@@ -96,6 +96,157 @@ export interface ReachOpts {
   mayOpenGroup?: boolean;
 }
 
+async function resolveRecipientTarget(
+  dir: ReachDirectory,
+  recipient: string,
+  authorityId: string,
+): Promise<ReachResolution> {
+  const r = await dir.resolveRecipient(recipient);
+  if (r.kind === "none") {
+    return {
+      ok: false,
+      status: 404,
+      error: "recipient_not_found",
+      message: `no internal teammate matches "${recipient}"`,
+    };
+  }
+  if (r.kind === "ambiguous") {
+    return {
+      ok: false,
+      status: 409,
+      error: "ambiguous_recipient",
+      message: `"${recipient}" matches multiple teammates — pass an exact name or id`,
+      candidates: r.candidates.map((c) => ({ principalId: c.principalId, displayName: c.displayName })),
+    };
+  }
+  const rid = r.member.principalId;
+  return {
+    ok: true,
+    destination: principalDestination(rid, authorityId),
+    recipient: { principalId: rid, displayName: r.member.displayName },
+  };
+}
+
+async function resolveChannelTarget(
+  dir: ReachDirectory,
+  channel: string,
+  authorityId: string,
+): Promise<ReachResolution> {
+  const r = await dir.resolveChannel(channel);
+  if (r.kind === "none") {
+    return {
+      ok: false,
+      status: 404,
+      error: "channel_not_found",
+      message: `no channel I'm in matches "${channel}"`,
+    };
+  }
+  if (r.kind === "ambiguous") {
+    return {
+      ok: false,
+      status: 409,
+      error: "ambiguous_channel",
+      message: `"${channel}" matches multiple channels — pass an exact name or id`,
+      candidates: r.candidates.map((c) => ({ channelId: c.channelId, name: c.name })),
+    };
+  }
+  const cid = r.channel.channelId;
+  if (
+    !(await isVisible(dir, authorityId, { kind: "channel", channelId: cid, isPrivate: r.channel.isPrivate === true }))
+  ) {
+    return membershipDenial(dir, authorityId, "channel");
+  }
+  return {
+    ok: true,
+    destination: { type: "slack", target: cid, audienceScopeId: makeScopeId("channel", cid) },
+    channel: { channelId: cid, name: r.channel.name },
+  };
+}
+
+async function resolveGroupTarget(
+  dir: ReachDirectory,
+  targetParticipants: readonly string[],
+  authorityId: string,
+  opts: ReachOpts,
+): Promise<ReachResolution> {
+  if (targetParticipants.length === 0) {
+    return {
+      ok: false,
+      status: 400,
+      error: "bad_request",
+      message: "participants must list the group DM's other members (at least one)",
+    };
+  }
+  const asked = [...new Set(targetParticipants)];
+  if (asked.length > MAX_GROUP_DM_PARTICIPANTS) return groupTooLarge();
+  const named: string[] = [];
+  for (const query of asked) {
+    const p = await dir.resolveRecipient(query);
+    if (p.kind === "none") {
+      return {
+        ok: false,
+        status: 404,
+        error: "recipient_not_found",
+        message: `no internal teammate matches "${query}"`,
+      };
+    }
+    if (p.kind === "ambiguous") {
+      return {
+        ok: false,
+        status: 409,
+        error: "ambiguous_recipient",
+        message: `"${query}" matches multiple teammates — pass an exact name or id`,
+        candidates: p.candidates.map((c) => ({ principalId: c.principalId, displayName: c.displayName })),
+      };
+    }
+    named.push(p.member.principalId);
+  }
+  const participants = [...new Set([...named, authorityId])];
+  if (participants.length < 2) {
+    return {
+      ok: false,
+      status: 400,
+      error: "bad_request",
+      message: "a group DM needs someone besides you — name a `recipient` instead for a 1:1 DM",
+    };
+  }
+  if (participants.length > MAX_GROUP_DM_PARTICIPANTS) return groupTooLarge();
+  const groupDestination = (gid: string): ReachResolution => ({
+    ok: true,
+    destination: { type: "group", target: gid, audienceScopeId: makeScopeId("group", gid) },
+    group: { groupId: gid },
+  });
+  const known = await dir.resolveGroup(participants);
+  if (known.kind === "one") {
+    if (!(await isVisible(dir, authorityId, { kind: "group", groupId: known.groupId }))) {
+      return membershipDenial(dir, authorityId, "group");
+    }
+    return groupDestination(known.groupId);
+  }
+  if (!opts.mayOpenGroup || !dir.openGroup) {
+    return {
+      ok: false,
+      status: 404,
+      error: "group_not_found",
+      message: dir.openGroup
+        ? "no group DM I'm in has exactly those participants — post to it once with /v1/reach, which opens it, then address it here"
+        : "no group DM I'm in has exactly those participants (it may not have synced yet)",
+    };
+  }
+  if (!(await dir.directoryMember(authorityId))) return membershipDenial(dir, authorityId, "group");
+  const opened = await dir.openGroup(participants);
+  if (!opened || "error" in opened) {
+    return {
+      ok: false,
+      status: 502,
+      error: "group_open_failed",
+      message: opened?.error ?? "I couldn't open a group DM with those people just now — try again in a moment",
+    };
+  }
+  await dir.registerGroup?.(opened.groupId, participants).catch((e) => swallow("reach: register opened group", e));
+  return groupDestination(opened.groupId);
+}
+
 export async function resolveReachTarget(
   dir: ReachDirectory,
   target: ReachTarget,
@@ -113,141 +264,9 @@ export async function resolveReachTarget(
       message: "specify exactly one of recipient (a teammate), channel, or participants (a group DM)",
     };
   }
-  if (wantsRecipient) {
-    const r = await dir.resolveRecipient(target.recipient!);
-    if (r.kind === "none") {
-      return {
-        ok: false,
-        status: 404,
-        error: "recipient_not_found",
-        message: `no internal teammate matches "${target.recipient}"`,
-      };
-    }
-    if (r.kind === "ambiguous") {
-      return {
-        ok: false,
-        status: 409,
-        error: "ambiguous_recipient",
-        message: `"${target.recipient}" matches multiple teammates — pass an exact name or id`,
-        candidates: r.candidates.map((c) => ({ principalId: c.principalId, displayName: c.displayName })),
-      };
-    }
-    const rid = r.member.principalId;
-    return {
-      ok: true,
-      destination: principalDestination(rid, authorityId),
-      recipient: { principalId: rid, displayName: r.member.displayName },
-    };
-  }
-  if (wantsChannel) {
-    const r = await dir.resolveChannel(target.channel!);
-    if (r.kind === "none") {
-      return {
-        ok: false,
-        status: 404,
-        error: "channel_not_found",
-        message: `no channel I'm in matches "${target.channel}"`,
-      };
-    }
-    if (r.kind === "ambiguous") {
-      return {
-        ok: false,
-        status: 409,
-        error: "ambiguous_channel",
-        message: `"${target.channel}" matches multiple channels — pass an exact name or id`,
-        candidates: r.candidates.map((c) => ({ channelId: c.channelId, name: c.name })),
-      };
-    }
-    const cid = r.channel.channelId;
-    if (
-      !(await isVisible(dir, authorityId, { kind: "channel", channelId: cid, isPrivate: r.channel.isPrivate === true }))
-    ) {
-      return membershipDenial(dir, authorityId, "channel");
-    }
-    return {
-      ok: true,
-      destination: { type: "slack", target: cid, audienceScopeId: makeScopeId("channel", cid) },
-      channel: { channelId: cid, name: r.channel.name },
-    };
-  }
-  if (wantsGroup) {
-    if (target.participants!.length === 0) {
-      return {
-        ok: false,
-        status: 400,
-        error: "bad_request",
-        message: "participants must list the group DM's other members (at least one)",
-      };
-    }
-    const asked = [...new Set(target.participants!)];
-    if (asked.length > MAX_GROUP_DM_PARTICIPANTS) return groupTooLarge();
-    const named: string[] = [];
-    for (const query of asked) {
-      const p = await dir.resolveRecipient(query);
-      if (p.kind === "none") {
-        return {
-          ok: false,
-          status: 404,
-          error: "recipient_not_found",
-          message: `no internal teammate matches "${query}"`,
-        };
-      }
-      if (p.kind === "ambiguous") {
-        return {
-          ok: false,
-          status: 409,
-          error: "ambiguous_recipient",
-          message: `"${query}" matches multiple teammates — pass an exact name or id`,
-          candidates: p.candidates.map((c) => ({ principalId: c.principalId, displayName: c.displayName })),
-        };
-      }
-      named.push(p.member.principalId);
-    }
-    const participants = [...new Set([...named, authorityId])];
-    if (participants.length < 2) {
-      return {
-        ok: false,
-        status: 400,
-        error: "bad_request",
-        message: "a group DM needs someone besides you — name a `recipient` instead for a 1:1 DM",
-      };
-    }
-    if (participants.length > MAX_GROUP_DM_PARTICIPANTS) return groupTooLarge();
-    const groupDestination = (gid: string): ReachResolution => ({
-      ok: true,
-      destination: { type: "group", target: gid, audienceScopeId: makeScopeId("group", gid) },
-      group: { groupId: gid },
-    });
-    const known = await dir.resolveGroup(participants);
-    if (known.kind === "one") {
-      if (!(await isVisible(dir, authorityId, { kind: "group", groupId: known.groupId }))) {
-        return membershipDenial(dir, authorityId, "group");
-      }
-      return groupDestination(known.groupId);
-    }
-    if (!opts.mayOpenGroup || !dir.openGroup) {
-      return {
-        ok: false,
-        status: 404,
-        error: "group_not_found",
-        message: dir.openGroup
-          ? "no group DM I'm in has exactly those participants — post to it once with /v1/reach, which opens it, then address it here"
-          : "no group DM I'm in has exactly those participants (it may not have synced yet)",
-      };
-    }
-    if (!(await dir.directoryMember(authorityId))) return membershipDenial(dir, authorityId, "group");
-    const opened = await dir.openGroup(participants);
-    if (!opened || "error" in opened) {
-      return {
-        ok: false,
-        status: 502,
-        error: "group_open_failed",
-        message: opened?.error ?? "I couldn't open a group DM with those people just now — try again in a moment",
-      };
-    }
-    await dir.registerGroup?.(opened.groupId, participants).catch((e) => swallow("reach: register opened group", e));
-    return groupDestination(opened.groupId);
-  }
+  if (wantsRecipient) return resolveRecipientTarget(dir, target.recipient!, authorityId);
+  if (wantsChannel) return resolveChannelTarget(dir, target.channel!, authorityId);
+  if (wantsGroup) return resolveGroupTarget(dir, target.participants!, authorityId, opts);
   return {
     ok: false,
     status: 400,

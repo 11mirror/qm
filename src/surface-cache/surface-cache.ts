@@ -1,4 +1,4 @@
-import { createPgPool, tenantCols, withPgTransaction } from "../persistence/pg-pool.ts";
+import { createPgPool, type PgPool, tenantCols, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { CachedMessage, ContainerState, LiveFallback, IngestEvent, SurfaceCache } from "./types.ts";
 import { tenant } from "../tenant.ts";
 import { jsonbSafeStringify } from "../util/text.ts";
@@ -28,64 +28,44 @@ function clampLimit(limit: number | undefined, fallback: number): number {
 
 const REVISION_SCAN_LIMIT = 500;
 
-export function createPostgresSurfaceCache(
-  connectionString: string,
-  opts: { liveFallback?: LiveFallback } = {},
-): SurfaceCache {
-  const { q, pool, close } = createPgPool(connectionString, [
-    {
-      id: "surface-cache/store/0007",
-      // The first release ran without a lock timeout.
-      acceptedChecksums: ["d56a4323978d8233aab8258422908b794bf960dc2059e252b3850e6da3902a36"],
-      statements: [
-        `SET LOCAL lock_timeout = '3s'`,
-        `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS surface TEXT NOT NULL DEFAULT 'slack'`,
-        `ALTER TABLE channel_state ADD COLUMN IF NOT EXISTS surface TEXT NOT NULL DEFAULT 'slack'`,
-      ],
-    },
-  ]);
-
-  const liveFallback = opts.liveFallback;
-
-  function rowToMessage(r: Record<string, unknown>): CachedMessage {
-    return {
-      container: r.container as string,
-      ts: r.ts as string,
-      ...(r.surface != null && r.surface !== SLACK ? { surface: r.surface as string } : {}),
-      ...(r.sub != null ? { sub: r.sub as string } : {}),
-      ...(r.subtype != null ? { subtype: r.subtype as string } : {}),
-      ...(r.broadcast ? { broadcast: true } : {}),
-      ...(r.bot_id != null ? { botId: r.bot_id as string } : {}),
-      ...(r.author_id != null ? { authorId: r.author_id as string } : {}),
-      ...(r.author_name != null ? { authorName: r.author_name as string } : {}),
-      text: (r.text as string) ?? "",
-      ...(r.reply_count != null ? { replyCount: Number(r.reply_count) } : {}),
-      ...(r.mentions != null ? { mentions: r.mentions as Record<string, string> } : {}),
-      ...(r.self ? { self: true } : {}),
-      ...(r.bot ? { bot: true } : {}),
-      ...(r.mentions_self ? { mentionsSelf: true } : {}),
-      ...(r.edited_at != null ? { editedAt: Number(r.edited_at) } : {}),
-      ...(r.deleted ? { deleted: true } : {}),
-      ...(r.deleted_at != null ? { deletedAt: Number(r.deleted_at) } : {}),
-      ...(r.handled ? { handled: true } : {}),
-      ...(Array.isArray(r.files) && r.files.length ? { files: r.files as CachedMessage["files"] } : {}),
-      createdAt: Number(r.created_at),
-    };
-  }
-
+function rowToMessage(r: Record<string, unknown>): CachedMessage {
   return {
-    async ingest(events) {
-      if (!events.length) return { upserted: 0 };
-      const now = Date.now();
-      let upserted = 0;
-      const files = new Map<string, { container: string; ts: string; rows: Array<Record<string, unknown>> }>();
-      const states: Array<Record<string, unknown>> = [];
-      await withPgTransaction(await pool(), async (client) => {
-        for (const event of events) {
-          const e = normalizeEvent(event);
-          if (!e.container || !e.ts) continue;
-          const res = await client.query(
-            `INSERT INTO channel_messages(org_id, container, ts, sub, author_id, author_name, text, mentions, self, bot, mentions_self, edited_at, deleted, handled, created_at, deleted_at, broadcast, subtype, bot_id, surface)
+    container: r.container as string,
+    ts: r.ts as string,
+    ...(r.surface != null && r.surface !== SLACK ? { surface: r.surface as string } : {}),
+    ...(r.sub != null ? { sub: r.sub as string } : {}),
+    ...(r.subtype != null ? { subtype: r.subtype as string } : {}),
+    ...(r.broadcast ? { broadcast: true } : {}),
+    ...(r.bot_id != null ? { botId: r.bot_id as string } : {}),
+    ...(r.author_id != null ? { authorId: r.author_id as string } : {}),
+    ...(r.author_name != null ? { authorName: r.author_name as string } : {}),
+    text: (r.text as string) ?? "",
+    ...(r.reply_count != null ? { replyCount: Number(r.reply_count) } : {}),
+    ...(r.mentions != null ? { mentions: r.mentions as Record<string, string> } : {}),
+    ...(r.self ? { self: true } : {}),
+    ...(r.bot ? { bot: true } : {}),
+    ...(r.mentions_self ? { mentionsSelf: true } : {}),
+    ...(r.edited_at != null ? { editedAt: Number(r.edited_at) } : {}),
+    ...(r.deleted ? { deleted: true } : {}),
+    ...(r.deleted_at != null ? { deletedAt: Number(r.deleted_at) } : {}),
+    ...(r.handled ? { handled: true } : {}),
+    ...(Array.isArray(r.files) && r.files.length ? { files: r.files as CachedMessage["files"] } : {}),
+    createdAt: Number(r.created_at),
+  };
+}
+
+async function ingestEvents(pool: PgPool["pool"], events: IngestEvent[]): Promise<{ upserted: number }> {
+  if (!events.length) return { upserted: 0 };
+  const now = Date.now();
+  let upserted = 0;
+  const files = new Map<string, { container: string; ts: string; rows: Array<Record<string, unknown>> }>();
+  const states: Array<Record<string, unknown>> = [];
+  await withPgTransaction(await pool(), async (client) => {
+    for (const event of events) {
+      const e = normalizeEvent(event);
+      if (!e.container || !e.ts) continue;
+      const res = await client.query(
+        `INSERT INTO channel_messages(org_id, container, ts, sub, author_id, author_name, text, mentions, self, bot, mentions_self, edited_at, deleted, handled, created_at, deleted_at, broadcast, subtype, bot_id, surface)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,COALESCE($18::boolean, FALSE),$19,$20,$21)
              ON CONFLICT (${tenantCols("org_id, container, ts")}) DO UPDATE SET
                sub = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) OR NOT $17 THEN channel_messages.sub ELSE EXCLUDED.sub END,
@@ -107,82 +87,82 @@ export function createPostgresSurfaceCache(
                 OR COALESCE(EXCLUDED.edited_at, 0) >= COALESCE(channel_messages.edited_at, 0)
                 OR EXCLUDED.handled
              RETURNING NOT deleted AND COALESCE(edited_at, 0) = COALESCE($12::bigint, 0) AS content_accepted`,
-            [
-              tenant().orgId,
-              e.container,
-              e.ts,
-              e.sub ?? null,
-              e.authorId ?? null,
-              e.authorName ?? null,
-              e.text ?? "",
-              e.mentions ? JSON.stringify(e.mentions) : null,
-              e.self ?? false,
-              e.bot ?? false,
-              e.mentionsSelf ?? false,
-              e.editedAt ?? null,
-              e.deleted ?? false,
-              e.handled ?? false,
-              e.createdAt ?? now,
-              e.deleted ? now : null,
-              e.sub !== undefined,
-              e.broadcast ?? null,
-              e.subtype ?? null,
-              e.botId ?? null,
-              e.surface ?? SLACK,
-            ],
-          );
-          upserted += res.rowCount ?? 0;
-          if (res.rows[0]?.content_accepted && e.files !== undefined) {
-            // A later accepted event for the same message replaces its files, as the per-event rewrite did.
-            const byId = new Map<string, Record<string, unknown>>();
-            for (const f of e.files) {
-              if (!f.fileId) continue;
-              byId.set(f.fileId, {
-                container: e.container,
-                ts: e.ts,
-                file_id: f.fileId,
-                name: f.name ?? null,
-                mimetype: f.mimetype ?? null,
-                created_at: e.createdAt ?? now,
-                title: f.title ?? null,
-                size: f.size ?? null,
-              });
-            }
-            files.set(`${e.container}\u0000${e.ts}`, { container: e.container, ts: e.ts, rows: [...byId.values()] });
-          }
-          states.push({
+        [
+          tenant().orgId,
+          e.container,
+          e.ts,
+          e.sub ?? null,
+          e.authorId ?? null,
+          e.authorName ?? null,
+          e.text ?? "",
+          e.mentions ? JSON.stringify(e.mentions) : null,
+          e.self ?? false,
+          e.bot ?? false,
+          e.mentionsSelf ?? false,
+          e.editedAt ?? null,
+          e.deleted ?? false,
+          e.handled ?? false,
+          e.createdAt ?? now,
+          e.deleted ? now : null,
+          e.sub !== undefined,
+          e.broadcast ?? null,
+          e.subtype ?? null,
+          e.botId ?? null,
+          e.surface ?? SLACK,
+        ],
+      );
+      upserted += res.rowCount ?? 0;
+      if (res.rows[0]?.content_accepted && e.files !== undefined) {
+        // A later accepted event for the same message replaces its files, as the per-event rewrite did.
+        const byId = new Map<string, Record<string, unknown>>();
+        for (const f of e.files) {
+          if (!f.fileId) continue;
+          byId.set(f.fileId, {
             container: e.container,
             ts: e.ts,
-            name: e.containerName ?? null,
-            kind: e.kind ?? null,
-            members: e.members ?? [],
-            surface: e.surface ?? SLACK,
+            file_id: f.fileId,
+            name: f.name ?? null,
+            mimetype: f.mimetype ?? null,
+            created_at: e.createdAt ?? now,
+            title: f.title ?? null,
+            size: f.size ?? null,
           });
         }
-        if (files.size) {
-          const replaced = [...files.values()];
-          await client.query(
-            `DELETE FROM channel_files f USING unnest($2::text[], $3::text[]) AS m(container, ts)
+        files.set(`${e.container}\u0000${e.ts}`, { container: e.container, ts: e.ts, rows: [...byId.values()] });
+      }
+      states.push({
+        container: e.container,
+        ts: e.ts,
+        name: e.containerName ?? null,
+        kind: e.kind ?? null,
+        members: e.members ?? [],
+        surface: e.surface ?? SLACK,
+      });
+    }
+    if (files.size) {
+      const replaced = [...files.values()];
+      await client.query(
+        `DELETE FROM channel_files f USING unnest($2::text[], $3::text[]) AS m(container, ts)
              WHERE f.org_id = $1 AND f.container = m.container AND f.ts = m.ts`,
-            [tenant().orgId, replaced.map((m) => m.container), replaced.map((m) => m.ts)],
-          );
-          const rows = replaced.flatMap((m) => m.rows);
-          if (rows.length) {
-            await client.query(
-              `INSERT INTO channel_files(org_id, container, ts, file_id, name, mimetype, created_at, title, size)
+        [tenant().orgId, replaced.map((m) => m.container), replaced.map((m) => m.ts)],
+      );
+      const rows = replaced.flatMap((m) => m.rows);
+      if (rows.length) {
+        await client.query(
+          `INSERT INTO channel_files(org_id, container, ts, file_id, name, mimetype, created_at, title, size)
                SELECT $1, container, ts, file_id, name, mimetype, created_at, title, size
                  FROM jsonb_to_recordset($2::jsonb)
                    AS b(container text, ts text, file_id text, name text, mimetype text, created_at bigint, title text, size bigint)`,
-              [tenant().orgId, JSON.stringify(rows)],
-            );
-          }
-        }
-        if (states.length) {
-          // One row per container, folded the way successive per-event upserts would have left it:
-          // newest last_ts, numerically oldest oldest_ts, the last name/kind/non-empty member list given,
-          // and the first event's surface for a container seen for the first time.
-          await client.query(
-            `INSERT INTO channel_state(org_id, container, last_ts, oldest_ts, name, kind, members, updated_at, surface)
+          [tenant().orgId, JSON.stringify(rows)],
+        );
+      }
+    }
+    if (states.length) {
+      // One row per container, folded the way successive per-event upserts would have left it:
+      // newest last_ts, numerically oldest oldest_ts, the last name/kind/non-empty member list given,
+      // and the first event's surface for a container seen for the first time.
+      await client.query(
+        `INSERT INTO channel_state(org_id, container, last_ts, oldest_ts, name, kind, members, updated_at, surface)
              SELECT $1, container, max(ts), (array_agg(ts ORDER BY ts::numeric))[1],
                     (array_agg(name ORDER BY ord DESC) FILTER (WHERE name IS NOT NULL))[1],
                     (array_agg(kind ORDER BY ord DESC) FILTER (WHERE kind IS NOT NULL))[1],
@@ -200,13 +180,15 @@ export function createPostgresSurfaceCache(
                kind = COALESCE(EXCLUDED.kind, channel_state.kind),
                members = CASE WHEN EXCLUDED.members = '[]'::jsonb THEN channel_state.members ELSE EXCLUDED.members END,
                updated_at = EXCLUDED.updated_at`,
-            [tenant().orgId, JSON.stringify(states.map((state, ord) => ({ ord, ...state }))), now],
-          );
-        }
-      });
-      return { upserted };
-    },
+        [tenant().orgId, JSON.stringify(states.map((state, ord) => ({ ord, ...state }))), now],
+      );
+    }
+  });
+  return { upserted };
+}
 
+function surfaceMessageReads(q: PgPool["q"], liveFallback: LiveFallback | undefined) {
+  return {
     async markHandled(container, ts) {
       await q(
         `INSERT INTO channel_messages(org_id, container, ts, created_at, handled)
@@ -297,7 +279,11 @@ export function createPostgresSurfaceCache(
       );
       return rows.map(rowToMessage);
     },
+  } satisfies Partial<SurfaceCache>;
+}
 
+function surfaceContainerReads(q: PgPool["q"]) {
+  return {
     async members(container) {
       const rows = await q("SELECT members FROM channel_state WHERE org_id = $1 AND container = $2", [
         tenant().orgId,
@@ -361,7 +347,30 @@ export function createPostgresSurfaceCache(
         };
       });
     },
+  } satisfies Partial<SurfaceCache>;
+}
 
+export function createPostgresSurfaceCache(
+  connectionString: string,
+  opts: { liveFallback?: LiveFallback } = {},
+): SurfaceCache {
+  const { q, pool, close } = createPgPool(connectionString, [
+    {
+      id: "surface-cache/store/0007",
+      // The first release ran without a lock timeout.
+      acceptedChecksums: ["d56a4323978d8233aab8258422908b794bf960dc2059e252b3850e6da3902a36"],
+      statements: [
+        `SET LOCAL lock_timeout = '3s'`,
+        `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS surface TEXT NOT NULL DEFAULT 'slack'`,
+        `ALTER TABLE channel_state ADD COLUMN IF NOT EXISTS surface TEXT NOT NULL DEFAULT 'slack'`,
+      ],
+    },
+  ]);
+
+  return {
+    ingest: (events) => ingestEvents(pool, events),
+    ...surfaceMessageReads(q, opts.liveFallback),
+    ...surfaceContainerReads(q),
     close,
   };
 }

@@ -180,21 +180,22 @@ function homeRoster(
   return ids?.length ? ids : undefined;
 }
 
-export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<TriggerOutcome> {
-  await deps.identity.refresh();
-  const runsAsScope = actsAsScope(spec.owner, spec.ownerScopeId);
-  const scheduled = SCHEDULED_SURFACES.has(spec.surface);
-  const currentMembers = await deps.currentScopeMembers?.(spec.ownerScopeId);
-  const actorId = spec.owner;
-  if (!runsAsScope && deps.identity.classify(spec.owner).type !== "internal") {
-    return { authzFailed: true, ran: false, note: "owner is no longer an internal principal" };
-  }
+async function homeConversation(
+  deps: TriggerDeps,
+  ownerKind: string | null,
+  ownerRef: string,
+  threadRef: string,
+  runsAsScope: boolean,
+  currentMembers: Principal[] | undefined,
+): Promise<{
+  conversation: TurnRequest["conversation"];
+  roster: DirectoryMember[] | undefined;
+  isPrivate: boolean | undefined;
+}> {
   const audience =
     runsAsScope && currentMembers?.length
       ? currentMembers.map((m) => ({ externalId: m.id, ...(m.teamIds ? { teamIds: m.teamIds } : {}) }))
       : undefined;
-  const { kind: ownerKind, ref: ownerRef } = parseScopeId(spec.ownerScopeId);
-  const threadRef = spec.threadRef ?? spec.fireKey;
   let conversation: TurnRequest["conversation"] = { kind: "dm", threadRef };
   let roster: DirectoryMember[] | undefined;
   let isPrivate: boolean | undefined;
@@ -215,11 +216,19 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       ...(roster ? { publishMembers: roster.map((m) => ({ externalId: m.principalId })) } : {}),
     };
   }
+  return { conversation, roster, isPrivate };
+}
 
-  const members = runsAsScope ? undefined : homeRoster(ownerKind, ownerRef, isPrivate, roster, currentMembers);
-  const ownerIsMember = members?.some((ids) => ids.some((id) => samePerson(id, actorId)));
-  if (scheduled && ownerIsMember === false)
-    return { authzFailed: true, ownerLeft: true, ran: false, note: "the owner left this conversation" };
+async function resolveHomeAccess(
+  deps: TriggerDeps,
+  spec: TriggerSpec,
+  actorId: string,
+  runsAsScope: boolean,
+  ownerIsMember: boolean | undefined,
+  currentMembers: Principal[] | undefined,
+  ownerKind: string | null,
+  ownerRef: string,
+): Promise<{ ok: boolean; note?: string }> {
   let homeAccess: { ok: boolean; note?: string };
   if (runsAsScope || ownerIsMember) {
     homeAccess = { ok: true };
@@ -241,6 +250,78 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       deps.currentScopeMembers !== undefined,
     );
   }
+  return homeAccess;
+}
+
+function fireRequest(
+  spec: TriggerSpec,
+  actorId: string,
+  conversation: TurnRequest["conversation"],
+  roster: DirectoryMember[] | undefined,
+  scheduledAsPerson: boolean,
+  liveDelivery: boolean,
+): TurnRequest {
+  return {
+    surface: spec.surface,
+    actor: { externalId: actorId },
+    conversation,
+    text: typeof spec.input === "string" ? spec.input : spec.input(roster),
+    origin: {
+      kind: "automation",
+      ...(spec.securityScreenData !== undefined ? { screenData: spec.securityScreenData } : {}),
+      ...(spec.destination ? { destination: spec.destination } : {}),
+      ...(scheduledAsPerson && conversation.kind !== "dm" ? { useOwnerKeychain: true } : {}),
+    },
+    ...(spec.unattendedGrants && grantsStayWithOwner(spec) ? { unattendedGrants: spec.unattendedGrants } : {}),
+    ...(spec.runtime ? { model: spec.runtime.modelId } : {}),
+    ...turnModelOptions({
+      surface: spec.surface,
+      thinkingLevel: spec.runtime?.effortLevel ?? spec.thinkingLevel,
+      fastMode: spec.fastMode ?? spec.runtime?.fastMode,
+    }),
+    ...(spec.model ? { model: spec.model } : {}),
+    ...(spec.attachments?.length ? { attachments: spec.attachments } : {}),
+    ...(spec.readOnly ? { readOnly: true } : {}),
+    ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
+    ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
+    idempotencyKey: spec.fireKey,
+  };
+}
+
+export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<TriggerOutcome> {
+  await deps.identity.refresh();
+  const runsAsScope = actsAsScope(spec.owner, spec.ownerScopeId);
+  const scheduled = SCHEDULED_SURFACES.has(spec.surface);
+  const currentMembers = await deps.currentScopeMembers?.(spec.ownerScopeId);
+  const actorId = spec.owner;
+  if (!runsAsScope && deps.identity.classify(spec.owner).type !== "internal") {
+    return { authzFailed: true, ran: false, note: "owner is no longer an internal principal" };
+  }
+  const { kind: ownerKind, ref: ownerRef } = parseScopeId(spec.ownerScopeId);
+  const threadRef = spec.threadRef ?? spec.fireKey;
+  const { conversation, roster, isPrivate } = await homeConversation(
+    deps,
+    ownerKind,
+    ownerRef,
+    threadRef,
+    runsAsScope,
+    currentMembers,
+  );
+
+  const members = runsAsScope ? undefined : homeRoster(ownerKind, ownerRef, isPrivate, roster, currentMembers);
+  const ownerIsMember = members?.some((ids) => ids.some((id) => samePerson(id, actorId)));
+  if (scheduled && ownerIsMember === false)
+    return { authzFailed: true, ownerLeft: true, ran: false, note: "the owner left this conversation" };
+  const homeAccess = await resolveHomeAccess(
+    deps,
+    spec,
+    actorId,
+    runsAsScope,
+    ownerIsMember,
+    currentMembers,
+    ownerKind,
+    ownerRef,
+  );
   const destinationIsHome = spec.destination?.audienceScopeId === spec.ownerScopeId;
   const deliverable = spec.destination
     ? (destinationIsHome && homeAccess.ok) || (await destinationVisible(deps, actorId, spec.destination))
@@ -282,31 +363,9 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         note = homeAccess.note ?? MEMBERSHIP_SKIP_NOTE;
         return;
       }
-      const res = await deps.run({
-        surface: spec.surface,
-        actor: { externalId: actorId },
-        conversation,
-        text: typeof spec.input === "string" ? spec.input : spec.input(roster),
-        origin: {
-          kind: "automation",
-          ...(spec.securityScreenData !== undefined ? { screenData: spec.securityScreenData } : {}),
-          ...(spec.destination ? { destination: spec.destination } : {}),
-          ...(scheduled && !runsAsScope && conversation.kind !== "dm" ? { useOwnerKeychain: true } : {}),
-        },
-        ...(spec.unattendedGrants && grantsStayWithOwner(spec) ? { unattendedGrants: spec.unattendedGrants } : {}),
-        ...(spec.runtime ? { model: spec.runtime.modelId } : {}),
-        ...turnModelOptions({
-          surface: spec.surface,
-          thinkingLevel: spec.runtime?.effortLevel ?? spec.thinkingLevel,
-          fastMode: spec.fastMode ?? spec.runtime?.fastMode,
-        }),
-        ...(spec.model ? { model: spec.model } : {}),
-        ...(spec.attachments?.length ? { attachments: spec.attachments } : {}),
-        ...(spec.readOnly ? { readOnly: true } : {}),
-        ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
-        ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
-        idempotencyKey: spec.fireKey,
-      });
+      const res = await deps.run(
+        fireRequest(spec, actorId, conversation, roster, scheduled && !runsAsScope, liveDelivery),
+      );
       if (spec.deferWhenBusy && res.refusalKind === "session_busy") throw new FireDeferred();
       status = res.status;
       errorCode = res.errorCode;

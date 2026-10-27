@@ -3,7 +3,7 @@ import { principalDestination } from "../reach/reach.ts";
 import type { Outbound } from "../surfaces/outbound.ts";
 import { deliveryCandidatesFor } from "../core/orchestrator/turn-helpers.ts";
 import type { SessionMailbox } from "../sessions/session-mailbox.ts";
-import { type SpawnMeta } from "../types.ts";
+import { type Session, type SpawnMeta } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import { isUnstarted, type Run, type RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
@@ -53,6 +53,139 @@ export interface SubagentMailDeps {
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
 }
 
+const UNINHERITED_REQUEST_KEYS = [
+  "runId",
+  "attempt",
+  "runLeaseToken",
+  "runStartedAt",
+  "finalAttempt",
+  "background",
+  "cancel",
+  "shutdown",
+  "modelAccount",
+  "privateSessionMessage",
+  "sessionMessageDepth",
+  "delegatingRunId",
+  "approval",
+  "proactiveOpener",
+  "redeliveryKey",
+  "attachments",
+  "inboundNotes",
+  "priorTurns",
+  "overheard",
+  "detectContext",
+  "detectOpener",
+  "conversationHeader",
+  "wakeCause",
+] as const;
+
+function mailContent(run: Run): { kind: SubagentMailKind; body: string } {
+  const result = run.result;
+  let kind: SubagentMailKind;
+  let body: string;
+  if (run.status === "failed" || result?.status === "failed") {
+    kind = "errored";
+    body = snippet(result?.reason ?? "the turn failed", MAIL_ERROR_CAP);
+  } else if (result?.pendingApprovals?.length || result?.status === "pending_approval") {
+    kind = "awaiting_input";
+    body = snippet(
+      result.pendingApprovals?.map((a) => a.command).join("; ") ?? "a command needs human approval",
+      MAIL_ERROR_CAP,
+    );
+  } else if (result?.status === "refused") {
+    kind = "refused";
+    body = snippet(result.reason ?? "the turn was refused", MAIL_ERROR_CAP);
+  } else if (result?.status === "ok" && (result.reply?.trim() || result.attachments?.length)) {
+    kind = "final_answer";
+    body = result.reply?.trim() || `Produced ${result.attachments!.map((file) => file.name).join(", ")}.`;
+  } else {
+    kind = "no_reply";
+    body = "completed without sending a reply.";
+  }
+  return { kind, body };
+}
+
+async function sendChildFiles(
+  outbound: Pick<Outbound, "send">,
+  run: Run,
+  meta: OrchestratorInput | SpawnMeta,
+  parent: Session,
+  child: Session,
+  attachments: NonNullable<NonNullable<Run["result"]>["attachments"]>,
+): Promise<void> {
+  const delivery = deliveryCandidatesFor(meta.surface, meta.deliveryTarget, meta.deliveryCandidates, parent.scopeId);
+  const candidate = delivery.candidates.find((item) => item.key === delivery.defaultKey);
+  const destination =
+    candidate ??
+    (meta.origin?.kind === "automation" ? meta.origin.destination : undefined) ??
+    principalDestination(meta.actor.id, meta.actor.id);
+  await outbound.send({
+    destination,
+    text: "",
+    attachments,
+    idempotencyKey: `subagent-files:${run.id}`,
+    provenance: {
+      trigger: "subagent",
+      surface: meta.surface ?? "unknown",
+      fireKey: `subagent-files:${run.id}`,
+      sourceScopeId: child.scopeId,
+      sourceThreadRef: child.threadRef,
+      sourceSessionId: child.id,
+    },
+  });
+}
+
+async function wakeParent(
+  deps: SubagentMailDeps,
+  run: Run,
+  parent: Session,
+  prepared: OrchestratorInput,
+  meta: OrchestratorInput | SpawnMeta,
+  originalParent: boolean,
+  initiatingRun: Run | null | undefined,
+): Promise<boolean> {
+  const surfaceTools =
+    meta.surfaceTools === true ||
+    requiresDelegation(prepared, (await deps.delegationEnabled?.(prepared.actor.id)) === true);
+  const dedupKey = `subagent-return:${run.id}`;
+  const existing = await deps.runs.getByDedupKey(dedupKey);
+  const unread = (await deps.mailbox.pending(parent.id)).some((message) => message.id === `subagent-mail-${run.id}`);
+  if (!unread) {
+    if (existing && isUnstarted(existing)) await deps.runs.withdraw(existing.id, { unstartedOnly: true });
+    return true;
+  }
+  const rewake = existing && (existing.status === "done" || existing.status === "failed") ? existing.id : null;
+  const inFlight = await deps.runs.inFlightForThread(parent.threadRef);
+  const sharedWake = inFlight.some(
+    (turn) =>
+      turn.status === "queued" &&
+      turn.request.wakeCause === "child_done" &&
+      turn.request.actor.id === prepared.actor.id,
+  );
+  if (sharedWake) {
+    await deps.runs.deferReturn(run.id, CHILD_DONE_RECHECK_MS);
+    return false;
+  }
+  const wake =
+    "A delegated task finished. Check internal messages with subagents wait (timeoutMs: 0), then report any new result or blocker relevant to the user's request. If it was already handled or no message is available, end without posting.";
+  await deps.runs.enqueue({
+    sessionId: parent.threadRef,
+    dedupKey: rewake ? `${dedupKey}:${rewake}` : dedupKey,
+    request: {
+      ...prepared,
+      ...(surfaceTools ? { surfaceTools } : {}),
+      ...(originalParent && initiatingRun ? { delegatingRunId: initiatingRun.id } : {}),
+      origin: sessionTurnOrigin(prepared.origin, wake),
+      text: wake,
+      displayText: "Delegated task completed",
+      wakeCause: "child_done",
+    },
+    maxAttempts: deps.maxAttempts,
+  });
+  await deps.runs.deferReturn(run.id, CHILD_DONE_RECHECK_MS);
+  return false;
+}
+
 export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Promise<boolean> {
   if (!isSubagentThreadRef(run.sessionId) || run.request.privateSessionMessage) return true;
   if (
@@ -87,27 +220,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
       };
   const title = child.title?.trim() || child.id;
   const result = run.result;
-  let kind: SubagentMailKind;
-  let body: string;
-  if (run.status === "failed" || result?.status === "failed") {
-    kind = "errored";
-    body = snippet(result?.reason ?? "the turn failed", MAIL_ERROR_CAP);
-  } else if (result?.pendingApprovals?.length || result?.status === "pending_approval") {
-    kind = "awaiting_input";
-    body = snippet(
-      result.pendingApprovals?.map((a) => a.command).join("; ") ?? "a command needs human approval",
-      MAIL_ERROR_CAP,
-    );
-  } else if (result?.status === "refused") {
-    kind = "refused";
-    body = snippet(result.reason ?? "the turn was refused", MAIL_ERROR_CAP);
-  } else if (result?.status === "ok" && (result.reply?.trim() || result.attachments?.length)) {
-    kind = "final_answer";
-    body = result.reply?.trim() || `Produced ${result.attachments!.map((file) => file.name).join(", ")}.`;
-  } else {
-    kind = "no_reply";
-    body = "completed without sending a reply.";
-  }
+  const { kind, body } = mailContent(run);
   const text = renderSubagentMail({
     title,
     sessionId: child.id,
@@ -132,32 +245,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     displayText: `[subagent ${title}: ${kind.replace("_", " ")}]`,
     envelopeWrapped: true,
   };
-  for (const key of [
-    "runId",
-    "attempt",
-    "runLeaseToken",
-    "runStartedAt",
-    "finalAttempt",
-    "background",
-    "cancel",
-    "shutdown",
-    "modelAccount",
-    "privateSessionMessage",
-    "sessionMessageDepth",
-    "delegatingRunId",
-    "approval",
-    "proactiveOpener",
-    "redeliveryKey",
-    "attachments",
-    "inboundNotes",
-    "priorTurns",
-    "overheard",
-    "detectContext",
-    "detectOpener",
-    "conversationHeader",
-    "wakeCause",
-  ] as const)
-    delete request[key];
+  for (const key of UNINHERITED_REQUEST_KEYS) delete request[key];
   if (!originalParent) request.addressed = false;
   const prepared = deps.prepareRequest ? await deps.prepareRequest(request) : request;
   assertAudienceCompatible(run.request, prepared);
@@ -171,28 +259,8 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     )
       throw new Error("the current parent audience cannot read this child result");
   }
-  if (result?.attachments?.length && deps.outbound) {
-    const delivery = deliveryCandidatesFor(meta.surface, meta.deliveryTarget, meta.deliveryCandidates, parent.scopeId);
-    const candidate = delivery.candidates.find((item) => item.key === delivery.defaultKey);
-    const destination =
-      candidate ??
-      (meta.origin?.kind === "automation" ? meta.origin.destination : undefined) ??
-      principalDestination(meta.actor.id, meta.actor.id);
-    await deps.outbound.send({
-      destination,
-      text: "",
-      attachments: result.attachments,
-      idempotencyKey: `subagent-files:${run.id}`,
-      provenance: {
-        trigger: "subagent",
-        surface: meta.surface ?? "unknown",
-        fireKey: `subagent-files:${run.id}`,
-        sourceScopeId: child.scopeId,
-        sourceThreadRef: child.threadRef,
-        sourceSessionId: child.id,
-      },
-    });
-  }
+  if (result?.attachments?.length && deps.outbound)
+    await sendChildFiles(deps.outbound, run, meta, parent, child, result.attachments);
   await deps.mailbox.send({
     id: `subagent-mail-${run.id}`,
     recipientId: parent.id,
@@ -203,47 +271,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     audience: prepared.conversation.audience,
     createdAt: Date.now(),
   });
-  if (!isSubagentThreadRef(parent.threadRef)) {
-    const surfaceTools =
-      meta.surfaceTools === true ||
-      requiresDelegation(prepared, (await deps.delegationEnabled?.(prepared.actor.id)) === true);
-    const dedupKey = `subagent-return:${run.id}`;
-    const existing = await deps.runs.getByDedupKey(dedupKey);
-    const unread = (await deps.mailbox.pending(parent.id)).some((message) => message.id === `subagent-mail-${run.id}`);
-    if (!unread) {
-      if (existing && isUnstarted(existing)) await deps.runs.withdraw(existing.id, { unstartedOnly: true });
-      return true;
-    }
-    const rewake = existing && (existing.status === "done" || existing.status === "failed") ? existing.id : null;
-    const inFlight = await deps.runs.inFlightForThread(parent.threadRef);
-    const sharedWake = inFlight.some(
-      (turn) =>
-        turn.status === "queued" &&
-        turn.request.wakeCause === "child_done" &&
-        turn.request.actor.id === prepared.actor.id,
-    );
-    if (sharedWake) {
-      await deps.runs.deferReturn(run.id, CHILD_DONE_RECHECK_MS);
-      return false;
-    }
-    const wake =
-      "A delegated task finished. Check internal messages with subagents wait (timeoutMs: 0), then report any new result or blocker relevant to the user's request. If it was already handled or no message is available, end without posting.";
-    await deps.runs.enqueue({
-      sessionId: parent.threadRef,
-      dedupKey: rewake ? `${dedupKey}:${rewake}` : dedupKey,
-      request: {
-        ...prepared,
-        ...(surfaceTools ? { surfaceTools } : {}),
-        ...(originalParent && initiatingRun ? { delegatingRunId: initiatingRun.id } : {}),
-        origin: sessionTurnOrigin(prepared.origin, wake),
-        text: wake,
-        displayText: "Delegated task completed",
-        wakeCause: "child_done",
-      },
-      maxAttempts: deps.maxAttempts,
-    });
-    await deps.runs.deferReturn(run.id, CHILD_DONE_RECHECK_MS);
-    return false;
-  }
+  if (!isSubagentThreadRef(parent.threadRef))
+    return wakeParent(deps, run, parent, prepared, meta, originalParent, initiatingRun);
   return true;
 }

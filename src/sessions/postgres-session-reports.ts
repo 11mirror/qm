@@ -27,13 +27,7 @@ function rowToSpendRow(r: Record<string, unknown>): SpendRow {
   };
 }
 
-/** Admin reports over all sessions: per-day LLM spend (cached per day) and per-person turn attribution (cached per session). */
-export function createSessionReports(
-  db: Pick<PgPool, "pool" | "q">,
-  now: () => number,
-): Pick<SessionStore, "attributedTurns" | "spendRollup" | "spendReport" | "refreshSpendRollup"> {
-  const { pool, q } = db;
-  const spendSql = `WITH RECURSIVE ancestry AS (
+const spendSql = `WITH RECURSIVE ancestry AS (
            SELECT s.id AS session_id, s.parent_session_id, s.origin AS origin, s.origin_id AS cron_id,
                   ARRAY[s.id] AS path
              FROM sessions s
@@ -74,6 +68,12 @@ export function createSessionReports(
          )
          SELECT * FROM rollup ORDER BY day, scope_id, origin, cron_id, model`;
 
+/** Admin reports over all sessions: per-day LLM spend (cached per day) and per-person turn attribution (cached per session). */
+export function createSessionReports(
+  db: Pick<PgPool, "pool" | "q">,
+  now: () => number,
+): Pick<SessionStore, "attributedTurns" | "spendRollup" | "spendReport" | "refreshSpendRollup"> {
+  const { pool, q } = db;
   return {
     async attributedTurns(): Promise<AttributedTurn[]> {
       // Sessions whose user items or participant windows changed are recomputed in small batches,

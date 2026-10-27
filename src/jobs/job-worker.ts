@@ -64,11 +64,56 @@ function serializeStart(worker: JobWorker): JobWorker {
   });
 }
 
+type AbsurdDb = ReturnType<typeof registerAbsurdSchema>;
+type JobHandlers = Map<string, { run: JobHandler; concurrency: number; running: number }>;
+
+async function settleJob(db: AbsurdDb, runId: string, disposition: JobDisposition): Promise<void> {
+  const pool = await db.pool();
+  if (disposition === "done") await completeRun(pool, JOB_QUEUE, runId);
+  else if (disposition === "release") await failRun(pool, JOB_QUEUE, runId, { message: "released unfinished" });
+  else await scheduleRun(pool, JOB_QUEUE, runId, new Date(disposition));
+}
+
+async function runJob(
+  db: AbsurdDb,
+  handlers: JobHandlers,
+  name: string,
+  runId: string,
+  params: unknown,
+): Promise<void> {
+  const keepAlive = setInterval(() => {
+    void db
+      .pool()
+      .then((pool) => extendClaim(pool, JOB_QUEUE, runId, CLAIM_TIMEOUT_SEC))
+      .catch((e: unknown) => reportFailure("jobs: extend claim", e, `job=${name}`));
+  }, CLAIM_EXTEND_MS);
+  keepAlive.unref?.();
+  const handler = handlers.get(name);
+  const busy = handler && handler.running >= handler.concurrency;
+  if (handler && !busy) handler.running++;
+  try {
+    let disposition: JobDisposition;
+    if (!handler) disposition = Date.now() + UNKNOWN_JOB_RETRY_MS;
+    else if (busy) disposition = Date.now() + BUSY_RETRY_MS;
+    else
+      disposition = await handler.run(params).catch((e: unknown): JobDisposition => {
+        reportFailure("jobs: run", e, `job=${name}`);
+        return "release";
+      });
+    await settleJob(db, runId, disposition);
+  } catch (e) {
+    reportFailure("jobs: settle", e, `job=${name}`);
+  } finally {
+    if (handler && !busy) handler.running--;
+    clearInterval(keepAlive);
+  }
+}
+
 export function createJobWorker(databaseUrl: string): JobWorker {
   const db = registerAbsurdSchema(databaseUrl);
   const limit = MAX_CONCURRENCY;
   const worker = `jobs:${randomUUID()}`;
-  const handlers = new Map<string, { run: JobHandler; concurrency: number; running: number }>();
+  const handlers: JobHandlers = new Map();
   const recurring: Array<{ job: string; immediate: boolean }> = [];
   let starts = 0;
   let started = false;
@@ -81,42 +126,6 @@ export function createJobWorker(databaseUrl: string): JobWorker {
     throw e;
   };
 
-  async function settle(runId: string, disposition: JobDisposition): Promise<void> {
-    const pool = await db.pool();
-    if (disposition === "done") await completeRun(pool, JOB_QUEUE, runId);
-    else if (disposition === "release") await failRun(pool, JOB_QUEUE, runId, { message: "released unfinished" });
-    else await scheduleRun(pool, JOB_QUEUE, runId, new Date(disposition));
-  }
-
-  async function run(name: string, runId: string, params: unknown): Promise<void> {
-    const keepAlive = setInterval(() => {
-      void db
-        .pool()
-        .then((pool) => extendClaim(pool, JOB_QUEUE, runId, CLAIM_TIMEOUT_SEC))
-        .catch((e: unknown) => reportFailure("jobs: extend claim", e, `job=${name}`));
-    }, CLAIM_EXTEND_MS);
-    keepAlive.unref?.();
-    const handler = handlers.get(name);
-    const busy = handler && handler.running >= handler.concurrency;
-    if (handler && !busy) handler.running++;
-    try {
-      let disposition: JobDisposition;
-      if (!handler) disposition = Date.now() + UNKNOWN_JOB_RETRY_MS;
-      else if (busy) disposition = Date.now() + BUSY_RETRY_MS;
-      else
-        disposition = await handler.run(params).catch((e: unknown): JobDisposition => {
-          reportFailure("jobs: run", e, `job=${name}`);
-          return "release";
-        });
-      await settle(runId, disposition);
-    } catch (e) {
-      reportFailure("jobs: settle", e, `job=${name}`);
-    } finally {
-      if (handler && !busy) handler.running--;
-      clearInterval(keepAlive);
-    }
-  }
-
   async function poll(): Promise<void> {
     const mine = new Set<Promise<void>>();
     while (started) {
@@ -126,7 +135,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
         try {
           for (const task of await claimTasks(await db.pool(), JOB_QUEUE, worker, CLAIM_TIMEOUT_SEC, free)) {
             claimed++;
-            const work = run(task.taskName, task.runId, task.params);
+            const work = runJob(db, handlers, task.taskName, task.runId, task.params);
             active.add(work);
             mine.add(work);
             void work.finally(() => {

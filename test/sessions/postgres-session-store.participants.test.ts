@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
-import { createPostgresSessionStore, rowToSession } from "../../src/sessions/postgres-session-store.ts";
+import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
+import { rowToSession } from "../../src/sessions/postgres-session-rows.ts";
 import { scopeId } from "../../src/types.ts";
 import { assertLateJoinerScopes, assertLeanListing } from "../support/participant-scopes.ts";
 import { assertParticipantSessionParity } from "../support/participant-session-parity.ts";

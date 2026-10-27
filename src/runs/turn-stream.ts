@@ -93,30 +93,27 @@ function makeEntry(partial: Partial<Entry> = {}): Entry {
   };
 }
 
-export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
-  const maxChars = Math.max(2, opts.maxChars ?? DEFAULT_MAX_CHARS);
-  const graceMs = opts.graceMs ?? DEFAULT_GRACE_MS;
-  const runs = new Map<string, Entry>();
-  const listeners = new Map<string, Set<TurnStreamListener>>();
+type Listeners = Map<string, Set<TurnStreamListener>>;
 
-  const ensure = (runId: string): Entry => {
-    let entry = runs.get(runId);
-    if (!entry) {
-      entry = makeEntry();
-      runs.set(runId, entry);
-    }
-    return entry;
-  };
+function ensure(runs: Map<string, Entry>, runId: string): Entry {
+  let entry = runs.get(runId);
+  if (!entry) {
+    entry = makeEntry();
+    runs.set(runId, entry);
+  }
+  return entry;
+}
 
-  const append = (runId: string, entry: Entry, delta: string): void => {
-    const offset = entry.totalChars;
-    entry.totalChars += delta.length;
-    entry.text += delta;
-    if (entry.text.length > maxChars)
-      entry.text = entry.text.slice(-Math.max(BLOCK_JOIN.length, Math.floor(maxChars / 2)));
-    opts.onDelta?.(runId, delta, offset, entry.totalChars - entry.text.length);
-  };
+function append(opts: TurnStreamOptions, maxChars: number, runId: string, entry: Entry, delta: string): void {
+  const offset = entry.totalChars;
+  entry.totalChars += delta.length;
+  entry.text += delta;
+  if (entry.text.length > maxChars)
+    entry.text = entry.text.slice(-Math.max(BLOCK_JOIN.length, Math.floor(maxChars / 2)));
+  opts.onDelta?.(runId, delta, offset, entry.totalChars - entry.text.length);
+}
 
+function streamWriteMethods(opts: TurnStreamOptions, maxChars: number, runs: Map<string, Entry>, listeners: Listeners) {
   return {
     begin(runId) {
       const entry = runs.get(runId);
@@ -135,7 +132,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
 
     publish(runId, delta) {
       if (!delta) return;
-      const entry = ensure(runId);
+      const entry = ensure(runs, runId);
       entry.replying = true;
       if (entry.timer) {
         clearTimeout(entry.timer);
@@ -143,7 +140,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       }
       if (entry.firstBlockOpen && entry.firstBlock.length < FIRST_BLOCK_MAX_CHARS)
         entry.firstBlock = (entry.firstBlock + delta).slice(0, FIRST_BLOCK_MAX_CHARS);
-      append(runId, entry, delta);
+      append(opts, maxChars, runId, entry, delta);
     },
 
     publishBlockStart(runId) {
@@ -151,11 +148,11 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       if (!entry) return;
       if (entry.firstBlock) entry.firstBlockOpen = false;
       if (!entry.text || entry.text.endsWith(BLOCK_JOIN)) return;
-      append(runId, entry, BLOCK_JOIN);
+      append(opts, maxChars, runId, entry, BLOCK_JOIN);
     },
 
     publishReasoning(runId, step, index, delta) {
-      const entry = ensure(runId);
+      const entry = ensure(runs, runId);
       let block = entry.reasoning.find((b) => b.step === step && b.index === index);
       if (!block) {
         block = { step, index, text: "" };
@@ -178,7 +175,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
     },
 
     noteToolCall(runId) {
-      const entry = ensure(runId);
+      const entry = ensure(runs, runId);
       if (!entry.firstBlockOpen) return;
       entry.firstBlockOpen = false;
       entry.firstBlockClosed = entry.firstBlock.trim().length > 0;
@@ -186,9 +183,13 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
         for (const l of listeners.get(runId) ?? []) l.onFirstBlock?.(entry.firstBlock);
       }
     },
+  } satisfies Partial<TurnStream>;
+}
 
+function streamStateMethods(opts: TurnStreamOptions, graceMs: number, runs: Map<string, Entry>, listeners: Listeners) {
+  return {
     noteGoal(runId, goal) {
-      ensure(runId).goal = goal;
+      ensure(runs, runId).goal = goal;
     },
 
     goal(runId) {
@@ -196,7 +197,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
     },
 
     noteRuntime(runId, runtime) {
-      ensure(runId).runtime = runtime;
+      ensure(runs, runId).runtime = runtime;
       opts.onChange?.(runId);
     },
 
@@ -211,7 +212,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
     },
 
     markSurfacePosted(runId) {
-      const entry = ensure(runId);
+      const entry = ensure(runs, runId);
       if (entry.surfacePosted) return;
       entry.surfacePosted = true;
       for (const l of listeners.get(runId) ?? []) l.onSurfacePosted?.();
@@ -263,6 +264,17 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
         if (set.size === 0 && listeners.get(runId) === set) listeners.delete(runId);
       };
     },
+  } satisfies Partial<TurnStream>;
+}
+
+export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
+  const maxChars = Math.max(2, opts.maxChars ?? DEFAULT_MAX_CHARS);
+  const graceMs = opts.graceMs ?? DEFAULT_GRACE_MS;
+  const runs = new Map<string, Entry>();
+  const listeners: Listeners = new Map();
+  return {
+    ...streamWriteMethods(opts, maxChars, runs, listeners),
+    ...streamStateMethods(opts, graceMs, runs, listeners),
   };
 }
 

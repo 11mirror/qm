@@ -72,57 +72,91 @@ export interface MultitenantHost {
   stopWorkers(): Promise<void>;
 }
 
+interface HostState {
+  tenants: BootedTenant[];
+  servers: Server[];
+  workers: TenantWorker[];
+  coreRoutes: HostRoute<HostTarget>[];
+  edgeRoutes: HostRoute<HostTarget>[];
+  running: Map<string, Running>;
+  homeCore?: HostTarget;
+  homeEdge?: HostTarget;
+  publicPort?: number;
+}
+
+async function startEdge(
+  state: HostState,
+  t: Tenant,
+  tenantEnv: NodeJS.ProcessEnv,
+  rec: RegistryTenant,
+  target: HostTarget,
+  own: Running,
+): Promise<void> {
+  const loopback = createHttpServer((req, res) => target.request(req, res));
+  loopback.on("upgrade", (req, socket, head) => target.upgrade(req, socket, head));
+  await new Promise<void>((resolve) => loopback.listen(0, "127.0.0.1", resolve));
+  own.servers.push(loopback);
+  state.servers.push(loopback);
+  const core = { CORE_API_URL: `http://127.0.0.1:${(loopback.address() as AddressInfo).port}`, CORE_ORG_ID: t.orgId };
+  const web = await startTenantWorker(new URL("../../plugins/web-ui/server/index.ts", import.meta.url), {
+    ...tenantServiceEnv(tenantEnv, rec, "web-ui"),
+    ...core,
+  });
+  own.workers.push(web);
+  state.workers.push(web);
+  const webUrl = `http://127.0.0.1:${web.port}`;
+  const portalBase = {
+    ...tenantServiceEnv(tenantEnv, rec, "portal"),
+    ...core,
+    WEB_UI_UPSTREAM: webUrl,
+    ADMIN_UPSTREAM: `${webUrl}/admin`,
+  };
+  const portalEnv = t.id ? await relocateEmbeddedAuth(portalBase) : portalBase;
+  const portal = await startTenantWorker(new URL("../../plugins/portal/src/index.ts", import.meta.url), portalEnv);
+  own.workers.push(portal);
+  state.workers.push(portal);
+  const edge = proxyTarget(portal.port);
+  if (!t.id) state.homeEdge = edge;
+  const appsDomain = appsDomainOf(portalEnv);
+  own.edge = { hosts: rec.hosts, ...(appsDomain ? { appsDomain } : {}), target: edge };
+  state.edgeRoutes.push(own.edge);
+}
+
+async function retire(state: HostState, id: string): Promise<void> {
+  const own = state.running.get(id);
+  if (!own?.booted) return;
+  state.running.delete(id);
+  drop(state.coreRoutes, own.core);
+  drop(state.edgeRoutes, own.edge);
+  drop(state.tenants, own.booted);
+  const booted = own.booted;
+  await withTenant(own.tenant, async () => {
+    booted.beginShutdown();
+    await booted.stop();
+  });
+  await Promise.all(own.workers.map((worker) => worker.stop()));
+  for (const worker of own.workers) drop(state.workers, worker);
+  for (const server of own.servers) {
+    server.close();
+    drop(state.servers, server);
+  }
+  console.log(`[qm] tenant ${own.tenant.slug ?? id} (${id}) stopped`);
+}
+
 export async function startMultitenant(env: NodeJS.ProcessEnv, boot: Boot = bootTenant): Promise<MultitenantHost> {
   if (!env.DATABASE_URL) throw new Error("QM_MULTITENANT=1 needs DATABASE_URL to read the tenant registry");
   const registry = createPgPool(env.DATABASE_URL);
   const key = tenantSecretsKey(env);
-  const tenants: BootedTenant[] = [];
-  const servers: Server[] = [];
-  const workers: TenantWorker[] = [];
-  const coreRoutes: HostRoute<HostTarget>[] = [];
-  const edgeRoutes: HostRoute<HostTarget>[] = [];
-  const running = new Map<string, Running>();
+  const state: HostState = {
+    tenants: [],
+    servers: [],
+    workers: [],
+    coreRoutes: [],
+    edgeRoutes: [],
+    running: new Map(),
+  };
+  const { tenants, servers, workers, coreRoutes, edgeRoutes, running } = state;
   const failed = new Map<string, string>();
-  let homeCore: HostTarget | undefined;
-  let homeEdge: HostTarget | undefined;
-  let publicPort: number | undefined;
-
-  async function startEdge(
-    t: Tenant,
-    tenantEnv: NodeJS.ProcessEnv,
-    rec: RegistryTenant,
-    target: HostTarget,
-    own: Running,
-  ): Promise<void> {
-    const loopback = createHttpServer((req, res) => target.request(req, res));
-    loopback.on("upgrade", (req, socket, head) => target.upgrade(req, socket, head));
-    await new Promise<void>((resolve) => loopback.listen(0, "127.0.0.1", resolve));
-    own.servers.push(loopback);
-    servers.push(loopback);
-    const core = { CORE_API_URL: `http://127.0.0.1:${(loopback.address() as AddressInfo).port}`, CORE_ORG_ID: t.orgId };
-    const web = await startTenantWorker(new URL("../../plugins/web-ui/server/index.ts", import.meta.url), {
-      ...tenantServiceEnv(tenantEnv, rec, "web-ui"),
-      ...core,
-    });
-    own.workers.push(web);
-    workers.push(web);
-    const webUrl = `http://127.0.0.1:${web.port}`;
-    const portalBase = {
-      ...tenantServiceEnv(tenantEnv, rec, "portal"),
-      ...core,
-      WEB_UI_UPSTREAM: webUrl,
-      ADMIN_UPSTREAM: `${webUrl}/admin`,
-    };
-    const portalEnv = t.id ? await relocateEmbeddedAuth(portalBase) : portalBase;
-    const portal = await startTenantWorker(new URL("../../plugins/portal/src/index.ts", import.meta.url), portalEnv);
-    own.workers.push(portal);
-    workers.push(portal);
-    const edge = proxyTarget(portal.port);
-    if (!t.id) homeEdge = edge;
-    const appsDomain = appsDomainOf(portalEnv);
-    own.edge = { hosts: rec.hosts, ...(appsDomain ? { appsDomain } : {}), target: edge };
-    edgeRoutes.push(own.edge);
-  }
 
   async function add(t: Tenant, tenantEnv: NodeJS.ProcessEnv, rec: RegistryTenant): Promise<void> {
     const own: Running = { tenant: t, workers: [], servers: [], hosts: rec.hosts };
@@ -130,8 +164,8 @@ export async function startMultitenant(env: NodeJS.ProcessEnv, boot: Boot = boot
       boot(tenantEnv, async (server, config) => {
         const target = tenantTarget(t, server);
         if (!t.id) {
-          homeCore = target;
-          publicPort = config.publicPort;
+          state.homeCore = target;
+          state.publicPort = config.publicPort;
         }
         own.hosts = t.id ? rec.hosts : [...new Set([...rec.hosts, ...configHosts(config)])];
         own.core = {
@@ -140,33 +174,12 @@ export async function startMultitenant(env: NodeJS.ProcessEnv, boot: Boot = boot
           target,
         };
         coreRoutes.push(own.core);
-        if (publicPort) await startEdge(t, tenantEnv, { ...rec, hosts: own.hosts }, target, own);
+        if (state.publicPort) await startEdge(state, t, tenantEnv, { ...rec, hosts: own.hosts }, target, own);
       }),
     );
     tenants.push(own.booted);
     running.set(t.id ?? "", own);
     console.log(`[qm] tenant ${t.slug ?? "home"} (${t.id ?? "home"}) hosts=${own.hosts.join(",")} booted`);
-  }
-
-  async function retire(id: string): Promise<void> {
-    const own = running.get(id);
-    if (!own?.booted) return;
-    running.delete(id);
-    drop(coreRoutes, own.core);
-    drop(edgeRoutes, own.edge);
-    drop(tenants, own.booted);
-    const booted = own.booted;
-    await withTenant(own.tenant, async () => {
-      booted.beginShutdown();
-      await booted.stop();
-    });
-    await Promise.all(own.workers.map((worker) => worker.stop()));
-    for (const worker of own.workers) drop(workers, worker);
-    for (const server of own.servers) {
-      server.close();
-      drop(servers, server);
-    }
-    console.log(`[qm] tenant ${own.tenant.slug ?? id} (${id}) stopped`);
   }
 
   async function reconcile(records: TenantRecord[], homeId: string): Promise<void> {
@@ -175,7 +188,7 @@ export async function startMultitenant(env: NodeJS.ProcessEnv, boot: Boot = boot
     for (const id of [...running.keys()]) {
       if (!id || wanted.has(id)) continue;
       try {
-        await retire(id);
+        await retire(state, id);
       } catch (error) {
         reportFailure(`tenant ${id} failed to stop`, error);
       }
@@ -200,10 +213,10 @@ export async function startMultitenant(env: NodeJS.ProcessEnv, boot: Boot = boot
   await reconcile(await listTenants(registry, key), homeId);
 
   const homeConfig = tenants[0]!.config;
-  if (homeCore) {
+  if (state.homeCore) {
     const front = createHostFront(
       () => coreRoutes,
-      () => homeCore,
+      () => state.homeCore,
     );
     front.requestTimeout = 0;
     front.headersTimeout = 10_000;
@@ -212,14 +225,14 @@ export async function startMultitenant(env: NodeJS.ProcessEnv, boot: Boot = boot
     servers.push(front);
     console.log(`[qm] multitenant front listening on :${homeConfig.port} for ${tenants.length} tenant(s)`);
   }
-  if (publicPort) {
+  if (state.publicPort) {
     const edge = createHostFront(
       () => edgeRoutes,
-      () => homeEdge,
+      () => state.homeEdge,
     );
-    await new Promise<void>((resolve) => edge.listen(publicPort, resolve));
+    await new Promise<void>((resolve) => edge.listen(state.publicPort, resolve));
     servers.push(edge);
-    console.log(`[qm] multitenant public edge listening on :${publicPort} for ${tenants.length} tenant(s)`);
+    console.log(`[qm] multitenant public edge listening on :${state.publicPort} for ${tenants.length} tenant(s)`);
   }
 
   let reconciling: Promise<void> | null = null;

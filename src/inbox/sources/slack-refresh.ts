@@ -15,44 +15,115 @@ interface SlackParticipant {
   avatarUrl?: string;
 }
 
+async function slackCall(
+  kit: RefreshKit,
+  slackBase: string,
+  owner: string,
+  method: string,
+  params: Record<string, string | number>,
+  token: string,
+): Promise<Record<string, unknown>> {
+  const rateLimit = kit.limiter(owner, `slack:${method}`);
+  const client = slackWebClient(token, (t, options) => new WebClient(t, { ...options, slackApiUrl: slackBase }), 3000);
+  let result: unknown;
+  try {
+    result = await client.apiCall(method, params);
+  } catch (error) {
+    if (!isObj(error)) throw error;
+    if (error.code === ErrorCode.RateLimitedError) {
+      rateLimit(Number(error.retryAfter));
+      throw kit.failure(new Error(`slack ${method}: HTTP 429`, { cause: error }));
+    }
+    if (error.code === ErrorCode.HTTPError)
+      throw kit.failure(new Error(`slack ${method}: HTTP ${String(error.statusCode)}`, { cause: error }));
+    if (error.code === ErrorCode.PlatformError)
+      throw kit.failure(new Error(`slack ${method}: ${slackErrorCode(error) ?? "Invalid response"}`, { cause: error }));
+    throw error;
+  }
+  if (!isObj(result)) throw kit.failure(new Error(`slack ${method}: Invalid response`));
+  return result;
+}
+
+function imageUrl(profile: Record<string, unknown>): string | undefined {
+  return [48, 72, 192, 512, 1024, 32, 24, "original", 36, 96, 128, 256]
+    .map((size) => profile[`image_${size}`])
+    .find((value): value is string => typeof value === "string" && value.startsWith("https://"));
+}
+
+function savedParticipants(payload: Record<string, unknown>): SlackParticipant[] {
+  return Array.isArray(payload.participants)
+    ? payload.participants.filter(
+        (person): person is SlackParticipant =>
+          isObj(person) && typeof person.id === "string" && typeof person.name === "string",
+      )
+    : [];
+}
+
+function messageParticipant(message: Record<string, unknown>): SlackParticipant | undefined {
+  const bot = isObj(message.bot_profile) ? message.bot_profile : {};
+  const profile = isObj(message.user_profile) ? message.user_profile : {};
+  let id = typeof message.user === "string" ? message.user : undefined;
+  if (!id && typeof message.bot_id === "string") id = `bot:${message.bot_id}`;
+  if (!id) return;
+  const avatarUrl = imageUrl(isObj(bot.icons) ? bot.icons : profile);
+  return {
+    id,
+    name: String(bot.name || profile.display_name || profile.real_name || message.username || id),
+    ...(avatarUrl ? { avatarUrl } : {}),
+  };
+}
+
+async function participants(
+  kit: RefreshKit,
+  directory: Pick<DirectoryStore, "getBySlackId">,
+  owner: string,
+  ids: string[],
+  previous: SlackParticipant[],
+): Promise<{ people: SlackParticipant[]; refreshAt: number }> {
+  let complete = true;
+  const people = await Promise.all(
+    [...new Set(ids)].slice(0, 8).map(async (id): Promise<SlackParticipant> => {
+      const saved = previous.find((person) => person.id === id) ?? { id, name: id };
+      if (id.startsWith("bot:")) return saved;
+      try {
+        const member = await directory.getBySlackId(id);
+        if (!member) return saved;
+        const avatarUrl = member.avatarUrl?.startsWith("https://") ? member.avatarUrl : saved.avatarUrl;
+        return { id, name: member.displayName || saved.name, ...(avatarUrl ? { avatarUrl } : {}) };
+      } catch (error) {
+        kit.recordFailure(owner, `Slack profile ${id}`, error);
+        complete = false;
+        return saved;
+      }
+    }),
+  );
+  return { people, refreshAt: kit.now() + (complete ? 86_400_000 : 60_000) };
+}
+
+function contextMessage(m: Record<string, unknown>, root: string | undefined, people: Map<string, SlackParticipant>) {
+  const author = messageParticipant(m);
+  const person = author && people.get(author.id);
+  return {
+    author: person?.name ?? String(m.user ?? m.username ?? "Slack"),
+    ...(person ? { authorId: person.id } : {}),
+    ...(person?.avatarUrl ? { avatarUrl: person.avatarUrl } : {}),
+    text: typeof m.text === "string" ? m.text : "",
+    at: Math.round(Number(m.ts) * 1000),
+    ts: m.ts,
+    ...(root && m.ts !== root ? { reply: true } : {}),
+    images: (Array.isArray(m.files) ? m.files.filter(isObj) : [])
+      .filter((f) => typeof f.mimetype === "string" && f.mimetype.startsWith("image/"))
+      .map((f) => f.url_private)
+      .filter((url): url is string => typeof url === "string" && url.startsWith("https://"))
+      .slice(0, 4),
+  };
+}
+
 export function createSlackRefresher(
   kit: RefreshKit,
   opts: { directory: Pick<DirectoryStore, "getBySlackId">; slackApiUrl?: string },
 ): SourceRefresher {
   const slackBase = normalizeSlackApiUrl(opts.slackApiUrl ?? "https://slack.com/api");
-
-  async function slackCall(
-    owner: string,
-    method: string,
-    params: Record<string, string | number>,
-    token: string,
-  ): Promise<Record<string, unknown>> {
-    const rateLimit = kit.limiter(owner, `slack:${method}`);
-    const client = slackWebClient(
-      token,
-      (t, options) => new WebClient(t, { ...options, slackApiUrl: slackBase }),
-      3000,
-    );
-    let result: unknown;
-    try {
-      result = await client.apiCall(method, params);
-    } catch (error) {
-      if (!isObj(error)) throw error;
-      if (error.code === ErrorCode.RateLimitedError) {
-        rateLimit(Number(error.retryAfter));
-        throw kit.failure(new Error(`slack ${method}: HTTP 429`, { cause: error }));
-      }
-      if (error.code === ErrorCode.HTTPError)
-        throw kit.failure(new Error(`slack ${method}: HTTP ${String(error.statusCode)}`, { cause: error }));
-      if (error.code === ErrorCode.PlatformError)
-        throw kit.failure(
-          new Error(`slack ${method}: ${slackErrorCode(error) ?? "Invalid response"}`, { cause: error }),
-        );
-      throw error;
-    }
-    if (!isObj(result)) throw kit.failure(new Error(`slack ${method}: Invalid response`));
-    return result;
-  }
 
   function slackInfo(
     owner: string,
@@ -61,62 +132,8 @@ export function createSlackRefresher(
     token: string,
   ): Promise<Record<string, unknown>> {
     return kit.cached(`${owner}:${method}:${new URLSearchParams(params)}`, () =>
-      slackCall(owner, method, params, token),
+      slackCall(kit, slackBase, owner, method, params, token),
     );
-  }
-
-  function imageUrl(profile: Record<string, unknown>): string | undefined {
-    return [48, 72, 192, 512, 1024, 32, 24, "original", 36, 96, 128, 256]
-      .map((size) => profile[`image_${size}`])
-      .find((value): value is string => typeof value === "string" && value.startsWith("https://"));
-  }
-
-  function savedParticipants(payload: Record<string, unknown>): SlackParticipant[] {
-    return Array.isArray(payload.participants)
-      ? payload.participants.filter(
-          (person): person is SlackParticipant =>
-            isObj(person) && typeof person.id === "string" && typeof person.name === "string",
-        )
-      : [];
-  }
-
-  function messageParticipant(message: Record<string, unknown>): SlackParticipant | undefined {
-    const bot = isObj(message.bot_profile) ? message.bot_profile : {};
-    const profile = isObj(message.user_profile) ? message.user_profile : {};
-    let id = typeof message.user === "string" ? message.user : undefined;
-    if (!id && typeof message.bot_id === "string") id = `bot:${message.bot_id}`;
-    if (!id) return;
-    const avatarUrl = imageUrl(isObj(bot.icons) ? bot.icons : profile);
-    return {
-      id,
-      name: String(bot.name || profile.display_name || profile.real_name || message.username || id),
-      ...(avatarUrl ? { avatarUrl } : {}),
-    };
-  }
-
-  async function participants(
-    owner: string,
-    ids: string[],
-    previous: SlackParticipant[],
-  ): Promise<{ people: SlackParticipant[]; refreshAt: number }> {
-    let complete = true;
-    const people = await Promise.all(
-      [...new Set(ids)].slice(0, 8).map(async (id): Promise<SlackParticipant> => {
-        const saved = previous.find((person) => person.id === id) ?? { id, name: id };
-        if (id.startsWith("bot:")) return saved;
-        try {
-          const member = await opts.directory.getBySlackId(id);
-          if (!member) return saved;
-          const avatarUrl = member.avatarUrl?.startsWith("https://") ? member.avatarUrl : saved.avatarUrl;
-          return { id, name: member.displayName || saved.name, ...(avatarUrl ? { avatarUrl } : {}) };
-        } catch (error) {
-          kit.recordFailure(owner, `Slack profile ${id}`, error);
-          complete = false;
-          return saved;
-        }
-      }),
-    );
-    return { people, refreshAt: kit.now() + (complete ? 86_400_000 : 60_000) };
   }
 
   async function refreshAvatars(owner: string, item: InboxItem): Promise<void> {
@@ -129,7 +146,13 @@ export function createSlackRefresher(
     if (!senderId || senderId.startsWith("bot:")) return;
     if (!previous.some((person) => person.id === senderId))
       previous.unshift({ id: senderId, name: typeof payload.from === "string" ? payload.from : senderId });
-    const profiles = await participants(owner, [senderId, ...previous.map((person) => person.id)], previous);
+    const profiles = await participants(
+      kit,
+      opts.directory,
+      owner,
+      [senderId, ...previous.map((person) => person.id)],
+      previous,
+    );
     await kit.items.annotate(
       item.id,
       {
@@ -156,8 +179,8 @@ export function createSlackRefresher(
       const defaultRoot = direct ? undefined : meta.ts;
       const root = typeof meta.threadTs === "string" ? meta.threadTs : defaultRoot;
       const body = root
-        ? await slackCall(owner, "conversations.replies", { channel, ts: root, limit: 100 }, token)
-        : await slackCall(owner, "conversations.history", { channel, limit: 100 }, token);
+        ? await slackCall(kit, slackBase, owner, "conversations.replies", { channel, ts: root, limit: 100 }, token)
+        : await slackCall(kit, slackBase, owner, "conversations.history", { channel, limit: 100 }, token);
       if (!Array.isArray(body.messages)) throw new Error("Couldn't read the Slack conversation.");
       const messages = body.messages
         .filter(isObj)
@@ -182,6 +205,8 @@ export function createSlackRefresher(
       if (sender && (!previous.has(sender.id) || previous.get(sender.id)?.name === sender.id))
         previous.set(sender.id, { ...sender, ...(typeof payload.from === "string" ? { name: payload.from } : {}) });
       const profiles = await participants(
+        kit,
+        opts.directory,
         owner,
         [
           ...(sender ? [sender.id] : []),
@@ -193,24 +218,7 @@ export function createSlackRefresher(
         [...previous.values()],
       );
       const people = new Map([...previous.values(), ...profiles.people].map((person) => [person.id, person]));
-      const context = messages.map((m) => {
-        const author = messageParticipant(m);
-        const person = author && people.get(author.id);
-        return {
-          author: person?.name ?? String(m.user ?? m.username ?? "Slack"),
-          ...(person ? { authorId: person.id } : {}),
-          ...(person?.avatarUrl ? { avatarUrl: person.avatarUrl } : {}),
-          text: typeof m.text === "string" ? m.text : "",
-          at: Math.round(Number(m.ts) * 1000),
-          ts: m.ts,
-          ...(root && m.ts !== root ? { reply: true } : {}),
-          images: (Array.isArray(m.files) ? m.files.filter(isObj) : [])
-            .filter((f) => typeof f.mimetype === "string" && f.mimetype.startsWith("image/"))
-            .map((f) => f.url_private)
-            .filter((url): url is string => typeof url === "string" && url.startsWith("https://"))
-            .slice(0, 4),
-        };
-      });
+      const context = messages.map((m) => contextMessage(m, root, people));
       const nearby =
         root && Array.isArray(payload.context)
           ? payload.context
