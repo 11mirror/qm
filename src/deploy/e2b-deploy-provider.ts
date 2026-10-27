@@ -115,7 +115,7 @@ export function createE2bDeployProvider(opts: E2bDeployProviderOptions): DeployP
     });
   }
 
-  const forget = (d: Deployment): Promise<void> =>
+  const forget = (d: Deployment) =>
     store.delete(d.id).catch((err) => swallow("e2b-deploy: drop dead body pointer", err));
 
   async function connectStored(d: Deployment): Promise<{ stored: StoredE2bDeployBody; session: E2bSession } | null> {

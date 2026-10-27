@@ -1,4 +1,6 @@
 import { pollProcess } from "../../src/sandbox/process-poll.ts";
+import type { SandboxBodies } from "../../src/sandbox/sandbox-bodies.ts";
+import { createNoopAdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import { test, after, beforeEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -16,19 +18,19 @@ import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../../src/auth/capability
 import { installFakeModal, type FakeModal } from "../support/fake-modal.ts";
 import { MODAL_CHECKPOINT_RETENTION_MS, type ModalClient } from "../../src/sandbox/modal-client.ts";
 import type { Sandbox } from "../../src/sandbox/sandbox.ts";
-import { singleProcessDeps } from "../support/single-process.ts";
 import { testAdvisoryLock, testDatabaseUrl, testSandboxBodies } from "../support/test-database.ts";
 
 let fake: FakeModal;
 let sandbox: Sandbox;
+let store: SandboxBodies<StoredModalSandbox>;
 const scope = scopeId("personal", "tester");
 const layers = [{ scopeId: scope, mountPath: "/", mode: "rw" as const }];
 const scopeName = (): string => sandboxScopeName("qmt", scope);
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createModalSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "modal-ws-"))), {
-    store: testSandboxBodies(MODAL_BODIES),
-    ...singleProcessDeps(),
+    store,
+    advisoryLock: createNoopAdvisoryLock(),
     client: fake.client,
     namePrefix: "qmt",
     ...extra,
@@ -37,6 +39,7 @@ function make(extra: Record<string, unknown> = {}): Sandbox {
 
 beforeEach(() => {
   fake = installFakeModal();
+  store = testSandboxBodies(MODAL_BODIES);
   sandbox = make();
 });
 after(() => fake?.cleanup());
@@ -102,7 +105,7 @@ test("force-through proxy env is set when a proxy url and token are present", as
 });
 
 test("an existing live sandbox holding the scope name is adopted after a restart", async () => {
-  await make().provision(layers);
+  await make({ store: testSandboxBodies(MODAL_BODIES) }).provision(layers);
   const h = await sandbox.provision(layers);
   assert.equal(h.coldStart, false);
   assert.equal(fake.createdCount(scopeName()), 1);
@@ -132,8 +135,7 @@ test("a terminated sandbox falls back to a fresh one with home hydrated from the
 });
 
 test("rotation snapshots changes written since the last teardown snapshot", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const s = make({ store });
+  const s = make();
   const a = await s.provision(layers);
   await s.teardown(a);
   await s.writeFile(a, "late.txt", "written after teardown\n");
@@ -161,8 +163,7 @@ test("computerStatus reports a gone sandbox as unprovisioned, not wedged", async
 });
 
 test("reapDeepIdle spares a box running a detached background job", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const s = make({ store });
+  const s = make();
   const h = await s.provision(layers);
   assert.ok(supportsProcessSessions(s));
   if (!supportsProcessSessions(s)) return;
@@ -175,8 +176,7 @@ test("reapDeepIdle spares a box running a detached background job", async () => 
 });
 
 test("rotation aborts and keeps the old box when terminating it fails", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const s = make({ store });
+  const s = make();
   const a = await s.provision(layers);
   await s.writeFile(a, "keep.txt", "still here\n");
   await s.teardown(a);
@@ -195,12 +195,11 @@ test("rotation aborts and keeps the old box when terminating it fails", async ()
 });
 
 test("deep idle termination excludes writes from another core until recovery", { timeout: 10000 }, async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
   const advisoryLock = testAdvisoryLock();
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  const first = make({ store, advisoryLock });
-  const second = make({ store, advisoryLock });
+  const first = make({ advisoryLock });
+  const second = make({ advisoryLock });
   const one = await first.provision(layers);
   const two = await second.provision(layers);
   await first.teardown(one);
@@ -272,7 +271,7 @@ test("a create race with another core instance adopts the winner instead of erro
       return fake.client.fromName(name);
     },
   };
-  await make().provision(layers);
+  await make({ store: testSandboxBodies(MODAL_BODIES) }).provision(layers);
   const s = make({ client: racing });
   const h = await s.provision(layers);
   assert.equal(fake.createdCount(scopeName()), 1);
@@ -281,8 +280,7 @@ test("a create race with another core instance adopts the winner instead of erro
 });
 
 test("teardown checkpoints the home and leaves the sandbox running", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const s = make({ store });
+  const s = make();
   const a = await s.provision(layers);
   await s.teardown(a);
   assert.equal(fake.current(a.id)?.state, "running", "no pause exists on modal — the warm path is staying up");
@@ -299,8 +297,7 @@ test("destroy teardown terminates the sandbox", async () => {
 });
 
 test("a sandbox near Modal's lifetime is rotated at provision with files intact", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const s = make({ store });
+  const s = make();
   const a = await s.provision(layers);
   await s.writeFile(a, "keep.txt", "survives rotation\n");
   await s.teardown(a);
@@ -321,8 +318,7 @@ test("teardown checkpoints are throttled by snapshotIntervalSec", async () => {
 });
 
 test("reapDeepIdle checkpoints and terminates idle scopes, keeping the checkpoint reference", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const s = make({ store });
+  const s = make();
   const h = await s.provision(layers);
   await s.writeFile(h, "keep.txt", "parked\n");
   await s.teardown(h);
@@ -331,22 +327,20 @@ test("reapDeepIdle checkpoints and terminates idle scopes, keeping the checkpoin
   assert.equal(r.reaped, 1, "the global cutoff is clamped to the six-hour default idle window");
   assert.equal(fake.current(scopeName()), null);
   assert.ok((await store.get(scope))?.checkpointId);
-  const restarted = make({ store });
+  const restarted = make();
   const b = await restarted.provision(layers);
   assert.equal(await restarted.readFile(b, "keep.txt"), "parked\n", "the reap checkpoint preserved the home");
 });
 
 test("idleParkSec sets the deep-idle window", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const s = make({ store, idleParkSec: 60 });
+  const s = make({ idleParkSec: 60 });
   await s.teardown(await s.provision(layers));
   await store.update(scope, { lastActivityMs: Date.now() - 120_000 });
   assert.equal((await s.reapDeepIdle!(72 * 3600_000)).reaped, 1);
 });
 
 test("reapDeepIdle leaves recently active scopes alone and cleans rows for gone boxes without a checkpoint", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const s = make({ store });
+  const s = make();
   await s.provision(layers);
   const active = await s.reapDeepIdle!(72 * 3600_000);
   assert.equal(active.reaped, 0);
@@ -368,8 +362,7 @@ test("profile advertises provider checkpoints and process sessions", () => {
 });
 
 test("a failing checkpoint restore fails the provision instead of cold-starting empty", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const s = make({ store });
+  const s = make();
   const a = await s.provision(layers);
   await s.writeFile(a, "precious.txt", "irreplaceable\n");
   await s.teardown(a);
@@ -382,8 +375,7 @@ test("a failing checkpoint restore fails the provision instead of cold-starting 
 });
 
 test("rotation aborts and keeps the old box when the pre-rotation checkpoint fails", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const s = make({ store });
+  const s = make();
   const a = await s.provision(layers);
   await s.writeFile(a, "keep.txt", "must not vanish\n");
   await s.teardown(a);
@@ -402,14 +394,13 @@ test("rotation aborts and keeps the old box when the pre-rotation checkpoint fai
   assert.equal((await store.get(scope))?.checkpointId, checkpoint);
   assert.match((await store.get(scope))?.snapshotError ?? "", /unavailable/);
   fake.onSnapshot(null);
-  const c = await make({ store }).provision(layers);
+  const c = await make().provision(layers);
   assert.equal(fake.createdCount(scopeName()), 2, "rotation resumes once checkpoints recover");
   assert.equal(await s.readFile(c, "keep.txt"), "must not vanish\n");
 });
 
 test("teardown of a box the turn never used skips the checkpoint only while the stored home is clean", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const s = make({ store });
+  const s = make();
   await s.teardown(await s.provision(layers), { homeUnchanged: true });
   assert.equal(fake.snapshotCount(), 1, "a home that was never checkpointed is saved even by an unused turn");
   await store.update(scope, { lastSnapshotMs: 1 });
@@ -426,15 +417,14 @@ test("teardown of a box the turn never used skips the checkpoint only while the 
 });
 
 test("checkpoints restore across core restarts and report their expiry", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const first = make({ store });
+  const first = make();
   const handle = await first.provision(layers);
   await first.writeFile(handle, "uncommitted.txt", "keep me");
   await first.teardown(handle);
   const record = (await store.get(scope))!;
   assert.ok(record.checkpointId);
   fake.terminate(scopeName());
-  const restarted = make({ store });
+  const restarted = make();
   const next = await restarted.provision(layers);
   assert.equal(await restarted.readFile(next, "uncommitted.txt"), "keep me");
   assert.ok(!fake.execScripts().some((script) => script.includes("tar --null")));
@@ -491,18 +481,16 @@ test("rows written by the previous Modal record shape are migrated and keep thei
 });
 
 test("expired checkpoints block replacement instead of starting an empty home", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const first = make({ store });
+  const first = make();
   await first.teardown(await first.provision(layers));
   fake.terminate(scopeName());
   await store.update(scope, { checkpointAtMs: 1 });
-  await assert.rejects(make({ store }).provision(layers), /checkpoint has expired/);
+  await assert.rejects(make().provision(layers), /checkpoint has expired/);
   assert.equal(fake.runningCount(), 0);
 });
 
 test("maintenance refreshes overdue checkpoints of active homes", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const s = make({ store });
+  const s = make();
   const handle = await s.provision(layers);
   await s.teardown(handle);
   const initial = (await store.get(scope))?.checkpointId;
@@ -512,14 +500,13 @@ test("maintenance refreshes overdue checkpoints of active homes", async () => {
   assert.notEqual((await store.get(scope))?.checkpointId, initial);
   assert.equal(fake.current(scopeName())?.state, "running");
   fake.terminate(scopeName());
-  const restarted = make({ store });
+  const restarted = make();
   const recovered = await restarted.provision(layers);
   assert.equal(await restarted.readFile(recovered, "background.txt"), "new background output");
 });
 
 test("failed maintenance checkpoints wait for the interval", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const s = make({ store });
+  const s = make();
   await s.teardown(await s.provision(layers));
   await store.update(scope, { lastSnapshotMs: 1 });
   fake.onSnapshot(async () => {
@@ -533,8 +520,7 @@ test("failed maintenance checkpoints wait for the interval", async () => {
 });
 
 test("maintenance checkpoints an idle scope with a live background job without reaping it", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const s = make({ store });
+  const s = make();
   const handle = await s.provision(layers);
   assert.ok(supportsProcessSessions(s));
   if (!supportsProcessSessions(s)) return;
@@ -549,41 +535,38 @@ test("maintenance checkpoints an idle scope with a live background job without r
 });
 
 test("interrupted hydration is retried from the retained checkpoint on the next provision", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const first = make({ store });
+  const first = make();
   const handle = await first.provision(layers);
   await first.writeFile(handle, "working.txt", "last complete checkpoint");
   await first.teardown(handle);
   await first.writeFile(handle, "working.txt", "incomplete replacement content");
   await store.update(scope, { initializationPending: true });
-  const restarted = make({ store });
+  const restarted = make();
   const restored = await restarted.provision(layers);
   assert.equal(await restarted.readFile(restored, "working.txt"), "last complete checkpoint");
   assert.equal((await store.get(scope))?.initializationPending, undefined);
 });
 
 test("restart checkpoints a healthy home, replaces the machine, and keeps the work", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const s = make({ store });
+  const s = make();
   const handle = await s.provision(layers);
   await s.writeFile(handle, "working.txt", "written after the last teardown");
   await s.restartComputer!(scope);
   assert.equal(fake.current(scopeName()), null);
-  const next = await make({ store }).provision(layers);
+  const next = await make().provision(layers);
   assert.equal(await s.readFile(next, "working.txt"), "written after the last teardown");
   assert.equal(fake.createdCount(scopeName()), 2);
 });
 
 test("restart of interrupted hydration discards the replacement and retries the checkpoint", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const first = make({ store });
+  const first = make();
   const handle = await first.provision(layers);
   await first.writeFile(handle, "working.txt", "last complete checkpoint");
   await first.teardown(handle);
   const checkpoint = (await store.get(scope))!.checkpointId;
   await first.writeFile(handle, "working.txt", "incomplete replacement content");
   await store.update(scope, { initializationPending: true });
-  const restarted = make({ store });
+  const restarted = make();
   await restarted.restartComputer!(scope);
   assert.equal((await store.get(scope))!.checkpointId, checkpoint);
   assert.equal(fake.snapshotCount(), 1, "an incomplete home is never checkpointed");
@@ -592,8 +575,7 @@ test("restart of interrupted hydration discards the replacement and retries the 
 });
 
 test("destroyScope terminates the machine and forgets the scope", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const backend = make({ store });
+  const backend = make();
   const first = await backend.provision(layers);
   const firstId = (await store.get(scope))!.sandboxId;
   await backend.teardown(first);
@@ -629,8 +611,7 @@ test("warm commands and process controls do not wait for a checkpoint", { timeou
 });
 
 test("ordinary calls never rotate an aged warm sandbox", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const s = make({ store });
+  const s = make();
   const handle = await s.provision(layers);
   await store.update(scope, { expiresAtMs: nearExpiry() });
   const id = (await store.get(scope))!.sandboxId;
@@ -643,14 +624,13 @@ test("ordinary calls never rotate an aged warm sandbox", async () => {
 });
 
 test("checkpoint writers from separate cores share the durable lifecycle lock", { timeout: 10000 }, async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
   const advisoryLock = testAdvisoryLock();
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   let writers = 0;
   let maximum = 0;
-  const first = make({ store, advisoryLock, snapshotIntervalSec: 0 });
-  const second = make({ store, advisoryLock, snapshotIntervalSec: 0 });
+  const first = make({ advisoryLock, snapshotIntervalSec: 0 });
+  const second = make({ advisoryLock, snapshotIntervalSec: 0 });
   const a = await first.provision(layers);
   const b = await second.provision(layers);
   fake.onSnapshot(async () => {
@@ -679,8 +659,7 @@ test("checkpoint writers from separate cores share the durable lifecycle lock", 
 });
 
 test("a near-expiry checkpoint of a reaped scope is renewed before Modal deletes it", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const s = make({ store });
+  const s = make();
   const handle = await s.provision(layers);
   await s.writeFile(handle, "work.txt", "idle for a month");
   await store.update(scope, { lastActivityMs: 1 });
@@ -700,14 +679,13 @@ test("a near-expiry checkpoint of a reaped scope is renewed before Modal deletes
   assert.equal(renewed.initializationPending, undefined);
   assert.equal(fake.current(scopeName()), null, "the renewal sandbox is terminated again");
   assert.equal(fake.runningCount(), 0);
-  const restarted = make({ store });
+  const restarted = make();
   const restored = await restarted.provision(layers);
   assert.equal(await restarted.readFile(restored, "work.txt"), "idle for a month");
 });
 
 test("checkpoint renewal skips expired checkpoints instead of looping", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const s = make({ store });
+  const s = make();
   await s.provision(layers);
   await store.update(scope, { lastActivityMs: 1 });
   await s.reapDeepIdle!(1);
@@ -719,8 +697,7 @@ test("checkpoint renewal skips expired checkpoints instead of looping", async ()
 });
 
 test("a sandbox approaching Modal's lifetime limit is checkpointed and retired even while busy", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const s = make({ store });
+  const s = make();
   const handle = await s.provision(layers);
   await s.writeFile(handle, "job.txt", "in flight");
   assert.ok(supportsProcessSessions(s));
@@ -737,8 +714,7 @@ test("a sandbox approaching Modal's lifetime limit is checkpointed and retired e
 });
 
 test("untracked scope sandboxes are terminated after a grace period while scratch and other deployments are kept", async () => {
-  const store = testSandboxBodies<StoredModalSandbox>(MODAL_BODIES);
-  const s = make({ store });
+  const s = make();
   const handle = await s.provision(layers);
   const tracked = fake.current(handle.id)!.sandboxId;
   const orphan = fake.createUntracked({ "qm-org": tenant().orgId, "qm-prefix": "qmt", "qm-kind": "scope" });

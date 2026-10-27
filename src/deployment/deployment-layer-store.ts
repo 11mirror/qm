@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import type { ScopeId } from "../types.ts";
 import {
   safeSkillFilePath,
@@ -93,24 +93,6 @@ const DEPLOYMENT_LAYER: TableSpec = {
 };
 
 export const DEPLOYMENT_LAYER_MIGRATION = mapToTableMigration("deployment/layer/0001-typed", DEPLOYMENT_LAYER);
-
-const codec = tableCodec<StoredDeploymentLayer>(DEPLOYMENT_LAYER);
-
-function createLayerRow(databaseUrl: string) {
-  const { q } = createPgPool(databaseUrl, [DEPLOYMENT_LAYER_MIGRATION]);
-  return {
-    async get(): Promise<StoredDeploymentLayer | null> {
-      return codec.rows(await q(`SELECT ${codec.columns} FROM deployment_layer WHERE id = $1`, [CURRENT]))[0] ?? null;
-    },
-    async put(record: StoredDeploymentLayer): Promise<void> {
-      await q(
-        `INSERT INTO deployment_layer (${codec.columns}) VALUES (${codec.placeholders})
-         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET ${codec.updates}`,
-        codec.values(CURRENT, record),
-      );
-    },
-  };
-}
 
 export const LAYER_CREATED_BY = "system:deployment-layer";
 export const LAYER_REVIEWER = "system:deployment-layer-reviewer";
@@ -500,7 +482,10 @@ function nextLayerRecord(
 
 export function createDeploymentLayerStore(opts: DeploymentLayerStoreOptions): DeploymentLayerStore {
   const now = opts.now ?? Date.now;
-  const layer = createLayerRow(opts.databaseUrl);
+  const layer = typedTable<StoredDeploymentLayer>(
+    createPgPool(opts.databaseUrl, [DEPLOYMENT_LAYER_MIGRATION]),
+    DEPLOYMENT_LAYER,
+  );
   const retrying = retryingWith(opts.retryDelaysMs ?? [250, 1000, 4000]);
   const projection = layerProjection(opts, retrying);
   let appliedHash: string | null = null;
@@ -538,10 +523,10 @@ export function createDeploymentLayerStore(opts: DeploymentLayerStoreOptions): D
       try {
         await retrying(() => opts.auditPersisted!({ ...record, ...revision }));
         await retrying(async () => {
-          const current = await layer.get();
+          const current = await layer.get(CURRENT);
           if (!current) throw new Error("deployment layer disappeared while reconciling its audit");
           const pendingAudits = (current.pendingAudits ?? []).filter((entry) => entry.version !== revision.version);
-          await layer.put({ ...current, pendingAudits });
+          await layer.put(CURRENT, { ...current, pendingAudits });
         });
       } catch (error) {
         if (strict) throw error;
@@ -570,7 +555,7 @@ export function createDeploymentLayerStore(opts: DeploymentLayerStoreOptions): D
     isApplied: async (hash) => {
       if (appliedHash !== hash) return false;
       try {
-        const record = await layer.get();
+        const record = await layer.get(CURRENT);
         return record?.contentHash === hash && projection.projectionMatches(record);
       } catch {
         return false;
@@ -588,7 +573,7 @@ export function createDeploymentLayerStore(opts: DeploymentLayerStoreOptions): D
     hydrate: () =>
       queue(CURRENT, () =>
         withFleetLock(async () => {
-          const record = await retrying(() => layer.get());
+          const record = await retrying(() => layer.get(CURRENT));
           if (record) {
             await auditPersisted(record, false);
             return applyForHydrate(record);
@@ -598,7 +583,7 @@ export function createDeploymentLayerStore(opts: DeploymentLayerStoreOptions): D
             seeded = true;
             let appeared: StoredDeploymentLayer | null = null;
             try {
-              appeared = await retrying(() => layer.get());
+              appeared = await retrying(() => layer.get(CURRENT));
             } catch (error) {
               reportFailure(
                 "deployment-layer: recheck after seeding",
@@ -614,7 +599,7 @@ export function createDeploymentLayerStore(opts: DeploymentLayerStoreOptions): D
     get: () =>
       queue(CURRENT, () =>
         withFleetLock(async () => {
-          const record = await layer.get();
+          const record = await layer.get(CURRENT);
           if (!record) return null;
           await auditPersisted(record, false);
           if (failedHash !== record.contentHash) {
@@ -632,9 +617,9 @@ export function createDeploymentLayerStore(opts: DeploymentLayerStoreOptions): D
         const { candidate, manifests } = layerCandidate(input, updatedBy, now());
         return withFleetLock(async () => {
           await assertPutAllowed(opts, manifests, projection.activeBundleClaims);
-          const current = await layer.get();
+          const current = await layer.get(CURRENT);
           const record = nextLayerRecord(current, candidate);
-          if (record !== current) await layer.put(record);
+          if (record !== current) await layer.put(CURRENT, record);
           try {
             await auditPersisted(record, true);
             await apply(record);
