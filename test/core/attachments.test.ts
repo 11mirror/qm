@@ -1,5 +1,6 @@
 import "../support/auto-fake-sprites.ts";
 import { test } from "node:test";
+import { countTokens } from "../../src/util/tokens.ts";
 import assert from "node:assert/strict";
 import { NoDefaultSandboxError } from "../../src/sandbox/sandbox-routing.ts";
 import type { GrantedHandle, IncomingAttachment, TurnRequest } from "../../src/types.ts";
@@ -7,7 +8,6 @@ import { storedItem, type NewItem } from "../../src/sessions/items.ts";
 import { createMemoryBlobTransferStore, type BlobTransferStore } from "../../src/persistence/blob-transfer.ts";
 import {
   MAX_INBOUND_FILES,
-  MAX_SHARED_FILES_LISTED,
   environmentNote,
   inboundIssueList,
   inboundIssuesNote,
@@ -116,55 +116,49 @@ test("sharedManifest lists shared/<name> handles, flags writable, dedups, and re
     { handlePath: "shared/budget.xlsx", ownerScopeId: "personal:U3", fileId: "2".repeat(32), permission: "write" },
     { handlePath: "shared/report.txt", ownerScopeId: "personal:U4", fileId: "1".repeat(32), permission: "read" },
   ];
-  const m = sharedManifest(handles);
+  const m = sharedManifest(handles, 1_000);
   assert.match(m, /shared\/report\.txt/);
   assert.match(m, /shared\/budget\.xlsx \(writable\)/);
   assert.doesNotMatch(m, /report\.txt \(writable\)/);
   assert.equal((m.match(/shared\/report\.txt/g) ?? []).length, 1, "deduped by handlePath");
-  assert.equal(sharedManifest([]), "");
+  assert.equal(sharedManifest([], 1_000), "");
 });
 
-test("sharedManifest caps the listing at MAX_SHARED_FILES_LISTED with a '…and N more' tail", () => {
-  const total = MAX_SHARED_FILES_LISTED + 7;
+test("sharedManifest lists what fits the token budget, then counts the rest with the fetch hint", () => {
+  const total = 600;
   const handles: GrantedHandle[] = Array.from({ length: total }, (_, i) => ({
     handlePath: `shared/file-${i}.txt`,
     ownerScopeId: "personal:U2",
     fileId: i.toString(16).padStart(32, "0"),
     permission: "read" as const,
   }));
-  const m = sharedManifest(handles);
-  assert.equal((m.match(/^- shared\//gm) ?? []).length, MAX_SHARED_FILES_LISTED, "only the cap is listed");
-  assert.match(m, /…and 7 more \(read shared\/<name> to fetch\)/);
+  const budget = 400;
+  const m = sharedManifest(handles, budget);
+  const listed = m.split("\n").filter((line) => line.startsWith("- "));
+  assert.ok(listed.length > 10 && listed.length < total, `budget keeps a prefix, got ${listed.length}`);
+  assert.ok(listed.reduce((n, line) => n + countTokens(line), 0) <= budget);
+  assert.match(m, new RegExp(`…and ${total - listed.length} more \\(read shared/<name> to fetch\\)`));
   assert.match(m, new RegExp(`^${total} files shared with you`));
   const sortedPaths = handles.map((h) => h.handlePath).sort();
   assert.deepEqual(
-    m.split("\n").filter((line) => line.startsWith("- ")),
-    sortedPaths.slice(0, MAX_SHARED_FILES_LISTED).map((path) => `- ${path}`),
+    listed,
+    sortedPaths.slice(0, listed.length).map((path) => `- ${path}`),
   );
-  assert.equal(sharedManifest(handles.toReversed()), m);
-});
-
-test("sharedManifest at exactly the cap lists every file with no '…and N more' tail", () => {
-  const handles: GrantedHandle[] = Array.from({ length: MAX_SHARED_FILES_LISTED }, (_, i) => ({
-    handlePath: `shared/f${i}.txt`,
-    ownerScopeId: "personal:U2",
-    fileId: i.toString(16).padStart(32, "0"),
-    permission: "read" as const,
-  }));
-  const m = sharedManifest(handles);
-  assert.equal((m.match(/^- shared\//gm) ?? []).length, MAX_SHARED_FILES_LISTED);
-  assert.doesNotMatch(m, /…and \d+ more/);
+  assert.equal(sharedManifest(handles.toReversed(), budget), m);
+  const everything = sharedManifest(handles, 1_000_000);
+  assert.equal((everything.match(/^- shared\//gm) ?? []).length, total);
+  assert.doesNotMatch(everything, /…and \d+ more/);
 });
 
 test("sharedFilesSystemSection wraps the listing in a ## heading, '' when nothing is shared", () => {
   const handles: GrantedHandle[] = [
     { handlePath: "shared/report.txt", ownerScopeId: "personal:U2", fileId: "1".repeat(32), permission: "read" },
   ];
-  const s = sharedFilesSystemSection(handles);
+  const s = sharedFilesSystemSection(handles, 1_000);
   assert.match(s, /^## Files shared with you\n/);
   assert.match(s, /shared\/report\.txt/);
   assert.match(s, /read a path below to fetch that file on demand/);
-  assert.equal(sharedFilesSystemSection([]), "");
+  assert.equal(sharedFilesSystemSection([], 1_000), "");
 });
 
 test("environmentNote wraps turn-scoped notes in an <environment> block ('' for empty input)", () => {

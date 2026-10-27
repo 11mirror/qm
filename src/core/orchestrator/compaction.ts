@@ -68,7 +68,11 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     documentTokenBudget: (scopeId, model) => documentTokenBudget(deps, scopeId, model),
   };
 }
-function tokenBudgetFor(deps: OrchestratorDeps, scopeLabel?: string, model?: string): number {
+export function tokenBudgetFor(
+  deps: Pick<OrchestratorDeps, "maxContextTokens" | "harness">,
+  scopeLabel?: string,
+  model?: string,
+): number {
   return deps.maxContextTokens ?? deps.harness.models.contextTokenBudget?.(scopeLabel, model) ?? MAX_CONTEXT_TOKENS;
 }
 function documentTokenBudget(deps: OrchestratorDeps, scopeId: string, model?: string): number {
