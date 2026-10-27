@@ -1,15 +1,15 @@
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
-import type { PgPool } from "../persistence/pg-pool.ts";
-import { swallow } from "../util/errors.ts";
+import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
+import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { jsonbStringify } from "../util/text.ts";
 import {
   createDeployGitStore,
+  type DeployGitStore,
   type DeployGitInputFile,
   type DeployGitStoreOptions,
   type DeployGitTreeFile,
 } from "./deploy-git-store.ts";
-import { tenantCols } from "../persistence/pg-pool.ts";
 
 export interface DeploymentVersion {
   version: number;
@@ -125,9 +125,8 @@ export interface DeployStore {
 }
 
 export interface DeployStoreBackings {
-  deployments: DurableMap<Deployment>;
+  databaseUrl: string;
   git?: DeployGitStoreOptions;
-  pg: PgPool;
   touchDebounceMs?: number;
 }
 
@@ -136,62 +135,52 @@ const versionRef = (version: number): string => `refs/versions/${version}`;
 const NAME_INDEX = "deployments_name_unique";
 const TOUCH_DEBOUNCE_MS = 60_000;
 
-interface DeployAccess {
-  readOne(id: string): Promise<number | null>;
-  readAll(): Promise<Map<string, number>>;
-  write(id: string, at: number): Promise<boolean>;
-  findByName?(name: string): Promise<Deployment | null>;
-}
+const DEPLOYMENTS: TableSpec = {
+  table: "deployments",
+  key: "id",
+  keyIsField: true,
+  columns: {
+    ownerScopeId: { type: "text", required: true },
+    createdBy: { type: "text", required: true },
+    createdInScope: { type: "text" },
+    defaultAudience: { type: "jsonb" },
+    name: { type: "text" },
+    displayName: { type: "text" },
+    currentVersion: { type: "bigint", required: true },
+    status: { type: "text", required: true },
+    endpoint: { type: "jsonb" },
+    alwaysOn: { type: "boolean" },
+    embedAncestors: { type: "text[]" },
+    public: { type: "boolean" },
+    appliedVersion: { type: "bigint" },
+    lastAccessAt: { type: "bigint" },
+    versions: { type: "jsonb", required: true },
+  },
+};
 
-function createPgDeployAccess(pg: PgPool): DeployAccess {
-  let readyP: Promise<void> | null = null;
-  function ready(): Promise<void> {
-    if (!readyP) {
-      readyP = (async () => {
-        await pg
-          .q(
-            `CREATE UNIQUE INDEX IF NOT EXISTS ${NAME_INDEX}
-             ON deployments ((json->>'name')) WHERE json->>'name' IS NOT NULL`,
-          )
-          .catch((e) =>
-            swallow(
-              "deploy-store: could not create unique name index on deployments (concurrent boot, or duplicate names)",
-              e,
-            ),
-          );
-      })().catch((e) => {
-        readyP = null;
-        throw e;
-      });
-    }
-    return readyP;
-  }
+export const DEPLOYMENTS_MIGRATION = mapToTableMigration("deploy/deployments/0001-typed", DEPLOYMENTS, {
+  statements: [
+    `DO $$ BEGIN
+      EXECUTE format('CREATE UNIQUE INDEX IF NOT EXISTS ${NAME_INDEX} ON deployments (%sname) WHERE name IS NOT NULL',
+        CASE WHEN EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'deployments'::regclass
+          AND attname = 'tenant_id' AND NOT attisdropped) THEN 'tenant_id, ' ELSE '' END);
+    EXCEPTION WHEN unique_violation THEN RAISE WARNING 'deployments: duplicate names, no unique name index';
+    END $$`,
+    `CREATE INDEX IF NOT EXISTS deployments_resource_search_gin ON deployments
+      USING gin (to_tsvector('simple', coalesce(display_name, name, '') || ' ' || coalesce(name, '')))`,
+  ],
+});
+
+const codec = tableCodec<Deployment>(DEPLOYMENTS);
+const SELECT = `SELECT ${codec.columns},
+  (SELECT a.last_access_at FROM deployment_access a WHERE a.id = deployments.id) AS touched_at FROM deployments`;
+
+function fromRow(r: Record<string, unknown>): Deployment {
+  const d = codec.row(r);
   return {
-    async readOne(id) {
-      await ready();
-      const rows = await pg.q("SELECT last_access_at FROM deployment_access WHERE id = $1", [id]);
-      return rows.length ? Number(rows[0]!.last_access_at) : null;
-    },
-    async readAll() {
-      await ready();
-      const rows = await pg.q("SELECT id, last_access_at FROM deployment_access");
-      return new Map(rows.map((row) => [row.id as string, Number(row.last_access_at)]));
-    },
-    async write(id, at) {
-      await ready();
-      const res = await pg.query(
-        `INSERT INTO deployment_access (id, last_access_at)
-         SELECT d.id, $2::bigint FROM deployments d WHERE d.id = $1
-         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET last_access_at = GREATEST(deployment_access.last_access_at, EXCLUDED.last_access_at)`,
-        [id, at],
-      );
-      return res.rowCount > 0;
-    },
-    async findByName(name) {
-      await ready();
-      const rows = await pg.q("SELECT json FROM deployments WHERE json->>'name' = $1 ORDER BY id LIMIT 1", [name]);
-      return rows.length ? (rows[0]!.json as Deployment) : null;
-    },
+    ...d,
+    endpoint: d.endpoint ?? null,
+    ...(r.touched_at != null ? { lastAccessAt: Number(r.touched_at) } : {}),
   };
 }
 
@@ -200,68 +189,117 @@ function isNameConflict(e: unknown): boolean {
   return err?.code === "23505" && err?.constraint === NAME_INDEX;
 }
 
+async function named<T>(name: string | undefined, write: () => Promise<T>): Promise<T> {
+  try {
+    return await write();
+  } catch (e) {
+    if (isNameConflict(e)) throw new Error(`deployment name taken: ${name}`, { cause: e });
+    throw e;
+  }
+}
+
+async function makeVersion(
+  git: DeployGitStore,
+  deploymentId: string,
+  version: number,
+  input: VersionInput,
+  parentCommit?: string,
+): Promise<DeploymentVersion> {
+  const commit = input.files
+    ? await git.commit({
+        deploymentId,
+        version,
+        files: input.files,
+        ...(parentCommit ? { parent: parentCommit } : {}),
+        message: `deploy v${version}`,
+      })
+    : undefined;
+  return {
+    version,
+    createdAt: Date.now(),
+    entrypoint: input.entrypoint,
+    snapshotDir: input.snapshotDir,
+    ...(input.homeDir ? { homeDir: input.homeDir } : {}),
+    ...(input.env ? { env: input.env } : {}),
+    ...(commit ? { commit } : {}),
+    ...(parentCommit ? { parentCommit } : {}),
+  };
+}
+
+async function setVersionRefs(git: DeployGitStore, id: string, v: DeploymentVersion): Promise<DeploymentVersion> {
+  if (v.commit) {
+    await git.setRef(id, versionRef(v.version), v.commit);
+    await git.setRef(id, `refs/deploy-commits/${v.commit}`, v.commit);
+  }
+  return v;
+}
+
+type FieldSetters = Pick<
+  DeployStore,
+  | "setStatus"
+  | "setEndpoint"
+  | "setName"
+  | "setOwnerScope"
+  | "setDisplayName"
+  | "setAlwaysOn"
+  | "setEmbedAncestors"
+  | "setPublic"
+  | "setDefaultAudience"
+>;
+
+function fieldSetters(set: (id: string, column: string, value: unknown) => Promise<void>): FieldSetters {
+  return {
+    setStatus: (id, status) => set(id, "status", status),
+    setEndpoint: (id, endpoint) => set(id, "endpoint", endpoint ? jsonbStringify(endpoint) : null),
+    setName: (id, name) => named(name, () => set(id, "name", name)),
+    setOwnerScope: (id, ownerScopeId) => set(id, "owner_scope_id", ownerScopeId),
+    setDisplayName: (id, displayName) => set(id, "display_name", displayName || null),
+    setAlwaysOn: (id, alwaysOn) => set(id, "always_on", alwaysOn),
+    setEmbedAncestors: (id, embedAncestors) => set(id, "embed_ancestors", embedAncestors),
+    setPublic: (id, isPublic) => set(id, "public", isPublic ? true : null),
+    setDefaultAudience: (id, snapshot) => set(id, "default_audience", jsonbStringify(snapshot)),
+  };
+}
+
 export function createDeployStore(backing: DeployStoreBackings): DeployStore {
-  const backingMap = backing.deployments;
+  const { q, query } = createPgPool(backing.databaseUrl, [DEPLOYMENTS_MIGRATION]);
   const git = createDeployGitStore(backing.git);
   const touchDebounceMs = backing.touchDebounceMs ?? TOUCH_DEBOUNCE_MS;
-  const access = createPgDeployAccess(backing.pg);
   const lastTouch = new Map<string, number>();
 
-  function withAccess(d: Deployment, at: number | null | undefined): Deployment {
-    return at == null ? d : { ...d, lastAccessAt: at };
+  const load = async (id: string): Promise<Deployment | null> => {
+    const rows = await q(`${SELECT} WHERE id = $1`, [id]);
+    return rows.length ? fromRow(rows[0]!) : null;
+  };
+  const set = async (id: string, column: string, value: unknown): Promise<void> => {
+    await q(`UPDATE deployments SET ${column} = $2 WHERE id = $1`, [id, value]);
+  };
+  const versionIn = async (id: string, version: number): Promise<DeploymentVersion | null | undefined> => {
+    const d = await load(id);
+    if (!d) return undefined;
+    const v = d.versions.find((x) => x.version === version);
+    if (!v) throw new Error(`no such version ${version}`);
+    return v;
+  };
+
+  async function appendVersion(id: string, v: DeploymentVersion): Promise<DeploymentVersion> {
+    await q(`UPDATE deployments SET versions = versions || $2::jsonb, current_version = $3 WHERE id = $1`, [
+      id,
+      jsonbStringify([v]),
+      v.version,
+    ]);
+    return setVersionRefs(git, id, v);
   }
 
-  async function putNamed(d: Deployment): Promise<void> {
-    try {
-      await backingMap.put(d.id, d);
-    } catch (e) {
-      if (isNameConflict(e)) throw new Error(`deployment name taken: ${d.name}`, { cause: e });
-      throw e;
-    }
-  }
-
-  async function makeVersion(
-    deploymentId: string,
-    version: number,
-    input: VersionInput,
-    parentCommit?: string,
-  ): Promise<DeploymentVersion> {
-    const commit = input.files
-      ? await git.commit({
-          deploymentId,
-          version,
-          files: input.files,
-          ...(parentCommit ? { parent: parentCommit } : {}),
-          message: `deploy v${version}`,
-        })
-      : undefined;
-    return {
-      version,
-      createdAt: Date.now(),
-      entrypoint: input.entrypoint,
-      snapshotDir: input.snapshotDir,
-      ...(input.homeDir ? { homeDir: input.homeDir } : {}),
-      ...(input.env ? { env: input.env } : {}),
-      ...(commit ? { commit } : {}),
-      ...(parentCommit ? { parentCommit } : {}),
-    };
-  }
-
-  async function updateVersionRef(deploymentId: string, version: DeploymentVersion): Promise<void> {
-    if (!version.commit) return;
-    await git.setRef(deploymentId, versionRef(version.version), version.commit);
-    await git.setRef(deploymentId, `refs/deploy-commits/${version.commit}`, version.commit);
-  }
-
-  async function updateAppliedRef(deploymentId: string, version: DeploymentVersion): Promise<void> {
-    if (version.commit) await git.setRef(deploymentId, CURRENT_REF, version.commit);
-    else await git.deleteRef(deploymentId, CURRENT_REF);
+  async function committedVersion(id: string, version: number): Promise<DeploymentVersion | undefined> {
+    const v = (await load(id))?.versions.find((x) => x.version === version);
+    return v?.commit ? v : undefined;
   }
 
   return {
     async create(input) {
       const id = input.id ?? randomUUID();
-      const v = await makeVersion(id, 1, input);
+      const v = await makeVersion(git, id, 1, input);
       const d: Deployment = {
         id,
         ownerScopeId: input.ownerScopeId,
@@ -274,30 +312,28 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
         endpoint: null,
         versions: [v],
       };
-      await putNamed(d);
-      await updateVersionRef(d.id, v);
+      await named(d.name, () =>
+        q(
+          `INSERT INTO deployments (${codec.columns}) VALUES (${codec.placeholders})
+           ON CONFLICT (${tenantCols("id")}) DO UPDATE SET ${codec.updates}`,
+          codec.values(id, d),
+        ),
+      );
+      await setVersionRefs(git, id, v);
       return d;
     },
     async addVersion(id, input) {
-      const d = await backingMap.get(id);
+      const d = await load(id);
       if (!d) throw new Error(`unknown deployment: ${id}`);
-      const version = d.versions.length + 1;
-      const parentCommit = currentVersionOf(d)?.commit;
-      const v = await makeVersion(id, version, input, parentCommit);
-      d.versions.push(v);
-      d.currentVersion = version;
-      await backingMap.put(id, d);
-      await updateVersionRef(id, v);
-      return v;
+      return appendVersion(id, await makeVersion(git, id, d.versions.length + 1, input, currentVersionOf(d)?.commit));
     },
     async addVersionFromCommit(id, commit) {
-      const d = await backingMap.get(id);
+      const d = await load(id);
       if (!d) throw new Error(`unknown deployment: ${id}`);
       const current = currentVersionOf(d);
       if (current?.commit === commit) return null;
-      const version = d.versions.length + 1;
-      const v: DeploymentVersion = {
-        version,
+      return appendVersion(id, {
+        version: d.versions.length + 1,
         createdAt: Date.now(),
         entrypoint: current?.entrypoint ?? "",
         snapshotDir: current?.snapshotDir ?? "/unused",
@@ -305,124 +341,64 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
         ...(current?.env ? { env: current.env } : {}),
         commit,
         ...(current?.commit ? { parentCommit: current.commit } : {}),
-      };
-      d.versions.push(v);
-      d.currentVersion = version;
-      await backingMap.put(id, d);
-      await updateVersionRef(id, v);
-      return v;
+      });
     },
-    async get(id) {
-      const d = await backingMap.get(id);
-      return d ? withAccess(d, await access.readOne(id)) : null;
-    },
+    get: load,
     async getByName(name) {
-      const d = access.findByName
-        ? await access.findByName(name)
-        : ((await backingMap.all()).find((x) => x.name === name) ?? null);
-      return d ? withAccess(d, await access.readOne(d.id)) : null;
+      const rows = await q(`${SELECT} WHERE name = $1 ORDER BY id LIMIT 1`, [name]);
+      return rows.length ? fromRow(rows[0]!) : null;
     },
     async list() {
-      const [ds, accessAt] = await Promise.all([backingMap.all(), access.readAll()]);
-      return ds.map((d) => withAccess(d, accessAt.get(d.id)));
+      return (await q(`${SELECT} ORDER BY id`)).map(fromRow);
     },
     async setCurrentVersion(id, version) {
-      const d = await backingMap.get(id);
-      if (!d) return;
-      const v = d.versions.find((x) => x.version === version);
-      if (!v) throw new Error(`no such version ${version}`);
-      d.currentVersion = version;
-      await backingMap.put(id, d);
+      if (await versionIn(id, version)) await set(id, "current_version", version);
     },
     async setVersionImage(id, version, image) {
-      const d = await backingMap.get(id);
-      if (!d) return;
-      const v = d.versions.find((x) => x.version === version);
-      if (!v) throw new Error(`no such version ${version}`);
-      v.image = image;
-      await backingMap.put(id, d);
+      if (!(await versionIn(id, version))) return;
+      await q(
+        `UPDATE deployments SET versions = (
+           SELECT jsonb_agg(CASE WHEN (v->>'version')::bigint = $2 THEN v || jsonb_build_object('image', $3::text) ELSE v END
+             ORDER BY n)
+           FROM jsonb_array_elements(versions) WITH ORDINALITY AS t(v, n))
+         WHERE id = $1`,
+        [id, version, image],
+      );
     },
-    async setStatus(id, status) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.status = status;
-        await backingMap.put(id, d);
-      }
-    },
-    async setEndpoint(id, endpoint) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.endpoint = endpoint;
-        await backingMap.put(id, d);
-      }
-    },
-    async setName(id, name) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.name = name;
-        await putNamed(d);
-      }
-    },
-    async setOwnerScope(id, ownerScopeId) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.ownerScopeId = ownerScopeId;
-        await backingMap.put(id, d);
-      }
-    },
-    async setDisplayName(id, displayName) {
-      const d = await backingMap.get(id);
-      if (d) {
-        if (displayName) d.displayName = displayName;
-        else delete d.displayName;
-        await backingMap.put(id, d);
-      }
-    },
-    async setAlwaysOn(id, alwaysOn) {
-      await backingMap.merge(id, { alwaysOn } as Partial<Deployment>);
-    },
-    async setEmbedAncestors(id, embedAncestors) {
-      await backingMap.merge(id, { embedAncestors } as Partial<Deployment>);
-    },
-    async setPublic(id, isPublic) {
-      await backingMap.merge(id, { public: isPublic ? true : undefined });
-    },
-    async setDefaultAudience(id, snapshot) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.defaultAudience = snapshot;
-        await backingMap.put(id, d);
-      }
-    },
+    ...fieldSetters(set),
     async setAppliedVersion(id, version) {
-      const d = await backingMap.get(id);
-      if (!d) return;
-      const v = d.versions.find((x) => x.version === version);
-      if (!v) throw new Error(`no such version ${version}`);
-      d.appliedVersion = version;
-      await backingMap.put(id, d);
-      await updateAppliedRef(id, v);
+      const v = await versionIn(id, version);
+      if (!v) return;
+      await set(id, "applied_version", version);
+      if (v.commit) await git.setRef(id, CURRENT_REF, v.commit);
+      else await git.deleteRef(id, CURRENT_REF);
     },
     async touch(id, at) {
       const prev = lastTouch.get(id);
       if (prev !== undefined && at - prev < touchDebounceMs) return;
-      if (await access.write(id, at)) lastTouch.set(id, at);
+      const res = await query(
+        `INSERT INTO deployment_access (id, last_access_at)
+         SELECT d.id, $2::bigint FROM deployments d WHERE d.id = $1
+         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET last_access_at = GREATEST(deployment_access.last_access_at, EXCLUDED.last_access_at)`,
+        [id, at],
+      );
+      if (res.rowCount > 0) lastTouch.set(id, at);
     },
     async versionOf(id, version) {
-      return (await backingMap.get(id))?.versions.find((v) => v.version === version) ?? null;
+      return (await load(id))?.versions.find((v) => v.version === version) ?? null;
     },
     async treeOf(id, version) {
-      const v = (await backingMap.get(id))?.versions.find((x) => x.version === version);
-      return v?.commit ? git.treeOf(id, v.commit) : null;
+      const v = await committedVersion(id, version);
+      return v ? git.treeOf(id, v.commit!) : null;
     },
     commitTreeOf: (id, commit) => git.treeOf(id, commit),
     async filesOf(id, version, paths) {
-      const v = (await backingMap.get(id))?.versions.find((x) => x.version === version);
-      return v?.commit ? git.filesOf(id, v.commit, paths) : null;
+      const v = await committedVersion(id, version);
+      return v ? git.filesOf(id, v.commit!, paths) : null;
     },
     async bundleOf(id, version) {
-      const v = (await backingMap.get(id))?.versions.find((x) => x.version === version);
-      return v?.commit ? git.bundle(id, v.commit) : null;
+      const v = await committedVersion(id, version);
+      return v ? git.bundle(id, v.commit!) : null;
     },
     refOf: (id, ref) => git.refOf(id, ref),
     repoUrl: (id) => git.repoUrl(id),

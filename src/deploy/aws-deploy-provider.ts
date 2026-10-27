@@ -5,7 +5,7 @@ import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
 import { bytes, normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
 import { AwsApiError, createMicrovmApi, createMicrovmClient, type AwsMicrovmApi } from "../sandbox/aws-microvm-api.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { deploymentKeyedTable, type DeployBodyStore } from "./deploy-body-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
@@ -69,6 +69,17 @@ export interface StoredDeployBody {
   orgId?: string;
 }
 
+export const AWS_DEPLOY_BODIES_MIGRATION = deploymentKeyedTable("aws_deploy_bodies", {
+  microvmId: { type: "text", required: true },
+  endpoint: { type: "text", required: true },
+  createdAtMs: { type: "bigint", required: true },
+  lastSnapshotMs: { type: "bigint" },
+  dataCredsAtMs: { type: "bigint" },
+  rotateNotBeforeMs: { type: "bigint" },
+  replacementMicrovmId: { type: "text" },
+  orgId: { type: "text" },
+});
+
 export interface AwsDeployProviderOptions {
   region: string;
   profile?: string;
@@ -88,7 +99,7 @@ export interface AwsDeployProviderOptions {
   dataPrefix?: string;
   snapshotIntervalMs?: number;
   dataRoleArn?: string;
-  store: DurableMap<StoredDeployBody>;
+  store: DeployBodyStore<StoredDeployBody>;
   advisoryLock: AdvisoryLock;
   api?: AwsMicrovmApi;
   fetchImpl?: typeof fetch;

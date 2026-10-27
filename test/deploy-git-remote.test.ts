@@ -11,9 +11,9 @@ import { createServer } from "../src/api/server.ts";
 import type { App } from "../src/api/app.ts";
 import { mintDeployGitAccess } from "../src/deploy/access-token.ts";
 import { createDeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
-import type { DeployGitArchive } from "../src/deploy/deploy-git-store.ts";
+import { createDeployGitArchiveStore } from "../src/deploy/deploy-git-store.ts";
 import { scopeId } from "../src/types.ts";
-import { testMap, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
+import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 const execFileP = promisify(execFile);
@@ -25,7 +25,7 @@ async function fixture(): Promise<{
   deployment: Deployment;
 }> {
   const backing = testDeployBackings();
-  const archiveStore = testMap<DeployGitArchive>();
+  const archiveStore = createDeployGitArchiveStore(backing.databaseUrl);
   const writerStore = createDeployStore({
     ...backing,
     git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-remote-writer-")), archiveStore },

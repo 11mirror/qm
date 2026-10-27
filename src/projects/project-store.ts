@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
+import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { scopeId, type ScopeId } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
 import { createKeyedQueue } from "../util/async.ts";
@@ -94,8 +95,130 @@ function visible(project: Project): Project {
   };
 }
 
+const PROJECTS: TableSpec = {
+  table: "projects",
+  key: "id",
+  keyIsField: true,
+  columns: {
+    orgId: { type: "text", required: true },
+    name: { type: "text", required: true },
+    ownerId: { type: "text", required: true },
+    memberIds: { type: "text[]", required: true },
+    channelMemberIds: { type: "text[]" },
+    slackChannel: { type: "jsonb" },
+    createdAt: { type: "bigint", required: true },
+    updatedAt: { type: "bigint", required: true },
+  },
+};
+
+export const PROJECTS_MIGRATION = mapToTableMigration("projects/store/0001-typed", PROJECTS, {
+  statements: [`CREATE INDEX IF NOT EXISTS projects_org ON projects (org_id)`],
+});
+
+const codec = tableCodec<Project>(PROJECTS);
+
+type Refusal = Exclude<ProjectMutation["status"], "ok">;
+type Transform = (project: Project) => Project | Refusal;
+type IsActive = (principalId: string) => boolean;
+
+function effectiveMemberIds(project: Project): string[] {
+  return [...new Set([...project.memberIds, ...(project.channelMemberIds ?? [])])];
+}
+
+function createProjectRows(databaseUrl: string) {
+  const { q } = createPgPool(databaseUrl, [PROJECTS_MIGRATION]);
+  const upsert = async (project: Project, onConflict: string): Promise<Project> =>
+    codec.rows(
+      await q(
+        `INSERT INTO projects (${codec.columns}) VALUES (${codec.placeholders})
+         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET ${onConflict} RETURNING ${codec.columns}`,
+        codec.values(project.id, project),
+      ),
+    )[0]!;
+  return {
+    load: async (id: string): Promise<Project | null> =>
+      codec.rows(await q(`SELECT ${codec.columns} FROM projects WHERE id = $1`, [id]))[0] ?? null,
+    save: (project: Project) => upsert(project, codec.updates),
+    insertOrGet: (project: Project) => upsert(project, "id = projects.id"),
+    listWhere: async (where: string, params: unknown[]): Promise<Project[]> =>
+      codec.rows(
+        await q(`SELECT ${codec.columns} FROM projects WHERE org_id = $1 AND ${where} ORDER BY updated_at DESC, id`, [
+          tenant().orgId,
+          ...params,
+        ]),
+      ),
+  };
+}
+
+function rosterTransform(actorId: string, memberId: string, add: boolean, isActive: IsActive, now: () => number) {
+  return (project: Project): Project | Refusal => {
+    const canChangeRoster = add
+      ? project.memberIds.some((member) => samePerson(member, actorId))
+      : samePerson(project.ownerId, actorId);
+    if (!canChangeRoster || !isActive(project.ownerId) || !isActive(actorId)) return "forbidden";
+    if (samePerson(memberId, project.ownerId)) return "invalid_member";
+    const memberIds = add
+      ? [...new Set([...project.memberIds, memberId])]
+      : project.memberIds.filter((member) => member !== memberId);
+    if (
+      memberIds.length === project.memberIds.length &&
+      memberIds.every((member, i) => member === project.memberIds[i])
+    )
+      return project;
+    return { ...project, memberIds, updatedAt: Math.max(now(), project.updatedAt + 1) };
+  };
+}
+
+function slackLinkTransform(
+  actorId: string,
+  link: { channelId: string; channelName: string } | null,
+  isActive: IsActive,
+  now: () => number,
+): Transform {
+  return (project) => {
+    const isMember = project.memberIds.some((member) => samePerson(member, actorId));
+    if (!isMember || !isActive(project.ownerId) || !isActive(actorId)) return "forbidden";
+    const current = project.slackChannel;
+    if (!link) {
+      if (!current) return project;
+      const { slackChannel: _dropped, channelMemberIds: _members, ...rest } = project;
+      return rest;
+    }
+    if (current && current.channelId === link.channelId && current.channelName === link.channelName) return project;
+    const slackChannel = {
+      channelId: link.channelId,
+      channelName: link.channelName,
+      linkedBy: actorId,
+      linkedAt: now(),
+    };
+    return { ...project, slackChannel };
+  };
+}
+
+function channelSyncTransform(
+  memberIds: readonly string[],
+  channelName: string | undefined,
+  isActive: IsActive,
+  now: () => number,
+): Transform {
+  const next = [...new Set(memberIds)].sort();
+  return (project) => {
+    if (!project.slackChannel || !isActive(project.ownerId)) return "forbidden";
+    const current = [...(project.channelMemberIds ?? [])].sort();
+    const sameMembers = current.length === next.length && current.every((m, i) => m === next[i]);
+    const nextName = channelName ?? project.slackChannel.channelName;
+    if (sameMembers && nextName === project.slackChannel.channelName) return project;
+    return {
+      ...project,
+      channelMemberIds: next,
+      slackChannel: { ...project.slackChannel, channelName: nextName },
+      ...(sameMembers ? {} : { updatedAt: Math.max(now(), project.updatedAt + 1) }),
+    };
+  };
+}
+
 export function createProjectStore(
-  backing: DurableMap<Project>,
+  databaseUrl: string,
   opts: {
     now?: () => number;
     id?: () => string;
@@ -108,40 +231,29 @@ export function createProjectStore(
   const isActiveMember = opts.isActiveMember ?? (() => true);
   const advisoryLock = opts.advisoryLock;
   const queue = createKeyedQueue<string>();
+  const { load, save, insertOrGet, listWhere } = createProjectRows(databaseUrl);
   const withLock = <T>(id: string, fn: () => Promise<T>): Promise<T> =>
     queue(id, () => advisoryLock.withLock(`project:${id}`, fn));
 
   async function projectForGroup(groupRef: string): Promise<Project | undefined> {
     const id = projectIdFromGroupRef(groupRef);
     if (!id) return undefined;
-    const project = await backing.get(id);
+    const project = await load(id);
     return project?.orgId === tenant().orgId ? project : undefined;
   }
-
-  function effectiveMemberIds(project: Project): string[] {
-    return [...new Set([...project.memberIds, ...(project.channelMemberIds ?? [])])];
-  }
-
-  type Refusal = Exclude<ProjectMutation["status"], "ok">;
 
   function change(
     id: string,
     effect: ProjectMutationEffect | undefined,
-    transform: (project: Project) => Project | Refusal,
+    transform: Transform,
   ): Promise<ProjectMutation> {
     return withLock(id, async () => {
-      let refusal: Refusal | undefined;
-      let changed = false;
-      const updated = await backing.update(id, (project) => {
-        const next = transform(project);
-        refusal = typeof next === "string" ? next : undefined;
-        if (typeof next === "string") return project;
-        changed = next !== project;
-        return next;
-      });
-      if (!updated) return { status: "not_found" };
-      if (refusal) return { status: refusal };
-      const result = { status: "ok" as const, project: visible(updated), changed };
+      const project = await load(id);
+      if (!project) return { status: "not_found" };
+      const next = transform(project);
+      if (typeof next === "string") return { status: next };
+      const changed = next !== project;
+      const result = { status: "ok" as const, project: visible(changed ? await save(next) : project), changed };
       await effect?.(result);
       return result;
     });
@@ -155,22 +267,7 @@ export function createProjectStore(
     effect?: ProjectMutationEffect,
   ): Promise<ProjectMutation> {
     if (!memberId) return { status: "invalid_member" };
-    return change(id, effect, (project) => {
-      const canChangeRoster = add
-        ? project.memberIds.some((member) => samePerson(member, actorId))
-        : samePerson(project.ownerId, actorId);
-      if (!canChangeRoster || !isActiveMember(project.ownerId) || !isActiveMember(actorId)) return "forbidden";
-      if (samePerson(memberId, project.ownerId)) return "invalid_member";
-      const memberIds = add
-        ? [...new Set([...project.memberIds, memberId])]
-        : project.memberIds.filter((member) => member !== memberId);
-      if (
-        memberIds.length === project.memberIds.length &&
-        memberIds.every((member, i) => member === project.memberIds[i])
-      )
-        return project;
-      return { ...project, memberIds, updatedAt: Math.max(now(), project.updatedAt + 1) };
-    });
+    return change(id, effect, rosterTransform(actorId, memberId, add, isActiveMember, now));
   }
 
   return {
@@ -187,25 +284,19 @@ export function createProjectStore(
         createdAt: at,
         updatedAt: at,
       };
-      const stored = await backing.putIfAbsent(project.id, project);
+      const stored = await insertOrGet(project);
       if (stored.createdAt !== project.createdAt || stored.ownerId !== project.ownerId)
         throw new Error("project id collision");
       return visible(stored);
     },
     async get(id) {
-      const project = await backing.get(id);
+      const project = await load(id);
       return project ? visible(project) : null;
     },
     async listForMember(principalId) {
-      return (await backing.all())
-        .filter(
-          (project) =>
-            project.orgId === tenant().orgId &&
-            isActiveMember(project.ownerId) &&
-            isActiveMember(principalId) &&
-            effectiveMemberIds(project).includes(principalId),
-        )
-        .sort((a, b) => b.updatedAt - a.updatedAt)
+      if (!isActiveMember(principalId)) return [];
+      return (await listWhere(`($2 = ANY(member_ids) OR $2 = ANY(channel_member_ids))`, [principalId]))
+        .filter((project) => isActiveMember(project.ownerId))
         .map(visible);
     },
     addMember: (id, ownerId, memberId, effect) => mutate(id, ownerId, memberId, true, effect),
@@ -218,49 +309,13 @@ export function createProjectStore(
         return project.name === clean ? project : { ...project, name: clean };
       });
     },
-    async setSlackChannel(id, actorId, link, effect) {
-      return change(id, effect, (project) => {
-        const isMember = project.memberIds.some((member) => samePerson(member, actorId));
-        if (!isMember || !isActiveMember(project.ownerId) || !isActiveMember(actorId)) return "forbidden";
-        const current = project.slackChannel;
-        if (!link) {
-          if (!current) return project;
-          const { slackChannel: _dropped, channelMemberIds: _members, ...rest } = project;
-          return rest;
-        }
-        if (current && current.channelId === link.channelId && current.channelName === link.channelName) return project;
-        return {
-          ...project,
-          slackChannel: {
-            channelId: link.channelId,
-            channelName: link.channelName,
-            linkedBy: actorId,
-            linkedAt: now(),
-          },
-        };
-      });
-    },
-    async syncChannelMembers(id, memberIds, channelName, effect) {
-      const next = [...new Set(memberIds)].sort();
-      return change(id, effect, (project) => {
-        if (!project.slackChannel || !isActiveMember(project.ownerId)) return "forbidden";
-        const current = [...(project.channelMemberIds ?? [])].sort();
-        const sameMembers = current.length === next.length && current.every((m, i) => m === next[i]);
-        const nextName = channelName ?? project.slackChannel.channelName;
-        if (sameMembers && nextName === project.slackChannel.channelName) return project;
-        return {
-          ...project,
-          channelMemberIds: next,
-          slackChannel: { ...project.slackChannel, channelName: nextName },
-          ...(sameMembers ? {} : { updatedAt: Math.max(now(), project.updatedAt + 1) }),
-        };
-      });
-    },
+    setSlackChannel: (id, actorId, link, effect) =>
+      change(id, effect, slackLinkTransform(actorId, link, isActiveMember, now)),
+    syncChannelMembers: (id, memberIds, channelName, effect) =>
+      change(id, effect, channelSyncTransform(memberIds, channelName, isActiveMember, now)),
     async listLinked() {
-      return (await backing.all())
-        .filter(
-          (project) => project.orgId === tenant().orgId && project.slackChannel && isActiveMember(project.ownerId),
-        )
+      return (await listWhere(`slack_channel IS NOT NULL`, []))
+        .filter((project) => isActiveMember(project.ownerId))
         .map(visible);
     },
     async slackChannel(groupRef) {
@@ -292,7 +347,7 @@ export function createProjectStore(
       const id = projectIdFromGroupRef(groupRef);
       if (!id) return undefined;
       return withLock(id, async () => {
-        const project = await backing.get(id);
+        const project = await load(id);
         if (!project || project.orgId !== tenant().orgId || String(project.updatedAt) !== version) return undefined;
         return fn();
       });
@@ -303,7 +358,7 @@ export function createProjectStore(
     },
     async withRosterLock(id, fn) {
       return withLock(id, async () => {
-        const project = await backing.get(id);
+        const project = await load(id);
         return project ? fn(visible(project)) : null;
       });
     },

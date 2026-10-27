@@ -146,12 +146,12 @@ import { createDeployStore, type Deployment } from "./deploy/deploy-store.ts";
 import { viewerIdentityKey } from "./deploy/access-token.ts";
 import { deploymentCredentialSlugs } from "./deploy/deployment-credentials.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
-import { createAwsDeployProvider, type StoredDeployBody } from "./deploy/aws-deploy-provider.ts";
-import { createPorterDeployProvider, type StoredPorterDeployBody } from "./deploy/porter-deploy-provider.ts";
+import { AWS_DEPLOY_BODIES_MIGRATION, createAwsDeployProvider } from "./deploy/aws-deploy-provider.ts";
+import { createPorterDeployProvider, PORTER_DEPLOY_BODIES_MIGRATION } from "./deploy/porter-deploy-provider.ts";
 import {
   createE2bDeployProvider,
+  E2B_DEPLOY_BODIES_MIGRATION,
   E2B_DEPLOY_IDLE_TIMEOUT_SEC,
-  type StoredE2bDeployBody,
 } from "./deploy/e2b-deploy-provider.ts";
 import type { DeployProvider } from "./deploy/deploy-provider.ts";
 import { createDeployService } from "./deploy/deploy-service.ts";
@@ -165,7 +165,8 @@ import {
   rosterAdmits,
   type CanManageScope,
 } from "./resolution/scope-membership.ts";
-import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
+import { createDeployGitArchiveStore } from "./deploy/deploy-git-store.ts";
+import { createDeployBodyStore } from "./deploy/deploy-body-store.ts";
 import { createLocalWorkspaceStore, type WorkspaceStore } from "./workspace/workspace-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
@@ -333,7 +334,7 @@ import {
 import { createAdminService, parseAdminGrants, type AdminService } from "./admin/admin-service.ts";
 import { createAdminGrantStore } from "./admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-store.ts";
-import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
+import { createProjectStore, type ProjectStore } from "./projects/project-store.ts";
 import { withErrorReporting, type ErrorLog } from "./admin/error-log.ts";
 import { createPostgresReplayDedupe, type ReplayDedupe } from "./auth/replay-dedupe.ts";
 import {
@@ -347,7 +348,6 @@ import {
   LAYER_CREATED_BY,
   LAYER_REVIEWER,
   type DeploymentLayerStore,
-  type StoredDeploymentLayer,
 } from "./deployment/deployment-layer-store.ts";
 import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
 import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
@@ -588,7 +588,7 @@ export function buildApp(
   });
   const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
   const directory = createPostgresDirectoryStore(databaseUrl);
-  const projects = createProjectStore(artifactMap<Project>("projects"), {
+  const projects = createProjectStore(databaseUrl, {
     isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
     advisoryLock,
   });
@@ -623,7 +623,7 @@ export function buildApp(
   const orgScope = scopeId("org", config.orgId);
   const auditLog = createPostgresAuditLog(databaseUrl);
   const deploymentLayerStore = createDeploymentLayerStore({
-    backing: artifactMap<StoredDeploymentLayer>("deployment_layer"),
+    databaseUrl,
     runtime: deploymentLayer,
     skills,
     skillBundles,
@@ -1323,11 +1323,10 @@ export function buildApp(
     },
   };
   const deployStore = createDeployStore({
-    deployments: artifactMap<Deployment>("deployments"),
-    pg: pgArtifactMap.pool,
+    databaseUrl,
     git: {
       repoRoot: config.deployGitDir,
-      archiveStore: artifactMap<DeployGitArchive>("deploy_git_repos"),
+      archiveStore: createDeployGitArchiveStore(databaseUrl),
       ...(config.s3Bucket ? { archiveBytes: s3Bytes(config.s3Bucket, "deploy-git/") } : {}),
     },
   });
@@ -1335,7 +1334,7 @@ export function buildApp(
     createAwsDeployProvider({
       ...config.awsDeploy,
       advisoryLock,
-      store: artifactMap<StoredDeployBody>("aws_deploy_bodies"),
+      store: createDeployBodyStore(databaseUrl, AWS_DEPLOY_BODIES_MIGRATION),
       onError: sandboxOnError,
     });
   const buildDeployProvider: Record<Config["deployProvider"], () => DeployProvider> = {
@@ -1345,7 +1344,7 @@ export function buildApp(
       createPorterDeployProvider({
         ...config.porterDeploy,
         advisoryLock,
-        store: artifactMap<StoredPorterDeployBody>("porter_deploy_bodies"),
+        store: createDeployBodyStore(databaseUrl, PORTER_DEPLOY_BODIES_MIGRATION),
         onError: sandboxOnError,
       }),
     e2b: () =>
@@ -1353,7 +1352,7 @@ export function buildApp(
         client: e2bClient("apps"),
         ...(config.sandbox.namePrefix ? { namePrefix: config.sandbox.namePrefix } : {}),
         advisoryLock,
-        store: artifactMap<StoredE2bDeployBody>("e2b_deploy_bodies"),
+        store: createDeployBodyStore(databaseUrl, E2B_DEPLOY_BODIES_MIGRATION),
         onError: sandboxOnError,
       }),
   };

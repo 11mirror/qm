@@ -8,7 +8,7 @@ import {
   type StoredDeploymentLayer,
 } from "../src/deployment/deployment-layer-store.ts";
 import { emptyDeploymentLayer, resolvedDeploymentLayer } from "../src/deployment/load-layer.ts";
-import { type DurableMap } from "../src/persistence/durable-map.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
 import { scopeId } from "../src/types.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
@@ -39,13 +39,36 @@ const skill: DeploymentLayerBundle["skills"] = [
   },
 ];
 
+type LayerHead = Pick<StoredDeploymentLayer, "contentHash" | "pendingAudits">;
+const readLayer = async (databaseUrl: string): Promise<LayerHead | null> =>
+  ((
+    await createPgPool(databaseUrl).q(
+      `SELECT content_hash AS "contentHash", pending_audits AS "pendingAudits" FROM deployment_layer`,
+    )
+  )[0] as LayerHead | undefined) ?? null;
+
+async function putLayer(databaseUrl: string, r: StoredDeploymentLayer): Promise<void> {
+  const { q } = createPgPool(databaseUrl);
+  await q(`DELETE FROM deployment_layer`);
+  await q(`INSERT INTO deployment_layer SELECT * FROM jsonb_populate_record(NULL::deployment_layer, $1)`, [
+    {
+      ...r,
+      id: "current",
+      content_hash: r.contentHash,
+      updated_at: r.updatedAt,
+      updated_by: r.updatedBy,
+      pending_audits: r.pendingAudits,
+    },
+  ]);
+}
+
 const publicRuntime = (runtime: ReturnType<typeof resolvedDeploymentLayer>) => {
   const { dir: _dir, ...resolved } = runtime;
   return resolved;
 };
 
 test("the durable deployment layer versions by content, hydrates runtime state, and archives removed skills", async () => {
-  const backing = testMap<StoredDeploymentLayer>();
+  const databaseUrl = testDatabaseUrl();
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
     backing: testMap(),
@@ -54,7 +77,7 @@ test("the durable deployment layer versions by content, hydrates runtime state, 
   let now = 100;
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime,
     skills,
     scopeId: scopeId("org", "default-org"),
@@ -81,7 +104,7 @@ test("the durable deployment layer versions by content, hydrates runtime state, 
   const hydratedRuntime = emptyDeploymentLayer();
   const hydrated = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime: hydratedRuntime,
     skills,
     scopeId: scopeId("org", "default-org"),
@@ -96,10 +119,10 @@ test("the durable deployment layer versions by content, hydrates runtime state, 
 });
 
 test("invalid descriptors never replace the durable current layer", async () => {
-  const backing = testMap<StoredDeploymentLayer>();
+  const databaseUrl = testDatabaseUrl();
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
     scopeId: scopeId("org", "default-org"),
@@ -144,7 +167,7 @@ test("a legacy published skill with an unsafe name is quarantined without blocki
   });
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing: testMap<StoredDeploymentLayer>(),
+    databaseUrl: testDatabaseUrl(),
     runtime: emptyDeploymentLayer(),
     skills,
     scopeId: org,
@@ -160,7 +183,7 @@ test("a legacy published skill with an unsafe name is quarantined without blocki
 });
 
 test("a stale baked-in filesystem seed never downgrades or resurrects the durable layer", async () => {
-  const backing = testMap<StoredDeploymentLayer>();
+  const databaseUrl = testDatabaseUrl();
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
     backing: testMap(),
@@ -168,7 +191,7 @@ test("a stale baked-in filesystem seed never downgrades or resurrects the durabl
   const org = scopeId("org", "default-org");
   const writer = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime: emptyDeploymentLayer(),
     skills,
     scopeId: org,
@@ -187,7 +210,7 @@ test("a stale baked-in filesystem seed never downgrades or resurrects the durabl
   let seeded = 0;
   const booted = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime: emptyDeploymentLayer(),
     skills,
     scopeId: org,
@@ -209,7 +232,7 @@ test("a stale baked-in filesystem seed never downgrades or resurrects the durabl
 });
 
 test("with no durable record the filesystem seed applies once, and a later durable layer overrides it", async () => {
-  const backing = testMap<StoredDeploymentLayer>();
+  const databaseUrl = testDatabaseUrl();
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
     backing: testMap(),
@@ -218,7 +241,7 @@ test("with no durable record the filesystem seed applies once, and a later durab
   let seeded = 0;
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime: emptyDeploymentLayer(),
     skills,
     scopeId: org,
@@ -251,16 +274,8 @@ test("with no durable record the filesystem seed applies once, and a later durab
   assert.equal((await skills.resolve("acme", [org])).skill?.manifest.body, "durable body\n");
 });
 
-test("hydrate retries a transient backing read instead of failing boot", async () => {
-  const backing = testMap<StoredDeploymentLayer>();
-  let flaked = 0;
-  const flaky = {
-    ...backing,
-    get: async (key: string) => {
-      if (flaked++ === 0) throw new Error("connection reset");
-      return backing.get(key);
-    },
-  } as DurableMap<StoredDeploymentLayer>;
+test("hydrate retries a transient backing read instead of failing boot", async (t) => {
+  const databaseUrl = testDatabaseUrl();
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
     backing: testMap(),
@@ -268,38 +283,43 @@ test("hydrate retries a transient backing read instead of failing boot", async (
   const runtime = emptyDeploymentLayer();
   await createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime: emptyDeploymentLayer(),
     skills,
     scopeId: scopeId("org", "default-org"),
   }).put({ contract: 1, tools: [tool("acme CLI")], skills: [] }, "api");
+  const { q } = createPgPool(databaseUrl);
+  await q(`ALTER TABLE deployment_layer RENAME TO deployment_layer_away`);
+  let flaked = 0;
+  let restored: Promise<unknown> | undefined;
+  t.mock.method(console, "error", () => {
+    flaked++;
+    restored ??= q(`ALTER TABLE deployment_layer_away RENAME TO deployment_layer`);
+  });
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing: flaky,
+    databaseUrl,
     runtime,
     skills,
     scopeId: scopeId("org", "default-org"),
-    retryDelaysMs: [1],
+    retryDelaysMs: [200],
   });
   assert.equal((await store.hydrate())?.version, 1);
   assert.equal(runtime.advertisedTools[0], "acme CLI");
-  assert.ok(flaked > 1, "the failed read was retried");
+  assert.equal(flaked, 1, "the failed read was retried");
 });
 
 test("a stored record that no longer applies degrades to the seed instead of failing boot", async (t) => {
   const errors: string[] = [];
   t.mock.method(console, "error", (...args: unknown[]) => errors.push(args.map(String).join(" ")));
-  const backing = testMap<StoredDeploymentLayer>();
-  await backing.put("current", {
+  const databaseUrl = testDatabaseUrl();
+  await putLayer(databaseUrl, {
     contentHash: "poisoned",
     version: 1,
     updatedAt: 1,
     updatedBy: "old-cli",
     bundle: { contract: 1, tools: [], skills: [{ path: "skills/broken/README.md", content: "no SKILL.md here" }] },
-    resolved: (() => {
-      const { dir: _dir, ...r } = emptyDeploymentLayer();
-      return r;
-    })(),
+    resolved: publicRuntime(emptyDeploymentLayer()),
   });
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
@@ -309,7 +329,7 @@ test("a stored record that no longer applies degrades to the seed instead of fai
   let seeded = 0;
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime,
     skills,
     scopeId: scopeId("org", "default-org"),
@@ -329,11 +349,11 @@ test("a stored record that no longer applies degrades to the seed instead of fai
 });
 
 test("a failed seed is retried on the next hydrate (seeded only latches on success)", async () => {
-  const backing = testMap<StoredDeploymentLayer>();
+  const databaseUrl = testDatabaseUrl();
   let attempts = 0;
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
     scopeId: scopeId("org", "default-org"),
@@ -350,22 +370,19 @@ test("a failed seed is retried on the next hydrate (seeded only latches on succe
 
 test("a failed fallback seed after an incompatible stored layer fails boot and retries", async (t) => {
   t.mock.method(console, "error", () => undefined);
-  const backing = testMap<StoredDeploymentLayer>();
-  await backing.put("current", {
+  const databaseUrl = testDatabaseUrl();
+  await putLayer(databaseUrl, {
     contentHash: "poisoned-seed",
     version: 1,
     updatedAt: 1,
     updatedBy: "old-cli",
     bundle: { contract: 1, tools: [], skills: [{ path: "skills/broken/README.md", content: "no SKILL.md here" }] },
-    resolved: (() => {
-      const { dir: _dir, ...resolved } = emptyDeploymentLayer();
-      return resolved;
-    })(),
+    resolved: publicRuntime(emptyDeploymentLayer()),
   });
   let attempts = 0;
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime: resolvedDeploymentLayer("/fallback", []),
     skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
     scopeId: scopeId("org", "default-org"),
@@ -381,7 +398,7 @@ test("a failed fallback seed after an incompatible stored layer fails boot and r
 });
 
 test("a PUT landing on another instance mid-seed is applied right after seeding (no 30s stale window)", async () => {
-  const backing = testMap<StoredDeploymentLayer>();
+  const databaseUrl = testDatabaseUrl();
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
     backing: testMap(),
@@ -389,14 +406,14 @@ test("a PUT landing on another instance mid-seed is applied right after seeding 
   const org = scopeId("org", "default-org");
   const writer = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime: emptyDeploymentLayer(),
     skills,
     scopeId: org,
   });
   const booted = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime: emptyDeploymentLayer(),
     skills,
     scopeId: org,
@@ -433,26 +450,23 @@ test("a PUT landing on another instance mid-seed is applied right after seeding 
 test("a layer that appears mid-seed but fails to apply leaves the fallback live instead of failing boot", async (t) => {
   const errors: string[] = [];
   t.mock.method(console, "error", (...args: unknown[]) => errors.push(args.map(String).join(" ")));
-  const backing = testMap<StoredDeploymentLayer>();
+  const databaseUrl = testDatabaseUrl();
   const runtime = resolvedDeploymentLayer("/fallback", []);
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime,
     skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
     scopeId: scopeId("org", "default-org"),
     retryDelaysMs: [],
     seedFallback: async () => {
-      await backing.put("current", {
+      await putLayer(databaseUrl, {
         contentHash: "appeared-poisoned",
         version: 1,
         updatedAt: 1,
         updatedBy: "other-instance",
         bundle: { contract: 1, tools: [], skills: [{ path: "skills/broken/README.md", content: "no SKILL.md here" }] },
-        resolved: (() => {
-          const { dir: _dir, ...resolved } = emptyDeploymentLayer();
-          return resolved;
-        })(),
+        resolved: publicRuntime(emptyDeploymentLayer()),
       });
     },
   });
@@ -464,7 +478,7 @@ test("a layer that appears mid-seed but fails to apply leaves the fallback live 
 });
 
 test("a mid-seed layer that fails during skill mutation keeps the fallback live and retries later", async () => {
-  const backing = testMap<StoredDeploymentLayer>();
+  const databaseUrl = testDatabaseUrl();
   const baseSkills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
     backing: testMap(),
@@ -480,13 +494,13 @@ test("a mid-seed layer that fails during skill mutation keeps the fallback live 
   const runtime = resolvedDeploymentLayer("/fallback", []);
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime,
     skills,
     scopeId: scopeId("org", "default-org"),
     retryDelaysMs: [],
     seedFallback: async () => {
-      await backing.put("current", {
+      await putLayer(databaseUrl, {
         contentHash: "appeared-partial",
         version: 1,
         updatedAt: 1,
@@ -499,10 +513,7 @@ test("a mid-seed layer that fails during skill mutation keeps the fallback live 
             { path: "skills/b/SKILL.md", content: "---\nname: b\ndescription: B.\n---\nb\n" },
           ],
         },
-        resolved: (() => {
-          const { dir: _dir, ...resolved } = emptyDeploymentLayer();
-          return resolved;
-        })(),
+        resolved: publicRuntime(emptyDeploymentLayer()),
       });
     },
   });
@@ -516,7 +527,7 @@ test("a mid-seed layer that fails during skill mutation keeps the fallback live 
 test("misplaced tool files are rejected, not silently ignored", async () => {
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing: testMap<StoredDeploymentLayer>(),
+    databaseUrl: testDatabaseUrl(),
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
     scopeId: scopeId("org", "default-org"),
@@ -537,7 +548,7 @@ test("live() reports the runtime source and durable reflects the backing", async
   });
   const none = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing: testMap<StoredDeploymentLayer>(),
+    databaseUrl: testDatabaseUrl(),
     runtime: emptyDeploymentLayer(),
     skills,
     scopeId: scopeId("org", "default-org"),
@@ -547,7 +558,7 @@ test("live() reports the runtime source and durable reflects the backing", async
   const fsRuntime = resolvedDeploymentLayer("/layer", []);
   const fs = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing: testMap<StoredDeploymentLayer>(),
+    databaseUrl: testDatabaseUrl(),
     runtime: fsRuntime,
     skills,
     scopeId: scopeId("org", "default-org"),
@@ -563,7 +574,7 @@ test("live() reports the runtime source and durable reflects the backing", async
 test("duplicate skill names across layer skill dirs are rejected at validation", async () => {
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing: testMap<StoredDeploymentLayer>(),
+    databaseUrl: testDatabaseUrl(),
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
     scopeId: scopeId("org", "default-org"),
@@ -587,7 +598,7 @@ test("duplicate skill names across layer skill dirs are rejected at validation",
 test("a NUL byte in the bundle is rejected at validation (Postgres JSONB would 500 on it later)", async () => {
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing: testMap<StoredDeploymentLayer>(),
+    databaseUrl: testDatabaseUrl(),
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
     scopeId: scopeId("org", "default-org"),
@@ -608,7 +619,7 @@ test("a NUL byte in the bundle is rejected at validation (Postgres JSONB would 5
 test("unpaired Unicode surrogates are rejected before the JSONB write", async () => {
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing: testMap<StoredDeploymentLayer>(),
+    databaseUrl: testDatabaseUrl(),
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
     scopeId: scopeId("org", "default-org"),
@@ -627,10 +638,10 @@ test("unpaired Unicode surrogates are rejected before the JSONB write", async ()
 });
 
 test("PUT validates cross-tool credential paths before persisting", async () => {
-  const backing = testMap<StoredDeploymentLayer>();
+  const databaseUrl = testDatabaseUrl();
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
     scopeId: scopeId("org", "default-org"),
@@ -662,13 +673,13 @@ test("PUT validates cross-tool credential paths before persisting", async () => 
     (error: unknown) =>
       error instanceof DeploymentLayerValidationError && /incompatible credential paths/.test(error.message),
   );
-  assert.equal(await backing.get("current"), null);
+  assert.equal(await readLayer(databaseUrl), null);
 });
 
 test("hydrate reparses bundle descriptors instead of trusting stored resolved fields", async (t) => {
   t.mock.method(console, "error", () => undefined);
-  const backing = testMap<StoredDeploymentLayer>();
-  await backing.put("current", {
+  const databaseUrl = testDatabaseUrl();
+  await putLayer(databaseUrl, {
     contentHash: "legacy-unvalidated",
     version: 7,
     updatedAt: 1,
@@ -687,7 +698,7 @@ test("hydrate reparses bundle descriptors instead of trusting stored resolved fi
   const runtime = resolvedDeploymentLayer("/fallback", []);
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime,
     skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
     scopeId: scopeId("org", "default-org"),
@@ -700,24 +711,24 @@ test("hydrate reparses bundle descriptors instead of trusting stored resolved fi
 });
 
 test("hydrate derives runtime fields from the stored bundle, not the resolved cache", async () => {
-  const backing = testMap<StoredDeploymentLayer>();
+  const databaseUrl = testDatabaseUrl();
   const bundle = { contract: 1 as const, tools: [tool("bundle truth")], skills: [] };
   const writer = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
     scopeId: scopeId("org", "default-org"),
   });
   const record = await writer.put(bundle, "writer");
-  await backing.put("current", {
+  await putLayer(databaseUrl, {
     ...record,
     resolved: { ...record.resolved, advertisedTools: ["tampered cache"] },
   });
   const runtime = emptyDeploymentLayer();
   const reader = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime,
     skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
     scopeId: scopeId("org", "default-org"),
@@ -726,29 +737,12 @@ test("hydrate derives runtime fields from the stored bundle, not the resolved ca
   assert.deepEqual(runtime.advertisedTools, ["bundle truth"]);
 });
 
-test("a concurrent delete during put surfaces a conflict error, not a TypeError", async () => {
-  const backing = {
-    get: async () => null,
-    put: async () => {},
-    putIfAbsent: async (_k: string, v: StoredDeploymentLayer) => ({ ...v, contentHash: "different-hash" }),
-    update: async () => null,
-  } as unknown as DurableMap<StoredDeploymentLayer>;
-  const store = createDeploymentLayerStore({
-    ...singleProcessDeps(),
-    backing,
-    runtime: emptyDeploymentLayer(),
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
-    scopeId: scopeId("org", "default-org"),
-  });
-  await assert.rejects(store.put({ contract: 1, tools: [], skills: [] }, "api"), /concurrent delete/);
-});
-
 test("concurrent writes serialize into monotonic durable versions", async () => {
-  const backing = testMap<StoredDeploymentLayer>();
+  const databaseUrl = testDatabaseUrl();
   const runtime = emptyDeploymentLayer();
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime,
     skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
     scopeId: scopeId("org", "default-org"),
@@ -792,7 +786,7 @@ test("two stores serialize the durable head and shared skill projection under on
     tryWithLocks: (_keys, fn) => fn(),
   };
 
-  const backing = testMap<StoredDeploymentLayer>();
+  const databaseUrl = testDatabaseUrl();
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
     backing: testMap(),
@@ -800,8 +794,14 @@ test("two stores serialize the durable head and shared skill projection under on
   const org = scopeId("org", "default-org");
   const firstRuntime = emptyDeploymentLayer();
   const secondRuntime = emptyDeploymentLayer();
-  const first = createDeploymentLayerStore({ backing, runtime: firstRuntime, skills, scopeId: org, advisoryLock });
-  const second = createDeploymentLayerStore({ backing, runtime: secondRuntime, skills, scopeId: org, advisoryLock });
+  const first = createDeploymentLayerStore({ databaseUrl, runtime: firstRuntime, skills, scopeId: org, advisoryLock });
+  const second = createDeploymentLayerStore({
+    databaseUrl,
+    runtime: secondRuntime,
+    skills,
+    scopeId: org,
+    advisoryLock,
+  });
   const v1 = first.put(
     {
       contract: 1,
@@ -822,7 +822,7 @@ test("two stores serialize the durable head and shared skill projection under on
 
   assert.equal(maxActive, 1);
   assert.deepEqual([one.version, two.version], [1, 2]);
-  assert.equal((await backing.get("current"))?.contentHash, two.contentHash);
+  assert.equal((await readLayer(databaseUrl))?.contentHash, two.contentHash);
   assert.equal((await skills.resolve("acme", [org])).skill?.manifest.body, "v2\n");
   assert.deepEqual(secondRuntime.advertisedTools, ["v2"]);
   await first.get();
@@ -830,7 +830,7 @@ test("two stores serialize the durable head and shared skill projection under on
 });
 
 test("a failed multi-skill apply rolls every deployment-owned skill back before reporting degraded", async () => {
-  const backing = testMap<StoredDeploymentLayer>();
+  const databaseUrl = testDatabaseUrl();
   const baseSkills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
     backing: testMap(),
@@ -847,7 +847,7 @@ test("a failed multi-skill apply rolls every deployment-owned skill back before 
   const runtime = emptyDeploymentLayer();
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime,
     skills,
     scopeId: org,
@@ -887,13 +887,13 @@ test("a failed multi-skill apply rolls every deployment-owned skill back before 
   assert.equal((await skills.resolve("removed", [org])).skill?.manifest.body, "old removed\n");
   assert.equal((await skills.resolve("b", [org])).skill, null);
   assert.deepEqual(runtime.advertisedTools, ["old tools"]);
-  const head = await backing.get("current");
+  const head = await readLayer(databaseUrl);
   assert.ok(head);
   assert.equal(await store.isApplied(head.contentHash), false);
 });
 
 test("applied status detects and repairs deployment-skill drift", async () => {
-  const backing = testMap<StoredDeploymentLayer>();
+  const databaseUrl = testDatabaseUrl();
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
     backing: testMap(),
@@ -901,7 +901,7 @@ test("applied status detects and repairs deployment-skill drift", async () => {
   const org = scopeId("org", "default-org");
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime: emptyDeploymentLayer(),
     skills,
     scopeId: org,
@@ -921,11 +921,11 @@ test("applied status detects and repairs deployment-skill drift", async () => {
 });
 
 test("a later hydrate reconciles a persisted layer audit exactly once", async () => {
-  const backing = testMap<StoredDeploymentLayer>();
+  const databaseUrl = testDatabaseUrl();
   const org = scopeId("org", "default-org");
   const record = await createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
     scopeId: org,
@@ -941,7 +941,7 @@ test("a later hydrate reconciles a persisted layer audit exactly once", async ()
     });
   const recovered = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
     scopeId: org,
@@ -957,13 +957,13 @@ test("a later hydrate reconciles a persisted layer audit exactly once", async ()
 });
 
 test("a failed audit remains recoverable after a later revision replaces the durable head", async () => {
-  const backing = testMap<StoredDeploymentLayer>();
+  const databaseUrl = testDatabaseUrl();
   const org = scopeId("org", "default-org");
   const audited: number[] = [];
   let auditAvailable = false;
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
     scopeId: org,
@@ -984,11 +984,11 @@ test("a failed audit remains recoverable after a later revision replaces the dur
 
   assert.equal(second.version, 2);
   assert.deepEqual(audited, [1, 2]);
-  assert.deepEqual((await backing.get("current"))?.pendingAudits, []);
+  assert.deepEqual((await readLayer(databaseUrl))?.pendingAudits, []);
 });
 
 test("a foreign same-name skill rejects the PUT before anything persists", async () => {
-  const backing = testMap<StoredDeploymentLayer>();
+  const databaseUrl = testDatabaseUrl();
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
     backing: testMap(),
@@ -1001,7 +1001,7 @@ test("a foreign same-name skill rejects the PUT before anything persists", async
   });
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime: emptyDeploymentLayer(),
     skills,
     scopeId: org,
@@ -1010,14 +1010,14 @@ test("a foreign same-name skill rejects the PUT before anything persists", async
     store.put({ contract: 1, tools: [], skills: skill }, "test"),
     (e: unknown) => e instanceof DeploymentLayerValidationError && /created by user:alice/.test((e as Error).message),
   );
-  assert.ok(!(await backing.get("current")), "the colliding layer was never persisted");
+  assert.ok(!(await readLayer(databaseUrl)), "the colliding layer was never persisted");
 });
 
 test("deployment skill names cannot contain path separators", async () => {
-  const backing = testMap<StoredDeploymentLayer>();
+  const databaseUrl = testDatabaseUrl();
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
     scopeId: scopeId("org", "default-org"),
@@ -1035,11 +1035,11 @@ test("deployment skill names cannot contain path separators", async () => {
     ),
     (error: unknown) => error instanceof DeploymentLayerValidationError && /skill name must/.test(error.message),
   );
-  assert.equal(await backing.get("current"), null);
+  assert.equal(await readLayer(databaseUrl), null);
 });
 
 test("a deployment skill cannot materialize over an active pack's shared bundle", async () => {
-  const backing = testMap<StoredDeploymentLayer>();
+  const databaseUrl = testDatabaseUrl();
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
     backing: testMap(),
@@ -1058,7 +1058,7 @@ test("a deployment skill cannot materialize over an active pack's shared bundle"
   await skillBundles.put({ packId: "one", commit: "abc", files, hash: computeBundleHash(files) });
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime: emptyDeploymentLayer(),
     skills,
     skillBundles,
@@ -1078,11 +1078,11 @@ test("a deployment skill cannot materialize over an active pack's shared bundle"
       error instanceof DeploymentLayerValidationError &&
       /skills\/acme\/helpers\/run\.ts, already claimed by pack:one/.test(error.message),
   );
-  assert.equal(await backing.get("current"), null);
+  assert.equal(await readLayer(databaseUrl), null);
 });
 
 test("a foreign skill racing after validation reports the revision as persisted and degraded", async () => {
-  const backing = testMap<StoredDeploymentLayer>();
+  const databaseUrl = testDatabaseUrl();
   const baseSkills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
     backing: testMap(),
@@ -1105,20 +1105,20 @@ test("a foreign skill racing after validation reports the revision as persisted 
     },
   };
   const runtime = emptyDeploymentLayer();
-  const store = createDeploymentLayerStore({ ...singleProcessDeps(), backing, runtime, skills, scopeId: org });
+  const store = createDeploymentLayerStore({ ...singleProcessDeps(), databaseUrl, runtime, skills, scopeId: org });
   await assert.rejects(
     store.put({ contract: 1, tools: [tool("acme CLI")], skills: skill }, "test"),
     (error: unknown) =>
       error instanceof DeploymentLayerPersistedError && /collides with an existing non-layer skill/.test(error.message),
   );
-  const record = await backing.get("current");
+  const record = await readLayer(databaseUrl);
   assert.ok(record, "the accepted durable revision remains current");
   assert.equal(await store.isApplied(record.contentHash), false);
   assert.deepEqual(runtime.advertisedTools, [], "a failed skill projection does not expose the revision's tools");
 });
 
 test("an archived foreign skill does not block the layer; a later live collision leaves the new revision unapplied", async () => {
-  const backing = testMap<StoredDeploymentLayer>();
+  const databaseUrl = testDatabaseUrl();
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
     backing: testMap(),
@@ -1134,7 +1134,7 @@ test("an archived foreign skill does not block the layer; a later live collision
   await skills.archive(archived.id);
 
   const runtime = emptyDeploymentLayer();
-  const store = createDeploymentLayerStore({ ...singleProcessDeps(), backing, runtime, skills, scopeId: org });
+  const store = createDeploymentLayerStore({ ...singleProcessDeps(), databaseUrl, runtime, skills, scopeId: org });
   const record = await store.put({ contract: 1, tools: [tool("acme CLI")], skills: skill }, "test");
   assert.equal(
     (await skills.resolve("acme", [org])).skill?.createdBy,
@@ -1155,7 +1155,7 @@ test("an archived foreign skill does not block the layer; a later live collision
   const fresh = emptyDeploymentLayer();
   const rehydrated = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing,
+    databaseUrl,
     runtime: fresh,
     skills,
     scopeId: org,
@@ -1178,7 +1178,7 @@ test("a bundle may carry the files a tool declares under install.files, and noth
   const runtime = emptyDeploymentLayer();
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
-    backing: testMap<StoredDeploymentLayer>(),
+    databaseUrl: testDatabaseUrl(),
     runtime,
     skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
     scopeId: scopeId("org", "default-org"),
