@@ -6,6 +6,9 @@ import {
   guardOutputBudget,
   OUTPUT_BUDGET_FLOOR_TOKENS,
   OUTPUT_GUARD_SAFETY_TOKENS,
+  sanitizeLlmPayload,
+  trimPayloadToByteBudget,
+  transportFromModel,
 } from "../../src/harness/pi-payload.ts";
 
 const FABLE = { contextWindow: 200_000, maxTokens: 64_000 };
@@ -197,3 +200,137 @@ for (const capKey of ["max_tokens", "max_output_tokens", "max_completion_tokens"
     assert.throws(() => guardOutputBudget(full, FABLE), /prompt is too long/i);
   });
 }
+
+test("sanitizeLlmPayload captures the prompt envelope and drops the message array", () => {
+  const payload = {
+    model: "claude-opus-4-8",
+    system: [{ type: "text", text: "be helpful" }],
+    tools: [{ name: "execute" }],
+    messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+  };
+
+  const { envelope, truncated } = sanitizeLlmPayload(payload);
+  assert.equal(truncated, false);
+  assert.deepEqual(envelope, {
+    model: "claude-opus-4-8",
+    system: [{ type: "text", text: "be helpful" }],
+    tools: [{ name: "execute" }],
+  });
+});
+
+const imageBlock = (data: string) => ({ type: "image", source: { type: "base64", media_type: "image/png", data } });
+
+test("trimPayloadToByteBudget returns the payload untouched when it fits", () => {
+  const payload = { messages: [{ role: "user", content: [imageBlock("AAAA".repeat(100))] }] };
+  assert.equal(trimPayloadToByteBudget(payload, 10_000_000), payload, "same reference — no clone, no cache churn");
+  assert.equal(trimPayloadToByteBudget(null, 10), null);
+  assert.equal(trimPayloadToByteBudget("nope", 10), "nope");
+});
+
+test("trimPayloadToByteBudget sheds the OLDEST images first and keeps the newest", () => {
+  const big = "AAAA".repeat(2_000_000);
+  const payload = {
+    messages: [
+      { role: "user", content: [{ type: "text", text: "first" }, imageBlock(big)] },
+      { role: "user", content: [imageBlock(big)] },
+      { role: "user", content: [imageBlock(big)] },
+    ],
+  };
+  const out = trimPayloadToByteBudget(payload, 18_000_000) as any;
+  assert.notEqual(out, payload);
+  assert.equal(out.messages[0].content[1].type, "text", "oldest image replaced with a placeholder");
+  assert.match(out.messages[0].content[1].text, /image removed/);
+  assert.equal(out.messages[1].content[0].type, "text", "second-oldest also shed to reach slack headroom");
+  assert.equal(out.messages[2].content[0].type, "image", "newest image survives");
+  assert.ok(JSON.stringify(out).length <= 18_000_000, "result fits the budget");
+  assert.equal((payload.messages[0]!.content[1] as any).type, "image", "input payload not mutated");
+});
+
+test("trimPayloadToByteBudget reaches images nested in tool_result content", () => {
+  const big = "AAAA".repeat(5_000_000);
+  const payload = {
+    messages: [
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: [imageBlock(big)] }] },
+      { role: "user", content: [{ type: "text", text: "latest" }] },
+    ],
+  };
+  const out = trimPayloadToByteBudget(payload, 18_000_000) as any;
+  const inner = out.messages[0].content[0].content[0];
+  assert.equal(inner.type, "text");
+  assert.match(inner.text, /image removed/);
+  assert.equal(out.messages[0].content[0].tool_use_id, "t1", "tool_result envelope preserved");
+  assert.ok(JSON.stringify(out).length <= 18_000_000);
+});
+
+test("trimPayloadToByteBudget also trims the OpenAI Responses wire shape", () => {
+  const dataUrl = `data:image/png;base64,${"AAAA".repeat(5_000_000)}`;
+  const payload = {
+    input: [
+      { role: "user", content: [{ type: "input_image", detail: "auto", image_url: dataUrl }] },
+      { role: "user", content: [{ type: "input_text", text: "latest" }] },
+    ],
+  };
+  const out = trimPayloadToByteBudget(payload, 18_000_000) as any;
+  assert.deepEqual(out.input[0].content[0], {
+    type: "input_text",
+    text: out.input[0].content[0].text,
+  });
+  assert.match(out.input[0].content[0].text, /image removed/);
+  assert.ok(JSON.stringify(out).length <= 18_000_000);
+});
+
+test("trimPayloadToByteBudget keeps a shed image block's cache_control breakpoint", () => {
+  const big = "AAAA".repeat(5_000_000);
+  const payload = {
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "image",
+            source: { type: "base64", media_type: "image/png", data: big },
+            cache_control: { type: "ephemeral" },
+          },
+        ],
+      },
+      { role: "user", content: [{ type: "text", text: "latest" }] },
+    ],
+  };
+  const out = trimPayloadToByteBudget(payload, 18_000_000) as any;
+  assert.deepEqual(out.messages[0].content[0].cache_control, { type: "ephemeral" });
+  assert.equal(out.messages[0].content[0].type, "text");
+});
+
+test("transportFromModel keeps the model id + string headers (the anthropic-beta that the body omits)", () => {
+  const model = { id: "claude-opus-4-8", headers: { "anthropic-beta": "fast,interleaved", "x-num": 7 } };
+  assert.deepEqual(
+    transportFromModel(model),
+    {
+      modelId: "claude-opus-4-8",
+      headers: { "anthropic-beta": "fast,interleaved" },
+    },
+    "non-string header values are dropped",
+  );
+  assert.equal(transportFromModel({}), undefined, "no id and no headers → no transport");
+  assert.equal(transportFromModel(null), undefined, "no model → no transport");
+});
+
+test("sanitizeLlmPayload attaches transport from the model arg alongside the redacted body", () => {
+  const model = { id: "claude-opus-4-8", headers: { "anthropic-beta": "fast-mode" } };
+  const out = sanitizeLlmPayload({ messages: [{ role: "user", content: "hi" }] }, model);
+  assert.deepEqual(out.transport, { modelId: "claude-opus-4-8", headers: { "anthropic-beta": "fast-mode" } });
+  assert.equal(out.truncated, false);
+  assert.equal(sanitizeLlmPayload({ messages: [] }).transport, undefined);
+});
+
+test("sanitizeLlmPayload redacts image bytes that appear outside the message array", () => {
+  const big = "AAAA".repeat(2000);
+  const payload = {
+    system: [{ type: "image", source: { type: "base64", media_type: "image/png", data: big } }],
+    messages: [],
+  };
+
+  const { envelope } = sanitizeLlmPayload(payload);
+  const block = (envelope as any).system[0];
+  assert.match(block.source.data, /<base64 image\/png omitted: \d+ chars>/, "image bytes never persist");
+});

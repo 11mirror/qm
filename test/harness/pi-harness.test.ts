@@ -280,35 +280,7 @@ for (const [modelId, upper, allowed, off, minimal] of [
         res.end();
         return;
       }
-      const message = {
-        id: "msg_test",
-        type: "message",
-        role: "assistant",
-        status: "completed",
-        content: [{ type: "output_text", text: "ok", annotations: [] }],
-      };
-      for (const event of [
-        { type: "response.created", response: { id: "resp_test", model: modelId, status: "in_progress", output: [] } },
-        { type: "response.output_item.added", output_index: 0, item: { ...message, content: [] } },
-        {
-          type: "response.content_part.added",
-          output_index: 0,
-          content_index: 0,
-          part: { type: "output_text", text: "", annotations: [] },
-        },
-        { type: "response.output_text.delta", output_index: 0, content_index: 0, delta: "ok" },
-        { type: "response.output_item.done", output_index: 0, item: message },
-        {
-          type: "response.completed",
-          response: {
-            id: "resp_test",
-            model: modelId,
-            status: "completed",
-            output: [message],
-            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-          },
-        },
-      ])
+      for (const event of okMessageEvents(modelId))
         res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
       res.end();
     });
@@ -373,6 +345,38 @@ for (const [modelId, upper, allowed, off, minimal] of [
       "must not widen the model's supported efforts",
     );
   });
+}
+
+function okMessageEvents(modelId: string) {
+  const message = {
+    id: "msg_test",
+    type: "message",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text: "ok", annotations: [] }],
+  };
+  return [
+    { type: "response.created", response: { id: "resp_test", model: modelId, status: "in_progress", output: [] } },
+    { type: "response.output_item.added", output_index: 0, item: { ...message, content: [] } },
+    {
+      type: "response.content_part.added",
+      output_index: 0,
+      content_index: 0,
+      part: { type: "output_text", text: "", annotations: [] },
+    },
+    { type: "response.output_text.delta", output_index: 0, content_index: 0, delta: "ok" },
+    { type: "response.output_item.done", output_index: 0, item: message },
+    {
+      type: "response.completed",
+      response: {
+        id: "resp_test",
+        model: modelId,
+        status: "completed",
+        output: [message],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      },
+    },
+  ];
 }
 
 function countTempDirs(prefix: string): number {
