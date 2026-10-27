@@ -56,17 +56,16 @@ const PRIVATE_SESSION_MESSAGE_MD = loadProtocolFile("turn-private-session-messag
 const PROACTIVE_OPENER_MD = loadProtocolFile("turn-proactive-opener");
 const IDEAS_CONVERSATION_MD = loadProtocolFile("turn-ideas-conversation");
 
-export async function frameTurnPrompt(
-  ctx: TurnCtx,
-  turn: {
-    screenTrace: ScreenTrace;
-    useMemory: boolean;
-    context: Awaited<ReturnType<typeof resolveTurnContext>>;
-    memoryScopeId: ScopeId;
-    memoryStrategy: MemoryStrategy;
-    observeSecurityData: SecurityObserver;
-  },
-) {
+interface FrameTurnArgs {
+  screenTrace: ScreenTrace;
+  useMemory: boolean;
+  context: Awaited<ReturnType<typeof resolveTurnContext>>;
+  memoryScopeId: ScopeId;
+  memoryStrategy: MemoryStrategy;
+  observeSecurityData: SecurityObserver;
+}
+
+export async function frameTurnPrompt(ctx: TurnCtx, turn: FrameTurnArgs) {
   const {
     deps,
     input,
@@ -80,7 +79,7 @@ export async function frameTurnPrompt(
     resolution,
     scopeId,
   } = ctx;
-  const { screenTrace, useMemory, context, memoryScopeId, memoryStrategy, observeSecurityData } = turn;
+  const { useMemory, context, memoryScopeId, memoryStrategy } = turn;
   const isWeb = input.surface === "web";
   const isSlack = input.surface === "slack";
   const surfaceTool = input.surface ?? "slack";
@@ -148,31 +147,7 @@ export async function frameTurnPrompt(
     systemPrompt += `\n\n${strategyLines.join("\n")}`;
   }
 
-  const delivery = deliveryCandidatesFor(input.surface, input.deliveryTarget, input.deliveryCandidates, scopeId);
-  const source = turnSource(input);
-  if (source)
-    for (const candidate of delivery.candidates) {
-      candidate.account = source.account;
-      candidate.workspaceId = source.workspaceId;
-    }
-  const defaultCandidate = delivery.candidates.find((c) => c.key === delivery.defaultKey);
-  let defaultDestination: Destination | undefined;
-  if (defaultCandidate) {
-    defaultDestination = {
-      type: defaultCandidate.type,
-      target: defaultCandidate.target,
-      ...(defaultCandidate.account ? { account: defaultCandidate.account } : {}),
-      ...(defaultCandidate.workspaceId ? { workspaceId: defaultCandidate.workspaceId } : {}),
-      ...(defaultCandidate.audienceScopeId ? { audienceScopeId: defaultCandidate.audienceScopeId } : {}),
-    };
-  } else if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination) {
-    defaultDestination = input.origin.destination;
-  }
-  const cronBlock =
-    delivery.candidates.length > 1 && deps.signingSecret && deps.apiBaseUrl
-      ? `\n\n${deliveryMenu(delivery.candidates, delivery.defaultKey)}`
-      : "";
-
+  const { delivery, defaultDestination, cronBlock } = turnDelivery(ctx);
   await deps.skillsReady;
   const configuredProviders =
     !external && deps.resolveConnectorClient
@@ -181,47 +156,8 @@ export async function frameTurnPrompt(
         )
       : [];
   const observedSkillScreens = new Set<string>();
-  const visibleSkillsForTurn = async (sources?: readonly string[]): Promise<SkillResolution[]> => {
-    const current = await context.listSkills(sources);
-    const allowed = filterConnectorSkills(current.skills, configuredProviders);
-    for (const entry of allowed) {
-      const skill = entry.skill;
-      if (!skill || !current.sharingSources.includes(skill.scopeId)) continue;
-      const snapshot = structuredClone(entry);
-      void (async () => {
-        const bundles = deps.skillBundles
-          ? await loadActiveBundles(deps.skillBundles, [snapshot]).catch(
-              swallowAs("skill screening: load bundles", null),
-            )
-          : [];
-        const payload = JSON.stringify({ manifest: snapshot.skill!.manifest, bundles });
-        const key = hashId([skill.scopeId, skill.id, payload], 64);
-        if (observedSkillScreens.has(key)) return;
-        observedSkillScreens.add(key);
-        if (bundles === null || Buffer.byteLength(payload, "utf8") > MAX_AUTO_ATTACHMENT_SCREEN_BYTES) return;
-        for (const chunk of securityScreenChunks("tool_result:shared_skill", payload))
-          await observeSecurityData(chunk, actor.id, scopeId, {
-            ...screenTrace,
-            hook: "tool_response",
-            request: input.text,
-            surface: "shared_skill",
-            origin: input.origin.kind,
-          });
-      })().catch(swallowAs("orchestrator: observed skill screen", undefined));
-    }
-    for (const entry of allowed) {
-      if (!entry.skill || !current.sharingSources.includes(entry.skill.scopeId)) continue;
-      deps.auditLog.record({
-        at: Date.now(),
-        principalId: actor.id,
-        action: "sharing.cross_context_read",
-        resource: `skill:${entry.skill.id}`,
-        scopeLabel: scopeId,
-        detail: JSON.stringify({ actor: actor.id, source: entry.skill.scopeId, target: scopeId }),
-      });
-    }
-    return allowed;
-  };
+  const visibleSkillsForTurn = (sources?: readonly string[]) =>
+    listVisibleSkills(ctx, turn, configuredProviders, observedSkillScreens, sources);
   const skillSourceContext = await context.listSkills([scopeId, resolution.orgScopeId]);
   const otherSkillSources = skillSourceContext.skillSources
     .filter((source) => source !== scopeId && source !== resolution.orgScopeId)
@@ -251,12 +187,8 @@ export async function frameTurnPrompt(
   if (sharedFilesBlock) turnContextBlocks["Files shared with you"] = sharedFilesBlock;
 
   const timeBlock = currentTimeBlock(turnTimezone ?? DEFAULT_CRON_TIMEZONE, Date.now());
-  let memoryContext = "a channel";
-  if (conversation.kind === "dm") memoryContext = "a direct message";
-  else if (conversation.channelName) memoryContext = `#${conversation.channelName}`;
-  else if (conversation.kind === "group") memoryContext = "a group conversation";
-  const memoryHeading = `\n\n## What you remember\nYou're in ${memoryContext}; use these authorized memories freely, but preferences tagged with another scope heading or \`(said in …)\` apply only there.\n\n`;
 
+  const memoryHeading = memoryHeadingFor(conversation);
   const onboardingBlock = isIdeasConversation(input) ? IDEAS_CONVERSATION_MD : "";
   return {
     systemPrompt,
@@ -278,6 +210,88 @@ export async function frameTurnPrompt(
     memoryHeading,
     onboardingBlock,
   };
+}
+
+function turnDelivery({ deps, input, scopeId }: TurnCtx) {
+  const delivery = deliveryCandidatesFor(input.surface, input.deliveryTarget, input.deliveryCandidates, scopeId);
+  const source = turnSource(input);
+  if (source)
+    for (const candidate of delivery.candidates) {
+      candidate.account = source.account;
+      candidate.workspaceId = source.workspaceId;
+    }
+  const defaultCandidate = delivery.candidates.find((c) => c.key === delivery.defaultKey);
+  let defaultDestination: Destination | undefined;
+  if (defaultCandidate) {
+    defaultDestination = {
+      type: defaultCandidate.type,
+      target: defaultCandidate.target,
+      ...(defaultCandidate.account ? { account: defaultCandidate.account } : {}),
+      ...(defaultCandidate.workspaceId ? { workspaceId: defaultCandidate.workspaceId } : {}),
+      ...(defaultCandidate.audienceScopeId ? { audienceScopeId: defaultCandidate.audienceScopeId } : {}),
+    };
+  } else if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination) {
+    defaultDestination = input.origin.destination;
+  }
+  const cronBlock =
+    delivery.candidates.length > 1 && deps.signingSecret && deps.apiBaseUrl
+      ? `\n\n${deliveryMenu(delivery.candidates, delivery.defaultKey)}`
+      : "";
+  return { delivery, defaultDestination, cronBlock };
+}
+
+async function listVisibleSkills(
+  { deps, input, actor, scopeId }: TurnCtx,
+  { context, screenTrace, observeSecurityData }: FrameTurnArgs,
+  configuredProviders: Awaited<ReturnType<typeof configuredConnectorProviders>>,
+  observedSkillScreens: Set<string>,
+  sources?: readonly string[],
+): Promise<SkillResolution[]> {
+  const current = await context.listSkills(sources);
+  const allowed = filterConnectorSkills(current.skills, configuredProviders);
+  for (const entry of allowed) {
+    const skill = entry.skill;
+    if (!skill || !current.sharingSources.includes(skill.scopeId)) continue;
+    const snapshot = structuredClone(entry);
+    void (async () => {
+      const bundles = deps.skillBundles
+        ? await loadActiveBundles(deps.skillBundles, [snapshot]).catch(swallowAs("skill screening: load bundles", null))
+        : [];
+      const payload = JSON.stringify({ manifest: snapshot.skill!.manifest, bundles });
+      const key = hashId([skill.scopeId, skill.id, payload], 64);
+      if (observedSkillScreens.has(key)) return;
+      observedSkillScreens.add(key);
+      if (bundles === null || Buffer.byteLength(payload, "utf8") > MAX_AUTO_ATTACHMENT_SCREEN_BYTES) return;
+      for (const chunk of securityScreenChunks("tool_result:shared_skill", payload))
+        await observeSecurityData(chunk, actor.id, scopeId, {
+          ...screenTrace,
+          hook: "tool_response",
+          request: input.text,
+          surface: "shared_skill",
+          origin: input.origin.kind,
+        });
+    })().catch(swallowAs("orchestrator: observed skill screen", undefined));
+  }
+  for (const entry of allowed) {
+    if (!entry.skill || !current.sharingSources.includes(entry.skill.scopeId)) continue;
+    deps.auditLog.record({
+      at: Date.now(),
+      principalId: actor.id,
+      action: "sharing.cross_context_read",
+      resource: `skill:${entry.skill.id}`,
+      scopeLabel: scopeId,
+      detail: JSON.stringify({ actor: actor.id, source: entry.skill.scopeId, target: scopeId }),
+    });
+  }
+  return allowed;
+}
+
+function memoryHeadingFor(conversation: TurnCtx["conversation"]): string {
+  let memoryContext = "a channel";
+  if (conversation.kind === "dm") memoryContext = "a direct message";
+  else if (conversation.channelName) memoryContext = `#${conversation.channelName}`;
+  else if (conversation.kind === "group") memoryContext = "a group conversation";
+  return `\n\n## What you remember\nYou're in ${memoryContext}; use these authorized memories freely, but preferences tagged with another scope heading or \`(said in …)\` apply only there.\n\n`;
 }
 
 const COMPOSIO_MD = loadProtocolFile("turn-composio");
