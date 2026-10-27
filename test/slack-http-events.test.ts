@@ -9,13 +9,10 @@ import { normalizeSlackApiUrl, slackPluginConfigFromEnv } from "../src/slack/ind
 
 const SECRET = "test-signing-secret";
 
-test("HTTP events mode trims the configured enum like the deployment secret gate", () => {
-  const config = slackPluginConfigFromEnv({
-    SLACK_EVENTS_MODE: "  http  ",
-    SLACK_BOT_TOKEN: "xoxb-test",
-    SLACK_SIGNING_SECRET: SECRET,
-  });
-  assert.equal(config?.eventsMode, "http");
+test("a signing secret without an app token configures HTTP events", () => {
+  const config = slackPluginConfigFromEnv({ SLACK_BOT_TOKEN: "xoxb-test", SLACK_SIGNING_SECRET: SECRET });
+  assert.equal(config?.signingSecret, SECRET);
+  assert.equal(config?.appToken, undefined);
 });
 
 function sign(body: string, ts = Math.floor(Date.now() / 1000)): { signature: string; timestamp: string } {

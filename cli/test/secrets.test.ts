@@ -107,14 +107,8 @@ test("discovered source plugins (absent from config.plugins) get CORE_SIGNING_SE
   );
 });
 
-test("SLACK_SIGNING_SECRET joins the secret set only in HTTP events mode (socket mode never verifies request signatures)", () => {
-  const socket = makeConfig({ services: ["core", "slack"] });
-  assert.ok(
-    !computedSecrets(socket).some((s) => s.name === "SLACK_SIGNING_SECRET"),
-    "absent in the default socket mode",
-  );
-  const http = makeConfig({ services: ["core", "slack"], env: { slack: { SLACK_EVENTS_MODE: "http" } } });
-  assert.ok(secretByName(http, "SLACK_SIGNING_SECRET").required);
+test("SLACK_SIGNING_SECRET is an optional Slack secret", () => {
+  assert.equal(secretByName(makeConfig({ services: ["core", "slack"] }), "SLACK_SIGNING_SECRET").required, false);
 });
 
 test('"sandbox" is a reserved name — a plugin may not shadow the sandbox pseudo-service', () => {
@@ -162,11 +156,6 @@ test("omitting modelProvider preserves the pre-existing deferred-to-Admin behavi
   const deferred = makeConfig();
   assert.equal(secretByName(deferred, "ANTHROPIC_API_KEY").required, false);
   assert.equal(secretByName(deferred, "OPENROUTER_API_KEY").required, false);
-});
-
-test("conditional secret values use the runtime's trimmed enum semantics", () => {
-  const slack = makeConfig({ services: ["core", "slack"], env: { slack: { SLACK_EVENTS_MODE: "  http  " } } });
-  assert.ok(secretByName(slack, "SLACK_SIGNING_SECRET").required);
 });
 
 test("AWS public app domains require and route their gate secret to core", () => {

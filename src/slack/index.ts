@@ -50,12 +50,9 @@ type SlackConnection = ReturnType<typeof slackConnection>;
 type SlackFlow = ReturnType<typeof createTurnFlow>;
 
 function slackConnection(cfg: SlackPluginConfig) {
-  const EVENTS_MODE = cfg.eventsMode ?? "socket";
   if (!cfg.botToken) throw new Error("Slack plugin needs botToken (SLACK_BOT_TOKEN, xoxb-…)");
-  if (!cfg.receiverFactory && EVENTS_MODE === "socket" && !cfg.appToken)
-    throw new Error("Slack plugin needs appToken (SLACK_APP_TOKEN, xapp-…) in socket events mode");
-  if (!cfg.receiverFactory && EVENTS_MODE === "http" && !cfg.signingSecret)
-    throw new Error("Slack plugin needs signingSecret (SLACK_SIGNING_SECRET) in http events mode");
+  if (!cfg.receiverFactory && !cfg.appToken && !cfg.signingSecret)
+    throw new Error("Slack plugin needs appToken (SLACK_APP_TOKEN, xapp-…) or signingSecret (SLACK_SIGNING_SECRET)");
   const BOT_TOKEN = cfg.botToken;
   const APP_TOKEN = cfg.appToken;
   const SLACK_API_URL = cfg.apiUrl ? normalizeSlackApiUrl(cfg.apiUrl) : undefined;
@@ -67,7 +64,7 @@ function slackConnection(cfg: SlackPluginConfig) {
   } as const;
   const webClient = (token: string, extra: Record<string, unknown> = {}) =>
     new WebClient(token, { ...CLIENT_OPTIONS, ...extra });
-  return { EVENTS_MODE, BOT_TOKEN, APP_TOKEN, SLACK_API_URL, TRUSTED_FILE_HOST, CLIENT_OPTIONS, webClient };
+  return { BOT_TOKEN, APP_TOKEN, SLACK_API_URL, TRUSTED_FILE_HOST, CLIENT_OPTIONS, webClient };
 }
 
 function settingsCaches(cfg: SlackPluginConfig, core: SlackCoreClient) {
@@ -108,13 +105,13 @@ function createSlackApp(
   ids: BotIdentity,
   stagingAccount: string,
 ) {
-  const { EVENTS_MODE, BOT_TOKEN, APP_TOKEN, SLACK_API_URL, CLIENT_OPTIONS } = conn;
+  const { BOT_TOKEN, APP_TOKEN, SLACK_API_URL, CLIENT_OPTIONS } = conn;
   const staging = core.stagedEnvelopes
     ? createEnvelopeStaging(core.stagedEnvelopes, { account: stagingAccount })
     : undefined;
   const receiver = () => {
     if (cfg.receiverFactory) return cfg.receiverFactory(staging);
-    return EVENTS_MODE === "http"
+    return !APP_TOKEN
       ? createHttpEventsReceiver({
           signingSecret: cfg.signingSecret!,
           staging,

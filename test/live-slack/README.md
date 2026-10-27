@@ -55,8 +55,8 @@ The `twin-e2e` matrix job in the workflow provisions one twin per shard.
 
 Mechanics: `arga-provision.ts up` provisions the twin, seeds users/tokens
 (`arga.ts:seedTwinUsers`), pre-creates the reach target channel, and emits the boot env —
-`SLACK_API_URL` (the plugin's Web API seam), `SLACK_EVENTS_MODE=http` +
-`SLACK_SIGNING_SECRET` (the plugin listens for signed Events-API POSTs instead of Socket
+`SLACK_API_URL` (the plugin's Web API seam), `SLACK_SIGNING_SECRET` with an empty
+`SLACK_APP_TOKEN` (the plugin listens for signed Events-API POSTs instead of Socket
 Mode, which the twin doesn't speak), and the minted QA/actor tokens. `run.ts` then starts
 an **event pump** (`arga.ts:startEventPump`) that polls the twin's `/admin/events` log and
 delivers each recorded event — signed, per-channel FIFO — to the instance's receiver. The
