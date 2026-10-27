@@ -52,6 +52,10 @@ export const CONTRACT_MIGRATIONS: readonly PgMigrationDefinition[] = [
     id: "contract/0008-drop-sandbox-routing",
     statements: ["DROP TABLE IF EXISTS sandbox_routing", "DROP TABLE IF EXISTS sandbox_resource_rollout"],
   },
+  {
+    id: "contract/0009-drop-runs-engine",
+    statements: ["SET LOCAL lock_timeout = '3s'", "ALTER TABLE runs DROP COLUMN IF EXISTS engine"],
+  },
 ];
 
 export const contractMigrations = (): PgMigrationDefinition[] => [
