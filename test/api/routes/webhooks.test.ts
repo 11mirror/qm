@@ -416,7 +416,7 @@ test("Project trigger access follows current membership while Slack-group owner 
 
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "member")).status, "ok");
 
-  await runNowSettled(built.scheduler, projectCron.id);
+  await runNowSettled(built.scheduler, built.crons, projectCron.id);
   assert.equal(await built.crons.get(projectCron.id), null, "a Project cron is deleted once its owner leaves");
 
   assert.equal(await capabilityStatus(base, projectToken), 403);

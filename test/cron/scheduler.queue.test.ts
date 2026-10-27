@@ -16,7 +16,7 @@ import { createIdentityService } from "../../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../../src/types.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
 import { testDatabaseUrl, testAdvisoryLock } from "../support/test-database.ts";
-import { settle } from "../support/settle.ts";
+import { fireSettled, settle } from "../support/settle.ts";
 import { busyOnce, schedulerDeps } from "../support/cron-scheduler-harness.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -151,7 +151,7 @@ test(
       assert.equal(runs[0]?.status, "ok");
       const again = await survivor.scheduler.runNow(cron.id);
       assert.ok(again.started, "a finished fire no longer blocks manual runs");
-      await again.settled;
+      await fireSettled(survivor.crons, cron.id, again.fireKey, 30_000);
       assert.equal(calls.length, 2);
     } finally {
       await survivor.jobs.stop();
@@ -355,7 +355,7 @@ for (const queued of [false, true]) {
     else {
       const manual = await scheduler.runNow(cron.id);
       assert.ok(manual.started);
-      first = manual.settled;
+      first = fireSettled(crons, cron.id, manual.fireKey);
     }
     await started.promise;
     clock = 2000;

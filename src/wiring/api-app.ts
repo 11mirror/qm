@@ -122,6 +122,7 @@ export function buildApiApp(deps: ApiAppInputs) {
     lock: advisoryLock,
     items: inboxItems,
     record: recordInboxEvent,
+    scans: crons,
     chat: createInboxChat({
       items: inboxItems,
       trigger: triggerDeps,

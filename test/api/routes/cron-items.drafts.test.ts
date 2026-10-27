@@ -34,12 +34,21 @@ test("sync-cron is created once, refreshes stale task text, and disables on requ
   assert.equal((disabled.body as { syncCron: { enabled: boolean } }).syncCron.enabled, false);
 });
 
-test("inbox sync keeps its scan watermark in Files, not on sandbox disk", () => {
-  for (const source of ["gmail", "slack"]) {
-    const task = renderSourceInboxTask(source);
-    assert.ok(task.includes("Keep a lastScanAt watermark in this cron's state file in Files"));
-    assert.ok(!task.includes("~/workspace"));
-  }
+test("an inbox's scan watermark is stored on its cron and only moves forward", async () => {
+  const w = world();
+  const cron = await inboxCron(w);
+  const path = `/v1/crons/${cron.id}/items`;
+  const scannedThrough = async () =>
+    ((await call(w, { method: "GET", path })).body as { scannedThrough?: number }).scannedThrough;
+  assert.equal(await scannedThrough(), undefined);
+  assert.equal((await call(w, { method: "POST", path, body: { scannedThrough: 5_000 } })).status, 200);
+  assert.equal(await scannedThrough(), 5_000);
+  await call(w, { method: "POST", path, body: { scannedThrough: 3_000 } });
+  assert.equal(await scannedThrough(), 5_000);
+  await call(w, { method: "POST", path, body: { items: [ITEM], scannedThrough: 9_000 } });
+  assert.equal(await scannedThrough(), 9_000);
+  assert.equal((await call(w, { method: "POST", path, body: { scannedThrough: "soon" } })).status, 400);
+  assert.equal((await call(w, { method: "POST", path, body: {} })).status, 400);
 });
 
 test("a send carrying the draft it saw is refused when the agent redrafted in between", async () => {
