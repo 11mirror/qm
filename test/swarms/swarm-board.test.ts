@@ -6,12 +6,11 @@ import { swarmCall, type SwarmCallContext, type SwarmInput, type SwarmMemberOpen
 import type { SessionMailbox, SessionMessage } from "../../src/sessions/session-mailbox.ts";
 import type { Session } from "../../src/types.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the swarm board tests";
+const URL = process.env.DATABASE_URL!;
 const actor = { id: "alice@example.com" } as SwarmCallContext["actor"];
 
 function world() {
-  const board = createPostgresSwarmBoard(URL!);
+  const board = createPostgresSwarmBoard(URL);
   const sessions = new Map<string, Session>();
   const sent: SessionMessage[] = [];
   const opened: SwarmMemberOpen[] = [];
@@ -41,7 +40,7 @@ function world() {
   return { board, sessions, sent, opened, add, ctx, call };
 }
 
-test("start opens ordinary subagents that share the coordinator's board", { skip }, async () => {
+test("start opens ordinary subagents that share the coordinator's board", async () => {
   const w = world();
   const parent = w.add("Requester");
   const coordinator = w.add("Coordinator", parent.id);
@@ -67,7 +66,7 @@ test("start opens ordinary subagents that share the coordinator's board", { skip
   assert.equal(nested.ok, false);
 });
 
-test("members post, reply, search and read threads; subscribers are told about new posts", { skip }, async () => {
+test("members post, reply, search and read threads; subscribers are told about new posts", async () => {
   const w = world();
   const coordinator = w.add("Coordinator");
   await w.call(coordinator, {

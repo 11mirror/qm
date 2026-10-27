@@ -627,10 +627,9 @@ test("a json block in the agent's reply is kept as text and never rewrites the d
   assert.equal((await items.get(item.id))?.thread?.at(-1)?.text, reply);
 });
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the inbox item source migration test";
+const URL = process.env.DATABASE_URL!;
 
-test("inbox items keep their source in one place after the source migration", { skip }, async () => {
+test("inbox items keep their source in one place after the source migration", async () => {
   const pg = (await import("pg")).default;
   const pool = new pg.Pool({ connectionString: URL });
   try {
@@ -667,7 +666,7 @@ test("inbox items keep their source in one place after the source migration", { 
   }
 });
 
-test("existing inbox items gain the conversation key their source adapter reads", { skip }, async () => {
+test("existing inbox items gain the conversation key their source adapter reads", async () => {
   const pg = (await import("pg")).default;
   const pool = new pg.Pool({ connectionString: URL });
   try {

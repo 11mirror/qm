@@ -212,7 +212,7 @@ test("a failing page-view log never blocks the page and is reported", async () =
   }
 });
 
-const URL = process.env.DATABASE_URL;
+const URL = process.env.DATABASE_URL!;
 const view = () => ({
   deploymentId: "dep-1",
   version: null,
@@ -223,19 +223,18 @@ const view = () => ({
   ip: null,
   userAgent: null,
 });
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres page-view tests";
 
-test("pg page-view log stores one row per view with clipped request fields", { skip }, async () => {
+test("pg page-view log stores one row per view with clipped request fields", async () => {
   const pg = (await import("pg")).default;
   const admin = new pg.Pool({ connectionString: URL });
   try {
     await admin.query("DROP TABLE IF EXISTS app_page_views CASCADE");
     await admin.query("DELETE FROM qm_schema_migrations WHERE id LIKE 'deploy/app-page-views/%'").catch(() => {});
-    const schema = createPgPool(URL!, []);
+    const schema = createPgPool(URL, []);
     await schema.pool();
     await schema.close();
     await admin.query(`INSERT INTO deployments (id, json) VALUES ('dep-1', '{}') ON CONFLICT (id) DO NOTHING`);
-    const log = createPostgresAppPageViewLog(URL!);
+    const log = createPostgresAppPageViewLog(URL);
     await log.record({
       deploymentId: "dep-1",
       version: 3,

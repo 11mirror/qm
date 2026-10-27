@@ -579,8 +579,7 @@ test("resident home files are held to the same path rules as app files", async (
   );
 });
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the deploy access tests";
+const URL = process.env.DATABASE_URL!;
 
 async function raw(sql: string, params: unknown[] = []): Promise<Record<string, unknown>[]> {
   const pg = (await import("pg")).default;
@@ -594,7 +593,6 @@ async function raw(sql: string, params: unknown[] = []): Promise<Record<string, 
 }
 
 before(async () => {
-  if (!URL) return;
   await truncateTables(URL, ["deployment_access", "deployments"]);
   await raw("DELETE FROM durable_map_versions WHERE tbl = 'deployments'").catch(() => {});
 });
@@ -606,7 +604,7 @@ after(async () => {
 });
 
 function makeFactory(): PostgresArtifactMaps {
-  const factory = createPostgresMapFactory(URL!);
+  const factory = createPostgresMapFactory(URL);
   factories.push(factory);
   return factory;
 }
@@ -632,7 +630,7 @@ const createInput = (name?: string) => ({
   ...(name ? { name } : {}),
 });
 
-test("touch upserts deployment_access without rewriting the blob or bumping the map version", { skip }, async () => {
+test("touch upserts deployment_access without rewriting the blob or bumping the map version", async () => {
   const { store } = makeStore({ touchDebounceMs: 0 });
   const d = await store.create(createInput());
   const versionBefore = (await raw("SELECT v FROM durable_map_versions WHERE tbl = 'deployments'"))[0]!.v;
@@ -657,7 +655,7 @@ test("touch upserts deployment_access without rewriting the blob or bumping the 
   );
 });
 
-test("touch keeps the max across instances (GREATEST) and debounces per instance", { skip }, async () => {
+test("touch keeps the max across instances (GREATEST) and debounces per instance", async () => {
   const a = makeStore({ touchDebounceMs: 0 }).store;
   const b = makeStore({ touchDebounceMs: 0 }).store;
   const d = await a.create(createInput());
@@ -680,7 +678,7 @@ test("touch keeps the max across instances (GREATEST) and debounces per instance
   assert.equal((await debounced.get(d.id))!.lastAccessAt, 70_001);
 });
 
-test("getByName resolves by indexed SQL lookup and hydrates last-access", { skip }, async () => {
+test("getByName resolves by indexed SQL lookup and hydrates last-access", async () => {
   const { store } = makeStore({ touchDebounceMs: 0 });
   const d = await store.create(createInput("slug-app"));
   assert.equal((await store.getByName("slug-app"))!.id, d.id);
@@ -689,14 +687,14 @@ test("getByName resolves by indexed SQL lookup and hydrates last-access", { skip
   assert.equal((await store.getByName("slug-app"))!.lastAccessAt, 4_242);
 });
 
-test("a racing create with a taken name fails on the unique index, not just the pre-check", { skip }, async () => {
+test("a racing create with a taken name fails on the unique index, not just the pre-check", async () => {
   const a = makeStore().store;
   const b = makeStore().store;
   await a.create(createInput("contested"));
   await assert.rejects(b.create(createInput("contested")), /deployment name taken: contested/);
 });
 
-test("renaming onto a taken name is rejected by the unique index", { skip }, async () => {
+test("renaming onto a taken name is rejected by the unique index", async () => {
   const { store } = makeStore();
   await store.create(createInput("held"));
   const other = await store.create(createInput("free"));
@@ -704,7 +702,7 @@ test("renaming onto a taken name is rejected by the unique index", { skip }, asy
   assert.equal((await store.get(other.id))!.name, "free");
 });
 
-test("rows never touched since the split fall back to the blob's legacy lastAccessAt", { skip }, async () => {
+test("rows never touched since the split fall back to the blob's legacy lastAccessAt", async () => {
   const { store, factory } = makeStore({ touchDebounceMs: 0 });
   const d = await store.create(createInput());
   await factory.map<Deployment>("deployments").merge(d.id, { lastAccessAt: 777 } as Partial<Deployment>);
@@ -713,7 +711,7 @@ test("rows never touched since the split fall back to the blob's legacy lastAcce
   assert.equal((await store.get(d.id))!.lastAccessAt, 9_999, "the access table wins once a touch lands");
 });
 
-test("pre-existing duplicate names degrade gracefully: no index, deterministic getByName", { skip }, async () => {
+test("pre-existing duplicate names degrade gracefully: no index, deterministic getByName", async () => {
   await raw("DROP INDEX IF EXISTS deployments_name_unique");
   const seed = makeFactory().map<Deployment>("deployments");
   const dup = (id: string): Deployment => ({

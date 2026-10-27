@@ -4,11 +4,9 @@ import { createPostgresDecisionStore } from "../../src/decisions/store.ts";
 import type { DecisionRule } from "../../src/decisions/decisions.ts";
 import { truncateTables } from "../support/test-database.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres decision tests";
+const URL = process.env.DATABASE_URL!;
 
 beforeEach(async () => {
-  if (!URL) return;
   await truncateTables(URL, ["decision_rules", "decision_providers"]);
 });
 
@@ -26,8 +24,8 @@ const rule = (id: string, over: Partial<DecisionRule> = {}): DecisionRule => ({
   ...over,
 });
 
-test("pg decisions: providers and rules are rows; hooks load active rules only", { skip }, async () => {
-  const store = createPostgresDecisionStore(URL!);
+test("pg decisions: providers and rules are rows; hooks load active rules only", async () => {
+  const store = createPostgresDecisionStore(URL);
   const a = { actorId: "admin@x.com" };
   await store.saveProvider({ id: "gw", protocol: "chat-completions" }, a);
   await store.saveProvider({ id: "oa", protocol: "decisions", baseUrl: "https://dec.example", credential: "dec" }, a);

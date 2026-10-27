@@ -34,8 +34,7 @@ import { settle } from "../support/settle.ts";
 import { testConfig } from "../support/test-config.ts";
 import { testConfigStore, testMap, testDatabaseUrl } from "../support/test-database.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres config-store tests";
+const URL = process.env.DATABASE_URL!;
 
 const TABLES = [
   "soul_configs",
@@ -53,7 +52,6 @@ const TABLES = [
 ];
 
 before(async () => {
-  if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
@@ -282,107 +280,99 @@ test("legacy migration rechecks the canonical marker inside the atomic update", 
   assert.deepEqual(stale.instructionsHistory(channel), []);
 });
 
-test(
-  "pg config store: scoped soul/policy/egress/flags survive a restart (write-through + hydrate)",
-  { skip },
-  async () => {
-    const f = createPostgresMapFactory(URL!);
-    const ch = scopeId("channel", "C1");
-    const policy = defaultOrgPolicy();
+test("pg config store: scoped soul/policy/egress/flags survive a restart (write-through + hydrate)", async () => {
+  const f = createPostgresMapFactory(URL);
+  const ch = scopeId("channel", "C1");
+  const policy = defaultOrgPolicy();
 
-    const m = maps(f);
-    const a = testConfigStore("default-org", m);
-    const version = await a.setInstructions(ch, "a channel-specific soul");
-    await a.setSetting("commandPolicy", policy, ch);
-    await a.setApprovalGrantModes(ch, { session: false, always: true });
-    await a.setSetting("egress", { allowedHosts: ["api.example.com"], deniedHosts: ["evil.example"] }, ch);
-    await a.setRuntimeSelection(ch, { modelId: "claude-opus-4-8" });
-    await a.setSetting("browseMaxSteps", 120, ch);
-    await a.setSetting("browseModel", "claude-sonnet-4-6", ch);
-    await settle(
-      async () =>
-        (await m.instructions.get(ch))?.version === version &&
-        !!(await m.commandPolicies.get(ch)) &&
-        (await m.approvalGrantModes.get(ch))?.modes.session === false &&
-        (await m.egressPolicies.get(ch))?.policy.allowedHosts[0] === "api.example.com" &&
-        (await m.baseModels.get(ch))?.modelId === "claude-opus-4-8" &&
-        (await m.browseMaxSteps.get(ch))?.steps === 120 &&
-        (await m.browseModels.get(ch))?.modelId === "claude-sonnet-4-6",
-    );
+  const m = maps(f);
+  const a = testConfigStore("default-org", m);
+  const version = await a.setInstructions(ch, "a channel-specific soul");
+  await a.setSetting("commandPolicy", policy, ch);
+  await a.setApprovalGrantModes(ch, { session: false, always: true });
+  await a.setSetting("egress", { allowedHosts: ["api.example.com"], deniedHosts: ["evil.example"] }, ch);
+  await a.setRuntimeSelection(ch, { modelId: "claude-opus-4-8" });
+  await a.setSetting("browseMaxSteps", 120, ch);
+  await a.setSetting("browseModel", "claude-sonnet-4-6", ch);
+  await settle(
+    async () =>
+      (await m.instructions.get(ch))?.version === version &&
+      !!(await m.commandPolicies.get(ch)) &&
+      (await m.approvalGrantModes.get(ch))?.modes.session === false &&
+      (await m.egressPolicies.get(ch))?.policy.allowedHosts[0] === "api.example.com" &&
+      (await m.baseModels.get(ch))?.modelId === "claude-opus-4-8" &&
+      (await m.browseMaxSteps.get(ch))?.steps === 120 &&
+      (await m.browseModels.get(ch))?.modelId === "claude-sonnet-4-6",
+  );
 
-    const b = testConfigStore("default-org", maps(f));
-    assert.equal(b.getInstructions(ch), null, "a cold instance has no scoped soul until it hydrates");
-    await b.hydrate?.();
+  const b = testConfigStore("default-org", maps(f));
+  assert.equal(b.getInstructions(ch), null, "a cold instance has no scoped soul until it hydrates");
+  await b.hydrate?.();
 
-    assert.equal(b.getInstructions(ch), "a channel-specific soul", "the scoped soul survived the restart");
-    assert.equal(b.instructionsVersion(ch), version, "the soul version round-trips (monotonic across restart)");
-    assert.equal(
-      b.instructionsHistory(ch)[0]?.content,
-      "a channel-specific soul",
-      "the revision history survives a restart",
-    );
-    assert.deepEqual(b.setting("commandPolicy", ch), policy, "the command policy survived");
-    assert.deepEqual(
-      b.setting("egress", ch),
-      { allowedHosts: ["api.example.com"], deniedHosts: ["evil.example"] },
-      "the egress policy survived",
-    );
-    assert.equal(b.getRuntimeSelection(ch)?.modelId ?? null, "claude-opus-4-8", "the base model survived");
-    assert.equal(b.setting("browseMaxSteps", ch), 120, "the browse step limit survived");
-    assert.equal(b.setting("browseModel", ch), "claude-sonnet-4-6", "the browse model survived");
-  },
-);
+  assert.equal(b.getInstructions(ch), "a channel-specific soul", "the scoped soul survived the restart");
+  assert.equal(b.instructionsVersion(ch), version, "the soul version round-trips (monotonic across restart)");
+  assert.equal(
+    b.instructionsHistory(ch)[0]?.content,
+    "a channel-specific soul",
+    "the revision history survives a restart",
+  );
+  assert.deepEqual(b.setting("commandPolicy", ch), policy, "the command policy survived");
+  assert.deepEqual(
+    b.setting("egress", ch),
+    { allowedHosts: ["api.example.com"], deniedHosts: ["evil.example"] },
+    "the egress policy survived",
+  );
+  assert.equal(b.getRuntimeSelection(ch)?.modelId ?? null, "claude-opus-4-8", "the base model survived");
+  assert.equal(b.setting("browseMaxSteps", ch), 120, "the browse step limit survived");
+  assert.equal(b.setting("browseModel", ch), "claude-sonnet-4-6", "the browse model survived");
+});
 
-test(
-  "pg config store: rapid overlapping writes to one scope converge to the last value (serialized write-through)",
-  { skip },
-  async () => {
-    const f = createPostgresMapFactory(URL!);
-    const ch = scopeId("channel", "C2");
-    const m = maps(f);
-    const a = testConfigStore("default-org", m);
+test("pg config store: rapid overlapping writes to one scope converge to the last value (serialized write-through)", async () => {
+  const f = createPostgresMapFactory(URL);
+  const ch = scopeId("channel", "C2");
+  const m = maps(f);
+  const a = testConfigStore("default-org", m);
 
-    let lastVersion = 0;
-    for (let i = 1; i <= 8; i++) {
-      lastVersion = await a.setInstructions(ch, `soul v${i}`);
-      await a.setSetting("egress", { allowedHosts: [`host${i}.example`], deniedHosts: [] }, ch);
-    }
-    await a.setRuntimeSelection(ch, { modelId: "claude-opus-4-8" });
-    await a.setRuntimeSelection(ch, null);
-    await a.setSetting("browseMaxSteps", 60, ch);
-    await a.setSetting("browseMaxSteps", null, ch);
-    await a.setSetting("browseModel", "claude-sonnet-4-6", ch);
-    await a.setSetting("browseModel", null, ch);
-    await settle(
-      async () =>
-        (await m.instructions.get(ch))?.content === "soul v8" &&
-        (await m.egressPolicies.get(ch))?.policy.allowedHosts[0] === "host8.example" &&
-        !(await m.baseModels.get(ch)) &&
-        !(await m.browseMaxSteps.get(ch)) &&
-        !(await m.browseModels.get(ch)),
-    );
+  let lastVersion = 0;
+  for (let i = 1; i <= 8; i++) {
+    lastVersion = await a.setInstructions(ch, `soul v${i}`);
+    await a.setSetting("egress", { allowedHosts: [`host${i}.example`], deniedHosts: [] }, ch);
+  }
+  await a.setRuntimeSelection(ch, { modelId: "claude-opus-4-8" });
+  await a.setRuntimeSelection(ch, null);
+  await a.setSetting("browseMaxSteps", 60, ch);
+  await a.setSetting("browseMaxSteps", null, ch);
+  await a.setSetting("browseModel", "claude-sonnet-4-6", ch);
+  await a.setSetting("browseModel", null, ch);
+  await settle(
+    async () =>
+      (await m.instructions.get(ch))?.content === "soul v8" &&
+      (await m.egressPolicies.get(ch))?.policy.allowedHosts[0] === "host8.example" &&
+      !(await m.baseModels.get(ch)) &&
+      !(await m.browseMaxSteps.get(ch)) &&
+      !(await m.browseModels.get(ch)),
+  );
 
-    const b = testConfigStore("default-org", maps(f));
-    await b.hydrate?.();
-    assert.equal(
-      b.getInstructions(ch),
-      "soul v8",
-      "the durable soul ends on the last write, not a reordered earlier one",
-    );
-    assert.equal(b.instructionsVersion(ch), lastVersion);
-    assert.deepEqual(
-      b.setting("egress", ch),
-      { allowedHosts: ["host8.example"], deniedHosts: [] },
-      "the durable egress ends on the last write",
-    );
-    assert.equal(b.getRuntimeSelection(ch)?.modelId ?? null, null, "a cleared base model stays cleared after restart");
-    assert.equal(b.setting("browseMaxSteps", ch), null, "a cleared browse step limit stays cleared after restart");
-    assert.equal(b.setting("browseModel", ch), null, "a cleared browse model stays cleared after restart");
-  },
-);
+  const b = testConfigStore("default-org", maps(f));
+  await b.hydrate?.();
+  assert.equal(
+    b.getInstructions(ch),
+    "soul v8",
+    "the durable soul ends on the last write, not a reordered earlier one",
+  );
+  assert.equal(b.instructionsVersion(ch), lastVersion);
+  assert.deepEqual(
+    b.setting("egress", ch),
+    { allowedHosts: ["host8.example"], deniedHosts: [] },
+    "the durable egress ends on the last write",
+  );
+  assert.equal(b.getRuntimeSelection(ch)?.modelId ?? null, null, "a cleared base model stays cleared after restart");
+  assert.equal(b.setting("browseMaxSteps", ch), null, "a cleared browse step limit stays cleared after restart");
+  assert.equal(b.setting("browseModel", ch), null, "a cleared browse model stays cleared after restart");
+});
 
-test("pg config store: settings written on one core reach another core through refreshScope", { skip }, async () => {
-  const f = createPostgresMapFactory(URL!);
+test("pg config store: settings written on one core reach another core through refreshScope", async () => {
+  const f = createPostgresMapFactory(URL);
   const ch = scopeId("channel", "C4");
   const org = scopeId("org", "default-org");
   const a = testConfigStore("default-org", maps(f));

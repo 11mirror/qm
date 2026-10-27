@@ -5,11 +5,9 @@ import { createAdminGrantStore, type AdminGrant } from "../../src/admin/admin-gr
 import { scopeId } from "../../src/types.ts";
 import { truncateTables } from "../support/test-database.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres admin-grant tests";
+const URL = process.env.DATABASE_URL!;
 
 beforeEach(async () => {
-  if (!URL) return;
   await truncateTables(URL, ["admin_grants"]);
 });
 
@@ -23,8 +21,8 @@ const grant = (over: Partial<AdminGrant> = {}): AdminGrant => ({
   ...over,
 });
 
-test("pg admin-grant persistence: put is an idempotent upsert; remove is key-scoped", { skip }, async () => {
-  const store = createPostgresAdminGrantStore(URL!);
+test("pg admin-grant persistence: put is an idempotent upsert; remove is key-scoped", async () => {
+  const store = createPostgresAdminGrantStore(URL);
 
   await store.put(grant());
   await store.put(grant());
@@ -45,11 +43,11 @@ test("pg admin-grant persistence: put is an idempotent upsert; remove is key-sco
   );
 });
 
-test("pg admin grants survive a restart: a promotion is read back through a SEPARATE store", { skip }, async () => {
-  const boot1 = createPostgresAdminGrantStore(URL!);
+test("pg admin grants survive a restart: a promotion is read back through a SEPARATE store", async () => {
+  const boot1 = createPostgresAdminGrantStore(URL);
   await boot1.put(grant({ principalId: "U-durable" }));
 
-  const boot2 = createPostgresAdminGrantStore(URL!);
+  const boot2 = createPostgresAdminGrantStore(URL);
   assert.equal(
     (await boot2.all()).some((g) => g.principalId === "U-durable"),
     true,
@@ -57,32 +55,28 @@ test("pg admin grants survive a restart: a promotion is read back through a SEPA
   );
 });
 
-test(
-  "pg-backed AdminGrantStore: seed applies once, then a redeploy never clobbers runtime grants",
-  { skip },
-  async () => {
-    const seed = [grant({ principalId: "seed-admin" })];
-    const s1 = createAdminGrantStore(createPostgresAdminGrantStore(URL!), { seed });
-    assert.equal(
-      (await s1.list()).some((g) => g.principalId === "seed-admin"),
-      true,
-      "seed applied to the empty store",
-    );
-    await s1.add(grant({ principalId: "promoted-at-runtime" }));
+test("pg-backed AdminGrantStore: seed applies once, then a redeploy never clobbers runtime grants", async () => {
+  const seed = [grant({ principalId: "seed-admin" })];
+  const s1 = createAdminGrantStore(createPostgresAdminGrantStore(URL), { seed });
+  assert.equal(
+    (await s1.list()).some((g) => g.principalId === "seed-admin"),
+    true,
+    "seed applied to the empty store",
+  );
+  await s1.add(grant({ principalId: "promoted-at-runtime" }));
 
-    const s2 = createAdminGrantStore(createPostgresAdminGrantStore(URL!), { seed });
-    const ids = (await s2.list()).map((g) => g.principalId).sort();
-    assert.deepEqual(ids, ["promoted-at-runtime", "seed-admin"], "redeploy preserves both seed + runtime grants");
-  },
-);
+  const s2 = createAdminGrantStore(createPostgresAdminGrantStore(URL), { seed });
+  const ids = (await s2.list()).map((g) => g.principalId).sort();
+  assert.deepEqual(ids, ["promoted-at-runtime", "seed-admin"], "redeploy preserves both seed + runtime grants");
+});
 
-test("concurrent administrator provisioning preserves the first grant", { skip }, async () => {
-  const store = createPostgresAdminGrantStore(URL!);
+test("concurrent administrator provisioning preserves the first grant", async () => {
+  const store = createPostgresAdminGrantStore(URL);
   const candidates = Array.from({ length: 8 }, (_, i) => grant({ createdAt: i, grantedBy: `issuer-${i}` }));
   const inserted = await Promise.all(candidates.map((g) => store.insertIfAbsent(g)));
   assert.equal(inserted.filter(Boolean).length, 1);
   const winner = candidates[inserted.indexOf(true)]!;
   assert.deepEqual(await store.all(), [winner]);
-  assert.equal(await createPostgresAdminGrantStore(URL!).insertIfAbsent(grant({ createdAt: 999 })), false);
+  assert.equal(await createPostgresAdminGrantStore(URL).insertIfAbsent(grant({ createdAt: 999 })), false);
   assert.deepEqual(await store.all(), [winner]);
 });

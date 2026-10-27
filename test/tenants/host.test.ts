@@ -167,8 +167,7 @@ test("Absurd queues are tenant-scoped except for the home tenant", () => {
   assert.equal(tenantQueue("turns_people"), "turns_people");
 });
 
-const URL_ADMIN = process.env.DATABASE_URL;
-const skip = URL_ADMIN ? false : "set DATABASE_URL (a Postgres) to run the multitenant host test";
+const URL_ADMIN = process.env.DATABASE_URL!;
 const DB = `qm_mt_host_${process.pid}`;
 const ROLE = "qm_mt_host_app";
 const ACME = "5b0c7e44-1f1a-4c6e-9d2a-00000000a001";
@@ -209,7 +208,6 @@ function postgresMultitenantHostGet(
 }
 
 before(async () => {
-  if (!URL_ADMIN) return;
   admin = new pg.Client({ connectionString: URL_ADMIN });
   await admin.connect();
   await admin.query(`DROP DATABASE IF EXISTS ${DB} WITH (FORCE)`);
@@ -250,7 +248,6 @@ before(async () => {
 });
 
 after(async () => {
-  if (!URL_ADMIN) return;
   await host?.stopWorkers();
   for (const server of host?.servers ?? []) server.close();
   await registry?.close();
@@ -259,7 +256,7 @@ after(async () => {
   await admin.end();
 });
 
-test("one process serves the home tenant and every registry tenant by host", { skip }, async () => {
+test("one process serves the home tenant and every registry tenant by host", async () => {
   assert.equal(host.tenants.length, 3);
   const port = (host.servers[host.servers.length - 1]!.address() as AddressInfo).port;
   const body = async (path: string, h: string) =>
@@ -271,7 +268,7 @@ test("one process serves the home tenant and every registry tenant by host", { s
   assert.equal((await postgresMultitenantHostGet(port, "/v1/x", "stranger.example.test")).status, 404);
 });
 
-test("a registry change boots added tenants and stops suspended ones without a restart", { skip }, async () => {
+test("a registry change boots added tenants and stops suspended ones without a restart", async () => {
   const frontPort = (host.servers[host.servers.length - 1]!.address() as AddressInfo).port;
   await upsertTenant(
     registry,
