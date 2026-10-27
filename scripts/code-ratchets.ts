@@ -53,7 +53,8 @@ export function blobTables(source: string, path: string) {
     const parts = [""];
     let depth = 1;
     for (const ch of source.slice(create.index + create[0].length)) {
-      depth += ch === "(" ? 1 : ch === ")" ? -1 : 0;
+      if (ch === "(") depth++;
+      if (ch === ")") depth--;
       if (!depth) break;
       if (ch === "," && depth === 1) parts.push("");
       else parts[parts.length - 1] += ch;

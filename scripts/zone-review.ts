@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { buildModelRuntime } from "../src/harness/pi-harness.ts";
+import { buildModelRuntime } from "../src/harness/pi-model-runtime.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 import { lines, section, wallOfShameLenses } from "./wall-of-shame-check.ts";
 import { inZone, isReviewable, readZone } from "./zone.ts";
