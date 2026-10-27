@@ -56,6 +56,26 @@ export const CONTRACT_MIGRATIONS: readonly PgMigrationDefinition[] = [
     id: "contract/0009-drop-runs-engine",
     statements: ["SET LOCAL lock_timeout = '3s'", "ALTER TABLE runs DROP COLUMN IF EXISTS engine"],
   },
+  {
+    id: "contract/0010-drop-retired-schema",
+    statements: [
+      "SET LOCAL lock_timeout = '3s'",
+      "DROP TABLE IF EXISTS loop_ingress",
+      "DROP TABLE IF EXISTS loop_ingress_deliveries",
+      "DROP TABLE IF EXISTS loop_outputs",
+      "DROP TABLE IF EXISTS loop_ship_grants",
+      "DROP TABLE IF EXISTS people_directory_urls",
+      "DROP TABLE IF EXISTS aws_sandbox_bodies",
+      "DROP TABLE IF EXISTS sharing_postures",
+      "DROP TABLE IF EXISTS superserve_config_epochs",
+      "DROP TABLE IF EXISTS superserve_sandbox_bodies",
+      "DROP INDEX IF EXISTS loop_items_loopid_fold",
+      "DROP INDEX IF EXISTS loop_items_loopid_unicode",
+      "DROP STATISTICS IF EXISTS loop_items_loopid_stats",
+      "DROP INDEX IF EXISTS idx_runs_fair_key",
+      "ALTER TABLE runs DROP COLUMN IF EXISTS fair_key",
+    ],
+  },
 ];
 
 export const contractMigrations = (): PgMigrationDefinition[] => [
