@@ -1,4 +1,5 @@
 import { errMessage } from "../util/errors.ts";
+import { readTextPrefix } from "../util/response-body.ts";
 import { isObj } from "../util/objects.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
@@ -23,17 +24,6 @@ export type BrokerFetch = (
   init: { method: string; headers: Record<string, string>; body?: string },
 ) => Promise<BrokerFetchResponse>;
 
-async function boundedText(response: Response, maxChars: number): Promise<string> {
-  if (!response.body) return "";
-  const decoder = new TextDecoder();
-  let text = "";
-  for await (const chunk of response.body) {
-    text += decoder.decode(chunk, { stream: true });
-    if (text.length >= maxChars) return text;
-  }
-  return text + decoder.decode();
-}
-
 export const realBrokerFetch: BrokerFetch = async (url, init) => {
   const r = await fetch(url, {
     method: init.method,
@@ -44,7 +34,7 @@ export const realBrokerFetch: BrokerFetch = async (url, init) => {
   return {
     status: r.status,
     ...(r.headers.get("content-type") ? { contentType: r.headers.get("content-type")! } : {}),
-    text: () => boundedText(r, MAX_RESPONSE_BYTES + 1),
+    text: () => readTextPrefix(r, MAX_RESPONSE_BYTES + 1),
   };
 };
 
