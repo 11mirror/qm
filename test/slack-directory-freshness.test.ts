@@ -210,6 +210,20 @@ test("a rejected full crawl is retried instead of throttling unpublished rosters
   assert.equal(a.state.memberCalls, 2);
 });
 
+test("a push refused for a stale member stamp refetches users before the retry", async (t) => {
+  const { core, advance } = fixture(t);
+  const a = core();
+  const b = core();
+  await a.refresh();
+  advance(20_000);
+  await b.refresh();
+  const refusedAt = a.pushes.length;
+  await a.directory.forceDirectorySync(a.client);
+  assert.equal(a.pushes[refusedAt]!.membersSyncedAt, 1_000_000);
+  await a.directory.forceDirectorySync(a.client);
+  assert.equal(a.pushes.at(-1)!.membersSyncedAt, 1_020_000);
+});
+
 test("a member_left revocation that core rejects fails the event so the gated envelope is redelivered", async (t) => {
   const { core, store } = fixture(t);
   const a = core([channel("C_ONE", true)]);

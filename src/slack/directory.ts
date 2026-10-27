@@ -131,7 +131,7 @@ export function createUserDirectory(deps: UserDirectoryDeps) {
     }
   }
 
-  return { current: () => snapshot, getUserSnapshot, classifyUserCached };
+  return { current: () => snapshot, expire: () => void (snapshot = undefined), getUserSnapshot, classifyUserCached };
 }
 
 export type UserDirectory = ReturnType<typeof createUserDirectory>;
@@ -155,6 +155,7 @@ export function createDirectory(deps: {
     coreSingleton: CORE_SINGLETON,
     classifyUserCached: (client, userId) => users.classifyUserCached(client, userId),
     seenGroupIds: new Set<string>(),
+    expireUserSnapshot: () => users.expire(),
   };
   const users = createUserDirectory({
     ids,
