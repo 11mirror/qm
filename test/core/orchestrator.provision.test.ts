@@ -10,7 +10,6 @@ import { egressDecision } from "../../src/resolution/egress-policy.ts";
 import { encodeRef, serviceCredRef } from "../../src/acl/resource-ref.ts";
 import { runTrigger } from "../../src/triggers/run-trigger.ts";
 import { createIdempotencyStore } from "../../src/idempotency/idempotency-store.ts";
-import { testMap } from "../support/test-database.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
 import { createPostgresDirectoryStore } from "../../src/directory/postgres-directory-store.ts";
 import {
@@ -430,7 +429,7 @@ test("a channel cron receives env credentials only when the directory proves an 
     const out = await runTrigger(
       {
         outbound,
-        idempotency: createIdempotencyStore(testMap()),
+        idempotency: createIdempotencyStore(testDatabaseUrl()),
         identity,
         run: (req) => app.turn(req),
         directory,

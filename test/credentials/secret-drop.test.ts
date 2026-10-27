@@ -8,7 +8,7 @@ import { createServer } from "../../src/api/server.ts";
 import { createSecretDropStore, SECRET_DROP_TTL_MS } from "../../src/credentials/secret-drop.ts";
 import { fireDropResolution, type DropResolution } from "../../src/triggers/keychain-ask.ts";
 import { recordingOutbound } from "../support/recording-outbound.ts";
-import { createIdempotencyStore, type IdempotencyRecord } from "../../src/idempotency/idempotency-store.ts";
+import { createIdempotencyStore } from "../../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../../src/identity/identity-service.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../src/auth/capability-token.ts";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
@@ -82,7 +82,7 @@ describe("SecretDropStore", () => {
 describe("fireDropResolution", () => {
   const depsWith = (run: (req: TurnRequest) => Promise<TurnResult>) => ({
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
+    idempotency: createIdempotencyStore(testDatabaseUrl()),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     run,
   });
@@ -173,7 +173,7 @@ describe("fireDropResolution", () => {
     const outbound = recordingOutbound();
     const deps = {
       outbound,
-      idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
+      idempotency: createIdempotencyStore(testDatabaseUrl()),
       identity: createIdentityService(testMap(), { externalMembers: testMap() }),
       run: async () => ({ status: "pending_approval" }) as TurnResult,
     };

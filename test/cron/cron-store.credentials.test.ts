@@ -33,7 +33,7 @@ async function fixture() {
   const requests: TurnRequest[] = [];
   const deps: AskResolutionDeps = {
     outbound,
-    idempotency: createIdempotencyStore(testMap()),
+    idempotency: createIdempotencyStore(testDatabaseUrl()),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     getCron: (id) => crons.get(id),
     run: async (request) => {
@@ -176,7 +176,7 @@ async function credentialRetryFixture(run: (request: TurnRequest) => Promise<Tur
     },
   });
   const outbound = recordingOutbound();
-  const idempotency = createIdempotencyStore(testMap());
+  const idempotency = createIdempotencyStore(testDatabaseUrl());
   const ask: KeychainAsk = {
     id: "retry-ask",
     credentialId: "dummy-credential",

@@ -8,14 +8,14 @@ import { createMemoryRunSignalStore } from "../../src/runs/run-signal-store.ts";
 import type { Run, RunStore } from "../../src/runs/run-store.ts";
 import { isUserMessage } from "../../src/sessions/items.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
-import { createSessionMailbox, type SessionMessage, type SessionMailbox } from "../../src/sessions/session-mailbox.ts";
+import { createSessionMailbox, type SessionMailbox } from "../../src/sessions/session-mailbox.ts";
 import type { SessionStore } from "../../src/sessions/session-store.ts";
 import { createSessionSyscalls } from "../../src/subagents/session-tools.ts";
 import { scopeId, type Principal, type Conversation, type ScopeId, type Session } from "../../src/types.ts";
 import { buildApp } from "../support/build-app.ts";
 import { settle } from "../support/settle.ts";
 import { testConfig } from "../support/test-config.ts";
-import { testAdvisoryLock, testMap, testDatabaseUrl } from "../support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";
 
 const alice: Principal = { id: "alice@example.com", type: "internal" };
 const bob: Principal = { id: "bob@example.com", type: "internal" };
@@ -44,7 +44,7 @@ test("session search reuses indexed search with participant intersection, tenure
     sessions,
     runs,
     signals: createMemoryRunSignalStore(),
-    mailbox: createSessionMailbox(testMap<SessionMessage>()),
+    mailbox: createSessionMailbox(testDatabaseUrl()),
     maxAttempts: 1,
     advisoryLock: testAdvisoryLock(),
     prepareRequest: async (request) => ({
@@ -106,7 +106,7 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
     sessions: built.sessions,
     runs: built.runs,
     signals: built.signals,
-    mailbox: createSessionMailbox(testMap<SessionMessage>()),
+    mailbox: createSessionMailbox(testDatabaseUrl()),
     maxAttempts: 1,
   }).forTurn({
     session: parentSession,
@@ -201,7 +201,7 @@ async function rig(opts?: { treeRunCap?: number }): Promise<Rig> {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = testRunStore();
   const signals = createMemoryRunSignalStore();
-  const mailbox = createSessionMailbox(testMap<SessionMessage>());
+  const mailbox = createSessionMailbox(testDatabaseUrl());
   const advisoryLock = testAdvisoryLock();
   const factory = createSessionSyscalls({
     mailbox,

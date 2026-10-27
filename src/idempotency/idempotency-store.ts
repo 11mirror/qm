@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
+import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { errMessage } from "../util/errors.ts";
 
 /** A committed key, or — while `claim` is set — a key some process is running right now. */
-export interface IdempotencyRecord {
+interface IdempotencyRecord {
   key: string;
   at: number;
   claim?: string;
@@ -26,14 +27,25 @@ const DEFAULT_PRUNE_INTERVAL_MS = 60 * 60_000;
 /** How long an in-flight claim blocks other processes before it is presumed dead (its holder crashed). */
 const DEFAULT_CLAIM_LEASE_MS = 10 * 60_000;
 
-export function createIdempotencyStore(
-  backing: DurableMap<IdempotencyRecord>,
-  opts: IdempotencyStoreOptions = {},
-): IdempotencyStore {
+const IDEMPOTENCY: TableSpec = {
+  table: "idempotency",
+  key: "key",
+  keyIsField: true,
+  columns: { at: { type: "bigint", required: true }, claim: { type: "text" } },
+};
+
+export const IDEMPOTENCY_MIGRATION = mapToTableMigration("idempotency/store/0001-typed", IDEMPOTENCY, {
+  statements: [`CREATE INDEX IF NOT EXISTS idempotency_at ON idempotency (at)`],
+});
+
+const codec = tableCodec<IdempotencyRecord>(IDEMPOTENCY);
+
+export function createIdempotencyStore(databaseUrl: string, opts: IdempotencyStoreOptions = {}): IdempotencyStore {
   const retentionMs = opts.retentionMs ?? DEFAULT_RETENTION_MS;
   const pruneIntervalMs = opts.pruneIntervalMs ?? DEFAULT_PRUNE_INTERVAL_MS;
   const claimLeaseMs = opts.claimLeaseMs ?? DEFAULT_CLAIM_LEASE_MS;
   const now = opts.now ?? Date.now;
+  const { q } = createPgPool(databaseUrl, [IDEMPOTENCY_MIGRATION]);
   const done = new Map<string, number>();
   let lastPruneAt = now();
 
@@ -42,19 +54,16 @@ export function createIdempotencyStore(
     lastPruneAt = t;
     const cutoff = t - retentionMs;
     for (const [key, at] of done) if (at < cutoff) done.delete(key);
-    void backing.deleteBelow("at", cutoff).catch((e: unknown) => {
+    void q(`DELETE FROM idempotency WHERE at < $1`, [cutoff]).catch((e: unknown) => {
       console.error("[idempotency] retention prune failed:", errMessage(e));
     });
   }
-
-  const live = (record: IdempotencyRecord | null, t: number): boolean =>
-    record != null && (record.claim ? t - record.at < claimLeaseMs : record.at >= t - retentionMs);
 
   const isCommitted = async (key: string): Promise<boolean> => {
     const cutoff = now() - retentionMs;
     const cached = done.get(key);
     if (cached != null && cached >= cutoff) return true;
-    const record = await backing.get(key);
+    const record = codec.rows(await q(`SELECT ${codec.columns} FROM idempotency WHERE key = $1`, [key]))[0];
     if (record != null && !record.claim && record.at >= cutoff) {
       done.set(record.key, record.at);
       return true;
@@ -62,15 +71,17 @@ export function createIdempotencyStore(
     return false;
   };
 
-  /** Claim `key` for this call across every process: insert a claim, or take over an expired record. */
   async function claimKey(key: string): Promise<string | null> {
     const t = now();
     const claim = randomUUID();
-    const mine: IdempotencyRecord = { key, at: t, claim };
-    if (await backing.insertIfAbsent(key, mine)) return claim;
-    const taken = await backing.update(key, (current) => (live(current, t) ? current : mine));
-    if (taken === null) return (await backing.insertIfAbsent(key, mine)) ? claim : null;
-    return taken.claim === claim ? claim : null;
+    const rows = await q(
+      `INSERT INTO idempotency (${codec.columns}) VALUES (${codec.placeholders})
+       ON CONFLICT (${tenantCols("key")}) DO UPDATE SET at = EXCLUDED.at, claim = EXCLUDED.claim
+       WHERE CASE WHEN idempotency.claim IS NULL THEN idempotency.at < $4 ELSE idempotency.at <= $5 END
+       RETURNING claim`,
+      [...codec.values(key, { key, at: t, claim }), t - retentionMs, t - claimLeaseMs],
+    );
+    return rows[0]?.claim === claim ? claim : null;
   }
 
   return {
@@ -81,11 +92,15 @@ export function createIdempotencyStore(
       try {
         await fn();
       } catch (error) {
-        await backing.deleteIf(key, (record) => record.claim === claim);
+        await q(`DELETE FROM idempotency WHERE key = $1 AND claim = $2`, [key, claim]);
         throw error;
       }
       const at = now();
-      await backing.put(key, { key, at });
+      await q(
+        `INSERT INTO idempotency (key, at) VALUES ($1, $2)
+         ON CONFLICT (${tenantCols("key")}) DO UPDATE SET at = EXCLUDED.at, claim = NULL`,
+        [key, at],
+      );
       done.set(key, at);
       pruneIfDue(at);
       return true;

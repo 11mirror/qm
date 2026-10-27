@@ -29,7 +29,7 @@ import { createDockerDeployProvider } from "../../src/deploy/docker-deploy-provi
 import { createDeployService } from "../../src/deploy/deploy-service.ts";
 import { recordingOutbound } from "../support/recording-outbound.ts";
 import { createFeatureFlagStore, type FeatureName } from "../../src/feature-flags.ts";
-import { createSessionMailbox, type SessionMessage } from "../../src/sessions/session-mailbox.ts";
+import { createSessionMailbox } from "../../src/sessions/session-mailbox.ts";
 import { createSessionSyscalls } from "../../src/subagents/session-tools.ts";
 import { createMemoryRunSignalStore } from "../../src/runs/run-signal-store.ts";
 import { scopeId, type Principal, type Session } from "../../src/types.ts";
@@ -318,14 +318,14 @@ const exceptions = Object.keys(SUBAGENT_EXCEPTIONS) as (keyof AgentToolsOptions)
 async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean) => Call | undefined) {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = testRunStore();
-  const featureFlags = createFeatureFlagStore(testMap());
+  const featureFlags = createFeatureFlagStore(testDatabaseUrl());
   for (const flag of flags) await featureFlags.setEnabled(flag, scope, true, "test");
   const sidebar: Session[] = [];
   const sessionSyscalls = createSessionSyscalls({
     advisoryLock: testAdvisoryLock(),
     sessions,
     runs,
-    mailbox: createSessionMailbox(testMap<SessionMessage>()),
+    mailbox: createSessionMailbox(testDatabaseUrl()),
     signals: createMemoryRunSignalStore(),
     maxAttempts: 1,
     conversations: {

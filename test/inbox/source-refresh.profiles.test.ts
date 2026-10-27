@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
-import { testMap } from "../support/test-database.ts";
 import { createPostgresErrorLog } from "../../src/admin/postgres-error-log.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
 import {
@@ -435,7 +434,7 @@ test("cosmetic refresh records ledger failures without rejecting the inbox reque
 
 test("Inbox source refresh checks the owner rollout before credentials, reads, or writes in either mode", async () => {
   const { createFeatureFlagStore } = await import("../../src/feature-flags.ts");
-  const flags = createFeatureFlagStore(testMap());
+  const flags = createFeatureFlagStore(testDatabaseUrl());
   await flags.setEnabled("inbox_loops", "personal:someone-else", true, "admin");
   for (const mode of [undefined, "avatars"] as const) {
     const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });

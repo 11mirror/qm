@@ -8,7 +8,7 @@ import { createTurnStream } from "../../src/runs/turn-stream.ts";
 import type { ProcessRecord } from "../../src/processes/process-registry.ts";
 import type { Session, Monitor } from "../../src/types.ts";
 import { isTerminal, type Run } from "../../src/runs/run-store.ts";
-import { testMap } from "../support/test-database.ts";
+import { testMap, testDatabaseUrl } from "../support/test-database.ts";
 
 function deferred() {
   let resolve!: () => void;
@@ -21,7 +21,7 @@ function deferred() {
 function fixture() {
   let at = 1_000;
   const store = testMap<SlackSessionStatusState>();
-  const flags = createFeatureFlagStore(testMap());
+  const flags = createFeatureFlagStore(testDatabaseUrl());
   const records = new Map<string, Run>();
   const jobs: ProcessRecord[] = [];
   const watches: Monitor[] = [];

@@ -13,7 +13,7 @@ import {
 import { runTrigger, type TriggerDeps } from "../../src/triggers/run-trigger.ts";
 import { scopeId, type Destination, type Principal, type TurnRequest, type TurnResult } from "../../src/types.ts";
 import { recordingOutbound, type PostLog } from "../support/recording-outbound.ts";
-import { testMap } from "../support/test-database.ts";
+import { testMap, testDatabaseUrl } from "../support/test-database.ts";
 
 function fakeDirectory(): ReachDirectory & {
   get(id: string): Promise<{ displayName: string } | null>;
@@ -327,7 +327,7 @@ describe("Reach: verbatim relay attribution", () => {
 function triggerDeps(run: (req: TurnRequest) => Promise<TurnResult>): TriggerDeps & { outbound: PostLog } {
   return {
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testMap()),
+    idempotency: createIdempotencyStore(testDatabaseUrl()),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     run,
     directory: fakeDirectory(),

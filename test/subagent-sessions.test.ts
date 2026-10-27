@@ -19,7 +19,7 @@ import type { RunStore } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 import { claimTurn, completeTurn, finishTurn, testRunStore, type TestRunStore } from "./support/turns.ts";
 
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alex" };
@@ -53,7 +53,7 @@ async function rig(opts?: {
   const { runs, ledger, databaseUrl } = runStore();
   const sessions = createPostgresSessionStore(databaseUrl);
   const signals = createMemoryRunSignalStore();
-  const mailbox = createSessionMailbox(testMap<SessionMessage>());
+  const mailbox = createSessionMailbox(testDatabaseUrl());
   const advisoryLock = testAdvisoryLock();
   const factory = createSessionSyscalls({
     mailbox,
@@ -865,8 +865,8 @@ test("follow-up retries recover the accepted run before checking full capacity",
 });
 
 test("mailbox survives recreation and rejects acknowledgements for another recipient", async () => {
-  const backing = testMap<SessionMessage>();
-  const mail = createSessionMailbox(backing);
+  const url = testDatabaseUrl();
+  const mail = createSessionMailbox(url);
   const message: SessionMessage = {
     id: "one",
     senderId: "sender",
@@ -878,7 +878,7 @@ test("mailbox survives recreation and rejects acknowledgements for another recip
   };
   await mail.send(message);
   await mail.send({ ...message, text: "replacement" });
-  const restarted = createSessionMailbox(backing);
+  const restarted = createSessionMailbox(url);
   await restarted.acknowledge("wrong", [message.id]);
   assert.equal((await restarted.pending("recipient"))[0]!.text, "data");
   await restarted.acknowledge("recipient", [message.id]);
@@ -1660,7 +1660,7 @@ test("children of a Slack group turn keep its source so external-workspace polic
   const { runs, databaseUrl } = runStore();
   const sessions = createPostgresSessionStore(databaseUrl);
   const factory = createSessionSyscalls({
-    mailbox: createSessionMailbox(testMap<SessionMessage>()),
+    mailbox: createSessionMailbox(testDatabaseUrl()),
     sessions,
     runs,
     signals: createMemoryRunSignalStore(),
@@ -1714,7 +1714,7 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
   const guest: Principal = { id: "G1", type: "guest", displayName: "Guest" };
   await sessions.addParticipant(room.id, guest.id);
   const factory = createSessionSyscalls({
-    mailbox: createSessionMailbox(testMap<SessionMessage>()),
+    mailbox: createSessionMailbox(testDatabaseUrl()),
     sessions,
     runs,
     signals: createMemoryRunSignalStore(),

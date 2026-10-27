@@ -13,11 +13,11 @@ import {
 import { createAskExpirySweep, fireAskResolution } from "../../src/triggers/keychain-ask.ts";
 import { runTrigger } from "../../src/triggers/run-trigger.ts";
 import { recordingOutbound } from "../support/recording-outbound.ts";
-import { createIdempotencyStore, type IdempotencyRecord } from "../../src/idempotency/idempotency-store.ts";
+import { createIdempotencyStore } from "../../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../../src/types.ts";
 import { materializeGrant } from "../support/materialize-grant.ts";
-import { testAdvisoryLock, testMap } from "../support/test-database.ts";
+import { testAdvisoryLock, testMap, testDatabaseUrl } from "../support/test-database.ts";
 import type { DurableMap } from "../../src/persistence/durable-map.ts";
 import { KEY, kcAt, GH } from "../support/keychain-ask-app.ts";
 
@@ -353,7 +353,7 @@ test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate cl
   const outcome = await runTrigger(
     {
       outbound: recordingOutbound(),
-      idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
+      idempotency: createIdempotencyStore(testDatabaseUrl()),
       identity: createIdentityService(testMap(), { externalMembers: testMap() }),
       run: async (req) => ((seen = req), { status: "ok" } as TurnResult),
     },
@@ -378,7 +378,7 @@ test("runTrigger: silent markers never silence a notification-shaped fire (keych
   const outcome = await runTrigger(
     {
       outbound,
-      idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
+      idempotency: createIdempotencyStore(testDatabaseUrl()),
       identity: createIdentityService(testMap(), { externalMembers: testMap() }),
       run: async () => ({ status: "ok", reply: "The keychain ask was approved." }) as TurnResult,
     },
@@ -414,7 +414,7 @@ test("fireAskResolution: a turn that fires but doesn't land falls back to a plai
     const outbound = recordingOutbound();
     return {
       outbound,
-      idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
+      idempotency: createIdempotencyStore(testDatabaseUrl()),
       identity: createIdentityService(testMap(), { externalMembers: testMap() }),
       run,
       getAsk: async () => current,

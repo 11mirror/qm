@@ -1,4 +1,5 @@
-import type { DurableMap } from "./persistence/durable-map.ts";
+import { createPgPool, tenantCols } from "./persistence/pg-pool.ts";
+import { mapToTableMigration, tableCodec, type TableSpec } from "./persistence/typed-table.ts";
 import type { ScopeId } from "./types.ts";
 import { tenant } from "./tenant.ts";
 
@@ -30,7 +31,7 @@ export const FEATURES = {
 export type FeatureName = keyof typeof FEATURES;
 export const FEATURE_NAMES = Object.keys(FEATURES) as FeatureName[];
 
-export interface FeatureFlagRecord {
+interface FeatureFlagRecord {
   featureName: FeatureName;
   enabledScopes: ScopeId[];
   updatedAt: number;
@@ -44,33 +45,51 @@ export interface FeatureFlagStore {
   setEnabled(featureName: FeatureName, scope: ScopeId, on: boolean, updatedBy: string): Promise<FeatureFlagRecord>;
 }
 
-export function createFeatureFlagStore(
-  backing: DurableMap<FeatureFlagRecord>,
-  opts: { now?: () => number } = {},
-): FeatureFlagStore {
+const FEATURE_FLAGS: TableSpec = {
+  table: "feature_flags",
+  key: "featureName",
+  keyIsField: true,
+  columns: {
+    enabledScopes: { type: "text[]", required: true },
+    updatedAt: { type: "bigint", required: true },
+    updatedBy: { type: "text", required: true },
+  },
+};
+
+export const FEATURE_FLAGS_MIGRATION = mapToTableMigration("feature-flags/store/0001-typed", FEATURE_FLAGS);
+
+const codec = tableCodec<FeatureFlagRecord>(FEATURE_FLAGS);
+
+export function createFeatureFlagStore(databaseUrl: string, opts: { now?: () => number } = {}): FeatureFlagStore {
   const now = opts.now ?? Date.now;
-  const key = (featureName: FeatureName) => featureName;
+  const { q } = createPgPool(databaseUrl, [FEATURE_FLAGS_MIGRATION]);
+  const get = async (featureName: FeatureName) =>
+    codec.rows(await q(`SELECT ${codec.columns} FROM feature_flags WHERE feature_name = $1`, [featureName]))[0] ?? null;
   return {
-    list: async () => (await backing.all()).filter((row) => FEATURE_NAMES.includes(row.featureName)),
-    get: (featureName) => backing.get(key(featureName)),
+    list: async () =>
+      codec
+        .rows(await q(`SELECT ${codec.columns} FROM feature_flags ORDER BY feature_name`))
+        .filter((row) => FEATURE_NAMES.includes(row.featureName)),
+    get,
     async enabled(featureName, scope) {
-      const row = await backing.get(key(featureName));
+      const row = await get(featureName);
       return row?.enabledScopes.includes(tenant().orgScope) === true || row?.enabledScopes.includes(scope) === true;
     },
     async setEnabled(featureName, scope, on, updatedBy) {
       if (!updatedBy.trim()) throw new Error("feature flag updater must not be empty");
-      const current = await backing.get(key(featureName));
-      const scopes = new Set(current?.enabledScopes ?? []);
-      if (on) scopes.add(scope);
-      else scopes.delete(scope);
-      const record = {
-        featureName,
-        enabledScopes: [...scopes].sort(),
-        updatedAt: now(),
-        updatedBy,
-      };
-      await backing.put(key(featureName), record);
-      return record;
+      const rows = await q(
+        `INSERT INTO feature_flags (${codec.columns}) VALUES (${codec.placeholders})
+         ON CONFLICT (${tenantCols("feature_name")}) DO UPDATE SET
+           enabled_scopes = ARRAY(SELECT s FROM unnest(array_remove(feature_flags.enabled_scopes, $5) || EXCLUDED.enabled_scopes) s
+             GROUP BY s ORDER BY s COLLATE "C"),
+           updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by
+         RETURNING ${codec.columns}`,
+        [
+          ...codec.values(featureName, { featureName, enabledScopes: on ? [scope] : [], updatedAt: now(), updatedBy }),
+          scope,
+        ],
+      );
+      return codec.row(rows[0]!);
     },
   };
 }

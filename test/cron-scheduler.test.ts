@@ -37,7 +37,7 @@ function harness(
     ...singleProcessDeps(),
     crons,
     outbound,
-    idempotency: createIdempotencyStore(testMap()),
+    idempotency: createIdempotencyStore(testDatabaseUrl()),
     identity,
     run,
     ...(directory ? { directory } : {}),
@@ -444,7 +444,7 @@ test("cron fires do not replay prior sessions or inline prior fire context", asy
     ...singleProcessDeps(),
     crons,
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testMap()),
+    idempotency: createIdempotencyStore(testDatabaseUrl()),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     run,
   });
@@ -559,7 +559,7 @@ test("a failing cron fire is logged, not swallowed", async (t) => {
     ...singleProcessDeps(),
     crons,
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testMap()),
+    idempotency: createIdempotencyStore(testDatabaseUrl()),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     run: async () => {
       throw new Error("boom");
@@ -592,7 +592,7 @@ test("queue mode: fires claim the slot before running, and stale or lost claims 
     ...singleProcessDeps(),
     crons,
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testMap()),
+    idempotency: createIdempotencyStore(testDatabaseUrl()),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     run: async (req) => {
       calls.push(req);
@@ -650,7 +650,7 @@ for (const queued of [false, true]) {
       ...singleProcessDeps(),
       crons,
       outbound: recordingOutbound(),
-      idempotency: createIdempotencyStore(testMap()),
+      idempotency: createIdempotencyStore(testDatabaseUrl()),
       identity: createIdentityService(testMap(), { externalMembers: testMap() }),
       advisoryLock: testAdvisoryLock(),
       now: () => clock,
@@ -750,7 +750,7 @@ test("queue mode: concurrent reconciliation cannot consume an overdue slot while
     ...singleProcessDeps(),
     crons,
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testMap()),
+    idempotency: createIdempotencyStore(testDatabaseUrl()),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     now: () => clock,
     advisoryLock: {
@@ -817,7 +817,7 @@ test("queue mode: an authz-failed fire disables the cron but gives the slot back
     ...singleProcessDeps(),
     crons,
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testMap()),
+    idempotency: createIdempotencyStore(testDatabaseUrl()),
     identity,
     run: async (req) => {
       calls.push(req);
@@ -1033,7 +1033,7 @@ test("a one-shot whose session is busy is deferred, stays enabled, and fires onc
     ...singleProcessDeps(),
     crons,
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testMap()),
+    idempotency: createIdempotencyStore(testDatabaseUrl()),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     run: busyOnce(calls),
     now: () => clock,
@@ -1084,7 +1084,7 @@ test("a fire that is still busy ten minutes past its slot gives up: consumed and
     ...singleProcessDeps(),
     crons,
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testMap()),
+    idempotency: createIdempotencyStore(testDatabaseUrl()),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     run: async (req) => {
       calls.push(req);
@@ -1117,7 +1117,7 @@ test("queue mode: a busy fire releases its slot and its job sleeps until the def
     ...singleProcessDeps(),
     crons,
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testMap()),
+    idempotency: createIdempotencyStore(testDatabaseUrl()),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     run: busyOnce(calls),
     now: () => clock,
@@ -1186,7 +1186,7 @@ test("manual cron preparation and detached fire retain admission across pause", 
     admittedWork: work,
     crons,
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testMap()),
+    idempotency: createIdempotencyStore(testDatabaseUrl()),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     run: () =>
       work.run(async () => {

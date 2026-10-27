@@ -1,4 +1,5 @@
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 
 export interface SessionMessage {
@@ -13,20 +14,51 @@ export interface SessionMessage {
   consumed?: boolean;
 }
 
-export function createSessionMailbox(backing: DurableMap<SessionMessage>) {
+const SESSION_MAILBOX: TableSpec = {
+  table: "session_mailbox",
+  key: "id",
+  keyIsField: true,
+  columns: {
+    recipientId: { type: "text", required: true },
+    senderId: { type: "text", required: true },
+    actor: { type: "jsonb", required: true },
+    text: { type: "text", required: true },
+    sourceEntrySeq: { type: "bigint" },
+    audience: { type: "jsonb", required: true },
+    createdAt: { type: "bigint", required: true },
+    consumed: { type: "boolean" },
+  },
+};
+
+export const SESSION_MAILBOX_MIGRATION = mapToTableMigration("sessions/mailbox/0001-typed", SESSION_MAILBOX, {
+  statements: [`CREATE INDEX IF NOT EXISTS session_mailbox_recipient ON session_mailbox (recipient_id)`],
+});
+
+const codec = tableCodec<SessionMessage>(SESSION_MAILBOX);
+
+export function createSessionMailbox(databaseUrl: string) {
+  const { q } = createPgPool(databaseUrl, [SESSION_MAILBOX_MIGRATION]);
   return {
     async send(message: SessionMessage): Promise<void> {
-      await backing.putIfAbsent(message.id, message);
+      await q(
+        `INSERT INTO session_mailbox (${codec.columns}) VALUES (${codec.placeholders}) ON CONFLICT DO NOTHING`,
+        codec.values(message.id, message),
+      );
     },
     async pending(recipientId: string): Promise<SessionMessage[]> {
-      const rows = await backing.select({ where: { field: "recipientId", anyOfFold: [recipientId] } });
-      return rows.filter((row) => !row.consumed).sort((a, b) => a.createdAt - b.createdAt);
+      return codec.rows(
+        await q(
+          `SELECT ${codec.columns} FROM session_mailbox
+           WHERE recipient_id = $1 AND consumed IS NOT TRUE ORDER BY created_at, id`,
+          [recipientId],
+        ),
+      );
     },
     async acknowledge(recipientId: string, ids: string[]): Promise<void> {
-      for (const id of ids) {
-        const row = await backing.get(id);
-        if (row?.recipientId === recipientId) await backing.merge(id, { consumed: true });
-      }
+      await q(`UPDATE session_mailbox SET consumed = true WHERE recipient_id = $1 AND id = ANY($2::text[])`, [
+        recipientId,
+        ids,
+      ]);
     },
   };
 }

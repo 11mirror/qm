@@ -11,7 +11,7 @@ import { createConfigStore, configStoreMaps } from "../resolution/config-store.t
 import { type SkillStore, createSkillStore, type Skill } from "../skills/skill-store.ts";
 import { createSkillPackStore, type SkillPack } from "../skills/skill-pack-store.ts";
 import { createSkillBundleStore, type SkillBundle } from "../skills/skill-bundle-store.ts";
-import { createFeatureFlagStore, type FeatureFlagRecord } from "../feature-flags.ts";
+import { createFeatureFlagStore } from "../feature-flags.ts";
 import { createPostgresTeamStore } from "../teams/teams.ts";
 import { scopeId } from "../types.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
@@ -61,7 +61,7 @@ export function buildStores(w: Head) {
   });
   const skillPacks = createSkillPackStore({ backing: artifactMap<SkillPack>("skill_packs") });
   const skillBundles = createSkillBundleStore({ backing: artifactMap<SkillBundle>("skill_bundles") });
-  const featureFlags = createFeatureFlagStore(artifactMap<FeatureFlagRecord>("feature_flags"));
+  const featureFlags = createFeatureFlagStore(databaseUrl);
   const teams = createPostgresTeamStore(databaseUrl, featureFlags, scopeId("org", config.orgId));
   const sessions: SessionStore = createPostgresSessionStore(databaseUrl);
   const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
