@@ -65,7 +65,7 @@ export function createTenantDirectory(opts: DirectoryOptions): TenantDirectory {
   const prepared = new Set<string>();
   const listeners: Array<(active: Tenant[]) => void> = [];
 
-  const isReady = (t: Tenant) => t.id === undefined || prepared.has(t.id);
+  const isReady = (t: Tenant) => !opts.prepare || t.id === undefined || prepared.has(t.id);
   const readyTenants = () => (current?.tenants ?? [opts.home]).filter(isReady);
   const notify = () => {
     const active = readyTenants();
