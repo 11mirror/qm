@@ -1,6 +1,7 @@
+import type { Item } from "../../../src/sessions/items.ts";
 import type { HarnessDetectInput, HarnessDetectResult, HarnessModelUtilities } from "../../../src/harness/harness.ts";
 import { TitleRejected } from "../../../src/core/turn-error.ts";
-import { deterministicCompactSummary } from "../../../src/harness/context-compaction.ts";
+import { compactionThroughSeq, compactTranscript } from "../../../src/harness/context-compaction.ts";
 import { countTokens } from "../../../src/util/tokens.ts";
 import { SECURITY_SCREEN_STEP, SECURITY_SCREEN_SYSTEM_PROMPT } from "../../../src/security/security-screen.ts";
 
@@ -121,4 +122,10 @@ export function createMockModels(flakyScreens: Set<string>): HarnessModelUtiliti
       return Promise.resolve(`In plain English: ${command.split("\n")[0]!.slice(0, 80)} (${reason}).`);
     },
   };
+}
+
+export function deterministicCompactSummary(history: Item[]): string {
+  const throughSeq = compactionThroughSeq(history);
+  const header = `Compacted ${history.length} prior entr${history.length === 1 ? "y" : "ies"} through seq ${throughSeq}.`;
+  return `${header}\n${compactTranscript(history)}`;
 }

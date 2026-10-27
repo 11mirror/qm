@@ -185,6 +185,7 @@ export interface HarnessDetectResult {
 export interface HarnessCompactInput {
   session: Session;
   history: Item[];
+  summaryTokenBudget: number;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
 }
 
