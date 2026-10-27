@@ -3,7 +3,6 @@ import { randomBytes } from "node:crypto";
 import { validateHeaderName, validateHeaderValue } from "node:http";
 import { HOP_BY_HOP } from "../util/http-proxy.ts";
 import { scopeId as toScopeId, parseScopeId, type Destination, type ScopeId } from "../types.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import { encryptSecret, decryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
 import { canonicalPerson, personIds, personKey, samePerson } from "../directory/person.ts";
@@ -13,6 +12,7 @@ import { shq } from "../util/shell.ts";
 import { homeRelativePath } from "./paths.ts";
 import { connectorTokenNote } from "./connector-token.ts";
 import { tenant } from "../tenant.ts";
+import type { KeychainStore, TargetUsernameCredential } from "./keychain-store.ts";
 
 const COMPOSIO_ENV_KEY = "COMPOSIO_API_KEY";
 
@@ -165,9 +165,6 @@ export interface KeychainCredential {
   createdAt: number;
   updatedAt: number;
 }
-
-/** A stored row as older builds wrote it; rewriteTargetUsernameCredentials rewrites these at boot. */
-type TargetUsernameCredential = KeychainCredential & { target?: string; username?: string };
 
 export type KeychainCredentialMeta = Omit<KeychainCredential, "secretEnc"> & { credentialHandle?: string };
 
@@ -598,8 +595,8 @@ function toMeta(rec: Omit<KeychainCredential, "secretEnc"> & { secretEnc?: strin
   };
 }
 
-function byOwners(ownerIds: string[]): { field: "ownerId"; anyOfFold: string[] } {
-  return { field: "ownerId", anyOfFold: ownerIds.flatMap((id) => personIds(id)) };
+function owners(ownerIds: string[]): string[] {
+  return ownerIds.flatMap((id) => personIds(id));
 }
 
 function bucketByOwner<C extends { ownerId: string }, T>(
@@ -622,9 +619,7 @@ function bucketByOwner<C extends { ownerId: string }, T>(
 }
 
 export function createKeychain(deps: {
-  creds: DurableMap<KeychainCredential>;
-  grants: DurableMap<KeychainGrant>;
-  asks: DurableMap<KeychainAsk>;
+  store: KeychainStore;
   key: SecretKey;
   lock: AdvisoryLock;
   refreshConnector?: OAuthRefresh;
@@ -633,12 +628,13 @@ export function createKeychain(deps: {
   now?: () => number;
 }): Keychain {
   const now = deps.now ?? Date.now;
+  const store = deps.store;
   const lock = deps.lock;
   const oauthSkew = deps.oauthSkewMs ?? 60_000;
   const oauthRefreshMargin = Math.max(deps.oauthRefreshMarginMs ?? 10 * 60_000, oauthSkew);
 
   async function getOwned(ownerId: string, id: string): Promise<KeychainCredential | null> {
-    const rec = await deps.creds.get(id);
+    const rec = await store.creds.get(id);
     return rec && samePerson(rec.ownerId, ownerId) ? rec : null;
   }
 
@@ -687,10 +683,7 @@ export function createKeychain(deps: {
   }
 
   async function activeGrantsFor(scopeId: ScopeId): Promise<KeychainGrant[]> {
-    const t = now();
-    return (await deps.grants.all()).filter(
-      (g) => g.audienceScopeId === scopeId && g.status === "active" && !consumedGrant(g) && !expired(g, t),
-    );
+    return store.grants.activeFor(scopeId, now());
   }
 
   const unsettled = (rec: KeychainAsk): boolean => rec.status === "pending" || rec.status === "expired";
@@ -698,23 +691,21 @@ export function createKeychain(deps: {
 
   async function freshAsks(recs: KeychainAsk[], t: number): Promise<KeychainAsk[]> {
     const ids = recs.filter(unsettled).map((rec) => rec.id);
-    const grants = new Map(
-      ids.length ? await deps.grants.selectEntries({ where: { field: "askId", anyOfFold: ids } }) : [],
-    );
+    const grants = new Map(ids.length ? (await store.grants.forAsks(ids)).map((g) => [g.id, g] as const) : []);
     const out: KeychainAsk[] = [];
     for (const rec of recs) out.push(await settleAsk(rec, t, grants.get(askGrantId(rec)) ?? null));
     return out;
   }
 
   async function freshAsk(rec: KeychainAsk, t: number): Promise<KeychainAsk> {
-    return settleAsk(rec, t, unsettled(rec) ? await deps.grants.get(askGrantId(rec)) : null);
+    return settleAsk(rec, t, unsettled(rec) ? await store.grants.get(askGrantId(rec)) : null);
   }
 
   async function settleAsk(rec: KeychainAsk, t: number, grant: KeychainGrant | null): Promise<KeychainAsk> {
     if (!unsettled(rec)) return rec;
     if (grant?.askId === rec.id) {
       return (
-        (await deps.asks.update(rec.id, (current) =>
+        (await store.asks.update(rec.id, (current) =>
           current.status === "pending" || current.status === "expired"
             ? { ...current, status: "approved", resolvedAt: grant.createdAt, grantId: grant.id, notifiedAt: undefined }
             : current,
@@ -723,7 +714,7 @@ export function createKeychain(deps: {
     }
     if (rec.status !== "pending" || rec.expiresAt >= t) return rec;
     return (
-      (await deps.asks.update(rec.id, (current) =>
+      (await store.asks.update(rec.id, (current) =>
         current.status === "pending" && current.expiresAt < t
           ? { ...current, status: "expired", resolvedAt: t }
           : current,
@@ -754,7 +745,7 @@ export function createKeychain(deps: {
   }
 
   async function brokerRecord(orgScopeId: string, slug: string): Promise<KeychainCredential | null> {
-    return deps.creds.get(brokerId(orgScopeId, slug));
+    return store.creds.get(brokerId(orgScopeId, slug));
   }
 
   function serviceCredentialRecord(
@@ -812,7 +803,7 @@ export function createKeychain(deps: {
   ): Promise<KeychainCredential> {
     const t = now();
     const id = oauthId(host, principalId, accountType);
-    const prior = await deps.creds.get(id);
+    const prior = await store.creds.get(id);
     const at = token.accountType ?? accountType;
     const rec: KeychainCredential = {
       id,
@@ -838,7 +829,7 @@ export function createKeychain(deps: {
       createdAt: prior?.createdAt ?? t,
       updatedAt: t,
     };
-    await deps.creds.put(id, rec);
+    await store.creds.put(rec);
     return rec;
   }
 
@@ -847,7 +838,7 @@ export function createKeychain(deps: {
     principalId: string,
     accountType?: string,
   ): Promise<KeychainCredential | null> {
-    return deps.creds.get(oauthId(host, principalId, accountType));
+    return store.creds.get(oauthId(host, principalId, accountType));
   }
 
   function recToOAuthToken(rec: KeychainCredential): OAuthToken {
@@ -870,13 +861,7 @@ export function createKeychain(deps: {
   }
 
   async function markConnectorRefreshFailure(rec: KeychainCredential, message: string): Promise<void> {
-    const t = now();
-    const current = await deps.creds.get(rec.id);
-    if (!current || current.updatedAt !== rec.updatedAt || current.fingerprint !== rec.fingerprint) return;
-    await deps.creds.merge(rec.id, {
-      refresh: { ...current.refresh, refreshFailedAt: t, refreshError: message },
-      updatedAt: t,
-    });
+    await store.creds.markRefreshFailure(rec, now(), message);
   }
 
   const rotatedSince = (current: KeychainCredential, rec: KeychainCredential): boolean =>
@@ -893,7 +878,7 @@ export function createKeychain(deps: {
     if (!deps.refreshConnector) return null;
     const refreshConnector = deps.refreshConnector;
     return lock.withLock(`keychain-refresh:${rec.id}`, async () => {
-      const latest = await deps.creds.get(rec.id);
+      const latest = await store.creds.get(rec.id);
       if (latest && rotatedSince(latest, rec)) return rotatedToken(latest);
       const stored = tryDecrypt(rec, recToOAuthToken);
       if (!stored) return null;
@@ -911,7 +896,7 @@ export function createKeychain(deps: {
           ...(stored.accountId ? { accountId: stored.accountId } : {}),
           ...fresh,
         };
-        const current = await deps.creds.get(rec.id);
+        const current = await store.creds.get(rec.id);
         if (current && rotatedSince(current, rec)) return rotatedToken(current);
         await putConnectorToken(host, principalId, merged, accountType);
         return merged.accessToken;
@@ -977,12 +962,11 @@ export function createKeychain(deps: {
 
   async function rewriteTargetUsernameCredentials(): Promise<number> {
     let rewritten = 0;
-    for (const rec of (await deps.creds.all()) as TargetUsernameCredential[]) {
-      if (rec.target === undefined && rec.username === undefined) continue;
+    for (const rec of await store.creds.targetUsernameRows()) {
       try {
         let changed = false;
-        await deps.creds.update(rec.id, (current) => {
-          const next = currentShape(current as TargetUsernameCredential);
+        await store.creds.update(rec.id, (current) => {
+          const next = currentShape(current);
           changed = next !== null;
           return next ?? current;
         });
@@ -1060,8 +1044,8 @@ export function createKeychain(deps: {
         updatedAt: t,
       };
     };
-    const rec = buildRec(await deps.creds.get(id));
-    await deps.creds.put(id, rec);
+    const rec = buildRec(await store.creds.get(id));
+    await store.creds.put(rec);
     return toMeta(rec);
   }
 
@@ -1106,7 +1090,7 @@ export function createKeychain(deps: {
   async function claimOnceGrant(grant: KeychainGrant, scopeId: ScopeId, usedBy: string): Promise<void> {
     if (grant.mode !== "once") return;
     const usedAt = now();
-    const claimed = await deps.grants.update(grant.id, (current) => {
+    const claimed = await store.grants.update(grant.id, (current) => {
       if (current.audienceScopeId !== scopeId) throw new KeychainError(403, "grant is for a different conversation");
       if (current.status === "revoked") throw new KeychainError(410, "grant was revoked");
       if (consumedGrant(current)) throw new KeychainError(410, "one-time grant already used");
@@ -1117,13 +1101,13 @@ export function createKeychain(deps: {
   }
 
   async function authorizedGrant(grantId: string, scopeId: ScopeId) {
-    const grant = await deps.grants.get(grantId);
+    const grant = await store.grants.get(grantId);
     if (!grant) throw new KeychainError(404, "unknown grant");
     if (grant.audienceScopeId !== scopeId) throw new KeychainError(403, "grant is for a different conversation");
     if (grant.status === "revoked") throw new KeychainError(410, "grant was revoked");
     if (consumedGrant(grant)) throw new KeychainError(410, "one-time grant already used");
     if (expired(grant, now())) throw new KeychainError(410, "grant is expired");
-    const cred = await deps.creds.get(grant.credentialId);
+    const cred = await store.creds.get(grant.credentialId);
     if (!cred) throw new KeychainError(404, "credential no longer exists");
     if (cred.kind === "broker") {
       throw new KeychainError(403, "broker credentials are not grantable — they are used via the credential broker");
@@ -1139,7 +1123,7 @@ export function createKeychain(deps: {
     const extra = { grantId: grant.id, purpose: grant.purpose };
     const materialized =
       cred.managed === "connector" ? await materializeConnector(cred, extra) : materializeDecrypted(cred, extra);
-    const version = cred.managed === "connector" ? await deps.creds.get(cred.id) : cred;
+    const version = cred.managed === "connector" ? await store.creds.get(cred.id) : cred;
     if (!version) throw new KeychainError(409, "credential changed while preparing execution; request it again");
     return {
       materialized,
@@ -1155,7 +1139,7 @@ export function createKeychain(deps: {
   }
 
   async function mintGrant(input: CreateGrantInput): Promise<KeychainGrant> {
-    const cred = await deps.creds.get(input.credentialId);
+    const cred = await store.creds.get(input.credentialId);
     if (!cred) throw new KeychainError(404, "unknown credential");
     if (cred.kind === "broker") {
       throw new KeychainError(400, "broker credentials are org-owned and used via the credential broker, not grants");
@@ -1185,18 +1169,14 @@ export function createKeychain(deps: {
       ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
       ...(input.askId ? { askId: input.askId } : {}),
     };
-    if (input.askId) return deps.grants.putIfAbsent(grant.id, grant);
-    await deps.grants.put(grant.id, grant);
+    if (input.askId) return store.grants.putIfAbsent(grant);
+    await store.grants.put(grant);
     return grant;
   }
 
   async function deleteCredential(id: string): Promise<void> {
-    for (const grant of await deps.grants.all()) {
-      if (grant.credentialId === id && grant.status === "active") {
-        await deps.grants.merge(grant.id, { status: "revoked", revokedAt: now() });
-      }
-    }
-    await deps.creds.delete(id);
+    await store.grants.revokeForCredential(id, now());
+    await store.creds.delete(id);
   }
 
   return {
@@ -1209,7 +1189,7 @@ export function createKeychain(deps: {
       if (!normalized.length) throw new KeychainError(409, "Refreshed credential files are missing");
       const fingerprint = credentialFilesFingerprint;
       if (fingerprint(normalized) === fingerprint(materialized.files)) return;
-      const updated = await deps.creds.update(materialized.credentialId, (current) => {
+      const updated = await store.creds.update(materialized.credentialId, (current) => {
         if (current.kind !== "file" || !samePerson(current.ownerId, materialized.ownerId))
           throw new KeychainError(409, "Credential changed during execution");
         const currentFiles = decryptToFiles(current).files;
@@ -1229,7 +1209,7 @@ export function createKeychain(deps: {
     },
 
     async writebackBaseline(source, fingerprint) {
-      const current = await deps.creds.get(source.credentialId);
+      const current = await store.creds.get(source.credentialId);
       if (!current || current.kind !== "file" || !samePerson(current.ownerId, source.ownerId))
         throw new KeychainError(410, "Credential was removed during execution");
       const files = decryptToFiles(current).files;
@@ -1246,26 +1226,21 @@ export function createKeychain(deps: {
     },
 
     async listAllMetadata() {
-      return (await deps.creds.select({ omit: ["secretEnc"] })).filter(listed).map(toMeta);
+      return (await store.creds.all()).filter(listed).map(toMeta);
     },
 
     async listByOwner(ownerId) {
-      return (await deps.creds.select({ omit: ["secretEnc"], where: byOwners([ownerId]) }))
+      return (await store.creds.byOwners(owners([ownerId])))
         .filter((c) => samePerson(c.ownerId, ownerId) && listed(c))
         .map(toMeta);
     },
 
     async listByOwners(ownerIds) {
-      return bucketByOwner(
-        await deps.creds.select({ omit: ["secretEnc"], where: byOwners(ownerIds) }),
-        ownerIds,
-        listed,
-        toMeta,
-      );
+      return bucketByOwner(await store.creds.byOwners(owners(ownerIds)), ownerIds, listed, toMeta);
     },
 
     async getCredential(id) {
-      const rec = await deps.creds.get(id);
+      const rec = await store.creds.get(id);
       return rec ? toMeta(rec) : null;
     },
 
@@ -1287,30 +1262,20 @@ export function createKeychain(deps: {
 
     async grantConnectorToScope({ host, principalId, accountType, audienceScopeId, purpose }) {
       const id = oauthId(host, principalId, accountType);
-      const cred = await deps.creds.get(id);
+      const cred = await store.creds.get(id);
       if (!cred) return null;
-      for (const g of await deps.grants.all()) {
-        if (
-          g.credentialId === id &&
-          g.audienceScopeId === audienceScopeId &&
-          g.mode === "standing" &&
-          g.status === "active"
-        ) {
-          return g;
-        }
-      }
-      return mintGrant({ credentialId: id, ownerId: principalId, audienceScopeId, mode: "standing", purpose });
+      return (
+        (await store.grants.standing(id, audienceScopeId)) ??
+        mintGrant({ credentialId: id, ownerId: principalId, audienceScopeId, mode: "standing", purpose })
+      );
     },
 
     async getGrant(id) {
-      return (await deps.grants.get(id)) ?? null;
+      return (await store.grants.get(id)) ?? null;
     },
 
     async listGrants(filter) {
-      const grants =
-        filter.ownerId === undefined
-          ? await deps.grants.all()
-          : await deps.grants.select({ where: byOwners([filter.ownerId]) });
+      const grants = await store.grants.list(filter.ownerId === undefined ? undefined : owners([filter.ownerId]));
       return grants.filter(
         (g) =>
           (filter.ownerId === undefined || samePerson(g.ownerId, filter.ownerId)) &&
@@ -1319,16 +1284,16 @@ export function createKeychain(deps: {
     },
 
     async revokeGrant(ownerId, grantId) {
-      const g = await deps.grants.get(grantId);
+      const g = await store.grants.get(grantId);
       if (!g || !samePerson(g.ownerId, ownerId)) return false;
-      if (g.status === "active") await deps.grants.merge(grantId, { status: "revoked", revokedAt: now() });
+      if (g.status === "active") await store.grants.revoke(grantId, now());
       return true;
     },
 
     async grantsForScope(scopeId) {
       const out: Array<{ grant: KeychainGrant; credential: KeychainCredentialMeta }> = [];
       for (const grant of await activeGrantsFor(scopeId)) {
-        const cred = await deps.creds.get(grant.credentialId);
+        const cred = await store.creds.get(grant.credentialId);
         if (cred && (cred.managed === "connector" || !credExpired(cred, now())))
           out.push({ grant, credential: toMeta(cred) });
       }
@@ -1339,7 +1304,7 @@ export function createKeychain(deps: {
       const purpose = input.purpose.trim();
       if (!purpose)
         throw new KeychainError(400, "purpose required — describe the specific task requiring this credential");
-      const cred = await deps.creds.get(input.credentialId);
+      const cred = await store.creds.get(input.credentialId);
       if (!cred || cred.kind === "broker") throw new KeychainError(404, "unknown credential");
       const t = now();
       if (!cred.managed && credExpired(cred, t))
@@ -1352,10 +1317,7 @@ export function createKeychain(deps: {
         throw new KeychainError(403, "personal requests require the credential owner's own conversation");
       }
       const origin = cronIdOf(input.requesterThreadRef) ?? input.requesterThreadRef;
-      for (const a of await freshAsks(
-        (await deps.asks.all()).reverse().sort((x, y) => y.createdAt - x.createdAt),
-        t,
-      )) {
+      for (const a of await freshAsks(await store.asks.list(true), t)) {
         const sameOrigin = (cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef) === origin;
         if (a.credentialId !== cred.id || a.requesterScopeId !== input.requesterScopeId || !sameOrigin) continue;
         if (a.status === "pending") return { ask: a, existing: true };
@@ -1384,30 +1346,30 @@ export function createKeychain(deps: {
         createdAt: t,
         expiresAt: input.expiresAt ?? t + ASK_TTL_MS,
       };
-      await deps.asks.put(ask.id, ask);
+      await store.asks.put(ask);
       return { ask, existing: false };
     },
 
     async getAsk(id) {
-      const rec = await deps.asks.get(id);
+      const rec = await store.asks.get(id);
       return rec ? freshAsk(rec, now()) : null;
     },
 
     async listAsks(filter) {
       const t = now();
       const out: KeychainAsk[] = [];
-      for (const a of await freshAsks(await deps.asks.all(), t)) {
+      for (const a of await freshAsks(await store.asks.list(false), t)) {
         if (filter.requesterId !== undefined && !samePerson(a.requesterId, filter.requesterId)) continue;
         if (filter.ownerId !== undefined && !samePerson(a.ownerId, filter.ownerId)) continue;
         if (filter.requesterScopeId !== undefined && a.requesterScopeId !== filter.requesterScopeId) continue;
         out.push(a);
       }
-      return out.sort((x, y) => x.createdAt - y.createdAt);
+      return out;
     },
 
     async approveAsk(input) {
       return lock.withLock(`keychain-ask:${input.askId}`, async () => {
-        const rec = await deps.asks.get(input.askId);
+        const rec = await store.asks.get(input.askId);
         if (!rec) throw new KeychainError(404, "unknown ask");
         const t = now();
         const ask = await freshAsk(rec, t);
@@ -1422,14 +1384,14 @@ export function createKeychain(deps: {
           askId: ask.id,
         });
         const patch = { status: "approved" as const, resolvedAt: t, grantId: grant.id, notifiedAt: undefined };
-        await deps.asks.merge(ask.id, patch);
+        await store.asks.merge(ask.id, patch);
         return { ask: { ...ask, ...patch }, grant };
       });
     },
 
     async declineAsk(input) {
       return lock.withLock(`keychain-ask:${input.askId}`, async () => {
-        const rec = await deps.asks.get(input.askId);
+        const rec = await store.asks.get(input.askId);
         if (!rec) throw new KeychainError(404, "unknown ask");
         if (!samePerson(rec.ownerId, input.ownerId))
           throw new KeychainError(403, "only the credential's owner can decline an ask");
@@ -1438,7 +1400,7 @@ export function createKeychain(deps: {
         if (ask.status !== "pending") throw new KeychainError(410, `ask already ${ask.status}`);
         const note = input.note?.trim();
         const patch = { status: "declined" as const, resolvedAt: t, ...(note ? { note } : {}) };
-        await deps.asks.merge(ask.id, patch);
+        await store.asks.merge(ask.id, patch);
         return { ...ask, ...patch };
       });
     },
@@ -1450,14 +1412,11 @@ export function createKeychain(deps: {
       const credentialLive = (id: string): Promise<boolean> => {
         const known = liveCredentials.get(id);
         if (known) return known;
-        const lookup = deps.creds.get(id).then(Boolean);
+        const lookup = store.creds.get(id).then(Boolean);
         liveCredentials.set(id, lookup);
         return lookup;
       };
-      for (const a of await freshAsks(
-        (await deps.asks.all()).reverse().sort((x, y) => y.createdAt - x.createdAt),
-        nowAt,
-      )) {
+      for (const a of await freshAsks(await store.asks.list(true), nowAt)) {
         const origin = cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef;
         const task = JSON.stringify([a.credentialId, a.requesterScopeId, origin]);
         const latestForTask = origin !== undefined && !taskDecisions.has(task);
@@ -1468,13 +1427,13 @@ export function createKeychain(deps: {
           a.notifiedAt < nowAt - ASK_PRUNE_AFTER_MS &&
           !(latestForTask && (await credentialLive(a.credentialId)))
         )
-          await deps.asks.delete(a.id);
+          await store.asks.delete(a.id);
       }
       return out;
     },
 
     async markAskNotified(id, status) {
-      await deps.asks.update(id, (current) =>
+      await store.asks.update(id, (current) =>
         current.status === status ? { ...current, notifiedAt: now() } : current,
       );
     },
@@ -1482,17 +1441,17 @@ export function createKeychain(deps: {
     async setServiceCredential(orgScopeId, input) {
       const prior = await brokerRecord(orgScopeId, input.slug);
       const rec = serviceCredentialRecord(orgScopeId, input, prior);
-      await deps.creds.put(rec.id, rec);
+      await store.creds.put(rec);
     },
 
     async setServiceCredentialIfAbsent(orgScopeId, input) {
       const rec = serviceCredentialRecord(orgScopeId, input, null);
-      return (await deps.creds.insertIfAbsent(rec.id, rec)) ? rec.updatedAt : null;
+      return (await store.creds.insertIfAbsent(rec)) ? rec.updatedAt : null;
     },
 
     async setServiceCredentialIfCurrent(orgScopeId, input, expectedUpdatedAt) {
       let updatedAt: number | null = null;
-      await deps.creds.update(brokerId(orgScopeId, input.slug), (prior) => {
+      await store.creds.update(brokerId(orgScopeId, input.slug), (prior) => {
         if (prior.kind !== "broker" || prior.ownerId !== orgScopeId || prior.updatedAt !== expectedUpdatedAt)
           return prior;
         const next = serviceCredentialRecord(orgScopeId, input, prior);
@@ -1503,20 +1462,17 @@ export function createKeychain(deps: {
     },
 
     async listServiceCredentials(orgScopeId) {
-      return (await deps.creds.select({ where: byOwners([orgScopeId]) }))
+      return (await store.creds.byOwners(owners([orgScopeId])))
         .filter((c) => c.kind === "broker" && c.ownerId === orgScopeId)
         .map(brokerToPublic);
     },
 
     async deleteServiceCredential(orgScopeId, slug) {
-      await deps.creds.delete(brokerId(orgScopeId, slug));
+      await store.creds.delete(brokerId(orgScopeId, slug));
     },
 
     async deleteServiceCredentialIfCurrent(orgScopeId, slug, expectedUpdatedAt) {
-      return deps.creds.deleteIf(
-        brokerId(orgScopeId, slug),
-        (prior) => prior.kind === "broker" && prior.ownerId === orgScopeId && prior.updatedAt === expectedUpdatedAt,
-      );
+      return store.creds.deleteBrokerIfCurrent(brokerId(orgScopeId, slug), orgScopeId, expectedUpdatedAt);
     },
 
     async getServiceCredentialSecret(orgScopeId, slug) {
@@ -1578,7 +1534,7 @@ export function createKeychain(deps: {
     async listConnectorsByOwners(ownerIds) {
       const t = now();
       return bucketByOwner(
-        await deps.creds.select({ omit: ["secretEnc"], where: byOwners(ownerIds) }),
+        await store.creds.byOwners(owners(ownerIds)),
         ownerIds,
         (c) => c.managed === "connector",
         (c) => connectorMeta(c, t, oauthSkew),
@@ -1599,7 +1555,7 @@ export function createKeychain(deps: {
           "a credential id loads only in its owner's own personal conversation — anywhere else needs a grant from the owner",
         );
       }
-      const cred = await deps.creds.get(credentialId);
+      const cred = await store.creds.get(credentialId);
       if (!cred || !samePerson(cred.ownerId, ownerId)) throw new KeychainError(404, "unknown credential");
       if (cred.kind === "broker") {
         throw new KeychainError(403, "broker credentials are used via the credential broker, never materialized");
@@ -1611,7 +1567,7 @@ export function createKeychain(deps: {
 
     async materializeOwn(ownerId) {
       const t = now();
-      return (await deps.creds.select({ where: byOwners([ownerId]) }))
+      return (await store.creds.byOwners(owners([ownerId])))
         .filter(
           (c) =>
             samePerson(c.ownerId, ownerId) &&
@@ -1625,7 +1581,7 @@ export function createKeychain(deps: {
     },
 
     async materializeOwnFiles(ownerId) {
-      return (await deps.creds.select({ where: byOwners([ownerId]) }))
+      return (await store.creds.byOwners(owners([ownerId])))
         .filter((c) => samePerson(c.ownerId, ownerId) && c.kind === "file" && listed(c))
         .map((c) => tryDecrypt(c, decryptToFiles))
         .filter((c): c is MaterializedFileCred => c !== null);

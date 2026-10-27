@@ -11,6 +11,7 @@ import { tenant } from "../../src/tenant.ts";
 import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./test-database.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
+import { createKeychainStore } from "../../src/credentials/keychain-store.ts";
 
 export function fakeRuns(run: Record<string, unknown>): ServerDeps["runs"] {
   return {
@@ -23,9 +24,7 @@ export function fakeRuns(run: Record<string, unknown>): ServerDeps["runs"] {
 export function fixture() {
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(testDatabaseUrl()),
     key: deriveConnectorKey("composio-test"),
   });
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));

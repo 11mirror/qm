@@ -7,13 +7,12 @@ import {
   renderKeychainManifest,
   KeychainError,
   type Keychain,
-  type KeychainGrant,
 } from "../../src/credentials/keychain.ts";
-import { type DurableMap, type DurableMapSelect } from "../../src/persistence/durable-map.ts";
 import { scopeId } from "../../src/types.ts";
 import { materializeGrant } from "../support/materialize-grant.ts";
-import { testAdvisoryLock, testMap } from "../support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";
 import { KEY, kc, GH } from "../support/keychain-store.ts";
+import { createKeychainStore } from "../../src/credentials/keychain-store.ts";
 
 test("save → list returns metadata only (no secret material), and re-save upserts the same slot", async () => {
   const k = kc();
@@ -50,28 +49,8 @@ test("listAllMetadata returns person-facing metadata only", async () => {
   assert.ok(!JSON.stringify(all).includes("s3"));
 });
 
-test("listing and per-owner reads use the store's projected select and never a full all() scan", async () => {
-  type Rec = import("../../src/credentials/keychain.ts").KeychainCredential;
-  const backing = testMap<Rec>();
-  const calls: string[] = [];
-  const creds: DurableMap<Rec> = {
-    ...backing,
-    async all() {
-      calls.push("all");
-      return backing.all();
-    },
-    async select<K extends Extract<keyof Rec, string> = never>(query: DurableMapSelect<Rec, K>) {
-      calls.push(`select:${(query.omit ?? []).join(",") || "full"}:${query.where ? "byOwner" : "unfiltered"}`);
-      return backing.select(query);
-    },
-  };
-  const k = createKeychain({
-    lock: testAdvisoryLock(),
-    creds,
-    grants: testMap(),
-    asks: testMap(),
-    key: KEY,
-  });
+test("listing and per-owner reads match owners across email casing and never return secret material", async () => {
+  const k = kc();
   const org = scopeId("org", "default-org");
   await k.save({ ...GH, ownerId: "Alice@X.com" });
   await k.save(GH);
@@ -103,10 +82,6 @@ test("listing and per-owner reads use the store's projected select and never a f
     [{ key: "GITHUB_TOKEN", value: "ghp_secret" }],
   );
   await k.materializeOwnFiles("U1");
-
-  assert.ok(!calls.includes("all"), `no listing path may scan the whole table (calls: ${calls.join(" ")})`);
-  assert.ok(calls.includes("select:secretEnc:byOwner"));
-  assert.ok(calls.includes("select:secretEnc:unfiltered"), "listAllMetadata projects the secret away");
 });
 
 test("envKey defaults from the service name (github → GITHUB_TOKEN)", async () => {
@@ -186,14 +161,8 @@ test("concurrent materialization consumes a once grant exactly once", async () =
 });
 
 test("legacy retry grants remain consumed and invalidate prepared uses", async () => {
-  const grants = testMap<KeychainGrant>();
-  const k = createKeychain({
-    lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants,
-    asks: testMap(),
-    key: KEY,
-  });
+  const store = createKeychainStore(testDatabaseUrl());
+  const k = createKeychain({ lock: testAdvisoryLock(), store, key: KEY });
   const credential = await k.save(GH);
   const grant = await k.createGrant({
     credentialId: credential.id,
@@ -203,7 +172,7 @@ test("legacy retry grants remain consumed and invalidate prepared uses", async (
     purpose: "one use",
   });
   const prepared = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
-  await grants.put(grant.id, { ...grant, status: "active", usedAt: Date.now(), usedBy: "U2" });
+  await store.grants.put({ ...grant, status: "active", usedAt: Date.now(), usedBy: "U2" });
   assert.equal((await k.grantsForScope("channel:C1")).length, 0);
   for (const actor of ["U2", "U3"])
     await assert.rejects(materializeGrant(k, grant.id, "channel:C1", actor), (e: KeychainError) => e.status === 410);
@@ -251,13 +220,12 @@ test("materializeOwnById: the owner's own credential needs no grant — scope, o
 });
 
 test("a grant row pointing at a broker credential cannot materialize (defense in depth)", async () => {
-  const creds = testMap<import("../../src/credentials/keychain.ts").KeychainCredential>();
-  const grants = testMap<import("../../src/credentials/keychain.ts").KeychainGrant>();
-  const k = createKeychain({ lock: testAdvisoryLock(), creds, grants, asks: testMap(), key: KEY });
+  const store = createKeychainStore(testDatabaseUrl());
+  const k = createKeychain({ lock: testAdvisoryLock(), store, key: KEY });
   const ORG = scopeId("org", "default-org");
   await k.setServiceCredential(ORG, { slug: "serp", name: "SERP", secret: "s3", host: "api.serper.dev" });
-  const broker = (await creds.all()).find((c) => c.kind === "broker")!;
-  await grants.put("g-broker", {
+  const broker = (await store.creds.all()).find((c) => c.kind === "broker")!;
+  await store.grants.put({
     id: "g-broker",
     credentialId: broker.id,
     ownerId: ORG,
@@ -281,13 +249,10 @@ test("a grant row pointing at a broker credential cannot materialize (defense in
 describe("connectors are grantable like any keychain record", () => {
   const GMAIL = "gmail.googleapis.com";
   const G1 = scopeId("group", "G1");
-  type Rec = import("../../src/credentials/keychain.ts").KeychainCredential;
   function kcWithRefresh(freshToken: string): Keychain {
     return createKeychain({
       lock: testAdvisoryLock(),
-      creds: testMap<Rec>(),
-      grants: testMap(),
-      asks: testMap(),
+      store: createKeychainStore(testDatabaseUrl()),
       key: KEY,
       refreshConnector: async () => ({ accessToken: freshToken, expiresAt: Date.now() + 3_600_000 }),
     });

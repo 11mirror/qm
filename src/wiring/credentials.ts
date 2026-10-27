@@ -1,41 +1,31 @@
 import type { Head } from "./late.ts";
 import { createEnvSecretSource } from "../credentials/secret-source.ts";
-import { type OAuthClientResolver, withPublicOAuthClients, makeRefresh, type OAuthState } from "../connectors/oauth.ts";
+import { type OAuthClientResolver, withPublicOAuthClients, makeRefresh } from "../connectors/oauth.ts";
 import {
   createConnectorClientResolver,
   deriveConnectorKey,
   type SecretKey,
 } from "../connectors/connector-client-store.ts";
 import { scopeId } from "../types.ts";
-import {
-  type Keychain,
-  createKeychain,
-  type KeychainCredential,
-  type KeychainGrant,
-  type KeychainAsk,
-  type OAuthToken,
-} from "../credentials/keychain.ts";
+import { type Keychain, createKeychain, type OAuthToken } from "../credentials/keychain.ts";
+import { createKeychainStore } from "../credentials/keychain-store.ts";
 import { refreshChatGPTTokens, refreshClaudeTokens } from "../model/subscription-oauth.ts";
 import { createUserModelCredentialStore } from "../model/user-model-credential-store.ts";
 import { withDeploymentCredentials } from "../credentials/deployment-credentials.ts";
 import type { Config } from "../config.ts";
 import { errMessage } from "../util/errors.ts";
 import { createMcpToolService } from "../mcp/mcp-tool-service.ts";
-import {
-  type BrowserSessionStore,
-  createBrowserSessionStore,
-  type StoredBrowserSession,
-} from "../connectors/browser-session-store.ts";
-import { type ConsentLinkStore, createConsentLinkStore, type ConsentLinkRecord } from "../connectors/consent-link.ts";
+import { type BrowserSessionStore, createBrowserSessionStore } from "../connectors/browser-session-store.ts";
+import { type ConsentLinkStore, createConsentLinkStore } from "../connectors/consent-link.ts";
 import { type OAuthFlowStore, createOAuthFlowStore } from "../connectors/oauth-flow-store.ts";
-import { type SecretDropStore, createSecretDropStore, type SecretDropRecord } from "../credentials/secret-drop.ts";
+import { type SecretDropStore, createSecretDropStore } from "../credentials/secret-drop.ts";
 import { createModelGateway } from "../model/model-gateway.ts";
 import type { StoresModule } from "./stores.ts";
 import type { FilesModule } from "./files.ts";
 import type { DeploymentLayerModule } from "./deployment-layer.ts";
 
 export function buildCredentials(w: Head & StoresModule & FilesModule & DeploymentLayerModule) {
-  const { overrides, configStore, config, connectorSecretKey, artifactMap, advisoryLock, mcpServers, auditLog } = w;
+  const { overrides, configStore, config, connectorSecretKey, databaseUrl, advisoryLock, mcpServers, auditLog } = w;
 
   const secretSource = createEnvSecretSource(overrides.env);
   const resolveClient: OAuthClientResolver = withPublicOAuthClients(
@@ -54,9 +44,7 @@ export function buildCredentials(w: Head & StoresModule & FilesModule & Deployme
     ...(signingSecretCredentialKey ? { fallbacks: [signingSecretCredentialKey] } : {}),
   };
   const credentialStore: Keychain = createKeychain({
-    creds: artifactMap<KeychainCredential>("keychain_credentials", ["ownerId"]),
-    grants: artifactMap<KeychainGrant>("keychain_grants", ["ownerId"]),
-    asks: artifactMap<KeychainAsk>("keychain_asks"),
+    store: createKeychainStore(databaseUrl),
     key: credentialKey,
     lock: advisoryLock,
     refreshConnector: (() => {
@@ -122,13 +110,13 @@ export function buildCredentials(w: Head & StoresModule & FilesModule & Deployme
       : {}),
   });
   const browserSessionStore: BrowserSessionStore = createBrowserSessionStore({
-    sessions: artifactMap<StoredBrowserSession>("browser_sessions"),
+    databaseUrl,
     key: credentialKey,
   });
   const connectorTokens = credentialStore;
-  const consentLinks: ConsentLinkStore = createConsentLinkStore(artifactMap<ConsentLinkRecord>("consent_links"));
-  const oauthFlows: OAuthFlowStore = createOAuthFlowStore(artifactMap<OAuthState>("oauth_flows"));
-  const secretDrops: SecretDropStore = createSecretDropStore(artifactMap<SecretDropRecord>("secret_drops"));
+  const consentLinks: ConsentLinkStore = createConsentLinkStore(databaseUrl);
+  const oauthFlows: OAuthFlowStore = createOAuthFlowStore(databaseUrl);
+  const secretDrops: SecretDropStore = createSecretDropStore(databaseUrl);
   const modelGateway = createModelGateway();
   return {
     warnShadowedBrokerCredentials,

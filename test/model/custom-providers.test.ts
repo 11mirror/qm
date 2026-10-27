@@ -2,7 +2,7 @@ import "../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test, afterEach } from "node:test";
 import { createInsecureTestServer } from "../../src/api/server.ts";
-import { createCustomProviderStore, type StoredCustomProvider } from "../../src/model/custom-provider-store.ts";
+import { createCustomProviderStore } from "../../src/model/custom-provider-store.ts";
 import {
   setCustomProviders,
   resolveCustomModel,
@@ -12,10 +12,11 @@ import {
   validateCustomProviderSpec,
 } from "../../src/model/custom-providers.ts";
 import { builtInModelCatalog } from "../../src/model/model-catalog.ts";
-import { modelSupported, modelServiceable, resolveModel, defaultModel } from "../../src/model/pi-models.ts";
+import { defaultModel, modelServiceable, modelSupported, resolveModel } from "../../src/model/pi-models.ts";
+import { createPgPool } from "../../src/persistence/pg-pool.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 import { buildApp, serverDeps } from "../../src/wiring.ts";
 import { testConfig } from "../support/test-config.ts";
-import { testMap } from "../support/test-database.ts";
 import { listenLocal } from "../support/listen-local.ts";
 
 afterEach(() => setCustomProviders([]));
@@ -111,8 +112,8 @@ test("spec validation rejects reserved ids, bad slugs, bad URLs, and empty model
 });
 
 test("store round-trip: upsert encrypts the key, statuses never leak it, delete disables", async () => {
-  const backing = testMap<StoredCustomProvider>();
-  const store = createCustomProviderStore({ backing, keyMaterial: "test-key-material" });
+  const databaseUrl = testDatabaseUrl();
+  const store = createCustomProviderStore({ databaseUrl, keyMaterial: "test-key-material" });
 
   await store.upsert(GATEWAY, "sk-secret-123", "admin@example.com");
   const statuses = await store.statuses();
@@ -120,9 +121,11 @@ test("store round-trip: upsert encrypts the key, statuses never leak it, delete 
   assert.equal(statuses[0]!.hasKey, true);
   assert.equal(JSON.stringify(statuses).includes("sk-secret-123"), false);
 
-  const raw = await backing.get("acme-gateway");
-  assert.ok(raw?.apiKeyEnc);
-  assert.equal(raw!.apiKeyEnc!.includes("sk-secret-123"), false);
+  const [raw] = await createPgPool(databaseUrl).q(
+    `SELECT api_key_enc FROM custom_model_providers WHERE id = 'acme-gateway'`,
+  );
+  assert.ok(raw?.api_key_enc);
+  assert.equal(String(raw.api_key_enc).includes("sk-secret-123"), false);
 
   assert.equal(await store.resolveKey("acme-gateway"), "sk-secret-123");
   assert.deepEqual(await store.enabled(), [GATEWAY]);
@@ -140,7 +143,7 @@ test("store round-trip: upsert encrypts the key, statuses never leak it, delete 
 
 test("store validates specs on upsert", async () => {
   const store = createCustomProviderStore({
-    backing: testMap<StoredCustomProvider>(),
+    databaseUrl: testDatabaseUrl(),
     keyMaterial: "k",
   });
   await assert.rejects(store.upsert({ ...GATEWAY, id: "anthropic" }, "k", "a@b.c"), /reserved/);
@@ -214,10 +217,10 @@ for (const protocol of ["openai", "openai-responses", "anthropic"] as const) {
   for (const reasoning of [undefined, false, true]) {
     test(`custom ${protocol} reasoning=${reasoning} survives persistence and runtime mappings`, async () => {
       const spec = { ...GATEWAY, protocol, models: [{ ...GATEWAY.models[0]!, reasoning }] };
-      const backing = testMap<StoredCustomProvider>();
-      const store = createCustomProviderStore({ backing, keyMaterial: "reasoning-test" });
+      const databaseUrl = testDatabaseUrl();
+      const store = createCustomProviderStore({ databaseUrl, keyMaterial: "reasoning-test" });
       await store.upsert(spec, "local", "admin@example.com");
-      const reloaded = createCustomProviderStore({ backing, keyMaterial: "reasoning-test" });
+      const reloaded = createCustomProviderStore({ databaseUrl, keyMaterial: "reasoning-test" });
       setCustomProviders(await reloaded.enabled());
       const model = resolveCustomModel("custom/acme-gateway/acme-large")!;
       assert.equal(model.reasoning, reasoning ?? false);

@@ -10,6 +10,7 @@ import {
   ASK_PRUNE_AFTER_MS,
   type KeychainAsk,
 } from "../../src/credentials/keychain.ts";
+import { createKeychainStore } from "../../src/credentials/keychain-store.ts";
 import { createAskExpirySweep, fireAskResolution } from "../../src/triggers/keychain-ask.ts";
 import { runTrigger } from "../../src/triggers/run-trigger.ts";
 import { recordingOutbound } from "../support/recording-outbound.ts";
@@ -18,7 +19,6 @@ import { createIdentityService } from "../../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../../src/types.ts";
 import { materializeGrant } from "../support/materialize-grant.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "../support/test-database.ts";
-import type { DurableMap } from "../../src/persistence/durable-map.ts";
 import { KEY, kcAt, GH } from "../support/keychain-ask-app.ts";
 
 test("createAsk: owner derived from the credential, purpose frozen, dedup per (credential, scope, task)", async () => {
@@ -280,22 +280,24 @@ test("sweep is the durable retry for approve/decline resolutions that never fire
 test("a sweep over ask history makes one grant query and no per-ask lookups", async () => {
   let t = 1_000_000;
   const lookups: string[] = [];
-  const counted = <T>(name: string, map: DurableMap<T>): DurableMap<T> => ({
-    ...map,
-    get: (id) => {
+  const store = createKeychainStore(testDatabaseUrl());
+  const { creds, grants } = store;
+  const countedGet =
+    <T>(name: string, get: (id: string) => Promise<T>) =>
+    (id: string) => {
       lookups.push(name);
-      return map.get(id);
-    },
-    selectEntries: (query) => {
-      lookups.push(`${name} batch`);
-      return map.selectEntries(query);
-    },
-  });
+      return get(id);
+    };
+  creds.get = countedGet("creds", creds.get);
+  grants.get = countedGet("grants", grants.get);
+  const forAsks = grants.forAsks;
+  grants.forAsks = (ids) => {
+    lookups.push("grants batch");
+    return forAsks(ids);
+  };
   const k = createKeychain({
     lock: testAdvisoryLock(),
-    creds: counted("creds", testMap()),
-    grants: counted("grants", testMap()),
-    asks: testMap(),
+    store,
     key: KEY,
     now: () => t,
   });

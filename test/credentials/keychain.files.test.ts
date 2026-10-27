@@ -11,8 +11,9 @@ import {
 } from "../../src/credentials/keychain.ts";
 import { deriveConnectorKey, encryptSecret } from "../../src/connectors/connector-client-store.ts";
 import { materializeGrant } from "../support/materialize-grant.ts";
-import { testAdvisoryLock, testMap } from "../support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";
 import { KEY, kc, GH } from "../support/keychain-store.ts";
+import { createKeychainStore } from "../../src/credentials/keychain-store.ts";
 
 test("file bundles: one item per service, materialize to a /tmp script with env pointers, never the home volume", async () => {
   const k = kc();
@@ -127,24 +128,12 @@ test("materializeOwn round-trips the owner's env creds; expired creds are skippe
 });
 
 test("materializeOwn skips a row that doesn't decrypt under the current key instead of throwing", async () => {
-  const creds = testMap<import("../../src/credentials/keychain.ts").KeychainCredential>();
+  const store = createKeychainStore(testDatabaseUrl());
   const OTHER = deriveConnectorKey("a-different-master-key");
-  const writer = createKeychain({
-    lock: testAdvisoryLock(),
-    creds,
-    grants: testMap(),
-    asks: testMap(),
-    key: OTHER,
-  });
+  const writer = createKeychain({ lock: testAdvisoryLock(), store, key: OTHER });
   await writer.save({ ownerId: "U1", service: "stripe", secret: "sk_bad", envKey: "STRIPE_KEY" });
 
-  const reader = createKeychain({
-    lock: testAdvisoryLock(),
-    creds,
-    grants: testMap(),
-    asks: testMap(),
-    key: KEY,
-  });
+  const reader = createKeychain({ lock: testAdvisoryLock(), store, key: KEY });
   await reader.save(GH);
 
   const own = await reader.materializeOwn("U1");
@@ -156,19 +145,12 @@ test("materializeOwn skips a row that doesn't decrypt under the current key inst
 });
 
 test("single-grant materialize surfaces a 422 (not a raw crypto 500) when the row doesn't decrypt", async () => {
-  const creds = testMap<import("../../src/credentials/keychain.ts").KeychainCredential>();
-  const grants = testMap<import("../../src/credentials/keychain.ts").KeychainGrant>();
+  const store = createKeychainStore(testDatabaseUrl());
   const OTHER = deriveConnectorKey("a-different-master-key");
-  const writer = createKeychain({
-    lock: testAdvisoryLock(),
-    creds,
-    grants,
-    asks: testMap(),
-    key: OTHER,
-  });
+  const writer = createKeychain({ lock: testAdvisoryLock(), store, key: OTHER });
   const cred = await writer.save({ ownerId: "U1", service: "stripe", secret: "sk_bad", envKey: "STRIPE_KEY" });
 
-  const reader = createKeychain({ lock: testAdvisoryLock(), creds, grants, asks: testMap(), key: KEY });
+  const reader = createKeychain({ lock: testAdvisoryLock(), store, key: KEY });
   const grant = await reader.createGrant({
     credentialId: cred.id,
     ownerId: "U1",
@@ -277,39 +259,30 @@ test("multi-input login: re-save upserts the same slot, and unique/non-empty fie
 });
 
 test("legacy rows are rewritten once to the current shape and materialize as before", async () => {
-  const creds = testMap<import("../../src/credentials/keychain.ts").KeychainCredential>();
-  const k = createKeychain({
-    lock: testAdvisoryLock(),
-    creds,
-    grants: testMap(),
-    asks: testMap(),
-    key: KEY,
-  });
+  const store = createKeychainStore(testDatabaseUrl());
+  const { creds } = store;
+  const k = createKeychain({ lock: testAdvisoryLock(), store, key: KEY });
   const password = await k.save({
     ownerId: "U1",
     service: "acme-portal",
     secret: "hunter2",
     envKey: "ACME_PORTAL_PASSWORD",
   });
-  await creds.merge(password.id, { username: "alice@acme.co" } as never);
+  await creds.update(password.id, (current) => ({ ...current, username: "alice@acme.co" }));
   const file = await k.save({ ownerId: "U1", service: "netrc", target: ".netrc", secret: "machine x" });
   const stored = (await creds.get(file.id))!;
   const { targets: _targets, ...withoutTargets } = stored;
-  await creds.put(file.id, {
-    ...withoutTargets,
-    target: ".netrc",
-    secretEnc: encryptSecret("machine x", KEY),
-  } as never);
+  await creds.put({ ...withoutTargets, target: ".netrc", secretEnc: encryptSecret("machine x", KEY) });
 
   assert.equal(await k.rewriteTargetUsernameCredentials(), 2);
   assert.equal(await k.rewriteTargetUsernameCredentials(), 0, "a second pass finds nothing to rewrite");
   const rewritten = (await creds.get(password.id))!;
-  assert.equal((rewritten as { username?: string }).username, undefined);
+  assert.equal(rewritten.username, undefined);
   assert.deepEqual(rewritten.fields, [
     { envKey: "ACME_PORTAL_PASSWORD", secret: true },
     { envKey: "ACME_PORTAL_USERNAME", secret: false },
   ]);
-  assert.equal(((await creds.get(file.id)) as { target?: string }).target, undefined);
+  assert.equal((await creds.get(file.id))!.target, undefined);
 
   const own = await k.materializeOwn("U1");
   const env = own.find((c) => c.credentialId === password.id) as { env: unknown };

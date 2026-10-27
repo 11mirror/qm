@@ -14,8 +14,9 @@ import { fakeSprites } from "../support/auto-fake-sprites.ts";
 import { testConfig } from "../support/test-config.ts";
 import { selectDefaultSandbox } from "../support/default-sandbox.ts";
 import { materializeGrant } from "../support/materialize-grant.ts";
-import { testAdvisoryLock, testMap } from "../support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";
 import { KEY, kc, GH } from "../support/keychain-store.ts";
+import { createKeychainStore } from "../../src/credentials/keychain-store.ts";
 
 const SECRET = "keychain-route-secret".repeat(3);
 
@@ -137,9 +138,7 @@ test("connector refresh during preparation binds the refreshed version and later
   let refreshes = 0;
   const k = createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(testDatabaseUrl()),
     key: KEY,
     refreshConnector: async () => {
       refreshes++;
@@ -203,9 +202,7 @@ test("manifest timestamps stay stable until credentials and pending asks actuall
   let now = Date.parse("2030-01-01T00:00:00Z");
   const k = createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(testDatabaseUrl()),
     key: KEY,
     now: () => now,
   });

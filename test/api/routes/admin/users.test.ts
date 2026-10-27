@@ -4,10 +4,11 @@ import { test } from "node:test";
 import { createInsecureTestServer } from "../../../../src/api/server.ts";
 import { deriveConnectorKey } from "../../../../src/connectors/connector-client-store.ts";
 import { createKeychain } from "../../../../src/credentials/keychain.ts";
+import { createKeychainStore } from "../../../../src/credentials/keychain-store.ts";
 import { scopeId, type TurnRequest } from "../../../../src/types.ts";
 import { buildApp } from "../../../support/build-app.ts";
 import { testConfig } from "../../../support/test-config.ts";
-import { testAdminGrantStore, testAdvisoryLock, testMap } from "../../../support/test-database.ts";
+import { testAdminGrantStore, testAdvisoryLock, testDatabaseUrl } from "../../../support/test-database.ts";
 import { listenLocal } from "../../../support/listen-local.ts";
 
 function start() {
@@ -290,9 +291,7 @@ function keychainStart() {
   const built = buildApp(testConfig());
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(testDatabaseUrl()),
     key: deriveConnectorKey("admin-keychain-test-key"),
   });
   const server = createInsecureTestServer(built.app, {

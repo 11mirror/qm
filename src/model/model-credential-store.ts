@@ -1,10 +1,11 @@
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
+import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { MODEL_PROVIDERS, type ModelProvider, type ModelProviderAvailability } from "./pi-models.ts";
 
 export { isModelProvider, type ModelProvider } from "./pi-models.ts";
 
-export interface StoredModelCredential {
+interface StoredModelCredential {
   provider: ModelProvider;
   secretEnc?: string;
   disabled?: boolean;
@@ -28,20 +29,48 @@ export interface ModelCredentialStore {
   availability(): Promise<ModelProviderAvailability>;
 }
 
+const MODEL_CREDENTIALS: TableSpec = {
+  table: "model_credentials",
+  key: "provider",
+  keyIsField: true,
+  columns: {
+    secretEnc: { type: "text" },
+    disabled: { type: "boolean" },
+    updatedAt: { type: "bigint", required: true },
+    updatedBy: { type: "text", required: true },
+  },
+};
+
+export const MODEL_CREDENTIALS_MIGRATION = mapToTableMigration("model/credentials/0001-typed", MODEL_CREDENTIALS);
+
+const codec = tableCodec<StoredModelCredential>(MODEL_CREDENTIALS);
+
 export function createModelCredentialStore(input: {
-  backing: DurableMap<StoredModelCredential>;
+  databaseUrl: string;
   keyMaterial: string | Buffer;
   fallback?: Partial<Record<ModelProvider, string>>;
 }): ModelCredentialStore {
   const key = deriveConnectorKey(input.keyMaterial, "model-credentials");
+  const { q } = createPgPool(input.databaseUrl, [MODEL_CREDENTIALS_MIGRATION]);
 
-  async function record(provider: ModelProvider): Promise<StoredModelCredential | null> {
-    return input.backing.get(provider);
+  async function records(providers: readonly ModelProvider[]): Promise<Map<string, StoredModelCredential>> {
+    const rows = codec.rows(
+      await q(`SELECT ${codec.columns} FROM model_credentials WHERE provider = ANY($1::text[])`, [providers]),
+    );
+    return new Map(rows.map((row) => [row.provider, row]));
+  }
+
+  async function save(rec: StoredModelCredential): Promise<void> {
+    await q(
+      `INSERT INTO model_credentials (${codec.columns}) VALUES (${codec.placeholders})
+       ON CONFLICT (${tenantCols("provider")}) DO UPDATE SET ${codec.updates}`,
+      codec.values(rec.provider, rec),
+    );
   }
 
   return {
     async resolve(provider) {
-      const saved = await record(provider);
+      const saved = (await records([provider])).get(provider);
       if (saved?.disabled) return null;
       return saved?.secretEnc ? decryptSecret(saved.secretEnc, key) : input.fallback?.[provider]?.trim() || null;
     },
@@ -51,7 +80,7 @@ export function createModelCredentialStore(input: {
       if (!secret) throw new Error("API key is required");
       const actor = updatedBy.trim();
       if (!actor) throw new Error("updatedBy is required");
-      await input.backing.put(provider, {
+      await save({
         provider,
         secretEnc: encryptSecret(secret, key),
         disabled: false,
@@ -61,7 +90,7 @@ export function createModelCredentialStore(input: {
     },
 
     async delete(provider, updatedBy) {
-      await input.backing.put(provider, {
+      await save({
         provider,
         disabled: true,
         updatedAt: Date.now(),
@@ -70,31 +99,21 @@ export function createModelCredentialStore(input: {
     },
 
     async statuses() {
-      return Promise.all(
-        MODEL_PROVIDERS.map(async (provider): Promise<ModelCredentialStatus> => {
-          const saved = await record(provider);
-          if (saved && !saved.disabled) {
-            return {
-              provider,
-              configured: true,
-              source: "admin",
-              updatedAt: saved.updatedAt,
-              updatedBy: saved.updatedBy,
-            };
-          }
-          if (saved?.disabled)
-            return {
-              provider,
-              configured: false,
-              source: "admin",
-              updatedAt: saved.updatedAt,
-              updatedBy: saved.updatedBy,
-            };
-          return input.fallback?.[provider]?.trim()
-            ? { provider, configured: true, source: "environment" }
-            : { provider, configured: false, source: "absent" };
-        }),
-      );
+      const saved = await records(MODEL_PROVIDERS);
+      return MODEL_PROVIDERS.map((provider): ModelCredentialStatus => {
+        const rec = saved.get(provider);
+        if (rec)
+          return {
+            provider,
+            configured: !rec.disabled,
+            source: "admin",
+            updatedAt: rec.updatedAt,
+            updatedBy: rec.updatedBy,
+          };
+        return input.fallback?.[provider]?.trim()
+          ? { provider, configured: true, source: "environment" }
+          : { provider, configured: false, source: "absent" };
+      });
     },
 
     async availability() {

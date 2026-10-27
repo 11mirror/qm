@@ -6,7 +6,7 @@ import { createModelCredentialStore, type ModelCredentialStore } from "../model/
 import type { StoresModule } from "./stores.ts";
 
 export function buildModelCredentials(w: Head & StoresModule) {
-  const { config, overrides, artifactMap, connectorSecretKey } = w;
+  const { config, overrides, databaseUrl, connectorSecretKey } = w;
 
   const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter((id) => !resolveModel(id));
   if (unknownGatewayModels.length) {
@@ -18,7 +18,7 @@ export function buildModelCredentials(w: Head & StoresModule) {
   const gatewayTransport = gatewayCatalog?.transport;
   const directProviderAvailability = providerKeysPresent(config);
   const directModelCredentials = createModelCredentialStore({
-    backing: artifactMap("model_credentials"),
+    databaseUrl,
     keyMaterial: connectorSecretKey,
     fallback: {
       ...(config.anthropicApiKey ? { anthropic: config.anthropicApiKey } : {}),

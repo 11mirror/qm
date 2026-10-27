@@ -18,6 +18,7 @@ import { testAdvisoryLock, testMap, testDatabaseUrl } from "../support/test-data
 import { automationOrigin } from "../support/turn-origin.ts";
 import { failedTurn } from "../support/orchestrator-app.ts";
 import { buildTestApp } from "../support/test-app.ts";
+import { createKeychainStore } from "../../src/credentials/keychain-store.ts";
 
 let ff: FakeSprites;
 before(() => {
@@ -100,9 +101,7 @@ test("a scheduled turn in a shared channel cannot use the owner's credential wit
 function keychain(now = Date.now) {
   return createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(testDatabaseUrl()),
     key: deriveConnectorKey("shared-credential-resumption-test"),
     now,
   });

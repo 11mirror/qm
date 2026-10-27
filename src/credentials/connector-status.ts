@@ -1,4 +1,5 @@
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
+import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import type { ConnectorTokenStore, OAuthTokenStatus } from "./keychain.ts";
 import {
   ACCOUNT_TYPES,
@@ -30,10 +31,34 @@ export interface ConnectorStatusCache {
   put(record: ConnectorStatusRecord): Promise<void>;
 }
 
-export function createConnectorStatusCache(map: DurableMap<ConnectorStatusRecord>): ConnectorStatusCache {
+const CONNECTOR_STATUS: TableSpec = {
+  table: "connector_status",
+  key: "principalId",
+  keyIsField: true,
+  columns: { checkedAt: { type: "bigint", required: true }, providers: { type: "jsonb", required: true } },
+};
+
+export const CONNECTOR_STATUS_MIGRATION = mapToTableMigration(
+  "credentials/connector-status/0001-typed",
+  CONNECTOR_STATUS,
+);
+
+const codec = tableCodec<ConnectorStatusRecord>(CONNECTOR_STATUS);
+
+export function createConnectorStatusCache(databaseUrl: string): ConnectorStatusCache {
+  const { q } = createPgPool(databaseUrl, [CONNECTOR_STATUS_MIGRATION]);
   return {
-    get: (principalId) => map.get(principalId),
-    put: (record) => map.put(record.principalId, record),
+    async get(principalId) {
+      const rows = await q(`SELECT ${codec.columns} FROM connector_status WHERE principal_id = $1`, [principalId]);
+      return rows[0] ? codec.row(rows[0]) : null;
+    },
+    async put(record) {
+      await q(
+        `INSERT INTO connector_status (${codec.columns}) VALUES (${codec.placeholders})
+         ON CONFLICT (${tenantCols("principal_id")}) DO UPDATE SET ${codec.updates}`,
+        codec.values(record.principalId, record),
+      );
+    },
   };
 }
 

@@ -5,9 +5,10 @@ import { deriveConnectorKey } from "../../src/connectors/connector-client-store.
 import { scopeId } from "../../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../../src/auth/capability-token.ts";
 import { testConfig } from "./test-config.ts";
-import { testAdvisoryLock, testMap, testDatabaseUrl } from "./test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./test-database.ts";
 import { createPostgresReplayDedupe } from "../../src/auth/replay-dedupe.ts";
 import { listenLocal } from "./listen-local.ts";
+import { createKeychainStore } from "../../src/credentials/keychain-store.ts";
 
 export const SECRET = "agent-admin-test-secret".repeat(3);
 
@@ -30,9 +31,7 @@ export async function start(withConfig = true) {
   );
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    store: createKeychainStore(testDatabaseUrl()),
     key: deriveConnectorKey("admin-agent-capability-keychain"),
   });
   const server = createServer(built.app, {

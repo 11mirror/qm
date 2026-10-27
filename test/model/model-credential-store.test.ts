@@ -8,9 +8,10 @@ import { buildApp as buildProductionApp, type BuiltApp } from "../../src/wiring.
 import { stopAtEnd } from "../support/build-app.ts";
 import { providerKeysPresent, companySubscriptionAuth } from "../../src/config.ts";
 import { testConfig } from "../support/test-config.ts";
-import { createModelCredentialStore, type StoredModelCredential } from "../../src/model/model-credential-store.ts";
+import { createModelCredentialStore } from "../../src/model/model-credential-store.ts";
+import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { getRequiredModel, MODEL_REGISTRY, modelServiceable, resolveModel } from "../../src/model/pi-models.ts";
-import { testMap } from "../support/test-database.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 
@@ -534,13 +535,16 @@ test("a company Claude subscription credential is reported as company subscripti
 });
 
 test("admin model credentials survive a second app instance on the same durable store", async () => {
-  const backing = testMap<StoredModelCredential>();
-  const first = createModelCredentialStore({ backing, keyMaterial: "shared-model-key" });
+  const databaseUrl = testDatabaseUrl();
+  const first = createModelCredentialStore({ databaseUrl, keyMaterial: "shared-model-key" });
   await first.set("openrouter", "durable-openrouter-key", "admin-alice@default-org");
 
-  const second = createModelCredentialStore({ backing, keyMaterial: "shared-model-key" });
+  const second = createModelCredentialStore({ databaseUrl, keyMaterial: "shared-model-key" });
   assert.equal(await second.resolve("openrouter"), "durable-openrouter-key");
-  assert.doesNotMatch(JSON.stringify(await backing.all()), /durable-openrouter-key/);
+  assert.doesNotMatch(
+    JSON.stringify(await createPgPool(databaseUrl).q(`SELECT * FROM model_credentials`)),
+    /durable-openrouter-key/,
+  );
   assert.doesNotMatch(JSON.stringify(await second.statuses()), /durable-openrouter-key/);
 });
 
