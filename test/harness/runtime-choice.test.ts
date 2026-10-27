@@ -1,10 +1,16 @@
 import test from "node:test";
+import { countTokens } from "../../src/util/tokens.ts";
 import assert from "node:assert/strict";
-import { resolveRuntimeChoice, resolveRuntimeChoiceDurable } from "../../src/harness/runtime-choice.ts";
+import {
+  resolveRuntimeChoice,
+  resolveRuntimeChoiceDurable,
+  withResolvedRuntime,
+} from "../../src/harness/runtime-choice.ts";
 import { createRuntimeService } from "../../src/harness/runtime-control.ts";
 import { recoveredRuntime } from "../../src/harness/runtime-recovery.ts";
 import { turnModelOptions } from "../../src/core/turn-options.ts";
-import type { RuntimeChoice } from "../../src/harness/harness.ts";
+import type { Harness, HarnessTurnInput, HarnessTurnResult, RuntimeChoice } from "../../src/harness/harness.ts";
+import type { GoalGovernorInput, GovernorVerdict } from "../../src/harness/goal.ts";
 import { storedItem } from "../../src/sessions/items.ts";
 import { testConfigStore, testDatabaseUrl } from "../support/test-database.ts";
 import { availableRuntimeError } from "../../src/api/runtime-config.ts";
@@ -431,4 +437,30 @@ test("explicit runtime validation rejects a revoked scoped model and unsupported
     await availableRuntimeError(ctx, PERSONAL, { modelId: "claude-sonnet-5", fastMode: true }),
     "fast_mode_not_supported",
   );
+});
+
+test("the governor is budgeted on the judge model the harness reports, through the resolved-runtime wrapper", async () => {
+  const prompts: string[] = [];
+  let governed: ((input: GoalGovernorInput) => Promise<GovernorVerdict>) | undefined;
+  const base = {
+    models: {
+      judge: async (_system: string, prompt: string) => (prompts.push(prompt), '{"verdict":"continue","reasons":"r"}'),
+      judgeTokenBudget: () => 1234,
+    },
+    turns: {
+      runTurn: async (input: HarnessTurnInput) => {
+        governed = input.governGoal;
+        return { result: { status: "ok", reply: "" } } as unknown as HarnessTurnResult;
+      },
+    },
+  } as unknown as Harness;
+  const harness = withResolvedRuntime(base, () => ({ modelId: "claude-opus-5" }));
+  await harness.turns.runTurn({ runtime: { modelId: "claude-opus-5" } } as HarnessTurnInput);
+  assert.ok(governed);
+  const work = Array.from({ length: 2_000 }, (_, i) => `step ${i} did a thing`).join("\n");
+  await governed({ objective: "obj", trigger: "checkpoint", recentWork: work });
+  assert.equal(prompts.length, 1);
+  assert.ok(countTokens(prompts[0]!) <= 1234, `the prompt fits the judge's budget (${countTokens(prompts[0]!)})`);
+  assert.match(prompts[0]!, /step 1999/);
+  assert.doesNotMatch(prompts[0]!, /step 0 /);
 });

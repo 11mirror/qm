@@ -76,7 +76,8 @@ export interface TurnGoal {
   setModelHasPrices(check: () => boolean): void;
   governor(): GoalGovernor | undefined;
   recentWork(): string;
-  setRecentWork(read: () => string): void;
+  workChecked(): void;
+  setRecentWork(read: () => string, checked?: () => void): void;
 }
 
 export interface TurnHalt {
@@ -134,6 +135,7 @@ function createTurnGoal(init: TurnToolStateInit): TurnGoal {
   let meter = init.goalMeter;
   let hasPrices = init.modelHasPrices;
   let recentWork = init.goalRecentWork;
+  let checkedWork: (() => void) | undefined;
   return {
     current: () => goal,
     set: (next) => {
@@ -160,8 +162,10 @@ function createTurnGoal(init: TurnToolStateInit): TurnGoal {
     },
     governor: () => governGoal,
     recentWork: () => recentWork?.() ?? "",
-    setRecentWork: (read) => {
+    workChecked: () => checkedWork?.(),
+    setRecentWork: (read, checked) => {
       recentWork = read;
+      checkedWork = checked;
     },
   };
 }

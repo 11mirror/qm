@@ -22,38 +22,29 @@ import type { TurnGoal } from "../turn-tool-state.ts";
 import { outsideWorkspace, sandboxSelector, text } from "./shared.ts";
 
 export function goalTools(kit: ToolKit, turnGoal: TurnGoal) {
-  const { GOAL_EVIDENCE_FILES, goalEvidenceFiles } = goalEvidence();
   const { createGoal } = createGoalTool(kit, turnGoal);
   const { getGoal } = getGoalTool(kit, turnGoal);
-  const { updateGoal } = updateGoalTool(kit, turnGoal, { GOAL_EVIDENCE_FILES, goalEvidenceFiles });
+  const { updateGoal } = updateGoalTool(kit, turnGoal);
   return { createGoal, getGoal, updateGoal };
 }
 
-function goalEvidence() {
-  const GOAL_EVIDENCE_FILES = 5;
-  const GOAL_EVIDENCE_FILE_CHARS = 20_000;
-  async function goalEvidenceFiles(
-    tc: ToolKit["ref"]["current"],
-    paths: readonly string[] | undefined,
-    signal?: AbortSignal,
-    sandboxId?: string,
-  ): Promise<string[]> {
-    const out: string[] = [];
-    for (const path of (paths ?? []).slice(0, GOAL_EVIDENCE_FILES)) {
-      const content = tc
-        ? await tc.read(path, signal, sandboxId).then(
-            (r) => r.content ?? (r.outsideWorkspace ? outsideWorkspace(path) : "[missing: no such file]"),
-            (e: unknown) => `[unreadable: ${errMessage(e)}]`,
-          )
-        : "[missing: no such file]";
-      let body = content;
-      if (body.length > GOAL_EVIDENCE_FILE_CHARS)
-        body = `${body.slice(0, GOAL_EVIDENCE_FILE_CHARS)}\n[truncated at ${GOAL_EVIDENCE_FILE_CHARS} of ${body.length} chars]`;
-      out.push(`<file path="${path.replace(/"/g, "")}">\n${body}\n</file>`);
-    }
-    return out;
+async function goalEvidenceFiles(
+  tc: ToolKit["ref"]["current"],
+  paths: readonly string[] | undefined,
+  signal?: AbortSignal,
+  sandboxId?: string,
+): Promise<string[]> {
+  const out: string[] = [];
+  for (const path of paths ?? []) {
+    const content = tc
+      ? await tc.read(path, signal, sandboxId).then(
+          (r) => r.content ?? (r.outsideWorkspace ? outsideWorkspace(path) : "[missing: no such file]"),
+          (e: unknown) => `[unreadable: ${errMessage(e)}]`,
+        )
+      : "[missing: no such file]";
+    out.push(`<file path="${path.replace(/"/g, "")}">\n${content}\n</file>`);
   }
-  return { GOAL_EVIDENCE_FILES, goalEvidenceFiles };
+  return out;
 }
 
 function createGoalTool(kit: ToolKit, turnGoal: TurnGoal) {
@@ -135,37 +126,27 @@ function getGoalTool(kit: ToolKit, turnGoal: TurnGoal) {
   return { getGoal };
 }
 
-function updateGoalTool(
-  kit: ToolKit,
-  turnGoal: TurnGoal,
-  {
-    GOAL_EVIDENCE_FILES,
-    goalEvidenceFiles,
-  }: Pick<ReturnType<typeof goalEvidence>, "GOAL_EVIDENCE_FILES" | "goalEvidenceFiles">,
-) {
+function updateGoalTool(kit: ToolKit, turnGoal: TurnGoal) {
   const updateGoal = defineTool({
     name: "update",
     label: "update",
     description:
       "complete: only when the objective is actually achieved, never because budget is low or you are stopping; an independent governor reads the objective, your recent work, note and named files, and may reject (the goal stays active with its reasons) or pause it for the user. " +
       "resume/cancel: only when the person in this turn explicitly asks; never to escape unfinished work.",
-    parameters: updateGoalParams(GOAL_EVIDENCE_FILES),
-    execute: (callId, params) => runUpdateGoal(kit, turnGoal, goalEvidenceFiles, callId, params),
+    parameters: updateGoalParams(),
+    execute: (callId, params) => runUpdateGoal(kit, turnGoal, callId, params),
   });
   return { updateGoal };
 }
 
-function updateGoalParams(GOAL_EVIDENCE_FILES: number) {
+function updateGoalParams() {
   return Type.Object({
     status: Type.Union([Type.Literal("complete"), Type.Literal("resume"), Type.Literal("cancel")]),
     note: Type.String({
       description: "complete: concrete evidence. resume/cancel: quote the user's request.",
     }),
     files: Type.Optional(
-      Type.Array(Type.String(), {
-        maxItems: GOAL_EVIDENCE_FILES,
-        description: "Workspace paths of deliverables for the governor to read.",
-      }),
+      Type.Array(Type.String(), { description: "Workspace paths of deliverables for the governor to read." }),
     ),
     sandbox_id: sandboxSelector("Sandbox holding `files`; omit for the default."),
   });
@@ -174,7 +155,6 @@ function updateGoalParams(GOAL_EVIDENCE_FILES: number) {
 async function runUpdateGoal(
   kit: ToolKit,
   turnGoal: TurnGoal,
-  goalEvidenceFiles: ReturnType<typeof goalEvidence>["goalEvidenceFiles"],
   callId: string,
   params: Static<ReturnType<typeof updateGoalParams>>,
 ) {
@@ -219,10 +199,7 @@ async function runUpdateGoal(
         true,
       );
   }
-  const evidence = [
-    p.note ?? "",
-    ...(await goalEvidenceFiles(ref.current, p.files, ref.abortSignal, p.sandbox_id)),
-  ].join("\n");
+  const evidence = [p.note ?? "", ...(await goalEvidenceFiles(ref.current, p.files, ref.abortSignal, p.sandbox_id))];
   let verdict: GovernorVerdict;
   try {
     const governGoal = turnGoal.governor();
