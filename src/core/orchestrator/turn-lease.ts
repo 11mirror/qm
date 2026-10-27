@@ -1,6 +1,5 @@
 import { surfaceHas } from "../../surfaces/surface.ts";
 import type { TurnCtx } from "./turn-context.ts";
-import type { TurnRunState } from "./turn-segment.ts";
 import type { Session } from "../../types.ts";
 import { startLeaseKeepalive } from "./lease-keepalive.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../message-revisions.ts";
@@ -106,7 +105,7 @@ export async function acquireTurnLeaseOrRefuse(
 
 export async function holdTurnLease(
   ctx: TurnCtx,
-  turn: { session: Session; run: TurnRunState },
+  session: Session,
 ): Promise<
   | { refused: TurnResult }
   | {
@@ -118,7 +117,6 @@ export async function holdTurnLease(
     }
 > {
   const { deps, input, automatedTurn, scopeId, messageTs } = ctx;
-  const { session, run } = turn;
   const leaseStart = Date.now();
   const acquired = await acquireTurnLeaseOrRefuse(deps, {
     sessionId: session.id,
@@ -154,10 +152,7 @@ export async function holdTurnLease(
     lease,
     Math.floor(deps.sessions.leaseTtlMs / 3),
     () => leaseState.released,
-    {
-      progress: () => run.turnProgress,
-      onStalled: () => turnAbort.abort(),
-    },
+    () => turnAbort.abort(),
   );
   return { lease, turnAbort, catchUpMessageRevisions, stopLeaseKeepalive, leaseState };
 }
