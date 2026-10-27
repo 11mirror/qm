@@ -1,5 +1,5 @@
 import type { SandboxResource, SandboxDefault } from "../src/sandbox/sandbox-resources.ts";
-import { upgradeLegacySandboxes, type SandboxResourceUpgradeMarker } from "../src/sandbox/sandbox-resource-upgrade.ts";
+import { importRoutedSandboxes, type SandboxResourceUpgradeMarker } from "../src/sandbox/sandbox-resource-upgrade.ts";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -136,27 +136,27 @@ test("pg sandbox upgrade runs once across cores and never overwrites a newer def
       records: createPostgresMap<SandboxResource>(pg, "upgrade_sandbox_records"),
       defaults: createPostgresMap<SandboxDefault>(pg, "upgrade_sandbox_defaults"),
       marker: createPostgresMap<SandboxResourceUpgradeMarker>(pg, "upgrade_sandbox_marker"),
-      legacyBackend: () => "local" as const,
+      fallbackBackend: () => "local" as const,
     });
     const shared = maps(pgA);
     const other = maps(pgB);
     await shared.defaults.put("personal:cleared", { sandboxId: null });
     const entered = Promise.withResolvers<void>();
     let calls = 0;
-    const first = upgradeLegacySandboxes({
+    const first = importRoutedSandboxes({
       ...shared,
       lock: createPostgresAdvisoryLock(pgA, { pollMs: 10 }),
-      legacyScopes: () => {
+      knownScopes: () => {
         calls++;
         entered.resolve();
         return release.promise;
       },
     });
     await entered.promise;
-    const second = upgradeLegacySandboxes({
+    const second = importRoutedSandboxes({
       ...other,
       lock: createPostgresAdvisoryLock(pgB, { pollMs: 10 }),
-      legacyScopes: async () => {
+      knownScopes: async () => {
         calls++;
         return ["personal:late"];
       },
@@ -171,7 +171,7 @@ test("pg sandbox upgrade runs once across cores and never overwrites a newer def
     const adopted = await other.defaults.get("personal:adopted");
     assert.ok(adopted?.sandboxId);
     assert.equal((await other.records.get(adopted.sandboxId))?.backingScopeId, "personal:adopted");
-    await upgradeLegacySandboxes({
+    await importRoutedSandboxes({
       ...other,
       lock: createPostgresAdvisoryLock(pgB),
       routes: async () => {

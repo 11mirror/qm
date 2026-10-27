@@ -32,7 +32,7 @@ export async function bootTenant(
   await migrateRegisteredPgSchemas(config.databaseUrl);
   if (config.databaseUrl) await ensureTenantQueues(config.databaseUrl);
   await built.sandboxResources.initialize();
-  const rewrittenCredentials = (await built.keychain?.normalizeLegacyCredentials()) ?? 0;
+  const rewrittenCredentials = (await built.keychain?.rewriteTargetUsernameCredentials()) ?? 0;
   if (rewrittenCredentials > 0)
     console.log(`[qm] rewrote ${rewrittenCredentials} keychain credential(s) to the current shape`);
   const slackConfig = slackPluginConfigFromEnv(env);

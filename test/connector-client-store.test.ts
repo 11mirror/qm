@@ -42,7 +42,7 @@ test("new ciphertexts are v2 (HKDF) and legacy sha256-key ciphertexts still decr
 
   const raw = randomBytes(32);
   const bufKey = deriveConnectorKey(raw);
-  assert.equal(bufKey.legacy, raw);
+  assert.equal(bufKey.v1, raw);
   assert.equal(decryptSecret(encryptSecret("buf", bufKey), bufKey), "buf");
 
   assert.notDeepEqual(

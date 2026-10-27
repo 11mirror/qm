@@ -65,7 +65,7 @@ export function slotValid(slot: string, store = poolStore()): boolean {
   return t.botToken.startsWith("xoxb-") && t.appToken.startsWith("xapp-");
 }
 
-const LEGACY_PORT_SLOTS = 16;
+const INTERLEAVED_PORT_SLOTS = 16;
 const PORTS_PER_SLOT = 7;
 
 export function portSlotCount(basePort = Number(process.env.DEV_INSTANCE_BASE_PORT || 8080)): number {
@@ -73,9 +73,9 @@ export function portSlotCount(basePort = Number(process.env.DEV_INSTANCE_BASE_PO
     throw new Error("DEV_INSTANCE_BASE_PORT must be an integer between 0 and 65535");
   }
   const available = 65535 - basePort;
-  return available >= LEGACY_PORT_SLOTS * PORTS_PER_SLOT
+  return available >= INTERLEAVED_PORT_SLOTS * PORTS_PER_SLOT
     ? Math.floor(available / PORTS_PER_SLOT)
-    : Math.max(0, available - LEGACY_PORT_SLOTS * (PORTS_PER_SLOT - 1));
+    : Math.max(0, available - INTERLEAVED_PORT_SLOTS * (PORTS_PER_SLOT - 1));
 }
 
 export function slotPorts(slot: string, basePort = Number(process.env.DEV_INSTANCE_BASE_PORT || 8080)): SlotPorts {
@@ -83,9 +83,9 @@ export function slotPorts(slot: string, basePort = Number(process.env.DEV_INSTAN
   if (!/^pool[1-9][0-9]*$/.test(slot) || !Number.isSafeInteger(num) || num > portSlotCount(basePort)) {
     throw new Error(`No valid port block for ${slot} with base port ${basePort}`);
   }
-  const legacy = num <= LEGACY_PORT_SLOTS;
-  const first = legacy ? basePort + num : basePort + (num - 1) * PORTS_PER_SLOT + 1;
-  const stride = legacy ? LEGACY_PORT_SLOTS : 1;
+  const interleaved = num <= INTERLEAVED_PORT_SLOTS;
+  const first = interleaved ? basePort + num : basePort + (num - 1) * PORTS_PER_SLOT + 1;
+  const stride = interleaved ? INTERLEAVED_PORT_SLOTS : 1;
   return {
     core: first,
     portal: first + 3 * stride,

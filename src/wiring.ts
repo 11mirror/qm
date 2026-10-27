@@ -197,14 +197,10 @@ import {
   type StoredManagedAgentsSandbox,
 } from "./sandbox/managed-agents-sandbox.ts";
 import { createSdkManagedAgentsClient } from "./sandbox/managed-agents-client.ts";
-import { createModalSandbox, modalLegacyRecordMigration, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
+import { createModalSandbox, modalRecordShapeMigration, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
 import { createSdkModalClient } from "./sandbox/modal-client.ts";
 import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
-import {
-  upgradeLegacySandboxes,
-  legacySandboxBackendForScope,
-  type LegacyRoute,
-} from "./sandbox/sandbox-resource-upgrade.ts";
+import { importRoutedSandboxes, routedBackendForScope, type SandboxRoute } from "./sandbox/sandbox-resource-upgrade.ts";
 import { effectiveEgressEnforcement, type BackendSandbox, type Sandbox } from "./sandbox/sandbox.ts";
 import { createEnvSecretSource } from "./credentials/secret-source.ts";
 import {
@@ -783,7 +779,7 @@ export function buildApp(
   };
   const e2bBodies = artifactMap<StoredE2bSandbox>("e2b_sandbox_bodies");
   const modalBodies = artifactMap<StoredModalSandbox>("modal_sandbox_bodies");
-  pgArtifactMap.pool.registerMigration(modalLegacyRecordMigration("modal_sandbox_bodies"));
+  pgArtifactMap.pool.registerMigration(modalRecordShapeMigration("modal_sandbox_bodies"));
   const buildLocal = (): BackendSandbox =>
     createLocalSandbox(workspace, {
       ...sandboxShared,
@@ -883,21 +879,20 @@ export function buildApp(
     records: sandboxRecords,
     defaults: sandboxDefaults,
     upgrade: () =>
-      upgradeLegacySandboxes({
+      importRoutedSandboxes({
         availableBackends: Object.keys(sandboxBackends) as SandboxBackendName[],
         records: sandboxRecords,
         defaults: sandboxDefaults,
         marker: artifactMap<{ activatedAt: string }>("sandbox_resource_rollout"),
-        routes: () => artifactMap<LegacyRoute>("sandbox_routing").entries(),
+        routes: () => artifactMap<SandboxRoute>("sandbox_routing").entries(),
         lock: advisoryLock,
-        legacyBackend: (scope) =>
-          legacySandboxBackendForScope(scope, config.sandboxBackend, config.legacySandboxScopeDefaults),
+        fallbackBackend: (scope) => routedBackendForScope(scope, config.sandboxBackend, config.scopeBackendDefaults),
         specFor: (backend) => sandboxBackends[backend]?.profile.spec,
-        legacyScopes: async () => [
+        knownScopes: async () => [
           ...(await sessions.distinctScopes()).map((scope) => scope.scopeId),
           ...(await environments.list()).map((environment) => environment.id),
         ],
-        legacySandboxes: async () => {
+        providerSandboxes: async () => {
           const [e2b, modal] = await Promise.all([e2bBodies.entries(), modalBodies.entries()]);
           return [
             ...e2b.map(([scopeId, body]) => ({ scopeId, backend: "e2b" as const, machineId: body.sandboxId })),
@@ -946,13 +941,13 @@ export function buildApp(
       secrets: secretSource,
     }),
   );
-  const legacyCredentialKey =
+  const signingSecretCredentialKey =
     config.signingSecret && config.signingSecret !== connectorSecretKey
       ? deriveConnectorKey(config.signingSecret, "keychain")
       : undefined;
   const credentialKey: SecretKey = {
     ...deriveConnectorKey(connectorSecretKey, "keychain"),
-    ...(legacyCredentialKey ? { fallbacks: [legacyCredentialKey] } : {}),
+    ...(signingSecretCredentialKey ? { fallbacks: [signingSecretCredentialKey] } : {}),
   };
   const credentialStore: Keychain = createKeychain({
     creds: artifactMap<KeychainCredential>("keychain_credentials", ["ownerId"]),

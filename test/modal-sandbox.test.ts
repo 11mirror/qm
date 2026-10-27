@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import {
   createModalSandbox,
-  modalLegacyRecordMigration,
+  modalRecordShapeMigration,
   type StoredModalSandbox,
 } from "../src/sandbox/modal-sandbox.ts";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
@@ -469,7 +469,7 @@ test("rows written by the previous Modal record shape are migrated and keep thei
     lastSnapshotAttemptMs: 4,
     hydrationPending: false,
   } as StoredModalSandbox);
-  await pool.migrate(modalLegacyRecordMigration(table));
+  await pool.migrate(modalRecordShapeMigration(table));
   const upgraded = (await store.get(scope))! as StoredModalSandbox & Record<string, unknown>;
   assert.equal(upgraded.checkpointId, imageId);
   assert.equal(upgraded.checkpointAtMs, expiresAtMs - MODAL_CHECKPOINT_RETENTION_MS);

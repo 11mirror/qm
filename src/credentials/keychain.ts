@@ -166,8 +166,8 @@ export interface KeychainCredential {
   updatedAt: number;
 }
 
-/** A stored row as older builds wrote it; normalizeLegacyCredentials rewrites these at boot. */
-type LegacyCredential = KeychainCredential & { target?: string; username?: string };
+/** A stored row as older builds wrote it; rewriteTargetUsernameCredentials rewrites these at boot. */
+type TargetUsernameCredential = KeychainCredential & { target?: string; username?: string };
 
 export type KeychainCredentialMeta = Omit<KeychainCredential, "secretEnc"> & { credentialHandle?: string };
 
@@ -469,7 +469,7 @@ interface GrantListFilter {
 export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   save(input: SaveCredentialInput): Promise<KeychainCredentialMeta>;
   /** Rewrite rows still in a pre-`targets`/pre-`fields` shape; returns how many changed. Runs once at boot. */
-  normalizeLegacyCredentials(): Promise<number>;
+  rewriteTargetUsernameCredentials(): Promise<number>;
   updateFiles(materialized: Extract<MaterializedCred, { kind: "file" }>, files: CredentialFile[]): Promise<void>;
   writebackBaseline(
     source: FileCredentialSource,
@@ -571,7 +571,7 @@ function isPersonalCredentialEnvKey(envKey: string): boolean {
   return ENV_KEY_RE.test(envKey) && !envKey.startsWith("AGENT_");
 }
 
-function legacyUsernameEnvKey(passwordEnvKey: string): string {
+function usernameEnvKeyFor(passwordEnvKey: string): string {
   const base = passwordEnvKey.replace(/_(PASSWORD|PASS|TOKEN|SECRET|API_KEY|KEY)$/i, "");
   return `${base || passwordEnvKey}_USERNAME`;
 }
@@ -941,7 +941,7 @@ export function createKeychain(deps: {
   /** The record a pre-`targets`/pre-`fields` row is rewritten to, or null when it already has the current shape:
    * a single-file credential saved as `target` + raw content becomes a one-file `targets` bundle, and an env
    * credential carrying a plaintext `username` becomes a two-field credential (secret + `<BASE>_USERNAME`). */
-  function currentShape(rec: LegacyCredential): KeychainCredential | null {
+  function currentShape(rec: TargetUsernameCredential): KeychainCredential | null {
     const { target, username, ...rest } = rec;
     if (target === undefined && username === undefined) return null;
     if (rec.kind === "file" && !rec.targets && target !== undefined) {
@@ -960,9 +960,9 @@ export function createKeychain(deps: {
       };
     }
     if (rec.kind === "env" && !rec.fields && username) {
-      const { envKey: legacyEnvKey, ...withoutEnvKey } = rest;
-      const envKey = legacyEnvKey ?? defaultEnvKey(rec.service);
-      const usernameKey = legacyUsernameEnvKey(envKey);
+      const { envKey: storedEnvKey, ...withoutEnvKey } = rest;
+      const envKey = storedEnvKey ?? defaultEnvKey(rec.service);
+      const usernameKey = usernameEnvKeyFor(envKey);
       const secret = JSON.stringify({ [envKey]: decryptSecret(rec.secretEnc, deps.key), [usernameKey]: username });
       return {
         ...withoutEnvKey,
@@ -977,20 +977,20 @@ export function createKeychain(deps: {
     return rest;
   }
 
-  async function normalizeLegacyCredentials(): Promise<number> {
+  async function rewriteTargetUsernameCredentials(): Promise<number> {
     let rewritten = 0;
-    for (const rec of (await deps.creds.all()) as LegacyCredential[]) {
+    for (const rec of (await deps.creds.all()) as TargetUsernameCredential[]) {
       if (rec.target === undefined && rec.username === undefined) continue;
       try {
         let changed = false;
         await deps.creds.update(rec.id, (current) => {
-          const next = currentShape(current as LegacyCredential);
+          const next = currentShape(current as TargetUsernameCredential);
           changed = next !== null;
           return next ?? current;
         });
         if (changed) rewritten++;
       } catch (error) {
-        console.error(`[keychain] could not rewrite legacy credential ${rec.id}:`, errMessage(error));
+        console.error(`[keychain] could not rewrite target/username credential ${rec.id}:`, errMessage(error));
       }
     }
     return rewritten;
@@ -1203,7 +1203,7 @@ export function createKeychain(deps: {
 
   return {
     save: saveCredential,
-    normalizeLegacyCredentials,
+    rewriteTargetUsernameCredentials,
 
     async updateFiles(materialized, files) {
       if (materialized.grantId) return;

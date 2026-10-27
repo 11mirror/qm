@@ -54,7 +54,7 @@ export interface DecryptedConnectorClient {
 
 export interface SecretKey {
   current: Buffer;
-  legacy: Buffer;
+  v1: Buffer;
   fallbacks?: SecretKey[];
 }
 
@@ -63,9 +63,9 @@ const HKDF_SALT = "agent-platform.secret-box";
 export function deriveConnectorKey(material: Buffer | string, purpose = "connector-secrets"): SecretKey {
   const ikm = Buffer.isBuffer(material) ? material : Buffer.from(material, "utf8");
   const current = Buffer.from(hkdfSync("sha256", ikm, HKDF_SALT, `${purpose}.v2`, 32));
-  const legacy =
+  const v1 =
     Buffer.isBuffer(material) && material.length === 32 ? material : createHash("sha256").update(material).digest();
-  return { current, legacy };
+  return { current, v1 };
 }
 
 export function encryptSecret(plain: string, key: SecretKey): string {
@@ -84,7 +84,7 @@ export function decryptSecret(enc: string, key: SecretKey): string {
     throw new Error("malformed encrypted secret");
   }
   const attempt = (k: SecretKey): string => {
-    const decipher = createDecipheriv("aes-256-gcm", v2 ? k.current : k.legacy, Buffer.from(ivB, "base64"));
+    const decipher = createDecipheriv("aes-256-gcm", v2 ? k.current : k.v1, Buffer.from(ivB, "base64"));
     decipher.setAuthTag(Buffer.from(tagB, "base64"));
     return Buffer.concat([decipher.update(Buffer.from(ctB, "base64")), decipher.final()]).toString("utf8");
   };

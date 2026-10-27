@@ -62,8 +62,8 @@ export function parseBackgroundWorkStatus(body: string, deploymentId: string): B
   }
   if (!record(value) || value.deploymentId !== deploymentId || !text(value.instanceId))
     throw new CliError("background ownership response does not match the requested deployment");
-  const legacy = value.protocol === 1 ? memberProtocolStatus(value) : undefined;
-  if (legacy) return legacy;
+  const memberStatus = value.protocol === 1 ? memberProtocolStatus(value) : undefined;
+  if (memberStatus) return memberStatus;
   if (
     value.protocol !== 2 ||
     !nullableText(value.ownerDeploymentId) ||

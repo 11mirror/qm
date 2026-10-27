@@ -6,10 +6,10 @@ import assert from "node:assert/strict";
 import { createSandboxResources, type SandboxResource, type SandboxDefault } from "../src/sandbox/sandbox-resources.ts";
 import { createSandboxRouter } from "../src/sandbox/sandbox-routing.ts";
 import {
-  upgradeLegacySandboxes,
-  legacySandboxBackendForScope,
-  legacySandboxId,
-  type LegacyRoute,
+  importRoutedSandboxes,
+  routedBackendForScope,
+  importedSandboxId,
+  type SandboxRoute,
   type SandboxResourceUpgradeMarker,
 } from "../src/sandbox/sandbox-resource-upgrade.ts";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
@@ -34,10 +34,10 @@ const processStubs = {
   },
 };
 
-function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["personal:alice"]) {
+function fixture(configure?: (backend: Sandbox) => void, knownScopes = ["personal:alice"]) {
   const records = testMap<SandboxResource>();
   const defaults = testMap<SandboxDefault>();
-  const routes = testMap<LegacyRoute>();
+  const routes = testMap<SandboxRoute>();
   const marker = testMap<SandboxResourceUpgradeMarker>();
   const disks = new Map<string, Map<string, string>>();
   const provisioned: string[] = [];
@@ -81,17 +81,17 @@ function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["person
   configure?.(backend);
   const lock = testAdvisoryLock();
   const upgrade =
-    (overrides: Partial<Parameters<typeof upgradeLegacySandboxes>[0]> = {}) =>
+    (overrides: Partial<Parameters<typeof importRoutedSandboxes>[0]> = {}) =>
     () =>
-      upgradeLegacySandboxes({
+      importRoutedSandboxes({
         availableBackends: ["local"],
         records,
         defaults,
         marker,
         lock,
         routes: () => routes.entries(),
-        legacyScopes: async () => legacyScopes,
-        legacyBackend: () => "local",
+        knownScopes: async () => knownScopes,
+        fallbackBackend: () => "local",
         ...overrides,
       });
   const options = {
@@ -181,7 +181,7 @@ test("legacy adoption is deterministic and reconnects the existing backing ident
   await backend.writeFile(old, "file", "keep");
   const lists = await Promise.all(Array.from({ length: 8 }, () => resources.list("alice", "personal:alice")));
   const id = lists[0]!.defaultSandboxId!;
-  assert.equal(id, legacySandboxId("personal:alice", "local"));
+  assert.equal(id, importedSandboxId("personal:alice", "local"));
   assert.ok(lists.every((list) => list.defaultSandboxId === id));
   assert.equal((await records.all()).length, 1);
   assert.equal((await records.get(id))?.backingScopeId, "personal:alice");
@@ -411,8 +411,8 @@ test("activation preserves routes, cold identities and explicit nulls without ca
     ...options,
     upgrade: upgrade({
       availableBackends: ["local", "modal"],
-      legacyScopes: async () => ["personal:old-session", "personal:unset"],
-      legacySandboxes: async () => [
+      knownScopes: async () => ["personal:old-session", "personal:unset"],
+      providerSandboxes: async () => [
         { scopeId: "personal:routed", backend: "modal", machineId: "sb-old" },
         { scopeId: "personal:routed", backend: "e2b", machineId: "e2b-cold" },
         { scopeId: "sandbox-managed", backend: "local", machineId: "managed-machine" },
@@ -652,7 +652,7 @@ test("resource activation honors scope defaults and preserves explicit legacy pr
     ...options,
     upgrade: upgrade({
       availableBackends: ["e2b", "modal", "sprites"],
-      legacyBackend: (scope) => legacySandboxBackendForScope(scope, "sprites", scopeDefaults),
+      fallbackBackend: (scope) => routedBackendForScope(scope, "sprites", scopeDefaults),
     }),
     backends: { modal: backend, sprites: backend, e2b: backend },
     defaultBackend: "sprites",
@@ -662,7 +662,7 @@ test("resource activation honors scope defaults and preserves explicit legacy pr
   assert.equal((await resources.resolve("personal:existing"))?.backend, "e2b");
   assert.equal(await resources.resolve("personal:new"), null);
   assert.equal(resources.defaultBackend(), "sprites");
-  assert.equal(legacySandboxBackendForScope("org", "sprites", scopeDefaults), "sprites");
+  assert.equal(routedBackendForScope("org", "sprites", scopeDefaults), "sprites");
 });
 
 for (const [kind, waiting] of [

@@ -540,7 +540,7 @@ test("legacy sandbox scope defaults are parsed for upgrade", () => {
   };
   assert.deepEqual(
     loadConfig({ ...credentials, SANDBOX_SCOPE_BACKENDS: '{"personal":"modal","channel":"sprites"}' })
-      .legacySandboxScopeDefaults,
+      .scopeBackendDefaults,
     { personal: "modal", channel: "sprites" },
   );
   for (const value of [

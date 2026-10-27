@@ -273,7 +273,7 @@ export function createConfigStore(
 ): ScopedConfigStore {
   const instructionsCache = new Map<ScopeId, { content: string; version: number }>();
   const instructionsHistory = new Map<ScopeId, PersistedInstructionsRevision[]>();
-  const legacyInstructionsHistory = new Map<ScopeId, PersistedInstructionsRevision[]>();
+  const separateInstructionsHistory = new Map<ScopeId, PersistedInstructionsRevision[]>();
   const baseModels = new Map<ScopeId, PersistedBaseModel>();
   const instructionsStore = opts.instructions;
   const instructionsHistoryStore = opts.instructionsHistory;
@@ -460,18 +460,18 @@ export function createConfigStore(
     isDeepStrictEqual(left, right);
   const mergeInstructionsHistory = (
     embedded: readonly PersistedInstructionsRevision[] | undefined,
-    legacy: readonly PersistedInstructionsRevision[],
+    separate: readonly PersistedInstructionsRevision[],
   ): PersistedInstructionsRevision[] => {
     const byVersion = new Map<number, PersistedInstructionsRevision>();
-    for (const revision of legacy) byVersion.set(revision.version, revision);
+    for (const revision of separate) byVersion.set(revision.version, revision);
     for (const revision of embedded ?? []) byVersion.set(revision.version, revision);
     return [...byVersion.values()].sort((a, b) => b.version - a.version);
   };
   const historyIncludingCurrent = (
     current: PersistedInstructions,
-    legacy: readonly PersistedInstructionsRevision[],
+    separate: readonly PersistedInstructionsRevision[],
   ): PersistedInstructionsRevision[] => {
-    const history = mergeInstructionsHistory(current.history, legacy);
+    const history = mergeInstructionsHistory(current.history, separate);
     if (!history.some((revision) => revision.version === current.version)) {
       history.push({
         scopeId: current.scopeId,
@@ -542,14 +542,14 @@ export function createConfigStore(
             if (r.history?.length) instructionsHistory.set(r.scopeId, r.history);
           }
           for (const r of await instructionsHistoryStore.all()) {
-            const legacyRevisions = legacyInstructionsHistory.get(r.scopeId) ?? [];
-            if (!legacyRevisions.some((revision) => revision.version === r.version)) legacyRevisions.push(r);
-            legacyInstructionsHistory.set(r.scopeId, legacyRevisions);
+            const separateRevisions = separateInstructionsHistory.get(r.scopeId) ?? [];
+            if (!separateRevisions.some((revision) => revision.version === r.version)) separateRevisions.push(r);
+            separateInstructionsHistory.set(r.scopeId, separateRevisions);
             const revisions = instructionsHistory.get(r.scopeId) ?? [];
             if (!revisions.some((revision) => revision.version === r.version)) revisions.push(r);
             instructionsHistory.set(r.scopeId, revisions);
           }
-          for (const revisions of legacyInstructionsHistory.values()) revisions.sort((a, b) => b.version - a.version);
+          for (const revisions of separateInstructionsHistory.values()) revisions.sort((a, b) => b.version - a.version);
           for (const revisions of instructionsHistory.values()) revisions.sort((a, b) => b.version - a.version);
           for (const r of await baseModelStore.all()) baseModels.set(r.scopeId, r);
           await Promise.all(allSettings.map((setting) => setting.hydrate()));
@@ -567,7 +567,7 @@ export function createConfigStore(
     async setInstructions(id, content, updatedBy) {
       assertInstructionsSize(content);
       return writeQueue(`instructions:${id}`, async () => {
-        const legacy = legacyInstructionsHistory.get(id) ?? [];
+        const separate = separateInstructionsHistory.get(id) ?? [];
         const append = (current: PersistedInstructions): PersistedInstructions => {
           const revision: PersistedInstructionsRevision = {
             scopeId: id,
@@ -578,7 +578,7 @@ export function createConfigStore(
           };
           return {
             ...revision,
-            history: [revision, ...historyIncludingCurrent(current, current.history === undefined ? legacy : [])],
+            history: [revision, ...historyIncludingCurrent(current, current.history === undefined ? separate : [])],
             mutationId: randomBytes(12).toString("hex"),
           };
         };
@@ -598,7 +598,7 @@ export function createConfigStore(
           saved = canonical.mutationId === mutationId ? canonical : await instructionsStore.update(id, append);
         }
         if (!saved) throw new Error("instructions disappeared during atomic update");
-        legacyInstructionsHistory.delete(id);
+        separateInstructionsHistory.delete(id);
         loadInstructionsCache(id, saved);
         return saved.version;
       });
@@ -614,7 +614,7 @@ export function createConfigStore(
           updatedAt: Date.now(),
           ...(updatedBy ? { updatedBy } : {}),
         };
-        const legacyHistory = legacyInstructionsHistory.get(id) ?? [];
+        const separateHistory = separateInstructionsHistory.get(id) ?? [];
         const mutationId = randomBytes(12).toString("hex");
         const candidate: PersistedInstructions = { ...revision, history: [revision], mutationId };
         const durable = await instructionsStore.get(id);
@@ -633,7 +633,7 @@ export function createConfigStore(
               ...candidate,
               history: [
                 revision,
-                ...historyIncludingCurrent(current, current.history === undefined ? legacyHistory : []),
+                ...historyIncludingCurrent(current, current.history === undefined ? separateHistory : []),
               ],
             };
           });
@@ -642,7 +642,7 @@ export function createConfigStore(
         }
         instructionsCache.set(id, { content: saved.content, version: saved.version });
         instructionsHistory.set(id, saved.history ?? [revision]);
-        legacyInstructionsHistory.delete(id);
+        separateInstructionsHistory.delete(id);
         return saved.version;
       });
     },
@@ -794,21 +794,21 @@ export function createConfigStore(
         ...allSettings.map((setting) => setting.refresh(id)),
       ]);
       let refreshedInstructions = instructions;
-      const legacyHistory = legacyInstructionsHistory.get(id) ?? [];
-      if (instructions && instructions.history === undefined && legacyHistory.length) {
-        const mergedHistory = mergeInstructionsHistory(instructions.history, legacyHistory);
+      const separateHistory = separateInstructionsHistory.get(id) ?? [];
+      if (instructions && instructions.history === undefined && separateHistory.length) {
+        const mergedHistory = mergeInstructionsHistory(instructions.history, separateHistory);
         if (!isDeepStrictEqual(mergedHistory, instructions.history ?? [])) {
           refreshedInstructions = instructionsStore.update
             ? await instructionsStore.update(id, (current) =>
                 current.history !== undefined
                   ? current
-                  : { ...current, history: mergeInstructionsHistory(current.history, legacyHistory) },
+                  : { ...current, history: mergeInstructionsHistory(current.history, separateHistory) },
               )
             : { ...instructions, history: mergedHistory };
         }
-        legacyInstructionsHistory.delete(id);
+        separateInstructionsHistory.delete(id);
       } else if (instructions?.history !== undefined) {
-        legacyInstructionsHistory.delete(id);
+        separateInstructionsHistory.delete(id);
       }
       loadInstructionsCache(id, refreshedInstructions);
       if (baseModel) baseModels.set(id, baseModel);

@@ -15,7 +15,7 @@ export function mintSignedPayload(value: unknown, secret: string): Promise<strin
     .sign(encoder.encode(secret));
 }
 
-function verifyLegacyPayload(token: string, secrets: string[]): unknown | null {
+function verifyHmacPayload(token: string, secrets: string[]): unknown | null {
   const dot = token.lastIndexOf(".");
   if (dot <= 0) return null;
   const payload = token.slice(0, dot);
@@ -34,7 +34,7 @@ function verifyLegacyPayload(token: string, secrets: string[]): unknown | null {
 
 export async function verifySignedPayload(token: string, secret: string | string[]): Promise<unknown | null> {
   const secrets = Array.isArray(secret) ? secret : [secret];
-  if (token.split(".").length !== 3) return verifyLegacyPayload(token, secrets);
+  if (token.split(".").length !== 3) return verifyHmacPayload(token, secrets);
   let kid: string | undefined;
   try {
     kid = decodeProtectedHeader(token).kid;

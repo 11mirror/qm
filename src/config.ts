@@ -6,7 +6,7 @@ import {
 import type { ExternalSlackPolicies } from "./resolution/external-slack.ts";
 import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";
 import { parseScopeId } from "./types.ts";
-import type { LegacySandboxScopeDefaults } from "./sandbox/sandbox-resource-upgrade.ts";
+import type { ScopeBackendDefaults } from "./sandbox/sandbox-resource-upgrade.ts";
 import { SANDBOX_BACKEND_NAMES, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
 import { existsSync, readdirSync } from "node:fs";
 import { parseProviderBaseUrl, type ModelGatewayTransportConfig } from "./model/provider-endpoints.ts";
@@ -18,11 +18,7 @@ import { sanitizeBranding } from "./resolution/branding.ts";
 import type { OrgBranding } from "./resolution/config-store.ts";
 import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "./deployment/secret-schema.ts";
 import { DEFAULT_CAPTURE_QUIET_MS } from "./memory/strategies/per-turn.ts";
-import {
-  slackPluginConfigFromEnv,
-  slackAccountConfigsFromEnv,
-  type SlackPluginConfig,
-} from "./slack/config.ts";
+import { slackPluginConfigFromEnv, slackAccountConfigsFromEnv, type SlackPluginConfig } from "./slack/config.ts";
 import {
   DEFAULT_CODEX_MODEL_ID,
   MODEL_PROVIDERS,
@@ -71,7 +67,7 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   databasePoolCaCert?: string;
   databasePoolMax?: number;
   databaseDirectPoolMax?: number;
-  legacySandboxScopeDefaults?: LegacySandboxScopeDefaults;
+  scopeBackendDefaults?: ScopeBackendDefaults;
   sandboxBackend: SandboxBackendName;
   deployProvider: "docker" | "aws" | "porter" | "e2b";
   modelId?: string;
@@ -692,7 +688,7 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     throw new Error(`SANDBOX_BACKEND must be set explicitly in production — use ${orList(SANDBOX_BACKEND_NAMES)}.`);
   }
   const sandboxBackend = sandboxBackendEnvStrict(env.SANDBOX_BACKEND);
-  const legacySandboxScopeDefaults: LegacySandboxScopeDefaults = {};
+  const scopeBackendDefaults: ScopeBackendDefaults = {};
   if (env.SANDBOX_SCOPE_BACKENDS) {
     const values: unknown = JSON.parse(env.SANDBOX_SCOPE_BACKENDS);
     if (!values || typeof values !== "object" || Array.isArray(values))
@@ -701,7 +697,7 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
       const parsed = parseScopeId(kind + ":scope").kind;
       if (!parsed || parsed !== kind || typeof value !== "string" || !value.trim())
         throw new Error("Invalid SANDBOX_SCOPE_BACKENDS entry: " + kind);
-      legacySandboxScopeDefaults[parsed] = sandboxBackendEnvStrict(value, "SANDBOX_SCOPE_BACKENDS." + kind);
+      scopeBackendDefaults[parsed] = sandboxBackendEnvStrict(value, "SANDBOX_SCOPE_BACKENDS." + kind);
     }
   }
   const selectedBackend = env.SANDBOX_BACKEND?.trim();
@@ -848,7 +844,7 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     port: e.PORT ?? CONFIG_DEFAULTS.port,
     dataDir,
     sandboxBackend,
-    legacySandboxScopeDefaults,
+    scopeBackendDefaults,
     deployProvider,
     piSystemCacheSplit: e.PI_SYSTEM_CACHE_SPLIT ?? false,
     turnWallClockMs: CONFIG_DEFAULTS.turnWallClockSec * 1000,
