@@ -1,23 +1,18 @@
 import { LRUCache } from "lru-cache";
 import type { FileArtifact, FileArtifactStore } from "../files/file-artifact-store.ts";
-import { isVisionAttachment, MAX_VISION_IMAGE_BYTES } from "../core/attachments.ts";
+import { isVisionAttachment, MAX_LLM_REQUEST_BYTES, MAX_VISION_IMAGE_BYTES } from "../core/attachments.ts";
 import { downscaleVisionImage } from "../core/image-downscale.ts";
 import { collectBytes } from "../util/bytes.ts";
 import { swallow } from "../util/errors.ts";
 import { OMITTED_IMAGE_TEXT, type PiReplayMessage, type ReplayImageRef } from "./replay.ts";
-
-const MAX_HISTORY_IMAGE_BYTES = 10_000_000;
 
 const UNAVAILABLE_IMAGE_TEXT = "[image could not be loaded for replay]";
 
 export const ELIDED_IMAGE_TEXT =
   "[image removed: this conversation's images no longer fit the model's request-size limit; ask for it to be re-shared if needed]";
 
-type LoadedImage = { data: string; sizeBytes: number };
-export type ReplayImageLoader = (
-  ref: Required<ReplayImageRef>,
-  remainingBytes: number,
-) => Promise<LoadedImage | "over-budget" | null>;
+type LoadedImage = { data: string };
+export type ReplayImageLoader = (ref: Required<ReplayImageRef>) => Promise<LoadedImage | "over-budget" | null>;
 
 const visionBytes = new LRUCache<string, string>({ maxSize: 64_000_000, sizeCalculation: (data) => data.length });
 
@@ -25,7 +20,7 @@ export function artifactImageLoader(
   files: FileArtifactStore,
   authorize: (artifact: FileArtifact) => boolean | Promise<boolean>,
 ): ReplayImageLoader {
-  return async (ref, remainingBytes) => {
+  return async (ref) => {
     const artifact = await files.get(ref.artifactId);
     if (
       !artifact ||
@@ -36,10 +31,10 @@ export function artifactImageLoader(
       !artifact.sha256
     )
       return null;
-    if (artifact.sizeBytes > MAX_VISION_IMAGE_BYTES || artifact.sizeBytes > remainingBytes) return "over-budget";
+    if (artifact.sizeBytes > MAX_VISION_IMAGE_BYTES) return "over-budget";
     const key = `${artifact.id}:${artifact.sha256}`;
     const cached = visionBytes.get(key);
-    if (cached !== undefined) return { data: cached, sizeBytes: artifact.sizeBytes };
+    if (cached !== undefined) return { data: cached };
     const opened = await files.open(ref.artifactId);
     if (!opened) return null;
     if (opened.sizeBytes !== artifact.sizeBytes || opened.artifact.sha256 !== artifact.sha256) {
@@ -50,7 +45,7 @@ export function artifactImageLoader(
     if (bytes.sha256 !== artifact.sha256) return null;
     const data = Buffer.from(await downscaleVisionImage(bytes.data, artifact.mimetype)).toString("base64");
     visionBytes.set(key, data);
-    return { data, sizeBytes: bytes.sizeBytes };
+    return { data };
   };
 }
 
@@ -60,10 +55,11 @@ type TextBlock = { type: "text"; text: string };
 export async function restoreReplayImages(
   messages: PiReplayMessage[],
   load: ReplayImageLoader | undefined,
+  requestByteBudget = MAX_LLM_REQUEST_BYTES,
 ): Promise<PiReplayMessage[]> {
   const restored = new Map<object, ImageBlock | TextBlock>();
   const cached = new Map<string, LoadedImage | "over-budget" | null>();
-  let remainingBytes = MAX_HISTORY_IMAGE_BYTES;
+  let remainingBytes = requestByteBudget;
   for (const message of [...messages].reverse()) {
     if (message.role !== "user") continue;
     for (const block of [...message.content].reverse()) {
@@ -77,17 +73,18 @@ export async function restoreReplayImages(
         cached.set(
           artifactId,
           remainingBytes > 0
-            ? await load({ artifactId, mimeType }, remainingBytes).catch((e: unknown) => {
+            ? await load({ artifactId, mimeType }).catch((e: unknown) => {
                 swallow("pi: replay image load", e);
                 return null;
               })
             : "over-budget",
         );
       const loaded = cached.get(artifactId)!;
-      if (loaded === "over-budget") restored.set(block, { type: "text", text: ELIDED_IMAGE_TEXT });
+      if (loaded === "over-budget" || (loaded && loaded.data.length > remainingBytes))
+        restored.set(block, { type: "text", text: ELIDED_IMAGE_TEXT });
       else if (!loaded) restored.set(block, { type: "text", text: UNAVAILABLE_IMAGE_TEXT });
       else {
-        remainingBytes -= loaded.sizeBytes;
+        remainingBytes -= loaded.data.length;
         restored.set(block, { type: "image", data: loaded.data, mimeType });
       }
     }

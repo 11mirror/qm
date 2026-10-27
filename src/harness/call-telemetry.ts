@@ -70,7 +70,7 @@ export function gatewayAttemptHeaders(headers: Record<string, string> | undefine
   const out: Record<string, string> = {};
   for (const name of GATEWAY_ATTEMPT_HEADERS) {
     const value = lower.get(name);
-    if (typeof value === "string" && value) out[name] = value.slice(0, 200);
+    if (typeof value === "string" && value) out[name] = value;
   }
   return Object.keys(out).length ? out : undefined;
 }
