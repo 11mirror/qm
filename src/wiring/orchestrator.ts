@@ -17,7 +17,7 @@ import { type SurfaceCache, createPostgresSurfaceCache } from "../surface-cache/
 import { type ChannelPolicyStore, createPostgresChannelPolicyStore } from "../surface-cache/channel-policy-store.ts";
 import { type OrchestratorDeps, createOrchestrator } from "../core/orchestrator.ts";
 import { installSharedCanvas } from "../surfaces/ui-canvas.ts";
-import { personalScope, scopeId } from "../types.ts";
+import { personalScope } from "../types.ts";
 import { EXEC_TIMEOUT_DEFAULT_MS, EXEC_TIMEOUT_MAX_MS } from "../harness/agent-tools.ts";
 import { BACKGROUND_JOB_TTL_MS, BACKGROUND_JOB_TTL_MAX_MS } from "../connectors/background-exec-broker.ts";
 import { resendMailer } from "../../plugins/chassis/src/resend.ts";
