@@ -167,8 +167,7 @@ export function loadApprovalLedger(
 }
 
 export type ApprovalDecisionOutcome =
-  | { kind: "settled"; result: TurnResult }
-  | { kind: "approved"; approvalNote: string };
+  { kind: "settled"; result: TurnResult } | { kind: "approved"; approvalNote: string };
 
 export async function consumeApprovalDecision(args: {
   deps: Pick<OrchestratorDeps, "approvals" | "approvalGrants" | "auditLog" | "sessions" | "sessionSyscalls">;

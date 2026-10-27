@@ -57,17 +57,16 @@ const PRIVATE_SESSION_MESSAGE_MD = loadProtocolFile("turn-private-session-messag
 const PROACTIVE_OPENER_MD = loadProtocolFile("turn-proactive-opener");
 const IDEAS_CONVERSATION_MD = loadProtocolFile("turn-ideas-conversation");
 
-export async function frameTurnPrompt(
-  ctx: TurnCtx,
-  turn: {
-    screenTrace: ScreenTrace;
-    useMemory: boolean;
-    context: Awaited<ReturnType<typeof resolveTurnContext>>;
-    memoryScopeId: ScopeId;
-    memoryStrategy: MemoryStrategy;
-    observeSecurityData: SecurityObserver;
-  },
-) {
+interface FrameTurnArgs {
+  screenTrace: ScreenTrace;
+  useMemory: boolean;
+  context: Awaited<ReturnType<typeof resolveTurnContext>>;
+  memoryScopeId: ScopeId;
+  memoryStrategy: MemoryStrategy;
+  observeSecurityData: SecurityObserver;
+}
+
+export async function frameTurnPrompt(ctx: TurnCtx, turn: FrameTurnArgs) {
   const {
     deps,
     input,
@@ -81,7 +80,7 @@ export async function frameTurnPrompt(
     resolution,
     scopeId,
   } = ctx;
-  const { screenTrace, useMemory, context, memoryScopeId, memoryStrategy, observeSecurityData } = turn;
+  const { useMemory, context, memoryScopeId, memoryStrategy } = turn;
   const profile = surfaceProfile(input.surface);
   const isWeb = profile.traits.includes("transcript");
   const surfaceTool = input.surface ?? "slack";
@@ -149,31 +148,7 @@ export async function frameTurnPrompt(
     systemPrompt += `\n\n${strategyLines.join("\n")}`;
   }
 
-  const delivery = deliveryCandidatesFor(input.surface, input.deliveryTarget, input.deliveryCandidates, scopeId);
-  const source = turnSource(input);
-  if (source)
-    for (const candidate of delivery.candidates) {
-      candidate.account = source.account;
-      candidate.workspaceId = source.workspaceId;
-    }
-  const defaultCandidate = delivery.candidates.find((c) => c.key === delivery.defaultKey);
-  let defaultDestination: Destination | undefined;
-  if (defaultCandidate) {
-    defaultDestination = {
-      type: defaultCandidate.type,
-      target: defaultCandidate.target,
-      ...(defaultCandidate.account ? { account: defaultCandidate.account } : {}),
-      ...(defaultCandidate.workspaceId ? { workspaceId: defaultCandidate.workspaceId } : {}),
-      ...(defaultCandidate.audienceScopeId ? { audienceScopeId: defaultCandidate.audienceScopeId } : {}),
-    };
-  } else if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination) {
-    defaultDestination = input.origin.destination;
-  }
-  const cronBlock =
-    delivery.candidates.length > 1 && deps.signingSecret && deps.apiBaseUrl
-      ? `\n\n${deliveryMenu(delivery.candidates, delivery.defaultKey)}`
-      : "";
-
+  const { delivery, defaultDestination, cronBlock } = turnDelivery(ctx);
   await deps.skillsReady;
   const configuredProviders =
     !external && deps.resolveConnectorClient
@@ -182,47 +157,8 @@ export async function frameTurnPrompt(
         )
       : [];
   const observedSkillScreens = new Set<string>();
-  const visibleSkillsForTurn = async (sources?: readonly string[]): Promise<SkillResolution[]> => {
-    const current = await context.listSkills(sources);
-    const allowed = filterConnectorSkills(current.skills, configuredProviders);
-    for (const entry of allowed) {
-      const skill = entry.skill;
-      if (!skill || !current.sharingSources.includes(skill.scopeId)) continue;
-      const snapshot = structuredClone(entry);
-      void (async () => {
-        const bundles = deps.skillBundles
-          ? await loadActiveBundles(deps.skillBundles, [snapshot]).catch(
-              swallowAs("skill screening: load bundles", null),
-            )
-          : [];
-        const payload = JSON.stringify({ manifest: snapshot.skill!.manifest, bundles });
-        const key = hashId([skill.scopeId, skill.id, payload], 64);
-        if (observedSkillScreens.has(key)) return;
-        observedSkillScreens.add(key);
-        if (bundles === null || Buffer.byteLength(payload, "utf8") > MAX_AUTO_ATTACHMENT_SCREEN_BYTES) return;
-        for (const chunk of securityScreenChunks("tool_result:shared_skill", payload))
-          await observeSecurityData(chunk, actor.id, scopeId, {
-            ...screenTrace,
-            hook: "tool_response",
-            request: input.text,
-            surface: "shared_skill",
-            origin: input.origin.kind,
-          });
-      })().catch(swallowAs("orchestrator: observed skill screen", undefined));
-    }
-    for (const entry of allowed) {
-      if (!entry.skill || !current.sharingSources.includes(entry.skill.scopeId)) continue;
-      deps.auditLog.record({
-        at: Date.now(),
-        principalId: actor.id,
-        action: "sharing.cross_context_read",
-        resource: `skill:${entry.skill.id}`,
-        scopeLabel: scopeId,
-        detail: JSON.stringify({ actor: actor.id, source: entry.skill.scopeId, target: scopeId }),
-      });
-    }
-    return allowed;
-  };
+  const visibleSkillsForTurn = (sources?: readonly string[]) =>
+    listVisibleSkills(ctx, turn, configuredProviders, observedSkillScreens, sources);
   const skillSourceContext = await context.listSkills([scopeId, resolution.orgScopeId]);
   const otherSkillSources = skillSourceContext.skillSources
     .filter((source) => source !== scopeId && source !== resolution.orgScopeId)
@@ -252,12 +188,8 @@ export async function frameTurnPrompt(
   if (sharedFilesBlock) turnContextBlocks["Files shared with you"] = sharedFilesBlock;
 
   const timeBlock = currentTimeBlock(turnTimezone ?? DEFAULT_CRON_TIMEZONE, Date.now());
-  let memoryContext = "a channel";
-  if (conversation.kind === "dm") memoryContext = "a direct message";
-  else if (conversation.channelName) memoryContext = `#${conversation.channelName}`;
-  else if (conversation.kind === "group") memoryContext = "a group conversation";
-  const memoryHeading = `\n\n## What you remember\nYou're in ${memoryContext}; use these authorized memories freely, but preferences tagged with another scope heading or \`(said in …)\` apply only there.\n\n`;
 
+  const memoryHeading = memoryHeadingFor(conversation);
   const onboardingBlock = isIdeasConversation(input) ? IDEAS_CONVERSATION_MD : "";
   return {
     systemPrompt,
@@ -279,6 +211,88 @@ export async function frameTurnPrompt(
     memoryHeading,
     onboardingBlock,
   };
+}
+
+function turnDelivery({ deps, input, scopeId }: TurnCtx) {
+  const delivery = deliveryCandidatesFor(input.surface, input.deliveryTarget, input.deliveryCandidates, scopeId);
+  const source = turnSource(input);
+  if (source)
+    for (const candidate of delivery.candidates) {
+      candidate.account = source.account;
+      candidate.workspaceId = source.workspaceId;
+    }
+  const defaultCandidate = delivery.candidates.find((c) => c.key === delivery.defaultKey);
+  let defaultDestination: Destination | undefined;
+  if (defaultCandidate) {
+    defaultDestination = {
+      type: defaultCandidate.type,
+      target: defaultCandidate.target,
+      ...(defaultCandidate.account ? { account: defaultCandidate.account } : {}),
+      ...(defaultCandidate.workspaceId ? { workspaceId: defaultCandidate.workspaceId } : {}),
+      ...(defaultCandidate.audienceScopeId ? { audienceScopeId: defaultCandidate.audienceScopeId } : {}),
+    };
+  } else if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination) {
+    defaultDestination = input.origin.destination;
+  }
+  const cronBlock =
+    delivery.candidates.length > 1 && deps.signingSecret && deps.apiBaseUrl
+      ? `\n\n${deliveryMenu(delivery.candidates, delivery.defaultKey)}`
+      : "";
+  return { delivery, defaultDestination, cronBlock };
+}
+
+async function listVisibleSkills(
+  { deps, input, actor, scopeId }: TurnCtx,
+  { context, screenTrace, observeSecurityData }: FrameTurnArgs,
+  configuredProviders: Awaited<ReturnType<typeof configuredConnectorProviders>>,
+  observedSkillScreens: Set<string>,
+  sources?: readonly string[],
+): Promise<SkillResolution[]> {
+  const current = await context.listSkills(sources);
+  const allowed = filterConnectorSkills(current.skills, configuredProviders);
+  for (const entry of allowed) {
+    const skill = entry.skill;
+    if (!skill || !current.sharingSources.includes(skill.scopeId)) continue;
+    const snapshot = structuredClone(entry);
+    void (async () => {
+      const bundles = deps.skillBundles
+        ? await loadActiveBundles(deps.skillBundles, [snapshot]).catch(swallowAs("skill screening: load bundles", null))
+        : [];
+      const payload = JSON.stringify({ manifest: snapshot.skill!.manifest, bundles });
+      const key = hashId([skill.scopeId, skill.id, payload], 64);
+      if (observedSkillScreens.has(key)) return;
+      observedSkillScreens.add(key);
+      if (bundles === null || Buffer.byteLength(payload, "utf8") > MAX_AUTO_ATTACHMENT_SCREEN_BYTES) return;
+      for (const chunk of securityScreenChunks("tool_result:shared_skill", payload))
+        await observeSecurityData(chunk, actor.id, scopeId, {
+          ...screenTrace,
+          hook: "tool_response",
+          request: input.text,
+          surface: "shared_skill",
+          origin: input.origin.kind,
+        });
+    })().catch(swallowAs("orchestrator: observed skill screen", undefined));
+  }
+  for (const entry of allowed) {
+    if (!entry.skill || !current.sharingSources.includes(entry.skill.scopeId)) continue;
+    deps.auditLog.record({
+      at: Date.now(),
+      principalId: actor.id,
+      action: "sharing.cross_context_read",
+      resource: `skill:${entry.skill.id}`,
+      scopeLabel: scopeId,
+      detail: JSON.stringify({ actor: actor.id, source: entry.skill.scopeId, target: scopeId }),
+    });
+  }
+  return allowed;
+}
+
+function memoryHeadingFor(conversation: TurnCtx["conversation"]): string {
+  let memoryContext = "a channel";
+  if (conversation.kind === "dm") memoryContext = "a direct message";
+  else if (conversation.channelName) memoryContext = `#${conversation.channelName}`;
+  else if (conversation.kind === "group") memoryContext = "a group conversation";
+  return `\n\n## What you remember\nYou're in ${memoryContext}; use these authorized memories freely, but preferences tagged with another scope heading or \`(said in …)\` apply only there.\n\n`;
 }
 
 const COMPOSIO_MD = loadProtocolFile("turn-composio");
@@ -306,7 +320,7 @@ export async function finishSystemPrompt(
     directoryIndexFor: (directory: DirectoryStore) => Promise<Map<string, DirectoryMember>>;
   },
 ): Promise<{ systemPrompt: string; volatileContext: string }> {
-  const { deps, input, actor, conversation, external, automatedTurn, turnTimezone, scopeId } = ctx;
+  const { deps, input, actor, conversation, external, automatedTurn } = ctx;
   const {
     strictReadOnly,
     turnContextBlocks,
@@ -332,34 +346,7 @@ export async function finishSystemPrompt(
   if (actorIsOrgAdmin) {
     systemPrompt += `\n\n${ORG_ADMIN_MD}`;
   }
-  if (deps.signingSecret && deps.apiBaseUrl && (deps.crons || deps.webhooks || deps.monitors)) {
-    const nowMs = Date.now();
-    const obligations = await Promise.all([
-      deps.crons?.byOwner(scopeId) ?? [],
-      deps.webhooks?.byOwner(scopeId) ?? [],
-      deps.monitors?.byOwner(scopeId) ?? [],
-    ])
-      .then(([crons, hooks, mons]) =>
-        renderStandingObligations(
-          crons.filter(
-            (c) =>
-              c.enabled &&
-              !c.archived &&
-              c.ownerScopeId === scopeId &&
-              (c.schedule.cron != null ||
-                c.schedule.everyMs != null ||
-                (c.schedule.firstFireAt ?? c.createdAt) > nowMs),
-          ),
-          hooks.filter((w) => w.enabled && w.ownerScopeId === scopeId),
-          mons.filter((m) => m.enabled && m.ownerScopeId === scopeId && m.expiresAt > nowMs),
-          turnTimezone,
-        ),
-      )
-      .catch(swallowAs("orchestrator: standing-obligations read", null));
-    turnContextBlocks["Already scheduled here"] =
-      obligations ??
-      "## Already scheduled here\nScheduled-work status is unavailable; check the live inventories before scheduling.";
-  }
+  await addStandingObligations(ctx, turnContextBlocks);
   if (input.origin.kind === "automation" && input.origin.destination && !input.surfaceTools) {
     systemPrompt += `\n\n${SCHEDULED_DESTINATION_MD}`;
   }
@@ -373,67 +360,11 @@ export async function finishSystemPrompt(
     );
     if (roster) turnContextBlocks["Other computers you can reach"] = roster;
   }
-  if (!external && deps.directory) {
-    const rosterBlock = await (async () => {
-      const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
-      const participants = [
-        ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
-        ...audienceMembers,
-      ];
-      const index = await directoryIndexFor(deps.directory!);
-      const seen = new Set<string>();
-      const resolved: DirectoryMember[] = [];
-      for (const p of participants) {
-        if (seen.has(personKey(p.id))) continue;
-        seen.add(personKey(p.id));
-        const m = index.get(personKey(p.id));
-        if (m) resolved.push(m);
-        else if (p.displayName) resolved.push({ principalId: p.id, displayName: p.displayName, type: "internal" });
-      }
-      return renderConversationRoster(resolved);
-    })().catch(swallowAs("orchestrator: conversation roster", null));
-    if (rosterBlock) turnContextBlocks["Who’s in this conversation"] = rosterBlock;
-  }
-  if (!strictReadOnly && (deps.keychain || credentialDescriptions.length)) {
-    const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
-    const members = [
-      ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
-      ...audienceMembers,
-    ].map((p) => ({ id: p.id, ...(p.displayName ? { displayName: p.displayName } : {}) }));
-    const [entriesByOwner, connectorsByOwner, scopeGrants, scopeAsks] = await Promise.all([
-      !external ? (deps.keychain?.listByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
-      !external ? (deps.keychain?.listConnectorsByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
-      !external ? (deps.keychain?.grantsForScope(scopeId) ?? []) : [],
-      !external ? (deps.keychain?.listAsks({ requesterScopeId: scopeId }) ?? []) : [],
-    ]);
-    const keychainBlock = renderKeychainManifest({
-      scopeId,
-      conversationKind: conversation.kind,
-      openSpeakerKeychain,
-      actorId: actor.id,
-      members,
-      entriesByOwner,
-      connectorsByOwner,
-      scopeGrants,
-      execution: credentialDescriptions,
-      scopeAsks,
-    });
-    if (keychainBlock) turnContextBlocks["Credentials"] = keychainBlock;
-  }
-  if (!strictReadOnly && deps.resolveConnectorClient && conversation.kind === "dm") {
-    let status = null;
-    try {
-      status = deps.connectorStatusCache ? await deps.connectorStatusCache.get(actor.id) : null;
-      if (deps.connectorTokens && deps.connectorStatusCache && connectorStatusIsStale(status, Date.now())) {
-        status = await refreshConnectorStatus(deps.connectorTokens, actor.id, Date.now());
-        await deps.connectorStatusCache.put(status);
-      }
-    } catch (e) {
-      swallow("orchestrator: connected-app status", e);
-    }
-    const connectionsUrl = deps.publicWebUrl ? `${deps.publicWebUrl.replace(/\/$/, "")}/keychain` : undefined;
-    turnContextBlocks["Connected apps"] = renderConnectedAppsBlock(status, configuredProviders, connectionsUrl);
-  }
+  if (!external && deps.directory) await addConversationRoster(ctx, turnContextBlocks, directoryIndexFor);
+  if (!strictReadOnly && (deps.keychain || credentialDescriptions.length))
+    await addKeychainManifest(ctx, turnContextBlocks, openSpeakerKeychain, credentialDescriptions);
+  if (!strictReadOnly && deps.resolveConnectorClient && conversation.kind === "dm")
+    await addConnectedApps(ctx, turnContextBlocks, configuredProviders);
   systemPrompt += `\n\n${USER_REPLY_RULES_MD.trim()}`;
   const stableSystemBytes = systemPrompt.length;
   if (timeBlock) systemPrompt += `\n\n${timeBlock}`;
@@ -441,4 +372,111 @@ export async function finishSystemPrompt(
   const volatileContext = systemPrompt.slice(stableSystemBytes).trim();
   systemPrompt = systemPrompt.slice(0, stableSystemBytes);
   return { systemPrompt, volatileContext };
+}
+
+async function addStandingObligations(
+  { deps, scopeId, turnTimezone }: TurnCtx,
+  turnContextBlocks: Record<string, string>,
+): Promise<void> {
+  if (!(deps.signingSecret && deps.apiBaseUrl && (deps.crons || deps.webhooks || deps.monitors))) return;
+  const nowMs = Date.now();
+  const obligations = await Promise.all([
+    deps.crons?.byOwner(scopeId) ?? [],
+    deps.webhooks?.byOwner(scopeId) ?? [],
+    deps.monitors?.byOwner(scopeId) ?? [],
+  ])
+    .then(([crons, hooks, mons]) =>
+      renderStandingObligations(
+        crons.filter(
+          (c) =>
+            c.enabled &&
+            !c.archived &&
+            c.ownerScopeId === scopeId &&
+            (c.schedule.cron != null || c.schedule.everyMs != null || (c.schedule.firstFireAt ?? c.createdAt) > nowMs),
+        ),
+        hooks.filter((w) => w.enabled && w.ownerScopeId === scopeId),
+        mons.filter((m) => m.enabled && m.ownerScopeId === scopeId && m.expiresAt > nowMs),
+        turnTimezone,
+      ),
+    )
+    .catch(swallowAs("orchestrator: standing-obligations read", null));
+  turnContextBlocks["Already scheduled here"] =
+    obligations ??
+    "## Already scheduled here\nScheduled-work status is unavailable; check the live inventories before scheduling.";
+}
+
+async function addConversationRoster(
+  { deps, actor, conversation }: TurnCtx,
+  turnContextBlocks: Record<string, string>,
+  directoryIndexFor: (directory: DirectoryStore) => Promise<Map<string, DirectoryMember>>,
+): Promise<void> {
+  const rosterBlock = await (async () => {
+    const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
+    const participants = [
+      ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
+      ...audienceMembers,
+    ];
+    const index = await directoryIndexFor(deps.directory!);
+    const seen = new Set<string>();
+    const resolved: DirectoryMember[] = [];
+    for (const p of participants) {
+      if (seen.has(personKey(p.id))) continue;
+      seen.add(personKey(p.id));
+      const m = index.get(personKey(p.id));
+      if (m) resolved.push(m);
+      else if (p.displayName) resolved.push({ principalId: p.id, displayName: p.displayName, type: "internal" });
+    }
+    return renderConversationRoster(resolved);
+  })().catch(swallowAs("orchestrator: conversation roster", null));
+  if (rosterBlock) turnContextBlocks["Who’s in this conversation"] = rosterBlock;
+}
+
+async function addKeychainManifest(
+  { deps, actor, conversation, external, scopeId }: TurnCtx,
+  turnContextBlocks: Record<string, string>,
+  openSpeakerKeychain: boolean,
+  credentialDescriptions: NonNullable<KeychainManifestInput["execution"]>,
+): Promise<void> {
+  const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
+  const members = [...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]), ...audienceMembers].map(
+    (p) => ({ id: p.id, ...(p.displayName ? { displayName: p.displayName } : {}) }),
+  );
+  const [entriesByOwner, connectorsByOwner, scopeGrants, scopeAsks] = await Promise.all([
+    !external ? (deps.keychain?.listByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
+    !external ? (deps.keychain?.listConnectorsByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
+    !external ? (deps.keychain?.grantsForScope(scopeId) ?? []) : [],
+    !external ? (deps.keychain?.listAsks({ requesterScopeId: scopeId }) ?? []) : [],
+  ]);
+  const keychainBlock = renderKeychainManifest({
+    scopeId,
+    conversationKind: conversation.kind,
+    openSpeakerKeychain,
+    actorId: actor.id,
+    members,
+    entriesByOwner,
+    connectorsByOwner,
+    scopeGrants,
+    execution: credentialDescriptions,
+    scopeAsks,
+  });
+  if (keychainBlock) turnContextBlocks["Credentials"] = keychainBlock;
+}
+
+async function addConnectedApps(
+  { deps, actor }: TurnCtx,
+  turnContextBlocks: Record<string, string>,
+  configuredProviders: Awaited<ReturnType<typeof configuredConnectorProviders>>,
+): Promise<void> {
+  let status = null;
+  try {
+    status = deps.connectorStatusCache ? await deps.connectorStatusCache.get(actor.id) : null;
+    if (deps.connectorTokens && deps.connectorStatusCache && connectorStatusIsStale(status, Date.now())) {
+      status = await refreshConnectorStatus(deps.connectorTokens, actor.id, Date.now());
+      await deps.connectorStatusCache.put(status);
+    }
+  } catch (e) {
+    swallow("orchestrator: connected-app status", e);
+  }
+  const connectionsUrl = deps.publicWebUrl ? `${deps.publicWebUrl.replace(/\/$/, "")}/keychain` : undefined;
+  turnContextBlocks["Connected apps"] = renderConnectedAppsBlock(status, configuredProviders, connectionsUrl);
 }
