@@ -107,9 +107,11 @@ function isOneShotSchedule(schedule: Cron["schedule"]): boolean {
   return schedule.everyMs == null && schedule.cron == null;
 }
 
+const isBangCommand = (task: string): boolean => /^!(run|scratch)\s/.test(task.trimStart());
+
 export function cronFireReadsNotes(cron: Pick<Cron, "schedule" | "action">): boolean {
   const task = cron.action ?? "";
-  if (!task.trim() || /^!(run|scratch)\s/.test(task.trimStart())) return false;
+  if (!task.trim() || isBangCommand(task)) return false;
   return !isOneShotSchedule(cron.schedule);
 }
 
@@ -149,7 +151,7 @@ function cronMentionRoster(cron: Cron, homeRoster: DirectoryMember[] | undefined
 function renderCronFireInput(cron: Cron, mentionRoster?: string): string {
   const task = cron.action ?? "";
   if (!task.trim()) return task;
-  if (/^!(run|scratch)\s/.test(task.trimStart())) return task;
+  if (isBangCommand(task)) return task;
   const readsNotes = cronFireReadsNotes(cron);
   return [
     "[Cron runtime context]",

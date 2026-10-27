@@ -10,7 +10,7 @@ export function composioCallbackUrl(publicUrl: string, returnTo: unknown, state:
     !(
       target.pathname === `${prefix}/` ||
       target.pathname === `${prefix}/settings` ||
-      new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/s/[a-zA-Z0-9_-]+$`).test(target.pathname)
+      (target.pathname.startsWith(`${prefix}/s/`) && /^[a-zA-Z0-9_-]+$/.test(target.pathname.slice(prefix.length + 3)))
     )
   )
     return null;

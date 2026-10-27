@@ -98,7 +98,7 @@ export function history(root: HTMLElement, d: any, s: Record<string, any>) {
               const kind = row.kind || row.type;
               const typeLabel =
                 (kind === "dm" && "DM") ||
-                (/^cron(_monologue|_wake)?$/.test(kind) && "Cron") ||
+                (["cron", "cron_monologue", "cron_wake"].includes(kind) && "Cron") ||
                 titleCase(String(kind).replaceAll("_", " "));
               name = origin ? cronName(origin, true) : row.origin?.label || typeLabel;
               preview = row.result || row.lastMessage || row.firstMessage || "";

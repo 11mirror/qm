@@ -33,6 +33,12 @@ export function workspacePathOf(rootDir: string, absPath: string): string | null
   return rel && !rel.startsWith("..") && !posix.isAbsolute(rel) ? rel : null;
 }
 
+const listedPaths = (stdout: string): string[] =>
+  stdout
+    .split("\n")
+    .map((s) => s.trim().replace(/^\.\//, ""))
+    .filter(Boolean);
+
 export function posixJoin(base: string, rel: string): string {
   const clean = workspaceRel((rel.startsWith("/") && workspacePathOf(base, rel)) || rel);
   return clean ? `${base.replace(/\/+$/, "")}/${clean}` : base;
@@ -80,10 +86,7 @@ export function createExecFileOps({ label, exec, writeInline, combineRemoveAndLi
       const rel = workspaceRel(relDir) || ".";
       const r = await exec(handle.id, listFilesScript(handle.rootDir, rel), 60);
       if (r.code !== 0) throw new Error(`${label} listDir failed (exit ${r.code}): ${r.stderr.trim()}`);
-      return r.stdout
-        .split("\n")
-        .map((s) => s.trim().replace(/^\.\//, ""))
-        .filter(Boolean);
+      return listedPaths(r.stdout);
     },
 
     ...(combineRemoveAndList
@@ -99,10 +102,7 @@ export function createExecFileOps({ label, exec, writeInline, combineRemoveAndLi
             );
             if (r.code !== 0) throw new Error(`${label} removeDir ${removeRelDir} failed: ${r.stderr}`);
             if (r.stderr.trim()) swallow(`${label} list ${listRelDir}`, new Error(r.stderr.trim()));
-            return r.stdout
-              .split("\n")
-              .map((s) => s.trim().replace(/^\.\//, ""))
-              .filter(Boolean);
+            return listedPaths(r.stdout);
           },
         }
       : {}),

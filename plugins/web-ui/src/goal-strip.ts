@@ -30,10 +30,7 @@ export function goalElapsedLabel(startedAt: number, now: number): string {
 }
 
 export function goalObjectiveLabel(objective: string, max = 120): string {
-  const oneLine = objective
-    .replace(/[\r\n\t]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const oneLine = objective.replace(/\s+/g, " ").trim();
   return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
 }
 
