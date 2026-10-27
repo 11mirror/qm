@@ -200,7 +200,6 @@ import { createSdkManagedAgentsClient } from "./sandbox/managed-agents-client.ts
 import { createModalSandbox, modalRecordShapeMigration, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
 import { createSdkModalClient } from "./sandbox/modal-client.ts";
 import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
-import { importRoutedSandboxes, routedBackendForScope, type SandboxRoute } from "./sandbox/sandbox-resource-upgrade.ts";
 import { effectiveEgressEnforcement, type BackendSandbox, type Sandbox } from "./sandbox/sandbox.ts";
 import { createEnvSecretSource } from "./credentials/secret-source.ts";
 import {
@@ -878,30 +877,6 @@ export function buildApp(
   const sandboxResources = createSandboxResources({
     records: sandboxRecords,
     defaults: sandboxDefaults,
-    upgrade: () =>
-      importRoutedSandboxes({
-        availableBackends: Object.keys(sandboxBackends) as SandboxBackendName[],
-        records: sandboxRecords,
-        defaults: sandboxDefaults,
-        marker: artifactMap<{ activatedAt: string }>("sandbox_resource_rollout"),
-        routes: () => artifactMap<SandboxRoute>("sandbox_routing").entries(),
-        lock: advisoryLock,
-        fallbackBackend: (scope) => routedBackendForScope(scope, config.sandboxBackend, config.scopeBackendDefaults),
-        specFor: (backend) => sandboxBackends[backend]?.profile.spec,
-        knownScopes: async () => [
-          ...(await sessions.distinctScopes()).map((scope) => scope.scopeId),
-          ...(await environments.list()).map((environment) => environment.id),
-        ],
-        providerSandboxes: async () => {
-          const [e2b, modal] = await Promise.all([e2bBodies.entries(), modalBodies.entries()]);
-          return [
-            ...e2b.map(([scopeId, body]) => ({ scopeId, backend: "e2b" as const, machineId: body.sandboxId })),
-            ...modal.flatMap(([scopeId, body]) =>
-              body.sandboxId ? [{ scopeId, backend: "modal" as const, machineId: body.sandboxId }] : [],
-            ),
-          ];
-        },
-      }),
     backends: sandboxBackends,
     defaultBackend: config.sandboxBackend,
     lock: advisoryLock,

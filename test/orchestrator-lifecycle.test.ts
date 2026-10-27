@@ -556,7 +556,6 @@ test("activated resource defaults preserve an existing computer and stop eager p
   noDefaultSandbox.add(built);
   await selectDefaultSandbox(built, "U1", scopeId("personal", "U1"));
   await built.sessions.getOrCreateByThread("dm:U1:t1", "dm", "personal:U1");
-  await built.sandboxResources.initialize();
   const boxes = spyProvisioning(built.sandbox);
   const warm = await built.app.turn(dm("!run echo warm"));
   assert.equal(warm.status, "ok", warm.reason);

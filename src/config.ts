@@ -5,8 +5,6 @@ import {
 } from "./credentials/deployment-credentials.ts";
 import type { ExternalSlackPolicies } from "./resolution/external-slack.ts";
 import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";
-import { parseScopeId } from "./types.ts";
-import type { ScopeBackendDefaults } from "./sandbox/sandbox-resource-upgrade.ts";
 import { SANDBOX_BACKEND_NAMES, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
 import { existsSync, readdirSync } from "node:fs";
 import { parseProviderBaseUrl, type ModelGatewayTransportConfig } from "./model/provider-endpoints.ts";
@@ -67,7 +65,6 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   databasePoolCaCert?: string;
   databasePoolMax?: number;
   databaseDirectPoolMax?: number;
-  scopeBackendDefaults?: ScopeBackendDefaults;
   sandboxBackend: SandboxBackendName;
   deployProvider: "docker" | "aws" | "porter" | "e2b";
   modelId?: string;
@@ -688,18 +685,6 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     throw new Error(`SANDBOX_BACKEND must be set explicitly in production — use ${orList(SANDBOX_BACKEND_NAMES)}.`);
   }
   const sandboxBackend = sandboxBackendEnvStrict(env.SANDBOX_BACKEND);
-  const scopeBackendDefaults: ScopeBackendDefaults = {};
-  if (env.SANDBOX_SCOPE_BACKENDS) {
-    const values: unknown = JSON.parse(env.SANDBOX_SCOPE_BACKENDS);
-    if (!values || typeof values !== "object" || Array.isArray(values))
-      throw new Error("SANDBOX_SCOPE_BACKENDS must be an object of scope kinds and backend names");
-    for (const [kind, value] of Object.entries(values)) {
-      const parsed = parseScopeId(kind + ":scope").kind;
-      if (!parsed || parsed !== kind || typeof value !== "string" || !value.trim())
-        throw new Error("Invalid SANDBOX_SCOPE_BACKENDS entry: " + kind);
-      scopeBackendDefaults[parsed] = sandboxBackendEnvStrict(value, "SANDBOX_SCOPE_BACKENDS." + kind);
-    }
-  }
   const selectedBackend = env.SANDBOX_BACKEND?.trim();
   if (selectedBackend && selectedBackend !== "local" && !env.SANDBOX_EGRESS_PROXY_URL?.trim()) {
     console.warn(
@@ -844,7 +829,6 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     port: e.PORT ?? CONFIG_DEFAULTS.port,
     dataDir,
     sandboxBackend,
-    scopeBackendDefaults,
     deployProvider,
     piSystemCacheSplit: e.PI_SYSTEM_CACHE_SPLIT ?? false,
     turnWallClockMs: CONFIG_DEFAULTS.turnWallClockSec * 1000,
