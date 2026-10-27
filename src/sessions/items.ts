@@ -97,12 +97,14 @@ export function storedItem(
   if ((item.kind === "ToolCall" || item.kind === "ToolResult") && !nonEmpty(item.callId))
     throw new Error(`items: ${item.kind} at seq ${at.seq} has no callId`);
   const turnId = item.turnId ?? at.turnId ?? null;
+  if (turnId !== null && !TURN_ID.safeParse(turnId).success)
+    throw new Error(`items: ${item.kind} at seq ${at.seq} has malformed turn id ${JSON.stringify(turnId)}`);
   return {
     sessionId: at.sessionId,
     seq: at.seq,
     createdAt: at.createdAt,
     kind: item.kind,
-    turnId: turnId && TURN_ID.safeParse(turnId).success ? turnId.toLowerCase() : null,
+    turnId: turnId?.toLowerCase() ?? null,
     author: AUTHORED_KINDS.has(item.kind) ? nonEmpty(item.author) : null,
     callId: nonEmpty(item.callId),
     elicitId: nonEmpty(item.elicitId),

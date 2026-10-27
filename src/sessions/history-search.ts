@@ -1,20 +1,8 @@
 import { contextSummary } from "./session-store.ts";
 import { isOverheard, itemFields, proseText, type Item } from "./items.ts";
-import { searchAuthor } from "./item-search.ts";
+import { matchesSearchTerms, searchAuthor, searchSnippet, searchTerms } from "./item-search.ts";
 
-const MAX_HIT_CHARS = 500;
-const MATCH_LEAD_CHARS = 100;
-
-function clipHit(text: string, terms: string[]): string {
-  if (text.length <= MAX_HIT_CHARS) return text;
-  const lower = text.toLowerCase();
-  const positions = terms.map((t) => lower.indexOf(t)).filter((i) => i >= 0);
-  const first = positions.length ? Math.min(...positions) : 0;
-  if (first + MATCH_LEAD_CHARS <= MAX_HIT_CHARS) return `${text.slice(0, MAX_HIT_CHARS)}…`;
-  const start = first - MATCH_LEAD_CHARS;
-  const end = start + MAX_HIT_CHARS;
-  return `…${text.slice(start, end)}${end < text.length ? "…" : ""}`;
-}
+const HIT_CHARS = 500;
 
 function itemText(item: Item): string {
   const summary = contextSummary(item);
@@ -41,17 +29,15 @@ export function openSessionItem(items: Item[], seq: number): string | null {
 }
 
 export function searchSessionItems(entries: Item[], query: string, limit = 20): string[] {
-  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const terms = searchTerms(query);
   if (!terms.length) return [];
   const hits: string[] = [];
   for (let i = entries.length - 1; i >= 0 && hits.length < limit; i--) {
     const entry = entries[i]!;
     const text = itemText(entry).trim();
     const author = searchAuthor(entry);
-    const haystack = `${author ? `${author} ` : ""}${text}`.toLowerCase();
-    if (!terms.every((t) => haystack.includes(t))) continue;
-    const clipped = clipHit(text, terms);
-    hits.push(`${itemLabel(entry)} ${clipped}`);
+    if (!matchesSearchTerms(`${author ?? ""} ${text}`, terms)) continue;
+    hits.push(`${itemLabel(entry)} ${searchSnippet(text, terms, HIT_CHARS)}`);
   }
   return hits;
 }

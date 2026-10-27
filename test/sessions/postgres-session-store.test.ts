@@ -69,12 +69,16 @@ test("pg items keep turn, author and time in typed columns", async () => {
     const user = await store.append(turn, { kind: "UserMessage", text: "hi", author: "alice" });
     await store.append(turn, { kind: "SteeringMessage", text: "also", author: "bob" });
     await store.append(turn, { kind: "AgentMessage", text: "hello", author: "ignored-on-agent-items" });
-    await store.append({ ...lease, turnId: "not-a-uuid" }, { kind: "ToolCall", tool: "execute", callId: "c1" });
+    await store.append(lease, { kind: "ToolCall", tool: "execute", callId: "c1" });
     await store.append(lease, { kind: "Error", errorCode: "turn_failure", text: "x" });
     const stopped = await store.append(turn, { kind: "Stop", author: "alice", body: { reason: "user" } });
     const read = await store.getItem(session.id, stopped.seq);
     assert.equal(read?.turnId, runId);
     assert.deepEqual(read?.body, { reason: "user" });
+    await assert.rejects(
+      store.append({ ...lease, turnId: "not-a-uuid" }, { kind: "ToolCall", tool: "execute", callId: "c2" }),
+      /malformed turn id/,
+    );
     await store.releaseLease(lease);
 
     const rows = (
