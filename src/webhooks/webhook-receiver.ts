@@ -129,7 +129,7 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
         headers: req.headers,
         rawBody: req.rawBody,
       };
-      if (!verifier.verify(input)) return { status: 401 };
+      if (!(await verifier.verify(input))) return { status: 401 };
 
       const parsed = parseBody(req.headers, req.rawBody);
 

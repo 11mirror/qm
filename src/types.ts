@@ -287,7 +287,7 @@ export interface Cron extends TriggerBase {
 }
 
 interface WebhookVerification {
-  scheme: "hmac-sha256" | "github" | "slack" | "stripe" | "linear";
+  scheme: "hmac-sha256" | "github" | "slack" | "stripe" | "linear" | "google-pubsub";
   secret?: string;
 }
 

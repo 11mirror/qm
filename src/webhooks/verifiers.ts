@@ -1,4 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
+import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
 import type { Webhook } from "../types.ts";
 import { constantTimeEqual } from "../util/crypto.ts";
 import { isObj } from "../util/objects.ts";
@@ -10,7 +11,7 @@ export interface VerifierInput {
 }
 
 export interface Verifier {
-  verify(input: VerifierInput): boolean;
+  verify(input: VerifierInput): boolean | Promise<boolean>;
   deliveryId(input: VerifierInput): string;
   handshake?(input: VerifierInput, parsedBody: unknown): string | null;
 }
@@ -136,7 +137,47 @@ const linear: Verifier = {
   },
 };
 
-const VERIFIERS: Record<WebhookScheme, Verifier> = { github, slack, stripe, linear, "hmac-sha256": hmacSha256 };
+const GOOGLE_ISSUERS = ["https://accounts.google.com", "accounts.google.com"];
+const GOOGLE_JWKS = createRemoteJWKSet(new URL("https://www.googleapis.com/oauth2/v3/certs"));
+
+export function googlePubsubVerifier(keys: JWTVerifyGetKey = GOOGLE_JWKS): Verifier {
+  return {
+    async verify({ secret, headers }) {
+      const authorization = header(headers, "authorization");
+      if (!secret || !authorization?.startsWith("Bearer ")) return false;
+      try {
+        await jwtVerify(authorization.slice("Bearer ".length), keys, {
+          issuer: GOOGLE_ISSUERS,
+          audience: secret,
+          algorithms: ["RS256"],
+          requiredClaims: ["exp"],
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    deliveryId({ rawBody }) {
+      try {
+        const body: unknown = JSON.parse(rawBody);
+        const id = isObj(body) && isObj(body.message) ? body.message.messageId : undefined;
+        if (typeof id === "string" && id) return id;
+      } catch {
+        return bodyHash(rawBody);
+      }
+      return bodyHash(rawBody);
+    },
+  };
+}
+
+const VERIFIERS: Record<WebhookScheme, Verifier> = {
+  github,
+  slack,
+  stripe,
+  linear,
+  "hmac-sha256": hmacSha256,
+  "google-pubsub": googlePubsubVerifier(),
+};
 
 export type WebhookScheme = Webhook["verification"]["scheme"];
 
