@@ -39,7 +39,7 @@ export function runtimeTools(kit: ToolKit, goal: Pick<TurnGoal, "current">, halt
       action: Type.Union([Type.Literal("get"), Type.Literal("set"), Type.Literal("inherit")]),
       model: optionalString("Model ID or exact display name from get."),
       effort: optionalString(
-        "A level from get's modelCatalog[model].effortLevels. adaptive = native Auto; default = provider default; auto = legacy default.",
+        "A level from get's modelCatalog[model].effortLevels. auto = a level chosen for the model; adaptive = native Auto; default = provider default.",
       ),
       fastMode: Type.Optional(Type.Boolean()),
       lifetime: Type.Optional(Type.Union([Type.Literal("task"), Type.Literal("scope")])),
