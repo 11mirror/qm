@@ -334,6 +334,7 @@ test("gateway parser keeps app-only authority and rejects malformed signed marke
 });
 
 test("app-only gateway checks exact current personal read grants without inherited or management authority", async () => {
+  const databaseUrl = testDatabaseUrl();
   const dir = mkdtempSync(join(tmpdir(), "app-only-gateway-"));
   let upstreamHits = 0;
   const upstream = createHttpServer((req, res) => {
@@ -342,7 +343,7 @@ test("app-only gateway checks exact current personal read grants without inherit
     res.end(JSON.stringify(req.headers));
   });
   await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const acl = createAclStore(createPostgresGrantStore(databaseUrl));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     externalSharingAllowed: async () => true,
@@ -358,12 +359,12 @@ test("app-only gateway checks exact current personal read grants without inherit
     acl,
     deployDir: join(dir, "deploy"),
   });
-  const identity = createIdentityService(testDatabaseUrl());
+  const identity = createIdentityService(databaseUrl);
   const app = createApp({
     deploy,
     acl,
-    directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    directory: createPostgresDirectoryStore(databaseUrl),
+    sessions: createPostgresSessionStore(databaseUrl),
     identity,
   } as unknown as Parameters<typeof createApp>[0]);
   const ownerScopeId = scopeId("personal", "owner@example.test");
@@ -391,7 +392,7 @@ test("app-only gateway checks exact current personal read grants without inherit
     featureFlags: externalSharingOn,
     identity,
     signingSecret: secret,
-    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    replayDedupe: createPostgresReplayDedupe(databaseUrl),
     deployAppsDomain: "apps.example.test",
     deployGateSecret: "gate",
     deployAppsSessionSecret: secret,

@@ -21,8 +21,9 @@ import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 function appWithFakeRuntime() {
+  const databaseUrl = testDatabaseUrl();
   const deployStore = createDeployStore(testDeployBackings());
-  const acl: AclStore = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const acl: AclStore = createAclStore(createPostgresGrantStore(databaseUrl));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
@@ -37,14 +38,14 @@ function appWithFakeRuntime() {
     acl,
     deployDir: mkdtempSync(join(tmpdir(), "reach-")),
   });
-  const directory = createPostgresDirectoryStore(testDatabaseUrl());
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const directory = createPostgresDirectoryStore(databaseUrl);
+  const sessions = createPostgresSessionStore(databaseUrl);
   const app = createApp({
     deploy,
     acl,
     directory,
     sessions,
-    identity: createIdentityService(testDatabaseUrl()),
+    identity: createIdentityService(databaseUrl),
   } as unknown as Parameters<typeof createApp>[0]);
   return { app, acl, directory, sessions };
 }

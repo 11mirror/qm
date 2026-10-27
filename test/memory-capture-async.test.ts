@@ -92,9 +92,10 @@ function gatedHarness() {
 }
 
 function buildOrchestrator(harness: Harness, memory?: MemoryService, memoryStrategy?: MemoryStrategy) {
+  const databaseUrl = testDatabaseUrl();
   const config = testConfigStore(ORG);
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const auditLog = createPostgresAuditLog(testDatabaseUrl());
+  const acl = createAclStore(createPostgresGrantStore(databaseUrl));
+  const auditLog = createPostgresAuditLog(databaseUrl);
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "mca-")));
   const deploy = createDeployService({
     ...singleProcessDeps(),
@@ -106,17 +107,17 @@ function buildOrchestrator(harness: Harness, memory?: MemoryService, memoryStrat
   });
   return createOrchestrator({
     ...singleProcessDeps(),
-    identity: createIdentityService(testDatabaseUrl()),
+    identity: createIdentityService(databaseUrl),
     resolution: createResolutionService(ORG, config, acl),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(databaseUrl),
     workspace,
-    files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
+    files: createPostgresFileArtifactStore(databaseUrl, createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
     modelGateway: createModelGateway(),
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 1000, windowMs: 60_000 }),
+    rateLimiter: createPostgresRateLimiter(databaseUrl, { maxPerWindow: 1000, windowMs: 60_000 }),
     harness,
-    memory: memory ?? createPostgresMemoryService(testDatabaseUrl()),
+    memory: memory ?? createPostgresMemoryService(databaseUrl),
     ...(memoryStrategy ? { memoryStrategy } : {}),
     deploy,
     acl,

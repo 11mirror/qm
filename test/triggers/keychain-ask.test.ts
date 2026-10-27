@@ -383,12 +383,13 @@ test("sweep isolates per-ask failures — one failed fire doesn't starve the bat
 });
 
 test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate claim)", async () => {
+  const databaseUrl = testDatabaseUrl();
   let seen: TurnRequest | undefined;
   const outcome = await runTrigger(
     {
       outbound: recordingOutbound(),
-      idempotency: createIdempotencyStore(testDatabaseUrl()),
-      identity: createIdentityService(testDatabaseUrl()),
+      idempotency: createIdempotencyStore(databaseUrl),
+      identity: createIdentityService(databaseUrl),
       run: async (req) => ((seen = req), { status: "ok" } as TurnResult),
     },
     {
@@ -408,12 +409,13 @@ test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate cl
 });
 
 test("runTrigger: silent markers never silence a notification-shaped fire (keychain-ask)", async () => {
+  const databaseUrl = testDatabaseUrl();
   const outbound = recordingOutbound();
   const outcome = await runTrigger(
     {
       outbound,
-      idempotency: createIdempotencyStore(testDatabaseUrl()),
-      identity: createIdentityService(testDatabaseUrl()),
+      idempotency: createIdempotencyStore(databaseUrl),
+      identity: createIdentityService(databaseUrl),
       run: async () => ({ status: "ok", reply: "The keychain ask was approved." }) as TurnResult,
     },
     {
@@ -445,11 +447,12 @@ test("fireAskResolution: a turn that fires but doesn't land falls back to a plai
     grantId: "g1",
   };
   const mkDeps = (run: (req: TurnRequest) => Promise<TurnResult>, current: KeychainAsk = ask) => {
+    const databaseUrl = testDatabaseUrl();
     const outbound = recordingOutbound();
     return {
       outbound,
-      idempotency: createIdempotencyStore(testDatabaseUrl()),
-      identity: createIdentityService(testDatabaseUrl()),
+      idempotency: createIdempotencyStore(databaseUrl),
+      identity: createIdentityService(databaseUrl),
       run,
       getAsk: async () => current,
     };

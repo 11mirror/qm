@@ -736,9 +736,10 @@ test("directory email recipients retain manage access", async () => {
 });
 
 test("exact email read grants admit app-only login and guest reach without membership or source access", async () => {
+  const databaseUrl = testDatabaseUrl();
   const { deploy, acl } = makeDeploy();
-  const identity = createIdentityService(testDatabaseUrl());
-  const directory = createPostgresDirectoryStore(testDatabaseUrl());
+  const identity = createIdentityService(databaseUrl);
+  const directory = createPostgresDirectoryStore(databaseUrl);
   const app = createApp({
     advisoryLock: testAdvisoryLock(),
     deploy,
@@ -817,13 +818,14 @@ test("exact email read grants admit app-only login and guest reach without membe
 });
 
 test("uniform app share accepts exact emails and enforces view-only outside the directory", async () => {
+  const databaseUrl = testDatabaseUrl();
   const { deploy, acl } = makeDeploy();
   const app = createApp({
     advisoryLock: testAdvisoryLock(),
     deploy,
     acl,
-    identity: createIdentityService(testDatabaseUrl()),
-    directory: createPostgresDirectoryStore(testDatabaseUrl()),
+    identity: createIdentityService(databaseUrl),
+    directory: createPostgresDirectoryStore(databaseUrl),
     auditLog: { record() {} },
   } as unknown as Parameters<typeof createApp>[0]);
   const d = await app.deploy({ ownerScopeId: "personal:U1", createdBy: "U1", entrypoint: "x", files: [] });
@@ -931,14 +933,15 @@ test("failed invitation delivery leaves the grant and reports the failure and ma
 });
 
 test("uniform app share uses the same invitation sender", async () => {
+  const databaseUrl = testDatabaseUrl();
   const { deploy, acl } = makeDeploy();
   const sent: string[] = [];
   const app = createApp({
     advisoryLock: testAdvisoryLock(),
     deploy,
     acl,
-    identity: createIdentityService(testDatabaseUrl()),
-    directory: createPostgresDirectoryStore(testDatabaseUrl()),
+    identity: createIdentityService(databaseUrl),
+    directory: createPostgresDirectoryStore(databaseUrl),
     deployAppsDomain: "apps.example.com",
     inviteMailer: {
       async send(message: { to: string }) {

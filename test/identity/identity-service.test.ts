@@ -9,7 +9,8 @@ import * as configModule from "../../src/resolution/config-store.ts";
 import { settle } from "../support/settle.ts";
 import { testConfig } from "../support/test-config.ts";
 
-const id = createIdentityService(testDatabaseUrl());
+const databaseUrl = testDatabaseUrl();
+const id = createIdentityService(databaseUrl);
 
 test("classifies a same-org member as internal", () => {
   const p = id.classify("U1");
@@ -41,7 +42,7 @@ test("audienceIsAllInternal is false for an empty audience (unknown ≠ all-inte
 });
 
 test("a deactivated principal classifies as non-internal (fail-closed source, §3)", async () => {
-  const svc = createIdentityService(testDatabaseUrl());
+  const svc = createIdentityService(databaseUrl);
   assert.equal(svc.classify("U-leaver").type, "internal");
   await svc.deactivate("U-leaver");
   const after = svc.classify("U-leaver");
@@ -52,7 +53,7 @@ test("a deactivated principal classifies as non-internal (fail-closed source, §
 });
 
 test("deactivation folds email case: a leaver stays out under any casing of their address", async () => {
-  const svc = createIdentityService(testDatabaseUrl());
+  const svc = createIdentityService(databaseUrl);
   await svc.deactivate("Alice@Corp.com");
   assert.equal(svc.classify("alice@corp.com").type, "guest");
   assert.equal(svc.classify("ALICE@CORP.COM").type, "guest");
@@ -61,31 +62,20 @@ test("deactivation folds email case: a leaver stays out under any casing of thei
 });
 
 test("case fold does not merge distinct emails or touch non-email ids", async () => {
-  const svc = createIdentityService(testDatabaseUrl());
+  const svc = createIdentityService(databaseUrl);
   await svc.deactivate("bob@corp.com");
   assert.equal(svc.classify("bobby@corp.com").type, "internal");
   await svc.deactivate("U-Case");
   assert.equal(svc.classify("u-case").type, "internal");
 });
 
-test("durable rehydration folds a cased stored deactivation", async () => {
+test("deactivation is durable: a fresh service over the same backing rehydrates it, folding case", async () => {
   const backing = testDatabaseUrl();
-  const first = createIdentityService(backing);
-  await first.deactivate("Carol@Corp.com");
+  await createIdentityService(backing).deactivate("Carol@Corp.com");
   const second = createIdentityService(backing);
+  assert.equal(second.classify("carol@corp.com").type, "internal");
   await second.hydrate();
   assert.equal(second.classify("carol@corp.com").type, "guest");
-});
-
-test("deactivation is durable: a fresh service over the same backing rehydrates it", async () => {
-  const backing = testDatabaseUrl();
-  const first = createIdentityService(backing);
-  await first.deactivate("U-leaver");
-
-  const second = createIdentityService(backing);
-  assert.equal(second.classify("U-leaver").type, "internal");
-  await second.hydrate();
-  assert.equal(second.classify("U-leaver").type, "guest");
 });
 
 test("a running instance refreshes deactivations written by another instance", async () => {
@@ -100,7 +90,6 @@ test("a running instance refreshes deactivations written by another instance", a
 });
 
 test("external members written by one instance reach another over the same backing", async () => {
-  const databaseUrl = testDatabaseUrl();
   const writer = createIdentityService(databaseUrl);
   const reader = createIdentityService(databaseUrl);
   await reader.hydrate();
@@ -130,7 +119,7 @@ test("external members written by one instance reach another over the same backi
 });
 
 test("a directory sync deactivates dropped members and self-heals when they reappear", async () => {
-  const svc = createIdentityService(testDatabaseUrl());
+  const svc = createIdentityService(databaseUrl);
   const out = await svc.recordDirectorySync(["U-gone"], ["U-here"]);
   assert.deepEqual(out, { deactivated: ["U-gone"], reactivated: [] });
   assert.equal(svc.classify("U-gone").type, "guest");
@@ -141,7 +130,7 @@ test("a directory sync deactivates dropped members and self-heals when they reap
 });
 
 test("a manual deactivation survives roster churn — only reactivate() clears it", async () => {
-  const svc = createIdentityService(testDatabaseUrl());
+  const svc = createIdentityService(databaseUrl);
   await svc.deactivate("U-fired");
   await svc.recordDirectorySync([], ["U-fired"]);
   assert.equal(svc.classify("U-fired").type, "guest");
@@ -153,7 +142,6 @@ test("a manual deactivation survives roster churn — only reactivate() clears i
 });
 
 test("a teammate without an expiry stays active after another instance reloads it", async () => {
-  const databaseUrl = testDatabaseUrl();
   const now = Date.now();
   const teammate: ExternalMember = {
     email: "sam@partner.example",

@@ -83,14 +83,15 @@ async function buildOrchestrator(
     brandingDefault?: OrgBranding;
   } = {},
 ) {
+  const databaseUrl = testDatabaseUrl();
   const config = testConfigStore(ORG);
   if (opts.orgInstructions !== undefined) await config.setInstructions(scopeId("org", ORG), opts.orgInstructions);
   if (opts.branding) await config.setSetting("branding", opts.branding, scopeId("org", ORG));
 
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const auditLog = createPostgresAuditLog(testDatabaseUrl());
+  const acl = createAclStore(createPostgresGrantStore(databaseUrl));
+  const auditLog = createPostgresAuditLog(databaseUrl);
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "pm-")));
-  const memory = createPostgresMemoryService(testDatabaseUrl());
+  const memory = createPostgresMemoryService(databaseUrl);
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore: createDeployStore(testDeployBackings()),
@@ -108,17 +109,17 @@ async function buildOrchestrator(
 
   return createOrchestrator({
     ...singleProcessDeps(),
-    identity: createIdentityService(testDatabaseUrl()),
+    identity: createIdentityService(databaseUrl),
     sessionSyscalls: opts.sessionSyscalls,
     featureFlags: opts.featureFlags,
     resolution,
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(databaseUrl),
     workspace,
-    files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
+    files: createPostgresFileArtifactStore(databaseUrl, createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
     modelGateway: createModelGateway(),
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 1000, windowMs: 60_000 }),
+    rateLimiter: createPostgresRateLimiter(databaseUrl, { maxPerWindow: 1000, windowMs: 60_000 }),
     harness: createMockHarness(),
     memory,
     deploy,

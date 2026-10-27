@@ -25,6 +25,7 @@ function keychain(now = Date.now) {
 }
 
 async function fixture(scope: ScopeId = "channel:C_SHARED") {
+  const databaseUrl = testDatabaseUrl();
   const clock = { t: Date.now() };
   const k = keychain(() => clock.t);
   const credential = await k.save({
@@ -33,7 +34,7 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
     secret: "dummy-only-secret",
     envKey: "DUMMY_TOKEN",
   });
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const cron = await crons.create({
     owner: `system:${scope}`,
     createdBy: `system:${scope}`,
@@ -52,8 +53,8 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
   const outbound = recordingOutbound();
   const deps: AskResolutionDeps = {
     outbound,
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     currentScopeMembers: async () => state.members,
     getCron: (id) => crons.get(id),
     getGrant: (id) => k.getGrant(id),

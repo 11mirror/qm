@@ -1,12 +1,5 @@
-// Registry of admin-configured MCP servers.
-//
-// Admin-only by design: registering a server points every scope's agents at
-// an outbound HTTP endpoint, so end users must not be able to add one (SSRF
-// and exfiltration surface). Secrets live in the record like other stored
-// connector credentials — reachable only through core, never injected into sandboxes.
-
-import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 
 export type McpServerAuthMode = "none" | "bearer" | "client-credentials" | "oauth-user";
 
@@ -68,27 +61,21 @@ const MCP_SERVERS: TableSpec = {
 
 export const MCP_SERVERS_MIGRATION = mapToTableMigration("mcp/servers/0001-typed", MCP_SERVERS);
 
-const codec = tableCodec<McpServer>(MCP_SERVERS);
-
 export function createMcpServerStore(databaseUrl: string): McpServerStore {
-  const { q } = createPgPool(databaseUrl, [MCP_SERVERS_MIGRATION]);
+  const table = typedTable<McpServer>(createPgPool(databaseUrl, [MCP_SERVERS_MIGRATION]), MCP_SERVERS);
   const listeners = new Set<() => void>();
   const emit = () => {
     for (const l of listeners) l();
   };
   return {
-    list: async () => codec.rows(await q(`SELECT ${codec.columns} FROM mcp_servers ORDER BY id`)),
-    get: async (id) => codec.rows(await q(`SELECT ${codec.columns} FROM mcp_servers WHERE id = $1`, [id]))[0] ?? null,
+    list: table.all,
+    get: table.get,
     put: async (server) => {
-      await q(
-        `INSERT INTO mcp_servers (${codec.columns}) VALUES (${codec.placeholders})
-         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET ${codec.updates}`,
-        codec.values(server.id, server),
-      );
+      await table.put(server.id, server);
       emit();
     },
     delete: async (id) => {
-      await q(`DELETE FROM mcp_servers WHERE id = $1`, [id]);
+      await table.delete(id);
       emit();
     },
     onChange: (listener) => {

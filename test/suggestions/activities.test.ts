@@ -24,11 +24,12 @@ const activities = ["app", "brief", "deck", "hire", "plan"].map((id) => ({
 }));
 
 function fixture() {
+  const databaseUrl = testDatabaseUrl();
   let time = Date.now();
   let output = JSON.stringify(activities);
-  const store = createSuggestedActivityProfileStore(testDatabaseUrl());
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const store = createSuggestedActivityProfileStore(databaseUrl);
+  const sessions = createPostgresSessionStore(databaseUrl);
+  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const outbound = recordingOutbound();
   const calls: TurnRequest[] = [];
   const settled: Promise<void>[] = [];
@@ -38,8 +39,8 @@ function fixture() {
     now: () => time,
     crons,
     outbound,
-    identity: createIdentityService(testDatabaseUrl()),
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
+    identity: createIdentityService(databaseUrl),
+    idempotency: createIdempotencyStore(databaseUrl),
     run: async (request) => {
       calls.push(request);
       const scope = scopeId("personal", request.actor.externalId);

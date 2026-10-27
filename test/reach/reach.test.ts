@@ -326,10 +326,11 @@ describe("Reach: verbatim relay attribution", () => {
 });
 
 function triggerDeps(run: (req: TurnRequest) => Promise<TurnResult>): TriggerDeps & { outbound: PostLog } {
+  const databaseUrl = testDatabaseUrl();
   return {
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     run,
     directory: fakeDirectory(),
   };
