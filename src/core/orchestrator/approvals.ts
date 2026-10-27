@@ -315,7 +315,8 @@ export async function consumeApprovalDecision(args: {
           kind: "UserMessage",
           hidden: true,
           body: { approvalDenial: true },
-          text: `The requesting human denied this pending operation, so it did not run: ${headSlice(p.summary ?? p.command, 2_000)}\nContinue without it. You need not address the denial. Do not retry it unless they ask again.`,
+          text: `The requesting human denied this pending operation, so it did not run: ${p.summary ?? deniedCommandLabel(p.command)}
+Continue without it. You need not address the denial. Do not retry it unless they ask again.`,
         },
       ];
   const [written] = await args.withRosterVersion(() => deps.sessions.appendMany(lease, items));
@@ -323,4 +324,12 @@ export async function consumeApprovalDecision(args: {
   await args.mirror(written!);
   if (!decision.approved) return denied(p.command);
   return approved(p.command, scope, p.approvalKey);
+}
+
+const COMMAND_HEAD_COLUMNS = 80;
+export function deniedCommandLabel(command: string): string {
+  const lines = command.split("\n");
+  const head = headSlice(lines[0]!, COMMAND_HEAD_COLUMNS);
+  if (head === command) return command;
+  return `${head} … (${lines.length} ${lines.length === 1 ? "line" : "lines"}, ${Buffer.byteLength(command)} bytes in all)`;
 }
