@@ -12,6 +12,7 @@ import { testDatabaseUrl } from "../support/test-database.ts";
 import { storedItem, type NewItem } from "../../src/sessions/items.ts";
 import type { ComputerStatus } from "../../src/sandbox/sandbox.ts";
 import { fakeToolContext, type Emitted, emittedItem, call, textOut } from "../support/agent-tools.ts";
+import type { ToolContext } from "../../src/tools/primitives.ts";
 
 test("each agent tool emits a tool_call then a tool_result", async () => {
   const emitted: Emitted[] = [];
@@ -395,6 +396,54 @@ test("a result over the inline cap keeps its head and tail and parks the full te
   assert.equal(uncapped.output, undefined, "0 turns the cap off");
   assert.ok(uncapped.text.includes("line 1000"));
   await store.releaseLease(lease);
+  await pool.close();
+});
+
+test("mailbox messages appended to a result share its inline-token bound and park with it", async () => {
+  const emitted: Emitted[] = [];
+  const pool = createPgPool(testDatabaseUrl());
+  await pool.q("INSERT INTO qm_settings(key, value) VALUES ('tool_result_inline_tokens', '100')");
+  const bytes = createMemoryDurableByteStore();
+  const outputs = createPostgresToolOutputStore({ pool, bytesFor: () => bytes });
+  const acknowledged: string[][] = [];
+  const mail = Array.from({ length: 10 }, (_, i) => ({
+    id: `m${i}`,
+    text: `MAIL-${i}-START ${Array.from({ length: 3_000 }, (_, j) => `word${j}`).join(" ")} MAIL-${i}-END`,
+  }));
+  const tc = {
+    ...fakeToolContext(),
+    toolOutput: outputs,
+    execute: async () => ({ stdout: "ok", stderr: "", code: 0, timedOut: false }),
+    sessionSyscalls: {
+      receive: async () => mail,
+      acknowledge: async (ids: string[]) => void acknowledged.push(ids),
+      open: async () => ({ ok: false as const, message: "unused" }),
+      write: async () => ({ ok: false as const, message: "unused" }),
+      read: async () => ({ ok: false as const, message: "unused" }),
+    },
+  } as unknown as ToolContext;
+  const ref: ToolContextRef = {
+    current: tc,
+    emit: (e) => void emitted.push(emittedItem(e)),
+    scopeLabel: "personal:U1",
+  };
+  const [execute] = createAgentTools(ref);
+  const ret = (await call(execute, { command: "true", purpose: "Run test command" })) as {
+    content: Array<{ type: string; text: string }>;
+  };
+  const seen = ret.content.map((c) => c.text).join("\n");
+  const payload = emitted.find((e) => e.kind === "ToolResult")!.fields as {
+    text: string;
+    output?: { chars: number; shownChars: number };
+  };
+  assert.equal(payload.text, seen, "the item stores exactly what the model saw");
+  assert.ok(seen.length < 1_000, `the result with its mail is cut to the 100-token budget (${seen.length})`);
+  assert.ok(payload.output, "the whole result, mail included, is parked");
+  assert.match(seen, /Internal agent message/);
+  assert.match(seen, /MAIL-9-END/, "the newest mail's tail survives");
+  assert.ok(payload.output.chars > mail.reduce((n, m) => n + m.text.length, 0), "the parked text holds every message");
+  assert.match(seen, /The full output is in tool-output\//);
+  assert.deepEqual(acknowledged, [mail.map((m) => m.id)], "every delivered message is acknowledged");
   await pool.close();
 });
 
