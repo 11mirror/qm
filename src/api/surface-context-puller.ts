@@ -9,7 +9,7 @@ const FULFILL_POLL_MS = 1_000;
 interface SurfaceContextApp {
   createContextRequest(source: string, query: SurfaceContextQuery): Promise<{ id: string }>;
   getContextRequest(id: string): Promise<{ status: string; result?: SurfaceContextResult; error?: string } | null>;
-  deleteContextRequest(id: string): Promise<void>;
+  deleteContextRequest(id: string): Promise<unknown>;
   awaitContextRequestEvent?(kind: "settled", id: string, ms: number): Promise<void>;
 }
 

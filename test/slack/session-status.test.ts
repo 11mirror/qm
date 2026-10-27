@@ -11,6 +11,8 @@ import { isTerminal, type Run } from "../../src/runs/run-store.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
 import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { createSessionStatusStore } from "../../src/slack/session-status.ts";
+import { SESSION_STATUS_MIGRATION } from "../../src/slack/session-status.ts";
+import { typedTable } from "../../src/persistence/typed-table.ts";
 
 function deferred() {
   let resolve!: () => void;
@@ -24,11 +26,7 @@ function fixture() {
   let at = 1_000;
   const url = testDatabaseUrl();
   const store = createSessionStatusStore(url);
-  const { q } = createPgPool(url);
-  const all = async (): Promise<SlackSessionStatusState[]> => {
-    const ids = await q(`SELECT id FROM slack_session_status ORDER BY id`);
-    return (await Promise.all(ids.map((r) => store.get(String(r.id))))).filter((row) => row !== null);
-  };
+  const { all } = typedTable<SlackSessionStatusState>(createPgPool(url), SESSION_STATUS_MIGRATION.spec);
   const flags = createFeatureFlagStore(url);
   const records = new Map<string, Run>();
   const jobs: ProcessRecord[] = [];

@@ -1,6 +1,5 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { lockedRow } from "../persistence/locked-row.ts";
-import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import { sleep, createKeyedQueue } from "../util/async.ts";
 import { holdUntilDone, type LeaderLease } from "../persistence/leader-lease.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -35,29 +34,16 @@ const TASK_ACKS: TableSpec = {
 
 export const TASK_ACKS_MIGRATION = mapToTableMigration("slack/task-acks/0001-typed", TASK_ACKS);
 
-const codec = tableCodec<TaskAckState>(TASK_ACKS);
-
 export function createTaskAckStore(databaseUrl: string) {
   const pg = createPgPool(databaseUrl, [TASK_ACKS_MIGRATION]);
-  const { q } = pg;
-  const modify = lockedRow<TaskAckState>(pg, TASK_ACKS);
+  const { get, insert, modify, codec } = typedTable<TaskAckState>(pg, TASK_ACKS);
   return {
-    async get(runId: string): Promise<TaskAckState | null> {
-      return (
-        codec.rows(await q(`SELECT ${codec.columns} FROM slack_task_acknowledgements WHERE id = $1`, [runId]))[0] ??
-        null
-      );
-    },
-    async insert(runId: string, state: TaskAckState): Promise<void> {
-      await q(
-        `INSERT INTO slack_task_acknowledgements (${codec.columns}) VALUES (${codec.placeholders}) ON CONFLICT DO NOTHING`,
-        codec.values(runId, state),
-      );
-    },
+    get,
+    insert,
     update: (runId: string, fn: (current: TaskAckState) => TaskAckState) =>
       modify(runId, (current) => current && fn(current)),
     async unsettled(): Promise<Array<[string, TaskAckState]>> {
-      const rows = await q(
+      const rows = await pg.q(
         `SELECT ${codec.columns} FROM slack_task_acknowledgements WHERE NOT finished OR synced IS NOT TRUE ORDER BY id`,
       );
       return rows.map((r) => [String(r.id), codec.row(r)]);

@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
-import { columnName, tableCodec, type MapConversion } from "../../src/persistence/typed-table.ts";
+import { typedTable, type MapConversion } from "../../src/persistence/typed-table.ts";
+import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
 import { AMBIENT_CURSORS_MIGRATION } from "../../src/api/ambient-cursors.ts";
 import { CONTEXT_REQUESTS_MIGRATION } from "../../src/api/context-requests.ts";
@@ -98,20 +99,17 @@ const REAL_ROWS: Array<[MapConversion, Record<string, Record<string, unknown>>]>
 
 for (const [conversion, rows] of REAL_ROWS)
   test(`${conversion.spec.table} keeps real-shaped rows exactly`, async () => {
-    const pool = new pg.Pool({ connectionString: testDatabaseUrl() });
+    const url = testDatabaseUrl();
+    const pool = new pg.Pool({ connectionString: url });
     const table = conversion.spec.table;
-    const codec = tableCodec<Record<string, unknown>>(conversion.spec);
     try {
       await pool.query(`DROP TABLE IF EXISTS ${table}`);
       await pool.query(`CREATE TABLE ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`);
       for (const [id, json] of Object.entries(rows))
         await pool.query(`INSERT INTO ${table} (id, json) VALUES ($1, $2)`, [id, JSON.stringify(json)]);
       for (const statement of conversion.statements) await pool.query(statement);
-      for (const [id, json] of Object.entries(rows)) {
-        const key = conversion.spec.keyIsField ? columnName(conversion.spec.key) : "id";
-        const found = await pool.query(`SELECT ${codec.columns} FROM ${table} WHERE ${key} = $1`, [id]);
-        assert.deepEqual(codec.row(found.rows[0]), json);
-      }
+      const typed = typedTable(createPgPool(url), conversion.spec);
+      for (const [id, json] of Object.entries(rows)) assert.deepEqual(await typed.get(id), json);
     } finally {
       await pool.end();
     }
