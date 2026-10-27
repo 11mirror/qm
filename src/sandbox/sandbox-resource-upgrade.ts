@@ -1,14 +1,10 @@
 import { createHash } from "node:crypto";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { parseScopeId, type ScopeKind } from "../types.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
 import type { AgentComputerSpec } from "./sandbox.ts";
-import type { SandboxDefault, SandboxResource } from "./sandbox-resources.ts";
-
-export interface SandboxResourceUpgradeMarker {
-  activatedAt: string;
-}
+import type { SandboxResource } from "./sandbox-resources.ts";
+import type { SandboxResourceStore } from "./sandbox-resource-store.ts";
 
 export interface LegacySandboxBinding {
   scopeId: string;
@@ -17,10 +13,6 @@ export interface LegacySandboxBinding {
 }
 
 export type LegacySandboxScopeDefaults = Partial<Record<ScopeKind, SandboxBackendName>>;
-
-export interface LegacyRoute {
-  backend: SandboxBackendName;
-}
 
 export function legacySandboxBackendForScope(
   scope: string,
@@ -36,24 +28,20 @@ export const legacySandboxId = (scopeId: string, backend: SandboxBackendName): s
 
 export async function upgradeLegacySandboxes(opts: {
   availableBackends: readonly SandboxBackendName[];
-  records: DurableMap<SandboxResource>;
-  defaults: DurableMap<SandboxDefault>;
-  marker: DurableMap<SandboxResourceUpgradeMarker>;
+  store: SandboxResourceStore;
   lock: AdvisoryLock;
-  routes?: () => Promise<Array<[string, LegacyRoute]>>;
   legacyScopes?: () => Promise<string[]>;
   legacySandboxes?: () => Promise<LegacySandboxBinding[]>;
   legacyBackend: (scopeId: string) => SandboxBackendName;
   specFor?: (backend: SandboxBackendName) => AgentComputerSpec | undefined;
 }): Promise<void> {
-  const done = async (): Promise<boolean> => (await opts.marker.get("explicit-defaults")) !== null;
-  if (await done()) return;
+  if (await opts.store.upgraded()) return;
   await opts.lock.withLock("sandbox-resources:activation", async () => {
-    if (await done()) return;
+    if (await opts.store.upgraded()) return;
     const [existing, defaults, routes, knownScopes, bindings] = await Promise.all([
-      opts.records.all(),
-      opts.defaults.entries(),
-      opts.routes?.() ?? [],
+      opts.store.list(),
+      opts.store.defaults(),
+      opts.store.legacyRoutes(),
       opts.legacyScopes?.() ?? [],
       opts.legacySandboxes?.() ?? [],
     ]);
@@ -91,7 +79,7 @@ export async function upgradeLegacySandboxes(opts: {
     }
     for (const [id, binding] of candidates) {
       const spec = opts.specFor?.(binding.backend);
-      await opts.records.putIfAbsent(id, {
+      await opts.store.insertIfAbsent({
         id,
         backend: binding.backend,
         ownerScopeId: binding.scopeId as SandboxResource["ownerScopeId"],
@@ -107,9 +95,9 @@ export async function upgradeLegacySandboxes(opts: {
     }
     for (const scope of scopes) {
       const id = legacySandboxId(scope, backendFor(scope));
-      const record = await opts.records.get(id);
-      await opts.defaults.putIfAbsent(scope, { sandboxId: record?.state === "retired" ? null : id });
+      const record = await opts.store.get(id);
+      await opts.store.setDefaultIfAbsent(scope, record?.state === "retired" ? null : id);
     }
-    await opts.marker.put("explicit-defaults", { activatedAt: new Date().toISOString() });
+    await opts.store.markUpgraded();
   });
 }

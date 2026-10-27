@@ -3,13 +3,13 @@ import { egressProxyHost } from "./sandbox-env.ts";
 import { setTimeout as wait } from "node:timers/promises";
 import type { Readable } from "node:stream";
 import { APIError, SpritesClient, type Checkpoint, type SpriteCheck, type StreamMessage } from "@fly/sprites";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { jitteredBackoffMs, retryAfterMs, withAbort, withTimeout } from "../util/async.ts";
 import { swallow, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { processSessionDir } from "./exec-process-session.ts";
 import { createProviderSandbox, type SandboxShared, type StoredSandboxRecord } from "./provider-sandbox.ts";
+import { sandboxBodiesMigration, type SandboxBodies } from "./sandbox-bodies.ts";
 import type { BackendSandbox, ExecPressure, ExecResult } from "./sandbox.ts";
 
 const HOME_DIR = "/home/sprite";
@@ -92,10 +92,12 @@ export function processKeepaliveScript(processId: string): string {
 
 export type StoredSpritesSandbox = StoredSandboxRecord;
 
+export const SPRITES_BODIES = sandboxBodiesMigration("sprites_initialization", {}, { dropKeys: ["pending"] });
+
 export interface SpritesSandboxOptions extends SandboxShared {
   token?: string;
   baseUrl?: string;
-  store: DurableMap<StoredSpritesSandbox>;
+  store: SandboxBodies<StoredSpritesSandbox>;
 }
 
 interface RawExec {

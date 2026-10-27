@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { hasParentPathSegment } from "./sandbox.ts";
 import { createProviderSandbox, type SandboxShared, type StoredSandboxRecord } from "./provider-sandbox.ts";
+import { sandboxBodiesMigration, type SandboxBodies } from "./sandbox-bodies.ts";
 import {
   ManagedAgentsCommandLostError,
   ManagedAgentsSandboxGoneError,
@@ -32,9 +32,13 @@ interface SessionFound {
 
 export type StoredManagedAgentsSandbox = StoredSandboxRecord & { sessionId?: string };
 
+export const MANAGED_AGENTS_BODIES = sandboxBodiesMigration("do_managed_agents_sandbox_bodies", {
+  sessionId: { type: "text" },
+});
+
 export interface ManagedAgentsSandboxOptions extends SandboxShared {
   client: ManagedAgentsClient;
-  store: DurableMap<StoredManagedAgentsSandbox>;
+  store: SandboxBodies<StoredManagedAgentsSandbox>;
 }
 
 export function createManagedAgentsSandbox(
@@ -49,8 +53,7 @@ export function createManagedAgentsSandbox(
   async function recordSession(name: string, sessionId: string): Promise<void> {
     const scope = scopeOf(name);
     if (!scope) return;
-    await store.putIfAbsent(scope, {});
-    await store.merge(scope, { sessionId });
+    await store.upsert(scope, { sessionId });
   }
 
   async function probe(sessionId: string): Promise<SessionFound | null> {

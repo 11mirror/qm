@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { NoDefaultSandboxError } from "../src/sandbox/sandbox-routing.ts";
 import type { GrantedHandle, IncomingAttachment } from "../src/types.ts";
-import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
+import { createSpritesSandbox, SPRITES_BODIES } from "../src/sandbox/sprites-sandbox.ts";
 import { storedItem, type NewItem } from "../src/sessions/items.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { installFakeSprites } from "./support/fake-sprites.ts";
@@ -34,7 +34,7 @@ import {
   turnFileId,
 } from "../src/core/attachments.ts";
 import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testSandboxBodies } from "./support/test-database.ts";
 
 test("turn file ids are stable within one attempt and fenced across retries", () => {
   assert.equal(turnFileId("run-1", 1, 123), turnFileId("run-1", 1, 123));
@@ -515,7 +515,7 @@ test("removeDir wipes a per-turn spool dir (and only it), tolerating an absent d
   after(() => ff.cleanup());
   const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "fs-rm-")));
   const sandbox = createSpritesSandbox(ws, {
-    store: testMap(),
+    store: testSandboxBodies(SPRITES_BODIES),
     advisoryLock: testAdvisoryLock(),
     token: "test-token",
     baseUrl: ff.baseUrl,
@@ -540,7 +540,7 @@ test("a binary file round-trips through the sandbox (base64-over-exec) without u
   after(() => ff.cleanup());
   const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "fs-bin-")));
   const sandbox = createSpritesSandbox(ws, {
-    store: testMap(),
+    store: testSandboxBodies(SPRITES_BODIES),
     advisoryLock: testAdvisoryLock(),
     token: "test-token",
     baseUrl: ff.baseUrl,

@@ -11,6 +11,7 @@ import {
   processKeepaliveScript,
   retrySpritesControl,
   spritesErrorDetail,
+  SPRITES_BODIES,
 } from "../src/sandbox/sprites-sandbox.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
@@ -21,7 +22,7 @@ import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-to
 import { installFakeSprites, FAKE_SPRITES_TOKEN, type FakeSprites } from "./support/fake-sprites.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { APIError, SpriteCommand } from "@fly/sprites";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testSandboxBodies } from "./support/test-database.ts";
 
 let fake: FakeSprites;
 let sandbox: Sandbox;
@@ -30,7 +31,7 @@ const layers = [{ scopeId: scope, mountPath: "/", mode: "rw" as const }];
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createSpritesSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "sprites-ws-"))), {
-    store: testMap(),
+    store: testSandboxBodies(SPRITES_BODIES),
     advisoryLock: testAdvisoryLock(),
     token: FAKE_SPRITES_TOKEN,
     namePrefix: "qmt",

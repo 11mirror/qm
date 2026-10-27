@@ -44,12 +44,9 @@ import { createSemanticMemory } from "./memory/semantic-memory.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
 import { createPostgresFileUploadStore } from "./files/file-upload-store.ts";
-import {
-  createSandboxResources,
-  type SandboxResource,
-  type SandboxDefault,
-  type SandboxResources,
-} from "./sandbox/sandbox-resources.ts";
+import { createSandboxResources, type SandboxResources } from "./sandbox/sandbox-resources.ts";
+import { createSandboxResourceStore } from "./sandbox/sandbox-resource-store.ts";
+import { createSandboxBodies } from "./sandbox/sandbox-bodies.ts";
 import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.ts";
 import type { SessionShare, SessionShareStore } from "./sessions/session-share.ts";
 import { mkdirSync } from "node:fs";
@@ -186,25 +183,26 @@ import {
 } from "./files/durable-byte-store.ts";
 import type { FileArtifactStore } from "./files/file-artifact-store.ts";
 import { createPostgresFileArtifactStore } from "./files/postgres-file-artifact-store.ts";
-import { createLocalSandbox, type StoredLocalSandbox } from "./sandbox/local-sandbox.ts";
-import { createSpritesSandbox, type StoredSpritesSandbox } from "./sandbox/sprites-sandbox.ts";
-import { createSmolmachinesSandbox, type StoredSmolmachinesSandbox } from "./sandbox/smolmachines-sandbox.ts";
-import { createE2bSandbox, E2B_TEMPLATE_TOOLS, type StoredE2bSandbox } from "./sandbox/e2b-sandbox.ts";
+import { createLocalSandbox, LOCAL_BODIES, type StoredLocalSandbox } from "./sandbox/local-sandbox.ts";
+import { createSpritesSandbox, SPRITES_BODIES, type StoredSpritesSandbox } from "./sandbox/sprites-sandbox.ts";
+import {
+  createSmolmachinesSandbox,
+  SMOLMACHINES_BODIES,
+  type StoredSmolmachinesSandbox,
+} from "./sandbox/smolmachines-sandbox.ts";
+import { createE2bSandbox, E2B_BODIES, E2B_TEMPLATE_TOOLS, type StoredE2bSandbox } from "./sandbox/e2b-sandbox.ts";
 import { createSdkE2bClient, type E2bClient } from "./sandbox/e2b-client.ts";
 import {
   createManagedAgentsSandbox,
+  MANAGED_AGENTS_BODIES,
   QM_TEMPLATE_TOOLS,
   type StoredManagedAgentsSandbox,
 } from "./sandbox/managed-agents-sandbox.ts";
 import { createSdkManagedAgentsClient } from "./sandbox/managed-agents-client.ts";
-import { createModalSandbox, modalLegacyRecordMigration, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
+import { createModalSandbox, MODAL_BODIES, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
 import { createSdkModalClient } from "./sandbox/modal-client.ts";
 import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
-import {
-  upgradeLegacySandboxes,
-  legacySandboxBackendForScope,
-  type LegacyRoute,
-} from "./sandbox/sandbox-resource-upgrade.ts";
+import { upgradeLegacySandboxes, legacySandboxBackendForScope } from "./sandbox/sandbox-resource-upgrade.ts";
 import { effectiveEgressEnforcement, type BackendSandbox, type Sandbox } from "./sandbox/sandbox.ts";
 import { createEnvSecretSource } from "./credentials/secret-source.ts";
 import {
@@ -770,27 +768,26 @@ export function buildApp(
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
     onError: sandboxOnError,
   };
-  const e2bBodies = artifactMap<StoredE2bSandbox>("e2b_sandbox_bodies");
-  const modalBodies = artifactMap<StoredModalSandbox>("modal_sandbox_bodies");
-  pgArtifactMap.pool.registerMigration(modalLegacyRecordMigration("modal_sandbox_bodies"));
+  const e2bBodies = createSandboxBodies<StoredE2bSandbox>(databaseUrl, E2B_BODIES);
+  const modalBodies = createSandboxBodies<StoredModalSandbox>(databaseUrl, MODAL_BODIES);
   const buildLocal = (): BackendSandbox =>
     createLocalSandbox(workspace, {
       ...sandboxShared,
       ...config.localSandbox,
-      store: artifactMap<StoredLocalSandbox>("local_sandbox_bodies"),
+      store: createSandboxBodies<StoredLocalSandbox>(databaseUrl, LOCAL_BODIES),
     });
   const buildSprites = (): BackendSandbox =>
     createSpritesSandbox(workspace, {
       ...sandboxShared,
       ...config.spritesSandbox,
-      store: artifactMap<StoredSpritesSandbox>("sprites_initialization"),
+      store: createSandboxBodies<StoredSpritesSandbox>(databaseUrl, SPRITES_BODIES),
       connectorSdk: loadConnectorSdk,
     });
   const buildSmolmachines = (): BackendSandbox =>
     createSmolmachinesSandbox(workspace, {
       ...sandboxShared,
       ...config.smolmachinesSandbox,
-      store: artifactMap<StoredSmolmachinesSandbox>("smolmachines_sandbox_bodies"),
+      store: createSandboxBodies<StoredSmolmachinesSandbox>(databaseUrl, SMOLMACHINES_BODIES),
     });
   const e2bClient = (use: "computers" | "apps"): E2bClient => {
     const e2b = config.e2bSandbox;
@@ -826,7 +823,7 @@ export function buildApp(
         ...(config.sandbox.egressProxyUrl ? { egressProxyUrl: config.sandbox.egressProxyUrl } : {}),
       }),
       extraTools: [...(managedAgents.template ? QM_TEMPLATE_TOOLS : []), ...deploymentLayer.advertisedTools],
-      store: artifactMap<StoredManagedAgentsSandbox>("do_managed_agents_sandbox_bodies"),
+      store: createSandboxBodies<StoredManagedAgentsSandbox>(databaseUrl, MANAGED_AGENTS_BODIES),
     });
   };
   const buildModal = (): BackendSandbox => {
@@ -866,18 +863,13 @@ export function buildApp(
   for (const name of Object.keys(buildBackend) as Array<Config["sandboxBackend"]>) {
     if (name !== config.sandboxBackend && enabledBackends.has(name)) sandboxBackends[name] = buildBackend[name]();
   }
-  const sandboxRecords = artifactMap<SandboxResource>("sandbox_resources");
-  const sandboxDefaults = artifactMap<SandboxDefault>("sandbox_defaults");
+  const sandboxResourceStore = createSandboxResourceStore(databaseUrl);
   const sandboxResources = createSandboxResources({
-    records: sandboxRecords,
-    defaults: sandboxDefaults,
+    store: sandboxResourceStore,
     upgrade: () =>
       upgradeLegacySandboxes({
         availableBackends: Object.keys(sandboxBackends) as SandboxBackendName[],
-        records: sandboxRecords,
-        defaults: sandboxDefaults,
-        marker: artifactMap<{ activatedAt: string }>("sandbox_resource_rollout"),
-        routes: () => artifactMap<LegacyRoute>("sandbox_routing").entries(),
+        store: sandboxResourceStore,
         lock: advisoryLock,
         legacyBackend: (scope) =>
           legacySandboxBackendForScope(scope, config.sandboxBackend, config.legacySandboxScopeDefaults),

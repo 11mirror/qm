@@ -10,6 +10,7 @@ import {
   localContainerName,
   localNetworkName,
   localVolumeName,
+  LOCAL_BODIES,
 } from "../src/sandbox/local-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
@@ -17,7 +18,7 @@ import { sleep } from "../src/util/async.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakeDocker, type FakeDocker } from "./support/fake-docker.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { testMap } from "./support/test-database.ts";
+import { testSandboxBodies } from "./support/test-database.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "local-sbx-"));
 const guestHome = join(tmp, "home");
@@ -60,7 +61,7 @@ function makeSandbox(fake: FakeDocker, opts: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "local-ws-"));
   return createLocalSandbox(createLocalWorkspaceStore(dir), {
     ...singleProcessDeps(),
-    store: testMap(),
+    store: testSandboxBodies(LOCAL_BODIES),
     dockerExec: fake.dockerExec,
     homeDir: guestHome,
     repoRoot: tmp,
@@ -242,7 +243,7 @@ test("read-only layers materialize into the workspace once per content fingerpri
   await workspace.write(shared, "guide.md", "shared doc");
   const sb = createLocalSandbox(workspace, {
     ...singleProcessDeps(),
-    store: testMap(),
+    store: testSandboxBodies(LOCAL_BODIES),
     dockerExec: fake.dockerExec,
     homeDir: guestHome,
     repoRoot: tmp,

@@ -4,12 +4,12 @@ import { arch } from "node:os";
 import { join } from "node:path";
 import { readdir, readFile as fsReadFile } from "node:fs/promises";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import { sleep } from "../util/async.ts";
 import { errMessage } from "../util/errors.ts";
 import { dockerContainerNetworks, ensureDockerNetwork, spawnDockerExec, type DockerExec } from "./docker-exec.ts";
 import { sandboxScopeName } from "./exec-sandbox-base.ts";
 import { createProviderSandbox, type SandboxShared, type StoredSandboxRecord } from "./provider-sandbox.ts";
+import { sandboxBodiesMigration, type SandboxBodies } from "./sandbox-bodies.ts";
 import type { BackendSandbox, ExecResult } from "./sandbox.ts";
 
 const DEFAULT_LOCAL_SANDBOX_IMAGE = "qm-sandbox-local:latest";
@@ -23,6 +23,8 @@ export type { DockerExec };
 
 export type StoredLocalSandbox = StoredSandboxRecord;
 
+export const LOCAL_BODIES = sandboxBodiesMigration("local_sandbox_bodies");
+
 export interface LocalSandboxOptions extends SandboxShared {
   image?: string;
   dockerBin?: string;
@@ -31,7 +33,7 @@ export interface LocalSandboxOptions extends SandboxShared {
   repoRoot?: string;
   dockerExec?: DockerExec;
   fetchImpl?: typeof fetch;
-  store: DurableMap<StoredLocalSandbox>;
+  store: SandboxBodies<StoredLocalSandbox>;
 }
 
 const FINGERPRINT_FIXED_SOURCES = [

@@ -4,17 +4,16 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createManagedAgentsSandbox } from "../src/sandbox/managed-agents-sandbox.ts";
+import { createManagedAgentsSandbox, MANAGED_AGENTS_BODIES } from "../src/sandbox/managed-agents-sandbox.ts";
 import { createSdkManagedAgentsClient } from "../src/sandbox/managed-agents-client.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId } from "../src/types.ts";
-import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
+import { createSandboxBodies } from "../src/sandbox/sandbox-bodies.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
-const maps = createPostgresMapFactory(databaseUrl);
-const smokeMap = <T>(name: string) => maps.map<T>(`smoke_${name}_${Date.now()}`);
+const store = createSandboxBodies(databaseUrl, MANAGED_AGENTS_BODIES);
 
 const apiToken = process.env.DO_AGENTS_API_TOKEN;
 const template = process.env.DO_AGENTS_TEMPLATE ?? "";
@@ -36,7 +35,7 @@ async function main(): Promise<void> {
     {
       client,
       namePrefix: prefix,
-      store: smokeMap("managed_agents"),
+      store,
       advisoryLock: createNoopAdvisoryLock(),
     },
   );

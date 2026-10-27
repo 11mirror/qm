@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSmolmachinesSandbox } from "../src/sandbox/smolmachines-sandbox.ts";
+import { createSmolmachinesSandbox, SMOLMACHINES_BODIES } from "../src/sandbox/smolmachines-sandbox.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
@@ -17,7 +17,7 @@ import {
 } from "./support/fake-smolmachines.ts";
 import type { StoredSmolmachinesSandbox } from "../src/sandbox/smolmachines-sandbox.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testSandboxBodies } from "./support/test-database.ts";
 
 let fake: FakeSmolmachines;
 let sandbox: Sandbox;
@@ -37,7 +37,7 @@ const preCreate = (name: string): Promise<Response> =>
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createSmolmachinesSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "smol-ws-"))), {
-    store: testMap(),
+    store: testSandboxBodies(SMOLMACHINES_BODIES),
     advisoryLock: testAdvisoryLock(),
     token: FAKE_SMOLMACHINES_TOKEN,
     namePrefix: "qmt",
@@ -374,7 +374,7 @@ test("exec is never retried and its failure names the request id", async () => {
 
 for (const lostResponse of ["disconnect", "503"] as const) {
   test(`accepted replacement create with ${lostResponse} is adopted by the next core`, async () => {
-    const store = testMap<StoredSmolmachinesSandbox>();
+    const store = testSandboxBodies<StoredSmolmachinesSandbox>(SMOLMACHINES_BODIES);
     const advisoryLock = testAdvisoryLock();
     let inject = true;
     const fetchImpl: typeof fetch = async (input, init) => {

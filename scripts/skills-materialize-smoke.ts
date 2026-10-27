@@ -1,20 +1,18 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
+import { createSpritesSandbox, SPRITES_BODIES } from "../src/sandbox/sprites-sandbox.ts";
+import { createSandboxBodies } from "../src/sandbox/sandbox-bodies.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId } from "../src/types.ts";
 import { loadConfig } from "../src/config.ts";
 import { materializeSkillTree } from "../src/skills/materialize.ts";
 import { computeBundleHash, type SkillBundle } from "../src/skills/skill-bundle-store.ts";
 import type { SkillFile, SkillResolution } from "../src/skills/skill-store.ts";
-import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
-const maps = createPostgresMapFactory(databaseUrl);
-const smokeMap = <T>(name: string) => maps.map<T>(`smoke_${name}_${Date.now()}`);
 
 if (!process.env.SPRITES_TOKEN) {
   console.error("set SPRITES_TOKEN (mint one with `sprite login`)");
@@ -35,7 +33,7 @@ const scope = scopeId("personal", "qm-skills-smoke");
 const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "skills-smoke-")));
 const sb = createSpritesSandbox(ws, {
   ...loadConfig().spritesSandbox,
-  store: smokeMap("sprites_initialization"),
+  store: createSandboxBodies(databaseUrl, SPRITES_BODIES),
   advisoryLock: createNoopAdvisoryLock(),
 });
 

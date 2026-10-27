@@ -5,18 +5,17 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createE2bSandbox, type StoredE2bSandbox } from "../src/sandbox/e2b-sandbox.ts";
+import { createE2bSandbox, type StoredE2bSandbox, E2B_BODIES } from "../src/sandbox/e2b-sandbox.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { supportsBlobStaging, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
-import { type DurableMap } from "../src/persistence/durable-map.ts";
 import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
 import { installFakeE2b, type FakeE2b } from "./support/fake-e2b.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testSandboxBodies } from "./support/test-database.ts";
 
 let fake: FakeE2b;
 let sandbox: Sandbox;
@@ -26,7 +25,7 @@ const scopeName = (): string => sandboxScopeName("qmt", scope);
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createE2bSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "e2b-ws-"))), {
-    store: testMap(),
+    store: testSandboxBodies(E2B_BODIES),
     ...singleProcessDeps(),
     client: fake.client,
     namePrefix: "qmt",
@@ -149,7 +148,7 @@ test("an existing live sandbox tagged with the scope name is adopted after a res
 });
 
 test("the durable store reconnects the same sandbox across backend instances", async () => {
-  const store: DurableMap<StoredE2bSandbox> = testMap();
+  const store = testSandboxBodies<StoredE2bSandbox>(E2B_BODIES);
   const s1 = make({ store });
   const a = await s1.provision(layers);
   await s1.writeFile(a, "keep.txt", "resident\n");
@@ -348,7 +347,7 @@ test("stageIn pulls a blob into the guest atomically (temp then mv)", async () =
 });
 
 test("used-turn teardown captures a native checkpoint and status does not wake a paused sandbox", async () => {
-  const store = testMap<StoredE2bSandbox>();
+  const store = testSandboxBodies<StoredE2bSandbox>(E2B_BODIES);
   const first = make({ store });
   const handle = await first.provision(layers);
   await first.writeFile(handle, "work.txt", "keep");
@@ -368,8 +367,8 @@ test("a row stored before the shared contract resumes its paused sandbox", async
   const handle = await first.provision(layers);
   await first.writeFile(handle, "unpublished.txt", "newest native contents");
   fake.pause(scopeName());
-  const store = testMap<StoredE2bSandbox>();
-  await store.put(scope, {
+  const store = testSandboxBodies<StoredE2bSandbox>(E2B_BODIES);
+  await store.upsert(scope, {
     sandboxId: fake.current(scopeName())!.sandboxId,
     createdAtMs: 0,
     nativePause: true,
@@ -409,7 +408,7 @@ test("a pause failure is reported and leaves the sandbox running for the next te
 });
 
 test("a lost E2B sandbox without a checkpoint requires explicit recovery instead of a blank replacement", async () => {
-  const store = testMap<StoredE2bSandbox>();
+  const store = testSandboxBodies<StoredE2bSandbox>(E2B_BODIES);
   const errors: string[] = [];
   const client = {
     ...fake.client,
@@ -438,7 +437,7 @@ test("a lost E2B sandbox without a checkpoint requires explicit recovery instead
 });
 
 test("a lost E2B sandbox is replaced from its persistent checkpoint", async () => {
-  const store = testMap<StoredE2bSandbox>();
+  const store = testSandboxBodies<StoredE2bSandbox>(E2B_BODIES);
   const first = make({ store });
   const handle = await first.provision(layers);
   await first.writeFile(handle, "work.txt", "captured before the pause\n");
@@ -460,7 +459,7 @@ test("a lost E2B sandbox is replaced from its persistent checkpoint", async () =
 });
 
 test("checkpoints follow the snapshot interval and supersede the previous capture", async () => {
-  const store = testMap<StoredE2bSandbox>();
+  const store = testSandboxBodies<StoredE2bSandbox>(E2B_BODIES);
   const throttled = make({ store, snapshotIntervalSec: 3600 });
   const a = await throttled.provision(layers);
   await throttled.teardown(a);
@@ -481,7 +480,7 @@ test("checkpoints follow the snapshot interval and supersede the previous captur
 });
 
 test("a failed checkpoint leaves the home dirty and is retried on an unused turn", async () => {
-  const store = testMap<StoredE2bSandbox>();
+  const store = testSandboxBodies<StoredE2bSandbox>(E2B_BODIES);
   let fail = true;
   const client = {
     ...fake.client,
@@ -536,7 +535,7 @@ test("restartComputer cold-boots the same sandbox from its disk", async () => {
 });
 
 test("a failing snapshot delete never wedges destroy", async () => {
-  const store = testMap<StoredE2bSandbox>();
+  const store = testSandboxBodies<StoredE2bSandbox>(E2B_BODIES);
   const client = {
     ...fake.client,
     async deleteSnapshot(): Promise<void> {
@@ -607,9 +606,9 @@ test("computerStatus reports provider metrics and the profile learns the sandbox
 });
 
 test("destroyScope deletes paused state without resuming and retains metadata on failure", async () => {
-  const store = testMap<StoredE2bSandbox>();
+  const store = testSandboxBodies<StoredE2bSandbox>(E2B_BODIES);
   const record: StoredE2bSandbox = { sandboxId: "paused-machine", checkpointId: "snap-old" };
-  await store.put(scope, record);
+  await store.upsert(scope, record);
   const deleted: string[] = [];
   let fail = true;
   const backend = make({
@@ -641,7 +640,7 @@ test("destroyScope deletes paused state without resuming and retains metadata on
 });
 
 test("destroyScope clears a live E2B session cache after deleting its machine", async () => {
-  const store = testMap<StoredE2bSandbox>();
+  const store = testSandboxBodies<StoredE2bSandbox>(E2B_BODIES);
   const backend = make({ store });
   const first = await backend.provision(layers);
   const firstId = (await store.get(scope))!.sandboxId;
@@ -654,7 +653,7 @@ test("destroyScope clears a live E2B session cache after deleting its machine", 
 });
 
 test("repeated destroy teardown never targets an unrelated default scope", async () => {
-  const store = testMap<StoredE2bSandbox>();
+  const store = testSandboxBodies<StoredE2bSandbox>(E2B_BODIES);
   const backend = make({ store });
   const other = await backend.provision([]);
   const defaultRecord = await store.get("default");

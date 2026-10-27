@@ -1,11 +1,10 @@
-import type { SandboxResource, SandboxDefault } from "../src/sandbox/sandbox-resources.ts";
-import { upgradeLegacySandboxes, type SandboxResourceUpgradeMarker } from "../src/sandbox/sandbox-resource-upgrade.ts";
-import { createPostgresMap } from "../src/persistence/durable-map.ts";
+import { upgradeLegacySandboxes } from "../src/sandbox/sandbox-resource-upgrade.ts";
+import { createSandboxResourceStore } from "../src/sandbox/sandbox-resource-store.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresAdvisoryLock, createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { testAdvisoryLock } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the advisory-lock tests";
@@ -131,16 +130,9 @@ test("pg sandbox upgrade runs once across cores and never overwrites a newer def
   const pgB = createPgPool(URL!);
   const release = Promise.withResolvers<string[]>();
   try {
-    const maps = (pg: typeof pgA) => ({
-      availableBackends: ["local"] as const,
-      records: createPostgresMap<SandboxResource>(pg, "upgrade_sandbox_records"),
-      defaults: createPostgresMap<SandboxDefault>(pg, "upgrade_sandbox_defaults"),
-      marker: createPostgresMap<SandboxResourceUpgradeMarker>(pg, "upgrade_sandbox_marker"),
-      legacyBackend: () => "local" as const,
-    });
-    const shared = maps(pgA);
-    const other = maps(pgB);
-    await shared.defaults.put("personal:cleared", { sandboxId: null });
+    const store = createSandboxResourceStore(testDatabaseUrl());
+    const shared = { availableBackends: ["local"] as const, store, legacyBackend: () => "local" as const };
+    await store.setDefault("personal:cleared", null);
     const entered = Promise.withResolvers<void>();
     let calls = 0;
     const first = upgradeLegacySandboxes({
@@ -154,29 +146,32 @@ test("pg sandbox upgrade runs once across cores and never overwrites a newer def
     });
     await entered.promise;
     const second = upgradeLegacySandboxes({
-      ...other,
+      ...shared,
       lock: createPostgresAdvisoryLock(pgB, { pollMs: 10 }),
       legacyScopes: async () => {
         calls++;
         return ["personal:late"];
       },
     });
-    await shared.defaults.put("personal:old", { sandboxId: "newer" });
+    await store.setDefault("personal:old", "newer");
     release.resolve(["personal:old", "personal:cleared", "personal:adopted"]);
     await Promise.all([first, second]);
     assert.equal(calls, 1);
-    assert.deepEqual(await shared.defaults.get("personal:old"), { sandboxId: "newer" });
-    assert.equal(await shared.defaults.get("personal:late"), null);
-    assert.deepEqual(await other.defaults.get("personal:cleared"), { sandboxId: null });
-    const adopted = await other.defaults.get("personal:adopted");
+    assert.deepEqual(await store.defaultFor("personal:old"), { sandboxId: "newer" });
+    assert.equal(await store.defaultFor("personal:late"), null);
+    assert.deepEqual(await store.defaultFor("personal:cleared"), { sandboxId: null });
+    const adopted = await store.defaultFor("personal:adopted");
     assert.ok(adopted?.sandboxId);
-    assert.equal((await other.records.get(adopted.sandboxId))?.backingScopeId, "personal:adopted");
+    assert.equal((await store.get(adopted.sandboxId))?.backingScopeId, "personal:adopted");
     await upgradeLegacySandboxes({
-      ...other,
-      lock: createPostgresAdvisoryLock(pgB),
-      routes: async () => {
-        throw new Error("completed upgrades must never read legacy routing again");
+      ...shared,
+      store: {
+        ...store,
+        legacyRoutes: async () => {
+          throw new Error("completed upgrades must never read legacy routing again");
+        },
       },
+      lock: createPostgresAdvisoryLock(pgB),
     });
   } finally {
     release.resolve([]);

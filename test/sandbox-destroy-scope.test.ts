@@ -9,16 +9,17 @@ import {
   localContainerName,
   localNetworkName,
   localVolumeName,
+  LOCAL_BODIES,
 } from "../src/sandbox/local-sandbox.ts";
-import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
-import { createSmolmachinesSandbox } from "../src/sandbox/smolmachines-sandbox.ts";
+import { createSpritesSandbox, SPRITES_BODIES } from "../src/sandbox/sprites-sandbox.ts";
+import { createSmolmachinesSandbox, SMOLMACHINES_BODIES } from "../src/sandbox/smolmachines-sandbox.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 
 import { installFakeSmolmachines } from "./support/fake-smolmachines.ts";
 import { installFakeSprites } from "./support/fake-sprites.ts";
 import { installFakeDocker } from "./support/fake-docker.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testSandboxBodies } from "./support/test-database.ts";
 
 const workspace = () => createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "destroy-scope-")));
 
@@ -27,7 +28,7 @@ test("Local scope deletion removes deterministic resources without provisioning,
   let fail = false;
   const sandbox = createLocalSandbox(workspace(), {
     ...singleProcessDeps(),
-    store: testMap(),
+    store: testSandboxBodies(LOCAL_BODIES),
     dockerExec: async (args) => {
       calls.push(args);
       return fail ? { code: 1, stdout: "", stderr: "daemon unavailable" } : { code: 0, stdout: "", stderr: "" };
@@ -49,7 +50,7 @@ test("Local scope deletion fails a refused core disconnect only while the core i
   const network = localNetworkName(localContainerName("scope"));
   const sandbox = createLocalSandbox(workspace(), {
     ...singleProcessDeps(),
-    store: testMap(),
+    store: testSandboxBodies(LOCAL_BODIES),
     coreContainer: "qm-core",
     dockerExec: async (args) =>
       args[1] === "disconnect" ? { code: 1, stdout: "", stderr: "is not connected" } : fake.dockerExec(args),
@@ -66,7 +67,7 @@ test("Sprites scope deletion sends only DELETE, retries provider errors, and acc
   const fake = installFakeSprites();
   try {
     const sandbox = createSpritesSandbox(workspace(), {
-      store: testMap(),
+      store: testSandboxBodies(SPRITES_BODIES),
       advisoryLock: testAdvisoryLock(),
       token: "test",
       baseUrl: fake.baseUrl,
@@ -96,7 +97,7 @@ for (const [name, create, resource] of [["Smolmachines", createSmolmachinesSandb
     let exists = true;
     const sandbox = create(workspace(), {
       ...singleProcessDeps(),
-      store: testMap(),
+      store: testSandboxBodies(SMOLMACHINES_BODIES),
       token: "test",
       fetchImpl: async (input, init) => {
         const path = new URL(String(input)).pathname;
@@ -128,7 +129,7 @@ test("Local deletion retries remaining disk cleanup after partial failure withou
   let volumeBusy = true;
   const sandbox = createLocalSandbox(workspace(), {
     ...singleProcessDeps(),
-    store: testMap(),
+    store: testSandboxBodies(LOCAL_BODIES),
     dockerExec: async (args) => {
       calls.push(args);
       return args[0] === "volume" && volumeBusy
@@ -149,8 +150,8 @@ for (const [name, create, install] of [["Smolmachines", createSmolmachinesSandbo
     const fake = install();
     try {
       const options = { ...singleProcessDeps(), token: "test-token", fetchImpl: fake.fetchImpl };
-      const a = create(workspace(), { ...options, store: testMap() });
-      const b = create(workspace(), { ...options, store: testMap() });
+      const a = create(workspace(), { ...options, store: testSandboxBodies(SMOLMACHINES_BODIES) });
+      const b = create(workspace(), { ...options, store: testSandboxBodies(SMOLMACHINES_BODIES) });
       const layers = [{ scopeId: "replaced", mountPath: "", mode: "rw" as const }];
       await a.provision(layers);
       await b.destroyScope!("replaced");

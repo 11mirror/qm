@@ -6,6 +6,8 @@ import { createPostgresAdvisoryLock, type AdvisoryLock } from "../../src/persist
 import { createPostgresMapFactory, type DurableMap } from "../../src/persistence/durable-map.ts";
 import { createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
 import { createConfigStore } from "../../src/resolution/config-store.ts";
+import { createSandboxBodies, type SandboxBodies } from "../../src/sandbox/sandbox-bodies.ts";
+import type { MapConversion } from "../../src/persistence/typed-table.ts";
 import { tenant } from "../../src/tenant.ts";
 import { scopeId } from "../../src/types.ts";
 
@@ -66,6 +68,10 @@ function sharedDatabase(): NonNullable<typeof shared> {
 
 export function testMap<T>(indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> {
   return sharedDatabase().maps.map<T>(`t_${randomBytes(8).toString("hex")}`, indexedFields);
+}
+
+export function testSandboxBodies<T extends object>(migration: MapConversion): SandboxBodies<T> {
+  return createSandboxBodies<T>(testDatabaseUrl(), migration);
 }
 
 export function testPgPool(): PgPool {
