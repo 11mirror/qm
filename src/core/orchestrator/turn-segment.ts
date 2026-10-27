@@ -578,6 +578,7 @@ export async function runSegments(
     !result.silent &&
     !result.stopped
   ) {
+    await spineFirst.ackDelivery;
     const primaryReply = stripAckPrefix(result.reply ?? "", spineFirst.ackText).trim();
     if (primaryReply && defaultDestination && deps.outbound)
       await postToDefault(deps.outbound, defaultDestination, primaryReply);
