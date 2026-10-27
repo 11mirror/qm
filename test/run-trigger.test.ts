@@ -6,7 +6,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type Destination, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { SESSION_BUSY_FIRE_TEXT } from "../src/core/failure-copy.ts";
-import { testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const toChannel: Destination = { type: "slack", target: "C1:169.7", audienceScopeId: scopeId("channel", "C1") };
 
@@ -36,7 +36,7 @@ function deps(
   return {
     outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     run,
     ...(dir ? { directory: dir } : {}),
   };

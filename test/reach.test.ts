@@ -14,7 +14,7 @@ import { recordingOutbound, type PostLog } from "./support/recording-outbound.ts
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type Destination, type Principal, type TurnRequest, type TurnResult } from "../src/types.ts";
-import { testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 function fakeDirectory(): ReachDirectory & {
   get(id: string): Promise<{ displayName: string } | null>;
@@ -329,7 +329,7 @@ function triggerDeps(run: (req: TurnRequest) => Promise<TurnResult>): TriggerDep
   return {
     outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     run,
     directory: fakeDirectory(),
   };

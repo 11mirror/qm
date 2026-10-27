@@ -5,7 +5,8 @@
 // and exfiltration surface). Secrets live in the record like other stored
 // connector credentials — reachable only through core, never injected into sandboxes.
 
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
+import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 
 export type McpServerAuthMode = "none" | "bearer" | "client-credentials" | "oauth-user";
 
@@ -54,23 +55,57 @@ export interface McpServerStore {
   onChange(listener: () => void): () => void;
 }
 
-export function createMcpServerStore(backing: DurableMap<McpServer>): McpServerStore {
+const MCP_SERVERS: TableSpec = {
+  table: "mcp_servers",
+  key: "id",
+  keyIsField: true,
+  columns: {
+    name: { type: "text", required: true },
+    url: { type: "text", required: true },
+    auth: { type: "text", required: true },
+    credentialScope: { type: "text" },
+    credentialHost: { type: "text" },
+    credentialAccountType: { type: "text" },
+    bearerToken: { type: "text" },
+    clientId: { type: "text" },
+    clientSecret: { type: "text" },
+    oauthAuthorizeUrl: { type: "text" },
+    oauthTokenUrl: { type: "text" },
+    oauthScopes: { type: "text[]" },
+    tools: { type: "jsonb" },
+    approval: { type: "text" },
+    catalog: { type: "boolean" },
+    attestActor: { type: "boolean" },
+    readOnly: { type: "boolean", required: true },
+    enabled: { type: "boolean", required: true },
+    updatedAt: { type: "bigint", required: true },
+    updatedBy: { type: "text", required: true },
+  },
+};
+
+export const MCP_SERVERS_MIGRATION = mapToTableMigration("mcp/servers/0001-typed", MCP_SERVERS);
+
+const codec = tableCodec<McpServer>(MCP_SERVERS);
+
+export function createMcpServerStore(databaseUrl: string): McpServerStore {
+  const { q } = createPgPool(databaseUrl, [MCP_SERVERS_MIGRATION]);
   const listeners = new Set<() => void>();
   const emit = () => {
     for (const l of listeners) l();
   };
   return {
-    async list() {
-      const entries = await backing.entries();
-      return entries.map(([, v]) => v).sort((a, b) => a.id.localeCompare(b.id));
-    },
-    get: (id) => backing.get(id),
+    list: async () => codec.rows(await q(`SELECT ${codec.columns} FROM mcp_servers ORDER BY id`)),
+    get: async (id) => codec.rows(await q(`SELECT ${codec.columns} FROM mcp_servers WHERE id = $1`, [id]))[0] ?? null,
     put: async (server) => {
-      await backing.put(server.id, server);
+      await q(
+        `INSERT INTO mcp_servers (${codec.columns}) VALUES (${codec.placeholders})
+         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET ${codec.updates}`,
+        codec.values(server.id, server),
+      );
       emit();
     },
     delete: async (id) => {
-      await backing.delete(id);
+      await q(`DELETE FROM mcp_servers WHERE id = $1`, [id]);
       emit();
     },
     onChange: (listener) => {

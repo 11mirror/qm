@@ -11,7 +11,7 @@ import { fireAskResolution, type AskResolutionDeps } from "../src/triggers/keych
 import { runTrigger } from "../src/triggers/run-trigger.ts";
 import type { Principal, ScopeId, TurnRequest } from "../src/types.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
-import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 function keychain(now = Date.now) {
@@ -52,7 +52,7 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
   const deps: AskResolutionDeps = {
     outbound,
     idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     currentScopeMembers: async () => state.members,
     getCron: (id) => crons.get(id),
     getGrant: (id) => k.getGrant(id),

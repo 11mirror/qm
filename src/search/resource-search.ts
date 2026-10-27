@@ -27,19 +27,14 @@ export interface ResourceSearchStore {
   search(kind: ResourceKind, query: string, limit: number): Promise<ResourceCandidate[]>;
 }
 
-const JSON_FIELDS = `json->>'scopeId' AS "scopeId", json->>'ownerScopeId' AS "ownerScopeId",
-  json->>'createdInScope' AS "createdInScope", json->>'createdBy' AS "createdBy",
-  json->>'owner' AS owner, json->>'status' AS status,
-  json->'members' AS members, json->'destination' AS destination`;
-
 const TRIGGER_FIELDS = `owner_scope_id AS "ownerScopeId", created_by AS "createdBy", owner, destination`;
 
 const sources = {
   skills: {
     table: "skills",
-    title: "coalesce(json->'manifest'->>'name', '')",
-    description: "coalesce(json->'manifest'->>'description', '')",
-    fields: JSON_FIELDS,
+    title: "coalesce(manifest->>'name', '')",
+    description: "coalesce(manifest->>'description', '')",
+    fields: `scope_id AS "scopeId", created_by AS "createdBy", status`,
   },
   crons: {
     table: "crons",
@@ -66,10 +61,10 @@ export function createPostgresResourceSearch(pg: PgPool): ResourceSearchStore {
     async skillMetadata(names) {
       const [rows, homes] = await Promise.all([
         pg.q(
-          "SELECT id, json->>'scopeId' AS scope, json->>'status' AS status, json->'manifest'->>'name' AS name FROM skills WHERE json->'manifest'->>'name' = ANY($1::text[]) ORDER BY id",
+          "SELECT id, scope_id AS scope, status, manifest->>'name' AS name FROM skills WHERE manifest->>'name' = ANY($1::text[]) ORDER BY id",
           [[...names]],
         ),
-        pg.q("SELECT json->>'scopeId' AS scope FROM skills GROUP BY json->>'scopeId' ORDER BY min(id)"),
+        pg.q("SELECT scope_id AS scope FROM skills GROUP BY scope_id ORDER BY min(id)"),
       ]);
       return {
         skills: rows.map((r) => ({

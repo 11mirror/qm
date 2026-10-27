@@ -18,7 +18,7 @@ import type { AppPageView, AppPageViewLog } from "../src/deploy/page-views.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const SESSION_SECRET = "portal-session-secret";
@@ -78,7 +78,7 @@ async function harness(log: AppPageViewLog) {
     acl,
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
     sessions: createPostgresSessionStore(testDatabaseUrl()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
   } as unknown as Parameters<typeof createApp>[0]);
   const deployed = await app.deploy({
     ownerScopeId: scopeId("personal", "alice@example.com"),

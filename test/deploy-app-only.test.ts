@@ -20,7 +20,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
@@ -63,7 +63,7 @@ test("app-only gateway checks exact current personal read grants without inherit
     acl,
     deployDir: join(dir, "deploy"),
   });
-  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const identity = createIdentityService(testDatabaseUrl());
   const app = createApp({
     deploy,
     acl,

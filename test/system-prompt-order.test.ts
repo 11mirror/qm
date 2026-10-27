@@ -32,13 +32,7 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import {
-  testConfigStore,
-  testDatabaseUrl,
-  testAdvisoryLock,
-  testDeployBackings,
-  testMap,
-} from "./support/test-database.ts";
+import { testConfigStore, testDatabaseUrl, testAdvisoryLock, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
@@ -125,7 +119,7 @@ function buildOrchestrator(
   const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     resolution: createResolutionService(ORG, config, acl),
     sessions,
     workspace,
@@ -320,7 +314,7 @@ test("Open carries only the live actor's personal reads into a shared turn and a
 
 test("Open advertises the source and audits a carried skill read without granting it to the room", async () => {
   const personal = scopeId("personal", actor.id);
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   const skill = await skills.create({
     scopeId: personal,
     createdBy: actor.id,
@@ -676,7 +670,7 @@ for (const mode of ["off", "writable", "skip"] as const) {
 }
 
 test("Open uses the exact skill snapshot that passed screening despite an in-flight source update", async () => {
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   const owner = scopeId("personal", actor.id);
   const skill = await skills.create({
     scopeId: owner,

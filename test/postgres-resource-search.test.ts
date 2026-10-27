@@ -6,6 +6,7 @@ import { createPostgresResourceSearch } from "../src/search/resource-search.ts";
 import { CRONS_MIGRATION } from "../src/cron/cron-store.ts";
 import { DEPLOYMENTS_MIGRATION } from "../src/deploy/deploy-store.ts";
 import { WEBHOOKS_MIGRATION } from "../src/webhooks/webhook-store.ts";
+import { SKILLS_MIGRATION } from "../src/skills/skill-store.ts";
 
 const database = process.env.DATABASE_URL;
 test(
@@ -17,7 +18,12 @@ test(
     await admin.q(`CREATE SCHEMA ${schema}`);
     const url = new URL(database!);
     url.searchParams.set("options", `-c search_path=${schema}`);
-    const pg = createPgPool(url.toString(), [CRONS_MIGRATION, WEBHOOKS_MIGRATION, DEPLOYMENTS_MIGRATION]);
+    const pg = createPgPool(url.toString(), [
+      CRONS_MIGRATION,
+      WEBHOOKS_MIGRATION,
+      DEPLOYMENTS_MIGRATION,
+      SKILLS_MIGRATION,
+    ]);
     try {
       let searchSql = "";
       let searchParams: unknown[] = [];
@@ -32,25 +38,24 @@ test(
         },
       });
       for (const kind of ["skills", "crons", "deploys", "webhooks"] as const) await store.search(kind, "zanzibar", 50);
-      const owned = { owner: "U1", ownerScopeId: "personal:U1", scopeId: "personal:U1" };
-      const jsonRow = (record: object) => [
-        `INSERT INTO $table (id, json) VALUES ('hit', $1)`,
-        [JSON.stringify({ id: "hit", ...record, ...owned })],
-        `UPDATE $table SET json = $1 WHERE id = 'hit'`,
-        [JSON.stringify({ id: "hit", name: "other", manifest: { name: "other" } })],
-      ];
       const triggerColumns = `id, owner_scope_id, owner, created_by, enabled, created_at, action`;
       for (const [table, [insert, insertParams, update, updateParams]] of [
         [
           "skills",
-          jsonRow({
-            manifest: {
-              name: "zanzibar-review",
-              description: "release checklist",
-              body: "privatebody ".repeat(10000),
-              files: [{ content: "asset".repeat(10000) }],
-            },
-          }),
+          [
+            `INSERT INTO skills (id, scope_id, manifest, status, created_by, version, granted_capabilities, approvals)
+             VALUES ('hit', 'personal:U1', $1, 'published', 'U1', 1, '{}', '{}')`,
+            [
+              JSON.stringify({
+                name: "zanzibar-review",
+                description: "release checklist",
+                body: "privatebody ".repeat(10000),
+                files: [{ content: "asset".repeat(10000) }],
+              }),
+            ],
+            `UPDATE skills SET manifest = $1 WHERE id = 'hit'`,
+            [JSON.stringify({ name: "other" })],
+          ],
         ],
         [
           "crons",

@@ -10,7 +10,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -37,7 +37,7 @@ function instance(
     crons,
     outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(URL!),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     run,
     jobQueue: cronJobQueue(createJobWorker(URL ?? ""), 4),
   });

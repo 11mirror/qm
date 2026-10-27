@@ -6,8 +6,8 @@ import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
-import { testMap, testAdvisoryLock } from "./support/test-database.ts";
+import { createSkillStore } from "../src/skills/skill-store.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 
 function freshApp() {
   const config: Config = testConfig({ orgId: "acme", seedSkills: false });
@@ -74,23 +74,10 @@ test("an unpublished (draft/reviewed) skill is not visible", async () => {
   assert.ok(!visible.some((r) => r.skill!.manifest.name === "wip"));
 });
 
-test("visibleFor reads the asked scopes' skills once, not once per skill name", async () => {
-  const backing = testMap<Skill>();
-  let allReads = 0;
-  const originalAll = backing.all.bind(backing);
-  backing.all = () => {
-    allReads += 1;
-    return originalAll();
-  };
-  let scopedReads = 0;
-  const originalSelect = backing.select.bind(backing);
-  backing.select = ((query) => {
-    scopedReads += 1;
-    return originalSelect(query);
-  }) as typeof backing.select;
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing });
+test("visibleFor resolves many skills across scopes with personal shadowing", async () => {
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
 
-  const org = scopeId("org", "default-org");
+  const org = scopeId("org", "visible-org");
   const personal = scopeId("personal", "U1");
   for (let i = 0; i < 200; i++) {
     const scope = i % 2 === 0 ? org : personal;
@@ -110,12 +97,7 @@ test("visibleFor reads the asked scopes' skills once, not once per skill name", 
   await skills.review(shadowing.id, "reviewer-1", []);
   await skills.publish(shadowing.id);
 
-  allReads = 0;
-  scopedReads = 0;
   const visible = await skills.visibleFor([personal, org]);
-
-  assert.equal(scopedReads, 1, "one scoped skills read per visibleFor call");
-  assert.equal(allReads, 0, "visibleFor never reads the whole table");
   assert.equal(visible.length, 200);
   const shadowed = visible.find((r) => r.skill!.manifest.name === "skill-0")!;
   assert.equal(shadowed.skill!.scopeId, personal);

@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { HarnessModelUtilities } from "../../harness/harness.ts";
-import type { DurableMap } from "../../persistence/durable-map.ts";
+import { createPgPool, tenantCols } from "../../persistence/pg-pool.ts";
+import { mapToTableMigration, tableCodec, type TableSpec } from "../../persistence/typed-table.ts";
+import { jsonbStringify } from "../../util/text.ts";
 import { type MemoryService, type MemoryCaptureContext, isSystemActor } from "../memory-service.ts";
 import type { MemoryStrategy } from "../strategy.ts";
 import type { ScopeId } from "../../types.ts";
@@ -80,19 +82,72 @@ type TurnEndCtx = MemoryCaptureMetadata & {
   idempotencyKey?: string;
 };
 
+const MEMORY_CAPTURE_PENDING: TableSpec = {
+  table: "memory_capture_pending",
+  key: "id",
+  columns: {
+    scopeId: { type: "text", required: true },
+    actorId: { type: "text" },
+    conversationScopeId: { type: "text", required: true },
+    sessionId: { type: "text" },
+    idempotencyKey: { type: "text" },
+    sensitivity: { type: "text" },
+    inheritedFacts: { type: "jsonb" },
+    turns: { type: "jsonb", required: true },
+    token: { type: "text", required: true },
+    at: { type: "bigint", required: true },
+  },
+};
+
+export const MEMORY_CAPTURE_PENDING_MIGRATION = mapToTableMigration(
+  "memory/capture-pending/0001-typed",
+  MEMORY_CAPTURE_PENDING,
+);
+
+const codec = tableCodec<PendingCapture>(MEMORY_CAPTURE_PENDING);
+
+function createPendingCaptures(databaseUrl: string) {
+  const { q, query } = createPgPool(databaseUrl, [MEMORY_CAPTURE_PENDING_MIGRATION]);
+  const untracked = jsonbStringify([UNTRACKED_PROVENANCE]);
+  return {
+    async append(key: string, burst: PendingCapture): Promise<PendingCapture> {
+      const values = codec.values(key, burst);
+      const rows = await q(
+        `INSERT INTO memory_capture_pending AS p (${codec.columns}) VALUES (${codec.placeholders})
+         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET
+           turns = p.turns || EXCLUDED.turns,
+           inherited_facts = coalesce(p.inherited_facts, $${values.length + 1}::jsonb)
+             || coalesce(EXCLUDED.inherited_facts, $${values.length + 1}::jsonb),
+           token = EXCLUDED.token,
+           at = EXCLUDED.at
+         RETURNING ${codec.columns}`,
+        [...values, untracked],
+      );
+      return codec.row(rows[0]!);
+    },
+    async take(key: string, token: string): Promise<boolean> {
+      const { rowCount } = await query(`DELETE FROM memory_capture_pending WHERE id = $1 AND token = $2`, [key, token]);
+      return rowCount > 0;
+    },
+    async orphans(cutoff: number): Promise<Array<[string, PendingCapture]>> {
+      const rows = await q(`SELECT ${codec.columns} FROM memory_capture_pending WHERE at <= $1 ORDER BY id`, [cutoff]);
+      return rows.map((r) => [String(r.id), codec.row(r)]);
+    },
+  };
+}
+
 /** How long past its quiet window a burst waits before the sweep takes it from an instance that went away. */
 const ORPHAN_GRACE_MS = 60_000;
 
 function createBurstBuffer(
   quietMs: number,
   maxTurns: number,
-  pending: DurableMap<PendingCapture> | undefined,
+  pending: ReturnType<typeof createPendingCaptures> | undefined,
   flush: (burst: Burst) => Promise<void>,
   onError?: (e: unknown, burst: Burst) => void,
 ): { add(ctx: TurnEndCtx): Promise<void>; sweep(): Promise<void> } {
   const timers = new Map<string, NodeJS.Timeout>();
-  const take = async (key: string, burst: PendingCapture): Promise<boolean> =>
-    pending!.deleteIf(key, (current) => current.token === burst.token);
+  const take = async (key: string, burst: PendingCapture): Promise<boolean> => pending!.take(key, burst.token);
   return {
     async add({
       scopeId,
@@ -118,36 +173,18 @@ function createBurstBuffer(
       if (quietMs <= 0 || !pending) return flush(burst);
 
       const key = JSON.stringify([scopeId, burst.conversationScopeId, actorId ?? "", sessionId ?? ""]);
-      const token = randomUUID();
-      const [active] = await pending.mutateMany([
-        {
-          id: key,
-          apply: (current) =>
-            current
-              ? {
-                  ...current,
-                  turns: [...current.turns, { input, reply }],
-                  inheritedFacts: [
-                    ...(current.inheritedFacts ?? [UNTRACKED_PROVENANCE]),
-                    ...(burst.inheritedFacts ?? [UNTRACKED_PROVENANCE]),
-                  ],
-                  token,
-                  at: Date.now(),
-                }
-              : { ...burst, token, at: Date.now() },
-        },
-      ]);
+      const active = await pending.append(key, { ...burst, token: randomUUID(), at: Date.now() });
       clearTimeout(timers.get(key));
       timers.delete(key);
-      if (active!.turns.length >= maxTurns) {
-        if (await take(key, active!)) await flush(active!);
+      if (active.turns.length >= maxTurns) {
+        if (await take(key, active)) await flush(active);
         return;
       }
       const timer = setTimeout(() => {
         timers.delete(key);
         void (async () => {
-          if (await take(key, active!)) await flush(active!);
-        })().catch((e) => onError?.(e, active!));
+          if (await take(key, active)) await flush(active);
+        })().catch((e) => onError?.(e, active));
       }, quietMs);
       timer.unref?.();
       timers.set(key, timer);
@@ -155,8 +192,8 @@ function createBurstBuffer(
     async sweep() {
       if (!pending) return;
       const cutoff = Date.now() - quietMs - ORPHAN_GRACE_MS;
-      for (const [key, burst] of await pending.entries()) {
-        if (burst.at > cutoff || !(await take(key, burst))) continue;
+      for (const [key, burst] of await pending.orphans(cutoff)) {
+        if (!(await take(key, burst))) continue;
         await flush(burst).catch((e) => onError?.(e, burst));
       }
     },
@@ -182,12 +219,12 @@ export function createPerTurnStrategy(deps: {
   /** With a quiet window, turns from one speaker in one conversation are extracted together once it passes. */
   captureQuietMs?: number;
   /** Where bursts wait out the quiet window; required when captureQuietMs is set. */
-  pending?: DurableMap<PendingCapture>;
+  databaseUrl?: string;
   captureMaxTurns?: number;
   onCaptureError?: (e: unknown, scopeId: ScopeId) => void;
 }): MemoryStrategy & { sweep(): Promise<void> } {
   const quietMs = deps.captureQuietMs ?? 0;
-  if (quietMs > 0 && !deps.pending) throw new Error("a memory capture quiet window needs a pending-capture store");
+  if (quietMs > 0 && !deps.databaseUrl) throw new Error("a memory capture quiet window needs a pending-capture store");
   async function flush(burst: Burst): Promise<void> {
     const { facts, sensitivity } = await extractFacts(deps.harness, burst.turns);
     if (!facts.length) return;
@@ -197,7 +234,7 @@ export function createPerTurnStrategy(deps: {
   const buffer = createBurstBuffer(
     quietMs,
     deps.captureMaxTurns ?? DEFAULT_CAPTURE_MAX_TURNS,
-    deps.pending,
+    deps.databaseUrl ? createPendingCaptures(deps.databaseUrl) : undefined,
     flush,
     (e, burst) => deps.onCaptureError?.(e, burst.scopeId),
   );

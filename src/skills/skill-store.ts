@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
 import { parseScopeId } from "../types.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import { assertSafeSkillName, isSafeSkillName } from "./skill-name.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
+import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
+import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 
 type SkillStatus = "draft" | "reviewed" | "published" | "archived";
 
@@ -63,9 +64,39 @@ export interface SkillResolution {
 }
 
 export interface SkillStoreOptions {
-  backing: DurableMap<Skill>;
+  databaseUrl: string;
   advisoryLock: AdvisoryLock;
 }
+
+const SKILLS: TableSpec = {
+  table: "skills",
+  key: "id",
+  keyIsField: true,
+  columns: {
+    scopeId: { type: "text", required: true },
+    manifest: { type: "jsonb", required: true },
+    status: { type: "text", required: true },
+    createdBy: { type: "text", required: true },
+    version: { type: "bigint", required: true },
+    grantedCapabilities: { type: "text[]", required: true },
+    approvals: { type: "text[]", required: true },
+    createdAt: { type: "bigint" },
+    updatedAt: { type: "bigint" },
+    lastUsedAt: { type: "bigint" },
+    pack: { type: "jsonb" },
+  },
+};
+
+export const SKILLS_MIGRATION = mapToTableMigration("skills/store/0001-typed", SKILLS, {
+  dropKeys: ["signature"],
+  statements: [
+    `CREATE INDEX IF NOT EXISTS skills_scope_id ON skills (scope_id)`,
+    `CREATE INDEX IF NOT EXISTS skills_resource_name_idx ON skills ((manifest->>'name'))`,
+    `CREATE INDEX IF NOT EXISTS skills_resource_search_gin ON skills USING gin (to_tsvector('simple', coalesce(manifest->>'name', '') || ' ' || coalesce(manifest->>'description', '')))`,
+  ],
+});
+
+const codec = tableCodec<Skill>(SKILLS);
 
 export interface SkillStore {
   create(input: { scopeId: ScopeId; manifest: SkillManifest; createdBy: string; pack?: Skill["pack"] }): Promise<Skill>;
@@ -154,17 +185,31 @@ export function visibleSkillRows<T extends SkillSummary>(
   return visible;
 }
 
+function skillTable(databaseUrl: string) {
+  const { q } = createPgPool(databaseUrl, [SKILLS_MIGRATION]);
+  const select = async (where: string, params: unknown[] = []): Promise<Skill[]> =>
+    codec.rows(await q(`SELECT ${codec.columns} FROM skills ${where} ORDER BY id`, params));
+  return {
+    q,
+    async put(skill: Skill): Promise<void> {
+      await q(
+        `INSERT INTO skills (${codec.columns}) VALUES (${codec.placeholders})
+         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET ${codec.updates}`,
+        codec.values(skill.id, skill),
+      );
+    },
+    get: async (id: string): Promise<Skill | null> => (await select("WHERE id = $1", [id]))[0] ?? null,
+    list: () => select(""),
+    listInScopes: async (scopeIds: readonly ScopeId[]): Promise<Skill[]> =>
+      scopeIds.length ? select("WHERE scope_id = ANY($1::text[])", [[...scopeIds]]) : [],
+  };
+}
+
 export function createSkillStore(opts: SkillStoreOptions): SkillStore {
-  const skills = opts.backing;
+  const { q, put, get, list, listInScopes } = skillTable(opts.databaseUrl);
   const advisoryLock = opts.advisoryLock;
   const withNameLock = <T>(scopeId: ScopeId, name: string, fn: () => Promise<T>) =>
     advisoryLock.withLock(`skill-name:${scopeId}:${name}`, fn);
-  const listInScopes = async (scopeIds: readonly ScopeId[]): Promise<Skill[]> => {
-    const wanted = new Set(scopeIds);
-    if (!wanted.size) return [];
-    const rows = await skills.select({ where: { field: "scopeId", anyOfFold: [...wanted] } });
-    return rows.filter((skill) => wanted.has(skill.scopeId));
-  };
 
   return {
     withNameLock,
@@ -184,40 +229,40 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
         updatedAt: at,
         ...(input.pack ? { pack: input.pack } : {}),
       };
-      await skills.put(skill.id, skill);
+      await put(skill);
       return skill;
     },
     async update(id, manifest) {
       assertSafeSkillName(manifest.name);
-      const s = await skills.get(id);
+      const s = await get(id);
       if (!s) throw new Error(`unknown skill: ${id}`);
       if (manifest.name !== s.manifest.name) throw new Error("skill update cannot rename — create a new skill instead");
       s.manifest = manifest;
       if (scopeKind(s.scopeId) !== "personal") s.status = "draft";
       s.version += 1;
       s.updatedAt = Date.now();
-      await skills.put(s.id, s);
+      await put(s);
       return s;
     },
 
-    get: (id) => skills.get(id),
-    list: () => skills.all(),
+    get,
+    list,
     listInScopes,
 
     async review(id, reviewer, grantCapabilities) {
-      const s = await skills.get(id);
+      const s = await get(id);
       if (!s) throw new Error(`unknown skill: ${id}`);
       assertSafeSkillName(s.manifest.name);
       s.grantedCapabilities = [...new Set([...s.grantedCapabilities, ...grantCapabilities])];
       if (!s.approvals.includes(reviewer)) s.approvals.push(reviewer);
       s.status = "reviewed";
       s.updatedAt = Date.now();
-      await skills.put(s.id, s);
+      await put(s);
       return s;
     },
 
     async publish(id) {
-      const s = await skills.get(id);
+      const s = await get(id);
       if (!s) throw new Error(`unknown skill: ${id}`);
       assertSafeSkillName(s.manifest.name);
       if (s.status === "draft") throw new Error("skill must be reviewed before it is published");
@@ -225,35 +270,35 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
       if (missing.length) throw new Error(`skill requires ungranted capabilities: ${missing.join(", ")}`);
       s.status = "published";
       s.updatedAt = Date.now();
-      await skills.put(s.id, s);
+      await put(s);
       return s;
     },
 
     async archive(id) {
-      const existing = await skills.get(id);
+      const existing = await get(id);
       if (!existing) throw new Error(`unknown skill: ${id}`);
       return withNameLock(existing.scopeId, existing.manifest.name, async () => {
-        const s = await skills.get(id);
+        const s = await get(id);
         if (!s) throw new Error(`unknown skill: ${id}`);
         if (s.status === "archived") return s;
         s.status = "archived";
         s.updatedAt = Date.now();
-        await skills.put(s.id, s);
+        await put(s);
         return s;
       });
     },
 
     async restore(skill) {
       assertSafeSkillName(skill.manifest.name);
-      await skills.put(skill.id, structuredClone(skill));
+      await put(skill);
     },
 
     async delete(id) {
-      await skills.delete(id);
+      await q(`DELETE FROM skills WHERE id = $1`, [id]);
     },
 
     async recordUse(id, at) {
-      await skills.merge(id, { lastUsedAt: at ?? Date.now() });
+      await q(`UPDATE skills SET last_used_at = $2 WHERE id = $1`, [id, at ?? Date.now()]);
     },
 
     async resolve(name, orderedScopes) {
@@ -266,7 +311,7 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
     },
 
     async promote(id, targetScopeId) {
-      const s = await skills.get(id);
+      const s = await get(id);
       if (!s) throw new Error(`unknown skill: ${id}`);
       assertSafeSkillName(s.manifest.name);
       if (s.status !== "published") throw new Error("only a published skill can be promoted");
@@ -286,12 +331,12 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
         createdAt: at,
         updatedAt: at,
       };
-      await skills.put(promoted.id, promoted);
+      await put(promoted);
       return promoted;
     },
 
     async move(id, toScopeId) {
-      const s = await skills.get(id);
+      const s = await get(id);
       if (!s) throw new Error(`unknown skill: ${id}`);
       assertSafeSkillName(s.manifest.name);
       if (scopeKind(toScopeId) === "org") {
@@ -299,7 +344,7 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
       }
       s.scopeId = toScopeId;
       s.updatedAt = Date.now();
-      await skills.put(s.id, s);
+      await put(s);
       return s;
     },
   };

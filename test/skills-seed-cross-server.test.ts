@@ -1,48 +1,35 @@
-import { test, after } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
-import { createPostgresMapFactory, type DurableMap } from "../src/persistence/durable-map.ts";
-import { createPostgresAdvisoryLock, type AdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createSkillStore, type SkillStore } from "../src/skills/skill-store.ts";
 import { scopeId } from "../src/types.ts";
 import { installSeedSkills } from "../src/skills/seed.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
-const URL = process.env.DATABASE_URL;
-const factory = URL ? createPostgresMapFactory(URL) : null;
-let tableSequence = 0;
-after(async () => {
-  await factory?.pool.close();
-});
+const sharedLock = (databaseUrl: string) => createPostgresAdvisoryLock(createPgPool(databaseUrl));
 
-const shared = async (): Promise<{ backing: DurableMap<Skill>; lock: () => AdvisoryLock }> => {
-  if (!factory) {
-    const lock = testAdvisoryLock();
-    return { backing: testMap<Skill>(), lock: () => lock };
-  }
-  const table = `xsrv_skills_${process.pid}_${++tableSequence}`;
-  await factory.pool.query(`DROP TABLE IF EXISTS ${table}`);
-  return { backing: factory.map<Skill>(table), lock: () => createPostgresAdvisoryLock(factory.pool) };
-};
-
-const slowReads = (map: DurableMap<Skill>): DurableMap<Skill> => ({
-  ...map,
-  async all() {
-    const rows = await map.all();
+const slowReads = (store: SkillStore): SkillStore => ({
+  ...store,
+  async listInScopes(scopeIds) {
+    const rows = await store.listInScopes(scopeIds);
     await new Promise((resolve) => setTimeout(resolve, 50));
     return rows;
   },
 });
 
+const hello = async (store: SkillStore) => (await store.list()).filter((s) => s.manifest.name === "hello");
+
 test("two servers seeding the same catalog at boot install each skill once", async () => {
   const dir = mkdtempSync(join(tmpdir(), "seed-xsrv-"));
   mkdirSync(join(dir, "hello"));
   writeFileSync(join(dir, "hello", "SKILL.md"), "---\nname: hello\ndescription: Say hello.\n---\nSay hello.\n");
-  const { backing, lock } = await shared();
-  const left = createSkillStore({ backing: slowReads(backing), advisoryLock: lock() });
-  const right = createSkillStore({ backing: slowReads(backing), advisoryLock: lock() });
+  const databaseUrl = testDatabaseUrl();
+  const left = slowReads(createSkillStore({ databaseUrl, advisoryLock: sharedLock(databaseUrl) }));
+  const right = slowReads(createSkillStore({ databaseUrl, advisoryLock: sharedLock(databaseUrl) }));
   const org = scopeId("org", "default-org");
 
   const seedModule = "../src/skills/seed.ts";
@@ -54,39 +41,31 @@ test("two servers seeding the same catalog at boot install each skill once", asy
     rightServer.installSeedSkills(right, { dir, scopeId: org }),
   ]);
 
-  const rows = (await backing.all()).filter((s) => s.manifest.name === "hello");
+  const rows = await hello(left);
   assert.equal(rows.length, 1);
   assert.equal(rows[0]!.status, "published");
 });
 
 test("an admin archive racing another server's changed seed update leaves the skill archived", async () => {
   const dir = mkdtempSync(join(tmpdir(), "seed-archive-xsrv-"));
-  const { backing, lock } = await shared();
-  const copied: DurableMap<Skill> = {
-    ...backing,
-    get: async (id) => structuredClone(await backing.get(id)),
-    all: async () => structuredClone(await backing.all()),
-    put: (id, skill) => backing.put(id, structuredClone(skill)),
-  };
+  const databaseUrl = testDatabaseUrl();
   const seedWriting = Promise.withResolvers<void>();
   const releaseSeed = Promise.withResolvers<void>();
   const archiveLockEntered = Promise.withResolvers<void>();
-  const archiveLock = lock();
-  const left = createSkillStore({
-    backing: {
-      ...copied,
-      async put(id, skill) {
-        if (skill.status === "draft" && skill.manifest.body === "Updated instructions.\n") {
-          seedWriting.resolve();
-          await releaseSeed.promise;
-        }
-        await copied.put(id, skill);
-      },
+  const archiveLock = sharedLock(databaseUrl);
+  const leftStore = createSkillStore({ databaseUrl, advisoryLock: sharedLock(databaseUrl) });
+  const left: SkillStore = {
+    ...leftStore,
+    async update(id, manifest) {
+      if (manifest.body === "Updated instructions.\n") {
+        seedWriting.resolve();
+        await releaseSeed.promise;
+      }
+      return leftStore.update(id, manifest);
     },
-    advisoryLock: lock(),
-  });
+  };
   const right = createSkillStore({
-    backing: copied,
+    databaseUrl,
     advisoryLock: {
       ...archiveLock,
       withLock(key, fn) {
@@ -119,7 +98,7 @@ test("an admin archive racing another server's changed seed update leaves the sk
     releaseSeed.resolve();
     await Promise.all([seeding, archiving]);
 
-    const rows = await backing.all();
+    const rows = await hello(right);
     assert.equal(rows.length, 1);
     assert.equal(rows[0]!.id, original.id);
     assert.equal(rows[0]!.status, "archived");

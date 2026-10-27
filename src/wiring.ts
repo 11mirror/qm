@@ -59,17 +59,8 @@ import {
   type Config,
 } from "./config.ts";
 import type { ServerDeps } from "./api/deps.ts";
-import {
-  actorAssertionActive,
-  createIdentityService,
-  type DeactivationRecord,
-  type IdentityService,
-} from "./identity/identity-service.ts";
-import {
-  createPrincipalLinkService,
-  type PrincipalLink,
-  type PrincipalLinkService,
-} from "./identity/principal-links.ts";
+import { actorAssertionActive, createIdentityService, type IdentityService } from "./identity/identity-service.ts";
+import { createPrincipalLinkService, type PrincipalLinkService } from "./identity/principal-links.ts";
 import {
   createComposioReturns,
   createSlackAccounts,
@@ -77,18 +68,17 @@ import {
   type SlackAccounts,
 } from "./connectors/composio-links.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
-import type { ExternalMember } from "./identity/external-members.ts";
 import { resendMailer } from "../plugins/chassis/src/resend.ts";
 import { createConfigStore, type ScopedConfigStore } from "./resolution/config-store.ts";
 import { createResolutionService } from "./resolution/resolution-service.ts";
 import { createAclStore, type AclStore } from "./acl/acl-store.ts";
 import { createPostgresGrantStore } from "./acl/postgres-grant-store.ts";
-import { createSkillStore, type SkillStore, type Skill } from "./skills/skill-store.ts";
-import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.ts";
-import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
+import { createSkillStore, type SkillStore } from "./skills/skill-store.ts";
+import { createSkillPackStore } from "./skills/skill-pack-store.ts";
+import { createSkillBundleStore, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
-import { createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
+import { createPostgresMapFactory } from "./persistence/durable-map.ts";
 import { createUiStateStore, type UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./inbox/sources/slack.ts";
@@ -161,7 +151,7 @@ import { createDeployBodyStore } from "./deploy/deploy-body-store.ts";
 import { createLocalWorkspaceStore, type WorkspaceStore } from "./workspace/workspace-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
-import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
+import { createMcpServerStore, type McpServerStore } from "./mcp/mcp-server-store.ts";
 import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
 import {
   createLocalBlobTransferStore,
@@ -248,7 +238,7 @@ import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Harness } from "./harness/harness.ts";
 import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
 import { classifiedMemory } from "./memory/classification.ts";
-import { createPerTurnStrategy, type PendingCapture } from "./memory/strategies/per-turn.ts";
+import { createPerTurnStrategy } from "./memory/strategies/per-turn.ts";
 import { createOrchestrator, egressClaimAllowingControlPlane, type OrchestratorDeps } from "./core/orchestrator.ts";
 import {
   mintCapabilityToken,
@@ -525,8 +515,6 @@ export function buildApp(
 
   const pgArtifactMap = createPostgresMapFactory(databaseUrl);
   registerAbsurdSchema(databaseUrl);
-  const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
-    pgArtifactMap.map<T>(table, indexedFields);
   const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter((id) => !resolveModel(id));
   if (unknownGatewayModels.length) {
     throw new Error(`MODEL_GATEWAY_MODELS contains unsupported models: ${unknownGatewayModels.join(", ")}`);
@@ -559,21 +547,20 @@ export function buildApp(
     },
   };
   const advisoryLock: AdvisoryLock = createPostgresAdvisoryLock(pgArtifactMap.pool);
-  const principalLinks = createPrincipalLinkService(artifactMap<PrincipalLink>("principal_links"), advisoryLock);
+  const principalLinks = createPrincipalLinkService(databaseUrl, advisoryLock);
   installPrincipalLinks(principalLinks);
-  const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"), {
+  const identity = createIdentityService(databaseUrl, {
     directorySyncProtected: config.emailAuthPrincipals,
-    externalMembers: artifactMap<ExternalMember>("external_members"),
     principalLinks,
   });
   const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
   const configStore = createConfigStore(config.orgId, { databaseUrl, connectorSecretKey });
   const skills: SkillStore = createSkillStore({
-    backing: artifactMap<Skill>("skills"),
+    databaseUrl,
     advisoryLock,
   });
-  const skillPacks = createSkillPackStore({ backing: artifactMap<SkillPack>("skill_packs") });
-  const skillBundles = createSkillBundleStore({ backing: artifactMap<SkillBundle>("skill_bundles") });
+  const skillPacks = createSkillPackStore({ databaseUrl });
+  const skillBundles = createSkillBundleStore(databaseUrl);
   const featureFlags = createFeatureFlagStore(databaseUrl);
   const teams = createPostgresTeamStore(databaseUrl, featureFlags, scopeId("org", config.orgId));
   const sessions: SessionStore = createPostgresSessionStore(databaseUrl);
@@ -730,7 +717,7 @@ export function buildApp(
     createSweeper,
   });
   const baseMemory: MemoryService = withMemoryTidy(semanticMemory.memory, (scope) => memoryTidy.ensure(scope));
-  const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
+  const mcpServers = createMcpServerStore(databaseUrl);
   const errors = withErrorReporting(createPostgresErrorLog(databaseUrl));
   const sandboxOnError = (
     e: { category: string; code: string; message: string; scopeLabel?: string },
@@ -1352,7 +1339,7 @@ export function buildApp(
     harness: harness.models,
     memory,
     captureQuietMs: config.memoryCaptureQuietMs,
-    pending: artifactMap<PendingCapture>("memory_capture_pending"),
+    databaseUrl,
     onCaptureError: (e, scope) =>
       errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
   });

@@ -2,13 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createSkillStore } from "../src/skills/skill-store.ts";
 import { scopeId } from "../src/types.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 
-const org = scopeId("org", "default-org");
+const org = scopeId("org", "archive-org");
 const manifest = { name: "demo", description: "d", requiredCapabilities: [], body: "# Demo" };
 
 async function published() {
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   const s = await skills.create({ scopeId: org, manifest, createdBy: "pack:src1" });
   await skills.review(s.id, "system:pack-reviewer", []);
   await skills.publish(s.id);
@@ -42,7 +42,7 @@ test("an archived skill can be re-published (resurrection on re-import)", async 
 });
 
 test("create carries pack provenance", async () => {
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   const s = await skills.create({
     scopeId: org,
     manifest,

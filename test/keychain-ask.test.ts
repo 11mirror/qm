@@ -30,7 +30,7 @@ import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
-import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
@@ -388,7 +388,7 @@ test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate cl
     {
       outbound: recordingOutbound(),
       idempotency: createIdempotencyStore(testDatabaseUrl()),
-      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      identity: createIdentityService(testDatabaseUrl()),
       run: async (req) => ((seen = req), { status: "ok" } as TurnResult),
     },
     {
@@ -413,7 +413,7 @@ test("runTrigger: silent markers never silence a notification-shaped fire (keych
     {
       outbound,
       idempotency: createIdempotencyStore(testDatabaseUrl()),
-      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      identity: createIdentityService(testDatabaseUrl()),
       run: async () => ({ status: "ok", reply: "The keychain ask was approved." }) as TurnResult,
     },
     {
@@ -449,7 +449,7 @@ test("fireAskResolution: a turn that fires but doesn't land falls back to a plai
     return {
       outbound,
       idempotency: createIdempotencyStore(testDatabaseUrl()),
-      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      identity: createIdentityService(testDatabaseUrl()),
       run,
       getAsk: async () => current,
     };

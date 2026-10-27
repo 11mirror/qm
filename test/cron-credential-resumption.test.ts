@@ -8,7 +8,7 @@ import { fireAskResolution, type AskResolutionDeps } from "../src/triggers/keych
 import type { KeychainAsk } from "../src/credentials/keychain.ts";
 import type { Cron, Destination, TurnRequest } from "../src/types.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const recipient: Destination = {
   type: "principal",
@@ -32,7 +32,7 @@ async function fixture() {
   const deps: AskResolutionDeps = {
     outbound,
     idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     getCron: (id) => crons.get(id),
     run: async (request) => {
       requests.push(request);

@@ -5,7 +5,7 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createApprovalRecords, type ApprovalRecords } from "../src/core/approval-store.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const approval = (sessionId: string, actor: string, command: string, blocksInput = true): PendingApprovalRecord => ({
   sessionId,
@@ -45,7 +45,7 @@ test("session approvals are read by session id, never by scanning every approval
   const app = createApp({
     sessions,
     approvals,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
   } as unknown as Parameters<typeof createApp>[0]);
 
   const listed = await app.listSessionApprovals(mine.id, "alice");

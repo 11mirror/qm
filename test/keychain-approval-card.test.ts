@@ -15,7 +15,7 @@ import type { App } from "../src/api/app.ts";
 import type { Directory } from "../src/slack/directory.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 
 async function fixture() {
   let now = Date.now();
@@ -46,7 +46,7 @@ async function fixture() {
     belongsToScope: async () => member,
     listContexts: async () => [{ scopeId: ask.requesterScopeId, name: "the Reports conversation" }],
   } as unknown as Pick<App, "belongsToScope" | "listContexts">;
-  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const identity = createIdentityService(testDatabaseUrl());
   const sent: Array<{ destination: { target: string; keychainAskId?: string }; idempotencyKey?: string }> = [];
   const approvals = createKeychainApprovals({
     outbound: {

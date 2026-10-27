@@ -13,7 +13,7 @@ import { sessionSharingRoutes } from "../src/api/routes/session-sharing.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { scopeId } from "../src/types.ts";
 import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 function entry(item: NewItem, seq: number): Item {
   return storedItem(item, { sessionId: "s1", seq, createdAt: seq });
@@ -110,7 +110,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
       return bytes.put(...args);
     },
   };
-  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const identity = createIdentityService(testDatabaseUrl());
   const { runs } = createMemoryRunStore();
   const original = [
     ...entries,

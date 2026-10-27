@@ -9,7 +9,7 @@ import { createKeychain, type KeychainAsk } from "../src/credentials/keychain.ts
 import { createKeychainStore } from "../src/credentials/keychain-store.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import type { TurnRequest, TurnResult } from "../src/types.ts";
-import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
@@ -48,7 +48,7 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   const deps: AskResolutionDeps = {
     outbound,
     idempotency,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     getCron: (id) => crons.get(id),
     run,
   };
