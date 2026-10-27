@@ -46,7 +46,7 @@ export function registerTenantSettings(list: readonly TenantSettings[]): void {
 
 export function registeredTenant(id: string): Tenant | undefined {
   const settings = registered.get(id);
-  return settings && tenantFor(settings.orgId, id, settings.slug);
+  return settings?.status === "active" ? tenantFor(settings.orgId, id, settings.slug) : undefined;
 }
 
 export function tenantSettings(t: Tenant = tenant()): TenantSettings {

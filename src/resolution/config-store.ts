@@ -541,13 +541,19 @@ function createTenantConfigStore(
     },
     getSlackEmojiCatalogDurable: (id) => tables.slackEmojiCatalog.get(id),
     hydrate() {
-      hydrated ??= (async () => {
-        const identity = await tables.deploymentIdentity.insertOrGet("singleton", { orgId });
-        if (identity.orgId !== orgId) throw new Error(`database belongs to org ${identity.orgId}, not ${orgId}`);
-        await instructions.hydrate();
-        await runtime.hydrate();
-        await Promise.all(allSettings.map((setting) => setting.hydrate()));
-      })();
+      if (!hydrated) {
+        const pending = (async () => {
+          const identity = await tables.deploymentIdentity.insertOrGet("singleton", { orgId });
+          if (identity.orgId !== orgId) throw new Error(`database belongs to org ${identity.orgId}, not ${orgId}`);
+          await instructions.hydrate();
+          await runtime.hydrate();
+          await Promise.all(allSettings.map((setting) => setting.hydrate()));
+        })();
+        hydrated = pending;
+        pending.catch(() => {
+          if (hydrated === pending) hydrated = null;
+        });
+      }
       return hydrated;
     },
     async refreshScope(id) {
@@ -568,25 +574,11 @@ export function createConfigStore(opts: {
   const tables = openConfigTables<ConfigRecords>(opts.databaseUrl);
   const queue = createKeyedQueue();
   const connectorClients = connectorClientsApi(tables.connectorClients, opts.connectorSecretKey);
-  const subscriptions: Array<(store: ScopedConfigStore) => void> = [];
-  const stores = perTenant(() => {
-    const store = createTenantConfigStore(tables, queue, connectorClients);
-    for (const subscribe of subscriptions) subscribe(store);
-    return store;
-  });
-  const everyStore = (subscribe: (store: ScopedConfigStore) => void) => {
-    subscriptions.push(subscribe);
-    for (const store of stores.all()) subscribe(store);
-  };
+  const stores = perTenant(() => createTenantConfigStore(tables, queue, connectorClients));
   const bound: Record<string, unknown> = {};
   for (const key of Object.keys(stores())) {
     bound[key] = (...args: unknown[]) =>
       (stores() as unknown as Record<string, (...args: unknown[]) => unknown>)[key]!(...args);
   }
-  return Object.assign(bound as unknown as ScopedConfigStore, {
-    onChannelHeaderPinChanged: (listener: (id: ScopeId) => void) =>
-      everyStore((store) => store.onChannelHeaderPinChanged(listener)),
-    onRuntimeSelectionChanged: (listener: (id: ScopeId) => void) =>
-      everyStore((store) => store.onRuntimeSelectionChanged(listener)),
-  });
+  return bound as unknown as ScopedConfigStore;
 }

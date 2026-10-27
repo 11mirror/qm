@@ -35,6 +35,8 @@ interface DirectoryOptions {
   now?: () => number;
 }
 
+const reportedCollisions = new Set<string>();
+
 function servable(records: TenantRecord[], homeId: string, opts: DirectoryOptions): TenantRecord[] {
   const orgs = new Set([opts.home.orgId]);
   const prefixes = new Set([opts.homeSandboxPrefix]);
@@ -43,6 +45,9 @@ function servable(records: TenantRecord[], homeId: string, opts: DirectoryOption
     if (rec.id === homeId || rec.status !== "active") continue;
     const prefix = rec.sandboxNamePrefix ?? `qm-${rec.slug}`;
     if (orgs.has(rec.orgId) || prefixes.has(prefix)) {
+      const collision = `${rec.id}:${rec.orgId}:${prefix}`;
+      if (reportedCollisions.has(collision)) continue;
+      reportedCollisions.add(collision);
       reportFailure(
         `tenant ${rec.slug}: not served`,
         new Error(`org id ${rec.orgId} or sandbox prefix ${prefix} is already used by another tenant`),
@@ -62,6 +67,7 @@ export function createTenantDirectory(opts: DirectoryOptions): TenantDirectory {
   let loading: Promise<Snapshot> | null = null;
   const preparing = new Map<string, Promise<void>>();
   const prepared = new Set<string>();
+  const failed = new Map<string, number>();
   const listeners: Array<(active: Tenant[]) => void> = [];
 
   const isReady = (t: Tenant) => !opts.prepare || t.id === undefined || prepared.has(t.id);
@@ -74,21 +80,23 @@ export function createTenantDirectory(opts: DirectoryOptions): TenantDirectory {
   function ready(t: Tenant): Promise<void> {
     const id = t.id;
     if (id === undefined || !opts.prepare || prepared.has(id)) return Promise.resolve();
+    const failedAt = failed.get(id);
+    if (failedAt !== undefined && now() - failedAt >= PREPARE_RETRY_MS) {
+      failed.delete(id);
+      preparing.delete(id);
+    }
     let pending = preparing.get(id);
     if (!pending) {
       pending = withTenant(t, opts.prepare);
       preparing.set(id, pending);
-      const settled = pending;
-      settled.then(
+      pending.then(
         () => {
           prepared.add(id);
           notify();
         },
         (error: unknown) => {
+          failed.set(id, now());
           reportFailure(`tenant ${t.slug ?? id}: preparation failed`, error);
-          setTimeout(() => {
-            if (preparing.get(id) === settled) preparing.delete(id);
-          }, PREPARE_RETRY_MS).unref();
         },
       );
     }
@@ -116,13 +124,22 @@ export function createTenantDirectory(opts: DirectoryOptions): TenantDirectory {
     return { at: now(), routes: [homeRoute, ...routes], tenants: [opts.home, ...others.map(({ t }) => t)] };
   }
 
+  let attemptedAt = Number.NEGATIVE_INFINITY;
+  let lastFailure: unknown;
+  const attemptedRecently = () => now() - attemptedAt < MISS_RELOAD_MS;
+
   function reload(): Promise<Snapshot> {
+    if (!loading) attemptedAt = now();
     return (loading ??= load()
       .then((next) => {
         current = next;
         for (const t of next.tenants) void ready(t).catch(() => {});
         notify();
         return next;
+      })
+      .catch((error: unknown) => {
+        lastFailure = error;
+        throw error;
       })
       .finally(() => {
         loading = null;
@@ -133,13 +150,13 @@ export function createTenantDirectory(opts: DirectoryOptions): TenantDirectory {
   const unsubscribe = subscribePostgresChannel(opts.databaseUrl, "qm_tenants", refresh, refresh);
 
   async function snapshot(): Promise<Snapshot> {
-    if (!current) return reload();
-    if (now() - current.at >= FRESH_MS) refresh();
+    if (!current) return !loading && attemptedRecently() ? Promise.reject(lastFailure) : reload();
+    if (now() - current.at >= FRESH_MS && !attemptedRecently()) refresh();
     return current;
   }
 
   async function fresher(): Promise<Snapshot> {
-    if (current && now() - current.at < MISS_RELOAD_MS) return current;
+    if (current && !loading && (now() - current.at < MISS_RELOAD_MS || attemptedRecently())) return current;
     try {
       return await reload();
     } catch (error) {

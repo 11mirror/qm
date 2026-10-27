@@ -55,6 +55,7 @@ before(async () => {
 
 after(async () => {
   useTenantDirectory(undefined);
+  registerTenantSettings([]);
   if (!URL) return;
   const admin = new pg.Client({ connectionString: URL });
   await admin.connect();

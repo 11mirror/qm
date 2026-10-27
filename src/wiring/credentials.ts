@@ -143,9 +143,12 @@ export function buildCredentials(deps: CredentialsInputs) {
     identityReady.catch(reportFailureAs("startup: hydrate identity", undefined));
     configReady?.catch(reportFailureAs("startup: hydrate configuration", undefined));
     const ready = Promise.all([identityReady, configReady, layerReady]).then(() => {});
-    ready.catch(() => {});
-    tenantStart.at = { ready, skillsReady };
-    return tenantStart.at;
+    const at = { ready, skillsReady };
+    ready.catch(() => {
+      if (tenantStart.at === at) tenantStart.at = undefined;
+    });
+    tenantStart.at = at;
+    return at;
   };
   const skillsReady: PromiseLike<void> = { then: (resolve, reject) => startOnce().skillsReady.then(resolve, reject) };
   return {
