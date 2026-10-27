@@ -1,6 +1,6 @@
 import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule, Destination } from "../types.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, typedTable, updateRow, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import {
   createPostgresCronFireStore,
   type BeginFireResult,
@@ -119,11 +119,10 @@ export function createCronStore(
   const staleRunningMs = opts.staleRunningMs ?? DEFAULT_FIRE_RUNNING_STALE_MS;
   const fires = opts.fires ?? createPostgresCronFireStore(databaseUrl);
   const db = createPgPool(databaseUrl, [CRONS_MIGRATION]);
-  const { q, pool } = db;
+  const { q } = db;
   const table = typedTable<Cron>(db, CRONS);
   const { get } = table;
-  const update = async (id: string, fn: (cron: Cron) => Cron): Promise<Cron | null> =>
-    updateRow(await pool(), CRONS, id, fn);
+  const { update } = table;
   return {
     async create(input) {
       assertNoEscalation(input);

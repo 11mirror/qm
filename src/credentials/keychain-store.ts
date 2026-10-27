@@ -1,5 +1,5 @@
 import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, typedTable, updateRow, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import { pgTextSafe } from "../util/text.ts";
 import type { KeychainAsk, KeychainCredential, KeychainGrant } from "./keychain.ts";
 
@@ -62,7 +62,6 @@ function rowTable<T>(spec: TableSpec, pg: PgPool) {
     ...table,
     select: async (clause: string, params: unknown[] = []): Promise<T[]> =>
       table.codec.rows(await pg.q(`SELECT ${table.codec.columns} FROM ${spec.table} ${clause}`, params)),
-    update: async (id: string, fn: (current: T) => T) => updateRow(await pg.pool(), spec, id, fn),
   };
 }
 
