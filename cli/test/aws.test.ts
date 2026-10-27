@@ -1,3 +1,4 @@
+import "./support/aws-sdk-bridge.ts";
 import test from "node:test";
 import https from "node:https";
 import { EventEmitter } from "node:events";
@@ -1748,6 +1749,7 @@ console.log("");`,
   try {
     await withAwsLease(config.aws!, async () => {
       t.mock.timers.tick(20 * 60_000);
+      await new Promise((resolve) => setImmediate(resolve));
       t.mock.timers.tick(20 * 60_000);
     });
     assert.match(warnings.join("\n"), /"deploy" lease in acme-qm-deploy-locks was taken over by another QM operation/);

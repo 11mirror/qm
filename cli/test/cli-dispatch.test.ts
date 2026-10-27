@@ -1,3 +1,4 @@
+import "./support/aws-sdk-bridge.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import https from "node:https";

@@ -40,6 +40,12 @@ import {
 } from "../config.ts";
 import { manifestRef } from "../manifest.ts";
 import {
+  GetMicrovmImageCommand,
+  LambdaMicrovmsClient,
+  paginateListMicrovmImageVersions,
+} from "@aws-sdk/client-lambda-microvms";
+import { awsClient } from "../aws-sdk.ts";
+import {
   computedSecrets,
   validatedSecrets,
   runtimeSecretNames,
@@ -328,47 +334,21 @@ function deployImageCoordinates(config: QmConfig): { name: string; version: stri
   return { name, version };
 }
 
-export function guardLambdaMicrovms(e: unknown): never {
-  if (/invalid choice:?\s*'?lambda-microvms/i.test(errMessage(e))) {
-    throw new CliError(
-      "this AWS CLI lacks the `lambda-microvms` commands needed to build/verify the AWS deploy MicroVM image; install an AWS CLI with Lambda MicroVMs support",
-    );
-  }
-  throw e instanceof Error ? e : new Error(errMessage(e));
-}
-
-function assertAwsDeployImage(config: QmConfig): void {
+async function assertAwsDeployImage(config: QmConfig): Promise<void> {
   if (!requiresAwsMicrovmImage(config)) return;
   const aws = requireAws(config);
   const { name, version } = deployImageCoordinates(config);
   const expectedArn = `arn:aws:lambda:${aws.region}:${aws.accountId}:microvm-image:${name}`;
-  let image: Record<string, unknown>;
-  try {
-    image = awsJson<Record<string, unknown>>(aws, [
-      "lambda-microvms",
-      "get-microvm-image",
-      "--image-identifier",
-      expectedArn,
-    ]);
-  } catch (e) {
-    if (/invalid choice:?\s*'?lambda-microvms/i.test(errMessage(e))) return;
-    guardLambdaMicrovms(e);
+  const microvms = awsClient(LambdaMicrovmsClient, aws.region);
+  const { imageArn } = await microvms.send(new GetMicrovmImageCommand({ imageIdentifier: expectedArn }));
+  if (imageArn !== expectedArn)
+    throw new CliError(`AWS deploy image ${name} resolves to ${imageArn ?? "no ARN"}, expected ${expectedArn}`);
+  for await (const page of paginateListMicrovmImageVersions({ client: microvms }, { imageIdentifier: expectedArn })) {
+    const pinned = page.items?.find((item) => item.imageVersion === version);
+    if (pinned?.state === "SUCCESSFUL" && pinned.status === "ACTIVE") return;
+    if (pinned) break;
   }
-  const detail = (image.image && typeof image.image === "object" ? image.image : image) as Record<string, unknown>;
-  const arn = detail.imageArn ?? detail.imageARN ?? detail.arn;
-  if (arn !== expectedArn)
-    throw new CliError(`AWS deploy image ${name} resolves to ${String(arn ?? "no ARN")}, expected ${expectedArn}`);
-  const versions =
-    awsJson<{ items?: Array<{ imageVersion?: string | number; state?: string; status?: string }> }>(aws, [
-      "lambda-microvms",
-      "list-microvm-image-versions",
-      "--image-identifier",
-      expectedArn,
-    ]).items ?? [];
-  const pinned = versions.find((item) => String(item.imageVersion) === version);
-  if (!pinned || pinned.state !== "SUCCESSFUL" || pinned.status !== "ACTIVE") {
-    throw new CliError(`AWS deploy image ${name} version ${version} is not SUCCESSFUL and ACTIVE`);
-  }
+  throw new CliError(`AWS deploy image ${name} version ${version} is not SUCCESSFUL and ACTIVE`);
 }
 
 function secretValueFrom(config: QmConfig, name: string, arns?: Record<string, string>): string {
@@ -2294,7 +2274,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   assertAwsPublicFrontDoor(config);
   if (!opts.dryRun && !opts.inactive) await assertAwsPublicNetwork(config);
   assertAwsPublicApiUrl(config);
-  assertAwsDeployImage(config);
+  await assertAwsDeployImage(config);
   header(`qm ${opts.dryRun ? "plan" : "up"} — ${config.orgId} (aws)`);
   const allServices = topology.workloads;
   assertOwnedServices(config, describedServices(config, allServices), allServices);
@@ -2355,7 +2335,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     );
     return;
   }
-  const lease = acquireLease(aws);
+  const lease = await acquireLease(aws);
   const releaseId = randomUUID();
   const stagingLabel = "qm-staging";
   const staged = new Set<string>();
@@ -2374,7 +2354,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   let dbRestorePoint: string | undefined;
   let migratedCandidate = false;
   try {
-    assertAwsDeployImage(config);
+    await assertAwsDeployImage(config);
     before = serviceSnapshot(config, allServices);
     current = currentDeploymentManifest(aws);
     if (current?.backgroundDeploymentId && !aws.backgroundWorkControl)
@@ -2618,7 +2598,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
           warn(`could not clean staging image ${service}:${stagingLabel}: ${errMessage(error)}`);
       }
     }
-    releaseLease(aws, lease);
+    await releaseLease(aws, lease);
   }
   ok(`AWS services stable on ${label} (deployment ${recorded?.id ?? current?.id})`);
 }
@@ -2671,12 +2651,12 @@ export async function awsDown(config: QmConfig, configDir = process.cwd()): Prom
   const { aws, workloads } = awsTopology(config, configDir);
   assertAwsCallerAccount(aws);
   assertOwnedServices(config, describedServices(config, workloads), workloads);
-  const lease = acquireLease(aws);
+  const lease = await acquireLease(aws);
   try {
     const before = serviceSnapshot(config, workloads);
     await applyServiceTargets(config, before.tasks, Object.fromEntries(workloads.map((workload) => [workload, 0])));
   } finally {
-    releaseLease(aws, lease);
+    await releaseLease(aws, lease);
   }
   ok(
     "AWS services set to zero desired tasks; in-flight turns resume on the next deployment. Infrastructure and data were retained.",
@@ -2716,7 +2696,7 @@ export async function awsRollback(
 ): Promise<void> {
   const { aws, workloads: services } = awsTopology(config, layerOpts?.configDir ?? process.cwd());
   assertAwsCallerAccount(aws);
-  const lease = acquireLease(aws);
+  const lease = await acquireLease(aws);
   let before: ReturnType<typeof serviceSnapshot> | undefined;
   let applied = false;
   let currentLayerBody: string | undefined;
@@ -2834,7 +2814,7 @@ export async function awsRollback(
     }
     throwAfterCompensation(error, compensationFailures);
   } finally {
-    releaseLease(aws, lease);
+    await releaseLease(aws, lease);
   }
   ok(`rolled back ${config.orgId}`);
 }
@@ -4589,7 +4569,7 @@ async function checkLive(
   assertAwsCallerAccount(aws);
   const failures: string[] = [];
   try {
-    assertAwsDeployImage(config);
+    await assertAwsDeployImage(config);
   } catch (error) {
     failures.push(`deploy image drift: ${errMessage(error)}`);
   }

@@ -1,3 +1,4 @@
+import "./support/aws-sdk-bridge.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -75,7 +76,7 @@ if (command === "dynamodb put-item") {
   }
   fs.unlinkSync(lockPath);
   console.log("{}");
-} else if (command === "sts get-caller-identity") console.log(process.env.FAKE_ACCOUNT || "123456789012");
+} else if (command === "sts get-caller-identity") console.log(JSON.stringify({Account:process.env.FAKE_ACCOUNT || "123456789012"}));
 else if (command === "s3api put-object") {
   if (!fs.existsSync(args[args.indexOf("--body") + 1])) process.exit(9);
   console.log("{}");

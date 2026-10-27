@@ -1,3 +1,4 @@
+import "./support/aws-sdk-bridge.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -49,7 +50,7 @@ const text = args.join(" ");
 fs.appendFileSync(${JSON.stringify(log)}, text + "\\n");
 const after = (flag) => args[args.indexOf(flag) + 1];
 const arn = (family, revision) => "arn:aws:ecs:us-west-2:123456789012:task-definition/" + family + ":" + revision;
-if (text.includes("sts get-caller-identity")) console.log(${JSON.stringify(account)});
+if (text.includes("sts get-caller-identity")) console.log(${JSON.stringify(JSON.stringify({ Account: account }))});
 else if (text.includes("ecs list-task-definitions")) {
   const family = after("--family-prefix");
   const status = after("--status");

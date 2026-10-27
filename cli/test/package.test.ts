@@ -48,50 +48,82 @@ test(
       const awsDeployment = join(dir, "aws-deployment");
       const packageManifest = JSON.parse(readFileSync(join(cliDir, "package.json"), "utf8")) as Record<string, unknown>;
       const version = packageManifest["version"] as string;
-      const published = new Map([
-        ["@yc-software/qm", { manifest: packageManifest, bytes: readFileSync(join(dir, packed[0]!.filename)) }],
+      type Published = { manifest: Record<string, unknown>; bytes: Buffer };
+      const published = new Map<string, Map<string, Published>>([
+        [
+          "@yc-software/qm",
+          new Map([[version, { manifest: packageManifest, bytes: readFileSync(join(dir, packed[0]!.filename)) }]]),
+        ],
       ]);
-      for (const name of Object.keys(packageManifest["dependencies"] as Record<string, string>)) {
-        const source = join(cliDir, "node_modules", name);
-        const [dependency] = JSON.parse(
-          execFileSync("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", dir], {
-            cwd: source,
-            encoding: "utf8",
-            env,
-          }),
-        ) as Array<{ filename: string }>;
-        published.set(name, {
-          manifest: JSON.parse(readFileSync(join(source, "package.json"), "utf8")) as Record<string, unknown>,
-          bytes: readFileSync(join(dir, dependency!.filename)),
-        });
-      }
+      // Serve the installed dependency closure, resolving each dependency the way Node does: the
+      // nearest node_modules from the dependent package up to the CLI package.
+      const installed = new Set<string>();
+      const resolveFrom = (from: string, name: string): string | undefined => {
+        for (let at = from; at.startsWith(cliDir); at = dirname(at)) {
+          if (existsSync(join(at, "node_modules", name, "package.json"))) return join(at, "node_modules", name);
+        }
+        return undefined;
+      };
+      const visit = (from: string, deps: Record<string, string> | undefined): void => {
+        for (const name of Object.keys(deps ?? {})) {
+          const source = resolveFrom(from, name);
+          if (!source || installed.has(source)) continue;
+          installed.add(source);
+          const manifest = JSON.parse(readFileSync(join(source, "package.json"), "utf8")) as Record<string, unknown>;
+          visit(source, manifest["dependencies"] as Record<string, string> | undefined);
+        }
+      };
+      visit(cliDir, packageManifest["dependencies"] as Record<string, string>);
+      await Promise.all(
+        [...installed].map(async (source) => {
+          const { stdout } = await execFileAsync(
+            "npm",
+            ["pack", "--json", "--ignore-scripts", "--pack-destination", dir],
+            {
+              cwd: source,
+              encoding: "utf8",
+              env,
+            },
+          );
+          const [dependency] = JSON.parse(stdout) as Array<{ filename: string }>;
+          const manifest = JSON.parse(readFileSync(join(source, "package.json"), "utf8")) as Record<string, unknown>;
+          const versions = published.get(manifest["name"] as string) ?? new Map<string, Published>();
+          versions.set(manifest["version"] as string, {
+            manifest,
+            bytes: readFileSync(join(dir, dependency!.filename)),
+          });
+          published.set(manifest["name"] as string, versions);
+        }),
+      );
       registry = createServer((request, response) => {
         const origin = `http://${request.headers.host}`;
         const path = decodeURIComponent(request.url ?? "").slice(1);
-        const metadata = published.get(path);
-        if (metadata) {
-          const release = metadata.manifest["version"] as string;
+        const versions = published.get(path);
+        if (versions) {
           response.setHeader("content-type", "application/json");
           response.end(
             JSON.stringify({
               name: path,
-              "dist-tags": { latest: release },
-              versions: {
-                [release]: {
-                  ...metadata.manifest,
-                  dist: {
-                    tarball: `${origin}/${path}/-/package-${release}.tgz`,
-                    shasum: createHash("sha1").update(metadata.bytes).digest("hex"),
-                    integrity: `sha512-${createHash("sha512").update(metadata.bytes).digest("base64")}`,
+              "dist-tags": { latest: [...versions.keys()].at(-1) },
+              versions: Object.fromEntries(
+                [...versions].map(([release, metadata]) => [
+                  release,
+                  {
+                    ...metadata.manifest,
+                    dist: {
+                      tarball: `${origin}/${path}/-/package-${release}.tgz`,
+                      shasum: createHash("sha1").update(metadata.bytes).digest("hex"),
+                      integrity: `sha512-${createHash("sha512").update(metadata.bytes).digest("base64")}`,
+                    },
                   },
-                },
-              },
+                ]),
+              ),
             }),
           );
           return;
         }
-        const tarball = /^(.+)\/-\/package-[^/]+\.tgz$/.exec(path);
-        const archive = tarball && published.get(tarball[1]!);
+        const tarball = /^(.+)\/-\/package-([^/]+)\.tgz$/.exec(path);
+        const archive = tarball && published.get(tarball[1]!)?.get(tarball[2]!);
         if (archive) {
           response.setHeader("content-type", "application/octet-stream");
           response.end(archive.bytes);
@@ -261,7 +293,12 @@ else if (command === "secretsmanager get-secret-value") {
       const awsPlan = execFileSync(awsBin, ["plan"], {
         cwd: awsDeployment,
         encoding: "utf8",
-        env: { ...env, AWS_BIN: fakeAws },
+        env: {
+          ...env,
+          AWS_BIN: fakeAws,
+          NODE_OPTIONS: `--import=${join(cliDir, "test/support/aws-sdk-bridge.ts")}`,
+          QM_TEST_AWS_SDK_ROOT: join(awsDeployment, "node_modules/@yc-software/qm"),
+        },
       });
       assert.match(awsPlan, /Plan only/);
       assert.match(awsPlan, /000000000000\.dkr\.ecr\.us-west-2\.amazonaws\.com\/acme-aws-qm-core@sha256:a{64}/);
