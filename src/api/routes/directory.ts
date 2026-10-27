@@ -49,12 +49,11 @@ async function canonicalPrincipal(ctx: ApiCtx): Promise<RouteResult> {
 async function pushDirectory(ctx: ApiCtx): Promise<RouteResult> {
   const { app, body } = ctx;
   const b = body as Record<string, unknown>;
-  if (!Array.isArray(b.members) && !Array.isArray(b.channels) && !Array.isArray(b.groupMembers)) {
+  if (!Array.isArray(b.members) && !Array.isArray(b.channels) && !Array.isArray(b.groupMembers))
     return reply(400, {
       error: "bad_request",
       message: "members[], channels[], and/or groupMembers[] required",
     });
-  }
   if (
     b.partialChannels !== undefined &&
     (typeof b.partialChannels !== "boolean" ||
@@ -62,18 +61,16 @@ async function pushDirectory(ctx: ApiCtx): Promise<RouteResult> {
         (!Array.isArray(b.channels) ||
           !Array.isArray(b.channelMembers) ||
           numOrUndef(b.channelsSyncedAt) === undefined)))
-  ) {
+  )
     return reply(400, {
       error: "bad_request",
       message: "partial channels require channels[], channelMembers[] and channelsSyncedAt",
     });
-  }
-  if (Array.isArray(b.members) && b.members.some((m) => isObj(m) && !isPrincipalType(m.type))) {
+  if (Array.isArray(b.members) && b.members.some((m) => isObj(m) && !isPrincipalType(m.type)))
     return reply(400, {
       error: "bad_request",
       message: `member type must be one of: ${PRINCIPAL_TYPES.join(", ")}`,
     });
-  }
   if (typeof b.workspaceUrl === "string" && /^https:\/\/[^\s/]+$/.test(b.workspaceUrl.replace(/\/+$/, ""))) {
     await app.setDirectoryWorkspaceUrl(b.workspaceUrl.replace(/\/+$/, ""));
   }

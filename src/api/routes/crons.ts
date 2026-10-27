@@ -110,9 +110,8 @@ async function cronRuns(ctx: ApiCtx): Promise<RouteResult> {
   const limit = rawLimit === null ? undefined : Number(rawLimit);
   const cron = await gateSourceCron(ctx, id);
   if (!cron) return;
-  if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+  if (limit !== undefined && (!Number.isInteger(limit) || limit < 1))
     return reply(400, { error: "bad_request", message: "limit must be a positive integer" });
-  }
   const { runs, total } = await app.listCronFires(id, limit !== undefined ? { limit } : {});
   return ok({ cron: cron, runs, total });
 }
@@ -134,18 +133,16 @@ async function cronById(ctx: ApiCtx): Promise<RouteResult> {
     if (editor) await notifyOwnerOfCronEdit(app, { cron, editorId: editor, changeSummary: ["deleted"] });
     return ok({ ok: true });
   }
-  if ((cron.unattendedGrants?.length ?? 0) > 0) {
+  if ((cron.unattendedGrants?.length ?? 0) > 0)
     return reply(403, {
       error: "forbidden",
       message: "a privileged cron may only be patched by its owner from a live turn",
     });
-  }
-  if (body.unattendedGrants !== undefined) {
+  if (body.unattendedGrants !== undefined)
     return reply(400, {
       error: "bad_request",
       message: "unattended grants can only be set by the cron's owner from a live turn",
     });
-  }
   const { task, action, schedule, ...rest } = body;
   const text = action ?? task;
   const result = await applyCronPatch(

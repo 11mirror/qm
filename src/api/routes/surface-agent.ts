@@ -148,14 +148,11 @@ export const listSkills = withQuery("principalId", async ({ app, url }, principa
   return ok({ skills });
 });
 
-function skillReader(ctx: ApiCtx, fallback: unknown): string | null {
+function skillReader(ctx: ApiCtx, fallback: unknown): string {
   const principalId = ctx.capability?.actorId ?? ctx.actor?.p ?? (typeof fallback === "string" ? fallback : "");
-  if (!ctx.capability && !ctx.actor && ctx.secret) {
-    throw fail(401, "capability_required");
-  }
+  if (!ctx.capability && !ctx.actor && ctx.secret) throw fail(401, "capability_required");
   if (principalId) return principalId;
   throw badRequest("principalId required");
-  return null;
 }
 
 function skillView(skill: Skill) {
@@ -172,15 +169,13 @@ function skillView(skill: Skill) {
 export async function getSkillDetail(ctx: ApiCtx): Promise<RouteResult> {
   const { app } = ctx;
   const principalId = skillReader(ctx, ctx.url.searchParams.get("principalId"));
-  if (!principalId) return;
   const skill = await app.getSkill(ctx.params.id!);
   if (
     !skill ||
     (!(await app.canManageSkill(skill, principalId)) &&
       !(await app.listVisibleSkills(principalId)).some((row) => row.skill?.id === skill.id))
-  ) {
+  )
     return reply(404, { error: "not_found" });
-  }
   return ok({
     skill: {
       ...skillView(skill),
@@ -200,7 +195,6 @@ export async function getSkillDetail(ctx: ApiCtx): Promise<RouteResult> {
 
 export async function restoreSkill(ctx: ApiCtx): Promise<RouteResult> {
   const principalId = skillReader(ctx, bodyField(ctx, "principalId"));
-  if (!principalId) return;
   const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId);
   return restored ? ok({ ok: true }) : reply(404, { error: "not_found" });
 }
@@ -251,12 +245,11 @@ export async function createSkill(ctx: ApiCtx): Promise<RouteResult> {
       return reply(403, { error: "forbidden", message: "you cannot create a skill in that context" });
     homeScope = requestedScope as ScopeId;
   }
-  if (homeScope && (parseScopeId(homeScope).kind === "org" || parseScopeId(homeScope).kind === "team")) {
+  if (homeScope && (parseScopeId(homeScope).kind === "org" || parseScopeId(homeScope).kind === "team"))
     return reply(403, {
       error: "forbidden",
       message: "a skill cannot be created in an org or team scope — promote a published skill instead",
     });
-  }
   const fields = {
     name: bodyField(ctx, "name"),
     description: bodyField(ctx, "description"),

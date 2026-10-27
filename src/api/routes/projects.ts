@@ -16,7 +16,7 @@ function bodyText(ctx: ApiCtx, key: string): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function capabilityPrincipal(ctx: ApiCtx, requested: string): string | null {
+function capabilityPrincipal(ctx: ApiCtx, requested: string): string {
   if (!ctx.capability) return requested;
   if (requested && requested !== ctx.capability.actorId) throw refuse(404, { error: "not_found" });
   return ctx.capability.actorId;
@@ -24,14 +24,12 @@ function capabilityPrincipal(ctx: ApiCtx, requested: string): string | null {
 
 async function listProjects(ctx: ApiCtx): Promise<RouteResult> {
   const principalId = capabilityPrincipal(ctx, (ctx.url.searchParams.get("principalId") ?? "").trim());
-  if (principalId === null) return;
   if (!principalId) return reply(400, { error: "bad_request", message: "principalId required" });
   return ok({ projects: await ctx.app.listProjects(principalId) });
 }
 
 async function createProject(ctx: ApiCtx): Promise<RouteResult> {
   const principalId = capabilityPrincipal(ctx, bodyText(ctx, "principalId"));
-  if (principalId === null) return;
   const name = bodyText(ctx, "name");
   if (!principalId || !name) return reply(400, { error: "bad_request", message: "principalId and name required" });
   const project = await ctx.app.createProject(principalId, name);
@@ -45,7 +43,6 @@ function projectMutation(
 ): (ctx: ApiCtx) => Promise<RouteResult> {
   return async (ctx) => {
     const principalId = capabilityPrincipal(ctx, bodyText(ctx, "principalId"));
-    if (principalId === null) return;
     const value = read(ctx);
     if (!principalId || (field && !value))
       throw fail(400, "bad_request", field ? `principalId and ${field} required` : "principalId required");

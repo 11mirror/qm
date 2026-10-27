@@ -57,7 +57,6 @@ async function inbox(ctx: ApiCtx): Promise<RouteResult> {
   const preferences = ctx.deps.uiState;
   if (!deps || !preferences) return reply(503, { error: "inbox_unavailable" });
   const actorId = actingPrincipal(ctx);
-  if (!actorId) return;
   if (!(await inboxLoopsEnabled(ctx, actorId))) return reply(403, { error: "feature_disabled" });
   if (ctx.capability && ctx.capability.privateScope !== true) return reply(403, { error: "forbidden" });
   const defaults = [];
@@ -75,9 +74,8 @@ async function inbox(ctx: ApiCtx): Promise<RouteResult> {
       !Array.isArray(body.cronIds) ||
       body.cronIds.length > 100 ||
       body.cronIds.some((value) => typeof value !== "string")
-    ) {
+    )
       return reply(400, { error: "invalid_selection" });
-    }
     ids = [...new Set(body.cronIds as string[])];
     if (ids.some((value) => !available.some((cron) => cron.id === value))) return reply(403, { error: "forbidden" });
     await preferences.put(id, { value: ids, updatedAt: Date.now() });
@@ -190,7 +188,7 @@ async function inbox(ctx: ApiCtx): Promise<RouteResult> {
 
 async function access(ctx: ApiCtx): Promise<RouteResult> {
   const actorId = actingPrincipal(ctx);
-  if (actorId) return ok({ enabled: await inboxLoopsEnabled(ctx, actorId) });
+  return ok({ enabled: await inboxLoopsEnabled(ctx, actorId) });
 }
 
 async function viewers(ctx: ApiCtx): Promise<RouteResult> {

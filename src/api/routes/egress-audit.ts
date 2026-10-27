@@ -36,12 +36,11 @@ async function ingestEgressAudit(ctx: ApiCtx): Promise<RouteResult> {
   const { deps, body } = ctx;
   if (!deps.egressAudit) return reply(501, { error: "not_configured", message: "no egress audit sink wired" });
   const records = (body as { records?: unknown })?.records;
-  if (!Array.isArray(records) || records.length === 0 || records.length > MAX_BATCH) {
+  if (!Array.isArray(records) || records.length === 0 || records.length > MAX_BATCH)
     return reply(400, {
       error: "bad_request",
       message: `records must be a non-empty array of at most ${MAX_BATCH}`,
     });
-  }
   let accepted = 0;
   for (const raw of records) {
     const parsed = parseRecord(raw);

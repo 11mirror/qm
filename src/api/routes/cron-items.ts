@@ -36,7 +36,7 @@ export interface InboxServiceDeps {
   lock?: AdvisoryLock;
 }
 
-export function actingPrincipal(ctx: ApiCtx): string | null {
+export function actingPrincipal(ctx: ApiCtx): string {
   const principalId = ctx.capability?.actorId || ctx.actor?.p || (ctx.url.searchParams.get("principalId") ?? "").trim();
   if (principalId) return principalId;
   throw refuse(403, {
@@ -74,7 +74,6 @@ async function loadInboxCron(ctx: ApiCtx): Promise<{ deps: InboxServiceDeps; cro
   const deps = ctx.deps.inbox;
   if (!deps) throw refuse(404, { error: "not_found", message: "inboxes are not wired on this deployment" });
   const actorId = actingPrincipal(ctx);
-  if (!actorId) return null;
   const cron = await ctx.app.getCron(ctx.params.id ?? "");
   if (!cron?.inbox || cron.archived || !(await canAdministerCron(ctx.app, cron, actorId)))
     throw refuse(404, { error: "not_found", message: "no such cron inbox" });
@@ -112,9 +111,8 @@ function parseIngestEntry(cron: Cron, raw: unknown): IngestEntryInput | { error:
   if (!isObj(raw)) return { error: "item must be an object" };
   const adapter = sourceAdapter(raw.source);
   if (adapter) {
-    if (cron.inbox?.source && cron.inbox.source !== adapter.id) {
+    if (cron.inbox?.source && cron.inbox.source !== adapter.id)
       return { error: `this inbox does not accept "${adapter.id}" items` };
-    }
     const parsed = adapter.parse(raw);
     if ("error" in parsed) return parsed;
     return {
@@ -127,15 +125,12 @@ function parseIngestEntry(cron: Cron, raw: unknown): IngestEntryInput | { error:
       ...(parsed.proposal ? { proposal: { ...parsed.proposal, by: "agent" as const } } : {}),
     };
   }
-  if (typeof raw.source === "string" && raw.source.trim()) {
-    return { error: `unknown source "${raw.source}"` };
-  }
+  if (typeof raw.source === "string" && raw.source.trim()) return { error: `unknown source "${raw.source}"` };
   const dedupeKey = typeof raw.dedupeKey === "string" ? raw.dedupeKey.trim() : "";
   if (!dedupeKey || dedupeKey.length > 300) return { error: "dedupeKey (<=300 chars) required" };
   if (!isObj(raw.sourcePayload)) return { error: "sourcePayload must be an object" };
-  if (jsonSize(raw.sourcePayload) > MAX_SOURCE_PAYLOAD_BYTES) {
+  if (jsonSize(raw.sourcePayload) > MAX_SOURCE_PAYLOAD_BYTES)
     return { error: `sourcePayload must be under ${MAX_SOURCE_PAYLOAD_BYTES} bytes of JSON` };
-  }
   const sourceAt =
     typeof raw.sourceAt === "number" && Number.isFinite(raw.sourceAt) && raw.sourceAt > 0 ? raw.sourceAt : undefined;
   const summary = typeof raw.summary === "string" && raw.summary.trim() ? raw.summary.trim().slice(0, 500) : undefined;
@@ -143,9 +138,8 @@ function parseIngestEntry(cron: Cron, raw: unknown): IngestEntryInput | { error:
   if (raw.proposal !== undefined) {
     const data = isObj(raw.proposal) && isObj(raw.proposal.data) ? raw.proposal.data : raw.proposal;
     if (!isObj(data)) return { error: "proposal must be an object" };
-    if (jsonSize(data) > MAX_PROPOSAL_BYTES) {
+    if (jsonSize(data) > MAX_PROPOSAL_BYTES)
       return { error: `proposal must be under ${MAX_PROPOSAL_BYTES} bytes of JSON` };
-    }
     proposal = { data };
   }
   return {
@@ -173,9 +167,8 @@ async function listItems(ctx: ApiCtx): Promise<RouteResult> {
   const { deps, cron } = loaded;
   if (!readableItems(ctx, cron)) return;
   const wanted = ctx.url.searchParams.get("state");
-  if (wanted !== null && !isLedgerState(wanted)) {
+  if (wanted !== null && !isLedgerState(wanted))
     return reply(400, { error: "bad_request", message: "unknown state filter" });
-  }
   if (cron.inbox?.source === "gmail" && cron.owner === loaded.actorId) {
     const openMail = (await deps.items.byCron(cron.id)).filter((item) => !isResolved(item) && item.source === "gmail");
     await ctx.deps.inboxSourceRefresh?.(cron.owner, openMail);
@@ -194,17 +187,13 @@ async function ingestItems(ctx: ApiCtx): Promise<RouteResult> {
   const loaded = await loadInboxCron(ctx);
   if (!loaded) return;
   const { deps, cron } = loaded;
-  if (!ctx.capability) {
-    return reply(403, { error: "forbidden", message: "inbox items are ingested by the agent" });
-  }
+  if (!ctx.capability) return reply(403, { error: "forbidden", message: "inbox items are ingested by the agent" });
   if (!readableItems(ctx, cron)) return;
   const body = isObj(ctx.body) ? ctx.body : {};
-  if (!Array.isArray(body.items) || body.items.length === 0) {
+  if (!Array.isArray(body.items) || body.items.length === 0)
     return reply(400, { error: "bad_request", message: "items (non-empty array) required" });
-  }
-  if (body.items.length > MAX_ITEMS_PER_INGEST) {
+  if (body.items.length > MAX_ITEMS_PER_INGEST)
     return reply(400, { error: "bad_request", message: `at most ${MAX_ITEMS_PER_INGEST} items per call` });
-  }
   const sessionId = await agentSessionId(ctx);
   const classifyInboxEmail =
     cron.inbox?.source === "gmail" &&
@@ -214,9 +203,7 @@ async function ingestItems(ctx: ApiCtx): Promise<RouteResult> {
   const existingItems = await deps.items.byCron(cron.id);
   for (const [at, raw] of body.items.entries()) {
     const parsed = parseIngestEntry(cron, raw);
-    if ("error" in parsed) {
-      return reply(400, { error: "bad_request", message: `items[${at}]: ${parsed.error}` });
-    }
+    if ("error" in parsed) return reply(400, { error: "bad_request", message: `items[${at}]: ${parsed.error}` });
     if (classifyInboxEmail && parsed.source === "gmail" && isObj(raw)) {
       for (const key of ["automated", "probablyResolved"])
         if (typeof raw[key] === "boolean") parsed.sourcePayload[key] = raw[key];
@@ -267,9 +254,8 @@ async function serveItemImage(ctx: ApiCtx): Promise<RouteResult> {
   const { cron, item } = loaded;
   const ctxIndex = Number.parseInt(ctx.url.searchParams.get("ctx") ?? "", 10);
   const imageIndex = Number.parseInt(ctx.url.searchParams.get("i") ?? "", 10);
-  if (!Number.isInteger(ctxIndex) || !Number.isInteger(imageIndex) || imageIndex < 0 || ctxIndex < -1) {
+  if (!Number.isInteger(ctxIndex) || !Number.isInteger(imageIndex) || imageIndex < 0 || ctxIndex < -1)
     return reply(400, { error: "bad_request", message: "ctx and i required" });
-  }
   const url = imageUrlFromItem(item, ctxIndex, imageIndex);
   if (!url) return reply(404, { error: "not_found", message: "no such image on this item" });
   const host = new URL(url).hostname;
@@ -291,9 +277,8 @@ async function serveItemImage(ctx: ApiCtx): Promise<RouteResult> {
     return reply(502, { error: "upstream", message: errMessage(e) });
   }
   const type = upstream.headers.get("content-type") ?? "";
-  if (!upstream.ok || !upstream.body || !type.startsWith("image/")) {
+  if (!upstream.ok || !upstream.body || !type.startsWith("image/"))
     return reply(502, { error: "upstream", message: `upstream returned ${upstream.status} ${type}` });
-  }
   let bytes: Buffer;
   try {
     bytes = (
@@ -400,12 +385,9 @@ async function actOnItem(ctx: ApiCtx): Promise<RouteResult> {
     return sendItemOrConflict(ctx, next, "this item is not dismissed");
   }
 
-  if (kind === "send" && item.status !== "ready") {
+  if (kind === "send" && item.status !== "ready")
     return sendConflict("This item needs a fresh draft before sending", "not_ready");
-  }
-  if (ledgerState(item) === "actioned") {
-    return sendConflict("this item was already actioned", "already_actioned");
-  }
+  if (ledgerState(item) === "actioned") return sendConflict("this item was already actioned", "already_actioned");
 
   if (staleDraft()) return draftChanged();
 
@@ -484,18 +466,16 @@ async function followUpOnItem(ctx: ApiCtx): Promise<RouteResult> {
   const message = typeof body.message === "string" ? body.message.trim() : "";
   if (!message && !options.attachments?.length)
     return reply(400, { error: "bad_request", message: "message required" });
-  if (message.length > MAX_FOLLOWUP_CHARS) {
+  if (message.length > MAX_FOLLOWUP_CHARS)
     return reply(400, {
       error: "bad_request",
       message: `message must be under ${MAX_FOLLOWUP_CHARS} chars`,
     });
-  }
-  if (typeof body.expectedProposalAt === "number" && item.proposal?.at !== body.expectedProposalAt) {
+  if (typeof body.expectedProposalAt === "number" && item.proposal?.at !== body.expectedProposalAt)
     return reply(409, {
       error: "draft_changed",
       message: "the draft changed; review it before continuing",
     });
-  }
   if (!deps.chat) return reply(404, { error: "not_found", message: "inbox chat is not wired" });
   try {
     const next = await deps.chat.followUp(
@@ -584,7 +564,6 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<RouteResult> {
 async function ensureInboxSyncCron(ctx: ApiCtx): Promise<RouteResult> {
   if (!ctx.deps.inbox) return reply(404, { error: "not_found", message: "inboxes are not wired on this deployment" });
   const owner = actingPrincipal(ctx);
-  if (!owner) return;
   if (!(await inboxLoopsEnabled(ctx, owner))) return reply(403, { error: "feature_disabled" });
   const body = isObj(ctx.body) ? ctx.body : {};
   const everyMs =

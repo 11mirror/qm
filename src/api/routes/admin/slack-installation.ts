@@ -19,7 +19,6 @@ const standardEmoji = (): StandardEmojiEntry[] =>
 
 export async function getSlackInstallation(ctx: ApiCtx): Promise<RouteResult> {
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const { scope } = authz;
   if (!ctx.deps.slackInstallation) return reply(404, { error: "not_configured" });
   authz.audit("slack-installation.read", "slack-installation");
@@ -69,7 +68,6 @@ export async function getSlackInstallation(ctx: ApiCtx): Promise<RouteResult> {
 
 export async function putSlackInstallation(ctx: ApiCtx): Promise<RouteResult> {
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const { actor } = authz;
   if (!ctx.deps.slackInstallation) return reply(404, { error: "not_configured" });
   const body = ctx.body as { botToken?: unknown; appToken?: unknown };
@@ -92,7 +90,6 @@ export async function putSlackInstallation(ctx: ApiCtx): Promise<RouteResult> {
 
 export async function deleteSlackInstallation(ctx: ApiCtx): Promise<RouteResult> {
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const { actor } = authz;
   if (!ctx.deps.slackInstallation) return reply(404, { error: "not_configured" });
   await ctx.deps.slackInstallation.delete(actor.id);
@@ -102,7 +99,6 @@ export async function deleteSlackInstallation(ctx: ApiCtx): Promise<RouteResult>
 
 export async function getSlackEmojiList(ctx: ApiCtx): Promise<RouteResult> {
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const { scope } = authz;
   const managed = await ctx.deps.slackInstallation?.get();
   const botToken = managed?.botToken ?? ctx.deps.slackEnvBotToken ?? "";
@@ -129,7 +125,7 @@ export async function getSlackEmojiList(ctx: ApiCtx): Promise<RouteResult> {
 }
 
 export async function startSlackInstallation(ctx: ApiCtx): Promise<RouteResult> {
-  if (!(await orgAdmin(ctx))) return;
+  await orgAdmin(ctx);
   if (!ctx.deps.managedSlack) return reply(404, { error: "not_configured" });
   try {
     const step = (ctx.body as { step?: unknown } | undefined)?.step ?? "install";

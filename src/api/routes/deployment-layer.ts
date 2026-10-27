@@ -51,9 +51,7 @@ async function putDeploymentLayer(ctx: ApiCtx): Promise<RouteResult> {
   const store = ctx.deps.deploymentLayer;
   if (!store) return reply(404, { error: "not_found" });
   const bundle = bundleFrom(ctx.body);
-  if (!bundle) {
-    return reply(400, { error: "bad_request", message: "contract: 1, tools[], and skills[] required" });
-  }
+  if (!bundle) return reply(400, { error: "bad_request", message: "contract: 1, tools[], and skills[] required" });
   try {
     const record = await store.put(bundle, "source-authenticated deployment CLI");
     return ok({ ok: true, ...persisted(record) });

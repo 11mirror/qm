@@ -30,16 +30,13 @@ export function adminActorFrom(ctx: Pick<ApiCtx, "req" | "deps" | "capability" |
 export async function authorizeAdmin(
   ctx: Pick<ApiCtx, "req" | "res" | "deps" | "capability" | "actor">,
   _scope: string,
-): Promise<Principal | null> {
+): Promise<Principal> {
   const { deps } = ctx;
-  if (!deps.admin) {
-    throw fail(404, "not_found");
-  }
+  if (!deps.admin) throw fail(404, "not_found");
   const grants = await deps.admin.listGrants();
   const actor = adminActorFrom(ctx);
-  if (actor && !(await activePrincipal(deps, actor.id))) {
+  if (actor && !(await activePrincipal(deps, actor.id)))
     throw fail(403, "forbidden", "this principal is no longer active");
-  }
   if (actor && adminStatusFromGrants(grants, actor.id).isAdmin) return actor;
   throw fail(403, "forbidden", "admin grant required for this scope");
 }
@@ -52,13 +49,10 @@ export async function activePrincipal(deps: ServerDeps, principalId: string): Pr
 
 export async function requireScopedAdmin(
   ctx: Pick<ApiCtx, "req" | "res" | "deps" | "capability" | "actor" | "url">,
-): Promise<{ actor: Principal; scope: string } | null> {
+): Promise<{ actor: Principal; scope: string }> {
   const scope = ctx.url.searchParams.get("scope") ?? "";
-  if (!scope) {
-    throw fail(400, "bad_request", "scope required");
-  }
-  const actor = await authorizeAdmin(ctx, scope);
-  return actor ? { actor, scope } : null;
+  if (!scope) throw fail(400, "bad_request", "scope required");
+  return { actor: await authorizeAdmin(ctx, scope), scope };
 }
 
 export { resolveCapabilityDestination } from "../capability-destination.ts";
@@ -69,15 +63,13 @@ export async function verifiedConversationSpeaker(
 ): Promise<{ principalId: string } | { error: string }> {
   const threadRef = ctx.capability?.threadRef;
   const { runs, signals, identity } = ctx.deps;
-  if (!threadRef || !runs || !signals || !identity) {
+  if (!threadRef || !runs || !signals || !identity)
     return { error: "this turn has no conversation to verify the speaker against" };
-  }
   let turnRuns: Run[];
   if (ctx.capability?.runId) {
     const own = await runs.get(ctx.capability.runId);
-    if (!own || own.sessionId !== threadRef || isTerminal(own.status)) {
+    if (!own || own.sessionId !== threadRef || isTerminal(own.status))
       return { error: "no live turn to verify the speaker against" };
-    }
     turnRuns = [own];
   } else {
     turnRuns = await runs.inFlightForThread(threadRef);
@@ -89,9 +81,7 @@ export async function verifiedConversationSpeaker(
   }
   const match = spoke.find((p) => samePerson(p, onBehalfOf));
   if (!match) return { error: `${onBehalfOf} hasn't spoken in this turn` };
-  if (!identity.isInternal(identity.classify(match))) {
-    return { error: `${onBehalfOf} isn't an internal teammate` };
-  }
+  if (!identity.isInternal(identity.classify(match))) return { error: `${onBehalfOf} isn't an internal teammate` };
   return { principalId: match };
 }
 

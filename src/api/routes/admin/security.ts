@@ -7,7 +7,6 @@ const FLAG_ACTIONS = [SECURITY_FLAGGED, SECURITY_TOOL_RESULT_QUARANTINE];
 
 export async function listSecurityFlags(ctx: ApiCtx): Promise<RouteResult> {
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const requested = Number(ctx.url.searchParams.get("limit") ?? 50);
   const limit = Number.isInteger(requested) && requested > 0 ? Math.min(requested, MAX_FLAGS) : 50;
   const events = (await ctx.deps.auditLog?.tail({ limit, action: FLAG_ACTIONS })) ?? [];

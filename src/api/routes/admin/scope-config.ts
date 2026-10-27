@@ -43,7 +43,6 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<RouteResult> {
   const targetScope = params.scope!;
   const resource = params.resource!;
   const authz = await adminAt(ctx, targetScope);
-  if (!authz) return;
   const withScopeMutationLock = async <T>(fn: () => Promise<T>): Promise<T> =>
     deps.advisoryLock ? deps.advisoryLock.withLock(`admin-governance:${targetScope}`, fn) : fn();
 
@@ -99,7 +98,6 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<RouteResult> {
 
 export async function getAdminResources(ctx: ApiCtx): Promise<RouteResult> {
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   await ctx.deps.refreshModels?.();
   authz.audit("resources.read", "resources");
   return ok({ resources: adminResourceManifest() });
@@ -119,7 +117,6 @@ export async function whoami(ctx: ApiCtx): Promise<RouteResult> {
 export async function listAdminScopes(ctx: ApiCtx): Promise<RouteResult> {
   const { app, deps } = ctx;
   const authz = await orgAdmin(ctx, "scopes");
-  if (!authz) return;
   const [crons, deployments, skills, environmentRows] = await Promise.all([
     app.listCrons(),
     app.listDeployments(),
@@ -256,7 +253,7 @@ async function scopeServiceCredentials(deps: ApiCtx["deps"], targetScope: string
 export async function getCredentialUsageSummary(ctx: ApiCtx): Promise<RouteResult> {
   const targetScope = ctx.params.scope!;
   if (!targetScope || targetScope.includes("/")) return reply(404, { error: "not_found" });
-  if (!(await authorizeAdmin(ctx, targetScope))) return;
+  await authorizeAdmin(ctx, targetScope);
   const credentials = (await ctx.deps.serviceCreds?.listServiceCredentials(targetScope)) ?? [];
   if (!ctx.deps.credentialUsage) return reply(503, { error: "usage_unavailable" });
   const summaries = await ctx.deps.credentialUsage.summary(credentials.map((credential) => credential.slug));
@@ -366,7 +363,6 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<RouteResult> {
     }
   };
   const actor = await read("authorize", () => authorizeAdmin(ctx, targetScope));
-  if (!actor) return;
   const view = requestedView as SettingsView | null;
   const includes = (...views: SettingsView[]) => view === null || views.includes(view);
   const needsModels = includes("models", "governance", "onboarding");
@@ -435,7 +431,7 @@ export async function retention(ctx: ApiCtx): Promise<RouteResult> {
   const { deps, url } = ctx;
   const scope = url.searchParams.get("scope") ?? tenant().orgScope;
   if (parseScopeId(scope).kind !== "org") throw badRequest("retention is org-wide; request an org scope");
-  if (!(await adminAt(ctx, scope, "retention"))) return;
+  await adminAt(ctx, scope, "retention");
   const sessionCount = (await deps.sessions?.countSessions()) ?? 0;
   const participants = (await deps.sessions?.listParticipants()) ?? [];
   const turns = (await deps.sessions?.attributedTurns()) ?? [];

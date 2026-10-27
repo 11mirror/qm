@@ -14,6 +14,6 @@ export function unattendedGrantListing(routes: ReadonlyArray<Route<ApiCtx>>) {
 }
 
 export async function listUnattendedGrants(ctx: ApiCtx, routes: ReadonlyArray<Route<ApiCtx>>): Promise<RouteResult> {
-  if (!(await orgAdmin(ctx, "unattended-grants"))) return;
+  await orgAdmin(ctx, "unattended-grants");
   return ok({ grants: unattendedGrantListing(routes) });
 }

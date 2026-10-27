@@ -29,9 +29,8 @@ async function deploymentLiveSmoke(ctx: ApiCtx): Promise<RouteResult> {
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   try {
     if (!valid(await control.store.get())) return reply(409, { error: "deployment_smoke_ownership_conflict" });
-    if (!(await replay.claim(`deployment-live-smoke:${body.requestId.toLowerCase()}`, REQUEST_EXPIRY))) {
+    if (!(await replay.claim(`deployment-live-smoke:${body.requestId.toLowerCase()}`, REQUEST_EXPIRY)))
       return reply(409, { error: "deployment_smoke_replay" });
-    }
     const identity = { requestId: body.requestId, deploymentId: control.deploymentId, instanceId: control.instanceId };
     ctx.res.writeHead(200, {
       "content-type": "application/x-ndjson",

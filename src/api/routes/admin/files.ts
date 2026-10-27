@@ -28,7 +28,6 @@ async function adminFile(ctx: ApiCtx) {
   const art = await deps.files.get(id);
   if (!art) throw notFound();
   const authz = await adminAt(ctx, art.ownerScopeId);
-  if (!authz) return;
   return { files: deps.files, id, art, authz };
 }
 
@@ -81,7 +80,6 @@ export async function downloadAdminFile(ctx: ApiCtx): Promise<RouteResult> {
 export async function listAdminFiles(ctx: ApiCtx): Promise<RouteResult> {
   const { app, deps, url } = ctx;
   const authz = await scopedAdmin(ctx);
-  if (!authz) return;
   const { scope, orgWide } = authz;
   const nameQuery = (url.searchParams.get("q") ?? "").trim();
   authz.audit("files.read", "files");
@@ -104,7 +102,6 @@ export async function listAdminFiles(ctx: ApiCtx): Promise<RouteResult> {
 export async function uploadAdminFile(ctx: ApiCtx): Promise<RouteResult> {
   const { deps, body } = ctx;
   const authz = await scopedAdmin(ctx);
-  if (!authz) return;
   if (!deps.files) return reply(404, { error: "not_found", message: "file store not wired" });
   if (!deps.blobTransfer) return reply(501, { error: "not_configured", message: "blob transfer store not wired" });
   const { actor, scope } = authz;

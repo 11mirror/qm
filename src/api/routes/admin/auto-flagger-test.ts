@@ -79,7 +79,6 @@ export async function testAutoFlagger(ctx: ApiCtx): Promise<RouteResult> {
   const scope = tenant().orgScope;
   const requestedScope = decodeURIComponent(ctx.params.scope ?? scope);
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const { actor } = authz;
   if (requestedScope !== scope) throw badRequest("the Auto flagger is org-wide; request an org scope");
   await ctx.deps.refreshModels?.();

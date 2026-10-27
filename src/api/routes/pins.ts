@@ -25,24 +25,21 @@ async function addPin(ctx: ApiCtx): Promise<RouteResult> {
   const b = isObj(body) ? body : {};
   const text = typeof b.text === "string" && b.text.trim() ? b.text.trim() : undefined;
   const seq = b.seq;
-  if (seq !== undefined && (typeof seq !== "number" || !Number.isInteger(seq) || seq < 0)) {
+  if (seq !== undefined && (typeof seq !== "number" || !Number.isInteger(seq) || seq < 0))
     return reply(400, { error: "bad_request", message: "seq must be a non-negative integer" });
-  }
-  if (!text && seq === undefined) {
+  if (!text && seq === undefined)
     return reply(400, {
       error: "bad_request",
       message: "pass `text` (a note to pin) and/or `seq` (a transcript entry to pin)",
     });
-  }
   const out = await app.pinConversationItem(threadRef, capability!.actorId, {
     ...(text ? { text } : {}),
     ...(seq !== undefined ? { entrySeq: seq } : {}),
   });
   if ("error" in out) {
     if (out.error === "not_found") return reply(404, { error: "not_found", message: "no such conversation" });
-    if (out.error === "bad_entry") {
+    if (out.error === "bad_entry")
       return reply(404, { error: "entry_not_found", message: `no transcript entry with seq ${seq}` });
-    }
     return reply(409, {
       error: "pin_limit",
       message: "this conversation already has the maximum number of pins — unpin something first",

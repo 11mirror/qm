@@ -144,13 +144,12 @@ const writeCanvas = withTurn(async (ctx, turn) => {
 
 const observe = withTurn(async (ctx, turn) => {
   const { deps, body } = ctx;
-  if (!turn.personal) {
+  if (!turn.personal)
     throw fail(
       403,
       "not_private",
       "UI observation is only available in the person's own web conversations, not shared ones.",
     );
-  }
   if (!deps.signals) throw fail(404, "not_available", "run signals are unavailable");
   const b = isObj(body) ? body : {};
   const selector = typeof b.selector === "string" && b.selector.trim() ? b.selector.trim() : undefined;
@@ -178,13 +177,12 @@ const observe = withTurn(async (ctx, turn) => {
     scopeLabel: scopeId("personal", turn.actorId),
     status: typeof outcome === "string" ? outcome : "ok",
   });
-  if (typeof outcome === "string") {
+  if (typeof outcome === "string")
     throw fail(
       504,
       "ui_not_open",
       `No open web UI tab answered within ${OBSERVE_TIMEOUT_MS / 1000}s. The person may have closed QM; ask them to open it and retry.`,
     );
-  }
   return ok({ snapshot: outcome.structured ?? null });
 });
 

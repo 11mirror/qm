@@ -19,7 +19,7 @@ async function directoryMember(deps: ApiCtx["deps"], id: string): Promise<boolea
 export async function listPrincipalLinks(ctx: ApiCtx): Promise<RouteResult> {
   const { deps } = ctx;
   if (!deps.principalLinks) throw notFound();
-  if (!(await orgAdmin(ctx))) return;
+  await orgAdmin(ctx);
   return ok({ links: await deps.principalLinks.list() });
 }
 
@@ -27,7 +27,6 @@ export async function createPrincipalLink(ctx: ApiCtx): Promise<RouteResult> {
   const { deps, body } = ctx;
   if (!deps.principalLinks) throw notFound();
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const b = isObj(body) ? body : {};
   if (typeof b.principalId === "string" && (await directoryMember(deps, b.principalId)))
     return reply(400, { error: "link_failed", message: DIRECTORY_MEMBER_IS_CANONICAL });
@@ -57,7 +56,6 @@ export async function deletePrincipalLink(ctx: ApiCtx): Promise<RouteResult> {
   const { deps, params } = ctx;
   if (!deps.principalLinks) throw notFound();
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const link = await deps.principalLinks.unlink(params.principalId!);
   if (!link) throw notFound();
   await deps.identity?.refresh(true);

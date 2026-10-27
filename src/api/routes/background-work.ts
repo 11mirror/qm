@@ -53,9 +53,8 @@ async function backgroundWork(ctx: ApiCtx): Promise<RouteResult> {
       body.expectedOwnerDeploymentId === null ||
       identity(body.expectedOwnerDeploymentId)
     )
-  ) {
+  )
     return reply(400, { error: "invalid_background_request" });
-  }
   return status(
     ctx,
     await control.store.set({

@@ -105,9 +105,8 @@ async function listWebhookEvents(ctx: ApiCtx): Promise<RouteResult> {
   const { app, params, actor, url } = ctx;
   const webhook = await app.getWebhook(params.id!);
   const viewer = actor?.p ?? url.searchParams.get("viewer");
-  if (!viewer || !webhook || !(await canAdministerWebhook(app, webhook, viewer))) {
+  if (!viewer || !webhook || !(await canAdministerWebhook(app, webhook, viewer)))
     return reply(404, { error: "not_found" });
-  }
   return ok({ events: await app.listWebhookEvents(webhook.id, viewer) });
 }
 

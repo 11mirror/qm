@@ -27,9 +27,7 @@ async function resolveSurfaceTarget(
   if (typeof b.channel === "string" && b.channel.trim()) {
     const ref = b.channel.trim().replace(/^#/, "");
     if (/^[CG][A-Z0-9]{6,}$/.test(ref)) {
-      if (!(await app.channelVisibleTo(cap.actorId, ref))) {
-        throw await notVisible(ctx, cap.actorId, b.channel);
-      }
+      if (!(await app.channelVisibleTo(cap.actorId, ref))) throw await notVisible(ctx, cap.actorId, b.channel);
       return { source: "slack", target: { channelId: ref } };
     }
     const r = await app.resolveChannel(ref);
@@ -41,9 +39,8 @@ async function resolveSurfaceTarget(
         message: `"${b.channel}" matches multiple channels — pass an exact name or id`,
         candidates: r.candidates.map((c) => ({ channelId: c.channelId, name: c.name })),
       });
-    if (!(await app.channelVisibleTo(cap.actorId, r.channel.channelId, r.channel.isPrivate === true))) {
+    if (!(await app.channelVisibleTo(cap.actorId, r.channel.channelId, r.channel.isPrivate === true)))
       throw await notVisible(ctx, cap.actorId, `#${r.channel.name}`);
-    }
     return { source: "slack", target: { channelId: r.channel.channelId, channelName: r.channel.name } };
   }
   const dest = cap.destination;
@@ -64,9 +61,8 @@ async function rateLimitRecipient(ctx: ApiCtx): Promise<Pick<SurfaceContextQuery
 
 async function createSurfaceContextRequest(ctx: ApiCtx): Promise<RouteResult> {
   const { app, body, capability } = ctx;
-  if (!capability) {
+  if (!capability)
     return reply(401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
-  }
   const b = isObj(body) ? body : {};
   const count = Math.max(
     1,
@@ -97,17 +93,15 @@ async function createSurfaceContextRequest(ctx: ApiCtx): Promise<RouteResult> {
 
 async function createSurfaceFileRequest(ctx: ApiCtx): Promise<RouteResult> {
   const { app, body, capability } = ctx;
-  if (!capability) {
+  if (!capability)
     return reply(401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
-  }
   const b = isObj(body) ? body : {};
   const ts = typeof b.ts === "string" && b.ts.trim() ? b.ts.trim() : undefined;
-  if (!ts) {
+  if (!ts)
     return reply(400, {
       error: "bad_request",
       message: "pass the message's `ts` (find it via /v1/surface-context)",
     });
-  }
   const threadTs = typeof b.threadTs === "string" && b.threadTs.trim() ? b.threadTs.trim() : undefined;
   const name = typeof b.name === "string" && b.name.trim() ? b.name.trim() : undefined;
 
@@ -122,13 +116,12 @@ async function createSurfaceFileRequest(ctx: ApiCtx): Promise<RouteResult> {
   const request = await app.createContextRequest(resolved.source, query);
   return awaitOutcome(ctx, request.id, FILE_FULFILL_WAIT_MS, async (result) => {
     const file = result.file;
-    if (!file) {
+    if (!file)
       return reply(502, {
         error: "surface_error",
         message:
           "the surface can't fetch files yet (it may be mid-deploy) — tell the person plainly rather than retrying",
       });
-    }
     const token = await mintCapabilityToken(
       {
         actorId: capability.actorId,
@@ -177,9 +170,8 @@ async function awaitOutcome(
   const { app } = ctx;
   const outcome = await awaitContextOutcome(app, requestId, { waitMs, pollMs: FULFILL_POLL_MS });
   if (outcome.status === "done") return onDone(outcome.result);
-  if (outcome.status === "failed") {
+  if (outcome.status === "failed")
     return reply(502, { error: "surface_error", message: outcome.error ?? "the surface couldn't answer that" });
-  }
   return reply(504, { error: "surface_timeout", message: "the surface didn't answer in time — try again" });
 }
 

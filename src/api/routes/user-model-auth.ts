@@ -59,12 +59,10 @@ const setAccount = withStore(async (ctx, principal, store) => {
   if (!config) throw fail(404, "not_found");
   const { account, provider } = bodyObj(ctx);
   if (account !== "personal" && account !== "company") throw fail(400, "bad_request");
-  if (account === "company" && (await config.getIndividualModelAuthDurable())) {
+  if (account === "company" && (await config.getIndividualModelAuthDurable()))
     throw fail(403, "Your organization requires a personal AI account.");
-  }
-  if (account === "personal" && !(await store.connections(principal)).length) {
+  if (account === "personal" && !(await store.connections(principal)).length)
     throw fail(409, "Connect an AI account first.");
-  }
   if (provider !== undefined && provider !== "anthropic" && provider !== "openai") throw fail(400, "bad_request");
   if (account === "personal" && provider && !(await store.connections(principal)).some((c) => c.provider === provider))
     throw fail(409, "Connect this AI account first.");
@@ -88,9 +86,8 @@ const putApiKey = withStore(async (ctx, principal, store) => {
   const apiKey = bodyString(ctx, "apiKey").trim();
   if (!provider) return reply(400, PROVIDER_REQUIRED);
   if (!apiKey) throw fail(400, "bad_request", "API key is required");
-  if (!(await validateProviderApiKey(ctx, provider, apiKey))) {
+  if (!(await validateProviderApiKey(ctx, provider, apiKey)))
     throw fail(400, "invalid_api_key", `${provider} rejected this API key`);
-  }
   await store.setApiKey(principal, provider, apiKey);
   auditAuth(ctx, principal, "api-key", provider);
   return ok({ ok: true });

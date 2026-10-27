@@ -24,7 +24,6 @@ function redact(server: McpServer): Omit<McpServer, "bearerToken" | "clientSecre
 
 export async function getMcpServers(ctx: ApiCtx): Promise<RouteResult> {
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   if (!ctx.deps.mcpServers) throw notFound();
   authz.audit("mcp-servers.read", "mcp-servers");
   const servers = await ctx.deps.mcpServers.list();
@@ -42,7 +41,6 @@ export async function getMcpServers(ctx: ApiCtx): Promise<RouteResult> {
 
 export async function putMcpServer(ctx: ApiCtx): Promise<RouteResult> {
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   if (!ctx.deps.mcpServers) throw notFound();
   const id = ctx.params.id ?? "";
   if (!isValidMcpServerId(id))
@@ -73,14 +71,10 @@ export async function putMcpServer(ctx: ApiCtx): Promise<RouteResult> {
   const credentialScope = oauthUser ? "per-user" : (b.credentialScope ?? existing?.credentialScope ?? "shared");
   if (credentialScope !== "shared" && credentialScope !== "per-user")
     throw badRequest("credentialScope must be shared or per-user");
-  if (
-    attestActor &&
-    (!catalog || credentialScope !== "shared" || (auth !== "bearer" && auth !== "client-credentials"))
-  ) {
+  if (attestActor && (!catalog || credentialScope !== "shared" || (auth !== "bearer" && auth !== "client-credentials")))
     throw badRequest(
       "attestActor requires catalog, shared credentials, and bearer or client-credentials auth, so only QM can assert the person",
     );
-  }
   const credentialHost = b.credentialHost ?? existing?.credentialHost ?? (oauthUser ? parsed.hostname : undefined);
   if (
     oauthUser &&
@@ -88,9 +82,8 @@ export async function putMcpServer(ctx: ApiCtx): Promise<RouteResult> {
     Object.values(PROVIDERS).some((p) =>
       p.hosts.some((h) => credentialHost === h || credentialHost.endsWith(`.${h}`) || h.endsWith(`.${credentialHost}`)),
     )
-  ) {
+  )
     throw badRequest("credentialHost is already used by another connector");
-  }
   for (const field of ["oauthAuthorizeUrl", "oauthTokenUrl"] as const) {
     if (oauthUser && b[field] !== undefined && !httpsUrl(b[field])) throw badRequest(`${field} must be an HTTPS URL`);
   }
@@ -106,16 +99,14 @@ export async function putMcpServer(ctx: ApiCtx): Promise<RouteResult> {
       credentialHost !== credentialHost.trim() ||
       credentialHost.length > 253 ||
       /[\s/\\?#@]/.test(credentialHost))
-  ) {
+  )
     throw badRequest("per-user credentials require a credentialHost");
-  }
   if (
     credentialScope === "per-user" &&
     parsed.protocol !== "https:" &&
     !["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname)
-  ) {
+  )
     throw badRequest("per-user credentials require HTTPS (except loopback)");
-  }
   let discovered: DiscoveredOAuth | undefined;
   if (oauthUser && (!oauthAuthorizeUrl || !oauthTokenUrl)) {
     discovered = await discoverOAuth(parsed);
@@ -155,12 +146,11 @@ export async function putMcpServer(ctx: ApiCtx): Promise<RouteResult> {
   if (auth === "bearer" && !server.bearerToken) throw badRequest("bearer auth requires bearerToken");
   if (auth === "client-credentials" && (!server.clientId || !server.clientSecret))
     throw badRequest("client-credentials auth requires clientId and clientSecret");
-  if (oauthUser && (!server.clientId || !server.oauthAuthorizeUrl || !server.oauthTokenUrl)) {
+  if (oauthUser && (!server.clientId || !server.oauthAuthorizeUrl || !server.oauthTokenUrl))
     throw badRequest(
       "oauth-user auth requires clientId plus HTTPS oauthAuthorizeUrl and oauthTokenUrl, or OAuth metadata to discover them" +
         (discovered?.errors.length ? ` (discovery: ${discovered.errors.join("; ")})` : ""),
     );
-  }
   let toolNames: string[] | undefined;
   if (b.validate !== false && !oauthUser && ctx.deps.mcpToolService) {
     try {
@@ -179,7 +169,6 @@ export async function putMcpServer(ctx: ApiCtx): Promise<RouteResult> {
 
 export async function deleteMcpServer(ctx: ApiCtx): Promise<RouteResult> {
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   if (!ctx.deps.mcpServers) throw notFound();
   const id = ctx.params.id ?? "";
   if (!(await ctx.deps.mcpServers.get(id))) throw notFound();

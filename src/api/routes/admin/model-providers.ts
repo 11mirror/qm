@@ -27,7 +27,6 @@ export const validateProviderApiKey = (ctx: ApiCtx, provider: ModelProvider, api
 
 export async function getModelProviders(ctx: ApiCtx): Promise<RouteResult> {
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   await ctx.deps.refreshModels?.();
   if (!ctx.deps.modelCredentials) throw notFound();
   authz.audit("model-providers.read", "model-providers");
@@ -47,7 +46,6 @@ export async function getModelProviders(ctx: ApiCtx): Promise<RouteResult> {
 
 export async function putModelProvider(ctx: ApiCtx): Promise<RouteResult> {
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const store = ctx.deps.modelCredentials;
   const provider = ctx.params.provider;
   if (!store || !isModelProvider(provider)) throw notFound();
@@ -63,7 +61,6 @@ export async function putModelProvider(ctx: ApiCtx): Promise<RouteResult> {
 
 export async function deleteModelProvider(ctx: ApiCtx): Promise<RouteResult> {
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const provider = ctx.params.provider;
   if (!ctx.deps.modelCredentials || !isModelProvider(provider)) throw notFound();
   await ctx.deps.modelCredentials.delete(provider, authz.actor.id);

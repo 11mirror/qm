@@ -148,12 +148,11 @@ function dropFormHtml(
   dropId: string,
   rec: { service: string; purpose: string; fields?: SecretDropField[]; createdAt?: number } | null,
 ): string {
-  if (!rec) {
+  if (!rec)
     return dropPage(
       "Secret drop",
       `<h1 id="title">This link has expired</h1><p>Secret-drop links are single-use. Ask the agent for a fresh one.</p>`,
     );
-  }
   const service_ = escapeHtml(rec.service);
   const purpose_ = escapeHtml(rec.purpose);
   const requested_ = rec.createdAt
@@ -197,22 +196,19 @@ async function mintDrop(ctx: ApiCtx): Promise<RouteResult> {
     return reply(500, { error: "misconfigured", message: "no capability secret to bind the drop link with" });
   if (capability.triggered) return reply(403, { error: "forbidden", message: TRIGGERED });
   const b = body as Record<string, unknown>;
-  if (typeof b.service !== "string" || !b.service.trim() || typeof b.purpose !== "string" || !b.purpose.trim()) {
+  if (typeof b.service !== "string" || !b.service.trim() || typeof b.purpose !== "string" || !b.purpose.trim())
     return reply(400, {
       error: "bad_request",
       message: "expected { service, purpose, envKey?, host?, grantMode?, fields? }",
     });
-  }
-  if (b.grantMode !== undefined && b.grantMode !== "once" && b.grantMode !== "standing") {
+  if (b.grantMode !== undefined && b.grantMode !== "once" && b.grantMode !== "standing")
     return reply(400, { error: "bad_request", message: 'grantMode must be "once" or "standing"' });
-  }
   const fields = parseDropFields(b.fields);
-  if (fields === "invalid") {
+  if (fields === "invalid")
     return reply(400, {
       error: "bad_request",
       message: `fields must be 1–${MAX_DROP_FIELDS} items of { key: ENV_VAR_NAME, label?, secret? } with unique keys`,
     });
-  }
   let ownerId = capability.actorId;
   if (typeof b.onBehalfOf === "string" && b.onBehalfOf.trim() && !samePerson(b.onBehalfOf, capability.actorId)) {
     const speaker = await verifiedConversationSpeaker(ctx, b.onBehalfOf.trim());
@@ -281,19 +277,17 @@ async function redeemDrop(ctx: ApiCtx): Promise<RouteResult> {
   if (!peeked.ok) return reply(404, dropGone(peeked.reason));
   const linkClaims = await dropLinkClaims(ctx, params.id!, peeked.rec);
   if (!linkClaims) return reply(404, dropGone());
-  if (!samePerson(req.headers["x-drop-owner"] as string | undefined, peeked.rec.ownerId)) {
+  if (!samePerson(req.headers["x-drop-owner"] as string | undefined, peeked.rec.ownerId))
     return reply(403, {
       error: "forbidden",
       message: "sign in as the account owner to complete this credential drop",
     });
-  }
   const attestation = linkClaims === true ? undefined : linkClaims;
-  if (!(await dropScopeAuthorized(ctx, peeked.rec, attestation))) {
+  if (!(await dropScopeAuthorized(ctx, peeked.rec, attestation)))
     return reply(409, {
       error: "scope_changed",
       message: "couldn't confirm you're still in this conversation — try again, or ask the agent for a fresh link",
     });
-  }
   const dropFieldDefs = peeked.rec.fields;
   let saveFields: Array<{ envKey: string; value: string; secret: boolean }> | undefined;
   if (dropFieldDefs?.length) {

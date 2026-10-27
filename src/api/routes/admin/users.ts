@@ -28,7 +28,6 @@ const FORGET_AFTER_MS = 24 * 60 * 60 * 1000;
 export async function listUsers(ctx: ApiCtx): Promise<RouteResult> {
   const { deps } = ctx;
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const { scope } = authz;
   authz.audit("users.read", "users");
   const participants = (await deps.sessions?.listParticipants()) ?? [];
@@ -102,7 +101,6 @@ export const inviteTeammate = (ctx: ApiCtx): Promise<RouteResult> => inviteUser(
 async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<RouteResult> {
   const { deps, body } = ctx;
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const { actor, scope } = authz;
   if (!deps.identity) throw notFound();
   if (teammate && ctx.capability)
@@ -222,7 +220,6 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<RouteResult> 
 export async function revokeExternalUser(ctx: ApiCtx): Promise<RouteResult> {
   const { deps, params } = ctx;
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const { actor, scope } = authz;
   if (!deps.identity) throw notFound();
   await deps.identity.refresh(true);
@@ -261,8 +258,7 @@ export async function revokeExternalUser(ctx: ApiCtx): Promise<RouteResult> {
 
 export async function searchDirectory(ctx: ApiCtx): Promise<RouteResult> {
   const { deps, app, url } = ctx;
-  const authz = await orgAdmin(ctx);
-  if (!authz) return;
+  await orgAdmin(ctx);
   const q = (url.searchParams.get("q") ?? "").trim();
   if (!q || !deps.directory) return ok({ members: [] });
   const r = await app.resolveRecipient(q);
@@ -277,7 +273,6 @@ export async function searchDirectory(ctx: ApiCtx): Promise<RouteResult> {
 export async function listKeychainStatus(ctx: ApiCtx): Promise<RouteResult> {
   const { app, deps } = ctx;
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const { scope } = authz;
   authz.audit("keychain.read", "keychain");
 
@@ -352,7 +347,6 @@ async function resolveAdminUser(deps: ApiCtx["deps"], requestedPrincipal: string
 export async function getUserDetail(ctx: ApiCtx): Promise<RouteResult> {
   const { deps, params } = ctx;
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const { member, principalId } = await resolveAdminUser(deps, params.principalId!);
   const personal = makeScopeId("personal", principalId);
   authz.audit("user.read", principalId);
@@ -387,7 +381,6 @@ export async function getUserDetail(ctx: ApiCtx): Promise<RouteResult> {
 export async function startImpersonation(ctx: ApiCtx): Promise<RouteResult> {
   const { app, body } = ctx;
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const target = String((body as { target?: string } | undefined)?.target ?? "").trim();
   if (!target) throw badRequest("target principal required");
   if (target === authz.actor.id) throw badRequest("cannot impersonate yourself");
@@ -399,7 +392,6 @@ export async function startImpersonation(ctx: ApiCtx): Promise<RouteResult> {
 export async function stopImpersonation(ctx: ApiCtx): Promise<RouteResult> {
   const { body } = ctx;
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const target = String((body as { target?: string } | undefined)?.target ?? "").trim();
   authz.audit("impersonate.stop", target || "-");
   return ok({ ok: true });
@@ -412,7 +404,6 @@ const ONBOARDING_STATUSES = new Set<OnboardingStatus>(["not_started", "pending",
 export async function setUserOnboarding(ctx: ApiCtx): Promise<RouteResult> {
   const { deps, body, params } = ctx;
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const { actor } = authz;
   if (!deps.memory) throw notFound();
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
@@ -428,7 +419,6 @@ export async function setUserOnboarding(ctx: ApiCtx): Promise<RouteResult> {
 export async function resetUserToBrandNew(ctx: ApiCtx): Promise<RouteResult> {
   const { deps, params } = ctx;
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const { actor } = authz;
   if (!deps.memory) throw notFound();
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
@@ -445,7 +435,6 @@ export async function resetUserToBrandNew(ctx: ApiCtx): Promise<RouteResult> {
 export async function createAdminGrant(ctx: ApiCtx): Promise<RouteResult> {
   const { deps, body } = ctx;
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const { actor } = authz;
   const b = body as { principalId?: string; role?: string; scopeId?: string };
   try {
@@ -464,7 +453,6 @@ export async function createAdminGrant(ctx: ApiCtx): Promise<RouteResult> {
 export async function revokeAdminGrant(ctx: ApiCtx): Promise<RouteResult> {
   const { deps, url, params } = ctx;
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const { actor } = authz;
   const principalId = params.principalId!;
   const scope = url.searchParams.get("scope") ?? "";

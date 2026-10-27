@@ -463,7 +463,6 @@ export async function spendExport(ctx: BaseCtx): Promise<RouteResult> {
 export async function spend(ctx: ApiCtx): Promise<RouteResult> {
   const { res, app, deps, url } = ctx;
   const authz = await orgAdmin(ctx, "spend");
-  if (!authz) return;
   const { scope } = authz;
   const bad = (message: string) => badRequest(message);
   const bucket = url.searchParams.get("bucket") ?? "day";

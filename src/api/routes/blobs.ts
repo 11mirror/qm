@@ -12,7 +12,7 @@ import { reportForeignTenant } from "../../tenant.ts";
 
 const STAGE_UPLOAD_DEADLINE_MS = 1_800_000;
 
-function rejectBlob(ctx: BaseCtx, message: string): null {
+function rejectBlob(ctx: BaseCtx, message: string): never {
   ctx.req.resume();
   throw fail(403, "forbidden", message);
 }
@@ -43,7 +43,7 @@ async function authorizeBlob(
   return null;
 }
 
-function blobStore(ctx: BaseCtx): NonNullable<BaseCtx["deps"]["blobTransfer"]> | null {
+function blobStore(ctx: BaseCtx): NonNullable<BaseCtx["deps"]["blobTransfer"]> {
   if (ctx.deps.blobTransfer) return ctx.deps.blobTransfer;
   ctx.req.resume();
   throw fail(501, "not_configured", "no blob transfer store wired");
@@ -52,7 +52,6 @@ function blobStore(ctx: BaseCtx): NonNullable<BaseCtx["deps"]["blobTransfer"]> |
 async function putBlob(ctx: BaseCtx): Promise<RouteResult> {
   const { req } = ctx;
   const store = blobStore(ctx);
-  if (!store) return;
   const declaredSha = headerValue(req, "x-content-sha256") ?? "";
   if (ctx.secret && !headerValue(req, CAPABILITY_HEADER) && !/^[0-9a-f]{64}$/.test(declaredSha)) {
     req.resume();
@@ -78,7 +77,7 @@ async function putBlob(ctx: BaseCtx): Promise<RouteResult> {
 async function getBlob(ctx: BaseCtx): Promise<RouteResult> {
   const { res, params } = ctx;
   const store = blobStore(ctx);
-  if (!store || !(await authorizeBlob(ctx, "read", params.id!))) return;
+  if (!(await authorizeBlob(ctx, "read", params.id!))) return;
   const blob = await store.open(params.id!);
   if (!blob) return reply(404, { error: "not_found" });
   res.writeHead(200, { "content-type": "application/octet-stream", "content-length": String(blob.sizeBytes) });

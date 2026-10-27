@@ -28,17 +28,15 @@ function authorized(ctx: ApiCtx, actor: Principal, scope: string, read?: string)
   return authz;
 }
 
-export async function adminAt(ctx: ApiCtx, scope: string, read?: string): Promise<AdminAuthz | null> {
-  const actor = await authorizeAdmin(ctx, scope);
-  return actor && authorized(ctx, actor, scope, read);
+export async function adminAt(ctx: ApiCtx, scope: string, read?: string): Promise<AdminAuthz> {
+  return authorized(ctx, await authorizeAdmin(ctx, scope), scope, read);
 }
 
-export const orgAdmin = (ctx: ApiCtx, read?: string): Promise<AdminAuthz | null> =>
-  adminAt(ctx, tenant().orgScope, read);
+export const orgAdmin = (ctx: ApiCtx, read?: string): Promise<AdminAuthz> => adminAt(ctx, tenant().orgScope, read);
 
-export async function scopedAdmin(ctx: ApiCtx, read?: string): Promise<AdminAuthz | null> {
+export async function scopedAdmin(ctx: ApiCtx, read?: string): Promise<AdminAuthz> {
   const authz = await requireScopedAdmin(ctx);
-  return authz && authorized(ctx, authz.actor, authz.scope, read);
+  return authorized(ctx, authz.actor, authz.scope, read);
 }
 
 export const badRequest = (message: string): HttpError => fail(400, "bad_request", message);
@@ -79,18 +77,13 @@ export async function requireScopedResource<T, K extends StringKey<T>>(
   scopeKey: K,
   noun: string,
   scopeMismatch: "forbid" | "fallback" = "forbid",
-): Promise<(AdminAuthz & { record: T }) | null> {
+): Promise<AdminAuthz & { record: T }> {
   const authz = await scopedAdmin(ctx);
-  if (!authz) return null;
   const record = await load();
-  if (!record) {
-    throw notFound();
-  }
+  if (!record) throw notFound();
   const recordScope = record[scopeKey] as string;
   if (authz.orgWide || recordScope === authz.scope) return { ...authz, record };
-  if (scopeMismatch === "forbid") {
-    throw fail(403, "forbidden", `${noun} is outside the requested scope`);
-  }
+  if (scopeMismatch === "forbid") throw fail(403, "forbidden", `${noun} is outside the requested scope`);
   return { ...authorized(ctx, authz.actor, recordScope), record };
 }
 

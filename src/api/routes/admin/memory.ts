@@ -6,7 +6,6 @@ import { badRequest, discoverScopes, notFound, orgAdmin, scopedAdmin } from "./c
 export async function listMemoryScopes(ctx: ApiCtx): Promise<RouteResult> {
   const { app, deps } = ctx;
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   if (!deps.memory) throw notFound();
   authz.audit("memory.scopes.read", "memory");
   const labels = await discoverScopes(app, deps);
@@ -44,7 +43,6 @@ export async function listMemoryScopes(ctx: ApiCtx): Promise<RouteResult> {
 export async function adminMemory(ctx: ApiCtx): Promise<RouteResult> {
   const { deps, body, method } = ctx;
   const authz = await scopedAdmin(ctx);
-  if (!authz) return;
   const { actor, scope } = authz;
   const memory = deps.memory;
   if (!memory) throw notFound();

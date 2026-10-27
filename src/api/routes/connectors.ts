@@ -167,15 +167,13 @@ async function oauthCallback(ctx: BaseCtx): Promise<RouteResult> {
   try {
     state = await resumeOAuthFlow(deps, secret, stateParam);
     if (state.provider !== oauthRoute.provider) throw new Error("OAuth provider mismatch");
-    if (state.orgId !== undefined && state.orgId !== tenant().orgId) {
+    if (state.orgId !== undefined && state.orgId !== tenant().orgId)
       throw new Error("OAuth state is for a different org");
-    }
     if (
       !deps.replayDedupe ||
       !(await deps.replayDedupe.claim(`oauth:${state.nonce}`, state.issuedAt + OAUTH_STATE_MAX_AGE_MS))
-    ) {
+    )
       throw new Error("OAuth state was already used or replay protection is unavailable");
-    }
     const accountType = state.accountType ?? "default";
     const client = await resolverFor(deps)(oauthRoute.provider, { accountType });
     const { hosts, token } = await exchangeCode(oauthRoute.provider, code, state.redirectUri, {
@@ -230,9 +228,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<RouteResult> {
   if (!clicker) return reply(401, { error: "unauthorized", message: "sign in to complete this connection" });
   const linkId = decodeURIComponent(ctx.params.linkId ?? "");
   const peeked = await deps.consentLinks.peek(linkId);
-  if (!peeked.ok) {
-    return ok({ status: peeked.reason === "expired" ? "expired" : "invalid" });
-  }
+  if (!peeked.ok) return ok({ status: peeked.reason === "expired" ? "expired" : "invalid" });
   const rec = peeked.rec;
   if (rec.orgId !== undefined && rec.orgId !== tenant().orgId) return ok({ status: "invalid" });
   if (!oauthProvider(rec.provider)) return ok({ status: "invalid" });
@@ -401,19 +397,17 @@ export async function oauthRevoke(ctx: ApiCtx): Promise<RouteResult> {
     principalId = personKey(principalId) || capability.actorId;
     if (!samePerson(principalId, capability.actorId)) {
       const members = capability.keychainMembers ?? [];
-      if (!members.some((m) => samePerson(m.id, principalId))) {
+      if (!members.some((m) => samePerson(m.id, principalId)))
         return reply(400, {
           error: "bad_request",
           message: "principalId must be a member of this conversation",
         });
-      }
     }
   }
   const providerName = typeof b.provider === "string" ? b.provider : "";
   const host = typeof b.host === "string" ? b.host : "";
-  if (!principalId || (!providerName && !host)) {
+  if (!principalId || (!providerName && !host))
     return reply(400, { error: "bad_request", message: "principalId and provider or host required" });
-  }
   const hosts = providerName ? oauthProvider(providerName)?.hosts : [host];
   if (!hosts) return unknownProvider(providerName);
   for (const h of hosts)

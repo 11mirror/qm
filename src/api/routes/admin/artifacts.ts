@@ -24,7 +24,6 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<RouteResult> {
   const { app, pathname } = ctx;
   const resource = pathname.slice("/v1/admin/".length);
   const authz = await scopedAdmin(ctx, resource);
-  if (!authz) return;
   const { scope, orgWide } = authz;
   if (resource === "crons") {
     const crons = (await app.listCrons())
@@ -75,7 +74,6 @@ export async function putAdminCronRuntime(ctx: ApiCtx): Promise<RouteResult> {
   const { app, params, body } = ctx;
   const id = params.id!;
   const scoped = await requireScopedResource(ctx, () => app.getCron(id), "ownerScopeId", "cron");
-  if (!scoped) return;
   if (
     typeof body !== "object" ||
     body === null ||
@@ -98,7 +96,6 @@ export async function putAdminCronDestination(ctx: ApiCtx): Promise<RouteResult>
   const { app, params, body } = ctx;
   const id = params.id!;
   const scoped = await requireScopedResource(ctx, () => app.getCron(id), "ownerScopeId", "cron");
-  if (!scoped) return;
   const { actor, record: cron } = scoped;
   if (typeof body !== "object" || body === null || !("destination" in body))
     throw badRequest("destination is required; use null to clear");
@@ -122,7 +119,6 @@ export async function getAdminSkill(ctx: ApiCtx): Promise<RouteResult> {
   const { app, params } = ctx;
   const id = params.id!;
   const scoped = await requireScopedResource(ctx, () => app.getSkill(id), "scopeId", "skill", "fallback");
-  if (!scoped) return;
   const { record: skill } = scoped;
   const provenance = skill.pack;
   const provenancePack = provenance ? ((await app.getSkillPack(provenance.packId)) ?? undefined) : undefined;
@@ -148,7 +144,6 @@ export async function archiveAdminSkill(ctx: ApiCtx): Promise<RouteResult> {
   const { app, params } = ctx;
   const id = params.id!;
   const scoped = await requireScopedResource(ctx, () => app.getSkill(id), "scopeId", "skill");
-  if (!scoped) return;
   const { record: skill } = scoped;
   await app.archiveSkill(id);
   scoped.audit("skill.archive", id, skill.scopeId);

@@ -31,7 +31,6 @@ async function directoryNames(deps: ApiCtx["deps"]) {
 export async function listAmbientContainers(ctx: ApiCtx): Promise<RouteResult> {
   const { app } = ctx;
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const { scope } = authz;
   authz.audit("ambient_context.read", "ambient-context");
   const raw = await app.listSurfaceContainers({ limit: CONTEXT_PAGE_MAX + 1 });
@@ -47,7 +46,6 @@ export async function listAmbientContainers(ctx: ApiCtx): Promise<RouteResult> {
 export async function listAmbientMessages(ctx: ApiCtx): Promise<RouteResult> {
   const { app, deps, url } = ctx;
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const { scope } = authz;
   const container = (url.searchParams.get("container") ?? "").trim();
   if (!container) throw badRequest("container required");
@@ -84,7 +82,6 @@ async function listDecisionLog<Outcome extends string>(
 ): Promise<RouteResult> {
   const { deps, url } = ctx;
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const { scope } = authz;
   if (!store) return ok({ scopeId: scope, [log.many]: [], counts: log.empty });
   const container = (url.searchParams.get("container") ?? "").trim() || undefined;

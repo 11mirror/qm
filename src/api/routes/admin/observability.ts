@@ -11,7 +11,6 @@ const AUDIT_FILTERED_LIMIT = 2000;
 export async function egress(ctx: ApiCtx): Promise<RouteResult> {
   const { deps } = ctx;
   const authz = await scopedAdmin(ctx, "egress");
-  if (!authz) return;
   const { scope, orgWide } = authz;
   const q = orgWide ? { limit: EGRESS_LIST_LIMIT } : { scopeId: scope, limit: EGRESS_LIST_LIMIT };
   const brokerRows = ((await deps.credentialUsage?.list(q)) ?? []).map((s) => ({
@@ -47,7 +46,6 @@ export async function egress(ctx: ApiCtx): Promise<RouteResult> {
 export async function listAdminRuns(ctx: ApiCtx): Promise<RouteResult> {
   const { deps } = ctx;
   const authz = await scopedAdmin(ctx, "runs");
-  if (!authz) return;
   const { scope, orgWide } = authz;
   const rawRuns = (await deps.runs?.list({ limit: RUNS_LIST_LIMIT })) ?? [];
   const byThread = new Map(
@@ -80,7 +78,6 @@ export async function listAdminRuns(ctx: ApiCtx): Promise<RouteResult> {
 export async function listAdminErrors(ctx: ApiCtx): Promise<RouteResult> {
   const { deps, url } = ctx;
   const authz = await scopedAdmin(ctx, "errors");
-  if (!authz) return;
   const { scope, orgWide } = authz;
   const sessionId = url.searchParams.get("sessionId") || undefined;
   const filters = {
@@ -103,7 +100,6 @@ export async function listAdminErrors(ctx: ApiCtx): Promise<RouteResult> {
 export async function listAdminAudit(ctx: ApiCtx): Promise<RouteResult> {
   const { deps } = ctx;
   const authz = await scopedAdmin(ctx, "audit");
-  if (!authz) return;
   const { scope, orgWide } = authz;
   const action = ctx.url.searchParams.get("action") ?? undefined;
   const resourceContains = ctx.url.searchParams.get("resource") ?? undefined;

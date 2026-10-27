@@ -61,9 +61,8 @@ async function proxyDeployment(ctx: BaseCtx): Promise<RouteResult> {
       return reply(403, { error: "forbidden", message: "portal identity required" });
     if (deps.identity) {
       await deps.identity.refresh();
-      if (deps.identity.classify(actor.p).type !== "internal") {
+      if (deps.identity.classify(actor.p).type !== "internal")
         return reply(403, { error: "forbidden", message: "principal is no longer active" });
-      }
     }
   }
   if (
@@ -111,7 +110,7 @@ async function listDeployments(ctx: ApiCtx): Promise<RouteResult> {
 const LOGS_DEFAULT_TAIL_LINES = 200;
 const LOGS_MAX_TAIL_LINES = 2000;
 
-function boundedIntParam(ctx: ApiCtx, name: string, fallback: number, max: number): number | null {
+function boundedIntParam(ctx: ApiCtx, name: string, fallback: number, max: number): number {
   const raw = ctx.url.searchParams.get(name);
   const value = raw === null ? fallback : Number(raw);
   if (Number.isInteger(value) && value >= 1 && value <= max) return value;
@@ -123,7 +122,6 @@ async function deploymentLogs(ctx: ApiCtx): Promise<RouteResult> {
   const viewer = capability?.actorId ?? actor?.p;
   if (!viewer) return reply(401, { error: "capability_required" });
   const tailLines = boundedIntParam(ctx, "tailLines", LOGS_DEFAULT_TAIL_LINES, LOGS_MAX_TAIL_LINES);
-  if (tailLines === null) return;
   const result = await app.deploymentLogsFor(params.id!, viewer, { tailLines });
   if (result.status !== "ok") return reply(404, { error: "not_found" });
   if (result.logs === null) return ok({ logs: null, message: "no logs available for this deployment" });
@@ -137,7 +135,6 @@ async function fetchDeployment(ctx: ApiCtx): Promise<RouteResult> {
   const path = normalizedDeploymentFetchPath(url.searchParams.get("path"));
   if (!path) return reply(400, { error: "bad_request", message: "path must be a safe absolute path" });
   const maxBytes = boundedIntParam(ctx, "maxBytes", AGENT_FETCH_DEFAULT_MAX_BYTES, AGENT_FETCH_MAX_BYTES);
-  if (maxBytes === null) return;
   const reach = await app.reachDeployment(params.id!, viewer);
   if (reach.status !== "ok") return reply(404, { error: "not_found" });
   try {

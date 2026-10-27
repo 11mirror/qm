@@ -37,13 +37,12 @@ async function attachEnvironment(ctx: ApiCtx): Promise<RouteResult> {
   if (!name) return reply(400, { error: "bad_request", message: "name (string) required" });
   const env = await app.resolveEnvironmentByName(name);
   if (!env) return reply(404, { error: "environment_not_found", message: `no environment named "${name}"` });
-  if (env.ownerActorId && !samePerson(env.ownerActorId, capability.actorId)) {
+  if (env.ownerActorId && !samePerson(env.ownerActorId, capability.actorId))
     return reply(403, {
       error: "owner_mediation_required",
       message: `environment "${name}" is owned by ${env.ownerActorId}. Ask them to attach this conversation to it (the same way you'd ask an owner for a credential grant) — only its owner can attach others.`,
       ownerActorId: env.ownerActorId,
     });
-  }
   try {
     await app.attachScope({ scopeId: capability.scopeId, environmentId: env.id, actorId: capability.actorId });
     return ok({ ok: true, environment: { id: env.id, name: env.name } });

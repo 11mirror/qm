@@ -46,7 +46,6 @@ function packRoute(
 ): (ctx: ApiCtx) => Promise<RouteResult> {
   return async (ctx) => {
     const actor = await authorizeAdmin(ctx, tenant().orgScope);
-    if (!actor) return;
     const out = await run(ctx, actor.id);
     if (!out) return;
     audit(ctx.deps, {

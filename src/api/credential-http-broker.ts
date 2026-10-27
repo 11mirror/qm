@@ -136,7 +136,7 @@ export async function brokerCredentialHttp(ctx: BaseCtx): Promise<RouteResult> {
 
   let target: BrokeredTarget;
   const match = connectorFor(claims, ref);
-  if (match && "ambiguous" in match) {
+  if (match && "ambiguous" in match)
     return deny(
       409,
       "ambiguous_connector",
@@ -144,7 +144,6 @@ export async function brokerCredentialHttp(ctx: BaseCtx): Promise<RouteResult> {
       ref,
       ref,
     );
-  }
   if (match) {
     const { connector } = match;
     if (!CONNECTOR_METHODS.has(method))
@@ -165,7 +164,7 @@ export async function brokerCredentialHttp(ctx: BaseCtx): Promise<RouteResult> {
       connector.ownerId,
       connector.accountType,
     );
-    if (!token) {
+    if (!token)
       return deny(
         410,
         "connector_unavailable",
@@ -173,7 +172,6 @@ export async function brokerCredentialHttp(ctx: BaseCtx): Promise<RouteResult> {
         connector.handle,
         connector.host,
       );
-    }
     target = {
       slug: connector.handle,
       host: connector.host,

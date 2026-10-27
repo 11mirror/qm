@@ -16,9 +16,8 @@ export const suggestedActivityRoutes: Route[] = [
     auth: "source",
     handle: async ({ deps, body, actor }) => {
       if (!deps.suggestedActivities) throw fail(404, "not_found");
-      if (!isObj(body) || typeof body.principalId !== "string" || !body.principalId || body.principalId.length > 200) {
+      if (!isObj(body) || typeof body.principalId !== "string" || !body.principalId || body.principalId.length > 200)
         throw fail(400, "bad_request");
-      }
       if (actor && actor.p !== body.principalId) throw fail(403, "forbidden");
       let seeds;
       try {
@@ -55,13 +54,10 @@ export const suggestedActivityRoutes: Route[] = [
         body.principalId.length > 200 ||
         typeof body.id !== "string" ||
         body.id.length > 64
-      ) {
+      )
         throw fail(400, "bad_request");
-      }
       if (actor && actor.p !== body.principalId) throw fail(403, "forbidden");
-      if (!(await deps.suggestedActivities.dismiss(body.principalId, body.id))) {
-        throw fail(404, "not_found");
-      }
+      if (!(await deps.suggestedActivities.dismiss(body.principalId, body.id))) throw fail(404, "not_found");
       return ok({ dismissed: true });
     },
   },

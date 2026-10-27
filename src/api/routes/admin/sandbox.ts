@@ -4,7 +4,6 @@ import { orgAdmin } from "./common.ts";
 
 export async function manageSandboxResources(ctx: ApiCtx): Promise<RouteResult> {
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const actorId = authz.actor.id;
   const resources = ctx.deps.sandboxResources;
   if (!resources) return reply(404, { error: "not_supported" });

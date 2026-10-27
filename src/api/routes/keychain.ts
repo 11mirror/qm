@@ -105,14 +105,12 @@ const saveCredential = keychainRoute(async ({ deps, body }, kc, { actorId, scope
           typeof (f as CredentialFieldInput)?.envKey !== "string" ||
           typeof (f as CredentialFieldInput)?.value !== "string",
       )
-    ) {
+    )
       throw fail(400, "bad_request", "each field needs string envKey and value");
-    }
     fields = b.fields as CredentialFieldInput[];
   }
-  if (typeof b.service !== "string" || (typeof b.secret !== "string" && !files?.length && !fields?.length)) {
+  if (typeof b.service !== "string" || (typeof b.secret !== "string" && !files?.length && !fields?.length))
     throw fail(400, "bad_request", "service plus secret, files[], or fields[] required");
-  }
   const meta = await kc.save({
     ownerId: actorId,
     service: b.service,
@@ -180,13 +178,11 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
     typeof b.credential !== "string" ||
     typeof b.purpose !== "string" ||
     (b.requestedMode !== undefined && b.requestedMode !== "once" && b.requestedMode !== "standing")
-  ) {
+  )
     throw fail(400, "bad_request", 'expected { credential, purpose, requestedMode?: "once"|"standing" }');
-  }
   const scope = parseScopeId(capability.scopeId);
-  if (scope.kind !== "channel" && scope.kind !== "personal" && scope.kind !== "group") {
+  if (scope.kind !== "channel" && scope.kind !== "personal" && scope.kind !== "group")
     throw fail(403, "forbidden", "asks require a personal or shared conversation");
-  }
   const cred = await kc.getCredential(b.credential);
   if (!cred) throw fail(404, "not_found", "unknown credential");
   const requester = await app.directoryMember(actorId);
@@ -195,9 +191,8 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
     !(await app.belongsToScope(cred.ownerId, capability.scopeId)) ||
     (scope.kind !== "personal" &&
       (requester?.type !== "internal" || (await app.directoryMember(cred.ownerId))?.type !== "internal"))
-  ) {
+  )
     throw fail(403, "forbidden", "the requester and credential owner must have current access to this conversation");
-  }
   const context = (await app.listContexts(cred.ownerId)).find((c) => c.scopeId === capability.scopeId);
   const cronId = cronIdOf(capability.threadRef);
   const cron = cronId ? await app.getCron(cronId) : null;

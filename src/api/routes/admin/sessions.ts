@@ -47,7 +47,6 @@ async function cronFireResults(app: App, summaries: readonly SessionSummary[]): 
 export async function listAdminSessions(ctx: ApiCtx): Promise<RouteResult> {
   const { res, app, deps, url } = ctx;
   const authz = await scopedAdmin(ctx, "sessions");
-  if (!authz) return;
   const { scope, orgWide } = authz;
   const categoryParam = url.searchParams.get("category") ?? "conversation";
   let category: SessionCategory | "all" = "conversation";
@@ -126,7 +125,6 @@ export async function getAdminSessionLlm(ctx: ApiCtx): Promise<RouteResult> {
   const { deps, params, url } = ctx;
   const id = params.id!;
   const scoped = await requireAdminSession(ctx, id);
-  if (!scoped) return;
   const { record: session } = scoped;
   scoped.audit("session.llm.read", id, session.scopeId);
   const turnParam = url.searchParams.get("turnSeq");
@@ -146,7 +144,6 @@ export async function getAdminSession(ctx: ApiCtx): Promise<RouteResult> {
   const { app, deps, params, url } = ctx;
   const id = params.id!;
   const scoped = await requireAdminSession(ctx, id);
-  if (!scoped) return;
   const { scope, record: session } = scoped;
   scoped.audit("session.read", id, session.scopeId);
   const want = Math.max(1, Math.floor(Number(url.searchParams.get("limit"))) || TRANSCRIPT_LIMIT_DEFAULT);

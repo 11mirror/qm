@@ -120,9 +120,7 @@ function sendRunOutcome(succeeded: boolean, outcome: { reason?: string }): Route
 
 async function postTurn(ctx: ApiCtx): Promise<RouteResult> {
   const { app, url, body } = ctx;
-  if (!isTurnRequest(body)) {
-    return reply(400, { error: "bad_request", message: "expected a TurnRequest" });
-  }
+  if (!isTurnRequest(body)) return reply(400, { error: "bad_request", message: "expected a TurnRequest" });
   const wantAsync = url.searchParams.get("async") === "1" || body.async === true;
   const sanitized = sanitizedTurnRequest(body);
   if ("error" in sanitized) return reply(400, { error: "bad_request", message: sanitized.error });
@@ -161,9 +159,8 @@ async function postRunSignal(ctx: ApiCtx): Promise<RouteResult> {
   const id = ctx.params.id!;
   const body = isObj(ctx.body) ? ctx.body : {};
   const kind = typeof body.kind === "string" ? body.kind : "";
-  if (kind !== "abort" && kind !== "steer" && kind !== "client_result") {
+  if (kind !== "abort" && kind !== "steer" && kind !== "client_result")
     return reply(400, { error: "bad_request", message: "kind must be abort, steer or client_result" });
-  }
   if (kind === "client_result") {
     const run = await ctx.deps.runs?.get(id);
     if (run?.request.desktopClientId && body.desktopClientId !== run.request.desktopClientId)
@@ -179,12 +176,10 @@ async function postRunSignal(ctx: ApiCtx): Promise<RouteResult> {
   const ts = typeof body.ts === "string" && body.ts ? body.ts : undefined;
   let request: TurnRequest | undefined;
   if (body.request !== undefined) {
-    if (!isTurnRequest(body.request)) {
+    if (!isTurnRequest(body.request))
       return reply(400, { error: "bad_request", message: "request must be a TurnRequest" });
-    }
-    if (actor && !samePerson(body.request.actor.externalId, actor.p)) {
+    if (actor && !samePerson(body.request.actor.externalId, actor.p))
       return reply(403, { error: "forbidden", message: "portal identity does not match the requested actor" });
-    }
     const sanitized = sanitizedTurnRequest(body.request);
     if ("error" in sanitized) return reply(400, { error: "bad_request", message: sanitized.error });
     request = sanitized.request;
