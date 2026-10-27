@@ -1,4 +1,4 @@
-import { errMessage } from "../util/errors.ts";
+import { errMessage, swallow } from "../util/errors.ts";
 import { readCappedText } from "../util/response-body.ts";
 import { isEmbeddingModel, type EmbeddingModel } from "./embedding-model.ts";
 import { gatewayRoot, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
@@ -190,9 +190,7 @@ export function createGatewayCatalog(
       } catch (error) {
         retryAt = now() + RETRY_MS;
         if (discovered && transientFailure(error) && now() - lastSuccessAt < STALE_MS) {
-          console.warn(
-            `[model] Gateway model discovery failed; keeping last known models and retrying in 30 seconds: ${errMessage(error)}`,
-          );
+          swallow("model: gateway model discovery (keeping last known models, retrying in 30s)", error);
           return;
         }
         if (discovered || Object.keys(config.models).length === 0) {
