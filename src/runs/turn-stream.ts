@@ -70,10 +70,7 @@ export interface TurnStreamOptions {
 
 const DEFAULT_MAX_CHARS = 200_000;
 const DEFAULT_GRACE_MS = 30_000;
-const FIRST_BLOCK_MAX_CHARS = 20_000;
 const BLOCK_JOIN = "\n\n";
-export const REASONING_MAX_BLOCKS = 8;
-const REASONING_MAX_CHARS = 20_000;
 
 function makeEntry(partial: Partial<Entry> = {}): Entry {
   return {
@@ -138,8 +135,7 @@ function streamWriteMethods(opts: TurnStreamOptions, maxChars: number, runs: Map
         clearTimeout(entry.timer);
         entry.timer = null;
       }
-      if (entry.firstBlockOpen && entry.firstBlock.length < FIRST_BLOCK_MAX_CHARS)
-        entry.firstBlock = (entry.firstBlock + delta).slice(0, FIRST_BLOCK_MAX_CHARS);
+      if (entry.firstBlockOpen) entry.firstBlock += delta;
       append(opts, maxChars, runId, entry, delta);
     },
 
@@ -156,13 +152,12 @@ function streamWriteMethods(opts: TurnStreamOptions, maxChars: number, runs: Map
       let block = entry.reasoning.find((b) => b.step === step && b.index === index);
       if (!block) {
         block = { step, index, text: "" };
-        entry.reasoning = [...entry.reasoning, block].slice(-REASONING_MAX_BLOCKS);
+        entry.reasoning = [...entry.reasoning, block];
       }
-      const piece = delta.slice(0, Math.max(0, REASONING_MAX_CHARS - block.text.length));
-      if (!piece) return;
+      if (!delta) return;
       const offset = block.text.length;
-      block.text += piece;
-      opts.onReasoning?.(runId, { step, index }, piece, offset);
+      block.text += delta;
+      opts.onReasoning?.(runId, { step, index }, delta, offset);
     },
 
     settleReasoning(runId, step, index) {

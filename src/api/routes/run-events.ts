@@ -1,6 +1,4 @@
-import { LRUCache } from "lru-cache";
 import { reasoningKey } from "../../runs/run-stream-events.ts";
-import { REASONING_MAX_BLOCKS } from "../../runs/turn-stream.ts";
 import type { Item } from "../../sessions/items.ts";
 import { type ApiCtx, reply, type Route, type RouteResult } from "./route.ts";
 import { SSE_HEADERS } from "./session-state.ts";
@@ -53,7 +51,7 @@ async function streamRun(ctx: ApiCtx): Promise<RouteResult> {
   let refreshing = false;
   let refreshAgain = false;
   const sentToolEvents = new Set<string>();
-  const sentReasoning = new LRUCache<string, number>({ max: REASONING_MAX_BLOCKS });
+  const sentReasoning = new Map<string, number>();
   let toolCursor: number | undefined;
   const cleanup = (): void => {
     closed = true;
