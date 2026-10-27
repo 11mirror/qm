@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import { createPgPool, type PgMigrationDefinition, type PgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
+import type { PgMigrationDefinition } from "../persistence/pg-migrations.ts";
 
 export const TURN_QUEUES = ["turns_people", "turns_delegated", "turns_background"] as const;
 export type TurnQueue = (typeof TURN_QUEUES)[number];
@@ -16,7 +17,6 @@ const queueSetup = (queue: string): string[] => [
 
 export const ABSURD_MIGRATION: PgMigrationDefinition = {
   id: "absurd/0.5.1",
-  script: true,
   statements: [readFileSync(ABSURD_SQL_URL, "utf8"), ...TURN_QUEUES.flatMap(queueSetup)],
   expectedChecksum: "1ff2d7e74b5a2b0454ec1ccea7f29fdf48fc58cbe89dc8e9f8f9e896ea5c8a2b",
   acceptedChecksums: [
@@ -40,7 +40,6 @@ const RETIRED_FUNCTIONS = [
 
 export const ABSURD_UNPARTITIONED_MIGRATION: PgMigrationDefinition = {
   id: "absurd/0.5.1-unpartitioned",
-  script: true,
   statements: [
     ...RETIRED_FUNCTIONS.map((name) => `DROP FUNCTION IF EXISTS absurd.${name}`),
     readFileSync(ABSURD_SQL_URL, "utf8"),

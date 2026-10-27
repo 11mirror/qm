@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import pg from "pg";
-import { applyPgMigrations, definePgMigration, pgMigrationChecksum } from "../../src/persistence/pg-pool.ts";
+import { applyPgMigrations, definePgMigration, pgMigrationChecksum } from "../../src/persistence/pg-migrations.ts";
 import { MEMORY_FACTS_MIGRATIONS } from "../../src/memory/postgres-memory-service.ts";
 import { CONTRACT_MIGRATIONS } from "../../src/persistence/contract-migrations.ts";
 import { withClient } from "../support/pg-client.ts";

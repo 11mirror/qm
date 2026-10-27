@@ -1,6 +1,16 @@
 import type { Pool, PoolClient } from "pg";
-import { swallowAs } from "../util/errors.ts";
+import { swallow, swallowAs } from "../util/errors.ts";
 import type { PgQueryOptions, Rows } from "./pg-pool.ts";
+
+export async function rollbackOrReport(client: PoolClient, context: string): Promise<Error | undefined> {
+  try {
+    await client.query("ROLLBACK");
+    return undefined;
+  } catch (error) {
+    swallow(context, error);
+    return error instanceof Error ? error : new Error(String(error));
+  }
+}
 
 async function withStatementTimeout<T>(
   client: PoolClient,
@@ -62,7 +72,6 @@ export async function runPgQuery(
         (lateClient) => lateClient.release(error instanceof Error ? error : new Error(String(error))),
         () => undefined,
       )
-      // The caller gets the original error; a client that connects late is only released.
       .catch(() => undefined);
     throw error;
   } finally {

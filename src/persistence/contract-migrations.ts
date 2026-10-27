@@ -1,4 +1,4 @@
-import { pgMigrationFrom, type PgMigration, type PgMigrationDefinition } from "./pg-pool.ts";
+import { pgMigrationFrom, type PgMigration, type PgMigrationDefinition } from "./pg-migrations.ts";
 
 export const CONTRACT_MIGRATIONS: readonly PgMigrationDefinition[] = [
   { id: "contract/0001-drop-deliveries", statements: ["DROP TABLE IF EXISTS deliveries"] },

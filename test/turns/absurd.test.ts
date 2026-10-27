@@ -1,7 +1,8 @@
 import { after, afterEach, before, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
-import { applyPgMigrations, pgMigrationFrom, type PoolClient } from "../../src/persistence/pg-pool.ts";
+import type { PoolClient } from "../../src/persistence/pg-pool.ts";
+import { applyPgMigrations, pgMigrationFrom } from "../../src/persistence/pg-migrations.ts";
 import { ABSURD_MIGRATION, TURN_QUEUES, registerAbsurdSchema, type TurnQueue } from "../../src/turns/absurd-schema.ts";
 import {
   RunFailed,

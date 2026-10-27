@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { definePgMigration, type PgMigration } from "./pg-pool.ts";
+import { definePgMigration, type PgMigration } from "./pg-migrations.ts";
 
 interface SchemaBaselineStep {
   id: string;

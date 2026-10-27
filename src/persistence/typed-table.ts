@@ -1,11 +1,5 @@
-import {
-  tenantCols,
-  tenantLockKey,
-  withPgTransaction,
-  type PgMigrationDefinition,
-  type PgPool,
-  type Rows,
-} from "./pg-pool.ts";
+import { tenantCols, tenantLockKey, withPgTransaction, type PgPool, type Rows } from "./pg-pool.ts";
+import type { PgMigrationDefinition } from "./pg-migrations.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 
 export type ColumnType = "text" | "bigint" | "double precision" | "boolean" | "jsonb" | "text[]";

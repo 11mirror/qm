@@ -1,7 +1,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
-import { applyPgMigrations, pgMigrationFrom } from "../../src/persistence/pg-pool.ts";
+import { applyPgMigrations, pgMigrationFrom } from "../../src/persistence/pg-migrations.ts";
 import { applyTenancy } from "../../src/persistence/tenancy.ts";
 import {
   ABSURD_JOBS_MIGRATION,

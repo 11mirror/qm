@@ -1,4 +1,4 @@
-import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import type { PgMigrationDefinition } from "../persistence/pg-migrations.ts";
 import { USER_KINDS } from "./items.ts";
 import { SPEND_FIELDS, spendValue } from "./postgres-session-sql.ts";
 
