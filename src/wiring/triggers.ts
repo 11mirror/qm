@@ -59,7 +59,6 @@ export function buildTriggers(
     directory,
     resolveRecipient,
     currentScopeMembers,
-    sessions,
   };
   const askResolution = (ask: KeychainAsk, grant?: KeychainGrant) =>
     fireAskResolution(

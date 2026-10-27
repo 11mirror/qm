@@ -67,9 +67,9 @@ export function buildStores(w: Head) {
     isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
     advisoryLock,
   });
-  const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions });
+  const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams });
   const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams });
-  const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions });
+  const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity });
   const managesArtifactHome = createManagesArtifactHome(
     { managedGroups: projects, directory, identity, teams },
     canManageScope,

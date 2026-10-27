@@ -31,7 +31,6 @@ export interface ScopeMembershipDeps {
     classify(externalId: string, isExternalGuest?: boolean): { type?: string; teamIds?: readonly string[] };
   };
   teams?: { isMember(principalId: string, teamId: string): Promise<boolean> };
-  sessions?: { participantScopes(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
 }
 
 async function teamMember(deps: ScopeMembershipDeps, principalId: string, teamId: string): Promise<boolean> {
@@ -111,15 +110,8 @@ async function memberOfSharedScope(
   kind: "channel" | "group",
   ref: string,
   principalId: string,
-  fullScope: ScopeId,
 ): Promise<boolean> {
-  const current = await sharedScopeMembership(deps, kind, ref, principalId);
-  if (current !== undefined) return current;
-  return (
-    (
-      await deps.sessions?.participantScopes(principalId).catch(swallowAs("scope membership: session lookup", []))
-    )?.some((s) => s.scopeId === fullScope) === true
-  );
+  return (await sharedScopeMembership(deps, kind, ref, principalId)) === true;
 }
 
 export type CanReadScope = (principalId: string, targetScope: ScopeId) => Promise<boolean>;
@@ -200,9 +192,9 @@ export function createCanReadScope(deps: ScopeMembershipDeps): CanReadScope {
     if (kind === "org") return deps.identity?.classify(principalId).type === "internal";
     if (kind === "personal") return samePerson(ref, principalId);
     if (kind === "team") return teamMember(deps, principalId, ref);
-    if (kind === "group") return memberOfSharedScope(deps, kind, ref, principalId, targetScope);
+    if (kind === "group") return memberOfSharedScope(deps, kind, ref, principalId);
     if (kind === "channel") {
-      if (await memberOfSharedScope(deps, kind, ref, principalId, targetScope)) return true;
+      if (await memberOfSharedScope(deps, kind, ref, principalId)) return true;
       const isPrivate = await deps.directory
         ?.channelPrivacy?.(ref)
         .catch(swallowAs("scope membership: channel privacy", undefined));
