@@ -2,7 +2,7 @@
 
 Security screening runs in observe mode. A classifier reads external content and records its verdict in the audit log as `security_screen.classify`, with status `allow`, `would_block` or `error`. Nothing it decides changes a turn.
 
-The screening gate is the one place where that verdict could turn into enforcement. It is the function `screeningGate` in `src/core/orchestrator/screening-gate.ts`. The security observer (`createSecurityObserver` in `src/core/orchestrator/security-screen.ts`) calls it after every classification and returns its decision. Today the gate always allows.
+The screening gate is the place where that verdict would turn into enforcement. It does not exist in code yet: the security observer (`createSecurityObserver` in `src/core/orchestrator/security-screen.ts`) records each classification and returns nothing. This document describes the gate to add when enforcement is wanted.
 
 ## What the gate decides
 
@@ -39,7 +39,7 @@ For a block to take effect, the call site has to wait for the decision. Today ev
 
 ## How it is turned on
 
-The gate is turned on by changing code: `screeningGate` starts returning `block` for the hooks, surfaces, origins or verdicts chosen. There is no environment variable, setting or feature flag. Enforcement ships in a reviewed change, together with its tests and the awaiting call sites, and can be rolled back the same way.
+The gate is turned on by changing code: the observer gains a pure decision function that returns `block` for the hooks, surfaces, origins or verdicts chosen, and returns that decision to its callers. There is no environment variable, setting or feature flag. Enforcement ships in a reviewed change, together with its tests and the awaiting call sites, and can be rolled back the same way.
 
 ## Why it is not the old quarantine flow
 
@@ -55,4 +55,4 @@ The gate is different:
 - **One function with one answer.** There is no held state, no release approvals, and no extra prompt text for the model.
 - **Posture stays separate.** It is not tied to the security posture or to configuration.
 - **The screener is unchanged.** It writes the same audit rows, and the gate reads its verdict.
-- **Small to review and test.** Enforcing means changing a pure function and the call sites that await it.
+- **Small to review and test.** Enforcing means adding a pure function and the call sites that await it.
