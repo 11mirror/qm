@@ -1,4 +1,4 @@
-import { item } from "./item-fixture.ts";
+import { item } from "./support/item-fixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";

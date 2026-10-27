@@ -1,9 +1,9 @@
 import { loadRuntimeConfig } from "../src/runtime-config-store.ts";
-import { runtimeConfig } from "./runtime-fixture.ts";
+import { runtimeConfig } from "./support/runtime-fixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { getBaseModel, modelSupportsFastMode } from "../src/pi-models.ts";
-import { metadata } from "./model-metadata.ts";
+import { metadata } from "./support/model-metadata.ts";
 
 test("models require server metadata even when the browser SDK knows their id", () => {
   assert.throws(() => getBaseModel("gpt-5.5"), /metadata unavailable/);

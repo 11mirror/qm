@@ -1,0 +1,513 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { JSDOM } from "jsdom";
+import { createServer } from "vite";
+import type { Conversation } from "../src/conv-types.ts";
+import { MAX_PANES, MAX_TILES } from "../src/split-layout.ts";
+
+interface Canvas {
+  panes: () => number;
+  tiles: () => number;
+  newChat: () => boolean;
+  tabCounts: () => number[];
+  activeTabs: () => number[];
+  cycleTab: (step: number) => void;
+  focusTile: (index: number) => void;
+  splitTile: (index: number) => void;
+  seededChat: (threadRef?: string) => Conversation | null;
+  drag: () => void;
+  closeTile: (index: number) => Promise<void>;
+  split: () => Promise<void>;
+  switchAway: () => void;
+}
+
+async function withCanvas(
+  run: (canvas: Canvas) => void | Promise<void>,
+  stacked: boolean | "single" = false,
+): Promise<void> {
+  const dom = new JSDOM('<!doctype html><div id="app"></div>', { url: "http://localhost/web-ui/" });
+  const globals = {
+    window: dom.window,
+    document: dom.window.document,
+    location: dom.window.location,
+    history: dom.window.history,
+    localStorage: dom.window.localStorage,
+    navigator: dom.window.navigator,
+    HTMLElement: dom.window.HTMLElement,
+    Element: dom.window.Element,
+    Node: dom.window.Node,
+    Event: dom.window.Event,
+    PointerEvent: dom.window.PointerEvent,
+    MouseEvent: dom.window.MouseEvent,
+    customElements: dom.window.customElements,
+    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+    requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0),
+    cancelAnimationFrame: clearTimeout,
+    ResizeObserver: class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+    fetch: async () =>
+      Response.json({
+        scopeId: "personal:tester",
+        models: [],
+        modelCatalog: {},
+        fastModeModelIds: [],
+        interactiveFastMode: false,
+        effective: { modelId: "" },
+        sessions: [],
+        items: [],
+      }),
+  };
+  const descriptors = new Map<string, PropertyDescriptor | undefined>();
+  for (const [key, value] of Object.entries(globals)) {
+    descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+  }
+  Object.defineProperty(dom.window, "matchMedia", {
+    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+  });
+  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  try {
+    const { appState } = await vite.ssrLoadModule("/src/shell.ts");
+    const split = await vite.ssrLoadModule("/src/split.ts");
+    const sessions = await vite.ssrLoadModule("/src/sessions.ts");
+    appState.me = { user: "tester", org: "test" };
+    appState.currentView = "chats";
+    appState.mainEl = document.createElement("main");
+    document.body.append(appState.mainEl);
+    if (stacked) {
+      const ids = stacked === "single" ? ["a"] : ["a", "b"];
+      localStorage.setItem(
+        "web-ui:split-canvas:v1",
+        JSON.stringify({
+          v: 2,
+          active: true,
+          layout: {
+            grid: {
+              root: {
+                type: "branch",
+                data: [
+                  {
+                    type: "leaf",
+                    data: {
+                      views: ids,
+                      activeView: "a",
+                      id: "stack",
+                    },
+                  },
+                ],
+              },
+              width: 1000,
+              height: 800,
+              orientation: "HORIZONTAL",
+            },
+            panels: Object.fromEntries(
+              ids.map((id) => [
+                id,
+                {
+                  id,
+                  contentComponent: "pane",
+                  tabComponent: "pane",
+                  params: {},
+                  title: "New session",
+                },
+              ]),
+            ),
+            activeGroup: "stack",
+          },
+        }),
+      );
+      split.loadPersistedSplit();
+      assert.equal(split.mountRestoredCanvas(), true);
+    }
+    if (!stacked) assert.ok(sessions.startNewChat());
+    await run({
+      panes: () => document.querySelectorAll(".dv-tab").length,
+      tabCounts: () =>
+        Array.from(document.querySelectorAll(".dv-groupview"), (g) => g.querySelectorAll(".dv-tab").length),
+      activeTabs: () =>
+        Array.from(document.querySelectorAll(".dv-groupview"), (g) =>
+          Array.from(g.querySelectorAll(".dv-tab")).findIndex((t) => t.classList.contains("dv-active-tab")),
+        ),
+      cycleTab: (step) => window.dispatchEvent(new dom.window.CustomEvent("qm:cycle-tab", { detail: step })),
+      focusTile: (index) => {
+        document
+          .querySelectorAll(".dv-groupview")
+          .item(index)!
+          .querySelector(".dv-tab")!
+          .dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true }));
+      },
+      splitTile: (index) => {
+        document
+          .querySelectorAll(".dv-groupview")
+          .item(index)!
+          .querySelector<HTMLButtonElement>('[aria-label="Split this pane with a new session"]')!
+          .click();
+      },
+      tiles: () => document.querySelectorAll(".dv-groupview").length,
+      newChat: () => sessions.startNewChat() !== null,
+      seededChat: (threadRef) => sessions.startNewChat(null, null, threadRef),
+      split: async () => {
+        split.beginSessionDrag({ id: "second", threadRef: "web:tester:second" });
+        const target = document.querySelector(".split-zone.zone-right");
+        assert.ok(target, "single views enter multiview through drag-and-drop");
+        target.dispatchEvent(new dom.window.Event("drop", { bubbles: true, cancelable: true }));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      },
+      drag: () => split.beginSessionDrag({ id: "second", threadRef: "web:tester:second" }),
+      closeTile: async (index) => {
+        document
+          .querySelectorAll(".dv-groupview")
+          .item(index)!
+          .querySelector<HTMLButtonElement>('[aria-label="Close pane"]')!
+          .click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      },
+      switchAway: () => {
+        appState.currentView = "crons";
+        appState.mainEl.replaceChildren();
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  } finally {
+    await vite.close();
+    dom.window.close();
+    for (const [key, descriptor] of descriptors) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete (globalThis as Record<string, unknown>)[key];
+    }
+  }
+}
+
+test("New chat stops splitting after three tiles and adds tabs to the selected pane", async () => {
+  await withCanvas(async (canvas) => {
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [1, 1]);
+
+    assert.equal(canvas.newChat(), true);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [1, 1], "one session: New chat replaces it");
+
+    await canvas.split();
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [2, 2]);
+
+    assert.equal(canvas.newChat(), true);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [3, 3], "split screen: New chat adds a window");
+
+    assert.equal(canvas.newChat(), true);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [4, 3], "three tiles: New chat adds a tab");
+
+    assert.equal(canvas.newChat(), true);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [5, 3], "further sessions also add tabs");
+    assert.deepEqual(canvas.tabCounts(), [1, 1, 3]);
+    canvas.focusTile(0);
+    assert.equal(canvas.newChat(), true);
+    assert.deepEqual(canvas.tabCounts(), [2, 1, 3], "the new tab follows the selected pane");
+    canvas.splitTile(2);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [7, 4], "explicit splitting still creates a fourth tile");
+    assert.equal(canvas.newChat(), true);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [8, 4], "four tiles: New chat still adds a tab");
+  });
+});
+
+test("a seeded New chat hands back the conversation in the pane it just placed", async () => {
+  await withCanvas(async (canvas) => {
+    const first = canvas.seededChat();
+    assert.ok(first, "the canvas must return a live conversation to seed");
+    assert.ok(first.state.threadRef, "…already mounted on its own new thread");
+    assert.ok(first.state.agent, "…with an agent a caller can prompt");
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [1, 1], "one session: it replaces that pane");
+
+    await canvas.split();
+    const second = canvas.seededChat();
+    assert.ok(second);
+    assert.notEqual(second.state.threadRef, first.state.threadRef, "each one is its own conversation");
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [3, 3], "split screen: it adds a window, same as the button");
+  });
+});
+
+test("seeded chats return from another view without losing the grid or supplied thread", async () => {
+  await withCanvas(async (canvas) => {
+    await canvas.split();
+    canvas.switchAway();
+    const thread = "web:tester:app-edit:example";
+    const conv = canvas.seededChat(thread);
+    assert.ok(conv?.state.agent);
+    assert.equal(conv?.state.threadRef, thread);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [3, 3]);
+  });
+});
+
+test("new chat replaces the focused conversation at capacity without dropping the grid", async () => {
+  await withCanvas(async (canvas) => {
+    await canvas.split();
+    for (let i = 2; i < MAX_PANES; i++) assert.equal(canvas.newChat(), true);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [MAX_PANES, 3]);
+    assert.ok(canvas.seededChat()?.state.agent);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [MAX_PANES, 3]);
+  });
+});
+
+test("explicit splitting reaches the tile cap and stops at capacity", async () => {
+  await withCanvas(async (canvas) => {
+    await canvas.split();
+    for (let i = 2; i < MAX_TILES; i++) canvas.splitTile(0);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [MAX_TILES, MAX_TILES]);
+    canvas.splitTile(0);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [MAX_TILES, MAX_TILES]);
+    await canvas.closeTile(0);
+    canvas.splitTile(0);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [MAX_TILES, MAX_TILES]);
+  });
+});
+
+test("a restored tab-only arrangement gains a tab, not a tile", async () => {
+  await withCanvas((canvas) => {
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [2, 1]);
+    assert.ok(canvas.seededChat()?.state.agent);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [3, 1]);
+  }, true);
+});
+
+test("a drafted first pane survives splitting and closing its neighbor", async () => {
+  await withCanvas(async (canvas) => {
+    const first = canvas.seededChat()!;
+    first.composer.state.draft = "Keep this unsent draft";
+    const host = first.state.host;
+    const agent = first.state.agent;
+    const thread = first.state.threadRef;
+    canvas.drag();
+    assert.equal(document.querySelectorAll(".split-zone.zone-right").length, 1);
+    await canvas.split();
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [2, 2]);
+    assert.equal(first.state.host, host);
+    assert.equal(first.state.agent, agent);
+    assert.equal(first.state.threadRef, thread);
+    assert.equal(first.composer.state.draft, "Keep this unsent draft");
+    await canvas.closeTile(1);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [1, 1]);
+    assert.ok(host?.isConnected);
+    assert.equal(first.state.agent, agent);
+    assert.equal(first.composer.state.draft, "Keep this unsent draft");
+    assert.equal(
+      document.querySelector('.split-pane-actions [aria-label="Close pane"]'),
+      null,
+      "single view has no group close control",
+    );
+    assert.ok(canvas.newChat());
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [1, 1], "New chat replaces the last pane");
+  });
+});
+
+test("a saved one-pane layout restores as a splittable canvas", async () => {
+  await withCanvas(async (canvas) => {
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [1, 1]);
+    await canvas.split();
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [2, 2]);
+  }, "single");
+});
+
+test("splitting does not dispose a first turn waiting for its session ID", async () => {
+  await withCanvas(async (canvas) => {
+    const first = canvas.seededChat()!;
+    first.state.pendingSend = "pending-test-send";
+    const agent = first.state.agent!;
+    canvas.drag();
+    assert.ok(document.querySelector(".zone-right"));
+    await canvas.split();
+    await canvas.closeTile(1);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [1, 1]);
+    assert.equal(first.state.agent, agent);
+    assert.equal(first.state.pendingSend, "pending-test-send");
+    first.state.pendingSend = null;
+  });
+});
+
+test("app edit chats suppress the general welcome and suggestions", async () => {
+  await withCanvas((canvas) => {
+    const conv = canvas.seededChat("web:tester:app-edit:example");
+    assert.ok(conv?.state.agent);
+    const shell = document.querySelector(".app-edit-chat");
+    assert.ok(shell);
+    assert.equal(shell.querySelector(".chat-cta"), null);
+    assert.equal(shell.querySelector("qm-connect-apps"), null);
+    assert.equal(shell.querySelector(".suggested-activities"), null);
+    assert.ok(shell.querySelector(".composer-wrap"));
+    assert.deepEqual(conv.state.agent.state.messages, []);
+  });
+});
+
+test("cycle-tab steps through the focused pane's tabs in order and wraps", async () => {
+  await withCanvas(async (canvas) => {
+    await canvas.split();
+    canvas.newChat();
+    canvas.newChat();
+    canvas.newChat();
+    assert.deepEqual(canvas.tabCounts(), [1, 1, 3]);
+    const start = canvas.activeTabs()[2];
+    canvas.cycleTab(1);
+    assert.deepEqual(canvas.activeTabs(), [0, 0, (start + 1) % 3]);
+    canvas.cycleTab(1);
+    canvas.cycleTab(1);
+    assert.deepEqual(canvas.activeTabs(), [0, 0, start]);
+    canvas.cycleTab(-1);
+    assert.deepEqual(canvas.activeTabs(), [0, 0, (start + 2) % 3]);
+    canvas.focusTile(0);
+    canvas.cycleTab(1);
+    assert.deepEqual(canvas.activeTabs(), [0, 0, (start + 2) % 3], "a single-tab pane has nothing to cycle");
+  });
+});
+
+async function withTabs(run: (requests: string[]) => Promise<void>): Promise<void> {
+  const dom = new JSDOM('<!doctype html><div id="app"></div>', { url: "http://localhost/" });
+  const requests: string[] = [];
+  const list = ["a", "b", "c"].map((id) => ({
+    id,
+    title: id,
+    type: "dm",
+    scopeId: "personal:tester",
+    threadRef: `web:tester:${id}`,
+    createdAt: 1,
+  }));
+  const globals = {
+    window: dom.window,
+    document: dom.window.document,
+    location: dom.window.location,
+    history: dom.window.history,
+    localStorage: dom.window.localStorage,
+    navigator: dom.window.navigator,
+    HTMLElement: dom.window.HTMLElement,
+    Element: dom.window.Element,
+    Node: dom.window.Node,
+    Event: dom.window.Event,
+    MouseEvent: dom.window.MouseEvent,
+    customElements: dom.window.customElements,
+    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+    requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0),
+    cancelAnimationFrame: clearTimeout,
+    ResizeObserver: class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+    fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      requests.push(`${init?.method ?? "GET"} ${path.split("?")[0]}`);
+      if (path.includes("/share")) return Response.json({ share: null });
+      const session = list.find((s) => path.split("?")[0] === `/api/sessions/${s.id}`);
+      return Response.json({
+        session,
+        sessions: list,
+        items: [],
+        approvals: [],
+        scopeId: "personal:tester",
+        models: [],
+        modelCatalog: {},
+        effective: { modelId: "" },
+      });
+    },
+  };
+  const descriptors = new Map<string, PropertyDescriptor | undefined>();
+  for (const [key, value] of Object.entries(globals)) {
+    descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+  }
+  Object.defineProperty(dom.window, "matchMedia", {
+    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+  });
+  dom.window.HTMLDialogElement.prototype.showModal = function () {
+    this.open = true;
+  };
+  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  let split: { exitSplitIfActive(): void } | undefined;
+  try {
+    const { appState } = await vite.ssrLoadModule("/src/shell.ts");
+    const canvas = await vite.ssrLoadModule("/src/split.ts");
+    split = canvas as typeof split;
+    const { sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
+    appState.me = { user: "tester", org: "test" };
+    appState.currentView = "chats";
+    appState.mainEl = document.createElement("main");
+    document.body.append(appState.mainEl);
+    sessionsState.list = list;
+    localStorage.setItem(
+      "web-ui:split-canvas:v1",
+      JSON.stringify({
+        v: 2,
+        active: true,
+        layout: {
+          grid: {
+            root: {
+              type: "branch",
+              data: [
+                { type: "leaf", data: { views: ["a", "b"], activeView: "b", id: "stack" } },
+                { type: "leaf", data: { views: ["c"], activeView: "c", id: "other" } },
+              ],
+            },
+            width: 1000,
+            height: 800,
+            orientation: "HORIZONTAL",
+          },
+          panels: Object.fromEntries(
+            list.map((s) => [
+              s.id,
+              {
+                id: s.id,
+                contentComponent: "pane",
+                tabComponent: "pane",
+                params: { sessionId: s.id, threadRef: s.threadRef },
+                title: s.title,
+              },
+            ]),
+          ),
+          activeGroup: "stack",
+        },
+      }),
+    );
+    canvas.loadPersistedSplit();
+    assert.equal(canvas.mountRestoredCanvas(), true);
+    // Warm both tabs so switching does not trigger a transcript load and incidental redraw.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    for (const title of ["a", "b"]) {
+      const tab = Array.from(document.querySelectorAll(".dv-tab")).find(
+        (el) => el.querySelector(".split-pane-title-text")?.textContent?.trim() === title,
+      )!;
+      tab.dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    requests.length = 0;
+    await run(requests);
+  } finally {
+    split?.exitSplitIfActive();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await vite.close();
+    dom.window.close();
+    for (const [key, descriptor] of descriptors) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete (globalThis as Record<string, unknown>)[key];
+    }
+  }
+}
+
+for (const action of ["Archive session", "Share conversation"]) {
+  test(`group ${action} follows the surviving tab after closing the active tab`, async () => {
+    await withTabs(async (requests) => {
+      const tabs = Array.from(document.querySelectorAll(".dv-tab"));
+      const closed = tabs.find((el) => el.querySelector(".split-pane-title-text")?.textContent?.trim() === "b")!;
+      const group = closed.closest(".dv-groupview")!;
+      closed.querySelector<HTMLButtonElement>('[aria-label="Close pane"]')!.click();
+      assert.equal(group.querySelectorAll(".dv-tab").length, 1);
+      assert.equal(group.querySelector(".split-pane-title-text")?.textContent?.trim(), "a");
+      group.querySelector<HTMLButtonElement>(`.split-pane-actions [aria-label="${action}"]`)!.click();
+      if (action === "Share conversation") {
+        document.querySelector<HTMLButtonElement>(".session-share-dialog .project-dialog-actions button")!.click();
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const expected = action === "Archive session" ? "POST /api/sessions/a" : "POST /api/sessions/a/share";
+      assert.ok(requests.includes(expected), JSON.stringify(requests));
+      assert.ok(!requests.includes("POST /api/sessions/b"));
+      assert.ok(!requests.includes("POST /api/sessions/b/share"));
+      if (action === "Archive session") assert.ok(!group.isConnected);
+    });
+  });
+}

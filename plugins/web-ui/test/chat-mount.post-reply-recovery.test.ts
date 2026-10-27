@@ -1,0 +1,770 @@
+import type { Item } from "../src/items.ts";
+import { item } from "./support/item-fixture.ts";
+import assert from "node:assert/strict";
+import test from "node:test";
+import { JSDOM } from "jsdom";
+import { createServer } from "vite";
+import { metadata } from "./support/model-metadata.ts";
+import type { Conversation } from "../src/conv-types.ts";
+import type { AssistantWork } from "../src/transcript-messages.ts";
+import type { WorkBlock } from "../src/core-bridge.ts";
+import { FakeEventSource, settle, until } from "./support/post-reply-fixture.ts";
+
+test("post replies remain visible in new and continuing conversations", async (t) => {
+  const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main>', { url: "http://localhost/" });
+  Object.defineProperty(dom.window, "matchMedia", {
+    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+  });
+  Object.defineProperty(dom.window.document, "visibilityState", { configurable: true, value: "visible" });
+  const globals = {
+    window: dom.window,
+    document: dom.window.document,
+    location: dom.window.location,
+    history: dom.window.history,
+    localStorage: dom.window.localStorage,
+    navigator: dom.window.navigator,
+    HTMLElement: dom.window.HTMLElement,
+    customElements: dom.window.customElements,
+    Node: dom.window.Node,
+    Event: dom.window.Event,
+    InputEvent: dom.window.InputEvent,
+    KeyboardEvent: dom.window.KeyboardEvent,
+    requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0),
+    cancelAnimationFrame: clearTimeout,
+    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+    EventSource: FakeEventSource,
+  };
+  for (const [key, value] of Object.entries(globals))
+    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+  const row = {
+    id: "s1",
+    threadRef: "web:owner:repro",
+    scopeId: "personal:owner",
+    title: "Synthetic reply repro",
+    type: "dm",
+    createdAt: Date.now(),
+  };
+  const user: Item = item("UserMessage", { seq: 0, createdAt: Date.now(), text: "Please answer" });
+  const answer = "The durable reply is present in storage.";
+  const completed: Item[] = [
+    user,
+    item("ToolCall", {
+      seq: 1,
+      createdAt: Date.now(),
+      tool: "web",
+      callId: "c1",
+      body: { action: "post", text: answer },
+    }),
+    item("ToolResult", {
+      seq: 2,
+      createdAt: Date.now(),
+      tool: "web",
+      callId: "c1",
+      text: "[sent]",
+      body: { action: "post", ok: true },
+    }),
+    item("AgentMessage", { seq: 3, createdAt: Date.now(), text: "Replied in thread." }),
+  ];
+  let items = [user];
+  let transcriptFails = false;
+  let intercept: ((path: string) => Promise<Response> | undefined) | undefined;
+  const requests: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const path = String(input);
+    requests.push(path);
+    if (path.includes("/api/runs/") && path.includes("/events"))
+      return new FakeEventSource(new URL(path, "http://localhost").pathname).response(init?.signal);
+    const intercepted = intercept?.(path);
+    if (intercepted) return intercepted;
+    if (path.includes("runtime-config"))
+      return Response.json({
+        scopeId: row.scopeId,
+        models: ["test-model"],
+        modelCatalog: { "test-model": metadata("test-model", "Test model") },
+        orgDefault: { modelId: "test-model", revision: 0 },
+        effective: { modelId: "test-model" },
+        scopeOverride: null,
+      });
+    if (path.includes("/api/runs/active")) return Response.json({ runId: null, queued: [] });
+    if (path === "/api/turn") return Response.json({ runId: "r1" });
+    if (path.endsWith("/approvals")) return Response.json({ approvals: [] });
+    if (path.startsWith("/api/sessions/s1"))
+      return transcriptFails
+        ? Response.json({ error: "temporary synthetic outage" }, { status: 503 })
+        : Response.json({ session: row, items, earlierItems: 0 });
+    if (path.startsWith("/api/sessions?")) return Response.json({ sessions: [row] });
+    if (path === "/api/contexts") return Response.json({ contexts: [] });
+    throw new Error(`Unexpected request: ${path}`);
+  };
+  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  let conv: Conversation | undefined;
+  try {
+    await vite.ssrLoadModule("/src/shell.ts");
+    const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
+    const { sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
+    const { createConversation, disposeConversation, ensureDeliveryStream } =
+      await vite.ssrLoadModule("/src/conversations.ts");
+    const { itemsToMessages } = await vite.ssrLoadModule("/src/transcript-messages.ts");
+    const { userSendMessage } = await vite.ssrLoadModule("/src/core-bridge.ts");
+    const { transcriptModel } = await vite.ssrLoadModule("/src/model-options.ts");
+    const { seedRuntimeConfig } = await vite.ssrLoadModule("/src/runtime-config-store.ts");
+    seedRuntimeConfig(row.scopeId, await (await fetch("/api/runtime-config")).json());
+    appState.me = { user: "owner", org: "test" };
+    appState.currentView = "chats";
+    sessionsState.list = [row];
+    sessionsState.loaded = true;
+    const host = document.querySelector<HTMLElement>("#main")!;
+    appState.mainEl = host;
+    ensureDeliveryStream();
+    const delivery = FakeEventSource.instances.find((es) => es.url === "/api/session-events")!;
+    const shownAnswer = () =>
+      [...host.querySelectorAll(".assistant-body > .streaming-text")].some((el) => el.textContent?.includes(answer));
+    async function mount(recorded: Item[] = [user], readOnly = false, wait = true) {
+      if (conv) disposeConversation(conv);
+      items = recorded;
+      transcriptFails = false;
+      conv = createConversation({
+        pane: true,
+        ownsUrl: false,
+        container: () => host,
+        claimContainer: () => host,
+        visible: () => true,
+        density: () => "full",
+        onDensityChange() {},
+        ensureDeliveryStream,
+      }) as Conversation;
+      if (readOnly) conv.mountReadOnly(row as never, itemsToMessages(recorded, transcriptModel()));
+      else {
+        conv.mountContinuable(
+          row.threadRef,
+          row.id,
+          row.scopeId,
+          itemsToMessages(recorded, transcriptModel()),
+          null,
+          row as never,
+        );
+      }
+      if (wait) await settle();
+      requests.length = 0;
+    }
+    const shownReplies = (text: string) => {
+      const matches = [...host.querySelectorAll(".assistant-body > .streaming-text, .work-message")].filter((el) =>
+        el.textContent?.includes(text),
+      );
+      for (const match of matches)
+        assert.equal(
+          match.closest("details:not([open])"),
+          null,
+          "delivered replies must remain visible outside closed work",
+        );
+      return matches;
+    };
+    const shown = (text: string) => shownReplies(text).length > 0;
+    async function postTurn(index: number, fails = false) {
+      const text = `Confirmed answer ${index}`;
+      const seq = index * 3;
+      const activity: Item[] = [
+        item("ToolCall", {
+          seq: seq + 1,
+          createdAt: Date.now(),
+          tool: "web",
+          callId: `post-${index}`,
+          body: { action: "post", text },
+        }),
+        item("ToolResult", {
+          seq: seq + 2,
+          createdAt: Date.now(),
+          tool: "web",
+          callId: `post-${index}`,
+          text: "[sent]",
+          isError: false,
+          body: { ok: true },
+        }),
+      ];
+      const before = FakeEventSource.instances.length;
+      const turn = conv!.state.agent!.prompt(`Question ${index}`);
+      await until(() => FakeEventSource.instances.length > before);
+      const run = FakeEventSource.instances.findLast((es) => es.url === "/api/runs/r1/events")!;
+      run.onopen?.();
+      items = [...items, item("UserMessage", { seq, createdAt: Date.now(), text: `Question ${index}` }), ...activity];
+      transcriptFails = fails;
+      run.emit("run", { status: "running", result: null, activity: activity.map((entry) => ({ item: entry })) });
+      await settle();
+      assert.equal(shownReplies(text).length, 1, "a confirmed post is visible while the turn continues");
+      run.emit("done", {
+        status: "done",
+        result: { status: "silent", sessionId: row.id },
+        activity: activity.map((entry) => ({ item: entry })),
+      });
+      await turn;
+      await settle();
+      return text;
+    }
+    for (const timing of ["during streaming", "stream starts during fetch", "stream ends during fetch"]) {
+      await t.test(`earlier history loads when ${timing}`, async () => {
+        const older: Item = { ...user, seq: 0, text: "Older history checkpoint" };
+        const current: Item = { ...user, seq: 10, text: "Current checkpoint" };
+        await mount([current]);
+        conv!.setTranscriptWindow(10, 1);
+        const agent = conv!.state.agent!;
+        let releasePage!: (response: Response) => void;
+        intercept = (path) => {
+          if (path.includes("beforeSeq=10"))
+            return new Promise<Response>((resolve) => {
+              releasePage = resolve;
+            });
+          if (path.startsWith("/api/sessions/s1?"))
+            return Promise.resolve(Response.json({ session: row, items, earlierItems: items[0]?.seq === 0 ? 0 : 1 }));
+          return undefined;
+        };
+        const clickHistory = () => {
+          const button = host.querySelector<HTMLButtonElement>(".earlier-messages-btn")!;
+          assert.equal(button.disabled, false, "history remains available during a live turn");
+          button.click();
+        };
+        if (timing === "stream starts during fetch") {
+          clickHistory();
+          await until(() => Boolean(releasePage));
+        }
+        const before = FakeEventSource.instances.length;
+        const turn = agent.prompt("Live pagination QA");
+        await until(() => FakeEventSource.instances.length > before);
+        const run = FakeEventSource.instances.findLast((es) => es.url === "/api/runs/r1/events")!;
+        try {
+          await settle();
+          if (timing !== "stream starts during fetch") clickHistory();
+          await until(() => Boolean(releasePage));
+          const retained = [...agent.state.messages];
+          const streaming = agent.state.streamingMessage;
+          const liveReply: Item = item("AgentMessage", {
+            seq: 12,
+            createdAt: Date.now(),
+            text: "Live reply survives pagination",
+          });
+          items = [current, liveReply];
+          if (timing === "stream ends during fetch") {
+            run.emit("done", {
+              status: "done",
+              result: { status: "ok", reply: "Live reply survives pagination", sessionId: row.id },
+              activity: [],
+            });
+            await turn;
+            await settle();
+          }
+          releasePage(Response.json({ session: row, items: [older], earlierItems: 0 }));
+          await until(() => !conv!.state.loadingEarlier);
+          assert.ok(host.textContent?.includes("Older history checkpoint"));
+          assert.ok(host.textContent?.includes("Current checkpoint"));
+          if (timing !== "stream ends during fetch") {
+            for (const message of retained) assert.ok(agent.state.messages.includes(message));
+            assert.equal(agent.state.streamingMessage, streaming);
+            assert.equal(agent.state.isStreaming, true);
+            items = [older, current, liveReply];
+            run.emit("done", {
+              status: "done",
+              result: { status: "ok", reply: "Live reply survives pagination", sessionId: row.id },
+              activity: [],
+            });
+            await turn;
+            await settle();
+          }
+          assert.equal(agent.state.isStreaming, false);
+          assert.ok(host.textContent?.includes("Live reply survives pagination"));
+          assert.equal(
+            agent.state.messages.filter((message) => (message as { entrySeq?: number }).entrySeq === 0).length,
+            1,
+          );
+        } finally {
+          intercept = undefined;
+          run.emit("done", { status: "done", result: { status: "silent", sessionId: row.id }, activity: [] });
+          await turn;
+        }
+      });
+    }
+    await t.test(
+      "an old history request cannot alter a remounted conversation or clear its loading state",
+      async () => {
+        const current: Item = { ...user, seq: 10 };
+        await mount([current]);
+        conv!.setTranscriptWindow(10, 1);
+        const pending: Array<(response: Response) => void> = [];
+        intercept = (path) =>
+          path.includes("beforeSeq=10") ? new Promise<Response>((resolve) => pending.push(resolve)) : undefined;
+        host.querySelector<HTMLButtonElement>(".earlier-messages-btn")!.click();
+        await until(() => pending.length === 1);
+        conv!.mountContinuable(
+          row.threadRef,
+          row.id,
+          row.scopeId,
+          itemsToMessages([current], transcriptModel()),
+          null,
+          row as never,
+        );
+        await settle();
+        conv!.setTranscriptWindow(10, 1);
+        host.querySelector<HTMLButtonElement>(".earlier-messages-btn")!.click();
+        await until(() => pending.length === 2);
+        pending[0]!(Response.json({ session: row, items: [{ ...user, text: "Stale page" }], earlierItems: 0 }));
+        await settle();
+        assert.equal(conv!.state.loadingEarlier, true);
+        assert.equal(host.textContent?.includes("Stale page"), false);
+        pending[1]!(Response.json({ session: row, items: [{ ...user, text: "Current page" }], earlierItems: 0 }));
+        await until(() => !conv!.state.loadingEarlier);
+        assert.ok(host.textContent?.includes("Current page"));
+        intercept = undefined;
+      },
+    );
+    await t.test("mounted core agent skips history conversion but sends the latest text and attachment", async () => {
+      await mount(completed);
+      const agent = conv!.state.agent!;
+      const attachment = {
+        id: "new-file",
+        type: "document",
+        fileName: "note.txt",
+        mimeType: "text/plain",
+        size: 5,
+        content: btoa("hello"),
+        extractedText: "hello",
+      };
+      agent.state.messages = [
+        ...agent.state.messages,
+        userSendMessage("Old attachment question", [{ ...attachment, id: "old-file", fileName: "old.txt" }]),
+        {
+          role: "toolResult",
+          toolCallId: "old-call",
+          toolName: "exec",
+          content: [{ type: "text", text: "old result" }],
+          isError: false,
+          timestamp: 0,
+        },
+      ];
+      const converted = agent.convertToLlm(agent.state.messages);
+      assert.ok(Array.isArray(converted), "conversion must return synchronously, not import or await history");
+      assert.deepEqual(converted, []);
+      const uploads: string[] = [];
+      let submitted: Record<string, unknown> | undefined;
+      const fetchBefore = globalThis.fetch;
+      globalThis.fetch = async (input, init) => {
+        const path = String(input);
+        if (path.startsWith("/api/blobs?sha=")) {
+          uploads.push(new TextDecoder().decode(init!.body as Uint8Array));
+          return Response.json({ blobId: "new-blob", sizeBytes: 5 });
+        }
+        if (path === "/api/turn") {
+          submitted = JSON.parse(String(init?.body));
+          return Response.json({ reply: "Received the new note" });
+        }
+        return fetchBefore(input, init);
+      };
+      try {
+        await agent.prompt(userSendMessage("Read the new note", [attachment]));
+        assert.equal(submitted?.text, "Read the new note");
+        assert.deepEqual(submitted?.attachments, [
+          { name: "note.txt", mimetype: "text/plain", sizeBytes: 5, blobId: "new-blob" },
+        ]);
+        assert.deepEqual(uploads, ["hello"], "only the current attachment is uploaded");
+        assert.equal(agent.state.errorMessage, undefined);
+      } finally {
+        globalThis.fetch = fetchBefore;
+      }
+    });
+    await t.test("work bursts update state immediately and draw once per frame, ignoring stale observers", async () => {
+      await mount();
+      const agent = conv!.state.agent!;
+      const state = conv!.state as Conversation["state"] & {
+        onWork: (work: WorkBlock) => void;
+        liveWork: WorkBlock | null;
+      };
+      const observe = state.onWork;
+      const before = FakeEventSource.instances.length;
+      const turn = agent.prompt("Observe this turn");
+      await until(() => FakeEventSource.instances.length > before);
+      const run = FakeEventSource.instances.findLast((es) => es.url === "/api/runs/r1/events")!;
+      await settle();
+      const label = () => host.querySelector(".live-work-label")?.textContent;
+      assert.match(label() ?? "", /Thinking/);
+      const rafBefore = globalThis.requestAnimationFrame;
+      const frames: FrameRequestCallback[] = [];
+      globalThis.requestAnimationFrame = (callback) => frames.push(callback);
+      try {
+        const work: WorkBlock = { status: "thinking", activity: [], stale: true };
+        for (let i = 0; i < 5; i++) observe({ ...work, startedAt: i });
+        observe(work);
+        assert.equal(state.liveWork, work);
+        assert.match(label() ?? "", /Thinking/, "the observer must not synchronously redraw");
+        assert.equal(frames.length, 1, "a burst shares one pending frame");
+        frames.shift()!(0);
+        assert.match(label() ?? "", /Interrupted, resuming/);
+        observe(work);
+        conv!.mountContinuable("web:owner:replacement", null, row.scopeId, []);
+        const replacement = conv!.state.agent;
+        const pending = frames.length;
+        observe(work);
+        assert.equal(frames.length, pending, "stale observers must not schedule draws");
+        assert.equal(state.liveWork, null);
+        for (const frame of frames.splice(0)) frame(0);
+        assert.equal(conv!.state.agent, replacement);
+        assert.doesNotMatch(host.textContent ?? "", /Interrupted, resuming/);
+      } finally {
+        globalThis.requestAnimationFrame = rafBefore;
+        run.emit("done", { status: "done", result: { status: "ok", reply: "Finished" } });
+        await turn;
+      }
+    });
+    await t.test("text redraws retain tool refs while changed work refreshes rows and disclosures", async () => {
+      await mount();
+      const agent = conv!.state.agent!;
+      const before = FakeEventSource.instances.length;
+      const turn = agent.prompt("Read two files");
+      await until(() => FakeEventSource.instances.length > before);
+      const run = FakeEventSource.instances.findLast((es) => es.url === "/api/runs/r1/events")!;
+      try {
+        const activity: Item[] = [1, 2].map((seq) =>
+          item("ToolCall", {
+            seq,
+            createdAt: Date.now(),
+            tool: "files",
+            callId: `read-${seq}`,
+            body: { action: "read", path: `file-${seq}.txt` },
+          }),
+        );
+        run.emit("run", { status: "running", result: null, activity: activity.map((entry) => ({ item: entry })) });
+        await settle();
+        const streaming = agent.state.streamingMessage as AssistantWork;
+        const work = streaming.work!;
+        assert.equal(host.querySelectorAll(".tool-running").length, 2);
+        let refs = 0;
+        const disclosureHosts = [...host.querySelectorAll(".tool-disclosure-host")];
+        assert.equal(disclosureHosts.length, 2);
+        for (const element of disclosureHosts) {
+          const closest = element.closest.bind(element);
+          Object.defineProperty(element, "closest", {
+            configurable: true,
+            value: (selector: string) => {
+              if (selector === "details") refs++;
+              return closest(selector);
+            },
+          });
+        }
+        for (let i = 0; i < 3; i++) {
+          streaming.content = [{ type: "text", text: `Progress ${i}` }];
+          conv!.drawActiveChat(agent);
+        }
+        assert.equal(refs, 0, "unchanged tools must not rerun their disclosure refs on text deltas");
+        assert.equal(
+          host.querySelector<HTMLElement & { content: string }>(".work-said qm-markdown")?.content,
+          "Progress 2",
+        );
+        const priorActivity = work.activity;
+        work.streamStartOffset = 200_001;
+        work.activity = [
+          ...priorActivity,
+          { marker: "text_start", seq: 3, createdAt: Date.now(), streamOffset: 200_003 },
+        ];
+        streaming.content = [{ type: "text", text: " \nCommentary marker" }];
+        conv!.drawActiveChat(agent);
+        assert.equal(
+          host.querySelector<HTMLElement & { content: string }>(".work-said qm-markdown")?.content,
+          "Commentary marker",
+        );
+        work.activity = [{ marker: "text_start", seq: 3, createdAt: Date.now(), streamOffset: 0 }];
+        streaming.content = [{ type: "text", text: "ipped tail complete" }];
+        conv!.drawActiveChat(agent);
+        assert.equal(
+          host.querySelector<HTMLElement & { content: string }>(".assistant-body > .streaming-text qm-markdown")
+            ?.content,
+          "…earlier output omitted\n\ntail complete",
+        );
+        delete work.streamStartOffset;
+        work.activity = priorActivity;
+        work.activity = [
+          ...work.activity,
+          { item: item("ToolResult", { seq: 3, createdAt: Date.now(), tool: "files", text: "First output" }) },
+        ];
+        conv!.drawActiveChat(agent);
+        assert.ok(refs > 0, "new activity refreshes tool rows");
+        const details = host.querySelector<HTMLDetailsElement>(".tool-ok")!;
+        assert.ok(details);
+        details.open = true;
+        details.dispatchEvent(new Event("toggle"));
+        assert.match(details.textContent ?? "", /First output/);
+        work.activity = work.activity.map((entry) =>
+          "item" in entry && entry.item.seq === 3 ? { item: { ...entry.item, text: "Updated output" } } : entry,
+        );
+        conv!.drawActiveChat(agent);
+        assert.match(details.textContent ?? "", /Updated output/);
+        assert.doesNotMatch(details.textContent ?? "", /First output/);
+        work.stale = true;
+        conv!.drawActiveChat(agent);
+        assert.match(host.querySelector(".tool-running")?.textContent ?? "", /interrupted/);
+        work.status = "complete";
+        conv!.drawActiveChat(agent);
+        assert.equal(host.querySelector(".tool-running"), null);
+        work.pendingApprovals = [{ requestId: "next-decision", command: "echo approved" }];
+        conv!.drawActiveChat(agent);
+        assert.match(host.querySelector(".inline-approval-marker")?.textContent ?? "", /echo approved/);
+        work.pendingApprovals = [];
+        conv!.drawActiveChat(agent);
+        assert.equal(host.querySelector(".inline-approval-marker"), null);
+      } finally {
+        run.emit("done", { status: "done", result: { status: "ok", reply: "Finished" } });
+        await turn;
+      }
+    });
+    await t.test("control: reopening displays a persisted post", async () => {
+      await mount(completed);
+      assert.ok(shownAnswer());
+    });
+    await t.test("a new session accepts every transcript after adoption without fork metadata", async () => {
+      await mount();
+      conv!.mountContinuable(row.threadRef, null, row.scopeId, []);
+      items = [];
+      const visible: boolean[] = [];
+      for (let i = 0; i < 3; i++) {
+        const text = await postTurn(i);
+        assert.equal(conv!.state.sessionId, row.id);
+        visible.push(shown(text));
+      }
+      assert.deepEqual(
+        visible,
+        [true, true, true],
+        "repeated posts must not stay hidden for the life of a new session",
+      );
+      assert.equal(conv!.state.forkSession, null);
+      const messages = conv!.state.agent!.state.messages;
+      assert.ok(messages.some((m) => JSON.stringify(m).includes("Confirmed answer 2")));
+      assert.equal(conv!.state.transcriptAnchorSeq, null);
+      assert.ok(
+        messages.some(
+          (m) =>
+            m.role === "assistant" &&
+            JSON.stringify((m as { content?: unknown }).content).includes("Confirmed answer 2"),
+        ),
+        "the durable transcript must actually apply, not just the activity fallback",
+      );
+    });
+    await t.test("confirmed posts remain visible over consecutive failed transcript refreshes", async () => {
+      await mount();
+      const visible: boolean[] = [];
+      for (let i = 0; i < 3; i++) visible.push(shown(await postTurn(i, true)));
+      assert.deepEqual(visible, [true, true, true]);
+      transcriptFails = false;
+      delivery.emit("session_state", { threadRef: row.threadRef, state: "idle", at: 1 });
+      await settle();
+      for (let i = 0; i < 3; i++) {
+        assert.equal(shownReplies(`Confirmed answer ${i}`).length, 1, "refresh must not duplicate a displayed post");
+      }
+    });
+    function deferredTranscript(recorded: Item[]) {
+      let release!: () => void;
+      const promise = new Promise<Response>((resolve) => {
+        release = () => resolve(Response.json({ session: row, items: recorded, earlierItems: 0 }));
+      });
+      return { promise, release };
+    }
+    await t.test("a late transcript cannot replace a newer successful refresh", async () => {
+      await mount();
+      const pending = deferredTranscript([user]);
+      intercept = (path) =>
+        path.startsWith("/api/sessions/s1") && !path.endsWith("/approvals") ? pending.promise : undefined;
+      delivery.emit("session_state", { threadRef: row.threadRef, state: "idle", at: 1 });
+      await until(() => requests.some((path) => path.startsWith("/api/sessions/s1")));
+      intercept = undefined;
+      items = completed;
+      delivery.emit("session_state", { threadRef: row.threadRef, state: "idle", at: 1 });
+      await settle();
+      assert.ok(shownAnswer());
+      pending.release();
+      await settle();
+      assert.ok(shownAnswer());
+    });
+    await t.test("a transcript started before teardown cannot write into the replacement chat", async () => {
+      await mount();
+      const oldAgent = conv!.state.agent;
+      const pending = deferredTranscript(completed);
+      intercept = (path) =>
+        path.startsWith("/api/sessions/s1") && !path.endsWith("/approvals") ? pending.promise : undefined;
+      delivery.emit("session_state", { threadRef: row.threadRef, state: "idle", at: 1 });
+      await until(() => requests.some((path) => path.startsWith("/api/sessions/s1")));
+      intercept = undefined;
+      conv!.mountContinuable("web:owner:replacement", null, row.scopeId, []);
+      pending.release();
+      await settle();
+      assert.notEqual(conv!.state.agent, oldAgent);
+      assert.equal(shownAnswer(), false);
+      assert.equal(conv!.state.threadRef, "web:owner:replacement");
+    });
+    await t.test("fork history follows the same refresh generation and preserves fully loaded history", async () => {
+      await mount();
+      conv!.state.forkSession = { ...row, forkedFrom: { sessionId: "source" }, forkBoundarySeq: 0 } as never;
+      conv!.state.inheritedLoaded = false;
+      const pending = deferredTranscript([{ ...user, text: "Stale inherited text" }]);
+      intercept = (path) =>
+        path.startsWith("/api/sessions/s1") && !path.endsWith("/approvals") ? pending.promise : undefined;
+      delivery.emit("session_state", { threadRef: row.threadRef, state: "idle", at: 1 });
+      await until(() => requests.some((path) => path.startsWith("/api/sessions/s1")));
+      intercept = undefined;
+      items = [{ ...user, text: "Current inherited text" }, ...completed.slice(1)];
+      delivery.emit("session_state", { threadRef: row.threadRef, state: "idle", at: 1 });
+      await settle();
+      const inherited = JSON.stringify(conv!.state.inheritedMessages);
+      assert.match(inherited, /Current inherited text/);
+      pending.release();
+      await settle();
+      assert.equal(JSON.stringify(conv!.state.inheritedMessages), inherited);
+      conv!.state.inheritedLoaded = true;
+      items = completed;
+      delivery.emit("session_state", { threadRef: row.threadRef, state: "idle", at: 1 });
+      await settle();
+      assert.equal(JSON.stringify(conv!.state.inheritedMessages), inherited);
+    });
+    await t.test("navigation during approval loading cannot update the replacement chat", async () => {
+      await mount();
+      let release!: () => void;
+      const promise = new Promise<Response>((resolve) => {
+        release = () => resolve(Response.json({ approvals: [] }));
+      });
+      items = completed;
+      intercept = (path) => (path.endsWith("/approvals") ? promise : undefined);
+      delivery.emit("session_state", { threadRef: row.threadRef, state: "idle", at: 1 });
+      await until(() => requests.some((path) => path.endsWith("/approvals")));
+      conv!.mountContinuable("web:owner:replacement", null, row.scopeId, []);
+      release();
+      intercept = undefined;
+      await settle();
+      assert.equal(shownAnswer(), false);
+      assert.deepEqual(conv!.state.agent!.state.messages, []);
+    });
+    await t.test("multiple posts in one turn appear once before and after transcript recovery", async () => {
+      await mount();
+      const activity: Item[] = [
+        ...completed.slice(1, 3),
+        item("ToolCall", {
+          seq: 3,
+          createdAt: Date.now(),
+          tool: "web",
+          callId: "c2",
+          body: { action: "post", text: "Second confirmed reply" },
+        }),
+        item("ToolResult", {
+          seq: 4,
+          createdAt: Date.now(),
+          tool: "web",
+          callId: "c2",
+          text: "[sent]",
+          isError: false,
+        }),
+      ];
+      const before = FakeEventSource.instances.length;
+      const turn = conv!.state.agent!.prompt("Send two replies");
+      await until(() => FakeEventSource.instances.length > before);
+      const run = FakeEventSource.instances.findLast((es) => es.url === "/api/runs/r1/events")!;
+      run.onopen?.();
+      transcriptFails = true;
+      run.emit("run", { status: "running", result: null, activity: activity.map((entry) => ({ item: entry })) });
+      await settle();
+      assert.deepEqual(
+        shownReplies(answer).map((el) => el.textContent?.trim()),
+        [answer],
+      );
+      assert.deepEqual(
+        shownReplies("Second confirmed reply").map((el) => el.textContent?.trim()),
+        ["Second confirmed reply"],
+      );
+      run.emit("done", {
+        status: "done",
+        result: { status: "silent", sessionId: row.id },
+        activity: activity.map((entry) => ({ item: entry })),
+      });
+      await turn;
+      await settle();
+      const count = (text: string) => shownReplies(text).length;
+      assert.equal(count(answer), 1);
+      assert.equal(count("Second confirmed reply"), 1);
+      items = [user, ...activity, item("AgentMessage", { seq: 5, createdAt: Date.now(), text: "Replies sent." })];
+      transcriptFails = false;
+      delivery.emit("session_state", { threadRef: row.threadRef, state: "idle", at: 1 });
+      await settle();
+      assert.equal(count(answer), 1);
+      assert.equal(count("Second confirmed reply"), 1);
+      assert.equal(count("Replies sent."), 0);
+    });
+    for (const edited of [false, true]) {
+      await t.test(
+        `ended-run steer keeps the durable queue and ${edited ? "preserves a newer draft" : "leaves the composer empty"}`,
+        async (sub) => {
+          sub.after(() => {
+            intercept = undefined;
+          });
+          await mount();
+          const agent = conv!.state.agent!;
+          let oldRunLive = true;
+          let signalled = false;
+          let resends = 0;
+          let withdrawals = 0;
+          const queued = [{ runId: "queued", text: "Follow-up question" }];
+          intercept = (path) => {
+            if (path.includes("/api/runs/active"))
+              return Promise.resolve(
+                Response.json({
+                  runId: oldRunLive ? "r1" : null,
+                  run: oldRunLive ? { status: "running" } : null,
+                  queued,
+                }),
+              );
+            if (path === "/api/runs/queued/withdraw") {
+              withdrawals++;
+              return Promise.resolve(Response.json({ withdrawn: true }));
+            }
+            if (path === "/api/runs/r1/signal") {
+              signalled = true;
+              return Promise.resolve(Response.json({ reason: "terminal", replayed: false }, { status: 409 }));
+            }
+            if (path === "/api/turn") {
+              resends++;
+              return Promise.resolve(Response.json({ reply: "Follow-up received" }));
+            }
+          };
+          const before = FakeEventSource.instances.length;
+          conv!.resumeIfIdle();
+          await until(() => FakeEventSource.instances.length > before);
+          const turn = agent.waitForIdle();
+          const run = FakeEventSource.instances.findLast((es) => es.url === "/api/runs/r1/events")!;
+          run.onopen?.();
+          conv!.composer.setQueuedRuns(row.threadRef, [{ runId: "queued", text: "Follow-up question" }]);
+          conv!.drawActiveChat(agent);
+          host.querySelector<HTMLButtonElement>(".queued-steer")!.click();
+          await until(() => signalled);
+          await settle();
+          assert.equal(conv!.composer.state.draft, "");
+          assert.deepEqual(conv!.composer.queuedRunsFor(row.threadRef), queued);
+          if (edited) conv!.composer.state.draft = "New draft";
+          assert.equal(resends, 0);
+          oldRunLive = false;
+          run.emit("done", { status: "done", result: { status: "ok", reply: "Original answer" } });
+          await turn;
+          await settle();
+          assert.equal(resends, 0);
+          assert.equal(withdrawals, 0);
+          assert.deepEqual(conv!.composer.queuedRunsFor(row.threadRef), queued);
+          assert.equal(conv!.composer.state.draft, edited ? "New draft" : "");
+          intercept = undefined;
+        },
+      );
+    }
+    if (conv) {
+      disposeConversation(conv);
+      conv = undefined;
+    }
+  } finally {
+    conv?.state.agent?.abort();
+    await conv?.state.agent?.waitForIdle();
+    conv?.composer.dispose();
+    conv?.dispose();
+    for (const es of FakeEventSource.instances) es.close();
+    await vite.close();
+    globalThis.fetch = originalFetch;
+    dom.window.close();
+  }
+});
