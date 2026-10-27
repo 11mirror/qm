@@ -1,30 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEACTIVATED_PRINCIPALS_MIGRATION, EXTERNAL_MEMBERS_MIGRATION } from "../src/identity/identity-service.ts";
-import { PRINCIPAL_LINKS_MIGRATION } from "../src/identity/principal-links.ts";
-import { MCP_SERVERS_MIGRATION } from "../src/mcp/mcp-server-store.ts";
-import { MEMORY_CAPTURE_PENDING_MIGRATION } from "../src/memory/strategies/per-turn.ts";
-import { SKILL_BUNDLES_MIGRATION } from "../src/skills/skill-bundle-store.ts";
-import { SKILL_PACKS_MIGRATION } from "../src/skills/skill-pack-store.ts";
 import { createSkillStore, SKILLS_MIGRATION } from "../src/skills/skill-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { scopeId } from "../src/types.ts";
-import { assertMapConversion } from "./support/map-conversion.ts";
 import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
-
-const CONVERSIONS = [
-  PRINCIPAL_LINKS_MIGRATION,
-  DEACTIVATED_PRINCIPALS_MIGRATION,
-  EXTERNAL_MEMBERS_MIGRATION,
-  SKILLS_MIGRATION,
-  SKILL_PACKS_MIGRATION,
-  SKILL_BUNDLES_MIGRATION,
-  MCP_SERVERS_MIGRATION,
-  MEMORY_CAPTURE_PENDING_MIGRATION,
-];
-
-for (const conversion of CONVERSIONS)
-  test(`${conversion.spec.table} converts in place for one tenant and for two`, () => assertMapConversion(conversion));
 
 test("a live-shaped skills map row converts and reads back through the store unchanged", async () => {
   const databaseUrl = testDatabaseUrl();

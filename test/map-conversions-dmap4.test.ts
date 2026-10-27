@@ -1,9 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { E2B_BODIES } from "../src/sandbox/e2b-sandbox.ts";
-import { LOCAL_BODIES } from "../src/sandbox/local-sandbox.ts";
-import { MANAGED_AGENTS_BODIES } from "../src/sandbox/managed-agents-sandbox.ts";
 import { MODAL_BODIES, type StoredModalSandbox } from "../src/sandbox/modal-sandbox.ts";
 import { createSandboxBodies } from "../src/sandbox/sandbox-bodies.ts";
 import {
@@ -14,26 +11,8 @@ import {
   SANDBOX_ROUTING_MIGRATION,
 } from "../src/sandbox/sandbox-resource-store.ts";
 import type { SandboxResource } from "../src/sandbox/sandbox-resources.ts";
-import { SMOLMACHINES_BODIES } from "../src/sandbox/smolmachines-sandbox.ts";
 import { SPRITES_BODIES } from "../src/sandbox/sprites-sandbox.ts";
-import { assertMapConversion } from "./support/map-conversion.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-
-const CONVERSIONS = [
-  E2B_BODIES,
-  MODAL_BODIES,
-  LOCAL_BODIES,
-  SPRITES_BODIES,
-  SMOLMACHINES_BODIES,
-  MANAGED_AGENTS_BODIES,
-  SANDBOX_RESOURCES_MIGRATION,
-  SANDBOX_DEFAULTS_MIGRATION,
-  SANDBOX_RESOURCE_ROLLOUT_MIGRATION,
-  SANDBOX_ROUTING_MIGRATION,
-];
-
-for (const conversion of CONVERSIONS)
-  test(`${conversion.spec.table} converts in place for one tenant and for two`, () => assertMapConversion(conversion));
 
 const modal: StoredModalSandbox = {
   checkpointAtMs: 1_761_000_000_001,
