@@ -33,7 +33,6 @@ import { createPostgresMemoryService } from "../src/memory/postgres-memory-servi
 import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testAdvisoryLock, testDeployBackings } from "./support/test-database.ts";
-import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const ORG = "default-org";
@@ -534,7 +533,7 @@ test("the cached prefix survives skill-store reordering + a recordUse-style meta
 });
 
 test("standing obligations: this scope's pending triggers render; other scopes' and immediate one-shots don't", async () => {
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl());
   const base = { owner: actor.id, createdBy: actor.id, ownerScopeId: scopeId("personal", actor.id) };
   await crons.create({
     ...base,
@@ -974,7 +973,7 @@ for (const surfaceTools of [false, true]) {
 }
 
 test("profile and scheduled-work changes append fresh snapshots without rewriting the cached prefix or history", async () => {
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl());
   const sandbox = fakeSandbox();
   const seen: HarnessTurnInput[] = [];
   const harness = createMockHarness();

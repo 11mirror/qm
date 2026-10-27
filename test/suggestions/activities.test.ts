@@ -13,7 +13,6 @@ import { scopeId, type TurnRequest } from "../../src/types.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
-import { createPostgresCronFireStore } from "../../src/cron/fire-store.ts";
 import { idleJobs } from "../support/cron-slots.ts";
 
 const activities = ["app", "brief", "deck", "hire", "plan"].map((id) => ({
@@ -24,23 +23,23 @@ const activities = ["app", "brief", "deck", "hire", "plan"].map((id) => ({
 }));
 
 function fixture() {
-  const databaseUrl = testDatabaseUrl();
   let time = Date.now();
   let output = JSON.stringify(activities);
-  const store = createSuggestedActivityProfileStore(databaseUrl);
-  const sessions = createPostgresSessionStore(databaseUrl);
-  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
+  const url = testDatabaseUrl();
+  const store = createSuggestedActivityProfileStore(url);
+  const sessions = createPostgresSessionStore(url);
+  const crons = createCronStore(url);
   const outbound = recordingOutbound();
   const calls: TurnRequest[] = [];
   const settled: Promise<void>[] = [];
   const scheduler = createScheduler({
     jobs: idleJobs(),
-    ...singleProcessDeps(),
+    ...singleProcessDeps(url),
     now: () => time,
     crons,
     outbound,
-    identity: createIdentityService(databaseUrl),
-    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(url),
+    idempotency: createIdempotencyStore(url),
     run: async (request) => {
       calls.push(request);
       const scope = scopeId("personal", request.actor.externalId);

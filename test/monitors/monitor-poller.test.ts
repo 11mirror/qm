@@ -102,10 +102,10 @@ async function harness(opts?: {
   minFireIntervalMs?: number;
   onRun?: () => Promise<void>;
 }) {
-  const databaseUrl = testDatabaseUrl();
   const fake = fakeSandbox();
-  const monitors = createMonitorStore(databaseUrl);
-  const processes = createPostgresProcessRegistry(databaseUrl);
+  const url = testDatabaseUrl();
+  const monitors = createMonitorStore(url);
+  const processes = createPostgresProcessRegistry(url);
   const outbound = recordingOutbound();
   const calls: TurnRequest[] = [];
   const run = async (req: TurnRequest): Promise<TurnResult> => {
@@ -113,14 +113,14 @@ async function harness(opts?: {
     await opts?.onRun?.();
     return opts?.result ?? { status: "ok", reply: opts?.reply ?? "MONITOR-REPLY" };
   };
-  const identity = createIdentityService(databaseUrl);
+  const identity = createIdentityService(url);
   const poller = createMonitorPoller({
-    ...singleProcessDeps(),
+    ...singleProcessDeps(url),
     monitors,
     processes,
     sandbox: fake.sandbox,
     outbound,
-    idempotency: createIdempotencyStore(databaseUrl),
+    idempotency: createIdempotencyStore(url),
     identity,
     run,
     ...(opts?.heartbeatMs !== undefined ? { heartbeatMs: opts.heartbeatMs } : {}),

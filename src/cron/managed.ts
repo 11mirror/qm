@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { tenantCols, type PgPool } from "../persistence/pg-pool.ts";
-import { cols, columnName, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, columnName, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import type { Cron } from "../types.ts";
 import type { CreateCronInput, CronStore } from "./cron-store.ts";
 import type { Scheduler } from "./scheduler.ts";
@@ -22,15 +22,15 @@ export interface ManagedCronProfiles<T extends ManagedCronClaim> {
 }
 
 export function managedCronProfiles<T extends ManagedCronClaim>(
-  q: PgPool["q"],
+  db: Pick<PgPool, "q" | "pool">,
   spec: TableSpec,
 ): ManagedCronProfiles<T> {
-  const codec = tableCodec<T>(spec);
+  const { q } = db;
+  const { codec, get } = typedTable<T>(db, spec);
   const { table } = spec;
   const key = columnName(spec.key);
-  const select = `SELECT ${codec.columns} FROM ${table} WHERE ${key} = $1`;
   return {
-    get: async (id) => codec.rows(await q(select, [id]))[0] ?? null,
+    get,
     async claim(id, initial, patch) {
       const sets = Object.keys(patch).map((field) => `${columnName(field)} = EXCLUDED.${columnName(field)}`);
       const claimed = await q(
@@ -39,7 +39,7 @@ export function managedCronProfiles<T extends ManagedCronClaim>(
          RETURNING ${codec.columns}`,
         codec.values(id, { ...initial, ...patch }),
       );
-      return codec.rows(claimed.length ? claimed : await q(select, [id]))[0]!;
+      return claimed.length ? codec.row(claimed[0]!) : (await get(id))!;
     },
     armed: async (id) =>
       codec.rows(await q(`UPDATE ${table} SET arming = NULL WHERE ${key} = $1 RETURNING ${codec.columns}`, [id]))[0] ??

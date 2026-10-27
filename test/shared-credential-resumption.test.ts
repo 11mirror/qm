@@ -12,7 +12,6 @@ import { runTrigger } from "../src/triggers/run-trigger.ts";
 import type { Principal, ScopeId, TurnRequest } from "../src/types.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
-import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { automationOrigin } from "./support/turn-origin.ts";
 
 function keychain(now = Date.now) {
@@ -25,7 +24,6 @@ function keychain(now = Date.now) {
 }
 
 async function fixture(scope: ScopeId = "channel:C_SHARED") {
-  const databaseUrl = testDatabaseUrl();
   const clock = { t: Date.now() };
   const k = keychain(() => clock.t);
   const credential = await k.save({
@@ -34,7 +32,7 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
     secret: "dummy-only-secret",
     envKey: "DUMMY_TOKEN",
   });
-  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
+  const crons = createCronStore(testDatabaseUrl());
   const cron = await crons.create({
     owner: `system:${scope}`,
     createdBy: `system:${scope}`,
@@ -53,8 +51,8 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
   const outbound = recordingOutbound();
   const deps: AskResolutionDeps = {
     outbound,
-    idempotency: createIdempotencyStore(databaseUrl),
-    identity: createIdentityService(databaseUrl),
+    idempotency: createIdempotencyStore(testDatabaseUrl()),
+    identity: createIdentityService(testDatabaseUrl()),
     currentScopeMembers: async () => state.members,
     getCron: (id) => crons.get(id),
     getGrant: (id) => k.getGrant(id),

@@ -3,7 +3,6 @@ import { test } from "node:test";
 import { deriveConnectorKey } from "../../src/connectors/connector-client-store.ts";
 import { type KeychainAsk, createKeychain } from "../../src/credentials/keychain.ts";
 import { createCronStore } from "../../src/cron/cron-store.ts";
-import { createPostgresCronFireStore } from "../../src/cron/fire-store.ts";
 import { createIdempotencyStore } from "../../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../../src/identity/identity-service.ts";
 import { type AskResolutionDeps, createAskExpirySweep, fireAskResolution } from "../../src/triggers/keychain-ask.ts";
@@ -21,8 +20,7 @@ const recipient: Destination = {
 };
 
 async function fixture() {
-  const databaseUrl = testDatabaseUrl();
-  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
+  const crons = createCronStore(testDatabaseUrl());
   const cron = await crons.create({
     owner: "U_ALICE",
     createdBy: "U_ALICE",
@@ -35,8 +33,8 @@ async function fixture() {
   const requests: TurnRequest[] = [];
   const deps: AskResolutionDeps = {
     outbound,
-    idempotency: createIdempotencyStore(databaseUrl),
-    identity: createIdentityService(databaseUrl),
+    idempotency: createIdempotencyStore(testDatabaseUrl()),
+    identity: createIdentityService(testDatabaseUrl()),
     getCron: (id) => crons.get(id),
     run: async (request) => {
       requests.push(request);
@@ -162,8 +160,7 @@ test("cron credential approval resumes a disabled one-shot job in its original f
 });
 
 async function credentialRetryFixture(run: (request: TurnRequest) => Promise<TurnResult>) {
-  const databaseUrl = testDatabaseUrl();
-  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
+  const crons = createCronStore(testDatabaseUrl());
   const cron = await crons.create({
     owner: "U_ALICE",
     createdBy: "U_ALICE",
@@ -179,7 +176,7 @@ async function credentialRetryFixture(run: (request: TurnRequest) => Promise<Tur
     },
   });
   const outbound = recordingOutbound();
-  const idempotency = createIdempotencyStore(databaseUrl);
+  const idempotency = createIdempotencyStore(testDatabaseUrl());
   const ask: KeychainAsk = {
     id: "retry-ask",
     credentialId: "dummy-credential",
@@ -198,7 +195,7 @@ async function credentialRetryFixture(run: (request: TurnRequest) => Promise<Tur
   const deps: AskResolutionDeps = {
     outbound,
     idempotency,
-    identity: createIdentityService(databaseUrl),
+    identity: createIdentityService(testDatabaseUrl()),
     getCron: (id) => crons.get(id),
     run,
   };
