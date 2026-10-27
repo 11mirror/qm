@@ -1,7 +1,7 @@
 import { surfaceHas } from "../surfaces/surface.ts";
 import { externalSlackAdmitted } from "../resolution/external-slack.ts";
 import { availableRuntimeError, runtimeConfigBody, userRuntimeConfigBody } from "./runtime-config.ts";
-import { type Run, isTerminal, isUnstarted, leaseLapsed, stopRun } from "../runs/run-store.ts";
+import { type Run, isTerminal, isUnstarted } from "../runs/run-store.ts";
 import { isSubagentThreadRef } from "../sessions/thread-ref.ts";
 import { stopSessionTree } from "../subagents/tree.ts";
 import {
@@ -30,7 +30,7 @@ import { sleep } from "../util/async.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { GENERIC_FAILURE_CLAUSE } from "../../plugins/chassis/src/failure-copy.ts";
 
-import { type App, type AppDeps, STALE_LEASE_GRACE_MS } from "./app-types.ts";
+import type { App, AppDeps } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
 import { isUserMessage } from "../sessions/items.ts";
@@ -71,7 +71,7 @@ export function createTurnMethods(deps: AppDeps, h: AppHelpers, ambient: Ambient
       const session = await deps.sessions.getByThread(run.sessionId);
       if (session) return stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals }, session, USER_STOP);
       await signals.send(run.id, { kind: "abort", reason: USER_STOP });
-      await stopRun(deps.runs, run);
+      await deps.runs.cancelTurn(run.id);
       return true;
     };
     return deps.advisoryLock.withLock("session-tree-admission", stop);
@@ -633,7 +633,6 @@ export function createTurnMethods(deps: AppDeps, h: AppHelpers, ambient: Ambient
 
       if (replay) dedupKey = replay.signalDedupKey;
 
-      if (origin.kind === "human" && !isSessionTurn(input) && !req.approval) deps.reaperPoke?.();
       const liveRouted = await steerLiveRun(req, adm, origin, conversation, input, redeliveryKey);
       if (liveRouted) return liveRouted;
 
@@ -671,7 +670,6 @@ export function createTurnMethods(deps: AppDeps, h: AppHelpers, ambient: Ambient
       });
       if (deduped && redeliveryKey && run.dedupKey === redeliveryKey) return { status: "silent" };
       if (spineRouted && !deduped) markTriggerHandled(input as OrchestratorInput);
-      if (spineRouted) deps.engaged?.engage(conversation.threadRef);
       if (deduped && run.result && isTerminal(run.status)) return h.withAdminLink(run.result);
       if (req.async) return { status: "queued", runId: run.id };
       return h.drive(run.id);
@@ -746,13 +744,12 @@ export function createTurnMethods(deps: AppDeps, h: AppHelpers, ambient: Ambient
       const runtime = deps.turnStream?.runtime(runId) ?? run.result?.runtime;
       const firstBlock = deps.turnStream?.firstBlock(runId);
       const surfacePosted = deps.turnStream?.surfacePosted(runId) ?? false;
-      const alive = run.status === "running" && !leaseLapsed(run, Date.now());
+      const alive = run.status === "running";
       const replying = deps.turnStream?.replying(runId) ?? false;
       const replyComplete = deps.turnStream?.isReplyDone(runId) ?? false;
       const activity = await deps.runActivity?.list(runId);
       const reasoning = deps.turnStream?.reasoning(runId) ?? [];
-      const stale =
-        run.status === "pending" ? run.attempts > 0 : !alive && leaseLapsed(run, Date.now() - STALE_LEASE_GRACE_MS);
+      const stale = run.status === "pending" && run.attempts > 0;
       return {
         desktopClientId: desktopClientForTurn({ ...run.request, attempt: run.attempts }),
         status: run.status,

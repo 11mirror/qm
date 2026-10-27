@@ -119,7 +119,7 @@ and leave `services.core.persistence` disabled. Sessions and runs then live in
 Postgres, and uploaded artifacts, session shares, published-app source archives and
 sandbox file transfers go to the bucket, so replicas share that state and pods can
 be replaced with rolling updates. Production core refuses to start without
-`DATABASE_URL`, or with `RUN_STORE=memory`. S3
+`DATABASE_URL`. S3
 credentials come from the standard AWS chain, such as a pod IAM role bound through
 `serviceAccount.create=true` with `serviceAccount.annotations`, or
 `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in the runtime Secret. Any S3-compatible

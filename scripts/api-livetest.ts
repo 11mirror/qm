@@ -17,7 +17,6 @@ const built = buildApp({
   ...loadConfig(),
   port: 0,
   dataDir: DATA,
-  runStore: "memory",
 });
 await built.start();
 await built.config.setInstructions(

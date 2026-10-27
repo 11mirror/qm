@@ -3,7 +3,8 @@ import { credentialHandle } from "../src/credentials/keychain.ts";
 import "./support/auto-fake-sprites.ts";
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { buildApp } from "./support/build-app.ts";
+import { buildTestApp } from "./support/test-app.ts";
+import { failedTurn } from "./support/orchestrator-app.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import type { Config } from "../src/config.ts";
@@ -13,7 +14,7 @@ import { sleep } from "../src/util/async.ts";
 // Full application/tool/materializer path, with deterministic model commands and
 // the repo's host-backed Sprites transport. This does not test VM isolation.
 async function fixture(t: TestContext, config: Partial<Config> = {}) {
-  const built = buildApp(testConfig({ memoryCapture: "off", ...config }));
+  const built = buildTestApp(testConfig({ memoryCapture: "off", ...config }));
   await built.config.hydrate?.();
   await built.identity.hydrate();
   await built.start();
@@ -422,20 +423,27 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
     "clean",
   );
   let deniedTurn = 0;
-  const denied = (origin: TurnRequest["origin"] = { kind: "human" }) =>
-    b.turn("!owner true", true, "U1", {
-      origin,
-      conversation: {
-        kind: "channel",
-        channelRef: "C1",
-        threadRef: `C1:keychain-denied-${++deniedTurn}`,
-        audience: [{ externalId: "U1" }, { externalId: "U2" }],
-        publishMembers: [{ externalId: "U1" }, { externalId: "U2" }],
+  const denied = (origin: TurnRequest["origin"]) =>
+    failedTurn(
+      b,
+      {
+        surface: "test",
+        actor: { externalId: "U1" },
+        origin,
+        conversation: {
+          kind: "channel",
+          channelRef: "C1",
+          threadRef: `C1:keychain-denied-${++deniedTurn}`,
+          audience: [{ externalId: "U1" }, { externalId: "U2" }],
+          publishMembers: [{ externalId: "U1" }, { externalId: "U2" }],
+        },
+        text: "!owner true",
       },
-    });
-  await assert.rejects(denied({ kind: "automation" }), /owner-auth box is not available/);
-  await assert.rejects(denied({ kind: "ambient" }), /owner-auth box is not available/);
-  await assert.rejects(denied({ kind: "ambient", live: false }), /owner-auth box is not available/);
+      /owner-auth box is not available/,
+    );
+  await denied({ kind: "automation" });
+  await denied({ kind: "ambient" });
+  await denied({ kind: "ambient", live: false });
   const firstTurn = (channelRef: string, origin: TurnRequest["origin"] = { kind: "human" }) =>
     b.turn(selected(), true, "U1", {
       origin,

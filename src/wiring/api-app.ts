@@ -58,7 +58,7 @@ function appDepsHead(w: BuildApiAppInputs) {
     sessions,
     orchestrator,
     runs,
-    leaseTtlMs,
+    late,
     maxAttempts,
     turnStream,
     runStreamEvents,
@@ -100,7 +100,9 @@ function appDepsHead(w: BuildApiAppInputs) {
     sessions,
     orchestrator,
     runs,
-    leaseTtlMs,
+    startTurns: () => {
+      if (!gates.inlineShutdown.signal.aborted) late.turnRunner.start();
+    },
     maxAttempts,
     turnStream,
     runStreamEvents,
@@ -157,8 +159,6 @@ function appDepsTail(w: BuildApiAppInputs) {
     artifactMap,
     contextRequestEvents,
     connectorSecretKey,
-    engaged,
-    pokeReaper,
     surfaceCache,
     channelPolicy,
     harness,
@@ -183,8 +183,6 @@ function appDepsTail(w: BuildApiAppInputs) {
     contextRequests: artifactMap<SurfaceContextRequest>("context_requests"),
     contextRequestEvents,
     contextViewerTokenKey: deriveConnectorKey(connectorSecretKey, "context-viewer-tokens"),
-    engaged,
-    reaperPoke: pokeReaper,
     surfaceCache,
     channelPolicy,
     ...(harness.models.judge

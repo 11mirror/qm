@@ -15,8 +15,9 @@ import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
-import { processRun } from "../src/runs/worker.ts";
+import { createTurnRunner } from "../src/turns/turn-runner.ts";
+import { TURN_QUEUES } from "../src/turns/absurd-schema.ts";
+import type { ErrorLog } from "../src/admin/error-log.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
@@ -29,6 +30,7 @@ import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limite
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { settledRun, testRunStore } from "./support/turns.ts";
 
 const ORG = "default-org";
 const ADMIN = "https://portal.example.com";
@@ -87,11 +89,16 @@ function buildOrchestrator(sessions: SessionStore) {
   });
 }
 
-test("a failed turn surfaces a refusal whose admin link points at the real session UUID", async () => {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+test("a failed turn surfaces a refusal whose admin link points at the real session UUID", async (t) => {
+  // The session store checks the turn's fence, so it must share the ledger's database.
+  const { runs, ledger, databaseUrl } = testRunStore();
+  const sessions = createPostgresSessionStore(databaseUrl);
   const orchestrator = buildOrchestrator(sessions);
-  const { runs } = createMemoryRunStore();
-  const leaseTtlMs = 60_000;
+  const recorded: string[] = [];
+  const errors = { record: (e) => recorded.push(e.message) } as Partial<ErrorLog> as ErrorLog;
+  const runner = createTurnRunner({ ledger, orchestrator, queues: TURN_QUEUES, slots: 1, errors, pollMs: 50 });
+  runner.start();
+  t.after(() => runner.stopClaims());
 
   const threadRef = "ch:C_UUID_FIXTURE:100.1";
   const request = {
@@ -103,11 +110,11 @@ test("a failed turn surfaces a refusal whose admin link points at the real sessi
   };
   const { run } = await runs.enqueue({ sessionId: threadRef, request, maxAttempts: 1 });
 
-  const claimed = await runs.claimById(run.id, "w1", leaseTtlMs);
-  assert.ok(claimed, "claimed for processing");
-  await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs }, claimed!), /boom/);
-
-  const stored = await runs.get(run.id);
+  const stored = await settledRun(runs, run.id);
+  assert.ok(
+    recorded.some((message) => /boom/.test(message)),
+    `the failure was recorded: ${recorded.join("; ")}`,
+  );
   assert.equal(stored?.result?.status, "failed");
   assert.equal(stored?.result?.sessionId, threadRef, "raw stored result holds the threadRef");
 

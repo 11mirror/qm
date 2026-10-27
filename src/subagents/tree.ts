@@ -1,6 +1,6 @@
 import { swallowAs } from "../util/errors.ts";
 import { type Session } from "../types.ts";
-import { stopRun, type Run, type RunStore } from "../runs/run-store.ts";
+import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 
@@ -88,7 +88,7 @@ export async function sessionRunCancelled(
 export async function stopSessionTree(
   deps: {
     sessions: Pick<SessionStore, "descendantsOf">;
-    runs: Pick<RunStore, "inFlightForThread" | "withdraw" | "get" | "cancelTurn" | "cancelTree">;
+    runs: Pick<RunStore, "inFlightForThread" | "cancelTree">;
     signals: Pick<RunSignalStore, "send">;
   },
   root: Session,
@@ -98,8 +98,7 @@ export async function stopSessionTree(
   const inFlight: Run[] = [];
   for (const session of tree) inFlight.push(...(await deps.runs.inFlightForThread(session.threadRef)));
   for (const run of inFlight) await deps.signals.send(run.id, { kind: "abort", ...(reason ? { reason } : {}) });
-  if (deps.runs.cancelTree) await deps.runs.cancelTree(tree.map((session) => session.threadRef));
-  for (const run of inFlight) if (run.engine !== "absurd" || !deps.runs.cancelTree) await stopRun(deps.runs, run);
+  await deps.runs.cancelTree(tree.map((session) => session.threadRef));
   return inFlight.length > 0;
 }
 

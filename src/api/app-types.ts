@@ -38,7 +38,6 @@ import type { Item } from "../sessions/items.ts";
 import { type Sandbox } from "../sandbox/sandbox.ts";
 import type { ProcessRegistry } from "../processes/process-registry.ts";
 import type { MonitorStore } from "../monitors/monitor-store.ts";
-import type { EngagedRegistry } from "../wake/engaged-registry.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
 import type { Run, RunDeliveryState, RunStore } from "../runs/run-store.ts";
 import type { GoalView, ReasoningBlock, TurnStream } from "../runs/turn-stream.ts";
@@ -595,10 +594,10 @@ export interface AppDeps {
   screenSecurity?: SecurityScreenProbe;
   orchestrator: Orchestrator;
   runs: RunStore;
-  leaseTtlMs: number;
   maxAttempts: number;
+  /** Starts this process claiming turns, so a caller waiting on a turn is not stranded. */
+  startTurns?: () => void;
   runWaitMs?: number;
-  inlineTurns?: boolean;
   turnStream?: TurnStream;
   runStreamEvents?: EventBus<RunStreamEvent>;
   runActivity?: RunActivityStore;
@@ -642,8 +641,6 @@ export interface AppDeps {
   processes?: ProcessRegistry;
   monitors?: MonitorStore;
   sandbox?: Sandbox;
-  reaperPoke?: () => void;
-  engaged?: EngagedRegistry;
   surfaceCache?: SurfaceCache;
   channelPolicy?: ChannelPolicyStore;
   ambientJudge?: (systemPrompt: string, prompt: string, signal?: AbortSignal) => Promise<string | undefined>;
@@ -743,8 +740,6 @@ export class InstructionsVersionConflictError extends Error {
 }
 
 export const CONTEXT_REQUEST_EXPIRY_MS = 2 * 60_000;
-
-export const STALE_LEASE_GRACE_MS = 30_000;
 
 interface SessionPageQuery {
   limit: number;

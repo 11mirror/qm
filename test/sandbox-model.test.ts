@@ -31,12 +31,15 @@ const liveRun = {
   sessionId: "dm:U1:t",
   status: "running",
   leaseToken: "lease-1",
-  leaseExpiresAt: Date.now() + 3_600_000,
   request: { actor: { id: "U1" } },
 };
 const runClaims = { runId: "run-1", runAttempt: 1, runLeaseToken: "lease-1", threadRef: "dm:U1:t" };
 const liveRuns = (run: Record<string, unknown> = liveRun) =>
-  ({ get: async (id: string) => (id === run.id ? run : null) }) as unknown as ServerDeps["runs"];
+  ({
+    get: async (id: string) => (id === run.id ? run : null),
+    leaseHeld: async (held: Record<string, unknown>, token: string) =>
+      held.status === "running" && held.leaseToken === token,
+  }) as unknown as ServerDeps["runs"];
 
 async function listen(server: ReturnType<typeof httpServer>): Promise<string> {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

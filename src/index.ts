@@ -14,7 +14,7 @@ async function bootSingleTenant(): Promise<{ tenants: BootedTenant[]; servers: S
     await new Promise<void>((resolve) => server.listen(config.port, resolve));
     console.log(
       `[qm] listening on :${config.port} (org=${config.orgId}, ` +
-        `runStore=${config.runStore}, workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
+        `workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
     );
     if (config.publicPort)
       servers.push(

@@ -13,6 +13,7 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { claimTurn, testRunStore } from "./support/turns.ts";
 
 const policy = { companyDomains: ["example.com"], companyTeamIds: ["TCOMPANY"], serviceCredentials: ["safe"] };
 const externalSlackPolicies = { batch: policy };
@@ -157,9 +158,8 @@ test("external native tool ceiling cannot delegate, switch sandboxes, read confi
 
 test("external broker requires the current run lease and both external-safe and ordinary grants", async () => {
   const { externalSlackCapabilityAllowed } = await import("../src/api/external-slack-capability.ts");
-  const { createMemoryRunStore } = await import("../src/runs/memory-run-store.ts");
   const { createAclStore } = await import("../src/acl/acl-store.ts");
-  const { runs } = createMemoryRunStore();
+  const { runs, ledger } = testRunStore();
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const req = request("test");
   const { run: queued } = await runs.enqueue({
@@ -171,7 +171,7 @@ test("external broker requires the current run lease and both external-safe and 
       origin: { kind: "human" },
     },
   });
-  const run = (await runs.claimById(queued.id, "test-worker", 60_000))!;
+  const { run, token } = (await claimTurn(ledger, queued.id))!;
   const claims: CapabilityClaims = {
     actorId: "U1",
     scopeId: `channel:${namespace}:C1`,
@@ -180,7 +180,7 @@ test("external broker requires the current run lease and both external-safe and 
     credentials: ["safe"],
     runId: run.id,
     runAttempt: run.attempts,
-    runLeaseToken: run.leaseToken!,
+    runLeaseToken: token,
     threadRef: run.sessionId,
     exp: Date.now() + 60_000,
   };
@@ -299,7 +299,7 @@ test("external sandbox API token cannot reach private APIs, while its safe broke
       origin: { kind: "human" },
     },
   });
-  const run = (await b.runs.claimById(queued.id, "test-worker", 60_000))!;
+  const { run, token } = (await claimTurn(b.turnLedger, queued.id))!;
   let forwarded = 0;
   const server = createServer(b.app, {
     ...serverDeps(config, b),
@@ -323,7 +323,7 @@ test("external sandbox API token cannot reach private APIs, while its safe broke
     externalSlack: true,
     runId: run.id,
     runAttempt: run.attempts,
-    runLeaseToken: run.leaseToken!,
+    runLeaseToken: token,
     threadRef: run.sessionId,
     exp: Date.now() + 60_000,
   };

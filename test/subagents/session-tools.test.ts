@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
 import type { AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
-import { createMemoryRunStore } from "../../src/runs/memory-run-store.ts";
+import { testRunStore } from "../support/turns.ts";
 import { createMemoryRunSignalStore } from "../../src/runs/run-signal-store.ts";
 import type { Run, RunStore } from "../../src/runs/run-store.ts";
 import { isUserMessage } from "../../src/sessions/items.ts";
@@ -38,7 +38,7 @@ test("session search reuses indexed search with participant intersection, tenure
     text: "memo shared",
   });
   await sessions.releaseLease(lease);
-  const { runs } = createMemoryRunStore();
+  const { runs } = testRunStore();
   let members: Principal[] | undefined;
   const factory = createSessionSyscalls({
     sessions,
@@ -199,7 +199,7 @@ interface Rig {
 
 async function rig(opts?: { treeRunCap?: number }): Promise<Rig> {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createMemoryRunStore();
+  const { runs } = testRunStore();
   const signals = createMemoryRunSignalStore();
   const mailbox = createSessionMailbox(testMap<SessionMessage>());
   const advisoryLock = testAdvisoryLock();

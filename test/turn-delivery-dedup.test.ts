@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { buildTestApp } from "./support/test-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { retryClock } from "./support/retry-clock.ts";
+import { settle } from "./support/settle.ts";
 import { completedSurfaceEnqueues, turnPostKeys } from "../src/core/orchestrator/turn-helpers.ts";
 import { storedItem, type NewItem } from "../src/sessions/items.ts";
 
@@ -28,17 +28,16 @@ function channelTurn(text: string, extra: Partial<TurnRequest> = {}): TurnReques
   };
 }
 
-test("a retried turn does not re-post: the same position dedups against the delivered row", async (t) => {
-  const backoff = retryClock(t);
+test("a retried turn does not re-post: the same position dedups against the delivered row", async () => {
   const built = freshApp();
   const req = channelTurn("!post-lost-result deploy is done", { idempotencyKey: "dedup-retry-1" });
 
-  await assert.rejects(built.app.turn(req), /boom/);
-  backoff();
+  const turn = built.app.turn(req);
+  await settle(async () => (await built.posts.pending("slack")).length > 0);
   const afterFirst = await built.posts.pending("slack");
   assert.equal(afterFirst.length, 1, "the interrupted attempt already enqueued its post");
 
-  const res = await built.app.turn(req);
+  const res = await turn;
   assert.equal(res.status, "silent", res.reason);
 
   const rows = (await built.posts.pending("slack")).filter((d) => d.idempotencyKey.startsWith("post:"));
@@ -51,13 +50,10 @@ test("a retried turn does not re-post: the same position dedups against the deli
   );
 });
 
-test("a resumed turn's NEW post after a completed one is delivered, not swallowed by the dedup", async (t) => {
-  const backoff = retryClock(t);
+test("a resumed turn's NEW post after a completed one is delivered, not swallowed by the dedup", async () => {
   const built = freshApp();
   const req = channelTurn("!post-then-boom first update|second update", { idempotencyKey: "dedup-resume-1" });
 
-  await assert.rejects(built.app.turn(req), /boom/);
-  backoff();
   const res = await built.app.turn(req);
   assert.equal(res.status, "silent", res.reason);
 
@@ -70,8 +66,7 @@ test("a resumed turn's NEW post after a completed one is delivered, not swallowe
   assert.equal(new Set(rows.map((d) => d.idempotencyKey)).size, 2, "each post holds its own key");
 });
 
-test("a retried automation fire (surface 'monitor') still seeds past its recorded post — the NEW post delivers", async (t) => {
-  const backoff = retryClock(t);
+test("a retried automation fire (surface 'monitor') still seeds past its recorded post — the NEW post delivers", async () => {
   const built = freshApp();
   const req: TurnRequest = {
     surface: "monitor",
@@ -83,8 +78,6 @@ test("a retried automation fire (surface 'monitor') still seeds past its recorde
     origin: { kind: "automation", destination: { type: "slack", target: "slack:C9:t1" } },
   };
 
-  await assert.rejects(built.app.turn(req), /boom/);
-  backoff();
   const res = await built.app.turn(req);
   assert.equal(res.status, "silent", res.reason);
 

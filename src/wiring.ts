@@ -78,6 +78,7 @@ import type { Harness } from "./harness/harness.ts";
 import { type SecurityScreener } from "./security/security-screener.ts";
 import { type RunSignalStore } from "./runs/run-signal-store.ts";
 import { type RunStore } from "./runs/run-store.ts";
+import { type TurnLedger } from "./turns/turn-ledger.ts";
 import { createSweeper as createUntrackedSweeper } from "./util/sweeper.ts";
 import { type ProcessRegistry } from "./processes/process-registry.ts";
 import { type MonitorStore } from "./monitors/monitor-store.ts";
@@ -163,6 +164,7 @@ import { assembleBuiltApp } from "./wiring/built-app.ts";
 
 export interface Runtime {
   start(): void;
+  startTurns(): void;
   startBackground(): void;
   stopBackgroundClaims(): Promise<void>;
   setBackgroundAdmission(canClaim: () => boolean, active: () => boolean): void;
@@ -217,6 +219,7 @@ export interface BuiltApp {
   deploymentLayerStore: DeploymentLayerStore;
   sessions: SessionStore;
   runs: RunStore;
+  turnLedger: TurnLedger;
   signals: RunSignalStore;
   sessionStateBus: SessionStateBus;
   ledgerEventBus: LedgerEventBus;

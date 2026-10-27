@@ -13,9 +13,8 @@ import {
 import { type DrainController, createDrainController } from "../runs/drain.ts";
 import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
 import { TURN_READY_CHANNEL, TURN_CANCEL_CHANNEL, TURN_YIELD_CHANNEL } from "../turns/turn-ledger.ts";
-import { type TurnRunner, createTurnRunner } from "../turns/turn-runner.ts";
+import { createTurnRunner, RUN_MAX_CLAIMS } from "../turns/turn-runner.ts";
 import { TURN_QUEUES } from "../turns/absurd-schema.ts";
-import { RUN_MAX_CLAIMS, type Worker, createWorker, createRunPreemption } from "../runs/worker.ts";
 import { type ProcessReaper, createProcessReaper, createReaperKillHook } from "../processes/process-reaper.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
 import type { ComposioReturn } from "../api/routes/composio.ts";
@@ -43,13 +42,10 @@ export function buildWorkers(
     gates,
     pgArtifactMap,
     turnLedger,
+    late,
     databaseUrl,
     orchestrator,
     errors,
-    admittedWork,
-    runs,
-    leaseTtlMs,
-    createSweeper,
     processes,
     sandbox,
     finishCredentials,
@@ -73,45 +69,22 @@ export function buildWorkers(
       : createNoopInstanceRegistry();
   const drain: DrainController = createDrainController({ registry: instanceRegistry });
   const canClaimRuns = () => gates.backgroundAdmission() && drain.canClaim();
-  const turnReady = turnLedger
-    ? createPostgresNotifyBus<string>(databaseUrl, TURN_READY_CHANNEL, "turn readiness")
-    : undefined;
-  const turnCancels = turnLedger
-    ? createPostgresNotifyBus<string>(databaseUrl, TURN_CANCEL_CHANNEL, "turn cancels")
-    : undefined;
-  const turnYields = turnLedger
-    ? createPostgresNotifyBus<string>(databaseUrl, TURN_YIELD_CHANNEL, "turn yields")
-    : undefined;
-  const turnRunner: TurnRunner | undefined = turnLedger
-    ? createTurnRunner({
-        ledger: turnLedger,
-        orchestrator,
-        queues: TURN_QUEUES,
-        slots: Math.max(1, config.workers),
-        capacity: () => Math.max(1, config.workers) - workers.filter((worker) => worker.held()).length,
-        ...(turnReady ? { ready: turnReady } : {}),
-        ...(turnCancels ? { cancels: turnCancels } : {}),
-        ...(turnYields ? { yields: turnYields } : {}),
-        canClaim: canClaimRuns,
-        errors,
-        maxClaims: RUN_MAX_CLAIMS,
-      })
-    : undefined;
-  const busyRuns = () => workers.filter((worker) => worker.held()).length + (turnRunner?.held().length ?? 0);
-  const canClaimRunSlot = () => canClaimRuns() && busyRuns() < Math.max(1, config.workers);
-  const workers: Worker[] = Array.from({ length: Math.max(1, config.workers) }, () =>
-    createWorker({
-      admittedWork,
-      runs,
-      orchestrator,
-      leaseTtlMs,
-      errors,
-      pollMs: 250,
-      canClaim: canClaimRunSlot,
-    }),
-  );
-  const preemption = createRunPreemption({ runs, workers, canClaim: canClaimRuns });
-  const preemptionSweeper = createSweeper(() => preemption.sweep(), 1_000, { label: "run-preemption" });
+  const turnReady = createPostgresNotifyBus<string>(databaseUrl, TURN_READY_CHANNEL, "turn readiness");
+  const turnCancels = createPostgresNotifyBus<string>(databaseUrl, TURN_CANCEL_CHANNEL, "turn cancels");
+  const turnYields = createPostgresNotifyBus<string>(databaseUrl, TURN_YIELD_CHANNEL, "turn yields");
+  const turnRunner = createTurnRunner({
+    ledger: turnLedger,
+    orchestrator,
+    queues: TURN_QUEUES,
+    slots: Math.max(1, config.workers),
+    ready: turnReady,
+    cancels: turnCancels,
+    yields: turnYields,
+    canClaim: canClaimRuns,
+    errors,
+    maxClaims: RUN_MAX_CLAIMS,
+  });
+  late.turnRunner = turnRunner;
   const processReaper: ProcessReaper | null = processes
     ? createProcessReaper(processes, {
         ...(supportsProcessSessions(sandbox)
@@ -130,8 +103,6 @@ export function buildWorkers(
     deepIdleMachineMs,
     devIdleMachineMs,
     drain,
-    workers,
-    preemptionSweeper,
     turnRunner,
     turnReady,
     turnCancels,

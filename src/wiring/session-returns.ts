@@ -5,7 +5,6 @@ import { sessionTreeWorking, stoppableAncestors } from "../subagents/tree.ts";
 import type { Run } from "../runs/run-store.ts";
 import { deliverSubagentMail } from "../subagents/mail.ts";
 import { isSubagentThreadRef } from "../sessions/thread-ref.ts";
-import { type WakeSweep, createWakeSweep } from "../wake/sweep.ts";
 import { createSurfaceContextPuller } from "../api/surface-context-puller.ts";
 import type { RunsModule } from "./runs.ts";
 import type { AppServicesModule } from "./app-services.ts";
@@ -31,7 +30,6 @@ export function buildSessionReturns(
 ) {
   const {
     runs,
-    engaged,
     app,
     sessions,
     sessionStateBus,
@@ -43,21 +41,10 @@ export function buildSessionReturns(
     featureFlags,
     outbound,
     runSignals,
-    pokeReaper,
-    config,
-    leaderLease,
     orchestratorDeps,
     keychain,
   } = w;
 
-  runs.onTerminal((run) => {
-    void runs
-      .activeForThread(run.sessionId)
-      .then((live) => {
-        if (!live) engaged.settle(run.sessionId);
-      })
-      .catch(swallowAs("wake: settle on terminal", undefined));
-  });
   runs.onTerminal((run) => {
     void app.replayOrphanedRunSignals(run.id).catch(swallowAs("wake: orphaned-signal replay", undefined));
   });
@@ -122,23 +109,6 @@ export function buildSessionReturns(
       afterId = batch.at(-1)!.id;
     }
   };
-  const wakeSweep: WakeSweep = createWakeSweep(
-    {
-      async engagedSessions() {
-        return engaged.list();
-      },
-      async sweepSession(threadRef) {
-        const live = await runs.activeForThread(threadRef);
-        if (!live) {
-          pokeReaper();
-          engaged.settle(threadRef);
-          return 1;
-        }
-        return 0;
-      },
-    },
-    { intervalMs: config.reaperIntervalMs, leaderLease },
-  );
   orchestratorDeps.surfaceContext = createSurfaceContextPuller(app, {
     searchToken: async (source, viewer) =>
       source === "slack" && viewer
@@ -147,7 +117,7 @@ export function buildSessionReturns(
           keychain.connectorAccessToken("slack.com", viewer, "company"))
         : null,
   });
-  return { sweepSessionReturns, wakeSweep };
+  return { sweepSessionReturns };
 }
 
 export type SessionReturnsModule = ReturnType<typeof buildSessionReturns>;

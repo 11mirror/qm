@@ -57,7 +57,6 @@ function fixture() {
       sessionId: "ch:C1:1.0",
       createdAt: at,
       status: "running",
-      leaseExpiresAt: Number.MAX_SAFE_INTEGER,
       deliveryState: { replying: true },
       request: { conversation: { kind: "channel", channelRef: "C1", threadRef: "ch:C1:1.0" }, actor: { id: "U1" } },
     } as Run;
@@ -152,7 +151,7 @@ test("concurrent starts share one card, terminal runs cannot clear active work, 
   assert.notEqual(f.card()[0]?.task_id, oldCard);
 });
 
-test("restart preserves card identity and pending or expired-lease work is waiting, not working", async () => {
+test("restart preserves card identity and pending work is waiting, not working", async () => {
   const f = fixture();
   await f.enable();
   const run = f.add("r1");
@@ -160,14 +159,12 @@ test("restart preserves card identity and pending or expired-lease work is waiti
   const restarted = f.manager();
   await restarted.reconcile(f.client, "T1:B1");
   assert.equal(f.cards.length, 1);
-  run.leaseExpiresAt = 0;
+  run.status = "pending";
   await restarted.reconcile(f.client, "T1:B1");
   assert.equal(f.card()[0]?.title, "Waiting to resume");
-  run.status = "pending";
   await restarted.reconcile(f.client, "T1:B1");
   assert.equal(f.cards.length, 2);
   run.status = "running";
-  run.leaseExpiresAt = Number.MAX_SAFE_INTEGER;
   await restarted.reconcile(f.client, "T1:B1");
   assert.equal(f.card()[0]?.title, "Working");
   assert.ok(f.cards.slice(1).every((call) => call.args.ts === "card.1"));

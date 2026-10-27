@@ -384,7 +384,6 @@ function serviceEnv(ctx: DockerCtx, service: ServiceName): Record<string, string
   if (service === "core") {
     out.PORT = "8080";
     out.DATA_DIR = "/data";
-    out.RUN_STORE = "postgres";
     out.DATABASE_URL = ctx.databaseUrl;
     if (config.model) out.PI_MODEL = config.model;
     if (config.modelProvider) out.MODEL_PROVIDER = config.modelProvider;

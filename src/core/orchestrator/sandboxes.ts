@@ -7,7 +7,6 @@ import type { GapPhase } from "../../sessions/session-store.ts";
 import { type SandboxHandle, supportsProcessSessions, SandboxProvisionCleanupError } from "../../sandbox/sandbox.ts";
 import { accessConversationSandbox, type SandboxAccessPlan } from "../../sandbox/sandbox-resources.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
-import { leaseLapsed } from "../../runs/run-store.ts";
 import { finishProcessCredentials } from "../../credentials/execute-files.ts";
 import {
   materializeSkillTree as laySkillTree,
@@ -251,7 +250,7 @@ async function releaseHold(t: TurnSandboxState, handle: SandboxHandle): Promise<
   if (!handle.resourceId || !runs || !deps.sandboxResources) return false;
   return deps.sandboxResources.release(handle.resourceId, input.runId, async (runId) => {
     const run = await runs.get(runId);
-    return run?.status === "running" && !leaseLapsed(run, Date.now());
+    return run?.status === "running";
   });
 }
 

@@ -5,6 +5,7 @@ import { projectGroupRef } from "../src/projects/project-store.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { completeTurn } from "./support/turns.ts";
 
 test("human child replay keeps one receipt across acknowledgement failure and a project roster change", async (t) => {
   const built = buildApp(testConfig({ openaiApiKey: "test-openai-key" }));
@@ -55,9 +56,7 @@ test("human child replay keeps one receipt across acknowledgement failure and a 
       ...options,
     },
   });
-  const claimed = await built.runs.claimById(run.id, "test-worker", 60_000);
-  assert.ok(claimed?.leaseToken);
-  await built.runs.complete(run.id, claimed.leaseToken, { status: "ok", reply: "Finished" });
+  await completeTurn(built.turnLedger, run.id, { status: "ok", reply: "Finished" });
   await built.signals.send(run.id, {
     kind: "steer",
     text: "Please continue the investigation",
@@ -112,9 +111,7 @@ test("late child signals remain pending behind approval and requestless steers r
     sessionId: child.threadRef,
     request: { actor, conversation, text: "task", origin: { kind: "automation" } },
   });
-  const claimed = await built.runs.claimById(run.id, "test", 30_000);
-  assert.ok(claimed?.leaseToken);
-  await built.runs.complete(run.id, claimed.leaseToken, { status: "ok" });
+  await completeTurn(built.turnLedger, run.id, { status: "ok" });
   await built.signals.send(run.id, {
     kind: "steer",
     text: "human followup",

@@ -1,5 +1,5 @@
 import type { Head } from "./late.ts";
-import { type RunSignalStore, createMemoryRunSignalStore } from "../runs/run-signal-store.ts";
+import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "../runs/postgres-run-signal-store.ts";
 import {
   resolveModel,
@@ -42,9 +42,7 @@ export function buildHarness(
     modelCredentials,
   } = w;
 
-  const runStoreKind = config.runStore;
-  const runSignals: RunSignalStore =
-    runStoreKind === "postgres" ? createPostgresRunSignalStore(databaseUrl) : createMemoryRunSignalStore();
+  const runSignals: RunSignalStore = createPostgresRunSignalStore(databaseUrl);
   const companyModelId = (id: string): string => {
     if (resolveModel(id)?.provider !== "openai" || modelRequestOverrides(id)) return id;
     const subscription = codexSubscriptionModelId(id);
@@ -137,7 +135,6 @@ export function buildHarness(
     delete harness.models.screenSecurity;
   }
   return {
-    runStoreKind,
     harness,
     runSignals,
     runtimeOrgScope,

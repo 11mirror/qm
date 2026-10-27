@@ -1,6 +1,6 @@
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import { samePerson } from "../directory/person.ts";
-import { runLeaseHeld, type RunStore } from "./run-store.ts";
+import type { RunStore } from "./run-store.ts";
 
 export async function capabilityRunActive(
   runs: Pick<RunStore, "get" | "leaseHeld"> | undefined,
@@ -13,6 +13,6 @@ export async function capabilityRunActive(
     run.attempts === cap.runAttempt &&
     run.sessionId === cap.threadRef &&
     samePerson(run.request.actor.id, cap.actorId) &&
-    (await runLeaseHeld(runs!, run, cap.runLeaseToken)),
+    (await runs!.leaseHeld(run, cap.runLeaseToken)),
   );
 }

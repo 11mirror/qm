@@ -5,7 +5,8 @@ import type { Sandbox } from "../../src/sandbox/sandbox.ts";
 import type { RunActivityEntry } from "../../src/runs/run-activity-store.ts";
 import type { Item } from "../../src/sessions/items.ts";
 import type { SecurityScreener } from "../../src/security/security-screener.ts";
-import type { ScopeId, TurnRequest } from "../../src/types.ts";
+import assert from "node:assert/strict";
+import type { ScopeId, TurnRequest, TurnResult } from "../../src/types.ts";
 import { hashId } from "../../src/util/crypto.ts";
 import { selectDefaultSandbox } from "./default-sandbox.ts";
 import { buildTestApp as buildRecordingApp } from "./test-app.ts";
@@ -48,6 +49,22 @@ export function freshApp(overrides: Partial<Config> = {}, securityScreener?: Sec
   const config = testConfig(overrides);
   config.sandbox.namePrefix ??= `test-${hashId([config.dataDir]).slice(0, 10)}`;
   return buildTestApp(config, securityScreener ? { securityScreener } : {});
+}
+
+export async function failedTurn(
+  built: ReturnType<typeof freshApp>,
+  request: TurnRequest,
+  reason: RegExp,
+): Promise<TurnResult> {
+  const result = await built.app.turn(request);
+  assert.equal(result.status, "failed", JSON.stringify(result));
+  await built.errors.flush();
+  const logged = await built.errors.list({ sessionId: result.sessionId! });
+  assert.ok(
+    logged.some((e) => reason.test(e.message)),
+    `expected a recorded failure matching ${reason}: ${JSON.stringify(logged.map((e) => e.message))}`,
+  );
+  return result;
 }
 
 export function spyProvisioning(sandbox: Sandbox) {

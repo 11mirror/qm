@@ -19,6 +19,7 @@ import type { BuiltApp } from "../../src/wiring.ts";
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
+import { completeTurn } from "../support/turns.ts";
 
 const SECRET = "portal-actor-binding-signing-secret";
 const ALICE = "alice@default-org";
@@ -160,9 +161,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
         text: "test request",
       },
     });
-    const claimed = await built.runs.claimById(run.id, "identity-gate-worker", 60_000);
-    assert.ok(claimed?.leaseToken);
-    await built.runs.complete(run.id, claimed.leaseToken, { status: "ok", reply: "owner-only result" });
+    await completeTurn(built.turnLedger, run.id, { status: "ok", reply: "owner-only result" });
     const strictServer = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SOURCE,

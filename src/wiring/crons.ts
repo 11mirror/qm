@@ -6,7 +6,7 @@ import { swallowAs } from "../util/errors.ts";
 import { createInboxLedger, type InboxEventSink } from "../inbox/ledger.ts";
 import { createPostgresCronFireStore } from "../cron/fire-store.ts";
 import { createCronStore, type CronStore } from "../cron/cron-store.ts";
-import { RUN_MAX_AGE_MS } from "../runs/reaper.ts";
+import { RUN_MAX_AGE_MS } from "../runs/run-store.ts";
 import { createWebhookStore, type WebhookHistory } from "../webhooks/webhook-store.ts";
 import { createApprovalStore } from "../core/approval-store.ts";
 import { createSecurityScreenProxy } from "../security/security-screener.ts";

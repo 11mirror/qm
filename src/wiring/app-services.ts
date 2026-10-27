@@ -4,8 +4,6 @@ import { wireRunResultPosts } from "../runs/run-results.ts";
 import { createGitFetcher, resolvePackAuth } from "../skills/pack-fetcher.ts";
 import { nonDeploymentCredential } from "../credentials/deployment-credentials.ts";
 import { scopeId } from "../types.ts";
-import { type Reaper, createReaper, RUN_MAX_AGE_MS, REAPER_LEASE_KEY } from "../runs/reaper.ts";
-import { createEngagedRegistry } from "../wake/engaged-registry.ts";
 import { swallowAs } from "../util/errors.ts";
 import {
   type AmbientJudgmentStore,
@@ -40,8 +38,6 @@ export function buildAppServices(
     chatSurfaces,
     serviceCreds,
     keychain,
-    leaderLease,
-    errors,
     databaseUrl,
     directProviderAvailability,
     harness,
@@ -77,27 +73,6 @@ export function buildAppServices(
         pack,
       ),
   });
-  const reaper: Reaper = createReaper(runs, sessions, {
-    intervalMs: config.reaperIntervalMs,
-    leaderLease,
-    maxAgeMs: RUN_MAX_AGE_MS,
-    errors,
-  });
-  const engaged = createEngagedRegistry();
-  let reapInFlight = false;
-  let lastReapAt = 0;
-  const REAP_POKE_COOLDOWN_MS = 1_000;
-  const pokeReaper = (): void => {
-    if (reapInFlight || Date.now() - lastReapAt < REAP_POKE_COOLDOWN_MS) return;
-    reapInFlight = true;
-    void leaderLease
-      .hold(REAPER_LEASE_KEY, () => reaper.sweep())
-      .catch(swallowAs("wake: reaper poke", null))
-      .finally(() => {
-        reapInFlight = false;
-        lastReapAt = Date.now();
-      });
-  };
   const ambientJudgments: AmbientJudgmentStore = createPostgresAmbientJudgmentStore(databaseUrl);
   const ackEmojiPicks: AckEmojiPickStore = createPostgresAckEmojiPickStore(databaseUrl);
   const providerKeys = directProviderAvailability;
@@ -118,14 +93,11 @@ export function buildAppServices(
     : undefined;
   return {
     skillFetcher,
-    engaged,
-    pokeReaper,
     screenSecurity,
     ambientJudgments,
     ackEmojiPicks,
     providerKeys,
     runResultRecovery,
-    reaper,
   };
 }
 

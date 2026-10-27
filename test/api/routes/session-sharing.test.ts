@@ -1,4 +1,3 @@
-import { createMemoryRunStore } from "../../../src/runs/memory-run-store.ts";
 import type { OrchestratorInput } from "../../../src/core/orchestrator/types.ts";
 import { createSessionMethods } from "../../../src/api/app-sessions.ts";
 import { Readable } from "node:stream";
@@ -14,6 +13,7 @@ import { type ApiCtx, respond } from "../../../src/api/routes/route.ts";
 import { scopeId } from "../../../src/types.ts";
 import { storedItem, type Item, type NewItem } from "../../../src/sessions/items.ts";
 import { testMap } from "../../support/test-database.ts";
+import { completeTurn, testRunStore } from "../../support/turns.ts";
 
 function entry(item: NewItem, seq: number): Item {
   return storedItem(item, { sessionId: "s1", seq, createdAt: seq });
@@ -111,7 +111,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
     },
   };
   const identity = createIdentityService(testMap(), { externalMembers: testMap() });
-  const { runs } = createMemoryRunStore();
+  const { runs, ledger } = testRunStore();
   const original = [
     ...entries,
     entry({ kind: "UserMessage", text: "File", body: { attachments: [{ artifactId: "f1", secret: "SECRET" }] } }, 12),
@@ -224,8 +224,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
       })
     ).run;
   const finish = async (runId: string, over: { sessionId?: string; seq?: number; text?: string } = {}) => {
-    const claimed = await runs.claimById(runId, "w1", 5_000);
-    await runs.complete(runId, claimed!.leaseToken!, {
+    await completeTurn(ledger, runId, {
       status: "ok",
       reply: over.text ?? "Generated",
       sessionId: over.sessionId ?? "s1",

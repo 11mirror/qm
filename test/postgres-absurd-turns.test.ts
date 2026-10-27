@@ -102,7 +102,6 @@ test("admission starts an idle conversation's turn and queues the next one behin
   const thread = `web:alice:${randomUUID()}`;
   const first = await admit(thread, "one");
   assert.equal(first.run.status, "pending");
-  assert.equal(first.run.engine, "absurd");
   assert.equal(await pointer(thread), first.run.id);
   const second = await admit(thread, "two");
   assert.equal(second.run.status, "queued");
@@ -117,13 +116,6 @@ test("admission starts an idle conversation's turn and queues the next one behin
     [first.run.id, second.run.id, again.run.id],
   );
   assert.equal((await runStore.runs.activeForThread(thread))?.id, first.run.id);
-  assert.equal(await runStore.runs.claim("legacy-worker", 60_000), null);
-});
-
-test("admission defers to a legacy run still in flight in the conversation", { skip }, async () => {
-  const thread = `web:alice:${randomUUID()}`;
-  await runStore.runs.enqueue({ sessionId: thread, request: request(thread) });
-  assert.equal(await ledger.admit({ sessionId: thread, request: request(thread), priority: 0 }), null);
 });
 
 test("turn end completes the task, records the result, and starts the queued turn", { skip }, async () => {

@@ -10,7 +10,6 @@ import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestr
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createModelGateway } from "../src/model/model-gateway.ts";
@@ -42,6 +41,7 @@ import {
   testAdvisoryLock,
 } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testRunStore } from "./support/turns.ts";
 
 type Call = { tool: string; args: Record<string, unknown> };
 type Turn = {
@@ -64,7 +64,7 @@ const exceptions = Object.keys(SUBAGENT_EXCEPTIONS) as (keyof AgentToolsOptions)
 
 async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean) => Call | undefined) {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createMemoryRunStore();
+  const { runs } = testRunStore();
   const featureFlags = createFeatureFlagStore(testMap());
   for (const flag of flags) await featureFlags.setEnabled(flag, scope, true, "test");
   const sidebar: Session[] = [];

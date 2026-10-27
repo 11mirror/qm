@@ -1,11 +1,12 @@
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { buildApp } from "./support/build-app.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { installGlobalFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import { failedTurn } from "./support/orchestrator-app.ts";
+import { buildTestApp } from "./support/test-app.ts";
 
 let ff: FakeSprites;
 before(() => {
@@ -17,7 +18,7 @@ after(() => ff.cleanup());
 const actor = { externalId: "U1" };
 
 async function setup() {
-  const built = buildApp(testConfig({ signingSecret: "own-cred-test" }));
+  const built = buildTestApp(testConfig({ maxAttempts: 1, signingSecret: "own-cred-test" }));
   await selectDefaultSandbox(built, "U1", scopeId("personal", "U1"), scopeId("channel", "C1"));
   const credential = await built.keychain!.save({
     ownerId: "U1",
@@ -72,14 +73,15 @@ test("a subagent of the owner's DM uses the owner's credential without a grant",
 
 test("a scheduled turn in a shared channel cannot use the owner's credential without a grant", async () => {
   const { built, read } = await setup();
-  await assert.rejects(
-    built.app.turn({
+  await failedTurn(
+    built,
+    {
       surface: "cron",
       actor,
       conversation: { kind: "channel", threadRef: "ch:C1:cron", channelRef: "C1", audience: [actor] },
       text: read,
       origin: { kind: "automation" },
-    } as TurnRequest),
+    } as TurnRequest,
     /credential handle is not available/,
   );
 });

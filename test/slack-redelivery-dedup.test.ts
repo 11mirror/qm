@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
+import { claimTurn, finishTurn } from "./support/turns.ts";
 import type { TurnRequest } from "../src/types.ts";
 
 const actor = { externalId: "U1" };
@@ -57,8 +58,8 @@ test("a redelivered message that folded into a live run as a steer is injected o
   try {
     const first = await built.app.turn(slackTurn("first", "t1"));
     const runId = (first as { runId: string }).runId;
-    const claimed = await built.runs.claim("w1", 30_000);
-    assert.equal(claimed?.id, runId);
+    const claimed = await claimTurn(built.turnLedger, runId);
+    assert.ok(claimed);
     const steer = await built.app.turn(slackTurn("also this", "t2"));
     const replay = await built.app.turn(slackTurn("also this", "t2"));
     assert.equal((steer as { steered?: boolean }).steered, true);
@@ -75,8 +76,8 @@ test("a redelivery that arrives while the first delivery's run is live joins tha
   try {
     const first = await built.app.turn(slackTurn("hello", "t1"));
     const runId = (first as { runId: string }).runId;
-    const claimed = await built.runs.claim("w1", 30_000);
-    assert.equal(claimed?.id, runId);
+    const claimed = await claimTurn(built.turnLedger, runId);
+    assert.ok(claimed);
     const again = await built.app.turn(slackTurn("hello", "t1"));
     assert.equal(again.status, "silent");
     assert.equal((await built.signals.takePending(runId)).length, 0, "the agent is not fed its own prompt as a steer");
@@ -90,9 +91,9 @@ test("a message folded as a steer is not re-run as a fresh turn after that run e
   try {
     const first = await built.app.turn(slackTurn("first", "t1"));
     const runId = (first as { runId: string }).runId;
-    const claimed = await built.runs.claim("w1", 30_000);
+    const claimed = await claimTurn(built.turnLedger, runId);
     await built.app.turn(slackTurn("fold me", "t2"));
-    await built.runs.complete(runId, claimed!.leaseToken!, { status: "silent" });
+    await finishTurn(claimed!, { status: "silent" });
     const foldRuns = async () => (await built.runs.list()).filter((run) => run.request.text.includes(">fold me<"));
     await settle(async () => (await foldRuns()).length > 0);
     const late = await built.app.turn(slackTurn("fold me", "t2"));
@@ -127,7 +128,7 @@ test("a redelivery that slips past the lookup still cannot steer the run it belo
   try {
     const first = await built.app.turn(slackTurn("hello", "t1"));
     const runId = (first as { runId: string }).runId;
-    await built.runs.claim("w1", 30_000);
+    await claimTurn(built.turnLedger, runId);
     const real = built.runs.getByDedupKey.bind(built.runs);
     let misses = 1;
     built.runs.getByDedupKey = async (key) => (misses-- > 0 ? null : real(key));
@@ -144,8 +145,7 @@ test("a redelivery of a finished run posts nothing rather than the answer a seco
   try {
     const first = await built.app.turn(slackTurn("hello", "t1"));
     const runId = (first as { runId: string }).runId;
-    const claimed = await built.runs.claim("w1", 30_000);
-    await built.runs.complete(runId, claimed!.leaseToken!, { status: "ok", reply: "the answer" });
+    await finishTurn((await claimTurn(built.turnLedger, runId))!, { status: "ok", reply: "the answer" });
     const again = await built.app.turn({ ...slackTurn("hello", "t1"), async: false });
     assert.equal(again.status, "silent");
   } finally {

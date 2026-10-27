@@ -141,7 +141,10 @@ export interface SessionSyscallDeps {
     | "visibleItems"
     | "getForParticipant"
   >;
-  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "latestForThread" | "getByDedupKey" | "get" | "withdraw">;
+  runs: Pick<
+    RunStore,
+    "enqueue" | "inFlightForThread" | "latestForThread" | "getByDedupKey" | "get" | "withdraw" | "cancelTree"
+  >;
   signals: Pick<RunSignalStore, "send" | "pending">;
   maxAttempts: number;
   treeRunCap?: number;

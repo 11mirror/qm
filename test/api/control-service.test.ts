@@ -972,16 +972,15 @@ test("queued cron rechecks its runtime after admission and preserves the overrid
     await built.config.setSetting("webuiModels", ["gpt-6-astra"], "org:default-org");
     return result;
   });
-  await assert.rejects(
-    built.app.turn({
-      surface: "cron",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "cron-runtime-revoked-after-enqueue" },
-      text: "must not execute",
-      model: "claude-sonnet-5",
-      fastMode: false,
-      origin: { kind: "automation" },
-    }),
-    /runtime is no longer available/,
-  );
+  const result = await built.app.turn({
+    surface: "cron",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: "cron-runtime-revoked-after-enqueue" },
+    text: "must not execute",
+    model: "claude-sonnet-5",
+    fastMode: false,
+    origin: { kind: "automation" },
+  });
+  assert.equal(result.status, "failed", JSON.stringify(result));
+  assert.match(result.reason ?? "", /runtime is no longer available/);
 });

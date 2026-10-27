@@ -64,7 +64,6 @@ export async function listAdminRuns(ctx: ApiCtx): Promise<RouteResult> {
         attempts: r.attempts,
         maxAttempts: r.maxAttempts,
         workerId: r.workerId,
-        leaseExpiresAt: r.leaseExpiresAt,
         createdAt: r.createdAt,
         startedAt: r.startedAt,
         finishedAt: r.finishedAt,

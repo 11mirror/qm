@@ -6,10 +6,14 @@ import { recordSteerIntake } from "../src/harness/harness-shared.ts";
 import type { HarnessTurnInput, HarnessTurnResult } from "../src/harness/harness.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { retryClock } from "./support/retry-clock.ts";
 import { isUserMessage } from "../src/sessions/items.ts";
 
-let exercise: ((turn: HarnessTurnInput) => Promise<HarnessTurnResult | void>) | undefined;
+let exercise:
+  | ((
+      turn: HarnessTurnInput,
+      original: (turn: HarnessTurnInput) => Promise<HarnessTurnResult>,
+    ) => Promise<HarnessTurnResult | void>)
+  | undefined;
 mock.module("./support/mock-harness.ts", {
   namedExports: {
     ...mockHarness,
@@ -18,7 +22,7 @@ mock.module("./support/mock-harness.ts", {
       const run = harness.turns.runTurn;
       harness.turns.runTurn = async (turn) => {
         if (!exercise) return run(turn);
-        return (await exercise(turn)) ?? { reply: "Done" };
+        return (await exercise(turn, run)) ?? { reply: "Done" };
       };
       return harness;
     },
@@ -27,8 +31,7 @@ mock.module("./support/mock-harness.ts", {
 const { buildApp } = await import("./support/build-app.ts");
 
 for (const mode of ["retry", "handoff"] as const) {
-  test(`a ${mode} hides its synthetic trigger but not real steer intake in entries or activity`, async (t) => {
-    const backoff = retryClock(t);
+  test(`a ${mode} hides its synthetic trigger but not real steer intake in entries or activity`, async () => {
     const built = buildApp(testConfig());
     const request: TurnRequest = {
       origin: { kind: "direct" },
@@ -38,13 +41,10 @@ for (const mode of ["retry", "handoff"] as const) {
       text: "!work-then-boom",
       idempotencyKey: "resume-steer-visibility",
     };
-    if (mode === "retry") {
-      await assert.rejects(built.app.turn(request), /boom/);
-      backoff();
-    }
     let runId: string | undefined;
-    exercise = async (turn) => {
+    exercise = async (turn, original) => {
       runId = turn.runId;
+      if (mode === "retry" && !turn.continueTurn) return original(turn);
       if (mode === "handoff" && turn.input === request.text) {
         await turn.emit({ kind: "UserMessage", text: turn.input });
         return {
@@ -55,8 +55,7 @@ for (const mode of ["retry", "handoff"] as const) {
           },
         };
       }
-      if (mode === "retry") assert.equal(turn.continueTurn, true);
-      else {
+      if (mode === "handoff") {
         assert.match(turn.input, /Runtime switched/);
         await turn.emit({ kind: "UserMessage", text: turn.input });
       }

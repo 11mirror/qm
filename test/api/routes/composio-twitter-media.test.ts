@@ -12,6 +12,14 @@ import { tenant } from "../../../src/tenant.ts";
 import { testAdvisoryLock } from "../../support/test-database.ts";
 import { testMap } from "../../support/test-database.ts";
 
+function fakeRuns(run: Record<string, unknown>): ServerDeps["runs"] {
+  return {
+    get: async () => run,
+    leaseHeld: async (held: { status: string; leaseToken?: string }, token: string) =>
+      held.status === "running" && token === held.leaseToken,
+  } as unknown as ServerDeps["runs"];
+}
+
 const PNG = Buffer.concat([
   Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108020000009077" + "53de", "hex"),
   Buffer.alloc(32, 7),
@@ -57,16 +65,13 @@ async function fixture() {
     keychain,
     serviceCreds: keychain,
     auditLog: { record: (e: { action: string }) => audits.push(e.action) } as unknown as ServerDeps["auditLog"],
-    runs: {
-      get: async () => ({
-        status: "running",
-        sessionId: "test-thread",
-        attempts: 1,
-        leaseToken: "test-lease",
-        leaseExpiresAt: Date.now() + 60_000,
-        request: { actor: { id: "alice" } },
-      }),
-    } as unknown as ServerDeps["runs"],
+    runs: fakeRuns({
+      status: "running",
+      sessionId: "test-thread",
+      attempts: 1,
+      leaseToken: "test-lease",
+      request: { actor: { id: "alice" } },
+    }),
     composioFetch: (async (input, init) => {
       calls.push({ url: String(input), body: init?.body ? JSON.parse(String(init.body)) : null });
       const reply = replies.shift();
@@ -207,7 +212,7 @@ test("ending the run during account lookup prevents the upload", async () => {
   const original = f.deps.composioFetch!;
   f.deps.composioFetch = async (...args) => {
     const response = await original(...args);
-    f.deps.runs = { get: async () => ({ status: "done" }) } as unknown as ServerDeps["runs"];
+    f.deps.runs = fakeRuns({ status: "done" });
     return response;
   };
   f.replies.push(xAccount);
@@ -246,7 +251,7 @@ test("ending the run partway through stops sending segments", async () => {
   const original = f.deps.composioFetch!;
   f.deps.composioFetch = async (...args) => {
     const response = await original(...args);
-    if (f.calls.length === 2) f.deps.runs = { get: async () => ({ status: "done" }) } as unknown as ServerDeps["runs"];
+    if (f.calls.length === 2) f.deps.runs = fakeRuns({ status: "done" });
     return response;
   };
   f.replies.push(xAccount, proxied({ data: { id: "1004" } }));

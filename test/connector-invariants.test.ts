@@ -26,6 +26,8 @@ async function brokeredConnectors(reply: string | undefined) {
   return (await verifyCapabilityToken(`${head}${rest}`, TEST_CAPABILITY_SECRET))?.connectors;
 }
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import { failedTurn } from "./support/orchestrator-app.ts";
+import { buildTestApp } from "./support/test-app.ts";
 
 const CATALOG_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 
@@ -153,7 +155,7 @@ function turn(kind: "dm" | "channel", text: string): TurnRequest {
 }
 
 test("F1/F3 — a live DM receives only its requested connector; a channel receives none", async () => {
-  const built = buildApp(testConfig({ ...BROKER }));
+  const built = buildTestApp(testConfig({ maxAttempts: 1, ...BROKER }));
   await selectDefaultSandbox(built, "U1", "personal:U1", "channel:C1");
   await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
   const absent = `!run test -z "$AGENT_CREDENTIAL_TOKEN" && echo absent`;
@@ -166,7 +168,7 @@ test("F1/F3 — a live DM receives only its requested connector; a channel recei
   );
   assert.equal((await built.app.turn({ ...turn("dm", absent), origin: { kind: "human" } })).reply, "absent");
   assert.equal((await built.app.turn(turn("channel", absent))).reply, "absent");
-  await assert.rejects(built.app.turn(turn("channel", selected)), /not available/);
+  await failedTurn(built, turn("channel", selected), /not available/);
 });
 
 function wake(text: string, readOnly: boolean): TurnRequest {
@@ -182,7 +184,7 @@ function wake(text: string, readOnly: boolean): TurnRequest {
 
 for (const surface of ["cron", "loop"]) {
   test(`personal ${surface} selects owner credentials without grants`, async () => {
-    const built = buildApp(testConfig({ ...BROKER }));
+    const built = buildTestApp(testConfig({ maxAttempts: 1, ...BROKER }));
     await selectDefaultSandbox(built, "U1", "personal:U1");
     await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
     const saved = await built.keychain!.save({
@@ -204,17 +206,14 @@ for (const surface of ["cron", "loop"]) {
     const connectors = await brokeredConnectors((await built.app.turn(request(selected))).reply);
     assert.equal(connectors?.[0]?.handle, "connector:gmail.googleapis.com:default");
     assert.equal((await built.app.turn(request(absent))).reply, "absent");
-    await assert.rejects(
-      built.app.turn({
-        ...request(selected),
-        conversation: { kind: "channel", channelRef: "C1", threadRef: "shared-automation" },
-      }),
+    await failedTurn(
+      built,
+      { ...request(selected), conversation: { kind: "channel", channelRef: "C1", threadRef: "shared-automation" } },
       /not available/,
     );
-    await assert.rejects(
-      built.app.turn(
-        request(`!execute ${JSON.stringify({ command: "true", credentials: [credentialHandle(other)] })}`),
-      ),
+    await failedTurn(
+      built,
+      request(`!execute ${JSON.stringify({ command: "true", credentials: [credentialHandle(other)] })}`),
       /not available/,
     );
     assert.deepEqual(await built.keychain!.listGrants({}), []);

@@ -8,8 +8,17 @@ import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { TURN_FILES_DIR, turnFileId } from "../src/core/attachments.ts";
 import { isOverheard, isUserMessage, messageTs, type Item } from "../src/sessions/items.ts";
 import { hashId } from "../src/util/crypto.ts";
-import { buildTestApp, freshApp, spyProvisioning, internalActor, dm, channel } from "./support/orchestrator-app.ts";
+import {
+  buildTestApp,
+  failedTurn,
+  freshApp,
+  spyProvisioning,
+  internalActor,
+  dm,
+  channel,
+} from "./support/orchestrator-app.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import { settle } from "./support/settle.ts";
 
 test("admin reach rides only live, all-internal turns — autonomous and guest-audience turns mint a powerless token", async () => {
   const config = testConfig({ signingSecret: "test-secret", apiBaseUrl: "https://core.example.com" });
@@ -298,9 +307,10 @@ test("turn-private transfer files are removed after staging, and a failed remova
       ["result.txt"],
     );
     assert.ok(usedHandle);
-    assert.equal(cleanupAttempts, 1);
-    const reported = (await errors.list()).filter((e) => e.code === "turn_files_cleanup_failed");
-    assert.equal(reported.length, fail ? 1 : 0);
+    await settle(() => cleanupAttempts === 1);
+    await settle(
+      async () => (await errors.list()).filter((e) => e.code === "turn_files_cleanup_failed").length === (fail ? 1 : 0),
+    );
     if (!fail) assert.deepEqual(await sandbox.listDir(usedHandle, TURN_FILES_DIR), []);
   }
 });
@@ -502,9 +512,10 @@ test("a file shared with the session is LISTED in the cached system prompt — w
   assert.equal(boxes.provisioned, 0, "listing shared files must not provision a box");
 });
 
-test("an unexpected turn fault is recorded to the error log (then rethrown → 500)", async () => {
-  const { app, errors } = freshApp();
-  await assert.rejects(app.turn(dm("!boom")), /boom: simulated turn fault/);
+test("an unexpected turn fault is recorded to the error log and fails the turn", async () => {
+  const built = freshApp({ maxAttempts: 1 });
+  const { errors } = built;
+  await failedTurn(built, dm("!boom"), /boom: simulated turn fault/);
   const turnError = (await errors.list()).find((e) => e.category === "turn" && e.code === "error");
   assert.ok(turnError, "the turn fault should be recorded in the error log");
   assert.match(turnError!.message, /boom/);

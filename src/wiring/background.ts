@@ -26,23 +26,8 @@ type BackgroundInputs = Head &
   DeploymentLayerModule;
 
 export function buildBackground(w: BackgroundInputs) {
-  const {
-    reaper,
-    wakeSweep,
-    admittedWork,
-    drain,
-    workers,
-    preemptionSweeper,
-    turnRunner,
-    jobs,
-    semanticMemory,
-    gates,
-    blobTransfer,
-    config,
-  } = w;
+  const { admittedWork, drain, turnRunner, jobs, semanticMemory, gates, blobTransfer, config } = w;
 
-  // Started together once background work is admitted, and stopped together.
-  const periodicServices: { start(): void; stop(): Promise<unknown> }[] = [reaper, wakeSweep];
   let backgroundRunning = false;
   let backgroundStopping: Promise<void> | null = null;
   let backgroundClaimsStopping: Promise<void> = Promise.resolve();
@@ -53,20 +38,9 @@ export function buildBackground(w: BackgroundInputs) {
     admittedWork.resume();
     drain.start();
     const generation = ++backgroundGeneration;
-    for (const worker of workers) {
-      const drained = worker.drained();
-      worker.start();
-      void drained
-        .then(() => {
-          if (backgroundRunning && generation === backgroundGeneration) worker.start();
-        })
-        .catch(swallowAs("wiring: worker resume failed", undefined));
-    }
-    preemptionSweeper.start();
-    turnRunner?.start();
+    turnRunner.start();
     const startPeriodic = () => {
       if (!backgroundRunning || generation !== backgroundGeneration) return;
-      for (const service of periodicServices) service.start();
       void jobs
         .start()
         .catch(reportFailureAs("jobs: start (background jobs will not run from this process)", undefined));
@@ -81,13 +55,7 @@ export function buildBackground(w: BackgroundInputs) {
     const previous = backgroundStopping;
     backgroundGeneration++;
     void semanticMemory.stop();
-    const stopping = [
-      ...periodicServices.map((service) => service.stop()),
-      jobs.stopClaims(),
-      preemptionSweeper.stop(),
-      turnRunner?.stopClaims(),
-      ...workers.map((worker) => worker.stopClaims()),
-    ];
+    const stopping = [jobs.stopClaims(), turnRunner.stopClaims()];
     backgroundClaimsStopping = Promise.all(stopping).then(() => {});
     const draining = Promise.all([previous, backgroundClaimsStopping])
       .then(() => {})
@@ -103,8 +71,7 @@ export function buildBackground(w: BackgroundInputs) {
       withTimeout(() => admittedWork.drained(), 3_000, "inline turn handback").catch(
         swallowAs("wiring: inline turn handback failed", undefined),
       ),
-      ...workers.map((w) => w.releaseInFlight()),
-      turnRunner?.releaseInFlight(),
+      turnRunner.releaseInFlight(),
     ]);
   }
   const runtime: Runtime = {
@@ -116,6 +83,9 @@ export function buildBackground(w: BackgroundInputs) {
       drain.start();
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
     },
+    startTurns() {
+      if (!gates.inlineShutdown.signal.aborted) turnRunner.start();
+    },
     startBackground,
     setBackgroundAdmission(canClaim, active) {
       gates.backgroundAdmission = canClaim;
@@ -123,24 +93,23 @@ export function buildBackground(w: BackgroundInputs) {
     },
     async stopBackgroundClaims() {
       void stopBackground().catch(swallowAs("wiring: background drain failed", undefined));
-      await Promise.all([backgroundClaimsStopping, ...workers.map((worker) => worker.stopClaims())]);
+      await backgroundClaimsStopping;
     },
     stopBackground,
     async backgroundDrained() {
       await backgroundStopping;
-      await Promise.all([admittedWork.drained(), jobs.stop(), ...workers.map((worker) => worker.drained())]);
+      await Promise.all([admittedWork.drained(), jobs.stop()]);
     },
     releaseInFlightRuns,
     async stop() {
-      await turnRunner?.releaseInFlight();
+      await turnRunner.releaseInFlight();
       await stopBackground();
       await Promise.all([
         withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
           swallowAs("wiring: admitted work drain failed", undefined),
         ),
         withTimeout(() => jobs.stop(), config.shutdownDrainMs, "background job drain"),
-        ...workers.map((w) => w.stop(config.shutdownDrainMs)),
-      ]).catch(swallowAs("wiring: worker drain failed", undefined));
+      ]).catch(swallowAs("wiring: background drain failed", undefined));
       await releaseInFlightRuns();
       await drain.stop();
       await closeEventStores(w);
@@ -175,11 +144,11 @@ async function closeEventStores(w: BackgroundInputs): Promise<void> {
     [
       runs.close?.(),
       runSignals.close?.(),
-      turnLedger?.close(),
-      turnReady?.close?.(),
+      turnLedger.close(),
+      turnReady.close?.(),
       contextRequestEvents.close?.(),
-      turnCancels?.close?.(),
-      turnYields?.close?.(),
+      turnCancels.close?.(),
+      turnYields.close?.(),
       sessionStateBus.close?.(),
       ledgerEventBus.close?.(),
       deploymentLayerChanged.close?.(),

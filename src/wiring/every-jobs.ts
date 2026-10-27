@@ -4,7 +4,7 @@ import { PROCESS_REAPER_INTERVAL_MS } from "../processes/process-reaper.ts";
 import { LLM_CAPTURE_RETENTION_MS } from "../sessions/session-store.ts";
 import { isTerminal } from "../runs/run-store.ts";
 import { swallowAs } from "../util/errors.ts";
-import { repairStaleTurns } from "../turns/turn-engine.ts";
+import { sweepTurns } from "../turns/turn-engine.ts";
 import type { SchedulerModule } from "./scheduler.ts";
 import type { TriggersModule } from "./triggers.ts";
 import type { CronsModule } from "./crons.ts";
@@ -122,8 +122,6 @@ export function registerEveryJobs(
   every("run-result-sweep", 60_000, () => runResultRecovery.sweep());
   every("queued-post-retry", 30_000, () => outbound.retryQueued());
   every("approval-deliveries", 30_000, () => approvals.deliverPending());
-  if (turnLedger) {
-    every("turns:pointer-repair", 60_000, () => repairStaleTurns({ ledger: turnLedger, sessions, errors }));
-    every("turns:cleanup", 60 * 60_000, () => turnLedger.cleanup());
-  }
+  every("turns:pointer-repair", 60_000, () => sweepTurns({ ledger: turnLedger, sessions, errors }));
+  every("turns:cleanup", 60 * 60_000, () => turnLedger.cleanup());
 }

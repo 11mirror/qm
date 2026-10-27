@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createOutbound } from "../src/surfaces/outbound.ts";
 import { runResultPost, wireRunResultPosts } from "../src/runs/run-results.ts";
@@ -10,6 +9,7 @@ import type { Principal, TurnResult } from "../src/types.ts";
 import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../plugins/chassis/src/security-quarantine.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { claimTurn, completeTurn, finishTurn, testRunStore } from "./support/turns.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
@@ -38,11 +38,13 @@ function run(over: Partial<Run>): Run {
     priority: 2,
     preemptions: 0,
     leaseToken: null,
-    leaseExpiresAt: null,
     workerId: null,
     createdAt: 1,
     startedAt: 1,
     finishedAt: 2,
+    absurdQueue: null,
+    absurdTaskId: null,
+    absurdRunId: null,
     ...over,
   };
 }
@@ -230,15 +232,16 @@ test("runResultPost skips terminal results that cannot be safely replayed", () =
   }
 });
 
-test("wired stores: a completed turn is posted unless the live path already posted it", async () => {
-  const { runs } = createMemoryRunStore();
+test("wired stores: a completed turn is posted unless the live path already posted it", async (t) => {
+  const { runs, ledger, close } = testRunStore();
+  t.after(close);
   const outbound = recordingOutbound();
   wireRunResultPosts(runs, outbound, { graceMs: 0 });
 
   const crashed = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
-  const c1 = await runs.claim("w1", 5_000);
+  const c1 = (await claimTurn(ledger, crashed.id))!;
   await runs.setDeliveryState(crashed.id, null, { editRef: "171.002" });
-  await runs.complete(crashed.id, c1?.leaseToken ?? "", { status: "ok", reply: "recovered reply" });
+  await finishTurn(c1, { status: "ok", reply: "recovered reply" });
   await settle();
   const pending = await outbound.pending("slack");
   assert.equal(pending.length, 1);
@@ -248,9 +251,9 @@ test("wired stores: a completed turn is posted unless the live path already post
   assert.equal(typeof (await runs.get(crashed.id))?.deliveryState?.postedAt, "number", "the run remembers the post");
 
   const live = (await runs.enqueue({ sessionId: "sB", request: turn("b", "C9") })).run;
-  const c2 = await runs.claim("w2", 5_000);
+  const c2 = (await claimTurn(ledger, live.id))!;
   await runs.setDeliveryState(live.id, null, { postedAt: 99 });
-  await runs.complete(live.id, c2?.leaseToken ?? "", { status: "ok", reply: "delivered live" });
+  await finishTurn(c2, { status: "ok", reply: "delivered live" });
   await settle();
   assert.deepEqual(
     (await outbound.pending("slack")).map((d) => d.idempotencyKey),
@@ -259,8 +262,9 @@ test("wired stores: a completed turn is posted unless the live path already post
   );
 });
 
-test("a live turn handler that still owns the run defers the post, and the sweep posts it later", async () => {
-  const { runs } = createMemoryRunStore();
+test("a live turn handler that still owns the run defers the post, and the sweep posts it later", async (t) => {
+  const { runs, ledger, close } = testRunStore();
+  t.after(close);
   const outbound = createOutbound({});
   const posted: string[] = [];
   let live = true;
@@ -270,7 +274,7 @@ test("a live turn handler that still owns the run defers the post, and the sweep
   });
   const recovery = wireRunResultPosts(runs, outbound, { graceMs: 0 });
   const r = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
-  await runs.complete(r.id, (await runs.claim("w1", 5_000))?.leaseToken ?? "", { status: "ok", reply: "x" });
+  await completeTurn(ledger, r.id, { status: "ok", reply: "x" });
   await settle();
   assert.deepEqual(posted, []);
   assert.equal((await runs.get(r.id))?.deliveryState?.postedAt, undefined, "a deferred post is not marked posted");
@@ -279,12 +283,12 @@ test("a live turn handler that still owns the run defers the post, and the sweep
   assert.deepEqual(posted, [`run:${r.id}`]);
 });
 
-test("sweep posts the reply of a terminal run nobody posted", async () => {
-  const { runs } = createMemoryRunStore();
+test("sweep posts the reply of a terminal run nobody posted", async (t) => {
+  const { runs, ledger, close } = testRunStore();
+  t.after(close);
   const outbound = recordingOutbound();
   const bypassed = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
-  const claimed = await runs.claim("w1", 5_000);
-  await runs.complete(bypassed.id, claimed?.leaseToken ?? "", { status: "ok", reply: "lost on the way out" });
+  await completeTurn(ledger, bypassed.id, { status: "ok", reply: "lost on the way out" });
   const recovery = wireRunResultPosts(runs, outbound, { graceMs: 0 });
   assert.deepEqual(await outbound.pending("slack"), [], "wired after the fact: nothing posted");
 
@@ -297,8 +301,9 @@ test("sweep posts the reply of a terminal run nobody posted", async () => {
   assert.equal(await recovery.sweep(Date.now() + 120_000), 0, "a second sweep sees the run was posted");
 });
 
-test("sweep marks a permanently undeliverable reply done instead of retrying it every minute", async () => {
-  const { runs } = createMemoryRunStore();
+test("sweep marks a permanently undeliverable reply done instead of retrying it every minute", async (t) => {
+  const { runs, ledger, close } = testRunStore();
+  t.after(close);
   const outbound = createOutbound({});
   let attempts = 0;
   outbound.register(["slack"], async () => {
@@ -306,20 +311,20 @@ test("sweep marks a permanently undeliverable reply done instead of retrying it 
     throw Object.assign(new Error("channel_not_found"), { permanent: true });
   });
   const r = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
-  await runs.complete(r.id, (await runs.claim("w1", 5_000))?.leaseToken ?? "", { status: "ok", reply: "x" });
+  await completeTurn(ledger, r.id, { status: "ok", reply: "x" });
   const recovery = wireRunResultPosts(runs, outbound, { graceMs: 0 });
   assert.equal(await recovery.sweep(Date.now() + 120_000), 0);
   assert.equal(await recovery.sweep(Date.now() + 120_000), 0);
   assert.equal(attempts, 1);
 });
 
-test("sweep pages through terminal runs by (finishedAt, id) without skipping ties", async () => {
-  const { runs } = createMemoryRunStore();
+test("sweep pages through terminal runs by (finishedAt, id) without skipping ties", async (t) => {
+  const { runs, ledger, close } = testRunStore();
+  t.after(close);
   const finished = new Set<string>();
   for (let i = 0; i < 205; i++) {
     const run = (await runs.enqueue({ sessionId: `s${i}`, request: turn(`r${i}`, "C9:171.001") })).run;
-    const claimed = await runs.claimForSession(`s${i}`, "w1", 5_000);
-    await runs.complete(run.id, claimed?.leaseToken ?? "", { status: "ok", reply: `r${i}` });
+    await completeTurn(ledger, run.id, { status: "ok", reply: `r${i}` });
     finished.add(`run:${run.id}`);
   }
   const swept = recordingOutbound();
@@ -329,14 +334,18 @@ test("sweep pages through terminal runs by (finishedAt, id) without skipping tie
   assert.equal(await sweptRecovery.sweep(Date.now() + 120_000), 0);
 });
 
-test("wired stores: a parked run posts a failure note", async () => {
-  const { runs } = createMemoryRunStore();
+test("wired stores: a parked run posts a failure note", async (t) => {
+  const { runs, ledger, close } = testRunStore();
+  t.after(close);
   const outbound = recordingOutbound();
   wireRunResultPosts(runs, outbound, { graceMs: 0 });
 
   const parked = (await runs.enqueue({ sessionId: "sP", request: turn("p", "C9:171.001"), maxAttempts: 1 })).run;
-  const claimed = await runs.claim("w1", 5_000);
-  await runs.fail(parked.id, claimed?.leaseToken ?? "", "boom", { retry: true });
+  await finishTurn(
+    (await claimTurn(ledger, parked.id))!,
+    { status: "failed", sessionId: "sP", reason: "boom" },
+    "failed",
+  );
   await settle();
 
   const stored = await runs.get(parked.id);
@@ -418,15 +427,19 @@ test("a done run records nothing", async () => {
   assert.equal((await sessions.getItems(session.id)).length, 0);
 });
 
-test("wired stores: a parked Slack run gets both the durable session entry and the recovery note", async () => {
+test("wired stores: a parked Slack run gets both the durable session entry and the recovery note", async (t) => {
   const { sessions, session } = await failureSessions();
-  const { runs } = createMemoryRunStore();
+  const { runs, ledger, close } = testRunStore();
+  t.after(close);
   const outbound = recordingOutbound();
   wireRunResultPosts(runs, outbound, { sessions, graceMs: 0 });
 
   const parked = (await runs.enqueue({ sessionId: "slack:D1", request: turn("p", "D1:171.001"), maxAttempts: 1 })).run;
-  const claimed = await runs.claim("w1", 5_000);
-  await runs.fail(parked.id, claimed?.leaseToken ?? "", "lease expired (reaped)", { retry: true });
+  await finishTurn(
+    (await claimTurn(ledger, parked.id))!,
+    { status: "failed", sessionId: "slack:D1", reason: "lease expired (reaped)" },
+    "failed",
+  );
 
   for (let i = 0; i < 50 && (await sessions.getItems(session.id)).length === 0; i++) {
     await new Promise((r) => setTimeout(r, 10));

@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryRunStore } from "../../src/runs/memory-run-store.ts";
+import { randomUUID } from "node:crypto";
 import type { Run } from "../../src/runs/run-store.ts";
+import { claimTurn, completeTurn, finishTurn, testRunStore } from "../support/turns.ts";
 import { createProductAnalytics } from "../../src/util/product-analytics.ts";
 
 test("disabled analytics makes no requests", async () => {
@@ -11,7 +12,7 @@ test("disabled analytics makes no requests", async () => {
     return new Response("ok");
   });
   await analytics.appPublished("person", "app", 1);
-  await analytics.responseFinished(await humanRun());
+  await analytics.responseFinished(humanRun());
   assert.equal(requests, 0);
 });
 
@@ -39,7 +40,7 @@ test("delivery failures cannot fail publication and concurrent requests are boun
     throw Error("offline");
   });
   await assert.doesNotReject(failing.appPublished("person", "app", 1));
-  await assert.doesNotReject(failing.responseFinished(await humanRun()));
+  await assert.doesNotReject(failing.responseFinished(humanRun()));
   const releases: Array<() => void> = [];
   const bounded = createProductAnalytics("company", { apiKey: "token" }, async () => {
     await new Promise<void>((resolve) => releases.push(resolve));
@@ -57,7 +58,7 @@ test("human run outcomes keep identity and deduplication without response conten
     bodies.push(JSON.parse(String(init?.body)));
     return new Response("ok");
   });
-  const run = await humanRun();
+  const run = humanRun();
   for (const status of ["ok", "silent", "react", "failed"] as const) {
     run.result = { status, reply: "private reply", reason: "secret error https://private.test" };
     await analytics.responseFinished(run);
@@ -88,7 +89,7 @@ test("non-human, stopped and non-completion results do not produce response outc
     requests++;
     return new Response("ok");
   });
-  const run = await humanRun();
+  const run = humanRun();
   for (const kind of ["automation", "ambient", "direct"] as const) {
     await analytics.responseFinished({ ...run, request: { ...run.request, origin: { kind } } });
   }
@@ -113,43 +114,64 @@ test("non-human, stopped and non-completion results do not produce response outc
   assert.equal(requests, 0);
 });
 
-test("terminal listener reports only exhausted failures and accepted completions, not retries or stale leases", async () => {
+test("terminal listener reports only exhausted failures and accepted completions, not retries or stale claims", async (t) => {
   const events: string[] = [];
   const analytics = createProductAnalytics("company", { apiKey: "token" }, async (_url, init) => {
     events.push(JSON.parse(String(init?.body)).event);
     return new Response("ok");
   });
-  const { runs } = createMemoryRunStore();
+  const { runs, ledger, close } = testRunStore();
+  t.after(close);
   runs.onTerminal((run) => {
     void analytics.responseFinished(run);
   });
-  const request = (await humanRun()).request;
+  const request = humanRequest();
   const { run } = await runs.enqueue({ sessionId: "thread", request, maxAttempts: 2 });
-  let claimed = (await runs.claim("worker", 10_000))!;
-  await runs.fail(run.id, claimed.leaseToken!, "private first error");
+  let claimed = (await claimTurn(ledger, run.id))!;
+  await ledger.handBack(claimed.run, claimed.token, { stop: { kind: "error" }, countsAsError: true });
   assert.deepEqual(events, []);
-  claimed = (await runs.claim("worker", 10_000))!;
-  assert.equal(await runs.complete(run.id, "stale-lease", { status: "ok" }), false);
+  claimed = (await claimTurn(ledger, run.id))!;
+  assert.equal(await finishTurn({ ...claimed, token: "stale-claim" }, { status: "ok" }), false);
   assert.deepEqual(events, []);
-  await runs.fail(run.id, claimed.leaseToken!, "private final error");
+  await finishTurn(claimed, { status: "failed", sessionId: "thread", reason: "private final error" }, "failed");
   assert.deepEqual(events, ["response_failed"]);
-  await runs.enqueue({ sessionId: "thread", request });
-  claimed = (await runs.claim("worker", 10_000))!;
-  await runs.complete(claimed.id, claimed.leaseToken!, { status: "ok" });
+  const next = (await runs.enqueue({ sessionId: "thread", request })).run;
+  await completeTurn(ledger, next.id, { status: "ok" });
   assert.deepEqual(events, ["response_failed", "response_completed"]);
 });
 
-async function humanRun(): Promise<Run> {
-  const { runs } = createMemoryRunStore();
-  const { run } = await runs.enqueue({
+function humanRequest(): Run["request"] {
+  return {
+    actor: { id: "person", type: "internal" },
+    conversation: { kind: "dm", threadRef: "thread", audience: [] },
+    origin: { kind: "human" },
+    surface: "web",
+    text: "private prompt",
+  };
+}
+
+function humanRun(): Run {
+  return {
+    id: randomUUID(),
     sessionId: "thread",
-    request: {
-      actor: { id: "person", type: "internal" },
-      conversation: { kind: "dm", threadRef: "thread", audience: [] },
-      origin: { kind: "human" },
-      surface: "web",
-      text: "private prompt",
-    },
-  });
-  return { ...run, status: "done", result: { status: "ok" }, finishedAt: Date.now() };
+    status: "done",
+    request: humanRequest(),
+    result: { status: "ok" },
+    deliveryState: null,
+    turnUserSeq: null,
+    dedupKey: null,
+    attempts: 1,
+    errorAttempts: 0,
+    maxAttempts: 3,
+    priority: 0,
+    preemptions: 0,
+    leaseToken: null,
+    workerId: null,
+    createdAt: Date.now(),
+    startedAt: Date.now(),
+    finishedAt: Date.now(),
+    absurdQueue: null,
+    absurdTaskId: null,
+    absurdRunId: null,
+  };
 }

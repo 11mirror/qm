@@ -10,14 +10,14 @@ import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
 import { type RunStreamEvent, emitRunText, emitRunReasoning, reasoningKey } from "../runs/run-stream-events.ts";
 import type { ContextRequestEvent } from "../api/app-types.ts";
 import { createTurnStream } from "../runs/turn-stream.ts";
-import { type RunActivityStore, createMemoryRunActivityStore } from "../runs/run-activity-store.ts";
+import type { RunActivityStore } from "../runs/run-activity-store.ts";
 import { createPostgresRunActivityStore } from "../runs/postgres-run-activity-store.ts";
 import type { SandboxModule } from "./sandbox.ts";
 import type { RunsModule } from "./runs.ts";
 import type { HarnessModule } from "./harness.ts";
 
 export function buildRunStreams(w: Head & SandboxModule & RunsModule & HarnessModule) {
-  const { sandbox, databaseUrl, late, config, runs, runStoreKind } = w;
+  const { sandbox, databaseUrl, late, config, runs } = w;
 
   const processes = supportsProcessSessions(sandbox) ? createPostgresProcessRegistry(databaseUrl) : undefined;
   late.processes = processes;
@@ -50,8 +50,7 @@ export function buildRunStreams(w: Head & SandboxModule & RunsModule & HarnessMo
     }
   });
   runs.onTerminal((run) => refreshRunStream(run.id));
-  const activityStore: RunActivityStore =
-    runStoreKind === "postgres" ? createPostgresRunActivityStore(databaseUrl) : createMemoryRunActivityStore();
+  const activityStore: RunActivityStore = createPostgresRunActivityStore(databaseUrl);
   const runActivity: RunActivityStore = {
     ...activityStore,
     async append(runId, entry) {

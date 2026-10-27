@@ -130,21 +130,15 @@ test("SSE relays tool activity frames and folds them into the done frame", async
 });
 
 test("active run lookup returns the latest tracked run for the caller's web thread", async (t) => {
-  const completion = Promise.withResolvers<void>();
-  const complete = built.runs.complete.bind(built.runs);
-  t.mock.method(built.runs, "complete", async (...args: Parameters<typeof complete>) => {
-    await completion.promise;
-    return complete(...args);
-  });
-  t.after(() => completion.resolve());
   const threadRef = `web:alice:${randomUUID()}`;
   const submit = (await (
     await fetch(
       `${webBase}/api/turn`,
-      asUser("alice", { method: "POST", body: JSON.stringify({ text: "track me", threadRef }) }),
+      asUser("alice", { method: "POST", body: JSON.stringify({ text: "!work-until-shutdown", threadRef }) }),
     )
   ).json()) as { runId?: string };
   assert.ok(submit.runId, "async turn should return a runId");
+  t.after(() => built.runs.cancelTurn(submit.runId!));
 
   const activeRes = await fetch(
     `${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`,

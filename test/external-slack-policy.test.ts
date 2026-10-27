@@ -1,4 +1,3 @@
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createSlackCoreClient, type SlackCoreClientDeps } from "../src/api/slack-core-client.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -16,6 +15,7 @@ import type { TurnRequest } from "../src/types.ts";
 import { createDirectory } from "../src/slack/directory.ts";
 import { createTurnHandler } from "../src/slack/turn-handler.ts";
 import { automationOrigin } from "./support/turn-origin.ts";
+import { testRunStore } from "./support/turns.ts";
 
 const policy = {
   companyDomains: ["company.example"],
@@ -356,7 +356,7 @@ test("an external account's sender neither borrows a missing default identity no
 });
 
 test("delegated human-origin runs cannot restart themselves as a person's private continuation", async () => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = testRunStore();
   const client = createSlackCoreClient({ runs } as SlackCoreClientDeps);
   const request = {
     surface: "slack",

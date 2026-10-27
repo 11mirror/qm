@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { MODEL_BUDGET_TEXT } from "../src/core/turn-error.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { retryClock } from "./support/retry-clock.ts";
+import { eventually, settle } from "./support/settle.ts";
 
 import { SESSION_BUSY_USER_TEXT } from "../src/core/failure-copy.ts";
 import { contextSummary } from "../src/sessions/session-store.ts";
@@ -14,6 +14,7 @@ import {
   noDefaultSandbox,
   buildTestApp,
   freshApp,
+  failedTurn,
   spyProvisioning,
   internalActor,
   dm,
@@ -111,7 +112,7 @@ test("a busy-refusal row stays jsonb-castable however the surface names itself",
   const first = await app.turn(dm("hello there", { surface: hostileSurface }));
   assert.equal(first.status, "ok");
 
-  const { lease } = await sessions.acquireLease(first.sessionId!, "turn");
+  const { lease } = await sessions.acquireLease(first.sessionId!, "compaction");
   assert.ok(lease);
   assert.equal((await app.turn(dm("again", { surface: hostileSurface }))).status, "refused");
 
@@ -308,7 +309,7 @@ test("EAGER_PROVISION warms the box on a tool-using session's next turn and stil
   assert.equal(res.status, "ok");
   assert.match(res.reply ?? "", /You said: hello there/);
   assert.equal(boxes.provisioned, 2, "the box is provisioned eagerly even though no tool ran this turn");
-  assert.equal(boxes.live, 0, "an eagerly provisioned box is still reclaimed at turn end");
+  await settle(() => boxes.live === 0);
 });
 
 test("EAGER_PROVISION never grows a computer for a chat-only session", async () => {
@@ -364,8 +365,8 @@ test("a preamble failure after the machine boots still reclaims it", async () =>
     }
     return realRemove(handle, dir);
   };
-  await built.app.turn(dm("!run echo hi")).catch(() => null);
-  assert.equal(boxes.live, 0, "a machine whose preamble threw must not stay booted");
+  await built.app.turn(dm("!run echo hi"));
+  await settle(() => boxes.live === 0);
 });
 
 test("eager provisioning stays off by default — a toolless turn provisions nothing", async () => {
@@ -411,11 +412,12 @@ test("Door 2: an envelopeWrapped request on its own skips the overheard seed (re
 });
 
 test("a terminal turn failure is recorded durably and never replays to the model", async () => {
-  const { app, errors } = freshApp();
+  const built = freshApp({ maxAttempts: 1 });
+  const { app, errors } = built;
   const t1 = await app.turn(dm("please summarize the attendee chats"));
   assert.equal(t1.status, "ok");
 
-  await assert.rejects(app.turn(dm("!refuse")), /reduce refusals/);
+  await failedTurn(built, dm("!refuse"), /reduce refusals/);
 
   const recorded = (await errors.list()).find((e) => e.category === "turn" && e.code === "error");
   assert.ok(recorded, "the failure is recorded in the error log");
@@ -436,12 +438,14 @@ test("a terminal turn failure is recorded durably and never replays to the model
 });
 
 test("a failure before the harness records the user message back-fills it — no orphan error in the transcript", async () => {
-  const { app } = freshApp();
+  const built = freshApp({ maxAttempts: 1 });
+  const { app } = built;
   const t1 = await app.turn(dm("hello"));
   assert.equal(t1.status, "ok");
 
-  await assert.rejects(
-    app.turn(dm("use the fancy model", { model: "not-a-real-model", origin: { kind: "human" } })),
+  await failedTurn(
+    built,
+    dm("use the fancy model", { model: "not-a-real-model", origin: { kind: "human" } }),
     /not approved/,
   );
 
@@ -463,12 +467,13 @@ test("a failure before the harness records the user message back-fills it — no
 });
 
 test("repeated terminal failures keep failing loudly — history is never rewritten", async () => {
-  const { app } = freshApp();
+  const built = freshApp({ maxAttempts: 1 });
+  const { app } = built;
   const t1 = await app.turn(dm("please summarize the attendee chats"));
   assert.equal(t1.status, "ok");
 
-  await assert.rejects(app.turn(dm("!refuse")), /reduce refusals/);
-  await assert.rejects(app.turn(dm("!refuse")), /reduce refusals/);
+  await failedTurn(built, dm("!refuse"), /reduce refusals/);
+  await failedTurn(built, dm("!refuse"), /reduce refusals/);
 
   const found = await app.getSession(t1.sessionId!);
   assert.equal(found!.items.filter((e) => turnFailure(e)).length, 2, "each failure leaves its own durable trace");
@@ -505,27 +510,25 @@ test("an exhausted model budget refuses the turn with a plain explanation instea
   assert.match(logged!.message, /ExceededBudget: Team=team-a over 1d budget/, "operators keep the gateway's detail");
 });
 
-test("a RETRYABLE error that exhausts its budget leaves one durable turn_failure record — no dead air", async (t) => {
-  const backoff = retryClock(t);
-  const { app, runs, errors } = freshApp();
+test("a RETRYABLE error that exhausts its budget leaves one durable turn_failure record — no dead air", async () => {
+  const { app, runs, errors } = freshApp({ maxAttempts: 2 });
   const t1 = await app.turn(dm("hello"));
   assert.equal(t1.status, "ok");
 
   const req = dm("!boom-always", { idempotencyKey: "exhaust-1" });
-  await assert.rejects(app.turn(req), /boom/);
-  backoff();
-  await assert.rejects(app.turn(req), /boom/);
-  backoff();
+  const exhausted = app.turn(req);
+  const midway = await eventually(() => runs.activeForThread("dm:U1:t1"), {
+    until: (run) => run?.status === "pending",
+    label: "the run really is mid-cycle — requeued, not parked",
+  });
   let found = await app.getSession(t1.sessionId!);
   assert.equal(
     found!.items.filter((e) => turnFailure(e)).length,
     0,
     "attempts with retry budget left write no failure record",
   );
-  const midway = await runs.activeForThread("dm:U1:t1");
-  assert.equal(midway?.status, "pending", "the run really is mid-cycle — requeued, not parked");
 
-  await assert.rejects(app.turn(req), /boom/);
+  assert.equal((await exhausted).status, "failed");
   assert.equal(await runs.activeForThread("dm:U1:t1"), null, "the run parked: no attempt is left to record it");
   assert.equal((await runs.get(midway!.id))?.status, "failed");
   found = await app.getSession(t1.sessionId!);
