@@ -44,6 +44,8 @@ import {
   type GoalGovernor,
   GOAL_INBOX_POLL_MS,
   type GoalInbox,
+  goalInboxHeld,
+  GOAL_SWARM_HELD_NOTE,
   type GoalRecord,
   type GovernorVerdict,
   GovernorUndecided,
@@ -124,6 +126,7 @@ export interface ToolContextRef {
   shutdown?: AbortSignal;
   pollFire?: boolean;
   silentRequested?: boolean;
+  swarmHeld?: boolean;
 
   goal?: GoalRecord | null;
   saveGoal?: (goal: GoalRecord) => Promise<void>;
@@ -363,8 +366,17 @@ const CLIENT_TOOL_TIMEOUT_TEXT = "The page didn't respond in time. It may have b
 
 const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently", "runtime", "sessions", "subagents"]);
 
+export function endedOnPurpose(ref: {
+  runtimeHandoff?: unknown;
+  silentRequested?: boolean;
+  pausedOnApproval?: boolean;
+  swarmHeld?: boolean;
+}): boolean {
+  return !!(ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval || ref.swarmHeld);
+}
+
 export function pauseStampAfterToolCall(
-  ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested" | "runtimeHandoff">,
+  ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested" | "runtimeHandoff" | "swarmHeld">,
   prior?: (
     info: unknown,
     signal?: unknown,
@@ -372,7 +384,7 @@ export function pauseStampAfterToolCall(
 ): (info: unknown, signal?: unknown) => Promise<{ terminate?: boolean } | undefined> {
   return async (info, signal) => {
     const upstream = prior ? await prior(info, signal) : undefined;
-    if (ref.pausedOnApproval || ref.silentRequested || ref.runtimeHandoff) return { ...upstream, terminate: true };
+    if (endedOnPurpose(ref)) return { ...upstream, terminate: true };
     return upstream;
   };
 }
@@ -547,10 +559,16 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const goalInbox =
         goal?.status === "active" && Date.now() - goalInboxCheckedAt >= GOAL_INBOX_POLL_MS ? ref.goalInbox : undefined;
       if (goalInbox) goalInboxCheckedAt = Date.now();
+      const held = !!goalInbox && (await goalInboxHeld(goalInbox));
       const arrived =
-        goal && goalInbox
+        goal && goalInbox && !held
           ? await takeGoalMessages(goalInbox, goal, ref.goalMeter).catch(swallowAs("goal: read the inbox", undefined))
           : undefined;
+      if (held) {
+        ref.swarmHeld = true;
+        ret.content.push({ type: "text", text: GOAL_SWARM_HELD_NOTE });
+        result += `\n\n${GOAL_SWARM_HELD_NOTE}`;
+      }
       if (arrived) {
         ret.content.push({ type: "text", text: arrived });
         result += `\n\n${arrived}`;
@@ -3776,6 +3794,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         await ref.saveGoal?.(goal).catch(swallowAs("goal: save after a wait", undefined));
         let outcome = `No swarm message reached you in ${GOAL_WAIT_MAX_MS / 60_000} minutes, so the goal is active again. Check on what you were waiting for, work around it if you can, or wait again.`;
         if (interrupted()) outcome = "The wait was interrupted; the goal is active again.";
+        else if (!arrived && (await goalInboxHeld(ref.goalInbox)))
+          outcome = "The swarm paused or stopped you, so the wait ended; the goal is active again.";
         if (arrived) outcome = `The goal is active again; this reached you while you waited:\n\n${arrived}`;
         return recordCoreAuthoredResult(callId, { tool: "goal", action: "update", goal }, text(outcome));
       }

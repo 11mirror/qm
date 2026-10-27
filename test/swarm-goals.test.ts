@@ -202,3 +202,124 @@ test("a goal message is still handed over when saving its adopted goal fails mid
   const message = (await f.store.get(f.root.id))!.messages.find((item) => item.id === replacement.id)!;
   assert.equal(message.notifications[worker!.id]?.state, "handed");
 });
+
+test("a worker's goal turn is held while it or an ancestor is paused or stopped, and only on swarm runs", async () => {
+  const f = await swarmFixture();
+  const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "lane A", goal });
+  await f.service.sweep();
+  const [child] = await f.service.spawn(await f.workerCaller(worker!.id), { requestId: "child", text: "lane A1" });
+  await f.service.sweep();
+  const runOf = async (id: string) =>
+    (await f.runs.list()).find((run) => run.request.swarm?.recipientId === id)!.request;
+  const input = await runOf(worker!.id);
+  const childInput = await runOf(child!.id);
+  assert.equal(await f.service.held(input), false);
+  await f.service.control(f.caller, { memberId: worker!.id, state: "paused" });
+  assert.equal(await f.service.held(input), true);
+  assert.equal(await f.service.held(childInput), true, "a paused ancestor holds its descendants");
+  const { swarm: _swarm, ...threadTurn } = input;
+  assert.equal(await f.service.held(threadTurn), false, "a person's own turn in the worker thread is never held");
+  await f.service.control(f.caller, { memberId: worker!.id, state: "active" });
+  assert.equal(await f.service.held(input), false);
+  await f.service.control(f.caller, { memberId: child!.id, state: "stopped" });
+  assert.equal(await f.service.held(childInput), true);
+});
+
+test("pausing a worker withdraws its unstarted deliveries and resuming delivers them again", async () => {
+  const f = await swarmFixture();
+  const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "lane A" });
+  await f.service.sweep();
+  const note = await f.service.send(f.caller, { requestId: "n", audience: [worker!.id], text: "next", notify: true });
+  await f.service.sweep();
+  const runFor = async () => (await f.runs.list()).find((run) => run.request.swarm?.messageId === note.id);
+  assert.ok(await runFor());
+  await f.service.control(f.caller, { memberId: worker!.id, state: "paused" });
+  assert.equal(await runFor(), undefined, "the queued run is withdrawn while paused");
+  await f.service.sweep();
+  assert.equal(await runFor(), undefined, "nothing is delivered while paused");
+  await f.service.control(f.caller, { memberId: worker!.id, state: "active" });
+  await f.service.sweep();
+  assert.ok(await runFor(), "the message is delivered once resumed");
+});
+
+test("a message a paused goal turn already saw is handed over, not delivered again on resume", async () => {
+  const f = await swarmFixture();
+  const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "lane A", goal });
+  await f.service.sweep();
+  const first = (await f.runs.list()).find((run) => run.request.swarm)!;
+  const claimed = (await f.runs.claimById(first.id, "worker", 60_000))!;
+  const input = {
+    ...claimed.request,
+    runId: claimed.id,
+    runLeaseToken: claimed.leaseToken!,
+    attempt: claimed.attempts,
+  };
+  const note = await f.service.send(f.caller, { requestId: "n", audience: [worker!.id], text: "next", notify: true });
+  await f.service.sweep();
+  assert.deepEqual(
+    (await f.service.queuedMessages(input)).map((message) => message.id),
+    [note.id],
+  );
+  await f.service.control(f.caller, { memberId: worker!.id, state: "paused" });
+  assert.deepEqual(
+    (await f.service.handOver(input, [note.id])).map((message) => message.id),
+    [note.id],
+  );
+  await f.service.control(f.caller, { memberId: worker!.id, state: "active" });
+  await f.service.sweep();
+  assert.equal(
+    (await f.runs.list()).find((run) => run.request.swarm?.messageId === note.id),
+    undefined,
+  );
+});
+
+test("a message handed over while its run is being withdrawn by a pause stays handed", async () => {
+  const f = await swarmFixture();
+  const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "lane A", goal });
+  await f.service.sweep();
+  const first = (await f.runs.list()).find((run) => run.request.swarm)!;
+  const claimed = (await f.runs.claimById(first.id, "worker", 60_000))!;
+  const input = {
+    ...claimed.request,
+    runId: claimed.id,
+    runLeaseToken: claimed.leaseToken!,
+    attempt: claimed.attempts,
+  };
+  const note = await f.service.send(f.caller, { requestId: "n", audience: [worker!.id], text: "next", notify: true });
+  await f.service.sweep();
+  const withdraw = f.runs.withdraw.bind(f.runs);
+  f.runs.withdraw = async (runId, options) => {
+    const withdrawn = await withdraw(runId, options);
+    await f.service.handOver(input, [note.id]);
+    return withdrawn;
+  };
+  await f.service.control(f.caller, { memberId: worker!.id, state: "paused" });
+  f.runs.withdraw = withdraw;
+  await f.service.control(f.caller, { memberId: worker!.id, state: "active" });
+  await f.service.sweep();
+  assert.equal(
+    (await f.runs.list()).find((run) => run.request.swarm?.messageId === note.id),
+    undefined,
+  );
+});
+
+test("a pause that loses its process mid-withdraw still delivers the message on resume", async () => {
+  const f = await swarmFixture();
+  const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "lane A" });
+  await f.service.sweep();
+  const note = await f.service.send(f.caller, { requestId: "n", audience: [worker!.id], text: "next", notify: true });
+  await f.service.sweep();
+  const runFor = async () => (await f.runs.list()).find((run) => run.request.swarm?.messageId === note.id);
+  assert.ok(await runFor());
+  const withdraw = f.runs.withdraw.bind(f.runs);
+  f.runs.withdraw = async (runId, options) => {
+    await withdraw(runId, options);
+    throw new Error("process lost after the withdraw");
+  };
+  await f.service.control(f.caller, { memberId: worker!.id, state: "paused" });
+  f.runs.withdraw = withdraw;
+  assert.equal(await runFor(), undefined);
+  await f.service.control(f.caller, { memberId: worker!.id, state: "active" });
+  await f.service.sweep();
+  assert.ok(await runFor(), "the message is delivered once resumed");
+});
