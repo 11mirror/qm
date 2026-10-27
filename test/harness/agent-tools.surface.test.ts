@@ -214,7 +214,7 @@ test("the surface tool's pull-query actions return pointers/data (not raw bytes)
   assert.match(bin, /not text/);
   assert.doesNotMatch(bin, /hello from the file/);
   const first = textOf(await call(slack, { action: "read_file", ref: "dddddddddddddddddddddddddddddddd" }));
-  assert.match(first, /page one\n\[showing up to character 8 of 16 — read_file again with offset 8 for more\]/);
+  assert.match(first, /page one\n\[showing up to character 8 — read_file again with offset 8 for more\]/);
   const second = textOf(await call(slack, { action: "read_file", ref: "dddddddddddddddddddddddddddddddd", offset: 8 }));
   assert.equal(second, "page two");
   const gone = textOf(await call(slack, { action: "read_file", ref: "cccccccccccccccccccccccccccccccc" }));

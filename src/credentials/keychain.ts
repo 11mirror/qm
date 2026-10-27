@@ -6,6 +6,7 @@ import { hashId } from "../util/crypto.ts";
 import { shq } from "../util/shell.ts";
 import { homeRelativePath } from "./paths.ts";
 import { connectorTokenNote } from "./connector-token.ts";
+import { bareChannelName } from "../util/text.ts";
 
 export const COMPOSIO_ENV_KEY = "COMPOSIO_API_KEY";
 
@@ -568,7 +569,7 @@ export function renderAskNotice(
   const { ask, credential } = input;
   const who = input.requesterName ? `${input.requesterName} (${ask.requesterId})` : ask.requesterId;
   let where: string;
-  if (input.channelName) where = `**#${input.channelName.replace(/^#/, "")}**`;
+  if (input.channelName) where = `**#${bareChannelName(input.channelName)}**`;
   else if (input.scopeName) where = `**${input.scopeName}**`;
   else if (ask.requesterScopeId.startsWith("group:")) where = "a group conversation";
   else if (ask.requesterScopeId.startsWith("channel:")) where = "a Slack channel";

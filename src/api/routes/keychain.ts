@@ -14,6 +14,7 @@ import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { audit, resolveCapabilityDestination } from "./shared.ts";
 import { reportFailure, swallowAs } from "../../util/errors.ts";
 import { cronIdOf } from "../../sessions/thread-ref.ts";
+import { bareChannelName } from "../../util/text.ts";
 
 async function resolveScopeNames(
   app: ApiCtx["app"],
@@ -48,7 +49,7 @@ async function resolveScopeNames(
     const fromSessions = byScope.get(id);
     if (kind === "channel" && ref) {
       const name = fromSessions ?? (channelsById ??= await loadChannels()).get(ref);
-      if (name) names[id] = `#${name.replace(/^#/, "")}`;
+      if (name) names[id] = `#${bareChannelName(name)}`;
     } else if (kind === "personal" && ref) {
       const name = (membersById ??= await loadMembers()).get(ref);
       if (name) names[id] = name;

@@ -400,7 +400,7 @@ function fakeToolContextPart3(): Pick<
       if (ref === "dddddddddddddddddddddddddddddddd")
         return offset
           ? { ok: true, content: "page two", sizeBytes: 30 }
-          : { ok: true, content: "page one", sizeBytes: 30, nextOffset: 8, totalChars: 16 };
+          : { ok: true, content: "page one", sizeBytes: 30, nextOffset: 8 };
       if (ref === "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         return { ok: true, content: "hello from the file", sizeBytes: 19 };
       if (ref === "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")

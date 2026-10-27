@@ -6,6 +6,7 @@ import { projectScopeId } from "../projects/project-store.ts";
 
 import { type App, type ScopeDeployment } from "./app-types.ts";
 import { type SessionKit, editableProject, withProjectView } from "./app-session-kit.ts";
+import { bareChannelName } from "../util/text.ts";
 
 export function projectMethods(k: SessionKit) {
   const { deps, h } = k;
@@ -56,7 +57,7 @@ export function projectMethods(k: SessionKit) {
       const { existing, projects } = gate;
       let link: { channelId: string; channelName: string } | null = null;
       if (channel !== null) {
-        const wanted = channel.trim().replace(/^#/, "");
+        const wanted = bareChannelName(channel.trim());
         if (!wanted) return { status: "invalid_channel" };
         const findChannel = async () => {
           const reachable = await deps.directory.listChannelsFor(principalId).catch(() => []);

@@ -70,7 +70,9 @@ export class BlobHashMismatchError extends Error {
   }
 }
 
-const BLOB_ID = /^[0-9a-f]{32}$/;
+export function isBlobId(value: string): boolean {
+  return value.length === 32 && Buffer.from(value, "hex").toString("hex") === value;
+}
 
 function newBlobId(): string {
   return randomBytes(16).toString("hex");
@@ -120,7 +122,7 @@ export function createLocalBlobTransferStore(dir: string): BlobTransferStore {
     },
 
     async open(blobId) {
-      if (!BLOB_ID.test(blobId)) return null;
+      if (!isBlobId(blobId)) return null;
       const path = join(dir, blobId);
       let st;
       try {
@@ -134,7 +136,7 @@ export function createLocalBlobTransferStore(dir: string): BlobTransferStore {
     },
 
     async delete(blobId) {
-      if (!BLOB_ID.test(blobId)) return;
+      if (!isBlobId(blobId)) return;
       await rm(join(dir, blobId), { force: true }).catch(swallowAs("blob-transfer: delete", undefined));
     },
 
@@ -199,7 +201,7 @@ export function createS3BlobTransferStore(options: S3BlobTransferOptions): BlobT
   const client = options._client ?? s3Client(options.region);
 
   return {
-    s3Ref: (blobId) => (/^[0-9a-f]{32}$/.test(blobId) ? { bucket, key: keyFor(blobId) } : null),
+    s3Ref: (blobId) => (isBlobId(blobId) ? { bucket, key: keyFor(blobId) } : null),
     async put(source, opts) {
       const blobId = newBlobId();
       const Key = keyFor(blobId);
@@ -243,7 +245,7 @@ export function createS3BlobTransferStore(options: S3BlobTransferOptions): BlobT
     },
 
     async open(blobId) {
-      if (!BLOB_ID.test(blobId)) return null;
+      if (!isBlobId(blobId)) return null;
       let r: { Body?: unknown; ContentLength?: number };
       try {
         r = (await client.send(new GetObjectCommand({ Bucket: bucket, Key: keyFor(blobId) }))) as {
@@ -259,7 +261,7 @@ export function createS3BlobTransferStore(options: S3BlobTransferOptions): BlobT
     },
 
     async delete(blobId) {
-      if (!BLOB_ID.test(blobId)) return;
+      if (!isBlobId(blobId)) return;
       await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: keyFor(blobId) }));
     },
 

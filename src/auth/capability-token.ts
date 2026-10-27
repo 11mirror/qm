@@ -3,6 +3,7 @@ import { deflateRaw, inflateRaw } from "node:zlib";
 import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeId } from "../types.ts";
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
 import { tenant } from "../tenant.ts";
+import { isBlobId } from "../persistence/blob-transfer.ts";
 
 export const CAPABILITY_TTL_MS = 60 * 60_000;
 export const DEPLOYMENT_CREDENTIAL_TTL_MS = 10 * 365 * 24 * 60 * 60_000;
@@ -162,8 +163,6 @@ export async function verifyCapabilityToken(
   return claims;
 }
 
-const BLOB_ID = /^[0-9a-f]{32}$/;
-
 export async function verifyBlobTransferCapability(
   token: string,
   secret: string | string[],
@@ -173,7 +172,7 @@ export async function verifyBlobTransferCapability(
   const claims = await verifyCapabilityToken(token, secret, now);
   const grant = claims?.blob;
   if (!claims || claims.aud !== BLOB_TRANSFER_AUD || !grant || grant.dir !== expected.dir) return null;
-  if (grant.id !== undefined && (typeof grant.id !== "string" || !BLOB_ID.test(grant.id))) return null;
+  if (grant.id !== undefined && (typeof grant.id !== "string" || !isBlobId(grant.id))) return null;
   if (expected.dir === "read" ? grant.id !== expected.id : grant.id !== undefined) return null;
   return claims as BlobTransferClaims;
 }

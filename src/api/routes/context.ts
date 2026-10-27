@@ -7,6 +7,7 @@ import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts
 import { awaitContextOutcome } from "../surface-context-puller.ts";
 import { parseDeliveryTarget } from "../../slack/delivery.ts";
 import { parseFileRef } from "../../surfaces/refs.ts";
+import { bareChannelName } from "../../util/text.ts";
 
 const SURFACE_CONTEXT_MAX_MESSAGES = 200;
 const SURFACE_CONTEXT_DEFAULT_MESSAGES = 100;
@@ -27,7 +28,7 @@ async function resolveSurfaceTarget(
   const { app, capability } = ctx;
   const cap = capability!;
   if (typeof b.channel === "string" && b.channel.trim()) {
-    const ref = b.channel.trim().replace(/^#/, "");
+    const ref = bareChannelName(b.channel.trim());
     if (/^[CG][A-Z0-9]{6,}$/.test(ref)) {
       if (!(await app.channelVisibleTo(cap.actorId, ref))) throw await notVisible(ctx, cap.actorId, b.channel);
       return { source: "slack", target: { channelId: ref } };

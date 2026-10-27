@@ -56,3 +56,7 @@ export function headTailSlice(s: string, maxChars: number, tailChars: number, no
   if (s.length <= maxChars) return s;
   return headSlice(s, maxChars - tailChars - notice.length) + notice + tailSlice(s, tailChars);
 }
+
+export function bareChannelName(name: string): string {
+  return name.startsWith("#") ? name.slice(1) : name;
+}

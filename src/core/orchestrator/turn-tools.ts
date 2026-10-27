@@ -58,7 +58,6 @@ export async function buildTurnTools(ctx: TurnCtx, turn: TurnToolsInput) {
 
   const spine: SpineState = {
     surfaceOutboundCount: 0,
-    crossConversationPosts: 0,
     turnUserEntrySeq: undefined,
   };
   const turnKey = input.runId ?? randomUUID();

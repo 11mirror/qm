@@ -101,7 +101,7 @@ test("surface post rejects traversal before provisioning or staging any attachme
       },
     },
     postKeys: turnPostKeys("run-test"),
-    spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+    spine: { surfaceOutboundCount: 0 },
     signal: new AbortController().signal,
   } as unknown as SurfaceToolsContext);
   const r = await tools!.post("hello", undefined, ["report.pdf", "../.ssh/id_ed25519"]);
@@ -127,7 +127,7 @@ test("surface channel settings preserve and reset the stored ambient reply polic
       return {};
     },
     postKeys: turnPostKeys("run-test"),
-    spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+    spine: { surfaceOutboundCount: 0 },
     signal: new AbortController().signal,
   } as unknown as SurfaceToolsContext)!;
 
@@ -215,7 +215,7 @@ test("surface post returns the sent attachments' metadata (so surfaces can rende
       return {};
     },
     postKeys: turnPostKeys("run-test"),
-    spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+    spine: { surfaceOutboundCount: 0 },
     signal: new AbortController().signal,
   } as unknown as SurfaceToolsContext)!;
   const r = await tools.post("Here they are", undefined, ["qm-brand/cover.png"]);
@@ -429,7 +429,7 @@ function pagedSurface(
       return {};
     },
     postKeys: turnPostKeys("run-test"),
-    spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+    spine: { surfaceOutboundCount: 0 },
     signal: abort.signal,
   } as unknown as SurfaceToolsContext)!;
   return { tools, pulls };
