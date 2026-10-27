@@ -30,7 +30,7 @@ export const COOKIE_DOMAIN =
   process.env.PORTAL_COOKIE_DOMAIN ||
   (APPS_DOMAIN ? derivedCookieDomain(hostOf(process.env.PORTAL_PUBLIC_URL ?? ""), APPS_DOMAIN) : undefined);
 
-export const IS_PROD = process.env.NODE_ENV === "production";
+const IS_PROD = process.env.NODE_ENV === "production";
 
 export const SECURE_COOKIES = PUBLIC_URL.startsWith("https://");
 
@@ -44,7 +44,7 @@ export const ORIGIN = (() => {
 
 export const API_ALLOWED_ORIGINS = parseAllowedOrigins(process.env.PORTAL_API_ALLOWED_ORIGINS);
 
-export const LOCAL_AUTH_BYPASS_REQUESTED = process.env.PORTAL_LOCAL_AUTH_BYPASS === "1";
+const LOCAL_AUTH_BYPASS_REQUESTED = process.env.PORTAL_LOCAL_AUTH_BYPASS === "1";
 
 export const LOCAL_AUTH_BYPASS = LOCAL_AUTH_BYPASS_REQUESTED && !IS_PROD && isLocalPortalUrl(PUBLIC_URL);
 
@@ -60,7 +60,7 @@ export const PLAYGROUND_MINT_WINDOW_S = 3600;
 
 export const WEB_UI_UPSTREAM = (process.env.WEB_UI_UPSTREAM ?? "http://localhost:8096").replace(/\/$/, "");
 
-export function isSlackIssuer(issuer: string): boolean {
+function isSlackIssuer(issuer: string): boolean {
   try {
     const host = new URL(issuer).hostname;
     return host === "slack.com" || host.endsWith(".slack.com");
@@ -84,13 +84,13 @@ export const OIDC: OidcConfig = {
   hostedDomain: hostedDomainHint(process.env.OIDC_ISSUER ?? "https://slack.com", process.env.OIDC_ALLOWED_EMAIL_DOMAIN),
 };
 
-export const OIDC_JWKS_CONFIGURED = Boolean(process.env.OIDC_JWKS_URI?.trim());
+const OIDC_JWKS_CONFIGURED = Boolean(process.env.OIDC_JWKS_URI?.trim());
 
 export const AUTH_BROKER_UPSTREAM = (process.env.AUTH_BROKER_UPSTREAM ?? "").replace(/\/$/, "");
 
 export const AUTH_BROKER_PREFIX = (process.env.AUTH_BROKER_PREFIX ?? "/idp").replace(/\/$/, "");
 
-export const BROKER_PUBLIC_ROUTES: ReadonlyArray<{ method: string; path: string }> = [
+const BROKER_PUBLIC_ROUTES: ReadonlyArray<{ method: string; path: string }> = [
   { method: "GET", path: "/authorize" },
   { method: "POST", path: "/authorize" },
   { method: "GET", path: "/verify" },
@@ -151,7 +151,7 @@ if (
 
 export const IMPERSONATE_TTL_S = 3600;
 
-export function hostOf(raw: string): string {
+function hostOf(raw: string): string {
   try {
     return new URL(raw).hostname.toLowerCase();
   } catch {
@@ -170,7 +170,7 @@ export function hostIsWithinDomain(host: string, domain: string): boolean {
   return !!h && !!d && (h === d || h.endsWith(`.${d}`));
 }
 
-export function isLocalPortalUrl(raw: string): boolean {
+function isLocalPortalUrl(raw: string): boolean {
   try {
     const hostname = new URL(raw).hostname.toLowerCase();
     return (
@@ -185,7 +185,7 @@ export function isLocalPortalUrl(raw: string): boolean {
   }
 }
 
-export function originOf(raw: string): string {
+function originOf(raw: string): string {
   try {
     return new URL(raw).origin;
   } catch {
@@ -338,7 +338,7 @@ export function bootChecks(): void {
   }
 }
 
-export function validEmailDomain(value: string): boolean {
+function validEmailDomain(value: string): boolean {
   if (value.length > 253 || !value.includes(".")) return false;
   return value
     .split(".")
