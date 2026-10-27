@@ -1,5 +1,5 @@
 import { validEmail } from "../../chassis/src/email.ts";
-import { html, render, nothing } from "lit";
+import { html, render, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { Building2, Globe, Lock, Search, X } from "lucide";
 import { api } from "./core-bridge";
@@ -20,107 +20,124 @@ type GeneralAccess = "restricted" | "org" | "public";
 
 const isOrgGrant = (grant: Grant): boolean => grant.scope === "org" || grant.scope.startsWith("org:");
 
-export async function openDeploymentPermissions(id: string, title: string, owner: string): Promise<void> {
-  const opener = document.activeElement as HTMLElement | null;
-  const dialog = document.createElement("dialog");
-  dialog.className = "project-dialog deployment-permissions-dialog";
-  dialog.setAttribute("aria-labelledby", "deployment-permissions-heading");
-  document.body.append(dialog);
-  let grantees: Grant[] = [];
-  let publicAccess = false;
-  let externalSharing = true;
-  let query = "";
-  let access = "view";
-  let selected: (DirectoryMatch & { email?: string }) | null = null;
-  const names = new Map<string, string>();
-  let busy = true;
-  let loaded = false;
-  let error = "";
-  const endpoint = `/api/deployments/${encodeURIComponent(id)}/share`;
-  const people = new PeopleSearch(
-    () => draw(),
-    (person) =>
-      `personal:${person.principalId}` !== owner &&
-      !grantees.some((grant) => grant.scope === `personal:${person.principalId}`),
-  );
-  const close = () => {
-    people.clear();
+class DeploymentPermissions {
+  private readonly opener = document.activeElement as HTMLElement | null;
+  private readonly dialog = document.createElement("dialog");
+  private readonly title: string;
+  private readonly owner: string;
+  private grantees: Grant[] = [];
+  private publicAccess = false;
+  private externalSharing = true;
+  private query = "";
+  private access = "view";
+  private selected: (DirectoryMatch & { email?: string }) | null = null;
+  private readonly names = new Map<string, string>();
+  private busy = true;
+  private loaded = false;
+  private error = "";
+  private readonly endpoint: string;
+  private readonly people: PeopleSearch;
+
+  constructor(id: string, title: string, owner: string) {
+    this.title = title;
+    this.owner = owner;
+    this.dialog.className = "project-dialog deployment-permissions-dialog";
+    this.dialog.setAttribute("aria-labelledby", "deployment-permissions-heading");
+    document.body.append(this.dialog);
+    this.endpoint = `/api/deployments/${encodeURIComponent(id)}/share`;
+    this.people = new PeopleSearch(
+      () => this.draw(),
+      (person) =>
+        `personal:${person.principalId}` !== this.owner &&
+        !this.grantees.some((grant) => grant.scope === `personal:${person.principalId}`),
+    );
+    this.dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      if (closeFormMenus()) return;
+      this.close();
+    });
+  }
+
+  private readonly close = () => {
+    this.people.clear();
     closeFormMenus();
-    dialog.close();
-    dialog.remove();
-    if (opener?.isConnected) opener.focus();
+    this.dialog.close();
+    this.dialog.remove();
+    if (this.opener?.isConnected) this.opener.focus();
   };
-  dialog.addEventListener("cancel", (event) => {
-    event.preventDefault();
-    if (closeFormMenus()) return;
-    close();
-  });
-  const run = async (failure: string, task: () => Promise<void>) => {
-    busy = true;
-    error = "";
-    draw();
+  private readonly run = async (failure: string, task: () => Promise<void>) => {
+    this.busy = true;
+    this.error = "";
+    this.draw();
     try {
       await task();
     } catch (e) {
-      error = errMessage(e, failure);
+      this.error = errMessage(e, failure);
     } finally {
-      busy = false;
-      if (dialog.isConnected) draw();
+      this.busy = false;
+      if (this.dialog.isConnected) this.draw();
     }
   };
-  const post = async (body: Record<string, unknown>) => {
+  private readonly post = async (body: Record<string, unknown>) => {
     const response = await api<{ public: boolean; grantees: Grant[]; invitation?: { emailProblem?: string } }>(
-      endpoint,
+      this.endpoint,
       { method: "POST", body: JSON.stringify(body) },
     );
-    publicAccess = response.public;
-    grantees = response.grantees;
+    this.publicAccess = response.public;
+    this.grantees = response.grantees;
     return response;
   };
-  const change = async (scope: string, value: string, email?: string) => {
-    if (busy) return;
+  private readonly change = async (scope: string, value: string, email?: string) => {
+    if (this.busy) return;
     closeFormMenus();
-    await run("Could not update permissions.", async () => {
-      const response = await post({ ...(email ? { email } : { scope }), access: value });
+    await this.run("Could not update permissions.", async () => {
+      const response = await this.post({ ...(email ? { email } : { scope }), access: value });
       if (response.invitation?.emailProblem)
-        error = `Access granted, but no invitation email was sent: ${response.invitation.emailProblem}`;
-      selected = null;
-      query = "";
-      people.clear();
+        this.error = `Access granted, but no invitation email was sent: ${response.invitation.emailProblem}`;
+      this.selected = null;
+      this.query = "";
+      this.people.clear();
     });
   };
-  const orgGrant = (): Grant | undefined => grantees.find(isOrgGrant);
-  const generalAccess = (): GeneralAccess => {
-    if (publicAccess) return "public";
-    return orgGrant() ? "org" : "restricted";
+  private readonly orgGrant = (): Grant | undefined => this.grantees.find(isOrgGrant);
+  private readonly generalAccess = (): GeneralAccess => {
+    if (this.publicAccess) return "public";
+    return this.orgGrant() ? "org" : "restricted";
   };
-  const changeGeneral = async (next: GeneralAccess) => {
-    if (busy || next === generalAccess() || (next === "public" && !externalSharing)) return;
+  private readonly changeGeneral = async (next: GeneralAccess) => {
+    if (this.busy || next === this.generalAccess() || (next === "public" && !this.externalSharing)) return;
     closeFormMenus();
-    await run("Could not update general access.", async () => {
-      if (next === "public") return void (await post({ public: true }));
-      if (publicAccess) await post({ public: false });
-      const grant = orgGrant();
-      if (next === "org" && !grant) await post({ scope: "org", access: "view" });
-      if (next === "restricted" && grant) await post({ scope: grant.scope, access: "none" });
+    await this.run("Could not update general access.", async () => {
+      if (next === "public") return void (await this.post({ public: true }));
+      if (this.publicAccess) await this.post({ public: false });
+      const grant = this.orgGrant();
+      if (next === "org" && !grant) await this.post({ scope: "org", access: "view" });
+      if (next === "restricted" && grant) await this.post({ scope: grant.scope, access: "none" });
     });
   };
-  const orgName = (): string => appState.me?.companyName?.trim() || "Your organization";
-  const generalAccessNote = (): string => {
-    const level = generalAccess();
+  private readonly orgName = (): string => appState.me?.companyName?.trim() || "Your organization";
+  private readonly generalAccessNote = (): string => {
+    const level = this.generalAccess();
     if (level === "public") return "Anyone on the internet with the link can open. No sign-in required";
-    if (level === "org") return `Anyone signed in to ${orgName()} can open`;
+    if (level === "org") return `Anyone signed in to ${this.orgName()} can open`;
     return "Only people with access can open";
   };
-  const emailCandidate = (): string | null => {
-    const email = query.trim().toLowerCase();
-    if (!externalSharing) return null;
+  private readonly emailCandidate = (): string | null => {
+    const email = this.query.trim().toLowerCase();
+    if (!this.externalSharing) return null;
     if (!validEmail(email)) return null;
-    const taken = [owner, ...grantees.map((g) => g.scope)].some((s) => s.toLowerCase() === `personal:${email}`);
-    return taken || people.matches.some((m) => m.principalId.toLowerCase() === email) ? null : email;
+    const taken = [this.owner, ...this.grantees.map((g) => g.scope)].some(
+      (s) => s.toLowerCase() === `personal:${email}`,
+    );
+    return taken || this.people.matches.some((m) => m.principalId.toLowerCase() === email) ? null : email;
   };
-  const permissionMenu = (value: string, label: string, update: (value: string) => void, removable = false) =>
-    html`<fieldset class="permission-control" ?disabled=${busy}>
+  private readonly permissionMenu = (
+    value: string,
+    label: string,
+    update: (value: string) => void,
+    removable = false,
+  ) =>
+    html`<fieldset class="permission-control" ?disabled=${this.busy}>
       ${menuSelect({
         value,
         ariaLabel: label,
@@ -134,196 +151,204 @@ export async function openDeploymentPermissions(id: string, title: string, owner
         },
       })}
     </fieldset>`;
-  const draw = () =>
+  readonly draw = () =>
     render(
       html`
         <div class="project-dialog-head">
           <div>
             <h2 id="deployment-permissions-heading">App permissions</h2>
-            <p>${title}</p>
+            <p>${this.title}</p>
           </div>
-          <button class="chip-x" type="button" aria-label="Close" @click=${close}>${icon(X, 16)}</button>
+          <button class="chip-x" type="button" aria-label="Close" @click=${this.close}>${icon(X, 16)}</button>
         </div>
-        ${
-          loaded
-            ? html` <div class="permission-search">
-                ${
-                  selected
-                    ? html`<div class="permission-invite">
-                        <div class="permission-person">
-                          ${avatarTpl({
-                            key: selected.principalId,
-                            name: selected.displayName,
-                            avatarUrl: selected.avatarUrl,
-                          })}<span class="permission-person-label"
-                            >${selected.displayName}<small>${selected.principalId}</small></span
-                          >
-                        </div>
-                        <button
-                          class="chip-x"
-                          aria-label="Cancel selection"
-                          ?disabled=${busy}
-                          @click=${() => {
-                            selected = null;
-                            draw();
-                          }}
-                        >
-                          ${icon(X, 14)}
-                        </button>
-                        <div class="permission-invite-actions">
-                          ${
-                            selected.email
-                              ? html`<span class="permission-note">Can view</span>`
-                              : permissionMenu(access, "New person's access", (value) => {
-                                  access = value;
-                                  draw();
-                                })
-                          }<button
-                            class="btn primary"
-                            ?disabled=${busy}
-                            @click=${() => {
-                              if (selected) {
-                                names.set(`personal:${selected.principalId}`, selected.displayName);
-                                void change(
-                                  `personal:${selected.principalId}`,
-                                  selected.email ? "view" : access,
-                                  selected.email,
-                                );
-                              }
-                            }}
-                          >
-                            Add
-                          </button>
-                        </div>
-                      </div>`
-                    : html`<form
-                        @submit=${(event: SubmitEvent) => {
-                          event.preventDefault();
-                          if (query.trim()) void people.run(query.trim());
-                        }}
-                      >
-                        <div class="project-member-search-row">
-                          ${icon(Search, 16)}<input
-                            id="app-people-query"
-                            aria-label="Add people"
-                            placeholder="Add people by name or email"
-                            type="search"
-                            autocomplete="off"
-                            maxlength="254"
-                            .value=${live(query)}
-                            ?disabled=${busy}
-                            @input=${(event: Event) => {
-                              query = (event.currentTarget as HTMLInputElement).value;
-                              people.schedule(query);
-                            }}
-                          />
-                        </div>
-                        ${peopleResults(people.matches, busy, (person) => {
-                          selected = person;
-                          closeFormMenus();
-                          draw();
-                        })}
-                        ${
-                          !people.searching && people.searchedQuery && emailCandidate()
-                            ? html`
-                                <button
-                                  class="project-member-result"
-                                  type="button"
-                                  ?disabled=${busy}
-                                  @click=${() => {
-                                    const email = emailCandidate();
-                                    if (!email) return;
-                                    selected = { principalId: email, displayName: email, type: "guest", email };
-                                    access = "view";
-                                    closeFormMenus();
-                                    draw();
-                                  }}
-                                >
-                                  Add ${emailCandidate()} with view access
-                                </button>
-                                <p class="permission-note">
-                                  They receive an app link by email and sign in with this address. This does not add
-                                  them to your organization.
-                                </p>
-                              `
-                            : nothing
-                        }
-                        ${people.searching ? html`<p class="permission-note" role="status">Searching…</p>` : nothing}
-                        ${!people.searching && people.searchedQuery && !people.matches.length && !emailCandidate() ? html`<p class="permission-note">No additional people found.</p>` : nothing}
-                      </form>`
-                }
-              </div>`
-            : nothing
-        }
+        ${this.loaded ? this.searchTpl() : nothing}
         <div class="permission-section-label">People with access</div>
         <div class="project-member-list">
           <div class="permission-row">
-            ${avatarTpl({ key: owner, name: owner.replace("personal:", "") })}<span class="permission-person-label"
-              >${owner.startsWith("personal:") ? friendlyPrincipal(owner.slice(9)) : scopeChip(owner)}</span
+            ${avatarTpl({ key: this.owner, name: this.owner.replace("personal:", "") })}<span
+              class="permission-person-label"
+              >${this.owner.startsWith("personal:") ? friendlyPrincipal(this.owner.slice(9)) : scopeChip(this.owner)}</span
             ><span class="permission-owner">Owner</span>
           </div>
-          ${grantees.filter((grant) => generalAccess() !== "org" || !isOrgGrant(grant)).map((grant) => html`<div class="permission-row">${avatarTpl({ key: grant.scope, name: isOrgGrant(grant) ? orgName() : grant.scope.replace("personal:", "") })}<span class="permission-person-label">${isOrgGrant(grant) ? orgName() : (names.get(grant.scope) ?? (grant.scope.startsWith("personal:") ? grant.scope.slice(9) : scopeChip(grant.scope)))}${names.has(grant.scope) ? html`<small>${grant.scope.replace("personal:", "")}</small>` : nothing}</span>${permissionMenu(grant.permission === "write" ? "manage" : "view", `Access for ${grant.scope}`, (value) => void change(grant.scope, value), true)}</div>`)}
+          ${this.grantees.filter((grant) => this.generalAccess() !== "org" || !isOrgGrant(grant)).map((grant) => html`<div class="permission-row">${avatarTpl({ key: grant.scope, name: isOrgGrant(grant) ? this.orgName() : grant.scope.replace("personal:", "") })}<span class="permission-person-label">${isOrgGrant(grant) ? this.orgName() : (this.names.get(grant.scope) ?? (grant.scope.startsWith("personal:") ? grant.scope.slice(9) : scopeChip(grant.scope)))}${this.names.has(grant.scope) ? html`<small>${grant.scope.replace("personal:", "")}</small>` : nothing}</span>${this.permissionMenu(grant.permission === "write" ? "manage" : "view", `Access for ${grant.scope}`, (value) => void this.change(grant.scope, value), true)}</div>`)}
         </div>
         <div class="permission-section-label permission-general-label">General access</div>
         <div class="project-member-list">
           <div class="permission-row">
             <span class="project-member-avatar" aria-hidden="true"
-              >${icon({ public: Globe, org: Building2, restricted: Lock }[generalAccess()], 16)}</span
+              >${icon({ public: Globe, org: Building2, restricted: Lock }[this.generalAccess()], 16)}</span
             >
             <span class="permission-person-label">
-              <fieldset class="permission-control general-access-control" ?disabled=${busy}>
+              <fieldset class="permission-control general-access-control" ?disabled=${this.busy}>
                 ${menuSelect({
-                  value: generalAccess(),
+                  value: this.generalAccess(),
                   ariaLabel: "General access",
                   className: "general-access-menu",
                   options: [
                     { value: "restricted", label: "Restricted" },
-                    { value: "org", label: orgName() },
+                    { value: "org", label: this.orgName() },
                     {
                       value: "public",
                       label: "Anyone with the link",
-                      ...(externalSharing
+                      ...(this.externalSharing
                         ? {}
                         : { disabledHint: "An org admin must turn on external app sharing first." }),
                     },
                   ],
                   onSelect: (next) => {
-                    if (next === "restricted" || next === "org" || next === "public") void changeGeneral(next);
+                    if (next === "restricted" || next === "org" || next === "public") void this.changeGeneral(next);
                   },
                 })}
               </fieldset>
-              <small>${generalAccessNote()}</small>
+              <small>${this.generalAccessNote()}</small>
             </span>
             ${(() => {
-              const grant = generalAccess() === "org" ? orgGrant() : undefined;
+              const grant = this.generalAccess() === "org" ? this.orgGrant() : undefined;
               return grant
-                ? permissionMenu(
+                ? this.permissionMenu(
                     grant.permission === "write" ? "manage" : "view",
-                    `Access for ${orgName()}`,
-                    (value) => void change(grant.scope, value),
+                    `Access for ${this.orgName()}`,
+                    (value) => void this.change(grant.scope, value),
                   )
                 : nothing;
             })()}
           </div>
         </div>
         ${
-          publicAccess
+          this.publicAccess
             ? html`<p class="share-external-warning" role="status">⚠️ Public. Anyone can open this app.</p>`
             : nothing
         }
-        ${busy ? html`<p role="status">Loading…</p>` : nothing}
-        ${error || people.error ? html`<p class="composer-error" role="alert">${error || people.error}</p>` : nothing}
-        <div class="project-dialog-actions actions"><button class="btn" @click=${close}>Done</button></div>
+        ${this.busy ? html`<p role="status">Loading…</p>` : nothing}
+        ${this.error || this.people.error ? html`<p class="composer-error" role="alert">${this.error || this.people.error}</p>` : nothing}
+        <div class="project-dialog-actions actions"><button class="btn" @click=${this.close}>Done</button></div>
       `,
-      dialog,
+      this.dialog,
     );
-  draw();
-  dialog.showModal();
-  await run("Could not load permissions.", async () => {
-    const response = await api<{ public: boolean; externalSharing?: boolean; grantees: Grant[] }>(endpoint);
-    publicAccess = response.public;
-    externalSharing = response.externalSharing !== false;
-    grantees = response.grantees;
-    loaded = true;
-  });
+
+  private searchTpl(): TemplateResult {
+    return html` <div class="permission-search">
+      ${
+        this.selected
+          ? html`<div class="permission-invite">
+              <div class="permission-person">
+                ${avatarTpl({
+                  key: this.selected.principalId,
+                  name: this.selected.displayName,
+                  avatarUrl: this.selected.avatarUrl,
+                })}<span class="permission-person-label"
+                  >${this.selected.displayName}<small>${this.selected.principalId}</small></span
+                >
+              </div>
+              <button
+                class="chip-x"
+                aria-label="Cancel selection"
+                ?disabled=${this.busy}
+                @click=${() => {
+                  this.selected = null;
+                  this.draw();
+                }}
+              >
+                ${icon(X, 14)}
+              </button>
+              <div class="permission-invite-actions">
+                ${
+                  this.selected.email
+                    ? html`<span class="permission-note">Can view</span>`
+                    : this.permissionMenu(this.access, "New person's access", (value) => {
+                        this.access = value;
+                        this.draw();
+                      })
+                }<button
+                  class="btn primary"
+                  ?disabled=${this.busy}
+                  @click=${() => {
+                    if (this.selected) {
+                      this.names.set(`personal:${this.selected.principalId}`, this.selected.displayName);
+                      void this.change(
+                        `personal:${this.selected.principalId}`,
+                        this.selected.email ? "view" : this.access,
+                        this.selected.email,
+                      );
+                    }
+                  }}
+                >
+                  Add
+                </button>
+              </div>
+            </div>`
+          : html`<form
+              @submit=${(event: SubmitEvent) => {
+                event.preventDefault();
+                if (this.query.trim()) void this.people.run(this.query.trim());
+              }}
+            >
+              <div class="project-member-search-row">
+                ${icon(Search, 16)}<input
+                  id="app-people-query"
+                  aria-label="Add people"
+                  placeholder="Add people by name or email"
+                  type="search"
+                  autocomplete="off"
+                  maxlength="254"
+                  .value=${live(this.query)}
+                  ?disabled=${this.busy}
+                  @input=${(event: Event) => {
+                    this.query = (event.currentTarget as HTMLInputElement).value;
+                    this.people.schedule(this.query);
+                  }}
+                />
+              </div>
+              ${peopleResults(this.people.matches, this.busy, (person) => {
+                this.selected = person;
+                closeFormMenus();
+                this.draw();
+              })}
+              ${
+                !this.people.searching && this.people.searchedQuery && this.emailCandidate()
+                  ? html`
+                      <button
+                        class="project-member-result"
+                        type="button"
+                        ?disabled=${this.busy}
+                        @click=${() => {
+                          const email = this.emailCandidate();
+                          if (!email) return;
+                          this.selected = { principalId: email, displayName: email, type: "guest", email };
+                          this.access = "view";
+                          closeFormMenus();
+                          this.draw();
+                        }}
+                      >
+                        Add ${this.emailCandidate()} with view access
+                      </button>
+                      <p class="permission-note">
+                        They receive an app link by email and sign in with this address. This does not add them to your
+                        organization.
+                      </p>
+                    `
+                  : nothing
+              }
+              ${this.people.searching ? html`<p class="permission-note" role="status">Searching…</p>` : nothing}
+              ${!this.people.searching && this.people.searchedQuery && !this.people.matches.length && !this.emailCandidate() ? html`<p class="permission-note">No additional people found.</p>` : nothing}
+            </form>`
+      }
+    </div>`;
+  }
+
+  async open(): Promise<void> {
+    this.draw();
+    this.dialog.showModal();
+    await this.run("Could not load permissions.", async () => {
+      const response = await api<{ public: boolean; externalSharing?: boolean; grantees: Grant[] }>(this.endpoint);
+      this.publicAccess = response.public;
+      this.externalSharing = response.externalSharing !== false;
+      this.grantees = response.grantees;
+      this.loaded = true;
+    });
+  }
+}
+
+export async function openDeploymentPermissions(id: string, title: string, owner: string): Promise<void> {
+  await new DeploymentPermissions(id, title, owner).open();
 }

@@ -426,80 +426,87 @@ export function isWorkHistoryItem(item: Item): boolean {
   return item.kind === "ToolCall" || item.kind === "ToolResult" || item.kind === "Elicitation" || isNarration(item);
 }
 
+interface Replay {
+  out: AgentMessage[];
+  pending: Item[];
+  deliveryFiles: DeliveredFile[];
+  stoppedShown: boolean;
+  hiddenPrompt: boolean;
+  model?: Model<Api> | undefined;
+}
+
+function flushWork(
+  r: Replay,
+  text: string,
+  at?: number,
+  closed = false,
+  timing?: { startedAt?: number; finishedAt?: number },
+  stopped = false,
+  entrySeqs: number[] = [],
+): void {
+  if (!text && !r.pending.length && !r.deliveryFiles.length && !stopped) return;
+  if (stopped) r.stoppedShown = true;
+  if (r.hiddenPrompt && !text && !stopped && r.pending.some(deliveredSilence)) {
+    r.pending = r.pending.filter((item) => !SILENCE_TOOLS.has(item.tool ?? ""));
+    if (!r.pending.some((item) => item.kind === "ToolCall") && !r.deliveryFiles.length) {
+      r.pending = [];
+      return;
+    }
+  }
+  entrySeqs = [...entrySeqs, ...r.pending.map((item) => item.seq)];
+  const lastText = r.pending.findLastIndex(isNarration);
+  if (lastText >= 0) {
+    const segment = (r.pending[lastText]!.text ?? "").trim();
+    if (text) {
+      if (segment === text.trim() && r.pending[lastText]!.body.phase !== "commentary") r.pending.splice(lastText, 1);
+    } else if (closed && !stopped && segment && !r.pending.some(deliveredSilence)) {
+      text = segment;
+      r.pending.splice(lastText, 1);
+    }
+  }
+  const msg: AssistantWork = {
+    ...baseAssistant(r.model, 0, text),
+    persisted: true,
+    ...(entrySeqs.length ? { entrySeqs } : {}),
+    stopReason: stopped ? "aborted" : "stop",
+    timestamp: at ?? r.pending[r.pending.length - 1]?.createdAt,
+  };
+  if (r.pending.length || (stopped && timing?.startedAt !== undefined)) {
+    const boundary = r.pending.findLast((item) => typeof item.body.workStartedAt === "number")?.body.workStartedAt as
+      number | undefined;
+    msg.work = {
+      status: "complete",
+      startedAt: timing?.startedAt ?? boundary ?? r.pending[0]?.createdAt,
+      finishedAt: timing?.finishedAt ?? at ?? r.pending[r.pending.length - 1]?.createdAt,
+      activity: r.pending.map((item) => ({ item })),
+    };
+  }
+  if (r.deliveryFiles.length) msg.deliveredFiles = r.deliveryFiles;
+  r.out.push(msg as AgentMessage);
+  r.pending = [];
+  r.deliveryFiles = [];
+}
+
 export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage[] {
-  const out: AgentMessage[] = [];
+  const r: Replay = { out: [], pending: [], deliveryFiles: [], stoppedShown: false, hiddenPrompt: false, model };
   const userByTs = new Map<string, HistoryUserMessage>();
-  let pending: Item[] = [];
-  let deliveryFiles: DeliveredFile[] = [];
   let posted = false;
-  let stoppedShown = false;
-  let hiddenPrompt = false;
   const heldPosts = new Map<string, { text: string; item: Item }>();
   const spillHeldPosts = (): void => {
-    for (const held of heldPosts.values()) pending.push(held.item);
+    for (const held of heldPosts.values()) r.pending.push(held.item);
     heldPosts.clear();
   };
   const filesOf = (item: Item): DeliveredFile[] =>
     deliveredFilesFromAttachments(item.body.files as UserAttachment[] | undefined);
   const appendDeliveryFiles = (files: DeliveredFile[]): void => {
-    const last = out.at(-1) as AssistantWork | undefined;
+    const last = r.out.at(-1) as AssistantWork | undefined;
     if (files.length && last?.role === "assistant") last.deliveredFiles = [...(last.deliveredFiles ?? []), ...files];
-    else deliveryFiles.push(...files);
+    else r.deliveryFiles.push(...files);
   };
   const appendAttachedFiles = (result: Item): void => {
     const files = filesOf(result);
     const restaged = new Set(files.map((f) => f.name));
-    deliveryFiles = [...deliveryFiles.filter((f) => !restaged.has(f.name)), ...files];
-  };
-  const flushWork = (
-    text: string,
-    at?: number,
-    closed = false,
-    timing?: { startedAt?: number; finishedAt?: number },
-    stopped = false,
-    entrySeqs: number[] = [],
-  ): void => {
-    if (!text && !pending.length && !deliveryFiles.length && !stopped) return;
-    if (stopped) stoppedShown = true;
-    if (hiddenPrompt && !text && !stopped && pending.some(deliveredSilence)) {
-      pending = pending.filter((item) => !SILENCE_TOOLS.has(item.tool ?? ""));
-      if (!pending.some((item) => item.kind === "ToolCall") && !deliveryFiles.length) {
-        pending = [];
-        return;
-      }
-    }
-    entrySeqs = [...entrySeqs, ...pending.map((item) => item.seq)];
-    const lastText = pending.findLastIndex(isNarration);
-    if (lastText >= 0) {
-      const segment = (pending[lastText]!.text ?? "").trim();
-      if (text) {
-        if (segment === text.trim() && pending[lastText]!.body.phase !== "commentary") pending.splice(lastText, 1);
-      } else if (closed && !stopped && segment && !pending.some(deliveredSilence)) {
-        text = segment;
-        pending.splice(lastText, 1);
-      }
-    }
-    const msg: AssistantWork = {
-      ...baseAssistant(model, 0, text),
-      persisted: true,
-      ...(entrySeqs.length ? { entrySeqs } : {}),
-      stopReason: stopped ? "aborted" : "stop",
-      timestamp: at ?? pending[pending.length - 1]?.createdAt,
-    };
-    if (pending.length || (stopped && timing?.startedAt !== undefined)) {
-      const boundary = pending.findLast((item) => typeof item.body.workStartedAt === "number")?.body.workStartedAt as
-        number | undefined;
-      msg.work = {
-        status: "complete",
-        startedAt: timing?.startedAt ?? boundary ?? pending[0]?.createdAt,
-        finishedAt: timing?.finishedAt ?? at ?? pending[pending.length - 1]?.createdAt,
-        activity: pending.map((item) => ({ item })),
-      };
-    }
-    if (deliveryFiles.length) msg.deliveredFiles = deliveryFiles;
-    out.push(msg as AgentMessage);
-    pending = [];
-    deliveryFiles = [];
+    r.deliveryFiles = [...r.deliveryFiles.filter((f) => !restaged.has(f.name)), ...files];
   };
   for (const e of items) {
     const text = e.text ?? "";
@@ -508,14 +515,14 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
       const decision = approvalDecisionMessage(e);
       if (decision) {
         spillHeldPosts();
-        flushWork("", e.createdAt);
-        out.push(decision as unknown as AgentMessage);
+        flushWork(r, "", e.createdAt);
+        r.out.push(decision as unknown as AgentMessage);
       }
       continue;
     }
     if (isFinishedReplyItem(e)) {
       spillHeldPosts();
-      flushWork(text, e.createdAt, true, undefined, false, [e.seq]);
+      flushWork(r, text, e.createdAt, true, undefined, false, [e.seq]);
       posted = false;
       continue;
     }
@@ -531,35 +538,35 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         const held = heldPosts.get(e.callId)!;
         heldPosts.delete(e.callId);
         if (postResultOk(e)) {
-          deliveryFiles.push(...filesOf(e));
-          flushWork(held.text, e.createdAt, false, undefined, false, [held.item.seq, e.seq]);
+          r.deliveryFiles.push(...filesOf(e));
+          flushWork(r, held.text, e.createdAt, false, undefined, false, [held.item.seq, e.seq]);
           posted = true;
         } else {
-          pending.push(held.item, e);
+          r.pending.push(held.item, e);
         }
         continue;
       }
       if (e.kind === "ToolResult" && e.tool === "attach" && postResultOk(e)) appendAttachedFiles(e);
-      pending.push(e);
+      r.pending.push(e);
       continue;
     }
     if (isUserMessage(e)) {
       const steered = e.kind === "SteeringMessage";
       if (!steered) {
-        stoppedShown = false;
-        hiddenPrompt = e.hidden === true;
+        r.stoppedShown = false;
+        r.hiddenPrompt = e.hidden === true;
       }
       if (isHidden(e)) continue;
       if (!steered) {
         posted = false;
         spillHeldPosts();
-        flushWork("", e.createdAt);
+        flushWork(r, "", e.createdAt);
       }
       const msg = userItemMessage(e);
       if (msg) {
         if (msg.ts) userByTs.set(msg.ts, msg);
-        if (steered) pending.push(e);
-        out.push(msg as AgentMessage);
+        if (steered) r.pending.push(e);
+        r.out.push(msg as AgentMessage);
       }
     } else if (e.kind === "AgentMessage" && e.variant === null) {
       const { workStartedAt, workFinishedAt } = e.body;
@@ -568,13 +575,13 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         ...(typeof workFinishedAt === "number" ? { finishedAt: workFinishedAt } : {}),
       };
       const stopped = e.body.stopped === true || text.trim() === "(stopped)";
-      if (text || pending.length || heldPosts.size || stopped) {
+      if (text || r.pending.length || heldPosts.size || stopped) {
         spillHeldPosts();
         if (posted && text) {
-          pending.push({ ...e, variant: "narration", body: { demoted: true } });
-          flushWork("", e.createdAt, false, timing, stopped, [e.seq]);
+          r.pending.push({ ...e, variant: "narration", body: { demoted: true } });
+          flushWork(r, "", e.createdAt, false, timing, stopped, [e.seq]);
         } else {
-          flushWork(text, e.createdAt, !posted, timing, stopped, [e.seq]);
+          flushWork(r, text, e.createdAt, !posted, timing, stopped, [e.seq]);
         }
       }
       posted = false;
@@ -582,14 +589,14 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
       appendDeliveryFiles(filesOf(e));
     } else if (e.kind === "Stop") {
       spillHeldPosts();
-      if (pending.length || !stoppedShown) flushWork("", e.createdAt, !posted, undefined, true, [e.seq]);
+      if (r.pending.length || !r.stoppedShown) flushWork(r, "", e.createdAt, !posted, undefined, true, [e.seq]);
       posted = false;
     } else if (note || (e.kind === "Error" && e.text)) {
       spillHeldPosts();
-      flushWork("", e.createdAt);
+      flushWork(r, "", e.createdAt);
       const original = note?.note === "message_revision" ? userByTs.get(note.ts) : undefined;
       if (original && note?.note === "message_revision") original[note.action] = true;
-      out.push(
+      r.out.push(
         (note
           ? { ...note, timestamp: e.createdAt }
           : { ...baseAssistant(model, e.createdAt), stopReason: "error", errorMessage: e.text }) as AgentMessage,
@@ -597,8 +604,8 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
     }
   }
   spillHeldPosts();
-  flushWork("");
-  return out;
+  flushWork(r, "");
+  return r.out;
 }
 
 export function attachPendingApprovals(

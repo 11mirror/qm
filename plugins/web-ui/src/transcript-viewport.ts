@@ -29,353 +29,365 @@ export function preserveTranscriptScroll(root: HTMLElement): () => void {
 const CONDENSED_LINES = 2;
 const NEAR_TOP = 400;
 
-export function createTranscriptViewport(options: { pinPrompt?: () => boolean } = {}) {
-  let scroller: HTMLElement | null = null;
-  let pins: HTMLElement | null = null;
-  let prompt: HTMLElement | null = null;
-  let stack: HTMLElement | null = null;
-  let content: HTMLElement | null = null;
-  let promptKey: string | undefined;
-  let expanded = false;
-  let lastTop = 0;
-  let observer: ResizeObserver | null = null;
-  let following = false;
-  let frame: number | null = null;
-  let remeasure = true;
-  let restContent = 0;
-  let condensedContent = 0;
-  let contentHeight = 0;
-  let condensedHeight = 0;
-  let gap: number | null = null;
-  let contentMax = "";
-  let collapseDistance = 0;
-  let geometryDistance: number | null = null;
-  let filledAtSize: number | null = null;
-  const contentUpdates = new Set<Promise<void>>();
+class TranscriptViewport {
+  private readonly options: { pinPrompt?: () => boolean };
+  private scroller: HTMLElement | null = null;
+  private pins: HTMLElement | null = null;
+  private prompt: HTMLElement | null = null;
+  private stack: HTMLElement | null = null;
+  private content: HTMLElement | null = null;
+  private promptKey: string | undefined;
+  private expanded = false;
+  private lastTop = 0;
+  private observer: ResizeObserver | null = null;
+  private following = false;
+  private frame: number | null = null;
+  private remeasure = true;
+  private restContent = 0;
+  private condensedContent = 0;
+  private contentHeight = 0;
+  private condensedHeight = 0;
+  private gap: number | null = null;
+  private contentMax = "";
+  private collapseDistance = 0;
+  private geometryDistance: number | null = null;
+  private filledAtSize: number | null = null;
+  private readonly contentUpdates = new Set<Promise<void>>();
 
-  function setFollowing(value: boolean): void {
-    following = value;
-    if (scroller) scroller.style.overflowAnchor = value ? "none" : "";
+  constructor(options: { pinPrompt?: () => boolean }) {
+    this.options = options;
   }
 
-  function cancelFollow(): void {
-    setFollowing(false);
-    if (frame !== null) cancelAnimationFrame(frame);
-    frame = null;
+  private setFollowing(value: boolean): void {
+    this.following = value;
+    if (this.scroller) this.scroller.style.overflowAnchor = value ? "none" : "";
   }
 
-  function clearPrompt(): void {
-    if (content) content.scrollTop = 0;
-    prompt?.classList.remove("stuck", "sticky-disabled", "pin-expanded", "pin-condensed", "latest-prompt");
-    prompt?.style.removeProperty("--pin-expanded-max");
-    prompt?.style.removeProperty("--pin-rest-height");
-    prompt?.style.removeProperty("--pin-content-max");
-    restContent = condensedContent = contentHeight = condensedHeight = 0;
-    gap = null;
-    contentMax = "";
-    collapseDistance = 0;
-    geometryDistance = null;
-    remeasure = true;
-    const toggle = prompt?.querySelector<HTMLButtonElement>(".pin-toggle");
+  cancelFollow(): void {
+    this.setFollowing(false);
+    if (this.frame !== null) cancelAnimationFrame(this.frame);
+    this.frame = null;
+  }
+
+  private clearPrompt(): void {
+    if (this.content) this.content.scrollTop = 0;
+    this.prompt?.classList.remove("stuck", "sticky-disabled", "pin-expanded", "pin-condensed", "latest-prompt");
+    this.prompt?.style.removeProperty("--pin-expanded-max");
+    this.prompt?.style.removeProperty("--pin-rest-height");
+    this.prompt?.style.removeProperty("--pin-content-max");
+    this.restContent = this.condensedContent = this.contentHeight = this.condensedHeight = 0;
+    this.gap = null;
+    this.contentMax = "";
+    this.collapseDistance = 0;
+    this.geometryDistance = null;
+    this.remeasure = true;
+    const toggle = this.prompt?.querySelector<HTMLButtonElement>(".pin-toggle");
     if (toggle) toggle.hidden = true;
-    expanded = false;
-    promptKey = undefined;
+    this.expanded = false;
+    this.promptKey = undefined;
   }
 
-  function syncPrompt(): void {
-    if (!scroller || !prompt || !content) return;
-    prompt.classList.toggle("pin-expanded", expanded);
-    const clipped = !expanded && content.scrollHeight > content.clientHeight + 1;
-    const toggle = prompt.querySelector<HTMLButtonElement>(".pin-toggle");
+  private syncPrompt(): void {
+    if (!this.scroller || !this.prompt || !this.content) return;
+    this.prompt.classList.toggle("pin-expanded", this.expanded);
+    const clipped = !this.expanded && this.content.scrollHeight > this.content.clientHeight + 1;
+    const toggle = this.prompt.querySelector<HTMLButtonElement>(".pin-toggle");
     if (toggle) {
-      toggle.hidden = !clipped && !expanded;
-      const label = expanded ? "Show less" : "Show more";
+      toggle.hidden = !clipped && !this.expanded;
+      const label = this.expanded ? "Show less" : "Show more";
       const text = toggle.querySelector<HTMLElement>(".pin-toggle-label") ?? toggle;
       if (text.textContent !== label) text.textContent = label;
-      toggle.setAttribute("aria-expanded", String(expanded));
+      toggle.setAttribute("aria-expanded", String(this.expanded));
     }
   }
 
-  function onClick(event: MouseEvent): void {
+  private readonly onClick = (event: MouseEvent): void => {
     const target = event.target as HTMLElement | null;
     if (target?.nodeType !== 1) return;
     const toggle = target.closest<HTMLButtonElement>(".pin-toggle");
-    if (!toggle || !prompt?.contains(toggle)) return;
-    cancelFollow();
-    expanded = !expanded;
-    if (!expanded && content) content.scrollTop = 0;
-    syncSticky();
-  }
+    if (!toggle || !this.prompt?.contains(toggle)) return;
+    this.cancelFollow();
+    this.expanded = !this.expanded;
+    if (!this.expanded && this.content) this.content.scrollTop = 0;
+    this.syncSticky();
+  };
 
-  function syncSticky(): void {
-    if (!scroller) return;
-    syncPrompt();
-    const top = pins?.getBoundingClientRect().height ?? 0;
-    scroller.style.setProperty("--chat-sticky-top", `${top}px`);
-    const style = getComputedStyle(scroller);
+  private syncSticky(): void {
+    if (!this.scroller) return;
+    this.syncPrompt();
+    const top = this.pins?.getBoundingClientRect().height ?? 0;
+    this.scroller.style.setProperty("--chat-sticky-top", `${top}px`);
+    const style = getComputedStyle(this.scroller);
     const paddingTop = parseFloat(style.paddingTop) || 0;
     const paddingBottom = parseFloat(style.paddingBottom) || 0;
-    const promptStyle = prompt ? getComputedStyle(prompt) : null;
+    const promptStyle = this.prompt ? getComputedStyle(this.prompt) : null;
     const promptMargin = promptStyle ? parseFloat(promptStyle.marginBottom) || 0 : 0;
-    if (prompt && content && promptStyle && remeasure && !expanded) measureRest(promptStyle);
-    if (prompt && content) {
-      const chrome = prompt.getBoundingClientRect().height - content.getBoundingClientRect().height;
-      const available = scroller.clientHeight - top - paddingTop - paddingBottom - promptMargin - chrome;
-      prompt.style.setProperty("--pin-expanded-max", `${Math.max(0, Math.floor(available))}px`);
+    if (this.prompt && this.content && promptStyle && this.remeasure && !this.expanded) this.measureRest(promptStyle);
+    if (this.prompt && this.content) {
+      const chrome = this.prompt.getBoundingClientRect().height - this.content.getBoundingClientRect().height;
+      const available = this.scroller.clientHeight - top - paddingTop - paddingBottom - promptMargin - chrome;
+      this.prompt.style.setProperty("--pin-expanded-max", `${Math.max(0, Math.floor(available))}px`);
     }
     const canStick =
-      !!prompt &&
-      prompt.getBoundingClientRect().height + promptMargin + top + paddingTop + paddingBottom <= scroller.clientHeight;
-    prompt?.classList.toggle("sticky-disabled", !canStick);
-    const line = scroller.getBoundingClientRect().top + scroller.clientTop + paddingTop + top;
-    const stuck = !!prompt && canStick && scroller.scrollTop > 0 && prompt.getBoundingClientRect().top <= line + 0.5;
-    prompt?.classList.toggle("stuck", stuck);
-    if (!prompt || !content || !promptStyle) return;
-    const edge = anchorEdge();
-    if (!stuck) gap = prompt.getBoundingClientRect().top - edge;
-    condense(stuck && !expanded, line - edge - (gap ?? restingGap(promptStyle)));
-    syncPrompt();
+      !!this.prompt &&
+      this.prompt.getBoundingClientRect().height + promptMargin + top + paddingTop + paddingBottom <=
+        this.scroller.clientHeight;
+    this.prompt?.classList.toggle("sticky-disabled", !canStick);
+    const line = this.scroller.getBoundingClientRect().top + this.scroller.clientTop + paddingTop + top;
+    const stuck =
+      !!this.prompt && canStick && this.scroller.scrollTop > 0 && this.prompt.getBoundingClientRect().top <= line + 0.5;
+    this.prompt?.classList.toggle("stuck", stuck);
+    if (!this.prompt || !this.content || !promptStyle) return;
+    const edge = this.anchorEdge();
+    if (!stuck) this.gap = this.prompt.getBoundingClientRect().top - edge;
+    this.condense(stuck && !this.expanded, line - edge - (this.gap ?? this.restingGap(promptStyle)));
+    this.syncPrompt();
   }
 
-  function anchorEdge(): number {
-    const previous = prompt?.previousElementSibling;
+  private anchorEdge(): number {
+    const previous = this.prompt?.previousElementSibling;
     if (previous) return previous.getBoundingClientRect().bottom;
-    return stack?.getBoundingClientRect().top ?? 0;
+    return this.stack?.getBoundingClientRect().top ?? 0;
   }
 
-  function restingGap(promptStyle: CSSStyleDeclaration): number {
-    const previous = prompt?.previousElementSibling;
+  private restingGap(promptStyle: CSSStyleDeclaration): number {
+    const previous = this.prompt?.previousElementSibling;
     let before = 0;
     if (previous) before = parseFloat(getComputedStyle(previous).marginBottom) || 0;
-    else if (stack) before = parseFloat(getComputedStyle(stack).paddingTop) || 0;
+    else if (this.stack) before = parseFloat(getComputedStyle(this.stack).paddingTop) || 0;
     return before + (parseFloat(promptStyle.marginTop) || 0);
   }
 
-  function measureRest(promptStyle: CSSStyleDeclaration): void {
-    if (!prompt || !content) return;
-    remeasure = false;
-    prompt.classList.remove("pin-condensed");
-    prompt.style.removeProperty("--pin-content-max");
-    prompt.style.setProperty("--pin-rest-height", "0px");
-    contentMax = "";
-    restContent = content.getBoundingClientRect().height;
-    contentHeight = content.scrollHeight;
+  private measureRest(promptStyle: CSSStyleDeclaration): void {
+    if (!this.prompt || !this.content) return;
+    this.remeasure = false;
+    this.prompt.classList.remove("pin-condensed");
+    this.prompt.style.removeProperty("--pin-content-max");
+    this.prompt.style.setProperty("--pin-rest-height", "0px");
+    this.contentMax = "";
+    this.restContent = this.content.getBoundingClientRect().height;
+    this.contentHeight = this.content.scrollHeight;
     const inner =
-      prompt.getBoundingClientRect().height -
+      this.prompt.getBoundingClientRect().height -
       (promptStyle.boxSizing === "border-box"
         ? 0
         : (parseFloat(promptStyle.paddingTop) || 0) + (parseFloat(promptStyle.paddingBottom) || 0));
-    prompt.style.setProperty("--pin-rest-height", `${Math.max(0, inner)}px`);
-    const contentStyle = getComputedStyle(content);
+    this.prompt.style.setProperty("--pin-rest-height", `${Math.max(0, inner)}px`);
+    const contentStyle = getComputedStyle(this.content);
     const lineHeight = parseFloat(contentStyle.lineHeight) || (parseFloat(contentStyle.fontSize) || 0) * 1.5;
-    condensedContent = CONDENSED_LINES * lineHeight;
+    this.condensedContent = CONDENSED_LINES * lineHeight;
   }
 
-  function contentChanged(): boolean {
-    if (!content) return false;
-    return content.scrollHeight !== (prompt?.classList.contains("pin-condensed") ? condensedHeight : contentHeight);
+  private contentChanged(): boolean {
+    if (!this.content) return false;
+    return (
+      this.content.scrollHeight !==
+      (this.prompt?.classList.contains("pin-condensed") ? this.condensedHeight : this.contentHeight)
+    );
   }
 
-  function condense(active: boolean, distance: number): void {
-    if (!prompt || !content) return;
+  private condense(active: boolean, distance: number): void {
+    if (!this.prompt || !this.content) return;
     if (!active) {
-      collapseDistance = 0;
-      geometryDistance = null;
+      this.collapseDistance = 0;
+      this.geometryDistance = null;
     } else {
-      if (geometryDistance === null) collapseDistance = Math.max(0, distance);
-      else if (following) collapseDistance = Math.max(collapseDistance, distance);
-      else collapseDistance = Math.max(0, collapseDistance + distance - geometryDistance);
-      geometryDistance = distance;
+      if (this.geometryDistance === null) this.collapseDistance = Math.max(0, distance);
+      else if (this.following) this.collapseDistance = Math.max(this.collapseDistance, distance);
+      else this.collapseDistance = Math.max(0, this.collapseDistance + distance - this.geometryDistance);
+      this.geometryDistance = distance;
     }
-    distance = collapseDistance;
-    const span = restContent - condensedContent;
+    distance = this.collapseDistance;
+    const span = this.restContent - this.condensedContent;
     const settled = span <= 0.5 || span - distance < 0.5;
-    if (active && settled && !prompt.classList.contains("pin-condensed")) {
-      prompt.classList.add("pin-condensed");
-      condensedHeight = content.scrollHeight;
-    } else if (!(active && settled)) prompt.classList.remove("pin-condensed");
+    if (active && settled && !this.prompt.classList.contains("pin-condensed")) {
+      this.prompt.classList.add("pin-condensed");
+      this.condensedHeight = this.content.scrollHeight;
+    } else if (!(active && settled)) this.prompt.classList.remove("pin-condensed");
     let max = "";
-    if (active) max = `${settled ? condensedContent : restContent - Math.max(0, distance)}px`;
-    if (max === contentMax) return;
-    contentMax = max;
-    if (max) prompt.style.setProperty("--pin-content-max", max);
-    else prompt.style.removeProperty("--pin-content-max");
+    if (active) max = `${settled ? this.condensedContent : this.restContent - Math.max(0, distance)}px`;
+    if (max === this.contentMax) return;
+    this.contentMax = max;
+    if (max) this.prompt.style.setProperty("--pin-content-max", max);
+    else this.prompt.style.removeProperty("--pin-content-max");
   }
 
-  function onScroll(): void {
-    if (!scroller || contentUpdates.size > 0) return;
-    const movingUp = scroller.scrollTop < lastTop;
-    const atBottom = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 1;
-    const resumeFollowing = atBottom && (following || !movingUp);
-    if (!resumeFollowing && movingUp) cancelFollow();
-    lastTop = scroller.scrollTop;
-    syncSticky();
-    if (resumeFollowing) setFollowing(true);
-    if (movingUp) loadEarlier();
+  private readonly onScroll = (): void => {
+    if (!this.scroller || this.contentUpdates.size > 0) return;
+    const movingUp = this.scroller.scrollTop < this.lastTop;
+    const atBottom = this.scroller.scrollHeight - this.scroller.clientHeight - this.scroller.scrollTop <= 1;
+    const resumeFollowing = atBottom && (this.following || !movingUp);
+    if (!resumeFollowing && movingUp) this.cancelFollow();
+    this.lastTop = this.scroller.scrollTop;
+    this.syncSticky();
+    if (resumeFollowing) this.setFollowing(true);
+    if (movingUp) this.loadEarlier();
+  };
+
+  private earlierButton(): HTMLButtonElement | null {
+    return this.scroller?.querySelector<HTMLButtonElement>(".earlier-messages-btn:not(:disabled)") ?? null;
   }
 
-  function earlierButton(): HTMLButtonElement | null {
-    return scroller?.querySelector<HTMLButtonElement>(".earlier-messages-btn:not(:disabled)") ?? null;
-  }
-
-  function loadEarlier(): void {
-    if (!scroller || scroller.scrollTop > NEAR_TOP) return;
-    const button = earlierButton();
+  private loadEarlier(): void {
+    if (!this.scroller || this.scroller.scrollTop > NEAR_TOP) return;
+    const button = this.earlierButton();
     if (!button) return;
-    cancelFollow();
+    this.cancelFollow();
     button.click();
   }
 
-  function fillViewport(): void {
-    const button = earlierButton();
-    if (!button || !scroller || scroller.clientHeight === 0) return;
-    if (scroller.scrollHeight - scroller.clientHeight > NEAR_TOP) return;
-    const size = (stack ?? scroller).getElementsByTagName("*").length;
-    if (size === filledAtSize) return;
-    filledAtSize = size;
+  private fillViewport(): void {
+    const button = this.earlierButton();
+    if (!button || !this.scroller || this.scroller.clientHeight === 0) return;
+    if (this.scroller.scrollHeight - this.scroller.clientHeight > NEAR_TOP) return;
+    const size = (this.stack ?? this.scroller).getElementsByTagName("*").length;
+    if (size === this.filledAtSize) return;
+    this.filledAtSize = size;
     button.click();
   }
 
-  function beforeRender(): void {
-    if (!scroller || contentUpdates.size > 0) return;
-    if (scroller.scrollTop !== lastTop) onScroll();
+  beforeRender(): void {
+    if (!this.scroller || this.contentUpdates.size > 0) return;
+    if (this.scroller.scrollTop !== this.lastTop) this.onScroll();
   }
 
-  function onContentUpdating(event: Event): void {
-    beforeRender();
+  private readonly onContentUpdating = (event: Event): void => {
+    this.beforeRender();
     const completion = (event as CustomEvent<Promise<void>>).detail;
-    contentUpdates.add(completion);
+    this.contentUpdates.add(completion);
     const complete = (): void => {
-      if (contentUpdates.delete(completion) && contentUpdates.size === 0) afterRender();
+      if (this.contentUpdates.delete(completion) && this.contentUpdates.size === 0) this.afterRender();
     };
     void completion.then(complete, complete);
+  };
+
+  afterRender(): void {
+    if (!this.scroller || !this.following || this.contentUpdates.size > 0) return;
+    this.lastTop = this.scroller.scrollTop;
+    if (this.frame !== null) cancelAnimationFrame(this.frame);
+    this.frame = null;
+    this.follow();
   }
 
-  function afterRender(): void {
-    if (!scroller || !following || contentUpdates.size > 0) return;
-    lastTop = scroller.scrollTop;
-    if (frame !== null) cancelAnimationFrame(frame);
-    frame = null;
-    follow();
-  }
+  private readonly onWheel = (event: WheelEvent): void => {
+    if (!this.scroller) return;
+    if (event.deltaY < 0) this.loadEarlier();
+    if (event.deltaY < 0 && this.scroller.scrollTop > 0) this.cancelFollow();
+  };
 
-  function onWheel(event: WheelEvent): void {
-    if (!scroller) return;
-    if (event.deltaY < 0) loadEarlier();
-    if (event.deltaY < 0 && scroller.scrollTop > 0) cancelFollow();
-  }
-
-  function onKeyDown(event: KeyboardEvent): void {
-    if (event.target !== scroller || event.key !== "End" || event.shiftKey || event.altKey) return;
+  private readonly onKeyDown = (event: KeyboardEvent): void => {
+    if (event.target !== this.scroller || event.key !== "End" || event.shiftKey || event.altKey) return;
     event.preventDefault();
-    follow(true);
+    this.follow(true);
+  };
+
+  dispose(): void {
+    if (this.frame !== null) cancelAnimationFrame(this.frame);
+    this.frame = null;
+    this.observer?.disconnect();
+    this.observer = null;
+    this.scroller?.removeEventListener("qm-content-updating", this.onContentUpdating);
+    this.scroller?.removeEventListener("scroll", this.onScroll);
+    this.scroller?.removeEventListener("wheel", this.onWheel);
+    this.scroller?.removeEventListener("click", this.onClick);
+    this.scroller?.removeEventListener("keydown", this.onKeyDown);
+    this.scroller?.style.removeProperty("--chat-sticky-top");
+    this.scroller?.style.removeProperty("overflow-anchor");
+    this.clearPrompt();
+    this.scroller = this.pins = this.prompt = this.stack = this.content = null;
+    this.lastTop = 0;
+    this.following = false;
+    this.filledAtSize = null;
+    this.contentUpdates.clear();
   }
 
-  function dispose(): void {
-    if (frame !== null) cancelAnimationFrame(frame);
-    frame = null;
-    observer?.disconnect();
-    observer = null;
-    scroller?.removeEventListener("qm-content-updating", onContentUpdating);
-    scroller?.removeEventListener("scroll", onScroll);
-    scroller?.removeEventListener("wheel", onWheel);
-    scroller?.removeEventListener("click", onClick);
-    scroller?.removeEventListener("keydown", onKeyDown);
-    scroller?.style.removeProperty("--chat-sticky-top");
-    scroller?.style.removeProperty("overflow-anchor");
-    clearPrompt();
-    scroller = pins = prompt = stack = content = null;
-    lastTop = 0;
-    following = false;
-    filledAtSize = null;
-    contentUpdates.clear();
-  }
-
-  function observe(previous: HTMLElement | null, next: HTMLElement | null): HTMLElement | null {
-    if (previous) observer?.unobserve(previous);
-    if (next) observer?.observe(next);
+  private observe(previous: HTMLElement | null, next: HTMLElement | null): HTMLElement | null {
+    if (previous) this.observer?.unobserve(previous);
+    if (next) this.observer?.observe(next);
     return next;
   }
 
-  function sync(element: HTMLElement | null): void {
+  sync(element: HTMLElement | null): void {
     let changed = false;
-    if (scroller !== element) {
+    if (this.scroller !== element) {
       changed = true;
-      dispose();
-      scroller = element;
-      lastTop = scroller?.scrollTop ?? 0;
-      setFollowing(false);
-      scroller?.addEventListener("qm-content-updating", onContentUpdating);
-      scroller?.addEventListener("scroll", onScroll, { passive: true });
-      scroller?.addEventListener("wheel", onWheel, { passive: true });
-      scroller?.addEventListener("click", onClick);
-      scroller?.addEventListener("keydown", onKeyDown);
+      this.dispose();
+      this.scroller = element;
+      this.lastTop = this.scroller?.scrollTop ?? 0;
+      this.setFollowing(false);
+      this.scroller?.addEventListener("qm-content-updating", this.onContentUpdating);
+      this.scroller?.addEventListener("scroll", this.onScroll, { passive: true });
+      this.scroller?.addEventListener("wheel", this.onWheel, { passive: true });
+      this.scroller?.addEventListener("click", this.onClick);
+      this.scroller?.addEventListener("keydown", this.onKeyDown);
       if (typeof ResizeObserver !== "undefined") {
-        observer = new ResizeObserver((entries = []) => {
-          if (entries.some((entry) => entry.target === scroller) || contentChanged()) remeasure = true;
-          beforeRender();
-          syncSticky();
-          follow();
-          fillViewport();
+        this.observer = new ResizeObserver((entries = []) => {
+          if (entries.some((entry) => entry.target === this.scroller) || this.contentChanged()) this.remeasure = true;
+          this.beforeRender();
+          this.syncSticky();
+          this.follow();
+          this.fillViewport();
         });
-        if (scroller) observer.observe(scroller);
+        if (this.scroller) this.observer.observe(this.scroller);
       }
     }
-    const nextStack = scroller?.querySelector<HTMLElement>(".message-stack") ?? null;
-    if (stack !== nextStack) {
+    const nextStack = this.scroller?.querySelector<HTMLElement>(".message-stack") ?? null;
+    if (this.stack !== nextStack) {
       changed = true;
-      filledAtSize = null;
-      stack = observe(stack, nextStack);
+      this.filledAtSize = null;
+      this.stack = this.observe(this.stack, nextStack);
     }
-    const nextPins = scroller?.querySelector<HTMLElement>(".pinned-strip") ?? null;
-    const prompts = stack?.querySelectorAll<HTMLElement>(":scope > .user-row");
-    const pinPrompt = options.pinPrompt?.() ?? true;
+    const nextPins = this.scroller?.querySelector<HTMLElement>(".pinned-strip") ?? null;
+    const prompts = this.stack?.querySelectorAll<HTMLElement>(":scope > .user-row");
+    const pinPrompt = this.options.pinPrompt?.() ?? true;
     const nextPrompt = pinPrompt ? (prompts?.item(prompts.length - 1) ?? null) : null;
-    if (pins !== nextPins) {
+    if (this.pins !== nextPins) {
       changed = true;
-      pins = observe(pins, nextPins);
+      this.pins = this.observe(this.pins, nextPins);
     }
-    if (prompt !== nextPrompt || promptKey !== nextPrompt?.dataset.index) {
+    if (this.prompt !== nextPrompt || this.promptKey !== nextPrompt?.dataset.index) {
       changed = true;
-      clearPrompt();
-      prompt = observe(prompt, nextPrompt);
-      promptKey = prompt?.dataset.index;
+      this.clearPrompt();
+      this.prompt = this.observe(this.prompt, nextPrompt);
+      this.promptKey = this.prompt?.dataset.index;
     }
-    prompt?.classList.add("latest-prompt");
-    const nextContent = prompt?.querySelector<HTMLElement>(".pin-content") ?? null;
-    if (content !== nextContent) {
+    this.prompt?.classList.add("latest-prompt");
+    const nextContent = this.prompt?.querySelector<HTMLElement>(".pin-content") ?? null;
+    if (this.content !== nextContent) {
       changed = true;
-      remeasure = true;
-      content = observe(content, nextContent);
+      this.remeasure = true;
+      this.content = this.observe(this.content, nextContent);
     }
-    if (changed) syncSticky();
-    fillViewport();
+    if (changed) this.syncSticky();
+    this.fillViewport();
   }
 
-  function follow(force = false): void {
+  follow(force = false): void {
     if (force) {
-      setFollowing(true);
-      lastTop = scroller?.scrollTop ?? 0;
-      if (frame !== null) cancelAnimationFrame(frame);
-      frame = null;
+      this.setFollowing(true);
+      this.lastTop = this.scroller?.scrollTop ?? 0;
+      if (this.frame !== null) cancelAnimationFrame(this.frame);
+      this.frame = null;
     }
-    if (!scroller || !following || contentUpdates.size > 0 || frame !== null) return;
-    const element = scroller;
+    if (!this.scroller || !this.following || this.contentUpdates.size > 0 || this.frame !== null) return;
+    const element = this.scroller;
     const priorTop = element.scrollTop;
-    frame = requestAnimationFrame(() => {
-      frame = null;
-      if (element !== scroller || !element.isConnected || !following || contentUpdates.size > 0) return;
+    this.frame = requestAnimationFrame(() => {
+      this.frame = null;
+      if (element !== this.scroller || !element.isConnected || !this.following || this.contentUpdates.size > 0) return;
       if (element.scrollTop < priorTop && element.scrollHeight - element.clientHeight - element.scrollTop > 1)
-        return cancelFollow();
+        return this.cancelFollow();
       element.scrollTop = element.scrollHeight;
-      lastTop = scroller?.scrollTop ?? 0;
-      syncSticky();
+      this.lastTop = this.scroller?.scrollTop ?? 0;
+      this.syncSticky();
     });
   }
 
-  function refresh(): void {
-    if (scroller) sync(scroller);
+  refresh(): void {
+    if (this.scroller) this.sync(this.scroller);
   }
+}
 
-  return { sync, refresh, follow, cancelFollow, beforeRender, afterRender, dispose };
+export function createTranscriptViewport(options: { pinPrompt?: () => boolean } = {}) {
+  return new TranscriptViewport(options);
 }
