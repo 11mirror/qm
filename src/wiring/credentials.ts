@@ -2,13 +2,11 @@ import type { StoresModule } from "./stores.ts";
 import type { FilesModule } from "./files.ts";
 import type { DeploymentLayerModule } from "./deployment-layer.ts";
 import type { Head } from "./late.ts";
+import { tenantConfig } from "../tenants/tenant-config.ts";
+import { tenantSecretKey } from "../credentials/tenant-secret-key.ts";
 import { createEnvSecretSource } from "../credentials/secret-source.ts";
 import { type OAuthClientResolver, withPublicOAuthClients, makeRefresh } from "../connectors/oauth.ts";
-import {
-  createConnectorClientResolver,
-  deriveConnectorKey,
-  type SecretKey,
-} from "../connectors/connector-client-store.ts";
+import { createConnectorClientResolver, deriveConnectorKey } from "../connectors/connector-client-store.ts";
 import { scopeId } from "../types.ts";
 import type { Keychain, OAuthToken } from "../credentials/keychain.ts";
 import { createKeychain } from "../credentials/create-keychain.ts";
@@ -45,14 +43,15 @@ export function buildCredentials(deps: CredentialsInputs) {
       secrets: secretSource,
     }),
   );
-  const signingSecretCredentialKey =
-    config.signingSecret && config.signingSecret !== connectorSecretKey
-      ? deriveConnectorKey(config.signingSecret, "keychain")
-      : undefined;
-  const credentialKey: SecretKey = {
-    ...deriveConnectorKey(connectorSecretKey, "keychain"),
-    ...(signingSecretCredentialKey ? { fallbacks: [signingSecretCredentialKey] } : {}),
-  };
+  const credentialKey = tenantSecretKey(() => {
+    const { signingSecret, connectorSecretKey: tenantKey = connectorSecretKey } = tenantConfig(config);
+    const signingSecretCredentialKey =
+      signingSecret && signingSecret !== tenantKey ? deriveConnectorKey(signingSecret, "keychain") : undefined;
+    return {
+      ...deriveConnectorKey(tenantKey, "keychain"),
+      ...(signingSecretCredentialKey ? { fallbacks: [signingSecretCredentialKey] } : {}),
+    };
+  });
   const credentialStore: Keychain = createKeychain({
     store: createKeychainStore(databaseUrl),
     key: credentialKey,
@@ -108,11 +107,10 @@ export function buildCredentials(deps: CredentialsInputs) {
     servers: mcpServers,
     audit: auditLog,
     userTokens: keychain,
-    ...(config.publicWebUrl
-      ? {
-          signInUrl: (id: string) => `${config.publicWebUrl!}/connect/${encodeURIComponent(id)}/self-connect`,
-        }
-      : {}),
+    signInUrl: (id: string) => {
+      const base = tenantConfig(config).publicWebUrl;
+      return base ? `${base}/connect/${encodeURIComponent(id)}/self-connect` : undefined;
+    },
   });
   const browserSessionStore: BrowserSessionStore = createBrowserSessionStore({
     databaseUrl,

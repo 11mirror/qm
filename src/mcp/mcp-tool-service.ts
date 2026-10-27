@@ -170,7 +170,7 @@ interface McpToolServiceOptions {
   userTokens?: Pick<ConnectorTokenStore, "connectorAccessToken" | "connectorTokenStatus">;
   now?: () => number;
   refreshIntervalMs?: number;
-  signInUrl?: (serverId: string) => string;
+  signInUrl?: (serverId: string) => string | undefined;
 }
 
 interface McpToolState {
