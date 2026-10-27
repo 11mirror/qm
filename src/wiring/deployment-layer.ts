@@ -1,3 +1,4 @@
+import type { StoresModule } from "./stores.ts";
 import type { Head } from "./late.ts";
 import { loadDeploymentLayer, emptyDeploymentLayer } from "../deployment/load-layer.ts";
 import { resolve } from "node:path";
@@ -12,10 +13,12 @@ import {
 import { installSeedSkills } from "../skills/seed.ts";
 import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
 import { reportFailureAs } from "../util/errors.ts";
-import type { StoresModule } from "./stores.ts";
 
-export function buildDeploymentLayer(w: Head & StoresModule) {
-  const { config, databaseUrl, skills, skillBundles, advisoryLock } = w;
+type DeploymentLayerInputs = Pick<Head, "config"> & { stores: StoresModule };
+
+export function buildDeploymentLayer(deps: DeploymentLayerInputs) {
+  const { config } = deps;
+  const { databaseUrl, skills, skillBundles, advisoryLock } = deps.stores;
 
   const deploymentLayer = config.deploymentLayerDir
     ? loadDeploymentLayer(config.deploymentLayerDir)
@@ -51,7 +54,6 @@ export function buildDeploymentLayer(w: Head & StoresModule) {
         }
       : {}),
   });
-  // Every instance re-applies the layer when any instance publishes one, and after a missed notification.
   const deploymentLayerChanged = createPostgresNotifyBus<null>(databaseUrl, "deployment_layer", "deployment layer");
   const deploymentLayerStore: DeploymentLayerStore = {
     ...layerStore,

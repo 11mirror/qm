@@ -1,4 +1,10 @@
-import type { Head } from "./late.ts";
+import type { RunsModule } from "./runs.ts";
+import type { ApiAppModule } from "./api-app.ts";
+import type { StoresModule } from "./stores.ts";
+import type { OrchestratorModule } from "./orchestrator.ts";
+import type { OutboundModule } from "./outbound.ts";
+import type { HarnessModule } from "./harness.ts";
+import type { CredentialsModule } from "./credentials.ts";
 import { swallowAs } from "../util/errors.ts";
 import { type Session, scopeId } from "../types.ts";
 import { sessionTreeWorking, stoppableAncestors } from "../subagents/tree.ts";
@@ -6,44 +12,25 @@ import type { Run } from "../runs/run-store.ts";
 import { deliverSubagentMail } from "../subagents/mail.ts";
 import { isSubagentThreadRef } from "../sessions/thread-ref.ts";
 import { createSurfaceContextPuller } from "../api/surface-context-puller.ts";
-import type { RunsModule } from "./runs.ts";
-import type { AppServicesModule } from "./app-services.ts";
-import type { ApiAppModule } from "./api-app.ts";
-import type { StoresModule } from "./stores.ts";
-import type { SessionSyscallsModule } from "./session-syscalls.ts";
-import type { OutboundModule } from "./outbound.ts";
-import type { HarnessModule } from "./harness.ts";
-import type { OrchestratorModule } from "./orchestrator.ts";
-import type { CredentialsModule } from "./credentials.ts";
 
-export function buildSessionReturns(
-  w: Head &
-    RunsModule &
-    AppServicesModule &
-    ApiAppModule &
-    StoresModule &
-    SessionSyscallsModule &
-    OutboundModule &
-    HarnessModule &
-    OrchestratorModule &
-    CredentialsModule,
-) {
-  const {
-    runs,
-    app,
-    sessions,
-    sessionStateBus,
-    blockingApprovalSessions,
-    advisoryLock,
-    maxAttempts,
-    sessionMailbox,
-    prepareSessionRequest,
-    featureFlags,
-    outbound,
-    runSignals,
-    orchestratorDeps,
-    keychain,
-  } = w;
+type SessionReturnsInputs = {
+  runs: RunsModule;
+  apiApp: ApiAppModule;
+  stores: StoresModule;
+  orchestrator: OrchestratorModule;
+  outbound: OutboundModule;
+  harness: HarnessModule;
+  credentials: CredentialsModule;
+};
+
+export function buildSessionReturns(deps: SessionReturnsInputs) {
+  const { runs, sessionStateBus, blockingApprovalSessions, maxAttempts } = deps.runs;
+  const { app } = deps.apiApp;
+  const { sessions, advisoryLock, featureFlags, every } = deps.stores;
+  const { sessionMailbox, prepareSessionRequest, orchestratorDeps } = deps.orchestrator;
+  const { outbound } = deps.outbound;
+  const { runSignals } = deps.harness;
+  const { keychain } = deps.credentials;
 
   runs.onTerminal((run) => {
     void app.replayOrphanedRunSignals(run.id).catch(swallowAs("wake: orphaned-signal replay", undefined));
@@ -117,7 +104,7 @@ export function buildSessionReturns(
           keychain.connectorAccessToken("slack.com", viewer, "company"))
         : null,
   });
-  return { sweepSessionReturns };
+  every("session-return-sweep", 1_000, sweepSessionReturns);
 }
 
 export type SessionReturnsModule = ReturnType<typeof buildSessionReturns>;

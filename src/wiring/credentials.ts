@@ -1,3 +1,6 @@
+import type { StoresModule } from "./stores.ts";
+import type { FilesModule } from "./files.ts";
+import type { DeploymentLayerModule } from "./deployment-layer.ts";
 import type { Head } from "./late.ts";
 import { createEnvSecretSource } from "../credentials/secret-source.ts";
 import { type OAuthClientResolver, withPublicOAuthClients, makeRefresh } from "../connectors/oauth.ts";
@@ -7,26 +10,32 @@ import {
   type SecretKey,
 } from "../connectors/connector-client-store.ts";
 import { scopeId } from "../types.ts";
-import { type Keychain, type OAuthToken } from "../credentials/keychain.ts";
+import type { Keychain, OAuthToken } from "../credentials/keychain.ts";
 import { createKeychain } from "../credentials/create-keychain.ts";
 import { createKeychainStore } from "../credentials/keychain-store.ts";
 import { refreshChatGPTTokens, refreshClaudeTokens } from "../model/subscription-oauth.ts";
 import { createUserModelCredentialStore } from "../model/user-model-credential-store.ts";
 import { withDeploymentCredentials } from "../credentials/deployment-credentials.ts";
 import type { Config } from "../config.ts";
-import { errMessage } from "../util/errors.ts";
+import { errMessage, reportFailureAs } from "../util/errors.ts";
 import { createMcpToolService } from "../mcp/mcp-tool-service.ts";
 import { type BrowserSessionStore, createBrowserSessionStore } from "../connectors/browser-session-store.ts";
 import { type ConsentLinkStore, createConsentLinkStore } from "../connectors/consent-link.ts";
 import { type OAuthFlowStore, createOAuthFlowStore } from "../connectors/oauth-flow-store.ts";
 import { type SecretDropStore, createSecretDropStore } from "../credentials/secret-drop.ts";
 import { createModelGateway } from "../model/model-gateway.ts";
-import type { StoresModule } from "./stores.ts";
-import type { FilesModule } from "./files.ts";
-import type { DeploymentLayerModule } from "./deployment-layer.ts";
 
-export function buildCredentials(w: Head & StoresModule & FilesModule & DeploymentLayerModule) {
-  const { overrides, configStore, config, connectorSecretKey, databaseUrl, advisoryLock, mcpServers, auditLog } = w;
+type CredentialsInputs = Pick<Head, "overrides" | "config" | "connectorSecretKey"> & {
+  stores: StoresModule;
+  files: FilesModule;
+  deploymentLayer: DeploymentLayerModule;
+};
+
+export function buildCredentials(deps: CredentialsInputs) {
+  const { overrides, config, connectorSecretKey } = deps;
+  const { configStore, databaseUrl, advisoryLock, identity } = deps.stores;
+  const { mcpServers } = deps.files;
+  const { auditLog, deploymentLayerStore, installCatalogs } = deps.deploymentLayer;
 
   const secretSource = createEnvSecretSource(overrides.env);
   const resolveClient: OAuthClientResolver = withPublicOAuthClients(
@@ -50,8 +59,6 @@ export function buildCredentials(w: Head & StoresModule & FilesModule & Deployme
     lock: advisoryLock,
     refreshConnector: (() => {
       const base = makeRefresh({ resolveClient });
-      // AI subscription logins ride the same connector-refresh machinery:
-      // the keychain calls this single-flight when a token is stale.
       return async (host: string, token: OAuthToken, ctx?: { accountType?: string; clientRef?: string }) => {
         if (token.refreshToken && host === "auth.openai.com") {
           const fresh = await refreshChatGPTTokens(token.refreshToken);
@@ -78,9 +85,6 @@ export function buildCredentials(w: Head & StoresModule & FilesModule & Deployme
     ...(fresh.accountId ? { accountId: fresh.accountId } : {}),
     ...(fresh.expiresAt !== undefined ? { expiresAt: fresh.expiresAt } : {}),
   });
-  // Per-user AI accounts live in the keychain itself (unified custody):
-  // same encryption, ownership, admin visibility, and removal flows as
-  // every other personal credential.
   const userModelCredentials = createUserModelCredentialStore({ keychain: credentialStore });
   const keychain: Keychain = credentialStore;
   const serviceCreds = withDeploymentCredentials(
@@ -119,8 +123,29 @@ export function buildCredentials(w: Head & StoresModule & FilesModule & Deployme
   const oauthFlows: OAuthFlowStore = createOAuthFlowStore(databaseUrl);
   const secretDrops: SecretDropStore = createSecretDropStore(databaseUrl);
   const modelGateway = createModelGateway();
+  let started: { ready: Promise<void>; skillsReady: Promise<void> } | undefined;
+  const startOnce = () => {
+    if (started) return started;
+    const layerReady = deploymentLayerStore.hydrate();
+    const layerSettled = layerReady.then(() => undefined, reportFailureAs("startup: deployment layer", undefined));
+    const skillsReady = config.seedSkills
+      ? Promise.all([
+          installCatalogs().catch(reportFailureAs("startup: install seed skills", undefined)),
+          layerSettled,
+        ]).then(() => undefined)
+      : layerSettled;
+    if (config.brokerCredentials?.length) warnShadowedBrokerCredentials(config.brokerCredentials);
+    const identityReady = identity.hydrate();
+    const configReady = configStore.hydrate?.();
+    identityReady.catch(reportFailureAs("startup: hydrate identity", undefined));
+    configReady?.catch(reportFailureAs("startup: hydrate configuration", undefined));
+    const ready = Promise.all([identityReady, configReady, layerReady]).then(() => {});
+    ready.catch(() => {});
+    started = { ready, skillsReady };
+    return started;
+  };
+  const skillsReady: PromiseLike<void> = { then: (resolve, reject) => startOnce().skillsReady.then(resolve, reject) };
   return {
-    warnShadowedBrokerCredentials,
     keychain,
     serviceCreds,
     userModelCredentials,
@@ -132,6 +157,8 @@ export function buildCredentials(w: Head & StoresModule & FilesModule & Deployme
     oauthFlows,
     secretDrops,
     browserSessionStore,
+    skillsReady,
+    startOnce,
   };
 }
 

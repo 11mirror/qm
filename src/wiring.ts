@@ -11,7 +11,6 @@ import { type DirectFileUploads } from "./files/direct-file-upload.ts";
 import { type SandboxResources } from "./sandbox/sandbox-resources.ts";
 import { type AwsRoleBroker } from "./auth/aws-role-broker.ts";
 import type { SessionShareStore } from "./sessions/session-share.ts";
-import { mkdirSync } from "node:fs";
 import { companySubscriptionAuth, configuredModel, providerKeysPresent, type Config } from "./config.ts";
 import type { ServerDeps } from "./api/deps.ts";
 import { type IdentityService } from "./identity/identity-service.ts";
@@ -25,7 +24,6 @@ import { type SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import type { UiStateStore } from "./surfaces/ui-state.ts";
 import { slackUserClientFactory } from "./inbox/sources/slack.ts";
-import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
 import { type AdvisoryLock } from "./persistence/advisory-lock.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { type AppPageViewLog } from "./deploy/page-views.ts";
@@ -98,33 +96,23 @@ import { errMessage } from "./util/errors.ts";
 import { sleep } from "./util/async.ts";
 import { type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 
-import type { Gates, Head, Late } from "./wiring/late.ts";
+import type { Gates, Late } from "./wiring/late.ts";
 
 import { buildStores } from "./wiring/stores.ts";
-
-import { buildModelCredentials } from "./wiring/model-credentials.ts";
 
 import { buildDeploymentLayer } from "./wiring/deployment-layer.ts";
 
 import { buildFiles } from "./wiring/files.ts";
 
-import { buildSandboxBackends } from "./wiring/sandbox-backends.ts";
-
 import { buildSandbox } from "./wiring/sandbox.ts";
 
 import { buildCredentials } from "./wiring/credentials.ts";
 
-import { buildModelKeys } from "./wiring/model-keys.ts";
-
 import { buildHarness } from "./wiring/harness.ts";
-
-import { buildStartup } from "./wiring/startup.ts";
 
 import { buildMemory } from "./wiring/memory.ts";
 
 import { buildRuns } from "./wiring/runs.ts";
-
-import { buildRunStreams } from "./wiring/run-streams.ts";
 
 import { buildOutbound } from "./wiring/outbound.ts";
 
@@ -134,15 +122,9 @@ import { registerLegacyMigrations } from "./wiring/legacy-migrations.ts";
 
 import { buildCrons } from "./wiring/crons.ts";
 
-import { buildSessionSyscalls } from "./wiring/session-syscalls.ts";
-
 import { buildOrchestrator } from "./wiring/orchestrator.ts";
 
-import { buildAppServices } from "./wiring/app-services.ts";
-
 import { buildApiApp } from "./wiring/api-app.ts";
-
-import { buildTriggers } from "./wiring/triggers.ts";
 
 import { buildSlackCore } from "./wiring/slack-core.ts";
 
@@ -153,8 +135,6 @@ import { buildScheduler } from "./wiring/scheduler.ts";
 import { buildReceivers } from "./wiring/receivers.ts";
 
 import { buildWorkers } from "./wiring/workers.ts";
-
-import { registerEveryJobs } from "./wiring/every-jobs.ts";
 
 import { buildBackground } from "./wiring/background.ts";
 
@@ -206,7 +186,6 @@ export function stopWithBackstop(
 
 export interface BuiltApp {
   checkReadiness: (signal: AbortSignal) => Promise<void>;
-  /** Startup I/O (store hydration, deployment layer, skill seeding); buildApp itself only constructs. */
   start: () => Promise<void>;
   backgroundOwnership?: BackgroundOwnershipControl;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
@@ -246,7 +225,6 @@ export interface BuiltApp {
   skillFetcher: SkillPackFetcher;
   auditLog: AuditLog;
   scheduler: Scheduler;
-  /** Resolve expired keychain asks now (the `cron:asks` job runs it every few seconds). */
   sweepAsks(now: number): Promise<void>;
   inbox: InboxServiceDeps;
   webhookReceiver: WebhookReceiver;
@@ -306,8 +284,7 @@ export interface AppOverrides {
   env?: NodeJS.ProcessEnv;
 }
 
-export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp {
-  // Switches the background lifecycle flips at runtime; modules read them through this object.
+function lifecycleState(config: Config) {
   const gates: Gates = {
     backgroundAdmission: () => !config.backgroundDeploymentId,
     backgroundActive: () => false,
@@ -316,57 +293,123 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
   const admittedWork = createAdmittedWork({
     canStart: () => !config.backgroundDeploymentId || gates.backgroundAdmission(),
   });
-  // Values built later in buildApp that earlier modules reach through closures.
-  const late = {} as Late;
+  return { gates, admittedWork, late: {} as Late };
+}
+
+export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp {
+  const { gates, admittedWork, late } = lifecycleState(config);
   const databaseUrl = config.databaseUrl;
   if (!databaseUrl) throw new Error("DATABASE_URL is required: QM keeps all state in Postgres");
   const connectorSecretKey = config.connectorSecretKey;
   if (!connectorSecretKey) throw new Error("CONNECTOR_SECRET_KEY is required");
-  configurePgPooling({
-    databaseUrl,
-    // Tenancy sets qm.tenant_id per session, which a transaction-mode pooler would leak between clients.
-    ...(config.databasePoolUrl && !config.multitenant ? { poolUrl: config.databasePoolUrl } : {}),
-    ...(config.databasePoolCaCert ? { caCert: config.databasePoolCaCert } : {}),
-    ...(config.databasePoolMax !== undefined ? { queryMax: config.databasePoolMax } : {}),
-    ...(config.databaseDirectPoolMax !== undefined ? { sessionMax: config.databaseDirectPoolMax } : {}),
-    tenancy: config.multitenant,
+  const stores = buildStores({ databaseUrl, config, connectorSecretKey, admittedWork });
+  const files = buildFiles({ config, stores });
+  const deploymentLayer = buildDeploymentLayer({ config, stores });
+  const sandbox = buildSandbox({ config, late, stores, files, deploymentLayer });
+  const credentials = buildCredentials({ overrides, config, connectorSecretKey, stores, files, deploymentLayer });
+  const harness = buildHarness({ config, overrides, connectorSecretKey, stores, credentials, deploymentLayer });
+  const memory = buildMemory({ late, config, stores, harness, files });
+  const runs = buildRuns({ config, late, stores, files, sandbox });
+  const outbound = buildOutbound({ config, late, stores, runs });
+  const deploy = buildDeploy({ config, stores, files, sandbox, outbound, runs, deploymentLayer, credentials });
+  const crons = buildCrons({ late, config, overrides, runs, stores, outbound });
+  registerLegacyMigrations({ stores });
+  const orchestrator = buildOrchestrator({
+    late,
+    config,
+    overrides,
+    stores,
+    outbound,
+    deploymentLayer,
+    runs,
+    harness,
+    files,
+    credentials,
+    sandbox,
+    memory,
+    deploy,
+    crons,
   });
-  configurePgCaTrust({
-    ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),
-    ...(config.databaseCaCertFile ? { certFile: config.databaseCaCertFile } : {}),
+  const apiApp = buildApiApp({
+    late,
+    config,
+    admittedWork,
+    gates,
+    overrides,
+    connectorSecretKey,
+    stores,
+    harness,
+    runs,
+    outbound,
+    crons,
+    credentials,
+    deploymentLayer,
+    orchestrator,
+    files,
+    deploy,
+    sandbox,
   });
-  mkdirSync(config.dataDir, { recursive: true });
-  const w0: Head = { config, overrides, gates, admittedWork, late, databaseUrl, connectorSecretKey };
-  const w1 = { ...w0, ...buildStores(w0) };
-  const w2 = { ...w1, ...buildModelCredentials(w1) };
-  const w3 = { ...w2, ...buildFiles(w2) };
-  const w4 = { ...w3, ...buildDeploymentLayer(w3) };
-  const w5 = { ...w4, ...buildSandboxBackends(w4) };
-  const w6 = { ...w5, ...buildSandbox(w5) };
-  const w7 = { ...w6, ...buildCredentials(w6) };
-  const w8 = { ...w7, ...buildModelKeys(w7) };
-  const w9 = { ...w8, ...buildHarness(w8) };
-  const w10 = { ...w9, ...buildStartup(w9) };
-  const w11 = { ...w10, ...buildMemory(w10) };
-  const w12 = { ...w11, ...buildRuns(w11) };
-  const w13 = { ...w12, ...buildRunStreams(w12) };
-  const w14 = { ...w13, ...buildOutbound(w13) };
-  const w15 = { ...w14, ...buildDeploy(w14) };
-  const w16 = { ...w15, ...buildCrons(w15) };
-  registerLegacyMigrations(w16);
-  const w17 = { ...w16, ...buildSessionSyscalls(w16) };
-  const w18 = { ...w17, ...buildOrchestrator(w17) };
-  const w19 = { ...w18, ...buildAppServices(w18) };
-  const w20 = { ...w19, ...buildApiApp(w19) };
-  const w21 = { ...w20, ...buildTriggers(w20) };
-  const w22 = { ...w21, ...buildSlackCore(w21) };
-  const w23 = { ...w22, ...buildSessionReturns(w22) };
-  const w24 = { ...w23, ...buildScheduler(w23) };
-  const w25 = { ...w24, ...buildReceivers(w24) };
-  const w26 = { ...w25, ...buildWorkers(w25) };
-  registerEveryJobs(w26);
-  const w27 = { ...w26, ...buildBackground(w26) };
-  return assembleBuiltApp(w27);
+  const slackCore = buildSlackCore({
+    config,
+    crons,
+    credentials,
+    apiApp,
+    stores,
+    deploymentLayer,
+    outbound,
+    memory,
+    orchestrator,
+    runs,
+    harness,
+    files,
+  });
+  buildSessionReturns({ runs, apiApp, stores, orchestrator, outbound, harness, credentials });
+  const scheduler = buildScheduler({
+    late,
+    admittedWork,
+    config,
+    overrides,
+    memory,
+    crons,
+    stores,
+    apiApp,
+    orchestrator,
+    harness,
+  });
+  const receivers = buildReceivers({ admittedWork, sandbox, runs, credentials, crons, apiApp, stores });
+  const workers = buildWorkers({ config, gates, late, stores, runs, orchestrator, files, sandbox, receivers });
+  const background = buildBackground({
+    admittedWork,
+    gates,
+    config,
+    workers,
+    stores,
+    memory,
+    files,
+    runs,
+    harness,
+    deploymentLayer,
+  });
+  return assembleBuiltApp({
+    config,
+    apiApp,
+    stores,
+    orchestrator,
+    deploymentLayer,
+    credentials,
+    runs,
+    harness,
+    background,
+    files,
+    scheduler,
+    receivers,
+    crons,
+    workers,
+    memory,
+    outbound,
+    slackCore,
+    sandbox,
+  });
 }
 
 export function serverDeps(

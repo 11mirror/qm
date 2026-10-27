@@ -1,32 +1,31 @@
+import type { WorkersModule } from "./workers.ts";
+import type { StoresModule } from "./stores.ts";
+import type { MemoryModule } from "./memory.ts";
+import type { FilesModule } from "./files.ts";
+import type { RunsModule } from "./runs.ts";
+import type { HarnessModule } from "./harness.ts";
+import type { DeploymentLayerModule } from "./deployment-layer.ts";
 import type { Head } from "./late.ts";
 import { swallowAs, reportFailureAs } from "../util/errors.ts";
 import { withTimeout } from "../util/async.ts";
 import type { Runtime } from "../wiring.ts";
-import type { AppServicesModule } from "./app-services.ts";
-import type { SessionReturnsModule } from "./session-returns.ts";
-import type { WorkersModule } from "./workers.ts";
-import type { SchedulerModule } from "./scheduler.ts";
-import type { MemoryModule } from "./memory.ts";
-import type { FilesModule } from "./files.ts";
-import type { RunStreamsModule } from "./run-streams.ts";
-import type { RunsModule } from "./runs.ts";
-import type { HarnessModule } from "./harness.ts";
-import type { DeploymentLayerModule } from "./deployment-layer.ts";
 
-type BackgroundInputs = Head &
-  AppServicesModule &
-  SessionReturnsModule &
-  WorkersModule &
-  SchedulerModule &
-  MemoryModule &
-  FilesModule &
-  RunStreamsModule &
-  RunsModule &
-  HarnessModule &
-  DeploymentLayerModule;
+type BackgroundInputs = Pick<Head, "admittedWork" | "gates" | "config"> & {
+  workers: WorkersModule;
+  stores: StoresModule;
+  memory: MemoryModule;
+  files: FilesModule;
+  runs: RunsModule;
+  harness: HarnessModule;
+  deploymentLayer: DeploymentLayerModule;
+};
 
-export function buildBackground(w: BackgroundInputs) {
-  const { admittedWork, drain, turnRunner, jobs, semanticMemory, gates, blobTransfer, config } = w;
+export function buildBackground(deps: BackgroundInputs) {
+  const { admittedWork, gates, config } = deps;
+  const { drain, turnRunner } = deps.workers;
+  const { jobs } = deps.stores;
+  const { semanticMemory } = deps.memory;
+  const { blobTransfer } = deps.files;
 
   let backgroundRunning = false;
   let backgroundStopping: Promise<void> | null = null;
@@ -112,7 +111,7 @@ export function buildBackground(w: BackgroundInputs) {
       ]).catch(swallowAs("wiring: background drain failed", undefined));
       await releaseInFlightRuns();
       await drain.stop();
-      await closeEventStores(w);
+      await closeEventStores(deps);
     },
   };
   return { runtime };
@@ -120,25 +119,22 @@ export function buildBackground(w: BackgroundInputs) {
 
 export type BackgroundModule = ReturnType<typeof buildBackground>;
 
-/** Final shutdown step: stop the stream sync, close every event store, then flush memory and the error log. */
-async function closeEventStores(w: BackgroundInputs): Promise<void> {
+async function closeEventStores(deps: BackgroundInputs): Promise<void> {
+  const { semanticMemory } = deps.memory;
   const {
-    semanticMemory,
     stopStreamSync,
     runs,
-    runSignals,
     turnLedger,
-    turnReady,
     contextRequestEvents,
-    turnCancels,
-    turnYields,
     sessionStateBus,
     ledgerEventBus,
-    deploymentLayerChanged,
     runActivity,
     runStreamEvents,
-    errors,
-  } = w;
+  } = deps.runs;
+  const { runSignals } = deps.harness;
+  const { turnReady, turnCancels, turnYields } = deps.workers;
+  const { deploymentLayerChanged } = deps.deploymentLayer;
+  const { errors } = deps.files;
   stopStreamSync();
   await Promise.all(
     [

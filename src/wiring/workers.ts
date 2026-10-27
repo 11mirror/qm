@@ -1,3 +1,9 @@
+import type { StoresModule } from "./stores.ts";
+import type { RunsModule } from "./runs.ts";
+import type { OrchestratorModule } from "./orchestrator.ts";
+import type { FilesModule } from "./files.ts";
+import type { SandboxModule } from "./sandbox.ts";
+import type { ReceiversModule } from "./receivers.ts";
 import type { Head } from "./late.ts";
 import { type BackgroundOwnershipControl, createBackgroundOwnershipStore } from "../runs/background-ownership.ts";
 import { randomUUID } from "node:crypto";
@@ -11,43 +17,34 @@ import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
 import { TURN_READY_CHANNEL, TURN_CANCEL_CHANNEL, TURN_YIELD_CHANNEL } from "../turns/turn-ledger.ts";
 import { createTurnRunner, RUN_MAX_CLAIMS } from "../turns/turn-runner.ts";
 import { TURN_QUEUES } from "../turns/absurd-schema.ts";
-import { type ProcessReaper, createProcessReaper, createReaperKillHook } from "../processes/process-reaper.ts";
+import {
+  type ProcessReaper,
+  createProcessReaper,
+  createReaperKillHook,
+  PROCESS_REAPER_INTERVAL_MS,
+} from "../processes/process-reaper.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
 import { createJobComputerSweep } from "../processes/job-computers.ts";
 import { errMessage } from "../util/errors.ts";
 import { createComposioReturns } from "../connectors/composio-links.ts";
-import type { StoresModule } from "./stores.ts";
-import type { RunsModule } from "./runs.ts";
-import type { OrchestratorModule } from "./orchestrator.ts";
-import type { FilesModule } from "./files.ts";
-import type { RunStreamsModule } from "./run-streams.ts";
-import type { SandboxModule } from "./sandbox.ts";
-import type { ReceiversModule } from "./receivers.ts";
 
-export function buildWorkers(
-  w: Head &
-    StoresModule &
-    RunsModule &
-    OrchestratorModule &
-    FilesModule &
-    RunStreamsModule &
-    SandboxModule &
-    ReceiversModule,
-) {
-  const {
-    config,
-    gates,
-    pgPool,
-    turnLedger,
-    late,
-    databaseUrl,
-    orchestrator,
-    errors,
-    processes,
-    sandbox,
-    sandboxResources,
-    finishCredentials,
-  } = w;
+type WorkersInputs = Pick<Head, "config" | "gates" | "late"> & {
+  stores: StoresModule;
+  runs: RunsModule;
+  orchestrator: OrchestratorModule;
+  files: FilesModule;
+  sandbox: SandboxModule;
+  receivers: ReceiversModule;
+};
+
+export function buildWorkers(deps: WorkersInputs) {
+  const { config, gates, late } = deps;
+  const { pgPool, databaseUrl, every } = deps.stores;
+  const { turnLedger, processes } = deps.runs;
+  const { orchestrator } = deps.orchestrator;
+  const { errors } = deps.files;
+  const { sandbox, sandboxResources } = deps.sandbox;
+  const { finishCredentials } = deps.receivers;
 
   const backgroundOwnership: BackgroundOwnershipControl | undefined = config.backgroundDeploymentId
     ? {
@@ -112,19 +109,15 @@ export function buildWorkers(
   const deepIdleMachineMs = 3 * 24 * 60 * 60_000;
   const devIdleMachineMs = 2 * 60 * 60_000;
   const reapDeepIdle = deepIdleMachineMs > 0 || devIdleMachineMs > 0 ? sandbox.reapDeepIdle : undefined;
-  return {
-    processReaper,
-    composioReturns,
-    reapDeepIdle,
-    deepIdleMachineMs,
-    devIdleMachineMs,
-    drain,
-    turnRunner,
-    turnReady,
-    turnCancels,
-    turnYields,
-    backgroundOwnership,
-  };
+  if (processReaper) every("processes:reaper", PROCESS_REAPER_INTERVAL_MS, () => processReaper.sweep());
+  every("Composio consent returns", 30 * 60_000, () => composioReturns.deleteExpired(Date.now()), {
+    immediate: true,
+  });
+  if (reapDeepIdle)
+    every("sandbox:deep-idle-reaper", 5 * 60_000, () => reapDeepIdle(deepIdleMachineMs, devIdleMachineMs), {
+      immediate: true,
+    });
+  return { composioReturns, drain, turnRunner, turnReady, turnCancels, turnYields, backgroundOwnership };
 }
 
 export type WorkersModule = ReturnType<typeof buildWorkers>;
