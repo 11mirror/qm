@@ -1,16 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createScheduler, CRON_FIRE_JOB, type Scheduler } from "../src/cron/scheduler.ts";
-import { createJobWorker, type JobWorker } from "../src/jobs/job-worker.ts";
-import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
-import { type CronFireStore } from "../src/cron/fire-store.ts";
-import { recordingOutbound } from "./support/recording-outbound.ts";
-import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
-import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
-import { singleProcessDeps } from "./support/single-process.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
-import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { createScheduler, CRON_FIRE_JOB, type Scheduler } from "../../src/cron/scheduler.ts";
+import { createJobWorker, type JobWorker } from "../../src/jobs/job-worker.ts";
+import { createCronStore, type CronStore } from "../../src/cron/cron-store.ts";
+import { type CronFireStore } from "../../src/cron/fire-store.ts";
+import { recordingOutbound } from "../support/recording-outbound.ts";
+import { createIdempotencyStore } from "../../src/idempotency/idempotency-store.ts";
+import { createIdentityService } from "../../src/identity/identity-service.ts";
+import { scopeId, type TurnRequest, type TurnResult } from "../../src/types.ts";
+import { singleProcessDeps } from "../support/single-process.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
+import { createPostgresCronFireStore } from "../../src/cron/fire-store.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron queue tests";

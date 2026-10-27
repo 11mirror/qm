@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
-import { applyPgMigrations, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
+import { createPostgresCronFireStore } from "../../src/cron/fire-store.ts";
+import { applyPgMigrations, registeredPgMigrations } from "../../src/persistence/pg-pool.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron fire history migration test";

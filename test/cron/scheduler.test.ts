@@ -1,22 +1,22 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createScheduler } from "../src/cron/scheduler.ts";
-import { runNowSettled, settle } from "./support/settle.ts";
-import { createCronStore } from "../src/cron/cron-store.ts";
-import { recordingOutbound } from "./support/recording-outbound.ts";
-import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
-import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
-import { type DirectoryStore } from "../src/directory/directory-store.ts";
-import type { CronFireJob } from "../src/cron/scheduler.ts";
-import type { JobWorker } from "../src/jobs/job-worker.ts";
-import { singleProcessDeps } from "./support/single-process.ts";
-import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
-import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
-import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
-import { idleJobs } from "./support/cron-slots.ts";
-import { automationOrigin } from "./support/turn-origin.ts";
+import { createScheduler } from "../../src/cron/scheduler.ts";
+import { runNowSettled, settle } from "../support/settle.ts";
+import { createCronStore } from "../../src/cron/cron-store.ts";
+import { recordingOutbound } from "../support/recording-outbound.ts";
+import { createIdempotencyStore } from "../../src/idempotency/idempotency-store.ts";
+import { createIdentityService } from "../../src/identity/identity-service.ts";
+import { scopeId, type TurnRequest, type TurnResult } from "../../src/types.ts";
+import { type DirectoryStore } from "../../src/directory/directory-store.ts";
+import type { CronFireJob } from "../../src/cron/scheduler.ts";
+import type { JobWorker } from "../../src/jobs/job-worker.ts";
+import { singleProcessDeps } from "../support/single-process.ts";
+import { createPostgresDirectoryStore } from "../../src/directory/postgres-directory-store.ts";
+import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";
+import { createPostgresCronFireStore } from "../../src/cron/fire-store.ts";
+import { idleJobs } from "../support/cron-slots.ts";
+import { automationOrigin } from "../support/turn-origin.ts";
 
 function harness(
   reply: string | ((req: TurnRequest) => Promise<TurnResult>) = "CRON-OUTPUT-XYZ",
@@ -1172,7 +1172,7 @@ test("queue mode: a busy fire releases its slot and its job sleeps until the def
 
 test("manual cron preparation and detached fire retain admission across pause", async () => {
   const databaseUrl = testDatabaseUrl();
-  const { createAdmittedWork } = await import("../src/util/admitted-work.ts");
+  const { createAdmittedWork } = await import("../../src/util/admitted-work.ts");
   const work = createAdmittedWork();
   const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const cron = await crons.create({

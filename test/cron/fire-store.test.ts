@@ -1,8 +1,8 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
-import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
-import { createCronStore } from "../src/cron/cron-store.ts";
-import { scopeId } from "../src/types.ts";
+import { createPostgresCronFireStore } from "../../src/cron/fire-store.ts";
+import { createCronStore } from "../../src/cron/cron-store.ts";
+import { scopeId } from "../../src/types.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron fire table tests";
