@@ -1,28 +1,18 @@
 import type { SkillPackStore } from "./skill-pack-store.ts";
 import type { SkillPackFetcher } from "./pack-fetcher.ts";
-import type { LeaderLease } from "../persistence/leader-lease.ts";
-import { createSweeper } from "../util/sweeper.ts";
-import { reportFailure, reportFailureAs } from "../util/errors.ts";
-
-const TICK_LEASE_KEY = "skills:sync:tick";
-const DEFAULT_INTERVAL_MS = 300_000;
+import { reportFailure } from "../util/errors.ts";
 
 export interface SkillSyncEngine {
   tick(now?: number): Promise<void>;
-  start(intervalMs: number): void;
-  stop(): Promise<void>;
 }
 
 export interface SkillSyncDeps {
   packs: SkillPackStore;
   fetcher: SkillPackFetcher;
   reconcile: (packId: string) => Promise<unknown>;
-  leaderLease: LeaderLease;
 }
 
 export function createSkillSyncEngine(deps: SkillSyncDeps): SkillSyncEngine {
-  const leaderLease = deps.leaderLease;
-
   async function syncOne(packId: string): Promise<void> {
     const pack = await deps.packs.get(packId);
     if (!pack) return;
@@ -49,14 +39,5 @@ export function createSkillSyncEngine(deps: SkillSyncDeps): SkillSyncEngine {
     }
   }
 
-  const tick = async (): Promise<void> => {
-    await leaderLease.hold(TICK_LEASE_KEY, syncAll);
-  };
-
-  const sweeper = createSweeper(
-    () => tick().catch(reportFailureAs("skill-sync: tick", undefined)),
-    DEFAULT_INTERVAL_MS,
-    { label: "skill-sync" },
-  );
-  return { tick, start: sweeper.start, stop: sweeper.stop };
+  return { tick: syncAll };
 }

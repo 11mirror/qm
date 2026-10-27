@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { claimTasks, completeRun, extendClaim, failRun, retryTask, scheduleRun, spawnTask } from "../turns/absurd.ts";
 import { JOB_QUEUE, registerAbsurdSchema } from "../turns/absurd-schema.ts";
+import { WorkAdmissionClosed } from "../util/admitted-work.ts";
 import { reportFailure } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 
@@ -18,6 +19,11 @@ export interface JobWorker {
   handle(name: string, handler: JobHandler, opts?: { concurrency?: number }): void;
   /** Durably queue a job; a key already live is a no-op, a released one is re-armed. */
   spawn(name: string, params: unknown, key: string): Promise<void>;
+  /**
+   * Run `fn` about every `everyMs` on one background owner: a self-rescheduling `every:<name>` job, spawned by
+   * `start` and run first right after its first spawn. A failed run is reported and the next one still comes.
+   */
+  every(name: string, everyMs: number, fn: () => unknown): void;
   start(): Promise<void>;
   healthy(): boolean;
   stopClaims(): Promise<void>;
@@ -39,6 +45,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
   const limit = MAX_CONCURRENCY;
   const worker = `jobs:${randomUUID()}`;
   const handlers = new Map<string, { run: JobHandler; concurrency: number; running: number }>();
+  const recurring: string[] = [];
   let started = false;
   let lastErrorAt = 0;
   let loop: Promise<void> | null = null;
@@ -115,6 +122,15 @@ export function createJobWorker(databaseUrl: string): JobWorker {
     }
   }
 
+  async function spawnKeyed(name: string, params: unknown, key: string, maxAttempts: number | null): Promise<void> {
+    const pool = await db.pool();
+    const spawned = await spawnTask(pool, JOB_QUEUE, name, params, { idempotencyKey: key, maxAttempts }).catch(
+      noteError,
+    );
+    if (!spawned.created) await retryTask(pool, JOB_QUEUE, spawned.taskId).catch(noteError);
+    wake.resolve();
+  }
+
   async function stopClaims(): Promise<void> {
     started = false;
     wake.resolve();
@@ -126,17 +142,28 @@ export function createJobWorker(databaseUrl: string): JobWorker {
     handle(name, run, opts = {}) {
       handlers.set(name, { run, concurrency: clampConcurrency(opts.concurrency ?? MAX_CONCURRENCY), running: 0 });
     },
-    async spawn(name, params, key) {
-      const pool = await db.pool();
-      const spawned = await spawnTask(pool, JOB_QUEUE, name, params, { idempotencyKey: key, maxAttempts: 1 }).catch(
-        noteError,
-      );
-      if (!spawned.created) await retryTask(pool, JOB_QUEUE, spawned.taskId).catch(noteError);
-      wake.resolve();
+    spawn: (name, params, key) => spawnKeyed(name, params, key, 1),
+    every(name, everyMs, fn) {
+      const job = `every:${name}`;
+      recurring.push(job);
+      handlers.set(job, {
+        run: async () => {
+          try {
+            await fn();
+          } catch (e) {
+            if (!(e instanceof WorkAdmissionClosed)) reportFailure(`jobs: ${job}`, e);
+          }
+          return Date.now() + everyMs;
+        },
+        concurrency: 1,
+        running: 0,
+      });
     },
     async start() {
       if (started) return;
-      await (await db.pool()).query("SELECT 1").catch(noteError);
+      const pool = await db.pool();
+      await pool.query("SELECT 1").catch(noteError);
+      for (const job of recurring) await spawnKeyed(job, null, job, null);
       started = true;
       lastErrorAt = 0;
       loop = poll();

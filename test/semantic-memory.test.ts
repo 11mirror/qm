@@ -1,8 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSemanticMemory } from "../src/memory/semantic-memory.ts";
-import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
-import { createSweeper } from "../src/util/sweeper.ts";
 import { scoredMemoryIndex } from "./support/scored-memory-index.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
@@ -202,8 +200,6 @@ test("without Postgres semantic recall stays readable and never embeds facts", a
     databaseUrl: undefined,
     embeddingModel: async () => "test",
     resolveEmbedder: async () => embedder,
-    leaderLease: createNoopLeaderLease(),
-    createSweeper,
   });
   assert.match(await recall(memory, "personal:a", { query: "verify" }), /newer fact[\s\S]*older fact/);
   assert.deepEqual(calls, []);

@@ -1,8 +1,7 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
-import { createScheduler, type Scheduler } from "../src/cron/scheduler.ts";
-import { cronJobQueue } from "../src/cron/job-queue.ts";
-import { createJobWorker } from "../src/jobs/job-worker.ts";
+import { createScheduler, CRON_FIRE_JOB, type Scheduler } from "../src/cron/scheduler.ts";
+import { createJobWorker, type JobWorker } from "../src/jobs/job-worker.ts";
 import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
 import { type CronFireStore } from "../src/cron/fire-store.ts";
 import { recordingOutbound } from "./support/recording-outbound.ts";
@@ -37,9 +36,10 @@ function instance(
   calls: TurnRequest[],
   turnMs: number,
   fires: CronFireStore,
-): { scheduler: Scheduler; crons: CronStore } {
+): { scheduler: Scheduler; crons: CronStore; jobs: JobWorker } {
   const maps = createPostgresMapFactory(URL!);
   const crons = createCronStore(maps.map<Cron>(CRONS_TABLE), { fires });
+  const jobs = createJobWorker(URL ?? "");
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);
     if (turnMs) await new Promise((r) => setTimeout(r, turnMs));
@@ -52,9 +52,10 @@ function instance(
     idempotency: createIdempotencyStore(maps.map<IdempotencyRecord>(IDEM_TABLE)),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     run,
-    jobQueue: cronJobQueue(createJobWorker(URL ?? ""), 4),
+    jobs,
+    fireConcurrency: 4,
   });
-  return { scheduler, crons };
+  return { scheduler, crons, jobs };
 }
 
 test(
@@ -65,8 +66,8 @@ test(
     const fires = createPostgresCronFireStore(testDatabaseUrl());
     const a = instance(calls, 12_000, fires);
     const b = instance(calls, 12_000, fires);
-    a.scheduler.start();
-    b.scheduler.start();
+    await a.jobs.start();
+    await b.jobs.start();
     try {
       const cron = await a.crons.create({
         schedule: { firstFireAt: Date.now() + 500 },
@@ -83,9 +84,7 @@ test(
       assert.equal((await b.crons.get(cron.id))?.enabled, false, "the one-shot ends disabled");
       assert.equal((await b.crons.listFires(cron.id)).total, 1, "one fire recorded");
     } finally {
-      a.scheduler.stop();
-      b.scheduler.stop();
-      await new Promise((r) => setTimeout(r, 500));
+      await Promise.all([a.jobs.stop(), b.jobs.stop()]);
     }
   },
 );
@@ -98,8 +97,8 @@ test(
     const fireStore = createPostgresCronFireStore(testDatabaseUrl());
     const a = instance(calls, 0, fireStore);
     const b = instance(calls, 0, fireStore);
-    a.scheduler.start();
-    b.scheduler.start();
+    await a.jobs.start();
+    await b.jobs.start();
     try {
       const cron = await a.crons.create({
         schedule: { everyMs: 2000 },
@@ -121,15 +120,13 @@ test(
       await new Promise((r) => setTimeout(r, 6_000));
       assert.equal(fires(), at, "a rescheduled cron's stale slot jobs do not fire");
     } finally {
-      a.scheduler.stop();
-      b.scheduler.stop();
-      await new Promise((r) => setTimeout(r, 500));
+      await Promise.all([a.jobs.stop(), b.jobs.stop()]);
     }
   },
 );
 
 test(
-  "cron job queue: a cron persisted without its fire job is enqueued once by startup reconciliation",
+  "cron job queue: a cron persisted without its fire job is enqueued once by repair",
   { skip, timeout: 120_000 },
   async () => {
     const calls: TurnRequest[] = [];
@@ -143,48 +140,71 @@ test(
       createdBy: "U3",
       ownerScopeId: scopeId("personal", "U3"),
     });
-    a.scheduler.start();
-    b.scheduler.start();
+    await a.jobs.start();
+    await b.jobs.start();
     try {
+      await Promise.all([a.scheduler.repair(), b.scheduler.repair()]);
       const fired = () => calls.filter((c) => c.idempotencyKey?.startsWith(`cron:${cron.id}:`)).length;
       await until(() => fired() >= 1, 30_000);
       await new Promise((r) => setTimeout(r, 3_000));
       assert.equal(fired(), 1, "the orphaned slot fires exactly once across both instances");
       assert.equal((await a.crons.listFires(cron.id)).total, 1);
     } finally {
-      a.scheduler.stop();
-      b.scheduler.stop();
-      await new Promise((r) => setTimeout(r, 500));
+      await Promise.all([a.jobs.stop(), b.jobs.stop()]);
     }
   },
 );
 
 test(
-  "cron job queue: a released slot is re-armed by the next enqueue, a consumed one is not",
+  "job worker: a released slot is re-armed by the next enqueue, a consumed one is not",
   { skip, timeout: 60_000 },
   async () => {
-    const queue = cronJobQueue(createJobWorker(URL!), 4);
+    const queue = createJobWorker(URL!);
     const seen: number[] = [];
-    const job = { cronId: `rearm-${Date.now()}`, scheduledAt: Date.now() };
-    await queue.start({
-      onFire: async () => {
-        seen.push(Date.now());
-        return seen.length === 1 ? "release" : "done";
-      },
+    const key = `cron:rearm-${Date.now()}`;
+    const job = { cronId: key };
+    queue.handle(CRON_FIRE_JOB, async () => {
+      seen.push(Date.now());
+      return seen.length === 1 ? "release" : "done";
     });
+    await queue.start();
     try {
-      await queue.enqueueFire(job);
+      await queue.spawn(CRON_FIRE_JOB, job, key);
       await until(() => seen.length >= 1, 15_000);
       await new Promise((r) => setTimeout(r, 300));
-      await queue.enqueueFire(job);
+      await queue.spawn(CRON_FIRE_JOB, job, key);
       await until(() => seen.length >= 2, 15_000);
       assert.equal(seen.length, 2, "the released slot fired again");
       await new Promise((r) => setTimeout(r, 300));
-      await queue.enqueueFire(job);
+      await queue.spawn(CRON_FIRE_JOB, job, key);
       await new Promise((r) => setTimeout(r, 2_500));
       assert.equal(seen.length, 2, "a consumed slot never fires twice");
     } finally {
       await queue.stop();
+    }
+  },
+);
+
+test(
+  "job worker: an every job runs on one of two workers and keeps its cadence after a throw",
+  { skip, timeout: 60_000 },
+  async () => {
+    const name = `cadence-${Date.now()}`;
+    const runs: number[] = [];
+    const workers = [createJobWorker(URL!), createJobWorker(URL!)];
+    for (const worker of workers)
+      worker.every(name, 1000, () => {
+        runs.push(Date.now());
+        if (runs.length === 1) throw new Error("first run fails");
+      });
+    try {
+      await Promise.all(workers.map((worker) => worker.start()));
+      await until(() => runs.length >= 3, 20_000);
+      assert.ok(runs.length >= 3, "the job reschedules itself, even after a failed run");
+      for (let i = 1; i < runs.length; i++)
+        assert.ok(runs[i]! - runs[i - 1]! >= 900, "runs never overlap or double up");
+    } finally {
+      await Promise.all(workers.map((worker) => worker.stop()));
     }
   },
 );

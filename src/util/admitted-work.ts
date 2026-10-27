@@ -19,6 +19,8 @@ export function createAdmittedWork(options: { paused?: boolean; canStart?: () =>
     resume() {
       paused = false;
     },
+    /** Whether background work is being fenced off; long passes stop between items when it is. */
+    paused: () => paused,
     run<T>(work: () => T | Promise<T>): Promise<T> {
       if (!canRun()) return Promise.reject(new WorkAdmissionClosed());
       const admission = { active: true };

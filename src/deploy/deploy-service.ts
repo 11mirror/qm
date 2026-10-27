@@ -22,7 +22,6 @@ import {
   type DeploymentVersion,
 } from "./deploy-store.ts";
 import type { DeployProfile, DeployProvider } from "./deploy-provider.ts";
-import type { LeaderLease } from "../persistence/leader-lease.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
@@ -140,7 +139,6 @@ export interface DeployServiceDeps {
   auditLog: AuditLog;
   appPublished?: (principal: string, deploymentId: string, version: number) => Promise<void>;
   acl: AclStore;
-  leaderLease: LeaderLease;
   advisoryLock: AdvisoryLock;
   canReadScope?: (principalId: string, scopeId: ScopeId) => Promise<boolean>;
   canWriteScope?: (principalId: string, scopeId: ScopeId) => Promise<boolean>;
@@ -192,7 +190,6 @@ function requiredEntrypoint(input: string | undefined, d: Deployment | null): st
 }
 
 export function createDeployService(deps: DeployServiceDeps): DeployService {
-  const leaderLease = deps.leaderLease;
   const advisoryLock = deps.advisoryLock;
   const deployQueue = createKeyedQueue();
   const externalSharingAllowed = (ownerScopeId: ScopeId): Promise<boolean> =>
@@ -570,27 +567,24 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     },
 
     async maintainDeployments() {
-      const result = await leaderLease.hold("deployments:keep-warm", async () => {
-        let maintained = 0;
-        for (const d of await deps.deployStore.list()) {
-          if (d.status !== "running") continue;
-          try {
-            const cur = await deps.deployStore.get(d.id);
-            if (!cur || cur.status !== "running") continue;
-            if (renewDue(cur)) {
-              await rotateDeployment(cur.id);
-              maintained++;
-            } else if (cur.alwaysOn) {
-              await liveEndpoint(cur);
-              maintained++;
-            }
-          } catch (e) {
-            console.error("%s", `[deploy] maintenance failed for ${d.name ?? d.id}:`, errMessage(e));
+      let maintained = 0;
+      for (const d of await deps.deployStore.list()) {
+        if (d.status !== "running") continue;
+        try {
+          const cur = await deps.deployStore.get(d.id);
+          if (!cur || cur.status !== "running") continue;
+          if (renewDue(cur)) {
+            await rotateDeployment(cur.id);
+            maintained++;
+          } else if (cur.alwaysOn) {
+            await liveEndpoint(cur);
+            maintained++;
           }
+        } catch (e) {
+          console.error("%s", `[deploy] maintenance failed for ${d.name ?? d.id}:`, errMessage(e));
         }
-        return maintained;
-      });
-      return result ?? 0;
+      }
+      return maintained;
     },
 
     async reachDeployment(idOrName, principalId, opts = {}): Promise<Reach> {
