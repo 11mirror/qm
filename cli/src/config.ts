@@ -1,5 +1,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
+import {
+  applyEdits,
+  findNodeAtLocation,
+  modify,
+  parse,
+  parseTree,
+  printParseErrorCode,
+  type ParseError,
+} from "jsonc-parser";
 import { CliError, die, errMessage, warn } from "./log.ts";
 import {
   AUTH_BROKER_ENV_KEYS,
@@ -28,6 +37,10 @@ import { envNum, isEnvVarName, isMissingOrPlaceholder } from "./util.ts";
 export const CONFIG_FILENAME = "qm.config.jsonc";
 
 export const CONTRACT_VERSION = 1 as const;
+
+const DNS_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
+const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const IAM_ROLE_ARN = /^arn:aws:iam::([0-9]{12}):role\/[A-Za-z0-9_+=,.@/-]{1,512}$/;
 
 export const validOrgId = (value: string): boolean =>
   value.length <= 63 && /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(value);
@@ -225,155 +238,29 @@ export function sandboxCoreEnv(config: QmConfig): { env: Record<string, string> 
   return { env };
 }
 
-function stripJsonComments(text: string): string {
-  let out = "";
-  for (let i = 0; i < text.length;) {
-    const ch = text[i]!;
-    if (ch === '"') {
-      const end = scanString(text, i);
-      out += text.slice(i, end);
-      i = end;
-    } else if (ch === "/" && text[i + 1] === "/") {
-      for (; i < text.length && text[i] !== "\n"; i++) out += " ";
-    } else if (ch === "/" && text[i + 1] === "*") {
-      const end = text.indexOf("*/", i + 2);
-      const stop = end === -1 ? text.length : end + 2;
-      for (; i < stop; i++) out += text[i] === "\n" ? "\n" : " ";
-    } else {
-      out += ch;
-      i++;
-    }
-  }
-  return out;
-}
-
-function stripTrailingCommas(text: string): string {
-  let out = text;
-  for (let i = 0; i < out.length; i++) {
-    if (out[i] === '"') {
-      i = scanString(out, i) - 1;
-      continue;
-    }
-    if (out[i] !== ",") continue;
-    const next = skipWs(out, i + 1);
-    if (out[next] === "}" || out[next] === "]") out = out.slice(0, i) + " " + out.slice(i + 1);
-  }
-  return out;
-}
-
-const parseConfigJson = (text: string): unknown => JSON.parse(stripTrailingCommas(stripJsonComments(text)));
-
-const skipWs = (s: string, i: number): number => {
-  while (i < s.length && /\s/.test(s[i]!)) i++;
-  return i;
+const parseConfigJson = (text: string): unknown => {
+  const errors: ParseError[] = [];
+  const value = parse(text, errors, { allowTrailingComma: true });
+  if (errors[0]) throw new CliError(`${printParseErrorCode(errors[0].error)} at offset ${errors[0].offset}`);
+  return value;
 };
 
-function scanString(s: string, i: number): number {
-  for (i++; i < s.length; i++) {
-    if (s[i] === "\\") i++;
-    else if (s[i] === '"') return i + 1;
-  }
-  throw new CliError("config has an unterminated string");
-}
-
-function scanValue(s: string, i: number): number {
-  const ch = s[i]!;
-  if (ch === '"') return scanString(s, i);
-  if (ch === "{" || ch === "[") {
-    const close = ch === "{" ? "}" : "]";
-    let depth = 0;
-    for (; i < s.length; i++) {
-      const c = s[i]!;
-      if (c === '"') i = scanString(s, i) - 1;
-      else if (c === ch) depth++;
-      else if (c === close && --depth === 0) return i + 1;
-    }
-    throw new CliError(`config has an unbalanced ${ch}`);
-  }
-  while (i < s.length && !/[,}\]\s]/.test(s[i]!)) i++;
-  return i;
-}
-
-interface PropSpan {
-  key: string;
-  valueStart: number;
-  valueEnd: number;
-}
-
-function objectProps(s: string, objStart: number): { props: PropSpan[]; openBrace: number; closeBrace: number } {
-  let i = skipWs(s, objStart);
-  if (s[i] !== "{") throw new CliError("config value is not an object");
-  const openBrace = i;
-  i++;
-  const props: PropSpan[] = [];
-  for (;;) {
-    i = skipWs(s, i);
-    if (i >= s.length) throw new CliError("config object is not closed");
-    if (s[i] === "}") return { props, openBrace, closeBrace: i };
-    if (s[i] !== '"') throw new CliError("config object has a non-string key");
-    const keyEnd = scanString(s, i);
-    const key = JSON.parse(s.slice(i, keyEnd)) as string;
-    i = skipWs(s, keyEnd);
-    if (s[i] !== ":") throw new CliError(`config key ${JSON.stringify(key)} has no value`);
-    i = skipWs(s, i + 1);
-    const valueEnd = scanValue(s, i);
-    props.push({ key, valueStart: i, valueEnd });
-    i = skipWs(s, valueEnd);
-    if (s[i] === ",") i++;
-  }
-}
-
-type TextEdit = { start: number; end: number; text: string };
-
-function applyEdits(raw: string, edits: TextEdit[]): string {
-  let out = raw;
-  for (const edit of edits.sort((a, b) => b.start - a.start))
-    out = out.slice(0, edit.start) + edit.text + out.slice(edit.end);
-  return out;
-}
-
-const stringEntry = ([key, value]: [string, string]): string => `${JSON.stringify(key)}: ${JSON.stringify(value)}`;
-
-/** Set each key of `updates` in an existing object: replace present values, insert the rest after the brace. */
-function upsertStrings(obj: ReturnType<typeof objectProps>, updates: Record<string, string>): TextEdit[] {
-  const edits: TextEdit[] = [];
-  const missing: Array<[string, string]> = [];
-  for (const [key, value] of Object.entries(updates)) {
-    const prop = obj.props.find((p) => p.key === key);
-    if (prop) edits.push({ start: prop.valueStart, end: prop.valueEnd, text: JSON.stringify(value) });
-    else missing.push([key, value]);
-  }
-  if (missing.length) {
-    const body = missing.map(stringEntry).join(", ");
-    edits.push({
-      start: obj.openBrace + 1,
-      end: obj.openBrace + 1,
-      text: obj.props.length ? ` ${body},` : ` ${body} `,
-    });
-  }
-  return edits;
-}
-
-function updateConfigStringMap(raw: string, key: string, updates: Record<string, string>): string {
-  const stripped = stripJsonComments(raw);
-  const root = objectProps(stripped, 0);
-  const property = root.props.find((p) => p.key === key);
-  if (property) return applyEdits(raw, upsertStrings(objectProps(stripped, property.valueStart), updates));
-  const body = Object.entries(updates).map(stringEntry).join(", ");
-  const text = `${root.props.length ? "," : ""}\n  ${JSON.stringify(key)}: { ${body} }\n`;
-  return applyEdits(raw, [{ start: root.closeBrace, end: root.closeBrace, text }]);
-}
+const setStrings = (raw: string, path: string[], updates: Record<string, string>): string =>
+  Object.entries(updates).reduce(
+    (text, [key, value]) =>
+      applyEdits(text, modify(text, [...path, key], value, { formattingOptions: { insertSpaces: true, tabSize: 2 } })),
+    raw,
+  );
 
 export const updateConfigImageOverrides = (raw: string, updates: Record<string, string>): string =>
-  updateConfigStringMap(raw, "imageOverrides", updates);
+  setStrings(raw, ["imageOverrides"], updates);
 
 export function updateConfigCoreEnv(raw: string, updates: Record<string, string>): string {
-  const stripped = stripJsonComments(raw);
-  const envProp = objectProps(stripped, 0).props.find((p) => p.key === "env");
-  if (!envProp) throw new CliError('config has no top-level "env" object');
-  const coreProp = objectProps(stripped, envProp.valueStart).props.find((p) => p.key === "core");
-  if (!coreProp) throw new CliError('config has no "env.core" object');
-  return applyEdits(raw, upsertStrings(objectProps(stripped, coreProp.valueStart), updates));
+  const tree = parseTree(raw);
+  const env = tree && findNodeAtLocation(tree, ["env"]);
+  if (env?.type !== "object") throw new CliError('config has no top-level "env" object');
+  if (findNodeAtLocation(env, ["core"])?.type !== "object") throw new CliError('config has no "env.core" object');
+  return setStrings(raw, ["env", "core"], updates);
 }
 
 export function loadConfigAt(path: string, overrides?: { target?: Target }): { config: QmConfig; path: string } {
@@ -701,11 +588,7 @@ function validateModelProvider(config: QmConfig, path: string): void {
 
 const validEmailDomain = (value: string): boolean => {
   if (value.length > 253 || !value.includes(".")) return false;
-  return value
-    .split(".")
-    .every(
-      (label) => label.length > 0 && label.length <= 63 && /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label),
-    );
+  return value.split(".").every((label) => label.length > 0 && label.length <= 63 && DNS_LABEL.test(label));
 };
 
 const DERIVED_AUTH_ENV_KEYS = ["AUTH_ISSUER", "AUTH_CLIENT_ID", "AUTH_REDIRECT_URI"] as const;
@@ -748,10 +631,7 @@ function validateBrokerTrust(config: QmConfig, path: string, secrets?: ReadonlyM
     .split(",")
     .map((email) => email.trim())
     .filter(Boolean);
-  if (
-    !allowed.length ||
-    allowed.some((email) => isMissingOrPlaceholder(email) || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
-  ) {
+  if (!allowed.length || allowed.some((email) => isMissingOrPlaceholder(email) || !EMAIL.test(email))) {
     throw new CliError(
       `${path}: the built-in auth broker requires env.auth.AUTH_ALLOWED_EMAIL_DOMAIN or a valid AUTH_ALLOWED_EMAILS in the target secret store — without one, anybody with an inbox could sign in`,
     );
@@ -802,7 +682,7 @@ export function validatePortalTrust(config: QmConfig, path = "config", secrets?:
       `${path}: env.portal.OIDC_ALLOWED_EMAIL_DOMAIN must be a valid, non-placeholder email domain when set`,
     );
   }
-  if (allowedEmails.some((email) => isMissingOrPlaceholder(email) || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))) {
+  if (allowedEmails.some((email) => isMissingOrPlaceholder(email) || !EMAIL.test(email))) {
     throw new CliError(`${path}: env.portal.OIDC_ALLOWED_EMAILS must contain valid, non-placeholder email addresses`);
   }
   if ((domain || allowedEmails.length) && (env.OIDC_PRINCIPAL_CLAIM ?? "email") !== "email") {
@@ -989,7 +869,7 @@ function validateAws(
   let alb: string | undefined;
   if (raw["alb"] !== undefined) {
     alb = requiredString(raw["alb"], "alb");
-    if (alb.length > 32 || !/^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(alb) || alb.startsWith("internal-")) {
+    if (alb.length > 32 || !DNS_LABEL.test(alb) || alb.startsWith("internal-")) {
       throw new CliError(
         `${path}: "aws.alb" must be a valid load balancer name (at most 32 letters, digits, and interior hyphens, not starting with "internal-")`,
       );
@@ -1081,9 +961,7 @@ function validateAws(
   const namespaceLabels = cloudMapNamespace.split(".");
   if (
     cloudMapNamespace.length > 253 ||
-    namespaceLabels.some(
-      (label) => label.length === 0 || label.length > 63 || !/^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label),
-    )
+    namespaceLabels.some((label) => label.length === 0 || label.length > 63 || !DNS_LABEL.test(label))
   ) {
     throw new CliError(
       `${path}: "aws.networking.cloudMapNamespace" must be a valid DNS namespace of at most 253 characters with labels of at most 63 characters`,
@@ -1091,7 +969,7 @@ function validateAws(
   }
   const roleArn = (value: unknown, field: string): string => {
     const arn = requiredString(value, field);
-    const match = arn.match(/^arn:aws:iam::([0-9]{12}):role\/[A-Za-z0-9_+=,.@/-]{1,512}$/);
+    const match = IAM_ROLE_ARN.exec(arn);
     if (!match || match[1] !== accountId) {
       throw new CliError(
         `${path}: "aws.${field}" must be an IAM role ARN in account ${accountId} and the commercial AWS partition`,
@@ -1195,7 +1073,7 @@ function validateAws(
         throw new CliError(`${path}: "aws.services.${name}.assumeRoleArns" must contain at least one IAM role ARN`);
       }
       for (const arn of arns) {
-        if (!/^arn:aws:iam::[0-9]{12}:role\/[A-Za-z0-9_+=,.@/-]{1,512}$/.test(arn)) {
+        if (!IAM_ROLE_ARN.test(arn)) {
           throw new CliError(
             `${path}: "aws.services.${name}.assumeRoleArns" must contain commercial AWS IAM role ARNs`,
           );
@@ -1223,7 +1101,7 @@ function validateAws(
     }
     if (value["targetGroup"] !== undefined) {
       const targetGroup = requiredString(value["targetGroup"], `services.${name}.targetGroup`);
-      if (targetGroup.length > 32 || !/^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(targetGroup)) {
+      if (targetGroup.length > 32 || !DNS_LABEL.test(targetGroup)) {
         throw new CliError(
           `${path}: "aws.services.${name}.targetGroup" must be a valid target group name (at most 32 letters, digits, and interior hyphens)`,
         );
