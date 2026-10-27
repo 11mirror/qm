@@ -237,8 +237,9 @@ export async function swarmCall(ctx: SwarmCallContext, input: SwarmInput): Promi
         body,
         createdAt: Date.now(),
       };
-      await ctx.board.insert(post);
-      const notified = await notifySubscribers(ctx, ctx, post).catch((e: unknown) => errMessage(e));
+      const notice = { actor: ctx.actor, audience: ctx.audience };
+      await ctx.board.insert(post, notice);
+      const notified = await notifySubscribers(ctx, notice, post).catch((e: unknown) => errMessage(e));
       return {
         ok: true,
         result: {

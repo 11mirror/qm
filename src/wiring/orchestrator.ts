@@ -342,7 +342,7 @@ function buildSessionSyscalls(deps: OrchestratorInputs) {
   };
   const sessionMailbox = createSessionMailbox(databaseUrl);
   const swarmBoard = createPostgresSwarmBoard(databaseUrl);
-  const swarmNotices = createSwarmNoticeSweep({ board: swarmBoard, mailbox: sessionMailbox, sessions, runs });
+  const swarmNotices = createSwarmNoticeSweep({ board: swarmBoard, mailbox: sessionMailbox });
   every("swarm-notice-sweep", 60_000, () => swarmNotices.sweep());
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
