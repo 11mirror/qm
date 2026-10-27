@@ -28,7 +28,7 @@ import type { GapWork } from "../sessions/session-store.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { isObj } from "../util/objects.ts";
 import { type GoalGovernor, type GoalRecord } from "./goal.ts";
-import { type ToolResultScreen, type ToolResultScreenInput } from "../security/security-posture.ts";
+import { type ToolResultScreenInput } from "../security/security-screen.ts";
 
 export interface ToolContextRef {
   documents?: DocumentInput[];
@@ -85,8 +85,8 @@ export interface ToolContextRef {
   governGoal?: GoalGovernor;
   /** The agent's recent work for the governor, newest last. */
   goalRecentWork?: () => string;
-  screenToolResult?: (input: ToolResultScreenInput) => Promise<ToolResultScreen>;
-  toolApprovalGate?: (tool: string, callKey?: string) => boolean;
+  observeToolResult?: (input: ToolResultScreenInput) => void;
+  toolApprovalGate?: (callKey: string) => boolean;
   approvedToolCalls?: Map<string, string>;
 }
 
@@ -147,7 +147,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
 
   const { cron, webhook } = schedulingTools(kit);
 
-  const { guidance, sharingTool, resourceTool, adminActions, adminPreamble } = controlPlaneTools(kit);
+  const { instructionsTool, sharingTool, resourceTool, adminActions, adminPreamble } = controlPlaneTools(kit);
 
   const { surface, attach, finishSilently } = replyTools(kit);
 
@@ -220,7 +220,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ),
     webhook,
     admin,
-    guidance,
+    instructions: instructionsTool,
     [surface.name]: surface,
     attach,
     finish_silently: finishSilently,

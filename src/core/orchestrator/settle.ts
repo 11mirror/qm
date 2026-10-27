@@ -5,11 +5,10 @@ import type { MemoryPolicy } from "../../memory/policy.ts";
 import { ProjectRosterChanged, rosterChangedRefusal } from "./admit.ts";
 import { parkApprovals, summarizeApproval, type ApprovalRequest } from "./approvals.ts";
 import type { TurnCtx } from "./turn-context.ts";
-import type { QuarantineReleaseApproval } from "./approvals.ts";
 import type { Session } from "../../types.ts";
 import type { MemoryProvenance } from "../../memory/facts.ts";
 import type { PartialTurn } from "../turn-resume.ts";
-import { type ScopeId, type TurnResult, type PendingApprovalRecord } from "../../types.ts";
+import { type ScopeId, type TurnResult } from "../../types.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "../turn-outcome.ts";
 import type { Lease } from "../../sessions/session-store.ts";
 import { isReply, isUserMessage, type Item, type NewItem } from "../../sessions/items.ts";
@@ -24,7 +23,6 @@ import {
   turnFailureMessage,
   turnFailureItem,
 } from "../turn-error.ts";
-import { hashId } from "../../util/crypto.ts";
 import { stripAckPrefix } from "./turn-helpers.ts";
 import { type SpineState } from "./surface-tools.ts";
 import { createAttachStaging } from "./attach-tool.ts";
@@ -34,7 +32,6 @@ export async function settleTurnResult(
   turn: {
     session: Session;
     strictReadOnly: boolean;
-    quarantineReleaseApprovals: QuarantineReleaseApproval[];
     hasSurfaceToolDeps: boolean;
     isPollFire: boolean;
     emittedEntries: Item[];
@@ -51,7 +48,6 @@ export async function settleTurnResult(
   const {
     session,
     strictReadOnly,
-    quarantineReleaseApprovals,
     hasSurfaceToolDeps,
     isPollFire,
     emittedEntries,
@@ -71,27 +67,20 @@ export async function settleTurnResult(
     finalResult = { status: "silent", sessionId: session.id, stopped: true };
   } else if (isPollFire && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
     finalResult = { status: "silent", sessionId: session.id };
-  } else if (result.pendingApprovals?.length || quarantineReleaseApprovals.length) {
+  } else if (result.pendingApprovals?.length) {
     const turnApprovals: Array<
       NonNullable<HarnessTurnResult["pendingApprovals"]>[number] & {
         summary?: string;
         summaryDetail?: string;
-        screenedOutput?: PendingApprovalRecord["screenedOutput"];
         grantModes?: { session: boolean; always: boolean };
       }
-    > = [...(result.pendingApprovals ?? []), ...quarantineReleaseApprovals];
+    > = [...(result.pendingApprovals ?? [])];
     const requests: ApprovalRequest[] = [];
     for (const pa of turnApprovals) {
       const command = pa.command;
       const summary = pa.summary ?? (await summarizeApproval(deps, scopeId, command, pa.reason, pa.purpose));
       requests.push({
-        requestId: commandApprovalId(
-          session.id,
-          pa.screenedOutput
-            ? `${command}:${hashId([pa.screenedOutput.tool, pa.screenedOutput.text, pa.screenedOutput.sourceScopeId ?? scopeId], 64)}`
-            : command,
-          pa.approvalKey,
-        ),
+        requestId: commandApprovalId(session.id, command, pa.approvalKey),
         command,
         reason: pa.reason,
         blocksInput: approvalBlocksInput(pa.kind, outcome),
@@ -100,7 +89,6 @@ export async function settleTurnResult(
         ...(pa.purpose ? { purpose: pa.purpose } : {}),
         ...(summary ? { summary } : {}),
         ...(pa.summaryDetail ? { summaryDetail: pa.summaryDetail } : {}),
-        ...(pa.screenedOutput ? { screenedOutput: pa.screenedOutput } : {}),
         ...(pa.approvalKey ? { approvalKey: pa.approvalKey } : {}),
         ...(pa.kind ? { kind: pa.kind } : {}),
       });

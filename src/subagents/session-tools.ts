@@ -18,7 +18,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
   const cap = deps.treeRunCap ?? SUBAGENT_TREE_RUN_CAP;
 
   return {
-    rejectMessage: (sessionId, messageId) => deps.mailbox.acknowledge(sessionId, [messageId]),
     forTurn(binding) {
       const ctx = createTurnContext(deps, binding, { lock, cap, admissionKey });
       const syscalls: SessionSyscalls = {

@@ -3,8 +3,6 @@ import test from "node:test";
 import { mountAdmin, type Reply, type Route } from "./fixture.ts";
 
 const governance = {
-  securityPosture: "auto",
-  sharingPosture: "isolated",
   autoFlagger: null,
   autoFlaggerDefault: { modelId: "model-a", rubric: "Default rubric" },
   baseModelOptions: [
@@ -37,15 +35,13 @@ test("governance shows its policy cards with working navigation actions", async 
   const admin = await governancePage();
   const page = admin.document.getElementById("view-governance")!.textContent!;
   for (const heading of [
-    "Security posture",
-    "Sharing posture",
     "Command policy",
     "Ambient reply policy",
     "Egress policy",
     "External Slack audience",
     "Custom providers",
     "Enabled models",
-    "Organization SOUL",
+    "Instructions",
     "Feature flags",
     "Shared service credentials",
     "Personal keychains",
@@ -56,14 +52,6 @@ test("governance shows its policy cards with working navigation actions", async 
   await admin.settle();
   assert.equal(admin.location(), "/settings/users");
   assert.equal(admin.views.at(-1), "users");
-  admin.close();
-});
-
-test("Open sharing explains the benefit and the privacy risk in plain language", async () => {
-  const admin = await governancePage();
-  const card = text(admin, "card-sharing-posture").replace(/\s+/g, " ");
-  assert.match(card, /QM can use your saved memories, files, and skills across conversations when you ask it for help/);
-  assert.match(card, /In a group conversation, this could risk revealing private information to others/);
   admin.close();
 });
 
@@ -153,7 +141,7 @@ test("resetting the auto flagger restores the default and ignores a reply for a 
 
 test("leaving governance with a draft asks before discarding it", async () => {
   const admin = await governancePage();
-  admin.document.querySelector<HTMLInputElement>('[name="security-posture-choice"][value="strict"]')!.click();
+  type(admin, "auto-flagger-rubric", "Unsaved draft");
   admin.controller.show("users");
   await admin.settle();
   const dialog = admin.document.getElementById("governance-review") as HTMLDialogElement;

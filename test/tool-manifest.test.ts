@@ -162,7 +162,7 @@ test("GET /v1/tool-manifest lists the signed-in person's web tools with their co
       "cron",
       "webhook",
       "admin",
-      "guidance",
+      "instructions",
       "attach",
       "finish_silently",
       "goal",

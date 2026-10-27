@@ -481,27 +481,21 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         decoded.length > SURFACE_FILE_MAX_CHARS ? `${decoded.slice(0, SURFACE_FILE_MAX_CHARS)}…[truncated]` : decoded;
       return { ok: true, content, sizeBytes: blob.sizeBytes };
     },
-    getStandingOrder: async () => {
-      if (!deps.channelPolicy) return { ok: false, message: "standing orders aren't available on this turn" };
+    getChannelBehavior: async () => {
+      if (!deps.channelPolicy) return { ok: false, message: "channel settings aren't available on this turn" };
       if (conversation.kind === "dm" || !conversation.channelRef)
-        return { ok: false, message: "standing orders are per-channel — there isn't one for a DM." };
+        return { ok: false, message: "channel settings apply only inside a channel." };
       const p = await deps.channelPolicy.get(conversation.channelRef);
       return {
         ok: true,
-        orders: p?.orders ?? "",
         ...(p?.bots && Object.keys(p.bots).length ? { bots: p.bots } : {}),
         ...(p?.ambientEnabled !== undefined ? { ambientEnabled: p.ambientEnabled } : {}),
       };
     },
-    setStandingOrder: async (
-      orders: string | undefined,
-      bots?: Record<string, BotPolicy>,
-      ambientEnabled?: boolean | null,
-      expectedOrders?: string,
-    ) => {
-      if (!deps.channelPolicy) return { ok: false, message: "standing orders aren't available on this turn" };
+    setChannelBehavior: async (bots?: Record<string, BotPolicy>, ambientEnabled?: boolean | null) => {
+      if (!deps.channelPolicy) return { ok: false, message: "channel settings aren't available on this turn" };
       if (conversation.kind === "dm" || !conversation.channelRef)
-        return { ok: false, message: "standing orders are per-channel — you can only set one from inside a channel." };
+        return { ok: false, message: "channel settings apply only inside a channel." };
       let parsedBots: Record<string, BotPolicy> | undefined;
       if (bots !== undefined) {
         const parsed = parseBotLedger(bots);
@@ -510,12 +504,11 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       }
       let p: ChannelPolicy;
       try {
-        p = await deps.channelPolicy.set(conversation.channelRef, orders, {
+        p = await deps.channelPolicy.set(conversation.channelRef, {
           setBy: actor.id,
           bots: parsedBots,
           sessionId: session.id,
           ambientEnabled,
-          expectedOrders,
         });
       } catch (error) {
         return { ok: false, message: errMessage(error) };
@@ -529,7 +522,6 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       });
       return {
         ok: true,
-        orders: p.orders,
         ...(p.bots && Object.keys(p.bots).length ? { bots: p.bots } : {}),
         ...(p.ambientEnabled !== undefined ? { ambientEnabled: p.ambientEnabled } : {}),
       };

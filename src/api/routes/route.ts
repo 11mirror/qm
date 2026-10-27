@@ -52,7 +52,6 @@ export type Route<C extends BaseCtx = ApiCtx> = {
   auth: RouteAuth;
   actor?: RouteActor;
   admin?: AdminAccess;
-  allowedInStrict?: true;
   maxBodyBytes?: number;
   /** Validates (and replaces) the parsed JSON body before the handler runs; a failure is a 400. */
   body?: ZodType;

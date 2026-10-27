@@ -1,5 +1,5 @@
 import { swallowAs } from "../util/errors.ts";
-import { composeSoul } from "../resolution/resolution-service.ts";
+import { composeInstructions } from "../resolution/resolution-service.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
@@ -33,8 +33,8 @@ import { projectIdFromGroupRef, projectScopeId, type Project, type ProjectStore 
 import {
   type App,
   type AppDeps,
-  SoulUpdateDeniedError,
-  SoulVersionConflictError,
+  InstructionsUpdateDeniedError,
+  InstructionsVersionConflictError,
   toFileItem,
   type ScopeDeployment,
   type SessionPinView,
@@ -790,7 +790,6 @@ export function createSessionMethods(deps: AppDeps, h: AppHelpers) {
       return isOpenScopeMember({
         actorId: principalId,
         scope,
-        config: deps.config,
         isCurrentSharedScopeMember: h.principalCanWriteScope,
       });
     },
@@ -1022,42 +1021,42 @@ export function createSessionMethods(deps: AppDeps, h: AppHelpers) {
       h.audit(movedBy, "skill_move", id, toScope);
     },
 
-    getSoul(scopeIdValue) {
+    getInstructions(scopeIdValue) {
       const orgScopeId = tenant().orgScope;
-      const orgSoul = deps.config.getSoul(orgScopeId);
-      const soul = deps.config.getSoul(scopeIdValue);
+      const orgInstructions = deps.config.getInstructions(orgScopeId);
+      const instructions = deps.config.getInstructions(scopeIdValue);
       return {
         scopeId: scopeIdValue,
-        soul,
-        soulVersion: deps.config.soulVersion(scopeIdValue),
+        instructions,
+        instructionsVersion: deps.config.instructionsVersion(scopeIdValue),
         orgScopeId,
-        orgSoul,
-        orgSoulVersion: deps.config.soulVersion(orgScopeId),
-        effectiveSoul: composeSoul(orgSoul, scopeIdValue === orgScopeId ? null : soul),
+        orgInstructions,
+        orgInstructionsVersion: deps.config.instructionsVersion(orgScopeId),
+        effectiveInstructions: composeInstructions(orgInstructions, scopeIdValue === orgScopeId ? null : instructions),
       };
     },
 
-    async updateSoul(scopeIdValue, content, actorId, opts) {
+    async updateInstructions(scopeIdValue, content, actorId, opts) {
       const { kind, ref } = parseScopeId(scopeIdValue);
       const allowedPersonal = kind === "personal" && samePerson(ref, actorId);
       const allowedShared = opts?.allowSharedScope && (kind === "channel" || kind === "group");
       if (!allowedPersonal && !allowedShared) {
-        throw new SoulUpdateDeniedError();
+        throw new InstructionsUpdateDeniedError();
       }
       const write = async (): Promise<number> => {
-        let snapshot: Awaited<ReturnType<typeof deps.config.captureSoulSnapshot>> | undefined;
+        let snapshot: Awaited<ReturnType<typeof deps.config.captureInstructionsSnapshot>> | undefined;
         try {
           await deps.config.refreshScope(scopeIdValue);
-          snapshot = await deps.config.captureSoulSnapshot(scopeIdValue);
+          snapshot = await deps.config.captureInstructionsSnapshot(scopeIdValue);
           const version =
             opts?.expectedVersion === undefined
-              ? await deps.config.setSoul(scopeIdValue, content, actorId)
-              : await deps.config.setSoulIfVersion(scopeIdValue, opts.expectedVersion, content, actorId);
-          if (version === null) throw new SoulVersionConflictError();
+              ? await deps.config.setInstructions(scopeIdValue, content, actorId)
+              : await deps.config.setInstructionsIfVersion(scopeIdValue, opts.expectedVersion, content, actorId);
+          if (version === null) throw new InstructionsVersionConflictError();
           h.audit(actorId, "soul_update", scopeIdValue, scopeIdValue);
           return version;
         } catch (error) {
-          if (snapshot !== undefined) deps.config.restoreSoulCacheSnapshot(scopeIdValue, snapshot);
+          if (snapshot !== undefined) deps.config.restoreInstructionsCacheSnapshot(scopeIdValue, snapshot);
           if (opts?.expectedVersion !== undefined) await deps.config.refreshScope(scopeIdValue);
           throw error;
         }

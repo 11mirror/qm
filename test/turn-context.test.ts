@@ -8,12 +8,11 @@ import { renderRecall } from "../src/memory/cross-scope.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { testConfigStore, testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 async function fixture() {
   const memory = createPostgresMemoryService(testDatabaseUrl());
-  const config = testConfigStore("test", { defaultSharingPosture: "open" });
   const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   let member = true;
@@ -23,7 +22,6 @@ async function fixture() {
       { scopeId: "org:test", mode: "ro", mountPath: "global" },
     ],
     orgScopeId: "org:test",
-    sharingPosture: "open",
     grantedHandles: [],
   } as unknown as Resolution;
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
@@ -38,7 +36,6 @@ async function fixture() {
     trustedLiveHuman: true,
     sessions: { listByParticipant: async () => [{ scopeId: "channel:eng", createdAt: 1 }] as Session[] },
     isCurrentSharedScopeMember: async (actor, scope) => member && actor === "alice" && scope === "channel:eng",
-    config,
     resolution,
     memoryPolicy: { recall: "visible", capture: "writable" },
     useMemory: true,
@@ -62,7 +59,6 @@ async function fixture() {
     input,
     acl,
     memory,
-    config,
     auditLog,
     removeMember: () => {
       member = false;
@@ -104,8 +100,7 @@ test("one context recalls capped, source-labelled memory and shares authority wi
 });
 
 for (const mode of [
-  "isolated",
-  "source-veto",
+  "external",
   "removed",
   "speaker-switch",
   "automation",
@@ -114,9 +109,8 @@ for (const mode of [
   "memory-skip",
 ] as const) {
   test(`context ${mode} excludes source memories consistently`, async () => {
-    const { input, config, removeMember } = await fixture();
-    if (mode === "isolated") input.resolution.sharingPosture = "isolated";
-    if (mode === "source-veto") await config.setSharingPosture("channel:eng", "isolated");
+    const { input, removeMember } = await fixture();
+    if (mode === "external") input.external = true;
     if (mode === "removed") removeMember();
     if (mode === "speaker-switch") input.actor = { id: "bob", type: "internal" };
     if (mode === "automation") input.trustedLiveHuman = false;

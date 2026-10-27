@@ -3,14 +3,12 @@ export type Rule = { id: number; pattern: string; decision: string; reason: stri
 export type Bot = { id: number; name: string; mode: string; hours: string };
 let nextId = 0;
 const fieldNames: Record<string, Record<string, string>> = {
-  "security-posture": { "security-posture": "posture" },
-  "sharing-posture": { "sharing-posture": "posture" },
   "org-ambient": { "governance-org-ambient": "on" },
   "auto-flagger": {
     "auto-flagger-model": "modelId",
     "auto-flagger-rubric": "rubric",
   },
-  "ambient-policy": { "ambient-enabled": "ambientEnabled", "ambient-orders": "orders" },
+  "ambient-policy": { "ambient-enabled": "ambientEnabled" },
   egress: { egress: "allowedHosts", "egress-deny": "deniedHosts" },
   "command-policy": {},
 };
@@ -107,7 +105,6 @@ export class GovernanceState extends SettingState {
         bots[name] = entry;
       }
       return {
-        orders: this.draft.orders || "",
         bots,
         ambientEnabled: this.draft.ambientEnabled ?? null,
         baseUpdatedAt: this.draft.baseUpdatedAt || 0,
@@ -176,8 +173,6 @@ export const states = new Map(Object.keys(fieldNames).map((key) => [key, new Gov
 export const { owns, collect, capture, commit, status, statusKey } = settingRegistry(states);
 export function load(data: Record<string, any>, scope: string, only?: string) {
   const resources: Record<string, [boolean, Record<string, any>]> = {
-    "security-posture": ["securityPosture" in data, { posture: data.securityPosture || "auto" }],
-    "sharing-posture": ["sharingPosture" in data, { posture: data.sharingPosture || "isolated" }],
     "auto-flagger": [
       scope.startsWith("org:") && "autoFlagger" in data,
       data.autoFlagger || data.autoFlaggerDefault || {},

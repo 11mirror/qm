@@ -17,7 +17,7 @@ import {
 import { verifyCapabilityToken, CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
 import { errMessage } from "../util/errors.ts";
-import { parseScopeId, scopeId } from "../types.ts";
+import { parseScopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { armBodyDeadline, HttpError, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
 import { KeychainError } from "../credentials/keychain.ts";
@@ -30,7 +30,7 @@ import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
 import { reportForeignTenant } from "../tenant.ts";
-import { SoulTooLargeError } from "../resolution/config-store.ts";
+import { InstructionsTooLargeError } from "../resolution/config-store.ts";
 import { zodMessage } from "./routes/shared.ts";
 
 async function capabilityAdminDenied(
@@ -38,7 +38,6 @@ async function capabilityAdminDenied(
   params: Record<string, string>,
   url: URL,
   claims: CapabilityClaims,
-  config: ServerDeps["config"],
 ): Promise<string | null> {
   if (access.agent === "anyone") return null;
   if (claims.aud !== CONTROL_PLANE_AUD) return "admin routes require the per-turn agent token";
@@ -51,11 +50,7 @@ async function capabilityAdminDenied(
   if (access.privateRead && parseScopeId(claims.scopeId).kind !== "personal") {
     const target =
       access.privateRead === "unless-org-scope" ? (params.scope ?? url.searchParams.get("scope") ?? "") : "";
-    if (
-      parseScopeId(target).kind !== "org" &&
-      (!livePersonCapability(claims) ||
-        (await config?.resolveSharingPostureDurable(scopeId("personal", claims.actorId), claims.scopeId)) !== "open")
-    ) {
+    if (parseScopeId(target).kind !== "org" && !livePersonCapability(claims)) {
       return "this admin read returns private content — ask the agent in a DM";
     }
   }
@@ -157,7 +152,7 @@ async function gate(
   base: BaseCtx,
   wiring: Wiring,
   raw: string,
-  route: Pick<Route, "auth" | "actor" | "admin" | "allowedInStrict"> | undefined,
+  route: Pick<Route, "auth" | "actor" | "admin"> | undefined,
   params: Record<string, string>,
 ): Promise<GateResult | null> {
   const { req, res, method, pathname, url } = base;
@@ -172,7 +167,7 @@ async function gate(
     if (routeAuth === "either") {
       if (capability.aud !== undefined && capability.aud !== CONTROL_PLANE_AUD)
         return refuse(res, 403, "capability token audience not valid for this route");
-      const denied = route?.admin && (await capabilityAdminDenied(route.admin, params, url, capability, deps.config));
+      const denied = route?.admin && (await capabilityAdminDenied(route.admin, params, url, capability));
       if (denied) return refuse(res, 403, denied);
     } else if (!requiredAud) {
       return refuse(res, 403, "capability token not valid for this route");
@@ -199,15 +194,6 @@ async function gate(
       return refuse(res, 400, "invalid JSON body");
     }
   }
-  if (
-    capability &&
-    !requiredAud &&
-    method !== "GET" &&
-    !route?.allowedInStrict &&
-    deps.config &&
-    (await deps.config.getSecurityPostureDurable(capability.scopeId)) === "strict"
-  )
-    return refuse(res, 403, "Strict posture blocks direct control-plane mutations");
 
   let actor: PortalIdentity | null = null;
   if (!capability) {
@@ -274,7 +260,11 @@ function typedFailure(err: unknown): HttpError | null {
   if (err instanceof MemoryDisclosureDenied) return as(403, "forbidden");
   if (err instanceof KeychainError) return as(err.status, "keychain");
   if (err instanceof BackgroundOwnershipConflict) return as(409, "background_ownership_conflict");
-  if (err instanceof PayloadTooLargeError || err instanceof ByteSourceTooLargeError || err instanceof SoulTooLargeError)
+  if (
+    err instanceof PayloadTooLargeError ||
+    err instanceof ByteSourceTooLargeError ||
+    err instanceof InstructionsTooLargeError
+  )
     return as(413, "payload_too_large");
   return null;
 }

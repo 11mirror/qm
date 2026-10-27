@@ -152,12 +152,14 @@ test("pg surface-cache: one ingest batch folds container state and keeps the las
 test("pg channel-policy: set + get + list", { skip }, async () => {
   const store = createPostgresChannelPolicyStore(URL!);
   try {
-    await store.set("C1", "flag anything about the Q3 launch", { setBy: "U-admin" });
+    await store.set("C1", { setBy: "U-admin", bots: { news: { mode: "ignore" } } });
     const p = await store.get("C1");
-    assert.equal(p?.orders, "flag anything about the Q3 launch");
+    assert.deepEqual(p?.bots, { news: { mode: "ignore" } });
     assert.equal(p?.setBy, "U-admin");
-    await store.set("C1", "stay silent unless @mentioned");
-    assert.equal((await store.get("C1"))?.orders, "stay silent unless @mentioned");
+    await store.set("C1", { bots: { news: { mode: "user" } } });
+    assert.deepEqual((await store.get("C1"))?.bots, { news: { mode: "user" } });
+    await store.set("C1", {});
+    assert.deepEqual((await store.get("C1"))?.bots, { news: { mode: "user" } }, "omitted bots are kept");
     assert.equal((await store.list()).length, 1);
   } finally {
     await store.close();
@@ -170,13 +172,13 @@ test(
   async () => {
     const store = createPostgresChannelPolicyStore(URL!);
     try {
-      await store.set("CPA1", "watch", { setBy: "U-admin" });
+      await store.set("CPA1", { setBy: "U-admin" });
       assert.equal((await store.get("CPA1"))?.ambientEnabled, undefined, "unset by default");
-      await store.set("CPA1", "watch", { setBy: "U-admin", ambientEnabled: false });
+      await store.set("CPA1", { setBy: "U-admin", ambientEnabled: false });
       assert.equal((await store.get("CPA1"))?.ambientEnabled, false);
-      await store.set("CPA1", "watch more");
+      await store.set("CPA1", {});
       assert.equal((await store.get("CPA1"))?.ambientEnabled, false, "omitted arg leaves the override unchanged");
-      await store.set("CPA1", "watch more", { ambientEnabled: null });
+      await store.set("CPA1", { ambientEnabled: null });
       assert.equal((await store.get("CPA1"))?.ambientEnabled, undefined, "null clears back to the default rule");
       const h = await store.history("CPA1");
       assert.deepEqual(
@@ -193,11 +195,15 @@ test(
 test("pg channel-policy: history appends a revision per set with provenance", { skip }, async () => {
   const store = createPostgresChannelPolicyStore(URL!);
   try {
-    await store.set("CPH1", "watch the launch", { setBy: "U-alice", sessionId: "sess-1" });
-    await store.set("CPH1", "watch the launch and incidents", { setBy: "U-bob", sessionId: "sess-2" });
+    await store.set("CPH1", { setBy: "U-alice", sessionId: "sess-1", ambientEnabled: true });
+    await store.set("CPH1", {
+      setBy: "U-bob",
+      sessionId: "sess-2",
+      bots: { news: { mode: "rollup", rollupHours: 6 } },
+    });
     const h = await store.history("CPH1");
     assert.equal(h.length, 2);
-    assert.equal(h[0]?.orders, "watch the launch and incidents");
+    assert.deepEqual(h[0]?.bots, { news: { mode: "rollup", rollupHours: 6 } });
     assert.equal(h[0]?.setBy, "U-bob");
     assert.equal(h[0]?.sessionId, "sess-2");
     assert.equal(h[1]?.setBy, "U-alice");
@@ -440,40 +446,6 @@ test("channel history includes broadcasts while exact roots exclude them", { ski
     );
   } finally {
     await cache.close();
-  }
-});
-
-test("pg channel guidance edits compare the stored text atomically across connections", { skip }, async () => {
-  const left = createPostgresChannelPolicyStore(URL!);
-  const right = createPostgresChannelPolicyStore(URL!);
-  const initial = "First rule. Second rule.";
-  try {
-    await left.set("CAS", initial, { ambientEnabled: true, bots: { news: { mode: "ignore" } } });
-    const attempts = await Promise.allSettled([
-      left.set("CAS", "First updated. Second rule.", { expectedOrders: initial }),
-      right.set("CAS", "First rule. Second updated.", { expectedOrders: initial }),
-    ]);
-    assert.equal(attempts.filter((result) => result.status === "fulfilled").length, 1);
-    const rejected = attempts.find((result) => result.status === "rejected");
-    assert.ok(rejected?.status === "rejected");
-    assert.match(String(rejected.reason), /guidance changed/);
-    assert.equal((await left.history("CAS")).length, 2);
-    const current = (await right.get("CAS"))!;
-    assert.equal(current.ambientEnabled, true);
-    assert.deepEqual(current.bots, { news: { mode: "ignore" } });
-    await right.set("CAS", "First updated. Second updated.", { expectedOrders: current.orders });
-    assert.equal((await left.get("CAS"))!.orders, "First updated. Second updated.");
-    await assert.rejects(left.set("CAS-missing", "new", { expectedOrders: "old" }), /guidance changed/);
-    assert.equal(await right.get("CAS-missing"), null);
-    await left.set("CAS", undefined, { ambientEnabled: false });
-    assert.equal((await right.get("CAS"))!.orders, "First updated. Second updated.");
-    assert.equal((await left.history("CAS"))[0]!.orders, "First updated. Second updated.");
-    await right.set("CAS-new", undefined, { bots: { news: { mode: "ignore" } } });
-    assert.equal((await left.get("CAS-new"))!.orders, "");
-    await left.set("CAS", "replace");
-    assert.equal((await right.get("CAS"))!.orders, "replace");
-  } finally {
-    await Promise.all([left.close(), right.close()]);
   }
 });
 

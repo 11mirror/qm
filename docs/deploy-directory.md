@@ -217,10 +217,10 @@ An exact `--candidate` deployment consumes its digest-pinned images without chan
 
 ## Content screening
 
-The classifier screens external content — inbound data, attachments and documents, shared skills, steering context, and external tool output — under every security posture. Screening runs in observe mode. Scope posture changes cannot turn screening off; they keep their own tool approvals and private-network policy.
+The classifier screens external content — inbound data, attachments and documents, shared skills, steering context, and external tool output . Screening always runs in observe mode.
 
 Observation classifies in the background and never delays a turn, quarantines, prompts, or adds untrusted-content markers. Each observation is bounded by a 15-second deadline; there is no separate concurrency cap. Observed model screens are not charged to the user's budget. Setting `SECURITY_SCREEN_PROXY_PROVIDER`, `SECURITY_SCREEN_PROXY_ENDPOINT` and `SECURITY_SCREEN_PROXY_TOKEN` together selects the proxy classifier; otherwise the model classifier runs.
 
-Every classification writes one `security_screen.classify` audit record with status `allow`, `block`, `would_block`, or `error`. Its detail carries the hook, source labels, surface, origin, session, run and thread identifiers, request ID, attempt count, and any score, threshold, or outcome — enough to find the transcript behind a would-block. It never includes the screened text.
+Every classification writes one `security_screen.classify` audit record with status `allow`, `would_block`, or `error`. Its detail carries the hook, source labels, surface, origin, session, run and thread identifiers, request ID, attempt count, and any score, threshold, or outcome — enough to find the transcript behind a would-block. It never includes the screened text.
 
 New tool-output release approvals deliver the exact saved text without running the tool again. They are once-only and retain the source scope in durable history. A release is refused if the current audience is no longer entitled to that source scope. Legacy persisted screening grants remain effective and are audited; remove those grants explicitly if a deployment requires every result to be classified. New release approvals cannot create session or always grants.

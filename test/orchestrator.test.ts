@@ -1077,29 +1077,27 @@ test("unattended grants enter capability claims only on non-live turns", async (
   assert.equal(claims?.grants, undefined);
 });
 
-test("the egress claim keeps the control-plane host reachable under an allowlist or a matching denylist", () => {
+test("the egress claim denies private networks and keeps the control-plane host reachable", () => {
   const core = "https://core.example.com";
 
-  const a = egressClaimAllowingControlPlane({ allowedHosts: ["api.github.com"] }, core)!;
+  const a = egressClaimAllowingControlPlane({ allowedHosts: ["api.github.com"] }, core);
   assert.deepEqual(a.allowedHosts, ["api.github.com", "core.example.com"]);
   assert.equal(egressDecision("core.example.com", a).allow, true);
   assert.equal(egressDecision("evil.com", a).allow, false, "the allowlist still bites everything else");
 
-  const d = egressClaimAllowingControlPlane({ allowedHosts: [], deniedHosts: ["example.com", "tracker.io"] }, core)!;
+  const d = egressClaimAllowingControlPlane({ allowedHosts: [], deniedHosts: ["example.com", "tracker.io"] }, core);
   assert.equal(egressDecision("core.example.com", d).allow, true, "core must not be denied");
   assert.equal(egressDecision("tracker.io", d).allow, false, "unrelated denies survive");
 
-  assert.equal(egressClaimAllowingControlPlane({ allowedHosts: [] }, core), undefined);
-
-  const auto = egressClaimAllowingControlPlane({ allowedHosts: [] }, core, true)!;
+  const auto = egressClaimAllowingControlPlane({ allowedHosts: [] }, core);
   assert.deepEqual(auto, {
     allowedHosts: [],
     denyPrivateNetworks: true,
     privateNetworkAllowedHosts: ["core.example.com"],
   });
-  assert.equal(egressDecision("api.github.com", auto).allow, true, "Auto keeps public internet capability");
+  assert.equal(egressDecision("api.github.com", auto).allow, true, "public internet stays reachable");
 
-  const withoutControlPlane = egressClaimAllowingControlPlane({ allowedHosts: [] }, "", true)!;
+  const withoutControlPlane = egressClaimAllowingControlPlane({ allowedHosts: [] }, "");
   assert.deepEqual(withoutControlPlane, { allowedHosts: [], denyPrivateNetworks: true });
 });
 
@@ -1237,10 +1235,7 @@ test("an org admin's live turn carries the admin prompt hint and a liveness clai
   assert.match(adminPrompt.reply ?? "", /including resources owned by other users/);
   assert.match(adminPrompt.reply ?? "", /Ordinary resource-owner restrictions do not by themselves prohibit/);
   assert.match(adminPrompt.reply ?? "", /admin grant changes and impersonation are portal-only/);
-  assert.match(
-    adminPrompt.reply ?? "",
-    /private-content reads require a DM or an Open conversation on a live admin turn/,
-  );
+  assert.match(adminPrompt.reply ?? "", /private-content reads require a DM or a turn the admin started/);
   assert.doesNotMatch(
     adminPrompt.reply ?? "",
     /private-content reads work only from a DM|bulk configuration imports require/,

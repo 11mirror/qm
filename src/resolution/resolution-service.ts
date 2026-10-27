@@ -5,7 +5,6 @@ import type { ScopedConfigStore } from "./config-store.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import { audienceEgressFloor, audienceDeniedFloor } from "./audience-floor.ts";
 import { principalEntitledToScope } from "./context-filter.ts";
-import { resolveSecurityPolicy, type SecurityScreenMode } from "../security/security-posture.ts";
 
 export interface ResolutionService {
   scopeFor(conversation: Conversation, actor: Principal): ScopeId;
@@ -22,23 +21,18 @@ export function conversationScope(
   return scopeId("channel", ref);
 }
 
-export function composeSoul(orgSoul: string | null, scopeSoul: string | null): string {
+export function composeInstructions(orgInstructions: string | null, scopeInstructions: string | null): string {
   const parts: string[] = [];
-  if (orgSoul?.trim()) parts.push(`## Organization instructions\n${orgSoul}`);
-  if (scopeSoul?.trim() && scopeSoul.trim() !== orgSoul?.trim()) {
+  if (orgInstructions?.trim()) parts.push(`## Organization instructions\n${orgInstructions}`);
+  if (scopeInstructions?.trim() && scopeInstructions.trim() !== orgInstructions?.trim()) {
     parts.push(
-      `## Conversation instructions${orgSoul?.trim() ? " (organization instructions take precedence)" : ""}\n${scopeSoul}`,
+      `## Conversation instructions${orgInstructions?.trim() ? " (organization instructions take precedence)" : ""}\n${scopeInstructions}`,
     );
   }
   return parts.join("\n\n");
 }
 
-export function createResolutionService(
-  orgId: string,
-  config: ScopedConfigStore,
-  acl: AclStore,
-  screening: SecurityScreenMode = "enforce",
-): ResolutionService {
+export function createResolutionService(orgId: string, config: ScopedConfigStore, acl: AclStore): ResolutionService {
   const orgScope = scopeId("org", orgId);
 
   function scopeFor(conversation: Conversation, actor: Principal): ScopeId {
@@ -67,17 +61,13 @@ export function createResolutionService(
         }
       }
 
-      const orgSoul = external ? "" : (config.getSoul(orgScope) ?? "");
-      const scopeSoul = external ? null : config.getSoul(scope);
-      const systemPrompt = composeSoul(orgSoul, scopeSoul);
+      const orgInstructions = external ? "" : (config.getInstructions(orgScope) ?? "");
+      const scopeInstructions = external ? null : config.getInstructions(scope);
+      const systemPrompt = composeInstructions(orgInstructions, scopeInstructions);
 
       const orgPolicy = config.setting("commandPolicy", orgScope) ?? defaultOrgPolicy();
       const scopePolicy = config.setting("commandPolicy", scope) ?? undefined;
       const commandPolicy = composePolicy(orgPolicy, scopePolicy);
-      const securityPolicy = resolveSecurityPolicy(await config.getSecurityPostureDurable(scope), screening);
-      const sharingPosture = external
-        ? "isolated"
-        : await config.resolveSharingPostureDurable(scopeId("personal", actor.id), scope);
       const approvalGrantModes = await config.getApprovalGrantModesDurable(scope);
 
       const egress = {
@@ -94,8 +84,6 @@ export function createResolutionService(
         systemPrompt,
         egress,
         commandPolicy,
-        securityPolicy,
-        sharingPosture,
         approvalGrantModes,
         orgScopeId: orgScope,
         grantedHandles,

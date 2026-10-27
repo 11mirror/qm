@@ -224,9 +224,6 @@ export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: Am
     searchSurface: async (queryText, opts) => (await deps.surfaceCache?.search(queryText, opts)) ?? [],
     readSurfaceMessages: async (container, opts) => (await deps.surfaceCache?.readMessages(container, opts)) ?? [],
     listSurfaceContainers: async (opts) => (await deps.surfaceCache?.listContainers(opts)) ?? [],
-    getChannelPolicy: async (container) => (await deps.channelPolicy?.get(container)) ?? null,
-    setChannelPolicy: async (container, orders, setBy, bots, sessionId, ambientEnabled) =>
-      (await deps.channelPolicy?.set(container, orders, { setBy, bots, sessionId, ambientEnabled })) ?? null,
     judgeAmbientContainer: (surface, container) => judgeAmbientContainer(surface, container),
     async createContextRequest(source, query) {
       const { viewerToken, ...storedQuery } = query;

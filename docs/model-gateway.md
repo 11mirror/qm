@@ -43,7 +43,7 @@ Company browser inference uses the same gateway key permissions and budgets as
 other company model calls. The selected model must be in the gateway catalog or
 configured aliases. Private gateways need no public listener. The endpoint accepts
 up to 16 MiB for screenshot history, rejects provider overrides, and rechecks scope
-membership, strict posture and gateway availability. Gateway budget exhaustion is
+membership and gateway availability. Gateway budget exhaustion is
 returned as HTTP 429; missing or retired models fail closed.
 
 The managed browse runner needs browser-use 0.12.9 with

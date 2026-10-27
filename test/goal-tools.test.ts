@@ -13,14 +13,14 @@ import {
 import type { ScopeId } from "../src/types.ts";
 import type { NewItem } from "../src/sessions/items.ts";
 
-function toolbox(screenToolResult?: ToolContextRef["screenToolResult"]) {
+function toolbox(observeToolResult?: ToolContextRef["observeToolResult"]) {
   const ref: ToolContextRef = {
     current: null,
     scopeLabel: { kind: "org", id: "test" } as unknown as ScopeId,
     emit: async () => undefined,
     goalMeter: createGrindMeter(),
     governGoal: async () => ({ verdict: "complete", reasons: "proven" }),
-    ...(screenToolResult ? { screenToolResult } : {}),
+    ...(observeToolResult ? { observeToolResult } : {}),
   };
   let row: GoalRecord | null = null;
   ref.saveGoal = async (goal) => {
@@ -215,29 +215,20 @@ test("update with no active goal errors cleanly", async () => {
   assert.match(textOf(res as never), /No active goal/);
 });
 
-test("goal tool results are core-authored, so the security classifier never sees or quarantines them", async () => {
+test("goal tool results are core-authored, so the security classifier never sees them", async () => {
   const screened: string[] = [];
-  const { create, get, update, by } = toolbox(async ({ tool }) => {
+  const { create, get, update, by } = toolbox(({ tool }) => {
     screened.push(tool);
-    return { outcome: "quarantine" };
   });
   const created = await create.execute("c1", { objective: "ship the fix" });
   const read = await get.execute("g1", {});
-  const closed = await update.execute("u1", { status: "complete", note: "shipped" });
-  for (const res of [created, read, closed]) {
-    assert.doesNotMatch(textOf(res as never), /quarantined by the security screen/);
-  }
+  await update.execute("u1", { status: "complete", note: "shipped" });
   assert.match(textOf(created as never), /registered and now enforced/);
   assert.match(textOf(read as never), /"objective": "ship the fix"/);
   assert.deepEqual(screened, [], "no goal tool is handed to the classifier");
 
-  const other = await by("finish_silently").execute("f1", {});
-  assert.match(
-    textOf(other as never),
-    /quarantined by the security screen/,
-    "the same screener still quarantines a non-exempt tool, so the exemption is what spared the goal tools",
-  );
-  assert.deepEqual(screened, ["finish_silently"]);
+  await by("finish_silently").execute("f1", {});
+  assert.deepEqual(screened, ["finish_silently"], "a non-exempt tool still reaches the classifier");
 });
 
 test("get frames free text as data and escapes tag characters in it", async () => {

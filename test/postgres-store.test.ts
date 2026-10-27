@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import { PARALLEL_EXCEPTION_QUERY } from "../src/deployment/postdeploy-smoke.ts";
 import { createPostgresSessionStore, rowToSession } from "../src/sessions/postgres-session-store.ts";
-import { SECURITY_SCREEN_STEP } from "../src/security/security-posture.ts";
+import { SECURITY_SCREEN_STEP } from "../src/security/security-screen.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { scopeId, type Principal, type TurnRequest, type TurnResult } from "../src/types.ts";

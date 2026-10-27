@@ -2079,7 +2079,7 @@
   border-radius: var(--radius);
 }
 #app-view .credential-main,
-#app-view .soul-diff section,
+#app-view .instructions-diff section,
 #app-view .governance-content,
 #app-view .setting-copy {
   min-width: 0;
@@ -2106,7 +2106,7 @@
   margin: 0 0 8px;
 }
 #app-view .sc-form-head .hint,
-#app-view .soul-revision p {
+#app-view .instructions-revision p {
   margin: 0;
 }
 #app-view .editor-grid {
@@ -2195,21 +2195,21 @@
   font-size: 11px;
   line-height: 1.4;
 }
-#app-view .soul-meta {
+#app-view .instructions-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 6px 14px;
   margin-top: 8px;
   color: var(--muted);
 }
-#app-view .soul-diff {
+#app-view .instructions-diff {
   display: grid;
   margin-top: 14px;
 }
-#app-view .soul-diff h3 {
+#app-view .instructions-diff h3 {
   margin: 0 0 5px;
 }
-#app-view .soul-diff pre {
+#app-view .instructions-diff pre {
   min-height: 90px;
   max-height: 210px;
   margin: 0;
@@ -2219,12 +2219,12 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-#app-view .soul-history {
+#app-view .instructions-history {
   display: grid;
   gap: 7px;
   margin-top: 14px;
 }
-#app-view .soul-revision {
+#app-view .instructions-revision {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2234,7 +2234,7 @@
   border-radius: 7px;
   background: var(--surface);
 }
-#app-view .soul-revision small {
+#app-view .instructions-revision small {
   display: block;
   color: var(--muted);
 }
@@ -2822,7 +2822,7 @@
   }
   #app-view .kpis,
   #app-view .sc-semantics,
-  #app-view .soul-diff {
+  #app-view .instructions-diff {
     grid-template-columns: 1fr;
   }
   #app-view .viewer {
@@ -3030,29 +3030,12 @@
   font-weight: 400;
   line-height: 1.4;
 }
-#app-view #card-security-posture .choice-stack {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-#app-view #card-security-posture .posture-choice,
-#app-view #card-sharing-posture .posture-choice,
 #app-view #card-external-slack .posture-choice {
   background: transparent;
 }
-#app-view #card-security-posture .posture-choice:has(input:checked),
-#app-view #card-sharing-posture .posture-choice:has(input:checked),
 #app-view #card-external-slack .posture-choice:has(input:checked) {
   border-color: var(--muted);
   background: transparent;
-}
-@media (max-width: 1100px) {
-  #app-view #card-security-posture .choice-stack {
-    grid-template-columns: 1fr;
-    gap: 4px;
-  }
-  #app-view #card-security-posture .posture-choice > span {
-    flex-wrap: wrap;
-    column-gap: 8px;
-  }
 }
 #app-view #view-governance .governance-field-grid {
   display: grid;
@@ -3181,7 +3164,6 @@
   align-items: start;
 }
 #app-view #view-governance .environment-notice.hidden,
-#app-view #card-security-posture > .head p,
 #app-view #card-external-slack > .head p,
 #app-view #view-governance section.card.hidden,
 #app-view #view-governance .card > .foot[hidden] {
@@ -3257,16 +3239,6 @@
   order: 1;
   font-weight: 400;
 }
-#app-view #card-security-posture .body > .dd,
-#app-view #card-sharing-posture .body > .dd {
-  width: 180px;
-  margin-left: auto;
-}
-#app-view #view-governance #sharing-posture-effective {
-  margin: 0 0 8px;
-  text-align: right;
-  font-size: 12px;
-}
 #app-view #view-governance #card-command-policy > .body,
 #app-view #view-governance #card-egress > .body,
 #app-view #view-governance #card-ambient-policy > .body {
@@ -3292,14 +3264,6 @@
   #app-view #view-governance .card > .foot {
     grid-column: 1;
   }
-  #app-view #card-security-posture .body > .dd,
-  #app-view #card-sharing-posture .body > .dd {
-    width: 100%;
-    margin-left: 0;
-  }
-  #app-view #view-governance #sharing-posture-effective {
-    text-align: left;
-  }
 }
 #app-view .screening-count {
   display: flex;
@@ -3319,8 +3283,6 @@
 #app-view #view-governance .screening-test-help {
   margin: 0 0 12px;
 }
-#app-view #view-governance #card-security-posture .choice-stack,
-#app-view #view-governance #card-sharing-posture .choice-stack,
 #app-view #view-governance #card-external-slack .choice-stack,
 #app-view #view-governance #card-org-ambient .choice-stack {
   display: flex;
@@ -3328,18 +3290,12 @@
   gap: 4px;
   margin: 0;
 }
-#app-view #view-governance #card-security-posture .posture-choice,
-#app-view #view-governance #card-sharing-posture .posture-choice,
 #app-view #view-governance #card-external-slack .posture-choice,
 #app-view #view-governance #card-org-ambient .posture-choice {
   padding: 10px 12px;
   border: 1px solid color-mix(in srgb, var(--text) 9%, var(--bg));
 }
-#app-view #card-security-posture .posture-choice:hover,
-#app-view #card-sharing-posture .posture-choice:hover,
 #app-view #card-external-slack .posture-choice:hover,
-#app-view #view-governance #card-security-posture .posture-choice:has(input:checked),
-#app-view #view-governance #card-sharing-posture .posture-choice:has(input:checked),
 #app-view #view-governance #card-external-slack .posture-choice:has(input:checked),
 #app-view #view-governance #card-org-ambient .posture-choice:has(input:checked) {
   background: color-mix(in srgb, var(--text) 2%, transparent);
@@ -3347,8 +3303,6 @@
 #app-view #view-governance .governance-layout,
 #app-view .posture-choice strong,
 #app-view .posture-choice small,
-#app-view #view-governance #card-security-posture .posture-choice > span,
-#app-view #view-governance #card-sharing-posture .posture-choice > span,
 #app-view #view-governance #card-external-slack .posture-choice > span,
 #app-view #view-governance #card-org-ambient .posture-choice > span,
 #app-view #view-governance #card-org-ambient > .head,
@@ -3573,8 +3527,6 @@
   font-weight: 400;
 }
 
-#app-view #view-governance #card-security-posture .posture-choice:hover,
-#app-view #view-governance #card-sharing-posture .posture-choice:hover,
 #app-view #view-governance #card-external-slack .posture-choice:hover,
 #app-view #view-governance #card-org-ambient .posture-choice:hover,
 #app-view[data-subview="credentials"] #view-governance .credential-actions button:hover {
@@ -3942,16 +3894,16 @@
   margin-top: 4px;
 }
 #app-view #view-governance .card > .foot .status,
-#app-view #view-governance .soul-meta {
+#app-view #view-governance .instructions-meta {
   font-size: 12px;
   line-height: 1.4;
 }
-#app-view .soul-preview-label {
+#app-view .instructions-preview-label {
   display: block;
   margin-bottom: 4px;
 }
-#app-view #view-governance #card-soul .soul-preview,
-#app-view #view-governance .soul-workbench textarea {
+#app-view #view-governance #card-instructions .instructions-preview,
+#app-view #view-governance .instructions-workbench textarea {
   width: 100%;
   min-height: 140px;
   max-height: 360px;
@@ -3966,24 +3918,24 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-#app-view #view-governance .soul-diff {
+#app-view #view-governance .instructions-diff {
   grid-template-columns: 1fr;
   gap: 12px;
 }
-#app-view #view-governance .soul-diff h3,
-#app-view #view-governance .soul-history h3 {
+#app-view #view-governance .instructions-diff h3,
+#app-view #view-governance .instructions-history h3 {
   margin: 0 0 4px;
   color: var(--text);
   font-size: 13px;
   font-weight: 400;
 }
-#app-view #view-governance .soul-diff pre {
+#app-view #view-governance .instructions-diff pre {
   padding: 7px 10px;
   border-radius: 6px;
   background: transparent;
   font: inherit;
 }
-#app-view #card-soul .soul-preview {
+#app-view #card-instructions .instructions-preview {
   margin: 0;
   text-overflow: ellipsis;
 }
@@ -4083,9 +4035,9 @@
   min-width: 0;
 }
 #app-view .policy-rule.hidden,
-#app-view #card-soul.is-editing .soul-preview-body,
-#app-view #card-soul:not(.is-editing) .soul-workbench,
-#app-view #card-soul.is-editing .soul-preview,
+#app-view #card-instructions.is-editing .instructions-preview-body,
+#app-view #card-instructions:not(.is-editing) .instructions-workbench,
+#app-view #card-instructions.is-editing .instructions-preview,
 #app-view #view-data .users-layout .status:empty,
 #app-view #shellbar.logs-shell .log-counts:empty,
 #app-view #slack-own-app-guide summary::-webkit-details-marker,

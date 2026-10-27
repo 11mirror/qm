@@ -1,28 +1,20 @@
-import { parseScopeId } from "../../types.ts";
-import {
-  parseBotLedger,
-  type ChannelPolicy,
-  type ChannelPolicyStore,
-} from "../../surface-cache/channel-policy-store.ts";
+import { parseScopeId, type ScopeId } from "../../types.ts";
+import { InstructionsVersionConflictError } from "../app-types.ts";
+import { InstructionsTooLargeError, MAX_INSTRUCTIONS_CHARS } from "../../resolution/config-store.ts";
+import { parseBotLedger, type BotPolicy, type ChannelPolicyStore } from "../../surface-cache/channel-policy-store.ts";
 import { sendJson } from "../http.ts";
 import { audit, isObj, refuse } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
-const MAX_ORDERS_CHARS = 20_000;
-
-export async function writeAmbientPolicy(
+/** Validates a channel-settings write (bots, ambientEnabled) and checks it against the loaded snapshot. */
+export async function checkChannelSettings(
   store: ChannelPolicyStore,
   container: string,
-  input: { orders?: unknown; bots?: unknown; ambientEnabled?: unknown; baseUpdatedAt?: unknown },
-  setBy: string,
-  ordersRequired: string,
-): Promise<{ policy: ChannelPolicy } | { status: 400 | 409; message: string }> {
-  if (typeof input.orders !== "string") return { status: 400, message: ordersRequired };
-  if (input.orders.length > MAX_ORDERS_CHARS)
-    return {
-      status: 400,
-      message: `standing order is capped at ${MAX_ORDERS_CHARS} characters — it is rendered into every ambient judgment`,
-    };
+  input: { bots?: unknown; ambientEnabled?: unknown; baseUpdatedAt?: unknown },
+): Promise<
+  | { bots: Record<string, BotPolicy>; ambientEnabled: boolean | null | undefined }
+  | { status: 400 | 409; message: string }
+> {
   const parsed = parseBotLedger(input.bots);
   if ("error" in parsed) return { status: 400, message: parsed.error };
   const { ambientEnabled } = input;
@@ -34,7 +26,7 @@ export async function writeAmbientPolicy(
       status: 409,
       message: "this channel's policy changed since you loaded it — reload and re-apply your edit",
     };
-  return { policy: await store.set(container, input.orders, { setBy, bots: parsed.bots, ambientEnabled }) };
+  return { bots: parsed.bots, ambientEnabled };
 }
 
 async function policyContainer(ctx: ApiCtx, principalId: string, scope: string): Promise<string | null> {
@@ -61,9 +53,11 @@ export async function getContextPolicy(ctx: ApiCtx): Promise<void> {
   );
   if (!container) return;
   const p = await deps.channelPolicy!.get(container);
+  const instructions = ctx.app.getInstructions((url.searchParams.get("scope") ?? "").trim() as ScopeId);
   return sendJson(res, 200, {
     policy: {
-      orders: p?.orders ?? "",
+      instructions: instructions.instructions ?? "",
+      instructionsVersion: instructions.instructionsVersion,
       bots: p?.bots ?? {},
       ambientEnabled: p?.ambientEnabled ?? null,
       updatedAt: p?.updatedAt ?? 0,
@@ -72,28 +66,48 @@ export async function getContextPolicy(ctx: ApiCtx): Promise<void> {
 }
 
 export async function setContextPolicy(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body } = ctx;
+  const { res, deps, body, app } = ctx;
   const b = isObj(body) ? body : {};
   const principalId = typeof b.principalId === "string" ? b.principalId.trim() : "";
   const scope = typeof b.scope === "string" ? b.scope.trim() : "";
   const container = await policyContainer(ctx, principalId, scope);
   if (!container) return;
-  const written = await writeAmbientPolicy(
-    deps.channelPolicy!,
-    container,
-    { ...b, bots: b.bots ?? {} },
-    principalId,
-    "orders (string) required",
-  );
-  if ("message" in written)
-    return sendJson(res, written.status, {
-      error: written.status === 409 ? "conflict" : "bad_request",
-      message: written.message,
+  if (b.instructions !== undefined && typeof b.instructions !== "string")
+    return sendJson(res, 400, { error: "bad_request", message: "instructions must be a string" });
+  if (typeof b.instructions === "string" && b.instructions.length > MAX_INSTRUCTIONS_CHARS)
+    return sendJson(res, 413, { error: "payload_too_large", message: new InstructionsTooLargeError().message });
+  const settings = await checkChannelSettings(deps.channelPolicy!, container, { ...b, bots: b.bots ?? {} });
+  if ("message" in settings)
+    return sendJson(res, settings.status, {
+      error: settings.status === 409 ? "conflict" : "bad_request",
+      message: settings.message,
     });
-  const p = written.policy;
+  if (
+    typeof b.instructions === "string" &&
+    b.instructions !== (app.getInstructions(scope as ScopeId).instructions ?? "")
+  ) {
+    try {
+      await app.updateInstructions(scope as ScopeId, b.instructions, principalId, {
+        allowSharedScope: true,
+        ...(typeof b.instructionsVersion === "number" ? { expectedVersion: b.instructionsVersion } : {}),
+      });
+    } catch (e) {
+      if (e instanceof InstructionsVersionConflictError)
+        return sendJson(res, 409, { error: "conflict", message: e.message });
+      throw e;
+    }
+  }
+  const p = await deps.channelPolicy!.set(container, { setBy: principalId, ...settings });
   audit(deps, { principalId, action: "surface.policy.set", resource: container, scopeLabel: scope });
+  const saved = app.getInstructions(scope as ScopeId);
   return sendJson(res, 200, {
-    policy: { orders: p.orders, bots: p.bots, ambientEnabled: p.ambientEnabled ?? null, updatedAt: p.updatedAt },
+    policy: {
+      instructions: saved.instructions ?? "",
+      instructionsVersion: saved.instructionsVersion,
+      bots: p.bots,
+      ambientEnabled: p.ambientEnabled ?? null,
+      updatedAt: p.updatedAt,
+    },
   });
 }
 

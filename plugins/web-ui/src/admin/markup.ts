@@ -61,15 +61,13 @@ export const ADMIN_MARKUP = `
         ><template data-settings-card="card-runtimes"></template
         ><section class="card sv-models" id="card-custom-providers"><div class="head"><h2>Custom providers</h2><p>OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages endpoints. Their models join the pickers above and below.</p></div><div class="body"><div class="tablewrap" id="model-custom-provider-table"><table><thead><tr><th>Provider</th><th>Protocol</th><th>Endpoint</th><th>Models</th><th>Key</th><th></th></tr></thead><tbody id="model-custom-provider-rows"></tbody></table></div><div id="custom-provider-summary" class="hint">Loading providers…</div></div><div class="foot"><button type="button" id="add-custom-provider">+ Add provider</button></div></section
         ><template data-settings-card="card-webui-models"></template
-        ><template data-settings-card="card-soul"></template
+        ><template data-settings-card="card-instructions"></template
         ><template data-settings-card="card-branding"></template
         ><template data-settings-card="card-feature-flags"></template
         ><template data-settings-card="card-decisions"></template
         ><template data-settings-card="card-service-credentials"></template
         ><section class="card sv-credentials" id="card-personal-keychains"><div class="head"><h2>Personal keychains</h2></div><div class="body"><div class="keychain-summary"><strong id="keychain-user-count">—</strong> users with keychain entries · <strong id="keychain-standing-count">—</strong> standing grants</div></div><div class="foot"><button type="button" class="viewlink" data-viewlink="users">View users ›</button></div></section
-        ><template data-governance-card="card-security-posture"></template
         ><template data-governance-card="card-auto-flagger"></template
-        ><template data-governance-card="card-sharing-posture"></template
         ><template data-governance-card="card-org-ambient"></template
         ><template data-governance-card="card-command-policy"></template
         ><template data-governance-card="card-egress"></template

@@ -1,4 +1,4 @@
-// The guidance tool, the sharing/resource tools (files, apps, skills, …) and the admin tool's action list.
+// The instructions tool, the sharing/resource tools (files, apps, skills, …) and the admin tool's action list.
 
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type TSchema, Type } from "typebox";
@@ -13,35 +13,30 @@ import { optionalBoolean, optionalString, text } from "./shared.ts";
 
 export function controlPlaneTools(kit: ToolKit) {
   const { ref, recordCall, recordResult, recordText, recordFail, unavailable, isUnavailable } = kit;
-  const guidance = defineTool({
-    name: "guidance",
-    label: "guidance",
+  const instructionsTool = defineTool({
+    name: "instructions",
+    label: "instructions",
     description:
-      "Read or change your durable guidance — the standing instructions you carry into " +
-      "future turns. Two scopes: `channel` = how you behave in THIS channel (when to chime " +
-      "in unprompted, where replies land, ongoing 'whenever X, do Y' orders — evaluated " +
-      "against every new message automatically, so never build a poll or timer for these); " +
-      "`conversation` = your standing instructions for this conversation (tone, defaults, " +
-      "recurring preferences). Default scope: `channel` when you're in a channel, else " +
-      "`conversation`. Conversation guidance lives on the surrounding scope — in a personal " +
-      "context it is shared by ALL of that person's sessions, not tied to the session that " +
-      "wrote it. Never store session pins or 'for this session' notes here: ALL pinning goes " +
-      "through the pins self-API (POST /v1/pins), which routes by context — the session's own " +
-      "pins in the web UI, native pinning in Slack. `edit` swaps one exact passage `old` for `new` " +
-      "and fails unless `old` appears exactly once in that scope's guidance; prefer it for small changes. " +
-      "`replace` REPLACES that scope's entire guidance with `content` — include everything that " +
-      "should remain. Org-wide policy is always layered above and " +
-      "cannot be overridden. Don't store one-off facts here — that's what memory is for.",
+      "Read or change your standing instructions for this conversation's scope: tone, defaults, recurring " +
+      "preferences, and ongoing 'whenever X, do Y' orders. Each scope has one text, and it is the " +
+      "conversation instructions in your prompt. In a channel it is that channel's instructions and is " +
+      "checked against every new message automatically, so never build a poll or timer for these; in a " +
+      "personal context it is shared by ALL of that person's sessions, not tied to the session that wrote it. " +
+      "Never store session pins or 'for this session' notes here: ALL pinning goes through the pins self-API " +
+      "(POST /v1/pins), which routes by context — the session's own pins in the web UI, native pinning in Slack. " +
+      "`edit` swaps one exact passage `old` for `new` and fails unless `old` appears exactly once; prefer it for " +
+      "small changes. `replace` REPLACES the whole text with `content` — include everything that should remain. " +
+      "Organization instructions are always layered above and cannot be changed here. Don't store one-off facts " +
+      "here — that's what memory is for.",
     parameters: Type.Object({
       action: Type.Union([Type.Literal("read"), Type.Literal("replace"), Type.Literal("edit")]),
-      scope: Type.Optional(Type.Union([Type.Literal("channel"), Type.Literal("conversation")])),
-      content: optionalString("replace: the full new guidance for the scope."),
-      old: optionalString("edit: an exact passage that appears once in the scope's current guidance."),
+      content: optionalString("replace: the full new instructions."),
+      old: optionalString("edit: an exact passage that appears once in the current instructions."),
       new: optionalString("edit: the text that takes the place of `old`."),
       ambientEnabled: Type.Optional(
         Type.Union([Type.Boolean(), Type.Null()], {
           description:
-            "Channel scope only. true judges every message for an unprompted reply, false responds only when addressed, and null uses the platform default.",
+            "Channels only. true judges every message for an unprompted reply, false responds only when addressed, and null uses the platform default.",
         }),
       ),
       bots: Type.Optional(
@@ -53,7 +48,7 @@ export function controlPlaneTools(kit: ToolKit) {
           }),
           {
             description:
-              "Per-bot handling for automated posters in this channel, keyed by bot author name: " +
+              "Channels only. Per-bot handling for automated posters in this channel, keyed by bot author name: " +
               "ignore (never wakes you), rollup (batch; judge at most every rollupHours), action " +
               "(their posts are triggers to act on), user (treat like a person).",
           },
@@ -63,126 +58,75 @@ export function controlPlaneTools(kit: ToolKit) {
     async execute(callId, params) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
-      await recordCall(callId, {
-        tool: "guidance",
-        action: params.action,
-        ...(params.scope ? { scope: params.scope } : {}),
-      });
-
-      const editError = (message: string) =>
-        recordFail(callId, { tool: "guidance", scope, error: message }, `[error] guidance edit ${message}.`);
-      const applyEdit = (current: string): { ok: true; next: string } | { ok: false; message: string } => {
-        if (typeof params.old !== "string" || !params.old || typeof params.new !== "string")
-          return { ok: false, message: "requires `old` (an exact passage of the current guidance) and `new`" };
-        const at = current.indexOf(params.old);
-        if (at < 0)
-          return {
-            ok: false,
-            message:
-              "found no exact match for `old` in this scope's own guidance; org policy layered above it cannot be edited",
-          };
-        if (current.indexOf(params.old, at + 1) >= 0)
-          return { ok: false, message: "found `old` more than once; include more surrounding text so it is unique" };
-        return { ok: true, next: current.slice(0, at) + params.new + current.slice(at + params.old.length) };
-      };
-
-      let scope = params.scope;
-      let channel: Awaited<ReturnType<typeof tc.getStandingOrder>> | undefined;
-      if (scope !== "conversation") {
-        channel = await tc.getStandingOrder();
-        if (!scope) scope = channel.ok ? "channel" : "conversation";
-      }
-
-      if (scope === "channel") {
-        if (!channel!.ok) {
-          return recordFail(
-            callId,
-            { tool: "guidance", scope, ok: false },
-            "[no channel scope here; use scope=conversation]",
-          );
-        }
-        if (params.action === "read") {
-          const soul = tc.soulRead();
-          const convoExists = !isUnavailable(soul) && !!soul.soul && soul.soul.trim().length > 0;
-          const ledger =
-            channel!.bots && Object.keys(channel!.bots).length
-              ? "\n\nBot ledger:\n" +
-                Object.entries(channel!.bots)
-                  .map(([n, b]) => `- ${n}: ${b.mode}${b.rollupHours ? ` (every ${b.rollupHours}h)` : ""}`)
-                  .join("\n")
-              : "";
-          const note = convoExists
-            ? "\n\n(conversation-scope guidance also exists — read with scope=conversation)"
-            : "";
-          let ambientState = "default";
-          if (channel!.ambientEnabled !== undefined) ambientState = channel!.ambientEnabled ? "on" : "off";
-          const ambient = `\n\nAmbient replies: ${ambientState}`;
-          const body =
-            (channel!.orders.trim() ? channel!.orders : "[no channel guidance set]") + ambient + ledger + note;
-          return recordText(callId, { tool: "guidance", scope, ok: true }, body);
-        }
-        let orders = typeof params.content === "string" ? params.content : undefined;
-        if (params.action === "edit") {
-          const edited = applyEdit(channel!.orders);
-          if (!edited.ok) return editError(edited.message);
-          orders = edited.next;
-        } else if (typeof orders !== "string" && params.bots === undefined && params.ambientEnabled === undefined) {
-          return recordFail(
-            callId,
-            { tool: "guidance", scope, error: "content, bots, or ambientEnabled required" },
-            "[error] guidance replace needs `content` (the full new channel guidance), `bots`, and/or `ambientEnabled`.",
-          );
-        }
-        const r = await tc.setStandingOrder(
-          orders,
-          params.bots,
-          params.ambientEnabled,
-          params.action === "edit" ? channel!.orders : undefined,
-        );
-        if (!r.ok) return recordFail(callId, { tool: "guidance", scope, ok: false }, `[error] ${r.message}`);
-        return recordText(callId, { tool: "guidance", scope, ok: true }, "[channel guidance updated]");
-      }
-
-      if (params.ambientEnabled !== undefined) {
-        return recordFail(
-          callId,
-          { tool: "guidance", scope, error: "ambientEnabled is channel scope only" },
-          "[error] `ambientEnabled` applies only to channel scope.",
-        );
-      }
+      await recordCall(callId, { tool: "instructions", action: params.action });
+      const fail = (error: string, message: string) =>
+        recordFail(callId, { tool: "instructions", error }, `[error] ${message}`);
+      const channel = await tc.getChannelBehavior();
 
       if (params.action === "read") {
-        const r = tc.soulRead();
-        if (isUnavailable(r)) return unavailable(callId, "guidance");
-        return recordText(
-          callId,
-          { tool: "guidance", scope, soulVersion: r.soulVersion },
-          r.soul ? r.soul : "(no standing instructions set)",
-        );
+        const r = tc.instructionsRead();
+        if (isUnavailable(r)) return unavailable(callId, "instructions");
+        let body = r.instructions?.trim() ? r.instructions : "(no instructions set)";
+        if (channel.ok) {
+          let ambientState = "default";
+          if (channel.ambientEnabled !== undefined) ambientState = channel.ambientEnabled ? "on" : "off";
+          body += `\n\nAmbient replies: ${ambientState}`;
+          if (channel.bots && Object.keys(channel.bots).length)
+            body +=
+              "\n\nBot ledger:\n" +
+              Object.entries(channel.bots)
+                .map(([n, b]) => `- ${n}: ${b.mode}${b.rollupHours ? ` (every ${b.rollupHours}h)` : ""}`)
+                .join("\n");
+        }
+        return recordText(callId, { tool: "instructions", version: r.instructionsVersion }, body);
       }
+
+      const behaviorChange = params.bots !== undefined || params.ambientEnabled !== undefined;
+      if (behaviorChange && !channel.ok)
+        return fail("channel_only", "`ambientEnabled` and `bots` apply only in a channel.");
       let content = params.content;
       let expectedVersion: number | undefined;
       if (params.action === "edit") {
-        const current = tc.soulRead();
-        if (isUnavailable(current)) return unavailable(callId, "guidance");
-        const edited = applyEdit(current.soul ?? "");
-        if (!edited.ok) return editError(edited.message);
-        content = edited.next;
-        expectedVersion = current.soulVersion;
-      } else if (typeof content !== "string") {
-        return recordFail(
-          callId,
-          { tool: "guidance", scope, error: "content required" },
-          "[error] guidance replace requires `content` (the full new standing instructions).",
+        if (typeof params.old !== "string" || !params.old || typeof params.new !== "string")
+          return fail(
+            "edit_args",
+            "instructions edit requires `old` (an exact passage of the current instructions) and `new`.",
+          );
+        const current = tc.instructionsRead();
+        if (isUnavailable(current)) return unavailable(callId, "instructions");
+        const existing = current.instructions ?? "";
+        const at = existing.indexOf(params.old);
+        if (at < 0)
+          return fail(
+            "edit_no_match",
+            "instructions edit found no exact match for `old`; organization instructions layered above cannot be edited.",
+          );
+        if (existing.indexOf(params.old, at + 1) >= 0)
+          return fail(
+            "edit_ambiguous",
+            "instructions edit found `old` more than once; include more surrounding text so it is unique.",
+          );
+        content = existing.slice(0, at) + params.new + existing.slice(at + params.old.length);
+        expectedVersion = current.instructionsVersion;
+      } else if (typeof content !== "string" && !behaviorChange) {
+        return fail(
+          "content_required",
+          "instructions replace needs `content` (the full new instructions), or `bots` / `ambientEnabled` in a channel.",
         );
       }
-      const r = await tc.soulWrite(content, expectedVersion);
-      if (isUnavailable(r)) return unavailable(callId, "guidance");
-      if (!r.ok) return recordFail(callId, { tool: "guidance", scope, error: r.code }, `[error] ${r.message}`);
+      if (behaviorChange) {
+        const r = await tc.setChannelBehavior(params.bots, params.ambientEnabled);
+        if (!r.ok) return fail("channel_settings", r.message);
+      }
+      if (typeof content !== "string")
+        return recordText(callId, { tool: "instructions", ok: true }, "[channel settings updated]");
+      const r = await tc.instructionsWrite(content, expectedVersion);
+      if (isUnavailable(r)) return unavailable(callId, "instructions");
+      if (!r.ok) return fail(r.code, r.message);
       return recordText(
         callId,
-        { tool: "guidance", scope, version: r.version },
-        `Updated your standing instructions (now version ${r.version}).`,
+        { tool: "instructions", version: r.version },
+        `Updated your instructions (now version ${r.version}).`,
       );
     },
   });
@@ -382,6 +326,6 @@ export function controlPlaneTools(kit: ToolKit) {
   );
 
   const adminPreamble =
-    "Uses existing admin handlers and audit. Authority is rechecked on every call. Private content requires a live admin in a DM or Open conversation; unattended reads require explicit grants. Admin-role changes, impersonation, identity links, and teammate invitations are portal-only. Confirm every mutation, report exactly what changed, and disclose only what this conversation needs. Binary/full captured-prompt downloads and raw-secret setters remain on the self-API; do not put secrets in native arguments.\n\n";
-  return { guidance, sharingTool, resourceTool, adminActions, adminPreamble };
+    "Uses existing admin handlers and audit. Authority is rechecked on every call. Private content requires a live admin in a DM or on a turn they started; unattended reads require explicit grants. Admin-role changes, impersonation, identity links, and teammate invitations are portal-only. Confirm every mutation, report exactly what changed, and disclose only what this conversation needs. Binary/full captured-prompt downloads and raw-secret setters remain on the self-API; do not put secrets in native arguments.\n\n";
+  return { instructionsTool, sharingTool, resourceTool, adminActions, adminPreamble };
 }

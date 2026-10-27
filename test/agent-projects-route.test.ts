@@ -119,23 +119,4 @@ describe("agent projects self-API", async () => {
     assert.equal((await request("POST", "/v1/projects", { principalId: "U1", name: "Matching" }, token)).status, 201);
     assert.equal((await request("POST", "/v1/projects", { principalId: "U2", name: "Hidden" }, token)).status, 404);
   });
-
-  it("allows every mutation under strict posture", async () => {
-    const token = await capFor("U1");
-    const scope = scopeId("personal", "U1");
-    await built.config.setSecurityPosture(scope, "strict");
-    try {
-      const created = await request("POST", "/v1/projects", { name: "Strict" }, token);
-      assert.equal(created.status, 201);
-      const projectId = ((await created.json()) as { project: { id: string } }).project.id;
-      assert.equal(
-        (await request("PATCH", `/v1/projects/${projectId}`, { name: "Strict Renamed" }, token)).status,
-        200,
-      );
-      assert.equal((await request("POST", `/v1/projects/${projectId}/members`, { memberId: "U3" }, token)).status, 200);
-      assert.equal((await request("DELETE", `/v1/projects/${projectId}/members/U3`, {}, token)).status, 200);
-    } finally {
-      await built.config.setSecurityPosture(scope, "auto");
-    }
-  });
 });

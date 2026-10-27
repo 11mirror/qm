@@ -67,27 +67,7 @@ test("production is parsed once", () => {
   assert.equal(loadConfig({}).production, false);
 });
 
-test("postures are fixed and the screen classifier follows the proxy settings", () => {
-  for (const env of [
-    {},
-    { HARNESS_SECURITY_POSTURE: "strict", HARNESS_SHARING_POSTURE: "isolated", SECURITY_SCREEN: "off" },
-  ]) {
-    const config = loadConfig(env);
-    assert.equal(config.securityPosture, "auto");
-    assert.equal(config.sharingPosture, "open");
-    assert.equal(config.securityScreen, "observe");
-  }
-  const warnings: string[] = [];
-  const original = console.warn;
-  console.warn = (message: string) => warnings.push(message);
-  try {
-    loadConfig({ HARNESS_SHARING_POSTURE: "isolated", SECURITY_SCREEN: "enforce" });
-  } finally {
-    console.warn = original;
-  }
-  assert.deepEqual(warnings, [
-    "[config] HARNESS_SHARING_POSTURE, SECURITY_SCREEN are no longer read: the default security posture is auto, the default sharing posture is open, and screening observes. Remove the variables.",
-  ]);
+test("the screen classifier follows the proxy settings", () => {
   assert.equal(loadConfig({}).securityScreenProxy, undefined);
   const proxy = {
     SECURITY_SCREEN_PROXY_PROVIDER: "example-screen",

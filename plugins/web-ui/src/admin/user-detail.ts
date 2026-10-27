@@ -222,15 +222,16 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
                   : table(
                       ["Setting", "Value"],
                       [
-                        ["Custom soul", { node: muted(cfg.hasSoul ? "set · v" + (cfg.soulVersion || 1) : "default") }],
+                        [
+                          "Custom instructions",
+                          { node: muted(cfg.hasInstructions ? "set · v" + (cfg.instructionsVersion || 1) : "default") },
+                        ],
                         [
                           "Command policy",
                           cfg.commandPolicy
                             ? `${ruleN} rule${ruleN === 1 ? "" : "s"} · ${cfg.commandPolicy.mode || "denylist"}`
                             : "default",
                         ],
-                        ["Security posture", cfg.securityPosture || "auto"],
-                        ["Sharing posture", cfg.sharingPosture || "isolated"],
                         ["Egress overrides", allowN || denyN ? allowN + " allow · " + denyN + " deny" : "none"],
                         ["Base model", cfg.baseModel || "org default"],
                         ["Connectors linked", String((cfg.connectors || []).length)],

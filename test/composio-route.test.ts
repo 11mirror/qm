@@ -605,12 +605,11 @@ test("agent cannot override identity, credentials, proxy parameters or use meta 
   }
 });
 
-test("capabilities without owner authorization, deployments and closed shared scopes fail before provider calls", async () => {
+test("capabilities without owner authorization and deployments fail before provider calls", async () => {
   for (const cap of [
     { ...privateCap, ownerConnections: undefined },
     { ...privateCap, deployment: "app" },
     { ...privateCap, botActor: true },
-    { ...privateCap, scopeId: "channel:general" },
   ]) {
     const f = fixture();
     await f.own();

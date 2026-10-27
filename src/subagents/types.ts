@@ -118,7 +118,6 @@ export interface SessionSyscalls {
 }
 
 export interface SessionSyscallsFactory {
-  rejectMessage?(sessionId: string, messageId: string): Promise<void>;
   forTurn(binding: SessionSyscallBinding): SessionSyscalls;
 }
 

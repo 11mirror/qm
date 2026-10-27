@@ -69,7 +69,6 @@ async function fixture(t: TestContext) {
       ids.map((principalId) => ({ channelId: "public-room", principalId })),
     );
   await roster(["alice", "bob"]);
-  await b.config.setSharingPosture("org:default-org", "open");
   const sharedSandbox = await b.sandboxResources.create("alice", "channel:public-room", "sprites", "shared-proof");
   await b.sandboxResources.setDefault("alice", "channel:public-room", sharedSandbox.id);
   const server = createServer(b.app, {
@@ -154,10 +153,6 @@ test("HTTP Open continuity: personal sandbox follows owner into shared channel a
   assert.equal((await b.turn(command("cat proof.txt"))).reply, "continuity-sentinel");
   assert.match((await b.turn(command("cat proof.txt"), "bob")).reply ?? "", /DENIED/);
   assert.match((await b.turn(command("cat proof.txt"), "stranger")).reply ?? "", /DENIED/);
-  await b.config.setSharingPosture("personal:alice", "isolated");
-  assert.match((await b.turn(command("cat proof.txt"))).reply ?? "", /DENIED/);
-  assert.equal((await b.turn(command("cat proof.txt"), "alice", false)).reply, "continuity-sentinel");
-  await b.config.clearSharingPosture("personal:alice");
   await b.roster(["bob"]);
   assert.equal((await b.turn(command("cat proof.txt"))).reply, "continuity-sentinel");
   const guests = [{ externalId: "alice" }, { externalId: "guest", isExternalGuest: true }];
@@ -233,78 +228,4 @@ test("HTTP Open shared cron isolates synthetic owner credential and revokes reso
     1,
     "once the owner leaves, the public-channel cron no longer gets their keychain",
   );
-});
-
-for (const isPrivate of [false, true]) {
-  for (const veto of ["org:default-org", "personal:alice", "channel:public-room"]) {
-    test(`HTTP Open cron opt-out stops owner credentials before materialization (${isPrivate ? "private" : "public"}, ${veto})`, async (t) => {
-      const b = await fixture(t);
-      assert.ok(b.keychain);
-      await b.directory.replaceChannels(
-        [{ channelId: "public-room", name: "public-room", isPrivate }],
-        ["alice", "bob"].map((principalId) => ({ channelId: "public-room", principalId })),
-      );
-      const credential = await b.keychain.save({
-        ownerId: "alice",
-        service: "continuity-veto",
-        envKey: "CONTINUITY_VETO_TOKEN",
-        secret: "synthetic-veto-sentinel",
-      });
-      const id = await b.createCron(
-        b.cap("alice"),
-        "Opt-out proof",
-        `!proof ${JSON.stringify({ ownerAuth: true, credentials: [credentialHandle(credential)], command: 'test "$CONTINUITY_VETO_TOKEN" = "synthetic-veto-sentinel" && printf veto-credential-present' })}`,
-      );
-      const initial = await b.scheduler.runNow(id);
-      assert.equal(initial.started, true);
-      if (initial.started) await initial.settled;
-      assert.ok((await b.posts.pending("slack")).some((d) => d.text.includes("veto-credential-present")));
-      const original = b.keychain.materializeOwnById.bind(b.keychain);
-      let materializations = 0;
-      b.keychain.materializeOwnById = async (...args: Parameters<typeof original>) => {
-        materializations++;
-        return original(...args);
-      };
-      await b.config.setSharingPosture(veto, "isolated");
-      const revoked = await b.scheduler.runNow(id);
-      if (revoked.started) await revoked.settled;
-      assert.equal(materializations, 0);
-      assert.equal(
-        (await b.posts.pending("slack")).filter((d) => d.text.includes("veto-credential-present")).length,
-        1,
-      );
-      assert.equal((await b.turn('!run printf "%s" "${CONTINUITY_VETO_TOKEN-unset}"', "bob")).reply, "unset");
-    });
-  }
-}
-
-test("HTTP private channel cron runs without its owner's keychain once the conversation isn't Open", async (t) => {
-  const b = await fixture(t);
-  assert.ok(b.keychain);
-  await b.directory.replaceChannels(
-    [{ channelId: "public-room", name: "private-room", isPrivate: true }],
-    ["alice", "bob"].map((principalId) => ({ channelId: "public-room", principalId })),
-  );
-  await b.config.setSharingPosture("org:default-org", "isolated");
-  const credential = await b.keychain.save({
-    ownerId: "alice",
-    service: "continuity-isolated",
-    envKey: "CONTINUITY_ISOLATED_TOKEN",
-    secret: "synthetic-isolated-sentinel",
-  });
-  const cron = await b.crons.create({
-    owner: "alice",
-    createdBy: "alice",
-    ownerScopeId: "channel:public-room",
-    schedule: { everyMs: 3600000 },
-    action: `!proof ${JSON.stringify({ ownerAuth: true, credentials: [credentialHandle(credential)], command: 'test "$CONTINUITY_ISOLATED_TOKEN" = "synthetic-isolated-sentinel" && printf isolated-credential-present' })}`,
-    destination: { type: "slack", target: "public-room", audienceScopeId: "channel:public-room" },
-  });
-  const fired = await b.scheduler.runNow(cron.id);
-  assert.equal(fired.started, true);
-  if (fired.started) await fired.settled;
-  const { runs } = await b.crons.listFires(cron.id);
-  assert.equal(runs.at(-1)?.status, "ok", "the fire still runs");
-  assert.ok(!(await b.posts.pending("slack")).some((d) => d.text.includes("isolated-credential-present")));
-  assert.equal((await b.crons.get(cron.id))?.enabled, true);
 });

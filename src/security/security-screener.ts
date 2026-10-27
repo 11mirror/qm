@@ -1,7 +1,7 @@
 import { readCappedText } from "../util/response-body.ts";
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
-import { MAX_SCREEN_CHARS, type SecurityScreenVerdict } from "./security-posture.ts";
+import { MAX_SCREEN_CHARS, type SecurityScreenVerdict } from "./security-screen.ts";
 import { swallow } from "../util/errors.ts";
 import { fetchWithRetry } from "../util/async.ts";
 

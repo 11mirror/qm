@@ -89,7 +89,7 @@ test("discovery for an org admin's LIVE turn includes the admin plane (live gran
     assert.ok(p.includes("/v1/admin/users"));
     assert.ok(!p.includes("/v1/admin/grants"), "grant management is portal-only and must not be advertised");
     assert.ok(body.guidance.some((g: string) => g.includes("confirm before any mutation")));
-    assert.match(JSON.stringify(body), /content reads require a DM or effective Open sharing for the live admin/);
+    assert.match(JSON.stringify(body), /content reads require a DM or a turn the live admin started/);
     assert.doesNotMatch(JSON.stringify(body), /DM only|only from a DM|bulk config imports require/);
     assert.equal(p.filter((x: string) => x === "/v1/admin/whoami").length, 1, "whoami listed once, not duplicated");
   } finally {
@@ -171,7 +171,7 @@ test("discovery includes admin routes for a verified human thread reply", async 
     assert.equal(p.filter((path) => path === "/v1/admin/whoami").length, 1);
     assert.equal(p.filter((path) => path === "/v1/admin/scopes").length, 1);
     assert.ok(body.guidance.some((g: string) => g.includes("confirm before any mutation")));
-    assert.match(JSON.stringify(body), /content reads require a DM or effective Open sharing for the live admin/);
+    assert.match(JSON.stringify(body), /content reads require a DM or a turn the live admin started/);
     assert.doesNotMatch(JSON.stringify(body), /DM only|only from a DM|bulk config imports require/);
     assert.ok(!body.guidance.some((g: string) => g.includes("This cron")));
     const member = await listApis(s.base, await capFor("U1", { liveAuthor: true }));

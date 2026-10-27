@@ -30,22 +30,16 @@ import {
   type PublicServiceCredential,
   type ServiceCredentialInput,
 } from "../../credentials/keychain.ts";
-import { writeAmbientPolicy } from "./context-policy.ts";
+import { checkChannelSettings } from "./context-policy.ts";
 import { authorizeUrl, PROVIDERS, type ConsentMode } from "../../connectors/oauth.ts";
 import { resolverFor } from "./connectors.ts";
 import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
 import { errMessage, reportFailure, swallowAs } from "../../util/errors.ts";
 import { isBackendFailure } from "../http.ts";
-import {
-  DEFAULT_SECURITY_SCREEN_RUBRIC,
-  parseSecurityPosture,
-  SECURITY_POSTURES,
-  type SecurityPosture,
-} from "../../security/security-posture.ts";
+import { DEFAULT_SECURITY_SCREEN_RUBRIC } from "../../security/security-screen.ts";
 import type { ApprovalGrantModes } from "../../types.ts";
 import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
 import { FEATURE_NAMES, FEATURES, type FeatureName } from "../../feature-flags.ts";
-import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
 import { tenant } from "../../tenant.ts";
 import { SCOPE_SETTINGS, type ScopeSettingName, type ScopeSettingValue } from "../../resolution/config-store.ts";
 import { auditAs, modelKeys } from "./admin/common.ts";
@@ -177,52 +171,12 @@ function channelContainer(scope: string): string | undefined {
 }
 
 export const ADMIN_RESOURCES: readonly AdminResource[] = [
-  {
-    id: "security-posture",
-    kind: "enum",
-    target: "any",
-    label: "Harness security posture. The org value is a minimum; narrower scopes may tighten it but cannot weaken it.",
-    readKey: "securityPosture",
-    enumValues: SECURITY_POSTURES,
-    get: (deps, scope) => deps.config.getSecurityPostureDurable(scope),
-    apply: generic<SecurityPosture>(
-      (body) => {
-        const posture = parseSecurityPosture((body as { posture?: unknown }).posture);
-        return posture
-          ? { value: posture }
-          : { error: `security-posture requires { posture: ${SECURITY_POSTURES.join(" | ")} }` };
-      },
-      (deps, scope, posture) => deps.config.setSecurityPosture(scope, posture),
-    ),
-  },
-  {
-    id: "sharing-posture",
-    kind: "enum",
-    target: "any",
-    label:
-      "Cross-context read posture. The organization is a ceiling; personal and room scopes may opt out. Isolated wins.",
-    readKey: "sharingPosture",
-    enumValues: SHARING_POSTURES,
-    get: (deps, scope) => deps.config.getSharingPostureDurable(scope),
-    apply: generic<SharingPosture | null>(
-      (body) => {
-        if ((body as { inherit?: unknown }).inherit === true) return { value: null };
-        const posture = parseSharingPosture((body as { posture?: unknown }).posture);
-        return posture
-          ? { value: posture }
-          : { error: `sharing-posture requires { posture: ${SHARING_POSTURES.join(" | ")} }` };
-      },
-      (deps, scope, posture) =>
-        posture === null ? deps.config.clearSharingPosture(scope) : deps.config.setSharingPosture(scope, posture),
-    ),
-  },
   settingResource("autoFlagger", {
     id: "auto-flagger",
     refreshesModels: true,
     kind: "custom",
     clearable: true,
-    label:
-      "The model and classification rubric used to screen external content when the deployment enables model screening.",
+    label: "The model and classification rubric used to screen external content.",
     orgWide: "the Auto flagger is org-wide",
     parse: (body, deps) =>
       (body as { reset?: unknown }).reset === true
@@ -312,23 +266,28 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     },
   }),
   {
-    id: "soul",
+    id: "instructions",
     kind: "text",
-    readKey: "soul",
-    get: (deps, scope) => deps.config.getSoul(scope),
+    readKey: "instructions",
+    get: (deps, scope) => deps.config.getInstructions(scope),
     apply: async (ctx, actor, scope) => {
       const body = ctx.body as { content?: unknown; expectedVersion?: unknown };
-      if (typeof body.content !== "string") return { error: "soul requires { content: string }" };
+      if (typeof body.content !== "string") return { error: "instructions requires { content: string }" };
       if (body.expectedVersion === undefined) {
-        await ctx.deps.config.setSoul(scope, body.content, actor.id);
+        await ctx.deps.config.setInstructions(scope, body.content, actor.id);
         return { ok: true };
       }
       if (typeof body.expectedVersion !== "number")
         return { error: "expectedVersion must be a number", code: "bad_version" };
-      const version = await ctx.deps.config.setSoulIfVersion(scope, body.expectedVersion, body.content, actor.id);
+      const version = await ctx.deps.config.setInstructionsIfVersion(
+        scope,
+        body.expectedVersion,
+        body.content,
+        actor.id,
+      );
       if (version === null) {
         return {
-          error: "SOUL changed after this draft was loaded. Reload before saving.",
+          error: "Instructions changed after this draft was loaded. Reload before saving.",
           code: "version_conflict",
           status: 409,
         };
@@ -346,7 +305,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const p = await deps.channelPolicy.get(ref).catch(swallowAs("admin: read channel ambient policy", undefined));
       if (p === undefined) return undefined;
       return {
-        orders: p?.orders ?? "",
         bots: p?.bots ?? {},
         ambientEnabled: p?.ambientEnabled ?? null,
         updatedAt: p?.updatedAt ?? 0,
@@ -358,22 +316,16 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const ref = channelContainer(scope);
       if (!ref) return { error: "ambient policy applies to channel and group scopes only" };
       const b = (ctx.body ?? {}) as {
-        orders?: unknown;
         bots?: unknown;
         ambientEnabled?: unknown;
         baseUpdatedAt?: unknown;
       };
-      const written = await writeAmbientPolicy(
-        deps.channelPolicy,
-        ref,
-        b,
-        actor.id,
-        "ambient-policy requires { orders: string }",
-      );
-      if ("message" in written)
-        return written.status === 409
-          ? { error: written.message, code: "conflict", status: 409 }
-          : { error: written.message };
+      const settings = await checkChannelSettings(deps.channelPolicy, ref, b);
+      if ("message" in settings)
+        return settings.status === 409
+          ? { error: settings.message, code: "conflict", status: 409 }
+          : { error: settings.message };
+      await deps.channelPolicy.set(ref, { setBy: actor.id, ...settings });
       auditAs(ctx.deps, actor.id, "surface.policy.set", ref, scope);
       return { ok: true };
     },

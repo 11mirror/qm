@@ -6,7 +6,6 @@ import { DEFAULT_AGENT_MODEL_ID } from "../src/model/pi-models.ts";
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const readme = read("README.md");
 const boot = read("src/tenants/boot.ts");
-const server = read("src/api/server.ts");
 const toolWrappers = read("src/harness/agent-tools/wrappers.ts");
 const rootPackage = JSON.parse(read("package.json")) as { dependencies: Record<string, string> };
 const webPackage = JSON.parse(read("plugins/web-ui/package.json")) as {
@@ -49,7 +48,6 @@ test("README names the frameworks the shipped surfaces use", () => {
   assert.doesNotMatch(readme, /No build step, no framework/);
 });
 
-test("Strict posture describes its approval gate, exemptions, and direct-mutation boundary", () => {
+test("the tool approval gate exempts only the no-effect turn ender", () => {
   assert.match(toolWrappers, /TOOL_APPROVAL_EXEMPT = new Set\(\["finish_silently"\]\)/);
-  assert.doesNotMatch(server, /Strict posture permits observation only/);
 });

@@ -112,8 +112,8 @@ test("GET /v1/admin/resources returns a manifest entry for every registered reso
     assert.equal(byId.get("base-model")?.kind, "enum");
     assert.equal(byId.get("base-model")?.target, "any");
     assert.ok((byId.get("base-model")?.enumValues?.length ?? 0) > 0);
-    assert.deepEqual(byId.get("security-posture")?.enumValues, ["dangerous", "auto", "strict"]);
-    assert.deepEqual(byId.get("sharing-posture")?.enumValues, ["isolated", "open"]);
+    assert.equal(byId.has("security-posture"), false);
+    assert.equal(byId.has("sharing-posture"), false);
     assert.equal(byId.get("service-credentials")?.target, "org");
     assert.equal(byId.get("service-credentials")?.secret, true);
     assert.equal(byId.has("import"), false);
@@ -278,7 +278,7 @@ test("PUT to an unknown resource is a 404", async () => {
 test("a generic resource round-trips through the registry dispatch + read loop", async () => {
   const srv = start();
   try {
-    const put = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/soul`, {
+    const put = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/instructions`, {
       method: "PUT",
       headers: ADMIN,
       body: JSON.stringify({ content: "be excellent", expectedVersion: 1 }),
@@ -286,17 +286,17 @@ test("a generic resource round-trips through the registry dispatch + read loop",
     assert.equal(put.status, 200);
     const get = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
     const body = (await get.json()) as {
-      soul: string;
-      soulVersion: number;
-      soulHistory: Array<{ content: string; version: number; updatedBy?: string; updatedAt: number }>;
+      instructions: string;
+      instructionsVersion: number;
+      instructionsHistory: Array<{ content: string; version: number; updatedBy?: string; updatedAt: number }>;
     };
-    assert.equal(body.soul, "be excellent");
-    assert.equal(body.soulVersion, 2);
-    assert.equal(body.soulHistory[0]?.content, "be excellent");
-    assert.equal(body.soulHistory[0]?.updatedBy, "admin-alice");
-    assert.ok(body.soulHistory[0]?.updatedAt);
+    assert.equal(body.instructions, "be excellent");
+    assert.equal(body.instructionsVersion, 2);
+    assert.equal(body.instructionsHistory[0]?.content, "be excellent");
+    assert.equal(body.instructionsHistory[0]?.updatedBy, "admin-alice");
+    assert.ok(body.instructionsHistory[0]?.updatedAt);
 
-    const stale = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/soul`, {
+    const stale = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/instructions`, {
       method: "PUT",
       headers: ADMIN,
       body: JSON.stringify({ content: "overwrite", expectedVersion: 1 }),
@@ -328,75 +328,6 @@ test("feature flag table changes one scope live without restart", async () => {
       }
     ).featureFlags;
     assert.deepEqual(flags.find((flag) => flag.featureName === "inbox_loops")?.enabledScopes, ["channel:C1"]);
-  } finally {
-    await srv.close();
-  }
-});
-
-test("security posture round-trips through durable scoped governance", async () => {
-  const srv = start();
-  try {
-    const before = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
-    assert.equal(((await before.json()) as { securityPosture: string }).securityPosture, "auto");
-
-    const put = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/security-posture`, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({ posture: "strict" }),
-    });
-    assert.equal(put.status, 200);
-    const after = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
-    assert.equal(((await after.json()) as { securityPosture: string }).securityPosture, "strict");
-
-    const invalid = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/security-posture`, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({ posture: "YOLO" }),
-    });
-    assert.equal(invalid.status, 400);
-  } finally {
-    await srv.close();
-  }
-});
-
-test("sharing posture round-trips through scoped governance with organization and room vetoes", async () => {
-  const srv = start();
-  try {
-    const org = "org:default-org";
-    const personal = "personal:U1";
-    const room = "channel:C1";
-    const read = async (scope: string) => {
-      const response = await fetch(`${srv.base}/v1/admin/scopes/${scope}`, { headers: ADMIN });
-      assert.equal(response.status, 200);
-      return (await response.json()) as { sharingPosture: string };
-    };
-    const put = async (scope: string, posture: string) =>
-      fetch(`${srv.base}/v1/admin/scopes/${scope}/sharing-posture`, {
-        method: "PUT",
-        headers: ADMIN,
-        body: JSON.stringify({ posture }),
-      });
-
-    assert.equal((await read(org)).sharingPosture, "open");
-    assert.equal((await put(org, "open")).status, 200);
-    assert.equal((await read(room)).sharingPosture, "open");
-    assert.equal((await put(personal, "isolated")).status, 200);
-    assert.equal((await read(personal)).sharingPosture, "isolated");
-    assert.equal((await put(room, "isolated")).status, 200);
-    assert.equal((await read(room)).sharingPosture, "isolated");
-    assert.equal((await put(org, "isolated")).status, 200);
-    assert.equal((await put(room, "open")).status, 200);
-    assert.equal((await read(room)).sharingPosture, "isolated");
-    assert.equal((await put(org, "invalid")).status, 400);
-    const reset = await fetch(`${srv.base}/v1/admin/scopes/${room}/sharing-posture`, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({ inherit: true }),
-    });
-    assert.equal(reset.status, 200);
-    assert.equal(await srv.built.config.getSharingPostureOwnDurable(room), null);
-    assert.equal((await put(org, "open")).status, 200);
-    assert.equal((await read(room)).sharingPosture, "open");
   } finally {
     await srv.close();
   }
@@ -541,9 +472,9 @@ test("ambient-policy edits a channel's standing order and bot ledger through the
     ).json()) as Record<string, unknown>;
     assert.equal("ambientPolicy" in org, false);
     const empty = (await (await fetch(`${srv.base}/v1/admin/scopes/channel:C1`, { headers: ADMIN })).json()) as {
-      ambientPolicy: { orders: string; bots: object; updatedAt: number };
+      ambientPolicy: { ambientEnabled?: boolean | null; bots: object; updatedAt: number };
     };
-    assert.deepEqual(empty.ambientPolicy, { orders: "", bots: {}, ambientEnabled: null, updatedAt: 0 });
+    assert.deepEqual(empty.ambientPolicy, { bots: {}, ambientEnabled: null, updatedAt: 0 });
 
     const badScope = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/ambient-policy`, {
       method: "PUT",
@@ -554,20 +485,20 @@ test("ambient-policy edits a channel's standing order and bot ledger through the
     const badMode = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/ambient-policy`, {
       method: "PUT",
       headers: ADMIN,
-      body: JSON.stringify({ orders: "", bots: { GitHub: { mode: "mute" } } }),
+      body: JSON.stringify({ bots: { GitHub: { mode: "mute" } } }),
     });
     assert.equal(badMode.status, 400);
     assert.match(((await badMode.json()) as { message: string }).message, /mode must be one of/);
     const badHours = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/ambient-policy`, {
       method: "PUT",
       headers: ADMIN,
-      body: JSON.stringify({ orders: "", bots: { GitHub: { mode: "rollup", rollupHours: -2 } } }),
+      body: JSON.stringify({ bots: { GitHub: { mode: "rollup", rollupHours: -2 } } }),
     });
     assert.equal(badHours.status, 400);
     const caseDup = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/ambient-policy`, {
       method: "PUT",
       headers: ADMIN,
-      body: JSON.stringify({ orders: "", bots: { GitHub: { mode: "action" }, github: { mode: "ignore" } } }),
+      body: JSON.stringify({ bots: { GitHub: { mode: "action" }, github: { mode: "ignore" } } }),
     });
     assert.equal(caseDup.status, 400);
     assert.match(((await caseDup.json()) as { message: string }).message, /duplicate bot/i);
@@ -575,14 +506,14 @@ test("ambient-policy edits a channel's standing order and bot ledger through the
     const put = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/ambient-policy`, {
       method: "PUT",
       headers: ADMIN,
-      body: '{"orders":"flag anything about the Q3 launch","bots":{"GitHub":{"mode":"rollup","rollupHours":24},"Linear":{"mode":"ignore"},"__proto__":{"mode":"ignore"}}}',
+      body: '{"ambientEnabled":true,"bots":{"GitHub":{"mode":"rollup","rollupHours":24},"Linear":{"mode":"ignore"},"__proto__":{"mode":"ignore"}}}',
     });
     assert.equal(put.status, 200);
     const got = (await (await fetch(`${srv.base}/v1/admin/scopes/channel:C1`, { headers: ADMIN })).json()) as {
-      ambientPolicy: { orders: string; bots: object; updatedAt: number };
+      ambientPolicy: { ambientEnabled?: boolean | null; bots: object; updatedAt: number };
     };
     const stored = await srv.built.channelPolicy.get("C1");
-    assert.equal(got.ambientPolicy.orders, "flag anything about the Q3 launch");
+    assert.equal(got.ambientPolicy.ambientEnabled, true);
     assert.deepEqual(Object.keys(got.ambientPolicy.bots).sort(), ["GitHub", "Linear", "__proto__"]);
     assert.equal(got.ambientPolicy.updatedAt, stored?.updatedAt);
     assert.equal(stored?.setBy, "admin-alice");
@@ -592,17 +523,17 @@ test("ambient-policy edits a channel's standing order and bot ledger through the
     const stale = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/ambient-policy`, {
       method: "PUT",
       headers: ADMIN,
-      body: JSON.stringify({ orders: "overwrite", bots: {}, baseUpdatedAt: 1 }),
+      body: JSON.stringify({ ambientEnabled: false, bots: {}, baseUpdatedAt: 1 }),
     });
     assert.equal(stale.status, 409);
-    assert.equal((await srv.built.channelPolicy.get("C1"))?.orders, "flag anything about the Q3 launch");
+    assert.equal((await srv.built.channelPolicy.get("C1"))?.ambientEnabled, true);
     const fresh = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/ambient-policy`, {
       method: "PUT",
       headers: ADMIN,
-      body: JSON.stringify({ orders: "updated", bots: {}, baseUpdatedAt: stored?.updatedAt }),
+      body: JSON.stringify({ ambientEnabled: false, bots: {}, baseUpdatedAt: stored?.updatedAt }),
     });
     assert.equal(fresh.status, 200);
-    assert.equal((await srv.built.channelPolicy.get("C1"))?.orders, "updated");
+    assert.equal((await srv.built.channelPolicy.get("C1"))?.ambientEnabled, false);
   } finally {
     await srv.close();
   }

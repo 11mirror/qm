@@ -2,33 +2,19 @@ import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../../types.ts";
 import type { TurnOrigin } from "../turn-origin.ts";
 import type { SecurityScreenClassification, SecurityScreenHook } from "../../security/security-screener.ts";
-import {
-  securityScreenSystemPrompt,
-  UNSCREENED_REASON,
-  type SecurityScreenVerdict,
-} from "../../security/security-posture.ts";
-import { estimateCostUsd } from "../../ratelimit/budget.ts";
-import type { HarnessLlmRequestRecord } from "../../harness/harness.ts";
+import { securityScreenSystemPrompt } from "../../security/security-screen.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
-import { sleep } from "../../util/async.ts";
 import { headSlice } from "../../util/text.ts";
 import type { OrchestratorDeps } from "./types.ts";
 
 const MAX_SCREEN_REQUEST_CHARS = 2_000;
 const MAX_AUDITED_SOURCES = 20;
 
-const unscreenedVerdict = (): SecurityScreenVerdict => ({
-  decision: "auto",
-  unscreened: true,
-  reason: UNSCREENED_REASON,
-});
-
-type ScreenStatus = "allow" | "block" | "would_block" | "error";
+type ScreenStatus = "allow" | "would_block" | "error";
 type Screened = Pick<SecurityScreenClassification, "verdict"> & Partial<SecurityScreenClassification>;
 
 interface SecurityScreenContext {
-  mode: "observe" | "enforce";
   hook?: SecurityScreenHook;
   surface?: string;
   origin?: TurnOrigin["kind"];
@@ -39,13 +25,17 @@ interface SecurityScreenContext {
   thread?: string;
 }
 
-export type SecurityClassifier = (
+/**
+ * Screen external data in the background and audit the verdict. Screening observes: it never
+ * blocks, rewrites or delays what the agent sees. The returned promise settles once the verdict is
+ * audited and never rejects; turn code does not wait for it.
+ */
+export type SecurityObserver = (
   payload: string,
   actorId: string,
   scopeLabel: ScopeId,
-  recordLlmRequest: ((rec: HarnessLlmRequestRecord, signal?: AbortSignal) => void | Promise<void>) | undefined,
   context: SecurityScreenContext,
-) => Promise<SecurityScreenVerdict | undefined>;
+) => Promise<void>;
 
 function screenSources(payload: string): string[] {
   let parsed: unknown;
@@ -61,12 +51,11 @@ function screenSources(payload: string): string[] {
   return [...new Set(sources)].slice(0, MAX_AUDITED_SOURCES);
 }
 
-export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassifier {
-  return async function classifySecurityData(payload, actorId, scopeLabel, recordLlmRequest, context) {
+export function createSecurityObserver(deps: OrchestratorDeps): SecurityObserver {
+  const observe: SecurityObserver = async (payload, actorId, scopeLabel, context) => {
     const screener = deps.securityScreener;
     const model = deps.harness.models.screenSecurity;
-    const observe = context.mode === "observe";
-    if (!screener && !model) return observe ? { decision: "auto" } : undefined;
+    if (!screener && !model) return;
     const timeoutMs = deps.securityScreenTimeoutMs ?? CONFIG_DEFAULTS.securityScreenTimeoutMs;
     const hook = context.hook ?? "user_input";
     let request: { origin: string; text: string; truncated: boolean } | undefined;
@@ -88,7 +77,7 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
         status,
         detail: JSON.stringify({
           hook,
-          mode: context.mode,
+          mode: "observe",
           sources: screenSources(payload),
           ...(context.surface ? { surface: context.surface } : {}),
           ...(context.origin ? { origin: context.origin } : {}),
@@ -127,11 +116,7 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
             }
           : {}),
         signal,
-        recordModelCall: (rec) => {
-          deps.modelGateway.recordCall({ at: Date.now(), scopeLabel, ...rec });
-          if (!observe) void deps.budget?.record(actorId, estimateCostUsd(rec.inputTokens));
-        },
-        ...(recordLlmRequest && !observe ? { recordLlmRequest } : {}),
+        recordModelCall: (rec) => deps.modelGateway.recordCall({ at: Date.now(), scopeLabel, ...rec }),
       });
       return verdict ? { verdict } : undefined;
     };
@@ -140,7 +125,7 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
       const requestId = context.requestId ?? randomUUID();
       const abort = new AbortController();
       const timer = setTimeout(() => abort.abort(), timeoutMs);
-      if (observe) timer.unref();
+      timer.unref();
       const timedOut = new Promise<undefined>((resolve) =>
         abort.signal.addEventListener("abort", () => resolve(undefined), { once: true }),
       );
@@ -154,27 +139,13 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
         abort.abort();
       }
     };
-    const settle = ({ requestId, result }: Awaited<ReturnType<typeof attempt>>, attempts: number) => {
-      let status: ScreenStatus = "error";
-      if (result && !result.verdict.unscreened) {
-        if (result.verdict.decision === "strict") status = observe ? "would_block" : "block";
-        else status = "allow";
-      }
-      audit(status, requestId, attempts, result);
-      return result?.verdict;
-    };
-
-    if (observe) {
-      void attempt()
-        .then((result) => settle(result, 1))
-        .catch(swallowAs("orchestrator: observed security screen", undefined));
-      return { decision: "auto" };
-    }
-
-    const startedAt = Date.now();
-    const first = await attempt();
-    if (first.result || Date.now() - startedAt >= timeoutMs / 2) return settle(first, 1) ?? unscreenedVerdict();
-    await sleep(250);
-    return settle(await attempt(), 2) ?? unscreenedVerdict();
+    const { requestId, result } = await attempt();
+    let status: ScreenStatus = "error";
+    if (result && !result.verdict.unscreened) status = result.verdict.decision === "strict" ? "would_block" : "allow";
+    audit(status, requestId, 1, result);
   };
+  return (payload, actorId, scopeLabel, context) =>
+    observe(payload, actorId, scopeLabel, context).catch(
+      swallowAs("orchestrator: observed security screen", undefined),
+    );
 }

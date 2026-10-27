@@ -3,7 +3,7 @@ import { type Api, scopeUrl, viewUrl } from "./api.ts";
 import * as governanceUI from "./admin.ts";
 import { initCustomDropdowns } from "./dropdown.ts";
 import { el } from "./dom.ts";
-import { pick, plural, titleCase } from "./format.ts";
+import { pick, plural } from "./format.ts";
 
 export interface SettingsContext {
   api: Api;
@@ -136,16 +136,16 @@ export function startSettings({
   let loadedCommandPolicyPresent = false;
   let serviceCredDirectory: any = [];
   let serviceCredChannels: any = [];
-  settings.configureSoul({
+  settings.configureInstructions({
     restore: async (revision) => {
       const immutable = { ...revision };
       const targetScope = scope();
       const targetGeneration = governanceReq;
-      const draftBefore = JSON.stringify(settings.collect("soul"));
-      const expectedVersion = settings.collect("soul").expectedVersion;
+      const draftBefore = JSON.stringify(settings.collect("instructions"));
+      const expectedVersion = settings.collect("instructions").expectedVersion;
       const confirmed = await reviewGovernanceChange({
-        title: "Restore SOUL version " + immutable.version + "?",
-        subtitle: "The saved instructions from this revision will replace the current SOUL.",
+        title: "Restore instructions version " + immutable.version + "?",
+        subtitle: "The saved instructions from this revision will replace the current instructions.",
         facts: [
           ["Scope", governanceScopeName(targetScope)],
           ["Current", "Version " + expectedVersion],
@@ -157,18 +157,18 @@ export function startSettings({
         danger: true,
       });
       if (!confirmed || scope() !== targetScope || governanceReq !== targetGeneration) return;
-      setStatus("st-soul", "Restoring…", "saving", true);
-      const r = await api("PUT", scopeUrl(targetScope, "/soul"), {
+      setStatus("st-instructions", "Restoring…", "saving", true);
+      const r = await api("PUT", scopeUrl(targetScope, "/instructions"), {
         content: immutable.content,
         expectedVersion,
       });
       if (scope() !== targetScope || governanceReq !== targetGeneration) return;
       if (!r.ok) {
-        if (r.status === 409) await refreshSoulConflict();
+        if (r.status === 409) await refreshInstructionsConflict();
         return setStatus(
-          "st-soul",
+          "st-instructions",
           r.status === 409
-            ? "SOUL changed; latest revision loaded and your draft was preserved."
+            ? "Instructions changed; latest revision loaded and your draft was preserved."
             : r.data?.message || "Restore failed.",
           "err",
           true,
@@ -177,12 +177,13 @@ export function startSettings({
       const fresh = await api("GET", viewUrl(targetScope, "customize"));
       if (scope() !== targetScope || governanceReq !== targetGeneration) return;
       if (!fresh.ok)
-        return setStatus("st-soul", "Restored, but the latest version could not be refreshed.", "warn", true);
-      if (JSON.stringify(settings.collect("soul")) === draftBefore) settings.load(fresh.data, targetScope, "soul");
-      else settings.refreshSoul(fresh.data);
-      sectionSnapshots.set("soul", settings.states.get("soul")!.baseline);
-      if (!settings.states.get("soul")!.dirty)
-        setStatus("st-soul", "Version " + immutable.version + " restored as a new revision", "ok", true);
+        return setStatus("st-instructions", "Restored, but the latest version could not be refreshed.", "warn", true);
+      if (JSON.stringify(settings.collect("instructions")) === draftBefore)
+        settings.load(fresh.data, targetScope, "instructions");
+      else settings.refreshInstructions(fresh.data);
+      sectionSnapshots.set("instructions", settings.states.get("instructions")!.baseline);
+      if (!settings.states.get("instructions")!.dirty)
+        setStatus("st-instructions", "Version " + immutable.version + " restored as a new revision", "ok", true);
     },
   });
   function renderEnvironmentNotice(data: any) {
@@ -233,7 +234,7 @@ export function startSettings({
     }
     if (requestedView === "customize") {
       savedBranding = r.data.branding || {};
-      settings.load(r.data, scope(), "soul");
+      settings.load(r.data, scope(), "instructions");
       settings.load(r.data, scope(), "branding");
       void settings.loadFlags(r.data, scope());
       settings.loadDecisions(r.data, scope());
@@ -275,11 +276,11 @@ export function startSettings({
         .catch((error) => console.warn("[swallowed] admin: model catalog refresh", errMessage(error)));
     }
   }
-  async function refreshSoulConflict() {
+  async function refreshInstructionsConflict() {
     const fresh = await api("GET", viewUrl(scope(), view()));
     if (!fresh.ok) return false;
-    settings.refreshSoul(fresh.data);
-    sectionSnapshots.set("soul", settings.states.get("soul")!.baseline);
+    settings.refreshInstructions(fresh.data);
+    sectionSnapshots.set("instructions", settings.states.get("instructions")!.baseline);
     return true;
   }
   async function refreshServiceCredentialConflict() {
@@ -568,30 +569,6 @@ export function startSettings({
         ],
         ...options,
       });
-    if (key === "security-posture") {
-      const dangerous = body.posture === "dangerous";
-      return review(titleCase(before().posture || "auto"), titleCase(body.posture), {
-        title: dangerous ? "Enable Dangerous autonomy?" : "Change security posture?",
-        subtitle: "Review the immutable change below before it is applied.",
-        warning: dangerous
-          ? "Dangerous disables posture-based content screening and tool approval gates. Deployment-required screening still applies. Predeclared command approvals, hard denials, identity, authorization, credential scope, revocation, and audit remain enforced."
-          : "This changes the effective tools and approval behavior for future turns in this scope.",
-        confirmLabel: dangerous ? "Enable Dangerous" : "Apply posture",
-        danger: dangerous,
-      });
-    }
-    if (key === "sharing-posture") {
-      const open = body.posture === "open";
-      return review(titleCase(before().posture || "isolated"), titleCase(body.posture), {
-        title: open ? "Enable Open sharing?" : "Return to Isolated sharing?",
-        subtitle: "This applies to future live human turns in the selected scope.",
-        warning: open
-          ? "Open can reveal a speaker's private information in shared replies. It does not carry credentials, history, writes, automation, or another person's resources. Organization, personal, and room policy must all allow it."
-          : "Cross-context resources will again require explicit shares or grants.",
-        confirmLabel: open ? "Enable Open" : "Use Isolated",
-        danger: open,
-      });
-    }
     if (key === "external-slack-participants") {
       const label = (on: any) => (on ? "External audiences enabled" : "Internal only");
       return review(label(!!before().on), label(body.on), {
@@ -606,26 +583,6 @@ export function startSettings({
     }
     return Promise.resolve(true);
   }
-  $("sharing-posture-inherit").onclick = async () => {
-    const requestedScope = scope();
-    const requestedGeneration = governanceReq;
-    const stale = () => requestedScope !== scope() || requestedGeneration !== governanceReq;
-    const draftBefore = JSON.stringify(governanceUI.collect("sharing-posture"));
-    const confirmed = await reviewGovernanceChange({
-      title: "Follow organization sharing?",
-      subtitle: "Remove this scope's sharing override.",
-      facts: [["Scope", governanceScopeName()]],
-      warning:
-        "The organization's sharing setting will apply. A personal or room Isolated override still takes precedence.",
-      confirmLabel: "Follow organization",
-    });
-    if (!confirmed || stale()) return;
-    const result = await api("PUT", scopeUrl(requestedScope, "/sharing-posture"), { inherit: true });
-    if (stale()) return;
-    if (result.ok)
-      await refreshPolicySetting("sharing-posture", requestedScope, requestedGeneration, draftBefore, "Saved");
-    else setStatus("st-sharing-posture", "Could not reset sharing.", "err");
-  };
   async function refreshPolicySetting(
     key: any,
     requestedScope: any,
@@ -712,10 +669,10 @@ export function startSettings({
     }
     if (btn?.dataset.saveRequest === saveRequest) delete btn.dataset.saveRequest;
     if (!r.ok) {
-      const soulConflict = key === "soul" && r.status === 409;
-      if (soulConflict) await refreshSoulConflict();
+      const instructionsConflict = key === "instructions" && r.status === 409;
+      if (instructionsConflict) await refreshInstructionsConflict();
       let message = r.data?.message || "Save failed.";
-      if (soulConflict) message = "SOUL changed; latest revision loaded and your draft was preserved.";
+      if (instructionsConflict) message = "Instructions changed; latest revision loaded and your draft was preserved.";
       else if (r.status === 403) message = "Not authorized for this scope.";
       return governanceUI.status(key, message, "err");
     }
@@ -726,17 +683,17 @@ export function startSettings({
       if (!hasGovernanceDraft()) location.reload();
       return;
     }
-    if (key === "soul") {
+    if (key === "instructions") {
       const fresh = await api("GET", viewUrl(requestedScope, "customize"));
       if (stale()) return;
       if (!fresh.ok) return governanceUI.status(key, "Saved, but the latest version could not be refreshed.", "warn");
-      settings.refreshSoul(fresh.data);
+      settings.refreshInstructions(fresh.data);
       sectionSnapshots.set(key, governanceUI.states.get(key)!.baseline);
       if (!governanceUI.states.get(key)!.dirty) governanceUI.status(key, "Saved", "ok");
       return;
     }
     if (key === "command-policy") loadedCommandPolicyPresent = true;
-    if (!["security-posture", "sharing-posture", "ambient-policy", "auto-flagger"].includes(key)) return;
+    if (!["ambient-policy", "auto-flagger"].includes(key)) return;
     const fresh = await api("GET", viewUrl(requestedScope, "governance"));
     if (stale() || !fresh.ok || governanceUI.states.get(key)!.dirty) return;
     governanceUI.load(fresh.data, requestedScope, key);

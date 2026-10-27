@@ -19,12 +19,10 @@ import type { OrgBranding } from "./resolution/config-store.ts";
 import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "./deployment/secret-schema.ts";
 import { DEFAULT_CAPTURE_QUIET_MS } from "./memory/strategies/per-turn.ts";
 import {
-  DEFAULT_SECURITY_POSTURE,
-  type SecurityPosture,
-  type SecurityScreenMode,
-} from "./security/security-posture.ts";
-import { DEFAULT_SHARING_POSTURE, type SharingPosture } from "./resolution/sharing-posture.ts";
-import { slackPluginConfigFromEnv, slackAccountConfigsFromEnv, type SlackPluginConfig } from "./slack/config.ts";
+  slackPluginConfigFromEnv,
+  slackAccountConfigsFromEnv,
+  type SlackPluginConfig,
+} from "./slack/config.ts";
 import {
   DEFAULT_CODEX_MODEL_ID,
   MODEL_PROVIDERS,
@@ -73,8 +71,6 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   databasePoolCaCert?: string;
   databasePoolMax?: number;
   databaseDirectPoolMax?: number;
-  securityPosture: SecurityPosture;
-  sharingPosture: SharingPosture;
   legacySandboxScopeDefaults?: LegacySandboxScopeDefaults;
   sandboxBackend: SandboxBackendName;
   deployProvider: "docker" | "aws" | "porter" | "e2b";
@@ -131,7 +127,6 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   approvalSummaryTimeoutMs: number;
   turnLeaseWaitMs: number;
   securityScreenTimeoutMs: number;
-  securityScreen: SecurityScreenMode;
   securityScreenProxy?: {
     provider: string;
     endpoint: string;
@@ -715,20 +710,6 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
       `[config] SANDBOX_BACKEND=${selectedBackend} without SANDBOX_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set SANDBOX_EGRESS_PROXY_URL to the public egress proxy to force sandbox traffic through it.`,
     );
   }
-  const ignoredPostureEnv = [
-    "HARNESS_SECURITY_POSTURE",
-    "HARNESS_SHARING_POSTURE",
-    "SECURITY_SCREEN",
-    "SECURITY_SCREEN_CLASSIFIER",
-    "SECURITY_SCREEN_BACKEND",
-    "SECURITY_SCREEN_ALL_POSTURES",
-    "SECURITY_SCREEN_PROXY_ROLLOUT",
-  ].filter((name) => env[name]?.trim());
-  if (ignoredPostureEnv.length) {
-    console.warn(
-      `[config] ${ignoredPostureEnv.join(", ")} ${ignoredPostureEnv.length === 1 ? "is" : "are"} no longer read: the default security posture is ${DEFAULT_SECURITY_POSTURE}, the default sharing posture is ${DEFAULT_SHARING_POSTURE}, and screening observes. Remove the variables.`,
-    );
-  }
   const proxyProvider = env.SECURITY_SCREEN_PROXY_PROVIDER?.trim();
   const proxyEndpoint = env.SECURITY_SCREEN_PROXY_ENDPOINT?.trim();
   const proxyToken = env.SECURITY_SCREEN_PROXY_TOKEN?.trim();
@@ -866,9 +847,6 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     multitenant: e.QM_MULTITENANT === "1",
     port: e.PORT ?? CONFIG_DEFAULTS.port,
     dataDir,
-    securityPosture: DEFAULT_SECURITY_POSTURE,
-    sharingPosture: DEFAULT_SHARING_POSTURE,
-    securityScreen: "observe",
     sandboxBackend,
     legacySandboxScopeDefaults,
     deployProvider,

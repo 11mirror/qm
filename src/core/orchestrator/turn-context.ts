@@ -32,7 +32,6 @@ export interface TurnCtx extends AdmittedTurn {
   isCurrentSharedScopeMember: ReturnType<typeof withLiveTurnMembership>;
   filterHistory: (entries: Item[]) => Item[];
   reconcileSessionParticipants: (sessionId: string) => Promise<void>;
-  screenSession: { id?: string };
 }
 
 export async function resolveTurnScope(deps: OrchestratorDeps, admitted: AdmittedTurn): Promise<TurnCtx> {
@@ -85,7 +84,6 @@ export async function resolveTurnScope(deps: OrchestratorDeps, admitted: Admitte
     isCurrentSharedScopeMember,
     filterHistory,
     reconcileSessionParticipants,
-    screenSession: {},
   };
 }
 
@@ -102,7 +100,6 @@ export async function openTurnSession(ctx: TurnCtx): Promise<Session> {
     input.surface,
     desktopClientForTurn(input) ? [desktopComputerTool] : undefined,
   );
-  ctx.screenSession.id = session.id;
   if (!input.sessionParticipantIds?.length && !ctx.automatedTurn)
     await deps.sessions.addParticipant(session.id, actor.id);
   return session;
@@ -134,7 +131,6 @@ export async function resolveTurnWorkspace(ctx: TurnCtx, turn: { useMemory: bool
     origin: authorizationOrigin,
     trustedLiveHuman: liveAuthorTurn,
     targetScope: scopeId,
-    config: deps.config,
     sessions: deps.sessions,
     isCurrentSharedScopeMember,
     currentScopeMembers: deps.currentScopeMembers,

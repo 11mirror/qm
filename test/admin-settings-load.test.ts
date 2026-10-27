@@ -2,7 +2,6 @@ import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AddressInfo } from "node:net";
-import { setTimeout as delay } from "node:timers/promises";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
@@ -64,7 +63,7 @@ test("settings projections preserve values while excluding unrelated payloads", 
       assert.equal(projected.branding.selfLabel, "Test assistant");
       assert.equal("orgAmbient" in projected, false);
       assert.equal("channelHeaderPinDefault" in projected, false);
-      assert.equal("soulHistory" in projected, true);
+      assert.equal("instructionsHistory" in projected, true);
       assert.equal("connectors" in projected, false);
     }
   }
@@ -78,40 +77,11 @@ test("Customize completes within 500 ms with unrelated model and connector servi
   t.after(srv.close);
   await warm(srv.base);
   t.mock.method(srv.built.config, "listConnectorClients", fail);
-  t.mock.method(srv.built.config, "getSecurityPostureDurable", fail);
   const started = performance.now();
   const response = await fetch(srv.base + scopePath + "?view=customize", { headers: ADMIN });
   assert.equal(response.status, 200);
-  assert.equal(typeof ((await response.json()) as { soul: string }).soul, "string");
+  assert.equal(typeof ((await response.json()) as { instructions: string }).instructions, "string");
   assert.ok(performance.now() - started < 500);
-});
-
-test("independent governance reads overlap rather than accumulating network round trips", async (t) => {
-  const srv = start();
-  t.after(srv.close);
-  const reads = [
-    "getSecurityPostureDurable",
-    "getSharingPostureDurable",
-    "getSharingPostureOwnDurable",
-    "getApprovalGrantModesDurable",
-  ] as const;
-  await warm(srv.base);
-  let active = 0;
-  let maxActive = 0;
-  for (const name of reads) {
-    const original = srv.built.config[name].bind(srv.built.config);
-    t.mock.method(srv.built.config, name, async (scope: string) => {
-      active++;
-      maxActive = Math.max(active, maxActive);
-      await delay(100);
-      active--;
-      return original(scope);
-    });
-  }
-  const response = await fetch(srv.base + scopePath + "?view=governance", { headers: ADMIN });
-  assert.equal(response.status, 200);
-  await response.json();
-  assert.equal(maxActive, reads.length);
 });
 
 test("each settings projection retains authorization before reading configuration", async (t) => {

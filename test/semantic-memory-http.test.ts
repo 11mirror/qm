@@ -220,7 +220,6 @@ pgTest("HTTP Open DM combines room and current memory, then blocks reads after m
   t.after(() => close(provider));
   const built = buildApp(
     testConfig({
-      sharingPosture: "open",
       databaseUrl,
       openaiApiKey: "test",
     }),
@@ -236,16 +235,12 @@ pgTest("HTTP Open DM combines room and current memory, then blocks reads after m
       { channelId: "C1", name: "room", isPrivate: true },
       { channelId: "C2", name: "closed", isPrivate: true },
     ],
-    [
-      { channelId: "C1", principalId: "U1" },
-      { channelId: "C2", principalId: "U1" },
-    ],
+    [{ channelId: "C1", principalId: "U1" }],
   );
   for (const scope of [room, denied]) {
     const session = await built.sessions.getOrCreateByThread(`${scope}:seed`, "channel", scope);
     await built.sessions.addParticipant(session.id, "U1");
   }
-  await built.config.setSharingPosture(denied, "isolated");
   await built.memory.capture(
     personal,
     ["0.7 LOCAL_NEAR", ...Array.from({ length: 120 }, (_, i) => `0.6 local ${i} ${"x".repeat(70)}`)],

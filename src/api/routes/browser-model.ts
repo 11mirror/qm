@@ -30,8 +30,6 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
   const { capability, deps, body, res } = ctx;
   const gateway = deps.browserModelGateway;
   if (!capability?.browserModel) return sendJson(res, 403, { error: "browser model grant required" });
-  if (deps.config && (await deps.config.getSecurityPostureDurable(capability.scopeId)) === "strict")
-    return sendJson(res, 403, { error: "browser model requests are disabled in strict posture" });
   const input = body as Record<string, unknown>;
   if (
     !body ||

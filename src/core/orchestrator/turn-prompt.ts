@@ -20,7 +20,7 @@ import {
   refreshConnectorStatus,
 } from "../../credentials/connector-status.ts";
 import { renderConnectedAppsBlock } from "../environment-facts.ts";
-import { securityScreenChunks } from "../../security/security-posture.ts";
+import { securityScreenChunks } from "../../security/security-screen.ts";
 import { isIdeasConversation } from "../../onboarding/onboarding.ts";
 import { INBOX_DIR, TURN_FILES_DIR, sharedFilesSystemSection, turnFileId } from "../attachments.ts";
 import { swallow, swallowAs } from "../../util/errors.ts";
@@ -44,8 +44,8 @@ import {
 
 import type { MemoryStrategy } from "../../memory/strategy.ts";
 import type { TurnCtx } from "./turn-context.ts";
-import type { InboundScreen } from "./inbound-screen.ts";
-import type { SecurityClassifier } from "./security-screen.ts";
+import type { ScreenTrace } from "./inbound-screen.ts";
+import type { SecurityObserver } from "./security-screen.ts";
 const SHARED_CORE_MD = loadProtocolFile("shared-core");
 const MODE_CONVERSATION_MD = loadProtocolFile("mode-conversation");
 const MODE_AUTONOMOUS_MD = loadProtocolFile("mode-autonomous");
@@ -58,12 +58,13 @@ const IDEAS_CONVERSATION_MD = loadProtocolFile("turn-ideas-conversation");
 
 export async function frameTurnPrompt(
   ctx: TurnCtx,
-  turn: Pick<InboundScreen, "securityPolicy" | "enforceScreen" | "screenTrace" | "recordScreenRequest"> & {
+  turn: {
+    screenTrace: ScreenTrace;
     useMemory: boolean;
     context: Awaited<ReturnType<typeof resolveTurnContext>>;
     memoryScopeId: ScopeId;
     memoryStrategy: MemoryStrategy;
-    classifySecurityData: SecurityClassifier;
+    observeSecurityData: SecurityObserver;
   },
 ) {
   const {
@@ -79,17 +80,7 @@ export async function frameTurnPrompt(
     resolution,
     scopeId,
   } = ctx;
-  const {
-    securityPolicy,
-    enforceScreen,
-    screenTrace,
-    recordScreenRequest,
-    useMemory,
-    context,
-    memoryScopeId,
-    memoryStrategy,
-    classifySecurityData,
-  } = turn;
+  const { screenTrace, useMemory, context, memoryScopeId, memoryStrategy, observeSecurityData } = turn;
   const isWeb = input.surface === "web";
   const isSlack = input.surface === "slack";
   const surfaceTool = input.surface ?? "slack";
@@ -189,65 +180,34 @@ export async function frameTurnPrompt(
           swallowAs("orchestrator: configured connector providers", []),
         )
       : [];
-  const carriedSkillScreens = new Map<string, Promise<boolean>>();
+  const observedSkillScreens = new Set<string>();
   const visibleSkillsForTurn = async (sources?: readonly string[]): Promise<SkillResolution[]> => {
     const current = await context.listSkills(sources);
-    const resolved = filterConnectorSkills(current.skills, configuredProviders);
-    const allowed: SkillResolution[] = [];
-    for (const entry of resolved) {
+    const allowed = filterConnectorSkills(current.skills, configuredProviders);
+    for (const entry of allowed) {
       const skill = entry.skill;
-      if (!skill || !current.sharingSources.includes(skill.scopeId) || securityPolicy.screening === "off") {
-        allowed.push(entry);
-        continue;
-      }
+      if (!skill || !current.sharingSources.includes(skill.scopeId)) continue;
       const snapshot = structuredClone(entry);
-      const screenSkill = async () => {
-        const bundles = structuredClone(
-          deps.skillBundles
-            ? await loadActiveBundles(deps.skillBundles, [snapshot]).catch(
-                swallowAs("skill screening: load bundles", null),
-              )
-            : [],
-        );
+      void (async () => {
+        const bundles = deps.skillBundles
+          ? await loadActiveBundles(deps.skillBundles, [snapshot]).catch(
+              swallowAs("skill screening: load bundles", null),
+            )
+          : [];
         const payload = JSON.stringify({ manifest: snapshot.skill!.manifest, bundles });
         const key = hashId([skill.scopeId, skill.id, payload], 64);
-        let screen = carriedSkillScreens.get(key);
-        if (!screen) {
-          screen = (async () => {
-            if (bundles === null || Buffer.byteLength(payload, "utf8") > MAX_AUTO_ATTACHMENT_SCREEN_BYTES) return false;
-            for (const chunk of securityScreenChunks("tool_result:shared_skill", payload)) {
-              const verdict = await classifySecurityData(chunk, actor.id, scopeId, recordScreenRequest, {
-                ...screenTrace,
-                hook: "tool_response",
-                request: input.text,
-                surface: "shared_skill",
-                origin: input.origin.kind,
-              });
-              if (verdict?.decision !== "auto" || verdict.unscreened) return false;
-            }
-            return true;
-          })();
-          carriedSkillScreens.set(key, screen);
-        }
-        return { passed: await screen, bundles };
-      };
-      if (!enforceScreen) {
-        allowed.push(entry);
-        void screenSkill().catch(swallowAs("orchestrator: observed skill screen", undefined));
-        continue;
-      }
-      const { passed, bundles } = await screenSkill();
-      if (passed && bundles) allowed.push({ ...snapshot, screenedBundles: bundles });
-      else
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: actor.id,
-          action: "sharing.skill_screen_blocked",
-          resource: `skill:${skill.id}`,
-          scopeLabel: scopeId,
-          status: "refused",
-          detail: JSON.stringify({ actor: actor.id, source: skill.scopeId, target: scopeId }),
-        });
+        if (observedSkillScreens.has(key)) return;
+        observedSkillScreens.add(key);
+        if (bundles === null || Buffer.byteLength(payload, "utf8") > MAX_AUTO_ATTACHMENT_SCREEN_BYTES) return;
+        for (const chunk of securityScreenChunks("tool_result:shared_skill", payload))
+          await observeSecurityData(chunk, actor.id, scopeId, {
+            ...screenTrace,
+            hook: "tool_response",
+            request: input.text,
+            surface: "shared_skill",
+            origin: input.origin.kind,
+          });
+      })().catch(swallowAs("orchestrator: observed skill screen", undefined));
     }
     for (const entry of allowed) {
       if (!entry.skill || !current.sharingSources.includes(entry.skill.scopeId)) continue;

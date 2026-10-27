@@ -75,16 +75,16 @@ const skills = {
 
 async function buildOrchestrator(
   opts: {
-    orgSoul?: string;
+    orgInstructions?: string;
     sessionSyscalls?: OrchestratorDeps["sessionSyscalls"];
     featureFlags?: OrchestratorDeps["featureFlags"];
-    scopeSoulFor?: { conversation: Conversation; soul: string };
+    scopeInstructionsFor?: { conversation: Conversation; soul: string };
     branding?: OrgBranding;
     brandingDefault?: OrgBranding;
   } = {},
 ) {
   const config = testConfigStore(ORG);
-  if (opts.orgSoul !== undefined) await config.setSoul(scopeId("org", ORG), opts.orgSoul);
+  if (opts.orgInstructions !== undefined) await config.setInstructions(scopeId("org", ORG), opts.orgInstructions);
   if (opts.branding) await config.setSetting("branding", opts.branding, scopeId("org", ORG));
 
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
@@ -101,9 +101,9 @@ async function buildOrchestrator(
   });
   const resolution = createResolutionService(ORG, config, acl);
 
-  if (opts.scopeSoulFor) {
-    const scope = resolution.scopeFor(opts.scopeSoulFor.conversation, actor);
-    await config.setSoul(scope, opts.scopeSoulFor.soul);
+  if (opts.scopeInstructionsFor) {
+    const scope = resolution.scopeFor(opts.scopeInstructionsFor.conversation, actor);
+    await config.setInstructions(scope, opts.scopeInstructionsFor.soul);
   }
 
   return createOrchestrator({
@@ -188,8 +188,8 @@ function countOccurrences(haystack: string, needle: string): number {
 }
 
 test("Mode 1 (DM): live-conversation frame, org policy once, no template leaks, no Mode-2 language", async () => {
-  const ORG_SOUL = "ORG-POLICY-MARKER: be terse and never promise a refund.";
-  const orch = await buildOrchestrator({ orgSoul: ORG_SOUL });
+  const ORG_INSTRUCTIONS = "ORG-POLICY-MARKER: be terse and never promise a refund.";
+  const orch = await buildOrchestrator({ orgInstructions: ORG_INSTRUCTIONS });
   const prompt = await sysprompt(orch, slackDm(""));
 
   assertNoTemplateTokens(prompt, "Mode 1 (DM)");
@@ -203,7 +203,7 @@ test("Mode 1 (DM): live-conversation frame, org policy once, no template leaks, 
   assert.match(prompt, /What you write IS your reply/);
 
   assert.equal(
-    countOccurrences(prompt, ORG_SOUL),
+    countOccurrences(prompt, ORG_INSTRUCTIONS),
     1,
     "org policy text must appear exactly once in a DM prompt with no scope soul",
   );
@@ -214,16 +214,16 @@ test("Mode 1 (DM): live-conversation frame, org policy once, no template leaks, 
 });
 
 test("Mode 1 (DM): org policy still renders exactly once when the scope soul duplicates it verbatim", async () => {
-  const ORG_SOUL = "ORG-POLICY-MARKER-2: escalate security incidents immediately.";
+  const ORG_INSTRUCTIONS = "ORG-POLICY-MARKER-2: escalate security incidents immediately.";
   const orch = await buildOrchestrator({
-    orgSoul: ORG_SOUL,
-    scopeSoulFor: { conversation: dmConversation, soul: ORG_SOUL },
+    orgInstructions: ORG_INSTRUCTIONS,
+    scopeInstructionsFor: { conversation: dmConversation, soul: ORG_INSTRUCTIONS },
   });
   const prompt = await sysprompt(orch, slackDm(""));
 
   assertNoTemplateTokens(prompt, "Mode 1 (DM, duplicate scope soul)");
   assert.equal(
-    countOccurrences(prompt, ORG_SOUL),
+    countOccurrences(prompt, ORG_INSTRUCTIONS),
     1,
     "resolve() must dedupe when the scope soul is string-equal (after trim) to the org soul — " +
       "CONTRACT.md §3 'Org-policy dedupe'",
@@ -231,8 +231,8 @@ test("Mode 1 (DM): org policy still renders exactly once when the scope soul dup
 });
 
 test("Mode 2 (spine channel): autonomous-worklog frame, org policy once, no template leaks, no Mode-1 language", async () => {
-  const ORG_SOUL = "ORG-POLICY-MARKER-3: never share customer PII outside the org.";
-  const orch = await buildOrchestrator({ orgSoul: ORG_SOUL });
+  const ORG_INSTRUCTIONS = "ORG-POLICY-MARKER-3: never share customer PII outside the org.";
+  const orch = await buildOrchestrator({ orgInstructions: ORG_INSTRUCTIONS });
   const prompt = await sysprompt(orch, spineChannelTurn(""));
 
   assertNoTemplateTokens(prompt, "Mode 2 (spine channel)");
@@ -242,7 +242,7 @@ test("Mode 2 (spine channel): autonomous-worklog frame, org policy once, no temp
   assert.doesNotMatch(prompt, /no one ever reads this transcript|private worklog/);
 
   assert.equal(
-    countOccurrences(prompt, ORG_SOUL),
+    countOccurrences(prompt, ORG_INSTRUCTIONS),
     1,
     "org policy text must appear exactly once in a spine-channel prompt with no scope soul",
   );
@@ -252,16 +252,16 @@ test("Mode 2 (spine channel): autonomous-worklog frame, org policy once, no temp
 });
 
 test("Mode 2 (spine channel): org policy still renders exactly once when the scope soul duplicates it verbatim", async () => {
-  const ORG_SOUL = "ORG-POLICY-MARKER-4: all deploys require a second approver.";
+  const ORG_INSTRUCTIONS = "ORG-POLICY-MARKER-4: all deploys require a second approver.";
   const orch = await buildOrchestrator({
-    orgSoul: ORG_SOUL,
-    scopeSoulFor: { conversation: channelConversation, soul: ORG_SOUL },
+    orgInstructions: ORG_INSTRUCTIONS,
+    scopeInstructionsFor: { conversation: channelConversation, soul: ORG_INSTRUCTIONS },
   });
   const prompt = await sysprompt(orch, spineChannelTurn(""));
 
   assertNoTemplateTokens(prompt, "Mode 2 (spine channel, duplicate scope soul)");
   assert.equal(
-    countOccurrences(prompt, ORG_SOUL),
+    countOccurrences(prompt, ORG_INSTRUCTIONS),
     1,
     "resolve() must dedupe the channel's own soul against the org soul the same way it does for a DM",
   );
@@ -431,8 +431,8 @@ test("env brandingDefault names the assistant when the store has no branding, an
 });
 
 test("Mode 2 (spine channel): static prose stays within the word-count ceiling (excl. live tail + soul)", async () => {
-  const ORG_SOUL = "ORG-POLICY-MARKER-5: keep it short.";
-  const orch = await buildOrchestrator({ orgSoul: ORG_SOUL });
+  const ORG_INSTRUCTIONS = "ORG-POLICY-MARKER-5: keep it short.";
+  const orch = await buildOrchestrator({ orgInstructions: ORG_INSTRUCTIONS });
   const prompt = await sysprompt(orch, spineChannelTurn("", { timezone: "America/New_York" }));
 
   const systemPrompt = prompt.split("\n\n<environment>")[0]!;
@@ -442,7 +442,7 @@ test("Mode 2 (spine channel): static prose stays within the word-count ceiling (
     "the volatile tail rides the environment note, not the system prompt",
   );
 
-  const staticProse = systemPrompt.split(ORG_SOUL).join("");
+  const staticProse = systemPrompt.split(ORG_INSTRUCTIONS).join("");
 
   const wordCount = staticProse.trim().split(/\s+/).filter(Boolean).length;
 
