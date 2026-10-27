@@ -204,8 +204,8 @@ test("completed portal failures log status, method and duration once without req
     req.on("error", reject);
     req.end();
   });
-  assert.equal(status, 500);
-  assert.equal(errors.mock.callCount(), before + 1);
+  assert.equal(status, 400);
+  assert.equal(errors.mock.callCount(), before);
 });
 
 test("a prototype-chain segment like /constructor/ never matches a keyed surface (no 500, falls to the web UI)", async () => {

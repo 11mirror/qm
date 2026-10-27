@@ -275,14 +275,15 @@ interface RequestCtx {
 async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const method = req.method ?? "GET";
   const rawTarget = req.url ?? "/";
-  const url = new URL(rawTarget, "http://portal.local");
-  const pathname = url.pathname;
 
   res.setHeader("strict-transport-security", "max-age=63072000; includeSubDomains");
   res.setHeader("referrer-policy", "no-referrer");
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("x-frame-options", "DENY");
 
+  const url = URL.parse(rawTarget, "http://portal.local");
+  if (!url) return json(res, 400, { error: "bad_request", message: "illegal path" });
+  const pathname = url.pathname;
   const ctx: RequestCtx = { req, res, method, rawTarget, url, pathname };
   for (const stage of [appHostRoutes, publicRoutes, sessionRoutes, passthroughRoutes, surfaceRoutes])
     if ((await stage(ctx)) !== NEXT) return;
