@@ -1,16 +1,9 @@
 import assert from "node:assert/strict";
-import { adminShell } from "./fixture.ts";
+import { adminShell } from "../support/admin-fixture.ts";
 import test from "node:test";
-import { buildSync } from "esbuild";
 import { JSDOM } from "jsdom";
-const bundle = buildSync({
-  entryPoints: [new URL("../../src/admin/settings.ts", import.meta.url).pathname],
-  bundle: true,
-  write: false,
-  format: "iife",
-  globalName: "settingsUI",
-  platform: "browser",
-}).outputFiles[0]!.text;
+import { adminBundle } from "../support/admin-bundle.ts";
+const bundle = adminBundle("settings.ts", "settingsUI");
 function setup() {
   const dom = new JSDOM(adminShell(), {
     runScripts: "outside-only",

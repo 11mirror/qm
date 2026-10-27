@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { litFixture } from "./fixture.ts";
+import { litFixture } from "../support/admin-fixture.ts";
 import { GovernanceState } from "../../src/admin/governance-state.ts";
 function setup() {
   const { dom } = litFixture({ markup: true });

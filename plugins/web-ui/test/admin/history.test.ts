@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { litFixture } from "./fixture.ts";
+import { litFixture } from "../support/admin-fixture.ts";
 
 test("cron fire rows surface the result digest", () => {
   const f = litFixture();

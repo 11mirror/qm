@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { litFixture } from "./fixture.ts";
+import { litFixture } from "../support/admin-fixture.ts";
 import { SettingsState, load as loadSettings, states as settingsStates } from "../../src/admin/settings.ts";
 import { CredentialState } from "../../src/admin/settings-credentials.ts";
 import { GovernanceState, load, states } from "../../src/admin/governance-state.ts";

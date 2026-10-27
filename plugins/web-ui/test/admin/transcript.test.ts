@@ -1,14 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSync } from "esbuild";
 import { JSDOM } from "jsdom";
-const bundle = buildSync({
-  entryPoints: [new URL("../../src/admin/transcript.ts", import.meta.url).pathname],
-  bundle: true,
-  write: false,
-  format: "iife",
-  globalName: "transcriptUI",
-}).outputFiles[0].text;
+import { mountAdmin } from "../support/admin-fixture.ts";
+import { adminBundle } from "../support/admin-bundle.ts";
+const bundle = adminBundle("transcript.ts", "transcriptUI");
 function setup() {
   const dom = new JSDOM('<div id="header-controls"></div><div id="view-data"></div>', { runScripts: "outside-only" });
   dom.window.requestAnimationFrame = () => 0;
@@ -145,4 +140,78 @@ test("deep-link back navigation uses the fetched session scope", async () => {
   } finally {
     dom.window.close();
   }
+});
+
+async function transcript(data: Record<string, unknown>) {
+  const admin = await mountAdmin("/settings/history/s/sess-1", {
+    "/scopes": { scopes: [], environments: [] },
+    "/sessions/sess-1/llm": { requests: [] },
+    "/sessions/sess-1": data,
+  });
+  await admin.settle(10);
+  return admin;
+}
+
+const coreItem = (seq: number, kind: string, extra: Record<string, unknown> = {}) => ({
+  sessionId: "sess-1",
+  seq,
+  kind,
+  createdAt: seq,
+  turnId: null,
+  author: null,
+  callId: null,
+  text: null,
+  tool: null,
+  variant: null,
+  isError: null,
+  body: {},
+  ...extra,
+});
+
+test("admin transcript renders core items with the real controller helpers", async () => {
+  const admin = await transcript({
+    session: { scopeId: "org:acme" },
+    items: [
+      coreItem(1, "UserMessage", { text: "hello", author: "u1", body: { name: "Ada" } }),
+      coreItem(2, "ToolCall", { callId: "c", tool: "execute", body: { command: "ls -la" } }),
+      coreItem(3, "ToolResult", { callId: "c", tool: "execute", text: "total 0", body: { code: 0 } }),
+      coreItem(4, "AgentMessage", { text: "all done" }),
+    ],
+  });
+  const doc = admin.document;
+  assert.equal(doc.querySelector("#view-data .empty"), null);
+  assert.equal(doc.querySelector(".user-entry .entry-label")!.textContent!.trim(), "Ada");
+  assert.match(doc.querySelector(".user-entry")!.textContent!, /hello/);
+  assert.match(doc.querySelector(".assistant-entry")!.textContent!, /all done/);
+  const tool = doc.querySelector(".tool-line-entry")!;
+  assert.equal(tool.querySelector(".tool-label")!.textContent, "execute");
+  assert.equal(tool.querySelector(".tool-line-preview")!.textContent, "ls -la");
+  assert.match(tool.querySelector(".meta-row")!.textContent!, /exit 0/);
+  admin.close();
+});
+
+test("transcript filters hide thinking and tool items but keep messages", async () => {
+  const admin = await transcript({
+    session: { scopeId: "org:acme" },
+    items: [
+      coreItem(1, "UserMessage", { text: "hello" }),
+      coreItem(2, "Reasoning", { text: "private thought" }),
+      coreItem(3, "ToolCall", { callId: "plain", tool: "read" }),
+      coreItem(4, "ToolResult", { callId: "plain", tool: "read" }),
+      coreItem(5, "AgentMessage", { text: "reply" }),
+    ],
+  });
+  const doc = admin.document;
+  const hidden = (selector: string) =>
+    [...doc.querySelectorAll(`#view-data ${selector}`)].map((entry) => entry.classList.contains("filtered"));
+  assert.deepEqual(hidden(".thinking-entry"), [false]);
+  doc.querySelector<HTMLInputElement>('[aria-label="Show thinking"]')!.click();
+  assert.deepEqual(hidden(".thinking-entry"), [true]);
+  assert.deepEqual(hidden(".tool-entry"), [false, false]);
+  doc.querySelector<HTMLInputElement>('[aria-label="Show tool results"]')!.click();
+  assert.deepEqual(hidden(".tool-entry"), [true, true]);
+  assert.deepEqual(hidden(".user-entry, .assistant-entry"), [false, false]);
+  doc.querySelector<HTMLInputElement>('[aria-label="Show thinking"]')!.click();
+  assert.deepEqual(hidden(".thinking-entry"), [false]);
+  admin.close();
 });

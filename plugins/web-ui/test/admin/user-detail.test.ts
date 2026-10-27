@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { litFixture } from "./fixture.ts";
+import { litFixture } from "../support/admin-fixture.ts";
 
 test("user controls render before credentials and artifacts are scoped links", async () => {
   const f = litFixture();

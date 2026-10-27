@@ -1,14 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSync } from "esbuild";
 import { JSDOM } from "jsdom";
-const bundle = buildSync({
-  entryPoints: [new URL("../../src/admin/slack-activity.ts", import.meta.url).pathname],
-  bundle: true,
-  write: false,
-  format: "iife",
-  globalName: "slackUI",
-}).outputFiles[0].text;
+import { adminBundle } from "../support/admin-bundle.ts";
+const bundle = adminBundle("slack-activity.ts", "slackUI");
 function setup() {
   const dom = new JSDOM('<div id="shellbar"></div><div id="view-data"></div>', {
     runScripts: "outside-only",

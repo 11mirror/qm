@@ -1,16 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSync } from "esbuild";
 import { JSDOM } from "jsdom";
+import { adminBundle } from "../support/admin-bundle.ts";
 
-const bundle = buildSync({
-  entryPoints: [new URL("../../src/admin/onboarding.ts", import.meta.url).pathname],
-  bundle: true,
-  write: false,
-  format: "iife",
-  globalName: "onboarding",
-  platform: "browser",
-}).outputFiles[0].text;
+const bundle = adminBundle("onboarding.ts", "onboarding");
 function fixture() {
   const dom = new JSDOM(
     '<template data-onboarding-ui="steps"></template><template data-onboarding-ui="provider"></template>',

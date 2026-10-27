@@ -1,23 +1,17 @@
 import assert from "node:assert/strict";
-import { adminShell } from "./fixture.ts";
+import { adminShell } from "../support/admin-fixture.ts";
 import test from "node:test";
-import { buildSync } from "esbuild";
 import { JSDOM } from "jsdom";
 import { configure, ConnectorsState, SlackInstallationState } from "../../src/admin/integrations-state.ts";
-const bundle = buildSync({
-  entryPoints: [new URL("../../src/admin/integrations.ts", import.meta.url).pathname],
-  bundle: true,
-  write: false,
-  format: "iife",
-  globalName: "integrationsUI",
-}).outputFiles[0].text;
+import { adminBundle } from "../support/admin-bundle.ts";
+const integrationsBundle = adminBundle("integrations.ts", "integrationsUI");
 function setup() {
   const dom = new JSDOM(adminShell(), {
     runScripts: "outside-only",
     url: "http://localhost/settings/slack-settings",
   });
   dom.window.eval(
-    bundle +
+    integrationsBundle +
       ';window.ui=integrationsUI;ui.mountCards();ui.configure({api:async()=>({ok:true,data:{}}),orgScope:()=>"org:test",connectorName:id=>id,save:()=>{}});',
   );
   dom.window.HTMLElement.prototype.scrollIntoView = () => {};
@@ -186,4 +180,72 @@ test("Slack connection validates token drafts before submitting", async () => {
   await s.save();
   assert.equal(called, false);
   assert.equal(s.message, "Both Slack tokens are required.");
+});
+
+async function render(data: Record<string, unknown>) {
+  const dom = new JSDOM(adminShell(), {
+    runScripts: "outside-only",
+    url: "http://localhost/settings/slack-settings",
+  });
+  dom.window.eval(
+    integrationsBundle +
+      ";window.ui=integrationsUI;ui.mountCards();ui.configure({api:async()=>({ok:true,data:" +
+      JSON.stringify(data) +
+      '}),orgScope:()=>"org:test",connectorName:x=>x});',
+  );
+  await dom.window.eval("ui.loadSlackInstallation()");
+  const result = (id: string) => dom.window.document.getElementById(id) as any;
+  test.after(() => dom.window.close());
+  return result;
+}
+
+test("public QM leads with manifest setup and hides hosted actions and instructions", async () => {
+  const el = await render({
+    configured: false,
+    source: "none",
+    createUrl: "https://api.slack.com/apps?manifest_json=test",
+  });
+  assert.equal(el("slack-installation-start").classList.contains("hidden"), true);
+  assert.equal(el("slack-own-app-guide").open, true);
+  assert.equal(el("slack-own-app-label").textContent.trim(), "Set up Slack");
+  assert.equal(el("slack-hosted-switch").classList.contains("hidden"), true);
+  assert.match(el("slack-installation-description").textContent.trim(), /manifest/);
+  assert.match(el("slack-installation-create").href, /manifest_json/);
+});
+
+test("hosted connection offers re-add and keeps custom setup secondary", async () => {
+  const el = await render({
+    configured: true,
+    source: "service",
+    installAvailable: true,
+    teamName: "Development Acme",
+  });
+  assert.equal(el("slack-installation-start-label").textContent.trim(), "Re-add to Slack");
+  assert.equal(el("slack-installation-start").disabled, false);
+  assert.equal(el("slack-installation-state").textContent.trim(), "Development Acme");
+  assert.equal(el("slack-own-app-label").textContent.trim(), "Use your own Slack app");
+  assert.equal(el("slack-own-app-guide").open, false);
+});
+
+test("custom connection cannot be replaced by hosted OAuth without disconnecting", async () => {
+  const el = await render({ configured: true, source: "admin", installAvailable: true });
+  assert.equal(el("slack-installation-start").disabled, true);
+  assert.equal(el("slack-installation-description").textContent.trim(), "Custom app");
+});
+
+test("managed credentials alone do not block retry of an unfinished route activation", async () => {
+  const dom = new JSDOM('<template data-integrations-card="card-slack-installation"></template>', {
+    runScripts: "outside-only",
+    url: "http://localhost/settings/slack-settings?slack=install",
+  });
+  try {
+    dom.window.eval(
+      integrationsBundle +
+        ';window.ui=integrationsUI;window.methods=[];ui.mountCards();ui.configure({api:async(method)=>{methods.push(method);return {ok:true,data:{configured:true,source:"service",installAvailable:true,setup:{connected:false}}}},orgScope:()=>"org:test"});',
+    );
+    await dom.window.eval("ui.loadSlackInstallation()");
+    assert.deepEqual(JSON.parse(String(dom.window.eval("JSON.stringify(methods)"))), ["GET", "POST"]);
+  } finally {
+    dom.window.close();
+  }
 });

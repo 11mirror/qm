@@ -1,15 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSync } from "esbuild";
 import { JSDOM } from "jsdom";
-const bundle = buildSync({
-  entryPoints: [new URL("../../src/admin/settings-providers.ts", import.meta.url).pathname],
-  bundle: true,
-  write: false,
-  format: "iife",
-  globalName: "providers",
-  platform: "browser",
-}).outputFiles[0].text;
+import { adminBundle } from "../support/admin-bundle.ts";
+const bundle = adminBundle("settings-providers.ts", "providers");
 function fixture() {
   const dom = new JSDOM('<template data-settings-card="custom-provider-dialog"></template>', {
     runScripts: "outside-only",

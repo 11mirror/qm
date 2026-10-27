@@ -1,24 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSync } from "esbuild";
 import { JSDOM } from "jsdom";
+import { adminBundle } from "../support/admin-bundle.ts";
 
-const source = buildSync({
-  entryPoints: [new URL("../../src/admin/artifacts.ts", import.meta.url).pathname],
-  bundle: true,
-  write: false,
-  format: "iife",
-  globalName: "artifacts",
-  platform: "browser",
-}).outputFiles[0].text;
-const packsSource = buildSync({
-  entryPoints: [new URL("../../src/admin/artifacts-skills.ts", import.meta.url).pathname],
-  bundle: true,
-  write: false,
-  format: "iife",
-  globalName: "skillUI",
-  platform: "browser",
-}).outputFiles[0].text;
+const source = adminBundle("artifacts.ts", "artifacts");
+const packsSource = adminBundle("artifacts-skills.ts", "skillUI");
 function fixture() {
   const dom = new JSDOM('<div id="shellbar"></div><main></main>', {
     runScripts: "outside-only",

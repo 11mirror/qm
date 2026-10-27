@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mountAdmin } from "./fixture.ts";
+import { mountAdmin } from "../support/admin-fixture.ts";
 
 async function render(text: string) {
   const admin = await mountAdmin("/settings/judgments?jid=1", {
