@@ -119,9 +119,7 @@ export function mimeFromName(name: string): string {
   return MIME_BY_EXT[ext] ?? "application/octet-stream";
 }
 
-export const MAX_OUTBOUND_FILES = 20;
-
-export const MAX_INBOUND_FILES = 10;
+export const MAX_REPLY_ATTACHMENT_BYTES = MAX_ATTACHMENT_BYTES;
 
 export interface ArtifactRegistration {
   store: FileArtifactStore;
@@ -223,16 +221,10 @@ export function inboundIssuesNote(issues: readonly string[]): string {
 }
 
 export function inboundIssueList(opts: {
-  tooMany?: readonly string[];
   unavailable?: readonly string[];
   surfaceNotes?: readonly string[];
 }): string[] {
   const issues: string[] = [];
-  if (opts.tooMany?.length) {
-    issues.push(
-      `${opts.tooMany.join(", ")} — too many files in one message (only the first ${MAX_INBOUND_FILES} were taken)`,
-    );
-  }
   if (opts.unavailable?.length) {
     issues.push(`${opts.unavailable.join(", ")} — no longer available (the upload may have expired)`);
   }
@@ -283,7 +275,6 @@ export async function materializeInbound(
 ): Promise<{
   metas: AttachmentMeta[];
   images: InboundImage[];
-  tooMany: string[];
   unavailable: string[];
   unstaged?: Set<string>;
 }> {
@@ -296,14 +287,9 @@ export async function materializeInbound(
   const unstaged = new Set<string>();
   const metas: AttachmentMeta[] = [];
   const images: InboundImage[] = [];
-  const tooMany: string[] = [];
   const unavailable: string[] = [];
   const usedNames = new Set<string>();
   for (const a of attachments) {
-    if (metas.length >= MAX_INBOUND_FILES) {
-      tooMany.push(safeAttachmentName(a.name));
-      continue;
-    }
     const blob = await transfer.open(a.blobId);
     if (!blob) {
       unavailable.push(safeAttachmentName(a.name));
@@ -346,7 +332,7 @@ export async function materializeInbound(
       });
     }
   }
-  return { metas, images, tooMany, unavailable, ...(unstaged.size ? { unstaged } : {}) };
+  return { metas, images, unavailable, ...(unstaged.size ? { unstaged } : {}) };
 }
 
 const DELIVERY_NOTE_PREFIX = "[files delivered to the conversation: ";
@@ -382,7 +368,6 @@ export function parseOutboundFiles(
     )
   )
     return { ok: false, message: 'files must be workspace path strings or {file_id: "stored Files ID"} objects' };
-  if (value.length > MAX_OUTBOUND_FILES) return { ok: false, message: `too many files (max ${MAX_OUTBOUND_FILES})` };
   if (value.some((file) => typeof file === "string" && hasParentPathSegment(file)))
     return { ok: false, message: "files must stay inside the workspace — no .. path segments" };
   return {
@@ -399,6 +384,7 @@ export async function collectNamedOutbound(
   register?: ArtifactRegistration,
   reservedNames: readonly string[] = [],
   openStored?: OpenStoredFile,
+  reservedBytes = 0,
 ): Promise<{
   attachments: OutgoingAttachment[];
   missing: string[];
@@ -421,6 +407,7 @@ export async function collectNamedOutbound(
     createdArtifactIds.clear();
   };
   let target: SandboxHandle | undefined;
+  let totalBytes = reservedBytes;
   try {
     for (const [i, file] of parsed.files.entries()) {
       const storedId = typeof file === "string" ? undefined : file.file_id;
@@ -440,7 +427,8 @@ export async function collectNamedOutbound(
       }
       const sizeBytes = stored?.sizeBytes ?? bytes!.length;
       if (sizeBytes === 0) empty.push(label);
-      if (sizeBytes > MAX_ATTACHMENT_BYTES) oversized.push(label);
+      if (sizeBytes > MAX_ATTACHMENT_BYTES || totalBytes + sizeBytes > MAX_REPLY_ATTACHMENT_BYTES)
+        oversized.push(label);
       if (doomed()) {
         stored?.stream.destroy();
         continue;
@@ -458,6 +446,7 @@ export async function collectNamedOutbound(
       } finally {
         stored?.stream.destroy();
       }
+      totalBytes += blob.sizeBytes;
       const attachment: OutgoingAttachment = { name, mimetype, sizeBytes: blob.sizeBytes, blobId: blob.blobId };
       attachments.push(attachment);
       if (blob.sizeBytes === 0) {
