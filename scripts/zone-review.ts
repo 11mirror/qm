@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import { buildModelRuntime } from "../src/harness/pi-harness.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 import { lines, section, wallOfShameLenses } from "./wall-of-shame-check.ts";
+import { inZone, isReviewable, readZone } from "./zone.ts";
 
 const DEFAULT_MODEL = "gpt-6.1-sol";
 const CHUNK_LINES = 1500;
@@ -22,13 +23,6 @@ export interface Finding {
   line: number;
   title: string;
 }
-
-export const zonePaths = (list: string) => lines(list).filter(Boolean);
-
-export const inZone = (zone: string[], path: string) => zone.some((z) => path === z || path.startsWith(`${z}/`));
-
-export const isReviewable = (path: string) =>
-  /\.(ts|tsx|mts|js|mjs|cjs|css|html|sh)$/.test(path) && !/(^|\/)test\/|\.test\./.test(path);
 
 export const fileSource = (path: string, text: string): Source => ({
   path,
@@ -91,7 +85,7 @@ const DIFF_NOTE =
 async function main() {
   const { values } = parseArgs({ options: { base: { type: "string" }, model: { type: "string" } } });
   const git = (...args: string[]) => execFileSync("git", args, { encoding: "utf8", maxBuffer: 1 << 28 });
-  const zone = zonePaths(readFileSync("slop-free-zone.txt", "utf8"));
+  const zone = readZone();
   const base = values.base;
   const files = (base ? git("diff", "--name-only", "--diff-filter=d", `${base}...HEAD`) : git("ls-files", ...zone))
     .split("\n")
