@@ -7,7 +7,7 @@ import {
   SettingsManager,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
-import { reportFailure, swallow } from "../util/errors.ts";
+import { swallow } from "../util/errors.ts";
 import type { TurnHalt, TurnToolState } from "./turn-tool-state.ts";
 import type { ModelCallLog } from "./model-call-log.ts";
 import type { TurnRequestSettings } from "./turn-request.ts";
@@ -22,7 +22,7 @@ import { type Item } from "../sessions/items.ts";
 import { modelGatewayRequest } from "../model/provider-endpoints.ts";
 import { type HarnessTurnInput } from "./harness.ts";
 import { createAgentTools, pauseStampAfterToolCall } from "./agent-tools.ts";
-import { planColdStartSeed, reconstructMessagesFromHistory, replayPreamble, seedPriorTurns } from "./replay.ts";
+import { planColdStartSeed, reconstructMessagesFromHistory, seedPriorTurns } from "./replay.ts";
 import { restoreReplayImages, type ReplayImageLoader } from "./replay-images.ts";
 import { countTokens } from "../util/tokens.ts";
 import {
@@ -235,38 +235,19 @@ export async function createTurnSession({
   tools,
   loadImage,
 }: TurnSessionInput): Promise<TurnSession> {
-  let reconstructed: PiReplayMessage[] | null;
-  try {
-    reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
-  } catch (err) {
-    reportFailure("pi-harness: history reconstruction (falling back)", err);
-    reconstructed = null;
-  }
+  const reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
   const seedPlan = planColdStartSeed(reconstructed, !!priorTurns?.length);
-  const composedPrompt = systemPrompt + (seedPlan === "preamble" ? replayPreamble(history) : "");
 
   const modelRuntime = await buildModelRuntime(await providerKeys(), modelGateway, "long");
-  const { session, dirs } = await openAgentSession(tempDirPrefix, composedPrompt, {
+  const { session, dirs } = await openAgentSession(tempDirPrefix, systemPrompt, {
     model,
     modelRuntime,
     customTools: tools,
     sessionManager: SessionManager.inMemory(undefined, { id: sessionId }),
   });
 
-  if (seedPlan === "structured" || seedPlan === "priorTurns") {
-    const structured = seedPlan === "structured";
-    try {
-      seedRawMessagesIntoSession(
-        session,
-        structured ? reconstructed! : seedPriorTurns(priorTurns!, []).map(toPiMessage),
-      );
-    } catch (err) {
-      reportFailure(
-        `pi-harness: seed ${structured ? "reconstructed history" : "prior turns"} (continuing without it)`,
-        err,
-      );
-    }
-  }
+  if (seedPlan === "structured") seedRawMessagesIntoSession(session, reconstructed);
+  else if (seedPlan === "priorTurns") seedRawMessagesIntoSession(session, seedPriorTurns(priorTurns!, []).map(toPiMessage));
 
   const agent = (session as unknown as { agent?: PiAgentWithPayloadHook }).agent;
   if (agent) {
@@ -319,7 +300,7 @@ export async function createTurnSession({
 
   return {
     agentSession: session,
-    composedPromptTokens: countTokens(composedPrompt),
+    composedPromptTokens: countTokens(systemPrompt),
     cwd: dirs.cwd,
     agentDir: dirs.agentDir,
     ...(dirs.ephemeralCwd ? { ephemeralCwd: dirs.ephemeralCwd } : {}),
