@@ -9,7 +9,7 @@ import { createPostgresSwarmBoard } from "../swarms/swarm-board.ts";
 import { scopeId } from "../types.ts";
 import { startSession } from "../api/start-session.ts";
 import { resolveRuntimeChoiceDurable } from "../harness/runtime-choice.ts";
-import type { PersistedUiState } from "../surfaces/ui-state.ts";
+import { createUiStateStore } from "../surfaces/ui-state.ts";
 import type { FilesModule } from "./files.ts";
 import type { StoresModule } from "./stores.ts";
 import type { RunsModule } from "./runs.ts";
@@ -23,7 +23,6 @@ export function buildSessionSyscalls(w: Head & FilesModule & StoresModule & Runs
     canWriteScope,
     projects,
     currentScopeMembers,
-    artifactMap,
     databaseUrl,
     featureFlags,
     sessions,
@@ -114,7 +113,7 @@ export function buildSessionSyscalls(w: Head & FilesModule & StoresModule & Runs
       );
     },
   });
-  const uiState = artifactMap<PersistedUiState>("web_ui_state");
+  const uiState = createUiStateStore(databaseUrl);
   return { uiState, sessionSyscalls, layerBrokerFor, sessionMailbox, prepareSessionRequest };
 }
 

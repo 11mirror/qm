@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createSlackSender } from "../../src/slack/sender.ts";
 import { SLACK_POST_SPLIT_LIMIT } from "../../src/slack/delivery.ts";
-import { createOutbound, type QueuedPost } from "../../src/surfaces/outbound.ts";
+import { createOutbound } from "../../src/surfaces/outbound.ts";
+import type { QueuedPost } from "../../src/surfaces/queued-posts.ts";
 
 const mixedFiles = [
   { name: "first.png", mimetype: "image/png", sizeBytes: 2, blobId: "B1" },

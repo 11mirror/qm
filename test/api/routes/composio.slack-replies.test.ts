@@ -3,8 +3,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresDirectoryStore } from "../../../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl } from "../../support/test-database.ts";
-import { testMap } from "../../support/test-database.ts";
 import { slackReplyFixture } from "../../support/composio-routes.ts";
+import { testQuery } from "../../support/test-database.ts";
 
 test("Slack replies use only the viewer's verified user connection and server-side thread destination", async () => {
   const f = await slackReplyFixture();
@@ -64,7 +64,7 @@ test("Slack replies cannot target hidden sessions or accept blank messages", asy
 
 test("Slack replies require a linked user account and never fall back to the bot token", async () => {
   const f = await slackReplyFixture();
-  await f.deps.slackAccounts!.delete("alice");
+  await testQuery(f.url, `DELETE FROM slack_accounts WHERE principal_id = 'alice'`);
   f.deps.slackEnvBotToken = "must-not-use";
   assert.equal((await f.invoke("/v1/composio/slack/reply-status", f.message)).data.connected, false);
   assert.equal((await f.invoke("/v1/composio/slack/reply", f.message)).status, 409);
@@ -120,7 +120,7 @@ test("Slack replies preserve unthreaded DMs and report Slack permission failures
 
 async function nativeSlackFixture(linked = true) {
   const f = await slackReplyFixture();
-  f.deps.slackAccounts = testMap();
+  await testQuery(f.url, `DELETE FROM slack_accounts`);
   f.deps.connectorTokens = f.deps.keychain;
   f.deps.oauthEnv = { SLACK_OAUTH_CLIENT_ID: "native-client", SLACK_OAUTH_CLIENT_SECRET: "native-secret" };
   f.deps.directory = createPostgresDirectoryStore(testDatabaseUrl());
@@ -205,7 +205,7 @@ test("native Slack connection status and linking work without a Composio credent
 
 test("configured native OAuth preserves an existing Composio connection", async () => {
   const f = await nativeSlackFixture(false);
-  await f.deps.slackAccounts!.put("alice", {
+  await f.deps.slackAccounts!.put({
     principalId: "alice",
     memberId: "alice",
     accountId: "ca_alice",

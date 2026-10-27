@@ -99,7 +99,7 @@ async function createShare(ctx: ApiCtx): Promise<RouteResult> {
     messages,
     files,
   };
-  await deps.sessionShares.putIfAbsent(share.token, share);
+  await deps.sessionShares.create(share);
   audit(deps, {
     principalId: viewer,
     action: "session.share",

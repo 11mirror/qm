@@ -16,14 +16,13 @@ import { companySubscriptionAuth, configuredModel, providerKeysPresent, type Con
 import type { ServerDeps } from "./api/deps.ts";
 import { type IdentityService } from "./identity/identity-service.ts";
 import { type PrincipalLinkService } from "./identity/principal-links.ts";
-import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts";
+import type { ComposioReturns, SlackAccounts } from "./connectors/composio-links.ts";
 import { resendMailer } from "../plugins/chassis/src/resend.ts";
 import { type ScopedConfigStore } from "./resolution/config-store.ts";
 import { type AclStore } from "./acl/acl-store.ts";
 import { type SkillStore } from "./skills/skill-store.ts";
 import { type SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { type SkillPackFetcher } from "./skills/pack-fetcher.ts";
-import { type DurableMap } from "./persistence/durable-map.ts";
 import type { UiStateStore } from "./surfaces/ui-state.ts";
 import { slackUserClientFactory } from "./inbox/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
@@ -261,8 +260,8 @@ export interface BuiltApp {
   egressAudit: EgressAuditSink;
   identity: IdentityService;
   principalLinks: PrincipalLinkService;
-  slackAccounts: DurableMap<SlackAccountLink>;
-  composioReturns: DurableMap<ComposioReturn>;
+  slackAccounts: SlackAccounts;
+  composioReturns: ComposioReturns;
   keychain: Keychain;
   serviceCreds: ServiceCredentialStore;
   outbound: Outbound;

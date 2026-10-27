@@ -9,9 +9,10 @@ import { createAclStore } from "../../src/acl/acl-store.ts";
 import { scopeId } from "../../src/types.ts";
 import { tenant } from "../../src/tenant.ts";
 import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap } from "./test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./test-database.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 import { createKeychainStore } from "../../src/credentials/keychain-store.ts";
+import { createComposioReturns, createSlackAccounts } from "../../src/connectors/composio-links.ts";
 
 export function fakeRuns(run: Record<string, unknown>): ServerDeps["runs"] {
   return {
@@ -22,6 +23,7 @@ export function fakeRuns(run: Record<string, unknown>): ServerDeps["runs"] {
 }
 
 export function fixture() {
+  const url = testDatabaseUrl();
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
     store: createKeychainStore(testDatabaseUrl()),
@@ -36,7 +38,7 @@ export function fixture() {
     keychain,
     serviceCreds: keychain,
     acl,
-    composioReturns: testMap(),
+    composioReturns: createComposioReturns(url),
     auditLog: {
       record: (e: { action: string; resource?: string }) => audits.push(e),
     } as unknown as ServerDeps["auditLog"],
@@ -111,7 +113,7 @@ export function fixture() {
         grantedBy: "admin",
       });
   }
-  return { invoke, own, shared, calls, replies, deps, app, audits };
+  return { invoke, own, shared, calls, replies, deps, app, audits, url };
 }
 
 export const privateCap: CapabilityClaims = {
@@ -147,8 +149,9 @@ export async function slackReplyFixture() {
       externalId: e.externalId,
       ...e.body,
     }));
-  f.deps.slackAccounts = testMap();
-  await f.deps.slackAccounts.put("alice", {
+  const slackAccounts = createSlackAccounts(f.url);
+  f.deps.slackAccounts = slackAccounts;
+  await slackAccounts.put({
     principalId: "alice",
     memberId: "alice",
     accountId: "ca_alice",

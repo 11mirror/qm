@@ -1,4 +1,3 @@
-import type { DurableMap } from "../../src/persistence/durable-map.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -14,11 +13,12 @@ import {
   isThreadReply,
   createThreadTracker,
   createDeduper,
-  type HandledEvent,
+  createHandledEvents,
   dedupedRun,
   dedupeKey,
   isBareStop,
 } from "../../src/slack/message-gating.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 test("shouldProcessMessage allows file_share and thread_broadcast but drops other subtypes and the bot's own", () => {
   assert.equal(shouldProcessMessage({ subtype: "file_share", user: "U1" }, "BOT"), true);
@@ -209,22 +209,8 @@ test("isBareStop accepts case-insensitive stop with optional trailing . or !", (
   for (const t of ["@qm stop it", "@qmstop", "@alice stop", "@here stop"]) assert.equal(isBareStop(t, "qm"), false, t);
 });
 
-const handledStore = () => {
-  const rows = new Map<string, HandledEvent>();
-  const map = {
-    get: async (id: string) => rows.get(id) ?? null,
-    put: async (id: string, value: HandledEvent) => {
-      rows.set(id, value);
-    },
-    delete: async (id: string) => {
-      rows.delete(id);
-    },
-  } as unknown as DurableMap<HandledEvent>;
-  return { rows, map };
-};
-
 test("an event handled by one process is skipped by another process sharing the handled store", async () => {
-  const { map } = handledStore();
+  const map = createHandledEvents(testDatabaseUrl());
   const key = dedupeKey({ event_id: "Ev7", channel: "C", ts: "7.7" });
   let runs = 0;
   const run = async () => {
@@ -239,7 +225,7 @@ test("an event handled by one process is skipped by another process sharing the 
 });
 
 test("a failed handler leaves no handled record, so a redelivery to another process reprocesses", async () => {
-  const { map, rows } = handledStore();
+  const map = createHandledEvents(testDatabaseUrl());
   const key = dedupeKey({ event_id: "Ev8", channel: "C", ts: "8.8" });
   let runs = 0;
   await dedupedRun(
@@ -251,7 +237,7 @@ test("a failed handler leaves no handled record, so a redelivery to another proc
     },
     () => undefined,
   );
-  assert.equal(rows.has(key), false);
+  assert.equal(await map.has(key), false);
   await dedupedRun(
     createDeduper(10, map),
     key,
@@ -261,5 +247,5 @@ test("a failed handler leaves no handled record, so a redelivery to another proc
     () => undefined,
   );
   assert.equal(runs, 2);
-  assert.equal(rows.has(key), true);
+  assert.equal(await map.has(key), true);
 });

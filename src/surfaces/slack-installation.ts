@@ -1,4 +1,6 @@
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { lockedRow } from "../persistence/locked-row.ts";
+import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
 import { ErrorCode } from "@slack/web-api";
 import { SLACK_AUTH_ERRORS, slackErrorCode } from "../slack/payloads.ts";
@@ -81,12 +83,43 @@ export interface SlackInstallationStore {
   enableManaged(): Promise<boolean>;
 }
 
+const SLACK_INSTALLATION: TableSpec = {
+  table: "slack_installation",
+  key: "orgId",
+  keyIsField: true,
+  columns: {
+    disabled: { type: "boolean", required: true },
+    serviceBlocked: { type: "boolean" },
+    botTokenEnc: { type: "text" },
+    appTokenEnc: { type: "text" },
+    appId: { type: "text" },
+    installId: { type: "text" },
+    installedAt: { type: "bigint" },
+    teamId: { type: "text" },
+    teamName: { type: "text" },
+    updatedAt: { type: "bigint", required: true },
+    updatedBy: { type: "text", required: true },
+    version: { type: "text", required: true },
+  },
+};
+
+export const SLACK_INSTALLATION_MIGRATION = mapToTableMigration(
+  "surfaces/slack-installation/0001-typed",
+  SLACK_INSTALLATION,
+);
+
+const codec = tableCodec<StoredSlackInstallation>(SLACK_INSTALLATION);
+
 export function createSlackInstallationStore(
   orgId: string,
-  map: DurableMap<StoredSlackInstallation>,
+  databaseUrl: string,
   keyMaterial: Buffer | string,
 ): SlackInstallationStore {
   const key = deriveConnectorKey(keyMaterial, "slack-installation");
+  const pg = createPgPool(databaseUrl, [SLACK_INSTALLATION_MIGRATION]);
+  const modify = lockedRow<StoredSlackInstallation>(pg, SLACK_INSTALLATION);
+  const read = async (): Promise<StoredSlackInstallation | null> =>
+    codec.rows(await pg.q(`SELECT ${codec.columns} FROM slack_installation WHERE org_id = $1`, [orgId]))[0] ?? null;
   const publicStatus = (record: StoredSlackInstallation | null): SlackInstallationStatus =>
     record && !record.disabled
       ? {
@@ -101,7 +134,7 @@ export function createSlackInstallationStore(
       : { configured: false, managed: record !== null };
   return {
     async get() {
-      const record = await map.get(orgId);
+      const record = await read();
       if (!record || record.disabled) return null;
       return {
         botToken: decryptSecret(record.botTokenEnc, key),
@@ -117,7 +150,7 @@ export function createSlackInstallationStore(
       };
     },
     async status() {
-      return publicStatus(await map.get(orgId));
+      return publicStatus(await read());
     },
     async set(input) {
       const updatedAt = Date.now();
@@ -135,24 +168,23 @@ export function createSlackInstallationStore(
         updatedBy: input.updatedBy,
         version: `${updatedAt}:${crypto.randomUUID()}`,
       };
-      await map.putIfAbsent(orgId, record);
-      const stored = await map.update(orgId, (current) => ({
+      const stored = await modify(orgId, (current) => ({
         ...record,
-        ...(current.installedAt !== undefined ? { installedAt: current.installedAt } : {}),
+        ...(current?.installedAt !== undefined ? { installedAt: current.installedAt } : {}),
       }));
       if (!stored) throw new Error("Slack installation disappeared during update");
       return publicStatus(stored);
     },
     async setManaged(input) {
-      await map.putIfAbsent(orgId, {
-        orgId,
-        disabled: true,
-        updatedAt: 0,
-        updatedBy: "slack-service",
-        version: "initial",
-      });
       let accepted = false;
-      await map.update(orgId, (record) => {
+      await modify(orgId, (current) => {
+        const record: StoredSlackInstallation = current ?? {
+          orgId,
+          disabled: true,
+          updatedAt: 0,
+          updatedBy: "slack-service",
+          version: "initial",
+        };
         if (record.serviceBlocked || (!record.disabled && !record.installId)) return record;
         if (!record.disabled && record.installId === input.installId) {
           accepted =
@@ -180,7 +212,8 @@ export function createSlackInstallationStore(
     },
     async enableManaged() {
       let accepted = true;
-      await map.update(orgId, (record) => {
+      await modify(orgId, (record) => {
+        if (!record) return null;
         if (!record.disabled && !record.installId) {
           accepted = false;
           return record;
@@ -191,8 +224,8 @@ export function createSlackInstallationStore(
     },
     async disableManaged(installId) {
       let disabled = false;
-      await map.update(orgId, (record) => {
-        if (record.disabled || record.installId !== installId) return record;
+      await modify(orgId, (record) => {
+        if (!record || record.disabled || record.installId !== installId) return record;
         disabled = true;
         return {
           orgId,
@@ -206,23 +239,19 @@ export function createSlackInstallationStore(
       return disabled;
     },
     async delete(updatedBy) {
-      const record = await map.update(orgId, (current) => ({
-        orgId,
-        disabled: true,
-        serviceBlocked: current.serviceBlocked || (!current.disabled && !current.installId),
-        ...(current.installedAt ? { installedAt: current.installedAt } : {}),
-        updatedAt: Date.now(),
-        updatedBy,
-        version: crypto.randomUUID(),
-      }));
-      if (record) return;
-      const updatedAt = Date.now();
-      await map.put(orgId, {
-        orgId,
-        disabled: true,
-        updatedAt,
-        updatedBy,
-        version: `${updatedAt}:${crypto.randomUUID()}`,
+      await modify(orgId, (current) => {
+        const updatedAt = Date.now();
+        if (!current)
+          return { orgId, disabled: true, updatedAt, updatedBy, version: `${updatedAt}:${crypto.randomUUID()}` };
+        return {
+          orgId,
+          disabled: true,
+          serviceBlocked: current.serviceBlocked || (!current.disabled && !current.installId),
+          ...(current.installedAt ? { installedAt: current.installedAt } : {}),
+          updatedAt,
+          updatedBy,
+          version: crypto.randomUUID(),
+        };
       });
     },
   };

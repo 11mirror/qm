@@ -7,6 +7,8 @@ import { testAdvisoryLock } from "../../support/test-database.ts";
 import { testDatabaseUrl } from "../../support/test-database.ts";
 import { testMap } from "../../support/test-database.ts";
 import { fixture, privateCap } from "../../support/composio-routes.ts";
+import { createSlackAccounts } from "../../../src/connectors/composio-links.ts";
+import { testQuery } from "../../support/test-database.ts";
 
 test("Composio requires a verified actor and never uses another person's key", async () => {
   const f = fixture();
@@ -316,7 +318,7 @@ test("Slack connection links verified workspace identity to the web owner and pe
   const { installPrincipalLinks, canonicalPerson } = await import("../../../src/directory/person.ts");
   f.deps.principalLinks = createPrincipalLinkService(testMap(), testAdvisoryLock());
   installPrincipalLinks(f.deps.principalLinks);
-  f.deps.slackAccounts = testMap();
+  f.deps.slackAccounts = createSlackAccounts(f.url);
   f.deps.signingSecret = "qa-slack-link-secret";
   f.deps.directory = createPostgresDirectoryStore(testDatabaseUrl());
   await f.deps.directory.replace([
@@ -373,7 +375,7 @@ test("Slack link rejects changed browser accounts, wrong owner, bots, other work
     await f.own("bob");
     f.deps.signingSecret = "slack-test";
     f.deps.principalLinks = createPrincipalLinkService(testMap(), testAdvisoryLock());
-    f.deps.slackAccounts = testMap();
+    f.deps.slackAccounts = createSlackAccounts(f.url);
     f.deps.directory = createPostgresDirectoryStore(testDatabaseUrl());
     await f.deps.directory.replace([
       { principalId: "work@example.test", slackId: "U123", displayName: "Alice", type: "internal" },
@@ -417,6 +419,6 @@ test("Slack link rejects changed browser accounts, wrong owner, bots, other work
     );
     assert.ok(result.status >= 400, `${scenario}: ${result.status}`);
     assert.equal((await f.deps.principalLinks.list()).length, 0);
-    assert.equal((await f.deps.slackAccounts.all()).length, 0);
+    assert.equal((await testQuery(f.url, "SELECT * FROM slack_accounts")).length, 0);
   }
 });

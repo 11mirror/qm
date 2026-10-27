@@ -6,6 +6,8 @@ import { tenant } from "../../../src/tenant.ts";
 import { testAdvisoryLock } from "../../support/test-database.ts";
 import { testMap } from "../../support/test-database.ts";
 import { fakeRuns, fixture, privateCap } from "../../support/composio-routes.ts";
+import { createSlackAccounts } from "../../../src/connectors/composio-links.ts";
+import { testQuery } from "../../support/test-database.ts";
 const execution = {
   tool: "GMAIL_FETCH_EMAILS",
   accountId: "ca_alice",
@@ -153,7 +155,7 @@ test("callback completion is browser-only and preserves the durable return URL",
     session_uri: "opaque",
     user_id: composioUserId(tenant().orgId, "alice"),
   });
-  assert.equal((await f.deps.composioReturns!.entries()).length, 0);
+  assert.equal((await testQuery(f.url, "SELECT * FROM composio_returns")).length, 0);
   assert.deepEqual(
     f.audits.filter((e) => e.action.startsWith("composio.conn")).map((e) => [e.action, e.resource]),
     [["composio.connected", "gmail"]],
@@ -274,7 +276,7 @@ test("expired callback returns are discarded after successful browser verificati
   });
   f.replies.push({ connected_account_id: "ca_test" });
   assert.deepEqual((await f.invoke("/v1/composio/complete-auth", { sessionUri: "opaque" })).data, { returnTo: null });
-  assert.equal(await f.deps.composioReturns!.get(key), null);
+  assert.equal((await testQuery(f.url, "SELECT * FROM composio_returns")).length, 0);
 });
 
 test("linked aliases can execute their existing accounts until the identity link is removed", async () => {
@@ -320,13 +322,13 @@ test("linked account discovery and Slack status preserve historical aliases with
   await f.shared();
   const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
   f.deps.principalLinks = links;
-  f.deps.slackAccounts = testMap();
+  f.deps.slackAccounts = createSlackAccounts(f.url);
   installPrincipalLinks(links);
   const aliasId = "oidc:alice";
   const canonicalUserId = composioUserId(tenant().orgId, "alice");
   const aliasUserId = composioUserId(tenant().orgId, aliasId);
   const account = { id: "ca_legacy", user_id: aliasUserId, status: "ACTIVE", toolkit: { slug: "slack" } };
-  await f.deps.slackAccounts.put(aliasId, {
+  await f.deps.slackAccounts.put({
     principalId: aliasId,
     memberId: "alice",
     accountId: account.id,
@@ -414,13 +416,13 @@ test("consent and browser verification use the canonical identity when signed in
     );
     assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail", callbackUrl }, aliasId)).status, 200);
     assert.equal(JSON.parse(String(f.calls[0]!.init?.body)).user_id, userId);
-    assert.equal((await f.deps.composioReturns!.get(`${userId}:ca_linked`))?.url, callbackUrl);
+    assert.equal((await testQuery(f.url, "SELECT * FROM composio_returns"))[0]?.url, callbackUrl);
     f.replies.push({ connected_account_id: "ca_linked", toolkit_slug: "gmail" });
     const result = await f.invoke("/v1/composio/complete-auth", { sessionUri: "opaque" }, aliasId);
     assert.equal(result.status, 200);
     assert.deepEqual(result.data, { returnTo: callbackUrl });
     assert.deepEqual(JSON.parse(String(f.calls.at(-1)!.init?.body)), { session_uri: "opaque", user_id: userId });
-    assert.equal((await f.deps.composioReturns!.entries()).length, 0);
+    assert.equal((await testQuery(f.url, "SELECT * FROM composio_returns")).length, 0);
   } finally {
     installPrincipalLinks(null);
   }
@@ -432,12 +434,12 @@ test("linked identities retain provider accounts and Slack status until unlinked
   const f = fixture();
   await f.shared();
   f.deps.principalLinks = createPrincipalLinkService(testMap(), testAdvisoryLock());
-  f.deps.slackAccounts = testMap();
+  f.deps.slackAccounts = createSlackAccounts(f.url);
   installPrincipalLinks(f.deps.principalLinks);
   const canonical = composioUserId(tenant().orgId, "alice");
   const alias = composioUserId(tenant().orgId, "oidc:alice");
   const account = { id: "ca_old", user_id: alias, status: "ACTIVE", toolkit: { slug: "slack" } };
-  await f.deps.slackAccounts.put("oidc:alice", {
+  await f.deps.slackAccounts.put({
     principalId: "oidc:alice",
     memberId: "alice",
     accountId: "ca_old",
@@ -478,14 +480,14 @@ test("linked identities retain provider accounts and Slack status until unlinked
     });
     assert.equal(new URL(f.calls[0]!.url).searchParams.get("user_ids"), [canonical, alias].join(","));
     assert.equal(new URL(f.calls[0]!.url).searchParams.get("cursor"), "page");
-    await f.deps.slackAccounts.put("alice", {
+    await f.deps.slackAccounts.put({
       ...(await f.deps.slackAccounts.get("oidc:alice"))!,
       principalId: "alice",
       accountId: "ca_expired",
     });
     f.replies.push({ ...account, id: "ca_expired", user_id: canonical, status: "EXPIRED" }, account);
     assert.equal((await f.invoke("/v1/composio/slack")).data.connected, true);
-    await f.deps.slackAccounts.delete("alice");
+    await testQuery(f.url, `DELETE FROM slack_accounts WHERE principal_id = 'alice'`);
     f.replies.push(
       { session_id: "trs_test" },
       { redirect_url: "https://connect.composio.dev/link/lk_test", connected_account_id: "ca_test" },

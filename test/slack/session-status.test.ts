@@ -8,7 +8,9 @@ import { createTurnStream } from "../../src/runs/turn-stream.ts";
 import type { ProcessRecord } from "../../src/processes/process-registry.ts";
 import type { Session, Monitor } from "../../src/types.ts";
 import { isTerminal, type Run } from "../../src/runs/run-store.ts";
-import { testMap, testDatabaseUrl } from "../support/test-database.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
+import { createPgPool } from "../../src/persistence/pg-pool.ts";
+import { createSessionStatusStore } from "../../src/slack/session-status.ts";
 
 function deferred() {
   let resolve!: () => void;
@@ -20,8 +22,14 @@ function deferred() {
 
 function fixture() {
   let at = 1_000;
-  const store = testMap<SlackSessionStatusState>();
-  const flags = createFeatureFlagStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const store = createSessionStatusStore(url);
+  const { q } = createPgPool(url);
+  const all = async (): Promise<SlackSessionStatusState[]> => {
+    const ids = await q(`SELECT id FROM slack_session_status ORDER BY id`);
+    return (await Promise.all(ids.map((r) => store.get(String(r.id))))).filter((row) => row !== null);
+  };
+  const flags = createFeatureFlagStore(url);
   const records = new Map<string, Run>();
   const jobs: ProcessRecord[] = [];
   const watches: Monitor[] = [];
@@ -93,6 +101,7 @@ function fixture() {
   };
   return {
     store,
+    all,
     flags,
     records,
     runs,
@@ -125,7 +134,7 @@ test("cards require opt-in, a reply thread and non-private engagement", async ()
   run.request.privateSessionMessage = true;
   await f.start(run.id);
   assert.deepEqual(f.cards, []);
-  assert.deepEqual(await f.store.all(), []);
+  assert.deepEqual(await f.all(), []);
 });
 
 test("concurrent starts share one card, terminal runs cannot clear active work, and later work gets a fresh card", async () => {
@@ -143,7 +152,7 @@ test("concurrent starts share one card, terminal runs cannot clear active work, 
   await f.reconcile();
   assert.equal(f.card()[0]?.title, "No active work");
   assert.equal(f.card()[0]?.status, "complete");
-  assert.deepEqual(await f.store.all(), []);
+  assert.deepEqual(await f.all(), []);
   const oldCard = f.card()[0]?.task_id;
   f.add("later");
   await f.start("later");
@@ -194,7 +203,7 @@ test("background lifecycle survives restart and gains a canonical link after fiv
   const wake = f.add("wake");
   await f.reconcile();
   assert.equal(f.card()[0]?.title, "Working");
-  assert.equal((await f.store.all())[0]?.startedAt, 1_000);
+  assert.equal((await f.all())[0]?.startedAt, 1_000);
   wake.status = "done";
   job.status = "exited";
   monitor.enabled = false;
@@ -239,7 +248,7 @@ test("opt-out settles only this account's card without cancelling work", async (
   assert.equal(f.card()[0]?.status, "complete");
   assert.equal(job.status, "running");
   assert.deepEqual(
-    (await f.store.all()).map((row) => row.account),
+    (await f.all()).map((row) => row.account),
     ["T2:B2"],
   );
 });
@@ -255,17 +264,17 @@ test("transient failures retry the same card after restart; inaccessible threads
   };
   run.status = "done";
   await f.reconcile();
-  assert.equal((await f.store.all()).length, 1);
+  assert.equal((await f.all()).length, 1);
   f.client.apiCall = call;
   await f.manager().reconcile(f.client, "T1:B1");
   assert.equal(f.cards.at(-1)?.args.ts, "card.1");
-  assert.deepEqual(await f.store.all(), []);
+  assert.deepEqual(await f.all(), []);
   f.add("new");
   f.client.apiCall = async () => {
     throw Object.assign(new Error("missing"), { data: { error: "channel_not_found" } });
   };
   await f.start("new");
-  assert.deepEqual(await f.store.all(), []);
+  assert.deepEqual(await f.all(), []);
 });
 
 test("delayed insert after lease loss cannot replace a newer card", async () => {
@@ -294,10 +303,10 @@ test("delayed insert after lease loss cannot replace a newer card", async () => 
   old.status = "done";
   f.add("new");
   await f.start("new");
-  const newer = (await f.store.all())[0]!;
+  const newer = (await f.all())[0]!;
   blocked.resolve();
   await pending;
-  assert.equal((await f.store.all())[0]?.cardId, newer.cardId);
+  assert.equal((await f.all())[0]?.cardId, newer.cardId);
   assert.equal(f.cards.length, 1);
 });
 

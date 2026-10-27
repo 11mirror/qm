@@ -2,7 +2,8 @@ import { surfaceHas } from "../surfaces/surface.ts";
 import { swallowAs } from "../util/errors.ts";
 import { type PendingApprovalRecord, sourceDestination, type TurnRequest, turnSource } from "../types.ts";
 import type { SurfaceRegistry } from "../surfaces/registry.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
+import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import type { Outbound } from "../surfaces/outbound.ts";
 import { principalDestination } from "../reach/reach.ts";
 
@@ -15,8 +16,75 @@ export function approvalDeliveryRecipient(actor: { externalId?: string } | undef
   return id && !id.startsWith("system:") ? id : undefined;
 }
 
+const APPROVALS: TableSpec = {
+  table: "approvals",
+  key: "id",
+  columns: {
+    sessionId: { type: "text", required: true },
+    command: { type: "text", required: true },
+    createdAt: { type: "bigint" },
+    reason: { type: "text" },
+    matched: { type: "text" },
+    purpose: { type: "text" },
+    summary: { type: "text" },
+    summaryDetail: { type: "text" },
+    approvalKey: { type: "text" },
+    grantModes: { type: "jsonb" },
+    request: { type: "jsonb" },
+    blocksInput: { type: "boolean" },
+    kind: { type: "text" },
+  },
+};
+
+export const APPROVALS_MIGRATION = mapToTableMigration("core/approvals/0001-typed", APPROVALS, {
+  statements: [`CREATE INDEX IF NOT EXISTS approvals_session ON approvals (session_id)`],
+});
+
+const codec = tableCodec<PendingApprovalRecord>(APPROVALS);
+const entries = (rows: Record<string, unknown>[]): Array<[string, PendingApprovalRecord]> =>
+  rows.map((r) => [String(r.id), codec.row(r)]);
+
+export function createApprovalRecords(databaseUrl: string) {
+  const { q } = createPgPool(databaseUrl, [APPROVALS_MIGRATION]);
+  return {
+    async get(id: string): Promise<PendingApprovalRecord | null> {
+      return codec.rows(await q(`SELECT ${codec.columns} FROM approvals WHERE id = $1`, [id]))[0] ?? null;
+    },
+    async put(id: string, record: PendingApprovalRecord): Promise<void> {
+      await q(
+        `INSERT INTO approvals (${codec.columns}) VALUES (${codec.placeholders})
+         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET ${codec.updates}`,
+        codec.values(id, record),
+      );
+    },
+    async delete(id: string): Promise<void> {
+      await q(`DELETE FROM approvals WHERE id = $1`, [id]);
+    },
+    async take(id: string): Promise<PendingApprovalRecord | null> {
+      return codec.rows(await q(`DELETE FROM approvals WHERE id = $1 RETURNING ${codec.columns}`, [id]))[0] ?? null;
+    },
+    async entries(): Promise<Array<[string, PendingApprovalRecord]>> {
+      return entries(await q(`SELECT ${codec.columns} FROM approvals ORDER BY id`));
+    },
+    async forSessions(sessionIds: readonly string[]): Promise<Array<[string, PendingApprovalRecord]>> {
+      if (!sessionIds.length) return [];
+      return entries(
+        await q(`SELECT ${codec.columns} FROM approvals WHERE session_id = ANY($1::text[]) ORDER BY id`, [
+          [...sessionIds],
+        ]),
+      );
+    },
+    async blockingSessionIds(): Promise<string[]> {
+      const rows = await q(`SELECT DISTINCT session_id FROM approvals WHERE blocks_input IS NOT FALSE`);
+      return rows.map((r) => String(r.session_id));
+    },
+  };
+}
+
+export type ApprovalRecords = ReturnType<typeof createApprovalRecords>;
+
 export function createApprovalStore(
-  backing: DurableMap<PendingApprovalRecord>,
+  backing: ApprovalRecords,
   outbound: Pick<Outbound, "send">,
   opts: { surfaces?: Pick<SurfaceRegistry, "get">; webSessionUrl?: (sessionId: string) => string | undefined } = {},
 ) {

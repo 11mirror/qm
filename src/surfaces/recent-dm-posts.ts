@@ -1,35 +1,56 @@
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
+import { mapToTableMigration, type TableSpec } from "../persistence/typed-table.ts";
+import { jsonbStringify } from "../util/text.ts";
 
-export interface RecentDmPosts {
-  posts: Array<{ key: string; text: string; at: number; onBehalfOf?: string; trigger?: string }>;
+export interface RecentDmPost {
+  key: string;
+  text: string;
+  at: number;
+  onBehalfOf?: string;
+  trigger?: string;
 }
 
 const KEEP = 5;
 const NOTE_ITEM_MAX_CHARS = 200;
 
-export async function rememberDmPost(
-  map: DurableMap<RecentDmPosts>,
-  threadRef: string,
-  post: RecentDmPosts["posts"][number],
-): Promise<void> {
-  await map.mutateMany([
-    {
-      id: threadRef,
-      apply: (current) =>
-        current?.posts.some((p) => p.key === post.key)
-          ? current
-          : { posts: [...(current?.posts ?? []), post].slice(-KEEP) },
+const RECENT_DM_POSTS: TableSpec = {
+  table: "recent_dm_posts",
+  key: "id",
+  columns: { posts: { type: "jsonb", required: true } },
+};
+
+export const RECENT_DM_POSTS_MIGRATION = mapToTableMigration("surfaces/recent-dm-posts/0001-typed", RECENT_DM_POSTS);
+
+export function createRecentDmPosts(databaseUrl: string) {
+  const { q } = createPgPool(databaseUrl, [RECENT_DM_POSTS_MIGRATION]);
+  return {
+    async remember(threadRef: string, post: RecentDmPost): Promise<void> {
+      await q(
+        `INSERT INTO recent_dm_posts (id, posts) VALUES ($1, jsonb_build_array($2::jsonb))
+         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET posts = (
+           SELECT jsonb_agg(p ORDER BY n) FROM (
+             SELECT p, n FROM jsonb_array_elements(recent_dm_posts.posts || EXCLUDED.posts) WITH ORDINALITY AS e(p, n)
+             ORDER BY n DESC LIMIT ${KEEP}) kept)
+         WHERE NOT recent_dm_posts.posts @> jsonb_build_array(jsonb_build_object('key', $3::text))`,
+        [threadRef, jsonbStringify(post), post.key],
+      );
     },
-  ]);
+    async posts(threadRef: string): Promise<RecentDmPost[]> {
+      const rows = await q(`SELECT posts FROM recent_dm_posts WHERE id = $1`, [threadRef]);
+      return (rows[0]?.posts as RecentDmPost[] | undefined) ?? [];
+    },
+  };
 }
 
+export type RecentDmPosts = ReturnType<typeof createRecentDmPosts>;
+
 export async function recentPrincipalDeliveryNote(
-  map: DurableMap<RecentDmPosts> | undefined,
+  store: Pick<RecentDmPosts, "posts"> | undefined,
   threadRef: string,
   since = 0,
 ): Promise<string> {
-  if (!map) return "";
-  const recent = ((await map.get(threadRef))?.posts ?? []).filter((p) => p.at > since);
+  if (!store) return "";
+  const recent = (await store.posts(threadRef)).filter((p) => p.at > since);
   if (!recent.length) return "";
   const lines = recent.map((p) => {
     const from = p.onBehalfOf ? ` from ${p.onBehalfOf}` : "";

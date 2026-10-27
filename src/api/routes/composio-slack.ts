@@ -214,7 +214,7 @@ export async function completeSlack(ctx: ApiCtx): Promise<RouteResult> {
         scopeLabel: tenant().orgScope,
       });
     }
-    await deps.slackAccounts.put(access.principal, {
+    await deps.slackAccounts.put({
       principalId: access.principal,
       accountId: proof.accountId,
       memberId: member.principalId,

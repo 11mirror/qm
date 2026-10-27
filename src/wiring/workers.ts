@@ -15,7 +15,7 @@ import { type ProcessReaper, createProcessReaper, createReaperKillHook } from ".
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
 import { createJobComputerSweep } from "../processes/job-computers.ts";
 import { errMessage } from "../util/errors.ts";
-import type { ComposioReturn } from "../api/routes/composio.ts";
+import { createComposioReturns } from "../connectors/composio-links.ts";
 import type { StoresModule } from "./stores.ts";
 import type { RunsModule } from "./runs.ts";
 import type { OrchestratorModule } from "./orchestrator.ts";
@@ -36,7 +36,6 @@ export function buildWorkers(
 ) {
   const {
     config,
-    artifactMap,
     gates,
     pgArtifactMap,
     turnLedger,
@@ -109,7 +108,7 @@ export function buildWorkers(
           : {}),
       })
     : null;
-  const composioReturns = artifactMap<ComposioReturn>("composio_returns");
+  const composioReturns = createComposioReturns(databaseUrl);
   const deepIdleMachineMs = 3 * 24 * 60 * 60_000;
   const devIdleMachineMs = 2 * 60 * 60_000;
   const reapDeepIdle = deepIdleMachineMs > 0 || devIdleMachineMs > 0 ? sandbox.reapDeepIdle : undefined;

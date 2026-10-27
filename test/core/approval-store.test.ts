@@ -3,7 +3,8 @@ import test from "node:test";
 import { createApprovalStore } from "../../src/core/approval-store.ts";
 import { recordingOutbound } from "../support/recording-outbound.ts";
 import type { PendingApprovalRecord } from "../../src/types.ts";
-import { testMap } from "../support/test-database.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
+import { createApprovalRecords } from "../../src/core/approval-store.ts";
 
 function record(threadRef: string, createdAt = 1): PendingApprovalRecord {
   return {
@@ -24,7 +25,7 @@ function record(threadRef: string, createdAt = 1): PendingApprovalRecord {
 
 for (const threadRef of ["dm:D1", "agent:main:subagent:child"]) {
   test(`saving approval immediately delivers a native request for ${threadRef}`, async () => {
-    const backing = testMap<PendingApprovalRecord>();
+    const backing = createApprovalRecords(testDatabaseUrl());
     const outbound = recordingOutbound();
     const approvals = createApprovalStore(backing, outbound);
     await approvals.put("A1", record(threadRef));
@@ -34,7 +35,7 @@ for (const threadRef of ["dm:D1", "agent:main:subagent:child"]) {
     assert.deepEqual((await backing.get("A1"))?.grantModes, { session: false, always: false });
     await approvals.deliverPending();
     assert.equal((await outbound.pending("principal")).length, 1, "the sweep does not repeat a posted request");
-    await approvals.take("A1");
+    await approvals.delete("A1");
     await approvals.put("A1", record(threadRef, 2));
     const posts = await outbound.pending("principal");
     assert.equal(posts.length, 2, "a new request for the same id is posted again");
@@ -43,7 +44,7 @@ for (const threadRef of ["dm:D1", "agent:main:subagent:child"]) {
 }
 
 test("persisted approvals recover after a failed post and restart without failing the turn", async () => {
-  const backing = testMap<PendingApprovalRecord>();
+  const backing = createApprovalRecords(testDatabaseUrl());
   const failed = createApprovalStore(backing, {
     send: async () => {
       throw new Error("delivery unavailable");
@@ -60,7 +61,7 @@ test("persisted approvals recover after a failed post and restart without failin
 
 test("web approvals remain on their native surface", async () => {
   const outbound = recordingOutbound();
-  const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), outbound);
+  const approvals = createApprovalStore(createApprovalRecords(testDatabaseUrl()), outbound);
   const approval = record("web:U1");
   approval.request!.surface = "web";
   await approvals.put("A1", approval);
@@ -69,7 +70,7 @@ test("web approvals remain on their native surface", async () => {
 });
 
 test("system approvals stay pending without posting an impossible Slack DM", async () => {
-  const backing = testMap<PendingApprovalRecord>();
+  const backing = createApprovalRecords(testDatabaseUrl());
   const outbound = recordingOutbound();
   const approvals = createApprovalStore(backing, outbound);
   const approval = record("slack:C1:ambient:1.0");
@@ -88,7 +89,7 @@ test("system approvals stay pending without posting an impossible Slack DM", asy
 test("approvals requested from a Slack DM thread are delivered into that thread", async () => {
   for (const threadRef of ["dm:D1:1700.1", "agent:main:subagent:child"]) {
     const outbound = recordingOutbound();
-    const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), outbound);
+    const approvals = createApprovalStore(createApprovalRecords(testDatabaseUrl()), outbound);
     const approval = record(threadRef);
     approval.request!.slackSource = { accountId: "default", teamId: "T1", userId: "U1", replyThreadTs: "1700.1" };
     await approvals.put("A1", approval);
@@ -96,7 +97,7 @@ test("approvals requested from a Slack DM thread are delivered into that thread"
     assert.equal(delivery?.destination.threadTs, "1700.1");
   }
   const outbound = recordingOutbound();
-  const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), outbound);
+  const approvals = createApprovalStore(createApprovalRecords(testDatabaseUrl()), outbound);
   const channel = record("channel:C1:1700.2");
   channel.request!.conversation = { kind: "channel", threadRef: "channel:C1:1700.2" } as never;
   channel.request!.slackSource = { accountId: "default", teamId: "T1", userId: "U1", replyThreadTs: "1700.2" };

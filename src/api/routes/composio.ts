@@ -561,8 +561,7 @@ async function completeAuth(ctx: ApiCtx): Promise<RouteResult> {
     });
   }
   const key = `${userId}:${accountId}`;
-  const saved = await ctx.deps.composioReturns?.get(key);
-  await ctx.deps.composioReturns?.delete(key);
+  const saved = await ctx.deps.composioReturns?.take(key);
   audit(ctx.deps, {
     principalId: access.principal,
     action: "composio.connected",
@@ -572,27 +571,11 @@ async function completeAuth(ctx: ApiCtx): Promise<RouteResult> {
   return ok({ returnTo: saved && saved.expiresAt > Date.now() ? saved.url : null });
 }
 
-export interface ComposioReturn {
-  url: string | null;
-  toolkit: string;
-  expiresAt: number;
-}
-
 async function identity(ctx: ApiCtx): Promise<RouteResult> {
   const principal = ctx.actor?.p ?? ctx.capability?.actorId;
   if (!principal || !(await activePrincipal(ctx.deps, principal))) return reply(403, { error: "forbidden" });
   const userIds = composioUserIds(principal);
   return ok({ userId: userIds[0], userIds });
-}
-
-export interface SlackAccountLink {
-  principalId: string;
-  accountId: string;
-  memberId: string;
-  userId: string;
-  teamId: string;
-  user: string;
-  workspace: string;
 }
 
 export const composioRoutes: ReadonlyArray<Route<ApiCtx>> = [

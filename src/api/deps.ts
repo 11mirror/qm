@@ -6,7 +6,6 @@ import type { DecisionStore } from "../decisions/store.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { ProviderKeys } from "../harness/pi-model-runtime.ts";
 import type { ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import type { BackgroundOwnershipControl } from "../runs/background-ownership.ts";
 import type { createSuggestedActivityService } from "../suggestions/activities.ts";
 import type { ManagedSlack } from "../surfaces/slack-managed.ts";
@@ -75,15 +74,15 @@ import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { AppPageViewLog } from "../deploy/page-views.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
 
-import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
+import type { ComposioReturns, SlackAccounts } from "../connectors/composio-links.ts";
 
 export interface ServerDeps {
   externalSlackPolicies?: ExternalSlackPolicies;
   checkReadiness?: (signal: AbortSignal) => Promise<void>;
   modelGatewayTransport?: ModelGatewayTransportConfig;
   resolveBrowserCompanyKeys?: (includeSubscription?: boolean) => Promise<ProviderKeys>;
-  slackAccounts?: DurableMap<SlackAccountLink>;
-  composioReturns?: DurableMap<ComposioReturn>;
+  slackAccounts?: SlackAccounts;
+  composioReturns?: ComposioReturns;
   composioFetch?: typeof fetch;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   production?: boolean;

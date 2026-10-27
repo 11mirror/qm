@@ -15,6 +15,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
 import { createMemoryEventBus } from "../util/event-bus.ts";
 import type { ContextRequestEvent } from "./app-types.ts";
+import type { ContextOutcome } from "./context-requests.ts";
 import {
   reachPost,
   withSlackUnfurlOption,
@@ -62,7 +63,7 @@ export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: 
   };
 }
 
-function settledContext(outcome: { result?: SurfaceContextResult; error?: string }): Partial<SurfaceContextRequest> {
+function settledContext(outcome: { result?: SurfaceContextResult; error?: string }): ContextOutcome {
   return outcome.error !== undefined
     ? { status: "failed", error: outcome.error }
     : { status: "done", result: outcome.result ?? { messages: [] } };
@@ -235,7 +236,7 @@ export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: Am
         status: "pending",
         query: storedQuery,
       };
-      await contextRequests.put(request.id, {
+      await contextRequests.create({
         ...request,
         ...(viewerToken && !surfaceHas(source, "transcript")
           ? { sealedViewerToken: encryptSecret(viewerToken, viewerTokenKey) }
@@ -246,7 +247,7 @@ export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: Am
           deps.sessions,
           query,
         ).catch(reportFailureAs("context: web conversation read", { error: "the web conversation couldn't be read" }));
-        await contextRequests.merge(request.id, settledContext(outcome));
+        await contextRequests.settle(request.id, settledContext(outcome), { unseal: false });
         return request;
       }
       contextRequestEvents.emit({ kind: "created", id: request.id });
@@ -271,17 +272,10 @@ export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: Am
     },
     deleteContextRequest: (id) => contextRequests.delete(id),
     async pendingContextRequests(source) {
-      const all = await contextRequests.all();
-      const now = Date.now();
-      const stale = all.filter((r) => r.status === "pending" && now - r.createdAt > CONTEXT_REQUEST_EXPIRY_MS);
-      await Promise.all(stale.map((r) => contextRequests.delete(r.id)));
-      return all
-        .filter((r) => r.source === source && r.status === "pending" && now - r.createdAt <= CONTEXT_REQUEST_EXPIRY_MS)
-        .map(withViewerToken);
+      return (await contextRequests.pending(source, Date.now() - CONTEXT_REQUEST_EXPIRY_MS)).map(withViewerToken);
     },
     async fulfillContextRequest(id, outcome) {
-      const settled =
-        (await contextRequests.merge(id, { ...settledContext(outcome), sealedViewerToken: undefined })) != null;
+      const settled = await contextRequests.settle(id, settledContext(outcome), { unseal: true });
       if (settled) contextRequestEvents.emit({ kind: "settled", id });
       return settled;
     },

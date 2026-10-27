@@ -4,16 +4,16 @@ import {
   createSlackSessionStatus,
   type SlackStatusActivity,
   type SlackSessionStatus,
-  type SlackSessionStatusState,
+  type SessionStatusStore,
 } from "../slack/session-status.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import { decideDeploymentAccess } from "../slack/deploy-access.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { ActorAssertion } from "../types.ts";
 import type { KeychainApprovals } from "../credentials/keychain-approval.ts";
-import { createTaskAcknowledgements, type TaskAckState, type TaskAcknowledgements } from "../slack/task-ack.ts";
-import type { StagedEnvelope } from "../slack/envelope-staging.ts";
-import type { HandledEvent } from "../slack/message-gating.ts";
+import { createTaskAcknowledgements, type TaskAckStore, type TaskAcknowledgements } from "../slack/task-ack.ts";
+import type { StagedEnvelopes } from "../slack/envelope-staging.ts";
+import type { HandledEvents } from "../slack/message-gating.ts";
 import { resolveBranding } from "../resolution/branding.ts";
 import { buffer } from "node:stream/consumers";
 import type { App } from "./app.ts";
@@ -39,7 +39,6 @@ import type { SlackNative } from "../surfaces/slack-surface.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import { isTerminal } from "../runs/run-store.ts";
 import type { GoalView, TurnStream } from "../runs/turn-stream.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import { reportFailure, swallowAs } from "../util/errors.ts";
 import { resolveRuntimeChoiceDurable } from "../harness/runtime-choice.ts";
 import type { RuntimeChoice } from "../harness/harness.ts";
@@ -117,8 +116,8 @@ export interface SlackCoreClient {
     /** Run one kind of upkeep for every Slack app attached in this process. */
     run(kind: keyof SlackUpkeep): Promise<void>;
   };
-  stagedEnvelopes?: DurableMap<StagedEnvelope>;
-  handledEvents?: DurableMap<HandledEvent>;
+  stagedEnvelopes?: StagedEnvelopes;
+  handledEvents?: HandledEvents;
   holdDirectorySync<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
   pendingContextRequests(): Promise<SurfaceContextRequest[]>;
   onContextRequest(listener: (request: SurfaceContextRequest) => void): () => void;
@@ -151,8 +150,8 @@ export type { SurfaceContextRequest };
 export interface SlackCoreClientDeps {
   identity: IdentityService;
   keychainApprovals?: KeychainApprovals;
-  taskAcknowledgements?: DurableMap<TaskAckState>;
-  sessionStatus?: DurableMap<SlackSessionStatusState>;
+  taskAcknowledgements?: TaskAckStore;
+  sessionStatus?: SessionStatusStore;
   statusActivity?: SlackStatusActivity;
   featureFlags?: FeatureFlagStore;
   app: App;
@@ -168,8 +167,8 @@ export interface SlackCoreClientDeps {
   ackModelId?: () => string | undefined;
   brandingDefault?: OrgBranding;
   leaderLease: LeaderLease;
-  stagedEnvelopes?: DurableMap<StagedEnvelope>;
-  handledEvents?: DurableMap<HandledEvent>;
+  stagedEnvelopes?: StagedEnvelopes;
+  handledEvents?: HandledEvents;
   surfaceCache?: SurfaceCache;
   memory?: MemoryService;
   inboxEvent?(event: ConversationEvent): Promise<void>;

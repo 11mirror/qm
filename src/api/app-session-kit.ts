@@ -166,9 +166,7 @@ export async function decorateSessions(k: SessionKit, principalId: string, all: 
   const descendantIds = new Set(descendants.map((d) => d.id));
   const approvalRows: PendingApprovalRecord[] = [];
   const approvalIds = [...visibleById.keys(), ...descendantIds];
-  const approvals = approvalIds.length
-    ? await k.deps.approvals?.selectEntries({ where: { field: "sessionId", anyOfFold: approvalIds } })
-    : [];
+  const approvals = approvalIds.length ? await k.deps.approvals?.forSessions(approvalIds) : [];
   for (const [, record] of approvals ?? []) {
     const session = visibleById.get(record.sessionId);
     if (

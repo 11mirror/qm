@@ -1,9 +1,10 @@
 import type { Head } from "./late.ts";
+import { createApprovalGrants } from "../core/orchestrator/approvals.ts";
 import { type SurfaceCache, createPostgresSurfaceCache } from "../surface-cache/surface-cache.ts";
 import { type ChannelPolicyStore, createPostgresChannelPolicyStore } from "../surface-cache/channel-policy-store.ts";
 import { type OrchestratorDeps, createOrchestrator } from "../core/orchestrator.ts";
 import { installSharedCanvas } from "../surfaces/ui-canvas.ts";
-import { personalScope, type CommandApprovalGrant } from "../types.ts";
+import { personalScope } from "../types.ts";
 import { EXEC_TIMEOUT_DEFAULT_MS, EXEC_TIMEOUT_MAX_MS } from "../harness/agent-tools.ts";
 import { BACKGROUND_JOB_TTL_MS, BACKGROUND_JOB_TTL_MAX_MS } from "../connectors/background-exec-broker.ts";
 import { resendMailer } from "../../plugins/chassis/src/resend.ts";
@@ -214,7 +215,6 @@ function orchestratorDepsTail(w: BuildOrchestratorInputs) {
     outbound,
     recentDmPosts,
     approvals,
-    artifactMap,
     processes,
     monitors,
     crons,
@@ -228,6 +228,7 @@ function orchestratorDepsTail(w: BuildOrchestratorInputs) {
     brokeredTools,
     deploymentLayer,
     layerBrokerFor,
+    databaseUrl,
   } = w;
   return {
     memoryPolicy: { recall: config.memoryRecall, capture: config.memoryCapture },
@@ -253,7 +254,7 @@ function orchestratorDepsTail(w: BuildOrchestratorInputs) {
     outbound,
     recentDmPosts,
     approvals,
-    approvalGrants: artifactMap<CommandApprovalGrant>("approval_grants", ["actorId"]),
+    approvalGrants: createApprovalGrants(databaseUrl),
     ...(processes ? { processes } : {}),
     monitors,
     crons,
