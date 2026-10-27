@@ -111,6 +111,7 @@ export interface DirectorySyncContext extends RosterReader {
   coreSingleton: boolean;
   lastFullRosterFetchAt?: number;
   seenGroupIds: Set<string>;
+  expireUserSnapshot: () => void;
 }
 
 const CHANNEL_MEMBERS_TTL_MS = 30 * 60_000;
@@ -220,7 +221,7 @@ async function crawlAndPush(
       ...(ctx.ids.ownWorkspaceUrl ? { workspaceUrl: ctx.ids.ownWorkspaceUrl } : {}),
     });
     if (applied && fetched?.fullRosterFetchedAt !== undefined) ctx.lastFullRosterFetchAt = fetched.fullRosterFetchedAt;
-    if (!applied) console.warn("[slack-plugin] directory push refused by the store (stale stamp) — will retry");
+    if (!applied) ctx.expireUserSnapshot();
     return fetched !== null && applied;
   } catch (err) {
     reportFailure("slack: directory push", err);
