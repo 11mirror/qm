@@ -2,6 +2,7 @@ import { resolveIndividualAuthRouting } from "../core/individual-auth-routing.ts
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import type { UserModelCredentialStore } from "./user-model-credential-store.ts";
 import { scopeId } from "../types.ts";
+import { tenant } from "../tenant.ts";
 
 export async function resolveBrowserModel(input: {
   actorId: string;
@@ -11,9 +12,10 @@ export async function resolveBrowserModel(input: {
 }) {
   const account = (await input.config?.getModelAccountDurable(input.actorId)) ?? "company";
   const personalScope = scopeId("personal", input.actorId);
-  const requested = (await input.config?.getBaseModelOwnDurable(personalScope)) ?? undefined;
+  const requested = (await input.config?.getRuntimeSelectionDurable(personalScope))?.modelId;
   if (account === "company") {
-    const model = requested ?? (await input.config?.getBaseModelDurable(personalScope)) ?? input.companyModel;
+    const model =
+      requested ?? (await input.config?.getRuntimeSelectionDurable(tenant().orgScope))?.modelId ?? input.companyModel;
     return { account, model, routing: null };
   }
   const [anthropic, openai] = await Promise.all([

@@ -152,17 +152,13 @@ test("vmFetch sends the proxy auth + port headers to the MicroVM endpoint", asyn
   assert.equal(calls[0]!.headers["x-aws-proxy-port"], "8080");
 });
 
-test(
-  "waitDaemon: a sustained gateway 429 is throttle, not daemon failure — no deadline poll-out",
-  { timeout: 15_000 },
-  async () => {
-    const { fetchImpl, calls } = fakeFetch(() => ({ status: 429 }));
-    const api = { createAuthToken: async () => "tok" } as unknown as AwsMicrovmApi;
-    const client = createMicrovmClient(api, { agentPort: 8080, tokenTtlMinutes: 30, fetchImpl });
-    await client.waitDaemon("mvm-1", "mvm-1.example.on.aws");
-    assert.equal(calls.length, 3, "a brief throttle is ridden out, a sustained one presumes the body alive");
-  },
-);
+test("waitDaemon: a throttled probe is not readiness; polling continues until the daemon answers", async () => {
+  const { fetchImpl, calls } = fakeFetch((_r, n) => ({ status: n < 4 ? 429 : 200 }));
+  const api = { createAuthToken: async () => "tok" } as unknown as AwsMicrovmApi;
+  const client = createMicrovmClient(api, { agentPort: 8080, tokenTtlMinutes: 30, fetchImpl });
+  await client.waitDaemon("mvm-1", "mvm-1.example.on.aws");
+  assert.equal(calls.length, 5, "only the 200 proves the daemon");
+});
 
 test("waitDaemon: a transient 429 blip still proves readiness on the next probe", { timeout: 15_000 }, async () => {
   const { fetchImpl, calls } = fakeFetch((_r, n) => ({ status: n === 0 ? 429 : 200 }));
@@ -186,6 +182,21 @@ test("readiness reuses only the supplied observation and checks again on the nex
   await assert.rejects(client.ensureRunning("one", "endpoint"), /TERMINATED/);
   assert.equal(reads, 1);
   await assert.rejects(client.ensureRunning("one", "endpoint", { microvmId: "two", state: "RUNNING" }), /another body/);
+});
+
+test("a failed resume surfaces its own error instead of waiting on the daemon", async () => {
+  const { fetchImpl, calls } = fakeFetch(() => ({ status: 200 }));
+  const api = {
+    resume: async () => {
+      throw new Error("resume refused: quota exceeded");
+    },
+  } as unknown as AwsMicrovmApi;
+  const client = createMicrovmClient(api, { agentPort: 8080, tokenTtlMinutes: 30, fetchImpl });
+  await assert.rejects(
+    client.ensureRunning("one", "endpoint", { microvmId: "one", state: "SUSPENDED" }),
+    /resume refused: quota exceeded/,
+  );
+  assert.equal(calls.length, 0);
 });
 
 test("control-plane reads retry throttling and outages, and failures carry the AWS request id", async () => {

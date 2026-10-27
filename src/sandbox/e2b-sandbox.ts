@@ -12,10 +12,11 @@ import {
   createProviderSandbox,
   type MachineState,
   type ProviderSandbox,
+  type SandboxDriver,
   type SandboxShared,
   type StoredSandboxRecord,
 } from "./provider-sandbox.ts";
-import type { Sandbox } from "./sandbox.ts";
+import type { BackendSandbox } from "./sandbox.ts";
 
 const HOME_DIR = "/home/user";
 const DEFAULT_KEEP_WARM_SEC = 3600;
@@ -31,14 +32,14 @@ export interface E2bSandboxOptions extends SandboxShared {
   store: DurableMap<StoredE2bSandbox>;
 }
 
-export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOptions): Sandbox {
+export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOptions): BackendSandbox {
   const { client, store } = opts;
   const keepWarmMs = (opts.keepWarmSec ?? DEFAULT_KEEP_WARM_SEC) * 1000;
   const sessions = new Map<string, E2bSession>();
   const scratchNames = new Set<string>();
   const restoredFrom = new Map<string, string>();
   const reviving = new Map<string, Promise<E2bSession>>();
-  const observed: { cpus?: number; memoryMb?: number; diskGb?: number } = {};
+  const observed: Pick<SandboxDriver, "cpus" | "memoryMb" | "diskGb"> = {};
 
   async function adopt(name: string, session: E2bSession): Promise<E2bSession> {
     sessions.set(name, session);
@@ -142,6 +143,15 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
   const sandbox: ProviderSandbox = createProviderSandbox(
     workspace,
     {
+      get cpus() {
+        return observed.cpus;
+      },
+      get memoryMb() {
+        return observed.memoryMb;
+      },
+      get diskGb() {
+        return observed.diskGb;
+      },
       backend: "e2b",
       homeDir: HOME_DIR,
       os: "Linux — E2B Firecracker sandbox (provider pause preserves state; publish durable work to git or Files)",
@@ -194,10 +204,5 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
     opts,
     opts.store,
   );
-  Object.defineProperties(sandbox.profile.spec!, {
-    cpus: { get: () => observed.cpus, enumerable: true },
-    memoryMb: { get: () => observed.memoryMb, enumerable: true },
-    diskGb: { get: () => observed.diskGb, enumerable: true },
-  });
   return sandbox;
 }

@@ -961,7 +961,7 @@ test("cron runtime create and patch retain ownership gates and refuse unavailabl
   const cleared = await control.patchCron(created.cron.id, { runtime: null }, claims("U1"));
   assert.ok(cleared.ok, JSON.stringify(cleared));
   assert.equal(cleared.cron.runtime, null);
-  assert.equal(built.config.getBaseModel("personal:U1"), null);
+  assert.equal(built.config.getRuntimeSelection("personal:U1")?.modelId ?? null, null);
 });
 
 test("scheduled runtime is refused before execution when its model is no longer enabled, including credential resumes", async () => {

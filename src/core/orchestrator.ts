@@ -269,6 +269,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
 
       let releasedToolOutput: PendingApprovalRecord["screenedOutput"];
+      let approvalNote = "";
       const approvalLedger = loadApprovalLedger(await actorGrants(), session.id, resolution.approvalGrantModes);
       const quarantineReleaseApprovals: QuarantineReleaseApproval[] = [];
       const catalog = await buildCredentialCatalog(ctx, {
@@ -361,7 +362,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           });
           if (decided.kind === "settled") return decided.result;
           releasedToolOutput = decided.releasedToolOutput;
-          systemPrompt += decided.promptNote;
+          approvalNote = decided.approvalNote;
         }
 
         const finished = await finishSystemPrompt(ctx, {
@@ -381,7 +382,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           directoryIndexFor,
         });
         systemPrompt = finished.systemPrompt;
-        const volatileContext = finished.volatileContext;
+        const volatileContext = [finished.volatileContext, approvalNote].filter(Boolean).join("\n\n");
 
         const declined = await detectAmbientDecline(ctx, {
           session,

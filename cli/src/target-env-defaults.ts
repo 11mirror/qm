@@ -9,12 +9,10 @@ export type TargetEnvDefaults = (config: QmConfig, service: string, name: string
 
 export const CORE_ENV_NAMES: readonly string[] = [
   "ADMIN_GRANTS",
-  "AGENT37_API_KEY",
   "ANTHROPIC_API_KEY",
   "AUTH_ALLOWED_EMAILS",
   "AUTH_ALLOWED_EMAIL_DOMAIN",
   "AUTH_EMAIL_FROM",
-  "AWS_DEFAULT_REGION",
   "AWS_DEPLOY_AGENT_PORT",
   "AWS_DEPLOY_APP_PORT",
   "AWS_DEPLOY_DATA_BUCKET",
@@ -33,14 +31,6 @@ export const CORE_ENV_NAMES: readonly string[] = [
   "AWS_DEPLOY_SNAPSHOT_INTERVAL_MS",
   "AWS_DEPLOY_SUSPENDED_SEC",
   "AWS_DEPLOY_TOKEN_TTL_MIN",
-  "AWS_REGION",
-  "AWS_SANDBOX_EGRESS_CONNECTORS",
-  "AWS_SANDBOX_EXEC_ROLE_ARN",
-  "AWS_SANDBOX_IMAGE",
-  "AWS_SANDBOX_IMAGE_VERSION",
-  "AWS_SANDBOX_INGRESS_CONNECTORS",
-  "AWS_SANDBOX_PROFILE",
-  "AWS_SANDBOX_REGION",
   "BACKGROUND_DEPLOYMENT_ID",
   "BACKGROUND_WORK_ENABLED",
   "BUDGET_USD_PER_WINDOW",
@@ -155,22 +145,12 @@ export const CORE_ENV_NAMES: readonly string[] = [
   "SPRITES_TOKEN",
   "SUGGESTED_ACTIVITIES_CONTEXT",
   "SUGGESTED_ACTIVITIES_ENABLED",
-  "SUPERSERVE_API_KEY",
-  "SUPERSERVE_TEMPLATE",
   "TRUSTED_OIDC_ADMIN_ISSUER",
   "WORKERS",
 ];
 
-const AWS_RENDER_ENV_DEFAULTS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  core: { SANDBOX_BACKEND: "aws" },
-};
-
 export const TARGET_ENV_DEFAULTS: Record<Target, TargetEnvDefaults> = {
   docker: () => undefined,
-  aws: (config, service, name) => {
-    const rendered = AWS_RENDER_ENV_DEFAULTS[service]?.[name];
-    if (rendered === undefined) return undefined;
-    if (name === "SANDBOX_BACKEND") return config.sandbox?.backend ?? rendered;
-    return rendered;
-  },
+  aws: (config, service, name) =>
+    service === "core" && name === "SANDBOX_BACKEND" ? config.sandbox?.backend : undefined,
 };

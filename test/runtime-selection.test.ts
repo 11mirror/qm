@@ -108,10 +108,9 @@ test("every write that changes a scope's served model notifies listeners", async
 
   await config.setRuntimeSelection(ORG, { modelId: "claude-opus-4-8" });
   await config.setRuntimeSelection(PERSONAL, { modelId: "gpt-5.5" });
-  await config.setBaseModel(PERSONAL, "gpt-5.6-sol");
   await config.setRuntimeSelection(PERSONAL, null);
   await config.acknowledgeRuntimeSelection(PERSONAL);
-  assert.deepEqual(seen, [ORG, PERSONAL, PERSONAL, PERSONAL]);
+  assert.deepEqual(seen, [ORG, PERSONAL, PERSONAL]);
 });
 
 test("a listener that throws cannot break the write that notified it", async () => {

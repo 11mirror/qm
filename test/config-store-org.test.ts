@@ -21,7 +21,7 @@ test("purpose runtimes persist independently without manufacturing a conversatio
   assert.equal(store.getPurposeRuntime("cron"), undefined);
   await store.setPurposeRuntime("cron", cron);
   await store.setPurposeRuntime("subagent", subagent);
-  assert.equal(store.getBaseModel(org), null);
+  assert.equal(store.getRuntimeSelection(org)?.modelId ?? null, null);
   assert.equal(await store.getRuntimeSelectionDurable(org), null);
   const reader = testConfigStore("default-org", { baseModels });
   await reader.hydrate!();
@@ -34,8 +34,8 @@ test("purpose runtimes persist independently without manufacturing a conversatio
   await store.setRuntimeSelection(org, null);
   await store.setRuntimeSelection(org, { modelId: "gpt-5.5" });
   assert.equal(store.getRuntimeSelection(org)?.modelId, "gpt-5.5");
-  await store.setBaseModel(org, "gpt-5.5");
-  await store.setBaseModel(org, null);
+  await store.setRuntimeSelection(org, { modelId: "gpt-5.5" });
+  await store.setRuntimeSelection(org, null);
   assert.deepEqual(await reader.getPurposeRuntimeDurable("cron"), cron);
   assert.deepEqual(await reader.getPurposeRuntimeDurable("subagent"), subagent);
   await store.clearPurposeRuntime("cron");

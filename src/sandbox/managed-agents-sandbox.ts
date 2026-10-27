@@ -11,7 +11,7 @@ import {
   type ManagedAgentsClient,
   type ManagedAgentsSession,
 } from "./managed-agents-client.ts";
-import type { ExecResult, Sandbox } from "./sandbox.ts";
+import type { BackendSandbox, ExecResult } from "./sandbox.ts";
 
 const WORKSPACE_ROOT = "/workspace";
 const HOME_DIR = `${WORKSPACE_ROOT}/home`;
@@ -37,7 +37,10 @@ export interface ManagedAgentsSandboxOptions extends SandboxShared {
   store: DurableMap<StoredManagedAgentsSandbox>;
 }
 
-export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: ManagedAgentsSandboxOptions): Sandbox {
+export function createManagedAgentsSandbox(
+  workspace: WorkspaceStore,
+  opts: ManagedAgentsSandboxOptions,
+): BackendSandbox {
   const { client, store } = opts;
   const sessions = new Map<string, ManagedAgentsSession>();
   const knownScopes = new Map<string, string>();
@@ -96,8 +99,12 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
     try {
       return await action(await connect(name));
     } catch (e) {
-      if (e instanceof ManagedAgentsCommandLostError || e instanceof ManagedAgentsSandboxGoneError) forget(name);
-      throw e;
+      if (!(e instanceof ManagedAgentsCommandLostError || e instanceof ManagedAgentsSandboxGoneError)) throw e;
+      forget(name);
+      const scope = e instanceof ManagedAgentsSandboxGoneError ? scopeOf(name) : undefined;
+      if (!scope || (await store.get(scope))?.initializationPending) throw e;
+      await sandbox.ensureResident(scope);
+      return action(await connect(name));
     }
   }
 
@@ -221,11 +228,11 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
       forget,
       checkpoints: {
         machineBound: true,
-        capture: async (name) =>
-          (await withSession(name, (session) => session.createCheckpoint(CHECKPOINT_LABEL))).checkpointId,
+        capture: async (name) => (await (await connect(name)).createCheckpoint(CHECKPOINT_LABEL)).checkpointId,
         restore: rollback,
         async drop(name, checkpointId) {
-          await sessions.get(name)?.deleteCheckpoint(checkpointId);
+          const found = await findSession(name);
+          if (found) await client.deleteCheckpoint(found.sessionId, checkpointId);
         },
       },
     },

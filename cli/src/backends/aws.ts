@@ -27,7 +27,6 @@ import {
 } from "../aws-lease.ts";
 import { CliError, dim, errMessage, header, note, ok, step, warn } from "../log.ts";
 import {
-  awsMicrovmExecRoleArn,
   awsTaskRoleArn,
   awsWorkloadArchitecture,
   effectiveSandboxBackend,
@@ -406,22 +405,10 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
       S3_BUCKET: config.env.core?.S3_BUCKET?.trim() || awsObjectStoreBucket(config),
       S3_REGION: aws.region,
     };
-    if (sandboxBackend && sandboxBackend !== "aws") {
-      Object.assign(env, sandboxCoreEnv(config).env, {
-        SANDBOX_BACKEND: sandboxBackend,
-        ...stores,
-      });
-    } else {
-      Object.assign(env, {
-        SANDBOX_BACKEND: "aws",
-        AWS_SANDBOX_REGION: aws.region,
-        AWS_SANDBOX_IMAGE: config.env.core?.AWS_DEPLOY_IMAGE ?? "",
-        AWS_SANDBOX_IMAGE_VERSION: config.env.core?.AWS_DEPLOY_IMAGE_VERSION ?? "",
-        AWS_SANDBOX_EXEC_ROLE_ARN: awsMicrovmExecRoleArn(config, aws),
-        AWS_DEPLOY_DATA_BUCKET: awsObjectStoreBucket(config),
-        ...stores,
-      });
-    }
+    Object.assign(env, sandboxCoreEnv(config).env, {
+      ...(sandboxBackend ? { SANDBOX_BACKEND: sandboxBackend } : {}),
+      ...stores,
+    });
   }
   if (service === "core" && hostsWebEdge(config.services)) env.PORTAL_XFF_TRUSTED_HOPS = "1";
   env[def.docker.portEnv] = String(def.docker.internalPort);

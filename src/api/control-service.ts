@@ -29,6 +29,7 @@ import {
 import { actsAsScope, parseScopeId, type Permission } from "../types.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
+import { SoulTooLargeError } from "../resolution/config-store.ts";
 
 export interface CronCreateRequest {
   runtime?: Cron["runtime"];
@@ -154,7 +155,8 @@ export interface ControlService {
     claims: CapabilityClaims,
     expectedVersion?: number,
   ): Promise<
-    ControlOk<{ version: number }> | ControlErr<"soul_update_denied" | "soul_version_conflict" | "soul_update_failed">
+    | ControlOk<{ version: number }>
+    | ControlErr<"soul_update_denied" | "soul_version_conflict" | "payload_too_large" | "soul_update_failed">
   >;
   shareArtifact(req: ShareArtifactRequest, claims: CapabilityClaims): Promise<ShareArtifactResult>;
 }
@@ -215,7 +217,7 @@ export async function canAdministerWebhook(
   return isActor ? isActor(webhook.owner) : app.samePerson(webhook.owner, actorId);
 }
 
-function withDefaultTimezone(schedule: CronSchedule, cap: CapabilityClaims): CronSchedule {
+function withDefaultTimezone(schedule: CronSchedule, cap: { timezone?: unknown }): CronSchedule {
   if (schedule.cron === undefined || schedule.timezone !== undefined) return schedule;
   const tz = typeof cap.timezone === "string" && cap.timezone.trim() ? cap.timezone : DEFAULT_CRON_TIMEZONE;
   return { ...schedule, timezone: tz };
@@ -234,16 +236,22 @@ function cronPatchChanges(before: Cron, patch: CronPatch): boolean {
   );
 }
 
+export interface CronEditor {
+  actorId: string;
+  timezone?: string;
+  sessionRef?: string;
+}
+
 function patchFromCronPatchRequest(
   before: Cron,
   req: CronPatchRequest,
-  capability: CapabilityClaims,
+  editor: CronEditor,
 ): CronPatch | ControlErr<"bad_request"> {
   if (!CRON_PATCH_FIELDS.some((field) => req[field] !== undefined))
     return fail("bad_request", CRON_PATCH_NOTHING_TO_CHANGE);
   if (req.unfurlLinks !== undefined && !before.destination)
     return fail("bad_request", "unfurlLinks can only be set on a cron with a delivery destination");
-  const sessionRef = req.session ? liveSessionRef(capability, before.ownerScopeId) : undefined;
+  const sessionRef = req.session ? editor.sessionRef : undefined;
   if (req.session && !sessionRef)
     return fail("bad_request", "session:true needs a live conversation in the cron's own scope to tie it to");
   return {
@@ -252,13 +260,43 @@ function patchFromCronPatchRequest(
     ...(req.title !== undefined ? { title: req.title } : {}),
     ...(req.action !== undefined ? { action: req.action } : {}),
     ...(req.text !== undefined ? { message: req.text } : {}),
-    ...(req.schedule !== undefined ? { schedule: withDefaultTimezone(req.schedule, capability) } : {}),
+    ...(req.schedule !== undefined ? { schedule: withDefaultTimezone(req.schedule, editor) } : {}),
     ...(req.enabled !== undefined ? { enabled: req.enabled } : {}),
     ...(req.archived !== undefined ? { archived: req.archived } : {}),
     ...(req.unfurlLinks !== undefined && before.destination
       ? { destination: withSlackUnfurlOption(before.destination, req.unfurlLinks) }
       : {}),
   };
+}
+
+/** Applies a cron edit for whoever is allowed to make it: builds the patch, skips no-ops, writes, and tells the owner. */
+export async function applyCronPatch(
+  app: App,
+  before: Cron,
+  req: CronPatchRequest,
+  editor: CronEditor,
+  unattendedGrants?: () => Promise<ControlErr<"forbidden" | "bad_request"> | null>,
+): Promise<ControlOk<{ cron: Cron }> | ControlErr<"not_found" | "forbidden" | "bad_request" | "cron_update_failed">> {
+  const patch = patchFromCronPatchRequest(before, req, editor);
+  if ("ok" in patch) return patch;
+  if (req.unattendedGrants !== undefined) patch.unattendedGrants = req.unattendedGrants;
+  else if ((before.unattendedGrants?.length ?? 0) > 0) patch.unattendedGrants = before.unattendedGrants;
+  if (!cronPatchChanges(before, patch)) return { ok: true, cron: before };
+  const refused = (patch.unattendedGrants?.length ?? 0) > 0 ? await unattendedGrants?.() : null;
+  if (refused) return refused;
+  try {
+    const cron = await app.updateCron(before.id, patch);
+    if (!cron) return fail("not_found", `no cron ${before.id}`);
+    await notifyOwnerOfCronEdit(app, {
+      cron,
+      editorId: editor.actorId,
+      changeSummary: cronEditSummary(req),
+      ...(req.schedule !== undefined ? { detail: { schedule: withDefaultTimezone(req.schedule, editor) } } : {}),
+    });
+    return { ok: true, cron };
+  } catch (e) {
+    return fail("cron_update_failed", errMessage(e));
+  }
 }
 
 function cronEditSummary(req: CronPatchRequest): string[] {
@@ -443,25 +481,17 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       const before = found.cron;
       const invalidGrants = invalidUnattendedGrants(req.unattendedGrants);
       if (invalidGrants) return invalidGrants;
-      const patch = patchFromCronPatchRequest(before, req, capability);
-      if ("ok" in patch) return patch;
-      if (req.unattendedGrants !== undefined) patch.unattendedGrants = req.unattendedGrants;
-      else if ((before.unattendedGrants?.length ?? 0) > 0) patch.unattendedGrants = before.unattendedGrants;
-      if (!cronPatchChanges(before, patch)) return found;
-      if ((patch.unattendedGrants?.length ?? 0) > 0) {
+      const editor: CronEditor = {
+        actorId: capability.actorId,
+        ...(typeof capability.timezone === "string" ? { timezone: capability.timezone } : {}),
+        ...(liveSessionRef(capability, before.ownerScopeId) !== undefined
+          ? { sessionRef: liveSessionRef(capability, before.ownerScopeId)! }
+          : {}),
+      };
+      return applyCronPatch(app, before, req, editor, async () => {
         const refusal = await unattendedGrantRefusal(app, admin, before, capability);
-        if (refusal) return { ok: false, ...refusal };
-      }
-      try {
-        const cron = await app.updateCron(id, patch);
-        if (!cron) return fail("not_found", `no cron ${id}`);
-        const detail: CronEditDetail =
-          req.schedule !== undefined ? { schedule: withDefaultTimezone(req.schedule, capability) } : {};
-        await notifyEdit(cron, capability, cronEditSummary(req), detail);
-        return { ok: true, cron };
-      } catch (e) {
-        return fail("cron_update_failed", errMessage(e));
-      }
+        return refusal ? { ok: false, ...refusal } : null;
+      });
     },
 
     async noteCron(id, text, capability) {
@@ -609,6 +639,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       } catch (e) {
         if (e instanceof SoulUpdateDeniedError) return fail("soul_update_denied", errMessage(e));
         if (e instanceof SoulVersionConflictError) return fail("soul_version_conflict", errMessage(e));
+        if (e instanceof SoulTooLargeError) return fail("payload_too_large", e.message);
         return fail("soul_update_failed", errMessage(e));
       }
     },

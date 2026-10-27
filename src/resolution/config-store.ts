@@ -134,8 +134,6 @@ export interface ScopedConfigStore {
   getPurposeRuntimeDurable(purpose: RuntimePurpose): Promise<RuntimeSelection | undefined>;
   setPurposeRuntime(purpose: RuntimePurpose, selection: RuntimeSelection): Promise<void>;
   clearPurposeRuntime(purpose: RuntimePurpose): Promise<void>;
-  getBaseModel(id: ScopeId): string | null;
-  setBaseModel(id: ScopeId, modelId: string | null): Promise<void>;
   getRuntimeSelection(id: ScopeId): ScopedRuntimeSelection | null;
   setRuntimeSelection(id: ScopeId, selection: RuntimeSelection | null): Promise<void>;
   acknowledgeRuntimeSelection(id: ScopeId): Promise<void>;
@@ -144,8 +142,6 @@ export interface ScopedConfigStore {
   getIndividualModelAuthDurable(principalId?: string): Promise<boolean>;
   setPersonalModelAuth(principalId: string, on: boolean, provider?: "anthropic" | "openai"): Promise<void>;
   getModelAccountDurable(principalId: string): Promise<ModelAccount>;
-  getBaseModelOwnDurable(id: ScopeId): Promise<string | null>;
-  getBaseModelDurable(id: ScopeId): Promise<string | null>;
   setSlackEmojiCatalog(id: ScopeId, emoji: Record<string, string>): Promise<void>;
   getSlackEmojiCatalogDurable(id: ScopeId): Promise<PersistedSlackEmojiCatalog | null>;
   getEmbeddingModelDurable(): Promise<string | null>;
@@ -209,6 +205,18 @@ const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
   autoFlaggerConfigs: "auto_flagger_configs",
   deploymentIdentity: "deployment_identity",
 };
+
+export const MAX_SOUL_CHARS = 100_000;
+
+export class SoulTooLargeError extends Error {
+  constructor() {
+    super(`SOUL must be at most ${MAX_SOUL_CHARS} characters`);
+  }
+}
+
+function assertSoulSize(content: string): void {
+  if (content.length > MAX_SOUL_CHARS) throw new SoulTooLargeError();
+}
 
 export const configStoreMaps = (map: (table: string) => DurableMap<never>): Required<ConfigStoreMaps> =>
   Object.fromEntries(
@@ -567,7 +575,8 @@ export function createConfigStore(
       return hydrated;
     },
     getSoul: (id) => souls.get(id)?.content ?? null,
-    setSoul(id, content, updatedBy) {
+    async setSoul(id, content, updatedBy) {
+      assertSoulSize(content);
       return writeQueue(`soul:${id}`, async () => {
         const legacy = legacySoulHistory.get(id) ?? [];
         const append = (current: PersistedSoul): PersistedSoul => {
@@ -606,6 +615,7 @@ export function createConfigStore(
       });
     },
     async setSoulIfVersion(id, expectedVersion, content, updatedBy) {
+      assertSoulSize(content);
       return writeQueue(`soul:${id}`, async () => {
         const version = expectedVersion + 1;
         const revision: PersistedSoulRevision = {
@@ -730,17 +740,6 @@ export function createConfigStore(
     },
     setPurposeRuntime,
     clearPurposeRuntime: (purpose) => setPurposeRuntime(purpose),
-    getBaseModel: (id) => baseModels.get(id)?.modelId ?? null,
-    async setBaseModel(id, modelId) {
-      await writeQueue(`model:${id}`, async () => {
-        const saved = await updateBaseModelRow(id, (current) => {
-          if (modelId === null) return withoutRuntime(id, current);
-          return { ...current, scopeId: id, modelId };
-        });
-        cacheBaseModel(id, saved);
-      });
-      noteRuntimeSelectionChanged(id);
-    },
     getRuntimeSelection: (id) => runtimeSelection(baseModels.get(id)),
     async setRuntimeSelection(id, selection) {
       await writeQueue(`model:${id}`, async () => {
@@ -785,10 +784,6 @@ export function createConfigStore(
       const id = scopeId("personal", principalId);
       await settings.individualModelAuth.store.put(id, { scopeId: id, on, ...(on && provider ? { provider } : {}) });
     },
-    getBaseModelOwnDurable: async (id) => (await baseModelStore.get(id))?.modelId ?? null,
-    getBaseModelDurable: async (id) =>
-      (await baseModelStore.get(id))?.modelId ??
-      (id === org ? null : ((await baseModelStore.get(org))?.modelId ?? null)),
     async setSlackEmojiCatalog(id, emoji) {
       await writeQueue(`slackEmojiCatalog:${id}`, () =>
         slackEmojiCatalogStore.put(id, { scopeId: id, emoji, updatedAt: Date.now() }),
