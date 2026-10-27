@@ -30,8 +30,8 @@ test("every ENFORCED deployment-contract clause names a verifier and its impleme
       ["../src/deployment/deployment-layer-store.ts", /function createDeploymentLayerStore/],
       ["../cli/src/commands/conformance.ts", /deploymentLayerRequest/],
     ],
-    "aws.rendered-task": [["../cli/src/backends/aws.ts", /function renderTaskDefinition/]],
-    "aws.live-drift": [["../cli/src/backends/aws.ts", /function awsCheckLive/]],
+    "aws.rendered-task": [["../cli/src/backends/aws/task-definitions.ts", /function renderTaskDefinition/]],
+    "aws.live-drift": [["../cli/src/backends/aws/doctor.ts", /function awsCheckLive/]],
     "target.provider-registry": [
       ["../cli/src/backends/registry.ts", /HOSTING_PROVIDERS/],
       ["../cli/test/package.test.ts", /packed npm artifact creates and operates a standalone deployment repository/],
