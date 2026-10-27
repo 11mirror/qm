@@ -43,248 +43,50 @@ import { completedSurfaceEnqueues } from "./turn-helpers.ts";
 import { createCompaction } from "./compaction.ts";
 import { createTurnSandboxes } from "./sandboxes.ts";
 
-export async function prepareTurnInput(
-  ctx: TurnCtx,
-  turn: {
-    screenTrace: ScreenTrace;
-    strictReadOnly: boolean;
-    context: Awaited<ReturnType<typeof resolveTurnContext>>;
-    framed: Awaited<ReturnType<typeof frameTurnPrompt>>;
-    session: Session;
-    isRetry: boolean;
-    recordedTurn: RecordedTurn | null;
-    provision: ReturnType<typeof createTurnSandboxes>["provision"];
-    lease: Lease;
-    turnAbort: AbortController;
-    historyWindow: () => ReturnType<OrchestratorDeps["sessions"]["getContextWindow"]>;
-    volatileContext: string;
-    turnTools: Awaited<ReturnType<typeof buildTurnTools>>;
-    transcripts: ReturnType<typeof createTranscriptSource>;
-    blobTransfer: OrchestratorDeps["blobTransfer"];
-    documentTokenBudget: ReturnType<typeof createCompaction>["documentTokenBudget"];
-    compactContextIfNeeded: ReturnType<typeof createCompaction>["compactContextIfNeeded"];
-    observeSecurityData: SecurityObserver;
-  },
-) {
-  const {
-    deps,
-    input,
-    actor,
-    conversation,
-    automatedTurn,
-    sessionTurn,
-    humanInput,
-    withManagedRosterVersion,
-    resolution,
-    scopeId,
-    filterHistory,
-  } = ctx;
-  const {
-    screenTrace,
-    strictReadOnly,
-    context,
-    session,
-    isRetry,
-    recordedTurn,
-    provision,
-    lease,
-    turnAbort,
-    historyWindow,
-    volatileContext,
-    transcripts,
-    blobTransfer,
-    documentTokenBudget,
-    compactContextIfNeeded,
-    observeSecurityData,
-  } = turn;
-  const { memoryScopeId } = context;
-  const { surfaceName, turnContextBlocks, nativeSkills, turnInboxDir } = turn.framed;
-  const { spine, postKeys, fileRegistration, mayReadArtifact } = turn.turnTools;
-  if (input.attachments?.some((attachment) => attachment.sourceId)) {
-    input.attachments = withoutAlreadyIngested(
-      input.attachments,
-      (await deps.sessions.getContextWindow(session.id)).items,
-    );
-  }
-  const inbound =
-    input.attachments?.length && !strictReadOnly
-      ? await materializeInbound(
-          deps.sandbox,
-          provision,
-          input.attachments,
-          blobTransfer,
-          fileRegistration,
-          turnInboxDir,
-          ({ content }) =>
-            void observeSecurityData(content, actor.id, scopeId, {
-              ...screenTrace,
-              sessionId: session.id,
-              hook: "tool_response",
-              request: input.text,
-              surface: "inbound_file",
-              origin: input.origin.kind,
-            }),
-        )
-      : { metas: [], images: [], tooMany: [], unavailable: [] };
-  const manifest = inboundManifest(inbound.metas, turnInboxDir, inbound.unstaged);
-  const inboundIssues = inboundIssueList({
-    tooMany: inbound.tooMany,
-    unavailable: inbound.unavailable,
-    surfaceNotes: [
-      ...(input.inboundNotes ?? []),
-      ...(strictReadOnly
-        ? (input.attachments ?? []).map(
-            (attachment) => `${safeAttachmentName(attachment.name)} — unavailable in read-only mode`,
-          )
-        : []),
-    ],
-  });
+interface TurnInputArgs {
+  screenTrace: ScreenTrace;
+  strictReadOnly: boolean;
+  context: Awaited<ReturnType<typeof resolveTurnContext>>;
+  framed: Awaited<ReturnType<typeof frameTurnPrompt>>;
+  session: Session;
+  isRetry: boolean;
+  recordedTurn: RecordedTurn | null;
+  provision: ReturnType<typeof createTurnSandboxes>["provision"];
+  lease: Lease;
+  turnAbort: AbortController;
+  historyWindow: () => ReturnType<OrchestratorDeps["sessions"]["getContextWindow"]>;
+  volatileContext: string;
+  turnTools: Awaited<ReturnType<typeof buildTurnTools>>;
+  transcripts: ReturnType<typeof createTranscriptSource>;
+  blobTransfer: OrchestratorDeps["blobTransfer"];
+  documentTokenBudget: ReturnType<typeof createCompaction>["documentTokenBudget"];
+  compactContextIfNeeded: ReturnType<typeof createCompaction>["compactContextIfNeeded"];
+  observeSecurityData: SecurityObserver;
+}
 
-  const importedOverheard: OverheardEntryPayload[] = [];
-  if ((!input.envelopeWrapped || humanInput) && input.overheard?.length) {
-    const toImport = await transcripts
-      .forRender(session.id)
-      .then((read) => selectOverheardToImport(input.overheard!, recordedMessageTimestamps(read.items)))
-      .catch(swallowAs("orchestrator: overheard catch-up import", [] as OverheardEntryPayload[]));
-    let importedEntries: Item[] = [];
-    try {
-      importedEntries = await withManagedRosterVersion(() =>
-        deps.sessions.appendMany(lease, toImport.map(overheardItem)),
-      );
-    } catch (e) {
-      if (e instanceof ProjectRosterChanged) throw e;
-      swallow("orchestrator: overheard catch-up import", e);
-    }
-    if (importedEntries.length) importedOverheard.push(...toImport);
-  }
-
-  const rawEntries = (await historyWindow()).items;
+export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
+  const { deps, input, automatedTurn } = ctx;
+  const { strictReadOnly, provision } = turn;
+  const { memoryScopeId } = turn.context;
+  const { spine } = turn.turnTools;
+  const { inbound, manifest, inboundIssues } = await stageInbound(ctx, turn);
+  const importedOverheard = await importOverheard(ctx, turn);
   const priorTurns = input.priorTurns;
-  let visibleHistory = filterHistory(forModelContext(rawEntries));
-  const recalled = await context.recallMemory(memoryRecallQuery(input.text, visibleHistory));
-  const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.runId)) : null;
-  let resumePlan = partial ? resumeStrategy(visibleHistory, partial) : null;
-  if (partial && resumePlan?.kind === "settle") {
-    const settle = resumePlan;
-    const settled = await withManagedRosterVersion(() =>
-      deps.sessions.appendMany(lease, unrecordedResultItems(settle, input.resumeCause)),
-    );
-    visibleHistory = filterHistory(forModelContext([...rawEntries, ...settled]));
-    resumePlan = resumeStrategy(visibleHistory, partial);
-  }
-  const resume = resumePlan && resumePlan.kind !== "restart" ? partial : null;
-  const documentBudget = documentTokenBudget(scopeId, input.model);
-  const history = await withManagedRosterVersion(() =>
-    compactContextIfNeeded({
-      cancel: turnAbort.signal,
-      session,
-      lease,
-      visibleHistory,
-      scopeId,
-      orgScopeId: resolution.orgScopeId,
-      actorId: actor.id,
-      ...(input.model ? { model: input.model } : {}),
-      reservedTokens: strictReadOnly
-        ? 0
-        : inbound.metas.reduce((sum, meta) => sum + (isDocumentAttachment(meta) ? estimateDocumentTokens(meta) : 0), 0),
-    }),
+  const { visibleHistory, recalled, partial, resumePlan, resume } = await loadTurnHistory(ctx, turn);
+  const { history, documentInputs, contextRecovered, observeDocuments, ...remaining } = await loadTurnDocuments(
+    ctx,
+    turn,
+    inbound,
+    visibleHistory,
   );
-  const contextRecovered =
-    history !== visibleHistory &&
-    history.some((entry) => entry.kind === "ContextCompaction" && entry.body.mode === "recent");
-  const documentInputs = strictReadOnly
-    ? { documents: [], notices: [], tokens: 0 }
-    : await loadDocumentInputs(
-        deps.files,
-        [...historicalDocumentMetas(history), ...inbound.metas],
-        mayReadArtifact,
-        undefined,
-        turnAbort.signal,
-        undefined,
-        undefined,
-        documentBudget,
-      );
-  const observeDocuments = (inputs: Awaited<ReturnType<typeof loadDocumentInputs>>, requestText: string) => {
-    if (!(deps.securityScreener || deps.harness.models.screenSecurity)) return;
-    const documents = inputs.documents.slice();
-    void (async () => {
-      for (const document of documents) {
-        const extracted = await documentText(document, turnAbort.signal).catch(
-          swallowAs("document screen: extract", null),
-        );
-        if (turnAbort.signal.aborted) return;
-        if (!extracted) continue;
-        for (const chunk of securityScreenChunks("tool_result:inbound_document", extracted.text))
-          void observeSecurityData(chunk, actor.id, scopeId, {
-            ...screenTrace,
-            sessionId: session.id,
-            hook: "tool_response",
-            request: requestText,
-            surface: "inbound_file",
-            origin: input.origin.kind,
-          });
-      }
-    })().catch(swallowAs("orchestrator: observed document screen", undefined));
-  };
-  observeDocuments(documentInputs, input.text);
-  const remainingDocumentBytes =
-    MAX_DOCUMENT_BYTES -
-    documentInputs.documents.reduce((sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"), 0);
-  const remainingDocumentCount = MAX_TURN_DOCUMENTS - documentInputs.documents.length;
-  const remainingDocumentTokens = documentBudget - documentInputs.tokens;
-  const principalDelivered = await recentPrincipalDeliveryNote(
-    deps.recentDmPosts,
-    session.threadRef,
-    visibleHistory.findLast((e) => isUserMessage(e) && !isOverheard(e))?.createdAt,
-  );
-  const sender = !automatedTurn && !sessionTurn && input.text.trim() ? senderNote(actor.displayName) : "";
-  const usedSkills = history.flatMap((entry) =>
-    entry.kind === "ToolCall" &&
-    entry.tool === "skills" &&
-    entry.body.action === "read" &&
-    typeof entry.body.name === "string"
-      ? [entry.body.name]
-      : [],
-  );
-  turnContextBlocks["Skills"] = skillsIndex(nativeSkills, [scopeId, resolution.orgScopeId], usedSkills);
-  const turnEnvironmentContents = [
-    manifest,
-    principalDelivered,
-    sender,
-    input.conversationHeader?.trim(),
-    volatileContext,
-  ]
-    .filter((s) => s && s.trim())
-    .join("\n\n");
+  const { remainingDocumentBytes, remainingDocumentCount, remainingDocumentTokens } = remaining;
+  const turnEnvironmentContents = await composeTurnEnvironment(ctx, turn, visibleHistory, history, manifest);
   const baseText = input.proactiveOpener && !input.text.trim() ? PROACTIVE_OPENER_PROMPT : input.text;
   const pausedTurnUserEntry = input.approval
     ? [...visibleHistory].reverse().find((e) => isUserMessage(e) && !isOverheard(e))
     : undefined;
   const approvalReplay = !!pausedTurnUserEntry && (pausedTurnUserEntry.text ?? "").trim() === input.text.trim();
-  if (partial) {
-    const posted = completedSurfaceEnqueues(
-      filterHistory(await deps.sessions.getItems(session.id, { sinceSeq: partial.userSeq })),
-      partial.userSeq,
-      surfaceName,
-    );
-    postKeys.seed(posted);
-    spine.surfaceOutboundCount += posted;
-  }
-  if (partial) {
-    deps.auditLog.record({
-      at: Date.now(),
-      principalId: actor.id,
-      action: "turn.resume",
-      resource: conversation.threadRef,
-      scopeLabel: scopeId,
-      detail: resume
-        ? `attempt ${input.attempt}; resuming partial turn at seq ${partial.userSeq} (${partial.workEntries} recorded entries)`
-        : `attempt ${input.attempt}; re-running turn at seq ${partial.userSeq} (no recorded work to resume)`,
-    });
-    console.error(
-      `[orchestrator] turn.resume attempt=${input.attempt} thread=${conversation.threadRef} userSeq=${partial.userSeq} workEntries=${partial.workEntries} strategy=${resumePlan!.kind}`,
-    );
-  }
+  if (partial) await noteResume(ctx, turn, partial, resume, resumePlan!);
   const turnInput = baseText;
   const continueTurn = !!partial && history.some((entry) => entry.seq === partial.userSeq);
   if (partial) spine.turnUserEntrySeq = partial.userSeq;
@@ -324,6 +126,248 @@ export async function prepareTurnInput(
     continueTurn,
     isPollFire,
   };
+}
+
+async function stageInbound(ctx: TurnCtx, turn: TurnInputArgs) {
+  const { deps, input, actor, scopeId } = ctx;
+  const { screenTrace, strictReadOnly, session, provision, blobTransfer, observeSecurityData } = turn;
+  const { turnInboxDir } = turn.framed;
+  const { fileRegistration } = turn.turnTools;
+  if (input.attachments?.some((attachment) => attachment.sourceId)) {
+    input.attachments = withoutAlreadyIngested(
+      input.attachments,
+      (await deps.sessions.getContextWindow(session.id)).items,
+    );
+  }
+  const inbound =
+    input.attachments?.length && !strictReadOnly
+      ? await materializeInbound(
+          deps.sandbox,
+          provision,
+          input.attachments,
+          blobTransfer,
+          fileRegistration,
+          turnInboxDir,
+          ({ content }) =>
+            void observeSecurityData(content, actor.id, scopeId, {
+              ...screenTrace,
+              sessionId: session.id,
+              hook: "tool_response",
+              request: input.text,
+              surface: "inbound_file",
+              origin: input.origin.kind,
+            }),
+        )
+      : { metas: [], images: [], tooMany: [], unavailable: [] };
+  const manifest = inboundManifest(inbound.metas, turnInboxDir, inbound.unstaged);
+  const inboundIssues = inboundIssueList({
+    tooMany: inbound.tooMany,
+    unavailable: inbound.unavailable,
+    surfaceNotes: [
+      ...(input.inboundNotes ?? []),
+      ...(strictReadOnly
+        ? (input.attachments ?? []).map(
+            (attachment) => `${safeAttachmentName(attachment.name)} — unavailable in read-only mode`,
+          )
+        : []),
+    ],
+  });
+  return { inbound, manifest, inboundIssues };
+}
+
+async function importOverheard(ctx: TurnCtx, turn: TurnInputArgs): Promise<OverheardEntryPayload[]> {
+  const { deps, input, humanInput, withManagedRosterVersion } = ctx;
+  const { transcripts, session, lease } = turn;
+  const importedOverheard: OverheardEntryPayload[] = [];
+  if ((!input.envelopeWrapped || humanInput) && input.overheard?.length) {
+    const toImport = await transcripts
+      .forRender(session.id)
+      .then((read) => selectOverheardToImport(input.overheard!, recordedMessageTimestamps(read.items)))
+      .catch(swallowAs("orchestrator: overheard catch-up import", [] as OverheardEntryPayload[]));
+    let importedEntries: Item[] = [];
+    try {
+      importedEntries = await withManagedRosterVersion(() =>
+        deps.sessions.appendMany(lease, toImport.map(overheardItem)),
+      );
+    } catch (e) {
+      if (e instanceof ProjectRosterChanged) throw e;
+      swallow("orchestrator: overheard catch-up import", e);
+    }
+    if (importedEntries.length) importedOverheard.push(...toImport);
+  }
+  return importedOverheard;
+}
+
+async function loadTurnHistory(ctx: TurnCtx, turn: TurnInputArgs) {
+  const { deps, input, filterHistory, withManagedRosterVersion } = ctx;
+  const { historyWindow, context, isRetry, recordedTurn, lease } = turn;
+  const rawEntries = (await historyWindow()).items;
+  let visibleHistory = filterHistory(forModelContext(rawEntries));
+  const recalled = await context.recallMemory(memoryRecallQuery(input.text, visibleHistory));
+  const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.runId)) : null;
+  let resumePlan = partial ? resumeStrategy(visibleHistory, partial) : null;
+  if (partial && resumePlan?.kind === "settle") {
+    const settle = resumePlan;
+    const settled = await withManagedRosterVersion(() =>
+      deps.sessions.appendMany(lease, unrecordedResultItems(settle, input.resumeCause)),
+    );
+    visibleHistory = filterHistory(forModelContext([...rawEntries, ...settled]));
+    resumePlan = resumeStrategy(visibleHistory, partial);
+  }
+  const resume = resumePlan && resumePlan.kind !== "restart" ? partial : null;
+  return { visibleHistory, recalled, partial, resumePlan, resume };
+}
+
+async function loadTurnDocuments(
+  ctx: TurnCtx,
+  turn: TurnInputArgs,
+  inbound: Awaited<ReturnType<typeof stageInbound>>["inbound"],
+  visibleHistory: Item[],
+) {
+  const { deps, actor, resolution, scopeId, input, withManagedRosterVersion } = ctx;
+  const { strictReadOnly, session, lease, turnAbort, documentTokenBudget, compactContextIfNeeded } = turn;
+  const { mayReadArtifact } = turn.turnTools;
+  const documentBudget = documentTokenBudget(scopeId, input.model);
+  const history = await withManagedRosterVersion(() =>
+    compactContextIfNeeded({
+      cancel: turnAbort.signal,
+      session,
+      lease,
+      visibleHistory,
+      scopeId,
+      orgScopeId: resolution.orgScopeId,
+      actorId: actor.id,
+      ...(input.model ? { model: input.model } : {}),
+      reservedTokens: strictReadOnly
+        ? 0
+        : inbound.metas.reduce((sum, meta) => sum + (isDocumentAttachment(meta) ? estimateDocumentTokens(meta) : 0), 0),
+    }),
+  );
+  const contextRecovered =
+    history !== visibleHistory &&
+    history.some((entry) => entry.kind === "ContextCompaction" && entry.body.mode === "recent");
+  const documentInputs = strictReadOnly
+    ? { documents: [], notices: [], tokens: 0 }
+    : await loadDocumentInputs(
+        deps.files,
+        [...historicalDocumentMetas(history), ...inbound.metas],
+        mayReadArtifact,
+        undefined,
+        turnAbort.signal,
+        undefined,
+        undefined,
+        documentBudget,
+      );
+  const observeDocuments = (inputs: Awaited<ReturnType<typeof loadDocumentInputs>>, requestText: string) =>
+    observeTurnDocuments(ctx, turn, inputs, requestText);
+  observeDocuments(documentInputs, input.text);
+  const remainingDocumentBytes =
+    MAX_DOCUMENT_BYTES -
+    documentInputs.documents.reduce((sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"), 0);
+  const remainingDocumentCount = MAX_TURN_DOCUMENTS - documentInputs.documents.length;
+  const remainingDocumentTokens = documentBudget - documentInputs.tokens;
+  return {
+    history,
+    documentInputs,
+    contextRecovered,
+    observeDocuments,
+    remainingDocumentBytes,
+    remainingDocumentCount,
+    remainingDocumentTokens,
+  };
+}
+
+function observeTurnDocuments(
+  ctx: TurnCtx,
+  turn: TurnInputArgs,
+  inputs: Awaited<ReturnType<typeof loadDocumentInputs>>,
+  requestText: string,
+): void {
+  const { deps, actor, scopeId, input } = ctx;
+  const { screenTrace, session, turnAbort, observeSecurityData } = turn;
+  if (!(deps.securityScreener || deps.harness.models.screenSecurity)) return;
+  const documents = inputs.documents.slice();
+  void (async () => {
+    for (const document of documents) {
+      const extracted = await documentText(document, turnAbort.signal).catch(
+        swallowAs("document screen: extract", null),
+      );
+      if (turnAbort.signal.aborted) return;
+      if (!extracted) continue;
+      for (const chunk of securityScreenChunks("tool_result:inbound_document", extracted.text))
+        void observeSecurityData(chunk, actor.id, scopeId, {
+          ...screenTrace,
+          sessionId: session.id,
+          hook: "tool_response",
+          request: requestText,
+          surface: "inbound_file",
+          origin: input.origin.kind,
+        });
+    }
+  })().catch(swallowAs("orchestrator: observed document screen", undefined));
+}
+
+async function composeTurnEnvironment(
+  ctx: TurnCtx,
+  turn: TurnInputArgs,
+  visibleHistory: Item[],
+  history: Item[],
+  manifest: string,
+): Promise<string> {
+  const { deps, actor, input, automatedTurn, sessionTurn, resolution, scopeId } = ctx;
+  const { session, volatileContext } = turn;
+  const { turnContextBlocks, nativeSkills } = turn.framed;
+  const principalDelivered = await recentPrincipalDeliveryNote(
+    deps.recentDmPosts,
+    session.threadRef,
+    visibleHistory.findLast((e) => isUserMessage(e) && !isOverheard(e))?.createdAt,
+  );
+  const sender = !automatedTurn && !sessionTurn && input.text.trim() ? senderNote(actor.displayName) : "";
+  const usedSkills = history.flatMap((entry) =>
+    entry.kind === "ToolCall" &&
+    entry.tool === "skills" &&
+    entry.body.action === "read" &&
+    typeof entry.body.name === "string"
+      ? [entry.body.name]
+      : [],
+  );
+  turnContextBlocks["Skills"] = skillsIndex(nativeSkills, [scopeId, resolution.orgScopeId], usedSkills);
+  return [manifest, principalDelivered, sender, input.conversationHeader?.trim(), volatileContext]
+    .filter((s) => s && s.trim())
+    .join("\n\n");
+}
+
+async function noteResume(
+  ctx: TurnCtx,
+  turn: TurnInputArgs,
+  partial: NonNullable<Awaited<ReturnType<typeof loadTurnHistory>>["partial"]>,
+  resume: Awaited<ReturnType<typeof loadTurnHistory>>["resume"],
+  resumePlan: NonNullable<Awaited<ReturnType<typeof loadTurnHistory>>["resumePlan"]>,
+): Promise<void> {
+  const { deps, input, actor, conversation, scopeId, filterHistory } = ctx;
+  const { session } = turn;
+  const { surfaceName } = turn.framed;
+  const { spine, postKeys } = turn.turnTools;
+  const posted = completedSurfaceEnqueues(
+    filterHistory(await deps.sessions.getItems(session.id, { sinceSeq: partial.userSeq })),
+    partial.userSeq,
+    surfaceName,
+  );
+  postKeys.seed(posted);
+  spine.surfaceOutboundCount += posted;
+  deps.auditLog.record({
+    at: Date.now(),
+    principalId: actor.id,
+    action: "turn.resume",
+    resource: conversation.threadRef,
+    scopeLabel: scopeId,
+    detail: resume
+      ? `attempt ${input.attempt}; resuming partial turn at seq ${partial.userSeq} (${partial.workEntries} recorded entries)`
+      : `attempt ${input.attempt}; re-running turn at seq ${partial.userSeq} (no recorded work to resume)`,
+  });
+  console.error(
+    `[orchestrator] turn.resume attempt=${input.attempt} thread=${conversation.threadRef} userSeq=${partial.userSeq} workEntries=${partial.workEntries} strategy=${resumePlan.kind}`,
+  );
 }
 
 export function turnFailureUserItem(
