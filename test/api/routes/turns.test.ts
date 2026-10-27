@@ -2,32 +2,20 @@ import "../../support/auto-fake-sprites.ts";
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
-import { createServer } from "../../../src/api/server.ts";
 import { buildApp } from "../../support/build-app.ts";
-import { signedHeaders } from "../../../plugins/chassis/src/core-client.ts";
 import { testConfig } from "../../support/test-config.ts";
-import { createPostgresReplayDedupe } from "../../../src/auth/replay-dedupe.ts";
-import { testDatabaseUrl } from "../../support/test-database.ts";
+import { serveCore } from "../../support/core-route-server.ts";
 
-const SECRET = "core-signing-secret".repeat(3);
 const built = buildApp(testConfig());
-const core = createServer(built.app, {
-  replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-  signingSecret: SECRET,
-  runs: built.runs,
-  sessions: built.sessions,
-});
-core.listen(0);
-const base = `http://localhost:${(core.address() as AddressInfo).port}`;
+const core = serveCore(built.app, { runs: built.runs, sessions: built.sessions });
 
 after(async () => {
-  await new Promise<void>((r) => core.close(() => r()));
+  await core.close();
   await built.runtime.stop();
 });
 
 test("POST /v1/turns strips unattendedGrants from the external body", async () => {
-  const body = JSON.stringify({
+  const r = await core.post("/v1/turns", {
     surface: "cron",
     actor: { externalId: "internal:owner" },
     conversation: {
@@ -41,13 +29,8 @@ test("POST /v1/turns strips unattendedGrants from the external body", async () =
     unattendedGrants: ["admin.sessions.read"],
     async: true,
   });
-  const r = await fetch(`${base}/v1/turns`, {
-    method: "POST",
-    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
-    body,
-  });
   assert.equal(r.status, 202);
-  const { runId } = (await r.json()) as { runId: string };
+  const { runId } = r.json as { runId: string };
   const run = await built.runs.get(runId);
   assert.equal(
     run?.request.unattendedGrants,
@@ -57,7 +40,7 @@ test("POST /v1/turns strips unattendedGrants from the external body", async () =
 });
 
 test("POST /v1/turns strips nested owner-keychain union from typed automation origin", async () => {
-  const body = JSON.stringify({
+  const r = await core.post("/v1/turns", {
     surface: "cron",
     actor: { externalId: "internal:owner" },
     conversation: {
@@ -70,41 +53,31 @@ test("POST /v1/turns strips nested owner-keychain union from typed automation or
     origin: { kind: "automation", screenData: "external event", useOwnerKeychain: true },
     async: true,
   });
-  const r = await fetch(`${base}/v1/turns`, {
-    method: "POST",
-    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
-    body,
-  });
   assert.equal(r.status, 202);
-  const { runId } = (await r.json()) as { runId: string };
+  const { runId } = r.json as { runId: string };
   const run = await built.runs.get(runId);
   assert.deepEqual(run?.request.origin, { kind: "automation", screenData: "external event" });
 });
 
 test("POST /v1/turns strips spawned: an external body can't opt out of mid-turn steer folding", async () => {
-  const turnBody = (text: string, extra: Record<string, unknown> = {}): string =>
-    JSON.stringify({
-      surface: "slack",
-      actor: { externalId: "U1" },
-      conversation: {
-        kind: "channel",
-        channelRef: "C-spawn-guard",
-        threadRef: "ch:C-spawn-guard:1.0",
-        audience: [{ externalId: "U1" }],
-      },
-      text,
-      origin: { kind: "human" },
-      async: true,
-      ...extra,
-    });
-  const post = async (body: string): Promise<{ runId: string }> => {
-    const r = await fetch(`${base}/v1/turns`, {
-      method: "POST",
-      headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
-      body,
-    });
+  const turnBody = (text: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+    surface: "slack",
+    actor: { externalId: "U1" },
+    conversation: {
+      kind: "channel",
+      channelRef: "C-spawn-guard",
+      threadRef: "ch:C-spawn-guard:1.0",
+      audience: [{ externalId: "U1" }],
+    },
+    text,
+    origin: { kind: "human" },
+    async: true,
+    ...extra,
+  });
+  const post = async (body: Record<string, unknown>): Promise<{ runId: string }> => {
+    const r = await core.post("/v1/turns", body);
     assert.equal(r.status, 202);
-    return (await r.json()) as { runId: string };
+    return r.json as { runId: string };
   };
   const first = await post(turnBody("@bot start"));
   const second = await post(turnBody("make it blue", { spawned: true }));
@@ -112,23 +85,18 @@ test("POST /v1/turns strips spawned: an external body can't opt out of mid-turn 
 });
 
 test("POST /v1/turns strips redeliveryKey: an external body cannot borrow Slack's redelivery namespace", async () => {
-  const turnBody = (threadRef: string): string =>
-    JSON.stringify({
-      surface: "slack",
-      actor: { externalId: "U1" },
-      conversation: { kind: "channel", channelRef: "C-rd", threadRef, audience: [{ externalId: "U1" }] },
-      text: "hello",
-      origin: { kind: "human" },
-      async: true,
-      redeliveryKey: "slack:B1:C-rd:1.0",
-    });
-  const post = async (body: string): Promise<{ http: number; runId?: string }> => {
-    const r = await fetch(`${base}/v1/turns`, {
-      method: "POST",
-      headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
-      body,
-    });
-    const json = (await r.json()) as { runId?: string };
+  const turnBody = (threadRef: string): Record<string, unknown> => ({
+    surface: "slack",
+    actor: { externalId: "U1" },
+    conversation: { kind: "channel", channelRef: "C-rd", threadRef, audience: [{ externalId: "U1" }] },
+    text: "hello",
+    origin: { kind: "human" },
+    async: true,
+    redeliveryKey: "slack:B1:C-rd:1.0",
+  });
+  const post = async (body: Record<string, unknown>): Promise<{ http: number; runId?: string }> => {
+    const r = await core.post("/v1/turns", body);
+    const json = r.json as { runId?: string };
     return { http: r.status, ...(json.runId ? { runId: json.runId } : {}) };
   };
   const first = await post(turnBody("ch:C-rd:1.0"));
@@ -142,7 +110,7 @@ test("POST /v1/turns strips redeliveryKey: an external body cannot borrow Slack'
 });
 
 test("POST /v1/turns rejects a client idempotencyKey in the reserved slack: namespace", async () => {
-  const body = JSON.stringify({
+  const r = await core.post("/v1/turns", {
     surface: "web",
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "web:U1:reserved" },
@@ -151,28 +119,18 @@ test("POST /v1/turns rejects a client idempotencyKey in the reserved slack: name
     async: true,
     idempotencyKey: "slack:B1:C1:1.0",
   });
-  const r = await fetch(`${base}/v1/turns`, {
-    method: "POST",
-    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
-    body,
-  });
   assert.equal(r.status, 400);
-  assert.match(JSON.stringify(await r.json()), /reserved slack: prefix/);
+  assert.match(JSON.stringify(r.json), /reserved slack: prefix/);
 });
 
 test("POST /v1/turns rejects a body without a turn origin", async () => {
-  const body = JSON.stringify({
+  const r = await core.post("/v1/turns", {
     surface: "web",
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "web:U1:no-origin" },
     text: "hi",
     liveActor: true,
   });
-  const r = await fetch(`${base}/v1/turns`, {
-    method: "POST",
-    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
-    body,
-  });
   assert.equal(r.status, 400);
-  assert.match(JSON.stringify(await r.json()), /origin\.kind must be/);
+  assert.match(JSON.stringify(r.json), /origin\.kind must be/);
 });
