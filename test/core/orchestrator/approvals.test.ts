@@ -4,7 +4,11 @@ import assert from "node:assert/strict";
 import { scopeId, type PendingApprovalRecord } from "../../../src/types.ts";
 import { isUserMessage } from "../../../src/sessions/items.ts";
 import { freshApp, spyProvisioning, dm, channel, activityItems } from "../../support/orchestrator-app.ts";
-import { consumeApprovalDecision, loadApprovalLedger } from "../../../src/core/orchestrator/approvals.ts";
+import {
+  consumeApprovalDecision,
+  deniedCommandLabel,
+  loadApprovalLedger,
+} from "../../../src/core/orchestrator/approvals.ts";
 
 test("an approval pause persists timing on its boundary entry", async () => {
   const { app } = freshApp();
@@ -755,4 +759,16 @@ test("a recorded denial stays a denial on retry", async () => {
   assert.equal(outcome.kind, "settled");
   assert.equal(h.pending.size, 0);
   assert.equal(h.ledger.consume("git push --force"), false);
+});
+
+test("a denied operation without a summary is named by its first line and overall size, not the whole script", () => {
+  assert.equal(deniedCommandLabel("git push --force origin main"), "git push --force origin main");
+  const script = ["set -e", ...Array.from({ length: 400 }, (_, i) => `echo ${"x".repeat(60)} ${i}`)].join("\n");
+  const label = deniedCommandLabel(script);
+  assert.equal(label, `set -e … (401 lines, ${Buffer.byteLength(script)} bytes in all)`);
+  assert.ok(label.length < 80);
+  const oneLine = `python3 -c "${"x".repeat(50_000)}"`;
+  const bounded = deniedCommandLabel(oneLine);
+  assert.equal(bounded, `${oneLine.slice(0, 80)} … (1 line, ${Buffer.byteLength(oneLine)} bytes in all)`);
+  assert.ok(bounded.length < 120);
 });
