@@ -218,6 +218,7 @@ export interface PgMigrationDefinition {
    * applied; a follow-up migration brings it to this definition's end state.
    */
   acceptedChecksums?: readonly string[];
+  script?: boolean;
 }
 
 export interface PgMigration extends PgMigrationDefinition {
@@ -301,19 +302,36 @@ export function definePgMigration(
   statements: readonly string[],
   expectedChecksum?: string,
   acceptedChecksums?: readonly string[],
+  script?: boolean,
 ): PgMigration {
   if (!/^[a-z0-9][a-z0-9._/-]*$/i.test(id) || id.includes("..")) {
     throw new Error(`pg-pool: invalid migration id ${JSON.stringify(id)}`);
   }
   const normalized = statements.map((statement) => statement.trim()).filter((statement) => statement.length > 0);
-  for (const statement of normalized) assertOneStatement(statement);
+  if (!script) for (const statement of normalized) assertOneStatement(statement);
   const checksum = pgMigrationChecksum(normalized);
   if (expectedChecksum !== undefined && checksum !== expectedChecksum) {
     throw new Error(
       `pg-pool: migration ${id} source checksum mismatch (expected=${expectedChecksum}, actual=${checksum})`,
     );
   }
-  return { id, statements: normalized, checksum, ...(acceptedChecksums?.length ? { acceptedChecksums } : {}) };
+  return {
+    id,
+    statements: normalized,
+    checksum,
+    ...(acceptedChecksums?.length ? { acceptedChecksums } : {}),
+    ...(script ? { script } : {}),
+  };
+}
+
+export function pgMigrationFrom(definition: PgMigrationDefinition): PgMigration {
+  return definePgMigration(
+    definition.id,
+    definition.statements,
+    definition.expectedChecksum,
+    definition.acceptedChecksums,
+    definition.script,
+  );
 }
 
 const SCHEMA_LOCK_POLL_MS = 50;
@@ -616,9 +634,7 @@ export function createPgPool(
   const migrates = idOrDefinitions !== undefined;
   const definitions =
     typeof idOrDefinitions === "string" ? [{ id: idOrDefinitions, statements }] : (idOrDefinitions ?? []);
-  const migrations = definitions.map((definition) =>
-    definePgMigration(definition.id, definition.statements, definition.expectedChecksum, definition.acceptedChecksums),
-  );
+  const migrations = definitions.map(pgMigrationFrom);
   for (const migration of migrations) registerPgMigration(connectionString, migration);
   let readyP: Promise<void> | null = null;
   let sessionPoolP: Promise<Pool> | null = null;
@@ -749,12 +765,7 @@ export function createPgPool(
     ]);
   }
   async function migrate(definition: PgMigrationDefinition): Promise<void> {
-    const migration = definePgMigration(
-      definition.id,
-      definition.statements,
-      definition.expectedChecksum,
-      definition.acceptedChecksums,
-    );
+    const migration = pgMigrationFrom(definition);
     registerPgMigration(connectionString, migration);
     if (closed) throw new Error("Postgres store is closed");
     await ready();
@@ -765,15 +776,7 @@ export function createPgPool(
     });
   }
   function registerMigration(definition: PgMigrationDefinition): void {
-    registerPgMigration(
-      connectionString,
-      definePgMigration(
-        definition.id,
-        definition.statements,
-        definition.expectedChecksum,
-        definition.acceptedChecksums,
-      ),
-    );
+    registerPgMigration(connectionString, pgMigrationFrom(definition));
   }
   return { pool, sessionPool, q, query, registerMigration, migrate, close };
 }

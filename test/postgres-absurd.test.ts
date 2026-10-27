@@ -1,7 +1,7 @@
 import { after, afterEach, before, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
-import { applyPgMigrations, definePgMigration, type PoolClient } from "../src/persistence/pg-pool.ts";
+import { applyPgMigrations, pgMigrationFrom, type PoolClient } from "../src/persistence/pg-pool.ts";
 import { ABSURD_MIGRATION, TURN_QUEUES, registerAbsurdSchema, type TurnQueue } from "../src/turns/absurd-schema.ts";
 import {
   RunFailed,
@@ -84,12 +84,31 @@ test("absurd/0.5.1 applies once and a rerun is a no-op", { skip }, async () => {
     (await admin.query("SELECT count(*)::int AS n FROM pg_proc WHERE pronamespace = 'absurd'::regnamespace")).rows[0]!
       .n;
   const before = await functions();
-  await applyPgMigrations(admin, [
-    definePgMigration(ABSURD_MIGRATION.id, ABSURD_MIGRATION.statements, ABSURD_MIGRATION.expectedChecksum),
-  ]);
+  await applyPgMigrations(admin, [pgMigrationFrom(ABSURD_MIGRATION)]);
   assert.deepEqual(await ledger(), first);
   assert.equal(await functions(), before);
   assert.equal((await admin.query("SELECT absurd.get_schema_version() AS v")).rows[0]!.v, "0.5.1");
+});
+
+test("a database that recorded the 0.5.1 release checksum keeps booting", { skip }, async () => {
+  const released = ABSURD_MIGRATION.acceptedChecksums![0]!;
+  await admin.query("UPDATE qm_schema_migrations SET checksum = $1 WHERE id = 'absurd/0.5.1'", [released]);
+  try {
+    await applyPgMigrations(admin, [pgMigrationFrom(ABSURD_MIGRATION)]);
+    const { rows } = await admin.query("SELECT checksum FROM qm_schema_migrations WHERE id = 'absurd/0.5.1'");
+    assert.equal(rows[0]!.checksum, released);
+  } finally {
+    await admin.query("UPDATE qm_schema_migrations SET checksum = $1 WHERE id = 'absurd/0.5.1'", [
+      ABSURD_MIGRATION.expectedChecksum,
+    ]);
+  }
+});
+
+test("only unpartitioned queues can be created", { skip }, async () => {
+  await assert.rejects(
+    admin.query("SELECT absurd.create_queue('zone_partitioned', 'partitioned')"),
+    /Unsupported queue storage mode/,
+  );
 });
 
 test("the three turn queues exist with a 7-day cleanup TTL", { skip }, async () => {
