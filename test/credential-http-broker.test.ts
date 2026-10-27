@@ -119,6 +119,45 @@ test("git HTTP broker streams a smart-HTTP request through the pinned service cr
   });
 });
 
+test("the HTTP broker applies the same daily cap and actor attestation as the JSON broker", async () => {
+  const seen: Array<Record<string, string>> = [];
+  let admitted = true;
+  const deps: ServerDeps = {
+    control: {} as ServerDeps["control"],
+    serviceCreds: {
+      getServiceCredentialSecret: async () => ({
+        slug: "gitlab",
+        name: "GitLab git",
+        secret: "dXNlcjp0b2tlbg==",
+        host: "gitlab.example",
+        injection: { scheme: "Basic ", actor: true },
+        allowedMethods: ["GET", "POST"],
+        allowedPathPrefixes: ["/acme/repo.git"],
+        maxRequestsPerDay: 1,
+        enabled: true,
+      }),
+    } as unknown as ServerDeps["serviceCreds"],
+    credentialUsage: {
+      record: () => undefined,
+      admitDailyCall: async () => admitted,
+    } as unknown as ServerDeps["credentialUsage"],
+    credentialHttpFetch: async (_url, init) => {
+      seen.push(init.headers);
+      return { status: 200, headers: {}, body: Readable.from(["ok"]) };
+    },
+  };
+  const first = ctx("/v1/credentials/http/gitlab/acme/repo.git/info/refs", "GET", deps);
+  await brokerCredentialHttp(first);
+  assert.equal(first.res.statusCode, 200);
+  assert.equal(seen[0]!["x-qm-actor"], "U1");
+  admitted = false;
+  const second = ctx("/v1/credentials/http/gitlab/acme/repo.git/info/refs", "GET", deps);
+  await brokerCredentialHttp(second);
+  assert.equal(second.res.statusCode, 429);
+  assert.match(await text(second.res), /daily_cap_reached/);
+  assert.equal(seen.length, 1);
+});
+
 test("git HTTP broker sends a credential's fixed headers over a caller's case variant", async () => {
   let seen: Record<string, string> | undefined;
   const deps: ServerDeps = {

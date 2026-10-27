@@ -2,6 +2,7 @@
 name: google-workspace
 description: Read and act on the user's Gmail, Google Calendar, and Google Tasks through per-user OAuth.
 requiredCapabilities:
+  - connector:google
   - egress:gmail.googleapis.com
   - egress:www.googleapis.com
 ---

@@ -68,6 +68,7 @@ const MAX_MEMBERS_PER_START = 20;
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
 const MAX_POST_CHARS = 16_000;
+const PREVIEW_CHARS = 500;
 const NOTICE_CHARS = 2_000;
 const CHANNEL_NAME = /^[a-z0-9][a-z0-9_-]{0,39}$/;
 
@@ -85,6 +86,14 @@ interface PostView {
   cursor: number;
   text: string;
   replies?: number;
+  truncated?: true;
+}
+
+function preview(post: SwarmBoardPost): PostView {
+  const full = view(post);
+  return post.body.length > PREVIEW_CHARS
+    ? { ...full, text: `${post.body.slice(0, PREVIEW_CHARS)}…`, truncated: true }
+    : full;
 }
 
 function view(post: SwarmBoardPost): PostView {
@@ -190,8 +199,8 @@ export async function swarmCall(ctx: SwarmCallContext, input: SwarmInput): Promi
       if (input.action === "search" && !input.query?.trim()) return { ok: false, message: "search requires `query`." };
       const posts =
         input.action === "threads"
-          ? (await ctx.board.threads(swarmId, page)).map((post) => ({ ...view(post), replies: post.replies }))
-          : (await ctx.board.search(swarmId, input.query!.trim(), page)).map(view);
+          ? (await ctx.board.threads(swarmId, page)).map((post) => ({ ...preview(post), replies: post.replies }))
+          : (await ctx.board.search(swarmId, input.query!.trim(), page)).map(preview);
       return {
         ok: true,
         result: {

@@ -1,6 +1,8 @@
 ---
 name: morning-digest
 description: Assemble and deliver one short morning digest for the person who owns the cron — what changed overnight in the sources they already connected, and what it means for their day.
+requiredCapabilities:
+  - connector:x
 ---
 
 # Morning digest

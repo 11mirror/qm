@@ -48,7 +48,10 @@ export interface SurfaceRequest {
 }
 
 export type InboundOutcome =
-  { status: 401; reason: string } | { status: 400; reason: string } | { status: 200; messages: InboundMessage[] };
+  | { status: 401; reason: string }
+  | { status: 400; reason: string }
+  | { status: 503; reason: string }
+  | { status: 200; messages: InboundMessage[] };
 
 export interface Surface {
   readonly name: string;

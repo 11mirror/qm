@@ -64,6 +64,7 @@ function cronSchedulePromptLabel(c: Cron, timezone: string): string {
   return `once at ${localIsoTime(timezone, schedule.firstFireAt ?? c.createdAt)}`;
 }
 
+const OBLIGATIONS_CAP = 30;
 export function renderStandingObligations(
   crons: Cron[],
   webhooks: Webhook[],
@@ -82,7 +83,10 @@ export function renderStandingObligations(
   ];
   return [
     "## Already scheduled here",
-    ...(lines.length ? lines : ["No active scheduled work was found for this conversation."]),
+    ...(lines.length ? lines.slice(0, OBLIGATIONS_CAP) : ["No active scheduled work was found for this conversation."]),
+    ...(lines.length > OBLIGATIONS_CAP
+      ? [`…and ${lines.length - OBLIGATIONS_CAP} more — list crons, webhooks or job watches to see them all.`]
+      : []),
   ].join("\n");
 }
 

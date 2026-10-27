@@ -4,12 +4,17 @@ import { filterConnectorSkills } from "../src/core/orchestrator.ts";
 import type { SkillResolution } from "../src/skills/skill-store.ts";
 import { scopeId } from "../src/types.ts";
 
-function skill(name: string): SkillResolution {
+function skill(name: string, connector?: string): SkillResolution {
   return {
     skill: {
       id: name,
       scopeId: scopeId("org", "acme"),
-      manifest: { name, description: name, requiredCapabilities: [], body: name },
+      manifest: {
+        name,
+        description: name,
+        requiredCapabilities: connector ? [`connector:${connector}`] : [],
+        body: name,
+      },
       status: "published",
       createdBy: "test",
       version: 1,
@@ -25,12 +30,12 @@ function skill(name: string): SkillResolution {
 test("provider skills are visible only for connectors configured by the admin", () => {
   const all = [
     skill("memory"),
-    skill("google-workspace"),
-    skill("dropbox"),
-    skill("linear"),
-    skill("x"),
-    skill("slack-drafts"),
-    skill("zoom"),
+    skill("google-workspace", "google"),
+    skill("dropbox", "dropbox"),
+    skill("linear", "linear"),
+    skill("x", "x"),
+    skill("slack-drafts", "slack"),
+    skill("zoom", "zoom"),
   ];
   assert.deepEqual(
     filterConnectorSkills(all, []).map((entry) => entry.skill?.manifest.name),
@@ -48,7 +53,7 @@ test("provider skills are visible only for connectors configured by the admin", 
 
 test("the credential-backed Composio skill needs no dedicated OAuth configuration", () => {
   assert.deepEqual(
-    filterConnectorSkills([skill("composio"), skill("google-workspace")], []).map(
+    filterConnectorSkills([skill("composio"), skill("google-workspace", "google")], []).map(
       (entry) => entry.skill?.manifest.name,
     ),
     ["composio"],

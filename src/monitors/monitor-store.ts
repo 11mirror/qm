@@ -24,6 +24,7 @@ export interface MonitorStore {
   get(id: string): Promise<Monitor | null>;
   list(): Promise<Monitor[]>;
   enabled(): Promise<Monitor[]>;
+  byOwner(scopeId: string): Promise<Monitor[]>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
   delete(id: string): Promise<void>;
   deleteDefunct(now: number): Promise<number>;
@@ -62,6 +63,7 @@ export function createMonitorStore(backing: DurableMap<Monitor>): MonitorStore {
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
+    byOwner: (scopeId) => backing.select({ where: { field: "ownerScopeId", anyOfFold: [scopeId] } }),
     async enabled() {
       return (await backing.all()).filter((m) => m.enabled);
     },

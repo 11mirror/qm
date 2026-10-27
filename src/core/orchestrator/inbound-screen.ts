@@ -19,10 +19,6 @@ export interface ScreenTrace {
   readonly runId?: string;
 }
 
-/**
- * Screen the turn's inbound external data in the background. Screening only observes: the turn
- * proceeds at once and the verdict lands in the audit log.
- */
 export function observeInboundTurn(
   ctx: TurnCtx,
   services: { observeSecurityData: SecurityObserver; blobTransfer: OrchestratorDeps["blobTransfer"] },

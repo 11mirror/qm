@@ -1,6 +1,8 @@
 ---
 name: email-draft-in-voice
 description: Draft Gmail in the user's own voice from the voice profile built by email-voice-profile. Drafts only; the user reviews and sends.
+requiredCapabilities:
+  - connector:google
 ---
 
 # Draft email in the user's voice

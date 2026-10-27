@@ -87,6 +87,61 @@ export function brokerRequestHeaders(
   return { ...headers, ...injected };
 }
 
+export function serviceRequestHeaders(
+  rec: DecryptedServiceCredential,
+  claims: CapabilityClaims,
+  caller: Record<string, string>,
+): Record<string, string> {
+  const headers = brokerRequestHeaders(rec, caller);
+  if (rec.injection?.actor) headers["x-qm-actor"] = claims.actorId;
+  return headers;
+}
+
+export interface BrokerDenial {
+  status: number;
+  code: string;
+  message: string;
+}
+
+export async function serviceCallDenial(
+  rec: DecryptedServiceCredential,
+  claims: CapabilityClaims,
+  call: { slug: string; method: string; pathname: string; usage: CredentialUsageSink | undefined },
+): Promise<BrokerDenial | undefined> {
+  if (credentialInjectionError(rec.injection))
+    return { status: 503, code: "invalid_injection", message: "credential injection configuration is invalid" };
+  if (rec.injection?.actor && (typeof claims.actorId !== "string" || !/^[\x21-\x7e]{1,256}$/.test(claims.actorId)))
+    return { status: 403, code: "invalid_actor", message: "actor identity cannot be attested" };
+  if (!brokerMethodAllowed(rec, call.method))
+    return {
+      status: 403,
+      code: "method_not_allowed",
+      message: `method ${call.method} is not allowed for this credential`,
+    };
+  if (!brokerPathAllowed(call.pathname, rec.allowedPathPrefixes))
+    return { status: 403, code: "path_not_allowed", message: "url path is not in the credential's allowlist" };
+  if (rec.maxRequestsPerDay === undefined) return undefined;
+  let admitted: boolean;
+  try {
+    if (!call.usage) throw new Error("no usage ledger");
+    admitted = await call.usage.admitDailyCall(call.slug, rec.maxRequestsPerDay);
+  } catch (err) {
+    console.error(`[credential-broker] daily cap check failed for ${call.slug}:`, errMessage(err));
+    return {
+      status: 503,
+      code: "daily_cap_unavailable",
+      message: "the credential's daily request cap could not be checked",
+    };
+  }
+  return admitted
+    ? undefined
+    : {
+        status: 429,
+        code: "daily_cap_reached",
+        message: `this credential has used its ${rec.maxRequestsPerDay} requests for today (UTC); it resets at 00:00 UTC`,
+      };
+}
+
 export function upstreamFailureCode(error: unknown): string {
   for (let cause = error; cause instanceof Error; cause = cause.cause) {
     const code = (cause as { code?: unknown }).code;
@@ -189,15 +244,9 @@ export async function brokerCredentialCall(
   const grant = await grantedCredential(claims, slug, reader, orgScopeId);
   if (!grant.rec) return deny(grant.status, grant.code, grant.message, grant.host);
   const { rec } = grant;
-  if (credentialInjectionError(rec.injection)) {
-    return deny(503, "invalid_injection", "credential injection configuration is invalid", rec.host);
-  }
   const callerHeaders = Object.entries(isObj(body.headers) ? body.headers : {});
   if (callerHeaders.some(([key]) => key.toLowerCase() === "x-qm-actor")) {
     return deny(400, "reserved_header", "x-qm-actor is set only by the broker", rec.host);
-  }
-  if (rec.injection?.actor && (typeof claims.actorId !== "string" || !/^[\x21-\x7e]{1,256}$/.test(claims.actorId))) {
-    return deny(403, "invalid_actor", "actor identity cannot be attested", rec.host);
   }
   let parsed: URL;
   try {
@@ -218,35 +267,13 @@ export async function brokerCredentialCall(
   if (rec.injection?.actor && parsed.port) {
     return deny(403, "port_not_allowed", "actor-attested credentials require standard HTTPS", rec.host);
   }
-  if (!brokerMethodAllowed(rec, method))
-    return deny(403, "method_not_allowed", `method ${method} is not allowed for this credential`, rec.host);
-  if (!brokerPathAllowed(parsed.pathname, rec.allowedPathPrefixes)) {
-    return deny(403, "path_not_allowed", "url path is not in the credential's allowlist", rec.host);
-  }
-
-  if (rec.maxRequestsPerDay !== undefined) {
-    let admitted: boolean;
-    try {
-      if (!opts.usage) throw new Error("no usage ledger");
-      admitted = await opts.usage.admitDailyCall(slug, rec.maxRequestsPerDay);
-    } catch (err) {
-      console.error(`[credential-broker] daily cap check failed for ${slug}:`, errMessage(err));
-      return deny(503, "daily_cap_unavailable", "the credential's daily request cap could not be checked", rec.host);
-    }
-    if (!admitted)
-      return deny(
-        429,
-        "daily_cap_reached",
-        `this credential has used its ${rec.maxRequestsPerDay} requests for today (UTC); it resets at 00:00 UTC`,
-        rec.host,
-      );
-  }
+  const denial = await serviceCallDenial(rec, claims, { slug, method, pathname: parsed.pathname, usage: opts.usage });
+  if (denial) return deny(denial.status, denial.code, denial.message, rec.host);
 
   const caller: Record<string, string> = {};
   for (const [k, v] of callerHeaders)
     if (typeof v === "string" && ALLOWED_CALLER_HEADERS.has(k.toLowerCase())) caller[k] = v;
-  const headers = brokerRequestHeaders(rec, caller);
-  if (rec.injection?.actor) headers["x-qm-actor"] = claims.actorId;
+  const headers = serviceRequestHeaders(rec, claims, caller);
 
   let resp: BrokerFetchResponse;
   try {

@@ -29,6 +29,8 @@ for (const b of backends()) {
     assert.equal(live.length, 1);
     assert.equal(live[0]!.processId, id(1));
     assert.equal((await reg.liveByScope("personal:U2")).length, 0);
+    assert.equal(await reg.hasLive("sandbox-1"), true);
+    assert.equal(await reg.hasLive("sandbox-2"), false);
   });
 
   test(`[${b.name}] expired running sessions are not live; listExpired surfaces them WITHOUT flipping status`, async () => {
@@ -42,6 +44,7 @@ for (const b of backends()) {
       ttlMs: -1,
     });
     assert.equal((await reg.liveByScope("s")).length, 0, "an expired session is not live");
+    assert.equal(await reg.hasLive("sandbox-1"), false);
 
     const expired = await reg.listExpired();
     assert.equal(expired.length, 1);

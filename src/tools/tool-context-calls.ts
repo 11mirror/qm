@@ -227,7 +227,7 @@ export function surfaceOps(deps: ToolContextDeps, { surfaceOp }: Pick<ReturnType
     whatsNew: (opts) => surfaceOp((s) => s.whatsNew(opts)),
     search: (query, opts) => surfaceOp((s) => s.search(query, opts)),
     readMembers: () => surfaceOp((s) => s.readMembers()),
-    readFile: (ref) => surfaceOp((s) => s.readFile(ref)),
+    readFile: (ref, offset) => surfaceOp((s) => s.readFile(ref, offset)),
     getChannelBehavior: () => surfaceOp((s) => s.getChannelBehavior()),
     setChannelBehavior: (bots, ambientEnabled) => surfaceOp((s) => s.setChannelBehavior(bots, ambientEnabled)),
     attach: (files, sandboxId) =>

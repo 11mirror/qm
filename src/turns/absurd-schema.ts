@@ -4,7 +4,6 @@ import { tenant } from "../tenant.ts";
 
 export const TURN_QUEUES = ["turns_people", "turns_delegated", "turns_background"] as const;
 export type TurnQueue = (typeof TURN_QUEUES)[number];
-/** Background jobs (cron fires) that are not conversation turns. */
 export const JOB_QUEUE = "jobs";
 export type AbsurdQueue = TurnQueue | typeof JOB_QUEUE;
 export const ABSURD_QUEUES: readonly AbsurdQueue[] = [...TURN_QUEUES, JOB_QUEUE];

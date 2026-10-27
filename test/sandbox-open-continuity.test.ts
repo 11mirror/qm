@@ -95,7 +95,9 @@ function fixture(
     deps: {
       sandbox,
       sandboxResources: resources,
-      processes: { listLive: async () => state.liveJobs },
+      processes: {
+        hasLive: async (sandboxId: string) => state.liveJobs.some((job) => job.sandboxId === sandboxId),
+      },
       config,
       isCurrentSharedScopeMember: async () => state.member,
     },

@@ -334,9 +334,9 @@ export async function finishSystemPrompt(
   if (deps.signingSecret && deps.apiBaseUrl && (deps.crons || deps.webhooks || deps.monitors)) {
     const nowMs = Date.now();
     const obligations = await Promise.all([
-      deps.crons?.list() ?? [],
-      deps.webhooks?.list() ?? [],
-      deps.monitors?.enabled() ?? [],
+      deps.crons?.byOwner(scopeId) ?? [],
+      deps.webhooks?.byOwner(scopeId) ?? [],
+      deps.monitors?.byOwner(scopeId) ?? [],
     ])
       .then(([crons, hooks, mons]) =>
         renderStandingObligations(
@@ -350,7 +350,7 @@ export async function finishSystemPrompt(
                 (c.schedule.firstFireAt ?? c.createdAt) > nowMs),
           ),
           hooks.filter((w) => w.enabled && w.ownerScopeId === scopeId),
-          mons.filter((m) => m.ownerScopeId === scopeId && m.expiresAt > nowMs),
+          mons.filter((m) => m.enabled && m.ownerScopeId === scopeId && m.expiresAt > nowMs),
           turnTimezone,
         ),
       )

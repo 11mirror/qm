@@ -267,37 +267,42 @@ test("an attached file is recorded in the attach tool result", async () => {
   assert.equal(files[0]!.artifactId, t1.attachments![0]!.artifactId);
 });
 
-test("turn-private transfer files are removed after staging", async () => {
-  const { app, sandbox, blobTransfer } = freshApp();
-  const blob = await blobTransfer.put(Buffer.from("inbound"));
-  let usedHandle: Parameters<typeof sandbox.listDir>[0] | undefined;
-  let cleanupAttempts = 0;
-  const removeDir = sandbox.removeDir.bind(sandbox);
-  sandbox.removeDir = async (handle, path) => {
-    if (/^\.agent-turn\/[a-f0-9]{24}\/[a-z0-9]+-[a-f0-9]{24}$/.test(path) && ++cleanupAttempts < 3) {
-      throw new Error("transient cleanup failure");
-    }
-    return removeDir(handle, path);
-  };
-  const run = sandbox.run.bind(sandbox);
-  sandbox.run = async (handle, command, opts) => {
-    usedHandle = handle;
-    return run(handle, command, opts);
-  };
+test("turn-private transfer files are removed after staging, and a failed removal is reported", async () => {
+  for (const fail of [false, true]) {
+    const { app, sandbox, blobTransfer, errors } = freshApp();
+    const blob = await blobTransfer.put(Buffer.from("inbound"));
+    let usedHandle: Parameters<typeof sandbox.listDir>[0] | undefined;
+    let cleanupAttempts = 0;
+    const removeDir = sandbox.removeDir.bind(sandbox);
+    sandbox.removeDir = async (handle, path) => {
+      if (/^\.agent-turn\/[a-f0-9]{24}\/[a-z0-9]+-[a-f0-9]{24}$/.test(path)) {
+        cleanupAttempts++;
+        if (fail) throw new Error("cleanup failure");
+      }
+      return removeDir(handle, path);
+    };
+    const run = sandbox.run.bind(sandbox);
+    sandbox.run = async (handle, command, opts) => {
+      usedHandle = handle;
+      return run(handle, command, opts);
+    };
 
-  const result = await app.turn(
-    dm("!writeattach result.txt outbound", {
-      attachments: [{ name: "input.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
-    }),
-  );
+    const result = await app.turn(
+      dm("!writeattach result.txt outbound", {
+        attachments: [{ name: "input.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
+      }),
+    );
 
-  assert.deepEqual(
-    result.attachments?.map((a) => a.name),
-    ["result.txt"],
-  );
-  assert.ok(usedHandle);
-  assert.equal(cleanupAttempts, 3);
-  assert.deepEqual(await sandbox.listDir(usedHandle, TURN_FILES_DIR), []);
+    assert.deepEqual(
+      result.attachments?.map((a) => a.name),
+      ["result.txt"],
+    );
+    assert.ok(usedHandle);
+    assert.equal(cleanupAttempts, 1);
+    const reported = (await errors.list()).filter((e) => e.code === "turn_files_cleanup_failed");
+    assert.equal(reported.length, fail ? 1 : 0);
+    if (!fail) assert.deepEqual(await sandbox.listDir(usedHandle, TURN_FILES_DIR), []);
+  }
 });
 
 test("a later turn removes same-conversation and expired transfer files", async () => {

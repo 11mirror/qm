@@ -2,6 +2,7 @@
 name: zoom
 description: Find, create, reschedule, and cancel the user's Zoom meetings through per-user OAuth.
 requiredCapabilities:
+  - connector:zoom
   - egress:api.zoom.us
 ---
 

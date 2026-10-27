@@ -224,10 +224,6 @@ function createFileRegistration(ctx: TurnCtx, session: Session): ArtifactRegistr
           ownerId: actor.id,
         }).grantees
       : [];
-  // Files posted into a group/DM conversation (e.g. a project web session) get no
-  // per-member grants from defaultPublishAudience ("auto-share deferred"), which left
-  // other members unable to load them. Grant the conversation scope itself read access
-  // so everyone party to the conversation can fetch what was posted into it.
   const fileOwnerScopeId = external ? scopeId : toScopeId("personal", actor.id);
   const fileGrantees = [...fileAudience];
   if ((conversation.kind === "group" || conversation.kind === "dm") && scopeId !== fileOwnerScopeId) {
@@ -337,7 +333,6 @@ function sessionHistoryTools(ctx: TurnCtx, session: Session) {
     open: async (seq: number) => {
       const item = await deps.sessions.getItem(session.id, seq);
       if (!item) return null;
-      // Only a compaction summary's visibility depends on the rest of the transcript (just the latest shows).
       const view = item.kind === "ContextCompaction" ? await historyView() : filterHistory(forSearchView([item]));
       return openSessionItem(view, seq);
     },

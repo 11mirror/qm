@@ -45,6 +45,7 @@ export interface ProcessRegistry {
   listByScope(scopeId: string): Promise<ProcessRecord[]>;
   liveByScope(scopeId: string, now?: number): Promise<ProcessRecord[]>;
   listLive(now?: number): Promise<ProcessRecord[]>;
+  hasLive(sandboxId: string, now?: number): Promise<boolean>;
   markStatus(processId: string, status: ProcessStatus): Promise<boolean>;
   credentialFiles(processId: string): Promise<ProcessCredentialFiles | null>;
   setCredentialFiles(processId: string, files: ProcessCredentialFiles | null): Promise<void>;
@@ -139,6 +140,13 @@ export function createPostgresProcessRegistry(connectionString: string): Process
     async listLive(now = Date.now()) {
       const rows = await q("SELECT * FROM process_sessions WHERE status = 'running' AND expires_at > $1", [now]);
       return rows.map(pgRowToRecord);
+    },
+    async hasLive(sandboxId, now = Date.now()) {
+      const rows = await q(
+        "SELECT 1 FROM process_sessions WHERE sandbox_id = $1 AND status = 'running' AND expires_at > $2 LIMIT 1",
+        [sandboxId, now],
+      );
+      return rows.length > 0;
     },
     async markStatus(processId, status) {
       const updated = await q("UPDATE process_sessions SET status = $1 WHERE process_id = $2 RETURNING process_id", [

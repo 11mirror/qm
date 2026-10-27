@@ -1468,7 +1468,7 @@ export function buildApp(
       : {}),
   });
   const environments = createPostgresEnvironmentStore(databaseUrl);
-  const monitors = createMonitorStore(artifactMap<Monitor>("monitors"));
+  const monitors = createMonitorStore(artifactMap<Monitor>("monitors", ["ownerScopeId"]));
   const cronOwnerCache = new Map<string, string>();
   const publishInboxEvent = (event: LedgerEvent): void => {
     void (async () => {
@@ -1488,7 +1488,7 @@ export function buildApp(
     if (await inboxItems.recordEvent(item, event)) await scheduler.runNow(item.cronId);
   };
   const cronFires = createPostgresCronFireStore(databaseUrl);
-  const cronsBase = createCronStore(artifactMap<Cron>("crons"), {
+  const cronsBase = createCronStore(artifactMap<Cron>("crons", ["ownerScopeId"]), {
     staleRunningMs: RUN_MAX_AGE_MS,
     fires: cronFires,
   });
@@ -1542,7 +1542,10 @@ export function buildApp(
       "DO $$ BEGIN IF to_regclass('feature_flags') IS NOT NULL THEN DELETE FROM feature_flags WHERE id = 'swarms'; END IF; END $$",
     ],
   });
-  const webhooks = createWebhookStore(artifactMap<Webhook>("webhooks"), artifactMap<WebhookHistory>("webhook_history"));
+  const webhooks = createWebhookStore(
+    artifactMap<Webhook>("webhooks", ["ownerScopeId"]),
+    artifactMap<WebhookHistory>("webhook_history"),
+  );
   const webUiBase = (config.slack?.webUiPublicUrl ?? config.publicWebUrl)?.replace(/\/+$/, "");
   const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), outbound, {
     surfaces: chatSurfaces,

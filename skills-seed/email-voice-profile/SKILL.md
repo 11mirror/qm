@@ -1,6 +1,8 @@
 ---
 name: email-voice-profile
 description: Build (or refresh) a voice profile of how the user writes email, from their own sent Gmail. The profile is what email-draft-in-voice consumes to ghostwrite email that sounds like them.
+requiredCapabilities:
+  - connector:google
 ---
 
 # Email voice profile

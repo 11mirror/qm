@@ -5,7 +5,6 @@ import { scopeId, type ScopeId } from "./types.ts";
 import { reportFailure } from "./util/errors.ts";
 
 export interface Tenant {
-  /** Row-level tenant id (UUID) in the shared database; undefined means the database's own singleton tenant. */
   readonly id?: string;
   readonly slug?: string;
   readonly orgId: string;

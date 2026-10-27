@@ -371,6 +371,8 @@ interface SurfaceMembersResult {
 interface SurfaceFileResult {
   ok: boolean;
   content?: string;
+  nextOffset?: number;
+  totalChars?: number;
   name?: string;
   sizeBytes?: number;
   contentType?: string;
@@ -400,7 +402,7 @@ export interface SurfaceToolDeps {
   whatsNew(opts?: { since?: string }): Promise<SurfaceWhatsNewResult>;
   search(query: string, opts?: SurfaceSearchToolOpts): Promise<SurfaceSearchResult>;
   readMembers(): Promise<SurfaceMembersResult>;
-  readFile(ref: string): Promise<SurfaceFileResult>;
+  readFile(ref: string, offset?: number): Promise<SurfaceFileResult>;
   getChannelBehavior(): Promise<ChannelBehaviorResult>;
   setChannelBehavior(bots?: Record<string, BotPolicy>, ambientEnabled?: boolean | null): Promise<ChannelBehaviorResult>;
 }

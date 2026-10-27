@@ -136,8 +136,6 @@ export interface OrchestratorDeps {
   apiBaseUrl?: string;
   sandboxModels?: boolean;
   publicWebUrl?: string;
-  /** The public base for an inbound webhook URL (PUBLIC_WEB_URL ?? api url) — what the webhook
-   *  tool hands the user to point the sender at; matches the HTTP webhook route's base exactly. */
   webhookPublicUrl?: string;
   deploy: DeployService;
   acl: AclStore;
@@ -173,7 +171,6 @@ export interface OrchestratorDeps {
   connectorTokens?: ConnectorTokenStore;
   connectorStatusCache?: ConnectorStatusCache;
   resolveConnectorClient?: OAuthClientResolver;
-  scratchExec?: boolean;
   featureFlags?: FeatureFlagStore;
   installSharedCanvas?: (
     actorId: string,
@@ -227,7 +224,6 @@ interface SurfaceSearchStoreHit {
 
 export interface Orchestrator {
   handleTurn(input: OrchestratorInput): Promise<TurnResult>;
-  /** Observe a mid-turn message with the security screen; never blocks the steer. */
   observeSecuritySteer(input: {
     payload: string;
     actor: Principal;

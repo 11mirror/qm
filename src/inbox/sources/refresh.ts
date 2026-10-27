@@ -1,5 +1,6 @@
 import type { InboxItem } from "../../types.ts";
 import type { InboxLedger } from "../ledger.ts";
+import type { ConnectorTokenSource } from "./adapter.ts";
 
 export interface RefreshKit {
   items: Pick<InboxLedger, "annotate">;
@@ -12,7 +13,7 @@ export interface RefreshKit {
 }
 
 export interface SourceRefresher {
-  connectorHost: string;
+  connectorToken(tokens: ConnectorTokenSource, owner: string, item: InboxItem): Promise<string | null>;
   connectorName: string;
   refresh(owner: string, item: InboxItem, connectorToken: () => Promise<string>): Promise<void>;
   refreshAvatars?(owner: string, item: InboxItem): Promise<void>;

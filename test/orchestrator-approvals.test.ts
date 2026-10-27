@@ -435,6 +435,7 @@ test("an enforced proxy outage fails open and audits the configured provider", a
     (entry) => entry.action === "security_screen.classify" && entry.status === "error",
   );
   assert.equal(event?.resource, "example-screen");
+  assert.equal(JSON.parse(event!.detail!).error, "proxy unavailable");
   assert.equal(built.modelGateway.audit().filter((rec) => rec.model === "mock-security").length, 0);
 });
 

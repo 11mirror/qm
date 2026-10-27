@@ -49,6 +49,7 @@ export interface CronStore {
   create(input: CreateCronInput): Promise<Cron>;
   get(id: string): Promise<Cron | null>;
   list(): Promise<Cron[]>;
+  byOwner(scopeId: string): Promise<Cron[]>;
   update(id: string, patch: CronPatch): Promise<Cron | null>;
   delete(id: string): Promise<void>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
@@ -127,6 +128,7 @@ export function createCronStore(
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
+    byOwner: (scopeId) => backing.select({ where: { field: "ownerScopeId", anyOfFold: [scopeId] } }),
     async update(id, patch) {
       const before = await backing.get(id);
       if (!before) return null;

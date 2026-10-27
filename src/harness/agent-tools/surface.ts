@@ -93,6 +93,12 @@ function surfaceParams(surfaceName: string) {
           "read_thread: how many recent messages to fetch. search: max hits to return (default: a small window).",
       }),
     ),
+    offset: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        description: "read_file: character offset to continue from (the offset an earlier read_file said to use).",
+      }),
+    ),
     query: optionalString("search: words to look for in this place's messages."),
     source: Type.Optional(
       Type.Union([Type.Literal("mirror"), Type.Literal("slack")], {
@@ -291,8 +297,13 @@ async function surfaceReadFile(
 ) {
   const { recordCall, recordExternalResult, recordText } = kit;
   if (params.ref === undefined) return missing("ref");
-  await recordCall(callId, { tool: surfaceName, action: "read_file", ref: params.ref });
-  const r = await tc.readFile(params.ref);
+  await recordCall(callId, {
+    tool: surfaceName,
+    action: "read_file",
+    ref: params.ref,
+    ...(params.offset !== undefined ? { offset: params.offset } : {}),
+  });
+  const r = await (params.offset !== undefined ? tc.readFile(params.ref, params.offset) : tc.readFile(params.ref));
   if (!r.ok) return couldnt("read that file", r.message);
   if (r.content !== undefined) {
     return recordExternalResult(
@@ -303,8 +314,13 @@ async function surfaceReadFile(
         ok: true,
         ...(r.name ? { name: r.name } : {}),
         ...(r.sizeBytes !== undefined ? { sizeBytes: r.sizeBytes } : {}),
+        ...(r.nextOffset !== undefined ? { nextOffset: r.nextOffset } : {}),
       },
-      text(r.content),
+      text(
+        r.nextOffset !== undefined
+          ? `${r.content}\n[showing up to character ${r.nextOffset} of ${r.totalChars} — read_file again with offset ${r.nextOffset} for more]`
+          : r.content,
+      ),
       "surface file",
     );
   }
