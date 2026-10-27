@@ -2,7 +2,6 @@ import type { CapabilityClaims } from "../../../src/auth/capability-token.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresDirectoryStore } from "../../../src/directory/postgres-directory-store.ts";
-import { testDatabaseUrl } from "../../support/test-database.ts";
 import { slackReplyFixture } from "../../support/composio-routes.ts";
 import { testQuery } from "../../support/test-database.ts";
 
@@ -123,7 +122,7 @@ async function nativeSlackFixture(linked = true) {
   await testQuery(f.url, `DELETE FROM slack_accounts`);
   f.deps.connectorTokens = f.deps.keychain;
   f.deps.oauthEnv = { SLACK_OAUTH_CLIENT_ID: "native-client", SLACK_OAUTH_CLIENT_SECRET: "native-secret" };
-  f.deps.directory = createPostgresDirectoryStore(testDatabaseUrl());
+  f.deps.directory = createPostgresDirectoryStore(f.url);
   await f.deps.directory.replace([{ principalId: "alice", slackId: "U123", displayName: "Alice", type: "internal" }]);
   f.deps.slackEnvBotToken = "workspace-bot";
   if (linked) await f.deps.connectorTokens!.setConnectorToken("slack.com", "alice", { accessToken: "alice-user" });

@@ -2,12 +2,11 @@ import "../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { collectSharedBundle, type FetchedRepo } from "../../src/skills/ingest.ts";
-import { computeBundleHash, createSkillBundleStore, type SkillBundle } from "../../src/skills/skill-bundle-store.ts";
+import { computeBundleHash, type SkillBundle } from "../../src/skills/skill-bundle-store.ts";
 import type { SkillFile } from "../../src/skills/skill-store.ts";
 import type { TurnRequest } from "../../src/types.ts";
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
-import { testDatabaseUrl } from "../support/test-database.ts";
 
 function repo(files: Array<[string, string, boolean?]>): FetchedRepo {
   return { commit: "c1", files: files.map(([path, text, binary]) => ({ path, text, binary: binary ?? false })) };
@@ -106,16 +105,6 @@ test("computeBundleHash is stable under reordering and busts on content change",
     computeBundleHash([a, { ...b, content: "changed" }]),
     "content change busts",
   );
-});
-
-test("SkillBundleStore get/put/delete/list round-trips by packId", async () => {
-  const store = createSkillBundleStore(testDatabaseUrl());
-  const files: SkillFile[] = [{ path: "lib/x.mjs", content: "1" }];
-  await store.put({ packId: "s1", commit: "c1", files, hash: computeBundleHash(files) });
-  assert.equal((await store.get("s1"))?.commit, "c1");
-  assert.equal((await store.list()).length, 1);
-  await store.delete("s1");
-  assert.equal(await store.get("s1"), null);
 });
 
 async function fixture(t: TestContext) {

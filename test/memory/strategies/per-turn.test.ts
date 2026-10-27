@@ -184,6 +184,13 @@ const GROUP = scopeId("group", "G9");
 const DM = scopeId("personal", ACTOR);
 const PERSONAL = scopeId("personal", ACTOR);
 
+function fresh(opts: { captureQuietMs?: number; captureMaxTurns?: number } = {}) {
+  const databaseUrl = testDatabaseUrl();
+  const memory = createPostgresMemoryService(databaseUrl);
+  const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory, databaseUrl, ...opts });
+  return { databaseUrl, memory, strategy };
+}
+
 const INPUT = "remember that my task list is ship the launch";
 const REPLY = "Noted.";
 
@@ -198,10 +205,9 @@ async function flushed(read: () => Promise<string>, patterns: RegExp[]): Promise
 
 for (const origin of [CHANNEL, GROUP, DM]) {
   test(`automatic capture writes only to ${origin} and leaves existing notebooks untouched`, async () => {
-    const { memory } = freshMemory();
+    const { memory, strategy } = fresh();
     await memory.capture(PERSONAL, ["Existing fact"], Date.now());
     const before = await memory.read(PERSONAL);
-    const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory });
     await strategy.onTurnEnd!({ scopeId: origin, input: INPUT, reply: REPLY, actorId: ACTOR });
     assert.match(await memory.read(origin), /task list is ship the launch/);
     if (origin !== PERSONAL) assert.equal(await memory.read(PERSONAL), before);
@@ -210,8 +216,7 @@ for (const origin of [CHANNEL, GROUP, DM]) {
 }
 
 test("redirected capture writes only to the resolved target, not the speaker's notebook", async () => {
-  const { memory } = freshMemory();
-  const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory });
+  const { memory, strategy } = fresh();
   await strategy.onTurnEnd!({
     scopeId: "personal:U2",
     conversationScopeId: CHANNEL,
@@ -225,13 +230,7 @@ test("redirected capture writes only to the resolved target, not the speaker's n
 });
 
 test("burst debounce: turns within the quiet window flush as one extraction after it elapses", async () => {
-  const { memory } = freshMemory();
-  const strategy = createPerTurnStrategy({
-    harness: createMockHarness().models,
-    memory,
-    captureQuietMs: 30,
-    databaseUrl: testDatabaseUrl(),
-  });
+  const { memory, strategy } = fresh({ captureQuietMs: 30 });
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact one is alpha", reply: REPLY, actorId: ACTOR });
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact two is beta", reply: REPLY, actorId: ACTOR });
 
@@ -242,14 +241,7 @@ test("burst debounce: turns within the quiet window flush as one extraction afte
 });
 
 test("burst debounce: a full burst flushes immediately at captureMaxTurns", async () => {
-  const { memory } = freshMemory();
-  const strategy = createPerTurnStrategy({
-    harness: createMockHarness().models,
-    memory,
-    captureQuietMs: 60_000,
-    databaseUrl: testDatabaseUrl(),
-    captureMaxTurns: 2,
-  });
+  const { memory, strategy } = fresh({ captureQuietMs: 60_000, captureMaxTurns: 2 });
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact one is alpha", reply: REPLY, actorId: ACTOR });
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact two is beta", reply: REPLY, actorId: ACTOR });
 
@@ -259,13 +251,7 @@ test("burst debounce: a full burst flushes immediately at captureMaxTurns", asyn
 });
 
 test("burst debounce: different speakers in one channel keep separate bursts in the channel", async () => {
-  const { memory } = freshMemory();
-  const strategy = createPerTurnStrategy({
-    harness: createMockHarness().models,
-    memory,
-    captureQuietMs: 30,
-    databaseUrl: testDatabaseUrl(),
-  });
+  const { memory, strategy } = fresh({ captureQuietMs: 30 });
   await strategy.onTurnEnd!({
     scopeId: CHANNEL,
     input: "remember that my task list is ship the launch",
@@ -287,8 +273,7 @@ test("burst debounce: different speakers in one channel keep separate bursts in 
 });
 
 test("a channel turn by a system actor captures nothing anywhere", async () => {
-  const { memory } = freshMemory();
-  const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory });
+  const { memory, strategy } = fresh();
   await strategy.onTurnEnd!({ scopeId: CHANNEL, input: INPUT, reply: REPLY, actorId: "system:ambient:acme" });
 
   assert.equal(await memory.read(CHANNEL), "", "origin scope receives nothing");
@@ -300,8 +285,7 @@ test("a channel turn by a system actor captures nothing anywhere", async () => {
 });
 
 test("an autonomous (triggered) channel turn captures nothing, even for a human actor", async () => {
-  const { memory } = freshMemory();
-  const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory });
+  const { memory, strategy } = fresh();
   await strategy.onTurnEnd!({ scopeId: CHANNEL, input: INPUT, reply: REPLY, actorId: ACTOR, autonomous: true });
 
   assert.equal(await memory.read(CHANNEL), "", "origin scope receives nothing on a triggered wake");
@@ -309,8 +293,7 @@ test("an autonomous (triggered) channel turn captures nothing, even for a human 
 });
 
 test("burst debounce: turns appended through two instances flush once, as one extraction", async () => {
-  const { memory } = freshMemory();
-  const databaseUrl = testDatabaseUrl();
+  const { memory, databaseUrl } = fresh();
   const prompts: string[] = [];
   const harness = {
     oneShot: async (_system: string, prompt: string) => {
@@ -329,14 +312,7 @@ test("burst debounce: turns appended through two instances flush once, as one ex
 });
 
 test("burst debounce: the sweep finishes a burst whose instance went away", async () => {
-  const { memory } = freshMemory();
-  const databaseUrl = testDatabaseUrl();
-  const strategy = createPerTurnStrategy({
-    harness: createMockHarness().models,
-    memory,
-    captureQuietMs: 30,
-    databaseUrl,
-  });
+  const { memory, strategy, databaseUrl } = fresh({ captureQuietMs: 30 });
   const { q } = createPgPool(databaseUrl);
   await q(
     `INSERT INTO memory_capture_pending (id, scope_id, conversation_scope_id, actor_id, turns, token, at)

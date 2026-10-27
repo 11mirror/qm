@@ -119,10 +119,11 @@ const GIT_ENV = {
 };
 
 function gitRwFixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
+  const databaseUrl = testDatabaseUrl();
   const deployStore = createDeployStore(
     testDeployBackings({ git: { repoRoot: mkdtempSync(join(tmpdir(), "git-rw-repo-")) } }),
   );
-  const acl: AclStore = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const acl: AclStore = createAclStore(createPostgresGrantStore(databaseUrl));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
@@ -137,16 +138,16 @@ function gitRwFixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
     acl,
     deployDir: mkdtempSync(join(tmpdir(), "git-rw-deploy-")),
   });
-  const identity = createIdentityService(testDatabaseUrl());
+  const identity = createIdentityService(databaseUrl);
   const app = createApp({
     deploy,
     acl,
-    directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    directory: createPostgresDirectoryStore(databaseUrl),
+    sessions: createPostgresSessionStore(databaseUrl),
     identity,
   } as unknown as Parameters<typeof createApp>[0]);
   const server: Server = createServer(app, {
-    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    replayDedupe: createPostgresReplayDedupe(databaseUrl),
     signingSecret: GIT_RW_SECRET,
     identity,
     ...urls,

@@ -148,6 +148,7 @@ test("reachDeployment: a provider without resolveEndpoint returns the frozen sto
 });
 
 function appServingUpstream(upstreamPort: number) {
+  const databaseUrl = testDatabaseUrl();
   const deployStore = createDeployStore(testDeployBackings());
   const deploy = createDeployService({
     ...singleProcessDeps(),
@@ -160,15 +161,15 @@ function appServingUpstream(upstreamPort: number) {
       destroy: async () => {},
     },
     auditLog,
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+    acl: createAclStore(createPostgresGrantStore(databaseUrl)),
     deployDir: mkdtempSync(join(tmpdir(), "subdomain-")),
   });
   const app = createApp({
     deploy,
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-    directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    acl: createAclStore(createPostgresGrantStore(databaseUrl)),
+    directory: createPostgresDirectoryStore(databaseUrl),
+    sessions: createPostgresSessionStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
   } as unknown as Parameters<typeof createApp>[0]);
   return app;
 }
@@ -491,6 +492,7 @@ async function fixture(
   upstreamContentType = "text/html; charset=utf-8",
   upstreamHeaders: Record<string, string> = {},
 ) {
+  const databaseUrl = testDatabaseUrl();
   const upstream = createHttpServer((_req, res) => {
     res.writeHead(200, { "content-type": upstreamContentType, ...upstreamHeaders });
     res.end("UPSTREAM OK");
@@ -509,15 +511,15 @@ async function fixture(
       destroy: async () => {},
     },
     auditLog: deployPathServingAuditLog,
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+    acl: createAclStore(createPostgresGrantStore(databaseUrl)),
     deployDir: mkdtempSync(join(tmpdir(), "path-serving-")),
   });
   const app = createApp({
     deploy,
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-    directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    acl: createAclStore(createPostgresGrantStore(databaseUrl)),
+    directory: createPostgresDirectoryStore(databaseUrl),
+    sessions: createPostgresSessionStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
   } as unknown as Parameters<typeof createApp>[0]);
   await app.deploy({
     ownerScopeId: scopeId("personal", "alice@example.com"),

@@ -46,10 +46,7 @@ Run the thing.
 });
 
 test("installSeedSkills publishes the repository starter catalog into org scope", async () => {
-  const skills = createSkillStore({
-    advisoryLock: testAdvisoryLock(),
-    databaseUrl: testDatabaseUrl(),
-  });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   const org = scopeId("org", "seed-org");
   const result = await installSeedSkills(skills, { dir: "skills-seed", scopeId: org });
   assert.deepEqual(result.skipped, []);
@@ -117,10 +114,7 @@ function writeSeedAsset(dir: string, name: string, relPath: string, content: str
 }
 
 test("installSeedSkills re-seeds a changed manifest over its own prior install, never over another author's", async () => {
-  const skills = createSkillStore({
-    advisoryLock: testAdvisoryLock(),
-    databaseUrl: testDatabaseUrl(),
-  });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   const org = scopeId("org", "default-org");
   const dir = mkdtempSync(join(tmpdir(), "seed-update-"));
   writeSeedSkill(dir, "demo", "old description", "# Demo v1");
@@ -162,10 +156,7 @@ test("installSeedSkills re-seeds a changed manifest over its own prior install, 
 });
 
 test("installSeedSkills leaves an admin-archived catalog skill archived when asked to", async () => {
-  const skills = createSkillStore({
-    advisoryLock: testAdvisoryLock(),
-    databaseUrl: testDatabaseUrl(),
-  });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   const org = scopeId("org", "default-org");
   const dir = mkdtempSync(join(tmpdir(), "seed-archived-"));
   writeSeedSkill(dir, "retired", "old catalog skill", "# Retired v1");
@@ -188,10 +179,7 @@ test("installSeedSkills leaves an admin-archived catalog skill archived when ask
 });
 
 test("concurrent upserts of the same scope+name serialize into one record (no duplicate creates)", async () => {
-  const skills = createSkillStore({
-    advisoryLock: testAdvisoryLock(),
-    databaseUrl: testDatabaseUrl(),
-  });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   const org = scopeId("org", "default-org");
   const upsert = (body: string) =>
     upsertSeedSkill(skills, {
@@ -279,10 +267,7 @@ function fakeSandbox() {
 }
 
 test("a bundled skill round-trips seed → store → materialize, assets land beside SKILL.md", async () => {
-  const skills = createSkillStore({
-    advisoryLock: testAdvisoryLock(),
-    databaseUrl: testDatabaseUrl(),
-  });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   const org = scopeId("org", "default-org");
   const dir = mkdtempSync(join(tmpdir(), "seed-tree-"));
   writeSeedSkill(dir, "tooled", "a skill with helpers", "# Tooled\n\nRun scripts/hello.py.");
@@ -318,10 +303,7 @@ test("safeSkillFilePath rejects traversal / absolute / dot segments", () => {
 });
 
 test("installSeedSkills re-seeds when only a bundled asset changes", async () => {
-  const skills = createSkillStore({
-    advisoryLock: testAdvisoryLock(),
-    databaseUrl: testDatabaseUrl(),
-  });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   const org = scopeId("org", "default-org");
   const dir = mkdtempSync(join(tmpdir(), "seed-asset-change-"));
   writeSeedSkill(dir, "tooled", "helpers", "# Tooled");

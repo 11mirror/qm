@@ -26,11 +26,12 @@ function captureDeps(): { deps: TriggerDeps & { outbound: PostLog }; seen: TurnR
     seen.push(req);
     return { status: "ok", reply: "digest" };
   };
+  const databaseUrl = testDatabaseUrl();
   return {
     deps: {
       outbound: recordingOutbound(),
-      idempotency: createIdempotencyStore(testDatabaseUrl()),
-      identity: createIdentityService(testDatabaseUrl()),
+      idempotency: createIdempotencyStore(databaseUrl),
+      identity: createIdentityService(databaseUrl),
       run,
     },
     seen,

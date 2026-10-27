@@ -27,12 +27,13 @@ const CH = "CBUILT";
 const CH_OTHER = "CSHARED";
 
 async function setup(opts: { withResolver: boolean } = { withResolver: true }) {
+  const databaseUrl = testDatabaseUrl();
   const deployStore = createDeployStore(
     testDeployBackings({ git: { repoRoot: mkdtempSync(join(tmpdir(), "parity-repo-")) } }),
   );
-  const acl: AclStore = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const directory: DirectoryStore = createPostgresDirectoryStore(testDatabaseUrl());
-  const identity = createIdentityService(testDatabaseUrl());
+  const acl: AclStore = createAclStore(createPostgresGrantStore(databaseUrl));
+  const directory: DirectoryStore = createPostgresDirectoryStore(databaseUrl);
+  const identity = createIdentityService(databaseUrl);
   await directory.replaceChannels(
     [
       { channelId: CH, name: "built", isPrivate: true },
@@ -234,12 +235,13 @@ test("failed default grant leaves the app name free for a complete retry", async
 const SECRET = "deploy-createdin-secret".repeat(3);
 
 async function fixture() {
+  const databaseUrl = testDatabaseUrl();
   const deployStore = createDeployStore(
     testDeployBackings({ git: { repoRoot: mkdtempSync(join(tmpdir(), "createdin-repo-")) } }),
   );
-  const acl: AclStore = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const directory: DirectoryStore = createPostgresDirectoryStore(testDatabaseUrl());
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const acl: AclStore = createAclStore(createPostgresGrantStore(databaseUrl));
+  const directory: DirectoryStore = createPostgresDirectoryStore(databaseUrl);
+  const sessions = createPostgresSessionStore(databaseUrl);
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
@@ -261,10 +263,10 @@ async function fixture() {
     acl,
     directory,
     sessions,
-    identity: createIdentityService(testDatabaseUrl()),
+    identity: createIdentityService(databaseUrl),
   } as unknown as Parameters<typeof createApp>[0]);
   const server: Server = createServer(app, {
-    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    replayDedupe: createPostgresReplayDedupe(databaseUrl),
     signingSecret: SECRET,
   });
   server.listen(0);

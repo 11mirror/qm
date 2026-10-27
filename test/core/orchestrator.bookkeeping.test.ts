@@ -57,6 +57,7 @@ function fakeSandbox(): Sandbox {
 }
 
 function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
+  const databaseUrl = testDatabaseUrl();
   const harness = defineHarness({
     async runTurn(turn) {
       await turn.emit({ kind: "UserMessage", text: turn.input });
@@ -67,9 +68,9 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
       return { decision: "auto" as const };
     },
   });
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const auditLog = createPostgresAuditLog(testDatabaseUrl());
+  const sessions = createPostgresSessionStore(databaseUrl);
+  const acl = createAclStore(createPostgresGrantStore(databaseUrl));
+  const auditLog = createPostgresAuditLog(databaseUrl);
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "bookkeeping-")));
   const deploy = createDeployService({
     ...singleProcessDeps(),
@@ -82,17 +83,17 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
   const outbound = recordingOutbound();
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
-    identity: createIdentityService(testDatabaseUrl()),
+    identity: createIdentityService(databaseUrl),
     resolution: createResolutionService(ORG, testConfigStore(ORG), acl),
     sessions,
     workspace,
-    files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
+    files: createPostgresFileArtifactStore(databaseUrl, createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
     modelGateway: createModelGateway(),
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 100, windowMs: 60_000 }),
+    rateLimiter: createPostgresRateLimiter(databaseUrl, { maxPerWindow: 100, windowMs: 60_000 }),
     harness,
-    memory: createPostgresMemoryService(testDatabaseUrl()),
+    memory: createPostgresMemoryService(databaseUrl),
     deploy,
     acl,
     outbound,

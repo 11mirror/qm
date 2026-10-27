@@ -28,9 +28,10 @@ const GATE_SECRET = "gate-secret";
 const PORTAL = "https://portal.example.com";
 
 function appServingUpstream(upstreamPort: number) {
+  const databaseUrl = testDatabaseUrl();
   const deployStore = createDeployStore(testDeployBackings());
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const directory = createPostgresDirectoryStore(testDatabaseUrl());
+  const acl = createAclStore(createPostgresGrantStore(databaseUrl));
+  const directory = createPostgresDirectoryStore(databaseUrl);
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
@@ -51,8 +52,8 @@ function appServingUpstream(upstreamPort: number) {
     deploy,
     acl,
     directory,
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     orgId: "acme",
   } as unknown as Parameters<typeof createApp>[0]);
   return { app, directory, acl };

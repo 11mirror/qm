@@ -100,7 +100,8 @@ test("work phases and approval decisions remain outside the shared message snaps
 });
 
 test("fresh shares freeze messages and authorized attachments with separate audiences", async (t) => {
-  const store = createSessionShareStore(testDatabaseUrl());
+  const databaseUrl = testDatabaseUrl();
+  const store = createSessionShareStore(databaseUrl);
   const bytes = createMemoryDurableByteStore();
   let puts = 0;
   const countedBytes = {

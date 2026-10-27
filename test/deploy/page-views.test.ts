@@ -52,13 +52,14 @@ function get(port: number, path: string, headers: Record<string, string>): Promi
 }
 
 async function harness(log: AppPageViewLog) {
+  const databaseUrl = testDatabaseUrl();
   const upstream = createHttpServer((_req, res) => {
     res.writeHead(200, { "content-type": "text/html" });
     res.end("UPSTREAM OK");
   });
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const acl = createAclStore(createPostgresGrantStore(databaseUrl));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     externalSharingAllowed: async () => true,
@@ -77,9 +78,9 @@ async function harness(log: AppPageViewLog) {
   const app = createApp({
     deploy,
     acl,
-    directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    directory: createPostgresDirectoryStore(databaseUrl),
+    sessions: createPostgresSessionStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
   } as unknown as Parameters<typeof createApp>[0]);
   const deployed = await app.deploy({
     ownerScopeId: scopeId("personal", "alice@example.com"),

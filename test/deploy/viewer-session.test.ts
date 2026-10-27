@@ -144,6 +144,7 @@ function httpPost(
 }
 
 test("subdomain ingress: portal sign-in admits the owner, denies strangers, bounces the signed-out", async () => {
+  const databaseUrl = testDatabaseUrl();
   let upstreamCookie: string | undefined = "unset";
   let upstreamIdentity: string | undefined = "unset";
   let upstreamUrl = "";
@@ -173,16 +174,16 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
       destroy: async () => {},
     },
     auditLog,
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+    acl: createAclStore(createPostgresGrantStore(databaseUrl)),
     deployDir: mkdtempSync(join(tmpdir(), "signin-")),
   });
   const outbound = recordingOutbound();
   const app = createApp({
     deploy,
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-    directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    acl: createAclStore(createPostgresGrantStore(databaseUrl)),
+    directory: createPostgresDirectoryStore(databaseUrl),
+    sessions: createPostgresSessionStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     outbound,
   } as unknown as Parameters<typeof createApp>[0]);
   await app.deploy({
@@ -359,10 +360,11 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
 });
 
 test("org-wide app access admits only signed-in org members", async () => {
+  const databaseUrl = testDatabaseUrl();
   const upstream = createHttpServer((_req, res) => res.end("UPSTREAM OK"));
   upstream.listen(0);
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const identity = createIdentityService(testDatabaseUrl());
+  const acl = createAclStore(createPostgresGrantStore(databaseUrl));
+  const identity = createIdentityService(databaseUrl);
   const deploy = createDeployService({
     ...singleProcessDeps(),
     externalSharingAllowed: async () => false,
@@ -381,8 +383,8 @@ test("org-wide app access admits only signed-in org members", async () => {
   const app = createApp({
     deploy,
     acl,
-    directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    directory: createPostgresDirectoryStore(databaseUrl),
+    sessions: createPostgresSessionStore(databaseUrl),
     identity,
   } as unknown as Parameters<typeof createApp>[0]);
   const d = await app.deploy({
@@ -425,6 +427,7 @@ test("org-wide app access admits only signed-in org members", async () => {
 });
 
 test("subdomain ingress: without the session config the domain has no door — a 503, not a bounce", async () => {
+  const databaseUrl = testDatabaseUrl();
   const deployStore = createDeployStore(testDeployBackings());
   const deploy = createDeployService({
     ...singleProcessDeps(),
@@ -438,15 +441,15 @@ test("subdomain ingress: without the session config the domain has no door — a
       destroy: async () => {},
     },
     auditLog,
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+    acl: createAclStore(createPostgresGrantStore(databaseUrl)),
     deployDir: mkdtempSync(join(tmpdir(), "signin-off-")),
   });
   const app = createApp({
     deploy,
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-    directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    acl: createAclStore(createPostgresGrantStore(databaseUrl)),
+    directory: createPostgresDirectoryStore(databaseUrl),
+    sessions: createPostgresSessionStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
   } as unknown as Parameters<typeof createApp>[0]);
   await app.deploy({
     ownerScopeId: scopeId("personal", "alice@example.com"),

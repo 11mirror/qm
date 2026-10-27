@@ -24,7 +24,7 @@ test("concurrent writes serialize into monotonic durable versions", async () => 
     ...singleProcessDeps(),
     databaseUrl,
     runtime,
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl }),
     scopeId: scopeId("org", "default-org"),
   });
   await store.put({ contract: 1, tools: [tool("v1")], skills: [] }, "one");
@@ -67,10 +67,7 @@ test("two stores serialize the durable head and shared skill projection under on
   };
 
   const databaseUrl = testDatabaseUrl();
-  const skills = createSkillStore({
-    advisoryLock: testAdvisoryLock(),
-    databaseUrl: testDatabaseUrl(),
-  });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl });
   const org = scopeId("org", "default-org");
   const firstRuntime = emptyDeploymentLayer();
   const secondRuntime = emptyDeploymentLayer();
@@ -111,10 +108,7 @@ test("two stores serialize the durable head and shared skill projection under on
 
 test("a failed multi-skill apply rolls every deployment-owned skill back before reporting degraded", async () => {
   const databaseUrl = testDatabaseUrl();
-  const baseSkills = createSkillStore({
-    advisoryLock: testAdvisoryLock(),
-    databaseUrl: testDatabaseUrl(),
-  });
+  const baseSkills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl });
   let failB = false;
   const skills = {
     ...baseSkills,
@@ -174,10 +168,7 @@ test("a failed multi-skill apply rolls every deployment-owned skill back before 
 
 test("applied status detects and repairs deployment-skill drift", async () => {
   const databaseUrl = testDatabaseUrl();
-  const skills = createSkillStore({
-    advisoryLock: testAdvisoryLock(),
-    databaseUrl: testDatabaseUrl(),
-  });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl });
   const org = scopeId("org", "default-org");
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
@@ -207,10 +198,10 @@ test("a later hydrate reconciles a persisted layer audit exactly once", async ()
     ...singleProcessDeps(),
     databaseUrl,
     runtime: emptyDeploymentLayer(),
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl }),
     scopeId: org,
   }).put({ contract: 1, tools: [tool("persisted before crash")], skills: [] }, "source-cli");
-  const audit = createPostgresAuditLog(testDatabaseUrl());
+  const audit = createPostgresAuditLog(databaseUrl);
   const auditPersisted = (stored: StoredDeploymentLayer) =>
     audit.recordOnce!(`deployment-layer:${org}:${stored.version}`, {
       at: stored.updatedAt,
@@ -223,7 +214,7 @@ test("a later hydrate reconciles a persisted layer audit exactly once", async ()
     ...singleProcessDeps(),
     databaseUrl,
     runtime: emptyDeploymentLayer(),
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl }),
     scopeId: org,
     auditPersisted,
   });
@@ -245,7 +236,7 @@ test("a failed audit remains recoverable after a later revision replaces the dur
     ...singleProcessDeps(),
     databaseUrl,
     runtime: emptyDeploymentLayer(),
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl }),
     scopeId: org,
     retryDelaysMs: [],
     auditPersisted: async (record) => {
@@ -269,10 +260,7 @@ test("a failed audit remains recoverable after a later revision replaces the dur
 
 test("a foreign same-name skill rejects the PUT before anything persists", async () => {
   const databaseUrl = testDatabaseUrl();
-  const skills = createSkillStore({
-    advisoryLock: testAdvisoryLock(),
-    databaseUrl: testDatabaseUrl(),
-  });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl });
   const org = scopeId("org", "default-org");
   await skills.create({
     scopeId: org,
@@ -299,7 +287,7 @@ test("deployment skill names cannot contain path separators", async () => {
     ...singleProcessDeps(),
     databaseUrl,
     runtime: emptyDeploymentLayer(),
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl }),
     scopeId: scopeId("org", "default-org"),
   });
   const markdown = (name: string) => `---\nname: ${name}\ndescription: Test.\n---\n${name}\n`;
@@ -320,11 +308,8 @@ test("deployment skill names cannot contain path separators", async () => {
 
 test("a deployment skill cannot materialize over an active pack's shared bundle", async () => {
   const databaseUrl = testDatabaseUrl();
-  const skills = createSkillStore({
-    advisoryLock: testAdvisoryLock(),
-    databaseUrl: testDatabaseUrl(),
-  });
-  const skillBundles = createSkillBundleStore(testDatabaseUrl());
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl });
+  const skillBundles = createSkillBundleStore(databaseUrl);
   const org = scopeId("org", "default-org");
   const packed = await skills.create({
     scopeId: org,
@@ -363,10 +348,7 @@ test("a deployment skill cannot materialize over an active pack's shared bundle"
 
 test("a foreign skill racing after validation reports the revision as persisted and degraded", async () => {
   const databaseUrl = testDatabaseUrl();
-  const baseSkills = createSkillStore({
-    advisoryLock: testAdvisoryLock(),
-    databaseUrl: testDatabaseUrl(),
-  });
+  const baseSkills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl });
   const org = scopeId("org", "default-org");
   const realList = baseSkills.list.bind(baseSkills);
   let calls = 0;
@@ -399,10 +381,7 @@ test("a foreign skill racing after validation reports the revision as persisted 
 
 test("an archived foreign skill does not block the layer; a later live collision leaves the new revision unapplied", async () => {
   const databaseUrl = testDatabaseUrl();
-  const skills = createSkillStore({
-    advisoryLock: testAdvisoryLock(),
-    databaseUrl: testDatabaseUrl(),
-  });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl });
   const org = scopeId("org", "default-org");
   const archived = await skills.create({
     scopeId: org,

@@ -21,7 +21,8 @@ const recipient: Destination = {
 };
 
 async function fixture() {
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const databaseUrl = testDatabaseUrl();
+  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const cron = await crons.create({
     owner: "U_ALICE",
     createdBy: "U_ALICE",
@@ -34,8 +35,8 @@ async function fixture() {
   const requests: TurnRequest[] = [];
   const deps: AskResolutionDeps = {
     outbound,
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     getCron: (id) => crons.get(id),
     run: async (request) => {
       requests.push(request);
@@ -161,7 +162,8 @@ test("cron credential approval resumes a disabled one-shot job in its original f
 });
 
 async function credentialRetryFixture(run: (request: TurnRequest) => Promise<TurnResult>) {
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const databaseUrl = testDatabaseUrl();
+  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const cron = await crons.create({
     owner: "U_ALICE",
     createdBy: "U_ALICE",
@@ -177,7 +179,7 @@ async function credentialRetryFixture(run: (request: TurnRequest) => Promise<Tur
     },
   });
   const outbound = recordingOutbound();
-  const idempotency = createIdempotencyStore(testDatabaseUrl());
+  const idempotency = createIdempotencyStore(databaseUrl);
   const ask: KeychainAsk = {
     id: "retry-ask",
     credentialId: "dummy-credential",
@@ -196,7 +198,7 @@ async function credentialRetryFixture(run: (request: TurnRequest) => Promise<Tur
   const deps: AskResolutionDeps = {
     outbound,
     idempotency,
-    identity: createIdentityService(testDatabaseUrl()),
+    identity: createIdentityService(databaseUrl),
     getCron: (id) => crons.get(id),
     run,
   };

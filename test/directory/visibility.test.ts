@@ -80,10 +80,11 @@ describe("isVisible: the shared action gate", () => {
 });
 
 function triggerDeps(run: (req: TurnRequest) => Promise<TurnResult>): TriggerDeps & { outbound: PostLog } {
+  const databaseUrl = testDatabaseUrl();
   return {
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     run,
     directory: dir(),
   };

@@ -280,10 +280,7 @@ test("visibleFor includes granted skills, shadowed by scope-owned skills of the 
 });
 
 test("a grant redundant with scope visibility does not self-shadow", async () => {
-  const store = createSkillStore({
-    advisoryLock: testAdvisoryLock(),
-    databaseUrl: testDatabaseUrl(),
-  });
+  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   const own = await publishedSkill(store, ERIC, "quickbooks");
 
   const rows = await store.visibleFor([ERIC, ORG], [{ id: own.id, ownerScopeId: ERIC }]);

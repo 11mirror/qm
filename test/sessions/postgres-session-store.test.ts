@@ -568,12 +568,13 @@ const approval = (sessionId: string, actor: string, command: string, blocksInput
 });
 
 test("session approvals are read by session id, never by scanning every approval", async () => {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const databaseUrl = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(databaseUrl);
   const mine = await sessions.getOrCreateByThread("dm:alice:t1", "dm", "personal:alice");
   const other = await sessions.getOrCreateByThread("dm:bob:t1", "dm", "personal:bob");
   await sessions.addParticipant(mine.id, "alice");
   await sessions.addParticipant(mine.id, "bob");
-  const backing = createApprovalRecords(testDatabaseUrl());
+  const backing = createApprovalRecords(databaseUrl);
   await backing.put("a-blocking", approval(mine.id, "alice", "git push --force"));
   await backing.put("a-input", approval(mine.id, "alice", "ask", false));
   await backing.put("b-blocking", approval(other.id, "bob", "rm -rf /"));
@@ -592,7 +593,7 @@ test("session approvals are read by session id, never by scanning every approval
   const app = createApp({
     sessions,
     approvals,
-    identity: createIdentityService(testDatabaseUrl()),
+    identity: createIdentityService(databaseUrl),
   } as unknown as Parameters<typeof createApp>[0]);
 
   const listed = await app.listSessionApprovals(mine.id, "alice");

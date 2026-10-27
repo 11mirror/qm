@@ -30,6 +30,7 @@ import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts"
 const actor: Principal = { id: "U1", type: "internal" };
 
 test("an ambient message whose reply detection fails stays silent and leaves the failure in the error and audit logs", async () => {
+  const databaseUrl = testDatabaseUrl();
   const base = createMockHarness();
   let ran = false;
   const harness: Harness = {
@@ -49,26 +50,26 @@ test("an ambient message whose reply detection fails stays silent and leaves the
     },
   };
   const config = testConfigStore("default-org");
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const auditLog = createPostgresAuditLog(testDatabaseUrl());
-  const errors = createPostgresErrorLog(testDatabaseUrl());
+  const acl = createAclStore(createPostgresGrantStore(databaseUrl));
+  const auditLog = createPostgresAuditLog(databaseUrl);
+  const errors = createPostgresErrorLog(databaseUrl);
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "rdf-")));
   const orch = createOrchestrator({
     ...singleProcessDeps(),
-    identity: createIdentityService(testDatabaseUrl()),
+    identity: createIdentityService(databaseUrl),
     resolution: createResolutionService("default-org", config, acl),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(databaseUrl),
     workspace,
-    files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
+    files: createPostgresFileArtifactStore(databaseUrl, createMemoryDurableByteStore()),
     sandbox: {
       profile: { backend: "fake", writablePersistence: "resident_disk", processSessions: false },
     } as Sandbox,
     modelGateway: createModelGateway(),
     auditLog,
     errors,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 1000, windowMs: 60_000 }),
+    rateLimiter: createPostgresRateLimiter(databaseUrl, { maxPerWindow: 1000, windowMs: 60_000 }),
     harness,
-    memory: createPostgresMemoryService(testDatabaseUrl()),
+    memory: createPostgresMemoryService(databaseUrl),
     deploy: createDeployService({
       ...singleProcessDeps(),
       deployStore: createDeployStore(testDeployBackings()),
