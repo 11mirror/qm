@@ -8,7 +8,14 @@ import pg from "pg";
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the harness choice migration test";
 const exec = promisify(execFile);
-const JSON_TABLES = ["base_model_configs", "approved_harness_configs", "auto_flagger_configs", "crons", "swarms"];
+const JSON_TABLES = [
+  "base_model_configs",
+  "approved_harness_configs",
+  "auto_flagger_configs",
+  "crons",
+  "swarms",
+  "feature_flags",
+];
 
 async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>): Promise<void> {
   const parent = new pg.Pool({ connectionString: databaseUrl });
@@ -49,8 +56,9 @@ test("stored harness choices are dropped while their runtime selections stay rec
   await withDatabase(async (url, admin) => {
     await migrate(url);
     await admin.query(
-      "DELETE FROM qm_schema_migrations WHERE id IN ('runtime/0002-drop-harness-choice', 'runtime/0003-promote-legacy-base-models', 'durable-map/swarms/0002-drop')",
+      "DELETE FROM qm_schema_migrations WHERE id IN ('runtime/0002-drop-harness-choice', 'runtime/0003-promote-legacy-base-models', 'durable-map/swarms/0002-drop', 'feature-flags/store/0001-typed')",
     );
+    await admin.query("DROP TABLE feature_flags");
     for (const table of JSON_TABLES)
       await admin.query(`CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`);
     const insert = (table: string, id: string, json: unknown) =>
@@ -73,6 +81,7 @@ test("stored harness choices are dropped while their runtime selections stay rec
     await insert("crons", "c2", { id: "c2", runtime: null });
     await insert("swarms", "s1", { id: "s1", template: { harness: "claude", model: "m" } });
     await insert("swarms", "s2", { id: "s2", template: { model: "m" } });
+    await insert("feature_flags", "swarms", { featureName: "swarms", enabledScopes: [], updatedAt: 1, updatedBy: "a" });
 
     await migrate(url);
 
@@ -102,5 +111,6 @@ test("stored harness choices are dropped while their runtime selections stay rec
     assert.deepEqual(crons.c1?.runtime, { modelId: "m" });
     assert.equal(crons.c2?.runtime, null);
     assert.equal((await admin.query("SELECT to_regclass('swarms') AS t")).rows[0].t, "swarms");
+    assert.equal((await admin.query("SELECT count(*)::int AS n FROM feature_flags")).rows[0].n, 0);
   });
 });
