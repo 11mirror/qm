@@ -3,6 +3,7 @@ import type { FilesModule } from "./files.ts";
 import type { DeploymentLayerModule } from "./deployment-layer.ts";
 import type { Head } from "./late.ts";
 import { tenantConfig } from "../tenants/tenant-config.ts";
+import { perTenant } from "../tenant.ts";
 import { tenantSecretKey } from "../credentials/tenant-secret-key.ts";
 import { createEnvSecretSource } from "../credentials/secret-source.ts";
 import { type OAuthClientResolver, withPublicOAuthClients, makeRefresh } from "../connectors/oauth.ts";
@@ -121,9 +122,12 @@ export function buildCredentials(deps: CredentialsInputs) {
   const oauthFlows: OAuthFlowStore = createOAuthFlowStore(databaseUrl);
   const secretDrops: SecretDropStore = createSecretDropStore(databaseUrl);
   const modelGateway = createModelGateway();
-  let started: { ready: Promise<void>; skillsReady: Promise<void> } | undefined;
+  const started = perTenant(() => ({
+    at: undefined as { ready: Promise<void>; skillsReady: Promise<void> } | undefined,
+  }));
   const startOnce = () => {
-    if (started) return started;
+    const tenantStart = started();
+    if (tenantStart.at) return tenantStart.at;
     const layerReady = deploymentLayerStore.hydrate();
     const layerSettled = layerReady.then(() => undefined, reportFailureAs("startup: deployment layer", undefined));
     const skillsReady = config.seedSkills
@@ -132,15 +136,16 @@ export function buildCredentials(deps: CredentialsInputs) {
           layerSettled,
         ]).then(() => undefined)
       : layerSettled;
-    if (config.brokerCredentials?.length) warnShadowedBrokerCredentials(config.brokerCredentials);
+    const { brokerCredentials } = tenantConfig(config);
+    if (brokerCredentials?.length) warnShadowedBrokerCredentials(brokerCredentials);
     const identityReady = identity.hydrate();
     const configReady = configStore.hydrate?.();
     identityReady.catch(reportFailureAs("startup: hydrate identity", undefined));
     configReady?.catch(reportFailureAs("startup: hydrate configuration", undefined));
     const ready = Promise.all([identityReady, configReady, layerReady]).then(() => {});
     ready.catch(() => {});
-    started = { ready, skillsReady };
-    return started;
+    tenantStart.at = { ready, skillsReady };
+    return tenantStart.at;
   };
   const skillsReady: PromiseLike<void> = { then: (resolve, reject) => startOnce().skillsReady.then(resolve, reject) };
   return {

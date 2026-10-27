@@ -47,7 +47,7 @@ export function buildFiles(deps: FilesInputs) {
     config.budgetUsdPerWindow !== undefined || config.orgBudgetUsdPerWindow !== undefined
       ? createPostgresBudgetTracker(databaseUrl, budgetOpts)
       : undefined;
-  const resolution = createResolutionService(config.orgId, configStore, acl);
+  const resolution = createResolutionService(configStore, acl);
   const workspace = createLocalWorkspaceStore(config.dataDir);
   const s3Options = (prefix: string) => ({
     get bucket() {

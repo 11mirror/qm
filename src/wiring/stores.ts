@@ -12,7 +12,7 @@ import { createSkillPackStore } from "../skills/skill-pack-store.ts";
 import { createSkillBundleStore } from "../skills/skill-bundle-store.ts";
 import { createFeatureFlagStore } from "../feature-flags.ts";
 import { createPostgresTeamStore } from "../teams/teams.ts";
-import { scopeId } from "../types.ts";
+import { tenant } from "../tenant.ts";
 import { type SessionStore, LLM_CAPTURE_RETENTION_MS } from "../sessions/session-store.ts";
 import { createPostgresSessionStore } from "../sessions/postgres-session-store.ts";
 import { createAdminGrantStore } from "../admin/admin-grant-store.ts";
@@ -63,11 +63,11 @@ export function buildStores(deps: StoresInputs) {
   const principalLinks = createPrincipalLinkService(databaseUrl, advisoryLock);
   installPrincipalLinks(principalLinks);
   const identity = createIdentityService(databaseUrl, {
-    directorySyncProtected: config.emailAuthPrincipals,
+    directorySyncProtected: () => tenantConfig(config).emailAuthPrincipals,
     principalLinks,
   });
   const leaderLease: LeaderLease = createPostgresLeaderLease(pgPool);
-  const configStore = createConfigStore(config.orgId, { databaseUrl, connectorSecretKey });
+  const configStore = createConfigStore({ databaseUrl, connectorSecretKey });
   const skills: SkillStore = createSkillStore({
     databaseUrl,
     advisoryLock,
@@ -75,10 +75,10 @@ export function buildStores(deps: StoresInputs) {
   const skillPacks = createSkillPackStore({ databaseUrl });
   const skillBundles = createSkillBundleStore(databaseUrl);
   const featureFlags = createFeatureFlagStore(databaseUrl);
-  const teams = createPostgresTeamStore(databaseUrl, featureFlags, scopeId("org", config.orgId));
+  const teams = createPostgresTeamStore(databaseUrl, featureFlags);
   const sessions: SessionStore = createPostgresSessionStore(databaseUrl);
   const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
-    seed: parseAdminGrants(config.adminGrants, config.orgId) ?? [],
+    seed: () => parseAdminGrants(tenantConfig(config).adminGrants, tenant().orgId) ?? [],
   });
   const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
   const directory = createPostgresDirectoryStore(databaseUrl);
