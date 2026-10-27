@@ -435,7 +435,11 @@ async function addConversationRoster(
       if (m) resolved.push(m);
       else if (p.displayName) resolved.push({ principalId: p.id, displayName: p.displayName, type: "internal" });
     }
-    return renderConversationRoster(resolved, budgetTokens);
+    return renderConversationRoster(
+      resolved,
+      budgetTokens,
+      resolved.find((m) => samePerson(m.principalId, actor.id))?.principalId,
+    );
   })().catch(swallowAs("orchestrator: conversation roster", null));
   if (rosterBlock) turnContextBlocks["Who’s in this conversation"] = rosterBlock;
 }

@@ -63,8 +63,12 @@ export function linesWithinTokenBudget(
   const kept: string[] = [];
   let used = 0;
   for (const line of lines) {
-    used += countTokens(line);
-    if (used > budgetTokens) break;
+    const tokens = countTokens(line);
+    if (used + tokens > budgetTokens) {
+      if (!kept.length) kept.push(`${line.slice(0, Math.floor((line.length * budgetTokens) / tokens))}…`);
+      break;
+    }
+    used += tokens;
     kept.push(line);
   }
   return { kept, omitted: lines.length - kept.length };

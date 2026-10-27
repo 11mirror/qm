@@ -116,12 +116,18 @@ export function renderReachRoster(
   ].join("\n");
 }
 
-export function renderConversationRoster(members: DirectoryMember[], budgetTokens: number): string | null {
+export function renderConversationRoster(
+  members: DirectoryMember[],
+  budgetTokens: number,
+  speakerId?: string,
+): string | null {
   if (members.length === 0) return null;
+  const speaker = members.filter((m) => m.principalId === speakerId);
+  const others = members.filter((m) => m.principalId !== speakerId);
   const { kept, omitted } = linesWithinTokenBudget(
-    members
-      .toSorted((a, b) => a.principalId.localeCompare(b.principalId))
-      .map((m) => `- ${m.displayName} (${m.principalId})`),
+    [...speaker, ...others.toSorted((a, b) => a.principalId.localeCompare(b.principalId))].map(
+      (m) => `- ${m.displayName} (${m.principalId})`,
+    ),
     budgetTokens,
   );
   const more = omitted ? `\n…and ${omitted} more in this conversation.` : "";

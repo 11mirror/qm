@@ -124,6 +124,25 @@ test("webhook and job-watch obligations are named by their first line", () => {
   assert.match(block, new RegExp(`^- Job watch: ${"a".repeat(300)}$`, "m"));
 });
 
+test("the roster keeps the speaker first and still shows a clipped entry when one line is over budget", () => {
+  const members = Array.from({ length: 50 }, (_, i) => ({
+    principalId: `U${String(i).padStart(4, "0")}`,
+    displayName: `Person ${i}`,
+    type: "internal" as const,
+  }));
+  const roster = renderConversationRoster(members, BUDGET, "U0042")!;
+  const listed = roster.split("\n").filter((line) => line.startsWith("- "));
+  assert.equal(listed[0], "- Person 42 (U0042)");
+  assert.deepEqual(listed.slice(1, 3), ["- Person 0 (U0000)", "- Person 1 (U0001)"]);
+  assert.equal(listed.filter((line) => line.includes("U0042")).length, 1);
+  const giant = [{ principalId: "U1", displayName: "x".repeat(20_000), type: "internal" as const }, members[0]!];
+  const clipped = renderConversationRoster(giant, 40, "U1")!;
+  const shown = clipped.split("\n").filter((line) => line.startsWith("- "));
+  assert.equal(shown.length, 1, "one clipped entry rather than none");
+  assert.ok(shown[0]!.endsWith("…") && shown[0]!.length < 20_000 && countTokens(shown[0]!) <= 48);
+  assert.match(clipped, /…and 1 more in this conversation\.$/);
+});
+
 test("conversation and reach rosters fill their token budget and count the rest", () => {
   const members = Array.from({ length: 800 }, (_, i) => ({
     principalId: `U${String(i).padStart(4, "0")}`,
