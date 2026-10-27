@@ -1,12 +1,7 @@
 import { securityScreenPayload } from "../../security/security-screen.ts";
 import { collectBlob } from "../../persistence/blob-transfer.ts";
 import { isVisionAttachment, safeAttachmentName, senderNote } from "../attachments.ts";
-import {
-  recordedMessageTimestamps,
-  renderOverheard,
-  selectOverheardToImport,
-  type OverheardEntryPayload,
-} from "../../harness/replay.ts";
+import { renderOverheard, selectOverheardToImport, type OverheardEntryPayload } from "../../harness/replay.ts";
 import { swallowAs } from "../../util/errors.ts";
 import type { OrchestratorDeps } from "./types.ts";
 import { MAX_AUTO_ATTACHMENT_SCREEN_BYTES, isScreenableTextAttachment } from "./turn-helpers.ts";
@@ -33,8 +28,11 @@ export function observeInboundTurn(
     let overheard: OverheardEntryPayload[] = [];
     if (conversation.kind !== "dm" && input.overheard?.length) {
       const existingSession = await deps.sessions.getByThread(conversation.threadRef);
-      const existingEntries = existingSession ? await deps.sessions.getItems(existingSession.id) : [];
-      overheard = selectOverheardToImport(input.overheard, recordedMessageTimestamps(existingEntries));
+      const incoming = input.overheard.flatMap((m) => (typeof m.ts === "string" && m.ts ? [m.ts] : []));
+      const recorded = existingSession
+        ? await deps.sessions.recordedMessageTimestamps(existingSession.id, incoming)
+        : new Set<string>();
+      overheard = selectOverheardToImport(input.overheard, recorded);
     }
     const attachmentPromptData: Array<{ source: string; content: string }> = [];
     for (const attachment of input.attachments ?? []) {

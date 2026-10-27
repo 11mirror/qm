@@ -11,7 +11,7 @@ import type { Item, NewItem } from "../../sessions/items.ts";
 import type { Lease } from "../../sessions/session-store.ts";
 import type { DurableMap } from "../../persistence/durable-map.ts";
 import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
-import { samePerson } from "../../directory/person.ts";
+import { rosterIds, samePerson } from "../../directory/person.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { sleep } from "../../util/async.ts";
 import { errMessage } from "../../util/errors.ts";
@@ -133,7 +133,10 @@ export function loadActorGrants(
   actorId: string,
 ): () => Promise<CommandApprovalGrant[]> {
   let loaded: Promise<CommandApprovalGrant[]> | undefined;
-  return () => (loaded ??= grants.all().then((all) => all.filter((grant) => samePerson(grant.actorId, actorId))));
+  return () =>
+    (loaded ??= grants
+      .select({ where: { field: "actorId", anyOfFold: rosterIds(actorId) } })
+      .then((rows) => rows.filter((grant) => samePerson(grant.actorId, actorId))));
 }
 
 export function loadApprovalLedger(
