@@ -152,7 +152,11 @@ test("operator error records send one classified event with the record details",
     process.exit(0);
   `);
   assert.equal(code, 0);
-  assert.equal(output.trim(), "private-job-failure");
+  assert.equal(
+    output.trim().split("\n").at(-1),
+    "private-job-failure",
+    "the stored record comes back last, after any migration log",
+  );
   assert.equal(events.length, 1);
   assert.equal(events[0]!.tags.error_code, "turn:failed");
   assert.equal(events[0]!.exception.values[0].value, "private-job-failure");
