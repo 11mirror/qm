@@ -319,7 +319,7 @@ function surfaceContainerReads(q: PgPool["q"]) {
     },
 
     async listContainers(opts = {}) {
-      const limit = clampLimit(opts.limit, MAX_READ_LIMIT);
+      const limit = opts.limit === undefined ? null : Math.max(1, Math.floor(opts.limit));
       const rows = await q(
         `SELECT s.*,
                 (SELECT COUNT(*)::int FROM channel_messages m
