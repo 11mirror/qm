@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { configurePgCaTrust, configurePgTenancy, createPgPool, pgCaOptions } from "./persistence/pg-pool.ts";
+import { configurePgCaTrust, configurePgTenancy, pgCaOptions } from "./persistence/pg-pool.ts";
 import { importTenant, migrateWithBuild } from "./tenants/import.ts";
 import { tenantSecretsKey, upsertTenant } from "./tenants/registry.ts";
 
@@ -191,14 +191,7 @@ async function main(): Promise<void> {
     ...(adminUrl ? { maintenanceUrl: adminUrl } : {}),
     batchSize,
     migrate: migrateWithBuild(process.env, { tenantize: true, orgId: spec.orgId }),
-    writeTenant: async (id) => {
-      const pool = createPgPool(targetUrl);
-      try {
-        await upsertTenant(pool, { id, ...spec, status: "active" }, tenantSecretsKey(process.env));
-      } finally {
-        await pool.close();
-      }
-    },
+    writeTenant: (id, db) => upsertTenant(db, { id, ...spec, status: "active" }, tenantSecretsKey(process.env)),
     log,
   });
   log(

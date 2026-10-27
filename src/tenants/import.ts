@@ -3,6 +3,7 @@ import pg from "pg";
 import { pgCaOptions } from "../persistence/pg-pool.ts";
 import { TENANCY_EXCLUDED_TABLES } from "../persistence/tenancy.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
+import type { SqlRunner } from "./registry.ts";
 import { copyRows, insertableColumns, primaryKey, qualified, type TableRef } from "./row-copy.ts";
 
 const STAGED_SCHEMAS = ["public", "absurd", "pgboss"];
@@ -22,7 +23,7 @@ export interface TenantImportOptions {
   maintenanceUrl?: string;
   batchSize: number;
   migrate: (stagingUrl: string) => Promise<void>;
-  writeTenant: (tenantId: string) => Promise<void>;
+  writeTenant: (tenantId: string, db: SqlRunner) => Promise<void>;
   log: (line: string) => void;
 }
 
@@ -439,6 +440,7 @@ export async function importTenant(options: TenantImportOptions): Promise<Tenant
         await target.query("SELECT set_config('qm.tenant_bypass', 'on', true)");
         const bumped = await bumpSequences(target);
         options.log(`advanced ${bumped} sequences`);
+        await options.writeTenant(tenantId, target);
         await target.query("COMMIT");
       } catch (error) {
         await target.query("ROLLBACK").catch(swallowAs("tenant import: rollback target", undefined));
@@ -446,7 +448,6 @@ export async function importTenant(options: TenantImportOptions): Promise<Tenant
       } finally {
         await staging.query("ROLLBACK").catch(swallowAs("tenant import: release staging", undefined));
       }
-      await options.writeTenant(tenantId);
       options.log(`tenant ${options.slug} (${tenantId}) is active`);
       return { tenantId, tables: counts, committed: true };
     },

@@ -71,7 +71,7 @@ export function addressList(v: unknown): string[] | undefined | null {
   const out: string[] = [];
   let length = 0;
   for (const entry of v) {
-    if (typeof entry !== "string" || /[\r\n\0]/.test(entry)) return null;
+    if (typeof entry !== "string" || ["\r", "\n", "\0"].some((c) => entry.includes(c))) return null;
     const address = entry.trim();
     length += address.length;
     if (length > 8000) return null;

@@ -149,7 +149,6 @@ function warnAboutUnreachableFeatures(config: Config): void {
 
 type SlackRuntime = ReturnType<typeof createSlackRuntimeReconciler>;
 
-/** Run background work (and the Slack runtimes) only while this deployment owns it. */
 function startBackgroundOwnership(
   built: ReturnType<typeof buildApp>,
   ownership: NonNullable<ReturnType<typeof buildApp>["backgroundOwnership"]>,
