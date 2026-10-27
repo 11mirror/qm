@@ -4,14 +4,20 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createE2bDeployProvider, type StoredE2bDeployBody } from "../../src/deploy/e2b-deploy-provider.ts";
-import { type DurableMap } from "../../src/persistence/durable-map.ts";
+import {
+  E2B_DEPLOY_BODIES_MIGRATION,
+  createE2bDeployProvider,
+  type StoredE2bDeployBody,
+} from "../../src/deploy/e2b-deploy-provider.ts";
+import { createDeployBodyStore, type DeployBodyStore } from "../../src/deploy/deploy-body-store.ts";
 import type { Deployment, DeploymentVersion } from "../../src/deploy/deploy-store.ts";
 import type { DeployProvider } from "../../src/deploy/deploy-provider.ts";
 import { scopeId } from "../../src/types.ts";
 import { installFakeE2b, type FakeE2b } from "../support/fake-e2b.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
-import { testMap } from "../support/test-database.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
+
+const bodyStore = () => createDeployBodyStore<StoredE2bDeployBody>(testDatabaseUrl(), E2B_DEPLOY_BODIES_MIGRATION);
 
 const SERVER = [
   "const fs = require('fs');",
@@ -57,10 +63,14 @@ function version(appVersion: string, entrypoint = "node server.js"): DeploymentV
   return { version: 1, createdAt: Date.now(), entrypoint, snapshotDir, env: { APP_VERSION: appVersion } };
 }
 
-async function make(): Promise<{ provider: DeployProvider; store: DurableMap<StoredE2bDeployBody>; fake: FakeE2b }> {
+async function make(): Promise<{
+  provider: DeployProvider;
+  store: DeployBodyStore<StoredE2bDeployBody>;
+  fake: FakeE2b;
+}> {
   appPort = await freePort();
   fake = installFakeE2b({ info: true });
-  const store = testMap<StoredE2bDeployBody>();
+  const store = bodyStore();
   const provider = createE2bDeployProvider({
     ...singleProcessDeps(),
     client: fake.client,

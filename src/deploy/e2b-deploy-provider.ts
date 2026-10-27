@@ -16,7 +16,7 @@ import {
 } from "./shared-deploy-provider.ts";
 import { makeTar } from "../sandbox/tar.ts";
 import { E2bSandboxGoneError, runE2bScript, type E2bClient, type E2bSession } from "../sandbox/e2b-client.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { deploymentKeyedTable, type DeployBodyStore } from "./deploy-body-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
@@ -43,6 +43,13 @@ export interface StoredE2bDeployBody {
   createdAtMs: number;
 }
 
+export const E2B_DEPLOY_BODIES_MIGRATION = deploymentKeyedTable("e2b_deploy_bodies", {
+  sandboxId: { type: "text", required: true },
+  host: { type: "text", required: true },
+  trafficAccessToken: { type: "text" },
+  createdAtMs: { type: "bigint", required: true },
+});
+
 export interface E2bDeployProviderOptions {
   client: E2bClient;
   namePrefix?: string;
@@ -50,7 +57,7 @@ export interface E2bDeployProviderOptions {
   readyWindowSec?: number;
   idleTimeoutSec?: number;
   resolveCacheMs?: number;
-  store: DurableMap<StoredE2bDeployBody>;
+  store: DeployBodyStore<StoredE2bDeployBody>;
   advisoryLock: AdvisoryLock;
   onError?: AppErrorSink;
 }

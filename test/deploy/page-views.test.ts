@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
+import { DEPLOYMENTS_MIGRATION } from "../../src/deploy/deploy-store.ts";
 import { mkdtempSync } from "node:fs";
 import { request as httpRequest, createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -231,10 +232,13 @@ test("pg page-view log stores one row per view with clipped request fields", { s
   try {
     await admin.query("DROP TABLE IF EXISTS app_page_views CASCADE");
     await admin.query("DELETE FROM qm_schema_migrations WHERE id LIKE 'deploy/app-page-views/%'").catch(() => {});
-    const schema = createPgPool(URL!, []);
+    const schema = createPgPool(URL!, [DEPLOYMENTS_MIGRATION]);
     await schema.pool();
     await schema.close();
-    await admin.query(`INSERT INTO deployments (id, json) VALUES ('dep-1', '{}') ON CONFLICT (id) DO NOTHING`);
+    await admin.query(
+      `INSERT INTO deployments (id, owner_scope_id, created_by, current_version, status, versions)
+       VALUES ('dep-1', 'org:o', 'U1', 1, 'stopped', '[]') ON CONFLICT (id) DO NOTHING`,
+    );
     const log = createPostgresAppPageViewLog(URL!);
     await log.record({
       deploymentId: "dep-1",

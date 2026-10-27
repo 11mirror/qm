@@ -109,12 +109,7 @@ export function testAdminGrantStore(
 export function testDeployBackings(
   backings: Partial<Parameters<typeof import("../../src/deploy/deploy-store.ts").createDeployStore>[0]> = {},
 ) {
-  const maps = createPostgresMapFactory(testDatabaseUrl());
-  return {
-    deployments: maps.map<import("../../src/deploy/deploy-store.ts").Deployment>("deployments"),
-    pg: maps.pool,
-    ...backings,
-  };
+  return { databaseUrl: testDatabaseUrl(), ...backings };
 }
 
 /** Empties the given tables where they exist, so each test starts from the migrated schema with no rows. */

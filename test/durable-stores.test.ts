@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
-import { createDeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
+import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import type { Cron } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testMap, testAdvisoryLock, testDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
@@ -70,8 +70,8 @@ test("skill mutations reject names that could escape or collide when materialize
 });
 
 test("deployments persist with immutable versions across store instances", async () => {
-  const map = testMap<Deployment>();
-  const s1 = createDeployStore(testDeployBackings({ deployments: map }));
+  const backing = testDeployBackings();
+  const s1 = createDeployStore(backing);
   const d = await s1.create({
     ownerScopeId: scopeId("team", "T1"),
     createdBy: "U1",
@@ -80,7 +80,7 @@ test("deployments persist with immutable versions across store instances", async
   });
   await s1.addVersion(d.id, { entrypoint: "node server.js --v2", snapshotDir: "/snap/2" });
 
-  const s2 = createDeployStore(testDeployBackings({ deployments: map }));
+  const s2 = createDeployStore(backing);
   const got = await s2.get(d.id);
   assert.equal(got?.versions.length, 2);
   assert.equal(got?.currentVersion, 2);

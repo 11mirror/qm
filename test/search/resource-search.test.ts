@@ -3,6 +3,7 @@ import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { createPostgresResourceSearch } from "../../src/search/resource-search.ts";
+import { DEPLOYMENTS_MIGRATION } from "../../src/deploy/deploy-store.ts";
 
 const database = process.env.DATABASE_URL;
 test(
@@ -14,7 +15,7 @@ test(
     await admin.q(`CREATE SCHEMA ${schema}`);
     const url = new URL(database!);
     url.searchParams.set("options", `-c search_path=${schema}`);
-    const pg = createPgPool(url.toString(), []);
+    const pg = createPgPool(url.toString(), [DEPLOYMENTS_MIGRATION]);
     try {
       let searchSql = "";
       let searchParams: unknown[] = [];
@@ -59,10 +60,17 @@ test(
           { action: "zanzibar release checklist", verification: { scheme: "github", secret: "never return" } },
         ],
       ] as const) {
-        await pg.q(`INSERT INTO ${table} (id, json) VALUES ($1, $2)`, [
-          "hit",
-          JSON.stringify({ id: "hit", ...record, owner: "U1", ownerScopeId: "personal:U1", scopeId: "personal:U1" }),
-        ]);
+        if (table === "deployments")
+          await pg.q(
+            `INSERT INTO deployments (id, name, display_name, owner_scope_id, created_by, current_version, status, endpoint, versions)
+             VALUES ('hit', $1, $2, 'personal:U1', 'U1', 1, 'stopped', $3, $4)`,
+            [record.name, record.displayName, record.endpoint, JSON.stringify(record.versions)],
+          );
+        else
+          await pg.q(`INSERT INTO ${table} (id, json) VALUES ($1, $2)`, [
+            "hit",
+            JSON.stringify({ id: "hit", ...record, owner: "U1", ownerScopeId: "personal:U1", scopeId: "personal:U1" }),
+          ]);
         const kind = table === "deployments" ? "deploys" : table;
         const rows = await store.search(kind, "zanz release", 50);
         const actualSql = searchSql;
@@ -87,9 +95,11 @@ test(
         } finally {
           client.release();
         }
-        await pg.q(`UPDATE ${table} SET json = $1 WHERE id = 'hit'`, [
-          JSON.stringify({ id: "hit", title: "other", action: "other", name: "other", manifest: { name: "other" } }),
-        ]);
+        if (table === "deployments") await pg.q(`UPDATE deployments SET name = 'other', display_name = NULL`);
+        else
+          await pg.q(`UPDATE ${table} SET json = $1 WHERE id = 'hit'`, [
+            JSON.stringify({ id: "hit", title: "other", action: "other", name: "other", manifest: { name: "other" } }),
+          ]);
         assert.equal((await store.search(kind, "zanzibar", 50)).length, 0);
       }
     } finally {

@@ -27,28 +27,37 @@ export interface ResourceSearchStore {
   search(kind: ResourceKind, query: string, limit: number): Promise<ResourceCandidate[]>;
 }
 
+const JSON_FIELDS = `json->>'scopeId' AS "scopeId", json->>'ownerScopeId' AS "ownerScopeId",
+  json->>'createdInScope' AS "createdInScope", json->>'createdBy' AS "createdBy",
+  json->>'owner' AS owner, json->>'status' AS status,
+  json->'members' AS members, json->'destination' AS destination`;
+
 const sources = {
   skills: {
     table: "skills",
     title: "coalesce(json->'manifest'->>'name', '')",
     description: "coalesce(json->'manifest'->>'description', '')",
+    fields: JSON_FIELDS,
   },
   crons: {
     table: "crons",
     title: "coalesce(json->>'title', '')",
     description: "coalesce(json->>'action', '') || ' ' || coalesce(json->>'message', '')",
+    fields: JSON_FIELDS,
   },
   deploys: {
     table: "deployments",
-    title: "coalesce(json->>'displayName', json->>'name', '')",
-    description: "coalesce(json->>'name', '')",
+    title: "coalesce(display_name, name, '')",
+    description: "coalesce(name, '')",
+    fields: `owner_scope_id AS "ownerScopeId", created_in_scope AS "createdInScope", created_by AS "createdBy", status`,
   },
   webhooks: {
     table: "webhooks",
     title: "coalesce(json->>'action', '')",
     description: "coalesce(json->'verification'->>'scheme', '')",
+    fields: JSON_FIELDS,
   },
-} satisfies Record<ResourceKind, { table: string; title: string; description: string }>;
+} satisfies Record<ResourceKind, { table: string; title: string; description: string; fields: string }>;
 
 export function createPostgresResourceSearch(pg: PgPool): ResourceSearchStore {
   return {
@@ -76,11 +85,7 @@ export function createPostgresResourceSearch(pg: PgPool): ResourceSearchStore {
       const source = sources[kind];
       const vector = `to_tsvector('simple', ${source.title} || ' ' || ${source.description})`;
       const rows = await pg.q(
-        `SELECT id, ${source.title} AS title, ${source.description} AS description,
-        json->>'scopeId' AS "scopeId", json->>'ownerScopeId' AS "ownerScopeId",
-        json->>'createdInScope' AS "createdInScope", json->>'createdBy' AS "createdBy",
-        json->>'owner' AS owner, json->>'status' AS status,
-        json->'members' AS members, json->'destination' AS destination
+        `SELECT id, ${source.title} AS title, ${source.description} AS description, ${source.fields}
         FROM ${source.table} WHERE ${vector} @@ to_tsquery('simple', $1)
         ORDER BY ts_rank(${vector}, to_tsquery('simple', $1)) DESC, id
         LIMIT $2`,

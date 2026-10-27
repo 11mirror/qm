@@ -1,12 +1,13 @@
 import type { Head } from "./late.ts";
 import { createDeployStore, type Deployment } from "../deploy/deploy-store.ts";
-import type { DeployGitArchive } from "../deploy/deploy-git-store.ts";
+import { createDeployGitArchiveStore } from "../deploy/deploy-git-store.ts";
+import { createDeployBodyStore } from "../deploy/deploy-body-store.ts";
 import type { DeployProvider } from "../deploy/deploy-provider.ts";
-import { createAwsDeployProvider, type StoredDeployBody } from "../deploy/aws-deploy-provider.ts";
+import { AWS_DEPLOY_BODIES_MIGRATION, createAwsDeployProvider } from "../deploy/aws-deploy-provider.ts";
 import type { Config } from "../config.ts";
 import { createDockerDeployProvider } from "../deploy/docker-deploy-provider.ts";
-import { createPorterDeployProvider, type StoredPorterDeployBody } from "../deploy/porter-deploy-provider.ts";
-import { createE2bDeployProvider, type StoredE2bDeployBody } from "../deploy/e2b-deploy-provider.ts";
+import { createPorterDeployProvider, PORTER_DEPLOY_BODIES_MIGRATION } from "../deploy/porter-deploy-provider.ts";
+import { createE2bDeployProvider, E2B_DEPLOY_BODIES_MIGRATION } from "../deploy/e2b-deploy-provider.ts";
 import { createDeployService } from "../deploy/deploy-service.ts";
 import { join } from "node:path";
 import { externalAppSharingAllowed } from "../feature-flags.ts";
@@ -33,8 +34,7 @@ export function buildDeploy(
     CredentialsModule,
 ) {
   const {
-    artifactMap,
-    pgArtifactMap,
+    databaseUrl,
     config,
     s3Bytes,
     advisoryLock,
@@ -54,11 +54,10 @@ export function buildDeploy(
   } = w;
 
   const deployStore = createDeployStore({
-    deployments: artifactMap<Deployment>("deployments"),
-    pg: pgArtifactMap.pool,
+    databaseUrl,
     git: {
       repoRoot: config.deployGitDir,
-      archiveStore: artifactMap<DeployGitArchive>("deploy_git_repos"),
+      archiveStore: createDeployGitArchiveStore(databaseUrl),
       ...(config.s3Bucket ? { archiveBytes: s3Bytes(config.s3Bucket, "deploy-git/") } : {}),
     },
   });
@@ -66,7 +65,7 @@ export function buildDeploy(
     createAwsDeployProvider({
       ...config.awsDeploy,
       advisoryLock,
-      store: artifactMap<StoredDeployBody>("aws_deploy_bodies"),
+      store: createDeployBodyStore(databaseUrl, AWS_DEPLOY_BODIES_MIGRATION),
       onError: sandboxOnError,
     });
   const buildDeployProvider: Record<Config["deployProvider"], () => DeployProvider> = {
@@ -76,7 +75,7 @@ export function buildDeploy(
       createPorterDeployProvider({
         ...config.porterDeploy,
         advisoryLock,
-        store: artifactMap<StoredPorterDeployBody>("porter_deploy_bodies"),
+        store: createDeployBodyStore(databaseUrl, PORTER_DEPLOY_BODIES_MIGRATION),
         onError: sandboxOnError,
       }),
     e2b: () =>
@@ -84,7 +83,7 @@ export function buildDeploy(
         client: e2bClient("apps"),
         ...(config.sandbox.namePrefix ? { namePrefix: config.sandbox.namePrefix } : {}),
         advisoryLock,
-        store: artifactMap<StoredE2bDeployBody>("e2b_deploy_bodies"),
+        store: createDeployBodyStore(databaseUrl, E2B_DEPLOY_BODIES_MIGRATION),
         onError: sandboxOnError,
       }),
   };

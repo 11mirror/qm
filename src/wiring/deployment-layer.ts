@@ -5,7 +5,6 @@ import { scopeId } from "../types.ts";
 import { createPostgresAuditLog } from "../admin/postgres-audit-log.ts";
 import {
   createDeploymentLayerStore,
-  type StoredDeploymentLayer,
   LAYER_CREATED_BY,
   LAYER_REVIEWER,
   type DeploymentLayerStore,
@@ -16,7 +15,7 @@ import { reportFailureAs } from "../util/errors.ts";
 import type { StoresModule } from "./stores.ts";
 
 export function buildDeploymentLayer(w: Head & StoresModule) {
-  const { config, databaseUrl, artifactMap, skills, skillBundles, advisoryLock } = w;
+  const { config, databaseUrl, skills, skillBundles, advisoryLock } = w;
 
   const deploymentLayer = config.deploymentLayerDir
     ? loadDeploymentLayer(config.deploymentLayerDir)
@@ -26,7 +25,7 @@ export function buildDeploymentLayer(w: Head & StoresModule) {
   const orgScope = scopeId("org", config.orgId);
   const auditLog = createPostgresAuditLog(databaseUrl);
   const layerStore = createDeploymentLayerStore({
-    backing: artifactMap<StoredDeploymentLayer>("deployment_layer"),
+    databaseUrl,
     runtime: deploymentLayer,
     skills,
     skillBundles,
