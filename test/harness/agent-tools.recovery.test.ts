@@ -263,7 +263,7 @@ test("core tools carry retrySafe while client tools cannot advertise automatic r
         query: "budget",
         callId: "safe",
         retrySafe: true,
-        rerun: { tool: "history", input: { query: "budget" } },
+        rerun: { tool: "history", input: {}, recorded: ["query"] },
       },
       { tool: "history", seq: 3, callId: "unsafe", retrySafe: false },
       { tool: "history", seq: 3, callId: "unmarked" },
