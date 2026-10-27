@@ -8,8 +8,6 @@ import {
   type AwsMicrovmApi,
 } from "../../src/sandbox/aws-microvm-api.ts";
 import { Readable } from "node:stream";
-import { SignatureV4 } from "@smithy/signature-v4";
-import { Sha256 } from "@aws-crypto/sha256-js";
 
 interface Recorded {
   url: string;

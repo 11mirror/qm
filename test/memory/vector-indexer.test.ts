@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { createMemoryVectorIndexer } from "../../src/memory/vector-indexer.ts";
 import type { MemoryVectorStore, MemoryVector } from "../../src/memory/postgres-vector-store.ts";
 import type { MemoryEmbedder } from "../../src/model/embeddings.ts";
-import { createNoopLeaderLease } from "../../src/persistence/leader-lease.ts";
 
 function fixture() {
   let now = 1000;

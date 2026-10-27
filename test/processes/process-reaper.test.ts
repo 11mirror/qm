@@ -6,9 +6,6 @@ import type { ProcessSandbox, SandboxHandle, ProvisionOptions, TeardownOptions }
 import type { WorkspaceLayer } from "../../src/types.ts";
 import { ProcessSessionGoneError } from "../../src/sandbox/exec-process-session.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
-import type { LeaderLease } from "../../src/persistence/leader-lease.ts";
-import { singleProcessDeps } from "../support/single-process.ts";
-
 
 const ID = "00000000-0000-0000-0000-000000000abc";
 

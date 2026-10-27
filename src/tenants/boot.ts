@@ -169,7 +169,8 @@ function startBackgroundOwnership(
     },
     fence() {
       void built.runtime.stopBackgroundClaims().catch(reportFailureAs("qm: background claim stop", undefined));
-      for (const runtime of slackRuntimes) void runtime.stop().catch(reportFailureAs("qm: Slack background stop", undefined));
+      for (const runtime of slackRuntimes)
+        void runtime.stop().catch(reportFailureAs("qm: Slack background stop", undefined));
     },
     async relinquish() {
       await Promise.all([built.runtime.stopBackgroundClaims(), ...slackRuntimes.map((runtime) => runtime.stop())]);

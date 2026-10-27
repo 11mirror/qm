@@ -38,12 +38,7 @@ const AGENT_FETCH_MAX_REDIRECTS = 5;
 const THROTTLE_SHIELD_MS = 5_000;
 const throttledUpstreams = new Map<string, number>();
 
-function setPruned(
-  map: Map<string, number>,
-  key: string,
-  value: number,
-  stale: (value: number) => boolean,
-): void {
+function setPruned(map: Map<string, number>, key: string, value: number, stale: (value: number) => boolean): void {
   if (map.size > 1000) for (const [k, v] of map) if (stale(v)) map.delete(k);
   map.set(key, value);
 }
@@ -62,8 +57,7 @@ type ProxyOptions = { sandbox?: boolean; frameAncestors?: readonly string[] };
 
 const endpointOrigin = ({ endpoint: { host, port, tls } }: OkReach): string =>
   `${tls ? "https" : "http"}://${host}:${port}`;
-const endpointAuthority = ({ endpoint: { host, port, tls } }: OkReach): string =>
-  tls ? host : `${host}:${port}`;
+const endpointAuthority = ({ endpoint: { host, port, tls } }: OkReach): string => (tls ? host : `${host}:${port}`);
 
 function writeUpstreamHead(
   res: BaseCtx["res"],

@@ -36,7 +36,7 @@ export async function selectTurnRuntime(
     scopeAttestation: Awaited<ReturnType<typeof buildCredentialCatalog>>["scopeAttestation"];
   },
 ) {
-  const { deps, input, actor, automatedTurn, humanInput, liveAuthorTurn, scopeId, filterHistory } = ctx;
+  const { deps, input, actor, automatedTurn, liveAuthorTurn, scopeId, filterHistory } = ctx;
   const { session, isRetry, controlClaims, scopeAttestation } = turn;
   const effectiveTurnWallClockMs =
     typeof input.turnWallClockMs === "number" && input.turnWallClockMs > 0

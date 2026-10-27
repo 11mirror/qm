@@ -1,7 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { runTrigger, type TriggerDeps } from "../../src/triggers/run-trigger.ts";
-import { composeCronEditNotice, notifyOwnerOfCronEdit, type CronEditNoticeSink } from "../../src/triggers/edit-notice.ts";
+import {
+  composeCronEditNotice,
+  notifyOwnerOfCronEdit,
+  type CronEditNoticeSink,
+} from "../../src/triggers/edit-notice.ts";
 import type { Cron } from "../../src/types.ts";
 import { recordingOutbound, type PostLog } from "../support/recording-outbound.ts";
 import { createIdempotencyStore } from "../../src/idempotency/idempotency-store.ts";

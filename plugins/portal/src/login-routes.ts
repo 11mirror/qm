@@ -6,7 +6,7 @@ import {
   openDesktopLogin,
 } from "./desktop-login.ts";
 import { INVITE_LOGIN_SCRIPT, INVITE_LOGIN_SCRIPT_HASH } from "./invite-login.ts";
-import { reportBackendError, reportFailure } from "../../chassis/src/error-reporting.ts";
+import { reportFailure } from "../../chassis/src/error-reporting.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
 import { createHash } from "node:crypto";
 import { type IncomingMessage, type ServerResponse } from "node:http";

@@ -12,7 +12,6 @@ import { singleProcessDeps } from "../support/single-process.ts";
 import { createPostgresProcessRegistry } from "../../src/processes/process-registry.ts";
 import { testDatabaseUrl, testMap } from "../support/test-database.ts";
 import { automationOrigin } from "../support/turn-origin.ts";
-import type { LeaderLease } from "../../src/persistence/leader-lease.ts";
 
 const SCOPE = "personal:U1";
 const handle: SandboxHandle = { id: "vm", rootDir: "/workspace", homeDir: "/root" };
