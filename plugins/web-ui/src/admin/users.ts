@@ -159,23 +159,12 @@ export class UsersView {
       if (this.email.trim() === body.email && this.role === body.role) this.inviteOpen = false;
     });
   }
-  draw() {
-    const s = this.services;
-    const hit = (...parts: unknown[]) => matches(this.filter, ...parts);
-    const users = (this.data.users || []).filter((u: any) =>
-      hit(u.principalId, u.admin?.role || "", u.admin?.scopeId || "member"),
-    );
-    const externals = (this.data.externalUsers || []).filter((m: any) =>
-      hit(m.email, m.role, m.invitedBy || "", m.status),
-    );
-    const admins = (this.data.grants || []).filter((g: any) => g.role === "org_admin").length;
-    const inviteEmail = this.data.inviteEmail || {};
-    const unset = { node: subline("Not configured") };
+  inviteForm() {
     const field = (label: string, input: unknown, cls = "") =>
       html`<div class=${"f" + (cls ? " " + cls : "")}>
         <label for=${"users-" + label.toLowerCase()}>${label}</label>${input}
       </div>`;
-    const invite = html`<div class=${this.inviteOpen ? "" : "hidden"} style="margin:0 0 14px">
+    return html`<div class=${this.inviteOpen ? "" : "hidden"} style="margin:0 0 14px">
       <div class="grant-form">
         ${field(
           "Email",
@@ -204,6 +193,19 @@ export class UsersView {
         </button>
       </div>
     </div>`;
+  }
+  draw() {
+    const s = this.services;
+    const hit = (...parts: unknown[]) => matches(this.filter, ...parts);
+    const users = (this.data.users || []).filter((u: any) =>
+      hit(u.principalId, u.admin?.role || "", u.admin?.scopeId || "member"),
+    );
+    const externals = (this.data.externalUsers || []).filter((m: any) =>
+      hit(m.email, m.role, m.invitedBy || "", m.status),
+    );
+    const admins = (this.data.grants || []).filter((g: any) => g.role === "org_admin").length;
+    const inviteEmail = this.data.inviteEmail || {};
+    const unset = { node: subline("Not configured") };
     const externalTable = table(
       ["Email", "Role", "Expires", "Invited by", "Status", ""],
       externals.map((m: any) => [
@@ -282,7 +284,7 @@ export class UsersView {
               </button>
             </div>
             <div class="body">
-              ${invite}${roster}
+              ${this.inviteForm()}${roster}
               <p class=${"status " + this.tone} id="st-users" role="status">${this.message}</p>
               <p
                 id="st-external"
