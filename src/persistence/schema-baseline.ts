@@ -6,7 +6,7 @@ export interface SchemaBaselineStep {
   checksum: string;
   statements: readonly string[];
   prepare?: readonly string[];
-  legacyId?: string;
+  preLedgerId?: string;
 }
 
 interface SchemaBaselineChain {

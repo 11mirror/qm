@@ -331,14 +331,14 @@ type BaselinePlan = "recorded" | "apply" | "adopt" | "upgrade";
 
 interface ChainMigration extends PgMigration {
   prepare?: readonly string[];
-  legacyId?: string;
+  preLedgerId?: string;
 }
 
 function chainMigration(step: SchemaBaselineStep): ChainMigration {
   return {
     ...definePgMigration(step.id, step.statements, step.checksum),
     ...(step.prepare ? { prepare: step.prepare } : {}),
-    ...(step.legacyId ? { legacyId: step.legacyId } : {}),
+    ...(step.preLedgerId ? { preLedgerId: step.preLedgerId } : {}),
   };
 }
 
@@ -394,12 +394,12 @@ async function applyInTransaction(
   }
 }
 
-async function appliedUnderLegacyId(client: PoolClient, legacyId: string): Promise<boolean> {
+async function appliedUnderPreLedgerId(client: PoolClient, preLedgerId: string): Promise<boolean> {
   const legacy = await client.query<{ present: boolean }>(
     "SELECT to_regclass('schema_migrations') IS NOT NULL AS present",
   );
   if (!legacy.rows[0]?.present) return false;
-  return Boolean((await client.query("SELECT 1 FROM schema_migrations WHERE id = $1", [legacyId])).rowCount);
+  return Boolean((await client.query("SELECT 1 FROM schema_migrations WHERE id = $1", [preLedgerId])).rowCount);
 }
 
 async function runUntimed(client: PoolClient, statements: readonly string[]): Promise<void> {
@@ -426,7 +426,8 @@ async function upgradeToSchemaBaseline(
       await applyInTransaction(client, `migration ${migration.id}`, [], migration, failure);
       continue;
     }
-    const adopted = migration.legacyId !== undefined && (await appliedUnderLegacyId(client, migration.legacyId));
+    const adopted =
+      migration.preLedgerId !== undefined && (await appliedUnderPreLedgerId(client, migration.preLedgerId));
     await applyInTransaction(
       client,
       `migration ${migration.id}`,
