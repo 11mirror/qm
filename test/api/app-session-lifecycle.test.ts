@@ -1,14 +1,14 @@
-import "./support/auto-fake-sprites.ts";
+import "../support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "./support/build-app.ts";
-import type { Item } from "../src/sessions/items.ts";
-import { testConfig } from "./support/test-config.ts";
-import { dmFor } from "./support/dm-turn.ts";
+import { buildApp } from "../support/build-app.ts";
+import type { Item } from "../../src/sessions/items.ts";
+import { testConfig } from "../support/test-config.ts";
+import { dmFor } from "../support/dm-turn.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-fork-"));

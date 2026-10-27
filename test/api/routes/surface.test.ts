@@ -151,7 +151,12 @@ test("one row can be looked up by id or thread, and only by someone who can see 
 
 function start() {
   const built = buildApp(testConfig());
-  const server = createInsecureTestServer(built.app);
+  const server = createInsecureTestServer(built.app, {
+    config: built.config,
+    admin: built.admin,
+    auditLog: built.auditLog,
+    uiState: built.uiState,
+  });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { built, base, close: () => new Promise<void>((r) => server.close(() => r())) };
@@ -377,6 +382,201 @@ test("directory push stores the workspace URL; /v1/directory/meta serves it", as
 
     const after = (await (await fetch(`${s.base}/v1/directory/meta`)).json()) as { workspaceUrl: string | null };
     assert.equal(after.workspaceUrl, "https://acme.slack.com", "stored normalized, trailing slash dropped");
+  } finally {
+    await s.close();
+  }
+});
+
+async function newSession(base: string, threadRef: string): Promise<string> {
+  const r = await fetch(`${base}/v1/turns`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      origin: { kind: "direct" },
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef },
+      text: "hello",
+    }),
+  });
+  const body = (await r.json()) as { status: string; sessionId?: string };
+  assert.equal(body.status, "ok");
+  return body.sessionId!;
+}
+
+async function patch(
+  base: string,
+  id: string,
+  body: Record<string, unknown>,
+): Promise<{ status: number; session?: Session; message?: string }> {
+  const r = await fetch(`${base}/v1/sessions/${encodeURIComponent(id)}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const parsed = (await r.json()) as { session?: Session; message?: string };
+  return { status: r.status, ...parsed };
+}
+
+test("POST /v1/sessions/:id pins and colors the viewer's row; null clears; casing normalizes", async () => {
+  const srv = start();
+  try {
+    const id = await newSession(srv.base, "web:U1:pin-color");
+
+    const pinned = await patch(srv.base, id, { principalId: "U1", pinned: true, color: "#AaBbCc" });
+    assert.equal(pinned.status, 200);
+    assert.equal(pinned.session?.pinned, true);
+    assert.equal(pinned.session?.color, "#aabbcc", "color is normalized to lowercase");
+
+    const cleared = await patch(srv.base, id, { principalId: "U1", pinned: false, color: null });
+    assert.equal(cleared.status, 200);
+    assert.ok(!cleared.session?.pinned);
+    assert.equal(cleared.session?.color ?? null, null, "null clears the color");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("POST /v1/sessions/:id rejects malformed colors and non-boolean pins", async () => {
+  const srv = start();
+  try {
+    const id = await newSession(srv.base, "web:U1:pin-color-bad");
+
+    for (const color of ["red", "#fff", "#12345", "#gggggg", "url(x)", "#aabbcc;background:red", 42]) {
+      const r = await patch(srv.base, id, { principalId: "U1", color });
+      assert.equal(r.status, 400, `rejects ${JSON.stringify(color)}`);
+    }
+    const badPin = await patch(srv.base, id, { principalId: "U1", pinned: "yes" });
+    assert.equal(badPin.status, 400);
+
+    const empty = await patch(srv.base, id, { principalId: "U1" });
+    assert.equal(empty.status, 400, "an empty patch is a bad request");
+
+    const stranger = await patch(srv.base, id, { principalId: "intruder", pinned: true });
+    assert.equal(stranger.status, 404, "a non-participant cannot touch the view");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("surface session route marks a conversation unread and read", async () => {
+  const srv = start();
+  try {
+    const id = await newSession(srv.base, "web:U1:unread");
+    const unread = await patch(srv.base, id, { principalId: "U1", unread: true });
+    assert.equal(unread.status, 200);
+    assert.equal(unread.session?.unread, true);
+    const read = await patch(srv.base, id, { principalId: "U1", unread: false });
+    assert.equal(read.status, 200);
+    assert.equal(read.session?.unread ?? false, false);
+    assert.equal((await patch(srv.base, id, { principalId: "U1", unread: "yes" })).status, 400);
+  } finally {
+    await srv.close();
+  }
+});
+
+const json = async (r: Response): Promise<any> => r.json();
+
+test("ui-state stores and returns a per-user record, isolated by principal", async () => {
+  const s = start();
+  try {
+    const empty = await json(await fetch(`${s.base}/v1/ui-state?principalId=U1&key=split-canvas`));
+    assert.equal(empty.value, null, "nothing stored yet");
+    assert.equal(empty.updatedAt, 0);
+
+    const layout = { v: 2, active: true, layout: { grid: {} }, updatedAt: 1111 };
+    const put = await fetch(`${s.base}/v1/ui-state`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ principalId: "U1", key: "split-canvas", value: layout, updatedAt: 1111 }),
+    });
+    assert.equal(put.status, 200);
+
+    const got = await json(await fetch(`${s.base}/v1/ui-state?principalId=U1&key=split-canvas`));
+    assert.deepEqual(got.value, layout, "the stored layout round-trips");
+    assert.equal(got.updatedAt, 1111);
+
+    const other = await json(await fetch(`${s.base}/v1/ui-state?principalId=U2&key=split-canvas`));
+    assert.equal(other.value, null, "another user's state is separate");
+
+    const stale = await fetch(`${s.base}/v1/ui-state`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ principalId: "U1", key: "split-canvas", value: { old: true }, updatedAt: 42 }),
+    });
+    assert.equal((await json(stale)).ok, false, "a stale write is refused");
+    const kept = await json(await fetch(`${s.base}/v1/ui-state?principalId=U1&key=split-canvas`));
+    assert.deepEqual(kept.value, layout, "the newer record survives a stale overwrite attempt");
+  } finally {
+    await s.close();
+  }
+});
+
+test("ui-state rejects bad keys and oversized values", async () => {
+  const s = start();
+  try {
+    const badKey = await fetch(`${s.base}/v1/ui-state?principalId=U1&key=No%20Good!`);
+    assert.equal(badKey.status, 400);
+
+    const noValue = await fetch(`${s.base}/v1/ui-state`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ principalId: "U1", key: "split-canvas" }),
+    });
+    assert.equal(noValue.status, 400);
+
+    const huge = await fetch(`${s.base}/v1/ui-state`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ principalId: "U1", key: "split-canvas", value: "x".repeat(140000) }),
+    });
+    assert.equal(huge.status, 413);
+  } finally {
+    await s.close();
+  }
+});
+
+test("ui-state measures the cap in bytes, races atomically, and clamps future clocks", async () => {
+  const s = start();
+  try {
+    const emoji = await fetch(`${s.base}/v1/ui-state`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ principalId: "U3", key: "split-canvas", value: "\u{1F991}".repeat(20000) }),
+    });
+    assert.equal(emoji.status, 413, "a value under the UTF-16 length cap but over the byte cap is refused");
+
+    const race = (updatedAt: number, tag: string) =>
+      fetch(`${s.base}/v1/ui-state`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ principalId: "U3", key: "race", value: { tag }, updatedAt }),
+      });
+    for (let i = 0; i < 20; i++) {
+      const base = (i + 1) * 10;
+      await Promise.all([race(base + 2, "newer"), race(base + 1, "older")]);
+      const got = await json(await fetch(`${s.base}/v1/ui-state?principalId=U3&key=race`));
+      assert.deepEqual(got.value, { tag: "newer" }, "concurrent writes settle on the newest record");
+      assert.equal(got.updatedAt, base + 2);
+    }
+
+    const farFuture = Date.now() + 365 * 24 * 3600 * 1000;
+    await fetch(`${s.base}/v1/ui-state`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ principalId: "U3", key: "skewed", value: { v: 1 }, updatedAt: farFuture }),
+    });
+    const skewed = await json(await fetch(`${s.base}/v1/ui-state?principalId=U3&key=skewed`));
+    assert.ok(skewed.updatedAt < Date.now() + 600000, "a far-future client clock is clamped near server time");
+
+    const catchUp = await json(
+      await fetch(`${s.base}/v1/ui-state`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ principalId: "U3", key: "skewed", value: { v: 2 }, updatedAt: skewed.updatedAt + 1 }),
+      }),
+    );
+    assert.equal(catchUp.ok, true, "other devices are not locked out for the skew duration");
   } finally {
     await s.close();
   }
