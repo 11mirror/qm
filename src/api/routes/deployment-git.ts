@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { basename, dirname } from "node:path";
 import { type App } from "../app.ts";
-import { errMessage } from "../../util/errors.ts";
+import { reportFailure } from "../../util/errors.ts";
 import { type ApiCtx, type BaseCtx, ok, reply, type RouteResult } from "./route.ts";
 import { verifyDeployGitAccess } from "../../deploy/access-token.ts";
 
@@ -196,7 +196,7 @@ export async function serveDeploymentGit(ctx: BaseCtx): Promise<RouteResult> {
     ctx.res.writeHead(result.status, result.headers);
     ctx.res.end(result.body);
   } catch (e) {
-    console.error("[deploy-git] request failed:", errMessage(e));
+    reportFailure("deploy-git: request", e);
     return reply(500, { error: "git_failed", message: "deployment git request failed" });
   }
 }

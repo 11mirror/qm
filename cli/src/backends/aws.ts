@@ -158,7 +158,7 @@ async function fetchCore(
         chunks.push(value);
       }
     } catch (error) {
-      await reader.cancel().catch(() => {});
+      await reader.cancel().catch(() => {}); // the read error below is what matters
       throw error;
     } finally {
       reader.releaseLock();

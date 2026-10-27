@@ -355,7 +355,7 @@ import {
   type StoredDeploymentLayer,
 } from "./deployment/deployment-layer-store.ts";
 import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
-import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 import type { ContextRequestEvent } from "./api/app-types.ts";
@@ -684,13 +684,10 @@ export function buildApp(
   const startOnce = () => {
     if (started) return started;
     const layerReady = deploymentLayerStore.hydrate();
-    const layerSettled = layerReady.then(
-      () => undefined,
-      (e: unknown) => console.error("[seed] deployment layer not ready:", errMessage(e)),
-    );
+    const layerSettled = layerReady.then(() => undefined, reportFailureAs("startup: deployment layer", undefined));
     const skillsReady = config.seedSkills
       ? Promise.all([
-          installCatalogs().catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e))),
+          installCatalogs().catch(reportFailureAs("startup: install seed skills", undefined)),
           layerSettled,
         ]).then(() => undefined)
       : layerSettled;
@@ -1054,7 +1051,7 @@ export function buildApp(
             } catch (e) {
               // A corrupt/undecryptable custom key must degrade that one
               // provider, never the whole turn (built-ins included).
-              console.error(`[model] custom provider ${p.id}: key unreadable: ${errMessage(e)}`);
+              reportFailure("model: custom provider key unreadable", e, p.id);
               return [p.id, null] as const;
             }
           }),
@@ -1077,7 +1074,7 @@ export function buildApp(
       const token = await companyChatGPTAuth.accessToken();
       return token ? { [CODEX_SUBSCRIPTION_PROVIDER]: token } : {};
     } catch (e) {
-      console.error(`[model] company ChatGPT auth (${companyChatGPTAuth.description}) unreadable: ${errMessage(e)}`);
+      reportFailure("model: company ChatGPT auth unreadable", e, companyChatGPTAuth.description);
       return {};
     }
   };
@@ -2365,12 +2362,7 @@ export function buildApp(
       if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
       void blobTransfer
         .ensureExpiry?.(1)
-        .catch((e) =>
-          console.error(
-            "[blob-transfer] S3 lifecycle expiry install failed (sweep remains the fallback):",
-            errMessage(e),
-          ),
-        );
+        .catch(reportFailureAs("blob-transfer: S3 lifecycle expiry install (sweep is the fallback)", undefined));
       drain.start();
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
     },
