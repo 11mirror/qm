@@ -1,9 +1,9 @@
-import "./support/auto-fake-sprites.ts";
+import "../support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildApp } from "./support/build-app.ts";
-import { SUBAGENT_TREE_RUN_CAP } from "../src/subagents/tree.ts";
-import { testConfig } from "./support/test-config.ts";
+import { buildApp } from "../support/build-app.ts";
+import { SUBAGENT_TREE_RUN_CAP } from "../../src/subagents/tree.ts";
+import { testConfig } from "../support/test-config.ts";
 
 test("detaching a subagent session requires current channel membership", async () => {
   const built = buildApp(testConfig());

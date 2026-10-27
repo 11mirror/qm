@@ -1,14 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
-import type { SessionStore } from "../src/sessions/session-store.ts";
-import { acquireLeaseWithin, sessionCategory } from "../src/sessions/session-store.ts";
-import { cronIdOf, sessionOrigin } from "../src/sessions/thread-ref.ts";
-import { parseSessionWakeRef } from "../src/api/routes/admin/origins.ts";
-import { scopeId } from "../src/types.ts";
-import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
-import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
+import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
+import type { SessionStore } from "../../src/sessions/session-store.ts";
+import { acquireLeaseWithin, sessionCategory } from "../../src/sessions/session-store.ts";
+import { cronIdOf, sessionOrigin } from "../../src/sessions/thread-ref.ts";
+import { parseSessionWakeRef } from "../../src/api/routes/admin/origins.ts";
+import { scopeId } from "../../src/types.ts";
+import { assertParticipantSessionParity } from "../support/participant-session-parity.ts";
+import { assertSpendRollupParity } from "../support/spend-rollup-parity.ts";
 
 test("sessionOrigin classifies trigger threads by prefix", () => {
   assert.equal(sessionOrigin("agent:main:cron:abc"), "cron");

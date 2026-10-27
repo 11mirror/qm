@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { openSessionItem, searchSessionItems } from "../src/sessions/history-search.ts";
-import { forModelContext, forSearchView } from "../src/harness/context-compaction.ts";
-import { contextSummaryItem } from "../src/sessions/session-store.ts";
-import { createAgentTools } from "../src/harness/agent-tools.ts";
-import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
+import { openSessionItem, searchSessionItems } from "../../src/sessions/history-search.ts";
+import { forModelContext, forSearchView } from "../../src/harness/context-compaction.ts";
+import { contextSummaryItem } from "../../src/sessions/session-store.ts";
+import { createAgentTools } from "../../src/harness/agent-tools.ts";
+import { storedItem, type Item, type NewItem } from "../../src/sessions/items.ts";
 
 const entry = (seq: number, item: NewItem): Item =>
   storedItem(item, { sessionId: "s1", seq, createdAt: 1_700_000_000_000 + seq * 1000 });

@@ -1,14 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { createTranscriptSource } from "../src/sessions/transcript-source.ts";
-import { appendToTranscript } from "../src/surfaces/outbound.ts";
-import { forModelContext, forSearchView } from "../src/harness/context-compaction.ts";
-import { scopeId } from "../src/types.ts";
-import { sleep } from "../src/util/async.ts";
-import type { SessionStore } from "../src/sessions/session-store.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
+import { createTranscriptSource } from "../../src/sessions/transcript-source.ts";
+import { appendToTranscript } from "../../src/surfaces/outbound.ts";
+import { forModelContext, forSearchView } from "../../src/harness/context-compaction.ts";
+import { scopeId } from "../../src/types.ts";
+import { sleep } from "../../src/util/async.ts";
+import type { SessionStore } from "../../src/sessions/session-store.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 const scope = scopeId("personal", "alice");
 
