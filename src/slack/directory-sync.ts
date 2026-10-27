@@ -8,7 +8,7 @@ import {
   isExternallyShared,
 } from "./identity.ts";
 import { createRefreshCoalescer } from "./message-gating.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { reportFailure, swallowAs } from "../util/errors.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 
 export type RosterRef = { id: string; info?: ChannelMeta };
@@ -67,11 +67,7 @@ export async function allClassifiedRosters(
           memberIds = await fetchChannelMemberIds(client, reader.ids.botUserId, ref.id);
         } catch (err) {
           if (kind.requireComplete) throw err;
-          console.error(
-            "%s",
-            `[slack-plugin] members fetch failed for ${kind.item} ${ref.id}:`,
-            (err as Error).message,
-          );
+          reportFailure(`slack: ${kind.item} members fetch`, err, ref.id);
           continue;
         }
         const actors: ActorAssertion[] = [];
@@ -135,7 +131,7 @@ async function fetchGroups(ctx: DirectorySyncContext, client: any) {
     );
     return { groupMembers, groupIds, groupRosterIds: [...groupRosters.keys()], groupsSyncedAt };
   } catch (err) {
-    console.error("[slack-plugin] group-DM list failed:", (err as Error).message);
+    reportFailure("slack: group-DM list", err);
     return {};
   }
 }
@@ -154,7 +150,7 @@ async function fetchChannels(
     );
     listed = [...all.filter((c) => !c.is_private), ...all.filter((c) => c.is_private)];
   } catch (err) {
-    console.error("[slack-plugin] channel list failed:", (err as Error).message);
+    reportFailure("slack: channel list", err);
     return null;
   }
   const channels = listed.map((c) => ({
@@ -227,7 +223,7 @@ async function crawlAndPush(
     if (!applied) console.warn("[slack-plugin] directory push refused by the store (stale stamp) — will retry");
     return fetched !== null && applied;
   } catch (err) {
-    console.error("[slack-plugin] directory push failed:", (err as Error).message);
+    reportFailure("slack: directory push", err);
     return false;
   }
 }
@@ -250,7 +246,7 @@ export async function pushDirectory(
       return crawlAndPush(ctx, snap, client, invalidations, () => lostFlag, targetChannelIds);
     });
   } catch (err) {
-    console.error("[slack-plugin] directory sync lease failed:", errMessage(err));
+    reportFailure("slack: directory sync lease", err);
     return false;
   }
   if (pushed === null) console.log("[slack-plugin] directory sync skipped: the sync lease is held elsewhere");
