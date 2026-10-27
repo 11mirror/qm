@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { applyPgMigrations, definePgMigration } from "../../src/persistence/pg-pool.ts";
+import { applyPgMigrations, definePgMigration, type PgMigrationDefinition } from "../../src/persistence/pg-pool.ts";
 import { applyTenancy, TENANT_BYPASS_OPTION } from "../../src/persistence/tenancy.ts";
 import {
   columnName,
@@ -58,6 +58,47 @@ async function seedMap(pool: pg.Pool, table: string, seeds: readonly Seed[]) {
   }
 }
 
+async function runMigration(pool: pg.Pool, migration: PgMigrationDefinition) {
+  await pool.query(`DELETE FROM qm_schema_migrations WHERE id = $1`, [migration.id]);
+  await applyPgMigrations(pool, [definePgMigration(migration.id, migration.statements)]);
+  for (const statement of migration.statements) await pool.query(statement);
+}
+
+const stripNulls = (json: Json) => Object.fromEntries(Object.entries(json).filter(([, v]) => v !== null));
+
+async function assertDualWrites(pool: pg.Pool, conversion: MapConversion, sample: { json: Json; want: Json }) {
+  const { spec } = conversion;
+  const codec = tableCodec<Json>(spec);
+  const keyed = (id: string, json: Json) => ({ ...json, ...(spec.keyIsField ? { [spec.key]: id } : {}) });
+  const client = await pool.connect();
+  const read = async (id: string) =>
+    (
+      await client.query(`SELECT id, json, ${codec.columns} FROM ${spec.table} WHERE ${columnName(spec.key)} = $1`, [
+        id,
+      ])
+    ).rows[0];
+  try {
+    await client.query("BEGIN");
+    await client.query(`DELETE FROM ${spec.table}`);
+    await client.query(`INSERT INTO ${spec.table} (id, json) VALUES ('old-writer', $1)`, [
+      keyed("old-writer", sample.json),
+    ]);
+    assert.deepEqual(codec.row(await read("old-writer")), keyed("old-writer", sample.want));
+    await client.query(`DELETE FROM ${spec.table}`);
+    const record = keyed("new-writer", sample.want);
+    await client.query(
+      `INSERT INTO ${spec.table} (${codec.columns}) VALUES (${codec.placeholders})`,
+      codec.values("new-writer", record),
+    );
+    const fromNew = await read("new-writer");
+    assert.equal(fromNew.id, "new-writer", `${spec.table} keeps the old key column in step`);
+    assert.deepEqual(stripNulls(fromNew.json), record, `${spec.table} keeps json in step for older readers`);
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
+}
+
 export async function assertMapConversion(conversion: MapConversion): Promise<void> {
   const { spec } = conversion;
   const codec = tableCodec<Json>(spec);
@@ -70,28 +111,47 @@ export async function assertMapConversion(conversion: MapConversion): Promise<vo
       [randomUUID(), rows.slice(1)],
     ],
   ];
+  const typedRows = async (pool: pg.Pool, tenant: string | null) =>
+    codec.rows(
+      (
+        await pool.query(
+          `SELECT ${codec.columns} FROM ${spec.table} ${tenant ? "WHERE tenant_id = $1" : ""} ORDER BY ${columnName(spec.key)}`,
+          tenant ? [tenant] : [],
+        )
+      ).rows,
+    );
   for (const seeds of cases) {
     const pool = new pg.Pool({ connectionString: testDatabaseUrl(), options: TENANT_BYPASS_OPTION });
     try {
       await seedMap(pool, spec.table, seeds);
-      await pool.query(`DELETE FROM qm_schema_migrations WHERE id = $1`, [conversion.id]);
-      await applyPgMigrations(pool, [definePgMigration(conversion.id, conversion.statements)]);
-      for (const statement of conversion.statements) await pool.query(statement);
-      const columns = await pool.query(
-        `SELECT 1 FROM information_schema.columns WHERE table_name = $1 AND column_name = 'json'`,
-        [spec.table],
-      );
-      assert.equal(columns.rowCount, 0, `${spec.table} keeps no json column`);
-      const versions = await pool.query(`SELECT 1 FROM durable_map_versions WHERE tbl = $1`, [spec.table]);
-      assert.equal(versions.rowCount, 0, `${spec.table} leaves no durable_map_versions row`);
+      await runMigration(pool, conversion);
       for (const [tenant, seeded] of seeds) {
-        const found = await pool.query(
-          `SELECT ${codec.columns} FROM ${spec.table} ${tenant ? "WHERE tenant_id = $1" : ""} ORDER BY ${columnName(spec.key)}`,
+        const want = seeded.map((row) => wanted.get(row.id));
+        assert.deepEqual(await typedRows(pool, tenant), want, `${spec.table} typed rows for tenant ${tenant}`);
+        const json = await pool.query(
+          `SELECT json FROM ${spec.table} ${tenant ? "WHERE tenant_id = $1" : ""} ORDER BY id`,
           tenant ? [tenant] : [],
         );
-        const want = seeded.map((row) => wanted.get(row.id));
-        assert.deepEqual(codec.rows(found.rows), want, `${spec.table} rows for tenant ${tenant}`);
+        assert.deepEqual(
+          json.rows.map((row) => row.json),
+          seeded.map((row) => row.json),
+          `${spec.table} json untouched`,
+        );
       }
+      if (!seeds[0]![0]) await assertDualWrites(pool, conversion, rows[0]!);
+      await runMigration(pool, conversion.contract);
+      const json = await pool.query(
+        `SELECT 1 FROM information_schema.columns WHERE table_name = $1 AND column_name IN ('json', 'id')`,
+        [spec.table],
+      );
+      assert.equal(json.rowCount, columnName(spec.key) === `"id"` ? 1 : 0, `${spec.table} contract drops json`);
+      assert.equal((await pool.query(`SELECT 1 FROM durable_map_versions WHERE tbl = $1`, [spec.table])).rowCount, 0);
+      for (const [tenant, seeded] of seeds)
+        assert.deepEqual(
+          await typedRows(pool, tenant),
+          seeded.map((row) => wanted.get(row.id)),
+          `${spec.table} after contract`,
+        );
     } finally {
       await pool.end();
     }
