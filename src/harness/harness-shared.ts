@@ -118,10 +118,14 @@ export async function resumeInterruptedToolCall(
       });
     }
   } catch (error) {
-    isError = recorded ? recorded.isError === true : true;
-    content = [{ type: "text", text: recorded ? (recorded.text ?? "") : `[error] ${errMessage(error)}` }];
-    if (!recorded)
-      await resumeEmit({ kind: "ToolResult", tool: call.tool, callId: call.callId, isError, text: content[0]!.text });
+    if (recorded) throw error;
+    await resumeEmit({
+      kind: "ToolResult",
+      tool: call.tool,
+      callId: call.callId,
+      isError: true,
+      text: `[error] ${errMessage(error)}`,
+    });
   } finally {
     state.routeEmit(emit);
     state.bindAbort(abortSignal);

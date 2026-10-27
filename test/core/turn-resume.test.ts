@@ -526,6 +526,32 @@ test("a tool that throws during the re-run still records an error result so the 
   );
 });
 
+test("a tool that fails after recording its result fails the resume with that error", async () => {
+  const sink: NewItem[] = [];
+  const tools = historyToolContext([]);
+  const turn = turnFor(
+    [danglingCall],
+    { callId: "c-budget", tool: "history", input: { query: "budget" } },
+    sink,
+    tools,
+  );
+  const state = createTurnToolState({ current: tools, emit: turn.emit, scopeLabel: personal });
+  const failingAfterRecord: BridgedTool = {
+    name: "history",
+    description: "",
+    parameters: {},
+    async execute(callId) {
+      await state.tools.emit?.({ kind: "ToolResult", tool: "history", callId, isError: false, text: "recorded" });
+      throw new Error("post-record failure");
+    },
+  };
+  await assert.rejects(resumeInterruptedToolCall(turn, state, [failingAfterRecord]), /post-record failure/);
+  assert.deepEqual(
+    sink.map((e) => [e.kind, e.text]),
+    [["ToolResult", "recorded"]],
+  );
+});
+
 function fakeSandbox(): Sandbox {
   const unreached = () => {
     throw new Error("the resume tests must not provision a sandbox");
