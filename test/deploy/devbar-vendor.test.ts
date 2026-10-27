@@ -1,23 +1,25 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 
 const root = resolve(import.meta.dirname, "../..");
-const vendored = resolve(root, "src/deploy/vendor/devbar.js");
 
 test("the devbar build succeeds and reproduces the vendored bundle", async () => {
-  const committed = await readFile(vendored, "utf8");
+  const outDir = await mkdtemp(join(tmpdir(), "devbar-"));
   try {
-    await promisify(execFile)(process.execPath, [resolve(root, "scripts/build-app-devbar.mjs")], { cwd: root });
-    assert.equal(
-      await readFile(vendored, "utf8"),
-      committed,
-      "run npm run build:app-annotations and commit the bundle",
-    );
+    await promisify(execFile)(process.execPath, [resolve(root, "scripts/build-app-devbar.mjs"), outDir], { cwd: root });
+    for (const name of ["devbar.js", "devbar.css", "LICENSE"]) {
+      assert.equal(
+        await readFile(join(outDir, name), "utf8"),
+        await readFile(resolve(root, "src/deploy/vendor", name), "utf8"),
+        `${name} is stale: run npm run build:app-annotations and commit src/deploy/vendor`,
+      );
+    }
   } finally {
-    await writeFile(vendored, committed);
+    await rm(outDir, { recursive: true, force: true });
   }
 });

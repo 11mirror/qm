@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const outDir = resolve(process.argv[2] ?? resolve(root, "src/deploy/vendor"));
 const entry = fileURLToPath(import.meta.resolve("devbar.sh"));
 const version = JSON.parse(await readFile(resolve(dirname(entry), "../package.json"), "utf8")).version;
 if (version !== "1.1.0") throw new Error("Review the QM Devbar adapter before upgrading devbar.sh");
@@ -201,7 +202,7 @@ function adaptCaptureOverlay(source) {
 
 await build({
   entryPoints: [resolve(root, "plugins/web-ui/src/app-devbar.ts")],
-  outfile: resolve(root, "src/deploy/vendor/devbar.js"),
+  outfile: resolve(outDir, "devbar.js"),
   bundle: true,
   minify: true,
   legalComments: "none",
@@ -370,7 +371,7 @@ const css = await transform(await readFile(resolve(dirname(entry), "index.css"),
   legalComments: "none",
 });
 await writeFile(
-  resolve(root, "src/deploy/vendor/devbar.css"),
+  resolve(outDir, "devbar.css"),
   css.code +
     `
 [data-devbar="root"][data-passive="true"] .devbar-toolbar > :not([data-devbar="select-overlay"]) { display: none !important; }
@@ -388,4 +389,4 @@ const licenses = await Promise.all(
     return `${name} ${pkg.version}\n\n${await readFile(resolve(folder, "LICENSE"), "utf8")}`;
   }),
 );
-await writeFile(resolve(root, "src/deploy/vendor/LICENSE"), licenses.join("\n\n"));
+await writeFile(resolve(outDir, "LICENSE"), licenses.join("\n\n"));
