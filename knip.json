@@ -55,6 +55,7 @@
         "src/hljs-lang-stub.ts",
         "test/**/*.test.ts",
         "src/app-devbar.ts",
+        "src/app-text-selection.ts",
         "src/inbox.ts",
         "src/context-model.ts",
         "src/assistant-sidebar.ts"
