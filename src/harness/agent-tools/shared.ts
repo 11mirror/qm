@@ -104,7 +104,6 @@ export const SURFACE_ACTIONS = [
 const LIST_PAGE_SIZE = 25;
 export const CRON_ID_ACTIONS = new Set(["get", "runs", "patch", "delete", "disable", "run", "note"]);
 export const SENDER_WEBHOOK_SCHEMES = WEBHOOK_SCHEMES.filter((scheme) => scheme !== "hmac-sha256");
-const LIST_PAGE_MAX = 100;
 const LIST_TASK_PREVIEW_CHARS = 200;
 export const WEBHOOK_ACTION_PREVIEW_CHARS = 2000;
 
@@ -139,7 +138,7 @@ export function pageOf<T>(
   opts: { offset?: number; limit?: number },
 ): { page: T[]; offset: number; note: string | null } {
   const offset = Math.max(0, opts.offset ?? 0);
-  const limit = Math.min(Math.max(1, opts.limit ?? LIST_PAGE_SIZE), LIST_PAGE_MAX);
+  const limit = Math.max(1, opts.limit ?? LIST_PAGE_SIZE);
   const page = items.slice(offset, offset + limit);
   const last = offset + page.length;
   if (page.length === 0) return { page, offset, note: `nothing at offset ${offset} — ${items.length} total` };
