@@ -1,3 +1,5 @@
+import type { NewItem } from "../../src/sessions/items.ts";
+import { contextSummaryItem } from "../../src/sessions/session-store.ts";
 import "../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -303,6 +305,42 @@ test("read shows whole entries, honours the caller's limit and maxChars, and say
   const total = loaded.reduce((n, count) => n + count, 0);
   assert.ok(total < 100, `only the newest entries that can fill 400 chars are loaded, not all 300 (loaded ${total})`);
   r.sessions.visibleItems = visibleItems;
+});
+
+test("a child's last word is found by paging back, reads a stop with no reply, and stops at its compaction boundary", async () => {
+  const r = await rig();
+  const api = r.syscallsFor(r.room);
+  const child = async (thread: string, items: NewItem[]) => {
+    const session = await r.sessions.getOrCreateByThread(thread, "dm", scope);
+    await r.sessions.setParentSession(session.id, r.room.id);
+    await r.sessions.addParticipant(session.id, actor.id);
+    const { lease } = await r.sessions.acquireLease(session.id);
+    assert.ok(lease);
+    for (const item of items) await r.sessions.append(lease, item);
+    await r.sessions.releaseLease(lease);
+    return session.id;
+  };
+  const buried = await child("subagent:buried", [
+    { kind: "AgentMessage", text: "BURIED-REPLY" },
+    ...Array.from({ length: 90 }, (_, i): NewItem => ({
+      kind: "ToolCall",
+      tool: "execute",
+      callId: `c${i}`,
+      body: {},
+    })),
+  ]);
+  const stopped = await child("subagent:stopped", [{ kind: "Stop", body: { reason: "by the user" } }]);
+  const compacted = await child("subagent:compacted", [
+    { kind: "AgentMessage", text: "FORGOTTEN-REPLY" },
+    contextSummaryItem(0, "summary"),
+    { kind: "ToolCall", tool: "execute", callId: "c2", body: {} },
+  ]);
+  const listed = await api.read({});
+  assert.ok(listed.ok && listed.mode === "children");
+  const said = new Map(listed.children.map((c) => [c.sessionId, c.lastSaid]));
+  assert.equal(said.get(buried), "BURIED-REPLY");
+  assert.equal(said.get(stopped), "[system] Subagent stopped by the user. No reply.");
+  assert.equal(said.get(compacted), undefined, "nothing said since the child's context was compacted");
 });
 
 test("explicit source title changes reach fresh child tasks without copying history", async () => {
