@@ -1,6 +1,6 @@
 import { likeEscape } from "../persistence/like.ts";
 import { createHash } from "node:crypto";
-import { createPgPool, type PoolClient, withPgTransaction, tenantCols } from "../persistence/pg-pool.ts";
+import { createPgPool, type PgPool, type PoolClient, withPgTransaction, tenantCols } from "../persistence/pg-pool.ts";
 import type { PrincipalType } from "../types.ts";
 import { foldPrincipalId, rosterIds } from "./person.ts";
 import {
@@ -61,93 +61,94 @@ function dedupMemberships(rows: ChannelMembership[]): ChannelMembership[] {
   );
 }
 
-export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
-  const { q, pool } = createPgPool(connectionString, []);
+async function pick<T>(
+  q: PgPool["q"],
+  query: string,
+  table: string,
+  idCol: string,
+  labelLcCol: string,
+  cols: string,
+  map: (r: Record<string, unknown>) => T,
+): Promise<{ kind: "one"; item: T } | { kind: "ambiguous"; items: T[] } | { kind: "none" }> {
+  const qn = normDirectoryQuery(query);
+  if (!qn) return { kind: "none" };
+  const from = `FROM ${table} WHERE org_id = $1`;
 
-  async function pick<T>(
-    query: string,
-    table: string,
-    idCol: string,
-    labelLcCol: string,
-    cols: string,
-    map: (r: Record<string, unknown>) => T,
-  ): Promise<{ kind: "one"; item: T } | { kind: "ambiguous"; items: T[] } | { kind: "none" }> {
-    const qn = normDirectoryQuery(query);
-    if (!qn) return { kind: "none" };
-    const from = `FROM ${table} WHERE org_id = $1`;
+  const byId = await q(`SELECT ${cols} ${from} AND lower(${idCol}) = $2 LIMIT 1`, [tenant().orgId, qn]);
+  if (byId.length) return { kind: "one", item: map(byId[0]!) };
 
-    const byId = await q(`SELECT ${cols} ${from} AND lower(${idCol}) = $2 LIMIT 1`, [tenant().orgId, qn]);
-    if (byId.length) return { kind: "one", item: map(byId[0]!) };
+  const exact = await q(`SELECT ${cols} ${from} AND ${labelLcCol} = $2 ORDER BY ${idCol} LIMIT ${MAX_CANDIDATES + 1}`, [
+    tenant().orgId,
+    qn,
+  ]);
+  if (exact.length === 1) return { kind: "one", item: map(exact[0]!) };
+  if (exact.length > 1) return { kind: "ambiguous", items: exact.slice(0, MAX_CANDIDATES).map(map) };
 
-    const exact = await q(
-      `SELECT ${cols} ${from} AND ${labelLcCol} = $2 ORDER BY ${idCol} LIMIT ${MAX_CANDIDATES + 1}`,
-      [tenant().orgId, qn],
-    );
-    if (exact.length === 1) return { kind: "one", item: map(exact[0]!) };
-    if (exact.length > 1) return { kind: "ambiguous", items: exact.slice(0, MAX_CANDIDATES).map(map) };
-
-    const esc = likeEscape(qn);
-    let pool2 = await q(
+  const esc = likeEscape(qn);
+  let pool2 = await q(
+    `SELECT ${cols} ${from} AND ${labelLcCol} LIKE $2 ESCAPE '\\' ORDER BY ${labelLcCol}, ${idCol} LIMIT ${MAX_CANDIDATES + 1}`,
+    [tenant().orgId, `${esc}%`],
+  );
+  if (!pool2.length) {
+    pool2 = await q(
       `SELECT ${cols} ${from} AND ${labelLcCol} LIKE $2 ESCAPE '\\' ORDER BY ${labelLcCol}, ${idCol} LIMIT ${MAX_CANDIDATES + 1}`,
-      [tenant().orgId, `${esc}%`],
+      [tenant().orgId, `%${esc}%`],
     );
-    if (!pool2.length) {
-      pool2 = await q(
-        `SELECT ${cols} ${from} AND ${labelLcCol} LIKE $2 ESCAPE '\\' ORDER BY ${labelLcCol}, ${idCol} LIMIT ${MAX_CANDIDATES + 1}`,
-        [tenant().orgId, `%${esc}%`],
+  }
+  if (!pool2.length) return { kind: "none" };
+  if (pool2.length === 1) return { kind: "one", item: map(pool2[0]!) };
+  return { kind: "ambiguous", items: pool2.slice(0, MAX_CANDIDATES).map(map) };
+}
+
+async function swapIfChanged(
+  pool: PgPool["pool"],
+  hashCol: string,
+  hash: string,
+  syncedAt: number | undefined,
+  write: (client: PoolClient) => Promise<boolean | void>,
+  partial = false,
+): Promise<boolean> {
+  const syncedAtCol = hashCol.replace(/_hash$/, "_synced_at");
+  return withPgTransaction(await pool(), async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [tenant().orgId]);
+    const sync = await client.query(`SELECT ${hashCol}, ${syncedAtCol} FROM directory_sync WHERE org_id = $1`, [
+      tenant().orgId,
+    ]);
+    const row = sync.rows[0];
+    if (
+      syncedAt !== undefined &&
+      row?.[syncedAtCol] != null &&
+      (partial ? Number(row[syncedAtCol]) >= syncedAt : Number(row[syncedAtCol]) > syncedAt)
+    ) {
+      console.warn(
+        `[directory] refused stale ${hashCol.replace(/_hash$/, "")} swap for ${tenant().orgId}: stamped ${Number(row[syncedAtCol]) - syncedAt}ms behind`,
       );
+      return false;
     }
-    if (!pool2.length) return { kind: "none" };
-    if (pool2.length === 1) return { kind: "one", item: map(pool2[0]!) };
-    return { kind: "ambiguous", items: pool2.slice(0, MAX_CANDIDATES).map(map) };
-  }
-
-  async function swapIfChanged(
-    hashCol: string,
-    hash: string,
-    syncedAt: number | undefined,
-    write: (client: PoolClient) => Promise<boolean | void>,
-    partial = false,
-  ): Promise<boolean> {
-    const syncedAtCol = hashCol.replace(/_hash$/, "_synced_at");
-    return withPgTransaction(await pool(), async (client) => {
-      await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [tenant().orgId]);
-      const sync = await client.query(`SELECT ${hashCol}, ${syncedAtCol} FROM directory_sync WHERE org_id = $1`, [
-        tenant().orgId,
-      ]);
-      const row = sync.rows[0];
-      if (
-        syncedAt !== undefined &&
-        row?.[syncedAtCol] != null &&
-        (partial ? Number(row[syncedAtCol]) >= syncedAt : Number(row[syncedAtCol]) > syncedAt)
-      ) {
-        console.warn(
-          `[directory] refused stale ${hashCol.replace(/_hash$/, "")} swap for ${tenant().orgId}: stamped ${Number(row[syncedAtCol]) - syncedAt}ms behind`,
+    if (!partial && row?.[hashCol] === hash) {
+      if (syncedAt !== undefined) {
+        await client.query(
+          `UPDATE directory_sync SET ${syncedAtCol} = GREATEST(COALESCE(${syncedAtCol}, 0), $2) WHERE org_id = $1`,
+          [tenant().orgId, syncedAt],
         );
-        return false;
       }
-      if (!partial && row?.[hashCol] === hash) {
-        if (syncedAt !== undefined) {
-          await client.query(
-            `UPDATE directory_sync SET ${syncedAtCol} = GREATEST(COALESCE(${syncedAtCol}, 0), $2) WHERE org_id = $1`,
-            [tenant().orgId, syncedAt],
-          );
-        }
-        return true;
-      }
-      const complete = await write(client);
-      if (partial && complete === false) return false;
-      await client.query(
-        `INSERT INTO directory_sync (org_id, ${hashCol}, ${syncedAtCol}, updated_at) VALUES ($1, $2, $3, $4)
-         ON CONFLICT (${tenantCols("org_id")}) DO UPDATE SET ${hashCol} = EXCLUDED.${hashCol},
-           ${syncedAtCol} = COALESCE(EXCLUDED.${syncedAtCol}, directory_sync.${syncedAtCol}),
-           updated_at = EXCLUDED.updated_at`,
-        [tenant().orgId, partial || complete === false ? null : hash, partial ? null : (syncedAt ?? null), Date.now()],
-      );
       return true;
-    });
-  }
+    }
+    const complete = await write(client);
+    if (partial && complete === false) return false;
+    await client.query(
+      `INSERT INTO directory_sync (org_id, ${hashCol}, ${syncedAtCol}, updated_at) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (${tenantCols("org_id")}) DO UPDATE SET ${hashCol} = EXCLUDED.${hashCol},
+         ${syncedAtCol} = COALESCE(EXCLUDED.${syncedAtCol}, directory_sync.${syncedAtCol}),
+         updated_at = EXCLUDED.updated_at`,
+      [tenant().orgId, partial || complete === false ? null : hash, partial ? null : (syncedAt ?? null), Date.now()],
+    );
+    return true;
+  });
+}
 
+function directoryRosterWrites(db: Pick<PgPool, "q" | "pool">) {
+  const { pool } = db;
   return {
     async replace(members, syncedAt) {
       const byId = new Map<string, DirectoryMember>();
@@ -158,7 +159,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
         internal.map((m) => `${m.principalId}|${m.displayName}|${m.type}|${m.slackId ?? ""}|${m.avatarUrl ?? ""}`),
       );
 
-      return swapIfChanged("members_hash", hash, syncedAt, async (client) => {
+      return swapIfChanged(pool, "members_hash", hash, syncedAt, async (client) => {
         await client.query("DELETE FROM directory_members WHERE org_id = $1", [tenant().orgId]);
         if (internal.length) {
           await client.query(
@@ -207,6 +208,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       const hash = hashRoster([...channelsPart, ...membersPart]);
 
       const applied = await swapIfChanged(
+        pool,
         "channels_hash",
         hash,
         syncedAt,
@@ -284,7 +286,12 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       );
       return applied;
     },
+  } satisfies Partial<DirectoryStore>;
+}
 
+function directoryChannelReads(db: Pick<PgPool, "q" | "pool">) {
+  const { q } = db;
+  return {
     async setWorkspaceUrl(url) {
       await q(
         `INSERT INTO directory_meta (org_id, workspace_url, updated_at) VALUES ($1, $2, $3)
@@ -344,7 +351,12 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       ]);
       return rows.length > 0 ? (rows[0]!.is_private as boolean) : undefined;
     },
+  } satisfies Partial<DirectoryStore>;
+}
 
+function directoryGroups(db: Pick<PgPool, "q" | "pool">) {
+  const { q, pool } = db;
+  return {
     async replaceGroups(groupMembers, syncedAt, groupIds, groupRosterIds) {
       const allRows = dedupPairs(
         groupMembers,
@@ -362,7 +374,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
         ...rows.map((member) => `m:${member.groupId}|${member.principalId}`),
       ]);
 
-      return swapIfChanged("groups_hash", hash, syncedAt, async (client) => {
+      return swapIfChanged(pool, "groups_hash", hash, syncedAt, async (client) => {
         await client.query(
           "DELETE FROM directory_group_members WHERE org_id = $1 AND NOT (group_id = ANY($2::text[]))",
           [tenant().orgId, listedIds],
@@ -477,7 +489,12 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       );
       return rows.map((row) => row.group_id as string);
     },
+  } satisfies Partial<DirectoryStore>;
+}
 
+function directoryLookups(db: Pick<PgPool, "q" | "pool">) {
+  const { q } = db;
+  return {
     async conversationMembers(kind, id) {
       const rows =
         kind === "channel"
@@ -561,7 +578,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
         [tenant().orgId, query.trim()],
       );
       if (bySlackId.length) return { kind: "one", member: memberRow(bySlackId[0]!) };
-      const m = await pick(query, "directory_members", "principal_id", "display_name_lc", MEMBER_COLS, memberRow);
+      const m = await pick(q, query, "directory_members", "principal_id", "display_name_lc", MEMBER_COLS, memberRow);
       if (m.kind === "one") return { kind: "one", member: m.item };
       if (m.kind === "ambiguous") return { kind: "ambiguous", candidates: m.items };
       return { kind: "none" };
@@ -569,6 +586,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
 
     async resolveChannel(query) {
       const m = await pick(
+        q,
         query,
         "directory_channels",
         "channel_id",
@@ -580,5 +598,15 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       if (m.kind === "ambiguous") return { kind: "ambiguous", candidates: m.items };
       return { kind: "none" };
     },
+  } satisfies Partial<DirectoryStore>;
+}
+
+export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
+  const db = createPgPool(connectionString, []);
+  return {
+    ...directoryRosterWrites(db),
+    ...directoryChannelReads(db),
+    ...directoryGroups(db),
+    ...directoryLookups(db),
   };
 }

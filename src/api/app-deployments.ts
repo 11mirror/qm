@@ -2,7 +2,8 @@ import { validEmail } from "../identity/external-members.ts";
 import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../admin/invite-email.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
 import { errMessage } from "../util/errors.ts";
-import { DeployAccessError, type Reach } from "../deploy/deploy-service.ts";
+import { DeployAccessError } from "../deploy/deploy-service-support.ts";
+import { type Reach } from "../deploy/deploy-service.ts";
 import { mintDeployGitAccess } from "../deploy/access-token.ts";
 
 import type { App, AppDeps, ViewerDeployment } from "./app-types.ts";

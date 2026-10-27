@@ -3,15 +3,10 @@ import { notifyDeploymentShared } from "./share-notice.ts";
 import type { Outbound } from "../surfaces/outbound.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "./embed-ancestors.ts";
 import { deploymentShareScope } from "./email-access.ts";
-import { mkdir, writeFile } from "node:fs/promises";
-import { join, dirname, resolve, relative, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { Grant, Permission, ScopeId } from "../types.ts";
-import { isManageableCreationScope, parseScopeId, scopeId } from "../types.ts";
+import type { Permission, ScopeId } from "../types.ts";
+import { parseScopeId, scopeId } from "../types.ts";
 import type { AclStore } from "../acl/acl-store.ts";
-import { deployRef, encodeRef } from "../acl/resource-ref.ts";
-import { normalizeRelPath } from "./deploy-fs.ts";
-import { samePerson } from "../directory/person.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import {
   currentVersionOf,
@@ -19,12 +14,22 @@ import {
   type DeployStore,
   type Deployment,
   type DeployEndpoint,
-  type DeploymentVersion,
 } from "./deploy-store.ts";
 import type { DeployProfile, DeployProvider } from "./deploy-provider.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { createKeyedQueue } from "../util/async.ts";
 import { reportFailure, swallow, swallowAs } from "../util/errors.ts";
+import { createDeployCore, type DeployCore } from "./deploy-service-core.ts";
+import {
+  DeployAccessError,
+  PUBLIC_LINKS_UNAVAILABLE,
+  assertAppSize,
+  fileSizes,
+  renewDue,
+  requiredEntrypoint,
+  snapshotFiles,
+  validateDisplayName,
+  validateName,
+} from "./deploy-service-support.ts";
 
 export interface DeployFile {
   path: string;
@@ -113,21 +118,6 @@ export interface DeploymentGrantee {
   permission: Permission;
 }
 
-const PUBLIC_LINKS_UNAVAILABLE =
-  "This instance serves apps at /d/<app>/ on its own domain, which always requires sign-in, so a public link would still ask visitors to sign in. Public links need an apps domain: set DEPLOY_APPS_DOMAIN to a domain with a wildcard DNS record routed to the portal, and AWS_DEPLOY_GATE_SECRET.";
-
-export type DeployAccessErrorCode =
-  "not_found" | "forbidden" | "external_sharing_disabled" | "public_links_unavailable";
-
-export class DeployAccessError extends Error {
-  readonly code: DeployAccessErrorCode;
-  constructor(code: DeployAccessErrorCode, message: string) {
-    super(message);
-    this.name = "DeployAccessError";
-    this.code = code;
-  }
-}
-
 export interface DeployServiceDeps {
   outbound?: Outbound;
   deployAppsDomain?: string;
@@ -148,183 +138,9 @@ export interface DeployServiceDeps {
   deploymentEnv?: (deployment: Deployment) => Promise<Record<string, string>>;
 }
 
-const NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function assertAppSize(sizes: readonly number[], maxBytes: number | undefined): void {
-  if (!maxBytes) return;
-  const total = sizes.reduce((sum, n) => sum + n, 0);
-  if (total > maxBytes) {
-    throw new Error(
-      `the app is too large to publish: ${total} bytes, maximum ${maxBytes} bytes — publish fewer or smaller files`,
-    );
-  }
-}
-
-const fileSizes = (files: readonly DeployFile[] | undefined): number[] =>
-  (files ?? []).map((f) => (typeof f.data === "string" ? Buffer.byteLength(f.data) : f.data.byteLength));
-
-function validateName(name: string): void {
-  if (UUID_RE.test(name)) throw new Error(`invalid deployment name (looks like an id): ${name}`);
-  if (!NAME_RE.test(name)) {
-    throw new Error(
-      `invalid deployment name "${name}": use 2-40 chars, lowercase letters/digits/hyphens, no leading/trailing hyphen`,
-    );
-  }
-}
-
-const DISPLAY_NAME_MAX = 60;
-function validateDisplayName(displayName: string): void {
-  if (/[\u0000-\u001f\u007f]/.test(displayName)) throw new Error("invalid display name: no control characters");
-  if (displayName.length > DISPLAY_NAME_MAX) throw new Error(`display name too long (max ${DISPLAY_NAME_MAX} chars)`);
-}
-
-export function deploymentEntrypoint(d: Deployment | null): string | undefined {
-  return currentVersionOf(d)?.entrypoint || undefined;
-}
-
-function requiredEntrypoint(input: string | undefined, d: Deployment | null): string {
-  const entrypoint = input ?? deploymentEntrypoint(d);
-  if (!entrypoint) throw new Error('publish requires an entrypoint, e.g. "node server.js"');
-  return entrypoint;
-}
-
-export function createDeployService(deps: DeployServiceDeps): DeployService {
-  const advisoryLock = deps.advisoryLock;
-  const deployQueue = createKeyedQueue();
-  const externalSharingAllowed = (ownerScopeId: ScopeId): Promise<boolean> =>
-    deps.externalSharingAllowed?.(ownerScopeId) ?? Promise.resolve(false);
-  async function assertShareAllowed(ownerScopeId: ScopeId, grantee: ScopeId, permission: Permission | null) {
-    const { kind, ref } = parseScopeId(grantee);
-    if (permission === null || kind !== "personal" || !ref?.includes("@")) return;
-    if ((await deps.canManageEmail?.(ref)) || (await externalSharingAllowed(ownerScopeId))) return;
-    throw new DeployAccessError("external_sharing_disabled", EXTERNAL_APP_SHARING_OFF);
-  }
-  function withDeployLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
-    return deployQueue(id, () => advisoryLock.withLock(`deploy:${id}`, fn));
-  }
-
-  const applyVersion = async (id: string, version: DeploymentVersion, alwaysOn?: boolean): Promise<DeployEndpoint> => {
-    const stored = (await deps.deployStore.get(id))!;
-    const d = alwaysOn === undefined ? stored : { ...stored, alwaysOn };
-    const deploymentEnv = await deps.deploymentEnv?.(d);
-    if (deploymentEnv && Object.keys(deploymentEnv).length)
-      version = { ...version, env: { ...version.env, ...deploymentEnv } };
-    let endpoint: DeployEndpoint;
-    if (version.commit && deps.provider.profile.appliesGitBundle) {
-      endpoint = await deps.provider.apply(
-        d,
-        version,
-        (await deps.deployStore.bundleOf(id, version.version)) ?? undefined,
-      );
-    } else {
-      let materialized = version;
-      if (version.commit) {
-        const files = await deps.deployStore.filesOf(id, version.version);
-        if (files == null) throw new Error(`cannot materialize deployment ${id} version ${version.version}`);
-        materialized = { ...version, snapshotDir: await snapshotFiles(deps.deployDir, files) };
-      }
-      endpoint = await deps.provider.apply(d, materialized);
-    }
-    if (alwaysOn !== undefined) await deps.deployStore.setAlwaysOn(id, alwaysOn);
-    if (endpoint.image && endpoint.image !== version.image) {
-      await deps.deployStore.setVersionImage(id, version.version, endpoint.image);
-    }
-    return endpoint;
-  };
-
-  const markVersionRunning = async (id: string, version: number, endpoint: DeployEndpoint): Promise<void> => {
-    await deps.deployStore.setEndpoint(id, endpoint);
-    await deps.deployStore.setStatus(id, "running");
-    await deps.deployStore.setAppliedVersion(id, version);
-  };
-
-  const liveEndpoint = async (d: Deployment): Promise<DeployEndpoint | null> => {
-    if (d.endpoint == null) return d.endpoint;
-    const version = currentVersionOf(d);
-    if (!version) return d.endpoint;
-    const resolved = await deps.provider.resolveEndpoint(d, version);
-    if (resolved) {
-      if (!endpointsEqual(resolved, d.endpoint)) await deps.deployStore.setEndpoint(d.id, resolved);
-      return resolved;
-    }
-    return withDeployLock(d.id, async () => {
-      const cur = await deps.deployStore.get(d.id);
-      if (cur?.status !== "running") return null;
-      const v = currentVersionOf(cur) ?? version;
-      const again = await deps.provider.resolveEndpoint(cur, v);
-      if (again) {
-        if (!endpointsEqual(again, cur.endpoint)) await deps.deployStore.setEndpoint(cur.id, again);
-        return again;
-      }
-      const fresh = await applyVersion(cur.id, v);
-      await markVersionRunning(cur.id, v.version, fresh);
-      return fresh;
-    });
-  };
-
-  const rotateDeployment = (id: string): Promise<void> =>
-    withDeployLock(id, async () => {
-      const cur = await deps.deployStore.get(id);
-      if (!cur || cur.status !== "running" || !renewDue(cur)) return;
-      const v = currentVersionOf(cur);
-      if (!v) return;
-      const endpoint = await applyVersion(cur.id, v);
-      await markVersionRunning(cur.id, v.version, endpoint);
-    });
-
-  const deploymentRef = (id: string): string => encodeRef(deployRef(id));
-  const grantsOn = (d: Deployment): Promise<Grant[]> => deps.acl.grantsFor(d.ownerScopeId, deploymentRef(d.id));
-
-  async function reachAllowed(d: Deployment, principalId: string): Promise<boolean> {
-    if (!principalId) return false;
-    const reaches = async (scope: ScopeId): Promise<boolean> => {
-      if (deps.canReadScope) return deps.canReadScope(principalId, scope);
-      const { kind, ref } = parseScopeId(scope);
-      return kind === "org" || (kind === "personal" && samePerson(ref, principalId));
-    };
-    if (await reaches(d.ownerScopeId)) return true;
-    for (const g of await grantsOn(d)) {
-      if ((g.permission === "read" || g.permission === "write") && (await reaches(g.granteeScopeId))) return true;
-    }
-    return false;
-  }
-
-  async function canWriteScope(callerId: string, scope: ScopeId, actingScopeId?: ScopeId): Promise<boolean> {
-    if (deps.canWriteScope) return deps.canWriteScope(callerId, scope);
-    return scope === `personal:${callerId}` || scope === actingScopeId;
-  }
-
-  async function managesHome(d: Deployment, callerId: string, actingScopeId?: ScopeId): Promise<boolean> {
-    if (d.ownerScopeId === `personal:${callerId}`) return true;
-    if (deps.managesArtifactHome && (await deps.managesArtifactHome(d.ownerScopeId, d.createdBy, callerId)))
-      return true;
-    if (
-      isManageableCreationScope(d.createdInScope) &&
-      (await canWriteScope(callerId, d.createdInScope!, actingScopeId))
-    )
-      return true;
-    return false;
-  }
-
-  async function canManage(
-    d: Deployment,
-    _ownerScopeId: ScopeId,
-    callerId: string,
-    actingScopeId?: ScopeId,
-  ): Promise<boolean> {
-    if (await managesHome(d, callerId, actingScopeId)) return true;
-    for (const grant of await grantsOn(d)) {
-      if (grant.permission !== "write") continue;
-      if (await canWriteScope(callerId, grant.granteeScopeId, actingScopeId)) return true;
-    }
-    return false;
-  }
-
+function deployPublishMethods(deps: DeployServiceDeps, core: DeployCore) {
+  const { withDeployLock, applyVersion, markVersionRunning, deploymentRef } = core;
   return {
-    providerProfile: deps.provider.profile,
-    assertShareAllowed,
-
     async deploy(input) {
       if (input.name !== undefined) {
         validateName(input.name);
@@ -405,7 +221,12 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         return (await deps.deployStore.get(id))!;
       });
     },
+  } satisfies Partial<DeployService>;
+}
 
+function deployLifecycleMethods(deps: DeployServiceDeps, core: DeployCore) {
+  const { withDeployLock, applyVersion, markVersionRunning } = core;
+  return {
     async getDeployment(idOrName) {
       return (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
     },
@@ -475,7 +296,12 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         return (await deps.deployStore.get(id))!;
       });
     },
+  } satisfies Partial<DeployService>;
+}
 
+function deploySettingsMethods(deps: DeployServiceDeps, core: DeployCore) {
+  const { externalSharingAllowed, withDeployLock, deploymentRef } = core;
+  return {
     async renameDeployment(id, name) {
       return withDeployLock(id, async () => {
         validateName(name);
@@ -566,7 +392,12 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
       return (await deps.deployStore.get(d.id))!;
     },
+  } satisfies Partial<DeployService>;
+}
 
+function deployRuntimeMethods(deps: DeployServiceDeps, core: DeployCore) {
+  const { withDeployLock, applyVersion, markVersionRunning, liveEndpoint, rotateDeployment, reachAllowed } = core;
+  return {
     async maintainDeployments() {
       let maintained = 0;
       for (const d of await deps.deployStore.list()) {
@@ -652,7 +483,12 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         return result;
       });
     },
+  } satisfies Partial<DeployService>;
+}
 
+function deployOrUpdateMethods(deps: DeployServiceDeps, core: DeployCore) {
+  const { canManage } = core;
+  return {
     async deployOrUpdate(input) {
       const { ownerScopeId, createdBy } = input;
       if (input.embedAncestors !== undefined && !parseEmbedAncestors(input.embedAncestors))
@@ -744,7 +580,12 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       if (input.embedAncestors !== undefined) await this.setDeploymentEmbedAncestors(d.id, input.embedAncestors);
       return (await deps.deployStore.get(d.id))!;
     },
+  } satisfies Partial<DeployService> & ThisType<DeployService>;
+}
 
+function deployAccessMethods(deps: DeployServiceDeps, core: DeployCore) {
+  const { assertShareAllowed, deploymentRef, grantsOn, managesHome, canManage } = core;
+  return {
     async canManageDeployment(idOrName, callerId, actingScopeId) {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       if (!d) return false;
@@ -826,25 +667,19 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
       return (await deps.deployStore.get(d.id))!;
     },
+  } satisfies Partial<DeployService>;
+}
+
+export function createDeployService(deps: DeployServiceDeps): DeployService {
+  const core = createDeployCore(deps);
+  return {
+    providerProfile: deps.provider.profile,
+    assertShareAllowed: core.assertShareAllowed,
+    ...deployPublishMethods(deps, core),
+    ...deployLifecycleMethods(deps, core),
+    ...deploySettingsMethods(deps, core),
+    ...deployRuntimeMethods(deps, core),
+    ...deployOrUpdateMethods(deps, core),
+    ...deployAccessMethods(deps, core),
   };
-}
-
-const renewDue = (d: Deployment): boolean => d.endpoint?.renewAt !== undefined && Date.now() >= d.endpoint.renewAt;
-
-function endpointsEqual(a: DeployEndpoint, b: DeployEndpoint | null): boolean {
-  return b != null && JSON.stringify(a) === JSON.stringify(b);
-}
-
-async function snapshotFiles(deployDir: string, files: DeployFile[]): Promise<string> {
-  const dir = join(deployDir, randomUUID());
-  await mkdir(dir, { recursive: true });
-  for (const f of files) {
-    const target = resolve(dir, normalizeRelPath(f.path));
-    const rel = relative(dir, target);
-    if (rel.startsWith("..") || isAbsolute(rel)) throw new Error(`deploy file escapes snapshot: ${f.path}`);
-    await mkdir(dirname(target), { recursive: true });
-    if (typeof f.data === "string") await writeFile(target, f.data, "utf8");
-    else await writeFile(target, Buffer.from(f.data));
-  }
-  return dir;
 }

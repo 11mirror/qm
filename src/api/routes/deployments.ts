@@ -1,5 +1,5 @@
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
-import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
+import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service-support.ts";
 import { deploymentView, type App, type DeployInput, type RedeployInput } from "../app.ts";
 import { swallow, swallowAs } from "../../util/errors.ts";
 import { fail, isTextualContentType, refusal, verifySignedRoute } from "../http.ts";

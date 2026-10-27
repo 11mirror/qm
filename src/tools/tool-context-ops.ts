@@ -14,7 +14,8 @@ import { CapabilityUnsupportedError, hasParentPathSegment, supportsAgentComputer
 import type { ScopeId } from "../types.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { waitForClientResult } from "../runs/run-signal-store.ts";
-import { deploymentEntrypoint, type DeployFile } from "../deploy/deploy-service.ts";
+import { deploymentEntrypoint } from "../deploy/deploy-service-support.ts";
+import { type DeployFile } from "../deploy/deploy-service.ts";
 import { publicUrlOf } from "../deploy/deploy-store.ts";
 import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
 import { errMessage, withCleanup } from "../util/errors.ts";
