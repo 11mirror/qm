@@ -27,7 +27,13 @@ const acme = tenantFor("acme", "7d3f5e1a-0000-4000-8000-00000000a001", "acme");
 const beta = tenantFor("beta", "9a1b2c3d-0000-4000-8000-00000000b002", "beta");
 const GAMMA = "c4d5e6f7-0000-4000-8000-00000000c003";
 function directoryOf(active: () => Promise<Tenant[]>): TenantDirectory {
-  return { active, byHost: () => Promise.resolve(undefined), watch: () => {}, close: () => Promise.resolve() };
+  return {
+    active,
+    byHost: () => Promise.resolve(undefined),
+    homeHosts: () => ({ hosts: [] }),
+    watch: () => {},
+    close: () => Promise.resolve(),
+  };
 }
 
 const directory = directoryOf(() => Promise.resolve([acme, beta]));

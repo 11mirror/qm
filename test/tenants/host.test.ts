@@ -26,7 +26,7 @@ import {
   type TenantDirectory,
 } from "../../src/tenants/directory.ts";
 import { createTenantFront } from "../../src/tenants/host.ts";
-import { type TenantRecord, upsertTenant } from "../../src/tenants/registry.ts";
+import { homeTenantId, type TenantRecord, upsertTenant } from "../../src/tenants/registry.ts";
 
 const ACME_ID = "0f8e2c4a-1b2c-4d3e-8f90-123456789abc";
 
@@ -132,19 +132,12 @@ test("core verifies each tenant with the derived secrets its surfaces sign with,
 });
 
 test("the one portal and web UI learn every active tenant's settings and serve each by host", async (t) => {
-  const config = loadConfig({
-    ...deployment,
-    CAPABILITY_SECRET: "home-capability-secret",
-    PORTAL_IDENTITY_SECRET: "home-portal-identity-secret",
-    MODEL_GATEWAY_URL: "https://gateway.example.test",
-    MODEL_GATEWAY_API_KEY_HEADER: "authorization",
-  });
   registerTenantSettings([record]);
   t.after(() => {
     registerTenantSettings([]);
     setEdgeTenants([]);
   });
-  edgeTenantFeed(config, deployment)([tenant(), tenantFor(record.orgId, record.id, record.slug)]);
+  edgeTenantFeed(deployment)([tenant(), tenantFor(record.orgId, record.id, record.slug)]);
   const edge = createServer((req, res) =>
     serveForHost(req, res, () => void res.end(`${edgeTenant()?.orgId}:${edgeTenant()?.sandboxNamePrefix ?? ""}`)),
   );
@@ -310,4 +303,24 @@ test("a tenant whose preparation fails is unavailable while every other tenant i
   } finally {
     await failing.close();
   }
+});
+
+test("a host on the home tenant's registry row is served by core and by the one portal and web UI", async (t) => {
+  const homeId = await homeTenantId(registry);
+  await upsertTenant(
+    registry,
+    { ...tenantRow(homeId, "home"), orgId: tenant().orgId, hosts: ["home-alias.example.test"] },
+    undefined,
+  );
+  clock += 1_000;
+  await eventually(() => seen("/v1/x", "home-alias.example.test"), { id: null, org: tenant().orgId });
+  t.after(() => setEdgeTenants([]));
+  edgeTenantFeed(deployment)(await activeTenants());
+  const edge = createServer((req, res) => serveForHost(req, res, () => void res.end(edgeTenant()?.id ?? "home")));
+  const port = await listen(edge);
+  t.after(() => edge.close());
+  for (const host of ["home.example.test", "home-alias.example.test"])
+    assert.deepEqual(await get(port, "/", { host }), { status: 200, body: "home" });
+  assert.deepEqual(await get(port, "/", { host: "acme.example.test" }), { status: 200, body: ACME });
+  assert.equal((await get(port, "/", { host: "stranger.example.test" })).status, 404);
 });

@@ -20,9 +20,11 @@ import {
   browserErrors,
   analyticsConfig,
   appsFrameDomain,
+  faviconSvg,
   framedByOwnSurfaces,
   PORT,
   publicUrl,
+  slackServiceUrl,
 } from "./server-env.ts";
 import { sendBuffered, json, gzipAccepted, serveFavicon, PayloadTooLargeError } from "../../chassis/src/http.ts";
 import { existsSync, statSync, createReadStream, readFileSync } from "node:fs";
@@ -38,7 +40,7 @@ import { hasInboxLoopPreview } from "./web-turns.ts";
 import { findRoute } from "../../chassis/src/router.ts";
 import { PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { startLiveFeeds } from "./live-feeds.ts";
-import { coreTenantHost, edgeTenant, serveForHost } from "../../chassis/src/tenant-hosts.ts";
+import { coreTenantHost, serveForHost } from "../../chassis/src/tenant-hosts.ts";
 
 const WEB_UI_DEV = process.env.WEB_UI_DEV === "1";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -66,7 +68,7 @@ async function serveWebManifest(res: ServerResponse): Promise<void> {
     theme_color: "#ffffff",
     icons: [
       {
-        src: (edgeTenant()?.faviconSvg ?? process.env.WEB_UI_FAVICON_SVG) ? "/favicon.svg" : "/brand-mark.svg",
+        src: faviconSvg() ? "/favicon.svg" : "/brand-mark.svg",
         sizes: "any",
         type: "image/svg+xml",
         purpose: "any maskable",
@@ -107,27 +109,30 @@ if (analyticsKey && (analyticsHost.protocol !== "https:" || analyticsHost.href !
   throw new Error("POSTHOG_HOST must be an HTTPS origin");
 const browserErrorOrigin = browserErrors ? new URL(browserErrors.dsn).origin : undefined;
 
-const SPA_CSP = [
-  "default-src 'self'",
-  "script-src 'self' 'wasm-unsafe-eval'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https:",
-  "font-src 'self' data:",
-  `connect-src 'self'${analyticsConfig ? ` ${analyticsConfig.host}` : ""}${browserErrorOrigin ? ` ${browserErrorOrigin}` : ""}`,
-  "frame-src 'self' data: https:",
-  "worker-src 'self' blob:",
-  "frame-ancestors 'self'",
-  "base-uri 'none'",
-  `form-action 'self'${process.env.QM_SLACK_SERVICE_URL ? ` ${new URL(process.env.QM_SLACK_SERVICE_URL).origin} https://slack.com` : ""}`,
-  "object-src 'none'",
-].join("; ");
+function spaCsp(): string {
+  const slackService = slackServiceUrl();
+  return [
+    "default-src 'self'",
+    "script-src 'self' 'wasm-unsafe-eval'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https:",
+    "font-src 'self' data:",
+    `connect-src 'self'${analyticsConfig ? ` ${analyticsConfig.host}` : ""}${browserErrorOrigin ? ` ${browserErrorOrigin}` : ""}`,
+    "frame-src 'self' data: https:",
+    "worker-src 'self' blob:",
+    "frame-ancestors 'self'",
+    "base-uri 'none'",
+    `form-action 'self'${slackService ? ` ${new URL(slackService).origin} https://slack.com` : ""}`,
+    "object-src 'none'",
+  ].join("; ");
+}
 
 function withSecurityHeaders(headers: Record<string, string>): Record<string, string> {
   return {
     ...headers,
-    "content-security-policy": SPA_CSP,
+    "content-security-policy": spaCsp(),
     "strict-transport-security": "max-age=63072000; includeSubDomains",
-    "referrer-policy": process.env.QM_SLACK_SERVICE_URL ? "strict-origin" : "no-referrer",
+    "referrer-policy": slackServiceUrl() ? "strict-origin" : "no-referrer",
     "x-frame-options": "SAMEORIGIN",
     "x-content-type-options": "nosniff",
   };
@@ -212,7 +217,7 @@ async function serveAppEditHtml(req: IncomingMessage, res: ServerResponse, url: 
     html = document;
   }
   const headers = withSecurityHeaders({ "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
-  const csp = SPA_CSP.replace("frame-ancestors 'self'", `frame-ancestors 'self' ${slug}.${appsDomain}`);
+  const csp = spaCsp().replace("frame-ancestors 'self'", `frame-ancestors 'self' ${slug}.${appsDomain}`);
   sendBuffered(res, 200, framedByOwnSurfaces(res, headers, csp), await brandIndexHtml(html));
   return true;
 }
@@ -266,7 +271,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     return serveFavicon(
       res,
       {
-        svg: edgeTenant()?.faviconSvg ?? process.env.WEB_UI_FAVICON_SVG,
+        svg: faviconSvg(),
         emoji: process.env.WEB_UI_FAVICON_EMOJI ?? "\u{1F3F4}\u{200D}\u2620\uFE0F",
       },
       "no-cache",

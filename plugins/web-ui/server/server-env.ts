@@ -10,6 +10,17 @@ export const publicUrl = (): string => {
   return tenant?.id ? tenantPublicUrl(tenant) : PUBLIC_URL;
 };
 
+export const faviconSvg = (): string | undefined => {
+  const tenant = edgeTenant();
+  return (tenant?.id ? tenant.faviconSvg : undefined) ?? process.env.WEB_UI_FAVICON_SVG;
+};
+
+const SLACK_SERVICE_URL = process.env.QM_SLACK_SERVICE_URL || undefined;
+export const slackServiceUrl = (): string | undefined => {
+  const tenant = edgeTenant();
+  return tenant?.id && !tenant.secrets.slackServiceToken ? undefined : SLACK_SERVICE_URL;
+};
+
 export const analyticsKey = process.env.POSTHOG_API_KEY?.trim();
 export const analyticsHost = new URL((analyticsKey && process.env.POSTHOG_HOST?.trim()) || "https://us.i.posthog.com");
 export const analyticsConfig = analyticsKey ? { apiKey: analyticsKey, host: analyticsHost.origin } : undefined;
