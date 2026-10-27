@@ -1,4 +1,4 @@
-import { errMessage } from "./errors.ts";
+import { swallow } from "./errors.ts";
 export interface OrgBranding {
   orgName?: string;
   accent?: string;
@@ -31,7 +31,7 @@ export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): 
         warmed = true;
         nextAt = Date.now() + REFRESH_MS;
       } catch (err) {
-        console.warn(`[branding] surface-config fetch failed: ${errMessage(err)}`);
+        swallow("branding: surface-config fetch (retrying)", err);
         nextAt = Date.now() + RETRY_MS;
       } finally {
         inflight = null;

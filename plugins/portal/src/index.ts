@@ -6,7 +6,7 @@ import {
   openDesktopLogin,
 } from "./desktop-login.ts";
 import { INVITE_LOGIN_SCRIPT, INVITE_LOGIN_SCRIPT_HASH } from "./invite-login.ts";
-import { reportBackendError } from "../../chassis/src/error-reporting.ts";
+import { reportBackendError, reportFailure } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
 import { createHash } from "node:crypto";
@@ -50,7 +50,7 @@ import { fetchCoreText, signedHeaders, withSourceAuthNonce, type HttpMethod } fr
 import { coreClaimStore, claimOnce, withinRateLimit, ClaimStoreUnavailableError } from "../../chassis/src/claims.ts";
 import { coreEmailAdmission } from "../../chassis/src/external-members.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
-import { errMessage } from "../../chassis/src/errors.ts";
+import { errMessage, swallow } from "../../chassis/src/errors.ts";
 import { isUiChannel, UI_CHANNEL_COOKIE } from "../../chassis/src/ui-release.ts";
 import { ALERT_ICON, cardPage, LOCK_ICON } from "../../chassis/src/card-page.ts";
 import {
@@ -163,7 +163,7 @@ async function fetchSurfaceConfig(): Promise<void> {
       surfaceConfigNextAt = Date.now() + (modelProviderConfigured === false ? 5_000 : 30_000);
     } else console.warn(`[portal] surface-config returned HTTP ${r.status}`);
   } catch (error) {
-    console.warn(`[portal] surface-config fetch failed: ${errMessage(error)}`);
+    swallow("portal: surface-config fetch (retrying)", error);
   }
 }
 
@@ -206,7 +206,7 @@ async function adminProbeAttempt(sub: string): Promise<boolean | null> {
     }
     return j.isAdmin;
   } catch (error) {
-    console.warn(`[portal] admin probe failed: ${errMessage(error)}`);
+    reportFailure("portal: admin probe", error);
     return null;
   } finally {
     clearTimeout(timer);
@@ -249,7 +249,7 @@ async function canonicalPrincipal(sub: string): Promise<string | null> {
     canonicalCache.set(sub, canonical);
     return canonical;
   } catch (error) {
-    console.warn(`[portal] canonical principal lookup failed: ${errMessage(error)}`);
+    reportFailure("portal: canonical principal lookup", error);
     return null;
   }
 }
@@ -378,7 +378,7 @@ async function handleConsentRedeem(
   try {
     data = (await coreCall<typeof data>("GET", o.corePath, { headers: portalIdentityHeaders(o.session.sub) })).body;
   } catch (error) {
-    console.warn(`[portal] consent redeem failed: ${errMessage(error)}`);
+    reportFailure("portal: consent redeem", error);
     return sendHtml(
       res,
       502,
@@ -437,7 +437,7 @@ async function handleSecretDrop(
       ...(isPost ? { body: rawBody } : {}),
     });
   } catch (error) {
-    console.warn(`[portal] secret drop relay failed: ${errMessage(error)}`);
+    reportFailure("portal: secret drop relay", error);
     if (isPost)
       return json(res, 502, {
         error: "unreachable",
@@ -472,7 +472,7 @@ async function handleSelfConnect(res: ServerResponse, o: { provider: string; ses
       connectErrorHtml(data.message ?? "We couldn't start the connection. This app may not be configured."),
     );
   } catch (error) {
-    console.warn(`[portal] self-connect start failed: ${errMessage(error)}`);
+    reportFailure("portal: self-connect start", error);
     return sendHtml(
       res,
       502,
@@ -753,7 +753,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           return json(res, 503, { error: "revocation_failed" });
         }
       } catch (error) {
-        console.warn(`[portal] broker session revoke failed: ${errMessage(error)}`);
+        reportFailure("portal: broker session revoke", error);
         return json(res, 503, { error: "revocation_failed" });
       }
     }
@@ -1204,7 +1204,7 @@ async function inviteLogin(req: IncomingMessage, res: ServerResponse): Promise<v
     res.writeHead(303, { location: "/", "cache-control": "no-store" });
     res.end();
   } catch (error) {
-    console.warn(`[portal] invitation redeem failed: ${errMessage(error)}`);
+    reportFailure("portal: invitation redeem", error);
     return sendHtml(res, 503, signInErrorHtml("Sign-in is temporarily unavailable. Please try again."));
   }
 }
@@ -1311,8 +1311,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
     });
     res.end();
   } catch (error) {
-    console.warn(`[portal] trusted sign-in failed: ${errMessage(error)}`);
-    reportBackendError(error, "trusted_signin_failed");
+    reportFailure("portal: trusted sign-in", error);
     sendHtml(
       res,
       400,

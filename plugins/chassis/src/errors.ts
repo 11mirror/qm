@@ -95,6 +95,10 @@ export function errDetail(e: unknown, seen = new Set<unknown>()): string {
   }
 }
 
+export function asError(e: unknown): Error {
+  return e instanceof Error ? e : new Error(errChain(e), { cause: e });
+}
+
 export function swallow(context: string, e: unknown): void {
   console.warn(`[swallowed] ${context}: ${errDetail(e)}`);
 }
