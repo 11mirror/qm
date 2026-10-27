@@ -8,8 +8,7 @@ import { CONTRACT_MIGRATIONS, HELD_BACK_CONTRACT_MIGRATIONS } from "../../src/pe
 import { applyPgMigrations, migrateRegisteredPgSchemas, pgMigrationFrom } from "../../src/persistence/pg-pool.ts";
 import { SCHEMA_BASELINE } from "../../src/persistence/schema-baseline.ts";
 import { TENANT_BYPASS_OPTION } from "../../src/persistence/tenancy.ts";
-import { tenantFor, withTenant } from "../../src/tenant.ts";
-import { ensureTenantQueues } from "../../src/turns/absurd-schema.ts";
+import { mergeTenantQueues } from "../../src/turns/absurd-schema.ts";
 import { buildApp } from "../../src/wiring.ts";
 import { testConfig } from "../support/test-config.ts";
 import { withClient } from "../support/pg-client.ts";
@@ -106,7 +105,6 @@ async function createDatabase(fixture?: string): Promise<string> {
   return url;
 }
 
-// What a boot does to the schema: every registered migration, then each tenant's turn queues.
 async function migrate(url: string, multitenant: boolean): Promise<void> {
   const { runtime } = buildApp({
     anthropicApiKey: "test-anthropic-key",
@@ -114,13 +112,7 @@ async function migrate(url: string, multitenant: boolean): Promise<void> {
   });
   try {
     await migrateRegisteredPgSchemas(url);
-    if (!multitenant) return;
-    const tenants = await withClient(url, async (client) => {
-      await client.query("SET qm.tenant_bypass = 'on'");
-      return (await client.query<{ id: string; slug: string; org_id: string }>("SELECT id, slug, org_id FROM tenants"))
-        .rows;
-    });
-    for (const t of tenants) await withTenant(tenantFor(t.org_id, t.id, t.slug), () => ensureTenantQueues(url));
+    await mergeTenantQueues(url);
   } finally {
     await runtime.stop();
   }

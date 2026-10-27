@@ -11,7 +11,7 @@ import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { createPgPool, migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
-import { ensureTenantQueues } from "./turns/absurd-schema.ts";
+import { mergeTenantQueues } from "./turns/absurd-schema.ts";
 import { hostOfUrl, setEdgeTenants } from "../plugins/chassis/src/tenant-hosts.ts";
 import { tagErrorDeployment } from "../plugins/chassis/src/error-reporting.ts";
 import { homeHosts, homeTenantSettings } from "../plugins/chassis/src/tenant-settings.ts";
@@ -43,10 +43,10 @@ export async function bootApp(
 
   const built = buildApp(config, { env });
   await migrateRegisteredPgSchemas(config.databaseUrl);
+  if (config.databaseUrl) await mergeTenantQueues(config.databaseUrl);
   const publishEdge = config.multitenant ? edgeTenantFeed(config, env) : undefined;
   if (publishEdge) {
     await useRegistryTenants(config, env, async () => {
-      await ensureTenantQueues(config.databaseUrl!);
       await built.start();
       await built.refreshCustomProviders();
     });
