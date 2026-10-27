@@ -68,9 +68,11 @@ export function verifiedFindings(reply: string, sources: Source[]) {
     findings: Array<Omit<Finding, "line">>;
   };
   const findings = parsed.findings.flatMap(({ path, lens, severity, title, anchor }): Finding[] => {
-    const cited = anchor.trim();
+    const cited = (anchor ?? "").trim();
     const hit = sources.find((s) => s.path === path)?.anchorable.find((a) => cited && a.text.includes(cited));
-    return hit ? [{ path, line: hit.line, lens: lens.replace(/\s*\(.*\)$/, ""), severity, title, anchor: cited }] : [];
+    return hit
+      ? [{ path, line: hit.line, lens: (lens ?? "").replace(/\s*\(.*\)$/, ""), severity, title, anchor: cited }]
+      : [];
   });
   return { findings, unverified: parsed.findings.length - findings.length };
 }
@@ -85,6 +87,8 @@ const DIFF_NOTE =
   "Review only what these diffs add. Each anchor must be a line the diff adds (a + line, copied without the +).";
 
 async function complete(system: string, user: string) {
+  if (!process.env.MODEL_GATEWAY_URL || !process.env.MODEL_GATEWAY_TOKEN)
+    throw new Error("Set MODEL_GATEWAY_URL and MODEL_GATEWAY_TOKEN; QM provides both in its sandboxes.");
   const res = await fetch(`${process.env.MODEL_GATEWAY_URL}/v1/chat/completions`, {
     method: "POST",
     headers: { authorization: `Bearer ${process.env.MODEL_GATEWAY_TOKEN}`, "content-type": "application/json" },
@@ -98,7 +102,8 @@ async function complete(system: string, user: string) {
       ],
     }),
   });
-  const body = (await res.json()) as {
+  const raw = await res.text();
+  const body = (res.headers.get("content-type")?.includes("json") ? JSON.parse(raw) : { error: raw }) as {
     choices?: Array<{ finish_reason: string; message: { content: string } }>;
     error?: unknown;
   };
