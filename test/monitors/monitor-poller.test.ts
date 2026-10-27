@@ -12,6 +12,7 @@ import { singleProcessDeps } from "../support/single-process.ts";
 import { createPostgresProcessRegistry } from "../../src/processes/process-registry.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
 import { automationOrigin } from "../support/turn-origin.ts";
+import { MAX_SCREEN_CHARS } from "../../src/security/security-screen.ts";
 
 const SCOPE = "personal:U1";
 const handle: SandboxHandle = { id: "vm", rootDir: "/workspace", homeDir: "/root" };
@@ -210,7 +211,7 @@ test("entity-heavy output cannot inflate the escaped event payload past the cap"
 
   const text = h.calls[0]?.text ?? "";
   const payload = text.slice(text.indexOf(">", text.indexOf("<event")) + 1, text.indexOf("</event>"));
-  assert.ok(payload.length <= 16_020, `escaped payload stays near the 16k cap, got ${payload.length}`);
+  assert.ok(payload.length <= MAX_SCREEN_CHARS, `escaped payload fits the security screen, got ${payload.length}`);
   assert.match(payload, /…\[truncated\]/);
   assert.match(payload, /&amp;/);
 });
