@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { ItemKind, WAKE_CAUSES } from "./items-schema.ts";
 import { isObj } from "../util/objects.ts";
 
@@ -86,7 +87,7 @@ const AUTHORED_KINDS: ReadonlySet<ItemKind> = new Set<ItemKind>([
   "RuntimeChange",
 ]);
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const TURN_ID = z.guid();
 const nonEmpty = (value: string | null | undefined): string | null => (value ? value : null);
 
 export function storedItem(
@@ -101,7 +102,7 @@ export function storedItem(
     seq: at.seq,
     createdAt: at.createdAt,
     kind: item.kind,
-    turnId: turnId && UUID.test(turnId) ? turnId.toLowerCase() : null,
+    turnId: turnId && TURN_ID.safeParse(turnId).success ? turnId.toLowerCase() : null,
     author: AUTHORED_KINDS.has(item.kind) ? nonEmpty(item.author) : null,
     callId: nonEmpty(item.callId),
     elicitId: nonEmpty(item.elicitId),
