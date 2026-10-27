@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 
 process.env.CORE_ORG_ID = "tenant-alpha";
 process.env.ORG_ID = "tenant-alpha";
-const chassis = await import("../plugins/chassis/src/portal-identity.ts");
-const core = await import("../src/auth/portal-identity.ts");
+const chassis = await import("../../plugins/chassis/src/portal-identity.ts");
+const core = await import("../../src/auth/portal-identity.ts");
 
 const secret = "portal-identity-tenant-secret";
 const now = 1_000_000;

@@ -1,18 +1,106 @@
-import { describe, it, before, after } from "node:test";
+import "../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
+import { mkdtempSync } from "node:fs";
 import type { Server } from "node:http";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
-import { createServer, createInsecureTestServer } from "../src/api/server.ts";
-import { mintSignedPayload } from "../src/auth/signed-token.ts";
-import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
-import { testConfig } from "./support/test-config.ts";
-import { scopeId } from "../src/types.ts";
-import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
-import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
-import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test, describe, it, before, after } from "node:test";
+import { signedHeaders } from "../../plugins/chassis/src/core-client.ts";
+import { authBrokerRoutes } from "../../src/api/routes/auth-broker.ts";
+import { createServer, createInsecureTestServer } from "../../src/api/server.ts";
+import { verifyCapabilityToken } from "../../src/auth/capability-token.ts";
+import { mintPortalIdentity } from "../../src/auth/portal-identity.ts";
+import { createPostgresReplayDedupe } from "../../src/auth/replay-dedupe.ts";
+import { mintSignedPayload } from "../../src/auth/signed-token.ts";
+import { signRequest } from "../../src/auth/source-auth.ts";
+import { scopeId } from "../../src/types.ts";
+import type { BuiltApp } from "../../src/wiring.ts";
+import { buildApp } from "../support/build-app.ts";
+import { testConfig } from "../support/test-config.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
+
+const SECRET = "portal-actor-binding-signing-secret";
+const ALICE = "alice@default-org";
+const BOB = "bob@default-org";
+
+const ROUTES: Array<[string, string, "query" | "body"]> = [
+  ["GET", "/v1/ui-state?key=k", "query"],
+  ["PUT", "/v1/ui-state", "body"],
+  ["GET", "/v1/runtime-config", "query"],
+  ["PUT", "/v1/runtime-config", "body"],
+  ["GET", "/v1/channel-header-pin", "query"],
+  ["PUT", "/v1/channel-header-pin", "body"],
+  ["PATCH", "/v1/projects/p1", "body"],
+  ["PUT", "/v1/projects/p1/slack-channel", "body"],
+  ["DELETE", "/v1/projects/p1/slack-channel", "body"],
+  ["PUT", "/v1/contexts/policy", "body"],
+  ["POST", "/v1/keychain/approvals/a1", "body"],
+  ["POST", "/v1/ui/observe/c1/result", "body"],
+  ["GET", "/v1/ui/canvases/s1", "query"],
+  ["POST", "/v1/ui/canvases/s1", "body"],
+  ["GET", "/v1/crons/c1/items/i1/image", "query"],
+  ["GET", "/v1/deployments/d1", "query"],
+  ["POST", "/v1/webhooks/w1/enable", "query"],
+];
+
+test("routes that act as a caller-named principal bind it to the signed portal identity", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "actor-binding-")) }));
+  const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: SECRET,
+    requireSignedPortalIdentity: true,
+    capabilitySecret: `${SECRET}-cap`,
+    portalIdentitySecret: `${SECRET}-portal`,
+  });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const call = async (
+    method: string,
+    path: string,
+    where: "query" | "body",
+    principalId: string,
+    signedIn?: string,
+  ) => {
+    const target = where === "query" ? `${path}${path.includes("?") ? "&" : "?"}principalId=${principalId}` : path;
+    const body = where === "body" ? JSON.stringify({ principalId }) : "";
+    const ts = Math.floor(Date.now() / 1000);
+    const res = await fetch(base + target, {
+      method,
+      headers: {
+        "content-type": "application/json",
+        "x-timestamp": String(ts),
+        "x-signature": signRequest(SECRET, ts, `${method}\n${target}\n${body}`),
+        ...(signedIn
+          ? {
+              "x-portal-identity": await mintPortalIdentity(
+                { p: signedIn, exp: Date.now() + 60_000 },
+                `${SECRET}-portal`,
+              ),
+            }
+          : {}),
+      },
+      ...(body ? { body } : {}),
+    });
+    return { status: res.status, body: (await res.text()).slice(0, 300) };
+  };
+  try {
+    for (const [method, path, where] of ROUTES) {
+      const spoofed = await call(method, path, where, BOB, ALICE);
+      assert.equal(spoofed.status, 403, `${method} ${path}: ${spoofed.body}`);
+      assert.match(spoofed.body, /portal identity does not match the requested actor/, `${method} ${path}`);
+      const anonymous = await call(method, path, where, ALICE);
+      assert.equal(anonymous.status, 401, `${method} ${path}: ${anonymous.body}`);
+      const own = await call(method, path, where, ALICE, ALICE);
+      assert.ok(
+        !/portal identity (does not match|required)/.test(own.body),
+        `${method} ${path} refused its own caller: ${own.body}`,
+      );
+    }
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
 
 const SOURCE = "shared-source-auth-secret-for-tests-0001";
 const CAP = "core-only-capability-secret-for-tests-01";

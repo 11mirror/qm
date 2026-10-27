@@ -1,17 +1,110 @@
-import "./support/auto-fake-sprites.ts";
-
-import { test } from "node:test";
+import "../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
 import { createHash } from "node:crypto";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { signRequest } from "../src/auth/source-auth.ts";
-import { buildApp } from "./support/build-app.ts";
-import { testConfig } from "./support/test-config.ts";
-import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import type { AddressInfo } from "node:net";
+import { test } from "node:test";
+import { createInsecureTestServer, createServer } from "../../src/api/server.ts";
+import { createPostgresReplayDedupe } from "../../src/auth/replay-dedupe.ts";
+import {
+  createSourceAuth,
+  signRequest,
+  verifySignature,
+  SOURCE_AUTH_REPLAY_WINDOW_MS,
+} from "../../src/auth/source-auth.ts";
+import { buildApp } from "../support/build-app.ts";
+import { testConfig } from "../support/test-config.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
-const SECRET = "test-signing-secret".repeat(3);
+const SECRET = "unit-test-secret";
+const W = SOURCE_AUTH_REPLAY_WINDOW_MS;
+
+function signedReq(tsSec: number, body: string, eventId = `evt-${tsSec}-${body}`) {
+  return { signature: signRequest(SECRET, tsSec, body), timestamp: tsSec, body, eventId };
+}
+
+test("a non-numeric timestamp is rejected even when the signature matches the NaN canonical string", () => {
+  const body = "POST\n/v1/turns\n{}";
+  const forged = { signature: signRequest(SECRET, Number.NaN, body), timestamp: Number.NaN, body };
+  const r = verifySignature(SECRET, forged, Date.now(), W);
+  assert.equal(r.ok, false);
+  assert.match((r as { reason: string }).reason, /invalid timestamp/);
+});
+
+test("verify: accepts a fresh signed request once, rejects the replay as a duplicate", async () => {
+  const clock = 1_000_000_000_000;
+  const auth = createSourceAuth({
+    dedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: SECRET,
+    now: () => clock,
+  });
+  const req = signedReq(Math.floor(clock / 1000), "hello");
+  assert.deepEqual(await auth.verify(req), { ok: true });
+  const replay = await auth.verify(req);
+  assert.equal(replay.ok, false);
+  assert.match((replay as { reason: string }).reason, /duplicate/);
+});
+
+test("dedupe covers the FULL acceptance window: a future-stamped request can't be replayed late in its life", async () => {
+  let clock = 1_000_000_000_000;
+  const t0 = clock;
+  const auth = createSourceAuth({
+    dedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: SECRET,
+    now: () => clock,
+  });
+
+  const futureTs = Math.floor((t0 + W) / 1000);
+  const req = signedReq(futureTs, "future-stamped");
+  assert.deepEqual(await auth.verify(req), { ok: true });
+
+  for (let i = 1; i <= 3; i++) {
+    clock = t0 + Math.floor((i * W) / 2);
+    assert.deepEqual(await auth.verify(signedReq(Math.floor(clock / 1000), `filler-${i}`)), { ok: true });
+  }
+
+  clock = t0 + Math.floor(1.9 * W);
+  const replay = await auth.verify(req);
+  assert.equal(replay.ok, false);
+  assert.match((replay as { reason: string }).reason, /duplicate/);
+
+  clock = futureTs * 1000 + W + 1000;
+  const stale = await auth.verify(req);
+  assert.equal(stale.ok, false);
+  assert.match((stale as { reason: string }).reason, /stale/);
+});
+
+test("a replay at the exact staleness boundary (|now - ts| == window) is still a duplicate", async () => {
+  let clock = 1_000_000_000_000;
+  const auth = createSourceAuth({
+    dedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: SECRET,
+    now: () => clock,
+  });
+  const ts = Math.floor(clock / 1000);
+  const req = signedReq(ts, "boundary");
+  assert.deepEqual(await auth.verify(req), { ok: true });
+
+  clock = ts * 1000 + W;
+  const replay = await auth.verify(req);
+  assert.equal(replay.ok, false);
+  assert.match((replay as { reason: string }).reason, /duplicate/);
+});
+
+test("a shared dedupe store closes the cross-instance replay window", async () => {
+  const clock = 1_000_000_000_000;
+  const now = () => clock;
+  const shared = createPostgresReplayDedupe(testDatabaseUrl());
+  const instanceA = createSourceAuth({ signingSecret: SECRET, now, dedupe: shared });
+  const instanceB = createSourceAuth({ signingSecret: SECRET, now, dedupe: shared });
+
+  const req = signedReq(Math.floor(clock / 1000), "cross-instance");
+  assert.deepEqual(await instanceA.verify(req), { ok: true });
+  const replay = await instanceB.verify(req);
+  assert.equal(replay.ok, false);
+  assert.match((replay as { reason: string }).reason, /duplicate/);
+});
+
+const GATE_SECRET = "test-signing-secret".repeat(3);
 
 test("the normal server refuses to start without source-auth material", () => {
   const built = buildApp(testConfig());
@@ -33,7 +126,7 @@ function sign(method: string, pathWithQuery: string, body: string): Record<strin
   return {
     "content-type": "application/json",
     "x-timestamp": String(ts),
-    "x-signature": signRequest(SECRET, ts, `${method}\n${pathWithQuery}\n${body}`),
+    "x-signature": signRequest(GATE_SECRET, ts, `${method}\n${pathWithQuery}\n${body}`),
   };
 }
 
@@ -46,7 +139,7 @@ const turnBody = (actorId: string) =>
   });
 
 test("with a signing secret, an UNSIGNED turn is rejected 401 (no impersonation)", async () => {
-  const srv = start(SECRET);
+  const srv = start(GATE_SECRET);
   try {
     const res = await fetch(`${srv.base}/v1/turns`, {
       method: "POST",
@@ -60,7 +153,7 @@ test("with a signing secret, an UNSIGNED turn is rejected 401 (no impersonation)
 });
 
 test("a FORGED actor whose body differs from what was signed is rejected", async () => {
-  const srv = start(SECRET);
+  const srv = start(GATE_SECRET);
   try {
     const headers = sign("POST", "/v1/turns", turnBody("U-real"));
     const res = await fetch(`${srv.base}/v1/turns`, { method: "POST", headers, body: turnBody("U-ceo") });
@@ -71,13 +164,13 @@ test("a FORGED actor whose body differs from what was signed is rejected", async
 });
 
 test("a non-numeric x-timestamp is rejected even when the signature matches the NaN canonical string", async () => {
-  const srv = start(SECRET);
+  const srv = start(GATE_SECRET);
   try {
     const body = turnBody("U1");
     const headers = {
       "content-type": "application/json",
       "x-timestamp": "not-a-number",
-      "x-signature": signRequest(SECRET, Number.NaN, `POST\n/v1/turns\n${body}`),
+      "x-signature": signRequest(GATE_SECRET, Number.NaN, `POST\n/v1/turns\n${body}`),
     };
     const res = await fetch(`${srv.base}/v1/turns`, { method: "POST", headers, body });
     assert.equal(res.status, 401);
@@ -87,7 +180,7 @@ test("a non-numeric x-timestamp is rejected even when the signature matches the 
 });
 
 test("a correctly-signed turn is accepted", async () => {
-  const srv = start(SECRET);
+  const srv = start(GATE_SECRET);
   try {
     const body = turnBody("U1");
     const res = await fetch(`${srv.base}/v1/turns`, { method: "POST", headers: sign("POST", "/v1/turns", body), body });
@@ -99,7 +192,7 @@ test("a correctly-signed turn is accepted", async () => {
 });
 
 test("a signature for one route can't be replayed against another (method+path bound)", async () => {
-  const srv = start(SECRET);
+  const srv = start(GATE_SECRET);
   try {
     const headers = sign("GET", "/v1/surface-context/pending?source=slack", "");
     const res = await fetch(`${srv.base}/v1/sessions?principalId=U-victim`, { headers });
@@ -110,7 +203,7 @@ test("a signature for one route can't be replayed against another (method+path b
 });
 
 test("a replayed signature is rejected (dedup) on a mutating route", async () => {
-  const srv = start(SECRET);
+  const srv = start(GATE_SECRET);
   try {
     const body = turnBody("U1");
     const headers = sign("POST", "/v1/turns", body);
@@ -124,7 +217,7 @@ test("a replayed signature is rejected (dedup) on a mutating route", async () =>
 });
 
 test("an identical signed GET re-sent in the same second is accepted (reads are not replay-deduped)", async () => {
-  const srv = start(SECRET);
+  const srv = start(GATE_SECRET);
   try {
     const headers = sign("GET", "/v1/surface-context/pending?source=slack", "");
     const first = await fetch(`${srv.base}/v1/surface-context/pending?source=slack`, { headers });
@@ -137,7 +230,7 @@ test("an identical signed GET re-sent in the same second is accepted (reads are 
 });
 
 test("deployment ingress /d/:id is rejected 401 without a valid signature", async () => {
-  const srv = start(SECRET);
+  const srv = start(GATE_SECRET);
   try {
     const res = await fetch(`${srv.base}/d/some-id/`, { headers: { "x-as-principal": "U-attacker" } });
     assert.equal(res.status, 401);
@@ -164,7 +257,7 @@ test("POST /v1/blobs requires x-content-sha256 when authed, then binds the body 
   const built = buildApp(testConfig());
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-    signingSecret: SECRET,
+    signingSecret: GATE_SECRET,
     blobTransfer: built.blobTransfer,
   });
   server.listen(0);
@@ -175,7 +268,7 @@ test("POST /v1/blobs requires x-content-sha256 when authed, then binds the body 
     const tsA = Math.floor(Date.now() / 1000);
     const noSha = await fetch(`${base}/v1/blobs`, {
       method: "POST",
-      headers: { "x-timestamp": String(tsA), "x-signature": signRequest(SECRET, tsA, "POST\n/v1/blobs\n") },
+      headers: { "x-timestamp": String(tsA), "x-signature": signRequest(GATE_SECRET, tsA, "POST\n/v1/blobs\n") },
       body,
     });
     assert.equal(noSha.status, 400);
@@ -185,7 +278,7 @@ test("POST /v1/blobs requires x-content-sha256 when authed, then binds the body 
       headers: {
         "x-content-sha256": sha,
         "x-timestamp": String(tsB),
-        "x-signature": signRequest(SECRET, tsB, `POST\n/v1/blobs\n${sha}`),
+        "x-signature": signRequest(GATE_SECRET, tsB, `POST\n/v1/blobs\n${sha}`),
       },
       body,
     });
@@ -199,11 +292,11 @@ test("egress-audit ingest requires source auth: unsigned is 401, signed lands â€
   const built = buildApp(testConfig());
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-    signingSecret: SECRET,
+    signingSecret: GATE_SECRET,
     egressAudit: built.egressAudit,
     requireSignedPortalIdentity: true,
-    capabilitySecret: `${SECRET}-cap`,
-    portalIdentitySecret: `${SECRET}-portal`,
+    capabilitySecret: `${GATE_SECRET}-cap`,
+    portalIdentitySecret: `${GATE_SECRET}-portal`,
   });
   server.listen(0);
   const srv = {

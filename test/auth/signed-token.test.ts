@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CompactSign, decodeProtectedHeader } from "jose";
-import { mintSignedPayload, signingKeyId, verifySignedPayload } from "../src/auth/signed-token.ts";
+import { mintSignedPayload, signingKeyId, verifySignedPayload } from "../../src/auth/signed-token.ts";
 
 const SECRET = "test-secret";
 

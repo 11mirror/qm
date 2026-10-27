@@ -1,7 +1,7 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
-import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { truncateTables } from "./support/test-database.ts";
+import { createPostgresReplayDedupe } from "../../src/auth/replay-dedupe.ts";
+import { truncateTables } from "../support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the replay-dedupe tests";
