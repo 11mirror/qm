@@ -23,7 +23,7 @@ import type { SkillResult } from "../../tools/primitives.ts";
 import { TURN_FILES_DIR } from "../attachments.ts";
 import { errMessage, swallow, swallowAs } from "../../util/errors.ts";
 import { loadActiveBundles } from "./turn-helpers.ts";
-import { BROKER_ENV_KEYS } from "./credential-catalog.ts";
+import { BROKER_ENV_KEYS } from "./credential-registry.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
 const TURN_FILES_MAX_AGE_MS = 24 * 60 * 60_000;
