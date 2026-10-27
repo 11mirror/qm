@@ -504,7 +504,7 @@ export function createTurnHandler(deps: {
           `[slack-plugin] unprompted turn errored (staying quiet) ch=${inc.channel} ts=${inc.ts}: ${(err as Error).message}`,
         );
       } else {
-        console.error(`[slack-plugin] turn errored ch=${inc.channel} ts=${inc.ts}: ${errMessage(err)}`);
+        reportFailure("slack: turn", err, `ch=${inc.channel} ts=${inc.ts}`);
         const note = `⚠️ ${slackFailureText(err)}`;
         if (ack?.postedAck()) await postReply(note);
         else await ephemeralOrSay(note);
