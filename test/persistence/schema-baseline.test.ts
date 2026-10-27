@@ -23,8 +23,6 @@ const created: string[] = [];
 // fixtures booted with SANDBOX_BACKEND=local).
 const BOOT_OR_RETIRED_TABLES = [
   "do_managed_agents_sandbox_bodies",
-  "loop_ingress",
-  "loop_ingress_deliveries",
   "loop_outputs",
   "loop_ship_grants",
   "smolmachines_sandbox_bodies",

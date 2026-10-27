@@ -458,3 +458,25 @@ test("an edited task applies to the next delivery at the same URL and secret", a
   assert.match(calls[0]?.text ?? "", /new orders/);
   assert.doesNotMatch(calls[0]?.text ?? "", /old orders/);
 });
+
+test("a google-pubsub webhook without Google's signed token is refused", async () => {
+  const { webhooks, calls, receiver } = harness();
+  const wh = await webhooks.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    action: "file the mail",
+    verification: { scheme: "google-pubsub", secret: "push-audience" },
+  });
+  const rawBody = JSON.stringify({ message: { messageId: "m-1", data: "e30=" } });
+  for (const authorization of [undefined, "Bearer not-a-jwt"])
+    assert.deepEqual(
+      await receiver.deliver(wh.id, {
+        headers: { "content-type": "application/json", ...(authorization ? { authorization } : {}) },
+        rawBody,
+      }),
+      { status: 401 },
+    );
+  await flush();
+  assert.equal(calls.length, 0);
+});
