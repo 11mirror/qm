@@ -43,3 +43,5 @@ export function buildModelCredentials(
   };
   return { gatewayCatalog, modelCredentials, gatewayTransport, directProviderAvailability };
 }
+
+export type ModelCredentials = ReturnType<typeof buildModelCredentials>;

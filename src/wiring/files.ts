@@ -1,4 +1,5 @@
 import { createAclStore } from "../acl/acl-store.ts";
+import { createPostgresToolOutputStore } from "../sessions/tool-output.ts";
 import { createPostgresGrantStore } from "../acl/postgres-grant-store.ts";
 import { createPostgresRateLimiter, RATE_LIMIT } from "../ratelimit/postgres-rate-limiter.ts";
 import { createPostgresBudgetTracker } from "../ratelimit/postgres-budget.ts";
@@ -26,9 +27,12 @@ import type { Config } from "../config.ts";
 import type { Stores } from "./stores.ts";
 
 export function buildFiles(
-  w: Pick<Stores, "managesArtifactHome" | "configStore" | "artifactMap"> & { config: Config; databaseUrl: string },
+  w: Pick<Stores, "managesArtifactHome" | "configStore" | "artifactMap" | "pgArtifactMap"> & {
+    config: Config;
+    databaseUrl: string;
+  },
 ) {
-  const { databaseUrl, managesArtifactHome, config, configStore, artifactMap } = w;
+  const { databaseUrl, managesArtifactHome, config, configStore, artifactMap, pgArtifactMap } = w;
 
   const acl = createAclStore(createPostgresGrantStore(databaseUrl), {
     manages: (principalId, scopeId, authoredBy) => managesArtifactHome(scopeId, authoredBy ?? "", principalId),
@@ -74,7 +78,12 @@ export function buildFiles(
     : undefined;
   const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
   const errors = withErrorReporting(createPostgresErrorLog(databaseUrl));
+  const toolOutput = createPostgresToolOutputStore({
+    pool: pgArtifactMap.pool,
+    bytesFor: (prefix) => byteStore(prefix, prefix),
+  });
   return {
+    toolOutput,
     errors,
     blobTransfer,
     workspace,

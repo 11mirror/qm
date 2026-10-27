@@ -1,10 +1,6 @@
-import type { MemoryEmbedder } from "./model/embeddings.ts";
 import { createPostgresSwarmBoard } from "./swarms/swarm-board.ts";
 import { nonDeploymentCredential } from "./credentials/deployment-credentials.ts";
-import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { type TeamStore } from "./teams/teams.ts";
-import { createDecisionHooks, routeTurnRuntime, turnStartState } from "./decisions/hooks.ts";
-import { createDecisionBackend } from "./decisions/providers.ts";
 import { type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
 import { availableRuntimeError } from "./api/runtime-config.ts";
@@ -37,7 +33,6 @@ import {
   SUBAGENT_TREE_RUN_CAP,
 } from "./subagents/tree.ts";
 import { isSubagentThreadRef } from "./sessions/thread-ref.ts";
-import { createMemoryEmbedder } from "./model/embeddings.ts";
 import { createSemanticMemory } from "./memory/semantic-memory.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { type DirectFileUploads } from "./files/direct-file-upload.ts";
@@ -49,13 +44,7 @@ import type { StagedEnvelope } from "./slack/envelope-staging.ts";
 import type { HandledEvent } from "./slack/message-gating.ts";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import {
-  baseModelProviders,
-  companySubscriptionAuth,
-  configuredModel,
-  providerKeysPresent,
-  type Config,
-} from "./config.ts";
+import { companySubscriptionAuth, configuredModel, providerKeysPresent, type Config } from "./config.ts";
 import type { ServerDeps } from "./api/deps.ts";
 import { actorAssertionActive, type IdentityService } from "./identity/identity-service.ts";
 import { type PrincipalLinkService } from "./identity/principal-links.ts";
@@ -136,7 +125,6 @@ import { type DurableByteStore } from "./files/durable-byte-store.ts";
 import type { FileArtifactStore } from "./files/file-artifact-store.ts";
 import { effectiveEgressEnforcement, type Sandbox } from "./sandbox/sandbox.ts";
 import {
-  credentialRequestHeaders,
   type ConnectorTokenStore,
   type Keychain,
   type KeychainAsk,
@@ -164,15 +152,10 @@ import { type ModelGateway } from "./model/model-gateway.ts";
 import { type ModelCredentialStore } from "./model/model-credential-store.ts";
 import { type UserModelCredentialStore } from "./model/user-model-credential-store.ts";
 import type { ModelGatewayTransportConfig } from "./model/provider-endpoints.ts";
-import { setCustomProviders } from "./model/custom-providers.ts";
-import { createCustomProviderStore, type CustomProviderStore } from "./model/custom-provider-store.ts";
-import { createPostgresToolOutputStore } from "./sessions/tool-output.ts";
+import { type CustomProviderStore } from "./model/custom-provider-store.ts";
 import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
-import { keychainCompanyChatGPTAuth, type CompanyChatGPTAuth } from "./model/company-chatgpt-auth.ts";
-import { keychainHarnessAuthEnv } from "./credentials/harness-auth-env.ts";
-import { createPiHarness, piHarnessConfigOptions, type ProviderKeys } from "./harness/pi-harness.ts";
-import { withResolvedRuntime, resolveRuntimeChoiceDurable } from "./harness/runtime-choice.ts";
-import { selectableModelCatalog } from "./model/model-catalog.ts";
+import { type ProviderKeys } from "./harness/pi-harness.ts";
+import { resolveRuntimeChoiceDurable } from "./harness/runtime-choice.ts";
 import type { Harness } from "./harness/harness.ts";
 import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
 import { classifiedMemory } from "./memory/classification.ts";
@@ -183,8 +166,7 @@ import { createControlService } from "./api/control-service.ts";
 import { createMemoryRunStore } from "./runs/memory-run-store.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import { TURN_QUEUES } from "./turns/absurd-schema.ts";
-import { createMemoryRunSignalStore, type RunSignalStore } from "./runs/run-signal-store.ts";
-import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
+import { type RunSignalStore } from "./runs/run-signal-store.ts";
 import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
 import { createTurnLedger, TURN_CANCEL_CHANNEL, TURN_READY_CHANNEL, TURN_YIELD_CHANNEL } from "./turns/turn-ledger.ts";
 import { createTurnRunner, type TurnRunner } from "./turns/turn-runner.ts";
@@ -234,16 +216,7 @@ import {
   type AmbientJudgmentStore,
 } from "./surface-cache/ambient-judgment-store.ts";
 import { createPostgresAckEmojiPickStore, type AckEmojiPickStore } from "./surface-cache/ack-emoji-pick-store.ts";
-import {
-  auxiliaryModelFor,
-  CODEX_SUBSCRIPTION_PROVIDER,
-  codexSubscriptionModelId,
-  modelRequestOverrides,
-  auxiliaryModelForProvider,
-  defaultModel,
-  resolveModel,
-  modelSupported,
-} from "./model/pi-models.ts";
+import { auxiliaryModelForProvider } from "./model/pi-models.ts";
 import { type AdminService } from "./admin/admin-service.ts";
 import { type ProjectStore } from "./projects/project-store.ts";
 import { type ErrorLog } from "./admin/error-log.ts";
@@ -269,6 +242,10 @@ import { buildSandboxBackends } from "./wiring/sandbox.ts";
 import { buildSandbox } from "./wiring/sandbox.ts";
 
 import { buildCredentials } from "./wiring/credentials.ts";
+
+import { buildModelKeys } from "./wiring/model-keys.ts";
+
+import { buildHarness } from "./wiring/harness.ts";
 
 export interface Runtime {
   start(): void;
@@ -478,6 +455,7 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     connectorSecretKey,
   });
   const {
+    toolOutput,
     errors,
     blobTransfer,
     workspace,
@@ -490,7 +468,7 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     rateLimiter,
     budget,
     fileUploads,
-  } = buildFiles({ databaseUrl, managesArtifactHome, config, configStore, artifactMap });
+  } = buildFiles({ databaseUrl, managesArtifactHome, config, configStore, artifactMap, pgArtifactMap });
   const { deploymentLayerStore, installCatalogs, deploymentLayer, auditLog, brokeredTools, deploymentLayerRefresh } =
     buildDeploymentLayer({ config, databaseUrl, artifactMap, skills, skillBundles, advisoryLock });
   let started: { ready: Promise<void>; skillsReady: Promise<void> } | undefined;
@@ -575,193 +553,47 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     mcpServers,
     auditLog,
   });
-
-  const toolOutput = createPostgresToolOutputStore({
-    pool: pgArtifactMap.pool,
-    bytesFor: (prefix) => byteStore(prefix, prefix),
+  const {
+    resolveMemoryEmbedder,
+    resolvePiProviderKeys,
+    refreshModels,
+    customProviders,
+    refreshCustomProviders,
+    resolveBrowserCompanyKeys,
+  } = buildModelKeys({
+    advisoryLock,
+    artifactMap,
+    connectorSecretKey,
+    gatewayCatalog,
+    modelCredentials,
+    gatewayTransport,
+    overrides,
+    config,
+    keychain,
   });
-  const runStoreKind = config.runStore;
-  const runSignals: RunSignalStore =
-    runStoreKind === "postgres" ? createPostgresRunSignalStore(databaseUrl) : createMemoryRunSignalStore();
-  const writeModelRegistry = <T>(fn: () => Promise<T>): Promise<T> =>
-    advisoryLock.withLock("model-registry", async () => {
-      await refreshModels();
-      return fn();
-    });
-  const customProviders = createCustomProviderStore({
-    write: writeModelRegistry,
-    backing: artifactMap("custom_model_providers"),
-    keyMaterial: connectorSecretKey,
-  });
-  const refreshCustomProviders = async () => {
-    setCustomProviders(await customProviders.enabled());
-  };
-  const refreshModels = async () => {
-    await gatewayCatalog?.refresh();
-    await refreshCustomProviders();
-  };
-  const resolveMemoryEmbedder = async (id: string): Promise<MemoryEmbedder> => {
-    const model = resolveEmbeddingModel(id);
-    if (!model) throw new Error(`Embedding model unavailable: ${id}`);
-    const key = model.provider === "openai" ? await modelCredentials.resolve("openai") : null;
-    return createMemoryEmbedder(model, key, gatewayTransport, overrides.modelCredentialFetch);
-  };
-  const resolveModelProviderKeys = async () => {
-    await refreshModels();
-    const [anthropic, openai, openrouter, enabledCustom] = await Promise.all([
-      modelCredentials.resolve("anthropic"),
-      modelCredentials.resolve("openai"),
-      modelCredentials.resolve("openrouter"),
-      customProviders.enabled(),
-    ]);
-    const customKeys = Object.fromEntries(
-      (
-        await Promise.all(
-          enabledCustom.map(async (p) => {
-            try {
-              return [p.id, await customProviders.resolveKey(p.id)] as const;
-            } catch (e) {
-              // A corrupt/undecryptable custom key must degrade that one
-              // provider, never the whole turn (built-ins included).
-              console.error(`[model] custom provider ${p.id}: key unreadable: ${errMessage(e)}`);
-              return [p.id, null] as const;
-            }
-          }),
-        )
-      ).filter(([, key]) => key),
-    );
-    return {
-      ...(anthropic ? { anthropic } : {}),
-      ...(openai ? { openai } : {}),
-      ...(openrouter ? { openrouter } : {}),
-      ...customKeys,
-    };
-  };
-  const companyChatGPTAuth: CompanyChatGPTAuth | undefined = config.codexAuthCredential
-    ? keychainCompanyChatGPTAuth({ keychain, credentialId: config.codexAuthCredential })
-    : undefined;
-  const resolveCompanySubscriptionKeys = async (): Promise<ProviderKeys> => {
-    if (!companyChatGPTAuth) return {};
-    try {
-      const token = await companyChatGPTAuth.accessToken();
-      return token ? { [CODEX_SUBSCRIPTION_PROVIDER]: token } : {};
-    } catch (e) {
-      console.error(`[model] company ChatGPT auth (${companyChatGPTAuth.description}) unreadable: ${errMessage(e)}`);
-      return {};
-    }
-  };
-  const companyClaudeAuthEnv = config.claudeAuthCredential
-    ? keychainHarnessAuthEnv(keychain, config.claudeAuthCredential, ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"])
-    : undefined;
-  const resolveCompanyClaudeKeys = async (): Promise<ProviderKeys> => {
-    if (!companyClaudeAuthEnv) return {};
-    const env = await companyClaudeAuthEnv();
-    const token = env.CLAUDE_CODE_OAUTH_TOKEN || env.ANTHROPIC_AUTH_TOKEN;
-    if (!token)
-      console.error(
-        `[model] company Claude subscription credential ${config.claudeAuthCredential} yielded no token (missing, expired, or not an env credential)`,
-      );
-    return token ? { anthropic: token } : {};
-  };
-  const resolvePiProviderKeys = async (): Promise<ProviderKeys> => ({
-    ...(await resolveCompanyClaudeKeys()),
-    ...(await resolveModelProviderKeys()),
-    ...(await resolveCompanySubscriptionKeys()),
-  });
-  const resolveBrowserCompanyKeys = async (includeSubscription = true): Promise<ProviderKeys> =>
-    includeSubscription ? resolvePiProviderKeys() : resolveModelProviderKeys();
-  const companyModelId = (id: string): string => {
-    if (resolveModel(id)?.provider !== "openai" || modelRequestOverrides(id)) return id;
-    const subscription = codexSubscriptionModelId(id);
-    return resolveModel(subscription) ? subscription : id;
-  };
-  const runtimeOrgScope = scopeId("org", config.orgId);
-  const orgBaseModelId = (): string | undefined => configStore.getRuntimeSelection(runtimeOrgScope)?.modelId;
-  const deploymentDefaultModel = () =>
-    defaultModel(
-      configuredModel(config),
-      baseModelProviders(config) ??
-        (gatewayTransport
-          ? { ...directProviderAvailability, modelIds: new Set(Object.keys(gatewayTransport.models)) }
-          : undefined),
-    );
-  const pi =
-    overrides.harness ??
-    createPiHarness({
-      ...piHarnessConfigOptions(config),
-      modelGateway: gatewayTransport,
-      resolveBaseModelId: () => orgBaseModelId() ?? deploymentDefaultModel(),
-      resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
-      resolveProviderKeys: resolvePiProviderKeys,
-      ...(directProviderAvailability.codexOAuth ? { companyModelId } : {}),
-      signals: runSignals,
-    });
-  const fallback = {
-    get modelId() {
-      return deploymentDefaultModel();
-    },
-  };
-  const decide = createDecisionHooks(
+  const {
+    runStoreKind,
+    harness,
+    runSignals,
+    runtimeOrgScope,
+    fallback,
+    hydrateModelCatalog,
+    orgBaseModelId,
+    judgeModelId,
+  } = buildHarness({
+    config,
+    databaseUrl,
+    configStore,
+    gatewayTransport,
+    directProviderAvailability,
+    overrides,
+    resolvePiProviderKeys,
     decisions,
-    createDecisionBackend({
-      providers: (ids) => decisions.providers(ids),
-      ...(config.modelGateway?.apiKey
-        ? {
-            gateway: {
-              url: config.modelGateway.url,
-              apiKey: config.modelGateway.apiKey,
-              ...(config.modelGateway.apiKeyHeader ? { apiKeyHeader: config.modelGateway.apiKeyHeader } : {}),
-            },
-          }
-        : {}),
-      credential: async (slug) => {
-        const rec = nonDeploymentCredential(
-          await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug),
-        );
-        return rec ? { host: rec.host, enabled: rec.enabled, headers: credentialRequestHeaders(rec) } : null;
-      },
-    }),
+    serviceCreds,
     auditLog,
-  );
-  const judgeModelId = (): string => config.judgeModelId ?? auxiliaryModelFor(orgBaseModelId() ?? fallback.modelId);
-  const hydrateModelCatalog = async (): Promise<unknown> => {
-    await refreshModels();
-    if (!(await modelCredentials.availability()).openrouter) return undefined;
-    return selectableModelCatalog(overrides.modelCredentialFetch);
-  };
-  const harness = withResolvedRuntime(pi, async (input, routedBy) => {
-    await refreshModels();
-    const resolve = (requested: typeof input.runtime) =>
-      resolveRuntimeChoiceDurable(
-        configStore,
-        runtimeOrgScope,
-        input.scopeLabel,
-        fallback,
-        requested,
-        hydrateModelCatalog,
-        input.runtimePurpose,
-      );
-    const decision = await decide("turn_start", turnStartState(input), {
-      ...(input.runtimeActorId ? { actorId: input.runtimeActorId } : {}),
-      scopeLabel: input.scopeLabel,
-      sessionId: input.session.id,
-      ...(input.runId ? { runId: input.runId } : {}),
-      ...(input.cancel ? { cancel: input.cancel } : {}),
-    });
-    const routed = await routeTurnRuntime(decision, resolve, async () => {
-      if (input.runtimePinned && input.runtime?.modelId) {
-        if (!modelSupported(input.runtime.modelId)) throw new Error(`Unsupported model: ${input.runtime.modelId}`);
-        return { ...input.runtime, modelId: input.runtime.modelId };
-      }
-      return resolve(input.runtime);
-    });
-    if (routed.routedBy) routedBy(routed.routedBy);
-    return routed.choice;
+    refreshModels,
+    modelCredentials,
   });
-
-  if (config.securityScreenProxy) {
-    delete harness.models.screenSecurity;
-  }
 
   const leaseTtlMs = config.leaseTtlMs;
   const maxAttempts = config.maxAttempts;
