@@ -78,3 +78,5 @@ export function buildRunStreams(
     appPageViews,
   };
 }
+
+export type RunStreamsModule = ReturnType<typeof buildRunStreams>;

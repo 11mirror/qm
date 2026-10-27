@@ -58,3 +58,5 @@ export function buildMemory(
   });
   return { memory, memoryStrategy, baseMemory, semanticMemory };
 }
+
+export type MemoryModule = ReturnType<typeof buildMemory>;

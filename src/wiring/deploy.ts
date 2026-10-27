@@ -168,3 +168,5 @@ export function buildDeploy(
   });
   return { deployService };
 }
+
+export type DeployModule = ReturnType<typeof buildDeploy>;

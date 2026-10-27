@@ -43,12 +43,11 @@ import { type SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { type DurableMap } from "./persistence/durable-map.ts";
 import type { UiStateStore } from "./surfaces/ui-state.ts";
-import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./inbox/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
 import { type AdvisoryLock } from "./persistence/advisory-lock.ts";
-import type { CommandApprovalGrant, Session, SurfaceContextRequest, TurnRequest } from "./types.ts";
-import { personalScope, scopeId } from "./types.ts";
+import type { Session, SurfaceContextRequest, TurnRequest } from "./types.ts";
+import { scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { type AppPageViewLog } from "./deploy/page-views.ts";
 import type { RateLimiter } from "./ratelimit/rate-limiter.ts";
@@ -69,7 +68,6 @@ import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { cronJobQueue } from "./cron/job-queue.ts";
 import { createJobWorker, type JobWorker } from "./jobs/job-worker.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
-import { createCurrentScopeMembers } from "./resolution/scope-membership.ts";
 import { type WorkspaceStore } from "./workspace/workspace-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
 import { type McpServerStore } from "./mcp/mcp-server-store.ts";
@@ -109,7 +107,6 @@ import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-
 import { type ProviderKeys } from "./harness/pi-harness.ts";
 import type { Harness } from "./harness/harness.ts";
 import { type SecurityScreener } from "./security/security-screener.ts";
-import { createOrchestrator, type OrchestratorDeps } from "./core/orchestrator.ts";
 import { createControlService } from "./api/control-service.ts";
 import { TURN_QUEUES } from "./turns/absurd-schema.ts";
 import { type RunSignalStore } from "./runs/run-signal-store.ts";
@@ -118,8 +115,6 @@ import { TURN_CANCEL_CHANNEL, TURN_READY_CHANNEL, TURN_YIELD_CHANNEL } from "./t
 import { createTurnRunner, type TurnRunner } from "./turns/turn-runner.ts";
 import { repairStaleTurns } from "./turns/turn-engine.ts";
 import { createRunPreemption, createWorker, RUN_MAX_CLAIMS, type Worker } from "./runs/worker.ts";
-import { EXEC_TIMEOUT_DEFAULT_MS, EXEC_TIMEOUT_MAX_MS } from "./harness/agent-tools.ts";
-import { BACKGROUND_JOB_TTL_MAX_MS, BACKGROUND_JOB_TTL_MS } from "./connectors/background-exec-broker.ts";
 import {
   createNoopInstanceRegistry,
   createPostgresInstanceRegistry,
@@ -148,8 +143,8 @@ import { type SurfaceRegistry } from "./chat-surface/registry.ts";
 import { createSurfaceContextPuller } from "./api/surface-context-puller.ts";
 import { createEngagedRegistry } from "./wake/engaged-registry.ts";
 import { createWakeSweep, type WakeSweep } from "./wake/sweep.ts";
-import { createPostgresSurfaceCache, type SurfaceCache } from "./surface-cache/surface-cache.ts";
-import { createPostgresChannelPolicyStore, type ChannelPolicyStore } from "./surface-cache/channel-policy-store.ts";
+import { type SurfaceCache } from "./surface-cache/surface-cache.ts";
+import { type ChannelPolicyStore } from "./surface-cache/channel-policy-store.ts";
 import {
   createPostgresAmbientJudgmentStore,
   type AmbientJudgmentStore,
@@ -202,6 +197,8 @@ import { registerLegacyMigrations } from "./wiring/legacy-migrations.ts";
 import { buildCrons } from "./wiring/crons.ts";
 
 import { buildSessionSyscalls } from "./wiring/session-syscalls.ts";
+
+import { buildOrchestrator } from "./wiring/orchestrator.ts";
 
 export interface Runtime {
   start(): void;
@@ -619,63 +616,20 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     fallback,
     hydrateModelCatalog,
   });
-  const liveFallback = async (
-    container: string,
-    opts?: { limit?: number },
-  ): Promise<Array<{
-    container: string;
-    ts: string;
-    authorId?: string;
-    authorName?: string;
-    text: string;
-    createdAt: number;
-  }> | null> => {
-    const puller = orchestratorDeps.surfaceContext;
-    if (!puller) return null;
-    const result = await puller.pull("slack", {
-      conversationTarget: container,
-      ...(opts?.limit !== undefined ? { count: opts.limit } : {}),
-    });
-    if (!result) return null;
-    return (result.messages as Array<Record<string, unknown>>).map((m) => ({
-      container,
-      ts: String(m.ts ?? ""),
-      ...(m.authorId ? { authorId: String(m.authorId) } : {}),
-      ...((m.author ?? m.authorName) ? { authorName: String(m.author ?? m.authorName) } : {}),
-      text: String(m.text ?? ""),
-      createdAt: Date.now(),
-    }));
-  };
-  const surfaceCache: SurfaceCache = createPostgresSurfaceCache(databaseUrl, { liveFallback });
-  const channelPolicy: ChannelPolicyStore = createPostgresChannelPolicyStore(databaseUrl);
-  const orchestratorDeps: OrchestratorDeps = {
-    channelPolicy,
-    surfaceCache,
-    surfaceLabel: chatSurfaces.label,
-    installSharedCanvas: async (actorId, fileId, where) => {
-      const canvas = await installSharedCanvas(uiState, actorId, await app.openFileForViewer(fileId, actorId));
-      if (typeof canvas === "string") return canvas;
-      auditLog.record({
-        at: Date.now(),
-        principalId: actorId,
-        action: "ui.canvas.install",
-        resource: `file:${fileId}`,
-        scopeLabel: personalScope(actorId),
-        detail: `rev ${canvas.rev}`,
-      });
-      sessionStateBus.emit({ ...where, participants: [actorId], state: "ui", at: Date.now(), ui: { kind: "canvas" } });
-      return null;
-    },
+  const { orchestrator, surfaceCache, channelPolicy, orchestratorDeps } = buildOrchestrator({
+    databaseUrl,
+    chatSurfaces,
+    uiState,
+    late,
+    auditLog,
     sessionStateBus,
-    externalSlackPolicies: config.externalSlackPolicies,
+    config,
     sessionSyscalls,
     refreshModels,
     identity,
     resolution,
-    config: configStore,
-    defaultTurnWallClockMs: config.turnWallClockMs,
+    configStore,
     userModelCredentials,
-    ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     sessions,
     workspace,
     files,
@@ -684,35 +638,15 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     sandboxResources,
     connectorTokens,
     modelGateway,
-    auditLog,
     rateLimiter,
     budget,
     harness,
     memory,
-    deploy: deployService,
+    deployService,
     acl,
     admin,
-    mcp: mcpToolService,
-    ...(config.maxContextTokens !== undefined ? { maxContextTokens: config.maxContextTokens } : {}),
-    execTimeoutMs: EXEC_TIMEOUT_DEFAULT_MS,
-    execTimeoutCeilingMs: EXEC_TIMEOUT_MAX_MS,
-    approvalSummaryTimeoutMs: config.approvalSummaryTimeoutMs,
-    turnLeaseWaitMs: config.turnLeaseWaitMs,
-    securityScreenTimeoutMs: config.securityScreenTimeoutMs,
-    ...(securityScreener ? { securityScreener } : {}),
-    backgroundJobTtlMs: BACKGROUND_JOB_TTL_MS,
-    backgroundJobTtlMaxMs: BACKGROUND_JOB_TTL_MAX_MS,
-    ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-    ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-    capabilityTokenCompression: config.capabilityTokenCompression,
-    ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-    ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
-    ...(config.deployAppsDomain ? { deployAppsDomain: config.deployAppsDomain } : {}),
-    ...(config.resendApiKey && config.emailFrom
-      ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
-      : {}),
-    ...(config.publicUrl ? { webhookPublicUrl: config.publicUrl } : {}),
-    memoryPolicy: { recall: config.memoryRecall, capture: config.memoryCapture },
+    mcpToolService,
+    securityScreener,
     memoryStrategy,
     skills,
     skillBundles,
@@ -720,7 +654,7 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     advisoryLock,
     errors,
     ledger,
-    signals: runSignals,
+    runSignals,
     turnStream,
     runActivity,
     runs,
@@ -729,32 +663,27 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     teams,
     credentialUsage,
     connectorStatusCache,
-    resolveConnectorClient: resolveClient,
+    resolveClient,
     keychain,
     serviceCreds,
     outbound,
     recentDmPosts,
     approvals,
-    approvalGrants: artifactMap<CommandApprovalGrant>("approval_grants"),
-    ...(processes ? { processes } : {}),
+    artifactMap,
+    processes,
     monitors,
     crons,
     webhooks,
-    resolveBaseModelId: () => orgBaseModelId() ?? fallback.modelId,
-    ...(config.scratchExecEnabled ? { scratchExec: true } : {}),
+    orgBaseModelId,
+    fallback,
     directory,
     isCurrentSharedScopeMember,
-    currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
-    managedGroups: projects,
     projects,
-    ...(config.reachExecEnabled ? { reachExec: true } : {}),
-    ...(config.eagerProvisionEnabled ? { eagerProvision: true } : {}),
     environments,
     brokeredTools,
     deploymentLayer,
     layerBrokerFor,
-  };
-  const orchestrator = createOrchestrator(orchestratorDeps);
+  });
 
   const uuidId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const recoveryAdminBase = config.publicWebUrl?.replace(/\/$/, "");

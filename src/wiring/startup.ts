@@ -39,3 +39,5 @@ export function buildStartup(
   const skillsReady: PromiseLike<void> = { then: (resolve, reject) => startOnce().skillsReady.then(resolve, reject) };
   return { skillsReady, startOnce };
 }
+
+export type StartupModule = ReturnType<typeof buildStartup>;

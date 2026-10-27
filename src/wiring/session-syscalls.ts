@@ -139,3 +139,5 @@ export function buildSessionSyscalls(
   const uiState = artifactMap<PersistedUiState>("web_ui_state");
   return { uiState, sessionSyscalls, layerBrokerFor, sessionMailbox, prepareSessionRequest };
 }
+
+export type SessionSyscallsModule = ReturnType<typeof buildSessionSyscalls>;
