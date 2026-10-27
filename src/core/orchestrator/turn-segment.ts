@@ -310,7 +310,7 @@ function createPrepareSteer(
     const seed = `${fileRegistration.seed}:steer:${randomUUID()}`;
     const inboxDir = `${turnInboxDir}/${randomUUID()}`;
     const received = strictReadOnly
-      ? { metas: [], images: [], tooMany: [], unavailable: [] }
+      ? { metas: [], images: [], unavailable: [] }
       : await materializeInbound(
           deps.sandbox,
           provision,

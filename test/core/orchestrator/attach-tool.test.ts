@@ -6,7 +6,7 @@ import {
   collectBlob,
   type BlobTransferStore,
 } from "../../../src/persistence/blob-transfer.ts";
-import { MAX_OUTBOUND_FILES, MAX_ATTACHMENT_BYTES } from "../../../src/core/attachments.ts";
+import { MAX_REPLY_ATTACHMENT_BYTES, MAX_ATTACHMENT_BYTES } from "../../../src/core/attachments.ts";
 import { createAttachStaging } from "../../../src/core/orchestrator/attach-tool.ts";
 import { fakeSandbox } from "../../support/attachment-sandbox.ts";
 
@@ -72,19 +72,45 @@ test("attach refuses a file past the size cap", async () => {
   assert.equal(staging.staged().length, 0);
 });
 
-test("attach accumulates across calls, replaces a re-named path, and caps the reply's file count", async () => {
+test("attach accumulates across calls, replaces a re-named path, and carries as many files as named", async () => {
   const { sandbox, handle, files } = fakeSandbox();
-  for (let i = 0; i < MAX_OUTBOUND_FILES + 5; i++) files.set(`f${i}.txt`, new Uint8Array(Buffer.from(`x${i}`)));
+  for (let i = 0; i < 40; i++) files.set(`f${i}.txt`, new Uint8Array(Buffer.from(`x${i}`)));
   const staging = attachStaging(sandbox, handle, createMemoryBlobTransferStore());
   assert.ok((await staging.attach(["f0.txt"])).ok);
   assert.ok((await staging.attach(["f1.txt"])).ok);
   assert.equal(staging.staged().length, 2, "a second call adds to the set");
   assert.ok((await staging.attach(["f0.txt"])).ok);
   assert.equal(staging.staged().length, 2, "re-naming a path replaces it instead of duplicating");
-  const rest = await staging.attach(Array.from({ length: MAX_OUTBOUND_FILES - 1 }, (_, i) => `f${i + 2}.txt`));
-  assert.ok(!rest.ok);
-  assert.match(rest.message, /at most/);
-  assert.equal(staging.staged().length, 2, "the over-cap call stages nothing");
+  const rest = await staging.attach(Array.from({ length: 38 }, (_, i) => `f${i + 2}.txt`));
+  assert.ok(rest.ok);
+  assert.equal(staging.staged().length, 40);
+});
+
+test("a reply's files are bounded by their total bytes, counting what is already staged", async () => {
+  const { sandbox, handle, files } = fakeSandbox();
+  files.set("a.bin", new Uint8Array(Buffer.from("aa")));
+  files.set("b.bin", new Uint8Array(Buffer.from("bb")));
+  files.set("c.bin", new Uint8Array(Buffer.from("c")));
+  const memory = createMemoryBlobTransferStore();
+  const nearlyFull = MAX_REPLY_ATTACHMENT_BYTES - 1;
+  let inflate = true;
+  const transfer: BlobTransferStore = {
+    ...memory,
+    put: async (source, opts) => {
+      const blob = await memory.put(source, opts);
+      return inflate ? { ...blob, sizeBytes: nearlyFull } : blob;
+    },
+  };
+  const staging = attachStaging(sandbox, handle, transfer);
+  assert.ok((await staging.attach(["a.bin"])).ok, "the first file is recorded at nearly the whole reply budget");
+  inflate = false;
+  const second = await staging.attach(["b.bin"]);
+  assert.ok(!second.ok);
+  assert.match(second.message, /b\.bin \(too large alongside the files already attached\)/);
+  assert.doesNotMatch(second.message, /b\.bin \(too large\)/);
+  assert.equal(staging.staged().length, 1, "the overflowing call stages nothing");
+  assert.ok((await staging.attach(["a.bin", "c.bin"])).ok, "replacing the staged file frees its bytes");
+  assert.equal(staging.staged().length, 2);
 });
 
 test("re-attaching a path replaces its staged bytes and releases the superseded blob", async () => {

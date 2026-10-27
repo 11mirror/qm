@@ -7,7 +7,6 @@ import type { GrantedHandle, IncomingAttachment, TurnRequest } from "../../src/t
 import { storedItem, type NewItem } from "../../src/sessions/items.ts";
 import { createMemoryBlobTransferStore, type BlobTransferStore } from "../../src/persistence/blob-transfer.ts";
 import {
-  MAX_INBOUND_FILES,
   environmentNote,
   inboundIssueList,
   inboundIssuesNote,
@@ -71,13 +70,10 @@ test("inboundManifest lists files under ./inbox/", () => {
 test("inboundIssueList is empty when nothing failed, and names each problem otherwise", () => {
   assert.deepEqual(inboundIssueList({}), []);
   const issues = inboundIssueList({
-    tooMany: ["x.png", "y.png"],
     unavailable: ["z.pdf"],
     surfaceNotes: ['I couldn\'t read "big.zip" — check my file-access permission'],
   });
   const joined = issues.join(" | ");
-  assert.match(joined, /x\.png, y\.png/);
-  assert.match(joined, /too many files/);
   assert.match(joined, /z\.pdf/);
   assert.match(joined, /no longer available/);
   assert.match(joined, /big\.zip/);
@@ -326,15 +322,13 @@ test("materializeInbound skips an attachment whose blob is missing (expired/neve
   assert.deepEqual(unavailable, ["ghost.bin"]);
 });
 
-test("materializeInbound caps inbound file count (core-side defense in depth)", async () => {
+test("materializeInbound takes every file in the message", async () => {
   const { sandbox, handle } = fakeSandbox();
   const transfer = createMemoryBlobTransferStore();
-  const attachments = await Promise.all(
-    Array.from({ length: MAX_INBOUND_FILES + 3 }, (_, i) => inFile(transfer, `f${i}.txt`, "x")),
-  );
-  const { metas, tooMany } = await materializeInbound(sandbox, handle, attachments, transfer);
-  assert.equal(metas.length, MAX_INBOUND_FILES);
-  assert.equal(tooMany.length, 3);
+  const attachments = await Promise.all(Array.from({ length: 40 }, (_, i) => inFile(transfer, `f${i}.txt`, "x")));
+  const { metas, unavailable } = await materializeInbound(sandbox, handle, attachments, transfer);
+  assert.equal(metas.length, 40);
+  assert.deepEqual(unavailable, []);
 });
 
 test("materializeInbound feeds supported images as vision, but not svg", async () => {
