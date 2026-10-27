@@ -1,0 +1,1123 @@
+import type { Harness, HarnessTurnInput } from "../../src/harness/harness.ts";
+import { createMemoryBlobTransferStore, type BlobTransferStore } from "../../src/persistence/blob-transfer.ts";
+import type { SecurityScreener } from "../../src/security/security-screener.ts";
+import { type SkillBundleStore } from "../../src/skills/skill-bundle-store.ts";
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createOrchestrator, type OrchestratorInput } from "../../src/core/orchestrator.ts";
+import { createIdentityService } from "../../src/identity/identity-service.ts";
+import { createAclStore } from "../../src/acl/acl-store.ts";
+import { createResolutionService } from "../../src/resolution/resolution-service.ts";
+import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
+import { createModelGateway } from "../../src/model/model-gateway.ts";
+import { createMockHarness } from "../support/mock-harness.ts";
+import { createCronStore, type CronStore } from "../../src/cron/cron-store.ts";
+import { createDeployStore } from "../../src/deploy/deploy-store.ts";
+import { createDockerDeployProvider } from "../../src/deploy/docker-deploy-provider.ts";
+import { createDeployService } from "../../src/deploy/deploy-service.ts";
+import { createMemoryDurableByteStore } from "../../src/files/durable-byte-store.ts";
+import type { Sandbox } from "../../src/sandbox/sandbox.ts";
+import type { ConnectorStatusCache } from "../../src/credentials/connector-status.ts";
+import type { ConnectorTokenStore } from "../../src/credentials/keychain.ts";
+import { createSkillStore, type SkillStore } from "../../src/skills/skill-store.ts";
+import { scopeId, type Conversation, type Principal, type ScopeId, type TurnRequest } from "../../src/types.ts";
+import type { ManagedGroupDirectory } from "../../src/resolution/scope-membership.ts";
+import type { IsCurrentSharedScopeMember } from "../../src/resolution/scope-membership.ts";
+import { singleProcessDeps } from "../support/single-process.ts";
+import { createPostgresAuditLog } from "../../src/admin/postgres-audit-log.ts";
+import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-artifact-store.ts";
+import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
+import { createPostgresRateLimiter } from "../../src/ratelimit/postgres-rate-limiter.ts";
+import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
+import {
+  testConfigStore,
+  testDatabaseUrl,
+  testAdvisoryLock,
+  testDeployBackings,
+  testMap,
+} from "../support/test-database.ts";
+import { createPostgresCronFireStore } from "../../src/cron/fire-store.ts";
+import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts";
+
+const ORG = "default-org";
+const actor: Principal = { id: "U1", type: "internal" };
+
+function fakeSandbox(): Sandbox {
+  const unreached = () => {
+    throw new Error("fakeSandbox: a conversational !sysprompt turn must not touch the sandbox");
+  };
+  return {
+    profile: {
+      backend: "fake",
+      writablePersistence: "resident_disk",
+      processSessions: false,
+      spec: { os: "Debian 12 (bookworm)", tools: ["git", "jq"], workdir: "/workspace", homeDir: "/root" },
+    },
+    provision: unreached as never,
+    run: unreached as never,
+    readFile: unreached as never,
+    writeFile: unreached as never,
+    writeFileBytes: unreached as never,
+    readFileBytes: unreached as never,
+    listDir: unreached as never,
+    removeDir: unreached as never,
+    teardown: unreached as never,
+  };
+}
+
+function readSandbox(): Sandbox {
+  return {
+    ...fakeSandbox(),
+    provision: async () => ({ id: "read", rootDir: "/workspace" }),
+    readFile: async () => null,
+    teardown: async () => {},
+  };
+}
+
+const connectorStatusCache: ConnectorStatusCache = {
+  get: async () => ({ principalId: actor.id, checkedAt: Date.now(), providers: { google: { connected: true } } }),
+  put: async () => {},
+};
+const connectorTokens = {
+  listConnectorsByOwners: async () => new Map(),
+  connectorAccessToken: async () => null,
+  connectorTokenStatus: () => {
+    throw new Error("connector tokens must not be swept when the status cache is fresh");
+  },
+} as unknown as ConnectorTokenStore;
+
+const skills = {
+  visibleFor: async () => [{ skill: { manifest: { name: "deploy", description: "Deploy the app" } }, shadowed: [] }],
+} as unknown as SkillStore;
+
+function buildOrchestrator(
+  extra: {
+    blobTransfer?: BlobTransferStore;
+    harness?: Harness;
+    memoryPolicy?: import("../../src/memory/policy.ts").MemoryPolicy;
+    crons?: CronStore;
+    connectorStatusCache?: ConnectorStatusCache;
+    sandbox?: Sandbox;
+    skills?: SkillStore;
+    skillBundles?: SkillBundleStore;
+    securityScreener?: SecurityScreener;
+    managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;
+    isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
+  } = {},
+) {
+  const config = testConfigStore(ORG);
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const auditLog = createPostgresAuditLog(testDatabaseUrl());
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "spo-")));
+  const memory = createPostgresMemoryService(testDatabaseUrl());
+  const deploy = createDeployService({
+    ...singleProcessDeps(),
+    deployStore: createDeployStore(testDeployBackings()),
+    provider: createDockerDeployProvider(),
+    deployDir: join(tmpdir(), "spo-deploy"),
+    auditLog,
+    acl,
+  });
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const orchestrator = createOrchestrator({
+    ...singleProcessDeps(),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    resolution: createResolutionService(ORG, config, acl),
+    sessions,
+    workspace,
+    files,
+    sandbox: fakeSandbox(),
+    modelGateway: createModelGateway(),
+    auditLog,
+    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 1000, windowMs: 60_000 }),
+    harness: createMockHarness(),
+    memory,
+    deploy,
+    acl,
+    config,
+    skills,
+    connectorTokens,
+    connectorStatusCache,
+    resolveConnectorClient: async (provider) => {
+      if (provider !== "google") throw new Error("not configured");
+      return { id: "client", secret: "secret", clientRef: "test" };
+    },
+    signingSecret: "test-signing-secret",
+    apiBaseUrl: "https://api.test",
+    ...extra,
+  });
+  return { orchestrator, memory, config, workspace, sessions, files, auditLog, acl };
+}
+
+const dm = (thread: string, text: string, extra: Partial<OrchestratorInput> = {}): OrchestratorInput => ({
+  surface: "test",
+  actor,
+  conversation: { kind: "dm", threadRef: thread, audience: [actor] } as Conversation,
+  text,
+  ...extra,
+  origin: extra.origin ?? { kind: "direct" },
+});
+
+const slackDm = (thread: string, text: string, extra: Partial<OrchestratorInput> = {}): OrchestratorInput => ({
+  ...dm(thread, text, extra),
+  surface: "slack",
+});
+
+test("system prompt is ordered cached-prefix → volatile tail, with memory LAST (after every other block)", async () => {
+  const { orchestrator: orch, memory } = buildOrchestrator();
+
+  await memory.capture(scopeId("personal", actor.id), ["my favorite color is chartreuse"], Date.now());
+
+  let prompt = "";
+  for (let i = 0; i < 200 && !/chartreuse/.test(prompt); i++) {
+    await new Promise((r) => setTimeout(r, 10));
+    const b = await orch.handleTurn(
+      dm(`dm:U1:tB${i}`, "!sysprompt", {
+        deliveryCandidates: [
+          { target: "C1", label: "#general" },
+          { target: "C2", label: "#random" },
+        ],
+      }),
+    );
+    assert.equal(b.status, "ok");
+    prompt = b.reply ?? "";
+  }
+
+  const headingAt = (title: string): number => {
+    const at = prompt.indexOf(`\n## ${title}\n`);
+    assert.notEqual(at, -1, `expected block "## ${title}" to be present as its own heading`);
+    return at;
+  };
+
+  const ordered = [
+    "Where you are",
+    "Where scheduled tasks post",
+    "Sandbox environment profile",
+    "Connected apps",
+    "What you remember",
+  ];
+  assert.doesNotMatch(prompt, /\n## Your logins\n/);
+  const positions = ordered.map((title) => ({ title, at: headingAt(title) }));
+  positions.reduce((prev, cur) => {
+    assert.ok(cur.at > prev.at, `"## ${cur.title}" must come AFTER "## ${prev.title}" (got ${cur.at} vs ${prev.at})`);
+    return cur;
+  });
+
+  assert.ok(
+    headingAt("What you remember") > headingAt("Connected apps"),
+    "memory (## What you remember) must be appended AFTER ## Connected apps (most-volatile-last)",
+  );
+  assert.match(prompt, /chartreuse/);
+
+  assert.match(prompt, /## System orientation/);
+  assert.match(prompt, /sandbox files as cached, not durably saved/);
+  assert.match(prompt, /\$AGENT_API_URL/);
+});
+
+test("Open carries only the live actor's personal reads into a shared turn and audits actual access", async () => {
+  const teammate: Principal = { id: "U2", type: "internal" };
+  const { orchestrator, config, workspace, files, auditLog } = buildOrchestrator({
+    sandbox: readSandbox(),
+    isCurrentSharedScopeMember: async (_principalId, sourceScope) => sourceScope === scopeId("channel", "C1"),
+  });
+  const personal = scopeId("personal", actor.id);
+  const teammatePersonal = scopeId("personal", teammate.id);
+  const channelScope = scopeId("channel", "C1");
+  const put = (id: string, ownerScopeId: ScopeId, name: string, mimetype: string, data: Uint8Array | string) =>
+    files.put({
+      id,
+      ownerScopeId,
+      createdBy: actor.id,
+      name,
+      path: name,
+      mimetype,
+      data: Buffer.from(data),
+      direction: "in",
+    });
+  const privateId = "1".repeat(32);
+  const teammateId = "3".repeat(32);
+  const binaryId = "4".repeat(32);
+  await put(privateId, personal, "private.txt", "text/plain", "ACTOR_PRIVATE_FILE");
+  await put(teammateId, teammatePersonal, "teammate.txt", "text/plain", "TEAMMATE_PRIVATE_FILE");
+  await put(binaryId, personal, "private.bin", "application/octet-stream", new Uint8Array([255, 254, 0, 1]));
+  const channel = (thread: string, text: string, origin: OrchestratorInput["origin"]): OrchestratorInput => ({
+    surface: "test",
+    actor,
+    conversation: {
+      kind: "channel",
+      threadRef: thread,
+      channelRef: "C1",
+      audience: [actor, teammate],
+      publishMembers: [actor, teammate],
+    },
+    text,
+    origin,
+  });
+
+  const isolated = await orchestrator.handleTurn(channel("C1:isolated", "!sysprompt", { kind: "human" }));
+  assert.doesNotMatch(isolated.reply ?? "", /shared\/open-personal-U1\/private\.txt/);
+  const open = await orchestrator.handleTurn(
+    channel("C1:open", `!read shared/open-personal-U1/${privateId}/private.txt`, { kind: "human" }),
+  );
+  assert.equal(open.reply, "ACTOR_PRIVATE_FILE");
+  const binary = await orchestrator.handleTurn(
+    channel("C1:binary", `!read shared/open-personal-U1/${binaryId}/private.bin`, { kind: "human" }),
+  );
+  assert.match(binary.reply ?? "", new RegExp(`Files ID ${binaryId}`));
+  const teammateRead = await orchestrator.handleTurn(channel("C1:teammate", "!sysprompt", { kind: "human" }));
+  assert.doesNotMatch(teammateRead.reply ?? "", /shared\/open-personal-U2\//);
+  const nextActor = await orchestrator.handleTurn({
+    ...channel("C1:open", `!read shared/open-personal-U1/${privateId}/private.txt`, { kind: "human" }),
+    actor: teammate,
+  });
+  assert.doesNotMatch(nextActor.reply ?? "", /ACTOR_PRIVATE_FILE/);
+  const nextActorOwn = await orchestrator.handleTurn({
+    ...channel("C1:open", `!read shared/open-personal-U2/${teammateId}/teammate.txt`, { kind: "human" }),
+    actor: teammate,
+  });
+  assert.equal(nextActorOwn.reply, "TEAMMATE_PRIVATE_FILE");
+
+  const automated = await orchestrator.handleTurn(channel("C1:automation", "!sysprompt", { kind: "automation" }));
+  assert.doesNotMatch(automated.reply ?? "", /shared\/open-personal-U1\/private\.txt/);
+  const incompleteRoster = await orchestrator.handleTurn({
+    ...channel("C1:incomplete", "!sysprompt", { kind: "human" }),
+    conversation: {
+      kind: "channel",
+      threadRef: "C1:incomplete",
+      channelRef: "C1",
+      audience: [actor, teammate],
+    },
+  });
+  assert.doesNotMatch(incompleteRoster.reply ?? "", /shared\/open-personal-U1\/private\.txt/);
+  await config.setSetting("externalSlackParticipants", true, scopeId("org", ORG));
+  const external = await orchestrator.handleTurn({
+    surface: "slack",
+    actor,
+    conversation: {
+      kind: "channel",
+      threadRef: "C1:external",
+      channelRef: "C1",
+      audience: [actor, { id: "guest@example.com", type: "guest" }],
+    },
+    text: "!sysprompt",
+    origin: { kind: "human" },
+  });
+  assert.equal(external.status, "ok");
+  assert.doesNotMatch(external.reply ?? "", /shared\/open-personal-U1\/private\.txt/);
+  assert.equal((await workspace.list(channelScope)).includes("private.txt"), false);
+  const carryAudit = (await auditLog.events()).find((event) => event.action === "sharing.cross_context_read");
+  assert.equal(carryAudit?.principalId, actor.id);
+  assert.deepEqual(JSON.parse(carryAudit?.detail ?? "{}"), {
+    actor: actor.id,
+    source: personal,
+    target: channelScope,
+  });
+});
+
+test("Open advertises the source and audits a carried skill read without granting it to the room", async () => {
+  const personal = scopeId("personal", actor.id);
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const skill = await skills.create({
+    scopeId: personal,
+    createdBy: actor.id,
+    manifest: {
+      name: "private-method",
+      description: "Use a private working method",
+      body: "Keep the method private.",
+      requiredCapabilities: [],
+    },
+  });
+  await skills.review(skill.id, actor.id, []);
+  await skills.publish(skill.id);
+  const { orchestrator, auditLog, acl } = buildOrchestrator({
+    skills,
+    isCurrentSharedScopeMember: async () => true,
+  });
+  const result = await orchestrator.handleTurn({
+    surface: "test",
+    actor,
+    conversation: {
+      kind: "channel",
+      threadRef: "C1:skill",
+      channelRef: "C1",
+      audience: [actor],
+      publishMembers: [actor],
+    },
+    text: "!sysprompt",
+    origin: { kind: "human" },
+  });
+  assert.match(result.reply ?? "", /Additional skill sources: personal:U1/);
+  assert.doesNotMatch(result.reply ?? "", /private-method|Use a private working method/);
+  const read = await orchestrator.handleTurn({
+    surface: "test",
+    actor,
+    conversation: {
+      kind: "channel",
+      threadRef: "C1:skill",
+      channelRef: "C1",
+      audience: [actor],
+      publishMembers: [actor],
+    },
+    text: "!skill private-method",
+    origin: { kind: "human" },
+  });
+  assert.equal(read.status, "ok", read.reason);
+  assert.equal(read.reply, "Keep the method private.");
+  const event = (await auditLog.events()).find(
+    (candidate) => candidate.action === "sharing.cross_context_read" && candidate.resource === `skill:${skill.id}`,
+  );
+  assert.deepEqual(JSON.parse(event?.detail ?? "{}"), {
+    actor: actor.id,
+    source: personal,
+    target: scopeId("channel", "C1"),
+  });
+  assert.deepEqual(await acl.list(), []);
+});
+
+test("Open keeps unclassified personal memory out of rooms, loads room memory in DMs, and capture stays in the room", async () => {
+  let member = true;
+  const { orchestrator, memory, files } = buildOrchestrator({
+    sandbox: readSandbox(),
+    isCurrentSharedScopeMember: async (principalId, sourceScope) =>
+      member && principalId === actor.id && sourceScope === scopeId("channel", "C1"),
+  });
+  const personal = scopeId("personal", actor.id);
+  const channelScope = scopeId("channel", "C1");
+  await memory.capture(personal, ["PERSONAL_OPEN_MEMORY"], Date.now(), actor.id);
+  const channelConversation: Conversation = {
+    kind: "channel",
+    threadRef: "C1:memory",
+    channelRef: "C1",
+    audience: [actor],
+    publishMembers: [actor],
+  };
+  const prompt = await orchestrator.handleTurn({
+    surface: "test",
+    actor,
+    conversation: channelConversation,
+    text: "!sysprompt",
+    origin: { kind: "human" },
+  });
+  assert.doesNotMatch(prompt.reply ?? "", /Sharing posture: Open/);
+  assert.doesNotMatch(prompt.reply ?? "", /PERSONAL_OPEN_MEMORY/);
+
+  await orchestrator.handleTurn({
+    surface: "test",
+    actor,
+    conversation: { ...channelConversation, threadRef: "C1:capture" },
+    text: "!memoryremember ROOM_ONLY_MEMORY",
+    origin: { kind: "human" },
+  });
+  assert.match(await memory.read(channelScope), /ROOM_ONLY_MEMORY/);
+  assert.doesNotMatch(await memory.read(personal), /ROOM_ONLY_MEMORY/);
+
+  const search = await orchestrator.handleTurn(
+    dm("dm:U1:open-search", "!memorysearch ROOM_ONLY_MEMORY", {
+      origin: { kind: "human" },
+    }),
+  );
+  assert.match(search.reply ?? "", /\[channel:C1\].*ROOM_ONLY_MEMORY/);
+  const decisionId = "5".repeat(32);
+  await files.put({
+    id: decisionId,
+    ownerScopeId: channelScope,
+    createdBy: actor.id,
+    name: "decision.txt",
+    path: "decision.txt",
+    mimetype: "text/plain",
+    data: Buffer.from("ROOM_DECISION_FILE"),
+    direction: "in",
+  });
+  const sharedFile = await orchestrator.handleTurn(
+    dm("dm:U1:room-file", `!read shared/open-channel-C1/${decisionId}/decision.txt`, { origin: { kind: "human" } }),
+  );
+  assert.equal(sharedFile.reply, "ROOM_DECISION_FILE");
+
+  const dmPrompt = await orchestrator.handleTurn(
+    dm("dm:U1:search-only", "!sysprompt", {
+      origin: { kind: "human" },
+    }),
+  );
+  assert.match(dmPrompt.reply ?? "", /### channel:C1[\s\S]*ROOM_ONLY_MEMORY/);
+  assert.match(dmPrompt.reply ?? "", /use these authorized memories freely/);
+  assert.doesNotMatch(dmPrompt.reply ?? "", /apply it only if that tag matches here/);
+
+  member = false;
+  const revoked = await orchestrator.handleTurn(
+    dm("dm:U1:revoked", "!memorysearch ROOM_ONLY_MEMORY", {
+      origin: { kind: "human" },
+    }),
+  );
+  assert.doesNotMatch(revoked.reply ?? "", /ROOM_ONLY_MEMORY/);
+  const revokedFile = await orchestrator.handleTurn(
+    dm("dm:U1:room-file", `!read shared/open-channel-C1/${decisionId}/decision.txt`, { origin: { kind: "human" } }),
+  );
+  assert.doesNotMatch(revokedFile.reply ?? "", /ROOM_DECISION_FILE/);
+});
+
+test("the system prompt is byte-identical across two turns a minute apart; the clock rides the environment note", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  const { orchestrator: orch } = buildOrchestrator();
+
+  const turn = (): OrchestratorInput =>
+    dm("dm:U1:cache-stable", "!sysprompt", {
+      timezone: "America/New_York",
+      deliveryCandidates: [
+        { target: "C1", label: "#general" },
+        { target: "C2", label: "#random" },
+      ],
+    });
+  const systemOf = (reply: string): string => reply.split("\n\n<environment>")[0]!;
+  const environmentOf = (reply: string): string => reply.slice(systemOf(reply).length);
+
+  const first = await orch.handleTurn(turn());
+  t.mock.timers.tick(61_000);
+  const second = await orch.handleTurn(turn());
+  assert.equal(first.status, "ok");
+  assert.equal(second.status, "ok");
+
+  for (const title of ["Skills", "Where you are", "Where scheduled tasks post", "Connected apps"]) {
+    assert.ok(
+      environmentOf(first.reply ?? "").includes(`\n## ${title}\n`),
+      `expected "## ${title}" in the first environment`,
+    );
+    assert.ok(
+      !environmentOf(second.reply ?? "").includes(`\n## ${title}\n`),
+      `unchanged "## ${title}" must not repeat`,
+    );
+    assert.ok(!systemOf(first.reply ?? "").includes(`\n## ${title}\n`));
+  }
+  for (const title of ["Sandbox environment profile", "The user's local time", "What you remember", "Your logins"]) {
+    assert.ok(
+      !systemOf(first.reply ?? "").includes(`\n## ${title}\n`),
+      `"## ${title}" must not be in the system prompt`,
+    );
+  }
+  assert.match(environmentOf(first.reply ?? ""), /## The user's local time/);
+  assert.notEqual(environmentOf(second.reply ?? ""), environmentOf(first.reply ?? ""), "the clock moved a minute");
+  assert.equal(
+    systemOf(second.reply ?? ""),
+    systemOf(first.reply ?? ""),
+    "the system prompt must be byte-identical across turns or every cached message block behind it is invalidated",
+  );
+});
+
+test("the cached prefix survives skill-store reordering + a recordUse-style metadata update", async () => {
+  const mkSkill = (name: string, lastUsedAt?: number) => ({
+    skill: { manifest: { name, description: `does ${name}` }, lastUsedAt },
+    shadowed: [],
+  });
+  let visible = [mkSkill("alpha"), mkSkill("midway"), mkSkill("zeta")];
+  const churningSkills = { visibleFor: async () => [...visible] } as unknown as SkillStore;
+  const { orchestrator: orch } = buildOrchestrator({ skills: churningSkills });
+
+  const prefixOf = (prompt: string): string => prompt.split("\n\n<environment>")[0]!;
+  const turn = () => dm("dm:U1:skill-order", "!sysprompt", { timezone: "America/New_York" });
+
+  const first = await orch.handleTurn(turn());
+  assert.equal(first.status, "ok");
+
+  visible = [mkSkill("zeta", Date.now()), mkSkill("alpha"), mkSkill("midway")];
+  const second = await orch.handleTurn(turn());
+  assert.equal(second.status, "ok");
+
+  const prefixA = prefixOf(first.reply ?? "");
+  assert.ok(
+    first.reply!.includes("**alpha**") && first.reply!.includes("**zeta**"),
+    "skills render in the initial environment",
+  );
+  assert.doesNotMatch(second.reply!, /\*\*alpha\*\*|\*\*zeta\*\*/);
+  assert.equal(
+    prefixOf(second.reply ?? ""),
+    prefixA,
+    "a store-order shuffle + lastUsedAt update must not change a byte of the cached prefix",
+  );
+});
+
+test("standing obligations: this scope's pending triggers render; other scopes' and immediate one-shots don't", async () => {
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const base = { owner: actor.id, createdBy: actor.id, ownerScopeId: scopeId("personal", actor.id) };
+  await crons.create({
+    ...base,
+    schedule: { everyMs: 300_000 },
+    title: "Vendor status",
+    action: "poll the vendor status page",
+  });
+  await crons.create({
+    ...base,
+    schedule: { firstFireAt: Date.now() + 86_400_000 },
+    title: "Legal follow-up",
+    action: "follow up with legal",
+  });
+  await crons.create({ ...base, schedule: { firstFireAt: Date.now() - 1000 }, message: "hi alice" });
+  await crons.create({
+    ...base,
+    ownerScopeId: scopeId("channel", "C9"),
+    schedule: { everyMs: 300_000 },
+    action: "channel-only digest",
+  });
+
+  const { orchestrator: orch } = buildOrchestrator({ crons });
+  const b = await orch.handleTurn(dm("dm:U1:obl", "!sysprompt"));
+  assert.equal(b.status, "ok");
+  const prompt = b.reply ?? "";
+
+  assert.match(prompt, /schedule the wake-up in the same turn/);
+  assert.match(prompt, /\n## Already scheduled here\n/);
+  assert.match(prompt, /Vendor status — every 5 minutes/);
+  assert.match(prompt, /Legal follow-up — once at/);
+  assert.doesNotMatch(prompt, /poll the vendor status page|follow up with legal/);
+  assert.doesNotMatch(prompt, /hi alice/);
+  assert.doesNotMatch(prompt, /channel-only digest/);
+});
+
+test("'Sandbox environment profile' renders the substrate profile's spec; no resize menu renders", async () => {
+  const sized: Sandbox = {
+    ...fakeSandbox(),
+    profile: {
+      ...fakeSandbox().profile,
+      spec: { ...fakeSandbox().profile.spec, cpus: 4, memoryMb: 8192 },
+    },
+  };
+  const b = await buildOrchestrator({ sandbox: sized }).orchestrator.handleTurn(dm("dm:U1:rz1", "!sysprompt"));
+  assert.equal(b.status, "ok");
+  const prompt = b.reply ?? "";
+  assert.doesNotMatch(prompt, /## Resizing this computer/);
+  assert.match(prompt, /4 vCPU \/ 8 GB RAM/, "the This-machine block shows the profile spec");
+});
+
+test("Slack turns get the terse-response style instruction; other surfaces do not", async () => {
+  const { orchestrator: orch } = buildOrchestrator();
+
+  const slack = await orch.handleTurn(slackDm("dm:U1:slack-style", "!sysprompt"));
+  assert.equal(slack.status, "ok");
+  assert.doesNotMatch(slack.reply ?? "", /## Talking on Slack/);
+  assert.match(slack.reply ?? "", /This is Slack: keep each reply to a couple of sentences/);
+
+  const nonSlack = await orch.handleTurn(dm("dm:U1:non-slack-style", "!sysprompt"));
+  assert.equal(nonSlack.status, "ok");
+  assert.doesNotMatch(nonSlack.reply ?? "", /## Talking on Slack/);
+  assert.doesNotMatch(nonSlack.reply ?? "", /a couple of sentences/);
+});
+test("a project session names its linked Slack home channel; unlinked projects get no block", async () => {
+  const managedGroups = {
+    recognizes: (ref: string) => ref.startsWith("web-project-"),
+    membership: async () => true,
+    members: async () => [actor.id],
+    version: async () => "1",
+    withVersion: async <T>(_ref: string, _version: string | undefined, fn: () => Promise<T>) => fn(),
+    slackChannel: async (ref: string) =>
+      ref === "web-project-linked" ? { channelId: "C-ENG", channelName: "eng" } : undefined,
+  };
+  const { orchestrator: orch } = buildOrchestrator({ managedGroups });
+
+  const group = (ref: string, thread: string): OrchestratorInput => ({
+    surface: "test",
+    actor,
+    conversation: {
+      kind: "group",
+      threadRef: thread,
+      channelRef: ref,
+      channelName: "Proj",
+      audience: [actor],
+    } as Conversation,
+    text: "!sysprompt",
+    scopeVersion: "1",
+    sessionParticipantIds: [actor.id],
+    origin: { kind: "direct" },
+  });
+
+  const linked = await orch.handleTurn(group("web-project-linked", "grp:linked:1"));
+  assert.equal(linked.status, "ok", `refused: ${(linked as { reason?: string }).reason}`);
+  const prompt = linked.reply ?? "";
+  assert.match(prompt, /## Project home channel/);
+  assert.match(prompt, /#eng/);
+  assert.match(prompt, /channel: "eng"/);
+
+  const unlinked = await orch.handleTurn(group("web-project-bare", "grp:bare:1"));
+  assert.equal(unlinked.status, "ok");
+  assert.ok(!(unlinked.reply ?? "").includes("## Project home channel"));
+});
+
+for (const mode of ["off", "writable", "skip"] as const) {
+  test(`Open respects memory ${mode}`, async () => {
+    const { orchestrator, memory } = buildOrchestrator({
+      sandbox: readSandbox(),
+      memoryPolicy: { recall: mode === "skip" ? "visible" : mode, capture: "off" },
+      isCurrentSharedScopeMember: async () => true,
+    });
+    await memory.capture(scopeId("personal", actor.id), ["DO_NOT_RECALL_PRIVATE_NOTE"], Date.now(), actor.id);
+    for (const text of [
+      "!sysprompt",
+      "!memorysearch DO_NOT_RECALL_PRIVATE_NOTE",
+      "!read shared/open-personal-U1/memory/MEMORY.md",
+    ]) {
+      const result = await orchestrator.handleTurn({
+        surface: "test",
+        actor,
+        conversation: {
+          kind: "channel",
+          channelRef: "C1",
+          threadRef: `C1:disabled:${mode}:${text}`,
+          audience: [actor],
+          publishMembers: [actor],
+        },
+        origin: { kind: "human" },
+        text,
+        ...(mode === "skip" ? { skipMemory: true } : {}),
+      });
+      assert.doesNotMatch(result.reply ?? "", /DO_NOT_RECALL_PRIVATE_NOTE/);
+    }
+  });
+}
+
+test("Open uses the exact skill snapshot that passed screening despite an in-flight source update", async () => {
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const owner = scopeId("personal", actor.id);
+  const skill = await skills.create({
+    scopeId: owner,
+    createdBy: actor.id,
+    manifest: {
+      name: "snapshot-method",
+      description: "SAFE_DESCRIPTION",
+      body: "SAFE_BODY",
+      requiredCapabilities: [],
+    },
+  });
+  await skills.review(skill.id, actor.id, []);
+  await skills.publish(skill.id);
+  let updated = false;
+  const securityScreener: SecurityScreener = {
+    provider: "test",
+    classify: async ({ payload }) => {
+      if (!updated && payload.includes("SAFE_DESCRIPTION")) {
+        updated = true;
+        await skills.update(skill.id, {
+          ...skill.manifest,
+          description: "UNSCREENED_UPDATE !security-risk",
+          body: "UNSCREENED_BODY !security-risk",
+        });
+      }
+      return { verdict: { decision: payload.includes("!security-risk") ? "strict" : "auto" }, score: 0, threshold: 1 };
+    },
+  };
+  const { orchestrator } = buildOrchestrator({
+    skills,
+    securityScreener,
+    isCurrentSharedScopeMember: async () => true,
+  });
+  const result = await orchestrator.handleTurn({
+    surface: "test",
+    actor,
+    origin: { kind: "human" },
+    conversation: {
+      kind: "channel",
+      channelRef: "C1",
+      threadRef: "C1:skill-snapshot",
+      audience: [actor],
+      publishMembers: [actor],
+    },
+    text: "!skill snapshot-method",
+  });
+  assert.equal(result.status, "ok", result.reason);
+  assert.equal(updated, true);
+  assert.match(result.reply ?? "", /SAFE_BODY/);
+  assert.doesNotMatch(result.reply ?? "", /UNSCREENED_UPDATE|UNSCREENED_BODY/);
+});
+
+test("steered files materialize in separate inboxes and keep distinct durable artifacts", async () => {
+  const blobTransfer = createMemoryBlobTransferStore();
+  const first = await blobTransfer.put(Buffer.from("first file"));
+  const second = await blobTransfer.put(Buffer.from("second file"));
+  const writes = new Map<string, string>();
+  const sandbox: Sandbox = {
+    ...readSandbox(),
+    removeDir: async () => {},
+    listDir: async () => [],
+    writeFile: async () => {},
+    writeFileBytes: async (_handle, path, bytes) => {
+      writes.set(path, Buffer.from(bytes).toString());
+    },
+  };
+  const harness = createMockHarness();
+  const prepared: Array<Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>>> = [];
+  harness.turns.runTurn = async (turn) => {
+    for (const blob of [first, second]) {
+      prepared.push(
+        await turn.prepareSteer!("read this", {
+          origin: { kind: "direct" },
+          surface: "web",
+          actor: { externalId: actor.id },
+          conversation: { kind: "dm", threadRef: "steer-files" },
+          text: "read this",
+          attachments: [{ name: "report.txt", mimetype: "text/plain", ...blob }],
+        }),
+      );
+    }
+    return { reply: "done" };
+  };
+  const { orchestrator, files } = buildOrchestrator({ harness, sandbox, blobTransfer });
+  const result = await orchestrator.handleTurn(dm("steer-files", "hello"));
+  assert.equal(result.status, "ok", result.reason);
+  const inboundWrites = [...writes].filter(([path]) => path.endsWith("/report.txt"));
+  assert.equal(inboundWrites.length, 2);
+  assert.deepEqual(
+    inboundWrites.map(([, content]) => content),
+    ["first file", "second file"],
+  );
+  for (const [i, [path]] of inboundWrites.entries()) {
+    assert.ok(prepared[i]!.text.includes(path));
+    assert.ok(await files.get(prepared[i]!.attachments![0]!.artifactId!));
+    assert.equal(
+      Buffer.from(prepared[i]!.documents![0]!.dataBase64, "base64").toString(),
+      i === 0 ? "first file" : "second file",
+    );
+  }
+  assert.notEqual(prepared[0]!.attachments![0]!.artifactId, prepared[1]!.attachments![0]!.artifactId);
+});
+
+test("read-only turns report steered files as unavailable without provisioning a sandbox", async () => {
+  const harness = createMockHarness();
+  let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
+  harness.turns.runTurn = async (turn) => {
+    prepared = await turn.prepareSteer!("", {
+      origin: { kind: "direct" },
+      surface: "web",
+      actor: { externalId: actor.id },
+      conversation: { kind: "dm", threadRef: "steer-strict" },
+      text: "",
+      attachments: [{ name: "secret.txt", mimetype: "text/plain", sizeBytes: 4, blobId: "b1" }],
+    });
+    return { reply: "done" };
+  };
+  const { orchestrator } = buildOrchestrator({ harness });
+  const result = await orchestrator.handleTurn(dm("steer-strict", "hello", { readOnly: true }));
+  assert.equal(result.status, "ok", result.reason);
+  assert.deepEqual(prepared?.attachments, []);
+  assert.deepEqual(prepared?.documents, []);
+  assert.match(prepared?.text ?? "", /secret.txt/);
+});
+
+for (const budget of ["count", "bytes", "reupload", "retry"] as const) {
+  test(`steered documents respect the initial turn budget (${budget})`, async () => {
+    const blobTransfer = createMemoryBlobTransferStore();
+    const blob = await blobTransfer.put(Buffer.from(budget === "bytes" ? "x".repeat(7_999_995) : "initial"));
+    const steerBlob = budget === "reupload" ? blob : await blobTransfer.put(Buffer.from("steered document"));
+    const sandbox: Sandbox = {
+      ...readSandbox(),
+      removeDir: async () => {},
+      listDir: async () => [],
+      writeFile: async () => {},
+      writeFileBytes: async () => {},
+    };
+    const harness = createMockHarness();
+    let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
+    harness.turns.runTurn = async (turn) => {
+      assert.equal(turn.documents?.length, budget === "count" ? 10 : 1);
+      const request: TurnRequest = {
+        origin: { kind: "direct" },
+        surface: "web",
+        actor: { externalId: actor.id },
+        conversation: { kind: "dm", threadRef: `steer-budget-${budget}` },
+        text: "read this",
+        attachments: [
+          { name: budget === "reupload" ? "initial-0.txt" : "steered.txt", mimetype: "text/plain", ...steerBlob },
+        ],
+      };
+      prepared = await turn.prepareSteer!("read this", request);
+      if (budget === "retry") {
+        assert.equal(prepared.documents?.length, 1);
+        prepared = await turn.prepareSteer!("read this", request);
+        assert.equal(turn.documents?.length, 1);
+      }
+      if (budget === "reupload")
+        assert.notEqual(prepared.attachments?.[0]?.artifactId, turn.documents?.[0]?.artifactId);
+      return { reply: "done" };
+    };
+    const { orchestrator } = buildOrchestrator({ harness, sandbox, blobTransfer });
+    const result = await orchestrator.handleTurn({
+      ...dm(`steer-budget-${budget}`, "hello"),
+      attachments: Array.from({ length: budget === "count" ? 10 : 1 }, (_, i) => ({
+        name: `initial-${i}.txt`,
+        mimetype: "text/plain",
+        ...blob,
+      })),
+    });
+    assert.equal(result.status, "ok", result.reason);
+    if (budget === "retry") assert.equal(prepared?.documents?.length, 1);
+    else assert.deepEqual(prepared?.documents, []);
+    if (budget === "reupload" || budget === "retry") assert.doesNotMatch(prepared?.text ?? "", /not included inline/);
+    else assert.match(prepared?.text ?? "", /steered.txt" is not included inline/);
+  });
+}
+
+test("steered native office documents are observed by the screen after extraction and still delivered", async () => {
+  const blobTransfer = createMemoryBlobTransferStore();
+  const blob = await blobTransfer.put(readFileSync(new URL("../fixtures/documents/sample.docx", import.meta.url)));
+  const sandbox: Sandbox = {
+    ...readSandbox(),
+    removeDir: async () => {},
+    listDir: async () => [],
+    writeFile: async () => {},
+    writeFileBytes: async () => {},
+  };
+  const harness = createMockHarness();
+  let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
+  let screened = false;
+  harness.turns.runTurn = async (turn) => {
+    prepared = await turn.prepareSteer!("summarize", {
+      origin: { kind: "direct" },
+      surface: "web",
+      actor: { externalId: actor.id },
+      conversation: { kind: "dm", threadRef: "steer-office-screen" },
+      text: "summarize",
+      attachments: [
+        {
+          name: "unsafe.docx",
+          mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          ...blob,
+        },
+      ],
+    });
+    return { reply: "done" };
+  };
+  const securityScreener: SecurityScreener = {
+    provider: "test",
+    classify: async ({ payload }) => {
+      const blocked = payload.includes("DOCX-QUARTZ-731");
+      screened ||= blocked;
+      return { verdict: { decision: blocked ? "strict" : "auto" }, score: 0, threshold: 1 };
+    },
+  };
+  const { orchestrator } = buildOrchestrator({ harness, sandbox, blobTransfer, securityScreener });
+  const result = await orchestrator.handleTurn(dm("steer-office-screen", "hello"));
+  assert.equal(result.status, "ok", result.reason);
+  for (let i = 0; i < 3_000 && !screened; i++) await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(screened, true, "the extracted text reaches the screen");
+  assert.equal(prepared?.documents?.length, 1, "a would-block verdict does not withhold the document");
+  assert.doesNotMatch(prepared?.text ?? "", /withheld/);
+});
+
+test("documents uploaded during a turn survive a runtime handoff without aliasing the active harness", async () => {
+  const blobTransfer = createMemoryBlobTransferStore();
+  const blob = await blobTransfer.put(Buffer.from("HANDOFF-DOCUMENT-492"));
+  const sandbox: Sandbox = {
+    ...readSandbox(),
+    removeDir: async () => {},
+    listDir: async () => [],
+    writeFile: async () => {},
+    writeFileBytes: async () => {},
+  };
+  const harness = createMockHarness();
+  let segments = 0;
+  harness.turns.runTurn = async (turn) => {
+    if (++segments === 1) {
+      const activeDocuments = turn.documents!;
+      const prepared = await turn.prepareSteer!("read this", {
+        origin: { kind: "direct" },
+        surface: "web",
+        actor: { externalId: actor.id },
+        conversation: { kind: "dm", threadRef: "steer-handoff" },
+        text: "read this",
+        attachments: [{ name: "steered.txt", mimetype: "text/plain", ...blob }],
+      });
+      assert.equal(prepared.documents?.length, 1);
+      assert.equal(activeDocuments.length, 0);
+      return { reply: "", runtimeHandoff: { choice: { modelId: "gpt-6-astra" }, lifetime: "task" } };
+    }
+    assert.equal(turn.documents?.length, 1);
+    assert.equal(Buffer.from(turn.documents![0]!.dataBase64, "base64").toString(), "HANDOFF-DOCUMENT-492");
+    return { reply: "read after switching" };
+  };
+  const { orchestrator } = buildOrchestrator({ harness, sandbox, blobTransfer });
+  const result = await orchestrator.handleTurn(dm("steer-handoff", "hello"));
+  assert.equal(result.status, "ok", result.reason);
+  assert.equal(segments, 2);
+});
+
+for (const surfaceTools of [false, true]) {
+  test(`automatic memory is injected once, then only updates (${surfaceTools ? "spine" : "DM"})`, async () => {
+    const base = createMockHarness();
+    const seen: HarnessTurnInput[] = [];
+    const harness: Harness = {
+      ...base,
+      turns: {
+        ...base.turns,
+        runTurn: async (turn) => {
+          seen.push(turn);
+          await turn.emit({ kind: "UserMessage", text: turn.input });
+          await turn.emit({ kind: "AgentMessage", text: "ok" });
+          return { reply: "ok" };
+        },
+      },
+    };
+    const { orchestrator, memory, sessions } = buildOrchestrator({ harness });
+    const personal = scopeId("personal", actor.id);
+    await memory.capture(personal, ["ALPHA_MARKER", "BETA_MARKER"], Date.now());
+    const input = slackDm("memory-once", "hello", { surfaceTools });
+    const first = await orchestrator.handleTurn(input);
+    assert.equal(first.status, "ok");
+    assert.match(seen[0]!.environment!, /ALPHA_MARKER/);
+    await orchestrator.handleTurn({ ...input, text: "next" });
+    assert.doesNotMatch(seen[1]!.environment ?? "", /ALPHA_MARKER|BETA_MARKER|What you remember/);
+    const beta = (await memory.facts!(personal)).find((fact) => fact.text.includes("BETA_MARKER"))!;
+    await memory.delete!(personal, [beta.id]);
+    await memory.capture(personal, ["GAMMA_MARKER"], Date.now());
+    await orchestrator.handleTurn({ ...input, text: "third" });
+    assert.doesNotMatch(seen[2]!.environment!, /ALPHA_MARKER/);
+    assert.match(seen[2]!.environment!, /GAMMA_MARKER/);
+    assert.match(seen[2]!.environment!, /\nU1: 1 earlier fact was consolidated or removed/);
+    const entries = await sessions.getItems(first.sessionId!);
+    const users = entries.filter((entry) => entry.kind === "UserMessage");
+    assert.match(JSON.stringify(users[0]!.body), /memoryRecall/);
+    assert.doesNotMatch(JSON.stringify(users[1]!.body), /ALPHA_MARKER|BETA_MARKER/);
+  });
+}
+
+test("profile and scheduled-work changes append fresh snapshots without rewriting the cached prefix or history", async () => {
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const sandbox = fakeSandbox();
+  const seen: HarnessTurnInput[] = [];
+  const harness = createMockHarness();
+  const runTurn = harness.turns.runTurn;
+  harness.turns.runTurn = async (turn) => {
+    seen.push(turn);
+    return runTurn(turn);
+  };
+  const { orchestrator, sessions } = buildOrchestrator({ crons, sandbox, harness });
+  const input = dm("dm:U1:snapshot-cache", "hello");
+  const first = await orchestrator.handleTurn(input);
+  assert.equal(first.status, "ok");
+  const originalHistory = await sessions.getItems(first.sessionId!);
+  const cron = await crons.create({
+    owner: actor.id,
+    createdBy: actor.id,
+    ownerScopeId: scopeId("personal", actor.id),
+    schedule: { everyMs: 300_000 },
+    title: "Synthetic status",
+    action: "check the synthetic status page",
+  });
+  sandbox.profile.spec = { os: "Other Linux", cpus: 8, workdir: "/new/workspace", homeDir: "/new/home" };
+  assert.equal((await orchestrator.handleTurn({ ...input, text: "next" })).status, "ok");
+  await crons.setEnabled(cron.id, false);
+  assert.equal((await orchestrator.handleTurn({ ...input, text: "third" })).status, "ok");
+  delete sandbox.profile.spec;
+  crons.byOwner = async () => {
+    throw new Error("inventory unavailable");
+  };
+  assert.equal((await orchestrator.handleTurn({ ...input, text: "fourth" })).status, "ok");
+  for (const turn of seen) {
+    assert.equal(turn.systemPrompt, seen[0]!.systemPrompt);
+    assert.doesNotMatch(turn.systemPrompt, /Sandbox environment profile|Already scheduled here|synthetic status/);
+    assert.match(turn.systemPrompt, /Use `cron` list\/get for details/);
+  }
+  assert.match(seen[0]!.environment!, /Debian 12/);
+  assert.match(seen[0]!.environment!, /No active scheduled work/);
+  assert.match(seen[1]!.environment!, /Other Linux|8 vCPU/);
+  assert.match(seen[1]!.environment!, /Synthetic status/g);
+  assert.doesNotMatch(seen[2]!.environment!, /Synthetic status/g);
+  assert.match(seen[2]!.environment!, /No active scheduled work/);
+  assert.match(seen[3]!.environment!, /No longer included: Sandbox environment profile/);
+  assert.match(seen[3]!.environment!, /Scheduled-work status is unavailable/);
+  assert.doesNotMatch(seen[3]!.environment!, /Other Linux|synthetic status|No active scheduled work/);
+  assert.deepEqual(seen[1]!.history, originalHistory);
+  assert.deepEqual((await sessions.getItems(first.sessionId!)).slice(0, originalHistory.length), originalHistory);
+});
+
+test("connector revocation refreshes the environment without treating historical inventories as authority", async () => {
+  let revoked = false;
+  const { orchestrator } = buildOrchestrator({
+    connectorStatusCache: {
+      get: async () => ({
+        principalId: actor.id,
+        checkedAt: Date.now(),
+        providers: { google: { connected: true, needsReconnect: revoked } },
+      }),
+      put: async () => {},
+    },
+  });
+  const first = await orchestrator.handleTurn(dm("dm:U1:revoked-cache", "!sysprompt"));
+  revoked = true;
+  const second = await orchestrator.handleTurn(dm("dm:U1:revoked-cache", "!sysprompt"));
+  const prefix = (reply: string) => reply.split("\n\n<environment>")[0]!;
+  assert.match(first.reply!, /Connected: Google/);
+  assert.match(second.reply!, /Needs reconnect: Google.*Do not use these apps/);
+  assert.doesNotMatch(second.reply!, /Connected: Google/);
+  assert.equal(prefix(first.reply!), prefix(second.reply!));
+  assert.match(second.reply!, /sections below replace their earlier versions/);
+});
+
+for (const mode of ["flagged", "ordinary"] as const) {
+  test(`live inbox steering refreshes context with ${mode} screening`, async () => {
+    const harness = createMockHarness();
+    const thread = mode === "ordinary" ? "web:alice:default" : "web:alice:inbox";
+    let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
+    harness.turns.runTurn = async (turn) => {
+      prepared = await turn.prepareSteer!("summarize again", {
+        origin: { kind: "direct" },
+        surface: "web",
+        actor: { externalId: actor.id },
+        conversation: { kind: "dm", threadRef: thread },
+        text: "summarize again",
+        conversationHeader: "UPDATED_INBOX_SNAPSHOT",
+      });
+      return { reply: "done" };
+    };
+    let refreshedScreens = 0;
+    const securityScreener: SecurityScreener = {
+      provider: "test",
+      classify: async ({ payload }) => {
+        if (payload.includes("UPDATED_INBOX_SNAPSHOT")) {
+          refreshedScreens++;
+          return { verdict: { decision: "strict" }, score: 1, threshold: 1 };
+        }
+        return { verdict: { decision: "auto" }, score: 0, threshold: 1 };
+      },
+    };
+    const { orchestrator } = buildOrchestrator({ harness, securityScreener });
+    const result = await orchestrator.handleTurn(dm(thread, "hello", { surface: "web" }));
+    assert.equal(result.status, "ok", result.reason);
+    if (mode === "flagged") assert.match(prepared!.text, /UPDATED_INBOX_SNAPSHOT/);
+    else assert.equal(prepared!.text, "summarize again");
+    if (mode === "ordinary") assert.equal(refreshedScreens, 0);
+    else assert.ok(refreshedScreens > 0);
+  });
+}
+
+test("the history tool opens one item without reading the transcript, and still finds it by search", async () => {
+  const harness = createMockHarness();
+  const opened: Array<string | null> = [];
+  let found: string[] = [];
+  let rememberedSeq = -1;
+  harness.turns.runTurn = async (turn) => {
+    if (turn.input.includes("recall")) {
+      opened.push(await turn.tools.historyOpen(rememberedSeq));
+      opened.push(await turn.tools.historyOpen(9_999));
+      found = await turn.tools.history("ZEBRA-DELTA-42");
+    }
+    return { reply: "done" };
+  };
+  const { orchestrator, sessions } = buildOrchestrator({ harness });
+  assert.equal((await orchestrator.handleTurn(dm("dm:U1:history-open", "remember ZEBRA-DELTA-42"))).status, "ok");
+  const session = (await sessions.getByThread("dm:U1:history-open"))!;
+  const { lease } = await sessions.acquireLease(session.id);
+  const remembered = await sessions.append(lease!, { kind: "UserMessage", text: "remember ZEBRA-DELTA-42" });
+  await sessions.releaseLease(lease!);
+  rememberedSeq = remembered.seq;
+  let fullReads = 0;
+  const getItems = sessions.getItems.bind(sessions);
+  sessions.getItems = async (...args) => {
+    if (args[0] === session.id && args[1] === undefined) fullReads++;
+    return getItems(...args);
+  };
+  const before = fullReads;
+  assert.equal((await orchestrator.handleTurn(dm("dm:U1:history-open", "recall it"))).status, "ok");
+  assert.match(opened[0] ?? "", /ZEBRA-DELTA-42/);
+  assert.equal(opened[1], null, "an unknown seq opens nothing");
+  assert.ok(found.some((hit) => hit.includes("ZEBRA-DELTA-42")));
+  assert.equal(fullReads - before, 1, "only search reads the whole transcript");
+});
