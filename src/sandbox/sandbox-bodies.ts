@@ -24,14 +24,14 @@ export function sandboxBodiesMigration(
   );
 }
 
-export function withLegacyColumns(typed: MapConversion, legacy: Readonly<Record<string, ColumnSpec>>): MapConversion {
+export function withRetiredColumns(typed: MapConversion, legacy: Readonly<Record<string, ColumnSpec>>): MapConversion {
   const { table } = typed.spec;
   return {
     ...typed,
     spec: { ...typed.spec, columns: { ...typed.spec.columns, ...legacy } },
     before: [
-      retireJsonKeysMigration(`sandbox/${table}/0000-legacy-columns`, table, { columns: legacy }),
-      retireJsonKeysMigration(`contract/sandbox/${table}/0000-legacy-columns`, table, { columns: legacy }),
+      retireJsonKeysMigration(`sandbox/${table}/0000-retired-columns`, table, { columns: legacy }),
+      retireJsonKeysMigration(`contract/sandbox/${table}/0000-retired-columns`, table, { columns: legacy }),
     ],
   };
 }

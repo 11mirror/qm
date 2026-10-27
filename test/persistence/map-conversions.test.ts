@@ -3,14 +3,9 @@ import assert from "node:assert/strict";
 import pg from "pg";
 import "../../src/wiring.ts";
 import { columnName, mapConversions, mapToTableMigration } from "../../src/persistence/typed-table.ts";
-import { CONTRACT_MIGRATIONS } from "../../src/persistence/contract-migrations.ts";
+import { CONTRACT_MIGRATIONS, pgMigrationOrder } from "../../src/persistence/contract-migrations.ts";
 import { readFileSync } from "node:fs";
-import {
-  createPgPool,
-  pgMigrationFrom,
-  pgMigrationOrder,
-  registeredPgMigrations,
-} from "../../src/persistence/pg-pool.ts";
+import { createPgPool, pgMigrationFrom, registeredPgMigrations } from "../../src/persistence/pg-pool.ts";
 import { MODAL_BODIES } from "../../src/sandbox/modal-sandbox.ts";
 import { MANAGED_AGENTS_BODIES } from "../../src/sandbox/managed-agents-sandbox.ts";
 import { BACKGROUND_OWNERSHIP_MIGRATION } from "../../src/runs/background-ownership.ts";
@@ -143,9 +138,9 @@ test("e2b bodies move the older line's keys into columns before the expand and k
   assert.deepEqual(
     ordered.map((migration) => migration.id),
     [
-      "sandbox/e2b_sandbox_bodies/0000-legacy-columns",
+      "sandbox/e2b_sandbox_bodies/0000-retired-columns",
       E2B_BODIES.id,
-      "contract/sandbox/e2b_sandbox_bodies/0000-legacy-columns",
+      "contract/sandbox/e2b_sandbox_bodies/0000-retired-columns",
       E2B_BODIES.contract.id,
     ],
   );
@@ -207,15 +202,15 @@ test("released expand migrations keep the checksums databases recorded for them"
 
 test("e2b and managed-agents bodies re-copy their legacy keys right before their contract", () => {
   for (const bodies of [E2B_BODIES, MANAGED_AGENTS_BODIES]) {
-    const url = `postgresql://legacy-columns.invalid/${bodies.spec.table}`;
+    const url = `postgresql://retired-columns.invalid/${bodies.spec.table}`;
     createPgPool(url, [bodies]);
     const table = bodies.spec.table;
     assert.deepEqual(
       registeredPgMigrations(url).map((migration) => migration.id),
       [
-        `sandbox/${table}/0000-legacy-columns`,
+        `sandbox/${table}/0000-retired-columns`,
         bodies.id,
-        `contract/sandbox/${table}/0000-legacy-columns`,
+        `contract/sandbox/${table}/0000-retired-columns`,
         bodies.contract.id,
       ],
     );

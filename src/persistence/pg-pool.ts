@@ -4,7 +4,8 @@ import type { ClientConfig, Pool, PoolClient } from "pg";
 import { parseIntoClientConfig } from "pg-connection-string";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
-import { SCHEMA_BASELINE, type SchemaBaselineStep } from "./schema-baseline.ts";
+import { SCHEMA_BASELINE, schemaBaselineChain, type ChainMigration } from "./schema-baseline.ts";
+import { pgMigrationOrder, pgMigrationsFrom } from "./contract-migrations.ts";
 import { applyTenancy, TENANT_BYPASS_OPTION } from "./tenancy.ts";
 import { runPgQuery } from "./pg-query.ts";
 
@@ -317,11 +318,6 @@ export function pgMigrationFrom(definition: PgMigrationDefinition): PgMigration 
   );
 }
 
-const pgMigrationsFrom = (definition: PgMigrationDefinition): PgMigration[] =>
-  [...(definition.before ?? []), definition, ...(definition.contract ? [definition.contract] : [])].map(
-    pgMigrationFrom,
-  );
-
 const SCHEMA_LOCK_POLL_MS = 50;
 
 async function lockSchema(client: PoolClient, name: string): Promise<void> {
@@ -335,30 +331,6 @@ async function lockSchema(client: PoolClient, name: string): Promise<void> {
 }
 
 type BaselinePlan = "recorded" | "apply" | "adopt" | "upgrade";
-
-interface ChainMigration extends PgMigration {
-  prepare?: readonly string[];
-  preLedgerId?: string;
-}
-
-function chainMigration(step: SchemaBaselineStep): ChainMigration {
-  return {
-    ...definePgMigration(step.id, step.statements, step.checksum),
-    ...(step.prepare ? { prepare: step.prepare } : {}),
-    ...(step.preLedgerId ? { preLedgerId: step.preLedgerId } : {}),
-  };
-}
-
-let preBaselineChain: { before: ChainMigration[]; migrations: ChainMigration[]; after: ChainMigration[] } | undefined;
-
-function schemaBaselineChain(): NonNullable<typeof preBaselineChain> {
-  const { before, migrations, after } = SCHEMA_BASELINE.chain;
-  return (preBaselineChain ??= {
-    before: before.map(chainMigration),
-    migrations: migrations.map(chainMigration),
-    after: after.map(chainMigration),
-  });
-}
 
 async function planSchemaBaseline(client: PoolClient, ledger: ReadonlyMap<string, string>): Promise<BaselinePlan> {
   const { id, checksum } = SCHEMA_BASELINE;
@@ -676,11 +648,6 @@ function registerPgMigration(connectionString: string, migration: PgMigration): 
   }
   database.set(migration.id, migration);
 }
-
-const migrationPhase = (id: string): number => (id.startsWith("contract/") ? 1 : 0);
-
-export const pgMigrationOrder = (a: string, b: string): number =>
-  migrationPhase(a) - migrationPhase(b) || a.localeCompare(b);
 
 export function registeredPgMigrations(connectionString: string): readonly PgMigration[] {
   return [...(registeredMigrations.get(connectionString)?.values() ?? [])].sort((a, b) => pgMigrationOrder(a.id, b.id));

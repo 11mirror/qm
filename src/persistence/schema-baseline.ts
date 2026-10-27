@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { definePgMigration, type PgMigration } from "./pg-pool.ts";
 
 export interface SchemaBaselineStep {
   id: string;
@@ -29,3 +30,27 @@ const chain = JSON.parse(
 ) as SchemaBaselineChain;
 
 export const SCHEMA_BASELINE = { id: "baseline/0001", sql, checksum, chain } as const;
+
+export interface ChainMigration extends PgMigration {
+  prepare?: readonly string[];
+  preLedgerId?: string;
+}
+
+function chainMigration(step: SchemaBaselineStep): ChainMigration {
+  return {
+    ...definePgMigration(step.id, step.statements, step.checksum),
+    ...(step.prepare ? { prepare: step.prepare } : {}),
+    ...(step.preLedgerId ? { preLedgerId: step.preLedgerId } : {}),
+  };
+}
+
+let preBaselineChain: { before: ChainMigration[]; migrations: ChainMigration[]; after: ChainMigration[] } | undefined;
+
+export function schemaBaselineChain(): NonNullable<typeof preBaselineChain> {
+  const { before, migrations, after } = SCHEMA_BASELINE.chain;
+  return (preBaselineChain ??= {
+    before: before.map(chainMigration),
+    migrations: migrations.map(chainMigration),
+    after: after.map(chainMigration),
+  });
+}

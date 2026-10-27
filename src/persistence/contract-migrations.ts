@@ -1,4 +1,4 @@
-import type { PgMigrationDefinition } from "./pg-pool.ts";
+import { pgMigrationFrom, type PgMigration, type PgMigrationDefinition } from "./pg-pool.ts";
 
 export const CONTRACT_MIGRATIONS: readonly PgMigrationDefinition[] = [
   { id: "contract/0001-drop-deliveries", statements: ["DROP TABLE IF EXISTS deliveries"] },
@@ -61,3 +61,13 @@ export const HELD_BACK_CONTRACT_MIGRATIONS: readonly PgMigrationDefinition[] = [
     statements: ["ALTER TABLE IF EXISTS tenants DROP COLUMN IF EXISTS env, DROP COLUMN IF EXISTS secret_env"],
   },
 ];
+
+export const pgMigrationsFrom = (definition: PgMigrationDefinition): PgMigration[] =>
+  [...(definition.before ?? []), definition, ...(definition.contract ? [definition.contract] : [])].map(
+    pgMigrationFrom,
+  );
+
+const migrationPhase = (id: string): number => (id.startsWith("contract/") ? 1 : 0);
+
+export const pgMigrationOrder = (a: string, b: string): number =>
+  migrationPhase(a) - migrationPhase(b) || a.localeCompare(b);
