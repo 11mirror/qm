@@ -36,6 +36,16 @@ import { tenant } from "../../tenant.ts";
 import type { TurnCtx } from "./turn-context.ts";
 import { SANDBOX_MODEL_PREFIX } from "../../api/contract.ts";
 
+const CREDENTIAL_TOKEN_ENV = "AGENT_CREDENTIAL_TOKEN";
+const AWS_BROKER_ENV = {
+  AWS_ACCESS_KEY_ID: "accessKeyId",
+  AWS_SECRET_ACCESS_KEY: "secretAccessKey",
+  AWS_SESSION_TOKEN: "sessionToken",
+  AWS_REGION: "region",
+  AWS_DEFAULT_REGION: "region",
+} as const;
+export const BROKER_ENV_KEYS: readonly string[] = [CREDENTIAL_TOKEN_ENV, ...Object.keys(AWS_BROKER_ENV)];
+
 const CONNECTOR_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 
 export async function buildCredentialCatalog(
@@ -107,7 +117,7 @@ export async function buildCredentialCatalog(
       env: async () => [
         { key: "AGENT_API_URL", value: deps.apiBaseUrl!, secret: false },
         {
-          key: "AGENT_CREDENTIAL_TOKEN",
+          key: CREDENTIAL_TOKEN_ENV,
           value: await (token ??= mintBrokerToken(credentials.toSorted(), connectors)),
         },
       ],
@@ -556,16 +566,10 @@ export async function buildCredentialCatalog(
               principalId: actor.id,
             });
             return {
-              env: Object.entries({
-                AWS_ACCESS_KEY_ID: aws.accessKeyId,
-                AWS_SECRET_ACCESS_KEY: aws.secretAccessKey,
-                AWS_SESSION_TOKEN: aws.sessionToken,
-                AWS_REGION: aws.region,
-                AWS_DEFAULT_REGION: aws.region,
-              }).map(([key, value]) => ({
+              env: Object.entries(AWS_BROKER_ENV).map(([key, field]) => ({
                 key,
-                value,
-                secret: key !== "AWS_REGION" && key !== "AWS_DEFAULT_REGION",
+                value: aws[field],
+                secret: field !== "region",
               })),
             };
           },

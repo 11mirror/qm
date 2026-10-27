@@ -617,22 +617,14 @@ test("scratch destruction failures keep their cause and retain the handle for re
     },
   });
   await boxes.provisionScratch();
-  await assert.rejects(boxes.reclaimBox(), (error: Error) => {
-    assert.equal(error.message, "Disposable sandbox destruction failed");
-    assert.ok(error instanceof AggregateError);
-    assert.deepEqual(
-      error.errors.map((attempt: Error) => attempt.message),
-      ["teardown-boom-1", "teardown-boom-2", "teardown-boom-3"],
-    );
-    return true;
-  });
-  assert.equal(attempts, 3);
+  await assert.rejects(boxes.reclaimBox(), /teardown-boom-1/);
+  assert.equal(attempts, 1);
   assert.equal(boxes.scratchBox.handle, scratchHandle);
   assert.equal(events.filter((event) => event.action === "sandbox.scratch.release_failed").length, 1);
   assert.equal(events.filter((event) => event.action === "sandbox.scratch.released").length, 0);
   assert.equal(
     JSON.parse(events.find((event) => event.action === "sandbox.scratch.release_failed")!.detail!).error,
-    "Disposable sandbox destruction failed <- Error: teardown-boom-1 <- Error: teardown-boom-2 <- Error: teardown-boom-3",
+    "teardown-boom-1",
   );
   assert.equal(errors.length, 1);
   fail = false;
@@ -693,7 +685,7 @@ for (const recovers of [true, false]) {
     assert.equal(boxes.scratchBox.handle, null);
     assert.equal(boxes.scratchBox.pending?.id, partial.id);
     if (recovers) await boxes.reclaimBox();
-    else await assert.rejects(boxes.reclaimBox(), /Disposable sandbox destruction failed/);
+    else await assert.rejects(boxes.reclaimBox(), /teardown-boom/);
     const failure = events.find((event) => event.action === "sandbox.scratch.provision_failed")!;
     assert.equal(JSON.parse(failure.detail!).sandboxId, partial.id);
     assert.equal(JSON.parse(failure.detail!).backend, "local");
