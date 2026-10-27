@@ -16,6 +16,7 @@ import type { BotIdentity, Directory } from "./directory.ts";
 import type { SlackConversationKind } from "./messaging.ts";
 import { type SlackHistoryMessage } from "./payloads.ts";
 import { messageWithForwardedContent } from "./forwards.ts";
+import { namedWithRef } from "../surfaces/refs.ts";
 
 export const RECENT_THREAD_LIMIT = 200;
 export const MAX_NAME_LOOKUPS = 10;
@@ -96,6 +97,7 @@ async function resolveMissingAuthorNames(
 async function shapeRecentMessages(
   deps: SerializerDeps,
   client: any,
+  channel: string,
   raw: SlackHistoryMessage[],
   triggerTs: string,
   nameById: Map<string, string>,
@@ -116,7 +118,20 @@ async function shapeRecentMessages(
       ...(isSelfMessage(deps, m) ? { isSelf: true } : {}),
       ...(m.thread_ts && String(m.thread_ts) !== m.ts ? { parentTs: String(m.thread_ts) } : {}),
       ...(reactions.length ? { reactions } : {}),
-      ...(content.files.length ? { files: content.files.map((f) => slackFileName(f)) } : {}),
+      ...(content.files.length
+        ? {
+            files: content.files.map((f, i) =>
+              f?.id
+                ? namedWithRef(slackFileName(f), {
+                    channel,
+                    ts: m.ts,
+                    index: i + 1,
+                    ...(m.thread_ts ? { threadTs: String(m.thread_ts) } : {}),
+                  })
+                : slackFileName(f),
+            ),
+          }
+        : {}),
     };
   });
 }
@@ -172,7 +187,10 @@ async function serializeSlackConversation(
   const raw = page.raw;
   if (inc.rawText !== undefined && !raw.some((m) => m.ts === inc.ts))
     raw.push({ ts: inc.ts, text: inc.rawText, user: inc.userId, thread_ts: inc.threadTs, files: inc.files });
-  const messages = recentWindow(await shapeRecentMessages(deps, client, raw, inc.ts, nameById), MAX_RECENT_MESSAGES);
+  const messages = recentWindow(
+    await shapeRecentMessages(deps, client, inc.channel, raw, inc.ts, nameById),
+    MAX_RECENT_MESSAGES,
+  );
 
   const slackIdOf = (a: ActorAssertion): string => ctx.slackIdsByPrincipal?.get(a.externalId) ?? a.externalId;
   const authors = new Set(messages.map((m) => m.authorId));

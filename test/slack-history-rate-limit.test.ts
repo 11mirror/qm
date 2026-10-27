@@ -148,7 +148,8 @@ for (const { managed, historyLimit } of [
       } as unknown as import("../src/api/slack-core-client.ts").SlackCoreClient,
       directory: {} as import("../src/slack/directory.ts").Directory,
       serializer: {
-        shapeRecentMessages: async (_client: unknown, raw: any[]) => raw.map((m) => ({ ...m, name: "Alice" })),
+        shapeRecentMessages: async (_client: unknown, _channel: string, raw: any[]) =>
+          raw.map((m) => ({ ...m, name: "Alice" })),
       } as unknown as import("../src/slack/conversation-view.ts").ConversationSerializer,
       botToken: "test",
       clientOptions: {},

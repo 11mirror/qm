@@ -4,7 +4,15 @@ import type { SlackHistoryReader } from "./history.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { WebClient } from "@slack/web-api";
 import { type RecentMessage, buildContextWindow } from "./conversation.ts";
-import { downloadSlackFile, fileReadIssue, isOversize, oversizeMsg, slackFileName } from "./attachments.ts";
+import {
+  type SlackFile,
+  downloadSlackFile,
+  fileReadIssue,
+  isOversize,
+  oversizeMsg,
+  slackFileName,
+} from "./attachments.ts";
+import { messageWithForwardedContent } from "./forwards.ts";
 import { isExternallyShared } from "./identity.ts";
 import { openConversationFor, parseDeliveryTarget } from "./delivery.ts";
 import { SLACK_AUTH_ERRORS, type SlackHistoryMessage, parseMessageList, slackErrorCode } from "./payloads.ts";
@@ -84,9 +92,8 @@ async function fetchSurfaceFile(
   client: any,
   channel: string,
   conversationThreadTs: string | undefined,
-  ref: { ts: string; threadTs?: string; name?: string },
+  ref: { ts: string; threadTs?: string; name?: string; index?: number },
 ): Promise<Record<string, unknown>> {
-  const { core, directory, botToken, trustedFileHost } = deps;
   const threadTs = typeof ref.threadTs === "string" && ref.threadTs ? ref.threadTs : conversationThreadTs;
   const msg = await findMessageAt(deps, client, channel, ref.ts, threadTs);
   if (!msg) {
@@ -94,7 +101,13 @@ async function fetchSurfaceFile(
       error: "I couldn't find that message — if it's a thread reply, pass its threadTs (the parent message's ts) too",
     };
   }
-  const files = (msg.files ?? []).filter((f) => f?.id);
+  const attached = messageWithForwardedContent(msg).files;
+  if (ref.index !== undefined) {
+    const picked = attached[ref.index - 1];
+    if (!picked?.id) return { error: `that message has no file #${ref.index}` };
+    return stageSurfaceFile(deps, client, picked, slackFileName(picked));
+  }
+  const files = attached.filter((f) => f?.id);
   if (!files.length) return { error: "that message has no files attached" };
   const names = files.map(slackFileName);
   const want = ref.name?.toLowerCase();
@@ -107,8 +120,16 @@ async function fetchSurfaceFile(
         ? `that message has no file matching "${ref.name}" — it carries: ${names.join(", ")}`
         : `that message carries ${files.length} files — pass a name: ${names.join(", ")}`,
     };
-  const file = files[at]!;
-  const name = names[at]!;
+  return stageSurfaceFile(deps, client, files[at]!, names[at]!);
+}
+
+async function stageSurfaceFile(
+  deps: ContextDeps,
+  client: any,
+  file: SlackFile,
+  name: string,
+): Promise<Record<string, unknown>> {
+  const { core, directory, botToken, trustedFileHost } = deps;
   if (isOversize(file)) return { error: oversizeMsg(name) };
   let staged: { blobId: string; sizeBytes: number };
   try {
@@ -243,7 +264,7 @@ async function fulfillSurfaceContext(deps: ContextDeps, client: any, r: SurfaceC
     if (!raw.length && failure?.status === "rejected") throw failure.reason;
     const note = [...notes].join(" ");
     const nameById = new Map<string, string>();
-    const shaped = await serializer.shapeRecentMessages(client, raw, "", nameById);
+    const shaped = await serializer.shapeRecentMessages(client, channel, raw, "", nameById);
     if (q.live === true && hasMore && !shaped.length)
       throw new Error("Live Slack history contains only filtered messages; an earlier page could not be located.");
     if (q.live === true) for (const message of shaped) message.reactions ??= [];
