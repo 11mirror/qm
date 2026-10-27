@@ -200,13 +200,13 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   ): Promise<PendingApproval[]> {
     if (!deps.approvals) return [];
     const [entries, session] = await Promise.all([
-      deps.approvals.selectEntries({ where: { field: "sessionId", anyOfFold: [sessionId] } }),
+      deps.approvals.forSessions([sessionId]),
       deps.sessions.get(sessionId),
     ]);
     if (!session) return [];
     const candidates: Array<{ key: string; record: PendingApprovalRecord }> = [];
     for (const [key, record] of entries) {
-      if (record.sessionId !== sessionId || (opts.blockingOnly && record.blocksInput === false)) continue;
+      if (opts.blockingOnly && record.blocksInput === false) continue;
       if (await approvalRecordIsCurrent(record, session)) candidates.push({ key, record });
     }
     const visible = opts.viewer ? await approvalsVisibleToViewer(session, opts.viewer, candidates) : candidates;

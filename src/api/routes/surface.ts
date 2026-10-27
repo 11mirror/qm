@@ -20,7 +20,6 @@ import {
   UI_STATE_KEY_PATTERN,
   UI_STATE_MAX_BYTES,
   UI_STATE_MAX_FUTURE_SKEW_MS,
-  storeUiState,
   uiStateId,
 } from "../../surfaces/ui-state.ts";
 import { redactWebhook } from "./webhooks.ts";
@@ -476,7 +475,7 @@ async function putUiState(ctx: ApiCtx): Promise<void> {
   if (!deps.uiState) return sendJson(res, 404, { error: "not_found" });
   const claimed = typeof b.updatedAt === "number" && Number.isFinite(b.updatedAt) ? b.updatedAt : Date.now();
   const updatedAt = Math.min(claimed, Date.now() + UI_STATE_MAX_FUTURE_SKEW_MS);
-  const result = await storeUiState(deps.uiState, uiStateId(principalId, key), { value: b.value, updatedAt });
+  const result = await deps.uiState.storeIfNewer(uiStateId(principalId, key), { value: b.value, updatedAt });
   return sendJson(res, 200, result);
 }
 

@@ -5,10 +5,8 @@ import type { RuntimeService } from "../../harness/runtime-types.ts";
 import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
 import type { AwsRoleBroker } from "../../auth/aws-role-broker.ts";
 import type {
-  CommandApprovalGrant,
   Conversation,
   Principal,
-  PendingApprovalRecord,
   SurfaceContextQuery,
   SurfaceContextResult,
   TurnRequest,
@@ -57,7 +55,8 @@ import type { MemoryService } from "../../memory/memory-service.ts";
 import type { McpToolService } from "../../mcp/mcp-tool-service.ts";
 import type { MemoryStrategy } from "../../memory/strategy.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
-import type { DurableMap } from "../../persistence/durable-map.ts";
+import type { ApprovalRecords } from "../approval-store.ts";
+import type { ApprovalGrants } from "./approvals.ts";
 import type { BlobTransferStore } from "../../persistence/blob-transfer.ts";
 import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { SkillStore } from "../../skills/skill-store.ts";
@@ -165,8 +164,8 @@ export interface OrchestratorDeps {
   skillBundles?: SkillBundleStore;
   skillsReady?: PromiseLike<void>;
   advisoryLock: AdvisoryLock;
-  approvals: DurableMap<PendingApprovalRecord>;
-  approvalGrants: DurableMap<CommandApprovalGrant>;
+  approvals: ApprovalRecords;
+  approvalGrants: ApprovalGrants;
   errors?: ErrorLog;
   ledger?: ToolLedger;
   signals?: RunSignalStore;
@@ -200,7 +199,7 @@ export interface OrchestratorDeps {
   keychain?: Keychain;
   serviceCreds?: ServiceCredentialStore;
   outbound?: Outbound;
-  recentDmPosts?: DurableMap<RecentDmPosts>;
+  recentDmPosts?: RecentDmPosts;
   directory?: DirectoryStore;
   projects?: Pick<ProjectStore, "recognizes" | "name">;
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;

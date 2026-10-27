@@ -9,9 +9,11 @@ import type {
 } from "../../types.ts";
 import type { Item, NewItem } from "../../sessions/items.ts";
 import type { Lease } from "../../sessions/session-store.ts";
-import type { DurableMap } from "../../persistence/durable-map.ts";
+import { createPgPool, tenantCols } from "../../persistence/pg-pool.ts";
+import { mapToTableMigration, tableCodec, type TableSpec } from "../../persistence/typed-table.ts";
+import type { ApprovalRecords } from "../approval-store.ts";
 import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
-import { samePerson } from "../../directory/person.ts";
+import { rosterIds, samePerson } from "../../directory/person.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { sleep } from "../../util/async.ts";
 import { errMessage } from "../../util/errors.ts";
@@ -65,7 +67,7 @@ function effectiveGrantModes(
 }
 
 export async function parkApprovals(
-  store: DurableMap<PendingApprovalRecord>,
+  store: Pick<ApprovalRecords, "put">,
   owner: { sessionId: string; request: TurnRequest; adminGrantModes: ApprovalGrantModes },
   requests: ApprovalRequest[],
 ): Promise<PendingApproval[]> {
@@ -128,12 +130,51 @@ export interface ApprovalLedger {
   credit(key: string, scope: "once" | "session" | "always"): void;
 }
 
-export function loadActorGrants(
-  grants: DurableMap<CommandApprovalGrant>,
-  actorId: string,
-): () => Promise<CommandApprovalGrant[]> {
+const APPROVAL_GRANTS: TableSpec = {
+  table: "approval_grants",
+  key: "id",
+  columns: {
+    actorId: { type: "text", required: true },
+    command: { type: "text", required: true },
+    scope: { type: "text", required: true },
+    createdAt: { type: "bigint", required: true },
+    sessionId: { type: "text" },
+    approvalKey: { type: "text" },
+  },
+};
+
+export const APPROVAL_GRANTS_MIGRATION = mapToTableMigration("core/approval-grants/0001-typed", APPROVAL_GRANTS, {
+  statements: [`CREATE INDEX IF NOT EXISTS approval_grants_actor ON approval_grants (lower(btrim(actor_id)))`],
+});
+
+const grantCodec = tableCodec<CommandApprovalGrant>(APPROVAL_GRANTS);
+
+export function createApprovalGrants(databaseUrl: string) {
+  const { q } = createPgPool(databaseUrl, [APPROVAL_GRANTS_MIGRATION]);
+  return {
+    async put(id: string, grant: CommandApprovalGrant): Promise<void> {
+      await q(
+        `INSERT INTO approval_grants (${grantCodec.columns}) VALUES (${grantCodec.placeholders})
+         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET ${grantCodec.updates}`,
+        grantCodec.values(id, grant),
+      );
+    },
+    async forActor(actorId: string): Promise<CommandApprovalGrant[]> {
+      const keys = [...new Set(rosterIds(actorId).map((id) => id.toLowerCase()))];
+      const rows = await q(
+        `SELECT ${grantCodec.columns} FROM approval_grants WHERE lower(btrim(actor_id)) = ANY($1::text[]) ORDER BY id`,
+        [keys],
+      );
+      return grantCodec.rows(rows).filter((grant) => samePerson(grant.actorId, actorId));
+    },
+  };
+}
+
+export type ApprovalGrants = ReturnType<typeof createApprovalGrants>;
+
+export function loadActorGrants(grants: ApprovalGrants, actorId: string): () => Promise<CommandApprovalGrant[]> {
   let loaded: Promise<CommandApprovalGrant[]> | undefined;
-  return () => (loaded ??= grants.all().then((all) => all.filter((grant) => samePerson(grant.actorId, actorId))));
+  return () => (loaded ??= grants.forActor(actorId));
 }
 
 export function loadApprovalLedger(
@@ -167,8 +208,7 @@ export function loadApprovalLedger(
 }
 
 export type ApprovalDecisionOutcome =
-  | { kind: "settled"; result: TurnResult }
-  | { kind: "approved"; approvalNote: string };
+  { kind: "settled"; result: TurnResult } | { kind: "approved"; approvalNote: string };
 
 export async function consumeApprovalDecision(args: {
   deps: Pick<OrchestratorDeps, "approvals" | "approvalGrants" | "auditLog" | "sessions" | "sessionSyscalls">;

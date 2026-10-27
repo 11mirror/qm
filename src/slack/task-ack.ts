@@ -1,4 +1,6 @@
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { lockedRow } from "../persistence/locked-row.ts";
+import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { sleep, createKeyedQueue } from "../util/async.ts";
 import { holdUntilDone, type LeaderLease } from "../persistence/leader-lease.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -25,12 +27,59 @@ interface ReactionClient {
 type Next = { channel: string; ts: string; pick?: () => Promise<string | undefined>; existing?: boolean };
 const retire = (state: TaskAckState): string[] => [...new Set([...state.previous, state.target])].filter(Boolean);
 
+const TASK_ACKS: TableSpec = {
+  table: "slack_task_acknowledgements",
+  key: "id",
+  columns: {
+    channel: { type: "text", required: true },
+    emoji: { type: "text", required: true },
+    target: { type: "text", required: true },
+    previous: { type: "text[]", required: true },
+    finished: { type: "boolean", required: true },
+    synced: { type: "boolean" },
+  },
+};
+
+export const TASK_ACKS_MIGRATION = mapToTableMigration("slack/task-acks/0001-typed", TASK_ACKS);
+
+const codec = tableCodec<TaskAckState>(TASK_ACKS);
+
+export function createTaskAckStore(databaseUrl: string) {
+  const pg = createPgPool(databaseUrl, [TASK_ACKS_MIGRATION]);
+  const { q } = pg;
+  const modify = lockedRow<TaskAckState>(pg, TASK_ACKS);
+  return {
+    async get(runId: string): Promise<TaskAckState | null> {
+      return (
+        codec.rows(await q(`SELECT ${codec.columns} FROM slack_task_acknowledgements WHERE id = $1`, [runId]))[0] ??
+        null
+      );
+    },
+    async insert(runId: string, state: TaskAckState): Promise<void> {
+      await q(
+        `INSERT INTO slack_task_acknowledgements (${codec.columns}) VALUES (${codec.placeholders}) ON CONFLICT DO NOTHING`,
+        codec.values(runId, state),
+      );
+    },
+    update: (runId: string, fn: (current: TaskAckState) => TaskAckState) =>
+      modify(runId, (current) => current && fn(current)),
+    async unsettled(): Promise<Array<[string, TaskAckState]>> {
+      const rows = await q(
+        `SELECT ${codec.columns} FROM slack_task_acknowledgements WHERE NOT finished OR synced IS NOT TRUE ORDER BY id`,
+      );
+      return rows.map((r) => [String(r.id), codec.row(r)]);
+    },
+  };
+}
+
+export type TaskAckStore = ReturnType<typeof createTaskAckStore>;
+
 export function createTaskAcknowledgements(
-  store: DurableMap<TaskAckState>,
+  store: TaskAckStore,
   lease: LeaderLease,
   recovery?: { runs: Pick<RunStore, "get"> },
 ) {
-  const update = store.update.bind(store);
+  const update = store.update;
   const queue = createKeyedQueue<string>();
   const change = (client: ReactionClient, runId: string, next?: Next) => queue(runId, () => apply(client, runId, next));
   const apply = (client: ReactionClient, runId: string, next?: Next) =>
@@ -45,7 +94,7 @@ export function createTaskAcknowledgements(
             ])
           : undefined;
         if (lost()) return false;
-        await store.putIfAbsent(runId, {
+        await store.insert(runId, {
           channel: next?.channel ?? "",
           emoji: emoji || "eyes",
           target: next?.ts ?? "",
@@ -99,7 +148,7 @@ export function createTaskAcknowledgements(
     });
   return {
     reconcile: async (client: ReactionClient) => {
-      for (const [runId, state] of await store.entries()) {
+      for (const [runId, state] of await store.unsettled()) {
         if (!state.finished && recovery) {
           const run = await recovery.runs.get(runId);
           if (run && isTerminal(run.status) && (run.deliveryState?.postedAt !== undefined || !runResultPost(run))) {

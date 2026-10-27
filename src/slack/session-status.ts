@@ -1,6 +1,8 @@
 import { SLACK_STATUS_TASK_PREFIX } from "./message-gating.ts";
 import { randomUUID } from "node:crypto";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { lockedRow } from "../persistence/locked-row.ts";
+import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { holdUntilDone, type LeaderLease } from "../persistence/leader-lease.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import { isTerminal, leaseLapsed, type RunStore } from "../runs/run-store.ts";
@@ -45,16 +47,64 @@ export interface SlackStatusActivity {
   publicWebUrl?: string;
 }
 
+const SESSION_STATUS: TableSpec = {
+  table: "slack_session_status",
+  key: "id",
+  columns: {
+    writer: { type: "text" },
+    account: { type: "text", required: true },
+    channel: { type: "text", required: true },
+    threadTs: { type: "text", required: true },
+    anchorRunId: { type: "text", required: true },
+    startedAt: { type: "bigint" },
+    cardId: { type: "text" },
+    cardTs: { type: "text" },
+    cardContent: { type: "text" },
+    followUrl: { type: "text" },
+  },
+};
+
+export const SESSION_STATUS_MIGRATION = mapToTableMigration("slack/session-status/0001-typed", SESSION_STATUS);
+
+const codec = tableCodec<SlackSessionStatusState>(SESSION_STATUS);
+
+export function createSessionStatusStore(databaseUrl: string) {
+  const pg = createPgPool(databaseUrl, [SESSION_STATUS_MIGRATION]);
+  const { q } = pg;
+  const modify = lockedRow<SlackSessionStatusState>(pg, SESSION_STATUS);
+  return {
+    async get(id: string): Promise<SlackSessionStatusState | null> {
+      return codec.rows(await q(`SELECT ${codec.columns} FROM slack_session_status WHERE id = $1`, [id]))[0] ?? null;
+    },
+    async putIfAbsent(id: string, state: SlackSessionStatusState): Promise<void> {
+      await q(
+        `INSERT INTO slack_session_status (${codec.columns}) VALUES (${codec.placeholders}) ON CONFLICT DO NOTHING`,
+        codec.values(id, state),
+      );
+    },
+    update: (id: string, fn: (row: SlackSessionStatusState) => SlackSessionStatusState) =>
+      modify(id, (row) => row && fn(row)),
+    async deleteIf(id: string, predicate: (row: SlackSessionStatusState) => boolean): Promise<void> {
+      await modify(id, (row) => (row && predicate(row) ? null : row));
+    },
+    async forAccount(account: string): Promise<string[]> {
+      const rows = await q(`SELECT id FROM slack_session_status WHERE account = $1 ORDER BY id`, [account]);
+      return rows.map((r) => String(r.id));
+    },
+  };
+}
+
+export type SessionStatusStore = ReturnType<typeof createSessionStatusStore>;
+
 export function createSlackSessionStatus(
-  store: DurableMap<SlackSessionStatusState>,
+  store: SessionStatusStore,
   lease: LeaderLease,
   runs: Pick<RunStore, "get" | "inFlightForThread">,
   flags: Pick<FeatureFlagStore, "enabled">,
   now = Date.now,
   activity: SlackStatusActivity = {},
 ) {
-  const update = store.update.bind(store);
-  const deleteIf = store.deleteIf.bind(store);
+  const { update, deleteIf } = store;
   const queue = createKeyedQueue<string>();
   const key = (account: string, channel: string, threadTs: string) => JSON.stringify([account, channel, threadTs]);
   async function sync(client: StatusClient, id: string, next?: SlackSessionStatusState) {
@@ -187,8 +237,7 @@ export function createSlackSessionStatus(
       }).catch(swallowAs("slack: start session status", undefined));
     },
     async reconcile(client: StatusClient, account: string) {
-      for (const [id, state] of await store.entries()) {
-        if (state.account !== account) continue;
+      for (const id of await store.forAccount(account)) {
         await sync(client, id).catch(swallowAs("slack: reconcile session status", undefined));
       }
     },

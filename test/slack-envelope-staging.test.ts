@@ -1,8 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createEnvelopeStaging, envelopeKey, type StagedEnvelope } from "../src/slack/envelope-staging.ts";
+import {
+  createEnvelopeStaging,
+  createStagedEnvelopes,
+  envelopeKey,
+  type StagedEnvelope,
+} from "../src/slack/envelope-staging.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createDeferredEnvelopeAck, envelopeStageFor } from "../src/slack/deferred-ack.ts";
-import { testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { settle } from "./support/settle.ts";
 
 const tick = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -17,6 +23,30 @@ async function cleared(read: () => Promise<unknown>): Promise<unknown> {
   return read();
 }
 
+function stagedMap() {
+  const url = testDatabaseUrl();
+  const { q } = createPgPool(url);
+  const store = createStagedEnvelopes(url);
+  return {
+    ...store,
+    async get(key: string) {
+      const rows = await q(`SELECT attempts, claimed_until FROM slack_staged_envelopes WHERE id = $1`, [key]);
+      return rows[0] ? { attempts: Number(rows[0].attempts), claimedUntil: rows[0].claimed_until } : null;
+    },
+    put: (key: string, value: StagedEnvelope) => store.stage(key, value),
+    async setReceivedAt(key: string, receivedAt: number) {
+      await q(`UPDATE slack_staged_envelopes SET received_at = $2 WHERE id = $1`, [key, receivedAt]);
+    },
+    async setClaim(key: string, attempts: number, claimedUntil: number) {
+      await q(`UPDATE slack_staged_envelopes SET attempts = $2, claimed_until = $3 WHERE id = $1`, [
+        key,
+        attempts,
+        claimedUntil,
+      ]);
+    },
+  };
+}
+
 function envelope(type: string, ts: string, channel = "C1"): Record<string, unknown> {
   return { type: "event_callback", event: { type, channel, ts, text: "hi" } };
 }
@@ -29,24 +59,27 @@ test("the staging key is scoped by account, event type, channel and ts, and igno
 });
 
 test("staging lands within its budget, or reports that it did not", async () => {
-  const map = testMap<StagedEnvelope>();
+  const map = stagedMap();
   const staging = createEnvelopeStaging(map, { account: "acct", ...LANDS });
   assert.equal(await staging.stage("k1", envelope("message", "1.0")), true);
   assert.ok(await map.get("k1"));
-  const slow = createEnvelopeStaging({ ...map, putIfAbsent: () => new Promise(() => {}) } as typeof map, {
-    account: "acct",
-    stageTimeoutMs: 20,
-  });
+  const slow = createEnvelopeStaging(
+    { ...map, stage: () => new Promise<void>(() => {}) },
+    {
+      account: "acct",
+      stageTimeoutMs: 20,
+    },
+  );
   assert.equal(await slow.stage("k2", envelope("message", "2.0")), false);
 });
 
 test("the sweep replays only stale unclaimed rows of its own account, claims them, and gives up on a failing handler after max attempts", async () => {
-  const map = testMap<StagedEnvelope>();
+  const map = stagedMap();
   let now = 1_000_000;
   const staging = createEnvelopeStaging(map, { account: "acct", now: () => now, staleAfterMs: 1_000, maxAttempts: 2 });
   await map.put("other", { body: envelope("message", "2.0"), account: "other", receivedAt: 1, attempts: 0 });
   await staging.stage("stale", envelope("message", "3.0"));
-  await map.merge("stale", { receivedAt: 1 });
+  await map.setReceivedAt("stale", 1);
   now += 5_000;
   await staging.stage("fresh", envelope("message", "1.0"));
   const replayed: string[] = [];
@@ -68,7 +101,7 @@ test("the sweep replays only stale unclaimed rows of its own account, claims the
 });
 
 test("a replay whose handler durably accepts clears the row through accepted()", async () => {
-  const map = testMap<StagedEnvelope>();
+  const map = stagedMap();
   const staging = createEnvelopeStaging(map, { account: "acct" });
   await staging.stage("k", envelope("message", "1.0"));
   staging.accepted("k");
@@ -77,7 +110,7 @@ test("a replay whose handler durably accepts clears the row through accepted()",
 });
 
 test("gate: when the cap fires first, the envelope is staged before the ack; later acceptance clears it", async () => {
-  const map = testMap<StagedEnvelope>();
+  const map = stagedMap();
   const staging = createEnvelopeStaging(map, { account: "acct", ...LANDS });
   const body = envelope("message", "1.0");
   const events: string[] = [];
@@ -102,11 +135,14 @@ test("gate: when the cap fires first, the envelope is staged before the ack; lat
 });
 
 test("gate: when staging cannot land before the cap, the ack is withheld so Slack redelivers", async () => {
-  const map = testMap<StagedEnvelope>();
-  const slow = createEnvelopeStaging({ ...map, putIfAbsent: () => new Promise(() => {}) } as typeof map, {
-    account: "acct",
-    stageTimeoutMs: 10,
-  });
+  const map = stagedMap();
+  const slow = createEnvelopeStaging(
+    { ...map, stage: () => new Promise<void>(() => {}) },
+    {
+      account: "acct",
+      stageTimeoutMs: 10,
+    },
+  );
   const body = envelope("message", "1.0");
   let acks = 0;
   let withheld = 0;
@@ -133,7 +169,7 @@ test("gate: when staging cannot land before the cap, the ack is withheld so Slac
 });
 
 test("gate: a handler failure after the cap leaves the staged row for the sweeper", async () => {
-  const map = testMap<StagedEnvelope>();
+  const map = stagedMap();
   const staging = createEnvelopeStaging(map, { account: "acct", ...LANDS });
   const body = envelope("message", "1.0");
   const { ack, gate } = createDeferredEnvelopeAck(async () => {}, {
@@ -149,7 +185,7 @@ test("gate: a handler failure after the cap leaves the staged row for the sweepe
 });
 
 test("a replay clears its row when the handler settles or accepts, keeps it while running, and keeps it on failure", async () => {
-  const map = testMap<StagedEnvelope>();
+  const map = stagedMap();
   let now = 1_000_000;
   const staging = createEnvelopeStaging(map, {
     account: "acct",
@@ -194,13 +230,13 @@ test("a replay clears its row when the handler settles or accepts, keeps it whil
 });
 
 test("the sweep skips a row another sweeper claimed between the read and the claim", async () => {
-  const map = testMap<StagedEnvelope>();
+  const map = stagedMap();
   let now = 1_000_000;
   const racing: typeof map = {
     ...map,
-    update: async (key, fn) => {
-      await map.merge(key, { attempts: 1, claimedUntil: now + 60_000 });
-      return map.update!(key, fn);
+    claim: async (key, at, claimedUntil) => {
+      await map.setClaim(key, 1, now + 60_000);
+      return map.claim(key, at, claimedUntil);
     },
   };
   const staging = createEnvelopeStaging(racing, { account: "acct", now: () => now, staleAfterMs: 1_000 });
@@ -218,7 +254,7 @@ test("the sweep skips a row another sweeper claimed between the read and the cla
 });
 
 test("rows older than a day are dropped whatever their account, so retired apps do not leave garbage", async () => {
-  const map = testMap<StagedEnvelope>();
+  const map = stagedMap();
   const now = 10 * 24 * 60 * 60_000;
   const staging = createEnvelopeStaging(map, { account: "acct", now: () => now });
   await map.put("old", {
@@ -239,13 +275,13 @@ test("rows older than a day are dropped whatever their account, so retired apps 
 });
 
 test("gate: acceptance that lands while the stage write is still in flight still clears the row once it lands", async () => {
-  const map = testMap<StagedEnvelope>();
+  const map = stagedMap();
   let release: (() => void) | undefined;
   const slowMap: typeof map = {
     ...map,
-    putIfAbsent: (key, value) =>
+    stage: (key, value) =>
       new Promise((resolve) => {
-        release = () => resolve(map.putIfAbsent(key, value));
+        release = () => resolve(map.stage(key, value));
       }),
   };
   const staging = createEnvelopeStaging(slowMap, { account: "acct", stageTimeoutMs: 10 });
@@ -272,7 +308,7 @@ test("gate: acceptance that lands while the stage write is still in flight still
 });
 
 test("gate: a handler failure after the cap keeps the staged row even though the receiver reports completion", async () => {
-  const map = testMap<StagedEnvelope>();
+  const map = stagedMap();
   const staging = createEnvelopeStaging(map, { account: "acct", ...LANDS });
   const body = envelope("message", "1.0");
   const { ack, gate } = createDeferredEnvelopeAck(async () => {}, {

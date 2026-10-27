@@ -194,9 +194,7 @@ export function createSessionMethods(deps: AppDeps, h: AppHelpers) {
     const descendantIds = new Set(descendants.map((d) => d.id));
     const approvalRows: PendingApprovalRecord[] = [];
     const approvalIds = [...visibleById.keys(), ...descendantIds];
-    const approvals = approvalIds.length
-      ? await deps.approvals?.selectEntries({ where: { field: "sessionId", anyOfFold: approvalIds } })
-      : [];
+    const approvals = approvalIds.length ? await deps.approvals?.forSessions(approvalIds) : [];
     for (const [, record] of approvals ?? []) {
       const session = visibleById.get(record.sessionId);
       if (
@@ -474,8 +472,7 @@ export function createSessionMethods(deps: AppDeps, h: AppHelpers) {
         ...(query.titleQuery ? { titleQuery: query.titleQuery } : {}),
       };
       if (query.status === "waiting") {
-        const pending = ((await deps.approvals?.all()) ?? []).filter((record) => record.blocksInput !== false);
-        filter.sessionIds = [...new Set(pending.map((record) => record.sessionId))];
+        filter.sessionIds = (await deps.approvals?.blockingSessionIds()) ?? [];
       }
       const firstPage = !query.before && query.status !== "archived";
       const [page, pinned, archived] = await Promise.all([

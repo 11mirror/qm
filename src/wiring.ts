@@ -6,9 +6,9 @@ import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
 import { createDecisionHooks, routeTurnRuntime, turnStartState } from "./decisions/hooks.ts";
 import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
-import type { SlackSessionStatusState } from "./slack/session-status.ts";
+import { createSessionStatusStore } from "./slack/session-status.ts";
 import { availableRuntimeError } from "./api/runtime-config.ts";
-import { createApprovalStore } from "./core/approval-store.ts";
+import { createApprovalRecords, createApprovalStore } from "./core/approval-store.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
@@ -20,7 +20,7 @@ import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
 import { emitRunReasoning, emitRunText, reasoningKey, type RunStreamEvent } from "./runs/run-stream-events.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createSessionMailbox } from "./sessions/session-mailbox.ts";
-import type { TaskAckState } from "./slack/task-ack.ts";
+import { createTaskAckStore } from "./slack/task-ack.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityProfileStore, createSuggestedActivityService } from "./suggestions/activities.ts";
 import { createMemoryTidyProfileStore, createMemoryTidyService, withMemoryTidy } from "./memory/tidy.ts";
@@ -44,10 +44,10 @@ import { createSandboxResources, type SandboxResources } from "./sandbox/sandbox
 import { createSandboxResourceStore } from "./sandbox/sandbox-resource-store.ts";
 import { createSandboxBodies } from "./sandbox/sandbox-bodies.ts";
 import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.ts";
-import type { SessionShare, SessionShareStore } from "./sessions/session-share.ts";
+import { createSessionShareStore, type SessionShareStore } from "./sessions/session-share.ts";
 import { mkdirSync } from "node:fs";
-import type { StagedEnvelope } from "./slack/envelope-staging.ts";
-import type { HandledEvent } from "./slack/message-gating.ts";
+import { createStagedEnvelopes } from "./slack/envelope-staging.ts";
+import { createHandledEvents } from "./slack/message-gating.ts";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import {
@@ -70,7 +70,12 @@ import {
   type PrincipalLink,
   type PrincipalLinkService,
 } from "./identity/principal-links.ts";
-import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts";
+import {
+  createComposioReturns,
+  createSlackAccounts,
+  type ComposioReturns,
+  type SlackAccounts,
+} from "./connectors/composio-links.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
 import { resendMailer } from "../plugins/chassis/src/resend.ts";
@@ -84,20 +89,13 @@ import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from 
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
 import { createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
-import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
+import { createUiStateStore, type UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./inbox/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
 import { createPostgresLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "./persistence/advisory-lock.ts";
-import type {
-  CommandApprovalGrant,
-  PendingApprovalRecord,
-  ScopeId,
-  Session,
-  SurfaceContextRequest,
-  TurnRequest,
-} from "./types.ts";
+import type { ScopeId, Session, TurnRequest } from "./types.ts";
 import { personalScope, scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
@@ -121,8 +119,9 @@ import { createInboxSourceRefresh } from "./inbox/source-refresh.ts";
 import { createInboxRealtime } from "./inbox/realtime.ts";
 import { createInboxChat } from "./inbox/item-chat.ts";
 import type { InboxServiceDeps } from "./api/routes/cron-items.ts";
-import { createOutbound, createWebSender, type Outbound, type QueuedPost } from "./surfaces/outbound.ts";
-import { rememberDmPost, type RecentDmPosts } from "./surfaces/recent-dm-posts.ts";
+import { createOutbound, createWebSender, type Outbound } from "./surfaces/outbound.ts";
+import { createQueuedPosts } from "./surfaces/queued-posts.ts";
+import { createRecentDmPosts } from "./surfaces/recent-dm-posts.ts";
 import { wireRunResultPosts } from "./runs/run-results.ts";
 import { adminSessionUrl } from "./util/admin-links.ts";
 import type { DirectoryStore } from "./directory/directory-store.ts";
@@ -346,6 +345,9 @@ import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 import type { ContextRequestEvent } from "./api/app-types.ts";
+import { createAmbientCursors } from "./api/ambient-cursors.ts";
+import { createContextRequests } from "./api/context-requests.ts";
+import { createApprovalGrants } from "./core/orchestrator/approvals.ts";
 
 export interface Runtime {
   start(): void;
@@ -444,8 +446,8 @@ export interface BuiltApp {
   egressAudit: EgressAuditSink;
   identity: IdentityService;
   principalLinks: PrincipalLinkService;
-  slackAccounts: DurableMap<SlackAccountLink>;
-  composioReturns: DurableMap<ComposioReturn>;
+  slackAccounts: SlackAccounts;
+  composioReturns: ComposioReturns;
   keychain: Keychain;
   serviceCreds: ServiceCredentialStore;
   outbound: Outbound;
@@ -602,11 +604,7 @@ export function buildApp(
   });
   const decisions = createPostgresDecisionStore(databaseUrl);
   const connectorStatusCache = createConnectorStatusCache(databaseUrl);
-  const slackInstallation = createSlackInstallationStore(
-    config.orgId,
-    artifactMap("slack_installation"),
-    connectorSecretKey,
-  );
+  const slackInstallation = createSlackInstallationStore(config.orgId, databaseUrl, connectorSecretKey);
   const deploymentLayer = config.deploymentLayerDir
     ? loadDeploymentLayer(config.deploymentLayerDir)
     : emptyDeploymentLayer();
@@ -1203,17 +1201,12 @@ export function buildApp(
       : undefined;
   const turnRouting = routeTurns(runStore.runs, turnLedger, featureFlags);
 
-  const blockingApprovalSessions = async (sessionIds: readonly string[]): Promise<Set<string>> => {
-    if (!sessionIds.length) return new Set();
-    const wanted = new Set(sessionIds);
-    return new Set(
-      (await approvals.select({ where: { field: "sessionId", anyOfFold: sessionIds } }))
-        .filter(
-          (r) => wanted.has(r.sessionId) && r.blocksInput !== false && actorAssertionActive(identity, r.request?.actor),
-        )
-        .map((r) => r.sessionId),
+  const blockingApprovalSessions = async (sessionIds: readonly string[]): Promise<Set<string>> =>
+    new Set(
+      (await approvals.forSessions(sessionIds))
+        .filter(([, r]) => r.blocksInput !== false && actorAssertionActive(identity, r.request?.actor))
+        .map(([, r]) => r.sessionId),
     );
-  };
   const workingAncestors = async (session: Session) => {
     const candidates = await stoppableAncestors(sessions, session);
     const awaiting = await blockingApprovalSessions(candidates.map((ancestor) => ancestor.id));
@@ -1367,10 +1360,10 @@ export function buildApp(
   const deployGitBase = config.apiBaseUrl;
   const idempotency = createIdempotencyStore(databaseUrl);
   const transcripts = { sessions, sessionStates: sessionStateBus };
-  const recentDmPosts = artifactMap<RecentDmPosts>("recent_dm_posts");
+  const recentDmPosts = createRecentDmPosts(databaseUrl);
   const outbound = createOutbound({
     idempotency,
-    retries: artifactMap<QueuedPost>("queued_posts"),
+    retries: createQueuedPosts(databaseUrl),
     afterSend: (post, receipt) => {
       const recipientId = post.destination.target;
       const threadRef = receipt.recipientThreadRef;
@@ -1384,7 +1377,7 @@ export function buildApp(
           "slack",
         );
         await sessions.addParticipant(session.id, recipientId);
-        await rememberDmPost(recentDmPosts, threadRef, {
+        await recentDmPosts.remember(threadRef, {
           key: post.idempotencyKey,
           text: post.text,
           at: Date.now(),
@@ -1539,7 +1532,7 @@ export function buildApp(
   });
   const webhooks = createWebhookStore(databaseUrl);
   const webUiBase = (config.slack?.webUiPublicUrl ?? config.publicWebUrl)?.replace(/\/+$/, "");
-  const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), outbound, {
+  const approvals = createApprovalStore(createApprovalRecords(databaseUrl), outbound, {
     surfaces: chatSurfaces,
     webSessionUrl: (sessionId) => (webUiBase ? `${webUiBase}/s/${encodeURIComponent(sessionId)}` : undefined),
   });
@@ -1626,7 +1619,7 @@ export function buildApp(
       );
     },
   });
-  const uiState = artifactMap<PersistedUiState>("web_ui_state");
+  const uiState = createUiStateStore(databaseUrl);
   const liveFallback = async (
     container: string,
     opts?: { limit?: number },
@@ -1744,7 +1737,7 @@ export function buildApp(
     outbound,
     recentDmPosts,
     approvals,
-    approvalGrants: artifactMap<CommandApprovalGrant>("approval_grants"),
+    approvalGrants: createApprovalGrants(databaseUrl),
     ...(processes ? { processes } : {}),
     monitors,
     crons,
@@ -1892,7 +1885,7 @@ export function buildApp(
     approvals,
     sessionStateBus,
     ledgerEventBus,
-    contextRequests: artifactMap<SurfaceContextRequest>("context_requests"),
+    contextRequests: createContextRequests(databaseUrl),
     contextRequestEvents,
     contextViewerTokenKey: deriveConnectorKey(connectorSecretKey, "context-viewer-tokens"),
     engaged,
@@ -1903,7 +1896,7 @@ export function buildApp(
       ? { ambientJudge: (s: string, pr: string, signal?: AbortSignal) => harness.models.judge!(s, pr, signal) }
       : {}),
     ...(screenSecurity ? { screenSecurity } : {}),
-    ambientCursors: artifactMap<{ lastJudgedTs: string; lastJudgedAt?: number }>("ambient_cursors"),
+    ambientCursors: createAmbientCursors(databaseUrl),
     ambientJudgments,
     ackEmojiPicks,
     judgeModelId,
@@ -1930,15 +1923,15 @@ export function buildApp(
     memory,
     ...(keychainApprovals ? { keychainApprovals } : {}),
     surfaceCache,
-    taskAcknowledgements: artifactMap<TaskAckState>("slack_task_acknowledgements"),
-    sessionStatus: artifactMap<SlackSessionStatusState>("slack_session_status"),
+    taskAcknowledgements: createTaskAckStore(databaseUrl),
+    sessionStatus: createSessionStatusStore(databaseUrl),
     statusActivity: { processes, monitors, sessions, publicWebUrl: config.publicWebUrl },
     featureFlags,
     inboxEvent: (event) => inboxRealtime.onConversationEvent(event),
     app,
     leaderLease,
-    stagedEnvelopes: artifactMap<StagedEnvelope>("slack_staged_envelopes"),
-    handledEvents: artifactMap<HandledEvent>("slack_handled_events"),
+    stagedEnvelopes: createStagedEnvelopes(databaseUrl),
+    handledEvents: createHandledEvents(databaseUrl),
     config: configStore,
     runtimeFallback: fallback,
     blobTransfer,
@@ -2230,7 +2223,7 @@ export function buildApp(
         leaderLease,
       })
     : null;
-  const composioReturns = artifactMap<ComposioReturn>("composio_returns");
+  const composioReturns = createComposioReturns(databaseUrl);
   const deepIdleMachineMs = 3 * 24 * 60 * 60_000;
   const devIdleMachineMs = 2 * 60 * 60_000;
   const reapDeepIdle = deepIdleMachineMs > 0 || devIdleMachineMs > 0 ? sandbox.reapDeepIdle : undefined;
@@ -2276,10 +2269,7 @@ export function buildApp(
         everyMs: 30 * 60_000,
         lock: "none",
         immediate: true,
-        run: async () => {
-          for (const [id, entry] of await composioReturns.entries())
-            if (entry.expiresAt <= Date.now()) await composioReturns.delete(id);
-        },
+        run: () => composioReturns.deleteExpired(Date.now()),
       },
       { name: "deploy-maintenance", everyMs: 5 * 60_000, lock: "none", run: () => app.maintainDeployments() },
       ...(reapDeepIdle
@@ -2526,7 +2516,7 @@ export function buildApp(
     egressAudit,
     identity,
     principalLinks,
-    slackAccounts: artifactMap<SlackAccountLink>("slack_accounts"),
+    slackAccounts: createSlackAccounts(databaseUrl),
     composioReturns,
     workspace,
     memory,
@@ -2563,7 +2553,7 @@ export function buildApp(
       : {}),
     ...(backgroundOwnership ? { backgroundOwnership } : {}),
     uiState,
-    sessionShares: artifactMap<SessionShare>("session_shares"),
+    sessionShares: createSessionShareStore(databaseUrl),
     sessionShareBytes: byteStore("session-shares/", "session-shares"),
     skillSyncEngine,
     slackCore,

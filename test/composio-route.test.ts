@@ -13,12 +13,12 @@ import { scopeId } from "../src/types.ts";
 import { tenant } from "../src/tenant.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { testAdvisoryLock } from "./support/test-database.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
-import { testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl, testMap, testQuery } from "./support/test-database.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { createComposioReturns, createSlackAccounts } from "../src/connectors/composio-links.ts";
 
 function fixture() {
+  const url = testDatabaseUrl();
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
     store: createKeychainStore(testDatabaseUrl()),
@@ -33,7 +33,7 @@ function fixture() {
     keychain,
     serviceCreds: keychain,
     acl,
-    composioReturns: testMap(),
+    composioReturns: createComposioReturns(url),
     auditLog: {
       record: (e: { action: string; resource?: string }) => audits.push(e),
     } as unknown as ServerDeps["auditLog"],
@@ -111,7 +111,7 @@ function fixture() {
         grantedBy: "admin",
       });
   }
-  return { invoke, own, shared, calls, replies, deps, app, audits };
+  return { invoke, own, shared, calls, replies, deps, app, audits, url };
 }
 
 test("Composio requires a verified actor and never uses another person's key", async () => {
@@ -422,7 +422,7 @@ test("Slack connection links verified workspace identity to the web owner and pe
   const { installPrincipalLinks, canonicalPerson } = await import("../src/directory/person.ts");
   f.deps.principalLinks = createPrincipalLinkService(testMap(), testAdvisoryLock());
   installPrincipalLinks(f.deps.principalLinks);
-  f.deps.slackAccounts = testMap();
+  f.deps.slackAccounts = createSlackAccounts(f.url);
   f.deps.signingSecret = "qa-slack-link-secret";
   f.deps.directory = createPostgresDirectoryStore(testDatabaseUrl());
   await f.deps.directory.replace([
@@ -479,7 +479,7 @@ test("Slack link rejects changed browser accounts, wrong owner, bots, other work
     await f.own("bob");
     f.deps.signingSecret = "slack-test";
     f.deps.principalLinks = createPrincipalLinkService(testMap(), testAdvisoryLock());
-    f.deps.slackAccounts = testMap();
+    f.deps.slackAccounts = createSlackAccounts(f.url);
     f.deps.directory = createPostgresDirectoryStore(testDatabaseUrl());
     await f.deps.directory.replace([
       { principalId: "work@example.test", slackId: "U123", displayName: "Alice", type: "internal" },
@@ -523,7 +523,7 @@ test("Slack link rejects changed browser accounts, wrong owner, bots, other work
     );
     assert.ok(result.status >= 400, `${scenario}: ${result.status}`);
     assert.equal((await f.deps.principalLinks.list()).length, 0);
-    assert.equal((await f.deps.slackAccounts.all()).length, 0);
+    assert.equal((await testQuery(f.url, "SELECT * FROM slack_accounts")).length, 0);
   }
 });
 
@@ -686,7 +686,7 @@ test("callback completion is browser-only and preserves the durable return URL",
     session_uri: "opaque",
     user_id: composioUserId(tenant().orgId, "alice"),
   });
-  assert.equal((await f.deps.composioReturns!.entries()).length, 0);
+  assert.equal((await testQuery(f.url, "SELECT * FROM composio_returns")).length, 0);
   assert.deepEqual(
     f.audits.filter((e) => e.action.startsWith("composio.conn")).map((e) => [e.action, e.resource]),
     [["composio.connected", "gmail"]],
@@ -807,7 +807,7 @@ test("expired callback returns are discarded after successful browser verificati
   });
   f.replies.push({ connected_account_id: "ca_test" });
   assert.deepEqual((await f.invoke("/v1/composio/complete-auth", { sessionUri: "opaque" })).data, { returnTo: null });
-  assert.equal(await f.deps.composioReturns!.get(key), null);
+  assert.equal((await testQuery(f.url, "SELECT * FROM composio_returns")).length, 0);
 });
 
 test("linked aliases can execute their existing accounts until the identity link is removed", async () => {
@@ -853,13 +853,13 @@ test("linked account discovery and Slack status preserve historical aliases with
   await f.shared();
   const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
   f.deps.principalLinks = links;
-  f.deps.slackAccounts = testMap();
+  f.deps.slackAccounts = createSlackAccounts(f.url);
   installPrincipalLinks(links);
   const aliasId = "oidc:alice";
   const canonicalUserId = composioUserId(tenant().orgId, "alice");
   const aliasUserId = composioUserId(tenant().orgId, aliasId);
   const account = { id: "ca_legacy", user_id: aliasUserId, status: "ACTIVE", toolkit: { slug: "slack" } };
-  await f.deps.slackAccounts.put(aliasId, {
+  await f.deps.slackAccounts.put({
     principalId: aliasId,
     memberId: "alice",
     accountId: account.id,
@@ -947,13 +947,13 @@ test("consent and browser verification use the canonical identity when signed in
     );
     assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail", callbackUrl }, aliasId)).status, 200);
     assert.equal(JSON.parse(String(f.calls[0]!.init?.body)).user_id, userId);
-    assert.equal((await f.deps.composioReturns!.get(`${userId}:ca_linked`))?.url, callbackUrl);
+    assert.equal((await testQuery(f.url, "SELECT * FROM composio_returns"))[0]?.url, callbackUrl);
     f.replies.push({ connected_account_id: "ca_linked", toolkit_slug: "gmail" });
     const result = await f.invoke("/v1/composio/complete-auth", { sessionUri: "opaque" }, aliasId);
     assert.equal(result.status, 200);
     assert.deepEqual(result.data, { returnTo: callbackUrl });
     assert.deepEqual(JSON.parse(String(f.calls.at(-1)!.init?.body)), { session_uri: "opaque", user_id: userId });
-    assert.equal((await f.deps.composioReturns!.entries()).length, 0);
+    assert.equal((await testQuery(f.url, "SELECT * FROM composio_returns")).length, 0);
   } finally {
     installPrincipalLinks(null);
   }
@@ -965,12 +965,12 @@ test("linked identities retain provider accounts and Slack status until unlinked
   const f = fixture();
   await f.shared();
   f.deps.principalLinks = createPrincipalLinkService(testMap(), testAdvisoryLock());
-  f.deps.slackAccounts = testMap();
+  f.deps.slackAccounts = createSlackAccounts(f.url);
   installPrincipalLinks(f.deps.principalLinks);
   const canonical = composioUserId(tenant().orgId, "alice");
   const alias = composioUserId(tenant().orgId, "oidc:alice");
   const account = { id: "ca_old", user_id: alias, status: "ACTIVE", toolkit: { slug: "slack" } };
-  await f.deps.slackAccounts.put("oidc:alice", {
+  await f.deps.slackAccounts.put({
     principalId: "oidc:alice",
     memberId: "alice",
     accountId: "ca_old",
@@ -1011,14 +1011,14 @@ test("linked identities retain provider accounts and Slack status until unlinked
     });
     assert.equal(new URL(f.calls[0]!.url).searchParams.get("user_ids"), [canonical, alias].join(","));
     assert.equal(new URL(f.calls[0]!.url).searchParams.get("cursor"), "page");
-    await f.deps.slackAccounts.put("alice", {
+    await f.deps.slackAccounts.put({
       ...(await f.deps.slackAccounts.get("oidc:alice"))!,
       principalId: "alice",
       accountId: "ca_expired",
     });
     f.replies.push({ ...account, id: "ca_expired", user_id: canonical, status: "EXPIRED" }, account);
     assert.equal((await f.invoke("/v1/composio/slack")).data.connected, true);
-    await f.deps.slackAccounts.delete("alice");
+    await testQuery(f.url, `DELETE FROM slack_accounts WHERE principal_id = 'alice'`);
     f.replies.push(
       { session_id: "trs_test" },
       { redirect_url: "https://connect.composio.dev/link/lk_test", connected_account_id: "ca_test" },
@@ -1078,8 +1078,8 @@ async function slackReplyFixture() {
       externalId: e.externalId,
       ...e.body,
     }));
-  f.deps.slackAccounts = testMap();
-  await f.deps.slackAccounts.put("alice", {
+  f.deps.slackAccounts = createSlackAccounts(f.url);
+  await f.deps.slackAccounts.put({
     principalId: "alice",
     memberId: "alice",
     accountId: "ca_alice",
@@ -1147,7 +1147,7 @@ test("Slack replies cannot target hidden sessions or accept blank messages", asy
 
 test("Slack replies require a linked user account and never fall back to the bot token", async () => {
   const f = await slackReplyFixture();
-  await f.deps.slackAccounts!.delete("alice");
+  await testQuery(f.url, `DELETE FROM slack_accounts WHERE principal_id = 'alice'`);
   f.deps.slackEnvBotToken = "must-not-use";
   assert.equal((await f.invoke("/v1/composio/slack/reply-status", f.message)).data.connected, false);
   assert.equal((await f.invoke("/v1/composio/slack/reply", f.message)).status, 409);
@@ -1203,7 +1203,7 @@ test("Slack replies preserve unthreaded DMs and report Slack permission failures
 
 async function nativeSlackFixture(linked = true) {
   const f = await slackReplyFixture();
-  f.deps.slackAccounts = testMap();
+  await testQuery(f.url, `DELETE FROM slack_accounts`);
   f.deps.connectorTokens = f.deps.keychain;
   f.deps.oauthEnv = { SLACK_OAUTH_CLIENT_ID: "native-client", SLACK_OAUTH_CLIENT_SECRET: "native-secret" };
   f.deps.directory = createPostgresDirectoryStore(testDatabaseUrl());
@@ -1288,7 +1288,7 @@ test("native Slack connection status and linking work without a Composio credent
 
 test("configured native OAuth preserves an existing Composio connection", async () => {
   const f = await nativeSlackFixture(false);
-  await f.deps.slackAccounts!.put("alice", {
+  await f.deps.slackAccounts!.put({
     principalId: "alice",
     memberId: "alice",
     accountId: "ca_alice",

@@ -170,7 +170,7 @@ export async function startSlackPlugin(
 
   const deduper = createDeduper(1000, core.handledEvents);
   const handledPrune = core.handledEvents
-    ? createSweeper(() => core.handledEvents!.deleteBelow("at", Date.now() - HANDLED_EVENT_TTL_MS), 60 * 60_000, {
+    ? createSweeper(() => core.handledEvents!.deleteBefore(Date.now() - HANDLED_EVENT_TTL_MS), 60 * 60_000, {
         label: "slack handled events",
       })
     : undefined;
