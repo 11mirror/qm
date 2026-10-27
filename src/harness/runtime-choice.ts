@@ -1,6 +1,5 @@
 import type { ScopedConfigStore, RuntimePurpose } from "../resolution/config-store.ts";
 import {
-  auxiliaryModelFor,
   defaultModel,
   fastModeModelIds,
   modelSupported,
@@ -142,12 +141,7 @@ export function withResolvedRuntime(
           ...(judge
             ? {
                 governGoal: (goalInput: GoalGovernorInput) =>
-                  governGoal(
-                    judge,
-                    goalInput,
-                    input.cancel,
-                    pi.models?.contextTokenBudget?.(undefined, auxiliaryModelFor(choice.modelId)),
-                  ),
+                  governGoal(judge, goalInput, input.cancel, pi.models?.judgeTokenBudget?.()),
               }
             : {}),
         });
