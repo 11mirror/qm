@@ -365,8 +365,11 @@ const failureSessions = async () => {
   return { sessions, session };
 };
 
+const FAILED_RUN_ID = "7d1f3c2e-5b7a-4e0b-9c3d-2a1b4c5d6e7f";
+
 const failedRun = (over: Partial<Run> = {}): Run =>
   run({
+    id: FAILED_RUN_ID,
     sessionId: "slack:D1",
     status: "failed",
     result: { status: "failed", sessionId: "slack:D1", reason: "lease expired (reaped)" },
@@ -396,7 +399,7 @@ test("an orchestrator-recorded in-turn failure suppresses the onTerminal entry",
     kind: "Error",
     errorCode: "turn_failure",
     text: "already recorded by the turn",
-    turnId: "r-1",
+    turnId: FAILED_RUN_ID,
   });
   await sessions.releaseLease(lease!);
 
@@ -404,20 +407,20 @@ test("an orchestrator-recorded in-turn failure suppresses the onTerminal entry",
   assert.equal((await sessions.getItems(session.id)).length, 1, "no duplicate entry");
 });
 
-test("a legacy failure entry without a run id suppresses the onTerminal entry", async () => {
+test("a failure entry recorded for another run does not suppress this run's entry", async () => {
   const { recordRunFailureEntry } = await import("../../src/runs/run-results.ts");
   const { sessions, session } = await failureSessions();
   const { lease } = await sessions.acquireLease(session.id);
   await sessions.append(lease!, {
     kind: "Error",
     errorCode: "turn_failure",
-    text: "recorded at the web drain",
-    body: { deliveryKey: "run:r-1" },
+    text: "an earlier run's failure",
+    turnId: "0b9e8d7c-6a5b-4c3d-8e2f-1a0b9c8d7e6f",
   });
   await sessions.releaseLease(lease!);
 
-  assert.equal(await recordRunFailureEntry(sessions, failedRun()), false);
-  assert.equal((await sessions.getItems(session.id)).length, 1);
+  assert.equal(await recordRunFailureEntry(sessions, failedRun()), true);
+  assert.equal((await sessions.getItems(session.id)).length, 2);
 });
 
 test("a done run records nothing", async () => {
