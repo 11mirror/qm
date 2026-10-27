@@ -3,7 +3,7 @@ import { slackReply } from "./slack-reply.ts";
 import { isBackendCredential } from "../../credentials/keychain.ts";
 import { livePersonCapability } from "../artifact-share.ts";
 import { mintSignedPayload } from "../../auth/signed-token.ts";
-import { canonicalPerson, personIds, samePerson } from "../../directory/person.ts";
+import { canonicalPerson, personIds } from "../../directory/person.ts";
 import { createHash } from "node:crypto";
 import { scopeId } from "../../types.ts";
 import { parseRef } from "../../acl/resource-ref.ts";

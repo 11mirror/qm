@@ -713,25 +713,29 @@ test("rows never touched since the split fall back to the blob's legacy lastAcce
   assert.equal((await store.get(d.id))!.lastAccessAt, 9_999, "the access table wins once a touch lands");
 });
 
-test("pre-existing duplicate names stop the store with the duplicates named until they are resolved", { skip }, async () => {
-  await raw("DROP INDEX IF EXISTS deployments_name_unique");
-  const seed = makeFactory().map<Deployment>("deployments");
-  const dup = (id: string): Deployment => ({
-    id,
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    name: "doubled",
-    currentVersion: 1,
-    status: "stopped",
-    endpoint: null,
-    versions: [],
-  });
-  await seed.put("dup-a", dup("dup-a"));
-  await seed.put("dup-b", dup("dup-b"));
+test(
+  "pre-existing duplicate names stop the store with the duplicates named until they are resolved",
+  { skip },
+  async () => {
+    await raw("DROP INDEX IF EXISTS deployments_name_unique");
+    const seed = makeFactory().map<Deployment>("deployments");
+    const dup = (id: string): Deployment => ({
+      id,
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      name: "doubled",
+      currentVersion: 1,
+      status: "stopped",
+      endpoint: null,
+      versions: [],
+    });
+    await seed.put("dup-a", dup("dup-a"));
+    await seed.put("dup-b", dup("dup-b"));
 
-  await assert.rejects(makeStore().store.getByName("doubled"), /doubled \(2 deployments\).*rename or delete/);
-  await seed.put("dup-b", { ...dup("dup-b"), name: "doubled-2" });
-  const { store } = makeStore();
-  assert.equal((await store.getByName("doubled"))!.id, "dup-a");
-  assert.ok((await raw("SELECT to_regclass('deployments_name_unique') AS index"))[0]?.index);
-});
+    await assert.rejects(makeStore().store.getByName("doubled"), /doubled \(2 deployments\).*rename or delete/);
+    await seed.put("dup-b", { ...dup("dup-b"), name: "doubled-2" });
+    const { store } = makeStore();
+    assert.equal((await store.getByName("doubled"))!.id, "dup-a");
+    assert.ok((await raw("SELECT to_regclass('deployments_name_unique') AS index"))[0]?.index);
+  },
+);
