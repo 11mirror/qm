@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
-import { testConfig } from "./support/test-config.ts";
+import { testConfig } from "../support/test-config.ts";
 
 const events: string[] = [];
 let invalidIndexes = false;
@@ -25,7 +25,7 @@ mock.module("pg", {
     },
   },
 });
-const { runSessionSmoke } = await import("../src/deployment/postdeploy-smoke.ts");
+const { runSessionSmoke } = await import("../../src/deployment/postdeploy-smoke.ts");
 
 test("session command preserves archive then database checks with bounded requests and database operations", async (t) => {
   const timeouts: number[] = [];

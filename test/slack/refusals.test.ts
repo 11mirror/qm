@@ -2,36 +2,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { refusalNote, refusalDelivery, postThenAckRunDelivery } from "../../src/slack/refusals.ts";
 import { SESSION_BUSY_USER_TEXT } from "../../src/core/failure-copy.ts";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createApp, type AppDeps } from "../../src/api/app.ts";
-import { createOrchestrator } from "../../src/core/orchestrator.ts";
-import { createIdentityService } from "../../src/identity/identity-service.ts";
-import { createAclStore } from "../../src/acl/acl-store.ts";
-import { createResolutionService } from "../../src/resolution/resolution-service.ts";
-import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
-import { createModelGateway } from "../../src/model/model-gateway.ts";
-import { createMockHarness } from "../support/mock-harness.ts";
-import { createDeployStore } from "../../src/deploy/deploy-store.ts";
-import { createDockerDeployProvider } from "../../src/deploy/docker-deploy-provider.ts";
-import { createDeployService } from "../../src/deploy/deploy-service.ts";
-import { createMemoryDurableByteStore } from "../../src/files/durable-byte-store.ts";
 import { createTurnRunner } from "../../src/turns/turn-runner.ts";
 import { TURN_QUEUES } from "../../src/turns/absurd-schema.ts";
 import type { ErrorLog } from "../../src/admin/error-log.ts";
-import type { SessionStore } from "../../src/sessions/session-store.ts";
-import type { Sandbox } from "../../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../../src/types.ts";
-import { singleProcessDeps } from "../support/single-process.ts";
-import { createPostgresAuditLog } from "../../src/admin/postgres-audit-log.ts";
-import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-artifact-store.ts";
-import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
-import { createPostgresRateLimiter } from "../../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
-import { testConfigStore, testDatabaseUrl, testDeployBackings } from "../support/test-database.ts";
-import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts";
 import { settledRun, testRunStore } from "../support/turns.ts";
+import { buildBareOrchestrator } from "../support/bare-orchestrator.ts";
 
 const ADMIN_URL = "https://portal.example.com/admin/?view=history&session=s-1";
 
@@ -154,69 +132,14 @@ test("refusalNote: boundary copy follows the typed refusal kind, not the reason 
   assert.match(untyped, /Full error/);
 });
 
-const ORG = "default-org";
 const ADMIN = "https://portal.example.com";
 const actor: Principal = { id: "U1", type: "internal" };
-
-function fakeSandbox(): Sandbox {
-  const unreached = () => {
-    throw new Error("fakeSandbox: a failed turn must not touch the sandbox");
-  };
-  return {
-    profile: {
-      backend: "fake",
-      writablePersistence: "resident_disk",
-      processSessions: false,
-    },
-    provision: unreached as never,
-    run: unreached as never,
-    readFile: unreached as never,
-    writeFile: unreached as never,
-    writeFileBytes: unreached as never,
-    readFileBytes: unreached as never,
-    listDir: unreached as never,
-    removeDir: unreached as never,
-    teardown: unreached as never,
-  };
-}
-
-function buildOrchestrator(sessions: SessionStore) {
-  const databaseUrl = testDatabaseUrl();
-  const config = testConfigStore(ORG);
-  const acl = createAclStore(createPostgresGrantStore(databaseUrl));
-  const auditLog = createPostgresAuditLog(databaseUrl);
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ral-")));
-  const deploy = createDeployService({
-    ...singleProcessDeps(),
-    deployStore: createDeployStore(testDeployBackings()),
-    provider: createDockerDeployProvider(),
-    deployDir: join(tmpdir(), "ral-deploy"),
-    auditLog,
-    acl,
-  });
-  return createOrchestrator({
-    ...singleProcessDeps(),
-    identity: createIdentityService(databaseUrl),
-    resolution: createResolutionService(ORG, config, acl),
-    sessions,
-    workspace,
-    files: createPostgresFileArtifactStore(databaseUrl, createMemoryDurableByteStore()),
-    sandbox: fakeSandbox(),
-    modelGateway: createModelGateway(),
-    auditLog,
-    rateLimiter: createPostgresRateLimiter(databaseUrl, { maxPerWindow: 1000, windowMs: 60_000 }),
-    harness: createMockHarness(),
-    memory: createPostgresMemoryService(databaseUrl),
-    deploy,
-    acl,
-  });
-}
 
 test("a failed turn surfaces a refusal whose admin link points at the real session UUID", async (t) => {
   // The session store checks the turn's fence, so it must share the ledger's database.
   const { runs, ledger, databaseUrl } = testRunStore();
   const sessions = createPostgresSessionStore(databaseUrl);
-  const orchestrator = buildOrchestrator(sessions);
+  const orchestrator = buildBareOrchestrator({ sessions });
   const recorded: string[] = [];
   const errors = { record: (e) => recorded.push(e.message) } as Partial<ErrorLog> as ErrorLog;
   const runner = createTurnRunner({ ledger, orchestrator, queues: TURN_QUEUES, slots: 1, errors, pollMs: 50 });

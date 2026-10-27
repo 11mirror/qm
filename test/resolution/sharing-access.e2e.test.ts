@@ -1,16 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { credentialHandle } from "../src/credentials/keychain.ts";
-import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
-import "./support/auto-fake-sprites.ts";
+import { credentialHandle } from "../../src/credentials/keychain.ts";
+import { encodeRef, serviceCredRef } from "../../src/acl/resource-ref.ts";
+import "../support/auto-fake-sprites.ts";
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { buildTestApp } from "./support/test-app.ts";
-import { failedTurn } from "./support/orchestrator-app.ts";
-import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
-import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
-import type { Config } from "../src/config.ts";
-import type { TurnRequest } from "../src/types.ts";
-import { sleep } from "../src/util/async.ts";
+import { buildTestApp } from "../support/test-app.ts";
+import { failedTurn } from "../support/orchestrator-app.ts";
+import { testConfig, TEST_CAPABILITY_SECRET } from "../support/test-config.ts";
+import { verifyCapabilityToken } from "../../src/auth/capability-token.ts";
+import type { Config } from "../../src/config.ts";
+import type { TurnRequest } from "../../src/types.ts";
+import { sleep } from "../../src/util/async.ts";
 
 // Full application/tool/materializer path, with deterministic model commands and
 // the repo's host-backed Sprites transport. This does not test VM isolation.

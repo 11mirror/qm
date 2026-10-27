@@ -1,10 +1,10 @@
-import { storedItem } from "../src/sessions/items.ts";
+import { storedItem } from "../../src/sessions/items.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { setImmediate } from "node:timers/promises";
-import { Ctx, type Env } from "./live-slack/harness.ts";
-import { SlackClient, type SlackMessage } from "./live-slack/slack.ts";
-import { scenarios } from "./live-slack/scenarios.ts";
+import { Ctx, type Env } from "./harness.ts";
+import { SlackClient, type SlackMessage } from "./slack.ts";
+import { scenarios } from "./scenarios.ts";
 
 function context(name: string) {
   const scenario = scenarios.find((item) => item.name === name)!;

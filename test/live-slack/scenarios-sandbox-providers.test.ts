@@ -5,9 +5,9 @@ import {
   sandboxProviders,
   sandboxProviderScenarios,
   selectSandboxProviderScenarios,
-} from "./live-slack/scenarios-sandbox-providers.ts";
-import type { Ctx } from "./live-slack/harness.ts";
-import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
+} from "./scenarios-sandbox-providers.ts";
+import type { Ctx } from "./harness.ts";
+import { storedItem, type Item, type NewItem } from "../../src/sessions/items.ts";
 
 const item = (fields: NewItem, seq: number): Item => storedItem(fields, { sessionId: "s", seq, createdAt: seq });
 

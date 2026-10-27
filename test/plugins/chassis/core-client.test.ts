@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { fetchCoreText } from "../plugins/chassis/src/core-client.ts";
+import { fetchCoreText } from "../../../plugins/chassis/src/core-client.ts";
 
 for (const retrySafeRead of [true, false]) {
   test(`body interruption retries only opted-in reads: ${retrySafeRead}`, async (t) => {

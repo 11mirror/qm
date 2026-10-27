@@ -1,25 +1,13 @@
-import { test, after } from "node:test";
+import "../support/auto-fake-sprites.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
-import { NoDefaultSandboxError } from "../src/sandbox/sandbox-routing.ts";
-import type { GrantedHandle, IncomingAttachment } from "../src/types.ts";
-import { createSpritesSandbox, SPRITES_BODIES } from "../src/sandbox/sprites-sandbox.ts";
-import { storedItem, type NewItem } from "../src/sessions/items.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { installFakeSprites } from "./support/fake-sprites.ts";
+import { NoDefaultSandboxError } from "../../src/sandbox/sandbox-routing.ts";
+import type { GrantedHandle, IncomingAttachment, TurnRequest } from "../../src/types.ts";
+import { storedItem, type NewItem } from "../../src/sessions/items.ts";
+import { createMemoryBlobTransferStore, type BlobTransferStore } from "../../src/persistence/blob-transfer.ts";
 import {
-  createMemoryBlobTransferStore,
-  collectBlob,
-  type BlobTransferStore,
-} from "../src/persistence/blob-transfer.ts";
-import {
-  MAX_OUTBOUND_FILES,
   MAX_INBOUND_FILES,
   MAX_SHARED_FILES_LISTED,
-  MAX_ATTACHMENT_BYTES,
   environmentNote,
   inboundIssueList,
   inboundIssuesNote,
@@ -32,40 +20,16 @@ import {
   sharedFilesSystemSection,
   sharedManifest,
   turnFileId,
-} from "../src/core/attachments.ts";
-import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
-import { testAdvisoryLock, testSandboxBodies } from "./support/test-database.ts";
+} from "../../src/core/attachments.ts";
+import { fakeSandbox } from "../support/attachment-sandbox.ts";
+import { buildApp } from "../support/build-app.ts";
+import { testConfig } from "../support/test-config.ts";
 
 test("turn file ids are stable within one attempt and fenced across retries", () => {
   assert.equal(turnFileId("run-1", 1, 123), turnFileId("run-1", 1, 123));
   assert.notEqual(turnFileId("run-1", 1, 123), turnFileId("run-1", 2, 123));
   assert.notEqual(turnFileId(undefined, 1, 123), turnFileId(undefined, 1, 123));
 });
-
-function fakeSandbox(): { sandbox: Sandbox; handle: SandboxHandle; files: Map<string, Uint8Array> } {
-  const files = new Map<string, Uint8Array>();
-  const sandbox = {
-    async writeFileBytes(_h: SandboxHandle, rel: string, data: Uint8Array) {
-      files.set(rel, data);
-    },
-    async readFileBytes(_h: SandboxHandle, rel: string) {
-      return files.get(rel) ?? null;
-    },
-    async listDir(_h: SandboxHandle, dir: string) {
-      return [...files.keys()].filter((k) => k === dir || k.startsWith(`${dir}/`));
-    },
-  } as unknown as Sandbox;
-  return { sandbox, handle: { id: "x", rootDir: "/tmp/x" }, files };
-}
-
-function attachStaging(sandbox: Sandbox, handle: SandboxHandle, blobTransfer: BlobTransferStore) {
-  return createAttachStaging({
-    sandbox,
-    provision: async () => handle,
-    blobTransfer,
-    fileRegistration: { store: null as never, ownerScopeId: "personal:U1", createdBy: "U1", seed: "run-1" },
-  });
-}
 
 async function inFile(
   transfer: BlobTransferStore,
@@ -404,154 +368,6 @@ test("materializeInbound tolerates a 0-byte file", async () => {
   assert.equal(files.get("inbox/empty.txt")!.length, 0);
 });
 
-test("attach stages a named workspace file as a blob attachment", async () => {
-  const { sandbox, handle, files } = fakeSandbox();
-  const transfer = createMemoryBlobTransferStore();
-  files.set("report.csv", new Uint8Array(Buffer.from("a,b\n1,2")));
-  files.set("keep.txt", new Uint8Array(Buffer.from("not attached")));
-  const staging = attachStaging(sandbox, handle, transfer);
-  const r = await staging.attach(["report.csv"]);
-  assert.ok(r.ok);
-  assert.deepEqual(
-    r.files.map((f) => [f.name, f.mimetype, f.sizeBytes]),
-    [["report.csv", "text/csv", 7]],
-  );
-  const staged = staging.staged();
-  assert.equal(staged.length, 1, "only the named file rides out");
-  const blob = await transfer.open(staged[0]!.blobId);
-  assert.equal((await collectBlob(blob!.stream)).toString("utf8"), "a,b\n1,2");
-});
-
-test("attach delivers a safe basename for a nested path (not a Slack path)", async () => {
-  const { sandbox, handle, files } = fakeSandbox();
-  files.set("sub/report.csv", new Uint8Array(Buffer.from("a,b")));
-  const staging = attachStaging(sandbox, handle, createMemoryBlobTransferStore());
-  const r = await staging.attach(["sub/report.csv"]);
-  assert.ok(r.ok);
-  assert.equal(r.files[0]!.name, "report.csv");
-});
-
-test("attaching a missing, empty, or traversing path stages nothing and says which", async () => {
-  const { sandbox, handle, files } = fakeSandbox();
-  files.set("blank.txt", new Uint8Array(0));
-  const staging = attachStaging(sandbox, handle, createMemoryBlobTransferStore());
-  const missing = await staging.attach(["gone.md"]);
-  assert.ok(!missing.ok);
-  assert.match(missing.message, /gone\.md \(not found\)/);
-  const empty = await staging.attach(["blank.txt"]);
-  assert.ok(!empty.ok);
-  assert.match(empty.message, /blank\.txt \(empty\)/);
-  const traversal = await staging.attach(["../../etc/passwd"]);
-  assert.ok(!traversal.ok);
-  assert.match(traversal.message, /no \.\. path segments/);
-  assert.equal(staging.staged().length, 0, "a failed call stages nothing at all");
-});
-
-test("attach refuses a file past the size cap", async () => {
-  const { sandbox, handle, files } = fakeSandbox();
-  files.set("huge.bin", new Uint8Array(MAX_ATTACHMENT_BYTES + 1));
-  const staging = attachStaging(sandbox, handle, createMemoryBlobTransferStore());
-  const r = await staging.attach(["huge.bin"]);
-  assert.ok(!r.ok);
-  assert.match(r.message, /huge\.bin \(too large\)/);
-  assert.equal(staging.staged().length, 0);
-});
-
-test("attach accumulates across calls, replaces a re-named path, and caps the reply's file count", async () => {
-  const { sandbox, handle, files } = fakeSandbox();
-  for (let i = 0; i < MAX_OUTBOUND_FILES + 5; i++) files.set(`f${i}.txt`, new Uint8Array(Buffer.from(`x${i}`)));
-  const staging = attachStaging(sandbox, handle, createMemoryBlobTransferStore());
-  assert.ok((await staging.attach(["f0.txt"])).ok);
-  assert.ok((await staging.attach(["f1.txt"])).ok);
-  assert.equal(staging.staged().length, 2, "a second call adds to the set");
-  assert.ok((await staging.attach(["f0.txt"])).ok);
-  assert.equal(staging.staged().length, 2, "re-naming a path replaces it instead of duplicating");
-  const rest = await staging.attach(Array.from({ length: MAX_OUTBOUND_FILES - 1 }, (_, i) => `f${i + 2}.txt`));
-  assert.ok(!rest.ok);
-  assert.match(rest.message, /at most/);
-  assert.equal(staging.staged().length, 2, "the over-cap call stages nothing");
-});
-
-test("re-attaching a path replaces its staged bytes and releases the superseded blob", async () => {
-  const { sandbox, handle, files } = fakeSandbox();
-  const transfer = createMemoryBlobTransferStore();
-  files.set("report.md", new Uint8Array(Buffer.from("draft")));
-  const staging = attachStaging(sandbox, handle, transfer);
-  const first = await staging.attach(["report.md"]);
-  assert.ok(first.ok);
-  const staleBlobId = staging.staged()[0]!.blobId;
-  files.set("report.md", new Uint8Array(Buffer.from("fixed")));
-  assert.ok((await staging.attach(["report.md"])).ok);
-  assert.equal(staging.staged().length, 1);
-  const blob = await transfer.open(staging.staged()[0]!.blobId);
-  assert.equal((await collectBlob(blob!.stream)).toString("utf8"), "fixed", "the reply carries the rewritten file");
-  assert.equal(await transfer.open(staleBlobId), null, "the superseded bytes are not left behind");
-});
-
-test("two attached files that share a basename get distinct delivered names", async () => {
-  const { sandbox, handle, files } = fakeSandbox();
-  files.set("drafts/notes.txt", new Uint8Array(Buffer.from("one")));
-  files.set("final/notes.txt", new Uint8Array(Buffer.from("two")));
-  const staging = attachStaging(sandbox, handle, createMemoryBlobTransferStore());
-  assert.ok((await staging.attach(["drafts/notes.txt"])).ok);
-  assert.ok((await staging.attach(["final/notes.txt"])).ok);
-  assert.deepEqual(
-    staging.staged().map((a) => a.name),
-    ["notes.txt", "notes-2.txt"],
-    "a later call cannot deliver a name an earlier one already took",
-  );
-});
-
-test("attach needs at least one path", async () => {
-  const { sandbox, handle } = fakeSandbox();
-  const staging = attachStaging(sandbox, handle, createMemoryBlobTransferStore());
-  const r = await staging.attach([]);
-  assert.ok(!r.ok);
-  assert.match(r.message, /at least one/);
-});
-
-test("removeDir wipes a per-turn spool dir (and only it), tolerating an absent dir and refusing root", async () => {
-  const ff = installFakeSprites();
-  after(() => ff.cleanup());
-  const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "fs-rm-")));
-  const sandbox = createSpritesSandbox(ws, {
-    store: testSandboxBodies(SPRITES_BODIES),
-    advisoryLock: testAdvisoryLock(),
-    token: "test-token",
-    baseUrl: ff.baseUrl,
-  });
-  const handle = await sandbox.provision([{ scopeId: "personal:U1", mountPath: "", mode: "rw" }]);
-  await sandbox.writeFileBytes(handle, "spool/one.txt", new Uint8Array(Buffer.from("1")));
-  await sandbox.writeFileBytes(handle, "spool/two.txt", new Uint8Array(Buffer.from("2")));
-  await sandbox.writeFileBytes(handle, "keep.txt", new Uint8Array(Buffer.from("keep")));
-  assert.equal((await sandbox.listDir(handle, "spool")).length, 2);
-
-  await sandbox.removeDir(handle, "spool");
-  assert.deepEqual(await sandbox.listDir(handle, "spool"), []);
-  assert.equal(await sandbox.readFile(handle, "keep.txt"), "keep");
-
-  await sandbox.removeDir(handle, "spool");
-  await sandbox.removeDir(handle, "");
-  assert.equal(await sandbox.readFile(handle, "keep.txt"), "keep");
-});
-
-test("a binary file round-trips through the sandbox (base64-over-exec) without utf8 corruption", async () => {
-  const ff = installFakeSprites();
-  after(() => ff.cleanup());
-  const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "fs-bin-")));
-  const sandbox = createSpritesSandbox(ws, {
-    store: testSandboxBodies(SPRITES_BODIES),
-    advisoryLock: testAdvisoryLock(),
-    token: "test-token",
-    baseUrl: ff.baseUrl,
-  });
-  const handle = await sandbox.provision([{ scopeId: "personal:U1", mountPath: "", mode: "rw" }]);
-  const raw = new Uint8Array([0x00, 0x9f, 0x92, 0x96, 0xff, 0xfe]);
-  await sandbox.writeFileBytes(handle, "keep.bin", raw);
-  const read = await sandbox.readFileBytes(handle, "keep.bin");
-  assert.deepEqual(new Uint8Array(read!), raw);
-});
-
 test("materializeInbound keeps uploads registered when the scope has no default sandbox", async () => {
   const { sandbox, files } = fakeSandbox();
   const transfer = createMemoryBlobTransferStore();
@@ -597,4 +413,37 @@ test("materializeInbound drops an unstaged upload it could not register, and ret
     ),
     /provider down/,
   );
+});
+
+test("an upload in a scope without a default sandbox still reaches the agent", async () => {
+  const built = buildApp(testConfig());
+  await built.directory.replace([{ principalId: "U1", displayName: "Synthetic User", type: "internal" }]);
+  await built.directory.replaceChannels(
+    [{ channelId: "C1", name: "synthetic-upload", isPrivate: true }],
+    [{ channelId: "C1", principalId: "U1" }],
+  );
+  const request: Omit<TurnRequest, "text"> = {
+    origin: { kind: "direct" },
+    surface: "slack",
+    actor: { externalId: "U1" },
+    conversation: { kind: "channel", threadRef: "ch:C1:upload", channelRef: "C1", audience: [{ externalId: "U1" }] },
+  };
+  const first = await built.app.turn({ ...request, text: "I will share a document" });
+  assert.equal(first.status, "ok");
+  const sessionId = first.sessionId!;
+  const blob = await built.blobTransfer.put(Buffer.from("Synthetic upload sample"));
+  const before = (await built.sessions.listLlmRequests(sessionId)).length;
+  const upload = await built.app.turn({
+    ...request,
+    text: "Please read this document",
+    attachments: [{ name: "sample.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
+  });
+  assert.equal(upload.status, "ok", upload.status === "ok" ? undefined : upload.reason);
+  assert.ok((await built.sessions.listLlmRequests(sessionId)).length > before);
+  assert.equal(await built.sandboxResources.resolve("channel:C1"), null);
+  const items = await built.sessions.getItems(sessionId);
+  const text = JSON.stringify(items.filter((e) => e.kind === "UserMessage"));
+  assert.match(text, /sample\.txt/);
+  assert.match(text, /not yet on a computer/);
+  assert.match(text, /\/v1\/files\/[^/]+\/content/);
 });

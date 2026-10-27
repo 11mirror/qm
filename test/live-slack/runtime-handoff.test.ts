@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { assertRuntimeHandoff } from "./live-slack/runtime-handoff.ts";
-import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
+import { assertRuntimeHandoff } from "./runtime-handoff.ts";
+import { storedItem, type Item, type NewItem } from "../../src/sessions/items.ts";
 
 const item = (fields: NewItem): Item => storedItem(fields, { sessionId: "s", seq: 0, createdAt: 0 });
 const call = (callId: string, action: string) => item({ kind: "ToolCall", tool: "runtime", callId, body: { action } });

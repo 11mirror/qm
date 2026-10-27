@@ -1,32 +1,20 @@
-import "./support/auto-fake-sprites.ts";
+import "../../support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildTestApp } from "./support/test-app.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
-import { testConfig } from "./support/test-config.ts";
-import { quietThread } from "./support/turns.ts";
-import { isUserMessage } from "../src/sessions/items.ts";
+import { buildTestApp } from "../../support/test-app.ts";
+import { scopeId } from "../../../src/types.ts";
+import { testConfig } from "../../support/test-config.ts";
+import { quietThread } from "../../support/turns.ts";
+import { isUserMessage } from "../../../src/sessions/items.ts";
+import { actor, mention } from "../../support/turn-requests.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-spine-"));
   return buildTestApp(testConfig({ dataDir }));
-}
-
-const actor = { externalId: "U1" };
-function mention(text: string, channel: string, root: string): TurnRequest {
-  return {
-    surface: "slack",
-    actor,
-    conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
-    deliveryTarget: `slack:${channel}:${root}`,
-    text,
-    async: true,
-    origin: { kind: "human" },
-  };
 }
 
 test("spine ON: react/edit/delete route through the SAME reach chokepoint to the current conversation", async () => {
