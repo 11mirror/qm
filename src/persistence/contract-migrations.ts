@@ -76,6 +76,10 @@ export const CONTRACT_MIGRATIONS: readonly PgMigrationDefinition[] = [
       "ALTER TABLE runs DROP COLUMN IF EXISTS fair_key",
     ],
   },
+  {
+    id: "contract/0011-drop-tenant-env-bags",
+    statements: ["ALTER TABLE IF EXISTS tenants DROP COLUMN IF EXISTS env, DROP COLUMN IF EXISTS secret_env"],
+  },
 ];
 
 export const contractMigrations = (): PgMigrationDefinition[] => [
