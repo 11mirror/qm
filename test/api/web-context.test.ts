@@ -115,7 +115,7 @@ test("answerWebContextRequest reads the log as the asking viewer, refuses gracef
         principalId,
         validFrom: 0,
         validTo: null,
-        validFromSeq: null,
+        validFromSeq: 0,
         validToSeq: null,
       }));
     },

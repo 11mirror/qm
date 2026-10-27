@@ -184,8 +184,10 @@ test("pg tool output: the inline cap comes from qm_settings and parked text read
       );
       const markerPath = /tool-output\/\S+(?=;)/.exec(cutToolOutput(full, 1, callId)!.text)![0];
       assert.deepEqual(await outputs.read(session.id, parkedOutputKey(markerPath)!), { text: full });
-      assert.deepEqual(await outputs.read(session.id, parkedOutputKey("tool-output/toolu_short")!), { text: full });
-      assert.equal(await outputs.read(session.id, parkedOutputKey("tool-output/missing")!), null);
+      const shortPath = /tool-output\/\S+(?=;)/.exec(cutToolOutput(full, 1, "toolu_short")!.text)![0];
+      assert.deepEqual(await outputs.read(session.id, parkedOutputKey(shortPath)!), { text: full });
+      assert.equal(parkedOutputKey("tool-output/toolu_short"), null);
+      assert.equal(await outputs.read(session.id, { digest: "0".repeat(32) }), null);
       assert.equal(await outputs.read("other-session", parkedOutputKey(markerPath)!), null);
       const row = (
         await raw.query(

@@ -98,7 +98,7 @@ test("attributed turns: every tenant's Admin Users counts survive the attributed
 
     // A write made with tenancy bypassed (a tenant import) marks the session dirty under its own tenant.
     await bypass.query(
-      `INSERT INTO participants(tenant_id, session_id, principal_id, valid_from) VALUES ($1, $2, 'imported-user', 0)`,
+      `INSERT INTO participants(tenant_id, session_id, principal_id, valid_from, valid_from_seq) VALUES ($1, $2, 'imported-user', 0, 0)`,
       [other.id, otherSessions[2]],
     );
     const marks = await bypass.query(`SELECT tenant_id::text AS t FROM attributed_turns_dirty WHERE session_id = $1`, [

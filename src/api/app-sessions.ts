@@ -1,5 +1,5 @@
 import { swallowAs } from "../util/errors.ts";
-import { type ParticipantPageQuery, itemWithinTenure } from "../sessions/session-store.ts";
+import { type ParticipantPageQuery, seqWithinTenure } from "../sessions/session-store.ts";
 import { scopeId } from "../types.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
@@ -66,8 +66,8 @@ function sessionViewMethods(k: SessionKit) {
       const window = await tenureOf(k, sessionId, principalId);
       return (
         !!window &&
-        itemWithinTenure({ seq: visibility.minSeq, createdAt: visibility.minCreatedAt }, window) &&
-        itemWithinTenure({ seq: visibility.maxSeq, createdAt: visibility.maxCreatedAt }, window)
+        seqWithinTenure(visibility.minSeq, window) &&
+        seqWithinTenure(visibility.maxSeq, window)
       );
     },
 

@@ -263,7 +263,7 @@ test("pg scopeSessionSummaries: previews are stored on append and match the JS e
   const scope = scopeId("channel", "pvw");
   const obj = await s.getOrCreateByThread("pvwA", "channel", scope);
   const { lease } = await s.acquireLease(obj.id);
-  await s.append(lease!, { kind: "UserMessage", text: `[${"c".repeat(3000)}]\n\nthe real opener` });
+  await s.append(lease!, { kind: "UserMessage", text: "the real\n\n  opener" });
   await s.append(lease!, { kind: "UserMessage", text: "x".repeat(300) });
   await s.releaseLease(lease!);
   const strp = await s.getOrCreateByThread("pvwB", "channel", scope);
@@ -273,7 +273,7 @@ test("pg scopeSessionSummaries: previews are stored on append and match the JS e
 
   const rows = await s.scopeSessionSummaries(scope, false, { limit: 500 });
   const ra = rows.find((r) => r.id === obj.id)!;
-  assert.equal(ra.firstMessage, "the real opener", "bracketed boilerplate stripped (even a >2KB block)");
+  assert.equal(ra.firstMessage, "the real opener", "whitespace collapses to one line");
   assert.equal(ra.lastMessage, "x".repeat(99) + "…", "last-message preview truncated to 100 like before");
   const rb = rows.find((r) => r.id === strp.id)!;
   assert.equal(rb.lastMessage, "nulbyte", "a null byte never reaches the text column");

@@ -46,10 +46,10 @@ export type NewItem<K extends ItemKind = ItemKind> = {
   [P in K]: { kind: P } & Partial<ItemColumns> & Required<P>;
 }[K];
 
-const USER_MESSAGE_KINDS: ReadonlySet<ItemKind> = new Set<ItemKind>(["UserMessage", "SteeringMessage"]);
+const USER_MESSAGE_KINDS: readonly ItemKind[] = ["UserMessage", "SteeringMessage"];
 
 export const isUserMessage = (item: Pick<Item, "kind">): item is Item<"UserMessage" | "SteeringMessage"> =>
-  USER_MESSAGE_KINDS.has(item.kind);
+  USER_MESSAGE_KINDS.includes(item.kind);
 
 export const isOverheard = (item: Pick<Item, "kind" | "body">): boolean =>
   item.kind === "UserMessage" && item.body.overheard === true;
@@ -147,11 +147,10 @@ export const ITEM_COLUMNS = [
   ["body", "body", "jsonb"],
 ] as const;
 
-export const USER_ITEM_KINDS: readonly string[] = ["UserMessage", "SteeringMessage"];
-export const USER_KINDS = `(${USER_ITEM_KINDS.map((kind) => `'${kind}'`).join(", ")})`;
-export const AGENT_REPLY_ITEM = (col: string): string => `${col}.kind = 'AgentMessage'`;
+export const USER_KINDS = `(${USER_MESSAGE_KINDS.map((kind) => `'${kind}'`).join(", ")})`;
+export const AGENT_REPLY_ITEM = (col: string): string => `(${col}.kind = 'AgentMessage' AND ${col}.variant IS NULL)`;
 export const SEARCHABLE_ITEM = (col: string): string =>
-  `(${col}.kind IN ('UserMessage','SteeringMessage','AgentMessage') AND ${col}.variant IS DISTINCT FROM 'files_delivered' AND ${col}.text IS NOT NULL)`;
+  `((${col}.kind IN ${USER_KINDS} OR ${col}.kind = 'AgentMessage') AND ${col}.variant IS DISTINCT FROM 'files_delivered' AND ${col}.text IS NOT NULL)`;
 export const searchTypeExpr = (col: string): string =>
   `CASE WHEN ${col}.kind IN ${USER_KINDS} THEN 'user' WHEN ${col}.variant = 'narration' THEN 'text' ELSE 'assistant' END`;
 export const msOf = (col: string): string => `(EXTRACT(EPOCH FROM ${col}) * 1000)::bigint`;

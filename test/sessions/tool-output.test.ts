@@ -32,7 +32,7 @@ test("cutToolOutput keeps text within the budget untouched and halves the rest b
   assert.ok(cut.text.endsWith("T".repeat(100)));
   const path = /tool-output\/\S+(?=;)/.exec(cut.text)![0];
   assert.equal(path.length, "tool-output/md5/".length + 32);
-  assert.equal(parkedOutputKey(path)?.callId, undefined);
+  assert.deepEqual(parkedOutputKey(path), { digest: path.slice("tool-output/md5/".length) });
 });
 
 test("an unparked cut keeps head and tail and says the full output was not kept", () => {
@@ -66,8 +66,8 @@ test("parkIfOverCap falls back to the inline budget without a store, and to an u
   assert.equal((await parkIfOverCap(saving, "short", "c1")).text, "short");
 });
 
-test("tool-output paths name one call", () => {
-  assert.equal(parkedOutputKey("tool-output/toolu_1")?.callId, "toolu_1");
+test("tool-output paths name one call by its digest", () => {
+  assert.equal(parkedOutputKey("tool-output/toolu_1"), null);
   assert.equal(parkedOutputKey(`tool-output/md5/${"ab".repeat(16)}`)?.digest, "ab".repeat(16));
   assert.equal(parkedOutputKey("tool-output/"), null);
   assert.equal(parkedOutputKey("tool-output/a/b"), null);

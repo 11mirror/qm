@@ -2,7 +2,17 @@ import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { USER_KINDS } from "./items.ts";
 import { SPEND_FIELDS, spendValue } from "./postgres-session-sql.ts";
 
-// Sessions migrations after the schema baseline (src/persistence/schema-baseline.sql), which holds 0001–0044.
+const firstSeqAtOrAfter = (ms: string, sameSession: string): string =>
+  `COALESCE((SELECT MIN(i.seq) FROM items i WHERE ${sameSession} AND i.created_at >= to_timestamp(${ms}::double precision / 1000)),
+            (SELECT COALESCE(MAX(i.seq) + 1, 0) FROM items i WHERE ${sameSession}))`;
+
+const backfillParticipantSeqBounds = (sameSession: string): string =>
+  `UPDATE participants p
+      SET valid_from_seq = COALESCE(p.valid_from_seq, ${firstSeqAtOrAfter("p.valid_from", sameSession)}),
+          valid_to_seq = CASE WHEN p.valid_to IS NULL THEN NULL
+                              ELSE COALESCE(p.valid_to_seq, ${firstSeqAtOrAfter("p.valid_to", sameSession)}) END
+    WHERE p.valid_from_seq IS NULL OR (p.valid_to IS NOT NULL AND p.valid_to_seq IS NULL)`;
+
 export const SESSION_STORE_MIGRATIONS: PgMigrationDefinition[] = [
   {
     id: "sessions/store/0045-llm-request-spend-columns",
@@ -11,7 +21,6 @@ export const SESSION_STORE_MIGRATIONS: PgMigrationDefinition[] = [
       ...SPEND_FIELDS.map(
         ([column, , type]) => `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS ${column} ${type}`,
       ),
-      // Usage JSON as jsonb when it parses and every number field casts, else NULL (never an error).
       `CREATE OR REPLACE FUNCTION llm_spend_usage(t text) RETURNS jsonb
              LANGUAGE plpgsql IMMUTABLE PARALLEL RESTRICTED AS $llm_spend_usage$
              DECLARE j jsonb;
@@ -30,7 +39,6 @@ export const SESSION_STORE_MIGRATIONS: PgMigrationDefinition[] = [
                RETURN NULL;
              END
              $llm_spend_usage$`,
-      // Spend reads these columns; a call with malformed usage still counts, at zero.
       `CREATE OR REPLACE FUNCTION llm_request_spend_columns() RETURNS trigger
              LANGUAGE plpgsql AS $llm_request_spend_columns$
              DECLARE u jsonb := llm_spend_usage(NEW.usage_json);
@@ -71,7 +79,6 @@ export const SESSION_STORE_MIGRATIONS: PgMigrationDefinition[] = [
              ON CONFLICT DO NOTHING;
              RETURN NULL;
            END $mark_attribution_dirty$`,
-      // Items are append-only and leave only with their session, whose participants go too.
       `CREATE TRIGGER items_attribution_dirty AFTER INSERT ON items
            FOR EACH ROW WHEN (NEW.kind IN ${USER_KINDS}) EXECUTE FUNCTION mark_attribution_dirty()`,
       `CREATE TRIGGER participants_attribution_dirty AFTER INSERT OR UPDATE OR DELETE ON participants
@@ -81,9 +88,6 @@ export const SESSION_STORE_MIGRATIONS: PgMigrationDefinition[] = [
     ],
   },
   {
-    // Migrations run with tenancy bypassed and before qm_tenantize(), so 0048's seed and any bypassed write (a tenant
-    // import) marked sessions dirty under the home tenant: other tenants' Admin Users caches never rebuilt. Dirty
-    // marks now carry the source row's tenant, and a tenantized database is re-seeded per tenant.
     id: "sessions/store/0049-attributed-turns-tenant",
     statements: [
       `SET LOCAL lock_timeout = '3s'`,
@@ -135,6 +139,41 @@ export const SESSION_STORE_MIGRATIONS: PgMigrationDefinition[] = [
              ON session_llm_requests(created_at)
              WHERE usage_json IS NOT NULL AND NOT (spend_usage_json(usage_json) IS NOT NULL
              AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`,
+    ],
+  },
+  {
+    id: "sessions/store/0051-participant-seq-bounds",
+    statements: [
+      `SET LOCAL lock_timeout = '3s'`,
+      `DO $participant_seq_bounds$
+           BEGIN
+             IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'participants'::regclass
+                         AND attname = 'tenant_id' AND NOT attisdropped) THEN
+               ${backfillParticipantSeqBounds("i.tenant_id = p.tenant_id AND i.session_id = p.session_id")};
+             ELSE
+               ${backfillParticipantSeqBounds("i.session_id = p.session_id")};
+             END IF;
+           END
+           $participant_seq_bounds$`,
+      `ALTER TABLE participants ALTER COLUMN valid_from_seq SET NOT NULL`,
+    ],
+  },
+  {
+    id: "sessions/store/0052-items-call-id-from-body",
+    statements: [
+      `SET LOCAL lock_timeout = '3s'`,
+      `DO $items_call_id_from_body$
+           BEGIN
+             IF EXISTS (SELECT 1 FROM items WHERE call_id IS NULL AND kind IN ('ToolCall', 'ToolResult')
+                         AND jsonb_typeof(body -> 'callId') = 'string' AND body ->> 'callId' <> '') THEN
+               ALTER TABLE items DISABLE TRIGGER items_append_only;
+               UPDATE items SET call_id = body ->> 'callId', body = body - 'callId'
+                WHERE call_id IS NULL AND kind IN ('ToolCall', 'ToolResult')
+                  AND jsonb_typeof(body -> 'callId') = 'string' AND body ->> 'callId' <> '';
+               ALTER TABLE items ENABLE TRIGGER items_append_only;
+             END IF;
+           END
+           $items_call_id_from_body$`,
     ],
   },
 ];

@@ -71,13 +71,11 @@ test("pg participant presence checks seek into the visible history window", asyn
     assert.equal(captured.length, 2);
 
     const windows = [
-      { fromSeq: 4000, toSeq: null, from: 0, to: null, visible: [] },
-      { fromSeq: 0, toSeq: 1, from: 40000, to: 40000, visible: [0] },
-      { fromSeq: null, toSeq: null, from: 40000, to: null, visible: [] },
-      { fromSeq: null, toSeq: null, from: 0, to: 10, visible: [0] },
-      { fromSeq: 3998, toSeq: null, from: 40000, to: 39990, visible: [3998] },
-      { fromSeq: null, toSeq: 2, from: 10, to: 0, visible: [1] },
-      { fromSeq: 2, toSeq: 2, from: 0, to: null, visible: [] },
+      { fromSeq: 4000, toSeq: null, visible: [] },
+      { fromSeq: 0, toSeq: 1, visible: [0] },
+      { fromSeq: 3998, toSeq: 4000, visible: [3998] },
+      { fromSeq: 1, toSeq: 2, visible: [1] },
+      { fromSeq: 2, toSeq: 2, visible: [] },
     ];
     type Plan = { "Relation Name"?: string; "Rows Removed by Filter"?: number; Plans?: Plan[] };
     const rejectedEntries = (plan: Plan): number =>
@@ -87,7 +85,7 @@ test("pg participant presence checks seek into the visible history window", asyn
       await raw.query(
         `UPDATE participants SET valid_from_seq=$3, valid_to_seq=$4, valid_from=$5, valid_to=$6
           WHERE session_id=$1 AND principal_id=$2`,
-        [session.id, owner, window.fromSeq, window.toSeq, window.from, window.to],
+        [session.id, owner, window.fromSeq, window.toSeq, 0, window.toSeq === null ? null : 1],
       );
       assert.deepEqual(
         (await store.visibleItems(session.id, owner)).map((entry) => entry.seq),
@@ -95,7 +93,6 @@ test("pg participant presence checks seek into the visible history window", asyn
       );
       assert.equal((await store.listByParticipant(owner))[0]!.hasEntries, window.visible.length > 0);
       assert.equal((await store.getForParticipant(session.id, owner))!.hasEntries, window.visible.length > 0);
-      if (window.fromSeq === null ? window.toSeq !== null : window.toSeq === null && window.to !== null) continue;
       for (const query of captured) {
         const result = await raw.query(`EXPLAIN (ANALYZE, FORMAT JSON) ${query.text}`, query.values);
         const rejected = rejectedEntries(result.rows[0]["QUERY PLAN"][0].Plan);
