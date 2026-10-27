@@ -53,7 +53,7 @@ export function createTenantDirectory(opts: {
 
   async function load(): Promise<Snapshot> {
     const [id, records] = await Promise.all([homeTenantId(opts.pool), listTenants(opts.pool, opts.secretsKey)]);
-    registerTenantSettings(records);
+    registerTenantSettings(records.filter((rec) => rec.id !== id));
     const homeRecord = records.find((rec) => rec.id === id);
     const others = records.filter((rec) => rec.id !== id && rec.status === "active");
     const homeRoute: HostRoute<Tenant> = {

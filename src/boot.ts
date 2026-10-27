@@ -18,7 +18,7 @@ import { homeHosts } from "../plugins/chassis/src/tenant-settings.ts";
 import { tenant, withTenant, type Tenant } from "./tenant.ts";
 import { createTenantDirectory, eachActiveTenant, isHomeTenant, useTenantDirectory } from "./tenants/directory.ts";
 import { tenantConfig } from "./tenants/tenant-config.ts";
-import { assertRowSecurityEnforced, retireTenantEnvBags, tenantSecretsKey } from "./tenants/registry.ts";
+import { assertRowSecurityEnforced, tenantSecretsKey } from "./tenants/registry.ts";
 
 export interface BootedApp {
   config: Config;
@@ -137,8 +137,6 @@ async function useRegistryTenants(
     isHomeTenant(tenant()) ? undefined : (tenantConfig(config).sentryDeployment ?? tenant().orgId),
   );
   const secretsKey = tenantSecretsKey(env);
-  const retired = await retireTenantEnvBags(pool, secretsKey);
-  if (retired) console.log(`[qm] moved ${retired} tenant row(s) from env bags to tenant settings`);
   useTenantDirectory(
     createTenantDirectory({
       databaseUrl,
