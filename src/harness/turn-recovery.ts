@@ -22,7 +22,7 @@ export function piFailedAssistant(session: AssistantTextSession): AssistantMessa
   return lastAssistant?.stopReason === "error" ? lastAssistant : undefined;
 }
 
-export function lastInputTokens(session: AssistantTextSession, failed: AssistantMessage): number | undefined {
+function lastInputTokens(session: AssistantTextSession, failed: AssistantMessage): number | undefined {
   const ok = [...session.messages]
     .reverse()
     .find((m) => m !== failed && m.role === "assistant" && (m as AssistantMessage).stopReason !== "error") as
@@ -31,7 +31,7 @@ export function lastInputTokens(session: AssistantTextSession, failed: Assistant
   return u ? u.input + u.cacheRead + u.cacheWrite : undefined;
 }
 
-export function piAssistantFailure(session: AssistantTextSession): ProviderTurnError | null {
+function piAssistantFailure(session: AssistantTextSession): ProviderTurnError | null {
   const failed = piFailedAssistant(session);
   if (!failed) return null;
   const contextWindow = (
@@ -41,7 +41,7 @@ export function piAssistantFailure(session: AssistantTextSession): ProviderTurnE
 }
 
 export const FALLBACK_CODES = new Set(["refusal", "model_unavailable"]);
-export const DOCUMENT_REJECTION_CODES = new Set(["context_too_long", "bad_request"]);
+const DOCUMENT_REJECTION_CODES = new Set(["context_too_long", "bad_request"]);
 
 export function documentsDroppedNote(documents: readonly DocumentInput[]): string {
   return (
@@ -52,10 +52,10 @@ export function documentsDroppedNote(documents: readonly DocumentInput[]): strin
   );
 }
 
-export const DOCUMENTS_DROPPED_RETRY_NOTE =
+const DOCUMENTS_DROPPED_RETRY_NOTE =
   "[system] The previous request failed while it carried inline attachments; they have been replaced with notes on how to read them from saved files. Continue with the request.";
 
-export function dropFailedAssistant(session: AgentSession, messagesBefore: number): void {
+function dropFailedAssistant(session: AgentSession, messagesBefore: number): void {
   const state = session.agent.state;
   for (let i = state.messages.length - 1; i >= messagesBefore; i--) {
     const m = state.messages[i] as { role?: string; stopReason?: string } | undefined;

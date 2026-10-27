@@ -38,7 +38,7 @@ export interface ApprovalRequest {
   kind?: "approval" | "input";
 }
 
-export function approvalView(
+function approvalView(
   requestId: string,
   record: PendingApprovalRecord,
   fallbackGrantModes?: ApprovalGrantModes,

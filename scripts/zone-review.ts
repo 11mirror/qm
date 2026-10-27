@@ -23,7 +23,7 @@ export interface Finding {
   anchor: string;
 }
 
-export const readZone = () => lines(readFileSync("slop-free-zone.txt", "utf8")).filter(Boolean);
+const readZone = () => lines(readFileSync("slop-free-zone.txt", "utf8")).filter(Boolean);
 
 export const inZone = (zone: string[], path: string) => zone.some((z) => path === z || path.startsWith(`${z}/`));
 

@@ -50,7 +50,7 @@ export interface CronFireJob {
 }
 
 /** `done` consumed the slot; `release` left it unconsumed (re-armed by the next enqueue); a number sleeps the job. */
-export type CronFireDisposition = JobDisposition;
+type CronFireDisposition = JobDisposition;
 
 export const CRON_FIRE_JOB = "cron-fire";
 

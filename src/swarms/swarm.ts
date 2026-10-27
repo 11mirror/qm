@@ -21,7 +21,7 @@ export const SWARM_ACTIONS = [
   "unsubscribe",
 ] as const;
 
-export type SwarmAction = (typeof SWARM_ACTIONS)[number];
+type SwarmAction = (typeof SWARM_ACTIONS)[number];
 
 export interface SwarmMemberOpen {
   requestId: string;

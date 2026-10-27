@@ -79,7 +79,7 @@ export async function coreJson<T>(res: ServerResponse, path: string): Promise<T 
   return data ?? undefined;
 }
 
-export const MAX_BODY_BYTES = 1_000_000;
+const MAX_BODY_BYTES = 1_000_000;
 
 export const readBody = (req: IncomingMessage): Promise<string> => readBodyCapped(req, MAX_BODY_BYTES);
 
@@ -182,7 +182,7 @@ export interface Relay {
   gate?: (c: WebCtx) => Promise<boolean>;
 }
 
-export async function relayBody(c: WebCtx, o: Relay): Promise<string | null> {
+async function relayBody(c: WebCtx, o: Relay): Promise<string | null> {
   if (o.raw) return readBody(c.req);
   if (o.body) return JSON.stringify(o.body);
   const head = o.principal ? { principalId: c.user } : {};

@@ -7,7 +7,7 @@ import type { GoalGovernor, GoalRecord } from "./goal.ts";
 import type { GrindMeter } from "./grind.ts";
 import type { HarnessHandoff } from "./runtime-types.ts";
 
-export interface PendingApproval {
+interface PendingApproval {
   command: string;
   reason: string;
   kind?: "approval";
