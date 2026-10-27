@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer, request, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { isDeepStrictEqual } from "node:util";
 import { test, after, before } from "node:test";
 import pg from "pg";
 import {
@@ -228,6 +229,7 @@ const ROLE = "qm_mt_host_app";
 const ACME = "5b0c7e44-1f1a-4c6e-9d2a-00000000a001";
 const BETA = "5b0c7e44-1f1a-4c6e-9d2a-00000000b002";
 const GAMMA = "5b0c7e44-1f1a-4c6e-9d2a-00000000c003";
+const DELTA = "5b0c7e44-1f1a-4c6e-9d2a-00000000d004";
 
 let admin: pg.Client;
 let registry: PgPool;
@@ -239,6 +241,13 @@ let directory: TenantDirectory;
 
 function frontGet(path: string, hostHeader: string): Promise<{ status: number; body: string }> {
   return get(frontPort, path, { host: hostHeader });
+}
+
+async function eventually<T>(read: () => Promise<T>, expected: T): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (!isDeepStrictEqual(await read(), expected) && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(await read(), expected);
 }
 
 async function seen(path: string, hostHeader: string): Promise<unknown> {
@@ -277,6 +286,7 @@ before(async () => {
     secretsKey: undefined,
     home: tenant(),
     homeHosts: ["home.example.test"],
+    homeSandboxPrefix: "qm",
     now: () => clock,
   });
   useTenantDirectory(directory);
@@ -318,8 +328,7 @@ test("a new registry row is served on its next request and a suspended one stops
   clock += 1_000;
   assert.deepEqual(await seen("/v1/x", "gamma.example.test"), { id: GAMMA, org: "gamma" });
   await upsertTenant(registry, tenantRow(BETA, "beta", "suspended"), undefined);
-  clock += 60_000;
-  assert.equal(await seen("/v1/x", "beta.example.test"), 404);
+  await eventually(() => seen("/v1/x", "beta.example.test"), 404);
   assert.deepEqual(
     (await activeTenants()).map((t) => t.id ?? null),
     [null, ACME, GAMMA],
@@ -330,6 +339,36 @@ test("a tenant's changed settings are live on its next request without a restart
   const prefix = async () => (await frontGet("/prefix", "acme.example.test")).body;
   assert.equal(await prefix(), "none");
   await upsertTenant(registry, { ...tenantRow(ACME, "acme"), sandboxNamePrefix: "a2" }, undefined);
-  clock += 60_000;
-  assert.equal(await prefix(), "a2");
+  await eventually(prefix, "a2");
+});
+
+test("a tenant reusing another tenant's org id is not served", async () => {
+  await upsertTenant(registry, { ...tenantRow(DELTA, "delta"), orgId: "acme" }, undefined);
+  clock += 1_000;
+  assert.equal(await seen("/v1/x", "delta.example.test"), 404);
+  assert.deepEqual(await seen("/v1/x", "acme.example.test"), { id: ACME, org: "acme" });
+});
+
+test("a tenant whose preparation fails is unavailable while every other tenant is served", async () => {
+  const failing = createTenantDirectory({
+    databaseUrl: appUrl,
+    pool: registry,
+    secretsKey: undefined,
+    home: tenant(),
+    homeHosts: ["home.example.test"],
+    homeSandboxPrefix: "qm",
+    prepare: async () => {
+      if (tenant().id === ACME) throw new Error("hydrate failed");
+    },
+  });
+  try {
+    await assert.rejects(failing.byHost("acme.example.test"), /hydrate failed/);
+    assert.equal((await failing.byHost("gamma.example.test"))?.id, GAMMA);
+    assert.deepEqual(
+      (await failing.active()).map((t) => t.id ?? null),
+      [null, GAMMA],
+    );
+  } finally {
+    await failing.close();
+  }
 });

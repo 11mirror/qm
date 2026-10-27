@@ -7,6 +7,7 @@ import {
   type TenantSettings,
 } from "../../plugins/chassis/src/tenant-settings.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
+import { reportFailure } from "../util/errors.ts";
 
 export type { TenantSecrets, TenantSettings } from "../../plugins/chassis/src/tenant-settings.ts";
 export { homeTenantSettings, tenantSecretsKey } from "../../plugins/chassis/src/tenant-settings.ts";
@@ -15,7 +16,14 @@ export type TenantRecord = TenantSettings & { id: string };
 
 export async function listTenants(pool: PgPool, key: Buffer | undefined): Promise<TenantRecord[]> {
   const rows = await pool.q(`SELECT ${TENANT_COLUMNS} FROM tenants ORDER BY created_at, slug`);
-  return rows.map((row) => tenantFromRow(row, key));
+  return rows.flatMap((row) => {
+    try {
+      return [tenantFromRow(row, key)];
+    } catch (error) {
+      reportFailure(`tenant ${String(row.slug)}: unreadable settings row`, error);
+      return [];
+    }
+  });
 }
 
 export interface SqlRunner {

@@ -16,7 +16,13 @@ import { hostOfUrl } from "../plugins/chassis/src/tenant-hosts.ts";
 import { tagErrorDeployment } from "../plugins/chassis/src/error-reporting.ts";
 import { homeHosts } from "../plugins/chassis/src/tenant-settings.ts";
 import { tenant, withTenant, type Tenant } from "./tenant.ts";
-import { createTenantDirectory, eachActiveTenant, isHomeTenant, useTenantDirectory } from "./tenants/directory.ts";
+import {
+  activeTenants,
+  createTenantDirectory,
+  isHomeTenant,
+  useTenantDirectory,
+  watchActiveTenants,
+} from "./tenants/directory.ts";
 import { tenantConfig } from "./tenants/tenant-config.ts";
 import { assertRowSecurityEnforced, tenantSecretsKey } from "./tenants/registry.ts";
 
@@ -37,11 +43,18 @@ export async function bootApp(
 
   const built = buildApp(config, { env });
   await migrateRegisteredPgSchemas(config.databaseUrl);
-  if (config.multitenant) await useRegistryTenants(config, env, built);
-  await eachActiveTenant(async () => {
+  const rewriteKeychain = async () => {
     const rewritten = (await built.keychain?.rewriteTargetUsernameCredentials()) ?? 0;
     if (rewritten > 0) console.log(`[qm] rewrote ${rewritten} keychain credential(s) to the current shape`);
-  });
+  };
+  if (config.multitenant)
+    await useRegistryTenants(config, env, async () => {
+      await ensureTenantQueues(config.databaseUrl!);
+      await rewriteKeychain();
+      await built.start();
+      await built.refreshCustomProviders();
+    });
+  await rewriteKeychain();
   const slackConfig = slackPluginConfigFromEnv(env);
   let slackEnvironmentState: "absent" | "configured" | "partial" = slackConfig ? "configured" : "absent";
   if (!slackConfig && (env.SLACK_BOT_TOKEN || env.SLACK_APP_TOKEN)) slackEnvironmentState = "partial";
@@ -62,7 +75,9 @@ export async function bootApp(
   if (!config.backgroundWorkEnabled && !config.backgroundDeploymentId)
     console.log("[qm] background work disabled; scheduler and runtime loops will not start");
 
-  await eachActiveTenant(async () => void slack.ensure());
+  slack.ensure();
+  watchActiveTenants(slack.sync);
+  slack.sync(await activeTenants());
 
   const slackAccountRuntimes = slackAccountConfigsFromEnv(env).map((account) =>
     createSlackRuntimeReconciler({
@@ -124,11 +139,7 @@ function warnAboutUnreachableFeatures(config: Config): void {
 
 type SlackRuntime = ReturnType<typeof createSlackRuntimeReconciler>;
 
-async function useRegistryTenants(
-  config: Config,
-  env: NodeJS.ProcessEnv,
-  built: ReturnType<typeof buildApp>,
-): Promise<void> {
+async function useRegistryTenants(config: Config, env: NodeJS.ProcessEnv, prepare: () => Promise<void>): Promise<void> {
   const databaseUrl = config.databaseUrl;
   if (!databaseUrl) throw new Error("QM_MULTITENANT=1 needs DATABASE_URL to read the tenant registry");
   const pool = createPgPool(databaseUrl);
@@ -148,11 +159,8 @@ async function useRegistryTenants(
         .filter((host): host is string => Boolean(host))
         .concat(homeHosts(env)),
       ...(config.deployAppsDomain ? { homeAppsDomain: config.deployAppsDomain } : {}),
-      prepare: async () => {
-        await ensureTenantQueues(databaseUrl);
-        await built.start();
-        await built.refreshCustomProviders();
-      },
+      homeSandboxPrefix: config.sandbox.namePrefix ?? "qm",
+      prepare,
     }),
   );
 }
@@ -214,8 +222,8 @@ function createTenantSlack(opts: {
     const existing = entries.get(key);
     if (existing) return existing;
     const entry = { tenant: t } as TenantSlackEntry;
-    const token = tenantConfig(config).slackServiceToken;
-    if (env.QM_SLACK_SERVICE_URL && token)
+    const token = tenantConfig(config).slackServiceToken ?? (isHomeTenant(t) ? "" : undefined);
+    if (env.QM_SLACK_SERVICE_URL && token !== undefined)
       entry.managed = createManagedSlack({
         serviceUrl: env.QM_SLACK_SERVICE_URL,
         token,
@@ -252,7 +260,19 @@ function createTenantSlack(opts: {
     },
   };
 
-  return { ensure, managed: () => ensure().managed, runtimes };
+  const sync = (active: Tenant[]) => {
+    const keep = new Set(active.map((t) => t.id ?? ""));
+    for (const t of active) withTenant(t, ensure);
+    for (const [key, entry] of entries) {
+      if (keep.has(key)) continue;
+      entries.delete(key);
+      void withTenant(entry.tenant, () => entry.runtime.stop()).catch(
+        reportFailureAs("slack plugin stop", undefined, `tenant=${entry.tenant.slug ?? key}`),
+      );
+    }
+  };
+
+  return { ensure, sync, managed: () => ensure().managed, runtimes };
 }
 
 function startBackgroundOwnership(

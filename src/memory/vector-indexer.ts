@@ -71,10 +71,9 @@ export function createMemoryVectorIndexer(opts: {
     }
   }
   return {
-    stop(): Promise<void> {
-      const s = state();
-      s.active?.abort();
-      return s.pending ?? Promise.resolve();
+    async stop(): Promise<void> {
+      for (const s of state.all()) s.active?.abort();
+      await Promise.all(state.all().map((s) => s.pending));
     },
     tick(): Promise<void> {
       const s = state();

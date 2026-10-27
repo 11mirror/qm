@@ -44,14 +44,15 @@ export function createIdempotencyStore(databaseUrl: string, opts: IdempotencySto
   const now = opts.now ?? Date.now;
   const pg = createPgPool(databaseUrl, [IDEMPOTENCY_MIGRATION]);
   const { codec, ...table } = typedTable<IdempotencyRecord>(pg, IDEMPOTENCY);
-  const done = perTenant(() => new Map<string, number>());
-  let lastPruneAt = now();
+  const state = perTenant(() => ({ done: new Map<string, number>(), lastPruneAt: now() }));
+  const done = () => state().done;
 
   function pruneIfDue(t: number): void {
-    if (t - lastPruneAt < pruneIntervalMs) return;
-    lastPruneAt = t;
+    const s = state();
+    if (t - s.lastPruneAt < pruneIntervalMs) return;
+    s.lastPruneAt = t;
     const cutoff = t - retentionMs;
-    for (const [key, at] of done()) if (at < cutoff) done().delete(key);
+    for (const [key, at] of s.done) if (at < cutoff) s.done.delete(key);
     void pg.q(`DELETE FROM idempotency WHERE at < $1`, [cutoff]).catch((e: unknown) => {
       console.error("[idempotency] retention prune failed:", errMessage(e));
     });

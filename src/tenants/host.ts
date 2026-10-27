@@ -6,6 +6,7 @@ import { reportFailure } from "../util/errors.ts";
 import { tenantByHost } from "./directory.ts";
 
 const HEALTH_PATHS: ReadonlySet<string> = new Set(["/healthz", "/readyz"]);
+const LOOPBACK: ReadonlySet<string> = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
 function pathOf(req: IncomingMessage): string {
   const url = req.url ?? "/";
@@ -16,10 +17,12 @@ function pathOf(req: IncomingMessage): string {
 export function createTenantFront(server: Server): Server {
   const home = tenant();
   const resolve = async (req: IncomingMessage): Promise<Tenant | "unknown" | "unavailable"> => {
+    if (HEALTH_PATHS.has(pathOf(req))) return home;
+    const host = LOOPBACK.has(req.socket.remoteAddress ?? "") ? requestHost(req.headers) : req.headers.host;
     try {
-      return (await tenantByHost(requestHost(req.headers))) ?? (HEALTH_PATHS.has(pathOf(req)) ? home : "unknown");
+      return (await tenantByHost(host)) ?? "unknown";
     } catch (error) {
-      reportFailure("tenant front: registry lookup failed", error);
+      reportFailure("tenant front: tenant lookup failed", error);
       return "unavailable";
     }
   };
@@ -28,7 +31,7 @@ export function createTenantFront(server: Server): Server {
       if (typeof found === "object") return withTenant(found, () => void server.emit("request", req, res));
       if (found === "unknown")
         res.writeHead(404, { "content-type": "text/plain; charset=utf-8" }).end("unknown host\n");
-      else res.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end("tenant registry unavailable\n");
+      else res.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end("tenant unavailable\n");
     });
   });
   front.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {

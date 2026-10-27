@@ -68,7 +68,9 @@ export function buildFiles(deps: FilesInputs) {
   const fileBytes = byteStore("", "docstore");
   const files: FileArtifactStore = createPostgresFileArtifactStore(databaseUrl, fileBytes);
   const fileUploads = config.s3Bucket
-    ? createDirectFileUploads({ ...s3Options(""), store: createPostgresFileUploadStore(databaseUrl), files })
+    ? createDirectFileUploads(
+        Object.assign(s3Options(""), { store: createPostgresFileUploadStore(databaseUrl), files }),
+      )
     : undefined;
   const mcpServers = createMcpServerStore(databaseUrl);
   const errors = withErrorReporting(createPostgresErrorLog(databaseUrl));

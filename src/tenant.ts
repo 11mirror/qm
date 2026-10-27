@@ -54,9 +54,9 @@ export function tenantSettings(t: Tenant = tenant()): TenantSettings {
   return home.settings;
 }
 
-export function perTenant<T>(create: () => T): () => T {
+export function perTenant<T>(create: () => T): (() => T) & { all(): T[] } {
   const states = new Map<string, T>();
-  return () => {
+  const current = () => {
     const t = tenant();
     const key = t.id ?? t.orgId;
     let state = states.get(key);
@@ -66,4 +66,5 @@ export function perTenant<T>(create: () => T): () => T {
     }
     return state;
   };
+  return Object.assign(current, { all: () => [...states.values()] });
 }

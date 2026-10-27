@@ -7,51 +7,65 @@ import { activeTenants, watchActiveTenants } from "./directory.ts";
 interface Live<T> {
   tenant: Tenant;
   item: T;
+  started: boolean;
 }
 
-function perActiveTenant<T>(create: () => T, start: (item: T) => unknown, retire: (item: T) => Promise<unknown>) {
+function perActiveTenant<T>(
+  create: () => T,
+  start: (item: T) => unknown,
+  retire: (item: T) => Promise<unknown>,
+  drained: (item: T) => boolean = () => true,
+) {
   const live = new Map<string, Live<T>>();
+  const retiring = new Set<Live<T>>();
   let running = false;
   let watching = false;
-  const launch = (entry: Live<T>) =>
-    void Promise.resolve(withTenant(entry.tenant, () => start(entry.item))).catch((error: unknown) =>
-      reportFailure(`tenant ${entry.tenant.slug ?? "home"}: background start`, error),
-    );
+  const launch = (entry: Live<T>) => {
+    entry.started = true;
+    void Promise.resolve(withTenant(entry.tenant, () => start(entry.item))).catch((error: unknown) => {
+      entry.started = false;
+      reportFailure(`tenant ${entry.tenant.slug ?? "home"}: background start`, error);
+    });
+  };
   const ensure = (t: Tenant): T => {
     const key = t.id ?? "";
     let entry = live.get(key);
     if (!entry) {
-      entry = { tenant: t, item: withTenant(t, create) };
+      entry = { tenant: t, item: withTenant(t, create), started: false };
       live.set(key, entry);
-      if (running) launch(entry);
     }
+    if (running && !entry.started) launch(entry);
     return entry.item;
   };
   const sync = (active: Tenant[]) => {
+    for (const entry of retiring) if (drained(entry.item)) retiring.delete(entry);
     if (!running) return;
     const keep = new Set(active.map((t) => t.id ?? ""));
     for (const t of active) ensure(t);
     for (const [key, entry] of live) {
       if (keep.has(key)) continue;
       live.delete(key);
+      retiring.add(entry);
       void withTenant(entry.tenant, () => retire(entry.item)).catch((error: unknown) =>
         reportFailure(`tenant ${entry.tenant.slug ?? key}: background stop`, error),
       );
     }
   };
+  const entries = () => [...live.values(), ...retiring];
   return {
     current: () => ensure(tenant()),
-    items: () => [...live.values()].map((entry) => entry.item),
+    items: () => entries().map((entry) => entry.item),
     async start() {
       running = true;
       if (!watching) watchActiveTenants(sync);
       watching = true;
-      for (const entry of live.values()) launch(entry);
+      for (const entry of live.values()) if (!entry.started) launch(entry);
       sync(await activeTenants());
     },
     halt() {
       running = false;
-      return [...live.values()];
+      for (const entry of live.values()) entry.started = false;
+      return entries();
     },
   };
 }
@@ -90,6 +104,7 @@ export function tenantTurnRunners(create: () => TurnRunner): TurnRunner {
     create,
     (runner) => runner.start(),
     (runner) => runner.stopClaims(),
+    (runner) => runner.held().length === 0,
   );
   const each = async (fn: (runner: TurnRunner) => Promise<void>) => {
     await Promise.all(tenants.halt().map((entry) => withTenant(entry.tenant, () => fn(entry.item))));

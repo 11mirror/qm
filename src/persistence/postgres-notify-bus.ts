@@ -27,6 +27,17 @@ export function noticePayload(encoded: string): string {
   return `{"t":${JSON.stringify(tenant().id ?? null)},"e":${encoded}}`;
 }
 
+function parseNotice<T>(payload: string): Notice<T> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(payload);
+    if (typeof parsed !== "object" || parsed === null || !("e" in parsed) || !("t" in parsed)) return undefined;
+    const { t } = parsed as { t: unknown };
+    return t === null || typeof t === "string" ? (parsed as Notice<T>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function deliverTo<T>(cb: (event: T) => void): (notice: Notice<T>) => void {
   const own = scopedTenant();
   const here = AsyncResource.bind((fn: () => void) => fn());
@@ -86,7 +97,10 @@ export function createPostgresNotifyBus<T>(
     stopListening = subscribePostgresChannel(
       connectionString,
       channel,
-      (payload) => local.emit(JSON.parse(payload) as Notice<T>),
+      (payload) => {
+        const notice = parseNotice<T>(payload);
+        if (notice) local.emit(notice);
+      },
       () => local.resync(),
     );
   }

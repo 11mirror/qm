@@ -30,7 +30,7 @@ import { proxyDeploymentSubdomain } from "./routes/deployment-subdomain.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
-import { tenant } from "../tenant.ts";
+import { foreignTenant } from "../tenants/directory.ts";
 import { InstructionsTooLargeError } from "../resolution/config-instructions.ts";
 import { zodMessage } from "./routes/shared.ts";
 
@@ -113,7 +113,7 @@ async function verifyCapability(
   if (!capToken) return refuse(res, 401, `${requiredAud} capability token required`);
   const capSecret = deps.capabilitySecret ?? secret;
   const capability = capSecret ? await verifyCapabilityToken(capToken, capSecret) : null;
-  if (!capability || (capability.orgId !== undefined && capability.orgId !== tenant().orgId))
+  if (!capability || foreignTenant(capability.orgId, "capability token"))
     return refuse(res, 401, "invalid or expired capability token");
   if (
     capability.externalSlack &&
