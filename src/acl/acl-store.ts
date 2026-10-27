@@ -9,6 +9,17 @@ const isFileGrant = (g: Grant) => parseRef(g.ref).kind === "file";
 
 type ScopeEntitlement = (p: Principal, scope: ScopeId, sessionScopeId: ScopeId, orgScopeId: ScopeId) => boolean;
 
+function reachesAudience(
+  audience: readonly Principal[],
+  sessionScopeId: ScopeId,
+  orgScopeId: ScopeId,
+  entitled: ScopeEntitlement,
+): (g: Grant) => boolean {
+  const toGrantee = (p: Principal, g: Grant) => entitled(p, g.granteeScopeId, sessionScopeId, orgScopeId);
+  const toOwner = (p: Principal, g: Grant) => entitled(p, g.ownerScopeId, sessionScopeId, orgScopeId);
+  return (g) => audience.some((p) => toGrantee(p, g)) && audience.every((p) => toGrantee(p, g) || toOwner(p, g));
+}
+
 export type ScopeManagement = (principalId: string, scopeId: ScopeId, authoredBy?: string) => Promise<boolean>;
 
 function ownerOf(scopeId: ScopeId): string | null {
@@ -70,6 +81,7 @@ export interface AclStoreOptions {
 
 export interface GrantPersistence {
   all(): Promise<Grant[]>;
+  forResource(ownerScopeId: ScopeId, ref: string): Promise<Grant[]>;
   put(g: Grant): Promise<void>;
   remove(g: Grant): Promise<void>;
   replaceForResourceIfCurrent(
@@ -132,9 +144,7 @@ export function createAclStore(persist: GrantPersistence, opts: AclStoreOptions 
       if (!(await canManage(ownerScopeId, revokedBy, authoredBy))) {
         throw new Error("only a manager of this scope may revoke access");
       }
-      const matches = (await persist.all()).filter(
-        (g) => g.ownerScopeId === ownerScopeId && g.ref === ref && g.granteeScopeId === granteeScopeId,
-      );
+      const matches = (await persist.forResource(ownerScopeId, ref)).filter((g) => g.granteeScopeId === granteeScopeId);
       for (const g of matches) await persist.remove(g);
     },
     async replaceGrantsIfCurrent(ownerScopeId, ref, expected, replacement, changedBy, authoredBy) {
@@ -156,20 +166,11 @@ export function createAclStore(persist: GrantPersistence, opts: AclStoreOptions 
     },
     async handlesForAudience(audience, sessionScopeId, orgScopeId, entitled) {
       if (audience.length === 0) return [];
-      const reaches = (p: Principal, g: Grant) =>
-        entitled(p, g.granteeScopeId, sessionScopeId, orgScopeId) ||
-        entitled(p, g.ownerScopeId, sessionScopeId, orgScopeId);
-      return handles(
-        (await persist.all()).filter(
-          (g) =>
-            isFileGrant(g) &&
-            audience.some((p) => entitled(p, g.granteeScopeId, sessionScopeId, orgScopeId)) &&
-            audience.every((p) => reaches(p, g)),
-        ),
-      );
+      const reached = reachesAudience(audience, sessionScopeId, orgScopeId, entitled);
+      return handles((await persist.all()).filter((g) => isFileGrant(g) && reached(g)));
     },
     async grantsFor(ownerScopeId, ref) {
-      return (await persist.all()).filter((g) => g.ownerScopeId === ownerScopeId && g.ref === ref);
+      return persist.forResource(ownerScopeId, ref);
     },
     async grantsOfKind(kind, audience, sessionScopeId, orgScopeId, entitled) {
       if (audience.length === 0) return [];
@@ -184,15 +185,8 @@ export function createAclStore(persist: GrantPersistence, opts: AclStoreOptions 
     async sharedOfKindForAudience(kind, audience, sessionScopeId, orgScopeId, entitled) {
       if (audience.length === 0) return [];
       const prefix = refPrefix(kind);
-      const reaches = (p: Principal, g: Grant) =>
-        entitled(p, g.granteeScopeId, sessionScopeId, orgScopeId) ||
-        entitled(p, g.ownerScopeId, sessionScopeId, orgScopeId);
-      return (await persist.all()).filter(
-        (g) =>
-          g.ref.startsWith(prefix) &&
-          audience.some((p) => entitled(p, g.granteeScopeId, sessionScopeId, orgScopeId)) &&
-          audience.every((p) => reaches(p, g)),
-      );
+      const reached = reachesAudience(audience, sessionScopeId, orgScopeId, entitled);
+      return (await persist.all()).filter((g) => g.ref.startsWith(prefix) && reached(g));
     },
     list: () => persist.all(),
   };

@@ -31,6 +31,13 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
       cache.at = version === null ? null : { v: version, grants };
       return [...grants];
     },
+    async forResource(ownerScopeId, ref) {
+      const rows = await q(
+        "SELECT owner_scope_id, path, grantee_scope_id, permission, granted_by FROM acl_grants WHERE owner_scope_id = $1 AND path = $2 ORDER BY grantee_scope_id, permission",
+        [ownerScopeId, ref],
+      );
+      return rows.map(rowToGrant);
+    },
     async put(g) {
       await withPgTransaction(await db.pool(), async (client) => {
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`acl-grants:${g.ownerScopeId}\n${g.ref}`]);
