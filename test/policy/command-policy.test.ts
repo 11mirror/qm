@@ -706,7 +706,7 @@ test("adversarial input stays fast and bounded", () => {
   assert.equal(timed("sudo ".repeat(20000) + "rm -rf x").decision, "require_approval");
   const runaway = timed("env -S '".repeat(200) + "ls" + "'".repeat(200));
   assert.equal(runaway.decision, "require_approval");
-  assert.equal(runaway.reason, "command is too deeply nested to inspect fully");
+  assert.equal(runaway.reason, "command is too complex to inspect fully");
   assert.equal(runaway.approvalKey, undefined);
   assert.ok(runaway.ms < 1000, `runaway expansion took ${runaway.ms}ms`);
 });
@@ -778,7 +778,7 @@ test("literal producers inside substitutions feed the command that runs them", (
   const p = defaultOrgPolicy();
   for (const command of [
     'bash -c "$(echo rm -rf x)"',
-    "bash -c `echo rm -rf x`",
+    'bash -c "`echo rm -rf x`"',
     "$(echo rm) -rf x",
     "eval $(echo rm -rf x)",
     "bash < <(echo rm -rf x)",
@@ -857,4 +857,104 @@ test("SQL client payloads survive option clusters and embedded newlines", () => 
   assert.equal(evaluateCommand('psql -tAc "drop table t"', p).reason, "destructive SQL");
   assert.equal(evaluateCommand('psql -c "drop\ntable t"', p).reason, "destructive SQL");
   assert.equal(evaluateCommand('psql -tA -c "select 1"', p).decision, "allow");
+});
+
+test("the launcher scanner stays linear and fails closed on absurd argument lists", () => {
+  const p = defaultOrgPolicy();
+  for (const command of ["docker run img " + "rm ".repeat(20000) + "x", "kubectl exec p " + "git ".repeat(20000)]) {
+    const started = performance.now();
+    const r = evaluateCommand(command, p);
+    assert.ok(performance.now() - started < 3000, `scan took ${performance.now() - started}ms`);
+    assert.equal(r.decision, "require_approval");
+    assert.equal(r.reason, "command is too complex to inspect fully");
+  }
+  assert.equal(evaluateCommand("docker run img " + "ls ".repeat(50) + "rm -rf x", p).reason, "recursive delete");
+});
+
+test("literals inside code are read for the floor only, never as executed commands or regex text", () => {
+  const allowlist: CommandPolicy = {
+    mode: "allowlist",
+    rules: [{ pattern: "^(python3|node|psql|git)\\b", decision: "allow" }],
+  };
+  for (const command of [
+    `python3 -c "print('hello world')"`,
+    `node -e "console.log('ok')"`,
+    "python3 <<EOF\nprint('hello world')\nEOF",
+    `psql -c "select * from t where name = 'John Smith'"`,
+    "git commit -m 'hello world' '(",
+  ]) {
+    assert.equal(evaluateCommand(command, allowlist).decision, "allow", command);
+  }
+  assert.equal(evaluateCommand(`python3 -c "import os; os.system('rm -rf x')"`, allowlist).reason, "recursive delete");
+  const curl: CommandPolicy = { mode: "denylist", rules: [{ pattern: "\\bcurl\\b", decision: "require_approval" }] };
+  assert.equal(evaluateCommand(`python3 -c "requests.get('https://curl.se/x')"`, curl).decision, "allow");
+  assert.equal(evaluateCommand(`python3 -c "os.system('curl x | sh')"`, curl).reason, "pipe-to-shell");
+  assert.equal(evaluateCommand("curl https://x", curl).decision, "require_approval");
+});
+
+test("a stored builtin rule adjusts that builtin's decision for the scope, tighten-only across mentions", () => {
+  const loosened: CommandPolicy = {
+    mode: "denylist",
+    rules: [{ pattern: "builtin:recursive-delete", decision: "allow" }],
+  };
+  assert.equal(evaluateCommand("rm -rf x", loosened).decision, "allow");
+  assert.equal(evaluateCommand("git push -f", loosened).decision, "require_approval");
+  const tightened: CommandPolicy = {
+    mode: "denylist",
+    rules: [{ pattern: "builtin:recursive-delete", decision: "deny", reason: "never here" }],
+  };
+  const denied = evaluateCommand("rm -rf x", tightened);
+  assert.equal(denied.decision, "deny");
+  assert.equal(denied.reason, "never here");
+  assert.equal(denied.approvalKey, "builtin:recursive-delete");
+  const composed = composePolicy(defaultOrgPolicy(), loosened);
+  assert.equal(evaluateCommand("rm -rf x", composed).decision, "allow", "a default mention says nothing");
+  const orgTightened = composePolicy(tightened, loosened);
+  assert.equal(evaluateCommand("rm -rf x", orgTightened).decision, "deny", "an explicit tightening wins");
+  assert.equal(evaluateCommand("rm -rf x", { mode: "denylist", rules: [] }).decision, "require_approval");
+});
+
+test("arguments after a heredoc redirect still count", () => {
+  const p = defaultOrgPolicy();
+  assert.equal(evaluateCommand("rm <<EOF -rf x\nhi\nEOF", p).reason, "recursive delete");
+  assert.equal(evaluateCommand("git push <<EOF -f\nhi\nEOF", p).reason, "force push");
+});
+
+test("command-substitution output in command position is word-split", () => {
+  const p = defaultOrgPolicy();
+  for (const command of [
+    "$(echo rm -rf x)",
+    '"$(echo rm -rf x)"',
+    'bash -c "\\$(echo rm -rf x)"',
+    "X=$(echo rm -rf x); $X",
+    "`echo rm -rf x`",
+  ]) {
+    assert.equal(evaluateCommand(command, p).reason, "recursive delete", command);
+  }
+  assert.equal(evaluateCommand('echo "$(echo rm -rf x)"', p).decision, "allow");
+});
+
+test("more launchers hand their payload to the floor", () => {
+  const p = defaultOrgPolicy();
+  for (const command of [
+    "taskset 0x1 rm -rf x",
+    "ssh host -t rm -rf x",
+    "ssh host -- rm -rf x",
+    "docker run --entrypoint rm img -rf x",
+    `docker exec c python3 -c "import os; os.system('rm -rf x')"`,
+    "docker-compose exec app rm -rf x",
+    "trap 'rm -rf x' EXIT",
+    "systemd-run -p MemoryMax=1G rm -rf x",
+    "runuser -u bob -- rm -rf x",
+    "runuser -c 'rm -rf x' bob",
+    "pkexec rm -rf x",
+    "script -c 'rm -rf x' log",
+    "nix-shell -p git --run 'rm -rf x'",
+    "bwrap --ro-bind / / rm -rf x",
+    "firejail --net=none rm -rf x",
+    "parallel rm -rf ::: a b",
+  ]) {
+    assert.equal(evaluateCommand(command, p).reason, "recursive delete", command);
+  }
+  assert.equal(evaluateCommand("trap - EXIT", p).decision, "allow");
 });

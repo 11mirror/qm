@@ -8,7 +8,7 @@ import {
   launcherScripts,
   producerOutput,
   readsScriptFiles,
-  scannedCommands,
+  scannedOffsets,
   sqlClientPayloads,
   stdinReader,
   unwrap,
@@ -28,11 +28,13 @@ export interface Invocation {
   text: string;
   argv: string[];
   inner: string[];
+  speculative: boolean;
 }
 
 interface CodePayload {
   text: string;
   sql: boolean;
+  speculative: boolean;
 }
 
 export interface ParsedCommand {
@@ -76,19 +78,23 @@ export function parseShellCommand(command: string): ParsedCommand {
   };
   const budget: Budget = { left: command.length * BUDGET_FACTOR + BUDGET_FLOOR, exhausted: false };
   const seen = new Set<string>();
-  const pending = [command];
+  const pending = [{ text: command, speculative: false }];
   for (let next = 0; next < pending.length && !budget.exhausted; next++) {
-    const script = pending[next]!;
+    const { text: script, speculative } = pending[next]!;
     if (seen.has(script)) continue;
     seen.add(script);
-    const collected = collect(script, budget);
+    const collected = collect(script, speculative, budget);
     if (!collected) break;
-    for (const key of ["invocations", "pipelines", "code", "functions", "sources", "unparsed"] as const) {
+    for (const key of ["invocations", "pipelines", "code", "functions"] as const) {
       for (const item of collected[key]) (parsed[key] as unknown[]).push(item);
     }
-    for (const item of collected.scripts) pending.push(item);
+    if (!speculative) {
+      parsed.sources.push(...collected.sources);
+      parsed.unparsed.push(...collected.unparsed);
+    }
+    for (const text of collected.scripts) pending.push({ text, speculative });
     const opaque = [...collected.code.map((payload) => payload.text), ...collected.unparsed];
-    for (const literal of quotedLiterals(opaque, budget)) pending.push(literal);
+    for (const text of quotedLiterals(opaque, budget)) pending.push({ text, speculative: true });
   }
   parsed.exhausted = budget.exhausted;
   return parsed;
@@ -133,7 +139,7 @@ function parse(text: string, budget: Budget) {
   return tree;
 }
 
-function collect(script: string, budget: Budget): Collected | undefined {
+function collect(script: string, speculative: boolean, budget: Budget): Collected | undefined {
   const tree = parse(script, budget);
   if (!tree) return undefined;
   try {
@@ -141,7 +147,7 @@ function collect(script: string, budget: Budget): Collected | undefined {
     const substitutions = tree.rootNode.descendantsOfType(["command_substitution", "process_substitution"]);
     substitutions.sort((a, b) => a.endIndex - a.startIndex - (b.endIndex - b.startIndex));
     for (const node of substitutions) substitutionOutput(node, context);
-    const collected = walk(tree.rootNode, context, budget);
+    const collected = walk(tree.rootNode, context, speculative, budget);
     collected.sources.push(sourceText(script, tree.rootNode));
     if (tree.rootNode.hasError) collected.unparsed.push(script);
     return collected;
@@ -280,11 +286,15 @@ function recordRedirectTail(statement: Node, script: Script): void {
   if (body?.type !== "command") return;
   const tail: Node[] = [];
   for (const redirect of statement.childrenForFieldName("redirect")) {
-    if (redirect?.type !== "file_redirect") continue;
+    if (redirect?.type !== "file_redirect" && redirect?.type !== "heredoc_redirect") continue;
     const operands = redirect.namedChildren.filter(
-      (child): child is Node => !!child && child.type !== "file_descriptor",
+      (child): child is Node =>
+        !!child &&
+        child.type !== "file_descriptor" &&
+        !child.type.startsWith("heredoc_") &&
+        !child.type.endsWith("_redirect"),
     );
-    tail.push(...operands.slice(1));
+    tail.push(...operands.slice(redirect.type === "file_redirect" ? 1 : 0));
   }
   if (tail.length) script.tails.set(body.startIndex, tail);
 }
@@ -304,8 +314,29 @@ function commandWords(command: Node, script: Script): Node[][] {
   return words;
 }
 
+function substitutionGroup(group: Node[]): "quoted" | "unquoted" | undefined {
+  const [only, ...rest] = group;
+  if (!only || rest.length) return undefined;
+  if (only.type === "command_substitution") return "unquoted";
+  const quoted = only.type === "string" && only.namedChildren.length === 1;
+  return quoted && only.firstNamedChild?.type === "command_substitution" ? "quoted" : undefined;
+}
+
+function split(value: string): string[] {
+  return value.split(/\s+/).filter((word) => word !== "");
+}
+
+function wordsOf(group: Node[], script: Script, position: number, resolved?: string): string[] {
+  const quoted = group.length === 1 && group[0]!.type === "string";
+  if (resolved !== undefined) return quoted && position > 0 ? [resolved] : split(resolved);
+  const joined = group.map((word) => literal(word, script)).join("");
+  const kind = substitutionGroup(group);
+  const splits = kind === "unquoted" || (kind === "quoted" && position === 0);
+  return splits && joined !== "$(...)" ? split(joined) : [joined];
+}
+
 function argvOf(command: Node, script: Script): string[] {
-  return commandWords(command, script).map((group) => group.map((word) => literal(word, script)).join(""));
+  return commandWords(command, script).flatMap((group, position) => wordsOf(group, script, position));
 }
 
 function commandOf(node: Node | null): Node | undefined {
@@ -334,7 +365,7 @@ function pipelineStages(pipeline: Node, argv: (command: Node) => string[]): stri
   });
 }
 
-function walk(root: Node, script: Script, budget: Budget): Collected {
+function walk(root: Node, script: Script, speculative: boolean, budget: Budget): Collected {
   const collected: Collected = {
     invocations: [],
     pipelines: [],
@@ -352,33 +383,44 @@ function walk(root: Node, script: Script, budget: Budget): Collected {
     return name === undefined ? undefined : variables.get(name);
   };
   const argvOfWords = (words: Node[][]) =>
-    words.map((group) => resolve(group) ?? group.map((word) => literal(word, script)).join(""));
+    words.flatMap((group, position) => wordsOf(group, script, position, resolve(group)));
   const argv = (command: Node) => argvOfWords(commandWords(command, script));
   const textOfWords = (words: Node[][]) =>
     words.map((group) => resolve(group) ?? group.map((word) => render(word, script)).join("")).join(" ");
   const invoke = (words: string[], unitText: string) => {
     const unwrapped = unwrap(words, parseWords);
-    collected.invocations.push({ text: unitText, argv: words, inner: unwrapped.inner });
+    collected.invocations.push({ text: unitText, argv: words, inner: unwrapped.inner, speculative });
     for (const split of unwrapped.splits) collected.scripts.push(split);
     return unwrapped.inner;
   };
   const feed = (payload: string, readers: Node[]) => {
     const kinds = readers.map((reader) => stdinReader(unwrap(argv(reader), parseWords).inner));
     if (kinds.includes("shell")) collected.scripts.push(payload);
-    else if (kinds.includes("sql")) collected.code.push({ text: payload, sql: true });
-    else if (kinds.includes("code")) collected.code.push({ text: payload, sql: false });
+    else if (kinds.includes("sql")) collected.code.push({ text: payload, sql: true, speculative });
+    else if (kinds.includes("code")) collected.code.push({ text: payload, sql: false, speculative });
   };
   const execute = (words: string[], unitText: string) => {
     const inner = invoke(words, unitText);
     for (const payload of launcherScripts(inner)) collected.scripts.push(payload);
-    for (const sql of sqlClientPayloads(inner)) collected.code.push({ text: sql, sql: true });
-    for (const code of inlineCodePayloads(inner)) collected.code.push({ text: code, sql: false });
+    for (const sql of sqlClientPayloads(inner)) collected.code.push({ text: sql, sql: true, speculative });
+    for (const code of inlineCodePayloads(inner)) collected.code.push({ text: code, sql: false, speculative });
     return inner;
   };
   const visitCommand = (node: Node, children: Node[]) => {
     const words = commandWords(node, script);
     const inner = execute(argvOfWords(words), textOfWords(words));
-    for (const command of [...findExecCommands(inner), ...scannedCommands(inner)]) execute(command, command.join(" "));
+    for (const command of findExecCommands(inner)) execute(command, command.join(" "));
+    const suffixCost = new Array<number>(inner.length + 1).fill(0);
+    for (let i = inner.length - 1; i >= 0; i--) suffixCost[i] = suffixCost[i + 1]! + inner[i]!.length + 1;
+    for (const offset of scannedOffsets(inner)) {
+      budget.left -= suffixCost[offset]!;
+      if (budget.left < 0) {
+        budget.exhausted = true;
+        break;
+      }
+      const command = inner.slice(offset);
+      execute(command, command.join(" "));
+    }
     if (readsScriptFiles(inner)) {
       for (const word of words.flat()) {
         const output = word.type === "process_substitution" ? substitutionOutput(word, script) : undefined;
@@ -417,7 +459,8 @@ function walk(root: Node, script: Script, budget: Budget): Collected {
     if (node.type === "variable_assignment") {
       const value = node.childForFieldName("value");
       const name = node.childForFieldName("name")?.text;
-      if (name && value && bareWord(literal(value, script))) variables.set(name, literal(value, script));
+      const assigned = value ? literal(value, script) : undefined;
+      if (name && assigned !== undefined && !assigned.includes("$(...)")) variables.set(name, assigned);
     } else if (node.type === "function_definition") {
       const name = node.childForFieldName("name")?.text;
       if (name) collected.functions.push(name);

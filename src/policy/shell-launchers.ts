@@ -3,7 +3,17 @@ const SHELL_VALUE_OPTIONS = ["-O", "-o", "--rcfile", "--init-file"];
 const SCRIPT_INTERPRETERS = new Set(["node", "perl", "ruby"]);
 const STDIN_SCRIPTS = new Set(["-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"]);
 const SSH_VALUE_OPTIONS = ["-p", "-l", "-i", "-o", "-F", "-J", "-L", "-R", "-D", "-W", "-E", "-b", "-c", "-m", "-O"];
-const SCAN_LAUNCHERS = new Set(["docker", "podman", "nerdctl", "kubectl", "unshare", "nsenter"]);
+const SCAN_LAUNCHERS = new Set([
+  "docker",
+  "docker-compose",
+  "podman",
+  "nerdctl",
+  "kubectl",
+  "unshare",
+  "nsenter",
+  "bwrap",
+]);
+const SCRIPT_OPTION_LAUNCHERS = new Set(["su", "runuser", "flock", "script", "nix-shell"]);
 const WRAPPER_OPTIONS: Record<string, string[]> = {
   "!": [],
   sudo: [
@@ -26,6 +36,31 @@ const WRAPPER_OPTIONS: Record<string, string[]> = {
   ],
   doas: ["-u", "-C"],
   exec: ["-a"],
+  pkexec: ["--user"],
+  firejail: [],
+  runuser: ["-u", "--user", "-g", "--group", "-G", "--supp-group", "-s", "--shell"],
+  parallel: ["-j", "--jobs", "-S", "--sshlogin", "--results", "--joblog", "-a", "--arg-file"],
+  "systemd-run": [
+    "-p",
+    "--property",
+    "-u",
+    "--unit",
+    "--description",
+    "-E",
+    "--setenv",
+    "-M",
+    "--machine",
+    "-H",
+    "--host",
+    "--uid",
+    "--gid",
+    "--nice",
+    "--working-directory",
+    "--on-active",
+    "--on-boot",
+    "--on-calendar",
+    "--timer-property",
+  ],
   nice: ["-n", "--adjustment"],
   ionice: ["-c", "--class", "-n", "--classdata", "-p", "--pid"],
   taskset: ["-c", "--cpu-list", "-p", "--pid"],
@@ -158,8 +193,9 @@ function stepInto(words: readonly string[], at: number, lastQuoted: number, pars
     return inspects ? undefined : { words, at: next };
   }
   if (executable === "eval") return lastQuoted <= at ? { words, at: at + 1 } : undefined;
+  if (executable === "taskset" && !(words[at + 1] ?? "-").startsWith("-")) return { words, at: at + 2 };
+  if (SCRIPT_OPTION_LAUNCHERS.has(executable) && words.includes("-c", at + 1)) return undefined;
   const positional = POSITIONAL_WRAPPERS[executable];
-  if (positional && words.includes("-c", at + 1)) return undefined;
   if (positional) return { words, at: skipOptions(words, at + 1, positional) + 1 };
   const options = WRAPPER_OPTIONS[executable];
   return options ? { words, at: skipOptions(words, at + 1, options) } : undefined;
@@ -220,14 +256,19 @@ export function launcherScripts(inner: string[]): string[] {
   const executable = basename(inner[0] ?? "");
   if (executable === "eval") return inner.length > 1 ? [inner.slice(1).join(" ")] : [];
   if (executable === "ssh") {
-    const host = skipOptions(inner, 1, SSH_VALUE_OPTIONS);
-    return inner.length > host + 1 ? [inner.slice(host + 1).join(" ")] : [];
+    const command = skipOptions(inner, skipOptions(inner, 1, SSH_VALUE_OPTIONS) + 1, []);
+    return inner.length > command ? [inner.slice(command).join(" ")] : [];
   }
+  if (executable === "trap") {
+    const handler = inner.find((arg, i) => i > 0 && !arg.startsWith("-"));
+    return handler === undefined || handler === "" ? [] : [handler];
+  }
+  if (executable === "nix-shell") return optionValue(inner, 1, ["--run", "--command"]);
   if (executable === "watch") {
     const command = skipOptions(inner, 1, ["-n", "--interval"]);
     return inner.length > command ? [inner.slice(command).join(" ")] : [];
   }
-  if (executable === "su" || executable === "flock") return optionValue(inner, 1, ["-c", "--command"]);
+  if (SCRIPT_OPTION_LAUNCHERS.has(executable)) return optionValue(inner, 1, ["-c", "--command"]);
   const script = shellInvocation(inner)?.script;
   return script === undefined ? [] : [script];
 }
@@ -249,16 +290,16 @@ export function findExecCommands(argv: string[]): string[][] {
   return commands;
 }
 
-export function scannedCommands(argv: string[]): string[][] {
+export function scannedOffsets(argv: string[]): number[] {
   if (!SCAN_LAUNCHERS.has(basename(argv[0] ?? ""))) return [];
   const separator = argv.indexOf("--");
-  if (separator >= 0 && separator + 1 < argv.length) return [argv.slice(separator + 1)];
-  const commands: string[][] = [];
+  if (separator >= 0 && separator + 1 < argv.length) return [separator + 1];
+  const offsets: number[] = [];
   for (let i = 1; i < argv.length; i++) {
     const name = basename(argv[i]!);
-    if (PAYLOAD_EXECUTABLES.has(name) || name.startsWith("mkfs")) commands.push(argv.slice(i));
+    if (PAYLOAD_EXECUTABLES.has(name) || name.startsWith("mkfs") || name.startsWith("python")) offsets.push(i);
   }
-  return commands;
+  return offsets;
 }
 
 export function producerOutput(inner: string[]): { output: string; leftover: string[] } | undefined {

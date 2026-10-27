@@ -6,7 +6,7 @@ import { parseShellCommand, type Invocation } from "./shell-parse.ts";
 
 type Unit =
   | { kind: "invocation"; invocation: Invocation }
-  | { kind: "code"; text: string; sql: boolean }
+  | { kind: "code"; text: string; sql: boolean; speculative: boolean }
   | { kind: "pipeline"; stages: string[][] }
   | { kind: "function"; name: string }
   | { kind: "source"; text: string }
@@ -176,7 +176,8 @@ export function parseCommandPolicy(input: unknown): { policy: CommandPolicy } | 
 
 function unitText(unit: Unit): string | undefined {
   if (unit.kind === "invocation") return unit.invocation.text;
-  return unit.kind === "code" || unit.kind === "source" || unit.kind === "unparsed" ? unit.text : undefined;
+  if (unit.kind === "code") return unit.sql ? unit.text : undefined;
+  return unit.kind === "source" || unit.kind === "unparsed" ? unit.text : undefined;
 }
 
 function compileRules(rules: readonly CommandRule[], origin: string): { compiled: CompiledRule[]; faults: string[] } {
@@ -198,6 +199,27 @@ function compileRules(rules: readonly CommandRule[], origin: string): { compiled
     }
   });
   return { compiled, faults };
+}
+
+function speculative(unit: Unit): boolean {
+  if (unit.kind === "invocation") return unit.invocation.speculative;
+  return unit.kind === "code" ? unit.speculative : false;
+}
+
+function floorRules(policy: CommandPolicy): CompiledRule[] {
+  return BUILTIN_RULES.map((builtin) => {
+    const mentions = policy.rules.filter(
+      (rule) => rule.pattern === builtin.pattern && rule.decision !== builtin.decision,
+    );
+    const strictest = mentions.reduce<CommandRule | undefined>(
+      (best, rule) => (best === undefined || RANK[rule.decision] > RANK[best.decision] ? rule : best),
+      undefined,
+    );
+    const rule: CommandRule = strictest
+      ? { pattern: builtin.pattern, decision: strictest.decision, reason: strictest.reason ?? builtin.reason }
+      : { pattern: builtin.pattern, decision: builtin.decision, reason: builtin.reason };
+    return { rule, matches: builtin.matches };
+  });
 }
 
 function unitsOf(command: string): { units: Unit[]; exhausted: boolean } {
@@ -229,14 +251,15 @@ function firstHit(rules: readonly CompiledRule[], unit: Unit): CommandEvaluation
 function decideUnit(
   unit: Unit,
   policy: CommandPolicy,
+  floor: readonly CompiledRule[],
   scope: readonly CompiledRule[],
   layer: readonly CompiledRule[],
 ): CommandEvaluation | undefined {
-  const own = firstHit(scope, unit);
+  if (speculative(unit)) return firstHit(floor, unit);
+  const own = firstHit([...floor, ...scope], unit);
   if (own) return own;
   if (policy.mode === "allowlist") {
-    const executes = unit.kind === "invocation" || unit.kind === "unparsed";
-    return executes ? { decision: "deny", reason: "not in allowlist" } : undefined;
+    return unit.kind === "invocation" ? { decision: "deny", reason: "not in allowlist" } : undefined;
   }
   return firstHit(layer, unit);
 }
@@ -258,18 +281,18 @@ export function evaluateCommandWithLayer(
 ): CommandEvaluation {
   const scope = compileRules(policy.rules, "command policy");
   const layer = compileRules(layerRules, "deployment command");
-  const rules = [...BUILTIN_RULES.map((rule): CompiledRule => ({ rule, matches: rule.matches })), ...scope.compiled];
+  const floor = floorRules(policy);
   const { units, exhausted } = unitsOf(command);
   let result: CommandEvaluation = { decision: "allow" };
   const decisions: CommandEvaluation[] = [];
   for (const unit of units) {
-    const decided = decideUnit(unit, policy, rules, layer.compiled);
+    const decided = decideUnit(unit, policy, floor, scope.compiled, layer.compiled);
     if (!decided) continue;
     decisions.push(decided);
     if (RANK[decided.decision] > RANK[result.decision]) result = decided;
   }
   if (result.decision !== "allow") return combined(result, decisions);
-  if (exhausted) return { decision: "require_approval", reason: "command is too deeply nested to inspect fully" };
+  if (exhausted) return { decision: "require_approval", reason: "command is too complex to inspect fully" };
   const faults = [...scope.faults, ...layer.faults];
   if (faults.length) {
     return { decision: "require_approval", reason: `${faults.join("; ")}; re-save the policy to fix it` };
