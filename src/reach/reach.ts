@@ -1,4 +1,4 @@
-import { surfaceTraits } from "../surfaces/surface.ts";
+import { surfaceHas } from "../surfaces/surface.ts";
 import type {
   DeliveryProvenance,
   Destination,
@@ -293,7 +293,7 @@ export function withEdit(destination: Destination, editRef: string | undefined):
 }
 
 export function withWebTranscriptText(destination: Destination): Destination {
-  return surfaceTraits(destination.type).transcript
+  return surfaceHas(destination.type, "transcript")
     ? { ...destination, webTranscript: { kind: "reply" } }
     : destination;
 }

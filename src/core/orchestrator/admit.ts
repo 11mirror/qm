@@ -1,4 +1,4 @@
-import { surfaceTraits } from "../../surfaces/surface.ts";
+import { surfaceHas } from "../../surfaces/surface.ts";
 import { scopeTeamsToTurn } from "../../teams/teams.ts";
 import { externalSlackAdmitted } from "../../resolution/external-slack.ts";
 import { delegatedAuthorizationOrigin } from "../../subagents/delegation.ts";
@@ -180,7 +180,7 @@ export async function admitTurn(
   if (conversation.kind !== "dm" && !deps.identity.audienceIsAllInternal(conversation.audience)) {
     const externalAllowed =
       external ||
-      (surfaceTraits(input.surface).externalParticipants &&
+      (surfaceHas(input.surface, "externalParticipants") &&
         (deps.config ? await deps.config.settingDurable("externalSlackParticipants", tenant().orgScope) : false));
     if (!externalAllowed) {
       return {

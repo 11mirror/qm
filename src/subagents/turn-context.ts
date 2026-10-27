@@ -1,4 +1,4 @@
-import { surfaceTraits } from "../surfaces/surface.ts";
+import { surfaceHas } from "../surfaces/surface.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { Session } from "../types.ts";
 import type { Item } from "../sessions/items.ts";
@@ -49,7 +49,7 @@ export function createTurnContext(
   }
 
   function sidebarRefusal(): string | null {
-    if (!surfaceTraits(binding.request.surface).sidebar) return WEB_ONLY;
+    if (!surfaceHas(binding.request.surface, "sidebar")) return WEB_ONLY;
     return null;
   }
 

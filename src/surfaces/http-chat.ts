@@ -6,13 +6,7 @@ import { destinationSource, type ActorAssertion } from "../types.ts";
 import { parseSurfaceDeliveryTarget, surfaceContainerRef } from "./refs.ts";
 import type { IngestEvent } from "../surface-cache/types.ts";
 import { swallowAs } from "../util/errors.ts";
-import {
-  surfaceTraits,
-  type InboundMessage,
-  type InboundOutcome,
-  type InboundSurface,
-  type SurfaceUser,
-} from "./surface.ts";
+import type { InboundMessage, InboundOutcome, InboundSurface, SurfaceUser } from "./surface.ts";
 
 const RESERVED_SURFACES = new Set([
   "slack",
@@ -183,7 +177,7 @@ export function createHttpChatSurface(
   return {
     name: config.surface,
     label: config.label,
-    traits: surfaceTraits(config.surface),
+    traits: [],
     destinationTypes: [config.surface],
     async normalize({ headers, pathWithQuery, rawBody }): Promise<InboundOutcome> {
       const verified = verifySignature(

@@ -1,4 +1,4 @@
-import { surfaceTraits } from "../surfaces/surface.ts";
+import { surfaceHas } from "../surfaces/surface.ts";
 import { scopeId, type ActorAssertion, type TurnRequest } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { samePerson } from "../directory/person.ts";
@@ -23,7 +23,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
   function shouldRouteToSpine(input: OrchestratorInput): boolean {
     const { conversation } = input;
     return (
-      !surfaceTraits(input.surface).transcript &&
+      !surfaceHas(input.surface, "transcript") &&
       conversation.kind !== "dm" &&
       (input.origin.kind === "human" || input.origin.kind === "ambient")
     );

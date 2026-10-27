@@ -1,4 +1,4 @@
-import { surfaceTraits } from "../surfaces/surface.ts";
+import { surfaceHas } from "../surfaces/surface.ts";
 import {
   type ScopeId,
   parseScopeId,
@@ -212,7 +212,7 @@ export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: Am
       if (!deps.surfaceCache || !events.length) return { upserted: 0 };
       if (self && (self.name || self.mentionId)) ambientSelf.set(`${tenant().orgId}:${surface}`, self);
       const out = await deps.surfaceCache.ingest(events.map((event) => ({ ...event, surface })));
-      if (surfaceTraits(surface).revisions && hasRevisionEvents(events)) {
+      if (surfaceHas(surface, "revisions") && hasRevisionEvents(events)) {
         void recordMessageRevisions(deps.sessions, events).catch(
           reportFailureAs("revisions: surface revision record", undefined),
         );
@@ -237,11 +237,11 @@ export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: Am
       };
       await contextRequests.put(request.id, {
         ...request,
-        ...(viewerToken && !surfaceTraits(source).transcript
+        ...(viewerToken && !surfaceHas(source, "transcript")
           ? { sealedViewerToken: encryptSecret(viewerToken, viewerTokenKey) }
           : {}),
       });
-      if (surfaceTraits(source).transcript) {
+      if (surfaceHas(source, "transcript")) {
         const outcome: { result?: SurfaceContextResult; error?: string } = await answerWebContextRequest(
           deps.sessions,
           query,

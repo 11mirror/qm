@@ -51,48 +51,32 @@ export interface SurfaceRequest {
 export type InboundOutcome =
   { status: 401; reason: string } | { status: 400; reason: string } | { status: 200; messages: InboundMessage[] };
 
-export interface SurfaceTraits {
-  transcript: boolean;
-  sidebar: boolean;
-  pickModel: boolean;
-  editableTurns: boolean;
-  memberGate: boolean;
-  externalParticipants: boolean;
-  earlyAck: boolean;
-  nativeActorIds: boolean;
-  revisions: boolean;
-  delegates: boolean;
-  nativeApprovals: boolean;
-  quarantineNotice: boolean;
-}
-
-const NO_TRAITS: SurfaceTraits = {
-  transcript: false,
-  sidebar: false,
-  pickModel: false,
-  editableTurns: false,
-  memberGate: false,
-  externalParticipants: false,
-  earlyAck: false,
-  nativeActorIds: false,
-  revisions: false,
-  delegates: false,
-  nativeApprovals: false,
-  quarantineNotice: false,
-};
+export type SurfaceTrait =
+  | "transcript"
+  | "sidebar"
+  | "pickModel"
+  | "editableTurns"
+  | "memberGate"
+  | "externalParticipants"
+  | "earlyAck"
+  | "nativeActorIds"
+  | "revisions"
+  | "delegates"
+  | "nativeApprovals"
+  | "quarantineNotice";
 
 interface SurfaceProfile {
   label?: string;
   promptFlavor?: "web" | "slack";
   dmContainer?: (threadRef: string) => string | null;
   toolHint?: string;
-  traits: SurfaceTraits;
+  traits: readonly SurfaceTrait[];
 }
 
 const PROFILES: Readonly<Record<string, SurfaceProfile>> = {
   web: {
     promptFlavor: "web",
-    traits: { ...NO_TRAITS, transcript: true, sidebar: true, pickModel: true, editableTurns: true, memberGate: true },
+    traits: ["transcript", "sidebar", "pickModel", "editableTurns", "memberGate"],
   },
   slack: {
     label: "Slack",
@@ -101,16 +85,15 @@ const PROFILES: Readonly<Record<string, SurfaceProfile>> = {
       threadRef.startsWith("dm:") ? (parseSlackThreadRef(threadRef)?.container ?? null) : null,
     toolHint:
       " To @-mention on Slack, use `<@U…>` for a person or `<!subteam^S…>` for a user group (ids appear in People here / read / search results). A typed `@name` is plain text and pings no one; @here/@channel/@everyone never ping.",
-    traits: {
-      ...NO_TRAITS,
-      externalParticipants: true,
-      earlyAck: true,
-      nativeActorIds: true,
-      revisions: true,
-      delegates: true,
-      nativeApprovals: true,
-      quarantineNotice: true,
-    },
+    traits: [
+      "externalParticipants",
+      "earlyAck",
+      "nativeActorIds",
+      "revisions",
+      "delegates",
+      "nativeApprovals",
+      "quarantineNotice",
+    ],
   },
 };
 
@@ -118,15 +101,16 @@ export const isNamedSurface = (name: string | undefined): name is string =>
   name !== undefined && Object.hasOwn(PROFILES, name);
 
 export const surfaceProfile = (name: string | undefined): SurfaceProfile =>
-  isNamedSurface(name) ? PROFILES[name]! : { traits: NO_TRAITS };
+  isNamedSurface(name) ? PROFILES[name]! : { traits: [] };
 
-export const surfaceTraits = (name: string | undefined): SurfaceTraits => surfaceProfile(name).traits;
+export const surfaceHas = (name: string | undefined, trait: SurfaceTrait): boolean =>
+  surfaceProfile(name).traits.includes(trait);
 
 export interface Surface {
   readonly name: string;
   readonly label: string;
   readonly destinationTypes: readonly string[];
-  readonly traits: SurfaceTraits;
+  readonly traits: readonly SurfaceTrait[];
   deliver: SurfaceSender;
 }
 

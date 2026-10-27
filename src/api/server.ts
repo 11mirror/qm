@@ -1,4 +1,4 @@
-import { surfaceTraits } from "../surfaces/surface.ts";
+import { surfaceHas } from "../surfaces/surface.ts";
 import { externalSlackCapabilityAllowed } from "./external-slack-capability.ts";
 import { CREDENTIAL_HTTP_BROKER_PREFIX } from "./credential-http-broker.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
@@ -220,7 +220,7 @@ async function gate(
         pathname === "/v1/turns" &&
         body !== null &&
         typeof body === "object" &&
-        surfaceTraits(String((body as { surface?: unknown }).surface)).memberGate;
+        surfaceHas(String((body as { surface?: unknown }).surface), "memberGate");
       const routeActor = route?.actor ?? (WRITE_METHODS.has(method) ? "person" : undefined);
       const needsActor = webTurn || (routeActor !== undefined && routeActor !== "system");
       if (needsActor) {

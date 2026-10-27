@@ -1,4 +1,4 @@
-import { surfaceTraits } from "../../surfaces/surface.ts";
+import { surfaceHas } from "../../surfaces/surface.ts";
 import { collectBytes } from "../../util/bytes.ts";
 import { randomUUID } from "node:crypto";
 import {
@@ -31,7 +31,7 @@ async function createShare(ctx: ApiCtx): Promise<void> {
     const seq = run.result?.sourceAssistantEntrySeq;
     if (
       run.status !== "done" ||
-      !surfaceTraits(run.request.surface).editableTurns ||
+      !surfaceHas(run.request.surface, "editableTurns") ||
       run.request.deliveryTarget !== source.session.threadRef ||
       run.result?.sessionId !== source.session.id ||
       seq === undefined

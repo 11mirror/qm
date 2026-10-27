@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { surfaceTraits, type Surface } from "./surface.ts";
+import { surfaceHas, surfaceProfile, type Surface } from "./surface.ts";
 import type { DeliveryProvenance, Destination, OutgoingAttachment, ScopeId } from "../types.ts";
 import type { TurnOrigin } from "../core/turn-origin.ts";
 import { acquireLeaseWithin, type SessionStore } from "../sessions/session-store.ts";
@@ -54,7 +54,7 @@ export function createOutbound(opts: {
   const once =
     opts.idempotency?.once.bind(opts.idempotency) ?? (async (_: string, fn: () => Promise<void>) => (await fn(), true));
   const retryable = (post: OutboundPost, error: unknown): boolean =>
-    Boolean(opts.retries) && !surfaceTraits(post.destination.type).transcript && !isPermanent(error);
+    Boolean(opts.retries) && !surfaceHas(post.destination.type, "transcript") && !isPermanent(error);
   return {
     async send(post) {
       const sender = senderFor(post.destination.type);
@@ -216,7 +216,7 @@ export function createWebSurface(deps: TranscriptDeps): Surface {
     name: "web",
     label: "web",
     destinationTypes: ["web"],
-    traits: surfaceTraits("web"),
+    traits: surfaceProfile("web").traits,
     deliver: webSender(deps),
   };
 }

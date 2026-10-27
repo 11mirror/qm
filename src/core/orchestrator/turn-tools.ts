@@ -1,4 +1,4 @@
-import { surfaceTraits } from "../../surfaces/surface.ts";
+import { surfaceHas } from "../../surfaces/surface.ts";
 import type { TurnCtx } from "./turn-context.ts";
 import type { ApprovalLedger } from "./approvals.ts";
 import type { buildCredentialCatalog } from "./credential-catalog.ts";
@@ -218,7 +218,7 @@ export async function buildTurnTools(
       sourceSessionId: session.id,
     });
   const earlyTaskAck =
-    surfaceTraits(input.surface).earlyAck &&
+    surfaceHas(input.surface, "earlyAck") &&
     humanInput &&
     conversation.kind === "dm" &&
     !input.approval &&
@@ -390,7 +390,7 @@ export async function buildTurnTools(
     memoryScopeId,
     ...(memoryAccess ? { memoryAccess } : {}),
     ...(!external && deps.mcp ? { mcp: deps.mcp } : {}),
-    ...(surfaceTraits(input.surface).nativeActorIds ? { actingSlackUserId: actor.id } : {}),
+    ...(surfaceHas(input.surface, "nativeActorIds") ? { actingSlackUserId: actor.id } : {}),
     ...(deps.deploymentLayer
       ? {
           layerAuth: {

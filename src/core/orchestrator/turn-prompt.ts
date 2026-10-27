@@ -1,4 +1,4 @@
-import { surfaceProfile, surfaceTraits } from "../../surfaces/surface.ts";
+import { surfaceProfile, surfaceHas } from "../../surfaces/surface.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../../cron/schedule.ts";
 import { isBackendCredential } from "../../credentials/keychain.ts";
 import { requiresDelegation } from "../../subagents/delegation.ts";
@@ -83,7 +83,7 @@ export async function frameTurnPrompt(
   } = ctx;
   const { screenTrace, useMemory, context, memoryScopeId, memoryStrategy, observeSecurityData } = turn;
   const profile = surfaceProfile(input.surface);
-  const isWeb = profile.traits.transcript;
+  const isWeb = profile.traits.includes("transcript");
   const surfaceTool = input.surface ?? "slack";
   const branding = await resolveBranding(deps.config, resolution.orgScopeId, deps.brandingDefault);
   const botName = branding.selfLabel ?? "QM";
@@ -132,7 +132,7 @@ export async function frameTurnPrompt(
     orgName,
     web: profile.promptFlavor === "web",
     slack: profile.promptFlavor === "slack",
-    sessions: profile.traits.sidebar && surfaceTraits(surfaceName).sidebar && Boolean(sessionSyscalls),
+    sessions: profile.traits.includes("sidebar") && surfaceHas(surfaceName, "sidebar") && Boolean(sessionSyscalls),
   });
   let systemPrompt = `${modeFrame}\n\n${resolution.systemPrompt}\n\n${sharedCore}`;
   if (external) systemPrompt += `\n\n${EXTERNAL_SLACK_MD}`;
