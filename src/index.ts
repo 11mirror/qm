@@ -3,7 +3,7 @@ import type { Server } from "node:http";
 import { stopWithBackstop } from "./wiring.ts";
 import { shutdownOnUncaught } from "./util/process-guard.ts";
 import { startWebEdge } from "./web-edge.ts";
-import { multitenant } from "../plugins/chassis/src/tenant-workers.ts";
+import { multitenant } from "../plugins/chassis/src/tenant-hosts.ts";
 import { bootTenant, type BootedTenant } from "./tenants/boot.ts";
 import { startMultitenant } from "./tenants/host.ts";
 
@@ -27,9 +27,13 @@ async function bootSingleTenant(): Promise<{ tenants: BootedTenant[]; servers: S
   return { tenants: [booted], servers };
 }
 
-const { tenants, servers, stopWorkers } = multitenant(process.env)
+const {
+  tenants,
+  servers,
+  stop: stopHost,
+} = multitenant(process.env)
   ? await startMultitenant(process.env)
-  : { ...(await bootSingleTenant()), stopWorkers: async () => {} };
+  : { ...(await bootSingleTenant()), stop: async () => {} };
 const home = tenants[0]!;
 
 let shuttingDown = false;
@@ -46,7 +50,7 @@ function shutdown(signal: string): void {
     {
       async stop() {
         await Promise.all(tenants.map((booted) => booted.stop()));
-        await stopWorkers();
+        await stopHost();
       },
       releaseInFlightRuns: async () => {
         await Promise.all(tenants.map((booted) => booted.releaseInFlightRuns()));

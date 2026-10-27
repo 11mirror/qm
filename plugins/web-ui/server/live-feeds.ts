@@ -2,8 +2,10 @@ import { swallow } from "../../chassis/src/errors.ts";
 import { type ServerResponse } from "node:http";
 
 import { coreFetch, fetchCoreGet, tryParse } from "./core-relay.ts";
+import { onEdgeTenants, perEdgeTenant, withEdgeTenant } from "../../chassis/src/tenant-hosts.ts";
+import type { TenantSettings } from "../../chassis/src/tenant-settings.ts";
 
-export const eventClients = new Map<string, Set<ServerResponse>>();
+export const eventClients = perEdgeTenant(() => new Map<string, Set<ServerResponse>>());
 
 export const ownerOfWebThread = (threadRef: string) => /^web:([^:]+):/.exec(threadRef)?.[1];
 
@@ -19,7 +21,8 @@ export function sseEvent(res: ServerResponse, event: string, data: unknown): voi
 }
 
 export function sendTo(users: Iterable<string>, event: string, data: unknown = {}): void {
-  for (const user of users) for (const res of eventClients.get(user) ?? []) sseEvent(res, event, data);
+  const clients = eventClients();
+  for (const user of users) for (const res of clients.get(user) ?? []) sseEvent(res, event, data);
 }
 
 export const SSE_HEARTBEAT_MS = 15_000;
@@ -51,12 +54,13 @@ export async function consumeCoreFeed(
   path: string,
   eventName: string,
   onEvent: (data: unknown) => void,
+  signal: AbortSignal,
   onReconnect?: () => void,
 ): Promise<void> {
   let dropped = false;
-  for (;;) {
+  while (!signal.aborted) {
     try {
-      const r = await fetchCoreGet(path, {}, {});
+      const r = await fetchCoreGet(path, { signal }, {});
       if (r.status === 200 && r.body) {
         if (dropped) {
           dropped = false;
@@ -91,39 +95,63 @@ export async function consumeCoreFeed(
       } else console.warn(`[web-ui] ${eventName} feed returned HTTP ${r.status}; reconnecting`);
       dropped = true;
     } catch (error) {
+      if (signal.aborted) return;
       swallow(`web-ui: ${eventName} feed dropped (reconnecting)`, error);
       dropped = true;
     }
-    await new Promise((resolve) => setTimeout(resolve, STATE_FEED_RECONNECT_MS));
+    await new Promise((resolve) => setTimeout(resolve, STATE_FEED_RECONNECT_MS).unref());
   }
 }
 
-export function runStateFeed(): Promise<void> {
-  return consumeCoreFeed(
+function runFeeds(signal: AbortSignal): void {
+  void consumeCoreFeed(
     "/v1/session-state/events",
     "session_state",
     (data) => forwardSessionState(data as SessionStateFrame),
-    () => sendTo(eventClients.keys(), "session_state_resync"),
+    signal,
+    () => sendTo(eventClients().keys(), "session_state_resync"),
   );
-}
-
-export function runInboxFeed(): Promise<void> {
-  return consumeCoreFeed(
+  void consumeCoreFeed(
     "/v1/cron-items/events",
     "inbox_item",
     (data) => void forwardInboxItem(data as { cronId?: string; itemId?: string; op?: string }),
+    signal,
     resyncInbox,
   );
 }
 
-export const resyncInbox = () => sendTo(eventClients.keys(), "inbox_resync");
+export function startLiveFeeds(): void {
+  const running = new Map<string, { feed: AbortController; tenant: TenantSettings | undefined }>();
+  onEdgeTenants((tenants) => {
+    const wanted = new Map<string, TenantSettings | undefined>(
+      tenants.length ? tenants.map((t) => [`${t.id ?? ""}\n${t.hosts[0] ?? ""}`, t]) : [["", undefined]],
+    );
+    for (const [key, { feed, tenant }] of running)
+      if (!wanted.has(key)) {
+        feed.abort();
+        running.delete(key);
+        withEdgeTenant(tenant, () => {
+          for (const clients of eventClients().values()) for (const res of clients) res.end();
+        });
+      }
+    for (const [key, tenant] of wanted) {
+      if (running.has(key)) continue;
+      const feed = new AbortController();
+      running.set(key, { feed, tenant });
+      withEdgeTenant(tenant, () => runFeeds(feed.signal));
+    }
+  });
+}
+
+export const resyncInbox = () => sendTo(eventClients().keys(), "inbox_resync");
 
 export async function forwardInboxItem(ev: { cronId?: string; itemId?: string; op?: string }): Promise<void> {
-  if (!ev.cronId || !ev.itemId || !eventClients.size) return;
+  const clients = eventClients();
+  if (!ev.cronId || !ev.itemId || !clients.size) return;
   const r = await coreFetch(
     "POST",
     "/v1/inbox/viewers",
-    JSON.stringify({ cronId: ev.cronId, candidates: [...eventClients.keys()] }),
+    JSON.stringify({ cronId: ev.cronId, candidates: [...clients.keys()] }),
   ).catch(() => null);
   if (r?.status === 404) return;
   const viewers = r?.status === 200 ? tryParse<{ viewers?: string[] }>(r.text)?.viewers : undefined;
