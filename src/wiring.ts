@@ -1,8 +1,6 @@
 import { type TeamStore } from "./teams/teams.ts";
 import { type DecisionStore } from "./decisions/store.ts";
-import type { SlackSessionStatusState } from "./slack/session-status.ts";
-import { availableRuntimeError } from "./api/runtime-config.ts";
-import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
+import { type KeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
 import { createAdmittedWork } from "./util/admitted-work.ts";
 import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
@@ -12,21 +10,13 @@ import {
   type BackgroundOwnership,
 } from "./runs/background-ownership.ts";
 import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
-import type { TaskAckState } from "./slack/task-ack.ts";
-import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
-import { createMemoryTidyService, type MemoryTidyProfile } from "./memory/tidy.ts";
-import { createRuntimeService } from "./harness/runtime-control.ts";
-import { deliverSubagentMail } from "./subagents/mail.ts";
-import { sessionTreeWorking, stoppableAncestors } from "./subagents/tree.ts";
-import { isSubagentThreadRef } from "./sessions/thread-ref.ts";
+import { createSuggestedActivityService } from "./suggestions/activities.ts";
 import { type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { type DirectFileUploads } from "./files/direct-file-upload.ts";
 import { type SandboxResources } from "./sandbox/sandbox-resources.ts";
 import { type AwsRoleBroker } from "./auth/aws-role-broker.ts";
 import type { SessionShare, SessionShareStore } from "./sessions/session-share.ts";
 import { mkdirSync } from "node:fs";
-import type { StagedEnvelope } from "./slack/envelope-staging.ts";
-import type { HandledEvent } from "./slack/message-gating.ts";
 import { randomUUID } from "node:crypto";
 import { companySubscriptionAuth, configuredModel, providerKeysPresent, type Config } from "./config.ts";
 import type { ServerDeps } from "./api/deps.ts";
@@ -44,8 +34,6 @@ import type { UiStateStore } from "./surfaces/ui-state.ts";
 import { slackUserClientFactory } from "./inbox/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
 import { type AdvisoryLock } from "./persistence/advisory-lock.ts";
-import type { Session, TurnRequest } from "./types.ts";
-import { scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { type AppPageViewLog } from "./deploy/page-views.ts";
 import type { RateLimiter } from "./ratelimit/rate-limiter.ts";
@@ -54,14 +42,12 @@ import type { SecurityScreenProbe } from "./security/security-screener.ts";
 import { type CronStore } from "./cron/cron-store.ts";
 import { type LedgerEventBus } from "./inbox/events.ts";
 import { createInboxSourceRefresh } from "./inbox/source-refresh.ts";
-import { createInboxRealtime } from "./inbox/realtime.ts";
-import { createInboxChat } from "./inbox/item-chat.ts";
 import type { InboxServiceDeps } from "./api/routes/cron-items.ts";
 import { type Outbound } from "./surfaces/outbound.ts";
 import type { DirectoryStore } from "./directory/directory-store.ts";
 import { type EnvironmentStore } from "./environments/environment-store.ts";
-import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
-import { createJobWorker, type JobWorker } from "./jobs/job-worker.ts";
+import { type Scheduler } from "./cron/scheduler.ts";
+import { type JobWorker } from "./jobs/job-worker.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
 import { type WorkspaceStore } from "./workspace/workspace-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
@@ -78,12 +64,7 @@ import {
   type KeychainGrant,
   type ServiceCredentialStore,
 } from "./credentials/keychain.ts";
-import {
-  fireAskResolution,
-  fireDropResolution,
-  createAskExpirySweep,
-  type DropResolution,
-} from "./triggers/keychain-ask.ts";
+import { type DropResolution } from "./triggers/keychain-ask.ts";
 import { type SecretDropStore } from "./credentials/secret-drop.ts";
 import { type FeatureFlagStore } from "./feature-flags.ts";
 import { type OAuthClientResolver } from "./connectors/oauth.ts";
@@ -101,10 +82,9 @@ import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-
 import { type ProviderKeys } from "./harness/pi-model-runtime.ts";
 import type { Harness } from "./harness/harness.ts";
 import { type SecurityScreener } from "./security/security-screener.ts";
-import { createControlService } from "./api/control-service.ts";
 import { TURN_QUEUES } from "./turns/absurd-schema.ts";
 import { type RunSignalStore } from "./runs/run-signal-store.ts";
-import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
+import { isTerminal, type RunStore } from "./runs/run-store.ts";
 import { TURN_CANCEL_CHANNEL, TURN_READY_CHANNEL, TURN_YIELD_CHANNEL } from "./turns/turn-ledger.ts";
 import { createTurnRunner, type TurnRunner } from "./turns/turn-runner.ts";
 import { repairStaleTurns } from "./turns/turn-engine.ts";
@@ -130,15 +110,12 @@ import { supportsProcessSessions, type SandboxHandle } from "./sandbox/sandbox.t
 import { finishProcessCredentials } from "./credentials/execute-files.ts";
 import { type SessionStateBus } from "./runs/session-state-bus.ts";
 import { type App } from "./api/app.ts";
-import { createSlackCoreClient, type SlackCoreClient } from "./api/slack-core-client.ts";
+import { type SlackCoreClient } from "./api/slack-core-client.ts";
 import { type SurfaceRegistry } from "./surfaces/registry.ts";
-import { createSurfaceContextPuller } from "./api/surface-context-puller.ts";
-import { createWakeSweep, type WakeSweep } from "./wake/sweep.ts";
 import { type SurfaceCache } from "./surface-cache/surface-cache.ts";
 import { type ChannelPolicyStore } from "./surface-cache/channel-policy-store.ts";
 import { type AmbientJudgmentStore } from "./surface-cache/ambient-judgment-store.ts";
 import { type AckEmojiPickStore } from "./surface-cache/ack-emoji-pick-store.ts";
-import { auxiliaryModelForProvider } from "./model/pi-models.ts";
 import { type AdminService } from "./admin/admin-service.ts";
 import { type ProjectStore } from "./projects/project-store.ts";
 import { type ErrorLog } from "./admin/error-log.ts";
@@ -192,6 +169,14 @@ import { buildOrchestrator } from "./wiring/orchestrator.ts";
 import { buildAppServices } from "./wiring/app-services.ts";
 
 import { buildApiApp } from "./wiring/api-app.ts";
+
+import { buildTriggers } from "./wiring/triggers.ts";
+
+import { buildSlackCore } from "./wiring/slack-core.ts";
+
+import { buildSessionReturns } from "./wiring/session-returns.ts";
+
+import { buildScheduler } from "./wiring/scheduler.ts";
 
 export interface Runtime {
   start(): void;
@@ -766,236 +751,90 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     providerKeys,
     late,
   });
-  const inboxRealtime = createInboxRealtime({
+  const { askResolution, triggerDeps, sweepAsks, inbox, dropResolution } = buildTriggers({
+    app,
+    outbound,
+    idempotency,
+    identity,
+    directory,
+    currentScopeMembers,
+    sessions,
     crons,
-    items: inboxItems,
-    record: recordInboxEvent,
+    keychain,
+    advisoryLock,
+    inboxItems,
+    recordInboxEvent,
+    auditLog,
   });
-  const keychainApprovals = createKeychainApprovals({
+  const { slackCore, slackHandledEvents, keychainApprovals } = buildSlackCore({
+    crons,
+    inboxItems,
+    recordInboxEvent,
     keychain,
     app,
     identity,
     sessions,
-    audit: auditLog,
+    auditLog,
     outbound,
-    resume: (ask, grant) => askResolution(ask, grant),
-  });
-  const slackHandledEvents = artifactMap<HandledEvent>("slack_handled_events");
-  const slackCore = createSlackCoreClient({
-    identity,
+    askResolution,
+    artifactMap,
     memory,
-    ...(keychainApprovals ? { keychainApprovals } : {}),
     surfaceCache,
-    taskAcknowledgements: artifactMap<TaskAckState>("slack_task_acknowledgements"),
-    sessionStatus: artifactMap<SlackSessionStatusState>("slack_session_status"),
-    statusActivity: { processes, monitors, sessions, publicWebUrl: config.publicWebUrl },
+    processes,
+    monitors,
+    config,
     featureFlags,
-    inboxEvent: (event) => inboxRealtime.onConversationEvent(event),
-    app,
     leaderLease,
-    stagedEnvelopes: artifactMap<StagedEnvelope>("slack_staged_envelopes"),
-    handledEvents: slackHandledEvents,
-    config: configStore,
-    runtimeFallback: fallback,
+    configStore,
+    fallback,
     blobTransfer,
-    slack: slackSurface.slack,
+    slackSurface,
     errors,
     runs,
     turnStream,
-    ackPicks: ackEmojiPicks,
-    ackModelId: () => auxiliaryModelForProvider("anthropic"),
-    ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
-    ...(harness.models.pickAckEmoji ? { pickAckEmoji: (t, c) => harness.models.pickAckEmoji!(t, c) } : {}),
+    ackEmojiPicks,
+    harness,
   });
-  runs.onTerminal((run) => {
-    void runs
-      .activeForThread(run.sessionId)
-      .then((live) => {
-        if (!live) engaged.settle(run.sessionId);
-      })
-      .catch(swallowAs("wake: settle on terminal", undefined));
-  });
-  runs.onTerminal((run) => {
-    void app.replayOrphanedRunSignals(run.id).catch(swallowAs("wake: orphaned-signal replay", undefined));
-  });
-  runs.onTerminal((run) => {
-    void (async () => {
-      const session = await sessions.getByThread(run.sessionId);
-      const at = run.finishedAt ?? Date.now();
-      if (!session) {
-        if (!(await runs.activeForThread(run.sessionId)))
-          sessionStateBus.emit({ threadRef: run.sessionId, state: "idle", at });
-        return;
-      }
-      const settle = async (target: Session): Promise<boolean> => {
-        if (await runs.activeForThread(target.threadRef)) return false;
-        const waiting = (await blockingApprovalSessions([target.id])).has(target.id);
-        if (!waiting && (await sessionTreeWorking(sessions, runs, target))) return false;
-        const participants = await sessions.participantsOf(target.id);
-        sessionStateBus.emit({
-          threadRef: target.threadRef,
-          sessionId: target.id,
-          state: waiting ? "awaiting_approval" : "idle",
-          at,
-          ...(participants.length ? { participants } : {}),
-        });
-        return true;
-      };
-      if (!(await settle(session))) return;
-      for (const ancestor of await stoppableAncestors(sessions, session)) if (!(await settle(ancestor))) return;
-    })().catch(swallowAs("session-state: terminal emit", undefined));
-  });
-  const returnSessionRun = (run: Run) =>
-    advisoryLock
-      .withLock("session-tree-admission", async () => {
-        const settled = await deliverSubagentMail(
-          {
-            sessions,
-            runs,
-            maxAttempts,
-            mailbox: sessionMailbox,
-            prepareRequest: prepareSessionRequest,
-            delegationEnabled: (actorId) => featureFlags.enabled("responsive_spine", scopeId("personal", actorId)),
-            outbound,
-            signals: runSignals,
-          },
-          run,
-        );
-        if (settled) await runs.markReturned(run.id);
-      })
-      .catch(async (error: unknown) => {
-        await runs.deferReturn(run.id, 60_000);
-        throw error;
-      });
-  runs.onTerminal((run) => {
-    if (isSubagentThreadRef(run.sessionId)) void returnSessionRun(run).catch(swallowAs("sessions: return", undefined));
-  });
-  const sweepSessionReturns = async () => {
-    let afterId: string | undefined;
-    for (;;) {
-      const batch = await runs.pendingReturns(100, afterId);
-      if (!batch.length) return;
-      for (const run of batch) await returnSessionRun(run).catch(swallowAs("sessions: recover return", undefined));
-      afterId = batch.at(-1)!.id;
-    }
-  };
-  const wakeSweep: WakeSweep = createWakeSweep(
-    {
-      async engagedSessions() {
-        return engaged.list();
-      },
-      async sweepSession(threadRef) {
-        const live = await runs.activeForThread(threadRef);
-        if (!live) {
-          pokeReaper();
-          engaged.settle(threadRef);
-          return 1;
-        }
-        return 0;
-      },
-    },
-    { intervalMs: config.reaperIntervalMs, leaderLease },
-  );
-  orchestratorDeps.surfaceContext = createSurfaceContextPuller(app, {
-    searchToken: async (source, viewer) =>
-      source === "slack" && viewer
-        ? ((await keychain.connectorAccessToken("slack.com", viewer, "personal")) ??
-          (await keychain.connectorAccessToken("slack.com", viewer)) ??
-          keychain.connectorAccessToken("slack.com", viewer, "company"))
-        : null,
-  });
-  const resolveRecipient = (query: string) => app.resolveRecipient(query);
-  const triggerDeps = {
-    outbound,
-    idempotency,
-    identity,
-    run: (req: TurnRequest) => app.turn(req),
-    directory,
-    resolveRecipient,
-    currentScopeMembers,
-    sessions,
-  };
-  const askResolution = (ask: KeychainAsk, grant?: KeychainGrant) =>
-    fireAskResolution(
-      {
-        ...triggerDeps,
-        getCron: (id) => crons.get(id),
-        getAsk: (id) => keychain.getAsk(id),
-        getGrant: (id) => keychain.getGrant(id),
-      },
-      ask,
-      grant,
-    );
-  const dropResolution = (drop: DropResolution) => fireDropResolution(triggerDeps, drop);
-  const inbox: InboxServiceDeps = {
-    lock: advisoryLock,
-    items: inboxItems,
-    record: recordInboxEvent,
-    chat: createInboxChat({
-      items: inboxItems,
-      trigger: triggerDeps,
-    }),
-  };
-  const sweepAsks = createAskExpirySweep({ keychain, fire: askResolution, auditLog });
-  const suggestedActivityProfiles = artifactMap<SuggestedActivityProfile>("suggested_activity_profiles");
-  const memoryTidy = createMemoryTidyService({
-    store: artifactMap<MemoryTidyProfile>("memory_tidy_profiles"),
-    memory: baseMemory,
-    timezone: async (principalId) => (await suggestedActivityProfiles.get(principalId))?.timezone,
-    crons,
-    scheduler: { notifyChanged: (id) => scheduler.notifyChanged(id) },
-  });
-  late.memoryTidy = memoryTidy;
-  const jobs = createJobWorker(databaseUrl);
-  const scheduler = createScheduler({
-    admittedWork,
-    skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
-    deleteCron: (id) => app.deleteCron(id),
-    advisoryLock,
-    crons,
-    ...triggerDeps,
-    jobs,
-    fireConcurrency: config.cronFireConcurrency,
-  });
-  late.scheduler = scheduler;
-  const suggestedActivities = createSuggestedActivityService({
-    store: suggestedActivityProfiles,
-    sessions,
-    crons,
-    scheduler,
-    enabled: config.suggestedActivitiesEnabled === true,
-    ...(config.suggestedActivitiesContext ? { context: config.suggestedActivitiesContext } : {}),
-  });
-  orchestratorDeps.control = createControlService(app, scheduler, admin);
-  orchestratorDeps.validateScheduledRuntime = (scope, choice, purpose) =>
-    availableRuntimeError(
-      {
-        deps: {
-          config: configStore,
-          baseModelDefault: fallback.modelId,
-          providerKeys: providerKeysPresent(config),
-          modelCredentials,
-          modelCredentialFetch: overrides.modelCredentialFetch,
-          refreshModels,
-        },
-      },
-      scope,
-      choice,
-      purpose,
-    );
-  orchestratorDeps.runtime = createRuntimeService(
-    {
-      config: configStore,
-      get baseModelDefault() {
-        return fallback.modelId;
-      },
-      providerKeys: providerKeysPresent(config),
-      modelCredentials,
-      modelCredentialFetch: overrides.modelCredentialFetch,
-      refreshModels,
-    },
+  const { sweepSessionReturns, wakeSweep } = buildSessionReturns({
+    runs,
+    engaged,
     app,
-  );
+    sessions,
+    sessionStateBus,
+    blockingApprovalSessions,
+    advisoryLock,
+    maxAttempts,
+    sessionMailbox,
+    prepareSessionRequest,
+    featureFlags,
+    outbound,
+    runSignals,
+    pokeReaper,
+    config,
+    leaderLease,
+    orchestratorDeps,
+    keychain,
+  });
+  const { jobs, scheduler, suggestedActivities } = buildScheduler({
+    artifactMap,
+    baseMemory,
+    crons,
+    late,
+    databaseUrl,
+    admittedWork,
+    app,
+    advisoryLock,
+    triggerDeps,
+    config,
+    sessions,
+    orchestratorDeps,
+    admin,
+    configStore,
+    fallback,
+    modelCredentials,
+    overrides,
+    refreshModels,
+  });
   const finishCredentials = (handle: SandboxHandle, processId: string) =>
     finishProcessCredentials({ sandbox, processes: processes!, keychain }, handle, processId);
   const monitorPoller: MonitorPoller | null =
