@@ -2001,11 +2001,12 @@ export function createChatSurface(
       `;
       if (note.note === "goal_cancelled")
         return row(html`Goal cancelled: <span class="system-note-text">${goalObjectiveLabel(note.content)}</span>`);
-      const who = note.speaker ?? "The user";
+      const who = note.byAgent ? brandName() : (note.speaker ?? "The user");
+      const whose = note.byAgent ? "its" : "their";
       return row(
         note.action === "deleted"
-          ? html`${who} deleted their message`
-          : html`${who} edited their message: <span class="system-note-text">${note.content}</span>`,
+          ? html`${who} deleted ${whose} message`
+          : html`${who} edited ${whose} message: <span class="system-note-text">${note.content}</span>`,
       );
     }
     if (role === "assistant") {
