@@ -1,3 +1,4 @@
+import { createMailWaker, type MailWaker } from "../../src/subagents/mail-wake.ts";
 import { createSessionMailbox, type SessionMailbox } from "../../src/sessions/session-mailbox.ts";
 import assert from "node:assert/strict";
 import { createMemoryRunSignalStore } from "../../src/runs/run-signal-store.ts";
@@ -17,11 +18,13 @@ export const conversation: Conversation = { kind: "dm", threadRef: "slack:dm:D1"
 
 export interface Rig {
   mailbox: SessionMailbox;
+  mailboxUrl: string;
   sessions: SessionStore;
   runs: RunStore;
   ledger: TestRunStore["ledger"];
   signals: ReturnType<typeof createMemoryRunSignalStore>;
   advisoryLock: AdvisoryLock;
+  waker: MailWaker;
   room: Session;
   syscallsFor(session: Session): ReturnType<ReturnType<typeof createSessionSyscalls>["forTurn"]>;
 }
@@ -42,8 +45,19 @@ export async function rig(opts?: {
   const { runs, ledger, databaseUrl } = runStore();
   const sessions = createPostgresSessionStore(databaseUrl);
   const signals = createMemoryRunSignalStore();
-  const mailbox = createSessionMailbox(testDatabaseUrl());
+  const mailboxUrl = testDatabaseUrl();
+  const mailbox = createSessionMailbox(mailboxUrl);
   const advisoryLock = testAdvisoryLock();
+  const waker = createMailWaker({
+    mailbox,
+    sessions,
+    runs,
+    lock: advisoryLock,
+    maxAttempts: 3,
+    delegationEnabled: async () => true,
+    ...(opts?.prepareRequest ? { prepareRequest: opts.prepareRequest } : {}),
+  });
+  mailbox.onDelivered(waker.wake);
   const factory = createSessionSyscalls({
     mailbox,
     sessions,
@@ -70,11 +84,13 @@ export async function rig(opts?: {
   });
   return {
     mailbox,
+    mailboxUrl,
     sessions,
     runs,
     ledger,
     signals,
     advisoryLock,
+    waker,
     room,
     syscallsFor: (session) => factory.forTurn(binding(session)),
   };

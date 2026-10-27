@@ -47,6 +47,7 @@ export function buildWorkers(
     sandbox,
     sandboxResources,
     finishCredentials,
+    notifyJobExit,
   } = w;
 
   const backgroundOwnership: BackgroundOwnershipControl | undefined = config.backgroundDeploymentId
@@ -85,6 +86,7 @@ export function buildWorkers(
   late.turnRunner = turnRunner;
   const processReaper: ProcessReaper | null = processes
     ? createProcessReaper(processes, {
+        onReaped: (rec) => notifyJobExit(rec, { kind: "expired" }),
         ...(supportsProcessSessions(sandbox)
           ? {
               kill: createReaperKillHook(sandbox, { onExit: finishCredentials }),

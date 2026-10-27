@@ -83,8 +83,8 @@ export interface BackgroundExecBroker {
   list(): Promise<BackgroundJobSummary[]>;
 }
 
-export const BACKGROUND_JOB_TTL_MS = 1_800_000;
-export const BACKGROUND_JOB_TTL_MAX_MS = 3_600_000;
+export const BACKGROUND_JOB_TTL_MS = 7_200_000;
+export const BACKGROUND_JOB_TTL_MAX_MS = 14_400_000;
 const DEFAULT_MAX_BYTES = 64 * 1024;
 const DEFAULT_TERM_GRACE_MS = 2_000;
 const DEFAULT_KILL_GRACE_MS = 1_000;

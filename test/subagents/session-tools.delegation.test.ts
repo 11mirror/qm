@@ -241,10 +241,7 @@ test("queued results recheck source-entry visibility after participant tenure ch
     reply: "OLD_PRIVATE_RESULT",
     sourceAssistantEntrySeq: entry.seq,
   });
-  await deliverSubagentMail(
-    { sessions: r.sessions, runs: r.runs, mailbox: r.mailbox, maxAttempts: 3 },
-    (await r.runs.get(run!.id))!,
-  );
+  await deliverSubagentMail({ sessions: r.sessions, runs: r.runs, mailbox: r.mailbox }, (await r.runs.get(run!.id))!);
   assert.equal((await api.receive!()).length, 1);
   await r.sessions.removeParticipant(child.id, other.id);
   await r.sessions.addParticipant(child.id, other.id);
@@ -301,10 +298,7 @@ test("completion wakes preserve a spine trigger's delivery destination", async (
   for (const pending of await r.runs.inFlightForThread(r.room.threadRef)) {
     await completeTurn(r.ledger, pending.id, { status: "silent" });
   }
-  await deliverSubagentMail(
-    { ...r, maxAttempts: 3, delegationEnabled: async () => true },
-    (await r.runs.get(queued.id))!,
-  );
+  await deliverSubagentMail({ ...r }, (await r.runs.get(queued.id))!);
   const wake = (await r.runs.inFlightForThread(r.room.threadRef)).find((run) => run.id !== parent.run.id)!;
   assert.ok(wake);
   assert.equal(wake.request.surfaceTools, true);
@@ -387,61 +381,59 @@ async function webChildRig() {
   const webConversation: Conversation = { kind: "dm", threadRef: "web:alex:1", audience: [actor] };
   const room = await r.sessions.getOrCreateByThread(webConversation.threadRef, "dm", scope, undefined, "web");
   await r.sessions.addParticipant(room.id, actor.id);
+  const first = await r.runs.enqueue({
+    sessionId: room.threadRef,
+    request: { actor, conversation: webConversation, surface: "web", origin: { kind: "human" }, text: "inspect" },
+  });
   const api = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
     session: room,
     scopeId: scope,
-    request: { surface: "web", conversation: webConversation, actor },
+    request: { ...first.run.request, runId: first.run.id },
   });
   const opened = await api.open({ task: "inspect logs" });
   assert.ok(opened.ok);
+  await completeTurn(r.ledger, first.run.id, { status: "ok", reply: "on it" });
   const child = await freshSession(r.sessions, opened.sessionId);
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   await completeTurn(r.ledger, queued.id, { status: "ok", reply: "done" });
-  const deliver = async () =>
-    deliverSubagentMail({ ...r, maxAttempts: 3, delegationEnabled: async () => false }, (await r.runs.get(queued.id))!);
-  return { ...r, room, api, deliver, wakeKey: `subagent-return:${queued.id}` };
+  const deliver = async () => deliverSubagentMail(r, (await r.runs.get(queued.id))!);
+  return { ...r, room, webConversation, api, deliver, wakeKey: `mail-wake:subagent-mail-${queued.id}` };
 }
 
-test("a finished child wakes an idle web parent once without the responsive rollout", async () => {
+test("a finished child wakes an idle web parent once, carrying its result", async () => {
   const r = await webChildRig();
-  assert.equal(await r.deliver(), false);
-  assert.equal(await r.deliver(), false);
+  await r.deliver();
+  await r.deliver();
   const wakes = await r.runs.inFlightForThread(r.room.threadRef);
   assert.equal(wakes.length, 1);
   assert.equal(wakes[0]!.dedupKey, r.wakeKey);
   assert.equal(wakes[0]!.request.surfaceTools, undefined);
   assert.equal(wakes[0]!.request.actor.id, actor.id);
-  assert.equal((await r.mailbox.pending(r.room.id)).length, 1);
+  assert.match(wakes[0]!.request.text, /kind="final_answer"/);
+  assert.deepEqual(await r.mailbox.pending(r.room.id), []);
 });
 
-test("a busy parent gets one queued wake, withdrawn once it collects the mail at its next tool boundary", async () => {
-  const r = await webChildRig();
-  const busy = await r.runs.enqueue({
-    sessionId: r.room.threadRef,
-    dedupKey: "busy-parent",
-    request: {
-      actor,
-      conversation: { kind: "dm", threadRef: r.room.threadRef, audience: [actor] },
-      origin: { kind: "human" },
-      text: "hi",
-    },
-  });
-  assert.equal(await r.deliver(), false);
-  assert.equal((await r.runs.getByDedupKey(r.wakeKey))?.status, "queued", "the wake waits behind the busy turn");
-  const claimed = await claimTurn(r.ledger, busy.run.id);
-  const mail = await r.api.receive!(0);
-  await r.api.acknowledge!(mail.map((message) => message.id));
-  await finishTurn(claimed!, { status: "ok", reply: "hello" });
-  assert.equal(await r.deliver(), true);
-  assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), [], "the unneeded wake is withdrawn");
-});
-
-test("no wake once the parent already consumed the completion", async () => {
-  const r = await webChildRig();
-  assert.equal(await r.deliver(), false);
-  await r.api.acknowledge!((await r.mailbox.pending(r.room.id)).map((message) => message.id));
-  assert.equal(await r.deliver(), true);
-  assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 0);
+test("a busy parent is not woken; it reads the mail at a tool boundary or is woken when its turn ends", async () => {
+  for (const reads of [true, false]) {
+    const r = await webChildRig();
+    const busy = await r.runs.enqueue({
+      sessionId: r.room.threadRef,
+      dedupKey: "busy-parent",
+      request: { actor, conversation: r.webConversation, surface: "web", origin: { kind: "human" }, text: "hi" },
+    });
+    await r.deliver();
+    assert.deepEqual(
+      (await r.runs.inFlightForThread(r.room.threadRef)).map((run) => run.id),
+      [busy.run.id],
+    );
+    const claimed = await claimTurn(r.ledger, busy.run.id);
+    if (reads) await r.api.acknowledge!((await r.api.receive!(0)).map((message) => message.id));
+    await finishTurn(claimed!, { status: "ok", reply: "hello" });
+    await r.waker.wakeThread(r.room.threadRef);
+    const wakes = await r.runs.inFlightForThread(r.room.threadRef);
+    assert.equal(wakes.length, reads ? 0 : 1);
+    if (!reads) assert.equal(wakes[0]!.dedupKey, r.wakeKey);
+  }
 });
 
 test("delegated human origin retains live authority boundaries", async () => {
@@ -532,11 +524,8 @@ test("a later participant cannot change a completion's actor, rollout, destinati
   for (const pending of await r.runs.inFlightForThread(room.threadRef)) {
     await completeTurn(r.ledger, pending.id, { status: "silent" });
   }
-  await deliverSubagentMail(
-    { ...r, maxAttempts: 3, delegationEnabled: async (id) => id === actor.id },
-    (await r.runs.get(queued.id))!,
-  );
-  const wake = await r.runs.getByDedupKey(`subagent-return:${queued.id}`);
+  await deliverSubagentMail(r, (await r.runs.get(queued.id))!);
+  const wake = await r.runs.getByDedupKey(`mail-wake:subagent-mail-${queued.id}`);
   assert.ok(wake);
   assert.equal(wake.request.actor.id, actor.id);
   assert.equal(wake.request.deliveryTarget, "slack:C1:task");
@@ -551,11 +540,8 @@ for (const surface of ["slack", "web"] as const) {
     for (const pending of await r.runs.inFlightForThread(r.room.threadRef)) {
       await completeTurn(r.ledger, pending.id, { status: "silent" });
     }
-    await deliverSubagentMail(
-      { ...r, maxAttempts: 3, delegationEnabled: async () => true },
-      (await r.runs.get(r.run.id))!,
-    );
-    const wake = (await r.runs.getByDedupKey(`subagent-return:${r.run.id}`))!;
+    await deliverSubagentMail({ ...r }, (await r.runs.get(r.run.id))!);
+    const wake = (await r.runs.getByDedupKey(`mail-wake:subagent-mail-${r.run.id}`))!;
     assert.ok(wake);
     assert.equal(wake.request.origin.kind, "human");
     assert.equal(wake.request.addressed, true);
@@ -569,7 +555,6 @@ for (const surface of ["slack", "web"] as const) {
     const next = (await r.runs.inFlightForThread(r.child.threadRef))[0]!;
     assert.equal((await delegatedAuthorizationOrigin(next.request, r))?.kind, "human");
     await r.sessions.setParentSession(r.child.id, null);
-    assert.equal(await delegatedAuthorizationOrigin(wake.request, r), undefined);
     assert.equal(await delegatedAuthorizationOrigin(next.request, r), undefined);
   });
 }

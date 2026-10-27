@@ -1,6 +1,7 @@
 import type { Head } from "./late.ts";
 import { MONITOR_POLL_MS } from "../monitors/monitor-poller.ts";
 import { PROCESS_REAPER_INTERVAL_MS } from "../processes/process-reaper.ts";
+import { JOB_EXIT_POLL_MS } from "../processes/job-exit-mail.ts";
 import { LLM_CAPTURE_RETENTION_MS } from "../sessions/session-store.ts";
 import { isTerminal } from "../runs/run-store.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -46,6 +47,7 @@ export function registerEveryJobs(
     sweepAsks,
     crons,
     monitorPoller,
+    jobExitSweep,
     processReaper,
     fileUploads,
     semanticMemory,
@@ -64,6 +66,7 @@ export function registerEveryJobs(
     runSignals,
     runs,
     sweepSessionReturns,
+    sweepMailWakes,
     runResultRecovery,
     outbound,
     approvals,
@@ -84,6 +87,7 @@ export function registerEveryJobs(
     if (pruned > 0) console.log(`[scheduler] pruned ${pruned} old cron fire row(s)`);
   });
   if (monitorPoller) every("monitor:poll", MONITOR_POLL_MS, () => monitorPoller.tick());
+  if (jobExitSweep) every("processes:exit-mail", JOB_EXIT_POLL_MS, () => jobExitSweep.tick());
   if (processReaper) every("processes:reaper", PROCESS_REAPER_INTERVAL_MS, () => processReaper.sweep());
   if (fileUploads) every("file-uploads", 60_000, () => fileUploads.sweep(), { immediate: true });
   every("memory-vector-index", 30_000, () => semanticMemory.index(), { immediate: true });
@@ -120,6 +124,7 @@ export function registerEveryJobs(
   });
   every("run-signals:prune", 60 * 60_000, () => runSignals.prune(7 * 24 * 60 * 60_000));
   every("session-return-sweep", 1_000, sweepSessionReturns);
+  every("session-mail-wake-sweep", 10_000, sweepMailWakes);
   every("run-result-sweep", 60_000, () => runResultRecovery.sweep());
   every("queued-post-retry", 30_000, () => outbound.retryQueued());
   every("approval-deliveries", 30_000, () => approvals.deliverPending(), { immediate: true });

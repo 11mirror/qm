@@ -1,20 +1,17 @@
-import { sessionTurnOrigin } from "../core/turn-origin.ts";
 import { principalDestination } from "../reach/reach.ts";
 import type { Outbound } from "../surfaces/outbound.ts";
 import { deliveryCandidatesFor } from "../core/orchestrator/turn-helpers.ts";
 import type { SessionMailbox } from "../sessions/session-mailbox.ts";
 import { type Session, type SpawnMeta } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
-import { isUnstarted, type Run, type RunStore } from "../runs/run-store.ts";
+import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { isSubagentThreadRef } from "../sessions/thread-ref.ts";
 import { itemVisibleToAll, snippet, assertAudienceCompatible } from "./audience.ts";
 import { sessionRunCancelled } from "./tree.ts";
-import { requiresDelegation } from "./delegation.ts";
 
-const CHILD_DONE_RECHECK_MS = 60_000;
 const MAIL_ERROR_CAP = 1_000;
 
 export type SubagentMailKind = "final_answer" | "no_reply" | "awaiting_input" | "errored" | "refused";
@@ -44,40 +41,11 @@ export function renderSubagentMail(input: {
 export interface SubagentMailDeps {
   signals?: Pick<RunSignalStore, "pending">;
   outbound?: Pick<Outbound, "send">;
-  delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
   sessions: Pick<SessionStore, "get" | "getByThread" | "getItems" | "latestItemSeq" | "visibleItems">;
-  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw" | "deferReturn"> &
-    Partial<Pick<RunStore, "latestForThread" | "get">>;
-  maxAttempts: number;
+  runs: Partial<Pick<RunStore, "latestForThread" | "get">>;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
 }
-
-const UNINHERITED_REQUEST_KEYS = [
-  "runId",
-  "attempt",
-  "runLeaseToken",
-  "runStartedAt",
-  "finalAttempt",
-  "background",
-  "cancel",
-  "shutdown",
-  "modelAccount",
-  "privateSessionMessage",
-  "sessionMessageDepth",
-  "delegatingRunId",
-  "approval",
-  "proactiveOpener",
-  "redeliveryKey",
-  "attachments",
-  "inboundNotes",
-  "priorTurns",
-  "overheard",
-  "detectContext",
-  "detectOpener",
-  "conversationHeader",
-  "wakeCause",
-] as const;
 
 function mailContent(run: Run): { kind: SubagentMailKind; body: string } {
   const result = run.result;
@@ -135,68 +103,17 @@ async function sendChildFiles(
   });
 }
 
-async function wakeParent(
-  deps: SubagentMailDeps,
-  run: Run,
-  parent: Session,
-  prepared: OrchestratorInput,
-  meta: OrchestratorInput | SpawnMeta,
-  originalParent: boolean,
-  initiatingRun: Run | null | undefined,
-): Promise<boolean> {
-  const surfaceTools =
-    meta.surfaceTools === true ||
-    requiresDelegation(prepared, (await deps.delegationEnabled?.(prepared.actor.id)) === true);
-  const dedupKey = `subagent-return:${run.id}`;
-  const existing = await deps.runs.getByDedupKey(dedupKey);
-  const unread = (await deps.mailbox.pending(parent.id)).some((message) => message.id === `subagent-mail-${run.id}`);
-  if (!unread) {
-    if (existing && isUnstarted(existing)) await deps.runs.withdraw(existing.id, { unstartedOnly: true });
-    return true;
-  }
-  const rewake = existing && (existing.status === "done" || existing.status === "failed") ? existing.id : null;
-  const inFlight = await deps.runs.inFlightForThread(parent.threadRef);
-  const sharedWake = inFlight.some(
-    (turn) =>
-      turn.status === "queued" &&
-      turn.request.wakeCause === "child_done" &&
-      turn.request.actor.id === prepared.actor.id,
-  );
-  if (sharedWake) {
-    await deps.runs.deferReturn(run.id, CHILD_DONE_RECHECK_MS);
-    return false;
-  }
-  const wake =
-    "A delegated task finished. Check internal messages with subagents wait (timeoutMs: 0), then report any new result or blocker relevant to the user's request. If it was already handled or no message is available, end without posting.";
-  await deps.runs.enqueue({
-    sessionId: parent.threadRef,
-    dedupKey: rewake ? `${dedupKey}:${rewake}` : dedupKey,
-    request: {
-      ...prepared,
-      ...(surfaceTools ? { surfaceTools } : {}),
-      ...(originalParent && initiatingRun ? { delegatingRunId: initiatingRun.id } : {}),
-      origin: sessionTurnOrigin(prepared.origin, wake),
-      text: wake,
-      displayText: "Delegated task completed",
-      wakeCause: "child_done",
-    },
-    maxAttempts: deps.maxAttempts,
-  });
-  await deps.runs.deferReturn(run.id, CHILD_DONE_RECHECK_MS);
-  return false;
-}
-
-export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Promise<boolean> {
-  if (!isSubagentThreadRef(run.sessionId) || run.request.privateSessionMessage) return true;
+export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Promise<void> {
+  if (!isSubagentThreadRef(run.sessionId) || run.request.privateSessionMessage) return;
   if (
     run.result?.stopped ||
     (deps.signals && deps.runs.get && (await sessionRunCancelled({ get: deps.runs.get }, deps.signals, run.id)))
   )
-    return true;
+    return;
   const child = await deps.sessions.getByThread(run.sessionId);
-  if (!child?.parentSessionId || !child.spawnMeta) return true;
+  if (!child?.parentSessionId || !child.spawnMeta) return;
   const parent = await deps.sessions.get(child.parentSessionId);
-  if (!parent) return true;
+  if (!parent) return;
   const latestParent = await deps.runs.latestForThread?.(parent.threadRef, { excludePrivateMessages: true });
   if (parent.scopeId !== child.scopeId) throw new Error("parent and child contexts no longer match");
   const initiatingRun = run.request.delegatingRunId ? await deps.runs.get?.(run.request.delegatingRunId) : undefined;
@@ -232,7 +149,6 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   delete (inherited as Partial<SpawnMeta>).openFingerprint;
   const request: OrchestratorInput = {
     ...inherited,
-    sessionSenderId: child.id,
     conversation: {
       ...meta.conversation,
       ...(currentContext
@@ -240,13 +156,9 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
         : {}),
       threadRef: parent.threadRef,
     },
-    origin: sessionTurnOrigin(meta.origin, text),
+    origin: meta.origin ?? { kind: "automation" },
     text,
-    displayText: `[subagent ${title}: ${kind.replace("_", " ")}]`,
-    envelopeWrapped: true,
   };
-  for (const key of UNINHERITED_REQUEST_KEYS) delete request[key];
-  if (!originalParent) request.addressed = false;
   const prepared = deps.prepareRequest ? await deps.prepareRequest(request) : request;
   assertAudienceCompatible(run.request, prepared);
   const outputSeq = run.result?.sourceAssistantEntrySeq ?? run.turnUserSeq ?? run.result?.sourceUserSeq;
@@ -271,7 +183,4 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     audience: prepared.conversation.audience,
     createdAt: Date.now(),
   });
-  if (!isSubagentThreadRef(parent.threadRef))
-    return wakeParent(deps, run, parent, prepared, meta, originalParent, initiatingRun);
-  return true;
 }

@@ -99,7 +99,10 @@ export interface RunStore {
     threadRefs: readonly string[],
     opts?: { excludePrivateMessages?: boolean },
   ): Promise<Map<string, Run>>;
-  latestForThread(threadRef: string, opts?: { excludePrivateMessages?: boolean }): Promise<Run | null>;
+  latestForThread(
+    threadRef: string,
+    opts?: { excludePrivateMessages?: boolean; actorId?: string },
+  ): Promise<Run | null>;
   pendingReturns(limit?: number, afterId?: string): Promise<Run[]>;
   terminalFinished(after: TerminalCursor, beforeMs: number, limit: number): Promise<Run[]>;
   markReturned(runId: string): Promise<void>;

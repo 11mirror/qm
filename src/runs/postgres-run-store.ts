@@ -124,24 +124,18 @@ function runReads(
     },
     async latestForThread(threadRef, opts) {
       const { rows } = await q(
-        "SELECT * FROM runs WHERE session_id = $1 AND (NOT $2::boolean OR COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true') ORDER BY created_at DESC, seq DESC LIMIT 1",
-        [threadRef, Boolean(opts?.excludePrivateMessages)],
+        `SELECT * FROM runs WHERE session_id = $1
+         AND (NOT $2::boolean OR COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true')
+         AND ($3::text IS NULL OR request::jsonb->'actor'->>'id' = $3)
+         ORDER BY created_at DESC, seq DESC LIMIT 1`,
+        [threadRef, Boolean(opts?.excludePrivateMessages), opts?.actorId ?? null],
       );
       return rows[0] ? rowToRun(rows[0]) : null;
     },
     async pendingReturns(limit = 100, afterId = "") {
       const { rows } = await q(
-        `SELECT * FROM (
-           SELECT * FROM runs WHERE status IN ('done','failed') AND returned_at IS NULL
-           AND session_id LIKE 'agent:main:subagent:%' AND id > $2
-           UNION
-           SELECT child.* FROM runs wake JOIN runs child
-           ON child.id = substring(wake.idempotency_key FROM length('subagent-return:') + 1)
-           WHERE wake.status IN ('pending','queued') AND wake.attempts = 0 AND wake.turn_user_seq IS NULL
-           AND wake.idempotency_key LIKE 'subagent-return:%'
-           AND child.status IN ('done','failed') AND child.session_id LIKE 'agent:main:subagent:%'
-           AND child.id > $2
-         ) pending WHERE retry_after <= $3 ORDER BY id LIMIT $1`,
+        `SELECT * FROM runs WHERE status IN ('done','failed') AND returned_at IS NULL
+         AND session_id LIKE 'agent:main:subagent:%' AND id > $2 AND retry_after <= $3 ORDER BY id LIMIT $1`,
         [limit, afterId, Date.now()],
       );
       return rows.map(rowToRun);

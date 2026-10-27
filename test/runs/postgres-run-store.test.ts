@@ -309,31 +309,6 @@ test("pg terminal returns survive reopening the run store", async () => {
   await second.close();
 });
 
-test("pg legacy completion wakeups remain discoverable after return and restart until withdrawn", async () => {
-  const first = testRunStore();
-  const { run } = await first.runs.enqueue({
-    sessionId: `agent:main:subagent:${randomUUID()}`,
-    request: turn("child"),
-  });
-  await finishTurn((await claimTurn(first.ledger, run.id))!, { status: "ok", reply: "done" });
-  const { run: wake } = await first.runs.enqueue({
-    sessionId: `parent-${randomUUID()}`,
-    dedupKey: `subagent-return:${run.id}`,
-    request: turn("completion"),
-  });
-  await first.runs.markReturned(run.id);
-  await first.close();
-  const second = testRunStore(first.databaseUrl);
-  try {
-    assert.ok((await second.runs.pendingReturns(1000)).some((pending) => pending.id === run.id));
-    assert.ok(!(await second.runs.pendingReturns(1000, run.id)).some((pending) => pending.id === run.id));
-    assert.equal(await second.runs.withdraw(wake.id), true);
-    assert.ok(!(await second.runs.pendingReturns(1000)).some((pending) => pending.id === run.id));
-  } finally {
-    await second.close();
-  }
-});
-
 test("pg unstarted withdrawal preserves claimed and handed-back turns", async () => {
   const { runs, ledger, close } = testRunStore();
   try {

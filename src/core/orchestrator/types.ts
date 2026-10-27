@@ -93,7 +93,7 @@ export interface OrchestratorInput extends Omit<
   shutdown?: AbortSignal;
   sessionParticipantIds?: readonly string[];
   scopeVersion?: string;
-  wakeCause?: "child_done";
+  wakeCause?: "mail";
   trace?: TraceCarrier;
 }
 

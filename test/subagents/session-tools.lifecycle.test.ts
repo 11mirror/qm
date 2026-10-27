@@ -198,65 +198,22 @@ test("read lists children with status and renders a child's recent transcript", 
   assert.match(transcript.rendered, /found 3 call sites/);
 });
 
-test("a finished child durably wakes its Slack parent exactly once and leaves the result in its mailbox", async () => {
+test("a finished child's result lands in its parent's mailbox once", async () => {
   const r = await rig();
   const opened = await r.syscallsFor(r.room).open({ task: "summarize the logs" });
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   await completeTurn(r.ledger, queued.id, { status: "ok", reply: "logs are clean" });
-  const finished = await r.runs.get(queued.id);
-
-  await deliverSubagentMail(
-    { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, delegationEnabled: async () => true },
-    finished!,
-  );
+  const finished = (await r.runs.get(queued.id))!;
+  await deliverSubagentMail(r, finished);
+  await deliverSubagentMail(r, finished);
   const mail = await r.mailbox.pending(r.room.id);
   assert.equal(mail.length, 1);
-  const request = mail[0]!;
-  assert.equal(request.recipientId, r.room.id);
-  assert.match(request.text, /<wake reason="subagent"/);
-  assert.match(request.text, /kind="final_answer"/);
-  assert.match(request.text, /logs are clean/);
-
-  await deliverSubagentMail(
-    { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, delegationEnabled: async () => true },
-    finished!,
-  );
-  assert.equal((await r.mailbox.pending(r.room.id)).length, 1);
-  const wakes = await r.runs.inFlightForThread(r.room.threadRef);
-  assert.equal(wakes.length, 1);
-  assert.equal(wakes[0]!.dedupKey, `subagent-return:${finished!.id}`);
-  assert.match(wakes[0]!.request.text, /Check internal messages/);
-  assert.equal(wakes[0]!.request.surfaceTools, true);
-});
-
-test("children finishing while a parent is busy share one queued wake", async () => {
-  const r = await rig();
-  const finished = [];
-  for (const task of ["first", "second", "third"]) {
-    const opened = await r.syscallsFor(r.room).open({ task, requestId: task });
-    assert.ok(opened.ok);
-    const child = await freshSession(r.sessions, opened.sessionId);
-    const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-    await completeTurn(r.ledger, queued.id, { status: "ok", reply: `${task} done` });
-    finished.push((await r.runs.get(queued.id))!);
-  }
-  const busy = await r.runs.enqueue({
-    sessionId: r.room.threadRef,
-    request: { ...finished[0]!.request, text: "busy" },
-  });
-  for (const run of finished) {
-    const settled = await deliverSubagentMail(
-      { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, delegationEnabled: async () => true },
-      run,
-    );
-    assert.equal(settled, false, "a return stays open until the parent reads its mail");
-  }
-  assert.equal((await r.mailbox.pending(r.room.id)).length, 3);
-  const wakes = (await r.runs.inFlightForThread(r.room.threadRef)).filter((run) => run.id !== busy.run.id);
-  assert.equal(wakes.length, 1);
-  assert.equal(wakes[0]!.request.wakeCause, "child_done");
+  assert.equal(mail[0]!.recipientId, r.room.id);
+  assert.match(mail[0]!.text, /<wake reason="subagent"/);
+  assert.match(mail[0]!.text, /kind="final_answer"/);
+  assert.match(mail[0]!.text, /logs are clean/);
 });
 
 test("a silent child mails a completed-without-reply notice without borrowing transcript text", async () => {
@@ -271,10 +228,7 @@ test("a silent child mails a completed-without-reply notice without borrowing tr
   await completeTurn(r.ledger, queued.id, { status: "silent" });
   const finished = await r.runs.get(queued.id);
 
-  await deliverSubagentMail(
-    { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, delegationEnabled: async () => true },
-    finished!,
-  );
+  await deliverSubagentMail({ mailbox: r.mailbox, sessions: r.sessions, runs: r.runs }, finished!);
   const mail = await r.mailbox.pending(r.room.id);
   assert.equal(mail.length, 1);
   assert.match(mail[0]!.text, /kind="no_reply"/);
@@ -291,10 +245,7 @@ test("a detached child sends no mail; any in-scope session can still be read", a
   await completeTurn(r.ledger, queued.id, { status: "ok", reply: "done alone" });
   const finished = await r.runs.get(queued.id);
 
-  await deliverSubagentMail(
-    { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, delegationEnabled: async () => true },
-    finished!,
-  );
+  await deliverSubagentMail({ mailbox: r.mailbox, sessions: r.sessions, runs: r.runs }, finished!);
   assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 0);
 
   const read = await r.syscallsFor(r.room).read({ target: child.id });
@@ -386,7 +337,6 @@ test("terminal children remain recoverable until their return is acknowledged", 
     deliverSubagentMail(
       {
         sessions: r.sessions,
-        maxAttempts: 3,
         runs: r.runs,
         mailbox: {
           ...r.mailbox,
@@ -401,31 +351,11 @@ test("terminal children remain recoverable until their return is acknowledged", 
   );
   assert.equal(failed, true);
   assert.equal((await r.runs.pendingReturns()).length, 1);
-  await deliverSubagentMail(
-    { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, delegationEnabled: async () => true },
-    pending!,
-  );
-  await deliverSubagentMail(
-    { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, delegationEnabled: async () => true },
-    pending!,
-  );
+  await deliverSubagentMail({ mailbox: r.mailbox, sessions: r.sessions, runs: r.runs }, pending!);
+  await deliverSubagentMail({ mailbox: r.mailbox, sessions: r.sessions, runs: r.runs }, pending!);
   assert.equal((await r.mailbox.pending(r.room.id)).length, 1);
-  const wakes = await r.runs.inFlightForThread(r.room.threadRef);
-  assert.equal(wakes.length, 1);
-  assert.equal(wakes[0]!.dedupKey, `subagent-return:${pending!.id}`);
-  assert.match(wakes[0]!.request.text, /Check internal messages/);
-  assert.equal(wakes[0]!.request.surfaceTools, true);
-  await r.mailbox.acknowledge(r.room.id, [`subagent-mail-${pending!.id}`]);
-  assert.equal(
-    await deliverSubagentMail(
-      { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, delegationEnabled: async () => true },
-      pending!,
-    ),
-    true,
-  );
   await r.runs.markReturned(pending!.id);
   assert.deepEqual(await r.runs.pendingReturns(), []);
-  assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
 });
 
 test("adopting into a fresh web parent never delivers to the old parent's surface", async () => {
@@ -439,10 +369,7 @@ test("adopting into a fresh web parent never delivers to the old parent's surfac
   await completeTurn(r.ledger, queued!.id, { status: "ok", reply: "ready" });
   const finished = (await r.runs.get(queued!.id))!;
   await assert.rejects(
-    deliverSubagentMail(
-      { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, delegationEnabled: async () => true },
-      finished,
-    ),
+    deliverSubagentMail({ mailbox: r.mailbox, sessions: r.sessions, runs: r.runs }, finished),
     /verified runtime context/,
   );
   await r.runs.enqueue({
@@ -456,10 +383,7 @@ test("adopting into a fresh web parent never delivers to the old parent's surfac
       text: "hello",
     },
   });
-  await deliverSubagentMail(
-    { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, delegationEnabled: async () => true },
-    finished,
-  );
+  await deliverSubagentMail({ mailbox: r.mailbox, sessions: r.sessions, runs: r.runs }, finished);
   const [mail] = await r.mailbox.pending(destination.id);
   assert.equal(mail!.recipientId, destination.id);
   assert.equal((await r.mailbox.pending(r.room.id)).length, 0);
@@ -564,25 +488,22 @@ test("completion cannot expand the finished run's audience and retries after its
     for (const pending of await r.runs.pendingReturns()) {
       attempts++;
       try {
-        if (
-          await deliverSubagentMail(
-            {
-              mailbox: r.mailbox,
-              sessions: r.sessions,
-              runs: r.runs,
-              maxAttempts: 3,
-              prepareRequest: async (request) => ({
-                ...request,
-                conversation: {
-                  ...request.conversation,
-                  audience: expanded ? [actor, { id: "new-member", type: "internal" }] : [actor],
-                },
-              }),
-            },
-            pending,
-          )
-        )
-          await r.runs.markReturned(pending.id);
+        await deliverSubagentMail(
+          {
+            mailbox: r.mailbox,
+            sessions: r.sessions,
+            runs: r.runs,
+            prepareRequest: async (request) => ({
+              ...request,
+              conversation: {
+                ...request.conversation,
+                audience: expanded ? [actor, { id: "new-member", type: "internal" }] : [actor],
+              },
+            }),
+          },
+          pending,
+        );
+        await r.runs.markReturned(pending.id);
       } catch (error) {
         await r.runs.deferReturn(pending.id, 60_000);
         throw error;
@@ -603,5 +524,5 @@ test("completion cannot expand the finished run's audience and retries after its
   await recover();
   assert.equal(attempts, 2);
   assert.equal((await r.mailbox.pending(r.room.id)).length, 1);
-  assert.ok(await r.runs.getByDedupKey(`subagent-return:${run!.id}`));
+  assert.deepEqual(await r.runs.pendingReturns(), []);
 });

@@ -5,6 +5,9 @@ import type { Item } from "../sessions/items.ts";
 import { itemVisibleToAll, snippet, assertAudienceCompatible } from "./audience.ts";
 import type { SessionReadInput, SessionChildSummary, SessionReadResult } from "./types.ts";
 import type { TurnContext } from "./turn-context.ts";
+import type { SessionStore } from "../sessions/session-store.ts";
+import type { OrchestratorInput } from "../core/orchestrator/types.ts";
+import type { Session } from "../types.ts";
 
 const READ_DEFAULT_LIMIT = 30;
 const READ_DEFAULT_MAX_CHARS = 4_000;
@@ -36,6 +39,45 @@ function lastAssistantText(items: readonly Item[]): string | undefined {
   return undefined;
 }
 
+export interface MailReader {
+  sessions: Pick<SessionStore, "getForParticipant" | "visibleItems">;
+  authorize?: (session: Session, actorId: string) => Promise<boolean>;
+}
+
+export async function visibleMail(
+  deps: MailReader,
+  scopeId: string,
+  caller: Pick<OrchestratorInput, "actor" | "conversation">,
+  messages: readonly SessionMessage[],
+  limit: number,
+): Promise<SessionMessage[]> {
+  const visible: SessionMessage[] = [];
+  for (const message of messages) {
+    const sender = await deps.sessions.getForParticipant(message.senderId, caller.actor.id);
+    if (!sender || sender.scopeId !== scopeId) continue;
+    if (deps.authorize && !(await deps.authorize(sender, caller.actor.id))) continue;
+    try {
+      assertAudienceCompatible(
+        { actor: message.actor, conversation: { ...caller.conversation, audience: message.audience } },
+        caller,
+      );
+    } catch {
+      continue;
+    }
+    if (
+      message.sourceEntrySeq !== undefined &&
+      !(await itemVisibleToAll(deps.sessions, sender.id, message.sourceEntrySeq, [
+        caller.actor.id,
+        ...caller.conversation.audience.map((person) => person.id),
+      ]))
+    )
+      continue;
+    visible.push(message);
+    if (visible.length >= limit) break;
+  }
+  return visible;
+}
+
 export async function receiveMessages(ctx: TurnContext, timeoutMs = 0): Promise<SessionMessage[]> {
   const { deps, binding, currentCaller } = ctx;
   const deadline = Date.now() + Math.min(60_000, Math.max(0, timeoutMs));
@@ -43,30 +85,7 @@ export async function receiveMessages(ctx: TurnContext, timeoutMs = 0): Promise<
     binding.request.cancel?.throwIfAborted();
     const caller = await currentCaller();
     const messages = await deps.mailbox.pending(binding.session.id);
-    const visible: SessionMessage[] = [];
-    for (const message of messages) {
-      const sender = await deps.sessions.getForParticipant(message.senderId, caller.actor.id);
-      if (!sender || sender.scopeId !== binding.scopeId) continue;
-      if (deps.authorize && !(await deps.authorize(sender, caller.actor.id))) continue;
-      try {
-        assertAudienceCompatible(
-          { actor: message.actor, conversation: { ...caller.conversation, audience: message.audience } },
-          caller,
-        );
-      } catch {
-        continue;
-      }
-      if (
-        message.sourceEntrySeq !== undefined &&
-        !(await itemVisibleToAll(deps.sessions, sender.id, message.sourceEntrySeq, [
-          caller.actor.id,
-          ...caller.conversation.audience.map((person) => person.id),
-        ]))
-      )
-        continue;
-      visible.push(message);
-      if (visible.length >= RECEIVE_BATCH_MAX) break;
-    }
+    const visible = await visibleMail(deps, binding.scopeId, caller, messages, RECEIVE_BATCH_MAX);
     if (visible.length || Date.now() >= deadline) return visible;
     await sleep(Math.min(250, deadline - Date.now()));
   } while (Date.now() <= deadline);

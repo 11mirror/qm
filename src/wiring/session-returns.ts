@@ -1,6 +1,6 @@
 import type { Head } from "./late.ts";
 import { swallowAs } from "../util/errors.ts";
-import { type Session, scopeId } from "../types.ts";
+import type { Session } from "../types.ts";
 import { sessionTreeWorking, stoppableAncestors } from "../subagents/tree.ts";
 import type { Run } from "../runs/run-store.ts";
 import { deliverSubagentMail } from "../subagents/mail.ts";
@@ -35,10 +35,9 @@ export function buildSessionReturns(
     sessionStateBus,
     blockingApprovalSessions,
     advisoryLock,
-    maxAttempts,
     sessionMailbox,
+    mailWaker,
     prepareSessionRequest,
-    featureFlags,
     outbound,
     runSignals,
     orchestratorDeps,
@@ -78,26 +77,25 @@ export function buildSessionReturns(
   const returnSessionRun = (run: Run) =>
     advisoryLock
       .withLock("session-tree-admission", async () => {
-        const settled = await deliverSubagentMail(
+        await deliverSubagentMail(
           {
             sessions,
             runs,
-            maxAttempts,
             mailbox: sessionMailbox,
             prepareRequest: prepareSessionRequest,
-            delegationEnabled: (actorId) => featureFlags.enabled("responsive_spine", scopeId("personal", actorId)),
             outbound,
             signals: runSignals,
           },
           run,
         );
-        if (settled) await runs.markReturned(run.id);
+        await runs.markReturned(run.id);
       })
       .catch(async (error: unknown) => {
         await runs.deferReturn(run.id, 60_000);
         throw error;
       });
   runs.onTerminal((run) => {
+    void mailWaker.wakeThread(run.sessionId);
     if (isSubagentThreadRef(run.sessionId)) void returnSessionRun(run).catch(swallowAs("sessions: return", undefined));
   });
   const sweepSessionReturns = async () => {
@@ -117,7 +115,7 @@ export function buildSessionReturns(
           keychain.connectorAccessToken("slack.com", viewer, "company"))
         : null,
   });
-  return { sweepSessionReturns };
+  return { sweepSessionReturns, sweepMailWakes: mailWaker.sweep };
 }
 
 export type SessionReturnsModule = ReturnType<typeof buildSessionReturns>;

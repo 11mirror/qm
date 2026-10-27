@@ -26,12 +26,36 @@ const SESSION_MAILBOX_MIGRATION = mapToTableMigration("sessions/mailbox/0001-typ
   statements: [`CREATE INDEX IF NOT EXISTS session_mailbox_recipient ON session_mailbox (recipient_id)`],
 });
 
+const SESSION_MAILBOX_UNREAD_MIGRATION = {
+  id: "sessions/mailbox/0002-unread",
+  statements: [
+    `CREATE INDEX IF NOT EXISTS session_mailbox_unread ON session_mailbox (created_at) WHERE consumed IS NOT TRUE`,
+  ],
+};
+
+export interface MailDelivery {
+  wake?: boolean;
+}
+
 export function createSessionMailbox(databaseUrl: string) {
-  const pg = createPgPool(databaseUrl, [SESSION_MAILBOX_MIGRATION]);
+  const pg = createPgPool(databaseUrl, [SESSION_MAILBOX_MIGRATION, SESSION_MAILBOX_UNREAD_MIGRATION]);
   const { codec, ...table } = typedTable<SessionMessage>(pg, SESSION_MAILBOX);
+  const delivered: Array<(recipientId: string) => Promise<void>> = [];
   return {
-    async send(message: SessionMessage): Promise<void> {
+    onDelivered(listener: (recipientId: string) => Promise<void>): void {
+      delivered.push(listener);
+    },
+    async send(message: SessionMessage, delivery: MailDelivery = {}): Promise<void> {
       await table.insert(message.id, message);
+      if (delivery.wake === false) return;
+      for (const listener of delivered) await listener(message.recipientId);
+    },
+    async unreadRecipients(sinceMs: number): Promise<string[]> {
+      const rows = await pg.q(
+        `SELECT DISTINCT recipient_id FROM session_mailbox WHERE consumed IS NOT TRUE AND created_at >= $1`,
+        [sinceMs],
+      );
+      return rows.map((row) => String(row.recipient_id));
     },
     async pending(recipientId: string): Promise<SessionMessage[]> {
       return codec.rows(

@@ -51,7 +51,8 @@ export async function delegatedAuthorizationOrigin(
       !child.parentSessionId &&
       !isSubagentThreadRef(child.threadRef) &&
       source.sessionId === sender.threadRef;
-    if (!delegated && !continued && !started) return;
+    const resumed = current.wakeCause === "mail" && sender.id === child.id && source.sessionId === child.threadRef;
+    if (!delegated && !continued && !started && !resumed) return;
     const parent = source.request;
     const audience = new Set([parent.actor.id, ...parent.conversation.audience.map((person) => person.id)]);
     if (
