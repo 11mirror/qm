@@ -78,13 +78,12 @@ const MAX_CLAIMS_BYTES = 1024 * 1024;
 export async function mintCapabilityToken(
   claims: CapabilityClaims,
   secret: string,
-  compressionEnabled = false,
 ): Promise<string> {
   const value = { orgId: tenant().orgId, ...claims };
   const bytes = Buffer.from(JSON.stringify(value));
   if (bytes.length > MAX_CLAIMS_BYTES) throw new Error("Capability claims exceed size limit");
   return mintSignedPayload(
-    compressionEnabled && bytes.length > 4096
+    bytes.length > 4096
       ? { encoding: "deflate-raw", claims: (await compress(bytes)).toString("base64url") }
       : value,
     secret,

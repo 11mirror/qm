@@ -147,7 +147,6 @@ async function createSurfaceFileRequest(ctx: ApiCtx): Promise<RouteResult> {
         exp: Date.now() + FILE_DOWNLOAD_TTL_MS,
       },
       (ctx.deps.capabilitySecret ?? ctx.secret)!,
-      ctx.deps.capabilityTokenCompression,
     );
     const { blobId, ...meta } = file;
     return ok({
