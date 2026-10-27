@@ -1,4 +1,4 @@
-import { html, render } from "lit";
+import { html, render, type TemplateResult } from "lit";
 import { X, Link, Copy, Check, Users, Globe, ChevronDown } from "lucide";
 import { toggleFormMenu, closeFormMenus } from "./ui";
 import { icon } from "./icons";
@@ -6,6 +6,71 @@ import { api, withBase } from "./core-bridge";
 
 interface ShareState {
   share: { token: string; audience: "internal" | "external"; createdAt: number } | null;
+}
+
+function audienceTpl(
+  audience: string,
+  busy: boolean,
+  choose: (value: "internal" | "external") => void,
+): TemplateResult {
+  return html`<div class="share-access-row">
+    <span class="share-access-icon">${icon(audience === "external" ? Globe : Users, 18)}</span>
+    <div class="form-menu-control menu-control share-audience" data-drop="down">
+      <button
+        class="btn menu-button share-audience-button"
+        type="button"
+        aria-label="Who can view"
+        aria-haspopup="menu"
+        aria-expanded="false"
+        ?disabled=${busy}
+        @click=${toggleFormMenu}
+        @keydown=${(event: KeyboardEvent) => {
+          if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+          event.preventDefault();
+          const control = (event.currentTarget as HTMLElement).parentElement!;
+          if (!control.classList.contains("open")) toggleFormMenu(event);
+          const options = control.querySelectorAll<HTMLButtonElement>(".menu-option");
+          options[event.key === "ArrowUp" ? options.length - 1 : 0]?.focus();
+        }}
+      >
+        <span>${audience === "external" ? "Anyone with the link" : "Anyone in your organization"}</span
+        >${icon(ChevronDown, 14)}
+      </button>
+      <div
+        class="menu-popover share-audience-menu"
+        role="menu"
+        aria-label="Who can view"
+        hidden
+        @keydown=${(event: KeyboardEvent) => {
+          const options = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>(".menu-option")];
+          const index = options.indexOf(document.activeElement as HTMLButtonElement);
+          if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+            event.preventDefault();
+            let next = (index + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
+            if (event.key === "Home") next = 0;
+            if (event.key === "End") next = options.length - 1;
+            options[next]?.focus();
+          }
+        }}
+      >
+        ${(["internal", "external"] as const).map(
+          (value) =>
+            html`<button
+              type="button"
+              role="menuitemradio"
+              aria-checked=${audience === value}
+              class=${`menu-option ${audience === value ? "active" : ""}`}
+              @click=${() => choose(value)}
+            >
+              ${icon(value === "external" ? Globe : Users, 16)}<span class="menu-option-label"
+                >${value === "external" ? "Anyone with the link" : "Anyone in your organization"}</span
+              >${audience === value ? icon(Check, 15) : ""}
+            </button>`,
+        )}
+      </div>
+    </div>
+    <span class="share-access-label">Can view</span>
+  </div>`;
 }
 
 export async function openSessionShare(id: string): Promise<void> {
@@ -76,74 +141,15 @@ export async function openSessionShare(id: string): Promise<void> {
           <div><h2 id="session-share-heading">Share conversation</h2></div>
           <button class="chip-x" type="button" aria-label="Close" @click=${close}>${icon(X, 16)}</button>
         </div>
-        <div class="share-access-row">
-          <span class="share-access-icon">${icon(audience === "external" ? Globe : Users, 18)}</span>
-          <div class="form-menu-control menu-control share-audience" data-drop="down">
-            <button
-              class="btn menu-button share-audience-button"
-              type="button"
-              aria-label="Who can view"
-              aria-haspopup="menu"
-              aria-expanded="false"
-              ?disabled=${busy}
-              @click=${toggleFormMenu}
-              @keydown=${(event: KeyboardEvent) => {
-                if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-                event.preventDefault();
-                const control = (event.currentTarget as HTMLElement).parentElement!;
-                if (!control.classList.contains("open")) toggleFormMenu(event);
-                const options = control.querySelectorAll<HTMLButtonElement>(".menu-option");
-                options[event.key === "ArrowUp" ? options.length - 1 : 0]?.focus();
-              }}
-            >
-              <span>${audience === "external" ? "Anyone with the link" : "Anyone in your organization"}</span
-              >${icon(ChevronDown, 14)}
-            </button>
-            <div
-              class="menu-popover share-audience-menu"
-              role="menu"
-              aria-label="Who can view"
-              hidden
-              @keydown=${(event: KeyboardEvent) => {
-                const options = [
-                  ...(event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>(".menu-option"),
-                ];
-                const index = options.indexOf(document.activeElement as HTMLButtonElement);
-                if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
-                  event.preventDefault();
-                  let next = (index + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
-                  if (event.key === "Home") next = 0;
-                  if (event.key === "End") next = options.length - 1;
-                  options[next]?.focus();
-                }
-              }}
-            >
-              ${(["internal", "external"] as const).map(
-                (value) =>
-                  html`<button
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked=${audience === value}
-                    class=${`menu-option ${audience === value ? "active" : ""}`}
-                    @click=${() => {
-                      audience = value;
-                      state = { share: null };
-                      copied = false;
-                      error = "";
-                      closeFormMenus();
-                      draw();
-                      dialog.querySelector<HTMLButtonElement>(".share-audience-button")?.focus();
-                    }}
-                  >
-                    ${icon(value === "external" ? Globe : Users, 16)}<span class="menu-option-label"
-                      >${value === "external" ? "Anyone with the link" : "Anyone in your organization"}</span
-                    >${audience === value ? icon(Check, 15) : ""}
-                  </button>`,
-              )}
-            </div>
-          </div>
-          <span class="share-access-label">Can view</span>
-        </div>
+        ${audienceTpl(audience, busy, (value) => {
+          audience = value;
+          state = { share: null };
+          copied = false;
+          error = "";
+          closeFormMenus();
+          draw();
+          dialog.querySelector<HTMLButtonElement>(".share-audience-button")?.focus();
+        })}
         ${audience === "external" ? html`<p class="share-external-warning" role="status">⚠️ External. Double-check what you're sharing.</p>` : ""}
         ${
           state.share

@@ -11,14 +11,13 @@ import { tip } from "./tooltip";
 
 type JobOutput = { text: string; cursor: number; state: "running" | "exited"; exitCode?: number };
 
-export function createBackgroundPanel({
-  chatState,
-  redrawTranscript,
-}: {
+interface BackgroundPanelDeps {
   chatState: { readonly sessionId: string | null; readonly threadRef: string | null };
   redrawTranscript: () => void;
-}) {
-  const bgPanel = {
+}
+
+class BackgroundPanel {
+  private readonly bgPanel = {
     requested: null as { sessionId: string | null; threadRef: string | null } | null,
     open: false,
     loading: false,
@@ -30,82 +29,91 @@ export function createBackgroundPanel({
     fetchSeq: 0,
     epoch: 0,
   };
+  private readonly chatState: BackgroundPanelDeps["chatState"];
+  private readonly redrawTranscript: () => void;
 
-  function requestBackgroundPanel(sessionId: string | null, threadRef: string | null): void {
-    const mounted = sessionId ? sessionId === chatState.sessionId : threadRef === chatState.threadRef;
+  constructor({ chatState, redrawTranscript }: BackgroundPanelDeps) {
+    this.chatState = chatState;
+    this.redrawTranscript = redrawTranscript;
+  }
+
+  readonly requestBackgroundPanel = (sessionId: string | null, threadRef: string | null): void => {
+    const mounted = sessionId ? sessionId === this.chatState.sessionId : threadRef === this.chatState.threadRef;
     if (mounted) {
-      openBackgroundPanel();
+      this.openBackgroundPanel();
       return;
     }
-    bgPanel.requested = { sessionId, threadRef };
-  }
+    this.bgPanel.requested = { sessionId, threadRef };
+  };
 
-  function resetBackgroundPanel(): void {
-    stopBackgroundPanel();
-    Object.assign(bgPanel, { loading: false, error: "", detail: null });
-    bgPanel.output.clear();
-    bgPanel.fetchSeq++;
-    bgPanel.epoch++;
-  }
+  readonly resetBackgroundPanel = (): void => {
+    this.stopBackgroundPanel();
+    Object.assign(this.bgPanel, { loading: false, error: "", detail: null });
+    this.bgPanel.output.clear();
+    this.bgPanel.fetchSeq++;
+    this.bgPanel.epoch++;
+  };
 
-  function consumeBackgroundPanelRequest(): void {
-    const req = bgPanel.requested;
-    bgPanel.requested = null;
+  readonly consumeBackgroundPanelRequest = (): void => {
+    const req = this.bgPanel.requested;
+    this.bgPanel.requested = null;
     if (!req) return;
-    const matches = req.sessionId ? req.sessionId === chatState.sessionId : req.threadRef === chatState.threadRef;
-    if (matches) openBackgroundPanel();
-  }
+    const matches = req.sessionId
+      ? req.sessionId === this.chatState.sessionId
+      : req.threadRef === this.chatState.threadRef;
+    if (matches) this.openBackgroundPanel();
+  };
 
-  function openBackgroundPanel(): void {
-    if (bgPanel.open) return;
-    bgPanel.open = true;
-    void refreshBackgroundDetail();
-    bgPanel.timer = setInterval(() => void backgroundPanelTick(), 2_500);
-    redrawTranscript();
-  }
+  private readonly openBackgroundPanel = (): void => {
+    if (this.bgPanel.open) return;
+    this.bgPanel.open = true;
+    void this.refreshBackgroundDetail();
+    this.bgPanel.timer = setInterval(() => void this.backgroundPanelTick(), 2_500);
+    this.redrawTranscript();
+  };
 
-  function stopBackgroundPanel(): void {
-    if (bgPanel.timer) clearInterval(bgPanel.timer);
-    Object.assign(bgPanel, { timer: null, open: false, openJob: null });
-  }
+  private readonly stopBackgroundPanel = (): void => {
+    if (this.bgPanel.timer) clearInterval(this.bgPanel.timer);
+    Object.assign(this.bgPanel, { timer: null, open: false, openJob: null });
+  };
 
-  function toggleBackgroundPanel(): void {
-    if (!bgPanel.open) return openBackgroundPanel();
-    stopBackgroundPanel();
-    redrawTranscript();
-  }
+  private readonly toggleBackgroundPanel = (): void => {
+    if (!this.bgPanel.open) return this.openBackgroundPanel();
+    this.stopBackgroundPanel();
+    this.redrawTranscript();
+  };
 
-  async function refreshBackgroundDetail(): Promise<void> {
-    const id = chatState.sessionId;
+  private readonly refreshBackgroundDetail = async (): Promise<void> => {
+    const id = this.chatState.sessionId;
     if (!id) {
-      bgPanel.detail = { jobs: [], watches: [], crons: [] };
+      this.bgPanel.detail = { jobs: [], watches: [], crons: [] };
       return;
     }
-    const seq = ++bgPanel.fetchSeq;
-    bgPanel.loading = !bgPanel.detail;
+    const seq = ++this.bgPanel.fetchSeq;
+    this.bgPanel.loading = !this.bgPanel.detail;
     try {
       const d = await api<SessionBackgroundView>(`/api/sessions/${encodeURIComponent(id)}/background`);
-      if (seq !== bgPanel.fetchSeq) return;
-      bgPanel.detail = d;
-      bgPanel.error = "";
+      if (seq !== this.bgPanel.fetchSeq) return;
+      this.bgPanel.detail = d;
+      this.bgPanel.error = "";
     } catch (e) {
-      if (seq !== bgPanel.fetchSeq) return;
-      bgPanel.error = errMessage(e, "Failed to load background activity.");
+      if (seq !== this.bgPanel.fetchSeq) return;
+      this.bgPanel.error = errMessage(e, "Failed to load background activity.");
     } finally {
-      if (seq === bgPanel.fetchSeq) {
-        bgPanel.loading = false;
-        redrawTranscript();
+      if (seq === this.bgPanel.fetchSeq) {
+        this.bgPanel.loading = false;
+        this.redrawTranscript();
       }
     }
-  }
+  };
 
-  async function backgroundPanelTick(): Promise<void> {
-    await refreshBackgroundDetail();
-    if (bgPanel.openJob) await pollJobOutput(bgPanel.openJob);
-    const d = bgPanel.detail;
+  private readonly backgroundPanelTick = async (): Promise<void> => {
+    await this.refreshBackgroundDetail();
+    if (this.bgPanel.openJob) await this.pollJobOutput(this.bgPanel.openJob);
+    const d = this.bgPanel.detail;
     if (d) {
       const row = sessionsState.list.find((r) =>
-        chatState.sessionId ? r.id === chatState.sessionId : r.threadRef === chatState.threadRef,
+        this.chatState.sessionId ? r.id === this.chatState.sessionId : r.threadRef === this.chatState.threadRef,
       );
       if (
         row &&
@@ -114,22 +122,22 @@ export function createBackgroundPanel({
           (row.crons ?? 0) !== d.crons.length)
       ) {
         await refreshSessions({ silent: true });
-        redrawTranscript();
+        this.redrawTranscript();
       }
     }
-  }
+  };
 
-  function toggleJobOutput(processId: string): void {
-    bgPanel.openJob = bgPanel.openJob === processId ? null : processId;
-    if (bgPanel.openJob && !bgPanel.output.has(processId)) void pollJobOutput(processId);
-    redrawTranscript();
-  }
+  private readonly toggleJobOutput = (processId: string): void => {
+    this.bgPanel.openJob = this.bgPanel.openJob === processId ? null : processId;
+    if (this.bgPanel.openJob && !this.bgPanel.output.has(processId)) void this.pollJobOutput(processId);
+    this.redrawTranscript();
+  };
 
-  async function pollJobOutput(processId: string): Promise<void> {
-    const id = chatState.sessionId;
+  private readonly pollJobOutput = async (processId: string): Promise<void> => {
+    const id = this.chatState.sessionId;
     if (!id) return;
-    const epoch = bgPanel.epoch;
-    const out: JobOutput = { text: "", cursor: 0, state: "running", ...bgPanel.output.get(processId) };
+    const epoch = this.bgPanel.epoch;
+    const out: JobOutput = { text: "", cursor: 0, state: "running", ...this.bgPanel.output.get(processId) };
     try {
       for (let i = 0; i < 8; i++) {
         const read = await api<SessionBackgroundOutput>(
@@ -139,67 +147,71 @@ export function createBackgroundPanel({
         Object.assign(out, { text, cursor: read.cursor, state: read.state, exitCode: read.exitCode });
         if (read.chunk.length < 60_000) break;
       }
-      if (epoch !== bgPanel.epoch) return;
-      bgPanel.output.set(processId, out);
+      if (epoch !== this.bgPanel.epoch) return;
+      this.bgPanel.output.set(processId, out);
     } catch (e) {
       swallow("web-ui: background job output read", e);
     }
-    if (epoch !== bgPanel.epoch) return;
-    redrawTranscript();
-  }
+    if (epoch !== this.bgPanel.epoch) return;
+    this.redrawTranscript();
+  };
 
-  function timeLeft(expiresAt: number): string {
+  private readonly timeLeft = (expiresAt: number): string => {
     const mins = Math.round((expiresAt - Date.now()) / 60_000);
     if (mins <= 0) return "expiring";
     if (mins < 60) return `${mins}m left`;
     return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m left`;
-  }
+  };
 
-  function backgroundActivityStrip(): TemplateResult | typeof nothing {
-    const counts = conversationBackground(sessionsState.list, chatState.sessionId, chatState.threadRef);
+  readonly backgroundActivityStrip = (): TemplateResult | typeof nothing => {
+    const counts = conversationBackground(sessionsState.list, this.chatState.sessionId, this.chatState.threadRef);
     const row = counts ? backgroundLabel(counts.jobs, counts.watches, counts.crons) : null;
     const live =
-      bgPanel.open && bgPanel.detail
-        ? backgroundLabel(bgPanel.detail.jobs.length, bgPanel.detail.watches.length, bgPanel.detail.crons.length)
+      this.bgPanel.open && this.bgPanel.detail
+        ? backgroundLabel(
+            this.bgPanel.detail.jobs.length,
+            this.bgPanel.detail.watches.length,
+            this.bgPanel.detail.crons.length,
+          )
         : null;
     const label = (live ?? row)?.label;
-    if (!label && !bgPanel.open) return nothing;
+    if (!label && !this.bgPanel.open) return nothing;
     return html`
-      <section class="bg-activity ${bgPanel.open ? "expanded" : ""}">
+      <section class="bg-activity ${this.bgPanel.open ? "expanded" : ""}">
         <button
           type="button"
           class="bg-activity-strip"
-          aria-expanded=${String(bgPanel.open)}
-          @click=${toggleBackgroundPanel}
+          aria-expanded=${String(this.bgPanel.open)}
+          @click=${this.toggleBackgroundPanel}
         >
           ${icon(Activity, 13)}<span class="bg-activity-label">${label ?? "Background activity"}</span>
           <span class="bg-activity-toggle">${icon(ChevronRight, 14)}</span>
         </button>
-        ${bgPanel.open ? backgroundPanelBody() : nothing}
+        ${this.bgPanel.open ? this.backgroundPanelBody() : nothing}
       </section>
     `;
-  }
+  };
 
-  function backgroundPanelBody(): TemplateResult {
-    const d = bgPanel.detail;
+  private readonly backgroundPanelBody = (): TemplateResult => {
+    const d = this.bgPanel.detail;
     const empty = d && d.jobs.length === 0 && d.watches.length === 0 && d.crons.length === 0;
     return html`<div class="bg-panel" role="region" aria-label="Background activity">
-      ${bgPanel.error ? html`<div class="bg-panel-note">${bgPanel.error}</div>` : nothing}
-      ${!d && bgPanel.loading ? html`<div class="bg-panel-note">Loading…</div>` : nothing}
-      ${empty && !bgPanel.error ? html`<div class="bg-panel-note">Nothing running here anymore.</div>` : nothing}
-      ${d ? d.jobs.map((j) => backgroundJobRow(j)) : nothing}
-      ${d ? d.watches.map((w) => backgroundWatchRow(w)) : nothing}
-      ${d ? d.crons.map((c) => backgroundCronRow(c)) : nothing}
+      ${this.bgPanel.error ? html`<div class="bg-panel-note">${this.bgPanel.error}</div>` : nothing}
+      ${!d && this.bgPanel.loading ? html`<div class="bg-panel-note">Loading…</div>` : nothing}
+      ${empty && !this.bgPanel.error ? html`<div class="bg-panel-note">Nothing running here anymore.</div>` : nothing}
+      ${d ? d.jobs.map((j) => this.backgroundJobRow(j)) : nothing}
+      ${d ? d.watches.map((w) => this.backgroundWatchRow(w)) : nothing}
+      ${d ? d.crons.map((c) => this.backgroundCronRow(c)) : nothing}
     </div>`;
-  }
+  };
 
-  function backgroundJobRow(j: SessionBackgroundView["jobs"][number]): TemplateResult {
-    const open = bgPanel.openJob === j.processId;
-    const out = bgPanel.output.get(j.processId);
+  private readonly backgroundJobRow = (j: SessionBackgroundView["jobs"][number]): TemplateResult => {
+    const open = this.bgPanel.openJob === j.processId;
+    const out = this.bgPanel.output.get(j.processId);
     const status =
       out?.state === "exited"
         ? `exited${out.exitCode !== undefined ? ` (${out.exitCode})` : ""}`
-        : timeLeft(j.expiresAt);
+        : this.timeLeft(j.expiresAt);
     return html`
       <div class="bg-row ${open ? "open" : ""}">
         <button
@@ -207,7 +219,7 @@ export function createBackgroundPanel({
           class="bg-row-head"
           aria-expanded=${String(open)}
           ${tip(open ? "Hide output" : "Show live output")}
-          @click=${() => toggleJobOutput(j.processId)}
+          @click=${() => this.toggleJobOutput(j.processId)}
         >
           ${icon(Terminal, 13)}
           ${
@@ -221,9 +233,9 @@ export function createBackgroundPanel({
         ${open ? html`<pre class="bg-row-output">${j.purpose ? `${j.command}\n\n` : ""}${out ? out.text || "(no output yet)" : "Loading output…"}</pre>` : nothing}
       </div>
     `;
-  }
+  };
 
-  function backgroundCronRow(c: SessionBackgroundView["crons"][number]): TemplateResult {
+  private readonly backgroundCronRow = (c: SessionBackgroundView["crons"][number]): TemplateResult => {
     return html`
       <div class="bg-row watch">
         <a class="bg-row-head" href=${deepLinkPath(UI_BASE, "crons", null, null, c.id)}>
@@ -233,9 +245,9 @@ export function createBackgroundPanel({
         </a>
       </div>
     `;
-  }
+  };
 
-  function backgroundWatchRow(w: SessionBackgroundView["watches"][number]): TemplateResult {
+  private readonly backgroundWatchRow = (w: SessionBackgroundView["watches"][number]): TemplateResult => {
     const what = w.pattern ? `output matching /${w.pattern}/` : "any new output";
     const note = w.instructions?.trim();
     return html`
@@ -244,11 +256,20 @@ export function createBackgroundPanel({
           ${icon(Radar, 13)}
           <span class="bg-row-cmd">Watch: wakes on ${what}${note ? ` · “${note}”` : ""}</span>
           <span class="bg-row-meta"
-            >armed ${relTime(w.createdAt)} · ${watchActivityLabel(w)} · ${timeLeft(w.expiresAt)}</span
+            >armed ${relTime(w.createdAt)} · ${watchActivityLabel(w)} · ${this.timeLeft(w.expiresAt)}</span
           >
         </div>
       </div>
     `;
-  }
-  return { backgroundActivityStrip, consumeBackgroundPanelRequest, requestBackgroundPanel, resetBackgroundPanel };
+  };
+}
+
+export function createBackgroundPanel(deps: BackgroundPanelDeps) {
+  const w = new BackgroundPanel(deps);
+  return {
+    requestBackgroundPanel: w.requestBackgroundPanel,
+    resetBackgroundPanel: w.resetBackgroundPanel,
+    consumeBackgroundPanelRequest: w.consumeBackgroundPanelRequest,
+    backgroundActivityStrip: w.backgroundActivityStrip,
+  };
 }

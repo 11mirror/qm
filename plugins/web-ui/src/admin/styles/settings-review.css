@@ -1,0 +1,759 @@
+#app-view .dd-btn:disabled {
+  opacity: 1;
+  background: var(--subtle);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+#app-view .dd-btn:disabled:hover {
+  background: var(--subtle);
+}
+#app-view .dd-btn > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#app-view .dd-btn > svg {
+  flex: none;
+  color: var(--muted);
+}
+#app-view .dd-menu {
+  display: none;
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 100%;
+  max-width: min(520px, 92vw);
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+#app-view .dd.open .dd-menu {
+  display: block;
+}
+#app-view .dd-item {
+  padding: 6px 10px;
+  border-radius: 5px;
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#app-view .dd-item:hover,
+#app-view .dd-item.active {
+  background: var(--subtle);
+}
+#app-view .dd-item.sel {
+  background: var(--subtle);
+  font-weight: 400;
+}
+#app-view .dd-item.dis {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+#app-view .rules td .dd-btn {
+  padding: 6px 8px;
+}
+#app-view .sc-picker,
+#app-view #view-governance section.card {
+  position: relative;
+}
+#app-view .sc-picker-list {
+  position: absolute;
+  z-index: 30;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--card, #161616);
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  padding: 4px;
+}
+#app-view .sc-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+#app-view .sc-picker-item:hover {
+  background: var(--hover, rgba(255, 255, 255, 0.06));
+}
+#app-view .sc-picker-item input {
+  pointer-events: none;
+  width: auto;
+}
+#app-view .sc-picker-group {
+  padding: 6px 9px 2px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted, #888);
+}
+#app-view .sc-picker-more {
+  padding: 4px 9px 6px;
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--muted, #888);
+}
+#app-view .kc-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: 1px;
+  background: var(--border, #444);
+}
+#app-view .kc-dot-active {
+  background: #4a9d5f;
+}
+#app-view .kc-dot-used {
+  background: #c9a45c;
+}
+#app-view .kc-dot-revoked {
+  background: #c96a5c;
+}
+#app-view .kc-sortbar {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--muted, #888);
+}
+#app-view .kc-sortbar .link.kc-sort-active {
+  font-weight: 700;
+}
+#app-view .governance-eyebrow {
+  margin: 0 0 3px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+#app-view .environment-notice {
+  display: flex;
+  justify-content: space-between;
+  margin: 0 0 18px;
+  padding: 14px 16px;
+}
+#app-view .environment-notice strong,
+#app-view .environment-notice p {
+  display: block;
+  margin: 0;
+}
+#app-view .environment-notice button,
+#app-view .model-add-row > button {
+  flex: none;
+}
+#app-view .governance-layout {
+  grid-template-columns: var(--gov-rail) minmax(0, 1fr);
+  gap: 28px;
+  align-items: start;
+}
+#app-view #view-governance section.card.dirty {
+  z-index: 1;
+}
+#app-view #view-governance .card > .head {
+  grid-template-columns: minmax(150px, 31%) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+#app-view #view-governance .card > .foot button:disabled {
+  border-color: transparent;
+  background: transparent;
+  color: #98a2b3;
+  opacity: 1;
+}
+#app-view #view-governance .card > .foot button:disabled:hover {
+  background: transparent;
+}
+#app-view #view-governance .setting-row > .body label:not(.setting-toggle) {
+  font-size: 11px;
+  font-weight: 500;
+}
+#app-view #view-governance .setting-row > .body select,
+#app-view #view-governance .setting-row > .body input[type="text"],
+#app-view #view-governance .setting-row > .body input[type="number"] {
+  max-width: none !important;
+  height: 34px;
+  padding: 5px 9px;
+  font-size: 12.5px;
+}
+#app-view #view-governance .setting-row > .body .dd-btn {
+  height: 34px;
+  padding: 5px 9px;
+  font-size: 12.5px;
+}
+#app-view #view-governance .setting-row > .foot {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+#app-view #view-governance .setting-row > .foot .status {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  overflow-wrap: anywhere;
+}
+#app-view #view-governance .setting-row > .foot button,
+#app-view #view-governance .card > .body {
+  grid-column: 2;
+}
+#app-view .setting-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+#app-view .setting-toggle input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+#app-view .setting-switch {
+  position: relative;
+  flex: none;
+  width: 32px;
+  height: 18px;
+  border: 1px solid #c8ced8;
+  border-radius: 999px;
+  background: var(--border);
+  transition:
+    background 0.14s,
+    border-color 0.14s;
+}
+#app-view .setting-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: #fff;
+  transition: transform 0.14s;
+}
+#app-view .setting-toggle input:checked + .setting-switch {
+  border-color: var(--ink);
+  background: var(--ink);
+}
+#app-view .setting-toggle input:checked + .setting-switch::after {
+  transform: translateX(14px);
+}
+#app-view .context-icon:focus-visible,
+#app-view .setting-toggle input:focus-visible + .setting-switch {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+#app-view .setting-copy strong {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+#app-view .setting-copy small {
+  display: block;
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+#app-view .policy-result {
+  padding: 10px 12px;
+  border-left: 3px solid #98a2b3;
+  background: var(--surface);
+  font-size: 12px;
+}
+#app-view .policy-result[data-tone="ok"] {
+  border-left-color: var(--ok);
+}
+#app-view .policy-result[data-tone="warn"] {
+  border-left-color: var(--warn);
+}
+#app-view .policy-result[data-tone="danger"] {
+  border-left-color: var(--danger);
+}
+#app-view .policy-warnings {
+  display: grid;
+  gap: 5px;
+  margin-top: 10px;
+  color: var(--warn);
+  font-size: 12px;
+}
+#app-view .governance-capability {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 14px;
+  border-radius: 8px;
+}
+#app-view .governance-capability.hidden {
+  display: none;
+}
+#app-view .governance-capability::before {
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  font-size: 11px;
+  font-weight: 800;
+}
+#app-view .governance-capability strong,
+#app-view .governance-capability span {
+  display: block;
+}
+#app-view dialog.review-dialog {
+  width: min(520px, calc(100vw - 28px));
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+}
+#app-view dialog.review-dialog::backdrop {
+  background: rgba(16, 24, 40, 0.48);
+  backdrop-filter: blur(2px);
+}
+#app-view dialog.custom-provider-dialog {
+  margin: auto;
+  width: min(560px, calc(100vw - 40px));
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 0 20px 60px color-mix(in srgb, var(--text) 24%, transparent);
+}
+#app-view dialog.custom-provider-dialog::backdrop {
+  background: color-mix(in srgb, var(--text) 28%, transparent);
+}
+#app-view .project-dialog-head h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+#app-view .project-dialog-head p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+#app-view .project-icon-button {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+}
+#app-view .project-icon-button:hover {
+  background: var(--subtle);
+  color: var(--text);
+}
+#app-view .custom-provider-form label:not(.custom-provider-validation) {
+  display: grid;
+  gap: 7px;
+  width: 100%;
+  margin-top: 16px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}
+#app-view .custom-provider-form label:not(.custom-provider-validation) > input,
+#app-view .custom-provider-form label > select,
+#app-view .custom-provider-form label > textarea {
+  display: block;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  font: inherit;
+  font-weight: 400;
+}
+#app-view .custom-provider-form label:not(.custom-provider-validation) > input,
+#app-view .custom-provider-form label > select {
+  height: 42px;
+  padding: 0 11px;
+}
+#app-view .custom-provider-form label > textarea {
+  min-height: 104px;
+  padding: 10px 11px;
+}
+#app-view .custom-provider-form label:not(.custom-provider-validation) > input:focus,
+#app-view .custom-provider-form label > select:focus,
+#app-view .custom-provider-form label > textarea:focus {
+  border-color: color-mix(in srgb, var(--text) 32%, var(--border));
+  box-shadow: none;
+}
+#app-view .custom-provider-validation {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 0 0;
+  color: var(--text);
+  font-size: 13px;
+}
+#app-view .custom-provider-form .status {
+  display: block;
+  min-height: 17px;
+  padding-top: 5px;
+}
+#app-view .label-detail {
+  color: var(--muted);
+  font-weight: 400;
+}
+#app-view .review-dialog-head {
+  padding: 20px 22px 13px;
+  border-bottom: 1px solid var(--border);
+}
+#app-view .review-dialog-head .governance-eyebrow {
+  color: var(--danger);
+}
+#app-view .review-dialog-head h2 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+}
+#app-view .review-dialog-head p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+#app-view .review-dialog-body {
+  padding: 16px 22px;
+}
+#app-view .review-dialog-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 18px;
+  margin: 0;
+}
+#app-view .review-dialog-facts dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+#app-view .review-dialog-facts dd {
+  min-width: 0;
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+#app-view .review-dialog-warning {
+  margin: 14px 0 0;
+}
+#app-view .review-dialog-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  padding: 13px 22px 18px;
+  border-top: 1px solid var(--border);
+}
+#app-view .review-dialog-confirm.danger {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #fff;
+}
+#app-view .review-dialog-confirm.danger:hover {
+  background: #912018;
+}
+@media (max-width: 1180px) {
+  #app-view .governance-layout {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+}
+@media (max-width: 900px) {
+  #app-view .shellbar {
+    top: calc(var(--header-total-h) + 61px);
+  }
+  #app-view .editor-grid {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 640px) {
+  #app-view #view-governance .setting-row > .foot {
+    flex-wrap: wrap;
+  }
+}
+@media (max-width: 560px) {
+  #app-view .header-controls {
+    gap: 10px;
+  }
+  #app-view .header-controls:not(:empty) + .who .header-button {
+    width: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+    overflow: hidden;
+    font-size: 0;
+  }
+  #app-view .header-controls:not(:empty) + .who .header-button::before {
+    content: "⌂";
+    font-size: 18px;
+  }
+  #app-view .who {
+    gap: 8px;
+  }
+  #app-view .pill {
+    max-width: 30vw;
+  }
+  #app-view .header-button {
+    min-height: 30px;
+    padding: 4px 8px;
+  }
+  #app-view .admin-inner,
+  #app-view section.card,
+  #app-view .viewer {
+    min-width: 0;
+    max-width: 100%;
+  }
+  #app-view .shellbar {
+    position: static;
+    flex-wrap: wrap;
+    row-gap: 6px;
+    white-space: normal;
+  }
+  #app-view section.card {
+    padding: 14px;
+    margin-bottom: 16px;
+  }
+  #app-view #view-governance .card > .head {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  #app-view .kpi .n {
+    overflow-wrap: anywhere;
+  }
+  #app-view .credential-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  #app-view .credential-actions {
+    justify-content: flex-start;
+  }
+  #app-view .kpis,
+  #app-view .sc-semantics,
+  #app-view .instructions-diff {
+    grid-template-columns: 1fr;
+  }
+  #app-view .viewer {
+    padding: 12px;
+  }
+  #app-view .entry .who {
+    flex-wrap: wrap;
+  }
+  #app-view .entry .who .copy {
+    opacity: 1;
+  }
+  #app-view .tool-entry {
+    padding: 8px;
+  }
+  #app-view .context-request-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+  #app-view .context-stats {
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+  #app-view .context-segment {
+    padding: 0 6px;
+  }
+  #app-view .header-check-prefix,
+  #app-view .context-segment small {
+    display: none;
+  }
+}
+@media (max-width: 400px) {
+  #app-view .who .pill {
+    display: none;
+  }
+  #app-view .header-button {
+    min-height: 44px;
+    padding: 4px 9px;
+  }
+}
+#app-view .admin-main {
+  width: auto;
+  max-width: none;
+}
+#app-view .admin-main .shellbar {
+  position: static;
+  min-height: 32px;
+  margin-bottom: 8px;
+  padding: 0;
+}
+#app-view .admin-main .shell-title {
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+#app-view .admin-main input[type="text"],
+#app-view .admin-main input[type="url"],
+#app-view .admin-main textarea,
+#app-view .admin-main select,
+#app-view .admin-main .dd > button {
+  background: transparent;
+  border-color: var(--border);
+  border-radius: 10px;
+  box-shadow: none;
+}
+#app-view .admin-main label,
+#app-view .admin-main .hint,
+#app-view .admin-main .viewlink,
+#app-view .admin-main input,
+#app-view .admin-main textarea,
+#app-view .admin-main .dd > button {
+  font-size: 13px;
+  line-height: 1.4;
+}
+#app-view .admin-main label,
+#app-view .admin-main .hint,
+#app-view .admin-main .viewlink {
+  color: var(--muted);
+}
+#app-view .admin-main label {
+  margin-bottom: 4px;
+}
+#app-view .admin-inner {
+  width: 100%;
+  margin: 0;
+}
+#app-view #view-governance .governance-content {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+#app-view #view-governance section.card,
+#app-view #view-governance section.card.setting-row {
+  min-height: 0;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+#app-view #view-governance section.card.flat-last {
+  margin: 0;
+  border-radius: 0;
+  border-bottom: 0;
+}
+#app-view #view-governance .card > .head,
+#app-view #view-governance .setting-row > .head {
+  display: block;
+  margin: 0 0 6px;
+  padding: 0;
+  border: 0;
+}
+#app-view #view-governance .card > .head:has(.viewlink) {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+#app-view #view-governance .card > .head:has(.viewlink) > p {
+  flex-basis: 100%;
+  order: 3;
+}
+#app-view #view-governance .card > .head h2,
+#app-view #view-governance .setting-row > .head h2 {
+  margin: 0;
+  font-size: 14px;
+}
+#app-view #view-governance .card > .head p,
+#app-view #view-governance .setting-row > .head p {
+  margin: 4px 0 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+#app-view #view-governance .card > .body,
+#app-view #view-governance .setting-row > .body {
+  min-width: 0;
+  padding: 0;
+}
+#app-view #view-governance .card > .foot,
+#app-view #view-governance .setting-row > .foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: auto;
+  min-height: 0;
+  margin: 8px 0 0;
+  padding: 0;
+  border: 0;
+}
+#app-view #view-governance .card > .foot .status,
+#app-view #view-governance .setting-row > .foot .status {
+  order: 0;
+  margin: 0;
+  text-align: left;
+}
+#app-view #view-governance .card > .foot button,
+#app-view #view-governance .setting-row > .foot button {
+  min-width: 0;
+  min-height: 0;
+  padding: 5px 12px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+#app-view .choice-stack {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-width: none;
+}
+#app-view .posture-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  line-height: 1.4;
+  transition: background 120ms ease;
+}
+#app-view .posture-choice:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+#app-view .posture-choice:focus-within {
+  outline: 2px solid var(--muted);
+  outline-offset: 1px;
+}
+#app-view .posture-choice:has(input:checked) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+#app-view .posture-choice:has(input:checked):hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+#app-view .posture-choice input {
+  margin: 3px 0 0;
+}
+#app-view .posture-choice strong {
+  color: var(--text);
+  font-size: 13px;
+}
+#app-view .posture-choice small {
+  margin-top: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+#app-view #card-external-slack .posture-choice {
+  background: transparent;
+}

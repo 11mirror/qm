@@ -1,7 +1,6 @@
 import { html, nothing } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
-import { ifDefined } from "lit/directives/if-defined.js";
 import { badge, copyButton, errorStripBox, metaChip, node, renderer, scroller } from "./shared.ts";
 import { isUserMessage, itemFields, type Item } from "../items.ts";
 import { firstLine, fmtBytes, fmtTime, fmtTokens, plural, relTime, wakeOriginLabel } from "./format.ts";
@@ -53,27 +52,19 @@ const activate = (run: () => void) => (e: KeyboardEvent) => {
   }
 };
 const requestCount = (count: number) => count + " request" + (count === 1 ? "" : "s");
-const contextIcon = (label: string, title: string, onClick: (e: Event) => void, expanded?: boolean) =>
-  html`<button
-    type="button"
-    class=${"context-icon" + (expanded ? " active" : "")}
-    aria-expanded=${ifDefined(expanded === undefined ? undefined : String(expanded))}
-    aria-label=${label}
-    title=${title}
-    @click=${onClick}
-  >
+const contextIcon = (label: string, title: string, onClick: (e: Event) => void) =>
+  html`<button type="button" class="context-icon" aria-label=${label} title=${title} @click=${onClick}>
     ${brain}
   </button>`;
 const TOOL_KINDS = new Set(["ToolCall", "ToolResult"]);
 const NOISE_KINDS = new Set(["ToolCall", "ToolResult", "Wake", "ContextCompaction", "Retraction", "RuntimeChange"]);
 const kindLabel = (kind: string) =>
   kind.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/ ([A-Z])/g, (_, c) => " " + c.toLowerCase());
-const json = (value: unknown) => JSON.stringify(value, null, 2);
 function itemText(item: Item): string {
   if (item.kind === "Wake" && typeof item.body.text === "string") return item.body.text;
   if (item.kind === "Reasoning") return item.text || (item.body.redacted ? "[redacted thinking]" : "");
   if (item.text != null && item.kind !== "ToolCall" && item.kind !== "ToolResult") return item.text;
-  return json(itemFields(item));
+  return JSON.stringify(itemFields(item), null, 2);
 }
 function deliveryFileBadges(files: Row[], s: Row) {
   const named = files.filter((f) => f && f.name);
@@ -264,24 +255,7 @@ export async function show(sessionId: string, limit: number | undefined, expand:
   const header = document.getElementById("header-controls")!;
   header.replaceChildren();
   const paintHeader = renderer(header);
-  function controls() {
-    paintHeader(
-      html`${Object.entries({ thinking: "thinking", "tool results": "toolResults" }).map(
-        ([label, key]) =>
-          html`<label class="header-check"
-            ><input
-              type="checkbox"
-              .checked=${!!s.visibility[key]}
-              aria-label=${"Show " + label}
-              @change=${(e: Event) => {
-                s.visibility[key] = (e.target as HTMLInputElement).checked;
-                applyVisibility();
-              }}
-            /><span class="header-check-prefix">Show </span>${label}</label
-          >`,
-      )}`,
-    );
-  }
+  const controls = () => paintHeader(headerControls(s, () => applyVisibility()));
   controls();
   const llmPromise = fetchSession(s, sessionId, "/llm?");
   const result = await fetchSession(s, sessionId, "?", "&limit=" + reqLimit);
@@ -325,121 +299,12 @@ export async function show(sessionId: string, limit: number | undefined, expand:
     else open.add(unit);
     paint();
   };
-  const memo = <K, V>(map: Map<K, V>, key: K, make: () => V) => {
-    if (!map.has(key)) map.set(key, make());
-    return map.get(key)!;
-  };
   const contextButton = (turn: any, count: number) =>
     contextIcon("View context sent to the model", "View context sent to the model · " + requestCount(count), (e) => {
       e.stopPropagation();
       s.go({ view: "history", scope: s.scope, session: sessionId, turn });
     });
-  const timing = ({ call, result: res }: Row) => {
-    return call && res
-      ? [
-          [dur.get(call.seq), "model"],
-          [(res.createdAt || 0) - (call.createdAt || 0), "exec"],
-        ]
-      : [[dur.get((call || res)?.seq)]];
-  };
-  function fullTool(unit: Row) {
-    const built = memo(toolNodes, unit, () =>
-      renderToolEntry(
-        unit.call,
-        unit.result,
-        unit.llmReqs?.length ? node(contextButton(unit.llmReqs[0].turnSeq, unit.llmReqs.length)) : null,
-        stepDurEl(timing(unit)),
-      ),
-    );
-    built.sync?.();
-    return built.block;
-  }
-  const cronLink = (cronOrigin: Row | null, ownerScope?: string) =>
-    cronOrigin?.kind === "cron"
-      ? html`<button
-          type="button"
-          class="link"
-          @click=${() => s.go({ view: "crons", scope: cronOrigin.cron?.ownerScopeId || ownerScope || s.scope, session: null, cron: cronOrigin.cronId })}
-        >
-          View cron
-        </button>`
-      : nothing;
-  const body = (item: Item) =>
-    memo(bodyNodes, item, () => {
-      const text = itemText(item),
-        user = isUserMessage(item);
-      const markup = (user && !isXmlishText(text)) || item.kind === "AgentMessage";
-      return node(markup ? html`<div class="message-body">${markdown(text)}</div>` : html`<pre>${text}</pre>`);
-    });
-  function unitTemplate(unit: Row) {
-    if (unit.kind === "llm")
-      return html`<div class="entry llm">
-        <div class="who">${contextButton("orphan", unit.reqs.length)}<span class="role">captured context</span></div>
-      </div>`;
-    if (unit.kind === "tool") {
-      const { call, result: res } = unit,
-        e = call || res,
-        kinds = [call, res].filter(Boolean).map((item) => item.kind),
-        hidden = s.entryHidden(kinds),
-        full = fullTool(unit);
-      full.classList.toggle("filtered", hidden);
-      if (unit.llmReqs?.length) return full;
-      const cp = call ? itemFields(call) : {},
-        rp = res ? itemFields(res) : {},
-        name = toolName(cp, rp);
-      return html`<div
-        class=${classMap({ entry: true, "tool-entry": true, "tool-line-entry": true, open: open.has(unit), filtered: hidden })}
-      >
-        <div
-          class="who tool-line"
-          tabindex="0"
-          role="button"
-          title="Toggle full tool card"
-          aria-expanded=${String(open.has(unit))}
-          @click=${(e: MouseEvent) => {
-            if (!(e.target as Element).closest(".copy")) toggle(unit)();
-          }}
-          @keydown=${activate(toggle(unit))}
-        >
-          <span class="tool-line-caret">${open.has(unit) ? "▾" : "▸"}</span
-          ><span class="tool-label">${toolLabelText(name, cp, rp)}</span
-          ><span class="tool-line-preview">${firstLine(toolPrimaryText(cp, rp, !!call, !!res) || "", 240)}</span
-          >${stepDurEl(timing(unit))}<span class="when"
-            >${call && res ? `#${call.seq}→#${res.seq} · ${fmtTime(call.createdAt)}` : `#${e.seq} · ${fmtTime(e.createdAt)}`}</span
-          >
-          <div class="meta-row">${toolStatusMeta(name, rp, !!res)}</div>
-          ${copyButton("Copy", () => toolCopyText(call, res))}
-        </div>
-        ${full}
-      </div>`;
-    }
-    const e: Item = unit.item,
-      noise = NOISE_KINDS.has(e.kind),
-      user = isUserMessage(e),
-      isOrigin = origin && e.seq === originPromptSeq,
-      text = itemText(e);
-    let label = kindLabel(e.kind);
-    if (e.kind === "AgentMessage") label = s.brandSelfLabel();
-    else if (e.kind === "Reasoning") label = "Thinking";
-    else if (user) label = (typeof e.body.name === "string" && e.body.name.trim()) || e.author || "User";
-    if (isOrigin) label = origin.label || wakeOriginLabel(origin.trigger);
-    const files =
-      e.kind === "AgentMessage" && Array.isArray(e.body.files) ? deliveryFileBadges(e.body.files, s) : nothing;
-    return html`<div
-      class=${classMap({ entry: true, noise, collapsed: noise && !open.has(unit), "thinking-entry": e.kind === "Reasoning", "message-entry": user || e.kind === "AgentMessage", "user-entry": user, "assistant-entry": e.kind === "AgentMessage", "cron-prompt-entry": !!isOrigin, "system-entry": e.kind === "Wake", filtered: s.entryHidden([e.kind]) })}
-    >
-      <div class="who">
-        ${unit.llmReqs?.length ? contextButton(unit.llmReqs[0].turnSeq, unit.llmReqs.length) : nothing}${noise ? html`<button type="button" class="disclosure" aria-expanded=${String(open.has(unit))} aria-label=${open.has(unit) ? "Collapse entry" : "Expand entry"} title=${open.has(unit) ? "Collapse entry" : "Expand entry"} @click=${toggle(unit)}>${open.has(unit) ? "▾" : "▸"}</button>` : nothing}<span
-          class=${"entry-label" + (isOrigin ? " important" : "")}
-          >${label}</span
-        >${isOrigin ? cronLink(origin, session.scopeId) : nothing}${!user ? stepDurEl([[dur.get(e.seq)]]) : nothing}<span
-          class="when"
-          >${"#" + e.seq + " · " + fmtTime(e.createdAt)}</span
-        >${copyButton("Copy", () => text)}
-      </div>
-      ${body(e)}${files}
-    </div>`;
-  }
+  const t: Row = { s, open, toggle, contextButton, dur, origin, originPromptSeq, session, toolNodes, bodyNodes };
   const load = () => {
     if (first > 0) reveal();
     else void show(sessionId, reqLimit * 4, true, s);
@@ -469,7 +334,11 @@ export async function show(sessionId: string, limit: number | undefined, expand:
                         ${more ? "Load earlier messages" : "Loading earlier messages…"}
                       </div>`
                     : nothing
-                }${repeat(units.slice(first), (unit) => unit, unitTemplate)}
+                }${repeat(
+                  units.slice(first),
+                  (unit) => unit,
+                  (unit) => unitTemplate(t, unit),
+                )}
               </div>`
             : html`<p class="empty">No entries.</p>`
         }
@@ -509,4 +378,130 @@ export async function show(sessionId: string, limit: number | undefined, expand:
   requestAnimationFrame(() => {
     if (current()) scroller(root).scrollTo({ top: expand ? 0 : scroller(root).scrollHeight });
   });
+}
+function headerControls(s: Row, applyVisibility: () => void) {
+  return html`${Object.entries({ thinking: "thinking", "tool results": "toolResults" }).map(
+    ([label, key]) =>
+      html`<label class="header-check"
+        ><input
+          type="checkbox"
+          .checked=${!!s.visibility[key]}
+          aria-label=${"Show " + label}
+          @change=${(e: Event) => {
+            s.visibility[key] = (e.target as HTMLInputElement).checked;
+            applyVisibility();
+          }}
+        /><span class="header-check-prefix">Show </span>${label}</label
+      >`,
+  )}`;
+}
+const memo = <K, V>(map: Map<K, V>, key: K, make: () => V) => {
+  if (!map.has(key)) map.set(key, make());
+  return map.get(key)!;
+};
+const timing = (dur: Map<any, any>, { call, result: res }: Row) =>
+  call && res
+    ? [
+        [dur.get(call.seq), "model"],
+        [(res.createdAt || 0) - (call.createdAt || 0), "exec"],
+      ]
+    : [[dur.get((call || res)?.seq)]];
+function fullTool(t: Row, unit: Row) {
+  const built = memo(t.toolNodes, unit, () =>
+    renderToolEntry(
+      unit.call,
+      unit.result,
+      unit.llmReqs?.length ? node(t.contextButton(unit.llmReqs[0].turnSeq, unit.llmReqs.length)) : null,
+      stepDurEl(timing(t.dur, unit)),
+    ),
+  );
+  built.sync?.();
+  return built.block;
+}
+const cronLink = (s: Row, cronOrigin: Row | null, ownerScope?: string) =>
+  cronOrigin?.kind === "cron"
+    ? html`<button
+        type="button"
+        class="link"
+        @click=${() => s.go({ view: "crons", scope: cronOrigin.cron?.ownerScopeId || ownerScope || s.scope, session: null, cron: cronOrigin.cronId })}
+      >
+        View cron
+      </button>`
+    : nothing;
+const body = (t: Row, item: Item) =>
+  memo(t.bodyNodes, item, () => {
+    const text = itemText(item),
+      user = isUserMessage(item);
+    const markup = (user && !isXmlishText(text)) || item.kind === "AgentMessage";
+    return node(markup ? html`<div class="message-body">${markdown(text)}</div>` : html`<pre>${text}</pre>`);
+  });
+function unitTemplate(t: Row, unit: Row) {
+  const { s, open, toggle, contextButton, dur, origin, originPromptSeq, session } = t;
+  if (unit.kind === "llm")
+    return html`<div class="entry llm">
+      <div class="who">${contextButton("orphan", unit.reqs.length)}<span class="role">captured context</span></div>
+    </div>`;
+  if (unit.kind === "tool") {
+    const { call, result: res } = unit,
+      e = call || res,
+      kinds = [call, res].filter(Boolean).map((item) => item.kind),
+      hidden = s.entryHidden(kinds),
+      full = fullTool(t, unit);
+    full.classList.toggle("filtered", hidden);
+    if (unit.llmReqs?.length) return full;
+    const cp = call ? itemFields(call) : {},
+      rp = res ? itemFields(res) : {},
+      name = toolName(cp, rp);
+    return html`<div
+      class=${classMap({ entry: true, "tool-entry": true, "tool-line-entry": true, open: open.has(unit), filtered: hidden })}
+    >
+      <div
+        class="who tool-line"
+        tabindex="0"
+        role="button"
+        title="Toggle full tool card"
+        aria-expanded=${String(open.has(unit))}
+        @click=${(e: MouseEvent) => {
+          if (!(e.target as Element).closest(".copy")) toggle(unit)();
+        }}
+        @keydown=${activate(toggle(unit))}
+      >
+        <span class="tool-line-caret">${open.has(unit) ? "▾" : "▸"}</span
+        ><span class="tool-label">${toolLabelText(name, cp, rp)}</span
+        ><span class="tool-line-preview">${firstLine(toolPrimaryText(cp, rp, !!call, !!res) || "", 240)}</span
+        >${stepDurEl(timing(dur, unit))}<span class="when"
+          >${call && res ? `#${call.seq}→#${res.seq} · ${fmtTime(call.createdAt)}` : `#${e.seq} · ${fmtTime(e.createdAt)}`}</span
+        >
+        <div class="meta-row">${toolStatusMeta(name, rp, !!res)}</div>
+        ${copyButton("Copy", () => toolCopyText(call, res))}
+      </div>
+      ${full}
+    </div>`;
+  }
+  const e: Item = unit.item,
+    noise = NOISE_KINDS.has(e.kind),
+    user = isUserMessage(e),
+    isOrigin = origin && e.seq === originPromptSeq,
+    text = itemText(e);
+  let label = kindLabel(e.kind);
+  if (e.kind === "AgentMessage") label = s.brandSelfLabel();
+  else if (e.kind === "Reasoning") label = "Thinking";
+  else if (user) label = (typeof e.body.name === "string" && e.body.name.trim()) || e.author || "User";
+  if (isOrigin) label = origin.label || wakeOriginLabel(origin.trigger);
+  const files =
+    e.kind === "AgentMessage" && Array.isArray(e.body.files) ? deliveryFileBadges(e.body.files, s) : nothing;
+  return html`<div
+    class=${classMap({ entry: true, noise, collapsed: noise && !open.has(unit), "thinking-entry": e.kind === "Reasoning", "message-entry": user || e.kind === "AgentMessage", "user-entry": user, "assistant-entry": e.kind === "AgentMessage", "cron-prompt-entry": !!isOrigin, "system-entry": e.kind === "Wake", filtered: s.entryHidden([e.kind]) })}
+  >
+    <div class="who">
+      ${unit.llmReqs?.length ? contextButton(unit.llmReqs[0].turnSeq, unit.llmReqs.length) : nothing}${noise ? html`<button type="button" class="disclosure" aria-expanded=${String(open.has(unit))} aria-label=${open.has(unit) ? "Collapse entry" : "Expand entry"} title=${open.has(unit) ? "Collapse entry" : "Expand entry"} @click=${toggle(unit)}>${open.has(unit) ? "▾" : "▸"}</button>` : nothing}<span
+        class=${"entry-label" + (isOrigin ? " important" : "")}
+        >${label}</span
+      >${isOrigin ? cronLink(s, origin, session.scopeId) : nothing}${!user ? stepDurEl([[dur.get(e.seq)]]) : nothing}<span
+        class="when"
+        >${"#" + e.seq + " · " + fmtTime(e.createdAt)}</span
+      >${copyButton("Copy", () => text)}
+    </div>
+    ${body(t, e)}${files}
+  </div>`;
 }

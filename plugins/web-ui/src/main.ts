@@ -6,13 +6,8 @@ import { bootSafely, closeUserMenu } from "./shell";
 import { registerChatSearchHotkey } from "./search";
 import { closeFormMenus } from "./ui";
 import { allConversations } from "./conversations";
-import {
-  clearSessionSelection,
-  closeOpenSessionMenu,
-  closeSessionSelectionColor,
-  renderList,
-  sessionsState,
-} from "./sessions";
+import { renderList, sessionsState } from "./sessions";
+import { clearSessionSelection, closeOpenSessionMenu, closeSessionSelectionColor } from "./session-actions";
 import { isPhone, onPhoneChange } from "./viewport";
 
 function closeComposerMenus(keepOpenWithin: Element | null): boolean {

@@ -31,15 +31,7 @@ export function shouldShowWork(work: WorkBlock | null | undefined, finalText: st
   return Boolean(work && (messageWorkTimeline(work, finalText).length || work.pendingApprovals?.length));
 }
 
-export function createLiveWork({
-  ctx,
-  chatState,
-  runSlot,
-  drawActiveChat,
-  chatMessage,
-  inlineSteers,
-  toolRow,
-}: {
+interface LiveWorkDeps {
   ctx: ConvCtx;
   chatState: ChatState;
   runSlot: RunSlot;
@@ -52,33 +44,40 @@ export function createLiveWork({
   ) => TemplateResult | typeof nothing;
   inlineSteers: ReadonlyMap<number, { message: AgentMessage; index: number }>;
   toolRow: (row: ToolRowModel, work: WorkBlock, status: WorkBlock["status"], stale?: boolean) => TemplateResult;
-}) {
-  let liveWorkExpanded = false;
-  const openThinking = new Set<string>();
+}
 
-  function liveWorkStatus(agent: Agent): TemplateResult | typeof nothing {
-    if (!agent.state.isStreaming && chatState.resolvingApprovals.size === 0) return nothing;
-    if (runSlot.stopGeneration === runSlot.generation)
+class LiveWork {
+  private liveWorkExpanded = false;
+  private readonly openThinking = new Set<string>();
+  private readonly deps: LiveWorkDeps;
+
+  constructor(deps: LiveWorkDeps) {
+    this.deps = deps;
+  }
+
+  readonly liveWorkStatus = (agent: Agent): TemplateResult | typeof nothing => {
+    if (!agent.state.isStreaming && this.deps.chatState.resolvingApprovals.size === 0) return nothing;
+    if (this.deps.runSlot.stopGeneration === this.deps.runSlot.generation)
       return html`<div class="stopped-head" role="status">${icon(Ban, 13)}<span>Stop requested</span></div>`;
-    const work = chatState.liveWork ?? { status: "thinking", activity: [] };
+    const work = this.deps.chatState.liveWork ?? { status: "thinking", activity: [] };
     if (work.status !== "thinking" && work.status !== "working") return nothing;
     if (currentTextPhase(work)?.phase === "final_answer" || shouldShowWork(work, "")) return nothing;
     const summary = liveWorkSummary(work);
     const expandable = Boolean(summary?.detail);
-    const expanded = expandable && liveWorkExpanded;
+    const expanded = expandable && this.liveWorkExpanded;
     let title = "";
-    if (expandable) title = liveWorkExpanded ? "Show less" : "Show more";
+    if (expandable) title = this.liveWorkExpanded ? "Show less" : "Show more";
     return html`
       <section class="live-work-status ${expanded ? "expanded" : ""}" aria-live="polite">
         <button
           type="button"
           class="live-work-line ${expandable ? "" : "static"}"
           ?disabled=${!expandable}
-          aria-expanded=${expandable ? String(liveWorkExpanded) : nothing}
+          aria-expanded=${expandable ? String(this.liveWorkExpanded) : nothing}
           ${tip(title)}
           @click=${() => {
-            liveWorkExpanded = !liveWorkExpanded;
-            drawActiveChat();
+            this.liveWorkExpanded = !this.liveWorkExpanded;
+            this.deps.drawActiveChat();
           }}
         >
           ${summary ? html`<span class="tool-icon">${icon(summary.icon, 15)}</span>` : nothing}
@@ -90,15 +89,15 @@ export function createLiveWork({
         </button>
       </section>
     `;
-  }
+  };
 
-  function workBlock(
+  readonly workBlock = (
     work: WorkBlock,
     isStreaming: boolean,
     text: string,
     baseline: string,
     stopped = false,
-  ): TemplateResult {
+  ): TemplateResult => {
     const active =
       isStreaming &&
       currentTextPhase(work)?.phase !== "final_answer" &&
@@ -106,7 +105,7 @@ export function createLiveWork({
     const segments = workTimelineSegments(messageWorkTimeline(work, active ? "" : text));
     return html`${segments.map((segment, index) => {
       const steer = segment[0];
-      if (steer?.kind === "steer") return renderTimelineItem(steer, work);
+      if (steer?.kind === "steer") return this.renderTimelineItem(steer, work);
       const last = index === segments.length - 1;
       const replies: string[] = [];
       const timeline = segment.filter((item) => {
@@ -116,7 +115,7 @@ export function createLiveWork({
         return false;
       });
       const tail = active && last ? streamedAnswer(text, work) : "";
-      const stopping = isStreaming && runSlot.stopGeneration === runSlot.generation;
+      const stopping = isStreaming && this.deps.runSlot.stopGeneration === this.deps.runSlot.generation;
       const animating = active && last && !stopping;
       let label = last ? workLabel(work) : "Worked";
       if (stopping && last) label = "Stop requested";
@@ -126,7 +125,7 @@ export function createLiveWork({
         !tail.trim() &&
         !(last && (stopped || stopping || work.stale || work.pendingApprovals?.length))
       )
-        return html`${renderTimelineItem(timeline[0]!, work)}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
+        return html`${this.renderTimelineItem(timeline[0]!, work)}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
       let fold =
         timeline.length || tail.trim() || (last && (active || work.pendingApprovals?.length))
           ? html`<details
@@ -157,7 +156,8 @@ export function createLiveWork({
                       activityGroups(timeline),
                       (items) => timelineKey(items[0]!),
                       (items) => {
-                        if (items.length === 1 || items[0]?.kind === "text") return renderTimelineItem(items[0]!, work);
+                        if (items.length === 1 || items[0]?.kind === "text")
+                          return this.renderTimelineItem(items[0]!, work);
                         const summary = activityGroupSummary(items, work.status);
                         const groupIcon = { read: BookOpen, search: Search, execute: Terminal, other: Wrench }[
                           summary.category
@@ -171,7 +171,7 @@ export function createLiveWork({
                             ><span class="activity-chevron">${icon(ChevronRight, 14)}</span>
                           </summary>
                           <div class="work-rows">
-                            ${repeat(items, timelineKey, (item) => renderTimelineItem(item, work))}
+                            ${repeat(items, timelineKey, (item) => this.renderTimelineItem(item, work))}
                           </div>
                         </details>`;
                       },
@@ -184,13 +184,13 @@ export function createLiveWork({
       if (stopped && last && fold === nothing) fold = html`<div class="stopped-head">${label}</div>`;
       return html`${fold}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
     })}`;
-  }
+  };
 
-  function waitingSteerRows(agent: Agent): TemplateResult[] {
-    return ctx.composer.waitingSteers(agent).map(
+  readonly waitingSteerRows = (agent: Agent): TemplateResult[] => {
+    return this.deps.ctx.composer.waitingSteers(agent).map(
       (q) =>
         html`<div class="inline-steer waiting-steer" aria-busy="true">
-          ${chatMessage(
+          ${this.deps.chatMessage(
             {
               role: "user",
               content: q.text || (q.hasAttachments ? "(files)" : ""),
@@ -202,15 +202,15 @@ export function createLiveWork({
           )}
         </div>`,
     );
-  }
+  };
 
-  function renderTimelineItem(item: TimelineItem, work: WorkBlock): TemplateResult {
+  readonly renderTimelineItem = (item: TimelineItem, work: WorkBlock): TemplateResult => {
     const status = work.status;
     const stale = work.stale === true;
     if (item.kind === "steer") {
-      const steer = inlineSteers.get(item.item.seq);
+      const steer = this.deps.inlineSteers.get(item.item.seq);
       return html`<div class="inline-steer">
-        ${steer ? chatMessage(steer.message, steer.index, false, true) : nothing}
+        ${steer ? this.deps.chatMessage(steer.message, steer.index, false, true) : nothing}
       </div>`;
     }
     if (item.kind === "thinking") {
@@ -218,10 +218,10 @@ export function createLiveWork({
       const key = timelineKey(item);
       return html`<details
         class="thinking-row"
-        ?open=${openThinking.has(key)}
+        ?open=${this.openThinking.has(key)}
         @toggle=${(event: Event) => {
-          if ((event.currentTarget as HTMLDetailsElement).open) openThinking.add(key);
-          else openThinking.delete(key);
+          if ((event.currentTarget as HTMLDetailsElement).open) this.openThinking.add(key);
+          else this.openThinking.delete(key);
         }}
       >
         <summary class="thinking-summary">
@@ -233,7 +233,19 @@ export function createLiveWork({
     }
     if (item.kind === "text") return html`<div class="work-message">${markdown(item.item.text ?? "")}</div>`;
     if (item.kind === "approval") return approvalMarker(item.approval);
-    return toolRow(item.row, work, status, stale);
-  }
-  return { liveWorkStatus, renderTimelineItem, waitingSteerRows, workBlock, resetThinking: () => openThinking.clear() };
+    return this.deps.toolRow(item.row, work, status, stale);
+  };
+
+  readonly resetThinking = () => this.openThinking.clear();
+}
+
+export function createLiveWork(deps: LiveWorkDeps) {
+  const w = new LiveWork(deps);
+  return {
+    liveWorkStatus: w.liveWorkStatus,
+    workBlock: w.workBlock,
+    waitingSteerRows: w.waitingSteerRows,
+    renderTimelineItem: w.renderTimelineItem,
+    resetThinking: w.resetThinking,
+  };
 }

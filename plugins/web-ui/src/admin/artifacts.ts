@@ -2,16 +2,14 @@ import { html, nothing, render } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { card, bareCard, table, renderer, empty, stacked, denseList as dense } from "./shared.ts";
 import { mountPacks, skillDetail, removeSkill } from "./artifacts-skills.ts";
+import { cronStatus, cronTemplate, dot } from "./artifacts-cron.ts";
 import {
   createdByCell,
   cronName,
-  destinationDetails,
-  destinationSummary,
   fileKind,
   fileName,
   firstLine,
   fmtBytes,
-  fmtTime,
   plural,
   relTime,
   scopeKind,
@@ -19,7 +17,7 @@ import {
   titleCase,
   uploadErrorMessage,
 } from "./format.ts";
-import { fmtSchedule, shortSchedule } from "./schedule.ts";
+import { shortSchedule } from "./schedule.ts";
 import { fileSha256 } from "../file-hash.ts";
 export type Data = Record<string, any>;
 export type Context = Record<string, any>;
@@ -48,7 +46,6 @@ function scopeList(items: Data[], c: Context, noun: string, latest: (r: Data) =>
 }
 const none = (c: Context, q: string, noun: string) =>
   q ? `No ${noun} match.` : `No ${noun} ${c.index ? "yet" : "in this scope"}.`;
-const dot = (...parts: unknown[]) => parts.filter(Boolean).join(" · ");
 const hit = (q: string, ...parts: unknown[]) => !q || parts.join(" ").toLowerCase().includes(q);
 const indexed = (c: Context, q: string, index: unknown, list: unknown, cls = "") =>
   html`${c.index ? html`<div class=${[cls, q ? "hidden" : ""].join(" ").trim()}>${index}</div>` : nothing}
@@ -521,7 +518,6 @@ export function skills(root: HTMLElement, d: Data, c: Context) {
   draw();
   if (c.index) void mountPacks(packs, c);
 }
-const cronStatus = (c: Data) => (c.archived && "archived") || (c.enabled === false ? "disabled" : "enabled");
 export function crons(root: HTMLElement, d: Data, c: Context) {
   const all = d.crons || [];
   if (c.cron) return cronDetail(root, all, c.cron, c);
@@ -564,213 +560,21 @@ function cronDetail(root: HTMLElement, all: Data[], id: string, c: Context) {
     context: cron ? c.shortName(cron.ownerScopeId) : "",
   });
   if (!cron) return render(empty("Cron " + shortId(id) + " isn't in this scope."));
-  let [editing, saving, expanded, needsToggle] = [false, false, false, true];
-  let [fires, error, total] = [null as Data[] | null, "", 0];
   const current = () => ({
     type: cron.destination?.type === "principal" ? "principal" : "slack",
     target: cron.destination?.target || "",
     audienceScopeId: cron.destination?.audienceScopeId || "",
     onBehalfOf: cron.destination?.onBehalfOf || "",
   });
-  const draft = current();
-  const change = (key: keyof typeof draft) => (e: Event) => {
-    draft[key] = (e.target as HTMLInputElement).value;
-    draw();
-  };
-  const save = async (clear = false) => {
-    if (saving) return;
-    if (!clear && !draft.target.trim()) {
-      root.querySelector<HTMLInputElement>('input[name="cron-target"]')?.focus();
-      return alert("Target is required.");
-    }
-    const destination = clear
-      ? null
-      : {
-          type: draft.type,
-          target: draft.target.trim(),
-          ...(draft.audienceScopeId.trim() ? { audienceScopeId: draft.audienceScopeId.trim() } : {}),
-          ...(draft.type === "principal" && draft.onBehalfOf.trim() ? { onBehalfOf: draft.onBehalfOf.trim() } : {}),
-        };
-    const submitted = JSON.stringify(draft);
-    saving = true;
-    draw();
-    try {
-      const response = await c.api(
-        "PUT",
-        "/api/crons/" + encodeURIComponent(id) + "/destination?scope=" + encodeURIComponent(c.scope),
-        { destination },
-      );
-      if (!response.ok) return alert(response.data?.message || "Could not update destination.");
-      cron.destination = destination;
-      c.invalidate();
-      if (JSON.stringify(draft) === submitted) {
-        editing = false;
-        c.setCronEditing(null);
-        await c.reload();
-      }
-    } catch {
-      alert("Could not update destination.");
-    } finally {
-      saving = false;
-      if (root.isConnected) draw();
-    }
-  };
-  const prompt = cron.action || cron.message || "";
-  const facts = () => [
-    ["Schedule", fmtSchedule(cron.schedule)],
-    [
-      "Destination",
-      html`<span
-        >${destinationSummary(cron.destination) + (destinationDetails(cron.destination) && cron.destination ? " · " + destinationDetails(cron.destination) : "")}</span
-      >`,
-    ],
-    ["Owner", cron.owner || cron.createdBy || "None"],
-    ["Status", cronStatus(cron)],
-    ["Created", fmtTime(cron.createdAt)],
-    ["Last fired", cron.lastFiredAt ? relTime(cron.lastFiredAt) : "never fired"],
-    ["Id", cron.id],
-  ];
-  const draw = () =>
-    render(
-      html`${
-          editing
-            ? card(
-                "Edit cron destination",
-                cron.title || cron.action || cron.message || cron.id,
-                html`<div>
-                  <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(160px, 1fr));gap:10px">
-                    <label
-                      >Type<select .value=${draft.type} @change=${change("type")}>
-                        <option value="slack" .selected=${draft.type === "slack"}>slack</option>
-                        <option value="principal" .selected=${draft.type === "principal"}>principal</option>
-                      </select></label
-                    ><label
-                      >Target<input
-                        name="cron-target"
-                        type="text"
-                        .value=${draft.target}
-                        placeholder=${draft.type === "principal" ? "principal id" : "Slack channel/thread id"}
-                        @input=${change("target")} /></label
-                    ><label
-                      >Audience scope<input
-                        type="text"
-                        .value=${draft.audienceScopeId}
-                        placeholder=${draft.type === "principal" ? "personal:U123" : "channel:C123"}
-                        @input=${change("audienceScopeId")} /></label
-                    ><label
-                      >On behalf of<input
-                        type="text"
-                        .value=${draft.onBehalfOf}
-                        ?disabled=${draft.type !== "principal"}
-                        @input=${change("onBehalfOf")}
-                    /></label>
-                  </div>
-                  <div class="foot">
-                    <button type="button" class="primary" ?disabled=${saving} @click=${() => save()}>
-                      Save destination</button
-                    ><button
-                      type="button"
-                      ?disabled=${saving}
-                      @click=${() => {
-                        editing = false;
-                        c.setCronEditing(null);
-                        draw();
-                      }}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>`,
-              )
-            : nothing
-        }
-        <div class="factlist">
-          ${facts()
-            .filter(([, value]) => value != null && value !== "")
-            .map(
-              ([label, value]) =>
-                html`<div class="fk">${label}</div>
-                  <div class="fv">${value}</div>`,
-            )}
-        </div>
-        <div class="credential-actions" style="margin:0 0 18px">
-          <button
-            type="button"
-            class="rowbtn"
-            ?disabled=${saving}
-            @click=${() => {
-              Object.assign(draft, current());
-              editing = true;
-              c.setCronEditing(id);
-              draw();
-            }}
-          >
-            Edit destination</button
-          ><button
-            type="button"
-            class="rowbtn danger"
-            ?disabled=${saving || !cron.destination}
-            @click=${() => save(true)}
-          >
-            Clear destination
-          </button>
-        </div>
-        ${
-          prompt
-            ? card(
-                cron.action ? "Prompt" : "Message",
-                cron.action ? "Re-run as a fresh prompt at every fire." : "Delivered as-is at every fire.",
-                html`<div>
-                  <p class=${"prompt-body" + (expanded ? "" : " clamped")}>${prompt}</p>
-                  ${
-                    needsToggle
-                      ? html`<button
-                          type="button"
-                          class="prompt-toggle"
-                          @click=${() => ((expanded = !expanded), draw())}
-                        >
-                          ${expanded ? "Show less" : "Show more"}
-                        </button>`
-                      : nothing
-                  }
-                </div>`,
-              )
-            : nothing
-        }${card(
-          "Recent fires",
-          "Each fire is a session. Click one to read its transcript. Dimmed fires delivered nothing.",
-          html`<div>
-            ${
-              (error && empty(error)) ||
-              (fires === null
-                ? html`<div class="loadingline">Loading fires...</div>`
-                : dense(
-                    fires,
-                    (s) => ({
-                      name: relTime(s.createdAt || s.lastActivity),
-                      preview: dot(
-                        typeof s.delivered === "number" &&
-                          (s.delivered ? "delivered" + (s.delivered > 1 ? " ×" + s.delivered : "") : "silent"),
-                        plural(s.turns || 0, "turn"),
-                        s.result || "(no messages)",
-                      ),
-                      time: plural(s.messages || 0, "entry", "entries"),
-                      cls: typeof s.delivered === "number" && !s.delivered ? "dim" : "",
-                      href: c.stateToUrl({ view: "history", scope: s.scopeId || c.scope, session: s.id }),
-                    }),
-                    (s) => c.go({ view: "history", scope: s.scopeId || c.scope, session: s.id }),
-                    "This cron has never fired.",
-                  ))
-            }${total > 25 ? html`<button type="button" class="prompt-toggle" @click=${() => c.go({ view: "history", scope: c.scope, session: null, page: 1, historyKind: "cron", cron: id })}>${"All " + plural(total, "fire") + " →"}</button>` : nothing}
-          </div>`,
-        )}`,
-    );
-  draw();
+  const k: Data = { root, c, id, cron, current, draft: current(), editing: false, saving: false, expanded: false };
+  Object.assign(k, { needsToggle: true, fires: null, error: "", total: 0 });
+  k.draw = () => render(cronTemplate(k));
+  k.draw();
   requestAnimationFrame(() => {
     const p = root.querySelector<HTMLElement>(".prompt-body");
     if (p && p.scrollHeight > 0 && p.scrollHeight <= p.clientHeight + 1) {
-      needsToggle = false;
-      draw();
+      k.needsToggle = false;
+      k.draw();
     }
   });
   void c
@@ -781,15 +585,15 @@ function cronDetail(root: HTMLElement, all: Data[], id: string, c: Context) {
     .then((response: Data) => {
       if (!root.isConnected) return;
       if (response.ok) {
-        fires = response.data.sessions || [];
-        total = response.data.total || fires!.length;
-      } else error = response.data?.message || `Failed to load fires (${response.status}).`;
-      draw();
+        k.fires = response.data.sessions || [];
+        k.total = response.data.total || k.fires!.length;
+      } else k.error = response.data?.message || `Failed to load fires (${response.status}).`;
+      k.draw();
     })
     .catch(() => {
       if (root.isConnected) {
-        error = "Failed to load fires.";
-        draw();
+        k.error = "Failed to load fires.";
+        k.draw();
       }
     });
 }

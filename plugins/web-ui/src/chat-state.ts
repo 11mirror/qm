@@ -12,8 +12,6 @@ export function createChatState() {
     contextName: null as string | null,
     rememberedThreadRef: null as string | null,
     rememberedSessionId: null as string | null,
-    rememberedScopeId: null as string | null,
-    rememberedContextName: null as string | null,
     liveWork: null as WorkBlock | null,
     goal: null as GoalStripState | null,
     turnRuntime: null as TurnRuntime | null,

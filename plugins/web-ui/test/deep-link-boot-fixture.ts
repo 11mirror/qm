@@ -220,6 +220,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
 
   const shell = await vite.ssrLoadModule("/src/shell.ts");
   const sessions = await vite.ssrLoadModule("/src/sessions.ts");
+  const sessionRows = await vite.ssrLoadModule("/src/session-rows.ts");
   const conversations = await vite.ssrLoadModule("/src/conversations.ts");
   const split = await vite.ssrLoadModule("/src/split.ts");
   return {
@@ -243,8 +244,8 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     boot: shell.boot as () => Promise<void>,
     switchView: shell.switchView as Harness["switchView"],
     renderList: sessions.renderList as () => void,
-    drawChatsPage: sessions.drawChatsPage as () => void,
-    renderChatsPage: sessions.renderChatsPage as () => Promise<void>,
+    drawChatsPage: sessionRows.drawChatsPage as () => void,
+    renderChatsPage: sessionRows.renderChatsPage as () => Promise<void>,
     appState: shell.appState as Harness["appState"],
     sessionsState: sessions.sessionsState as Harness["sessionsState"],
     visibleConversation: () =>

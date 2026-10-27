@@ -51,8 +51,6 @@ interface ChatState {
   contextName: string | null;
   rememberedThreadRef: string | null;
   rememberedSessionId: string | null;
-  rememberedScopeId: string | null;
-  rememberedContextName: string | null;
   pendingSend: string | null;
   resolvingApprovals: Set<string>;
   transcriptAnchorSeq: number | null;
@@ -111,7 +109,6 @@ export interface ChatSurface {
   resolveCommandApproval(decision: ApprovalDecision): void;
   approvalSummaryView(a: PendingApproval, expanded?: boolean): TemplateResult;
   notePendingSessionOnSend(): void;
-  syncPaneState(): void;
   onDelivery(threadRef: string): void;
   resumeIfIdle(): void;
   redraw(): void;

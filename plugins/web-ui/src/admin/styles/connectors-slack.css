@@ -1,0 +1,759 @@
+#app-view .admin-notice p,
+#app-view .admin-notice span,
+#app-view .admin-notice strong {
+  margin: 0;
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+#app-view .admin-notice strong {
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+#app-view .connector-dm-tip {
+  margin-bottom: 16px;
+}
+#app-view #view-connectors .card > .head p {
+  max-width: 70ch;
+}
+#app-view #view-connectors .card > .foot {
+  flex-wrap: wrap;
+  gap: 10px;
+}
+#app-view[data-subview="credentials"] #view-governance .credential-title strong,
+#app-view[data-subview="credentials"] #view-governance .keychain-summary strong,
+#app-view #view-connectors .credential-title strong {
+  font-size: 13px;
+  font-weight: 500;
+}
+#app-view #view-connectors .credential-row {
+  padding: 12px 0;
+  border-color: color-mix(in srgb, var(--text) 8%, var(--bg));
+}
+#app-view #view-governance .sv-customize > .head {
+  row-gap: 0;
+}
+#app-view #feature-flag-list {
+  display: grid;
+  gap: 10px;
+}
+#app-view #card-decisions .decision-form,
+#app-view #card-decisions .decision-option {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px 12px;
+  align-items: end;
+  margin: 10px 0;
+}
+#app-view #card-decisions .decision-option,
+#app-view #card-decisions .decision-question {
+  grid-column: 1 / -1;
+}
+#app-view #card-decisions .decision-option {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+#app-view #card-decisions textarea {
+  width: 100%;
+  min-height: 60px;
+}
+#app-view #feature-flag-list .feature-flag-row,
+#app-view #card-decisions .feature-flag-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+#app-view #feature-flag-list .feature-flag-row code,
+#app-view #card-decisions .feature-flag-row code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+#app-view #card-feature-flags .feature-flag-editor {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+#app-view #view-governance .sv-customize .body label:not(.setting-toggle) {
+  font-size: 13px;
+  font-weight: 400;
+}
+
+#app-view #view-governance .sv-customize .body input:not([type="checkbox"]):not([type="radio"]) {
+  max-width: none !important;
+  min-height: 34px;
+  padding: 7px 10px;
+  background: transparent;
+  font: inherit;
+}
+#app-view #view-governance .sv-customize .setting-toggle,
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .posture-choice {
+  align-items: flex-start;
+}
+#app-view #view-governance .sv-customize .setting-switch {
+  margin-top: 1px;
+}
+#app-view #view-governance .sv-customize .setting-copy strong,
+#app-view #view-governance .sv-customize .setting-copy small {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+#app-view #view-governance .sv-customize .setting-copy small,
+#app-view #slack-own-app-guide {
+  margin-top: 4px;
+}
+#app-view #view-governance .card > .foot .status,
+#app-view #view-governance .instructions-meta {
+  font-size: 12px;
+  line-height: 1.4;
+}
+#app-view .instructions-preview-label {
+  display: block;
+  margin-bottom: 4px;
+}
+#app-view #view-governance #card-instructions .instructions-preview,
+#app-view #view-governance .instructions-workbench textarea {
+  width: 100%;
+  min-height: 140px;
+  max-height: 360px;
+  margin: 0;
+  overflow: auto;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+#app-view #view-governance .instructions-diff {
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+#app-view #view-governance .instructions-diff h3,
+#app-view #view-governance .instructions-history h3 {
+  margin: 0 0 4px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 400;
+}
+#app-view #view-governance .instructions-diff pre {
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+}
+#app-view #card-instructions .instructions-preview {
+  margin: 0;
+  text-overflow: ellipsis;
+}
+
+#app-view #view-data .users-layout section.card {
+  margin: 0;
+  padding: 24px 0;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+}
+#app-view #view-data .users-layout > section.card:last-child {
+  border-bottom: 0;
+}
+#app-view #view-data .users-layout .card > .head {
+  padding: 0;
+  border: 0;
+}
+#app-view #view-data .users-layout .card > .head h2 {
+  font-size: 14px;
+  font-weight: 500;
+}
+#app-view #view-data .users-layout .card > .head p,
+:where(#app-view[data-admin-kit="true"])
+  :is(.admin-main, dialog)
+  label:not(:where(.posture-choice, .setting-toggle, .screening-compare, .switch)) {
+  line-height: 1.4;
+}
+#app-view #view-data .users-layout .card > .body {
+  min-width: 0;
+}
+#app-view #view-data .users-layout .users-roster > .head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 16px;
+}
+#app-view #view-data .users-layout .users-roster > .head p {
+  grid-column: 1;
+}
+#app-view #view-data .users-layout .users-roster > .head button {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  align-self: start;
+}
+#app-view #view-data .users-layout .empty {
+  padding: 12px 0;
+  text-align: left;
+}
+#app-view #view-data .users-layout .grant-form .grow {
+  min-width: min(220px, 100%);
+}
+#app-view:has(.users-layout) .shell-search input {
+  width: 240px;
+  max-width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+@media (max-width: 720px) {
+  #app-view #view-data .users-layout .users-roster > .head {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-start;
+  }
+}
+#app-view #shellbar .judgment-filters .shell-tab {
+  padding: 6px 14px;
+}
+#app-view #shellbar .judgment-filters .shell-tab:hover {
+  background: var(--subtle);
+  color: var(--text);
+}
+#app-view #shellbar .judgment-filters .shell-tab.active,
+#app-view #shellbar .judgment-filters .shell-tab.active:hover {
+  border-color: #0a2540;
+  background: #0a2540;
+  color: #fff;
+}
+
+#app-view #shellbar.logs-shell {
+  flex-wrap: wrap;
+  gap: 12px;
+  overflow: visible;
+}
+#app-view #shellbar.logs-shell .log-counts,
+#app-view #shellbar.logs-shell .shell-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+#app-view .policy-rule.hidden,
+#app-view #card-instructions.is-editing .instructions-preview-body,
+#app-view #card-instructions:not(.is-editing) .instructions-workbench,
+#app-view #card-instructions.is-editing .instructions-preview,
+#app-view #view-data .users-layout .status:empty,
+#app-view #shellbar.logs-shell .log-counts:empty,
+#app-view #slack-own-app-guide summary::-webkit-details-marker,
+#app-view #st-slack-installation:empty,
+#app-view #view-governance.governance-pending .governance-layout,
+#app-view #view-governance.governance-pending .environment-notice {
+  display: none;
+}
+#app-view #shellbar.logs-shell .shell-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-sizing: border-box;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+}
+#app-view #shellbar.logs-shell .log-count {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 18px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+#app-view #shellbar.logs-shell .log-counts {
+  gap: 6px 16px;
+}
+#app-view #shellbar.logs-shell .shell-tab:hover {
+  background: var(--subtle);
+  color: var(--text);
+}
+#app-view #shellbar.logs-shell .shell-tab.active,
+#app-view #shellbar.logs-shell .shell-tab.active:hover {
+  background: #0a2540;
+  border-color: #0a2540;
+  color: #fff;
+}
+@media (max-width: 720px) {
+  #app-view #shellbar.logs-shell .log-counts {
+    flex: 1 0 100%;
+    order: 1;
+  }
+  #app-view #shellbar.logs-shell .shell-spacer {
+    display: none;
+  }
+}
+
+#app-view #view-data .memory-notebooks {
+  padding-top: 8px;
+}
+#app-view #view-data .memory-notebooks .memory-columns,
+#app-view #view-data .memory-notebooks .dense-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 100px 180px;
+  align-items: center;
+  gap: 24px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  line-height: 1.4;
+}
+#app-view #view-data .memory-notebooks .memory-columns {
+  color: var(--muted);
+  font-size: 12px;
+}
+#app-view #view-data .memory-notebooks .memory-columns > :not(:first-child) {
+  text-align: right;
+}
+#app-view #view-data .memory-notebooks .dense-name {
+  min-width: 0;
+  max-width: none;
+  font-weight: 500;
+}
+#app-view #view-data .memory-notebooks .dense-preview,
+#app-view #view-data .memory-notebooks .dense-time {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+#app-view #view-data .memory-notebooks .dense-row {
+  border-top: 0;
+}
+#app-view #view-data .memory-notebooks .dense-row:hover {
+  background: var(--subtle);
+}
+#app-view #view-data section.memory-editor {
+  margin: 0;
+  padding: 24px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+#app-view #view-data .memory-editor > .head {
+  margin: 0 0 24px;
+  padding: 0;
+  border: 0;
+}
+#app-view #view-data .memory-editor h2 {
+  font-size: 14px;
+  font-weight: 500;
+}
+#app-view #view-data .memory-editor textarea {
+  box-sizing: border-box;
+  padding: 12px;
+  border-radius: 6px;
+  line-height: 1.6;
+}
+#app-view #view-data .memory-editor .memory-facts {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+#app-view #view-data .memory-editor .memory-facts li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid #e3e8ee;
+}
+#app-view #view-data .memory-editor button.primary {
+  min-height: 32px;
+  padding: 6px 14px;
+  border: 1px solid #0a2540;
+  border-radius: 6px;
+  background: #0a2540;
+  color: white;
+  font-size: 13px;
+}
+@media (max-width: 720px) {
+  #app-view #view-data .memory-notebooks .memory-columns,
+  #app-view #view-data .memory-notebooks .dense-row {
+    grid-template-columns: minmax(0, 1fr) 65px 110px;
+    gap: 10px;
+  }
+  #app-view #view-data .memory-notebooks .dense-name {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  #app-view #view-data .memory-notebooks .dense-time {
+    white-space: normal;
+  }
+}
+
+#app-view #card-slack-installation > .head {
+  border: 0;
+}
+#app-view #card-slack-installation > .head h2 {
+  color: var(--muted);
+}
+#app-view #card-slack-installation > .body {
+  padding-top: 0;
+}
+#app-view #card-slack-installation .slack-connection {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 8px;
+  border-radius: 8px;
+}
+#app-view #card-slack-installation h3 {
+  font-size: 14px;
+  font-weight: 500;
+  margin: 0;
+  line-height: 20px;
+}
+#app-view #card-slack-installation .hint {
+  margin: 2px 0 0;
+}
+#app-view .slack-connection-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+#app-view #card-slack-installation .slack-connection-actions button {
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  box-shadow: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 400;
+}
+#app-view #card-slack-installation .slack-connection-actions button:hover {
+  background: var(--subtle);
+  color: var(--text);
+}
+#app-view #card-slack-installation #slack-installation-start {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid #c7c7c7;
+  border-radius: 5px;
+  background: #fff;
+  color: #1d1c1d;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+#app-view #card-slack-installation #slack-installation-start:hover:not(:disabled) {
+  background: #f8f8f8;
+  border-color: #868686;
+}
+#app-view #slack-own-app-guide summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  list-style: none;
+  padding: 9px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--muted);
+}
+#app-view #slack-own-app-guide summary:hover {
+  background: var(--subtle);
+  color: var(--text);
+}
+#app-view #slack-own-app-guide[open] .slack-guide-arrow {
+  transform: rotate(90deg);
+}
+#app-view #slack-own-app-guide > p,
+#app-view #slack-own-app-guide > ol,
+#app-view #slack-own-app-guide > button {
+  margin-left: 8px;
+}
+#app-view #slack-own-app-guide p,
+#app-view #slack-own-app-guide ol {
+  color: var(--muted);
+  max-width: 760px;
+  line-height: 1.65;
+}
+#app-view #slack-own-app-guide li {
+  padding: 4px 0 8px 4px;
+}
+#app-view #slack-token-editor {
+  max-width: 560px;
+  margin-top: 20px;
+}
+#app-view #st-slack-installation {
+  display: block;
+  margin-top: 16px;
+}
+@media (max-width: 640px) {
+  #app-view #card-slack-installation .slack-connection {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) {
+  --control-height: 32px;
+  --control-radius: 6px;
+  --control-font: 13px;
+  --section-font: 14px;
+  --section-gap: 24px;
+  --control-gap: 8px;
+  font-size: var(--control-font);
+  line-height: 1.4;
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .admin-inner {
+  max-width: 960px;
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .shell-title {
+  letter-spacing: -0.025em;
+}
+
+:where(#app-view[data-admin-kit="true"])
+  :is(.admin-main, dialog)
+  button:not(
+    :where(
+      .viewlink,
+      .link,
+      .danger-link,
+      .icon,
+      .icon-button,
+      .project-icon-button,
+      .policy-rule .rowbtn,
+      .seg,
+      .shell-tab,
+      .dd-item,
+      .model-chip button,
+      .emoji-picker-grid button,
+      .ovmenu button,
+      .dd-btn,
+      .loadout-control button
+    )
+  ) {
+  min-height: var(--control-height);
+  color: var(--text);
+  box-shadow: none;
+}
+
+:where(#app-view[data-admin-kit="true"])
+  :is(.admin-main, dialog)
+  button:not(:where(.viewlink, .link, .danger-link, .icon, .policy-rule .rowbtn, .model-chip button)):hover:not(
+    :disabled
+  ) {
+  background: var(--subtle);
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) button.primary:hover:not(:disabled) {
+  background: var(--cta-hover);
+  border-color: var(--cta-hover);
+  color: var(--cta-foreground);
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) button.danger {
+  color: var(--danger);
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) button.primary:disabled {
+  background: var(--subtle);
+  border-color: var(--border);
+  color: var(--muted);
+  opacity: 1;
+}
+
+:where(#app-view[data-admin-kit="true"])
+  :is(.admin-main, dialog)
+  input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="file"]):not([type="color"]):not(
+    :where(.admin-search input)
+  ),
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) select:not(.loadout-button),
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) textarea,
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .dd > .dd-btn {
+  min-height: var(--control-height);
+  padding: 6px 10px;
+  color: var(--text);
+  box-shadow: none;
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) input:disabled,
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) select:not(.loadout-button):disabled,
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) textarea:disabled,
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .dd > .dd-btn:disabled {
+  background: var(--subtle);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) input[aria-invalid="true"],
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) textarea[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+#app-view #view-data .memory-notebooks .dense-row:focus-visible,
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) input:focus-visible,
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) select:focus-visible,
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) textarea:focus-visible,
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) button:focus-visible {
+  outline: 2px solid var(--cta);
+  outline-offset: 2px;
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .card > .head h2 {
+  margin: 0;
+  line-height: 1.5;
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .card > .head p,
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .hint,
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .field-hint {
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .card > .head p {
+  margin: 4px 0 0;
+  max-width: 70ch;
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .card > .foot {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .card > .foot:has(> .primary) {
+  display: flex;
+  justify-content: flex-end;
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .foot > .status {
+  order: -1;
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .viewlink,
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .link,
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .danger-link {
+  font-size: var(--control-font);
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .badge {
+  align-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 7%, transparent);
+  line-height: 1.4;
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .credential-row {
+  padding: 12px 0;
+  gap: 12px;
+  border-color: var(--border);
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .credential-actions {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .tablewrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--control-font);
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) th {
+  text-align: left;
+  background: transparent;
+  border-bottom: 1px solid var(--border);
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .empty {
+  padding: 16px 0;
+  color: var(--muted);
+  font-size: var(--control-font);
+  text-align: left;
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .posture-choice:has(input:checked) {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--text) 2%, transparent);
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .posture-choice:hover {
+  background: var(--subtle);
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) .posture-choice strong {
+  display: block;
+  color: var(--text);
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) input[type="radio"] {
+  appearance: none;
+  display: inline-grid;
+  place-content: center;
+  flex: 0 0 16px;
+  height: 16px;
+  min-height: 0;
+  margin: 1px 0 0;
+  padding: 0;
+  border-radius: 50%;
+  background: transparent;
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) input[type="radio"]::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transform: scale(0);
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) input[type="radio"]:checked {
+  border-color: var(--cta);
+}
+
+:where(#app-view[data-admin-kit="true"]) :is(.admin-main, dialog) input[type="radio"]:checked::before {
+  transform: scale(1);
+}

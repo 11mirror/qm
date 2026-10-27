@@ -13,7 +13,8 @@ import {
 } from "./core-bridge";
 import { workingWave } from "./ui";
 import { icon } from "./icons";
-import { refreshSessions, sessionsState, syncWorkingPulse } from "./sessions";
+import { refreshSessions, sessionsState } from "./sessions";
+import { syncWorkingPulse } from "./session-rows";
 import { goalElapsedLabel } from "./goal-strip";
 import {
   ackKey,
@@ -25,21 +26,18 @@ import {
   type SubagentRow,
 } from "./subagent-activity";
 
-export function createSubagentStrip({
-  ctx,
-  chatState,
-  drawActiveChat,
-  openSessionById,
-  syncWorkTicker,
-}: {
+const SUBAGENT_ACK_KEY = "qm.subagentAck";
+
+interface SubagentStripDeps {
   ctx: ConvCtx;
   chatState: { readonly sessionId: string | null; readonly resolvingApprovals: Set<string> };
   drawActiveChat: () => void;
   openSessionById: (id: string) => Promise<unknown>;
   syncWorkTicker: () => void;
-}) {
-  const SUBAGENT_ACK_KEY = "qm.subagentAck";
-  const subagentUi = {
+}
+
+class SubagentStrip {
+  private readonly subagentUi = {
     expanded: false,
     peekId: null as string | null,
     peek: null as PeekLine[] | null,
@@ -57,87 +55,92 @@ export function createSubagentStrip({
       })(),
     ),
   };
+  private readonly deps: SubagentStripDeps;
 
-  function stopSubagentPeek(): void {
-    if (subagentUi.timer) clearInterval(subagentUi.timer);
-    subagentUi.timer = null;
-    subagentUi.peekId = null;
-    subagentUi.peek = null;
+  constructor(deps: SubagentStripDeps) {
+    this.deps = deps;
   }
 
-  async function refreshSubagentPeek(id: string): Promise<void> {
+  private readonly stopSubagentPeek = (): void => {
+    if (this.subagentUi.timer) clearInterval(this.subagentUi.timer);
+    this.subagentUi.timer = null;
+    this.subagentUi.peekId = null;
+    this.subagentUi.peek = null;
+  };
+
+  private readonly refreshSubagentPeek = async (id: string): Promise<void> => {
     const page = await fetchTranscript(id, { tailTurns: 1 }).catch((error: unknown) => {
       reportHandledError("web:subagent_peek", error);
       return null;
     });
-    if (subagentUi.peekId !== id) return;
-    subagentUi.peek = page ? peekLines(page.items) : [];
-    drawActiveChat();
-  }
+    if (this.subagentUi.peekId !== id) return;
+    this.subagentUi.peek = page ? peekLines(page.items) : [];
+    this.deps.drawActiveChat();
+  };
 
-  function toggleSubagentPeek(row: SubagentRow): void {
+  private readonly toggleSubagentPeek = (row: SubagentRow): void => {
     const id = row.session.id;
-    const same = subagentUi.peekId === id;
-    stopSubagentPeek();
-    if (same) return drawActiveChat();
-    subagentUi.peekId = id;
-    void refreshSubagentPeek(id);
-    if (row.state === "working") subagentUi.timer = setInterval(() => void refreshSubagentPeek(id), 4000);
-    drawActiveChat();
-  }
+    const same = this.subagentUi.peekId === id;
+    this.stopSubagentPeek();
+    if (same) return this.deps.drawActiveChat();
+    this.subagentUi.peekId = id;
+    void this.refreshSubagentPeek(id);
+    if (row.state === "working") this.subagentUi.timer = setInterval(() => void this.refreshSubagentPeek(id), 4000);
+    this.deps.drawActiveChat();
+  };
 
-  function acknowledgeSubagent(row: SubagentRow): void {
-    subagentUi.acknowledged.add(ackKey(row));
+  private readonly acknowledgeSubagent = (row: SubagentRow): void => {
+    this.subagentUi.acknowledged.add(ackKey(row));
     try {
-      localStorage.setItem(SUBAGENT_ACK_KEY, JSON.stringify([...subagentUi.acknowledged].slice(-200)));
+      localStorage.setItem(SUBAGENT_ACK_KEY, JSON.stringify([...this.subagentUi.acknowledged].slice(-200)));
     } catch {
-      return drawActiveChat();
+      return this.deps.drawActiveChat();
     }
-    if (subagentUi.peekId === row.session.id) stopSubagentPeek();
-    drawActiveChat();
-  }
+    if (this.subagentUi.peekId === row.session.id) this.stopSubagentPeek();
+    this.deps.drawActiveChat();
+  };
 
-  function syncSubagentApprovals(rows: readonly SubagentRow[]): void {
+  private readonly syncSubagentApprovals = (rows: readonly SubagentRow[]): void => {
     const waiting = rows.filter((row) => row.state === "waiting").map((row) => row.session.id);
     const key = waiting.join(",");
-    if (key === subagentUi.approvalsKey) return;
-    subagentUi.approvalsKey = key;
-    for (const id of subagentUi.approvals.keys()) if (!waiting.includes(id)) subagentUi.approvals.delete(id);
+    if (key === this.subagentUi.approvalsKey) return;
+    this.subagentUi.approvalsKey = key;
+    for (const id of this.subagentUi.approvals.keys()) if (!waiting.includes(id)) this.subagentUi.approvals.delete(id);
     for (const id of waiting)
       void fetchSessionApprovals(id).then((r) => {
-        if (!subagentUi.approvalsKey.split(",").includes(id)) return;
-        subagentUi.approvals.set(id, r?.approvals ?? []);
-        drawActiveChat();
+        if (!this.subagentUi.approvalsKey.split(",").includes(id)) return;
+        this.subagentUi.approvals.set(id, r?.approvals ?? []);
+        this.deps.drawActiveChat();
       });
-  }
+  };
 
-  function resolveSubagentApproval(childId: string, decision: ApprovalDecision): void {
-    if (chatState.resolvingApprovals.has(decision.requestId)) return;
-    chatState.resolvingApprovals.add(decision.requestId);
-    ctx.composer.state.error = "";
-    drawActiveChat();
+  private readonly resolveSubagentApproval = (childId: string, decision: ApprovalDecision): void => {
+    if (this.deps.chatState.resolvingApprovals.has(decision.requestId)) return;
+    this.deps.chatState.resolvingApprovals.add(decision.requestId);
+    this.deps.ctx.composer.state.error = "";
+    this.deps.drawActiveChat();
     void resolveApproval(decision)
       .then(() => {
-        subagentUi.approvals.set(
+        this.subagentUi.approvals.set(
           childId,
-          (subagentUi.approvals.get(childId) ?? []).filter((a) => a.requestId !== decision.requestId),
+          (this.subagentUi.approvals.get(childId) ?? []).filter((a) => a.requestId !== decision.requestId),
         );
       })
       .catch((err: unknown) => {
-        ctx.composer.state.error = err instanceof Error ? err.message : "Could not send the approval.";
+        this.deps.ctx.composer.state.error = err instanceof Error ? err.message : "Could not send the approval.";
       })
       .finally(() => {
-        chatState.resolvingApprovals.delete(decision.requestId);
-        subagentUi.approvalsKey = "";
-        void refreshSessions({ silent: true }).finally(() => drawActiveChat());
+        this.deps.chatState.resolvingApprovals.delete(decision.requestId);
+        this.subagentUi.approvalsKey = "";
+        void refreshSessions({ silent: true }).finally(() => this.deps.drawActiveChat());
       });
-  }
+  };
 
-  function subagentRowTpl(row: SubagentRow): TemplateResult {
+  private readonly subagentRowTpl = (row: SubagentRow): TemplateResult => {
     const now = Date.now();
     const elapsed = goalElapsedLabel(row.startedAt, row.endedAt ?? now);
-    const peeking = subagentUi.peekId === row.session.id;
-    const approvals = unresolvedApprovals(subagentUi.approvals.get(row.session.id) ?? []);
+    const peeking = this.subagentUi.peekId === row.session.id;
+    const approvals = unresolvedApprovals(this.subagentUi.approvals.get(row.session.id) ?? []);
     const title = row.session.title?.trim() || "Subagent";
     return html`<div
       class="subagent-row ${row.state} ${peeking ? "peeking" : ""}"
@@ -147,7 +150,7 @@ export function createSubagentStrip({
         type="button"
         class="subagent-row-head"
         aria-expanded=${String(peeking)}
-        @click=${() => toggleSubagentPeek(row)}
+        @click=${() => this.toggleSubagentPeek(row)}
       >
         ${row.state === "working" ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}
         ${row.state === "waiting" ? html`<span class="awaiting-dot" aria-hidden="true"></span>` : nothing}
@@ -157,27 +160,27 @@ export function createSubagentStrip({
       </button>
       ${
         row.state === "failed"
-          ? html`<button type="button" class="subagent-row-action" @click=${() => acknowledgeSubagent(row)}>
+          ? html`<button type="button" class="subagent-row-action" @click=${() => this.acknowledgeSubagent(row)}>
               Dismiss
             </button>`
           : nothing
       }
-      <button type="button" class="subagent-row-action" @click=${() => void openSessionById(row.session.id)}>
+      <button type="button" class="subagent-row-action" @click=${() => void this.deps.openSessionById(row.session.id)}>
         Open
       </button>
       ${
         approvals.length
-          ? ctx.composer.composerApprovalPanel(approvals, (decision) =>
-              resolveSubagentApproval(row.session.id, decision),
+          ? this.deps.ctx.composer.composerApprovalPanel(approvals, (decision) =>
+              this.resolveSubagentApproval(row.session.id, decision),
             )
           : nothing
       }
-      ${peeking ? subagentPeekTpl() : nothing}
+      ${peeking ? this.subagentPeekTpl() : nothing}
     </div>`;
-  }
+  };
 
-  function subagentPeekTpl(): TemplateResult {
-    const lines = subagentUi.peek;
+  private readonly subagentPeekTpl = (): TemplateResult => {
+    const lines = this.subagentUi.peek;
     if (!lines) return html`<div class="subagent-peek bg-panel-note">Loading…</div>`;
     if (!lines.length) return html`<div class="subagent-peek bg-panel-note">No activity yet</div>`;
     return html`<ol class="subagent-peek" aria-live="polite">
@@ -188,19 +191,20 @@ export function createSubagentStrip({
           </li>`,
       )}
     </ol>`;
-  }
+  };
 
-  function subagentStrip(): TemplateResult | typeof nothing {
-    const rootId = chatState.sessionId;
+  readonly subagentStrip = (): TemplateResult | typeof nothing => {
+    const rootId = this.deps.chatState.sessionId;
     if (!rootId) return nothing;
-    const rows = visibleSubagents(subagentRows(sessionsState.list, rootId), subagentUi.acknowledged);
-    if (subagentUi.peekId && !rows.some((row) => row.session.id === subagentUi.peekId)) stopSubagentPeek();
-    syncSubagentApprovals(rows);
-    subagentUi.ticking = rows.some((row) => row.state === "working" || row.state === "waiting");
-    syncWorkTicker();
+    const rows = visibleSubagents(subagentRows(sessionsState.list, rootId), this.subagentUi.acknowledged);
+    if (this.subagentUi.peekId && !rows.some((row) => row.session.id === this.subagentUi.peekId))
+      this.stopSubagentPeek();
+    this.syncSubagentApprovals(rows);
+    this.subagentUi.ticking = rows.some((row) => row.state === "working" || row.state === "waiting");
+    this.deps.syncWorkTicker();
     if (!rows.length) return nothing;
     const single = rows.length === 1;
-    const expanded = single || subagentUi.expanded || rows.some((row) => row.state === "waiting");
+    const expanded = single || this.subagentUi.expanded || rows.some((row) => row.state === "waiting");
     const failed = rows.some((row) => row.state === "failed");
     return html`
       <section class="bg-activity subagent-activity ${expanded ? "expanded" : ""} ${failed ? "has-failed" : ""}">
@@ -212,18 +216,24 @@ export function createSubagentStrip({
                 class="bg-activity-strip"
                 aria-expanded=${String(expanded)}
                 @click=${() => {
-                  subagentUi.expanded = !subagentUi.expanded;
-                  if (!subagentUi.expanded) stopSubagentPeek();
-                  drawActiveChat();
+                  this.subagentUi.expanded = !this.subagentUi.expanded;
+                  if (!this.subagentUi.expanded) this.stopSubagentPeek();
+                  this.deps.drawActiveChat();
                 }}
               >
                 ${icon(Bot, 13)}<span class="bg-activity-label">${subagentSummary(rows)}</span>
                 <span class="bg-activity-toggle">${icon(ChevronRight, 14)}</span>
               </button>`
         }
-        ${expanded ? html`<div class="subagent-list ${single ? "single" : "bg-panel"}">${rows.map(subagentRowTpl)}</div>` : nothing}
+        ${expanded ? html`<div class="subagent-list ${single ? "single" : "bg-panel"}">${rows.map(this.subagentRowTpl)}</div>` : nothing}
       </section>
     `;
-  }
-  return { subagentStrip, subagentsTicking: () => subagentUi.ticking };
+  };
+
+  readonly subagentsTicking = () => this.subagentUi.ticking;
+}
+
+export function createSubagentStrip(deps: SubagentStripDeps) {
+  const w = new SubagentStrip(deps);
+  return { subagentStrip: w.subagentStrip, subagentsTicking: w.subagentsTicking };
 }
