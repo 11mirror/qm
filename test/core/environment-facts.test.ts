@@ -218,7 +218,7 @@ test("standing work includes all titles and readable timings, not IDs, owners or
     action: "private instructions",
     schedule: { cron: "0 8 * * 1,3,5", timezone: "America/Los_Angeles" },
   }));
-  const text = renderStandingObligations(crons, [], []);
+  const text = renderStandingObligations(crons, [], [], 10_000);
   assert.equal(text.split("\n").filter((line) => line.startsWith("- ")).length, 15);
   assert.match(text, /Task 14/);
   assert.match(text, /08:00 AM, only on Monday, Wednesday, and Friday/);
@@ -228,6 +228,7 @@ test("standing work includes all titles and readable timings, not IDs, owners or
       [{ ...crons[0]!, schedule: { cron: "0 8 * * FRI#L", timezone: "America/Los_Angeles" } }],
       [],
       [],
+      10_000,
     ),
     /last Friday/,
   );
@@ -235,6 +236,7 @@ test("standing work includes all titles and readable timings, not IDs, owners or
     [{ ...crons[0]!, schedule: { firstFireAt: Date.parse("2026-11-01T10:00:00Z") } }],
     [],
     [],
+    10_000,
   );
   assert.match(once, /2026-11-01T02:00:00-08:00/);
 });
