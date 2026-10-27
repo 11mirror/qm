@@ -28,17 +28,18 @@ const CONSENT_LINKS_MIGRATION = mapToTableMigration("connectors/consent-links/00
     returnTo text, createdAt bigint!`),
 });
 
+export const CONSENT_LINKS_RETIRED_KEYS = retireJsonKeysMigration(
+  "connectors/consent-links/0000-drop-channel-scope-id",
+  "consent_links",
+  { drop: ["channelScopeId"] },
+);
+
 export function createConsentLinkStore(
   databaseUrl: string,
   opts: { ttlMs?: number; now?: () => number } = {},
 ): ConsentLinkStore {
   const table = typedTable<ConsentLinkRecord>(
-    createPgPool(databaseUrl, [
-      retireJsonKeysMigration("connectors/consent-links/0000-drop-channel-scope-id", "consent_links", {
-        drop: ["channelScopeId"],
-      }),
-      CONSENT_LINKS_MIGRATION,
-    ]),
+    createPgPool(databaseUrl, [CONSENT_LINKS_RETIRED_KEYS, CONSENT_LINKS_MIGRATION]),
     CONSENT_LINKS_MIGRATION.spec,
   );
   const links = createOneTimeStore(table, opts.ttlMs ?? CONSENT_LINK_TTL_MS, opts.now);

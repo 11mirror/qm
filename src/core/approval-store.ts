@@ -34,11 +34,12 @@ export const APPROVALS_MIGRATION = mapToTableMigration("core/approvals/0001-type
   statements: [`CREATE INDEX IF NOT EXISTS approvals_session ON approvals (session_id)`],
 });
 
+export const APPROVALS_RETIRED_KEYS = retireJsonKeysMigration("core/approvals/0000-drop-screened-output", "approvals", {
+  drop: ["screenedOutput"],
+});
+
 export function createApprovalRecords(databaseUrl: string) {
-  const pg = createPgPool(databaseUrl, [
-    retireJsonKeysMigration("core/approvals/0000-drop-screened-output", "approvals", { drop: ["screenedOutput"] }),
-    APPROVALS_MIGRATION,
-  ]);
+  const pg = createPgPool(databaseUrl, [APPROVALS_RETIRED_KEYS, APPROVALS_MIGRATION]);
   const { get, put, delete: remove, take, codec } = typedTable<PendingApprovalRecord>(pg, APPROVALS);
   const entries = (rows: Record<string, unknown>[]): Array<[string, PendingApprovalRecord]> =>
     rows.map((r) => [String(r.id), codec.row(r)]);

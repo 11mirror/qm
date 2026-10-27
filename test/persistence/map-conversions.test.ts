@@ -10,6 +10,9 @@ import { MODAL_BODIES } from "../../src/sandbox/modal-sandbox.ts";
 import { MANAGED_AGENTS_BODIES } from "../../src/sandbox/managed-agents-sandbox.ts";
 import { BACKGROUND_OWNERSHIP_MIGRATION } from "../../src/runs/background-ownership.ts";
 import { E2B_BODIES } from "../../src/sandbox/e2b-sandbox.ts";
+import { APPROVALS_RETIRED_KEYS } from "../../src/core/approval-store.ts";
+import { CONSENT_LINKS_RETIRED_KEYS } from "../../src/connectors/consent-link.ts";
+import { CRONS_RETIRED_KEYS } from "../../src/cron/cron-store.ts";
 import { assertMapConversion } from "../support/map-conversion.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
 
@@ -20,6 +23,28 @@ test("every former durable-map table has a conversion", () => assert.equal(CONVE
 
 for (const conversion of CONVERSIONS)
   test(`${conversion.spec.table} converts in place for one tenant and for two`, () => assertMapConversion(conversion));
+
+const RETIRED_KEYS = [
+  { table: "approvals", migration: APPROVALS_RETIRED_KEYS, keys: { screenedOutput: { text: "out", redacted: true } } },
+  { table: "consent_links", migration: CONSENT_LINKS_RETIRED_KEYS, keys: { channelScopeId: "channel:a" } },
+  {
+    table: "crons",
+    migration: CRONS_RETIRED_KEYS,
+    keys: {
+      adminAuthorization: { grantedBy: "user:a", grants: ["read"] },
+      deliveryMigration: { from: "channel:a", to: "channel:b" },
+      initialVerificationRequestedAt: 1_761_000_000_001,
+      groupDeliveryTestRequestedAt: 1_761_000_000_002,
+    },
+  },
+];
+
+for (const { table, migration, keys } of RETIRED_KEYS)
+  test(`${table} rows carrying keys no column takes convert once ${migration.id} retires them`, () => {
+    const conversion = CONVERSIONS.find((c) => c.spec.table === table)!;
+    assert.ok(pgMigrationOrder(migration.id, conversion.id) < 0, `${migration.id} runs before ${conversion.id}`);
+    return assertMapConversion(conversion, { migration, keys });
+  });
 
 test("a row that does not rebuild from the typed columns fails the conversion and keeps the map", async () => {
   const pool = new pg.Pool({ connectionString: testDatabaseUrl() });
