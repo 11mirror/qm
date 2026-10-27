@@ -4,7 +4,7 @@ import { approvalDeliveryKey, approvalDeliveryRecipient } from "../core/approval
 import { samePerson } from "../directory/person.ts";
 import { approvalMessage } from "./approval-cards.ts";
 import { deliverKeychainCard } from "./keychain-approvals.ts";
-import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { destinationSource } from "../types.ts";
 import {
   botIdentityArgs,
@@ -99,7 +99,7 @@ export function createSlackSender(deps: {
     try {
       await uploadAttachments(client, channel, root, d.attachments, core);
     } catch (err) {
-      console.error(`[slack-plugin] delivery ${d.idempotencyKey} attachment upload failed:`, errMessage(err));
+      reportFailure("slack: delivery attachment upload", err, d.idempotencyKey);
       await client.chat
         .postMessage(slackReplyArgs(channel, uploadFailureNote(err), root))
         .catch(swallowAs("slack: post upload-failure note", undefined));

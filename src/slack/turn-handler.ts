@@ -500,9 +500,7 @@ export function createTurnHandler(deps: {
       await settleAck();
       if (inc.unprompted) {
         if (!accepted) inc.ackGate?.failed(errMessage(err));
-        console.error(
-          `[slack-plugin] unprompted turn errored (staying quiet) ch=${inc.channel} ts=${inc.ts}: ${(err as Error).message}`,
-        );
+        reportFailure("slack: unprompted turn (staying quiet)", err, `ch=${inc.channel} ts=${inc.ts}`);
       } else {
         console.error(`[slack-plugin] turn errored ch=${inc.channel} ts=${inc.ts}: ${errMessage(err)}`);
         const note = `⚠️ ${slackFailureText(err)}`;
@@ -547,7 +545,7 @@ export function createTurnHandler(deps: {
               await uploadAttachments(client, inc.channel, replyThreadTs, result.attachments, core);
             } catch (err) {
               uploadError = err;
-              console.error("[slack-plugin] file upload failed:", (err as Error).message);
+              reportFailure("slack: reply file upload", err);
             }
           }
           await ack?.drain();

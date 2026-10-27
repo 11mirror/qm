@@ -1,5 +1,5 @@
 import { isSubagentThreadRef } from "../sessions/thread-ref.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { reportFailure, swallowAs } from "../util/errors.ts";
 import { slackFailureText } from "./turn-flow.ts";
 import { slackSectionBlocks, toSlackMrkdwn } from "./mrkdwn.ts";
 import {
@@ -94,7 +94,7 @@ export function createApprovals(deps: {
     try {
       return ((await core.getApproval(requestId)) as StoredApproval | null) ?? null;
     } catch (err) {
-      console.error("[slack-plugin] approval recovery fetch failed:", (err as Error).message);
+      reportFailure("slack: approval recovery fetch", err, requestId);
       return "unavailable";
     }
   }
@@ -258,7 +258,7 @@ export function createApprovals(deps: {
           try {
             await uploadAttachments(client, ctx.channel, ctx.replyThreadTs, result.attachments, core);
           } catch (err) {
-            console.error("[slack-plugin] file upload failed:", (err as Error).message);
+            reportFailure("slack: approval reply file upload", err);
             await followup(uploadFailureNote(err));
           }
         }
@@ -289,7 +289,7 @@ export function createApprovals(deps: {
       ]);
       ackQuarantine();
     } catch (err) {
-      console.error("%s", `[slack] approval ${requestId} action failed:`, errMessage(err));
+      reportFailure("slack: approval action", err, requestId);
       const msg = slackFailureText(err);
       if (settled) {
         await updateCard(`⚠️ ${msg}`).catch(swallowAs("slack: update approval message", undefined));
