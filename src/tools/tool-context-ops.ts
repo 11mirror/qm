@@ -497,12 +497,14 @@ function tryDecodeUtf8(bytes: Uint8Array): string | null {
 
 export const COMMAND_PATH_PROBE_TIMEOUT_MS = 10_000;
 
+const trimSlashes = (path: string): string => path.replace(/^\.?\/+/, "").replace(/\/+$/, "");
+
 async function collectTree(
   sandbox: Sandbox,
   handle: SandboxHandle,
   dir?: string,
 ): Promise<Array<{ path: string; data: Uint8Array }>> {
-  const base = (dir ?? "").replace(/^\.?\/+/, "").replace(/\/+$/, "");
+  const base = trimSlashes(dir ?? "");
   if (supportsAgentComputerExport(sandbox)) {
     try {
       const entries = await sandbox.exportFiles(handle, {
@@ -528,15 +530,15 @@ async function collectTree(
 }
 
 function isUnderAnyDir(path: string, dirs: readonly string[]): boolean {
-  const p = path.replace(/^\.?\/+/, "").replace(/\/+$/, "");
+  const p = trimSlashes(path);
   return dirs.some((raw) => {
-    const dir = raw.replace(/^\.?\/+/, "").replace(/\/+$/, "");
+    const dir = trimSlashes(raw);
     return dir !== "" && (p === dir || p.startsWith(`${dir}/`));
   });
 }
 
 function filesUnder(snapshot: Array<{ path: string; data: Uint8Array }>, dir?: string): DeployFile[] {
-  const d = (dir ?? "").replace(/^\.?\/+/, "").replace(/\/+$/, "");
+  const d = trimSlashes(dir ?? "");
   if (!d || d === ".") return snapshot.map((f) => ({ path: f.path, data: f.data }));
   const prefix = `${d}/`;
   return snapshot

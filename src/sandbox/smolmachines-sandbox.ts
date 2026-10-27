@@ -227,13 +227,13 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     const rcf = `${HOME_DIR}/.qm-exec-${uid}.rc`;
     const body = `${guarded} > ${out} 2> ${err}; echo $? > ${rcf}`;
     const start = await postExec(name, `nohup sh -c ${shq(body)} >/dev/null 2>&1 & echo launched`, 30);
-    if (start.code !== 0 || !/launched/.test(start.stdout)) {
+    if (start.code !== 0 || !start.stdout.includes("launched")) {
       throw new Error(`smolmachines exec ${name}: background launch failed (rc=${start.code})`);
     }
     const deadline = Date.now() + timeoutSec * 1000 + EXIT_GRACE_MS;
     for (;;) {
       const p = await postExec(name, `[ -f ${rcf} ] && echo settled || echo running`, 30);
-      if (/settled/.test(p.stdout)) break;
+      if (p.stdout.includes("settled")) break;
       if (Date.now() > deadline) {
         throw new Error(`smolmachines exec ${name}: no exit after ${timeoutSec}s (+grace); leaving ${rcf}`);
       }
