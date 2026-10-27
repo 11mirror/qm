@@ -1,4 +1,4 @@
-import "./support/auto-fake-sprites.ts";
+import "../support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -6,11 +6,11 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { createPostgresLedgerEventBus, type OwnedLedgerEvent } from "../src/inbox/events.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
-import { testConfig } from "./support/test-config.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresLedgerEventBus, type OwnedLedgerEvent } from "../../src/inbox/events.ts";
+import { createInsecureTestServer } from "../../src/api/server.ts";
+import { buildApp } from "../support/build-app.ts";
+import { testConfig } from "../support/test-config.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 function event(over: Partial<OwnedLedgerEvent> = {}): OwnedLedgerEvent {
   return { cronId: "cron-1", itemId: "item-1", op: "ingest", at: 111, owner: "josh", ...over };

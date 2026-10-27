@@ -6,11 +6,11 @@ import {
   FIRE_RETENTION_KEEP_PER_CRON,
   FIRE_RETENTION_MS,
   STRANDED_FIRE_NOTE,
-} from "../src/cron/cron-store.ts";
-import { scopeId, type Cron } from "../src/types.ts";
-import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
-import { dueCrons, markFired } from "./support/cron-slots.ts";
+} from "../../src/cron/cron-store.ts";
+import { scopeId, type Cron } from "../../src/types.ts";
+import { createPostgresCronFireStore } from "../../src/cron/fire-store.ts";
+import { testDatabaseUrl, testMap } from "../support/test-database.ts";
+import { dueCrons, markFired } from "../support/cron-slots.ts";
 
 const base = { action: "x", owner: "U1", createdBy: "U1", ownerScopeId: scopeId("personal", "U1") };
 const ids = (cs: { id: string }[]) => cs.map((c) => c.id);

@@ -1,7 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPostgresAckEmojiPickStore, type AckEmojiPickStore } from "../src/surface-cache/ack-emoji-pick-store.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import {
+  createPostgresAckEmojiPickStore,
+  type AckEmojiPickStore,
+} from "../../src/surface-cache/ack-emoji-pick-store.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 async function contract(store: AckEmojiPickStore): Promise<void> {
   await store.record({

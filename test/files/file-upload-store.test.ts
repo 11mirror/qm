@@ -6,8 +6,8 @@ import {
   FileUploadError,
   MAX_ACTIVE_UPLOADS,
   type FileUpload,
-} from "../src/files/file-upload-store.ts";
-import { scopeId } from "../src/types.ts";
+} from "../../src/files/file-upload-store.ts";
+import { scopeId } from "../../src/types.ts";
 
 const url = process.env.DATABASE_URL;
 test(

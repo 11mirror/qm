@@ -1,14 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { type LiveFallback, createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
+import { type LiveFallback, createPostgresSurfaceCache } from "../../src/surface-cache/surface-cache.ts";
 import {
   judgeAmbientBatch,
   parseAmbientDecision,
   type AmbientBatch,
   type AmbientDecision,
-} from "../src/surface-cache/ambient-judge.ts";
-import { createPostgresChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+} from "../../src/surface-cache/ambient-judge.ts";
+import { createPostgresChannelPolicyStore } from "../../src/surface-cache/channel-policy-store.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 test("ingest is idempotent per (container, ts) — a re-delivery upserts, never doubles", async () => {
   const cache = createPostgresSurfaceCache(testDatabaseUrl());

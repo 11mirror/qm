@@ -1,13 +1,13 @@
-import "./support/auto-fake-sprites.ts";
+import "../support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildApp } from "./support/build-app.ts";
-import { createControlService } from "../src/api/control-service.ts";
-import { cronIsActive } from "../src/cron/cron-store.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
-import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
-import { testConfig } from "./support/test-config.ts";
+import { buildApp } from "../support/build-app.ts";
+import { createControlService } from "../../src/api/control-service.ts";
+import { cronIsActive } from "../../src/cron/cron-store.ts";
+import { scopeId, type TurnRequest } from "../../src/types.ts";
+import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../../src/auth/capability-token.ts";
+import { testConfig } from "../support/test-config.ts";
 
 const THREAD = "web:U1:watching";
 

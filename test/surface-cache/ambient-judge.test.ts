@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseAmbientDecision, renderAmbientPrompt, type AmbientBatch } from "../src/surface-cache/ambient-judge.ts";
+import { parseAmbientDecision, renderAmbientPrompt, type AmbientBatch } from "../../src/surface-cache/ambient-judge.ts";
 
 const base = (over: Partial<AmbientBatch>): AmbientBatch => ({
   container: "C1",

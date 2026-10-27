@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deflateRawSync } from "node:zlib";
 import { createHash } from "node:crypto";
-import { mintSignedPayload } from "../src/auth/signed-token.ts";
+import { mintSignedPayload } from "../../src/auth/signed-token.ts";
 
 test("publisher resumes an existing transfer after new uploads are disabled", async () => {
   const directory = await mkdtemp(join(tmpdir(), "qm-publisher-"));
@@ -60,7 +60,7 @@ test("publisher resumes an existing transfer after new uploads are disabled", as
     new Promise<string>((resolve, reject) => {
       const child = spawn(
         "python3",
-        [fileURLToPath(new URL("../src/files/upload-client.py", import.meta.url)), source],
+        [fileURLToPath(new URL("../../src/files/upload-client.py", import.meta.url)), source],
         {
           env: {
             ...process.env,
@@ -154,7 +154,7 @@ test("publisher cancels an unfinished upload when the file changed", async () =>
     const code = await new Promise<number | null>((resolve, reject) => {
       const child = spawn(
         "python3",
-        [fileURLToPath(new URL("../src/files/upload-client.py", import.meta.url)), source],
+        [fileURLToPath(new URL("../../src/files/upload-client.py", import.meta.url)), source],
         {
           env: { ...process.env, AGENT_API_URL: origin, AGENT_API_TOKEN: token },
           stdio: "ignore",
@@ -214,7 +214,7 @@ test("publisher starts a fresh upload when the saved session was aborted or expi
       const code = await new Promise<number | null>((resolve, reject) => {
         const child = spawn(
           "python3",
-          [fileURLToPath(new URL("../src/files/upload-client.py", import.meta.url)), source],
+          [fileURLToPath(new URL("../../src/files/upload-client.py", import.meta.url)), source],
           { env: { ...process.env, AGENT_API_URL: origin, AGENT_API_TOKEN: token }, stdio: "ignore" },
         );
         child.on("error", reject);
@@ -262,7 +262,7 @@ test("publisher shows what holds a full quota and can list and abort those uploa
       let out = "";
       const child = spawn(
         "python3",
-        [fileURLToPath(new URL("../src/files/upload-client.py", import.meta.url)), ...args],
+        [fileURLToPath(new URL("../../src/files/upload-client.py", import.meta.url)), ...args],
         {
           env: { ...process.env, AGENT_API_URL: origin, AGENT_API_TOKEN: token },
         },

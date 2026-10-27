@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeSchedule, validateUserSchedule } from "../src/cron/schedule.ts";
+import { normalizeSchedule, validateUserSchedule } from "../../src/cron/schedule.ts";
 
 const now = Date.UTC(2026, 6, 1, 12, 0, 0);
 const DAY = 24 * 60 * 60 * 1000;

@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { InboxItem, InboxPayload } from "../src/types.ts";
-import type { ConnectorTokenSource, SlackUserClient } from "../src/inbox/sources/adapter.ts";
-import { buildGmailReplyMime, gmailAdapter, replySubject } from "../src/inbox/sources/gmail.ts";
-import { renderSlackSendText, slackAdapter, slackReplyThreadTs } from "../src/inbox/sources/slack.ts";
-import { SLACK_POST_SPLIT_LIMIT } from "../src/slack/delivery.ts";
-import { adapterForItem } from "../src/inbox/sources/index.ts";
+import type { InboxItem, InboxPayload } from "../../../src/types.ts";
+import type { ConnectorTokenSource, SlackUserClient } from "../../../src/inbox/sources/adapter.ts";
+import { buildGmailReplyMime, gmailAdapter, replySubject } from "../../../src/inbox/sources/gmail.ts";
+import { renderSlackSendText, slackAdapter, slackReplyThreadTs } from "../../../src/inbox/sources/slack.ts";
+import { SLACK_POST_SPLIT_LIMIT } from "../../../src/slack/delivery.ts";
+import { adapterForItem } from "../../../src/inbox/sources/index.ts";
 
 function item(source: string, payload: Record<string, unknown>, proposal?: Record<string, unknown>): InboxItem {
   return {

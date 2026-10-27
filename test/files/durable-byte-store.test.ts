@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
-import { createS3DurableByteStore } from "../src/files/durable-byte-store.ts";
+import { createS3DurableByteStore } from "../../src/files/durable-byte-store.ts";
 
 test("S3 fallback streams large parts and aborts on transfer failure", async () => {
   let fail = false;

@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
-import { LOOPS_TO_CRONS_MIGRATION } from "../src/cron/migrations.ts";
-import { pgMigrationChecksum } from "../src/persistence/pg-pool.ts";
-import { applyTenancy } from "../src/persistence/tenancy.ts";
+import { LOOPS_TO_CRONS_MIGRATION } from "../../src/cron/migrations.ts";
+import { pgMigrationChecksum } from "../../src/persistence/pg-pool.ts";
+import { applyTenancy } from "../../src/persistence/tenancy.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the loops-to-crons migration test";

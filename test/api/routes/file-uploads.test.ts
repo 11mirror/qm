@@ -1,17 +1,17 @@
-import "./support/auto-fake-sprites.ts";
+import "../../support/auto-fake-sprites.ts";
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { buildApp } from "./support/build-app.ts";
-import { createServer } from "../src/api/server.ts";
-import { mintCapabilityToken, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
-import type { DirectFileUploads } from "../src/files/direct-file-upload.ts";
-import { FileUploadError, type FileUpload } from "../src/files/file-upload-store.ts";
-import { scopeId } from "../src/types.ts";
-import { testConfig } from "./support/test-config.ts";
-import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { buildApp } from "../../support/build-app.ts";
+import { createServer } from "../../../src/api/server.ts";
+import { mintCapabilityToken, CONTROL_PLANE_AUD } from "../../../src/auth/capability-token.ts";
+import type { DirectFileUploads } from "../../../src/files/direct-file-upload.ts";
+import { FileUploadError, type FileUpload } from "../../../src/files/file-upload-store.ts";
+import { scopeId } from "../../../src/types.ts";
+import { testConfig } from "../../support/test-config.ts";
+import { createPostgresReplayDedupe } from "../../../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "../../support/test-database.ts";
 
 const secret = "file-upload-test-secret".repeat(3);
 const personal = scopeId("personal", "U1");

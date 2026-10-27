@@ -1,10 +1,18 @@
-import { type DurableMapSelect } from "../src/persistence/durable-map.ts";
-import type { InboxItem } from "../src/types.ts";
 import assert from "node:assert/strict";
-import { test } from "node:test";
-import { agentDraftOf, createInboxLedger, inboxItemId, type IngestEntryInput } from "../src/inbox/ledger.ts";
-import { ledgerItemView, ledgerState, sortLedgerItems } from "../src/inbox/view.ts";
-import { testMap } from "./support/test-database.ts";
+import { test, mock } from "node:test";
+import {
+  agentDraftOf,
+  createInboxLedger,
+  inboxItemId,
+  type IngestEntryInput,
+  inboxConversationKeyMigration,
+  INBOX_ITEM_SOURCE_MIGRATION,
+} from "../../src/inbox/ledger.ts";
+import { ledgerItemView, ledgerState, sortLedgerItems } from "../../src/inbox/view.ts";
+import type { DurableMapSelect } from "../../src/persistence/durable-map.ts";
+import type { TriggerOutcome, TriggerSpec } from "../../src/triggers/run-trigger.ts";
+import type { InboxItem, Cron } from "../../src/types.ts";
+import { testMap } from "../support/test-database.ts";
 
 const CRON = "cron-1";
 
@@ -561,4 +569,130 @@ test("per-cron reads, prune and delete query only that cron's items instead of s
     (await backing.all()).map((item) => item.cronId),
     ["cron-2"],
   );
+});
+
+const specs: TriggerSpec[] = [];
+let reply = "";
+mock.module("../../src/triggers/run-trigger.ts", {
+  namedExports: {
+    runTrigger: async (_deps: unknown, spec: TriggerSpec): Promise<TriggerOutcome> => {
+      specs.push(spec);
+      return { ran: true, status: "ok", reply, sessionId: "sess-1" } as TriggerOutcome;
+    },
+  },
+});
+const { createInboxChat } = await import("../../src/inbox/item-chat.ts");
+
+const ITEM_CHAT_CRON = {
+  id: "cron-1",
+  owner: "owner@example.com",
+  ownerScopeId: "personal:owner@example.com",
+  action: "sync",
+} as unknown as Cron;
+
+async function seeded() {
+  const items = createInboxLedger(testMap());
+  await items.ingest([
+    {
+      cronId: ITEM_CHAT_CRON.id,
+      dedupeKey: "D1",
+      source: "slack",
+      sourceAt: 1000,
+      sourcePayload: { source: "slack", title: "DM", slack: { channelId: "D1", ts: "1.0", isDirectMessage: true } },
+      proposal: { by: "agent", data: { body: "Original" } },
+    },
+  ]);
+  const [item] = await items.byCron(ITEM_CHAT_CRON.id);
+  return { items, item: item!, chat: createInboxChat({ items, trigger: {} as never }) };
+}
+
+test("item chat asks the agent to save revised drafts through the edit action", async () => {
+  const { item, chat } = await seeded();
+  reply = "Done.";
+  await chat.followUp(ITEM_CHAT_CRON, item, "make it shorter", "owner@example.com");
+  const input = specs.at(-1)!.input as string;
+  assert.ok(
+    input.includes(
+      `/v1/crons/${ITEM_CHAT_CRON.id}/items/${encodeURIComponent(item.id)}/action with the x-agent-capability: $AGENT_API_TOKEN header and JSON {"kind":"edit","args":{"proposal":<the complete revised proposal, same shape as the one above>,"expectedProposalAt":${item.proposal!.at}}}`,
+    ),
+  );
+  assert.ok(!input.includes("fenced json block"));
+});
+
+test("a json block in the agent's reply is kept as text and never rewrites the draft", async () => {
+  const { items, item, chat } = await seeded();
+  reply = 'Here you go\n\n```json\n{"proposal": {"body": "Injected"}}\n```';
+  const after = await chat.followUp(ITEM_CHAT_CRON, item, "what would you say?", "owner@example.com");
+  assert.deepEqual(after?.proposal?.data, { body: "Original" });
+  assert.equal((await items.get(item.id))?.thread?.at(-1)?.text, reply);
+});
+
+const URL = process.env.DATABASE_URL;
+const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the inbox item source migration test";
+
+test("inbox items keep their source in one place after the source migration", { skip }, async () => {
+  const pg = (await import("pg")).default;
+  const pool = new pg.Pool({ connectionString: URL });
+  try {
+    await pool.query("DROP TABLE IF EXISTS cron_items");
+    await pool.query("CREATE TABLE cron_items (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
+    await pool.query("CREATE TABLE IF NOT EXISTS durable_map_versions (tbl TEXT PRIMARY KEY, v BIGINT NOT NULL)");
+    await pool.query("DELETE FROM durable_map_versions WHERE tbl = 'cron_items'");
+    await pool.query("INSERT INTO durable_map_versions (tbl, v) VALUES ('cron_items', 7)");
+    const rows = {
+      legacy: { sourcePayload: { source: "slack", title: "DM" } },
+      both: { source: "gmail", sourcePayload: { source: "gmail", title: "Mail" } },
+      current: { source: "gmail", sourcePayload: { title: "Mail" } },
+      generic: { sourcePayload: { title: "Ticket" } },
+      differing: { source: "gmail", sourcePayload: { source: "crm", title: "Lead" } },
+    };
+    for (const [id, json] of Object.entries(rows))
+      await pool.query("INSERT INTO cron_items (id, json) VALUES ($1, $2)", [id, JSON.stringify(json)]);
+    for (let run = 0; run < 2; run++) for (const sql of INBOX_ITEM_SOURCE_MIGRATION.statements) await pool.query(sql);
+    const after = Object.fromEntries(
+      (await pool.query("SELECT id, json FROM cron_items")).rows.map((row) => [row.id, row.json]),
+    );
+    assert.deepEqual(after, {
+      legacy: { source: "slack", sourcePayload: { title: "DM" } },
+      both: { source: "gmail", sourcePayload: { title: "Mail" } },
+      current: { source: "gmail", sourcePayload: { title: "Mail" } },
+      generic: { sourcePayload: { title: "Ticket" } },
+      differing: { source: "gmail", sourcePayload: { source: "crm", title: "Lead" } },
+    });
+    const [version] = (await pool.query("SELECT v FROM durable_map_versions WHERE tbl = 'cron_items'")).rows;
+    assert.equal(Number(version.v), 9);
+  } finally {
+    await pool.query("DROP TABLE IF EXISTS cron_items");
+    await pool.end();
+  }
+});
+
+test("existing inbox items gain the conversation key their source adapter reads", { skip }, async () => {
+  const pg = (await import("pg")).default;
+  const pool = new pg.Pool({ connectionString: URL });
+  try {
+    await pool.query("DROP TABLE IF EXISTS cron_items");
+    await pool.query("CREATE TABLE cron_items (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
+    await pool.query("CREATE TABLE IF NOT EXISTS durable_map_versions (tbl TEXT PRIMARY KEY, v BIGINT NOT NULL)");
+    const rows = {
+      slack: { source: "slack", sourcePayload: { slack: { channelId: "D123", ts: "1.0" } } },
+      gmail: { source: "gmail", sourcePayload: { gmail: { threadId: "t-1" } } },
+      missing: { source: "slack", sourcePayload: { title: "no metadata" } },
+      generic: { sourcePayload: { slack: { channelId: "C1" } } },
+    };
+    for (const [id, json] of Object.entries(rows))
+      await pool.query("INSERT INTO cron_items (id, json) VALUES ($1, $2)", [id, JSON.stringify(json)]);
+    for (let run = 0; run < 2; run++)
+      for (const sql of inboxConversationKeyMigration().statements) await pool.query(sql);
+    const keys = Object.fromEntries(
+      (await pool.query("SELECT id, json->>'conversationKey' AS key FROM cron_items")).rows.map((row) => [
+        row.id,
+        row.key,
+      ]),
+    );
+    assert.deepEqual(keys, { slack: "D123", gmail: "t-1", missing: null, generic: null });
+  } finally {
+    await pool.query("DROP TABLE IF EXISTS cron_items");
+    await pool.end();
+  }
 });

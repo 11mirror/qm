@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { slackAdapter } from "../src/inbox/sources/slack.ts";
+import { slackAdapter } from "../../../src/inbox/sources/slack.ts";
 
 function raw(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {

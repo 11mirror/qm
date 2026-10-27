@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import {
   createPostgresAmbientJudgmentStore,
   type AmbientJudgmentStore,
-} from "../src/surface-cache/ambient-judgment-store.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+} from "../../src/surface-cache/ambient-judgment-store.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 async function contract(store: AmbientJudgmentStore): Promise<void> {
   await store.record({

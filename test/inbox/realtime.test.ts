@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createInboxLedger, type IngestEntryInput, type LatestEvent } from "../src/inbox/ledger.ts";
-import { createInboxRealtime } from "../src/inbox/realtime.ts";
-import { slackConversationRef } from "../src/inbox/sources/slack.ts";
-import type { LedgerEvent } from "../src/inbox/events.ts";
-import type { Cron } from "../src/types.ts";
-import { testMap } from "./support/test-database.ts";
+import { createInboxLedger, type IngestEntryInput, type LatestEvent } from "../../src/inbox/ledger.ts";
+import { createInboxRealtime } from "../../src/inbox/realtime.ts";
+import { slackConversationRef } from "../../src/inbox/sources/slack.ts";
+import type { LedgerEvent } from "../../src/inbox/events.ts";
+import type { Cron } from "../../src/types.ts";
+import { testMap } from "../support/test-database.ts";
 
 const CRON = { id: "cron-inbox", owner: "owner@example.com", inbox: { source: "slack" } } as unknown as Cron;
 
