@@ -657,7 +657,7 @@ export interface TurnResult {
   reply?: string;
   reactions?: string[];
   reason?: string;
-  refusalKind?: "security_quarantine" | "session_busy" | "model_budget" | "approval_denied" | "internal_only";
+  refusalKind?: "security_quarantine" | "session_busy" | "model_budget" | "internal_only";
   errorCode?: string;
   adminUrl?: string;
   runId?: string;

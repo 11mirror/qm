@@ -194,7 +194,7 @@ export function loadApprovalLedger(
 }
 
 export type ApprovalDecisionOutcome =
-  { kind: "settled"; result: TurnResult } | { kind: "approved"; approvalNote: string };
+  { kind: "settled"; result: TurnResult } | { kind: "approved"; approvalNote: string } | { kind: "denied" };
 
 type DecidedScope = NonNullable<NonNullable<OrchestratorInput["approval"]>["scope"]>;
 
@@ -226,12 +226,7 @@ export async function consumeApprovalDecision(args: {
     });
   const denied = (command: string): ApprovalDecisionOutcome => {
     audit("command_approval.deny", command, "refused", { approvalOutcome: "denied" });
-    return settled({
-      status: "refused",
-      sessionId,
-      reason: `approval denied for ${command}`,
-      refusalKind: "approval_denied",
-    });
+    return { kind: "denied" };
   };
   const approved = async (command: string, scope: DecidedScope, approvalKey?: string) => {
     args.ledger.credit(approvalKey ?? command, scope);
@@ -316,7 +311,7 @@ export async function consumeApprovalDecision(args: {
         {
           kind: "UserMessage",
           hidden: true,
-          text: `The requesting human denied this pending operation, so it did not run: ${headSlice(p.summary ?? p.command, 2_000)}\nDo not retry it unless they ask again.`,
+          text: `The requesting human denied this pending operation, so it did not run: ${headSlice(p.summary ?? p.command, 2_000)}\nContinue without it. You need not address the denial. Do not retry it unless they ask again.`,
         },
       ];
   const [written] = await args.withRosterVersion(() => deps.sessions.appendMany(lease, items));
