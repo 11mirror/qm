@@ -4,7 +4,11 @@ import { test } from "node:test";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { documentBlocks, nativeDocumentFormat, withDocumentInputs } from "../../src/harness/document-inputs.ts";
-import { isDocumentAttachment } from "../../src/core/document-kinds.ts";
+import {
+  DOCUMENT_TEXT_FIT_CHARS,
+  estimateDocumentTokens,
+  isDocumentAttachment,
+} from "../../src/core/document-kinds.ts";
 import {
   documentFallbackText,
   documentText,
@@ -311,20 +315,47 @@ test("fallback text has one aggregate model-aware budget across all attachments"
   assert.match(JSON.stringify(payload), /truncated to fit/);
 });
 
-test("document text reports truncation as a flag, not from the extracted wording", async () => {
+test("document text is extracted whole; fitting it to the model is the request builder's job", async () => {
   const text = (body: string, name = "notes.txt") => ({
     name,
     mimeType: name.endsWith(".rtf") ? "application/rtf" : "text/plain",
     dataBase64: Buffer.from(body).toString("base64"),
   });
-  const quoted = await documentText(text("[Document text truncated at 5 characters.]"));
-  assert.equal(quoted.truncated, false);
-  const long = await documentText(text("x".repeat(200_001)));
-  assert.equal(long.truncated, true);
-  assert.match(long.text, /\[Document text truncated at 200000 characters\.\]$/);
+  assert.equal(await documentText(text("x".repeat(200_001))), "x".repeat(200_001));
   const office = await documentText(text(`{\\rtf1 ${"y".repeat(200_100)}}`, "long.rtf"));
-  assert.equal(office.truncated, true);
-  assert.match(office.text, /\[Document text truncated at 200000 characters\.\]$/);
+  assert.equal(office.length, 200_100);
+  assert.doesNotMatch(office, /truncated/);
+});
+
+test("a large text attachment is estimated at what the model route can inline, so it is fitted rather than stubbed", async () => {
+  const csv = Buffer.from(Array.from({ length: 12_000 }, (_, i) => `${i},${"v".repeat(24)}`).join("\n"));
+  assert.ok(csv.length > 300_000);
+  const { store, meta, artifact } = storeFor(csv);
+  artifact.name = "big.csv";
+  artifact.mimetype = "text/csv";
+  meta.name = "big.csv";
+  meta.mimetype = "text/csv";
+  assert.equal(estimateDocumentTokens(artifact), DOCUMENT_TEXT_FIT_CHARS / 4);
+  const loaded = await loadDocumentInputs(
+    store,
+    [meta],
+    () => true,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    30_000,
+  );
+  assert.equal(loaded.documents.length, 1, "the document is inlined, not reduced to a stub");
+  assert.deepEqual(loaded.notices, []);
+  const payload = await withDocumentInputs(
+    { input: [{ role: "user", content: [{ type: "input_text", text: "Summarize" }] }] },
+    { api: "openai-codex-responses", contextWindow: 200_000 },
+    loaded.documents,
+  );
+  const rendered = JSON.stringify(payload);
+  assert.match(rendered, /11999,vvvv|truncated to fit/);
+  assert.ok(rendered.length < 2 * DOCUMENT_TEXT_FIT_CHARS);
 });
 
 test("Pi proxy and Bedrock fallback use their actual provider request shapes", async () => {
