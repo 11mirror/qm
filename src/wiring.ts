@@ -266,7 +266,6 @@ import {
   type DropResolution,
 } from "./triggers/keychain-ask.ts";
 import { createSecretDropStore, type SecretDropStore, type SecretDropRecord } from "./credentials/secret-drop.ts";
-import { createConnectorStatusCache, type ConnectorStatusRecord } from "./credentials/connector-status.ts";
 import {
   createFeatureFlagStore,
   externalAppSharingAllowed,
@@ -679,7 +678,6 @@ export function buildApp(
     ? createPostgresTeamStore(config.databaseUrl, featureFlags, scopeId("org", config.orgId))
     : undefined;
   const decisions = config.databaseUrl ? createPostgresDecisionStore(config.databaseUrl) : undefined;
-  const connectorStatusCache = createConnectorStatusCache(artifactMap<ConnectorStatusRecord>("connector_status"));
   const slackInstallation = createSlackInstallationStore(
     config.orgId,
     artifactMap("slack_installation"),
@@ -1915,6 +1913,13 @@ export function buildApp(
     ],
   });
   pgArtifactMap?.pool.registerMigration({
+    id: "durable-map/connector_status/0002-drop",
+    statements: [
+      "DROP TABLE IF EXISTS connector_status",
+      "DELETE FROM durable_map_versions WHERE tbl = 'connector_status'",
+    ],
+  });
+  pgArtifactMap?.pool.registerMigration({
     id: "durable-map/pinned_skills/0002-drop",
     statements: ["DROP TABLE IF EXISTS pinned_skills", "DELETE FROM durable_map_versions WHERE tbl = 'pinned_skills'"],
   });
@@ -2110,7 +2115,6 @@ export function buildApp(
     featureFlags,
     teams,
     credentialUsage,
-    connectorStatusCache,
     resolveConnectorClient: resolveClient,
     ...(keychain ? { keychain } : {}),
     serviceCreds,
