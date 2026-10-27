@@ -279,6 +279,21 @@ test("a create race with another core instance adopts the winner instead of erro
   assert.equal((await s.run(h, "echo raced")).stdout.trim(), "raced");
 });
 
+test("after a restart, rotating onto a name its stopping predecessor still holds waits for the name", async () => {
+  const store = testMap<StoredModalSandbox>();
+  const before = make({ store });
+  const a = await before.provision(layers);
+  await before.writeFile(a, "keep.txt", "survives the deploy\n");
+  await before.teardown(a);
+  await store.merge(scope, { expiresAtMs: nearExpiry() });
+  fake.holdNameAfterTerminate(2);
+  const after = make({ store });
+  const b = await after.provision(layers);
+  assert.equal(await after.readFile(b, "keep.txt"), "survives the deploy\n");
+  assert.equal(fake.createdCount(scopeName()), 2);
+  assert.equal(fake.runningCount(), 1);
+});
+
 test("teardown checkpoints the home and leaves the sandbox running", async () => {
   const s = make();
   const a = await s.provision(layers);

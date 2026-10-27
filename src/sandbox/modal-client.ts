@@ -3,6 +3,7 @@ import { egressProxyHost } from "./sandbox-env.ts";
 import { isIP } from "node:net";
 import { resolveModalImage } from "./modal-image.ts";
 import { swallow } from "../util/errors.ts";
+import { withTimeout } from "../util/async.ts";
 
 export interface ModalCommandResult {
   stdout: string;
@@ -73,6 +74,7 @@ const DEFAULT_MEMORY_MB = 2048;
 export const MODAL_EXEC_GRACE_MS = 30_000;
 export const MODAL_MAX_EXEC_ARG_BYTES = 64 * 1024;
 const SNAPSHOT_CALL_TIMEOUT_MS = 600_000;
+const TERMINATE_WAIT_MS = 60_000;
 export const MODAL_CHECKPOINT_RETENTION_MS = 30 * 24 * 3600_000;
 
 function wholeSeconds(ms: number): number {
@@ -98,6 +100,22 @@ function isSandboxGoneError(sdk: ModalSdk, err: unknown): boolean {
 
 function isSandboxIdLookupGone(sdk: ModalSdk, err: unknown): boolean {
   return isSandboxGoneError(sdk, err) || err instanceof sdk.InvalidError || grpcCode(err) === GRPC_INVALID_ARGUMENT;
+}
+
+async function stop(
+  sdk: ModalSdk,
+  sbx: { sandboxId: string; terminate(): Promise<unknown>; wait(): Promise<unknown> },
+): Promise<void> {
+  try {
+    await sbx.terminate();
+  } catch (err) {
+    if (isSandboxGoneError(sdk, err)) return;
+    throw err;
+  }
+  const label = `modal-client: wait for ${sbx.sandboxId} to stop`;
+  await withTimeout(() => sbx.wait(), TERMINATE_WAIT_MS, label).catch((err: unknown) => {
+    if (!isSandboxGoneError(sdk, err)) swallow(label, err);
+  });
 }
 
 async function hasExited(
@@ -223,11 +241,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
       const { client } = await loadCtx();
       await sbx.mountImage("/root", await client.images.fromId(imageId));
     },
-    async terminate(): Promise<void> {
-      await sbx.terminate().catch((err) => {
-        if (!isSandboxGoneError(sdk, err)) throw err;
-      });
-    },
+    terminate: () => stop(sdk, sbx),
   });
 
   return {
@@ -291,12 +305,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
         if (isSandboxIdLookupGone(sdk, err)) return;
         throw err;
       }
-      try {
-        await sbx.terminate();
-      } catch (err) {
-        if (isSandboxGoneError(sdk, err)) return;
-        throw err;
-      }
+      await stop(sdk, sbx);
     },
     async *listRunning(tags): AsyncIterable<string> {
       const { sdk, client, app } = await loadCtx();

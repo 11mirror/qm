@@ -664,3 +664,32 @@ for (const recovers of [true, false]) {
     assert.equal(boxes.scratchBox.pending === null, recovers);
   });
 }
+
+test("a failed eager provision is audited and recorded as a sandbox error, and the next call retries", async () => {
+  let attempts = 0;
+  const { boxes, events, errors } = turnBoxes({
+    async provision() {
+      attempts++;
+      throw new Error("modal sandbox name qm-x already taken");
+    },
+  });
+  await assert.rejects(boxes.provision(true), /already taken/);
+  const failed = events.find((event) => event.action === "sandbox.scoped.provision_failed");
+  assert.ok(failed, "the failed provision leaves an audit event");
+  assert.deepEqual(JSON.parse(failed.detail!), {
+    runId: "run-1",
+    sessionId: "session-1",
+    eager: true,
+    error: "modal sandbox name qm-x already taken",
+  });
+  assert.equal(errors.length, 1);
+  assert.deepEqual((errors[0] as [Record<string, unknown>])[0], {
+    category: "sandbox",
+    code: "provision_failed",
+    message: "modal sandbox name qm-x already taken",
+    scopeLabel: scopeId("channel", "C1"),
+    sessionId: "session-1",
+  });
+  await assert.rejects(boxes.provision(true), /already taken/);
+  assert.equal(attempts, 2, "a failed provision is not cached; the next call tries again");
+});

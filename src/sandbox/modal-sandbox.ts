@@ -3,6 +3,7 @@ import { cols } from "../persistence/typed-table.ts";
 import type { MapConversion } from "../persistence/typed-table.ts";
 import { tenant } from "../tenant.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
+import { sleep } from "../util/async.ts";
 import { createExecProcessSessions } from "./exec-process-session.ts";
 import {
   MODAL_CHECKPOINT_RETENTION_MS,
@@ -24,6 +25,8 @@ const HOME_DIR = "/root";
 const ROTATE_MARGIN_MS = 4 * 3600_000;
 const RETIRE_MARGIN_MS = 30 * 60_000;
 const ROTATION_HOLD_MS = 10 * 60_000;
+const NAME_RELEASE_WAIT_MS = 30_000;
+const NAME_RETRY_MS = 500;
 const RENEW_MARGIN_MS = 7 * 24 * 3600_000;
 const ORPHAN_GRACE_MS = 10 * 60_000;
 const ACTIVITY_TOUCH_INTERVAL_MS = 10 * 60_000;
@@ -110,6 +113,21 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     if (!found) throw new ModalSandboxGoneError(name, "no running sandbox holds this name");
     sessions.set(name, found);
     return found;
+  }
+
+  async function claimName(name: string): Promise<ModalSession> {
+    const deadline = Date.now() + NAME_RELEASE_WAIT_MS;
+    for (;;) {
+      try {
+        return await client.create({ name, tags: tags("scope") });
+      } catch (e) {
+        if (!(e instanceof ModalNameConflictError)) throw e;
+        const adopted = await client.fromName(name);
+        if (adopted) return adopted;
+        if (Date.now() >= deadline) throw e;
+        await sleep(NAME_RETRY_MS);
+      }
+    }
   }
 
   async function createScratch(name: string): Promise<ModalSession> {
@@ -201,14 +219,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
           await createScratch(name);
           return;
         }
-        let session: ModalSession;
-        try {
-          session = await client.create({ name, tags: tags("scope") });
-        } catch (e) {
-          const adopted = e instanceof ModalNameConflictError ? await client.fromName(name) : null;
-          if (!adopted) throw e;
-          session = adopted;
-        }
+        const session = await claimName(name);
         sessions.set(name, session);
         const scope = await provider.scopeOf(name);
         const now = Date.now();
