@@ -204,7 +204,7 @@ async function crawlAndPush(
       principalId: a.externalId,
       displayName: a.displayName ?? a.externalId,
       type: "internal" as const,
-      ...(slackId && slackId !== a.externalId ? { slackId } : {}),
+      ...(slackId ? { slackId } : {}),
       ...(avatarUrl ? { avatarUrl } : {}),
     }));
   const fetched = await fetchChannels(ctx, client, invalidations, targetChannelIds);
