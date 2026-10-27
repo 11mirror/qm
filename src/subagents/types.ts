@@ -133,6 +133,7 @@ export interface SessionSyscallDeps {
     | "setSpawnMeta"
     | "childrenOf"
     | "descendantsOf"
+    | "listByParticipant"
     | "addParticipant"
     | "updateTitle"
     | "getItems"

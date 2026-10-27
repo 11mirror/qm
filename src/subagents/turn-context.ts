@@ -7,6 +7,8 @@ import { isSubagentThreadRef } from "../sessions/thread-ref.ts";
 import { sessionRunCancelled } from "./tree.ts";
 import type { SessionSyscallBinding, SessionSyscallDeps } from "./types.ts";
 
+type SessionStatus = "running" | "pending" | "idle";
+
 const WEB_ONLY = "sessions are a web UI feature and aren't available here.";
 
 export interface TurnContext {
@@ -19,7 +21,8 @@ export interface TurnContext {
   resolveTarget(ref: string): Promise<Session | null>;
   sidebarRefusal(): string | null;
   peerRefusal(target: Session): string | null;
-  statusOf(session: Session): Promise<"running" | "pending" | "idle">;
+  statusOf(session: Session): Promise<SessionStatus>;
+  statusesOf(sessions: readonly Session[]): Promise<Map<string, SessionStatus>>;
   visibleTitle(target: Session): string;
   visibleHistory(target: Session, limit: number, beforeSeq?: number): Promise<Item[]>;
   currentCaller(): Promise<OrchestratorInput>;
@@ -60,10 +63,16 @@ export function createTurnContext(
     return null;
   }
 
-  async function statusOf(session: Session): Promise<"running" | "pending" | "idle"> {
-    const inFlight = await deps.runs.inFlightForThread(session.threadRef);
-    if (inFlight.some((r) => r.status === "running")) return "running";
-    return inFlight.length ? "pending" : "idle";
+  async function statusesOf(sessions: readonly Session[]): Promise<Map<string, SessionStatus>> {
+    const statuses = new Map<string, SessionStatus>();
+    for (const run of await deps.runs.inFlightForThreads(sessions.map((session) => session.threadRef)))
+      if (run.status === "running" || !statuses.has(run.sessionId))
+        statuses.set(run.sessionId, run.status === "running" ? "running" : "pending");
+    return statuses;
+  }
+
+  async function statusOf(session: Session): Promise<SessionStatus> {
+    return (await statusesOf([session])).get(session.threadRef) ?? "idle";
   }
 
   const visibleTitle = (target: Session) => target.title?.trim() || target.id;
@@ -104,6 +113,7 @@ export function createTurnContext(
     sidebarRefusal,
     peerRefusal,
     statusOf,
+    statusesOf,
     visibleTitle,
     visibleHistory,
     currentCaller,

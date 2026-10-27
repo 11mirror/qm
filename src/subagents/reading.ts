@@ -73,12 +73,11 @@ async function readableLines(ctx: TurnContext, target: Session, limit: number, m
 async function othersWorkingInTree(ctx: TurnContext): Promise<boolean> {
   const { deps, binding } = ctx;
   const root = await sessionTreeRoot(deps.sessions, binding.session);
-  for (const session of [root, ...(await deps.sessions.descendantsOf([root.id]))]) {
-    if (session.scopeId !== binding.scopeId) continue;
-    for (const run of await deps.runs.inFlightForThread(session.threadRef))
-      if (run.id !== binding.request.runId) return true;
-  }
-  return false;
+  const tree = [root, ...(await deps.sessions.descendantsOf([root.id]))].filter(
+    (session) => session.scopeId === binding.scopeId,
+  );
+  const inFlight = await deps.runs.inFlightForThreads(tree.map((session) => session.threadRef));
+  return inFlight.some((run) => run.id !== binding.request.runId);
 }
 
 export async function receiveMessages(
@@ -132,22 +131,18 @@ export async function readSession(ctx: TurnContext, input: SessionReadInput): Pr
   await currentCaller();
   if (!input.target?.trim()) {
     const children = await deps.sessions.childrenOf(binding.session.id);
-    const summaries: SessionChildSummary[] = [];
-    for (const child of children) {
-      if (
-        child.scopeId !== binding.scopeId ||
-        !(await deps.sessions.getForParticipant(child.id, binding.request.actor.id))
-      )
-        continue;
-      const said = await lastAssistantText(ctx, child);
-      summaries.push({
-        sessionId: child.id,
-        title: visibleTitle(child),
-        status: await statusOf(child),
-        ...(said ? { lastSaid: said } : {}),
-      });
-    }
-    return { ok: true, mode: "children", children: summaries };
+    const summaries = await Promise.all(
+      children.map(async (child): Promise<SessionChildSummary | null> => {
+        if (
+          child.scopeId !== binding.scopeId ||
+          !(await deps.sessions.getForParticipant(child.id, binding.request.actor.id))
+        )
+          return null;
+        const [said, status] = await Promise.all([lastAssistantText(ctx, child), statusOf(child)]);
+        return { sessionId: child.id, title: visibleTitle(child), status, ...(said ? { lastSaid: said } : {}) };
+      }),
+    );
+    return { ok: true, mode: "children", children: summaries.filter((summary) => summary !== null) };
   }
   const target = await resolveTarget(input.target);
   if (!target)
