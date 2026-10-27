@@ -112,6 +112,7 @@ test("custom providers, Slack mention names and MCP sign-in clients do not cross
 async function servingMany(fn: () => Promise<void>): Promise<void> {
   useTenantDirectory({
     byHost: async () => undefined,
+    homeHosts: () => ({ hosts: [] }),
     active: async () => [tenant()],
     exists: async () => true,
     watch() {},
