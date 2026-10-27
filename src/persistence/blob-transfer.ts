@@ -1,8 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, readdir, rename, rm, stat } from "node:fs/promises";
-import { once } from "node:events";
 import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { join } from "node:path";
 import {
   DeleteObjectCommand,
@@ -72,8 +72,30 @@ export class BlobHashMismatchError extends Error {
 
 const BLOB_ID = /^[0-9a-f]{32}$/;
 
+function isMissingPath(err: unknown): boolean {
+  return err != null && typeof err === "object" && (err as { code?: string }).code === "ENOENT";
+}
+
 function newBlobId(): string {
   return randomBytes(16).toString("hex");
+}
+
+function meteredChunks(
+  source: BlobSource,
+  maxBytes: number | undefined,
+): { chunks: AsyncIterable<Buffer>; sizeBytes: () => number; sha256: () => string } {
+  const hash = createHash("sha256");
+  let sizeBytes = 0;
+  const chunks = (async function* (): AsyncIterable<Buffer> {
+    for await (const chunk of asChunks(source)) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      sizeBytes += buf.length;
+      if (maxBytes != null && sizeBytes > maxBytes) throw new BlobTooLargeError();
+      hash.update(buf);
+      yield buf;
+    }
+  })();
+  return { chunks, sizeBytes: () => sizeBytes, sha256: () => hash.digest("hex") };
 }
 
 export async function collectBlob(stream: Readable): Promise<Buffer> {
@@ -92,31 +114,20 @@ export function createLocalBlobTransferStore(dir: string): BlobTransferStore {
       const blobId = newBlobId();
       const partPath = join(dir, `${blobId}.part`);
       const finalPath = join(dir, blobId);
-      const hash = createHash("sha256");
-      const out = createWriteStream(partPath);
-      let size = 0;
+      const metered = meteredChunks(source, opts?.maxBytes);
       try {
-        for await (const chunk of asChunks(source)) {
-          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-          size += buf.length;
-          if (opts?.maxBytes != null && size > opts.maxBytes) throw new BlobTooLargeError();
-          hash.update(buf);
-          if (!out.write(buf)) await once(out, "drain");
-        }
-        await new Promise<void>((res, rej) => out.end((err?: Error | null) => (err ? rej(err) : res())));
+        await pipeline(metered.chunks, createWriteStream(partPath));
       } catch (err) {
-        out.destroy();
-        await once(out, "close").catch(swallowAs("blob-transfer: write-stream close", undefined));
         await rm(partPath, { force: true }).catch(swallowAs("blob-transfer: partial-file cleanup", undefined));
         throw err;
       }
-      const sha256 = hash.digest("hex");
+      const sha256 = metered.sha256();
       if (opts?.expectedSha256 && opts.expectedSha256 !== sha256) {
         await rm(partPath, { force: true }).catch(swallowAs("blob-transfer: partial-file cleanup", undefined));
         throw new BlobHashMismatchError();
       }
       await rename(partPath, finalPath);
-      return { blobId, sizeBytes: size, sha256 };
+      return { blobId, sizeBytes: metered.sizeBytes(), sha256 };
     },
 
     async open(blobId) {
@@ -126,7 +137,7 @@ export function createLocalBlobTransferStore(dir: string): BlobTransferStore {
       try {
         st = await stat(path);
       } catch (err) {
-        if (err != null && typeof err === "object" && (err as { code?: string }).code === "ENOENT") return null;
+        if (isMissingPath(err)) return null;
         throw err;
       }
       if (!st.isFile()) return null;
@@ -144,8 +155,9 @@ export function createLocalBlobTransferStore(dir: string): BlobTransferStore {
       let names: string[];
       try {
         names = await readdir(dir);
-      } catch {
-        return 0;
+      } catch (err) {
+        if (isMissingPath(err)) return 0;
+        throw err;
       }
       for (const name of names) {
         const path = join(dir, name);
@@ -171,8 +183,6 @@ export interface S3BlobTransferOptions {
   _client?: S3Send;
 }
 
-/** Re-chunk a byte stream into parts of exactly `size` bytes plus a final remainder; `last` marks the final part,
- * so a stream that fits in one part can go up as a single PutObject. */
 async function* exactParts(
   chunks: AsyncIterable<Buffer>,
   size: number,
@@ -199,22 +209,12 @@ export function createS3BlobTransferStore(options: S3BlobTransferOptions): BlobT
   const client = options._client ?? s3Client(options.region);
 
   return {
-    s3Ref: (blobId) => (/^[0-9a-f]{32}$/.test(blobId) ? { bucket, key: keyFor(blobId) } : null),
+    s3Ref: (blobId) => (BLOB_ID.test(blobId) ? { bucket, key: keyFor(blobId) } : null),
     async put(source, opts) {
       const blobId = newBlobId();
       const Key = keyFor(blobId);
-      const hash = createHash("sha256");
-      let sizeBytes = 0;
-      const chunks = (async function* (): AsyncIterable<Buffer> {
-        for await (const chunk of asChunks(source)) {
-          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-          sizeBytes += buf.length;
-          if (opts?.maxBytes != null && sizeBytes > opts.maxBytes) throw new BlobTooLargeError();
-          hash.update(buf);
-          yield buf;
-        }
-      })();
-      const parts = exactParts(chunks, S3_PART_BYTES);
+      const metered = meteredChunks(source, opts?.maxBytes);
+      const parts = exactParts(metered.chunks, S3_PART_BYTES);
       const first = await parts.next();
       if (first.done || first.value.last) {
         const Body = first.done ? Buffer.alloc(0) : first.value.body;
@@ -232,14 +232,14 @@ export function createS3BlobTransferStore(options: S3BlobTransferOptions): BlobT
         );
       }
 
-      const sha256 = hash.digest("hex");
+      const sha256 = metered.sha256();
       if (opts?.expectedSha256 && opts.expectedSha256 !== sha256) {
         await client
           .send(new DeleteObjectCommand({ Bucket: bucket, Key }))
           .catch(swallowAs("blob-transfer: hash-mismatch cleanup", undefined));
         throw new BlobHashMismatchError();
       }
-      return { blobId, sizeBytes, sha256 };
+      return { blobId, sizeBytes: metered.sizeBytes(), sha256 };
     },
 
     async open(blobId) {
