@@ -64,14 +64,19 @@ export async function piCompactHistory(ctx: PiHarnessContext, input: HarnessComp
   const providerKeys = await resolveProviderKeys();
   const runtime = await buildModelRuntime(providerKeys, modelGateway);
   const summarize = (compactModelId: string) =>
-    summarizeHistory(input.history, requiredModel(compactModelId), (summaryModel, context, options) => {
-      input.recordModelCall({
-        model: compactModelId,
-        inputTokens: countTokens(context.systemPrompt ?? "") + countTokens(JSON.stringify(context.messages)),
-        entryCount: input.history.length,
-      });
-      return runtime.streamSimple(summaryModel, context, options);
-    });
+    summarizeHistory(
+      input.history,
+      requiredModel(compactModelId),
+      (summaryModel, context, options) => {
+        input.recordModelCall({
+          model: compactModelId,
+          inputTokens: countTokens(context.systemPrompt ?? "") + countTokens(JSON.stringify(context.messages)),
+          entryCount: input.history.length,
+        });
+        return runtime.streamSimple(summaryModel, context, options);
+      },
+      input.summaryTokenBudget,
+    );
   try {
     return await summarize(primaryId);
   } catch (error) {

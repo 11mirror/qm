@@ -1,4 +1,4 @@
-import { generateSummary } from "@earendil-works/pi-coding-agent";
+import { DEFAULT_COMPACTION_SETTINGS, generateSummary } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { contextSummary } from "../sessions/session-store.ts";
 import type { Item } from "../sessions/items.ts";
@@ -24,14 +24,39 @@ const summaryInstructions = (summaryTokenBudget: number) =>
     `Do not include secrets or credentials. Keep the summary under ${summaryTokenBudget} tokens.`,
   ].join("\n");
 
-export async function summarizeHistory(history: Item[], model: Model<Api>, streamFn: StreamFn): Promise<string> {
+function summarizerBudgets(model: Model<Api>, summaryShareTokens: number | undefined) {
+  const { contextWindow, maxTokens } = model;
+  if (
+    !Number.isFinite(contextWindow) ||
+    !Number.isFinite(maxTokens) ||
+    contextWindow <= 0 ||
+    maxTokens <= 0 ||
+    maxTokens >= contextWindow
+  )
+    throw new Error(
+      `Compaction cannot size its request: model ${model.id} reports contextWindow=${String(contextWindow)} and maxTokens=${String(maxTokens)}`,
+    );
+  const inputBudget = contextTokenBudgetForModel(model.id) ?? contextWindow - maxTokens;
+  const summaryTokenBudget = Math.min(
+    DEFAULT_COMPACTION_SETTINGS.reserveTokens,
+    maxTokens,
+    summaryShareTokens ?? compactSummaryTokenBudget(inputBudget),
+  );
+  return { inputBudget, summaryTokenBudget };
+}
+
+export async function summarizeHistory(
+  history: Item[],
+  model: Model<Api>,
+  streamFn: StreamFn,
+  summaryShareTokens?: number,
+): Promise<string> {
   const previous = history.findLast((item) => contextSummary(item));
   const previousSummary = previous ? contextSummary(previous) : null;
   const messages = history.filter(
     (item) => !contextSummary(item) && (!previousSummary || item.seq > previousSummary.throughSeq),
   );
-  const historyBudget = contextTokenBudgetForModel(model.id) ?? model.contextWindow - model.maxTokens;
-  const summaryTokenBudget = compactSummaryTokenBudget(historyBudget);
+  const { inputBudget: historyBudget, summaryTokenBudget } = summarizerBudgets(model, summaryShareTokens);
   const instructions = summaryInstructions(summaryTokenBudget);
   const transcriptBudget = Math.max(
     1,

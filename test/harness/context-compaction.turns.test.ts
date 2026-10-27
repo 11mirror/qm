@@ -4,6 +4,7 @@ import {
   COMPACT_HARD_FRACTION,
   COMPACT_SOFT_FRACTION,
   validateCompactSummary,
+  compactSummaryTokenBudget,
   estimateHistoryTokens,
   forModelContext,
   overBudgetFraction,
@@ -215,7 +216,8 @@ for (const [kind, mkTurn] of [
 ] as const) {
   test(`a ${kind} turn between soft and hard does NOT block on compaction; the background pass sheds it`, async () => {
     const { harness, compactCalls } = spyHarness();
-    const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
+    const budget = budgetBetweenSoftAndHard(tokensOf(...msgTexts(8)));
+    const { orch, sessions } = buildOrchestrator(harness, budget);
     const sid = await seed(
       sessions,
       msgTexts(8).map((text) => ({ text })),
@@ -228,6 +230,11 @@ for (const [kind, mkTurn] of [
     const summaries = await waitForSummary(sessions, sid);
     assert.equal(summaries.length, 1, "the background pass compacts off the hot path");
     assert.equal(compactCalls.length, 1, "exactly one (background) compaction, none inline");
+    assert.equal(
+      compactCalls[0]!.summaryTokenBudget,
+      compactSummaryTokenBudget(budget),
+      "the summarizer is handed the summary's share of this session's context budget",
+    );
   });
 }
 
