@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { CONFIG_TABLES, keyedTable } from "../src/resolution/config-tables.ts";
+import { CONFIG_TABLES } from "../src/resolution/config-tables.ts";
+import { typedTable } from "../src/persistence/typed-table.ts";
 import type { PersistedBaseModel } from "../src/resolution/config-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfigStore, testDatabaseUrl } from "./support/test-database.ts";
@@ -13,7 +14,7 @@ const pick = { modelId: "org-model" };
 function servers() {
   const databaseUrl = testDatabaseUrl();
   return {
-    rows: keyedTable<PersistedBaseModel>(createPgPool(databaseUrl), CONFIG_TABLES.baseModels),
+    rows: typedTable<PersistedBaseModel>(createPgPool(databaseUrl), CONFIG_TABLES.baseModels),
     left: testConfigStore("default-org", { databaseUrl }),
     right: testConfigStore("default-org", { databaseUrl }),
   };
