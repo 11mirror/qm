@@ -233,7 +233,10 @@ test("the security screen proxy aborts sibling chunks after a terminal failure",
     },
   });
 
-  await assert.rejects(screener.classify({ payload: "x".repeat(16_000), hook: "tool_response" }), /HTTP 503/);
+  await assert.rejects(
+    screener.classify({ payload: "x".repeat(16_000), hook: "tool_response" }),
+    /proxy returned http 503/,
+  );
   assert.deepEqual(
     started.toSorted((a, b) => a - b),
     [0, 1],
@@ -277,7 +280,7 @@ test("the security screen proxy bounds response size and request time", async ()
         { status: 503 },
       ),
   });
-  await assert.rejects(failed.classify({ payload: "ordinary content", hook: "user_input" }), /HTTP 503/);
+  await assert.rejects(failed.classify({ payload: "ordinary content", hook: "user_input" }), /proxy returned http 503/);
   assert.equal(cancelled, 2);
 
   const oversized = createSecurityScreenProxy({
