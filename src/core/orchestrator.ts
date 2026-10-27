@@ -79,6 +79,7 @@ import {
   renderSandboxProfiles,
 } from "./environment-facts.ts";
 import { PROVIDERS } from "../connectors/oauth.ts";
+import { SANDBOX_MODEL_PREFIX } from "../api/contract.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import {
   mintCapabilityToken,
@@ -86,6 +87,7 @@ import {
   SANDBOX_CAPABILITY_TTL_MS,
   CONTROL_PLANE_AUD,
   BROWSER_MODEL_AUD,
+  SANDBOX_MODEL_AUD,
   OAUTH_CONSENT_AUD,
   CREDENTIAL_BROKER_AUD,
   EGRESS_PROXY_AUD,
@@ -1706,6 +1708,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             },
             deps.capabilitySecret ?? deps.signingSecret,
           );
+        }
+        if (deps.sandboxModels && allInternal && securityPolicy.posture !== "strict") {
+          connectorEnv.MODEL_GATEWAY_URL = `${deps.apiBaseUrl.replace(/\/+$/, "")}${SANDBOX_MODEL_PREFIX}`;
+          connectorEnv.MODEL_GATEWAY_TOKEN = await mintCapabilityToken(
+            { ...scopeAttestation, aud: SANDBOX_MODEL_AUD, exp: sandboxTokenExpiry },
+            deps.capabilitySecret ?? deps.signingSecret,
+            deps.capabilityTokenCompression,
+          );
+          turnContextBlocks["Model access"] =
+            "## Model access\nAn OpenAI-compatible model gateway is at `$MODEL_GATEWAY_URL` in the sandbox; authenticate with `Authorization: Bearer $MODEL_GATEWAY_TOKEN`. `GET $MODEL_GATEWAY_URL/v1/models` lists the usable models. The token is bound to this turn and expires with it; never send it anywhere but the gateway.";
         }
         connectorEnv.AGENT_OAUTH_CONSENT_TOKEN = await mintCapabilityToken(
           {
