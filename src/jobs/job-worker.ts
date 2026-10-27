@@ -49,6 +49,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
   let started = false;
   let lastErrorAt = 0;
   let loop: Promise<void> | null = null;
+  let starting: Promise<void> | null = null;
   let wake = Promise.withResolvers<void>();
   const active = new Set<Promise<void>>();
   const noteError = (e: unknown): never => {
@@ -132,6 +133,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
   }
 
   async function stopClaims(): Promise<void> {
+    await starting?.catch(() => {});
     started = false;
     wake.resolve();
     await loop;
@@ -159,14 +161,18 @@ export function createJobWorker(databaseUrl: string): JobWorker {
         running: 0,
       });
     },
-    async start() {
-      if (started) return;
-      const pool = await db.pool();
-      await pool.query("SELECT 1").catch(noteError);
-      for (const job of recurring) await spawnKeyed(job, null, job, null);
-      started = true;
-      lastErrorAt = 0;
-      loop = poll();
+    start() {
+      return (starting ??= (async () => {
+        if (started) return;
+        const pool = await db.pool();
+        await pool.query("SELECT 1").catch(noteError);
+        for (const job of recurring) await spawnKeyed(job, null, job, null);
+        started = true;
+        lastErrorAt = 0;
+        loop = poll();
+      })().finally(() => {
+        starting = null;
+      }));
     },
     healthy() {
       return started && Date.now() - lastErrorAt >= UNHEALTHY_AFTER_ERROR_MS;
