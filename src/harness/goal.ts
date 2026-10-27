@@ -29,6 +29,7 @@
  *   (wind down when exhausted; never auto-complete).
  */
 import { outermostJsonObject } from "../util/text.ts";
+import { countTokens, fitNewestLinesToTokens, fitPartsToTokens } from "../util/tokens.ts";
 import { Type, type Static } from "typebox";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import { type GrindBudget, type GrindMeter, grindState } from "./grind.ts";
@@ -67,14 +68,11 @@ export interface GovernorVerdict {
 /** Checkpoint cadence: every N continuation rounds or this much work, whichever comes first. */
 export const GOAL_GOVERNOR_ROUNDS = 3;
 const GOAL_GOVERNOR_INTERVAL_MS = 30 * 60_000;
-const GOAL_WORK_DIGEST_CHARS = 16_000;
-const GOAL_WORK_LINE_CHARS = 600;
 
 export const GOAL_STEP_BACK_PROMPT =
   "Take a step back, and think through whether this is actually a blocker error. There is likely a way around this issue if you explore a different path.";
 
 export const GOAL_FLOOR_RECHECK_MS = 60_000;
-const GOAL_MAX_OBJECTIVE_CHARS = 4000;
 
 const FLOOR_KEYS = ["minTurns", "minMs", "minTokens", "minUsd"] as const;
 
@@ -105,8 +103,6 @@ export function createGoalRecord(input: {
 }): GoalRecord {
   const objective = input.objective.trim();
   if (!objective) throw new Error("a goal needs a non-empty objective");
-  if (objective.length > GOAL_MAX_OBJECTIVE_CHARS)
-    throw new Error(`objective too long (max ${GOAL_MAX_OBJECTIVE_CHARS} chars)`);
   const capTokens = positiveInteger(input.capTokens);
   if (input.capTokens !== undefined && capTokens === undefined)
     throw new Error("token_cap must be a positive number of at least 1");
@@ -268,7 +264,7 @@ export interface GoalGovernorInput {
   /** The agent's recent turns (messages, tool calls, results), trimmed; newest last. */
   recentWork: string;
   /** Completion requests only: the agent's evidence note plus any files it named. */
-  evidence?: string;
+  evidence?: readonly string[];
   previous?: GovernorVerdict;
 }
 
@@ -285,37 +281,47 @@ const GOAL_GOVERNOR_SYSTEM_PROMPT = [
   'Reply with ONLY JSON: {"verdict": "continue" | "complete" | "step_back" | "pause", "reasons": "<one short paragraph; for pause, the exact question for the user>"}.',
 ].join("\n");
 
-/** Fit the newest work lines into the governor's budget. */
-export function goalWorkDigest(lines: ReadonlyArray<string>, maxChars = GOAL_WORK_DIGEST_CHARS): string {
-  const kept: string[] = [];
-  let used = 0;
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const raw = lines[i]!.replace(/\s+/g, " ").trim();
-    if (!raw) continue;
-    const line = raw.length > GOAL_WORK_LINE_CHARS ? `${raw.slice(0, GOAL_WORK_LINE_CHARS)}…` : raw;
-    if (used + line.length > maxChars) break;
-    kept.push(line);
-    used += line.length + 1;
-  }
-  return kept.reverse().join("\n");
+export function goalWorkDigest(lines: ReadonlyArray<string>): string {
+  return lines
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+const cutNotice = (cutChars: number) => `\n…[${cutChars} chars cut from the middle]…\n`;
+
+function governorPrompt(input: GoalGovernorInput, tokenBudget: number | undefined): string {
+  const fixed = [
+    `<trigger>${input.trigger}</trigger>`,
+    `<objective>\n${escapeTags(input.objective)}\n</objective>`,
+    input.previous
+      ? `<previous_verdict verdict="${input.previous.verdict}">\n${escapeTags(input.previous.reasons)}\n</previous_verdict>`
+      : "<previous_verdict>none</previous_verdict>",
+  ];
+  const frame = `${GOAL_GOVERNOR_SYSTEM_PROMPT}\n${fixed.join("\n")}\n<recent_work>\n</recent_work>\n<evidence>\n</evidence>`;
+  const remaining = tokenBudget === undefined ? Infinity : Math.max(0, tokenBudget - countTokens(frame));
+  const evidenceParts = input.evidence
+    ? fitPartsToTokens(input.evidence, Math.floor(remaining / 2), cutNotice).map(escapeTags)
+    : [];
+  const evidence = evidenceParts.join("\n");
+  const workBudget = remaining - (evidence ? countTokens(evidence) : 0);
+  const work = fitNewestLinesToTokens(input.recentWork.split("\n"), workBudget, cutNotice).map(escapeTags).join("\n");
+  return [
+    ...fixed,
+    `<recent_work>\n${work || "(not available)"}\n</recent_work>`,
+    input.evidence !== undefined ? `<evidence>\n${evidence}\n</evidence>` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export async function governGoal(
   judge: (system: string, prompt: string, signal?: AbortSignal) => Promise<string | undefined>,
   input: GoalGovernorInput,
   signal?: AbortSignal,
+  tokenBudget?: number,
 ): Promise<GovernorVerdict> {
-  const prompt = [
-    `<trigger>${input.trigger}</trigger>`,
-    `<objective>\n${escapeTags(input.objective)}\n</objective>`,
-    input.previous
-      ? `<previous_verdict verdict="${input.previous.verdict}">\n${escapeTags(input.previous.reasons)}\n</previous_verdict>`
-      : "<previous_verdict>none</previous_verdict>",
-    `<recent_work>\n${escapeTags(input.recentWork || "(not available)")}\n</recent_work>`,
-    input.evidence !== undefined ? `<evidence>\n${escapeTags(input.evidence)}\n</evidence>` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const prompt = governorPrompt(input, tokenBudget);
   const reply = (await judge(GOAL_GOVERNOR_SYSTEM_PROMPT, prompt, signal)) ?? "";
   let parsed: { verdict?: unknown; reasons?: unknown } | undefined;
   try {

@@ -144,7 +144,7 @@ test("a governor approval closes the goal and sees only the objective and eviden
   const { ref, create, update } = toolbox();
   const seen: string[][] = [];
   ref.governGoal = async (input) => {
-    seen.push([input.objective, input.evidence ?? ""]);
+    seen.push([input.objective, (input.evidence ?? []).join("\n")]);
     return { verdict: "complete", reasons: "tests pass" };
   };
   await create.execute("c1", { objective: "suite green" });
@@ -365,7 +365,7 @@ test("update reads named workspace files into the governor's evidence", async ()
   } as unknown as ToolContextRef["current"];
   let seen = "";
   ref.governGoal = async (input) => {
-    seen = input.evidence ?? "";
+    seen = (input.evidence ?? []).join("\n");
     return { verdict: "complete", reasons: "report present" };
   };
   await create.execute("c1", { objective: "write the report" });
@@ -388,7 +388,7 @@ test("update reads evidence from the named sandbox and says why a file could not
   } as unknown as ToolContextRef["current"];
   let seen = "";
   ref.governGoal = async (input) => {
-    seen = input.evidence ?? "";
+    seen = (input.evidence ?? []).join("\n");
     return { verdict: "continue", reasons: "not yet" };
   };
   await create.execute("c1", { objective: "write the report" });
