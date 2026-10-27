@@ -136,7 +136,7 @@ function cronParams() {
     limit: Type.Optional(
       Type.Integer({
         minimum: 1,
-        description: "list: page size (default 25, max 100). runs: latest N entries.",
+        description: "list: page size (default 25). runs: latest N entries.",
       }),
     ),
     offset: Type.Optional(Type.Integer({ minimum: 0, description: "list: page offset from the previous footer." })),
@@ -364,7 +364,7 @@ function webhookTool(kit: ToolKit) {
         ),
       ),
       destinationKey: optionalString('create: a key from the "Where scheduled tasks post" menu.'),
-      limit: Type.Optional(Type.Integer({ minimum: 1, description: "list: page size (default 25, max 100)." })),
+      limit: Type.Optional(Type.Integer({ minimum: 1, description: "list: page size (default 25)." })),
       offset: Type.Optional(Type.Integer({ minimum: 0, description: "list: page offset from the previous footer." })),
     }),
     async execute(callId, params) {
