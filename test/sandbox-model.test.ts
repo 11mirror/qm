@@ -3,7 +3,7 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { createServer as httpServer, type IncomingHttpHeaders } from "node:http";
+import { createServer as httpServer, request as httpRequest, type IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -233,4 +233,85 @@ test("deployments without a gateway leave the sandbox gateway variables unset", 
     text: "!run echo none",
   });
   for (const name of ["MODEL_GATEWAY_URL", "MODEL_GATEWAY_TOKEN"]) assert.equal(captured?.env?.[name], undefined, name);
+});
+
+test("only model API routes reach the gateway; admin and traversal paths get 404", async (t) => {
+  const seen: string[] = [];
+  const upstream = httpServer((req, res) => {
+    seen.push(`${req.method} ${req.url}`);
+    req.resume();
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end("{}");
+  });
+  const upstreamUrl = await listen(upstream);
+  t.after(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
+  const config = testConfig({ signingSecret: "ingress-secret".repeat(3) });
+  const built = buildApp(config);
+  const server = createServer(built.app, {
+    ...serverDeps(config, built),
+    modelGatewayTransport: { url: upstreamUrl, apiKey: key, apiKeyHeader: "api-key", models: routes },
+  });
+  const origin = await listen(server as unknown as ReturnType<typeof httpServer>);
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const token = await mintCapabilityToken(
+    { actorId: "U1", scopeId: "personal:U1", aud: SANDBOX_MODEL_AUD, exp: Date.now() + 60_000 },
+    TEST_CAPABILITY_SECRET,
+  );
+  const raw = (method: string, path: string, auth = true) =>
+    new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const req = httpRequest(`${origin}${path}`, {
+        method,
+        headers: { "content-type": "application/json", ...(auth ? { authorization: `Bearer ${token}` } : {}) },
+      });
+      req.on("error", reject);
+      req.on("response", (res) => {
+        let body = "";
+        res.on("data", (chunk) => (body += chunk));
+        res.on("end", () => resolve({ status: res.statusCode!, body }));
+      });
+      req.end(method !== "POST" ? undefined : JSON.stringify({ model: "gpt-6-luna", input: "x" }));
+    });
+
+  const allowed = [
+    "/v1/chat/completions",
+    "/v1/responses",
+    "/v1/responses/compact",
+    "/v1/messages",
+    "/v1/messages/count_tokens",
+    "/v1/embeddings",
+  ];
+  for (const path of allowed) assert.equal((await raw("POST", `/v1/sandbox-model${path}`)).status, 200, path);
+  assert.equal((await raw("GET", "/v1/sandbox-model/v1/models")).status, 200);
+  assert.deepEqual(
+    seen,
+    allowed.map((path) => `POST ${path}`),
+  );
+
+  const refused: Array<[string, string]> = [
+    ["GET", "/key/info"],
+    ["GET", "/key/list"],
+    ["GET", "/health"],
+    ["POST", "/model/new"],
+    ["GET", "/v1/key/info"],
+    ["POST", "/key/generate"],
+    ["GET", "/v1/chat/completions"],
+    ["DELETE", "/v1/responses"],
+    ["GET", "/v1/models/gpt-6-luna"],
+    ["POST", "/v1/chat/completions/../../key/info"],
+    ["POST", "/v1/chat/completions/%2e%2e/%2e%2e/key/info"],
+    ["POST", "/v1/chat%2Fcompletions"],
+    ["POST", "/v1/chat/completions%2F..%2F..%2Fkey%2Finfo"],
+    ["POST", "/v1//chat/completions"],
+    ["POST", "//key/info"],
+    ["POST", "/v1/chat/completions/"],
+  ];
+  for (const [method, path] of refused) {
+    const response = await raw(method, `/v1/sandbox-model${path}`);
+    assert.equal(response.status, 404, `${method} ${path}`);
+  }
+  assert.deepEqual(JSON.parse((await raw("GET", "/v1/sandbox-model/key/info")).body), {
+    error: { message: "not a model API route" },
+  });
+  assert.equal((await raw("GET", "/v1/sandbox-model/key/info", false)).status, 401);
+  assert.equal(seen.length, allowed.length);
 });

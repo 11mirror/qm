@@ -11,6 +11,14 @@ import type { ApiCtx, Route } from "./route.ts";
 
 const FORWARDED_HEADERS = ["accept", "content-type", "anthropic-version", "anthropic-beta"];
 const UPSTREAM_REQUEST_LIMIT_BYTES = 32 * 1024 * 1024;
+const FORWARDED_ROUTES = new Set([
+  "POST /v1/chat/completions",
+  "POST /v1/responses",
+  "POST /v1/responses/compact",
+  "POST /v1/messages",
+  "POST /v1/messages/count_tokens",
+  "POST /v1/embeddings",
+]);
 
 function redactGatewayKey(apiKey: string): (text: string) => string {
   return createExactSecretValueMasker([apiKey, apiKey.slice(apiKey.lastIndexOf(" ") + 1)]);
@@ -47,12 +55,15 @@ async function denied(ctx: ApiCtx): Promise<boolean> {
 }
 
 async function proxy(ctx: ApiCtx): Promise<void> {
-  if (await denied(ctx)) return;
   const { deps, body, req, res, capability, secret, url, pathname, method } = ctx;
-  const gateway = deps.modelGatewayTransport!;
   const path = pathname.slice(SANDBOX_MODEL_PREFIX.length);
+  const listing = method === "GET" && path === "/v1/models";
+  if (!listing && !FORWARDED_ROUTES.has(`${method} ${path}`))
+    return sendJson(res, 404, { error: { message: "not a model API route" } });
+  if (await denied(ctx)) return;
+  const gateway = deps.modelGatewayTransport!;
   await gateway.refresh?.();
-  if (method === "GET" && path === "/v1/models")
+  if (listing)
     return sendJson(res, 200, {
       object: "list",
       data: Object.keys(gateway.models).map((id) => ({ id, object: "model", owned_by: "gateway" })),
