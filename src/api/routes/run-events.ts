@@ -1,9 +1,8 @@
-import { sendJson } from "../http.ts";
 import { LRUCache } from "lru-cache";
 import { reasoningKey } from "../../runs/run-stream-events.ts";
 import { REASONING_MAX_BLOCKS } from "../../runs/turn-stream.ts";
 import type { Item } from "../../sessions/items.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { type ApiCtx, reply, type Route, type RouteResult } from "./route.ts";
 import { SSE_HEADERS } from "./session-state.ts";
 
 const HEARTBEAT_MS = 15_000;
@@ -30,11 +29,23 @@ function toolEvent(item: Item): { id: string; data: Record<string, unknown> } | 
   };
 }
 
-async function streamRun(ctx: ApiCtx): Promise<void> {
+function drained(res: ApiCtx["res"]): Promise<void> {
+  return new Promise((resolve) => {
+    const done = (): void => {
+      res.off("drain", done);
+      res.off("close", done);
+      resolve();
+    };
+    res.on("drain", done);
+    res.on("close", done);
+  });
+}
+
+async function streamRun(ctx: ApiCtx): Promise<RouteResult> {
   const { app, req, res, actor } = ctx;
   const runId = ctx.params.id!;
   const initial = await app.getRun(runId, actor?.p);
-  if (!initial) return sendJson(res, 404, { error: "not_found" });
+  if (!initial) return reply(404, { error: "not_found" });
   if (res.destroyed) return;
   let closed = false;
   let offset = 0;
@@ -57,16 +68,6 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
     }
     res.write(`${id === undefined ? "" : `id: ${id}\n`}data: ${JSON.stringify(data)}\n\n`);
   };
-  const drained = (): Promise<void> =>
-    new Promise((resolve) => {
-      const done = (): void => {
-        res.off("drain", done);
-        res.off("close", done);
-        resolve();
-      };
-      res.on("drain", done);
-      res.on("close", done);
-    });
   const sync = (): void => {
     if (syncing || closed) return;
     syncing = true;
@@ -75,7 +76,7 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
     });
   };
   const sendDrained = async (data: unknown, id?: string): Promise<void> => {
-    if (res.writableNeedDrain) await drained();
+    if (res.writableNeedDrain) await drained(res);
     send(data, id);
   };
   const snapshot = async (run: NonNullable<typeof initial>): Promise<void> => {

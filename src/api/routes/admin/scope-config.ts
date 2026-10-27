@@ -17,7 +17,6 @@ import {
   selectableModelCatalog,
   type ModelCatalogEntry,
 } from "../../../model/model-catalog.ts";
-import { sendJson } from "../../http.ts";
 import { activePrincipal, adminActorFrom, authorizeAdmin } from "../shared.ts";
 import {
   ADMIN_RESOURCES,
@@ -25,7 +24,7 @@ import {
   adminResourceManifest,
   defaultAutoFlaggerConfig,
 } from "../admin-resources.ts";
-import { isConfigured, type ApiCtx } from "../route.ts";
+import { type ApiCtx, isConfigured, ok, reply, type RouteResult } from "../route.ts";
 import type { ConfiguredDeps } from "../../deps.ts";
 import {
   composePolicy,
@@ -38,22 +37,21 @@ import { adminAt, auditAs, badRequest, discoverScopes, modelKeys, orgAdmin } fro
 import { scopeActivity } from "./scope-activity.ts";
 import { tenant } from "../../../tenant.ts";
 
-export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
-  if (!isConfigured(ctx)) return sendJson(ctx.res, 404, { error: "not_found" });
-  const { res, deps, params, body } = ctx;
+export async function putScopeConfig(ctx: ApiCtx): Promise<RouteResult> {
+  if (!isConfigured(ctx)) return reply(404, { error: "not_found" });
+  const { deps, params, body } = ctx;
   const targetScope = params.scope!;
   const resource = params.resource!;
   const authz = await adminAt(ctx, targetScope);
-  if (!authz) return;
   const withScopeMutationLock = async <T>(fn: () => Promise<T>): Promise<T> =>
     deps.advisoryLock ? deps.advisoryLock.withLock(`admin-governance:${targetScope}`, fn) : fn();
 
   if (resource === "command-policy-simulate") {
     const command = (body as { command?: unknown }).command;
-    if (typeof command !== "string" || !command.trim()) return badRequest(res, "command is required");
+    if (typeof command !== "string" || !command.trim()) throw badRequest("command is required");
     const supplied = (body as { policy?: unknown }).policy;
     const parsed = supplied === undefined ? null : parseCommandPolicy(supplied);
-    if (parsed && "error" in parsed) return badRequest(res, parsed.error);
+    if (parsed && "error" in parsed) throw badRequest(parsed.error);
     const targetKind = parseScopeId(targetScope).kind;
     const target =
       parsed?.policy ??
@@ -70,7 +68,7 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
     if (effectiveRuleIndex >= 0) ruleSource = effectiveRuleIndex < orgRuleCount ? "organization" : "scope";
     const ruleIndex = effectiveRuleIndex < 0 ? null : effectiveRuleIndex - (ruleSource === "scope" ? orgRuleCount : 0);
     authz.audit("command-policy.simulate", "command-policy");
-    return sendJson(res, 200, {
+    return ok({
       ok: true,
       decision: result.decision,
       reason: result.reason ?? null,
@@ -82,46 +80,43 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
   }
 
   const desc = ADMIN_RESOURCE_BY_ID.get(resource);
-  if (!desc) return sendJson(res, 404, { error: "not_found", message: `unknown admin resource: ${resource}` });
+  if (!desc) return reply(404, { error: "not_found", message: `unknown admin resource: ${resource}` });
   if (desc.refreshesModels) await deps.refreshModels?.();
   return withScopeMutationLock(async () => {
     try {
       const result = await desc.apply(ctx, authz.actor, targetScope);
       if ("error" in result)
-        return sendJson(res, result.status ?? 400, { error: result.code ?? "bad_request", message: result.error });
+        return reply(result.status ?? 400, { error: result.code ?? "bad_request", message: result.error });
     } catch (err) {
       await deps.config.refreshScope(targetScope);
       throw err;
     }
     authz.audit(`${resource}.update`, resource);
-    return sendJson(res, 200, { ok: true, scopeId: targetScope, resource });
+    return ok({ ok: true, scopeId: targetScope, resource });
   });
 }
 
-export async function getAdminResources(ctx: ApiCtx): Promise<void> {
+export async function getAdminResources(ctx: ApiCtx): Promise<RouteResult> {
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   await ctx.deps.refreshModels?.();
   authz.audit("resources.read", "resources");
-  return sendJson(ctx.res, 200, { resources: adminResourceManifest() });
+  return ok({ resources: adminResourceManifest() });
 }
 
-export async function whoami(ctx: ApiCtx): Promise<void> {
-  const { res, deps } = ctx;
-  if (!deps.admin) return sendJson(res, 404, { error: "not_found" });
+export async function whoami(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps } = ctx;
+  if (!deps.admin) return reply(404, { error: "not_found" });
   const actor = adminActorFrom(ctx);
-  if (!actor || !(await activePrincipal(deps, actor.id)))
-    return sendJson(res, 200, { isAdmin: false, permissions: [] });
+  if (!actor || !(await activePrincipal(deps, actor.id))) return ok({ isAdmin: false, permissions: [] });
   const status = await deps.admin.adminStatusOf(actor);
   const permissions = status.isAdmin ? ["admin"] : [];
   auditAs(deps, actor.id, "admin.whoami", "whoami", status.scopeId ?? actor.id);
-  return sendJson(res, 200, { ...status, permissions });
+  return ok({ ...status, permissions });
 }
 
-export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps } = ctx;
+export async function listAdminScopes(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, deps } = ctx;
   const authz = await orgAdmin(ctx, "scopes");
-  if (!authz) return;
   const [crons, deployments, skills, environmentRows] = await Promise.all([
     app.listCrons(),
     app.listDeployments(),
@@ -175,7 +170,7 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
     };
   });
   scopes.sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0) || a.scopeId.localeCompare(b.scopeId));
-  return sendJson(res, 200, {
+  return ok({
     scopeId: authz.scope,
     scopes,
     environments,
@@ -255,14 +250,14 @@ async function scopeServiceCredentials(deps: ApiCtx["deps"], targetScope: string
   }));
 }
 
-export async function getCredentialUsageSummary(ctx: ApiCtx): Promise<void> {
+export async function getCredentialUsageSummary(ctx: ApiCtx): Promise<RouteResult> {
   const targetScope = ctx.params.scope!;
-  if (!targetScope || targetScope.includes("/")) return sendJson(ctx.res, 404, { error: "not_found" });
-  if (!(await authorizeAdmin(ctx, targetScope))) return;
+  if (!targetScope || targetScope.includes("/")) return reply(404, { error: "not_found" });
+  await authorizeAdmin(ctx, targetScope);
   const credentials = (await ctx.deps.serviceCreds?.listServiceCredentials(targetScope)) ?? [];
-  if (!ctx.deps.credentialUsage) return sendJson(ctx.res, 503, { error: "usage_unavailable" });
+  if (!ctx.deps.credentialUsage) return reply(503, { error: "usage_unavailable" });
   const summaries = await ctx.deps.credentialUsage.summary(credentials.map((credential) => credential.slug));
-  return sendJson(ctx.res, 200, { summaries });
+  return ok({ summaries });
 }
 
 async function scopeEgress(deps: ConfiguredDeps, targetScope: string) {
@@ -349,14 +344,14 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
   };
 }
 
-export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
-  if (!isConfigured(ctx)) return sendJson(ctx.res, 404, { error: "not_found" });
+export async function getScopeConfig(ctx: ApiCtx): Promise<RouteResult> {
+  if (!isConfigured(ctx)) return reply(404, { error: "not_found" });
   const { res, deps, params, url } = ctx;
   const targetScope = params.scope!;
-  if (!targetScope || targetScope.includes("/")) return sendJson(res, 404, { error: "not_found" });
+  if (!targetScope || targetScope.includes("/")) return reply(404, { error: "not_found" });
   const requestedView = url.searchParams.get("view");
   if (requestedView !== null && !Object.hasOwn(SETTINGS_RESOURCES, requestedView))
-    return sendJson(res, 400, { error: "bad_request", message: "Unknown settings view" });
+    return reply(400, { error: "bad_request", message: "Unknown settings view" });
   const started = performance.now();
   const timings: Record<string, number> = {};
   const read = async <T>(name: string, load: () => T | Promise<T>): Promise<T> => {
@@ -368,7 +363,6 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     }
   };
   const actor = await read("authorize", () => authorizeAdmin(ctx, targetScope));
-  if (!actor) return;
   const view = requestedView as SettingsView | null;
   const includes = (...views: SettingsView[]) => view === null || views.includes(view);
   const needsModels = includes("models", "governance", "onboarding");
@@ -415,7 +409,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
       "[admin-settings] load budget exceeded",
       JSON.stringify({ view, durationMs: Math.round(elapsed), timings }),
     );
-  return sendJson(res, 200, {
+  return ok({
     scopeId: targetScope,
     ...environmentMetadata,
     ...values,
@@ -433,14 +427,14 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
   });
 }
 
-export async function retention(ctx: ApiCtx): Promise<void> {
-  const { res, deps, url } = ctx;
+export async function retention(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, url } = ctx;
   const scope = url.searchParams.get("scope") ?? tenant().orgScope;
-  if (parseScopeId(scope).kind !== "org") return badRequest(res, "retention is org-wide; request an org scope");
-  if (!(await adminAt(ctx, scope, "retention"))) return;
+  if (parseScopeId(scope).kind !== "org") throw badRequest("retention is org-wide; request an org scope");
+  await adminAt(ctx, scope, "retention");
   const sessionCount = (await deps.sessions?.countSessions()) ?? 0;
   const participants = (await deps.sessions?.listParticipants()) ?? [];
   const turns = (await deps.sessions?.attributedTurns()) ?? [];
   const report = computeRetention({ sessionCount, participants, turns, nowMs: Date.now() });
-  return sendJson(res, 200, { scopeId: scope, ...report });
+  return ok({ scopeId: scope, ...report });
 }

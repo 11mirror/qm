@@ -5,7 +5,7 @@ import { createInboxLedger } from "../src/inbox/ledger.ts";
 import { ensureInboxCron } from "../src/inbox/sync-task.ts";
 import { uiStateId } from "../src/surfaces/ui-state.ts";
 import type { PersistedUiState } from "../src/surfaces/ui-state.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+import { type ApiCtx, respond } from "../src/api/routes/route.ts";
 import { installPrincipalLinks } from "../src/directory/person.ts";
 import { inboxApp } from "./support/inbox-app.ts";
 import { testMap } from "./support/test-database.ts";
@@ -21,31 +21,29 @@ function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefres
   const call = async (method = "GET", body: unknown = null, query = "", actor = "alice") => {
     let status = 0;
     let data: any;
-    await inboxRoutes
-      .find((route) => "method" in route && route.method === method)!
-      .handle({
-        method,
-        body,
-        url: new URL(`http://local/v1/inbox?${query}`),
-        actor: { p: actor },
-        capability: null,
-        deps: {
-          inbox: { items, record: async () => {} },
-          uiState,
-          inboxSourceRefresh: sourceRefresh,
-          featureFlags: { enabled: async () => enabled },
+    await respond(inboxRoutes.find((route) => "method" in route && route.method === method)!.handle, {
+      method,
+      body,
+      url: new URL(`http://local/v1/inbox?${query}`),
+      actor: { p: actor },
+      capability: null,
+      deps: {
+        inbox: { items, record: async () => {} },
+        uiState,
+        inboxSourceRefresh: sourceRefresh,
+        featureFlags: { enabled: async () => enabled },
+      },
+      app,
+      res: {
+        getHeader: () => undefined,
+        writeHead: (value: number) => {
+          status = value;
         },
-        app,
-        res: {
-          getHeader: () => undefined,
-          writeHead: (value: number) => {
-            status = value;
-          },
-          end: (value: string) => {
-            data = JSON.parse(value);
-          },
+        end: (value: string) => {
+          data = JSON.parse(value);
         },
-      } as unknown as ApiCtx);
+      },
+    } as unknown as ApiCtx);
     return { status, data };
   };
   return { crons, items, uiState, defaults, call };
@@ -384,7 +382,7 @@ test("inbox viewers are exactly the active candidates who can administer the cro
   const ask = async (body: unknown, capability: unknown = null) => {
     let status = 0;
     let data: any;
-    await route.handle({
+    await respond(route.handle, {
       method: "POST",
       body,
       url: new URL("http://local/v1/inbox/viewers"),

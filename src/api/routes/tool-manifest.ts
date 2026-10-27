@@ -1,11 +1,10 @@
 import { toolManifest } from "../../harness/tool-manifest.ts";
 import { personalScope } from "../../types.ts";
-import { sendJson } from "../http.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 
-async function getToolManifest(ctx: ApiCtx): Promise<void> {
+async function getToolManifest(ctx: ApiCtx): Promise<RouteResult> {
   const principal = ctx.actor?.p;
-  if (!principal) return sendJson(ctx.res, 401, { error: "unauthorized" });
+  if (!principal) return reply(401, { error: "unauthorized" });
   const { deps } = ctx;
   const flag = async (name: "responsive_spine" | "persistent_subagents" | "ui_canvas") =>
     (await deps.featureFlags?.enabled(name, personalScope(principal))) === true;
@@ -21,7 +20,7 @@ async function getToolManifest(ctx: ApiCtx): Promise<void> {
     connectorTools: (await deps.mcpToolService?.toolDefsFor(principal)) ?? [],
     clientTools: [],
   });
-  return sendJson(ctx.res, 200, { tools });
+  return ok({ tools });
 }
 
 export const toolManifestRoutes: ReadonlyArray<Route<ApiCtx>> = [

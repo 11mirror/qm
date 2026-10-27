@@ -1,5 +1,5 @@
-import { sendJson } from "../http.ts";
-import { withAdmin, type ApiCtx, type Route } from "./route.ts";
+import { fail } from "../http.ts";
+import { type ApiCtx, ok, type Route, type RouteResult, withAdmin } from "./route.ts";
 import { audit, authorizeAdmin } from "./shared.ts";
 import type { NewSkillPack, SkillPack } from "../../skills/skill-pack-store.ts";
 import type { PackConfig } from "../../skills/normalize.ts";
@@ -37,17 +37,15 @@ function asConfig(v: unknown): PackConfig | undefined {
 }
 
 function badRequest(ctx: ApiCtx, message: string): null {
-  sendJson(ctx.res, 400, { error: "bad_request", message });
-  return null;
+  throw fail(400, "bad_request", message);
 }
 
 function packRoute(
   action: string,
   run: (ctx: ApiCtx, actorId: string) => Promise<{ body: unknown; resource?: string; scopeLabel?: string } | null>,
-): (ctx: ApiCtx) => Promise<void> {
+): (ctx: ApiCtx) => Promise<RouteResult> {
   return async (ctx) => {
     const actor = await authorizeAdmin(ctx, tenant().orgScope);
-    if (!actor) return;
     const out = await run(ctx, actor.id);
     if (!out) return;
     audit(ctx.deps, {
@@ -56,7 +54,7 @@ function packRoute(
       resource: out.resource ?? ctx.params.id!,
       scopeLabel: out.scopeLabel ?? tenant().orgScope,
     });
-    sendJson(ctx.res, 200, out.body);
+    return ok(out.body);
   };
 }
 

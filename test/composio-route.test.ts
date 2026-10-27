@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ServerResponse } from "node:http";
 import { composioRoutes, composioUserId } from "../src/api/routes/composio.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+import { type ApiCtx, respond } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
@@ -86,7 +86,7 @@ function fixture() {
       actor: actor ? { p: actor, exp: Date.now() + 60_000, ...(impersonating ? { imp: "admin" } : {}) } : null,
     } as ApiCtx;
     const route = composioRoutes.find((r) => "path" in r && r.path === url.pathname)!;
-    await route.handle(ctx);
+    await respond(route.handle, ctx);
     return { status, data: JSON.parse(text), text };
   }
   async function own(ownerId = "alice", service = "composio") {

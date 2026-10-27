@@ -7,9 +7,9 @@ import {
 import { parseScopeId } from "../../types.ts";
 import { samePerson } from "../../directory/person.ts";
 import { approvalCardDestination } from "../../credentials/keychain-approval.ts";
-import { sendJson } from "../http.ts";
+import { fail } from "../http.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { audit, resolveCapabilityDestination } from "./shared.ts";
 import { reportFailure, swallowAs } from "../../util/errors.ts";
@@ -62,27 +62,24 @@ async function resolveScopeNames(
 type Keychain = NonNullable<ApiCtx["deps"]["keychain"]>;
 
 const keychainRoute =
-  (handle: (ctx: ApiCtx, kc: Keychain, capability: CapabilityClaims) => Promise<void>) =>
-  async (ctx: ApiCtx): Promise<void> => {
-    const { res, deps, capability } = ctx;
+  (handle: (ctx: ApiCtx, kc: Keychain, capability: CapabilityClaims) => Promise<RouteResult>) =>
+  async (ctx: ApiCtx): Promise<RouteResult> => {
+    const { deps, capability } = ctx;
     if (!deps.keychain)
-      return sendJson(res, 503, {
-        error: "keychain_unavailable",
-        message: "The keychain isn't set up on this server. An operator needs to set CONNECTOR_SECRET_KEY.",
-      });
-    if (!capability)
-      return sendJson(res, 401, {
-        error: "unauthorized",
-        message: "keychain routes require an agent capability token",
-      });
+      throw fail(
+        503,
+        "keychain_unavailable",
+        "The keychain isn't set up on this server. An operator needs to set CONNECTOR_SECRET_KEY.",
+      );
+    if (!capability) throw fail(401, "unauthorized", "keychain routes require an agent capability token");
     const kc = deps.keychain;
     return handle(ctx, kc, capability);
   };
 
-const saveCredential = keychainRoute(async ({ res, deps, body }, kc, { actorId, scopeId }) => {
+const saveCredential = keychainRoute(async ({ deps, body }, kc, { actorId, scopeId }) => {
   const b = body as Record<string, unknown>;
   const expiresAt = normalizeInboundExpiresAt(b.expiresAt);
-  if (!expiresAt.ok) return sendJson(res, 400, { error: "bad_request", message: expiresAt.message });
+  if (!expiresAt.ok) throw fail(400, "bad_request", expiresAt.message);
   let files: CredentialFile[] | undefined;
   if (Array.isArray(b.files)) {
     files = [];
@@ -90,10 +87,11 @@ const saveCredential = keychainRoute(async ({ res, deps, body }, kc, { actorId, 
       if (typeof f?.path !== "string" || typeof f.contentBase64 !== "string") continue;
       const mode = f.mode;
       if (mode !== undefined && (typeof mode !== "number" || !Number.isInteger(mode) || mode < 0 || mode > 0o777))
-        return sendJson(res, 400, {
-          error: "bad_request",
-          message: `files[].mode must be an integer between 0 and 511 (octal 0o777); got ${JSON.stringify(mode)} for ${f.path}`,
-        });
+        throw fail(
+          400,
+          "bad_request",
+          `files[].mode must be an integer between 0 and 511 (octal 0o777); got ${JSON.stringify(mode)} for ${f.path}`,
+        );
       files.push({ path: f.path, contentBase64: f.contentBase64, ...(typeof mode === "number" ? { mode } : {}) });
     }
   }
@@ -107,17 +105,12 @@ const saveCredential = keychainRoute(async ({ res, deps, body }, kc, { actorId, 
           typeof (f as CredentialFieldInput)?.envKey !== "string" ||
           typeof (f as CredentialFieldInput)?.value !== "string",
       )
-    ) {
-      return sendJson(res, 400, { error: "bad_request", message: "each field needs string envKey and value" });
-    }
+    )
+      throw fail(400, "bad_request", "each field needs string envKey and value");
     fields = b.fields as CredentialFieldInput[];
   }
-  if (typeof b.service !== "string" || (typeof b.secret !== "string" && !files?.length && !fields?.length)) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "service plus secret, files[], or fields[] required",
-    });
-  }
+  if (typeof b.service !== "string" || (typeof b.secret !== "string" && !files?.length && !fields?.length))
+    throw fail(400, "bad_request", "service plus secret, files[], or fields[] required");
   const meta = await kc.save({
     ownerId: actorId,
     service: b.service,
@@ -137,14 +130,14 @@ const saveCredential = keychainRoute(async ({ res, deps, body }, kc, { actorId, 
     resource: `${meta.service}:${meta.id}`,
     scopeLabel: scopeId,
   });
-  return sendJson(res, 200, { credential: meta });
+  return ok({ credential: meta });
 });
 
-const listCredentials = keychainRoute(async ({ res }, kc, { actorId }) => {
-  return sendJson(res, 200, { credentials: await kc.listByOwner(actorId) });
+const listCredentials = keychainRoute(async (_ctx, kc, { actorId }) => {
+  return ok({ credentials: await kc.listByOwner(actorId) });
 });
 
-const keychainOverview = keychainRoute(async ({ res, app, deps }, kc, { actorId }) => {
+const keychainOverview = keychainRoute(async ({ app, deps }, kc, { actorId }) => {
   const credentials = await kc.listByOwner(actorId);
   const connectorCredentials = (await kc.listConnectorsByOwners([actorId])).get(actorId) ?? [];
   const grants = await kc.listGrants({ ownerId: actorId });
@@ -153,62 +146,53 @@ const keychainOverview = keychainRoute(async ({ res, app, deps }, kc, { actorId 
     ...grants.map((grant) => grant.audienceScopeId),
     ...asks.map((ask) => ask.requesterScopeId),
   ]);
-  return sendJson(res, 200, { credentials, connectorCredentials, grants, asks, scopeNames });
+  return ok({ credentials, connectorCredentials, grants, asks, scopeNames });
 });
 
 const removal = (action: string, remove: (kc: Keychain, actorId: string, id: string) => Promise<boolean>) =>
-  keychainRoute(async ({ res, deps, params }, kc, { actorId, scopeId }) => {
+  keychainRoute(async ({ deps, params }, kc, { actorId, scopeId }) => {
     const id = params.id!;
-    const ok = await remove(kc, actorId, id);
-    if (ok) audit(deps, { principalId: actorId, action, resource: id, scopeLabel: scopeId });
-    return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "not_found" });
+    const removed = await remove(kc, actorId, id);
+    if (removed) audit(deps, { principalId: actorId, action, resource: id, scopeLabel: scopeId });
+    return removed ? ok({ ok: true }) : reply(404, { error: "not_found" });
   });
 
 const deleteCredential = removal("keychain.delete", (kc, actorId, id) => kc.remove(actorId, id));
 
-const listGrants = keychainRoute(async ({ res }, kc, { actorId, scopeId }) => {
+const listGrants = keychainRoute(async (_ctx, kc, { actorId, scopeId }) => {
   const mine = await kc.listGrants({ ownerId: actorId });
   const here = await kc.listGrants({ audienceScopeId: scopeId });
   const byId = new Map([...mine, ...here].map((g) => [g.id, g]));
-  return sendJson(res, 200, { grants: [...byId.values()] });
+  return ok({ grants: [...byId.values()] });
 });
 
 const revokeGrant = removal("keychain.revoke", (kc, actorId, id) => kc.revokeGrant(actorId, id));
 
 const createAsk = keychainRoute(async (ctx, kc, capability) => {
-  const { res, app, deps, body } = ctx;
+  const { app, deps, body } = ctx;
   const actorId = capability.actorId;
   const b = body as { credential?: unknown; purpose?: unknown; requestedMode?: unknown; expiresAt?: unknown };
   const expiresAt = normalizeInboundExpiresAt(b.expiresAt);
-  if (!expiresAt.ok) return sendJson(res, 400, { error: "bad_request", message: expiresAt.message });
+  if (!expiresAt.ok) throw fail(400, "bad_request", expiresAt.message);
   if (
     typeof b.credential !== "string" ||
     typeof b.purpose !== "string" ||
     (b.requestedMode !== undefined && b.requestedMode !== "once" && b.requestedMode !== "standing")
-  ) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: 'expected { credential, purpose, requestedMode?: "once"|"standing" }',
-    });
-  }
+  )
+    throw fail(400, "bad_request", 'expected { credential, purpose, requestedMode?: "once"|"standing" }');
   const scope = parseScopeId(capability.scopeId);
-  if (scope.kind !== "channel" && scope.kind !== "personal" && scope.kind !== "group") {
-    return sendJson(res, 403, { error: "forbidden", message: "asks require a personal or shared conversation" });
-  }
+  if (scope.kind !== "channel" && scope.kind !== "personal" && scope.kind !== "group")
+    throw fail(403, "forbidden", "asks require a personal or shared conversation");
   const cred = await kc.getCredential(b.credential);
-  if (!cred) return sendJson(res, 404, { error: "not_found", message: "unknown credential" });
+  if (!cred) throw fail(404, "not_found", "unknown credential");
   const requester = await app.directoryMember(actorId);
   if (
     !(await app.belongsToScope(actorId, capability.scopeId)) ||
     !(await app.belongsToScope(cred.ownerId, capability.scopeId)) ||
     (scope.kind !== "personal" &&
       (requester?.type !== "internal" || (await app.directoryMember(cred.ownerId))?.type !== "internal"))
-  ) {
-    return sendJson(res, 403, {
-      error: "forbidden",
-      message: "the requester and credential owner must have current access to this conversation",
-    });
-  }
+  )
+    throw fail(403, "forbidden", "the requester and credential owner must have current access to this conversation");
   const context = (await app.listContexts(cred.ownerId)).find((c) => c.scopeId === capability.scopeId);
   const cronId = cronIdOf(capability.threadRef);
   const cron = cronId ? await app.getCron(cronId) : null;
@@ -253,31 +237,31 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
       scopeLabel: capability.scopeId,
     });
   }
-  return sendJson(res, 200, { ask, existing });
+  return ok({ ask, existing });
 });
 
-const listAsks = keychainRoute(async ({ res }, kc, { actorId, scopeId }) => {
+const listAsks = keychainRoute(async (_ctx, kc, { actorId, scopeId }) => {
   const all = await kc.listAsks({});
   const asks = all.filter(
     (a) => samePerson(a.requesterId, actorId) || samePerson(a.ownerId, actorId) || a.requesterScopeId === scopeId,
   );
-  return sendJson(res, 200, { asks });
+  return ok({ asks });
 });
 
-async function handleApproval(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body, params } = ctx;
+async function handleApproval(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, body, params } = ctx;
   const b = (body ?? {}) as { principalId?: unknown; decision?: unknown };
   if (!deps.keychainApprovals || typeof b.principalId !== "string" || !b.principalId)
-    return sendJson(res, 404, { error: "not_found" });
+    return reply(404, { error: "not_found" });
   if (b.decision !== "once" && b.decision !== "standing" && b.decision !== "deny")
-    return sendJson(res, 400, {
+    return reply(400, {
       error: "bad_request",
       message: 'expected { principalId, decision: "once"|"standing"|"deny" }',
     });
   const { keychainApprovals } = deps;
   const decision = b.decision;
   const principalId = b.principalId;
-  return sendJson(res, 200, await keychainApprovals.decide(params.id!, { externalId: principalId }, decision));
+  return ok(await keychainApprovals.decide(params.id!, { externalId: principalId }, decision));
 }
 
 export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [

@@ -1,14 +1,13 @@
 import { samePerson } from "../../directory/person.ts";
-import { refusal, sendJson } from "../http.ts";
+import { refusal } from "../http.ts";
 import { isObj } from "./shared.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 
-async function listEnvironments(ctx: ApiCtx): Promise<void> {
-  const { res, app, capability } = ctx;
-  if (!capability)
-    return sendJson(res, 403, { error: "forbidden", message: "environments require an agent capability token" });
+async function listEnvironments(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, capability } = ctx;
+  if (!capability) return reply(403, { error: "forbidden", message: "environments require an agent capability token" });
   const rows = await app.listEnvironments();
-  return sendJson(res, 200, {
+  return ok({
     environments: rows.map(({ environment, attachments }) => ({
       id: environment.id,
       name: environment.name,
@@ -18,38 +17,35 @@ async function listEnvironments(ctx: ApiCtx): Promise<void> {
   });
 }
 
-async function createEnvironment(ctx: ApiCtx): Promise<void> {
-  const { res, app, body, capability } = ctx;
-  if (!capability)
-    return sendJson(res, 403, { error: "forbidden", message: "environments require an agent capability token" });
+async function createEnvironment(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, body, capability } = ctx;
+  if (!capability) return reply(403, { error: "forbidden", message: "environments require an agent capability token" });
   const name = isObj(body) && typeof body.name === "string" ? body.name.trim() : "";
-  if (!name) return sendJson(res, 400, { error: "bad_request", message: "name (string) required" });
+  if (!name) return reply(400, { error: "bad_request", message: "name (string) required" });
   try {
     const env = await app.createEnvironment({ scopeId: capability.scopeId, name, actorId: capability.actorId });
-    return sendJson(res, 200, { environment: { id: env.id, name: env.name, ownerActorId: env.ownerActorId } });
+    return ok({ environment: { id: env.id, name: env.name, ownerActorId: env.ownerActorId } });
   } catch (e) {
     throw refusal(400, "environment_create_failed", e);
   }
 }
 
-async function attachEnvironment(ctx: ApiCtx): Promise<void> {
-  const { res, app, body, capability } = ctx;
-  if (!capability)
-    return sendJson(res, 403, { error: "forbidden", message: "environments require an agent capability token" });
+async function attachEnvironment(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, body, capability } = ctx;
+  if (!capability) return reply(403, { error: "forbidden", message: "environments require an agent capability token" });
   const name = isObj(body) && typeof body.name === "string" ? body.name.trim() : "";
-  if (!name) return sendJson(res, 400, { error: "bad_request", message: "name (string) required" });
+  if (!name) return reply(400, { error: "bad_request", message: "name (string) required" });
   const env = await app.resolveEnvironmentByName(name);
-  if (!env) return sendJson(res, 404, { error: "environment_not_found", message: `no environment named "${name}"` });
-  if (env.ownerActorId && !samePerson(env.ownerActorId, capability.actorId)) {
-    return sendJson(res, 403, {
+  if (!env) return reply(404, { error: "environment_not_found", message: `no environment named "${name}"` });
+  if (env.ownerActorId && !samePerson(env.ownerActorId, capability.actorId))
+    return reply(403, {
       error: "owner_mediation_required",
       message: `environment "${name}" is owned by ${env.ownerActorId}. Ask them to attach this conversation to it (the same way you'd ask an owner for a credential grant) — only its owner can attach others.`,
       ownerActorId: env.ownerActorId,
     });
-  }
   try {
     await app.attachScope({ scopeId: capability.scopeId, environmentId: env.id, actorId: capability.actorId });
-    return sendJson(res, 200, { ok: true, environment: { id: env.id, name: env.name } });
+    return ok({ ok: true, environment: { id: env.id, name: env.name } });
   } catch (e) {
     throw refusal(400, "environment_attach_failed", e);
   }

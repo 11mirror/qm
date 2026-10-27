@@ -22,7 +22,7 @@ import {
   getDeploymentShares,
   setDeploymentDisplayName,
 } from "../src/api/routes/deployments.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+import { type ApiCtx, respond, type Route } from "../src/api/routes/route.ts";
 import { HttpError } from "../src/api/http.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { RecipientResolution } from "../src/directory/directory-store.ts";
@@ -103,7 +103,7 @@ function callShare(
     body,
     capability,
   } as unknown as ApiCtx;
-  return shareDeployment(ctx).then(
+  return respond(shareDeployment, ctx).then(
     () => out,
     (error: unknown) => {
       if (error instanceof HttpError) return { status: error.status, body: error.body };
@@ -118,7 +118,7 @@ const one = (principalId: string, displayName: string): RecipientResolution => (
 });
 
 function callManage(
-  handle: (ctx: ApiCtx) => Promise<void>,
+  handle: Route<ApiCtx>["handle"],
   app: ReturnType<typeof createApp>,
   capability: CapabilityClaims | null,
   id: string,
@@ -136,7 +136,7 @@ function callManage(
     },
   };
   const ctx = { res, app, deps: { featureFlags }, params: { id }, body, capability } as unknown as ApiCtx;
-  return handle(ctx).then(() => out);
+  return respond(handle, ctx).then(() => out);
 }
 
 function callDetail(app: ReturnType<typeof createApp>, capability: CapabilityClaims, id: string) {
@@ -160,7 +160,7 @@ function callDetail(app: ReturnType<typeof createApp>, capability: CapabilityCla
     url: new URL(`http://localhost/v1/deployments/${id}`),
     req: { headers: { host: "localhost" } },
   } as unknown as ApiCtx;
-  return getDeployment(ctx).then(() => out);
+  return respond(getDeployment, ctx).then(() => out);
 }
 
 test("manage endpoints (rename/display-name/archive): agent capability is owner-scoped, source auth is trusted", async () => {
@@ -761,7 +761,7 @@ test("exact email read grants admit app-only login and guest reach without membe
     let status: number | undefined;
     let body: unknown;
     const handle = authBrokerRoutes.find((r) => "path" in r && r.path.endsWith("email-allowed"))!.handle;
-    await handle({
+    await respond(handle, {
       app,
       deps: { identity, acl, featureFlags },
       url: new URL(`http://core/v1/auth/broker/email-allowed?email=${encodeURIComponent(email)}`),

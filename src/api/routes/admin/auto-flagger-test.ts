@@ -1,8 +1,7 @@
 import { swallow } from "../../../util/errors.ts";
-import { sendJson } from "../../http.ts";
 import { audit } from "../shared.ts";
 import { badRequest, orgAdmin } from "./common.ts";
-import type { ApiCtx } from "../route.ts";
+import { type ApiCtx, ok, reply, type RouteResult } from "../route.ts";
 import { securityScreenSystemPrompt, type SecurityScreenVerdict } from "../../../security/security-screen.ts";
 import { defaultAutoFlaggerConfig, parseAutoFlaggerDraft, type AutoFlaggerDraft } from "../admin-resources.ts";
 import type { ScreenSample } from "../../../sessions/session-store.ts";
@@ -76,21 +75,20 @@ async function replay(
   return { totals, verdicts, complete };
 }
 
-export async function testAutoFlagger(ctx: ApiCtx): Promise<void> {
+export async function testAutoFlagger(ctx: ApiCtx): Promise<RouteResult> {
   const scope = tenant().orgScope;
   const requestedScope = decodeURIComponent(ctx.params.scope ?? scope);
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
   const { actor } = authz;
-  if (requestedScope !== scope) return badRequest(ctx.res, "the Auto flagger is org-wide; request an org scope");
+  if (requestedScope !== scope) throw badRequest("the Auto flagger is org-wide; request an org scope");
   await ctx.deps.refreshModels?.();
   const body = (ctx.body ?? {}) as { window?: unknown; modelId?: unknown; rubric?: unknown; compare?: unknown };
   const requestedWindow = body.window === undefined ? DEFAULT_WINDOW : Number(body.window);
   if (!Number.isInteger(requestedWindow) || requestedWindow < 1 || requestedWindow > MAX_WINDOW)
-    return badRequest(ctx.res, `window must be an integer between 1 and ${MAX_WINDOW}`);
+    throw badRequest(`window must be an integer between 1 and ${MAX_WINDOW}`);
   const { sessions, screenSecurity, config: configStore } = ctx.deps;
   if (!sessions || !screenSecurity || !configStore)
-    return sendJson(ctx.res, 501, {
+    return reply(501, {
       error: "unsupported",
       message: "this deployment has no screening model wired, so the flagger cannot be tested",
     });
@@ -102,7 +100,7 @@ export async function testAutoFlagger(ctx: ApiCtx): Promise<void> {
   const parsed = draftGiven
     ? await parseAutoFlaggerDraft(ctx.deps, body)
     : ({ value: effective } as { value: AutoFlaggerDraft });
-  if ("error" in parsed) return badRequest(ctx.res, parsed.error);
+  if ("error" in parsed) throw badRequest(parsed.error);
   const candidate = parsed.value;
   const samples = await sessions.listScreenSamples(requestedWindow);
   const startedAt = Date.now();
@@ -116,7 +114,7 @@ export async function testAutoFlagger(ctx: ApiCtx): Promise<void> {
       status: "empty",
       detail: JSON.stringify({ window: requestedWindow, sampled: 0 }),
     });
-    return sendJson(ctx.res, 200, {
+    return ok({
       scopeId: scope,
       window: requestedWindow,
       sampled: 0,
@@ -179,5 +177,5 @@ export async function testAutoFlagger(ctx: ApiCtx): Promise<void> {
       compared: !!baseline,
     }),
   });
-  sendJson(ctx.res, 200, result);
+  return ok(result);
 }

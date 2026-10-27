@@ -5,7 +5,7 @@ import { finished } from "node:stream/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { brokerCredentialHttp } from "../src/api/credential-http-broker.ts";
 import { type BrokeredConnector, CAPABILITY_TTL_MS, CREDENTIAL_BROKER_AUD } from "../src/auth/capability-token.ts";
-import type { BaseCtx } from "../src/api/routes/route.ts";
+import { type BaseCtx, respond } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 
 function req(headers: Record<string, string>, body = ""): IncomingMessage {
@@ -102,7 +102,7 @@ test("git HTTP broker streams a smart-HTTP request through the pinned service cr
     },
   };
   const c = ctx("/v1/credentials/http/gitlab/acme/repo.git/git-receive-pack", "POST", deps, "PACK");
-  await brokerCredentialHttp(c);
+  await respond(brokerCredentialHttp, c);
 
   assert.equal(await text(c.res), "0000");
   assert.equal(c.res.statusCode, 200);
@@ -141,7 +141,7 @@ test("git HTTP broker sends a credential's fixed headers over a caller's case va
     },
   };
   const c = ctx("/v1/credentials/http/gitlab/acme/repo.git/git-receive-pack", "POST", deps, "PACK");
-  await brokerCredentialHttp(c);
+  await respond(brokerCredentialHttp, c);
   await text(c.res);
   assert.deepEqual(seen, {
     "content-type": "application/x-git-receive-pack-request",
@@ -172,7 +172,7 @@ test("git HTTP broker refuses an env-delivery record like a missing credential",
     },
   };
   const c = ctx("/v1/credentials/http/gitlab/acme/repo.git/info/refs?service=git-upload-pack", "GET", deps);
-  await brokerCredentialHttp(c);
+  await respond(brokerCredentialHttp, c);
   assert.equal(c.res.statusCode, 404);
   assert.equal(fetched, false, "no upstream git fetch happens");
 });
@@ -204,7 +204,7 @@ test("git HTTP broker refuses encoded parent traversal past the repo path", asyn
       },
     };
     const c = ctx(path, "GET", deps);
-    await brokerCredentialHttp(c);
+    await respond(brokerCredentialHttp, c);
     assert.equal(c.res.statusCode, 403, path);
     assert.match(await text(c.res), /path_not_allowed/);
     assert.equal(fetched, false, "no upstream git fetch happens");
@@ -233,7 +233,7 @@ test("git HTTP broker cannot use a Composio key for project-wide discovery or ex
       },
     } as unknown as ServerDeps;
     const c = ctx("/v1/credentials/http/gitlab/api/v3.1/connected_accounts", method, deps);
-    await brokerCredentialHttp(c);
+    await respond(brokerCredentialHttp, c);
     await text(c.res);
     assert.equal(c.res.statusCode, 403);
     assert.equal(contacted, false);
@@ -284,7 +284,7 @@ test("connected-app broker injects the owner's OAuth token for the connector hos
       connectors: [GMAIL],
     },
   );
-  await brokerCredentialHttp(c);
+  await respond(brokerCredentialHttp, c);
   assert.equal(await text(c.res), '{"ok":true}');
   assert.equal(c.res.statusCode, 201);
   assert.deepEqual(calls, [
@@ -314,7 +314,7 @@ test("connected-app broker needs the handle when two selected accounts share a h
       connectors: [GMAIL, company],
     },
   );
-  await brokerCredentialHttp(ambiguous);
+  await respond(brokerCredentialHttp, ambiguous);
   assert.equal(ambiguous.res.statusCode, 409);
   assert.match(await text(ambiguous.res), /ambiguous_connector/);
   const named = ctx(
@@ -324,7 +324,7 @@ test("connected-app broker needs the handle when two selected accounts share a h
     "",
     { headers: {}, connectors: [GMAIL, company] },
   );
-  await brokerCredentialHttp(named);
+  await respond(brokerCredentialHttp, named);
   await text(named.res);
   assert.equal(calls.length, 1);
   assert.equal(calls[0]!.headers.authorization, "Bearer tok:gmail.googleapis.com:U1:company");
@@ -342,7 +342,7 @@ test("connected-app broker refuses revoked grants, lost tokens, and hosts the ca
     "",
     { headers: {}, connectors: [granted] },
   );
-  await brokerCredentialHttp(revoked);
+  await respond(brokerCredentialHttp, revoked);
   assert.equal(revoked.res.statusCode, 403);
   assert.match(await text(revoked.res), /grant_revoked/);
 
@@ -355,7 +355,7 @@ test("connected-app broker refuses revoked grants, lost tokens, and hosts the ca
     "",
     { headers: {}, connectors: [GMAIL] },
   );
-  await brokerCredentialHttp(lost);
+  await respond(brokerCredentialHttp, lost);
   assert.equal(lost.res.statusCode, 410);
   assert.match(await text(lost.res), /connector_unavailable/);
 
@@ -363,7 +363,7 @@ test("connected-app broker refuses revoked grants, lost tokens, and hosts the ca
     headers: {},
     connectors: [GMAIL],
   });
-  await brokerCredentialHttp(other);
+  await respond(brokerCredentialHttp, other);
   assert.ok(other.res.statusCode >= 400);
   await text(other.res);
   assert.deepEqual(calls, [], "no upstream request is made");

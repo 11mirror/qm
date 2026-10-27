@@ -8,12 +8,11 @@ import {
   request,
   stillAuthorized,
 } from "./composio.ts";
-import { sendJson } from "../http.ts";
 import { sniffImageDimensions } from "../../core/image-downscale.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { audit } from "./shared.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const CHUNK_BYTES = 2 * 1024 * 1024;
@@ -55,8 +54,8 @@ async function xMedia(
   return data && typeof data === "object" ? (data as Record<string, unknown>) : {};
 }
 
-async function uploadMedia(ctx: ApiCtx): Promise<void> {
-  if (!ctx.capability || ctx.actor) return sendJson(ctx.res, 403, { error: "agent_capability_required" });
+async function uploadMedia(ctx: ApiCtx): Promise<RouteResult> {
+  if (!ctx.capability || ctx.actor) return reply(403, { error: "agent_capability_required" });
   const access = await credential(ctx);
   if (!access) return;
   const body = ctx.body as Record<string, unknown> | null;
@@ -68,20 +67,20 @@ async function uploadMedia(ctx: ApiCtx): Promise<void> {
     typeof body.data !== "string" ||
     !body.data
   )
-    return sendJson(ctx.res, 400, {
+    return reply(400, {
       error: "invalid_upload",
       message: "Supply accountId and the image as base64 data only.",
     });
   if (body.data.length > Math.ceil(MAX_IMAGE_BYTES / 3) * 4)
-    return sendJson(ctx.res, 413, { error: "media_too_large", message: "Images must be 5 MB or smaller." });
+    return reply(413, { error: "media_too_large", message: "Images must be 5 MB or smaller." });
   const bytes = Buffer.from(body.data, "base64");
   if (bytes.toString("base64") !== body.data)
-    return sendJson(ctx.res, 400, { error: "invalid_upload", message: "data must be standard padded base64." });
+    return reply(400, { error: "invalid_upload", message: "data must be standard padded base64." });
   if (bytes.length > MAX_IMAGE_BYTES)
-    return sendJson(ctx.res, 413, { error: "media_too_large", message: "Images must be 5 MB or smaller." });
+    return reply(413, { error: "media_too_large", message: "Images must be 5 MB or smaller." });
   const format = sniffImageDimensions(bytes)?.format;
   if (!format || format === "gif")
-    return sendJson(ctx.res, 415, { error: "unsupported_media", message: "Upload a PNG, JPEG, or WebP image." });
+    return reply(415, { error: "unsupported_media", message: "Upload a PNG, JPEG, or WebP image." });
   const mediaType = `image/${format}`;
   const accountId = body.accountId;
   const resource = `${accountId}/media`;
@@ -95,7 +94,7 @@ async function uploadMedia(ctx: ApiCtx): Promise<void> {
     });
   try {
     const owned = await ownedAccount(ctx, access, accountId);
-    if (!activeAccount(owned, "twitter")) return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
+    if (!activeAccount(owned, "twitter")) return reply(403, { error: "connection_not_authorized" });
     if (!(await stillAuthorized(ctx, access.principal, owned.account))) return;
     auditUpload("started");
     const started = await xMedia(ctx, access.key, accountId, `${X_MEDIA_UPLOAD}/initialize`, {
@@ -116,7 +115,7 @@ async function uploadMedia(ctx: ApiCtx): Promise<void> {
     const finished = await xMedia(ctx, access.key, accountId, `${X_MEDIA_UPLOAD}/${mediaId}/finalize`);
     if (finished.id !== mediaId) throw new Error("Media id changed during upload");
     auditUpload("completed", `${resource}/${mediaId}`);
-    return sendJson(ctx.res, 200, {
+    return ok({
       mediaId,
       mediaType,
       bytes: bytes.length,
@@ -130,7 +129,7 @@ async function uploadMedia(ctx: ApiCtx): Promise<void> {
       error instanceof XMediaError && error.detail
         ? createExactSecretValueMasker([access.key])(redactSecrets(error.detail)).slice(0, 300)
         : "";
-    return sendJson(ctx.res, 502, {
+    return reply(502, {
       error: "media_upload_failed",
       ...(status ? { providerStatus: status } : {}),
       ...(detail ? { providerDetail: detail } : {}),

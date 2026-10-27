@@ -1,6 +1,5 @@
-import { sendJson } from "../http.ts";
 import { audit, isObj } from "./shared.ts";
-import { type ApiCtx, type Route } from "./route.ts";
+import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 import type { IngestEvent } from "../../surface-cache/surface-cache.ts";
 import { tenant } from "../../tenant.ts";
 
@@ -53,12 +52,12 @@ export function toEvent(raw: unknown): IngestEvent | null {
   };
 }
 
-async function ingestSurfaceEvents(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps, body } = ctx;
+async function ingestSurfaceEvents(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, deps, body } = ctx;
   const b = isObj(body) ? body : {};
   const surface = typeof b.surface === "string" && b.surface ? b.surface : "slack";
   const events = Array.isArray(b.events) ? b.events.map(toEvent).filter((e): e is IngestEvent => e !== null) : [];
-  if (!events.length) return sendJson(res, 400, { error: "bad_request", message: "events[] required" });
+  if (!events.length) return reply(400, { error: "bad_request", message: "events[] required" });
   const sb = isObj(b.self) ? b.self : {};
   const self =
     typeof sb.name === "string" || typeof sb.mentionId === "string"
@@ -74,7 +73,7 @@ async function ingestSurfaceEvents(ctx: ApiCtx): Promise<void> {
     resource: "surface_cache",
     scopeLabel: tenant().orgScope,
   });
-  return sendJson(res, 200, { ok: true, upserted });
+  return ok({ ok: true, upserted });
 }
 
 export const surfaceCacheRoutes: ReadonlyArray<Route<ApiCtx>> = [

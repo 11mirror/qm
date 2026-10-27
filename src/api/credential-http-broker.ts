@@ -11,8 +11,8 @@ import {
   upstreamFailureCode,
   upstreamUnreachable,
 } from "./credential-broker.ts";
-import { pipeToResponse, sendJson } from "./http.ts";
-import type { BaseCtx } from "./routes/route.ts";
+import { pipeToResponse } from "./http.ts";
+import { type BaseCtx, reply, type RouteResult } from "./routes/route.ts";
 import { HOP_BY_HOP, proxyHeaders } from "../util/http-proxy.ts";
 import { tenant } from "../tenant.ts";
 
@@ -114,13 +114,13 @@ interface BrokeredTarget {
   headers: Record<string, string>;
 }
 
-export async function brokerCredentialHttp(ctx: BaseCtx): Promise<void> {
+export async function brokerCredentialHttp(ctx: BaseCtx): Promise<RouteResult> {
   const parsed = parseBrokerPath(ctx.pathname);
-  if (!parsed) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!parsed) return reply(404, { error: "not_found" });
   const { ref, upstreamPath } = parsed;
   const method = ctx.method.toUpperCase();
   const claims = ctx.capability;
-  if (!claims) return sendJson(ctx.res, 401, { error: "unauthorized" });
+  if (!claims) return reply(401, { error: "unauthorized" });
 
   const sinks = brokerSinks(ctx.deps);
   const record = (
@@ -129,14 +129,14 @@ export async function brokerCredentialHttp(ctx: BaseCtx): Promise<void> {
     host: string,
     extra: { detail?: string; upstreamStatus?: number } = {},
   ): void => recordBrokerOutcome(sinks, claims, "http", { slug, host, status, ...extra });
-  const deny = (status: number, code: string, message: string, slug: string, host: string): void => {
+  const deny = (status: number, code: string, message: string, slug: string, host: string): RouteResult => {
     record("denied", slug, host, { detail: code });
-    sendJson(ctx.res, status, { error: code, message });
+    return reply(status, { error: code, message });
   };
 
   let target: BrokeredTarget;
   const match = connectorFor(claims, ref);
-  if (match && "ambiguous" in match) {
+  if (match && "ambiguous" in match)
     return deny(
       409,
       "ambiguous_connector",
@@ -144,7 +144,6 @@ export async function brokerCredentialHttp(ctx: BaseCtx): Promise<void> {
       ref,
       ref,
     );
-  }
   if (match) {
     const { connector } = match;
     if (!CONNECTOR_METHODS.has(method))
@@ -165,7 +164,7 @@ export async function brokerCredentialHttp(ctx: BaseCtx): Promise<void> {
       connector.ownerId,
       connector.accountType,
     );
-    if (!token) {
+    if (!token)
       return deny(
         410,
         "connector_unavailable",
@@ -173,7 +172,6 @@ export async function brokerCredentialHttp(ctx: BaseCtx): Promise<void> {
         connector.handle,
         connector.host,
       );
-    }
     target = {
       slug: connector.handle,
       host: connector.host,
@@ -181,7 +179,7 @@ export async function brokerCredentialHttp(ctx: BaseCtx): Promise<void> {
       headers: { ...callerHeaders(ctx, true), authorization: `Bearer ${token}` },
     };
   } else {
-    if (!isValidCredentialSlug(ref) || !ctx.deps.serviceCreds) return sendJson(ctx.res, 404, { error: "not_found" });
+    if (!isValidCredentialSlug(ref) || !ctx.deps.serviceCreds) return reply(404, { error: "not_found" });
     const grant = await grantedCredential(claims, ref, ctx.deps.serviceCreds, tenant().orgScope);
     if (!grant.rec) return deny(grant.status, grant.code, grant.message, ref, grant.host);
     const { rec } = grant;
@@ -212,7 +210,7 @@ export async function brokerCredentialHttp(ctx: BaseCtx): Promise<void> {
   } catch (error) {
     const detail = upstreamFailureCode(error);
     record("error", target.slug, target.host, { detail });
-    return sendJson(ctx.res, 502, upstreamUnreachable(detail));
+    return reply(502, upstreamUnreachable(detail));
   }
 
   record("ok", target.slug, target.host, { upstreamStatus: upstreamResp.status });

@@ -25,7 +25,7 @@ import { BackgroundOwnershipConflict } from "../runs/background-ownership.ts";
 import { ByteSourceTooLargeError } from "../files/durable-byte-store.ts";
 import { createRouter, run, type AdminAccess, type BaseCtx, type Route } from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
-import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
+import { proxyDeploymentSubdomain } from "./routes/deployment-subdomain.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";

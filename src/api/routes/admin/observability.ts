@@ -1,6 +1,5 @@
 import { type ScopeId } from "../../../types.ts";
-import { sendJson } from "../../http.ts";
-import { type ApiCtx } from "../route.ts";
+import { type ApiCtx, ok, type RouteResult } from "../route.ts";
 import { badRequest, scopedAdmin } from "./common.ts";
 
 const EGRESS_LIST_LIMIT = 1000;
@@ -9,10 +8,9 @@ const ERRORS_LIST_LIMIT = 200;
 const AUDIT_TAIL_LIMIT = 200;
 const AUDIT_FILTERED_LIMIT = 2000;
 
-export async function egress(ctx: ApiCtx): Promise<void> {
-  const { res, deps } = ctx;
+export async function egress(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps } = ctx;
   const authz = await scopedAdmin(ctx, "egress");
-  if (!authz) return;
   const { scope, orgWide } = authz;
   const q = orgWide ? { limit: EGRESS_LIST_LIMIT } : { scopeId: scope, limit: EGRESS_LIST_LIMIT };
   const brokerRows = ((await deps.credentialUsage?.list(q)) ?? []).map((s) => ({
@@ -42,13 +40,12 @@ export async function egress(ctx: ApiCtx): Promise<void> {
   const denied = records.filter((r) => !r.allowed).length;
   const hosts = new Set(records.map((r) => r.host).filter(Boolean)).size;
   const bySource = { broker: brokerRows.length, firewall: firewallRows.length };
-  return sendJson(res, 200, { scopeId: scope, records, total: records.length, denied, hosts, bySource });
+  return ok({ scopeId: scope, records, total: records.length, denied, hosts, bySource });
 }
 
-export async function listAdminRuns(ctx: ApiCtx): Promise<void> {
-  const { res, deps } = ctx;
+export async function listAdminRuns(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps } = ctx;
   const authz = await scopedAdmin(ctx, "runs");
-  if (!authz) return;
   const { scope, orgWide } = authz;
   const rawRuns = (await deps.runs?.list({ limit: RUNS_LIST_LIMIT })) ?? [];
   const byThread = new Map(
@@ -75,13 +72,12 @@ export async function listAdminRuns(ctx: ApiCtx): Promise<void> {
     })
     .filter((r) => orgWide || r.sessionScope === scope)
     .sort((a, b) => Number(ACTIVE.has(b.status)) - Number(ACTIVE.has(a.status)) || b.createdAt - a.createdAt);
-  return sendJson(res, 200, { scopeId: scope, active: runs.filter((r) => ACTIVE.has(r.status)).length, runs });
+  return ok({ scopeId: scope, active: runs.filter((r) => ACTIVE.has(r.status)).length, runs });
 }
 
-export async function listAdminErrors(ctx: ApiCtx): Promise<void> {
-  const { res, deps, url } = ctx;
+export async function listAdminErrors(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, url } = ctx;
   const authz = await scopedAdmin(ctx, "errors");
-  if (!authz) return;
   const { scope, orgWide } = authz;
   const sessionId = url.searchParams.get("sessionId") || undefined;
   const filters = {
@@ -91,20 +87,19 @@ export async function listAdminErrors(ctx: ApiCtx): Promise<void> {
   const rawLimit = Number(url.searchParams.get("limit") ?? ERRORS_LIST_LIMIT);
   const rawOffset = Number(url.searchParams.get("offset") ?? 0);
   if (!Number.isSafeInteger(rawLimit) || rawLimit < 1 || !Number.isSafeInteger(rawOffset) || rawOffset < 0)
-    return badRequest(res, "limit must be a positive integer and offset a non-negative integer.");
+    throw badRequest("limit must be a positive integer and offset a non-negative integer.");
   const limit = Math.min(rawLimit, ERRORS_LIST_LIMIT);
   const total = (await deps.errors?.count(filters)) ?? 0;
-  if (url.searchParams.get("count")) return sendJson(res, 200, { scopeId: scope, total });
+  if (url.searchParams.get("count")) return ok({ scopeId: scope, total });
   const lastOffset = total ? Math.floor((total - 1) / limit) * limit : 0;
   const offset = Math.min(rawOffset, lastOffset);
   const errors = (await deps.errors?.list({ ...filters, limit, offset })) ?? [];
-  return sendJson(res, 200, { scopeId: scope, errors, total, limit, offset });
+  return ok({ scopeId: scope, errors, total, limit, offset });
 }
 
-export async function listAdminAudit(ctx: ApiCtx): Promise<void> {
-  const { res, deps } = ctx;
+export async function listAdminAudit(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps } = ctx;
   const authz = await scopedAdmin(ctx, "audit");
-  if (!authz) return;
   const { scope, orgWide } = authz;
   const action = ctx.url.searchParams.get("action") ?? undefined;
   const resourceContains = ctx.url.searchParams.get("resource") ?? undefined;
@@ -127,5 +122,5 @@ export async function listAdminAudit(ctx: ApiCtx): Promise<void> {
     resource: e.resource,
     ...(e.status ? { status: e.status } : {}),
   }));
-  return sendJson(res, 200, { scopeId: scope, events });
+  return ok({ scopeId: scope, events });
 }

@@ -1,9 +1,9 @@
 import { isPrincipalType, PRINCIPAL_TYPES } from "../../types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
 import { canonicalPerson } from "../../directory/person.ts";
-import { sendJson } from "../http.ts";
+import { fail } from "../http.ts";
 import { audit, isObj } from "./shared.ts";
-import { withActor, type ApiCtx, type Route } from "./route.ts";
+import { type ApiCtx, ok, reply, type Route, type RouteResult, withActor } from "./route.ts";
 import { tenant } from "../../tenant.ts";
 
 const numOrUndef = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
@@ -22,11 +22,11 @@ function memberships<K extends "channelId" | "groupId">(
   );
 }
 
-function setPrincipalActive(active: boolean): (ctx: ApiCtx) => Promise<void> {
-  return async ({ res, deps, params }) => {
-    if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
+function setPrincipalActive(active: boolean): (ctx: ApiCtx) => Promise<RouteResult> {
+  return async ({ deps, params }) => {
+    if (!deps.identity) throw fail(404, "not_found");
     const id = params.id!;
-    if (!id) return sendJson(res, 404, { error: "not_found" });
+    if (!id) throw fail(404, "not_found");
     await (active ? deps.identity.reactivate(id) : deps.identity.deactivate(id));
     audit(deps, {
       principalId: id,
@@ -34,27 +34,26 @@ function setPrincipalActive(active: boolean): (ctx: ApiCtx) => Promise<void> {
       resource: "principal",
       scopeLabel: tenant().orgScope,
     });
-    return sendJson(res, 200, { ok: true, principalId: id, active });
+    return ok({ ok: true, principalId: id, active });
   };
 }
 
-async function canonicalPrincipal(ctx: ApiCtx): Promise<void> {
-  const { res, deps } = ctx;
+async function canonicalPrincipal(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps } = ctx;
   const id = ctx.params.id!;
-  if (!id) return sendJson(res, 404, { error: "not_found" });
+  if (!id) return reply(404, { error: "not_found" });
   await deps.identity?.refresh(true);
-  return sendJson(res, 200, { principalId: id, canonicalId: canonicalPerson(id) });
+  return ok({ principalId: id, canonicalId: canonicalPerson(id) });
 }
 
-async function pushDirectory(ctx: ApiCtx): Promise<void> {
-  const { res, app, body } = ctx;
+async function pushDirectory(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, body } = ctx;
   const b = body as Record<string, unknown>;
-  if (!Array.isArray(b.members) && !Array.isArray(b.channels) && !Array.isArray(b.groupMembers)) {
-    return sendJson(res, 400, {
+  if (!Array.isArray(b.members) && !Array.isArray(b.channels) && !Array.isArray(b.groupMembers))
+    return reply(400, {
       error: "bad_request",
       message: "members[], channels[], and/or groupMembers[] required",
     });
-  }
   if (
     b.partialChannels !== undefined &&
     (typeof b.partialChannels !== "boolean" ||
@@ -62,18 +61,16 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
         (!Array.isArray(b.channels) ||
           !Array.isArray(b.channelMembers) ||
           numOrUndef(b.channelsSyncedAt) === undefined)))
-  ) {
-    return sendJson(res, 400, {
+  )
+    return reply(400, {
       error: "bad_request",
       message: "partial channels require channels[], channelMembers[] and channelsSyncedAt",
     });
-  }
-  if (Array.isArray(b.members) && b.members.some((m) => isObj(m) && !isPrincipalType(m.type))) {
-    return sendJson(res, 400, {
+  if (Array.isArray(b.members) && b.members.some((m) => isObj(m) && !isPrincipalType(m.type)))
+    return reply(400, {
       error: "bad_request",
       message: `member type must be one of: ${PRINCIPAL_TYPES.join(", ")}`,
     });
-  }
   if (typeof b.workspaceUrl === "string" && /^https:\/\/[^\s/]+$/.test(b.workspaceUrl.replace(/\/+$/, ""))) {
     await app.setDirectoryWorkspaceUrl(b.workspaceUrl.replace(/\/+$/, ""));
   }
@@ -108,7 +105,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
       Array.isArray(b.channelRevocations) ? memberships(b.channelRevocations, "channelId") : undefined,
       b.partialChannels === true,
     );
-    if (b.partialChannels && !applied) return sendJson(res, 409, { error: "stale_directory_observation" });
+    if (b.partialChannels && !applied) return reply(409, { error: "stale_directory_observation" });
     channelCount = channels.length;
   }
   let groupMemberCount: number | undefined;
@@ -117,7 +114,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
     await app.upsertGroups(groupMembers, numOrUndef(b.groupsSyncedAt), strings(b.groupIds), strings(b.groupRosterIds));
     groupMemberCount = groupMembers.length;
   }
-  return sendJson(res, 200, {
+  return ok({
     ok: true,
     ...(memberCount !== undefined ? { members: memberCount } : {}),
     ...(channelCount !== undefined ? { channels: channelCount } : {}),
@@ -125,15 +122,15 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
   });
 }
 
-async function directoryMeta({ res, app }: ApiCtx): Promise<void> {
-  return sendJson(res, 200, await app.directoryMeta());
+async function directoryMeta({ app }: ApiCtx): Promise<RouteResult> {
+  return ok(await app.directoryMeta());
 }
 
 const SLACK_ID_RE = /^[UW][A-Z0-9]{8,}$/;
-async function resolveDirectory(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
+async function resolveDirectory(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, url } = ctx;
   const q = (url.searchParams.get("q") ?? "").trim();
-  if (!q) return sendJson(res, 400, { error: "bad_request", message: "q (a name to resolve) required" });
+  if (!q) return reply(400, { error: "bad_request", message: "q (a name to resolve) required" });
   const r = await app.resolveRecipient(q);
   let found: DirectoryMember[] = [];
   if (r.kind === "one") found = [r.member];
@@ -142,11 +139,11 @@ async function resolveDirectory(ctx: ApiCtx): Promise<void> {
     const slackId = m.slackId ?? (SLACK_ID_RE.test(m.principalId) ? m.principalId : undefined);
     return slackId ? { ...m, slackId } : m;
   });
-  return sendJson(res, 200, { matches });
+  return ok({ matches });
 }
 
-async function channelMembership(ctx: ApiCtx): Promise<void> {
-  return sendJson(ctx.res, 200, {
+async function channelMembership(ctx: ApiCtx): Promise<RouteResult> {
+  return ok({
     member: await ctx.app.channelMember(ctx.params.channelId!, ctx.params.principalId!),
   });
 }

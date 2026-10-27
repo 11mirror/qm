@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { postInstructions } from "../src/api/routes/surface.ts";
+import { postInstructions } from "../src/api/routes/surface-config.ts";
 import { InstructionsTooLargeError, MAX_INSTRUCTIONS_CHARS } from "../src/resolution/config-store.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+import { type ApiCtx, respond } from "../src/api/routes/route.ts";
 
 test("every instructions write path refuses content over the limit with payload_too_large", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "instructions-size-")) }));
@@ -28,7 +28,7 @@ test("every instructions write path refuses content over the limit with payload_
       out.body = data ? JSON.parse(data) : undefined;
     },
   };
-  await postInstructions({
+  await respond(postInstructions, {
     res,
     app: built.app,
     body: { content: tooLong },

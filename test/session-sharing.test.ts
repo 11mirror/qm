@@ -10,7 +10,7 @@ import type { AddressInfo } from "node:net";
 import { sharedMessages, type SessionShare } from "../src/sessions/session-share.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { sessionSharingRoutes } from "../src/api/routes/session-sharing.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+import { type ApiCtx, respond } from "../src/api/routes/route.ts";
 import { scopeId } from "../src/types.ts";
 import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 import { testMap } from "./support/test-database.ts";
@@ -138,7 +138,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
     }
     let body = "";
     for await (const chunk of req) body += chunk;
-    await route.handle({
+    await respond(route.handle, {
       req,
       res,
       method,

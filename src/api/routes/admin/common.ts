@@ -1,10 +1,9 @@
 import type { App } from "../../app.ts";
 import type { ServerDeps } from "../../deps.ts";
 import { parseScopeId, scopeId as makeScopeId, type Principal } from "../../../types.ts";
-import type { ServerResponse } from "node:http";
-import { sendJson } from "../../http.ts";
+import { fail, type HttpError } from "../../http.ts";
 import { audit, authorizeAdmin, requireScopedAdmin } from "../shared.ts";
-import { type ApiCtx } from "../route.ts";
+import type { ApiCtx } from "../route.ts";
 import { tenant } from "../../../tenant.ts";
 import { ALL_PROVIDERS_AVAILABLE, type ModelProviderAvailability } from "../../../model/pi-models.ts";
 
@@ -29,23 +28,20 @@ function authorized(ctx: ApiCtx, actor: Principal, scope: string, read?: string)
   return authz;
 }
 
-export async function adminAt(ctx: ApiCtx, scope: string, read?: string): Promise<AdminAuthz | null> {
-  const actor = await authorizeAdmin(ctx, scope);
-  return actor && authorized(ctx, actor, scope, read);
+export async function adminAt(ctx: ApiCtx, scope: string, read?: string): Promise<AdminAuthz> {
+  return authorized(ctx, await authorizeAdmin(ctx, scope), scope, read);
 }
 
-export const orgAdmin = (ctx: ApiCtx, read?: string): Promise<AdminAuthz | null> =>
-  adminAt(ctx, tenant().orgScope, read);
+export const orgAdmin = (ctx: ApiCtx, read?: string): Promise<AdminAuthz> => adminAt(ctx, tenant().orgScope, read);
 
-export async function scopedAdmin(ctx: ApiCtx, read?: string): Promise<AdminAuthz | null> {
+export async function scopedAdmin(ctx: ApiCtx, read?: string): Promise<AdminAuthz> {
   const authz = await requireScopedAdmin(ctx);
-  return authz && authorized(ctx, authz.actor, authz.scope, read);
+  return authorized(ctx, authz.actor, authz.scope, read);
 }
 
-export const badRequest = (res: ServerResponse, message: string): void =>
-  sendJson(res, 400, { error: "bad_request", message });
+export const badRequest = (message: string): HttpError => fail(400, "bad_request", message);
 
-export const notFound = (res: ServerResponse): void => sendJson(res, 404, { error: "not_found" });
+export const notFound = (): HttpError => fail(404, "not_found");
 
 export const limitParam = (url: URL, fallback: number, max: number): number =>
   Math.min(max, Math.max(1, Math.floor(Number(url.searchParams.get("limit"))) || fallback));
@@ -81,20 +77,13 @@ export async function requireScopedResource<T, K extends StringKey<T>>(
   scopeKey: K,
   noun: string,
   scopeMismatch: "forbid" | "fallback" = "forbid",
-): Promise<(AdminAuthz & { record: T }) | null> {
+): Promise<AdminAuthz & { record: T }> {
   const authz = await scopedAdmin(ctx);
-  if (!authz) return null;
   const record = await load();
-  if (!record) {
-    notFound(ctx.res);
-    return null;
-  }
+  if (!record) throw notFound();
   const recordScope = record[scopeKey] as string;
   if (authz.orgWide || recordScope === authz.scope) return { ...authz, record };
-  if (scopeMismatch === "forbid") {
-    sendJson(ctx.res, 403, { error: "forbidden", message: `${noun} is outside the requested scope` });
-    return null;
-  }
+  if (scopeMismatch === "forbid") throw fail(403, "forbidden", `${noun} is outside the requested scope`);
   return { ...authorized(ctx, authz.actor, recordScope), record };
 }
 

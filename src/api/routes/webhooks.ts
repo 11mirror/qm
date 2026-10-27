@@ -2,9 +2,9 @@ import type { Webhook } from "../../types.ts";
 import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
 import type { CreateWebhookInput } from "../../webhooks/webhook-store.ts";
 import { canAdministerWebhook, editWebhookTask } from "../control-service.ts";
-import { readRawBody, refusal, sendJson } from "../http.ts";
+import { fail, readRawBody, refusal } from "../http.ts";
 import { isObj } from "./shared.ts";
-import type { ApiCtx, BaseCtx, Route } from "./route.ts";
+import { type ApiCtx, type BaseCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 
 function isCreateWebhook(b: unknown): b is CreateWebhookInput {
   if (!isObj(b)) return false;
@@ -44,11 +44,11 @@ export function redactWebhook(w: Webhook): Webhook {
   return { ...w, verification: { ...w.verification, secret: "***" } };
 }
 
-async function incomingWebhook(ctx: BaseCtx): Promise<void> {
+async function incomingWebhook(ctx: BaseCtx): Promise<RouteResult> {
   const { req, res, deps, params } = ctx;
   if (!deps.webhookReceiver) {
     req.resume();
-    return sendJson(res, 404, { error: "not_found" });
+    return reply(404, { error: "not_found" });
   }
   const out = await deps.webhookReceiver.deliver(params.id!, { headers: req.headers, rawBody: await readRawBody(req) });
   if (out.status === 200) {
@@ -56,27 +56,25 @@ async function incomingWebhook(ctx: BaseCtx): Promise<void> {
     res.end(out.body);
     return;
   }
-  if (out.status === 202) return sendJson(res, 202, { ok: true });
-  if (out.status === 401)
-    return sendJson(res, 401, { error: "unauthorized", message: "signature verification failed" });
-  return sendJson(res, 404, { error: "not_found" });
+  if (out.status === 202) return reply(202, { ok: true });
+  if (out.status === 401) return reply(401, { error: "unauthorized", message: "signature verification failed" });
+  return reply(404, { error: "not_found" });
 }
 
-async function createWebhook(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps, body } = ctx;
+async function createWebhook(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, deps, body } = ctx;
   const v = isObj(body) ? body.verification : undefined;
   if (isObj(body) && (!isObj(v) || typeof v.scheme !== "string"))
-    return sendJson(res, 400, { error: "unsupported_verification", message: "verification requires a scheme" });
+    return reply(400, { error: "unsupported_verification", message: "verification requires a scheme" });
   if (isObj(body) && body.filters !== undefined && !isWebhookFilters(body.filters))
-    return sendJson(res, 400, {
+    return reply(400, {
       error: "invalid_filters",
       message: "every filter requires a path and at least one value",
     });
-  if (!isCreateWebhook(body))
-    return sendJson(res, 400, { error: "bad_request", message: "expected a CreateWebhookInput" });
+  if (!isCreateWebhook(body)) return reply(400, { error: "bad_request", message: "expected a CreateWebhookInput" });
   try {
     const webhook = await app.createWebhook(body);
-    return sendJson(res, 200, { webhook, url: inboundUrl(deps.publicUrl, webhook.id) });
+    return ok({ webhook, url: inboundUrl(deps.publicUrl, webhook.id) });
   } catch (e) {
     throw refusal(400, "webhook_create_failed", e);
   }
@@ -89,8 +87,8 @@ function inboundUrl(publicBase: string | undefined, id: string): string {
   return publicBase ? `${publicBase.replace(/\/$/, "")}${incomingPath}` : incomingPath;
 }
 
-async function listWebhooks(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps, actor, url } = ctx;
+async function listWebhooks(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, deps, actor, url } = ctx;
   const all = await app.listWebhooks();
   const viewer = actor?.p ?? url.searchParams.get("viewer");
   const isViewer = viewer ? await app.personMatcher(viewer) : undefined;
@@ -98,48 +96,47 @@ async function listWebhooks(ctx: ApiCtx): Promise<void> {
     ? await Promise.all(all.map((webhook) => canAdministerWebhook(app, webhook, viewer, isViewer)))
     : all.map(() => true);
   const visible = all.filter((_webhook, index) => allowed[index]);
-  return sendJson(res, 200, {
+  return ok({
     webhooks: visible.map((webhook) => ({ ...redactWebhook(webhook), url: inboundUrl(deps.publicUrl, webhook.id) })),
   });
 }
 
-async function listWebhookEvents(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, actor, url } = ctx;
+async function listWebhookEvents(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, params, actor, url } = ctx;
   const webhook = await app.getWebhook(params.id!);
   const viewer = actor?.p ?? url.searchParams.get("viewer");
-  if (!viewer || !webhook || !(await canAdministerWebhook(app, webhook, viewer))) {
-    return sendJson(res, 404, { error: "not_found" });
-  }
-  return sendJson(res, 200, { events: await app.listWebhookEvents(webhook.id, viewer) });
+  if (!viewer || !webhook || !(await canAdministerWebhook(app, webhook, viewer)))
+    return reply(404, { error: "not_found" });
+  return ok({ events: await app.listWebhookEvents(webhook.id, viewer) });
 }
 
 const setWebhookEnabled =
   (enabled: boolean) =>
-  async (ctx: ApiCtx): Promise<void> => {
-    const { res, app, params, actor, url } = ctx;
+  async (ctx: ApiCtx): Promise<RouteResult> => {
+    const { app, params, actor, url } = ctx;
     const id = params.id!;
     const webhook = await app.getWebhook(id);
-    if (!webhook) return sendJson(res, 404, { error: "not_found" });
+    if (!webhook) throw fail(404, "not_found");
     const principalId = actor?.p ?? url.searchParams.get("principalId");
     if (principalId && !(await canAdministerWebhook(app, webhook, principalId))) {
       const portalCaller = Boolean(actor);
-      return sendJson(res, portalCaller ? 403 : 404, {
+      return reply(portalCaller ? 403 : 404, {
         error: portalCaller ? "forbidden" : "not_found",
         ...(portalCaller ? { message: "not your webhook" } : {}),
       });
     }
     await app.setWebhookEnabled(id, enabled);
-    return sendJson(res, 200, { ok: true });
+    return ok({ ok: true });
   };
 
-async function updateWebhook(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps, params, actor, url, body } = ctx;
+async function updateWebhook(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, deps, params, actor, url, body } = ctx;
   const action = isObj(body) && typeof body.action === "string" ? body.action : "";
   const principalId = actor?.p ?? url.searchParams.get("principalId");
-  if (!principalId) return sendJson(res, 404, { error: "not_found" });
+  if (!principalId) return reply(404, { error: "not_found" });
   const r = await editWebhookTask(app, params.id!, action, principalId);
-  if (!r.ok) return sendJson(res, WEBHOOK_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
-  return sendJson(res, 200, { webhook: redactWebhook(r.webhook), url: inboundUrl(deps.publicUrl, r.webhook.id) });
+  if (!r.ok) return reply(WEBHOOK_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
+  return ok({ webhook: redactWebhook(r.webhook), url: inboundUrl(deps.publicUrl, r.webhook.id) });
 }
 
 export const webhookRawRoutes: ReadonlyArray<Route<BaseCtx>> = [

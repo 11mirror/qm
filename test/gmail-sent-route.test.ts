@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { gmailSent } from "../src/api/routes/connectors.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+import { type ApiCtx, respond } from "../src/api/routes/route.ts";
 
 test("sent mail requires portal identity and ignores a forged principal query", async () => {
   let status = 0;
@@ -26,16 +26,16 @@ test("sent mail requires portal identity and ignores a forged principal query", 
       },
     },
   } as unknown as ApiCtx;
-  await gmailSent(ctx);
+  await respond(gmailSent, ctx);
   assert.equal(status, 403);
   assert.equal(requestedPrincipal, "");
   ctx.actor = { p: "signed-in-user" } as ApiCtx["actor"];
-  await gmailSent(ctx);
+  await respond(gmailSent, ctx);
   assert.equal(status, 409);
   assert.equal(requestedPrincipal, "signed-in-user");
   requestedPrincipal = "";
   ctx.url.searchParams.set("accountType", "forged");
-  await gmailSent(ctx);
+  await respond(gmailSent, ctx);
   assert.equal(status, 400);
   assert.equal(requestedPrincipal, "");
 });
@@ -75,7 +75,7 @@ test("sent mail resolves the connected Google account slot", async () => {
     },
   } as unknown as ApiCtx;
   try {
-    await gmailSent(ctx);
+    await respond(gmailSent, ctx);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -100,7 +100,7 @@ test("Gmail upstream failures map to reconnect, not found, or retry responses wi
       let code = 0;
       let body = "";
       globalThis.fetch = async () => new Response("secret upstream detail", { status: upstream });
-      await gmailSent({
+      await respond(gmailSent, {
         actor: { p: "eve@example.com" },
         url: new URL("http://localhost/v1/connectors/gmail/sent/m1"),
         params: { messageId: "m1" },

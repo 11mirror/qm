@@ -11,6 +11,7 @@ import { selectEntries, type DurableMap, type DurableMapSelect } from "../src/pe
 import { oauthRevoke } from "../src/api/routes/connectors.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { respond } from "../src/api/routes/route.ts";
 
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 
@@ -431,7 +432,9 @@ test("oauthRevoke: a capability token disconnects its own connector, but not a n
         out.body = d ? JSON.parse(d) : undefined;
       },
     };
-    return oauthRevoke({ res, deps, body, capability } as unknown as Parameters<typeof oauthRevoke>[0]).then(() => out);
+    return respond(oauthRevoke, { res, deps, body, capability } as unknown as Parameters<typeof oauthRevoke>[0]).then(
+      () => out,
+    );
   };
   const cap = (actorId: string, members: string[] = []) => ({
     actorId,

@@ -13,12 +13,12 @@ import {
 } from "../../surfaces/ui-canvas.ts";
 import { uiStateId, UI_STATE_MAX_BYTES, type UiStateStore } from "../../surfaces/ui-state.ts";
 import { scopeId } from "../../types.ts";
-import { sendJson } from "../http.ts";
+import { fail } from "../http.ts";
 import { conversationRef } from "./pins.ts";
 import { samePerson } from "../../directory/person.ts";
 import { audit, isObj, refuse } from "./shared.ts";
 import { swallow } from "../../util/errors.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 
 const OBSERVE_TIMEOUT_MS = 15_000;
 const MAX_SELECTOR_CHARS = 500;
@@ -32,27 +32,27 @@ interface UiTurn {
 }
 
 async function liveWebTurn(ctx: ApiCtx): Promise<UiTurn | null> {
-  const { res, deps } = ctx;
+  const { deps } = ctx;
   const threadRef = await conversationRef(ctx);
   if (!threadRef) return null;
   const cap = ctx.capability!;
   if (!deps.uiState || !deps.runs || !deps.sessions)
-    return refuse(res, 404, { error: "not_available", message: "this deployment has no UI state store" });
+    throw refuse(404, { error: "not_available", message: "this deployment has no UI state store" });
   if (!(await canvasEnabled(ctx, cap.actorId)))
-    return refuse(res, 403, {
+    throw refuse(403, {
       error: "feature_disabled",
       message: "The ui_canvas feature flag is off for this person. An org admin can enable it under feature flags.",
     });
   if (cap.surface !== "web" || !cap.liveActor || cap.triggered || cap.botActor)
-    return refuse(res, 403, {
+    throw refuse(403, {
       error: "not_live_web_turn",
       message: "Only available during a turn the person started from the web UI.",
     });
   const run = cap.runId ? await deps.runs.get(cap.runId) : null;
   if (!run || isTerminal(run.status))
-    return refuse(res, 409, { error: "turn_ended", message: "The turn that issued this token has ended." });
+    throw refuse(409, { error: "turn_ended", message: "The turn that issued this token has ended." });
   const session = await deps.sessions.getByThread(threadRef);
-  if (!session) return refuse(res, 404, { error: "not_found", message: "no such conversation" });
+  if (!session) throw refuse(404, { error: "not_found", message: "no such conversation" });
   return {
     actorId: cap.actorId,
     sessionId: session.id,
@@ -88,7 +88,7 @@ function canvasTarget(ctx: ApiCtx, turn: Pick<UiTurn, "sessionId">): string {
   return alwaysOn ? ALWAYS_ON_CANVAS : turn.sessionId;
 }
 
-function withTurn(handle: (ctx: ApiCtx, turn: UiTurn) => Promise<void>): (ctx: ApiCtx) => Promise<void> {
+function withTurn(handle: (ctx: ApiCtx, turn: UiTurn) => Promise<RouteResult>): (ctx: ApiCtx) => Promise<RouteResult> {
   return async (ctx) => {
     const turn = await liveWebTurn(ctx);
     if (turn) return handle(ctx, turn);
@@ -96,7 +96,7 @@ function withTurn(handle: (ctx: ApiCtx, turn: UiTurn) => Promise<void>): (ctx: A
 }
 
 const getCanvas = withTurn(async (ctx, turn) =>
-  sendJson(ctx.res, 200, { canvas: await readUiCanvas(ctx.deps.uiState!, turn.actorId, canvasTarget(ctx, turn)) }),
+  ok({ canvas: await readUiCanvas(ctx.deps.uiState!, turn.actorId, canvasTarget(ctx, turn)) }),
 );
 
 function parsePatch(body: unknown): UiCanvasPatch | string {
@@ -118,20 +118,19 @@ function parsePatch(body: unknown): UiCanvasPatch | string {
 
 const writeCanvas = withTurn(async (ctx, turn) => {
   const patch = ctx.method === "DELETE" ? null : parsePatch(ctx.body);
-  if (typeof patch === "string") return sendJson(ctx.res, 400, { error: "bad_request", message: patch });
+  if (typeof patch === "string") throw fail(400, "bad_request", patch);
   const target = canvasTarget(ctx, turn);
   let canvas: UiCanvas | null;
   try {
     canvas = await writeUiCanvas(ctx.deps.uiState!, turn.actorId, target, patch);
   } catch (error) {
     if (!(error instanceof UiCanvasTooLargeError)) throw error;
-    return sendJson(ctx.res, 413, {
+    return reply(413, {
       error: "payload_too_large",
       message: `html, css and js together must stay under ${UI_STATE_MAX_BYTES} bytes`,
     });
   }
-  if (patch && !canvas)
-    return sendJson(ctx.res, 404, { error: "no_canvas", message: "there is no canvas yet; pass html, css or js" });
+  if (patch && !canvas) throw fail(404, "no_canvas", "there is no canvas yet; pass html, css or js");
   audit(ctx.deps, {
     principalId: turn.actorId,
     action: patch ? "ui.canvas.write" : "ui.canvas.dismiss",
@@ -140,22 +139,21 @@ const writeCanvas = withTurn(async (ctx, turn) => {
     ...(canvas ? { detail: `rev ${canvas.rev}` } : {}),
   });
   signalBrowser(ctx, turn, { kind: "canvas" });
-  return sendJson(ctx.res, 200, { canvas: canvasSummary(canvas) });
+  return ok({ canvas: canvasSummary(canvas) });
 });
 
 const observe = withTurn(async (ctx, turn) => {
-  const { res, deps, body } = ctx;
-  if (!turn.personal) {
-    return sendJson(res, 403, {
-      error: "not_private",
-      message: "UI observation is only available in the person's own web conversations, not shared ones.",
-    });
-  }
-  if (!deps.signals) return sendJson(res, 404, { error: "not_available", message: "run signals are unavailable" });
+  const { deps, body } = ctx;
+  if (!turn.personal)
+    throw fail(
+      403,
+      "not_private",
+      "UI observation is only available in the person's own web conversations, not shared ones.",
+    );
+  if (!deps.signals) throw fail(404, "not_available", "run signals are unavailable");
   const b = isObj(body) ? body : {};
   const selector = typeof b.selector === "string" && b.selector.trim() ? b.selector.trim() : undefined;
-  if (selector && selector.length > MAX_SELECTOR_CHARS)
-    return sendJson(res, 400, { error: "bad_request", message: "selector is too long" });
+  if (selector && selector.length > MAX_SELECTOR_CHARS) throw fail(400, "bad_request", "selector is too long");
   const callId = randomUUID();
   const pendingId = uiStateId(turn.actorId, uiObserveKey(callId));
   await deps.uiState!.put(pendingId, { value: { runId: turn.runId }, updatedAt: Date.now() });
@@ -179,33 +177,33 @@ const observe = withTurn(async (ctx, turn) => {
     scopeLabel: scopeId("personal", turn.actorId),
     status: typeof outcome === "string" ? outcome : "ok",
   });
-  if (typeof outcome === "string") {
-    return sendJson(res, 504, {
-      error: "ui_not_open",
-      message: `No open web UI tab answered within ${OBSERVE_TIMEOUT_MS / 1000}s. The person may have closed QM; ask them to open it and retry.`,
-    });
-  }
-  return sendJson(res, 200, { snapshot: outcome.structured ?? null });
+  if (typeof outcome === "string")
+    throw fail(
+      504,
+      "ui_not_open",
+      `No open web UI tab answered within ${OBSERVE_TIMEOUT_MS / 1000}s. The person may have closed QM; ask them to open it and retry.`,
+    );
+  return ok({ snapshot: outcome.structured ?? null });
 });
 
-async function observeResult(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body, params } = ctx;
+async function observeResult(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, body, params } = ctx;
   const b = isObj(body) ? body : {};
   const principalId = typeof b.principalId === "string" ? b.principalId : "";
   if (!principalId || !isObj(b.snapshot))
-    return sendJson(res, 400, { error: "bad_request", message: "principalId and snapshot required" });
-  if (!deps.uiState || !deps.signals) return sendJson(res, 404, { error: "not_found" });
+    return reply(400, { error: "bad_request", message: "principalId and snapshot required" });
+  if (!deps.uiState || !deps.signals) return reply(404, { error: "not_found" });
   const pending = await deps.uiState.take(uiStateId(principalId, uiObserveKey(params.callId!)));
   const runId = isObj(pending?.value) && typeof pending.value.runId === "string" ? pending.value.runId : null;
   const run = runId ? await deps.runs?.get(runId) : null;
-  if (!run || !samePerson(run.request.actor.id, principalId)) return sendJson(res, 404, { error: "not_found" });
+  if (!run || !samePerson(run.request.actor.id, principalId)) return reply(404, { error: "not_found" });
   await deps.signals.send(run.id, {
     kind: "client_result",
     callId: params.callId!,
     result: { content: "web UI snapshot", structured: b.snapshot },
     dedupeKey: `ui-observe:${run.id}:${params.callId}`,
   });
-  return sendJson(res, 200, { ok: true });
+  return ok({ ok: true });
 }
 
 async function canvasEnabled(ctx: ApiCtx, principalId: string): Promise<boolean> {
@@ -215,35 +213,35 @@ async function canvasEnabled(ctx: ApiCtx, principalId: string): Promise<boolean>
 async function userCanvasStore(ctx: ApiCtx, principalId: string): Promise<UiStateStore | null> {
   const sessionId = ctx.params.sessionId!;
   if (!principalId || (sessionId !== ALWAYS_ON_CANVAS && !(await ctx.deps.sessions?.get(sessionId))))
-    return refuse(ctx.res, 400, { error: "bad_request", message: "principalId and a session id required" });
+    throw refuse(400, { error: "bad_request", message: "principalId and a session id required" });
   if (ctx.deps.uiState && (await canvasEnabled(ctx, principalId))) return ctx.deps.uiState;
-  return refuse(ctx.res, 404, { error: "not_found" });
+  throw refuse(404, { error: "not_found" });
 }
 
-async function userCanvasContent(ctx: ApiCtx): Promise<void> {
+async function userCanvasContent(ctx: ApiCtx): Promise<RouteResult> {
   const principalId = ctx.url.searchParams.get("principalId") ?? "";
   const store = await userCanvasStore(ctx, principalId);
   if (!store) return;
   const canvas = await readUiCanvas(store, principalId, ctx.params.sessionId!);
-  return canvas ? sendJson(ctx.res, 200, { canvas }) : sendJson(ctx.res, 404, { error: "not_found" });
+  return canvas ? ok({ canvas }) : reply(404, { error: "not_found" });
 }
 
-async function userCanvas(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body, params } = ctx;
+async function userCanvas(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, body, params } = ctx;
   const b = isObj(body) ? body : {};
   const principalId = typeof b.principalId === "string" ? b.principalId : "";
   const sessionId = params.sessionId!;
   const store = await userCanvasStore(ctx, principalId);
   if (!store) return;
   if (b.dismiss !== true && typeof b.pinned !== "boolean")
-    return sendJson(res, 400, { error: "bad_request", message: "pass dismiss or pinned" });
+    return reply(400, { error: "bad_request", message: "pass dismiss or pinned" });
   const patch = b.dismiss === true ? null : { pinned: b.pinned as boolean };
   const canvas = await writeUiCanvas(store, principalId, sessionId, patch);
-  if (patch && !canvas) return sendJson(res, 404, { error: "not_found" });
+  if (patch && !canvas) return reply(404, { error: "not_found" });
   const session = await deps.sessions?.get(sessionId);
   if (session)
     signalBrowser(ctx, { actorId: principalId, sessionId, threadRef: session.threadRef }, { kind: "canvas" });
-  return sendJson(res, 200, { canvas: canvasSummary(canvas) });
+  return ok({ canvas: canvasSummary(canvas) });
 }
 
 export const uiCanvasRoutes: ReadonlyArray<Route<ApiCtx>> = [

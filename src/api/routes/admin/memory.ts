@@ -1,14 +1,12 @@
-import { sendJson } from "../../http.ts";
 import { renderFacts } from "../../../memory/facts.ts";
-import { memoryFacts, parseEdits, parseFacts, parseIds } from "../surface.ts";
-import { type ApiCtx } from "../route.ts";
+import { memoryFacts, parseEdits, parseFacts, parseIds } from "../surface-agent.ts";
+import { type ApiCtx, ok, type RouteResult } from "../route.ts";
 import { badRequest, discoverScopes, notFound, orgAdmin, scopedAdmin } from "./common.ts";
 
-export async function listMemoryScopes(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps } = ctx;
+export async function listMemoryScopes(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, deps } = ctx;
   const authz = await orgAdmin(ctx);
-  if (!authz) return;
-  if (!deps.memory) return notFound(res);
+  if (!deps.memory) throw notFound();
   authz.audit("memory.scopes.read", "memory");
   const labels = await discoverScopes(app, deps);
   const meta = (await deps.memory.metadata?.()) ?? null;
@@ -39,32 +37,31 @@ export async function listMemoryScopes(ctx: ApiCtx): Promise<void> {
       (b.updatedAt ?? 0) - (a.updatedAt ?? 0) ||
       a.scopeId.localeCompare(b.scopeId),
   );
-  return sendJson(res, 200, { scopeId: authz.scope, scopes });
+  return ok({ scopeId: authz.scope, scopes });
 }
 
-export async function adminMemory(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body, method } = ctx;
+export async function adminMemory(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, body, method } = ctx;
   const authz = await scopedAdmin(ctx);
-  if (!authz) return;
   const { actor, scope } = authz;
   const memory = deps.memory;
-  if (!memory) return notFound(res);
+  if (!memory) throw notFound();
   if (method === "POST") {
     const facts = parseFacts(body);
-    if (typeof facts === "string") return badRequest(res, facts);
+    if (typeof facts === "string") throw badRequest(facts);
     await memory.capture(scope, facts, Date.now(), actor.id, { mode: "explicit" });
   } else if (method === "PATCH") {
     const edits = parseEdits(body);
-    if (typeof edits === "string") return badRequest(res, edits);
+    if (typeof edits === "string") throw badRequest(edits);
     await memory.edit?.(scope, edits, actor.id);
   } else if (method === "DELETE") {
     const ids = parseIds(body);
-    if (typeof ids === "string") return badRequest(res, ids);
+    if (typeof ids === "string") throw badRequest(ids);
     await memory.delete?.(scope, ids, actor.id);
   }
   authz.audit(method === "GET" ? "memory.read" : "memory.update", "memory");
   const facts = await memoryFacts(memory, scope);
-  return sendJson(res, 200, {
+  return ok({
     scopeId: scope,
     content: memory.facts ? renderFacts(facts) : await memory.read(scope),
     facts,

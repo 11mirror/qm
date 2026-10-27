@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { suggestedActivityRoutes } from "../src/api/routes/suggested-activities.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+import { type ApiCtx, respond } from "../src/api/routes/route.ts";
 
 async function request(body: unknown, enabled: boolean, actor = "alice") {
   let status = 0;
@@ -9,7 +9,7 @@ async function request(body: unknown, enabled: boolean, actor = "alice") {
   let calls = 0;
   const route = suggestedActivityRoutes.find((entry) => "method" in entry && entry.method === "POST")!;
   assert.equal(route.auth, "source");
-  await route.handle({
+  await respond(route.handle, {
     body,
     actor: { p: actor, exp: Date.now() + 1000 },
     deps: enabled

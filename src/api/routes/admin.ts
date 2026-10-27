@@ -1,4 +1,5 @@
-import { withAdmin, type AdminAccess, type ApiCtx, type Route } from "./route.ts";
+import { type AdminAccess, type ApiCtx, Reply, type Route, type RouteResult, withAdmin } from "./route.ts";
+import { HttpError } from "../http.ts";
 import {
   getAdminResources,
   getScopeConfig,
@@ -59,19 +60,19 @@ import { listUnattendedGrants } from "./admin/unattended-grants.ts";
 import { createPrincipalLink, deletePrincipalLink, listPrincipalLinks } from "./admin/principal-links.ts";
 
 const timed =
-  (handle: (ctx: ApiCtx) => void | Promise<void>) =>
-  async (ctx: ApiCtx): Promise<void> => {
+  (handle: Route<ApiCtx>["handle"]) =>
+  async (ctx: ApiCtx): Promise<RouteResult> => {
     const started = Date.now();
-    let threw = false;
+    let status: number | undefined;
     try {
-      await handle(ctx);
+      const out = await handle(ctx);
+      if (out instanceof Reply) status = out.status;
+      return out;
     } catch (err) {
-      threw = true;
+      status = err instanceof HttpError ? err.status : 500;
       throw err;
     } finally {
-      console.log(
-        `[admin] ${ctx.method} ${ctx.pathname} ${threw ? 500 : ctx.res.statusCode} ${Date.now() - started}ms`,
-      );
+      console.log(`[admin] ${ctx.method} ${ctx.pathname} ${status ?? ctx.res.statusCode} ${Date.now() - started}ms`);
     }
   };
 

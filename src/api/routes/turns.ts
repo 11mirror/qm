@@ -1,10 +1,8 @@
 import { fromJSONSchema, z, ZodObject } from "zod";
 import type { ClientToolDeclaration, TurnRequest } from "../../types.ts";
 import { samePerson } from "../../directory/person.ts";
-import type { ServerResponse } from "node:http";
-import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
-import { type ApiCtx, type Route } from "./route.ts";
+import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 import { zodMessage } from "./shared.ts";
 
 const TURN_ORIGIN_KINDS = new Set<unknown>(["human", "ambient", "automation", "direct"]);
@@ -108,81 +106,76 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   return { request: { ...rest, origin, ...(clientTools?.length ? { clientTools } : {}) } };
 }
 
-function sendRunOutcome(res: ServerResponse, ok: boolean, outcome: { reason?: string }): void {
-  if (ok) return sendJson(res, 200, outcome);
-  if (outcome.reason === "not_found") return sendJson(res, 404, { error: "not_found" });
-  sendJson(res, 409, outcome);
+function sendRunOutcome(succeeded: boolean, outcome: { reason?: string }): RouteResult {
+  if (succeeded) return ok(outcome);
+  if (outcome.reason === "not_found") return reply(404, { error: "not_found" });
+  return reply(409, outcome);
 }
 
-async function postTurn(ctx: ApiCtx): Promise<void> {
-  const { res, app, url, body } = ctx;
-  if (!isTurnRequest(body)) {
-    return sendJson(res, 400, { error: "bad_request", message: "expected a TurnRequest" });
-  }
+async function postTurn(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, url, body } = ctx;
+  if (!isTurnRequest(body)) return reply(400, { error: "bad_request", message: "expected a TurnRequest" });
   const wantAsync = url.searchParams.get("async") === "1" || body.async === true;
   const sanitized = sanitizedTurnRequest(body);
-  if ("error" in sanitized) return sendJson(res, 400, { error: "bad_request", message: sanitized.error });
+  if ("error" in sanitized) return reply(400, { error: "bad_request", message: sanitized.error });
   const result = await app.turn({ ...sanitized.request, async: wantAsync });
-  if (result.status === "queued") return sendJson(res, 202, result);
-  return sendJson(res, result.status === "refused" ? 403 : 200, result);
+  if (result.status === "queued") return reply(202, result);
+  return reply(result.status === "refused" ? 403 : 200, result);
 }
 
-async function getApproval(ctx: ApiCtx): Promise<void> {
-  const { res, app, actor } = ctx;
+async function getApproval(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, actor } = ctx;
   const id = ctx.params.id!;
-  if (!id || id.includes("/")) return sendJson(res, 404, { error: "not_found" });
+  if (!id || id.includes("/")) return reply(404, { error: "not_found" });
   const record = await app.getApproval(id, actor?.p);
-  return record ? sendJson(res, 200, record) : sendJson(res, 404, { error: "not_found" });
+  return record ? ok(record) : reply(404, { error: "not_found" });
 }
 
-async function getPendingApproval(ctx: ApiCtx): Promise<void> {
-  const { res, app, url, actor } = ctx;
+async function getPendingApproval(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, url, actor } = ctx;
   const threadRef = url.searchParams.get("threadRef") ?? "";
-  if (!threadRef) return sendJson(res, 400, { error: "bad_request", message: "threadRef required" });
-  return sendJson(res, 200, { pending: await app.pendingApprovalForThread(threadRef, actor?.p) });
+  if (!threadRef) return reply(400, { error: "bad_request", message: "threadRef required" });
+  return ok({ pending: await app.pendingApprovalForThread(threadRef, actor?.p) });
 }
 
-async function postRunDeliveryState(ctx: ApiCtx): Promise<void> {
-  const { res, app, body } = ctx;
+async function postRunDeliveryState(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, body } = ctx;
   const id = ctx.params.id!;
   const editRef = isObj(body) && typeof body.editRef === "string" ? body.editRef : "";
-  if (!id || !editRef) return sendJson(res, 400, { error: "bad_request", message: "editRef required" });
+  if (!id || !editRef) return reply(400, { error: "bad_request", message: "editRef required" });
   const found = await app.setRunDeliveryState(id, { editRef });
-  if (!found) return sendJson(res, 404, { error: "not_found" });
-  return sendJson(res, 200, { ok: true });
+  if (!found) return reply(404, { error: "not_found" });
+  return ok({ ok: true });
 }
 
-async function postRunSignal(ctx: ApiCtx): Promise<void> {
-  const { res, app, actor } = ctx;
+async function postRunSignal(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, actor } = ctx;
   const id = ctx.params.id!;
   const body = isObj(ctx.body) ? ctx.body : {};
   const kind = typeof body.kind === "string" ? body.kind : "";
-  if (kind !== "abort" && kind !== "steer" && kind !== "client_result") {
-    return sendJson(res, 400, { error: "bad_request", message: "kind must be abort, steer or client_result" });
-  }
+  if (kind !== "abort" && kind !== "steer" && kind !== "client_result")
+    return reply(400, { error: "bad_request", message: "kind must be abort, steer or client_result" });
   if (kind === "client_result") {
     const run = await ctx.deps.runs?.get(id);
     if (run?.request.desktopClientId && body.desktopClientId !== run.request.desktopClientId)
-      return sendJson(res, 403, { error: "wrong_desktop_client" });
+      return reply(403, { error: "wrong_desktop_client" });
     const parsed = clientResultSchema.safeParse(body);
     if (!parsed.success)
-      return sendJson(res, 400, { error: "bad_request", message: zodMessage("client_result", parsed.error) });
+      return reply(400, { error: "bad_request", message: zodMessage("client_result", parsed.error) });
     const outcome = await app.signalRun(id, { kind, ...parsed.data }, actor?.p);
-    return sendRunOutcome(res, outcome.accepted, outcome);
+    return sendRunOutcome(outcome.accepted, outcome);
   }
   const text = typeof body.text === "string" ? body.text : undefined;
   const queuedRunId = typeof body.queuedRunId === "string" ? body.queuedRunId : undefined;
   const ts = typeof body.ts === "string" && body.ts ? body.ts : undefined;
   let request: TurnRequest | undefined;
   if (body.request !== undefined) {
-    if (!isTurnRequest(body.request)) {
-      return sendJson(res, 400, { error: "bad_request", message: "request must be a TurnRequest" });
-    }
-    if (actor && !samePerson(body.request.actor.externalId, actor.p)) {
-      return sendJson(res, 403, { error: "forbidden", message: "portal identity does not match the requested actor" });
-    }
+    if (!isTurnRequest(body.request))
+      return reply(400, { error: "bad_request", message: "request must be a TurnRequest" });
+    if (actor && !samePerson(body.request.actor.externalId, actor.p))
+      return reply(403, { error: "forbidden", message: "portal identity does not match the requested actor" });
     const sanitized = sanitizedTurnRequest(body.request);
-    if ("error" in sanitized) return sendJson(res, 400, { error: "bad_request", message: sanitized.error });
+    if ("error" in sanitized) return reply(400, { error: "bad_request", message: sanitized.error });
     request = sanitized.request;
   }
   const outcome = await app.signalRun(
@@ -197,45 +190,45 @@ async function postRunSignal(ctx: ApiCtx): Promise<void> {
     actor?.p,
   );
   if (outcome.reason === "text_required")
-    return sendJson(res, 400, { error: "bad_request", message: "text required", ...outcome });
+    return reply(400, { error: "bad_request", message: "text required", ...outcome });
   if (outcome.reason === "conversation_mismatch")
-    return sendJson(res, 400, {
+    return reply(400, {
       error: "bad_request",
       message: "request conversation does not match the run",
       ...outcome,
     });
-  return sendRunOutcome(res, outcome.accepted, outcome);
+  return sendRunOutcome(outcome.accepted, outcome);
 }
 
-async function getRun(ctx: ApiCtx): Promise<void> {
-  const { res, app, actor } = ctx;
+async function getRun(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, actor } = ctx;
   const id = ctx.params.id!;
   const run = await app.getRun(id, actor?.p);
-  if (!run) return sendJson(res, 404, { error: "not_found" });
-  return sendJson(res, 200, run);
+  if (!run) return reply(404, { error: "not_found" });
+  return ok(run);
 }
 
-async function getActiveRunForThread(ctx: ApiCtx): Promise<void> {
-  const { res, app, url, actor } = ctx;
+async function getActiveRunForThread(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, url, actor } = ctx;
   const threadRef = url.searchParams.get("threadRef") ?? "";
-  if (!threadRef) return sendJson(res, 400, { error: "bad_request", message: "threadRef required" });
+  if (!threadRef) return reply(400, { error: "bad_request", message: "threadRef required" });
   const active = await app.activeRunForThread(threadRef, actor?.p);
-  return sendJson(res, 200, { runId: active?.runId ?? null, ...(active?.queued ? { queued: active.queued } : {}) });
+  return ok({ runId: active?.runId ?? null, ...(active?.queued ? { queued: active.queued } : {}) });
 }
 
-async function patchQueuedRun(ctx: ApiCtx): Promise<void> {
-  const { res, app, actor, body } = ctx;
+async function patchQueuedRun(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, actor, body } = ctx;
   if (!isObj(body) || typeof body.text !== "string" || typeof body.expectedText !== "string")
-    return sendJson(res, 400, { error: "bad_request", message: "text and expectedText required" });
+    return reply(400, { error: "bad_request", message: "text and expectedText required" });
   const outcome = await app.editQueuedRun(ctx.params.id!, body.text, body.expectedText, actor?.p);
-  if (outcome.reason === "empty_text") return sendJson(res, 400, outcome);
-  return sendRunOutcome(res, outcome.edited, outcome);
+  if (outcome.reason === "empty_text") return reply(400, outcome);
+  return sendRunOutcome(outcome.edited, outcome);
 }
 
-async function postRunWithdraw(ctx: ApiCtx): Promise<void> {
-  const { res, app, actor } = ctx;
+async function postRunWithdraw(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, actor } = ctx;
   const outcome = await app.withdrawRun(ctx.params.id!, actor?.p);
-  return sendRunOutcome(res, outcome.withdrawn, outcome);
+  return sendRunOutcome(outcome.withdrawn, outcome);
 }
 
 export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [

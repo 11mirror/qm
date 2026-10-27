@@ -3,10 +3,10 @@ import { parseScopeId, personalScope, type Cron, type ScopeId } from "../../../t
 import type { SpendRow } from "../../../sessions/session-store.ts";
 import type { SessionOrigin } from "../../../sessions/thread-ref.ts";
 import { constantTimeEqual } from "../../../util/crypto.ts";
-import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
+import { contentDispositionAttachment, contentTypeWithUtf8Charset } from "../../http.ts";
 import { audit } from "../shared.ts";
 import { CRON_SUMMARY_FIELDS, badRequest, discoverScopes, orgAdmin, pick } from "./common.ts";
-import { type ApiCtx, type BaseCtx } from "../route.ts";
+import { type ApiCtx, type BaseCtx, ok, reply, type RouteResult } from "../route.ts";
 import { tenant } from "../../../tenant.ts";
 
 export function cacheHitRatio(s: { cacheRead?: number; cacheWrite?: number; uncachedInput?: number }): number | null {
@@ -421,20 +421,20 @@ async function cronInfoLookup(
   return crons;
 }
 
-export async function spendExport(ctx: BaseCtx): Promise<void> {
-  const { req, res, app, deps, url } = ctx;
+export async function spendExport(ctx: BaseCtx): Promise<RouteResult> {
+  const { req, app, deps, url } = ctx;
   const token = deps.spendExportToken;
-  if (!token) return sendJson(res, 404, { error: "not_found" });
+  if (!token) return reply(404, { error: "not_found" });
   const authorization = req.headers.authorization;
   if (typeof authorization !== "string" || !constantTimeEqual(authorization, `Bearer ${token}`))
-    return sendJson(res, 401, { error: "unauthorized" });
-  if (!deps.sessions) return sendJson(res, 503, { error: "spend_unavailable" });
+    return reply(401, { error: "unauthorized" });
+  if (!deps.sessions) return reply(503, { error: "spend_unavailable" });
   const from = parseDay(url.searchParams.get("from") ?? "");
   const to = parseDay(url.searchParams.get("to") ?? "");
   if (from === null || to === null)
-    return sendJson(res, 400, { error: "bad_request", message: "from and to must be YYYY-MM-DD dates (UTC)" });
+    return reply(400, { error: "bad_request", message: "from and to must be YYYY-MM-DD dates (UTC)" });
   if (to <= from || to - from > EXPORT_MAX_DAYS * DAY_MS)
-    return sendJson(res, 400, {
+    return reply(400, {
       error: "bad_request",
       message: `to must be later than from and at most ${EXPORT_MAX_DAYS} days after it`,
     });
@@ -457,30 +457,29 @@ export async function spendExport(ctx: BaseCtx): Promise<void> {
     scopeLabel: scope,
     detail: `${window.from}..${window.to} rows=${exported.length}`,
   });
-  sendJson(res, 200, { scopeId: scope, window, ...(asOf === undefined ? {} : { asOf }), rows: exported, crons });
+  return ok({ scopeId: scope, window, ...(asOf === undefined ? {} : { asOf }), rows: exported, crons });
 }
 
-export async function spend(ctx: ApiCtx): Promise<void> {
+export async function spend(ctx: ApiCtx): Promise<RouteResult> {
   const { res, app, deps, url } = ctx;
   const authz = await orgAdmin(ctx, "spend");
-  if (!authz) return;
   const { scope } = authz;
-  const bad = (message: string) => badRequest(res, message);
+  const bad = (message: string) => badRequest(message);
   const bucket = url.searchParams.get("bucket") ?? "day";
-  if (bucket !== "day" && bucket !== "week") return bad('bucket must be "day" or "week"');
+  if (bucket !== "day" && bucket !== "week") throw bad('bucket must be "day" or "week"');
   const format = url.searchParams.get("format") ?? "json";
-  if (format !== "json" && format !== "csv") return bad('format must be "json" or "csv"');
+  if (format !== "json" && format !== "csv") throw bad('format must be "json" or "csv"');
 
   const breakdown = SPEND_BREAKDOWNS.find((value) => value === (url.searchParams.get("breakdown") ?? "entity"));
-  if (!breakdown) return bad('breakdown must be "entity", "model" or "cron"');
+  if (!breakdown) throw bad('breakdown must be "entity", "model" or "cron"');
 
   const toRaw = url.searchParams.get("to");
   const to = toRaw === null ? Math.floor(Date.now() / DAY_MS) * DAY_MS + DAY_MS : parseBound(toRaw);
-  if (to === null) return bad("to must be a YYYY-MM-DD date (UTC) or epoch milliseconds");
+  if (to === null) throw bad("to must be a YYYY-MM-DD date (UTC) or epoch milliseconds");
   const fromRaw = url.searchParams.get("from");
   const from = fromRaw === null ? to - DEFAULT_WINDOW_DAYS * DAY_MS : parseBound(fromRaw);
-  if (from === null) return bad("from must be a YYYY-MM-DD date (UTC) or epoch milliseconds");
-  if (to <= from) return bad("to must be later than from");
+  if (from === null) throw bad("from must be a YYYY-MM-DD date (UTC) or epoch milliseconds");
+  if (to <= from) throw bad("to must be later than from");
 
   const { rows, asOf } = deps.sessions ? await deps.sessions.spendReport({ from, to }) : { rows: [], asOf: undefined };
   const labels = await discoverScopes(
@@ -497,8 +496,7 @@ export async function spend(ctx: ApiCtx): Promise<void> {
     label: (id) => labels.get(id) ?? "",
     cron: (cronId) => crons.get(cronId) ?? null,
   });
-  if (format === "json")
-    return sendJson(res, 200, { scopeId: scope, ...report, ...(asOf === undefined ? {} : { asOf }) });
+  if (format === "json") return ok({ scopeId: scope, ...report, ...(asOf === undefined ? {} : { asOf }) });
 
   const body = spendCsv(report, breakdown);
   res.writeHead(200, {

@@ -2,8 +2,8 @@ import { isDeepStrictEqual } from "node:util";
 import { isCronRuntime } from "../../../cron/runtime.ts";
 import { type Destination } from "../../../types.ts";
 import { publicUrlOf } from "../../../deploy/deploy-store.ts";
-import { refusal, sendJson } from "../../http.ts";
-import { type ApiCtx } from "../route.ts";
+import { refusal } from "../../http.ts";
+import { type ApiCtx, ok, reply, type RouteResult } from "../route.ts";
 import { notifyOwnerOfCronEdit } from "../../../triggers/edit-notice.ts";
 import { ADMIN_CRON_FIELDS, badRequest, pick, requireScopedResource, scopedAdmin } from "./common.ts";
 
@@ -20,17 +20,16 @@ function isAdminCronDestination(v: unknown): v is Destination {
   return keys.every((k) => k === "type" || k === "target" || k === "audienceScopeId" || k === "onBehalfOf");
 }
 
-export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
-  const { res, app, pathname } = ctx;
+export async function listAdminArtifacts(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, pathname } = ctx;
   const resource = pathname.slice("/v1/admin/".length);
   const authz = await scopedAdmin(ctx, resource);
-  if (!authz) return;
   const { scope, orgWide } = authz;
   if (resource === "crons") {
     const crons = (await app.listCrons())
       .filter((c) => orgWide || c.ownerScopeId === scope)
       .map((c) => pick(c, CRON_FIELDS));
-    return sendJson(res, 200, { scopeId: scope, crons });
+    return ok({ scopeId: scope, crons });
   }
   if (resource === "deployments") {
     const deployments = (await app.listDeployments())
@@ -47,7 +46,7 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
         lastAccessAt: d.lastAccessAt,
         publicUrl: publicUrlOf(d.endpoint),
       }));
-    return sendJson(res, 200, { scopeId: scope, deployments });
+    return ok({ scopeId: scope, deployments });
   }
   const packsById = new Map((await app.listSkillPacks()).map((p) => [p.id, p]));
   const skills = (await app.listSkills())
@@ -68,14 +67,13 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
         ...(provenancePack ? { pack: { id: provenancePack.id, url: provenancePack.url } } : {}),
       };
     });
-  return sendJson(res, 200, { scopeId: scope, skills });
+  return ok({ scopeId: scope, skills });
 }
 
-export async function putAdminCronRuntime(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, body } = ctx;
+export async function putAdminCronRuntime(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, params, body } = ctx;
   const id = params.id!;
   const scoped = await requireScopedResource(ctx, () => app.getCron(id), "ownerScopeId", "cron");
-  if (!scoped) return;
   if (
     typeof body !== "object" ||
     body === null ||
@@ -84,51 +82,48 @@ export async function putAdminCronRuntime(ctx: ApiCtx): Promise<void> {
     body.runtime === undefined ||
     !isCronRuntime(body.runtime)
   )
-    return badRequest(res, "runtime is required; use null to inherit");
+    throw badRequest("runtime is required; use null to inherit");
   try {
     const updated = await app.setCronRuntime(id, body.runtime);
     scoped.audit("cron.runtime.update", id, scoped.record.ownerScopeId);
-    return sendJson(res, 200, { cron: updated ? { id: updated.id, runtime: updated.runtime } : null });
+    return ok({ cron: updated ? { id: updated.id, runtime: updated.runtime } : null });
   } catch (error) {
     throw refusal(400, "bad_request", error);
   }
 }
 
-export async function putAdminCronDestination(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, body } = ctx;
+export async function putAdminCronDestination(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, params, body } = ctx;
   const id = params.id!;
   const scoped = await requireScopedResource(ctx, () => app.getCron(id), "ownerScopeId", "cron");
-  if (!scoped) return;
   const { actor, record: cron } = scoped;
   if (typeof body !== "object" || body === null || !("destination" in body))
-    return badRequest(res, "destination is required; use null to clear");
+    throw badRequest("destination is required; use null to clear");
   if ((cron.unattendedGrants?.length ?? 0) > 0)
-    return sendJson(res, 409, {
+    return reply(409, {
       error: "conflict",
       message: "this cron carries unattended admin read grants, so only its owner can change where it delivers",
     });
   const destination = (body as { destination: unknown }).destination;
   if (destination !== null && !isAdminCronDestination(destination))
-    return badRequest(res, "destination must be a principal or slack destination with a target");
+    throw badRequest("destination must be a principal or slack destination with a target");
   const next = destination === null ? undefined : destination;
-  if (isDeepStrictEqual(cron.destination, next))
-    return sendJson(res, 200, { cron: { id: cron.id, destination: cron.destination } });
+  if (isDeepStrictEqual(cron.destination, next)) return ok({ cron: { id: cron.id, destination: cron.destination } });
   const updated = await app.setCronDestination(id, next);
   await notifyOwnerOfCronEdit(app, { cron, editorId: actor.id, changeSummary: ["destination"] });
   scoped.audit("cron.destination.update", id, cron.ownerScopeId);
-  return sendJson(res, 200, { cron: updated ? { id: updated.id, destination: updated.destination } : null });
+  return ok({ cron: updated ? { id: updated.id, destination: updated.destination } : null });
 }
 
-export async function getAdminSkill(ctx: ApiCtx): Promise<void> {
-  const { res, app, params } = ctx;
+export async function getAdminSkill(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, params } = ctx;
   const id = params.id!;
   const scoped = await requireScopedResource(ctx, () => app.getSkill(id), "scopeId", "skill", "fallback");
-  if (!scoped) return;
   const { record: skill } = scoped;
   const provenance = skill.pack;
   const provenancePack = provenance ? ((await app.getSkillPack(provenance.packId)) ?? undefined) : undefined;
   scoped.audit("skill.read", id, skill.scopeId);
-  return sendJson(res, 200, {
+  return ok({
     id: skill.id,
     ownerScopeId: skill.scopeId,
     name: skill.manifest.name,
@@ -145,13 +140,12 @@ export async function getAdminSkill(ctx: ApiCtx): Promise<void> {
   });
 }
 
-export async function archiveAdminSkill(ctx: ApiCtx): Promise<void> {
-  const { res, app, params } = ctx;
+export async function archiveAdminSkill(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, params } = ctx;
   const id = params.id!;
   const scoped = await requireScopedResource(ctx, () => app.getSkill(id), "scopeId", "skill");
-  if (!scoped) return;
   const { record: skill } = scoped;
   await app.archiveSkill(id);
   scoped.audit("skill.archive", id, skill.scopeId);
-  return sendJson(res, 200, { ok: true });
+  return ok({ ok: true });
 }

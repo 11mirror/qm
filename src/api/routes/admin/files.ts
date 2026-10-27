@@ -1,7 +1,7 @@
 import { fileArtifactId, type FileArtifact } from "../../../files/file-artifact-store.ts";
 import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../../../core/attachments.ts";
-import { contentDispositionAttachment, contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../../http.ts";
-import { type ApiCtx } from "../route.ts";
+import { contentDispositionAttachment, contentTypeWithUtf8Charset, pipeToResponse } from "../../http.ts";
+import { type ApiCtx, ok, reply, type RouteResult } from "../route.ts";
 import { adminAt, badRequest, discoverScopes, notFound, scopedAdmin } from "./common.ts";
 
 const FILE_PREVIEW_MAX_BYTES = 256 * 1024;
@@ -21,25 +21,23 @@ const fileRow = (a: FileArtifact) => ({
 });
 
 async function adminFile(ctx: ApiCtx) {
-  const { res, deps, url } = ctx;
+  const { deps, url } = ctx;
   const id = url.searchParams.get("id") ?? "";
-  if (!id) return badRequest(res, "id required");
-  if (!deps.files) return notFound(res);
+  if (!id) throw badRequest("id required");
+  if (!deps.files) throw notFound();
   const art = await deps.files.get(id);
-  if (!art) return notFound(res);
+  if (!art) throw notFound();
   const authz = await adminAt(ctx, art.ownerScopeId);
-  if (!authz) return;
   return { files: deps.files, id, art, authz };
 }
 
-export async function readAdminFile(ctx: ApiCtx): Promise<void> {
-  const { res } = ctx;
+export async function readAdminFile(ctx: ApiCtx): Promise<RouteResult> {
   const found = await adminFile(ctx);
   if (!found) return;
   const { files, id, art, authz } = found;
   authz.audit("file.read", art.path);
   const opened = await files.open(id);
-  if (!opened) return notFound(res);
+  if (!opened) throw notFound();
   const chunks: Buffer[] = [];
   let total = 0;
   let truncated = false;
@@ -56,10 +54,10 @@ export async function readAdminFile(ctx: ApiCtx): Promise<void> {
   }
   const content = Buffer.concat(chunks).toString("utf8");
   const { ownerScopeId: scopeId, path, name, mimetype } = art;
-  return sendJson(res, 200, { id: art.id, scopeId, path, name, mimetype, content, truncated });
+  return ok({ id: art.id, scopeId, path, name, mimetype, content, truncated });
 }
 
-export async function downloadAdminFile(ctx: ApiCtx): Promise<void> {
+export async function downloadAdminFile(ctx: ApiCtx): Promise<RouteResult> {
   const { res } = ctx;
   const found = await adminFile(ctx);
   if (!found) return;
@@ -68,7 +66,7 @@ export async function downloadAdminFile(ctx: ApiCtx): Promise<void> {
   const inline = /^(image\/(png|jpeg|gif|webp|avif|bmp)|application\/pdf|text\/plain)$/.test(mime);
   authz.audit(inline ? "file.view" : "file.download", art.path);
   const opened = await files.open(id);
-  if (!opened) return notFound(res);
+  if (!opened) throw notFound();
   res.writeHead(200, {
     "content-type": inline ? contentTypeWithUtf8Charset(art.mimetype) : "application/octet-stream",
     "content-length": String(opened.sizeBytes),
@@ -79,14 +77,13 @@ export async function downloadAdminFile(ctx: ApiCtx): Promise<void> {
   pipeToResponse(res, opened.stream, "file read failed");
 }
 
-export async function listAdminFiles(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps, url } = ctx;
+export async function listAdminFiles(ctx: ApiCtx): Promise<RouteResult> {
+  const { app, deps, url } = ctx;
   const authz = await scopedAdmin(ctx);
-  if (!authz) return;
   const { scope, orgWide } = authz;
   const nameQuery = (url.searchParams.get("q") ?? "").trim();
   authz.audit("files.read", "files");
-  if (!deps.files) return sendJson(res, 200, { scopeId: scope, files: [] });
+  if (!deps.files) return ok({ scopeId: scope, files: [] });
   const scopes = orgWide ? [...(await discoverScopes(app, deps)).keys()] : [scope];
   const files: ReturnType<typeof fileRow>[] = [];
   let cursor: string | undefined;
@@ -99,16 +96,14 @@ export async function listAdminFiles(ctx: ApiCtx): Promise<void> {
     files.push(...page.files.map(fileRow));
     cursor = page.nextCursor;
   } while (cursor && files.length < FILES_LIST_MAX);
-  return sendJson(res, 200, { scopeId: scope, files });
+  return ok({ scopeId: scope, files });
 }
 
-export async function uploadAdminFile(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body } = ctx;
+export async function uploadAdminFile(ctx: ApiCtx): Promise<RouteResult> {
+  const { deps, body } = ctx;
   const authz = await scopedAdmin(ctx);
-  if (!authz) return;
-  if (!deps.files) return sendJson(res, 404, { error: "not_found", message: "file store not wired" });
-  if (!deps.blobTransfer)
-    return sendJson(res, 501, { error: "not_configured", message: "blob transfer store not wired" });
+  if (!deps.files) return reply(404, { error: "not_found", message: "file store not wired" });
+  if (!deps.blobTransfer) return reply(501, { error: "not_configured", message: "blob transfer store not wired" });
   const { actor, scope } = authz;
   const b = body as { blobId?: unknown; name?: unknown; mimetype?: unknown };
   const blobId = typeof b.blobId === "string" ? b.blobId.trim() : "";
@@ -118,9 +113,9 @@ export async function uploadAdminFile(ctx: ApiCtx): Promise<void> {
       .split(";")[0]!
       .trim()
       .toLowerCase() || mimeFromName(name);
-  if (!blobId) return badRequest(res, "blobId required");
+  if (!blobId) throw badRequest("blobId required");
   const opened = await deps.blobTransfer.open(blobId);
-  if (!opened) return sendJson(res, 404, { error: "not_found", message: "staged blob not found" });
+  if (!opened) return reply(404, { error: "not_found", message: "staged blob not found" });
   const id = fileArtifactId(`admin-upload:${actor.id}:${scope}:${Date.now()}:${blobId}`, "in", 0);
   const path = `artifacts/${id}/${name}`;
   try {
@@ -137,7 +132,7 @@ export async function uploadAdminFile(ctx: ApiCtx): Promise<void> {
       maxBytes: MAX_ATTACHMENT_BYTES,
     });
     authz.audit("file.upload", path);
-    return sendJson(res, 200, { file: fileRow(artifact) });
+    return ok({ file: fileRow(artifact) });
   } finally {
     await deps.blobTransfer.delete(blobId);
   }

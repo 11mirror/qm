@@ -4,7 +4,7 @@ import type { ServerResponse } from "node:http";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import { composioUserId } from "../src/api/routes/composio.ts";
 import { composioTwitterMediaRoutes } from "../src/api/routes/composio-twitter-media.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+import { type ApiCtx, respond } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
@@ -95,7 +95,7 @@ async function fixture() {
       capability: "capability" in options ? options.capability : cap,
       actor: options.actor ? { p: options.actor, exp: Date.now() + 60_000 } : null,
     } as unknown as ApiCtx;
-    await composioTwitterMediaRoutes[0]!.handle(ctx);
+    await respond(composioTwitterMediaRoutes[0]!.handle, ctx);
     return { status, data: JSON.parse(text), text };
   }
   return { upload, calls, replies, audits, deps };

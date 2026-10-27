@@ -5,7 +5,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import pg from "pg";
 import { runEventRoutes } from "../src/api/routes/run-events.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+import { type ApiCtx, respond } from "../src/api/routes/route.ts";
 import type { App } from "../src/api/app.ts";
 import { configurePgTenancy, createPgPool, type PgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresNotifyBus } from "../src/persistence/postgres-notify-bus.ts";
@@ -106,7 +106,12 @@ test(
     const offProbe = withTenant(kitten.tenant, () => kitten.bus.subscribe(() => seenIn.push(tenant().id)));
     const server: Server = createServer((req, res) =>
       withTenant(kitten.tenant, () => {
-        void runEventRoutes[0]!.handle({ app: kitten.app, req, res, params: { id: runId } } as unknown as ApiCtx);
+        void respond(runEventRoutes[0]!.handle, {
+          app: kitten.app,
+          req,
+          res,
+          params: { id: runId },
+        } as unknown as ApiCtx);
       }),
     );
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
