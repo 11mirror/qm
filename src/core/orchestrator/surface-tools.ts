@@ -7,6 +7,7 @@ import type {
   Principal,
   ScopeId,
   Session,
+  SurfaceContextQuery,
 } from "../../types.ts";
 import {
   openGroupViaSurface,
@@ -39,20 +40,48 @@ import { parseBotLedger, type BotPolicy, type ChannelPolicy } from "../../surfac
 import { isoFromTs } from "../../util/message-tag.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { headLooksLikeText, replaceThreadSegment, type TurnPostKeys } from "./turn-helpers.ts";
-import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
+import type { OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./types.ts";
 import { parseDeliveryTarget } from "../../slack/delivery.ts";
+import { RECENT_THREAD_LIMIT } from "../../slack/conversation-view.ts";
 import { parseFileRef } from "../../surfaces/refs.ts";
 
-const SURFACE_READ_MAX = 200;
 const SURFACE_SEARCH_DEFAULT = 10;
-const SURFACE_SEARCH_MAX = 40;
 const SURFACE_FILE_PAGE_CHARS = 20_000;
-const REACH_POSTS_PER_TURN = 5;
 
 export interface SpineState {
   surfaceOutboundCount: number;
-  crossConversationPosts: number;
   turnUserEntrySeq: number | undefined;
+}
+
+interface PulledPages {
+  messages: unknown[];
+  selfTs: string[];
+  note?: string;
+  exhausted: boolean;
+}
+
+async function pullPages(
+  puller: SurfaceContextPuller,
+  source: string,
+  query: SurfaceContextQuery,
+  done: (messages: unknown[]) => boolean,
+): Promise<PulledPages | null> {
+  const first = await puller.pull(source, query);
+  if (!first) return null;
+  const messages = [...first.messages];
+  const selfTs = [...(first.selfTs ?? [])];
+  const notes = new Set(first.note ? [first.note] : []);
+  let page = first;
+  while (page.hasMore && page.nextBefore && !done(messages)) {
+    const next = await puller.pull(source, { ...query, before: page.nextBefore });
+    if (!next) break;
+    messages.push(...next.messages);
+    selfTs.push(...(next.selfTs ?? []));
+    if (next.note) notes.add(next.note);
+    page = next;
+  }
+  const note = [...notes].join(" ");
+  return { messages, selfTs, ...(note ? { note } : {}), exhausted: !page.hasMore };
 }
 
 export interface SurfaceToolsContext {
@@ -235,7 +264,7 @@ const targetOf = (input: { channel?: string; participants?: readonly string[] })
 });
 
 function postingTools(turn: SurfaceTurn): Pick<SurfaceToolDeps, "post" | "reach" | "react" | "edit" | "delete"> {
-  const { deps, input, conversation, postKeys, spine, here: currentDestination } = turn;
+  const { deps, input, conversation, postKeys, here: currentDestination } = turn;
   const { resolveDestination, enqueue, resolveFiles } = destinationTools(turn);
   let editRefConsumed = false;
   return {
@@ -262,11 +291,6 @@ function postingTools(turn: SurfaceTurn): Pick<SurfaceToolDeps, "post" | "reach"
     },
     reach: async (postText, target, files, sandboxId) => {
       const seq = postKeys.take();
-      if (spine.crossConversationPosts >= REACH_POSTS_PER_TURN)
-        return {
-          ok: false,
-          message: `outbound limit reached for this turn (${REACH_POSTS_PER_TURN} posts to other conversations)`,
-        };
       const selectors = [
         target.channel !== undefined,
         target.recipient !== undefined,
@@ -282,7 +306,6 @@ function postingTools(turn: SurfaceTurn): Pick<SurfaceToolDeps, "post" | "reach"
       const r0 = await enqueue(d.destination, postText, seq, f.attachments);
       if (!r0.ok) return r0;
       const r = f.attachments?.length ? { ...r0, attachments: postedFileMetas(f.attachments) } : r0;
-      spine.crossConversationPosts += 1;
       let label = `a group DM (${target.participants?.length ?? 0} people)`;
       if (target.channel !== undefined) label = `#${target.channel.replace(/^#/, "")}`;
       else if (target.recipient !== undefined) label = `a DM to ${target.recipient}`;
@@ -367,7 +390,7 @@ function readingTools(
         conversationTarget: currentDestination.target,
         viewer: actor.id,
         ...rateLimitRecipient,
-        ...(opts?.limit !== undefined ? { count: Math.max(1, Math.min(SURFACE_READ_MAX, opts.limit)) } : {}),
+        ...(opts?.limit !== undefined ? { count: opts.limit } : {}),
       });
       if (!result) return { ok: false, message: "the surface didn't answer in time" };
       if (result.note && !result.messages?.length) return { ok: false, message: result.note };
@@ -377,16 +400,19 @@ function readingTools(
       if (!deps.surfaceContext) return { ok: false, message: "the surface can't be read from this turn" };
       const dest = currentDestination;
       if (!dest.target) return { ok: false, message: "this conversation has nothing to check" };
-      const result = await deps.surfaceContext.pull(input.surface ?? "unknown", {
-        conversationTarget: dest.target,
-        viewer: actor.id,
-        ...rateLimitRecipient,
-        count: SURFACE_READ_MAX,
-      });
-      if (!result) return { ok: false, message: "the surface didn't answer in time" };
-      if (result.note && !result.messages?.length) return { ok: false, message: result.note };
-      const msgs = (result.messages ?? []) as Array<{ ts?: string; threadTs?: string }>;
       const since = opts?.since;
+      const reachedSince = (messages: unknown[]) =>
+        since === undefined ||
+        (messages as Array<{ ts?: string }>).some((m) => typeof m?.ts === "string" && m.ts <= since);
+      const result = await pullPages(
+        deps.surfaceContext,
+        input.surface ?? "unknown",
+        { conversationTarget: dest.target, viewer: actor.id, ...rateLimitRecipient, count: RECENT_THREAD_LIMIT },
+        reachedSince,
+      );
+      if (!result) return { ok: false, message: "the surface didn't answer in time" };
+      if (result.note && !result.messages.length) return { ok: false, message: result.note };
+      const msgs = result.messages as Array<{ ts?: string; threadTs?: string }>;
       const self = new Set(result.selfTs);
       const newer = msgs.filter(
         (m) => typeof m?.ts === "string" && (since === undefined || m.ts > since) && !self.has(m.ts),
@@ -404,8 +430,8 @@ function readingTools(
         undefined,
       );
       const coverage = await coverageForTurn();
-      const capped =
-        msgs.length >= SURFACE_READ_MAX ? `Counts cover only the newest ${SURFACE_READ_MAX} messages.` : undefined;
+      const complete = result.exhausted || (since !== undefined && reachedSince(msgs));
+      const capped = complete ? undefined : `Counts cover only the newest ${msgs.length} messages.`;
       const message = [result.note, capped].filter(Boolean).join(" ");
       return {
         ok: true,
@@ -467,17 +493,20 @@ function searchTool(
       const withCoverage = (r: SurfaceSearchResult): SurfaceSearchResult =>
         coverage ? { ...r, coverageSince: coverage } : r;
       if (!q) return withCoverage({ ok: true, hits: [], source: "cache" });
-      const limit = Math.max(1, Math.min(SURFACE_SEARCH_MAX, opts?.limit ?? SURFACE_SEARCH_DEFAULT));
+      const limit = Math.max(1, opts?.limit ?? SURFACE_SEARCH_DEFAULT);
       const dest = currentDestination;
+      const matching = (messages: unknown[], prefiltered = false) =>
+        (messages as Array<{ ts?: string; time?: string; author?: string; text?: string }>).filter(
+          (m) => typeof m?.text === "string" && (prefiltered || m.text.toLowerCase().includes(q.toLowerCase())),
+        );
       const shapeHits = (messages: unknown[], prefiltered = false) =>
-        (messages as Array<{ ts?: string; time?: string; author?: string; text?: string }>)
-          .filter((m) => typeof m?.text === "string" && (prefiltered || m.text.toLowerCase().includes(q.toLowerCase())))
+        matching(messages, prefiltered)
           .slice(-limit)
           .map((m) => ({
             ...(m.ts ? { ref: m.ts } : {}),
             ...(m.author ? { author: m.author } : {}),
             ...(m.time ? { when: m.time } : {}),
-            snippet: String(m.text).slice(0, 200),
+            snippet: String(m.text),
           }));
       if (opts?.source === "slack") {
         if (!deps.surfaceContext?.searchLive)
@@ -487,7 +516,7 @@ function searchTool(
           conversationTarget: dest.target,
           viewer: actor.id,
           ...rateLimitRecipient,
-          count: SURFACE_READ_MAX,
+          count: limit,
           searchAll: q,
         });
         if (!result) return { ok: false, message: "the surface didn't answer in time" };
@@ -521,7 +550,7 @@ function searchTool(
             ref: hit.ts,
             ...(hit.authorName ? { author: hit.authorName } : {}),
             when: isoFromTs(hit.ts),
-            snippet: hit.text.slice(0, 200),
+            snippet: hit.text,
           })),
           source: "cache",
           message: "Search covers stored Slack events only; older or missed messages may be absent.",
@@ -541,18 +570,22 @@ function searchTool(
       }
       if (!deps.surfaceContext) return { ok: false, message: "search isn't available from this turn" };
       if (!dest.target) return { ok: false, message: "this conversation has nothing to search" };
-      const result = await deps.surfaceContext.pull(input.surface ?? "unknown", {
-        conversationTarget: dest.target,
-        viewer: actor.id,
-        ...rateLimitRecipient,
-        count: SURFACE_READ_MAX,
-        match: q,
-      });
+      const result = await pullPages(
+        deps.surfaceContext,
+        input.surface ?? "unknown",
+        {
+          conversationTarget: dest.target,
+          viewer: actor.id,
+          ...rateLimitRecipient,
+          count: RECENT_THREAD_LIMIT,
+          match: q,
+        },
+        (messages) => matching(messages).length >= limit,
+      );
       if (!result) return { ok: false, message: "the surface didn't answer in time" };
-      if (result.note && !result.messages?.length) return { ok: false, message: result.note };
-      const scanned = result.messages ?? [];
-      const capped =
-        scanned.length >= SURFACE_READ_MAX ? `Searched only the newest ${SURFACE_READ_MAX} messages.` : undefined;
+      if (result.note && !result.messages.length) return { ok: false, message: result.note };
+      const scanned = result.messages;
+      const capped = result.exhausted ? undefined : `Searched only the newest ${scanned.length} messages.`;
       const message = [result.note, capped].filter(Boolean).join(" ");
       return withCoverage({
         ok: true,
