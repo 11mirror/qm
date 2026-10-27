@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import pg from "pg";
-import { CONTRACT_MIGRATIONS } from "../../src/persistence/contract-migrations.ts";
+import { CONTRACT_MIGRATIONS, HELD_BACK_CONTRACT_MIGRATIONS } from "../../src/persistence/contract-migrations.ts";
 import { applyPgMigrations, migrateRegisteredPgSchemas, pgMigrationFrom } from "../../src/persistence/pg-pool.ts";
 import { SCHEMA_BASELINE } from "../../src/persistence/schema-baseline.ts";
 import { TENANT_BYPASS_OPTION } from "../../src/persistence/tenancy.ts";
@@ -147,7 +147,7 @@ async function copyTenants(from: string, to: string): Promise<void> {
 async function applyContracts(url: string): Promise<void> {
   const pool = new pg.Pool({ connectionString: url, options: TENANT_BYPASS_OPTION });
   try {
-    await applyPgMigrations(pool, CONTRACT_MIGRATIONS.map(pgMigrationFrom));
+    await applyPgMigrations(pool, [...CONTRACT_MIGRATIONS, ...HELD_BACK_CONTRACT_MIGRATIONS].map(pgMigrationFrom));
   } finally {
     await pool.end();
   }

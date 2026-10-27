@@ -215,8 +215,8 @@ export function createPostgresChannelPolicyStore(connectionString: string): Chan
              set_by = EXCLUDED.set_by, updated_at = EXCLUDED.updated_at
            RETURNING *
          ), hist AS (
-           INSERT INTO channel_policy_history(org_id, container, orders, bots, ambient_enabled, set_by, session_id, created_at)
-           SELECT $1, $2, '', up.bots, up.ambient_enabled, $4, $6, $5 FROM up
+           INSERT INTO channel_policy_history(org_id, container, bots, ambient_enabled, set_by, session_id, created_at)
+           SELECT $1, $2, up.bots, up.ambient_enabled, $4, $6, $5 FROM up
          )
          SELECT * FROM up`,
         [

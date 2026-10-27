@@ -208,6 +208,8 @@ export interface PgMigrationDefinition {
    */
   acceptedChecksums?: readonly string[];
   script?: boolean;
+  before?: readonly PgMigrationDefinition[];
+  contract?: PgMigrationDefinition;
 }
 
 export interface PgMigration extends PgMigrationDefinition {
@@ -314,6 +316,11 @@ export function pgMigrationFrom(definition: PgMigrationDefinition): PgMigration 
     definition.script,
   );
 }
+
+const pgMigrationsFrom = (definition: PgMigrationDefinition): PgMigration[] =>
+  [...(definition.before ?? []), definition, ...(definition.contract ? [definition.contract] : [])].map(
+    pgMigrationFrom,
+  );
 
 const SCHEMA_LOCK_POLL_MS = 50;
 
@@ -670,8 +677,13 @@ function registerPgMigration(connectionString: string, migration: PgMigration): 
   database.set(migration.id, migration);
 }
 
+const migrationPhase = (id: string): number => (id.startsWith("contract/") ? 1 : 0);
+
+export const pgMigrationOrder = (a: string, b: string): number =>
+  migrationPhase(a) - migrationPhase(b) || a.localeCompare(b);
+
 export function registeredPgMigrations(connectionString: string): readonly PgMigration[] {
-  return [...(registeredMigrations.get(connectionString)?.values() ?? [])].sort((a, b) => a.id.localeCompare(b.id));
+  return [...(registeredMigrations.get(connectionString)?.values() ?? [])].sort((a, b) => pgMigrationOrder(a.id, b.id));
 }
 
 export async function migrateRegisteredPgSchemas(connectionString?: string): Promise<void> {
@@ -711,7 +723,7 @@ export function createPgPool(
   const migrates = idOrDefinitions !== undefined;
   const definitions =
     typeof idOrDefinitions === "string" ? [{ id: idOrDefinitions, statements }] : (idOrDefinitions ?? []);
-  const migrations = definitions.map(pgMigrationFrom);
+  const migrations = definitions.flatMap(pgMigrationsFrom);
   for (const migration of migrations) registerPgMigration(connectionString, migration);
   let readyP: Promise<void> | null = null;
   let sessionPoolP: Promise<Pool> | null = null;
@@ -780,18 +792,18 @@ export function createPgPool(
     ]);
   }
   async function migrate(definition: PgMigrationDefinition): Promise<void> {
-    const migration = pgMigrationFrom(definition);
-    registerPgMigration(connectionString, migration);
+    const migrations = pgMigrationsFrom(definition);
+    for (const migration of migrations) registerPgMigration(connectionString, migration);
     if (closed) throw new Error("Postgres store is closed");
     await ready();
     await withMigrationPool(async (instance) => {
-      const applied = await applyPgMigrations(instance, [migration]);
-      markSettled(connectionString, [migration]);
+      const applied = await applyPgMigrations(instance, migrations);
+      markSettled(connectionString, migrations);
       await applyTenancyIfEnabled(instance, connectionString, applied > 0);
     });
   }
   function registerMigration(definition: PgMigrationDefinition): void {
-    registerPgMigration(connectionString, pgMigrationFrom(definition));
+    for (const migration of pgMigrationsFrom(definition)) registerPgMigration(connectionString, migration);
   }
   return { pool, sessionPool, q, query, registerMigration, migrate, close };
 }
