@@ -1,4 +1,5 @@
 import { modelRequestOverrides } from "../../model/pi-models.ts";
+import { gatewayRoot } from "../../model/provider-endpoints.ts";
 import { resolveBrowserModel } from "../../model/browser-model.ts";
 import { BrowserCompletionError, nativeBrowserCompletion } from "../../model/browser-completion.ts";
 import { BROWSER_MODEL_AUD } from "../../auth/capability-token.ts";
@@ -28,7 +29,7 @@ const BROWSER_REQUEST_FAILED = { error: "Selected AI account could not complete 
 
 async function browserModel(ctx: ApiCtx): Promise<void> {
   const { capability, deps, body, res } = ctx;
-  const gateway = deps.browserModelGateway;
+  const gateway = deps.modelGatewayTransport;
   if (!capability?.browserModel) return sendJson(res, 403, { error: "browser model grant required" });
   const input = body as Record<string, unknown>;
   if (
@@ -85,7 +86,7 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
     await gateway.refresh?.();
     const target = gateway.models[capability.browserModel];
     if (!target) return sendJson(res, 503, { error: "browser model unavailable" });
-    const response = await fetch(`${gateway.url.replace(/\/+$/, "").replace(/\/v1$/, "")}/v1/chat/completions`, {
+    const response = await fetch(`${gatewayRoot(gateway.url)}/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json", [gateway.apiKeyHeader]: gateway.apiKey },
       body: JSON.stringify({ ...input, model: target, stream: false }),
