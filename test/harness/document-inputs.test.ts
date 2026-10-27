@@ -1,3 +1,4 @@
+import { countTokens } from "../../src/util/tokens.ts";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
@@ -296,19 +297,25 @@ test("document restoration rejects tampered bytes", async () => {
   assert.match(result.notices[0]!, /integrity/);
 });
 
-test("fallback text has one aggregate model-aware budget across all attachments", async () => {
+test("fallback text shares one token budget derived from the model's window minus its output reserve", async () => {
+  const body = Array.from({ length: 20_000 }, (_, i) => `word${i}`).join(" ");
   const documents = Array.from({ length: 10 }, (_, i) => ({
     name: `large-${i}.txt`,
     mimeType: "text/plain",
-    dataBase64: Buffer.from("x".repeat(200_000)).toString("base64"),
+    dataBase64: Buffer.from(body).toString("base64"),
   }));
+  const request = { input: [{ role: "user", content: [{ type: "input_text", text: "Summarize" }] }] };
   const payload = await withDocumentInputs(
-    { input: [{ role: "user", content: [{ type: "input_text", text: "Summarize" }] }] },
-    { api: "openai-codex-responses", contextWindow: 32_000 },
+    request,
+    { api: "openai-codex-responses", contextWindow: 32_000, maxTokens: 8_000 },
     documents,
   );
-  assert.ok(JSON.stringify(payload).length < 30_000);
-  assert.match(JSON.stringify(payload), /truncated to fit/);
+  const rendered = JSON.stringify(payload);
+  assert.ok(countTokens(rendered) <= 32_000, `the request fits the window (${countTokens(rendered)} tokens)`);
+  assert.ok(countTokens(rendered) > 20_000, "the whole budget past the output reserve is used for documents");
+  assert.match(rendered, /truncated to fit/);
+  const unbounded = JSON.stringify(await withDocumentInputs(request, { api: "openai-codex-responses" }, documents));
+  assert.doesNotMatch(unbounded, /truncated to fit/, "a model without a known window gets every document whole");
 });
 
 test("document text reports truncation as a flag, not from the extracted wording", async () => {

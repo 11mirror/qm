@@ -19,6 +19,7 @@ export interface DocumentModel {
   id?: string;
   input?: readonly string[];
   contextWindow?: number;
+  maxTokens?: number;
 }
 
 export function nativeDocumentFormat(
@@ -48,11 +49,11 @@ export function nativeDocumentFormat(
 export async function documentBlocks(
   documents: readonly DocumentInput[],
   model: DocumentModel,
-  maxTextChars: number | DocumentTextBudget = 100_000,
+  maxTextTokens: number | DocumentTextBudget = Number.POSITIVE_INFINITY,
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>[]> {
   const blocks: Record<string, unknown>[] = [];
-  const budget = typeof maxTextChars === "number" ? { remaining: maxTextChars } : maxTextChars;
+  const budget = typeof maxTextTokens === "number" ? { remainingTokens: maxTextTokens } : maxTextTokens;
   const fitText = (text: string): string => fitDocumentText(text, budget);
   for (const document of documents) {
     const candidate = nativeDocumentFormat(model, document);
@@ -138,10 +139,13 @@ export async function withDocumentInputs(
   const promptTokens = countTokens(
     JSON.stringify(payload, (key, value) => (["data", "image_url", "file_data"].includes(key) ? "" : value)),
   );
-  const remainingTokens = Math.max(0, (model.contextWindow ?? 128_000) - promptTokens - 8192);
+  const remainingTokens =
+    model.contextWindow === undefined
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, model.contextWindow - promptTokens - (model.maxTokens ?? 0));
   const blocks =
     stubText === undefined
-      ? await documentBlocks(documents, model, Math.min(100_000, remainingTokens), signal)
+      ? await documentBlocks(documents, model, remainingTokens, signal)
       : [bareText ? { text: stubText } : { type: textType, text: stubText }];
   let original: unknown[] = [];
   if (Array.isArray(content)) original = content;

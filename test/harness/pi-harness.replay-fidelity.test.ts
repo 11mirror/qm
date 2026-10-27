@@ -1,3 +1,4 @@
+import type { PiReplayMessage } from "../../src/harness/replay.ts";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { createPiHarness } from "../../src/harness/pi-harness.ts";
@@ -9,7 +10,7 @@ import { storedItem, type Item, type NewItem } from "../../src/sessions/items.ts
 import type { ScopeId } from "../../src/types.ts";
 import { createMemoryRunSignalStore, type RunSignalStore } from "../../src/runs/run-signal-store.ts";
 import { createMemoryDurableByteStore } from "../../src/files/durable-byte-store.ts";
-import { artifactImageLoader } from "../../src/harness/replay-images.ts";
+import { artifactImageLoader, ELIDED_IMAGE_TEXT, restoreReplayImages } from "../../src/harness/replay-images.ts";
 import { createPostgresToolOutputStore, type ToolOutputStore } from "../../src/sessions/tool-output.ts";
 import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
@@ -469,9 +470,31 @@ test("a replayed image is read from the file store once, not on every turn", asy
     return open(id);
   };
   const load = artifactImageLoader(files, () => true);
-  const first = await load({ artifactId: "art-once", mimeType: "image/png" }, 10_000_000);
-  const second = await load({ artifactId: "art-once", mimeType: "image/png" }, 10_000_000);
-  assert.deepEqual([first, second, opens], [{ data: PNG_A, sizeBytes: 70 }, { data: PNG_A, sizeBytes: 70 }, 1]);
+  const first = await load({ artifactId: "art-once", mimeType: "image/png" });
+  const second = await load({ artifactId: "art-once", mimeType: "image/png" });
+  assert.deepEqual([first, second, opens], [{ data: PNG_A }, { data: PNG_A }, 1]);
+});
+
+test("replayed images are restored newest first until the request byte budget is spent, then elided", async () => {
+  const image = (artifactId: string) => ({ type: "image" as const, ref: { artifactId, mimeType: "image/png" } });
+  const messages = [
+    { role: "user", content: [{ type: "text", text: "a" }, image("old")] },
+    { role: "assistant", content: [{ type: "text", text: "ok" }] },
+    { role: "user", content: [{ type: "text", text: "b" }, image("new")] },
+  ] as unknown as PiReplayMessage[];
+  const load = async () => ({ data: "x".repeat(100) });
+  const restored = await restoreReplayImages(messages, load, 150);
+  const blocks = (i: number) => (restored[i] as { content: Array<{ type: string; text?: string }> }).content;
+  assert.equal(blocks(2)[1]!.type, "image", "the newest image fits the budget");
+  assert.equal(blocks(0)[1]!.type, "text", "the older one no longer fits");
+  assert.equal(blocks(0)[1]!.text, ELIDED_IMAGE_TEXT);
+  const all = await restoreReplayImages(messages, load);
+  assert.ok(
+    all.every((m) =>
+      (m as { content: Array<{ type: string }> }).content.every((b) => b.type !== "text" || !("ref" in b)),
+    ),
+  );
+  assert.equal((all[0] as { content: Array<{ type: string }> }).content[1]!.type, "image");
 });
 
 const PG_URL = process.env.DATABASE_URL;
@@ -623,7 +646,8 @@ test(
       );
       const before = first.bodies[1]!.input!;
       const after = second.bodies[0]!.input!;
-      assert.ok(JSON.stringify(before).includes(bigResult.trim()));
+      assert.ok(!JSON.stringify(before).includes(bigResult.trim()), "without a parking store the result is cut");
+      assert.match(JSON.stringify(before), /the full output was not kept/);
       assert.equal(JSON.stringify(after.slice(0, before.length)), JSON.stringify(before));
     });
   },
