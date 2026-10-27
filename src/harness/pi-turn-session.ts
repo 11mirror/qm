@@ -1,4 +1,3 @@
-/** Opens the Pi agent session for one turn: isolated dirs, replay seeding, tools and the request hooks. */
 import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,7 +30,8 @@ import {
   guardOutputBudget,
 } from "./pi-payload.ts";
 import { type ProviderKeys, buildModelRuntime, applyFastSpeed, applyReasoningMode } from "./pi-model-runtime.ts";
-import type { PiHarnessContext } from "./pi-harness.ts";
+import type { CoreToolOptions } from "./agent-tools.ts";
+import type { ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
 
 export interface TurnSession {
   agentSession: AgentSession;
@@ -177,8 +177,11 @@ async function openAgentSession(
     throw err;
   }
 }
-export function createTurnTools(ctx: PiHarnessContext, ref: ToolContextRef, turn: HarnessTurnInput): ToolDefinition[] {
-  const { opts } = ctx;
+export function createTurnTools(
+  opts: CoreToolOptions | undefined,
+  ref: ToolContextRef,
+  turn: HarnessTurnInput,
+): ToolDefinition[] {
   return createAgentTools(ref, {
     reachExec: opts?.reachExec,
     controlTools: opts?.controlTools,
@@ -196,19 +199,35 @@ export function createTurnTools(ctx: PiHarnessContext, ref: ToolContextRef, turn
   });
 }
 
-export async function createTurnSession(
-  ctx: PiHarnessContext,
-  model: Model<Api>,
-  sessionId: string,
-  systemPrompt: string,
-  history: Item[],
-  priorTurns: ConversationTurn[] | undefined,
-  turnProviderKeys: ProviderKeys | undefined,
-  ref: TurnSession["ref"],
-  tools: ToolDefinition[],
-  loadImage: ReplayImageLoader | undefined,
-): Promise<TurnSession> {
-  const { tempDirPrefix, resolveProviderKeys, modelGateway, captureRequests } = ctx;
+export interface TurnSessionInput {
+  model: Model<Api>;
+  sessionId: string;
+  systemPrompt: string;
+  history: Item[];
+  priorTurns: ConversationTurn[] | undefined;
+  providerKeys: () => Promise<ProviderKeys>;
+  modelGateway: ModelGatewayTransportConfig | undefined;
+  tempDirPrefix: string;
+  captureRequests: boolean;
+  ref: TurnSession["ref"];
+  tools: ToolDefinition[];
+  loadImage: ReplayImageLoader | undefined;
+}
+
+export async function createTurnSession({
+  model,
+  sessionId,
+  systemPrompt,
+  history,
+  priorTurns,
+  providerKeys,
+  modelGateway,
+  tempDirPrefix,
+  captureRequests,
+  ref,
+  tools,
+  loadImage,
+}: TurnSessionInput): Promise<TurnSession> {
   let reconstructed: PiReplayMessage[] | null;
   try {
     reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
@@ -219,11 +238,7 @@ export async function createTurnSession(
   const seedPlan = planColdStartSeed(reconstructed, !!priorTurns?.length);
   const composedPrompt = systemPrompt + (seedPlan === "preamble" ? replayPreamble(history) : "");
 
-  const modelRuntime = await buildModelRuntime(
-    turnProviderKeys ?? (await resolveProviderKeys()),
-    turnProviderKeys ? undefined : modelGateway,
-    "long",
-  );
+  const modelRuntime = await buildModelRuntime(await providerKeys(), modelGateway, "long");
   const { session, dirs } = await openAgentSession(tempDirPrefix, composedPrompt, {
     model,
     modelRuntime,
@@ -276,7 +291,7 @@ export async function createTurnSession(
         );
       }
       try {
-        const gateway = modelGatewayRequest(turnProviderKeys ? undefined : modelGateway, model as Model<Api>);
+        const gateway = modelGatewayRequest(modelGateway, model as Model<Api>);
         finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? GATEWAY_REQUEST_MAX_BYTES : undefined);
       } catch (e) {
         swallow("pi: request byte budget", e);

@@ -1,4 +1,3 @@
-/** Runs one Pi turn end to end: prompt, goal continuation, empty-ending re-prompt and recovery. */
 import { goalWorkDigest } from "./goal.ts";
 import { textFromContent } from "./pi-payload.ts";
 import { finishTurn } from "./turn-finish.ts";
@@ -42,9 +41,11 @@ import {
   createTurnTools,
   createTurnSession,
 } from "./pi-turn-session.ts";
-import type { PiHarnessContext } from "./pi-harness.ts";
+import type { PiModelAccess } from "./pi-model-access.ts";
+import type { CoreToolOptions } from "./agent-tools.ts";
+import type { ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
+import type { RunSignalStore } from "../runs/run-signal-store.ts";
 
-/** The agent's recent pi messages as governor work lines: what it said, called and got back. */
 function piGoalWork(messages: ReadonlyArray<unknown>): string {
   const lines: string[] = [];
   for (const m of messages as ReadonlyArray<{ role?: string; content?: unknown; toolName?: string }>) {
@@ -61,23 +62,20 @@ function piGoalWork(messages: ReadonlyArray<unknown>): string {
   }
   return goalWorkDigest(lines);
 }
-/** The turn's opened agent session plus what the later phases need from opening it. */
 interface OpenedPiTurn {
   turn: HarnessTurnInput;
   entry: TurnSession;
   desiredModelId: string;
   wantFast: boolean;
-  turnModelGateway: PiHarnessContext["modelGateway"];
-  /** The step recorder the recording tools report to while a prompt is running. */
+  turnModelGateway: ModelGatewayTransportConfig | undefined;
   active: { steps?: StepRecorder };
 }
 
-/** Builds the turn's tool context and tools, resumes an interrupted tool call, and opens the agent session. */
-async function openPiTurn(ctx: PiHarnessContext, dispatched: HarnessTurnInput): Promise<OpenedPiTurn> {
-  const { resolveModelId, modelGateway, requiredModel } = ctx;
-  const desiredModelId = dispatched.runtime?.modelId ?? resolveModelId();
-  const baseModel = requiredModel(desiredModelId, !dispatched.providerKeys);
-  const turnModelGateway = dispatched.providerKeys ? undefined : modelGateway;
+async function openPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInput): Promise<OpenedPiTurn> {
+  const { access } = opts;
+  const desiredModelId = dispatched.runtime?.modelId ?? opts.primaryModelId();
+  const baseModel = access.model(desiredModelId, !dispatched.providerKeys);
+  const turnModelGateway = dispatched.providerKeys ? undefined : access.gateway;
   const wantFast = wantsFastMode(dispatched.runtime?.fastMode, desiredModelId);
   const ref: TurnSession["ref"] = {
     current: dispatched.tools,
@@ -98,28 +96,26 @@ async function openPiTurn(ctx: PiHarnessContext, dispatched: HarnessTurnInput): 
     shutdown: dispatched.shutdown,
   };
   const active: OpenedPiTurn["active"] = {};
-  const tools = recordingTools(createTurnTools(ctx, ref, dispatched), () => active.steps);
+  const tools = recordingTools(createTurnTools(opts.toolOptions, ref, dispatched), () => active.steps);
   const resumed = await resumeInterruptedToolCall(dispatched, ref, tools as unknown as BridgedTool[]);
   const turn = resumed ? { ...dispatched, history: resumed } : dispatched;
-  const entry = await createTurnSession(
-    ctx,
-    withRequestHeaders(baseModel, !turnModelGateway?.models[desiredModelId], wantFast),
-    turn.session.id,
-    turn.systemPrompt,
-    turn.history,
-    turn.priorTurns,
-    turn.providerKeys,
+  const entry = await createTurnSession({
+    model: withRequestHeaders(baseModel, !turnModelGateway?.models[desiredModelId], wantFast),
+    sessionId: turn.session.id,
+    systemPrompt: turn.systemPrompt,
+    history: turn.history,
+    priorTurns: turn.priorTurns,
+    providerKeys: async () => turn.providerKeys ?? (await access.providerKeys()),
+    modelGateway: turnModelGateway,
+    tempDirPrefix: opts.tempDirPrefix,
+    captureRequests: opts.captureRequests,
     ref,
     tools,
-    turn.loadImage,
-  );
+    loadImage: turn.loadImage,
+  });
   return { turn, entry, desiredModelId, wantFast, turnModelGateway, active };
 }
 
-/**
- * Sets the turn's effort, telemetry and goal state, records the user message (unless continuing a
- * cut-off reply) and builds the model prompt.
- */
 async function preparePiPrompt(turn: HarnessTurnInput, entry: TurnSession, desiredModelId: string, wantFast: boolean) {
   const activeModel = entry.agentSession.model as { id?: string; headers?: Record<string, string> } | undefined;
   entry.ref.fast = wantFast;
@@ -187,7 +183,6 @@ async function preparePiPrompt(turn: HarnessTurnInput, entry: TurnSession, desir
   return { effectiveModel, telemetry, continueTurn, grindMeter, userEntry, modelPrompt };
 }
 
-/** The turn's transcript writes, run one after another; the first failure aborts the turn and is rethrown on settle. */
 type TurnPersistence = ReturnType<typeof createTurnPersistence>;
 
 function createTurnPersistence(entry: TurnSession, toolAbort: AbortController) {
@@ -218,10 +213,6 @@ function createTurnPersistence(entry: TurnSession, toolAbort: AbortController) {
   return { persist, rethrow, drain, settled };
 }
 
-/**
- * Feeds each finished pi message to the step recorder; a later user message is a steer (or a system
- * wake) and is recorded as one. Returns the unsubscribe.
- */
 function subscribeMessageEnds(opts: {
   turn: HarnessTurnInput;
   entry: TurnSession;
@@ -261,7 +252,6 @@ function subscribeMessageEnds(opts: {
 
 type TurnRace = (prompting: Promise<void>, capMs?: number) => Promise<TurnWallClockOutcome>;
 
-/** What the prompt phases share: the session, the wall-clock race and the turn's stop state. */
 interface PromptPhase {
   turn: HarnessTurnInput;
   entry: TurnSession;
@@ -273,7 +263,6 @@ interface PromptPhase {
   rawRemainingCapMs: () => number;
 }
 
-/** Keeps prompting an active goal after the first round, until it is met, blocked or out of time. */
 async function continueGoal(
   phase: PromptPhase,
   wallClock: TurnWallClockOutcome,
@@ -323,7 +312,6 @@ async function continueGoal(
   return wallClock;
 }
 
-/** Re-prompts once when the turn ended without a reply. Returns true when that recovery itself died. */
 async function repromptEmptyEnding(
   phase: PromptPhase,
   wallClock: TurnWallClockOutcome,
@@ -366,10 +354,6 @@ async function repromptEmptyEnding(
   return recoveryDead;
 }
 
-/**
- * Handles a prompt that threw: retry without documents, then on a provider refusal try the fallback
- * model. Rethrows when nothing recovered and the user did not stop the turn.
- */
 async function recoverTurnError(
   err: unknown,
   phase: PromptPhase,
@@ -400,11 +384,22 @@ async function recoverTurnError(
   }
 }
 
-export async function runPiTurn(ctx: PiHarnessContext, dispatched: HarnessTurnInput): Promise<HarnessTurnResult> {
-  const { companyServedId, defaultTurnWallClockMs, signals, opts } = ctx;
-  const { turn, entry, desiredModelId, wantFast, turnModelGateway, active } = await openPiTurn(ctx, dispatched);
+export interface PiTurnOptions {
+  access: PiModelAccess;
+  primaryModelId: () => string;
+  toolOptions: CoreToolOptions | undefined;
+  tempDirPrefix: string;
+  captureRequests: boolean;
+  turnWallClockMs: number;
+  signals: RunSignalStore | undefined;
+  resolveFallbackRuntime: () => { modelId: string; effortLevel?: string; fastMode?: boolean } | undefined;
+}
+
+export async function runPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInput): Promise<HarnessTurnResult> {
+  const { access, signals } = opts;
+  const { turn, entry, desiredModelId, wantFast, turnModelGateway, active } = await openPiTurn(opts, dispatched);
   try {
-    const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
+    const turnWallClockMs = turn.turnWallClockMs ?? opts.turnWallClockMs;
     const { effectiveModel, telemetry, continueTurn, grindMeter, userEntry, modelPrompt } = await preparePiPrompt(
       turn,
       entry,
@@ -458,8 +453,8 @@ export async function runPiTurn(ctx: PiHarnessContext, dispatched: HarnessTurnIn
         race,
         stopped: () => stop.userAborted,
         directModel: (id) => !turnModelGateway?.models[id],
-        servedModelId: (id) => (turn.providerKeys ? id : companyServedId(id)),
-        resolveFallbackRuntime: () => opts?.resolveFallbackRuntime?.(),
+        servedModelId: (id) => (turn.providerKeys ? id : access.servedId(id)),
+        resolveFallbackRuntime: opts.resolveFallbackRuntime,
       });
     const phase: PromptPhase = {
       turn,
