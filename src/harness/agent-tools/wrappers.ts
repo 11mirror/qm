@@ -1,8 +1,7 @@
 import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { canonicalJson } from "../../../cli/src/canonical-json.ts";
-import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
+import { redactSensitiveKeys } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { toolCallApprovalKey } from "../../core/approval-id.ts";
-import { redactCommand } from "../../sandbox/exec-process-session.ts";
 import { errMessage, reportFailure, swallow } from "../../util/errors.ts";
 import { isObj } from "../../util/objects.ts";
 import type { ToolRuntime, TurnHalt } from "../turn-tool-state.ts";
@@ -74,7 +73,7 @@ async function declaredApprovalReason(tool: ToolApprovalDeclaration, params: unk
 }
 
 function approvalCallText(label: string, params: unknown): string {
-  return `${label} ${redactCommand(redactSecrets(canonicalJson(params ?? {})))}`;
+  return `${label} ${canonicalJson(redactSensitiveKeys(params ?? {}))}`;
 }
 
 export function withToolApprovalGate(

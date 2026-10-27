@@ -634,6 +634,11 @@ test("an MCP tool that needs approval is not called until its exact arguments ar
   assert.deepEqual(calls, [{ id: 1 }]);
   await call(del, { id: 1 });
   assert.deepEqual(calls, [{ id: 1 }, { id: 1 }]);
+  await call(del, { id: 4, auth: { apiKey: "sk-live-abcdef" }, note: "y".repeat(1000) });
+  assert.equal(
+    state.halt.approvals().at(-1)!.command,
+    `example_delete {"auth":{"apiKey":"[redacted]"},"id":4,"note":"${"y".repeat(1000)}"}`,
+  );
   const cards = state.halt.approvals().length;
   assert.match(textOut(await call(del, { id: 3, note: "x".repeat(20_000) })), /too long to show on an approval card/);
   assert.equal(
