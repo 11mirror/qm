@@ -1,5 +1,6 @@
 // The surface, attach and finish_silently tools: posting, reacting and replying on the conversation's surface.
 
+import { surfaceProfile } from "../../surfaces/surface.ts";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { type OutboundFile } from "../../core/attachments.ts";
@@ -17,7 +18,8 @@ import {
 export function replyTools(kit: ToolKit) {
   const { ref, opts, surfaceTools, recordCall, recordResult, recordExternalResult, recordText, recordFail } = kit;
   const surfaceName = opts?.surfaceName ?? "slack";
-  const surfaceLabel = surfaceName === "slack" ? "Slack" : surfaceName;
+  const profile = surfaceProfile(surfaceName);
+  const surfaceLabel = profile.label ?? surfaceName;
   const surface = defineTool({
     name: surfaceName,
     label: surfaceName,
@@ -43,9 +45,7 @@ export function replyTools(kit: ToolKit) {
         Type.String({
           description:
             "post/reach: the message to send. edit: the new message content. Use Markdown, including [label](url) links; the surface renders it." +
-            (surfaceName === "slack"
-              ? " To @-mention on Slack, use `<@U…>` for a person or `<!subteam^S…>` for a user group (ids appear in People here / read / search results). A typed `@name` is plain text and pings no one; @here/@channel/@everyone never ping."
-              : ""),
+            (profile.toolHint ?? ""),
         }),
       ),
       channel: optionalString(

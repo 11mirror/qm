@@ -1,6 +1,6 @@
 import { swallowAs } from "../util/errors.ts";
 import { type PendingApprovalRecord, sourceDestination, type TurnRequest, turnSource } from "../types.ts";
-import type { SurfaceRegistry } from "../chat-surface/registry.ts";
+import type { SurfaceRegistry } from "../surfaces/registry.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { Outbound } from "../surfaces/outbound.ts";
 import { principalDestination } from "../reach/reach.ts";

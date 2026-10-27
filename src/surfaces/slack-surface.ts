@@ -1,7 +1,7 @@
 import type { ExternalSlackAccess } from "../slack/external-access.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { SurfaceSender } from "../surfaces/outbound.ts";
-import type { Surface } from "./surface.ts";
+import type { SurfaceSender } from "./outbound.ts";
+import { surfaceProfile, type Surface } from "./surface.ts";
 
 interface SlackAccountHandle {
   client: any;
@@ -45,7 +45,8 @@ export function createSlackSurface(): SlackSurface {
   };
   return {
     name: "slack",
-    label: "Slack",
+    label: surfaceProfile("slack").label!,
+    traits: surfaceProfile("slack").traits,
     destinationTypes: ["slack", "group", "principal"],
     slack,
     async deliver(post) {

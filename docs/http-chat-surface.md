@@ -6,7 +6,7 @@ configured surface gets its own surface name, scope namespace and signing secret
 product-specific lives in QM; the contract below is all a product implements.
 
 Inside QM an HTTP chat surface is one implementation of the `Surface` contract in
-`src/chat-surface/surface.ts`; Slack is the other. It declares no edits, reactions or rich
+`src/surfaces/surface.ts`; Slack is the other. It declares no edits, reactions or rich
 cards, and Markdown text.
 
 ## Configuration

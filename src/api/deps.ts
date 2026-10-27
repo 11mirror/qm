@@ -1,5 +1,5 @@
-import type { SurfaceRegistry } from "../chat-surface/registry.ts";
-import type { SlackEventsHandler } from "../chat-surface/slack.ts";
+import type { SurfaceRegistry } from "../surfaces/registry.ts";
+import type { SlackEventsHandler } from "../surfaces/slack-surface.ts";
 import type { SlackWebClientFactory } from "../slack/web-client.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { DecisionStore } from "../decisions/store.ts";

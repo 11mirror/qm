@@ -1,3 +1,4 @@
+import { surfaceTraits } from "../surfaces/surface.ts";
 import type { TurnOrigin, TurnRequest } from "../types.ts";
 export type { TurnOrigin } from "../types.ts";
 
@@ -125,7 +126,7 @@ export function desktopClientForTurn(
     > & { attempt?: number },
 ): string | undefined {
   return resolveTurnOrigin(input).kind === "human" &&
-    input.surface === "web" &&
+    surfaceTraits(input.surface).sidebar &&
     !input.proactiveOpener &&
     !input.spawned &&
     !input.botActor &&
