@@ -151,7 +151,21 @@ test(
       );
       await pool.query("ALTER TABLE memory_facts ENABLE TRIGGER memory_facts_text_hash");
 
-      assert.equal(await applyPgMigrations(pool, migrations), 1);
+      const logged: string[] = [];
+      const log = console.log;
+      console.log = (...args: unknown[]) => void logged.push(args.join(" "));
+      try {
+        assert.equal(await applyPgMigrations(pool, migrations), 1);
+      } finally {
+        console.log = log;
+      }
+      const recorded = (await ledger(pool)).length - 1;
+      assert.deepEqual(
+        logged.filter((line) => line.startsWith("[pg] migration preflight ok")),
+        [
+          `[pg] migration preflight ok: 1 pending (${recorded} recorded); baseline already recorded; accepted an earlier checksum for memory/facts/0002-text-hash`,
+        ],
+      );
       const rows = await ledger(pool);
       assert.equal(rows.find((r) => r.id === current.id)?.checksum, current.acceptedChecksums![0]);
       assert.ok(rows.some((r) => r.id === "memory/facts/0003-text-hash-not-null"));

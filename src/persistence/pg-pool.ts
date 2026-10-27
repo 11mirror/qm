@@ -379,10 +379,14 @@ async function applySchemaBaseline(client: PoolClient, plan: "apply" | "adopt"):
 
 // Everything that can refuse a migration run is checked before the first write, so a refused run leaves the database
 // exactly as it found it: recorded checksums, the pending set, and the baseline decision.
-function preflightPgMigrations(ledger: ReadonlyMap<string, string>, migrations: readonly PgMigration[]): PgMigration[] {
+function preflightPgMigrations(
+  ledger: ReadonlyMap<string, string>,
+  migrations: readonly PgMigration[],
+): { pending: PgMigration[]; acceptedPrior: string[] } {
   const seen = new Map<string, string>();
   const problems: string[] = [];
   const pending: PgMigration[] = [];
+  const acceptedPrior: string[] = [];
   for (const migration of migrations) {
     const twin = seen.get(migration.id);
     if (twin !== undefined) {
@@ -399,15 +403,25 @@ function preflightPgMigrations(ledger: ReadonlyMap<string, string>, migrations: 
         problems.push(`concurrent index migration ${migration.id} must contain only concurrent indexes`);
       }
       pending.push(migration);
-    } else if (recorded !== migration.checksum && !migration.acceptedChecksums?.includes(recorded)) {
-      problems.push(`migration ${migration.id} checksum mismatch (database=${recorded}, source=${migration.checksum})`);
+    } else if (recorded !== migration.checksum) {
+      if (migration.acceptedChecksums?.includes(recorded)) acceptedPrior.push(migration.id);
+      else
+        problems.push(
+          `migration ${migration.id} checksum mismatch (database=${recorded}, source=${migration.checksum})`,
+        );
     }
   }
   if (problems.length) {
     throw new Error(`pg-pool: refusing to migrate; nothing was applied: ${problems.join("; ")}`);
   }
-  return pending;
+  return { pending, acceptedPrior };
 }
+
+const BASELINE_PLAN_LOG = {
+  recorded: "already recorded",
+  apply: "applying to an empty database",
+  adopt: "adopting over the folded migrations",
+} as const;
 
 /** Applies the baseline and any pending migrations; returns how many it applied. */
 export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigration[]): Promise<number> {
@@ -425,7 +439,11 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
         : [],
     );
     const baseline = await planSchemaBaseline(client, ledger);
-    const pending = preflightPgMigrations(ledger, migrations);
+    const { pending, acceptedPrior } = preflightPgMigrations(ledger, migrations);
+    console.log(
+      `[pg] migration preflight ok: ${pending.length} pending (${ledger.size} recorded); baseline ${BASELINE_PLAN_LOG[baseline]}` +
+        (acceptedPrior.length ? `; accepted an earlier checksum for ${acceptedPrior.join(", ")}` : ""),
+    );
     if (baseline === "recorded" && pending.length === 0) return 0;
     await client.query(
       `CREATE TABLE IF NOT EXISTS ${PG_MIGRATIONS_TABLE}(
@@ -497,7 +515,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
             await client.query<{ id: string; checksum: string }>(`SELECT id, checksum FROM ${PG_MIGRATIONS_TABLE}`)
           ).rows.map((row) => [row.id, row.checksum] as const),
         );
-        remaining = preflightPgMigrations(ledgerNow, remaining);
+        remaining = preflightPgMigrations(ledgerNow, remaining).pending;
         continue;
       }
       await client.query("BEGIN");
