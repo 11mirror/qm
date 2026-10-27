@@ -38,7 +38,6 @@ export interface OrchestratorInstance {
   memoryPolicy: MemoryPolicy;
   memoryStrategy: MemoryStrategy;
   blobTransfer: OrchestratorDeps["blobTransfer"];
-  pendingCaptures: Map<ScopeId, Promise<void>>;
   reachableChannelsFor: (directory: DirectoryStore, principalId: string) => Promise<DirectoryChannel[]>;
   directoryIndexFor: (directory: DirectoryStore) => Promise<Map<string, DirectoryMember>>;
   compaction: CompactionContext;
@@ -407,7 +406,7 @@ async function prepareHeldTurnInput(o: OrchestratorInstance, t: HeldTurn, b: Beg
 }
 
 async function executeHeldTurn(o: OrchestratorInstance, t: HeldTurn, p: PreparedHeldTurn): Promise<TurnResult> {
-  const { deps, memoryPolicy, memoryStrategy, blobTransfer, pendingCaptures, observeSecurityData, titles } = o;
+  const { deps, memoryPolicy, memoryStrategy, blobTransfer, observeSecurityData, titles } = o;
   const { compactRecent } = o.compaction;
   const {
     ctx,
@@ -505,7 +504,6 @@ async function executeHeldTurn(o: OrchestratorInstance, t: HeldTurn, p: Prepared
       captureDependencies,
       memoryStrategy,
       memoryPolicy,
-      pendingCaptures,
     },
   );
 
