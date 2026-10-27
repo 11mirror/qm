@@ -5,8 +5,6 @@ import { isSubagentThreadRef } from "../sessions/thread-ref.ts";
 import type { SessionStartInput, SessionStartResult, SessionSummary, SessionListResult } from "./types.ts";
 import type { TurnContext } from "./turn-context.ts";
 
-const SESSION_LIST_LIMIT = 50;
-
 export async function searchSessions(
   ctx: TurnContext,
   input: { query: string; limit?: number },
@@ -46,9 +44,7 @@ export async function listSessions(ctx: TurnContext): Promise<SessionListResult>
     const seen = await Promise.all(audience.map((person) => deps.sessions.getForParticipant(session.id, person.id)));
     if (seen.every(Boolean)) visible.push(session);
   }
-  const recent = visible
-    .sort((a, b) => (b.lastActivityAt ?? b.createdAt) - (a.lastActivityAt ?? a.createdAt))
-    .slice(0, SESSION_LIST_LIMIT);
+  const recent = visible.sort((a, b) => (b.lastActivityAt ?? b.createdAt) - (a.lastActivityAt ?? a.createdAt));
   const sessions: SessionSummary[] = [];
   for (const session of recent)
     sessions.push({
@@ -80,7 +76,6 @@ export async function startSession(ctx: TurnContext, input: SessionStartInput): 
   if (binding.request.readOnly) return { ok: false, message: "a read-only turn cannot create sessions." };
   const text = input.text?.trim();
   if (!input.fork && !text) return { ok: false, message: "new requires `text`: the new session's first message." };
-  if (text && text.length > 16_000) return { ok: false, message: "text exceeds 16000 characters" };
   const out = await conversations
     .start(binding.request.actor.id, {
       scopeId: binding.scopeId,

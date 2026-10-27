@@ -14,7 +14,7 @@ import { sessionTreeRoot, sessionTreeRunCount, stopSessionTree } from "./tree.ts
 import type { SessionOpenInput, SessionOpenResult, SessionWriteInput, SessionWriteResult } from "./types.ts";
 import type { TurnContext } from "./turn-context.ts";
 
-const SESSION_MESSAGE_DEPTH_CAP = 8;
+const PRIVATE_REPLY_CHAIN_LOOP_GUARD = 8;
 
 function autoTitle(task: string): string {
   const line = task.trim().split("\n")[0] ?? "";
@@ -200,8 +200,10 @@ export async function writeSession(ctx: TurnContext, input: SessionWriteInput): 
       const privateChild = isSubagentThreadRef(target.threadRef);
       const privateMessage = binding.request.privateSessionMessage === true || !privateChild;
       const messageDepth = (binding.request.sessionMessageDepth ?? 0) + 1;
-      if (privateMessage && messageDepth > SESSION_MESSAGE_DEPTH_CAP)
-        throw new Error("private session message reply limit reached");
+      if (privateMessage && messageDepth > PRIVATE_REPLY_CHAIN_LOOP_GUARD)
+        throw new Error(
+          `this private message would be reply ${messageDepth} in an unbroken session-to-session chain; the loop guard stops at ${PRIVATE_REPLY_CHAIN_LOOP_GUARD}. Let a person or a task turn break the chain.`,
+        );
       const prepared = childRunRequest(
         target,
         {
@@ -242,7 +244,6 @@ export async function writeSession(ctx: TurnContext, input: SessionWriteInput): 
             ? "followup_task requires `task`: the full instruction the subagent works from."
             : "send_message requires `text` (or interrupt: true).",
         };
-      if (text.length > 16_000) return { ok: false, message: "message exceeds 16000 characters" };
       const stamped = renderSubagentMessage({ title: callerTitle, sessionId: binding.session.id }, text);
       if (!input.followup) {
         const sourceEntrySeq = await deps.sessions.latestItemSeq(binding.session.id);
