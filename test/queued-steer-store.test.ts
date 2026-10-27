@@ -35,6 +35,7 @@ for (const backend of ["memory", "postgres"] as const) {
           text: "",
           dedupeKey: randomUUID(),
           request: {
+            origin: { kind: "direct" },
             surface: "web",
             actor: { externalId: actor.id },
             conversation: { kind: "dm", threadRef: sessionId },

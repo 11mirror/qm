@@ -77,6 +77,7 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
   const s = start();
   try {
     const dm: TurnRequest = {
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
@@ -109,6 +110,7 @@ test("/v1/admin/users/:principalId: per-user detail counts personal conversation
   const s = start();
   try {
     const dm: TurnRequest = {
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
@@ -149,6 +151,7 @@ test("/v1/admin/users/:principalId/onboarding: org_admin sets/resets state, refl
   const s = start();
   try {
     const dm: TurnRequest = {
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
@@ -186,6 +189,7 @@ test("/v1/admin/users/:principalId/reset: deletes the user's personal sessions +
   const s = start();
   try {
     const dm: TurnRequest = {
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
@@ -297,6 +301,7 @@ test("/v1/admin/users: a freshly promoted user shows as admin in the roster", as
   const s = start();
   try {
     const dm: TurnRequest = {
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U9" },
       conversation: { kind: "dm", threadRef: "dm:U9:t1" },

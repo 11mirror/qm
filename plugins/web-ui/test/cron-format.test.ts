@@ -125,17 +125,17 @@ test("an offset-style timezone TZDate parses but Intl rejects still falls back t
   }
 });
 
-function legacyFormatCronDateTime(ms: number, now: number, timeZone?: string): string {
+function handRolledFormatCronDateTime(ms: number, now: number, timeZone?: string): string {
   const date = new Date(ms);
   const today = new Date(now);
   if (timeZone) {
-    const parts = legacyZonedParts(ms, timeZone);
-    const todayParts = legacyZonedParts(now, timeZone);
+    const parts = handRolledZonedParts(ms, timeZone);
+    const todayParts = handRolledZonedParts(now, timeZone);
     if (parts && todayParts) {
-      const tomorrow = legacyAddLocalDays(todayParts, 1);
+      const tomorrow = handRolledAddLocalDays(todayParts, 1);
       const time = zonedTime(ms, timeZone);
-      if (legacySameLocalDay(parts, todayParts)) return time;
-      if (legacySameLocalDay(parts, tomorrow)) return `tomorrow ${time}`;
+      if (handRolledSameLocalDay(parts, todayParts)) return time;
+      if (handRolledSameLocalDay(parts, tomorrow)) return `tomorrow ${time}`;
       const dateOpts: Intl.DateTimeFormatOptions =
         parts.year === todayParts.year
           ? { month: "short", day: "numeric", timeZone }
@@ -165,13 +165,13 @@ function legacyFormatCronDateTime(ms: number, now: number, timeZone?: string): s
   return `${date.toLocaleDateString([], dateOpts)} ${time}`;
 }
 
-interface LegacyParts {
+interface HandRolledParts {
   year: number;
   month: number;
   day: number;
 }
 
-function legacyZonedParts(ms: number, timeZone: string): LegacyParts | null {
+function handRolledZonedParts(ms: number, timeZone: string): HandRolledParts | null {
   try {
     const fmt = new Intl.DateTimeFormat("en-US-u-ca-gregory", {
       timeZone,
@@ -189,12 +189,12 @@ function legacyZonedParts(ms: number, timeZone: string): LegacyParts | null {
   }
 }
 
-function legacyAddLocalDays(parts: LegacyParts, days: number): LegacyParts {
+function handRolledAddLocalDays(parts: HandRolledParts, days: number): HandRolledParts {
   const d = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days));
   return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate() };
 }
 
-function legacySameLocalDay(a: LegacyParts, b: LegacyParts): boolean {
+function handRolledSameLocalDay(a: HandRolledParts, b: HandRolledParts): boolean {
   return a.year === b.year && a.month === b.month && a.day === b.day;
 }
 
@@ -232,7 +232,7 @@ test("formatCronDateTime matches the legacy hand-rolled formatter across timezon
         const ms = now + offset;
         assert.equal(
           formatCronDateTime(ms, now, timeZone),
-          legacyFormatCronDateTime(ms, now, timeZone),
+          handRolledFormatCronDateTime(ms, now, timeZone),
           `tz=${timeZone} now=${new Date(now).toISOString()} offset=${offset}`,
         );
       }

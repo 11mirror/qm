@@ -32,8 +32,8 @@ async function scopeWithoutDefault() {
     [{ channelId: "C1", name: "synthetic-upload", isPrivate: true }],
     [{ channelId: "C1", principalId: "U1" }],
   );
-  await built.sandboxResources.initialize();
   const base: Omit<TurnRequest, "text"> = {
+    origin: { kind: "direct" },
     surface: "slack",
     actor: { externalId: "U1" },
     conversation: { kind: "channel", threadRef: "ch:C1:native", channelRef: "C1", audience: [{ externalId: "U1" }] },

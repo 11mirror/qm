@@ -51,8 +51,8 @@ test("exemplar: a narrow question runs topic-scoped — no soup replay, no pushe
       conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [alice] },
       deliveryTarget: `slack:${channel}:${root}`,
       text: QUESTION,
-      liveActor: true,
       async: true,
+      origin: { kind: "human" },
     };
     await built.app.turn(req);
 
@@ -101,8 +101,8 @@ test("exemplar: a narrow question runs topic-scoped — no soup replay, no pushe
       conversation: { kind: "channel", threadRef: `ch:${channel}:${root2}`, channelRef: channel, audience: [alice] },
       deliveryTarget: `slack:${channel}:${root2}`,
       text: "!whats_new",
-      liveActor: true,
       async: true,
+      origin: { kind: "human" },
     });
     let pulled = false;
     const d2 = Date.now() + 5_000;

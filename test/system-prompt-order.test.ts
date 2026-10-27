@@ -749,6 +749,7 @@ test("steered files materialize in separate inboxes and keep distinct durable ar
     for (const blob of [first, second]) {
       prepared.push(
         await turn.prepareSteer!("read this", {
+          origin: { kind: "direct" },
           surface: "web",
           actor: { externalId: actor.id },
           conversation: { kind: "dm", threadRef: "steer-files" },
@@ -784,6 +785,7 @@ test("read-only turns report steered files as unavailable without provisioning a
   let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
   harness.turns.runTurn = async (turn) => {
     prepared = await turn.prepareSteer!("", {
+      origin: { kind: "direct" },
       surface: "web",
       actor: { externalId: actor.id },
       conversation: { kind: "dm", threadRef: "steer-strict" },
@@ -817,6 +819,7 @@ for (const budget of ["count", "bytes", "reupload", "retry"] as const) {
     harness.turns.runTurn = async (turn) => {
       assert.equal(turn.documents?.length, budget === "count" ? 10 : 1);
       const request: TurnRequest = {
+        origin: { kind: "direct" },
         surface: "web",
         actor: { externalId: actor.id },
         conversation: { kind: "dm", threadRef: `steer-budget-${budget}` },
@@ -867,6 +870,7 @@ test("steered native office documents are observed by the screen after extractio
   let screened = false;
   harness.turns.runTurn = async (turn) => {
     prepared = await turn.prepareSteer!("summarize", {
+      origin: { kind: "direct" },
       surface: "web",
       actor: { externalId: actor.id },
       conversation: { kind: "dm", threadRef: "steer-office-screen" },
@@ -914,6 +918,7 @@ test("documents uploaded during a turn survive a runtime handoff without aliasin
     if (++segments === 1) {
       const activeDocuments = turn.documents!;
       const prepared = await turn.prepareSteer!("read this", {
+        origin: { kind: "direct" },
         surface: "web",
         actor: { externalId: actor.id },
         conversation: { kind: "dm", threadRef: "steer-handoff" },
@@ -1053,6 +1058,7 @@ for (const mode of ["flagged", "ordinary"] as const) {
     let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
     harness.turns.runTurn = async (turn) => {
       prepared = await turn.prepareSteer!("summarize again", {
+        origin: { kind: "direct" },
         surface: "web",
         actor: { externalId: actor.id },
         conversation: { kind: "dm", threadRef: thread },

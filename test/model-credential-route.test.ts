@@ -319,6 +319,7 @@ test("OpenRouter catalog exposes runtime-supported tool models as selectable bas
     assert.equal(surfaceBody.baseModel, "stealth/ox-alpha");
 
     const turn = await srv.built.app.turn({
+      origin: { kind: "direct" },
       surface: "web",
       actor: { externalId: "alice" },
       conversation: { kind: "dm", threadRef: "web:alice:openrouter-catalog" },
@@ -349,6 +350,7 @@ test("web turns keep a persisted OpenRouter model enabled when the refreshed cat
     await srv.built.config.setRuntimeSelection("org:default-org", { modelId: "anthropic/claude-sonnet-4.5" });
     const turn = (threadRef: string, model: string) =>
       srv.built.app.turn({
+        origin: { kind: "direct" },
         surface: "web",
         actor: { externalId: "alice" },
         conversation: { kind: "dm", threadRef },
@@ -423,6 +425,7 @@ test("web turns refuse a model whose provider has no key", async () => {
   const srv = start();
   try {
     const unkeyed = await srv.built.app.turn({
+      origin: { kind: "direct" },
       surface: "web",
       actor: { externalId: "alice" },
       conversation: { kind: "dm", threadRef: "web:alice:unkeyed" },
@@ -548,6 +551,7 @@ test("a stored scope runtime remains usable outside the legacy configured picker
     await srv.built.config.setRuntimeSelection("personal:alice", { modelId: "claude-haiku-4-5" });
     const turn = (threadRef: string, model?: string) =>
       srv.built.app.turn({
+        origin: { kind: "direct" },
         surface: "web",
         actor: { externalId: "alice" },
         conversation: { kind: "dm", threadRef },
@@ -581,8 +585,8 @@ test("inbox runtime overrides use the web model allowlist without changing defau
       conversation: { kind: "dm", threadRef: "loop:test:item:runtime" },
       text: "Make it shorter",
       model: "claude-haiku-4-5",
-      triggered: true,
       async: true,
+      origin: { kind: "automation" },
     });
     assert.equal(rejected.status, "refused");
     assert.match(rejected.reason ?? "", /runtime is no longer available/);

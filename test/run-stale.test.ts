@@ -9,6 +9,7 @@ import { testConfig } from "./support/test-config.ts";
 test("getRun reports stale exactly when no live worker owns a previously-claimed run", async () => {
   const built = buildApp(testConfig({ backgroundWorkEnabled: false }));
   const ack = await built.app.turn({
+    origin: { kind: "direct" },
     surface: "test",
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "t1" },

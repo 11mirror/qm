@@ -26,40 +26,6 @@ after(async () => {
   await built.runtime.stop();
 });
 
-test("POST /v1/turns strips ownerKeychainUnion from the external body but keeps other fields", async () => {
-  const body = JSON.stringify({
-    surface: "cron",
-    actor: { externalId: "internal:owner" },
-    conversation: {
-      kind: "channel",
-      channelRef: "C9",
-      threadRef: "t-union-guard",
-      audience: [{ externalId: "internal:owner" }],
-    },
-    text: "x",
-    triggered: true,
-    ownerKeychainUnion: true,
-    readOnly: true,
-    skipMemory: true,
-    async: true,
-  });
-  const r = await fetch(`${base}/v1/turns`, {
-    method: "POST",
-    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
-    body,
-  });
-  assert.equal(r.status, 202);
-  const { runId } = (await r.json()) as { runId: string };
-  const run = await built.runs.get(runId);
-  assert.deepEqual(
-    run?.request.origin,
-    { kind: "automation" },
-    "external union injection is removed while trigger provenance survives",
-  );
-  assert.equal(run?.request.readOnly, true, "non-internal fields are still forwarded");
-  assert.equal(run?.request.skipMemory, true, "the source-authenticated memory opt-out is forwarded");
-});
-
 test("POST /v1/turns strips unattendedGrants from the external body", async () => {
   const body = JSON.stringify({
     surface: "cron",
@@ -71,7 +37,7 @@ test("POST /v1/turns strips unattendedGrants from the external body", async () =
       audience: [{ externalId: "internal:owner" }],
     },
     text: "x",
-    triggered: true,
+    origin: { kind: "automation" },
     unattendedGrants: ["admin.sessions.read"],
     async: true,
   });
@@ -115,91 +81,6 @@ test("POST /v1/turns strips nested owner-keychain union from typed automation or
   assert.deepEqual(run?.request.origin, { kind: "automation", screenData: "external event" });
 });
 
-test("POST /v1/turns does not let a typed origin override legacy automation provenance", async () => {
-  const body = JSON.stringify({
-    surface: "webhook",
-    actor: { externalId: "internal:owner" },
-    conversation: { kind: "dm", threadRef: "t-origin-conflict" },
-    text: "x",
-    triggered: true,
-    securityScreenData: "external event",
-    origin: { kind: "human" },
-    async: true,
-  });
-  const r = await fetch(`${base}/v1/turns`, {
-    method: "POST",
-    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
-    body,
-  });
-  assert.equal(r.status, 202);
-  const { runId } = (await r.json()) as { runId: string };
-  const run = await built.runs.get(runId);
-  assert.deepEqual(run?.request.origin, { kind: "automation", screenData: "external event" });
-});
-
-test("POST /v1/turns does not let legacy liveness override typed automation provenance", async () => {
-  const body = JSON.stringify({
-    surface: "webhook",
-    actor: { externalId: "internal:owner" },
-    conversation: { kind: "dm", threadRef: "t-reverse-origin-conflict" },
-    text: "x",
-    liveActor: true,
-    origin: { kind: "automation", screenData: "external event" },
-    async: true,
-  });
-  const r = await fetch(`${base}/v1/turns`, {
-    method: "POST",
-    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
-    body,
-  });
-  assert.equal(r.status, 202);
-  const { runId } = (await r.json()) as { runId: string };
-  const run = await built.runs.get(runId);
-  assert.deepEqual(run?.request.origin, { kind: "automation", screenData: "external event" });
-});
-
-test("POST /v1/turns preserves legacy screen data omitted from a matching typed automation origin", async () => {
-  const body = JSON.stringify({
-    surface: "webhook",
-    actor: { externalId: "internal:owner" },
-    conversation: { kind: "dm", threadRef: "t-origin-screen-data" },
-    text: "x",
-    triggered: true,
-    securityScreenData: "hostile external event",
-    origin: { kind: "automation" },
-    async: true,
-  });
-  const r = await fetch(`${base}/v1/turns`, {
-    method: "POST",
-    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
-    body,
-  });
-  assert.equal(r.status, 202);
-  const { runId } = (await r.json()) as { runId: string };
-  const run = await built.runs.get(runId);
-  assert.deepEqual(run?.request.origin, { kind: "automation", screenData: "hostile external event" });
-});
-
-test("POST /v1/turns rejects conflicting typed and legacy automation screen data", async () => {
-  const body = JSON.stringify({
-    surface: "webhook",
-    actor: { externalId: "internal:owner" },
-    conversation: { kind: "dm", threadRef: "t-origin-screen-conflict" },
-    text: "x",
-    triggered: true,
-    securityScreenData: "hostile external event",
-    origin: { kind: "automation", screenData: "benign replacement" },
-    async: true,
-  });
-  const r = await fetch(`${base}/v1/turns`, {
-    method: "POST",
-    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
-    body,
-  });
-  assert.equal(r.status, 400);
-  assert.match(JSON.stringify(await r.json()), /conflicting.*screen data/);
-});
-
 test("POST /v1/turns strips spawned: an external body can't opt out of mid-turn steer folding", async () => {
   const turnBody = (text: string, extra: Record<string, unknown> = {}): string =>
     JSON.stringify({
@@ -212,7 +93,7 @@ test("POST /v1/turns strips spawned: an external body can't opt out of mid-turn 
         audience: [{ externalId: "U1" }],
       },
       text,
-      liveActor: true,
+      origin: { kind: "human" },
       async: true,
       ...extra,
     });
@@ -237,6 +118,7 @@ test("POST /v1/turns strips redeliveryKey: an external body cannot borrow Slack'
       actor: { externalId: "U1" },
       conversation: { kind: "channel", channelRef: "C-rd", threadRef, audience: [{ externalId: "U1" }] },
       text: "hello",
+      origin: { kind: "human" },
       async: true,
       redeliveryKey: "slack:B1:C-rd:1.0",
     });
@@ -265,6 +147,7 @@ test("POST /v1/turns rejects a client idempotencyKey in the reserved slack: name
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "web:U1:reserved" },
     text: "hi",
+    origin: { kind: "human" },
     async: true,
     idempotencyKey: "slack:B1:C1:1.0",
   });
@@ -275,4 +158,21 @@ test("POST /v1/turns rejects a client idempotencyKey in the reserved slack: name
   });
   assert.equal(r.status, 400);
   assert.match(JSON.stringify(await r.json()), /reserved slack: prefix/);
+});
+
+test("POST /v1/turns rejects a body without a turn origin", async () => {
+  const body = JSON.stringify({
+    surface: "web",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: "web:U1:no-origin" },
+    text: "hi",
+    liveActor: true,
+  });
+  const r = await fetch(`${base}/v1/turns`, {
+    method: "POST",
+    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
+    body,
+  });
+  assert.equal(r.status, 400);
+  assert.match(JSON.stringify(await r.json()), /origin\.kind must be/);
 });

@@ -319,6 +319,7 @@ describe("agent → teammate DM: delivery events in the recipient's session (ant
 
     await new Promise((r) => setTimeout(r, 20));
     await built.app.turn({
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U-alice" },
       conversation: { kind: "dm", threadRef: "dm:D-alice" },

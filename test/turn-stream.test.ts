@@ -109,6 +109,7 @@ test("a queued run surfaces replyComplete via getRun once the reply is final", a
   built.runtime.start();
   try {
     const ack = await built.app.turn({
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "t1" },
@@ -132,6 +133,7 @@ test("a queued tool-using run surfaces its activity + timings via getRun()", asy
   built.runtime.start();
   try {
     const ack = await built.app.turn({
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "t1" },
@@ -158,6 +160,7 @@ test("a queued run exposes the agent's in-flight reply via getRun().partial", as
   built.runtime.start();
   try {
     const ack = await built.app.turn({
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "t1" },
@@ -233,6 +236,7 @@ test("a DM turn's opening text block rides getRun as firstBlock/firstBlockClosed
   built.runtime.start();
   try {
     const ack = await built.app.turn({
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "t-fb" },
@@ -255,6 +259,7 @@ test("a harvested first block is stripped from the final reply (never shown twic
   built.runtime.start();
   try {
     const ack = await built.app.turn({
+      origin: { kind: "direct" },
       surface: "slack",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "t-strip" },
@@ -276,6 +281,7 @@ test("a long first block is harvested too (no length gate) and stripped from the
   try {
     const long = "x".repeat(400);
     const ack = await built.app.turn({
+      origin: { kind: "direct" },
       surface: "slack",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "t-held" },
@@ -299,6 +305,7 @@ test("a non-slack surface never strips the first block from the reply", async ()
   built.runtime.start();
   try {
     const ack = await built.app.turn({
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "t-web" },
@@ -382,6 +389,7 @@ test("monitor wakes persist engagement after the reply gate", async () => {
   built.runtime.start();
   try {
     const ack = await built.app.turn({
+      origin: { kind: "direct" },
       surface: "monitor",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "t-monitor" },

@@ -168,7 +168,13 @@ test("GET /v1/sessions/:id honors tailTurns/sinceSeq and reports earlierItems", 
       const r = await fetch(`${srv.base}/v1/turns`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ surface: "test", actor, conversation: { kind: "dm", threadRef }, text }),
+        body: JSON.stringify({
+          origin: { kind: "direct" },
+          surface: "test",
+          actor,
+          conversation: { kind: "dm", threadRef },
+          text,
+        }),
       });
       const body = (await r.json()) as { status: string; sessionId?: string };
       assert.equal(body.status, "ok");

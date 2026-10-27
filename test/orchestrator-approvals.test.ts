@@ -427,8 +427,7 @@ test("an enforced proxy outage fails open and audits the configured provider", a
   const result = await built.app.turn(
     dm("summarize this", {
       surface: "webhook",
-      triggered: true,
-      securityScreenData: "ordinary external event",
+      origin: { kind: "automation", screenData: "ordinary external event" },
     }),
   );
   assert.equal(result.status, "ok");
@@ -496,8 +495,7 @@ test("a late proxy verdict after the deadline is never audited as authoritative"
   const result = await built.app.turn(
     dm("summarize this", {
       surface: "webhook",
-      triggered: true,
-      securityScreenData: "ordinary external event",
+      origin: { kind: "automation", screenData: "ordinary external event" },
     }),
   );
   assert.equal(result.status, "ok");
@@ -515,7 +513,7 @@ test("a late proxy verdict after the deadline is never audited as authoritative"
 test("Auto treats a fresh authenticated ambient speaker as the initiating human", async () => {
   const built = freshApp();
   const provisioning = spyProvisioning(built.sandbox);
-  const result = await built.app.turn(channel("!run printf ambient-ok", { unprompted: true }));
+  const result = await built.app.turn(channel("!run printf ambient-ok", { origin: { kind: "ambient" } }));
   assert.equal(result.status, "ok");
   assert.match(result.reply ?? "", /ambient-ok/);
   assert.equal(provisioning.provisioned, 1);

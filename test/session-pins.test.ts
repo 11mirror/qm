@@ -14,7 +14,13 @@ import { testConfig } from "./support/test-config.ts";
 const SECRET = "session-pins-secret-value!".repeat(2);
 
 function dm(externalId: string, text: string, thread: string): TurnRequest {
-  return { surface: "test", actor: { externalId }, conversation: { kind: "dm", threadRef: thread }, text };
+  return {
+    origin: { kind: "direct" },
+    surface: "test",
+    actor: { externalId },
+    conversation: { kind: "dm", threadRef: thread },
+    text,
+  };
 }
 
 describe("conversation pins self-API", async () => {

@@ -15,6 +15,7 @@ const guest = { externalId: "G9", isExternalGuest: true };
 
 function externalChannelTurn(surface: string): TurnRequest {
   return {
+    origin: { kind: "direct" },
     surface,
     actor: internalActor,
     conversation: { kind: "channel", threadRef: "ch:C1:t1", channelRef: "C1", audience: [internalActor, guest] },
@@ -85,6 +86,7 @@ test("the toggle never lets an external actor interact", async () => {
   await built.config.setSetting("externalSlackParticipants", true, org);
   await Promise.resolve();
   const res = await built.app.turn({
+    origin: { kind: "direct" },
     surface: "slack",
     actor: guest,
     conversation: { kind: "channel", threadRef: "ch:C1:t2", channelRef: "C1", audience: [internalActor, guest] },
@@ -97,6 +99,7 @@ test("the toggle never lets an external actor interact", async () => {
 test("a bot assertion can enter the turn pipeline", async () => {
   const built = freshApp();
   const res = await built.app.turn({
+    origin: { kind: "direct" },
     surface: "slack",
     actor: { externalId: "B1", isBot: true },
     conversation: { kind: "dm", threadRef: "dm:B1:t1" },

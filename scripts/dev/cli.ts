@@ -132,7 +132,7 @@ let withSlack = requestedSurface === "slack" || requestedSurface === "both";
 let withWeb = requestedSurface !== "slack";
 const devCallerEnv = (): Record<string, string> => ({ ...callerEnvSnapshot(), DEV_INSTANCE_ORG_ID: orgId });
 
-async function legacyTeardown(lease: LeaseInfo): Promise<void> {
+async function killLeaseProcesses(lease: LeaseInfo): Promise<void> {
   for (const name of ["portal", "web", "web-build", "slack", "core", "tunnel", "supervisor"]) {
     const pid = readPidFile(lease.lockDir, `${name}.pid`);
     if (pid) await killTree(pid, 5000);
@@ -151,7 +151,7 @@ async function teardownLease(lease: LeaseInfo): Promise<void> {
     while (Date.now() < deadline && existsSync(lease.lockDir)) await sleep(300);
     if (!existsSync(lease.lockDir)) return;
   }
-  await legacyTeardown(lease);
+  await killLeaseProcesses(lease);
 }
 
 async function reapStale(): Promise<void> {

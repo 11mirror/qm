@@ -41,8 +41,8 @@ for (const provider of ["anthropic", "openai"] as const) {
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: `execute-personal-${provider}` },
       text: "hello",
-      liveActor: true,
       async: true,
+      origin: { kind: "human" },
     });
     await built.config.setPersonalModelAuth("U1", false);
     built.runtime.start();
@@ -69,8 +69,8 @@ test("disconnecting a queued personal account fails without invoking any main ha
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "execute-disconnected-personal" },
     text: "hello",
-    liveActor: true,
     async: true,
+    origin: { kind: "human" },
   });
   await built.userModelCredentials.delete("U1", "openai");
   await built.config.setPersonalModelAuth("U1", false);
@@ -98,11 +98,11 @@ for (const account of ["personal", "openai", "anthropic"] as const) {
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: `web:U1:picker-${account}` },
       text: "hello",
-      liveActor: true,
       async: true,
       model,
       thinkingLevel: "high",
       fastMode: true,
+      origin: { kind: "human" },
     });
     assert.ok(submitted.runId, JSON.stringify(submitted));
     const queued = await built.runs.get(submitted.runId!);
@@ -135,9 +135,9 @@ test("personal web selections reject wrong providers, policy exclusions and disc
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: `web:U1:invalid-${crypto.randomUUID()}` },
       text: "hello",
-      liveActor: true,
       async: true,
       model,
+      origin: { kind: "human" },
     });
   for (const model of ["claude-sonnet-5", "unknown"]) assert.equal((await submit(model)).status, "refused");
   await built.config.setSetting("webuiModels", ["gpt-5.6-sol"], "org:default-org");
@@ -157,9 +157,9 @@ test("a queued web selection cannot fall back to another personal provider after
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "web:U1:disconnect-after-pick" },
     text: "hello",
-    liveActor: true,
     async: true,
     model: "gpt-5.6-terra",
+    origin: { kind: "human" },
   });
   assert.ok(submitted.runId, JSON.stringify(submitted));
   await built.userModelCredentials.delete("U1", "openai");
@@ -187,11 +187,11 @@ test("web subscription selections use the namespaced model and personal OAuth on
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "web:U1:oauth-picker" },
     text: "hello",
-    liveActor: true,
     async: true,
     model: "codex/gpt-5.6-terra",
     thinkingLevel: "high",
     fastMode: false,
+    origin: { kind: "human" },
   });
   assert.ok(submitted.runId, JSON.stringify(submitted));
   built.runtime.start();
@@ -223,8 +223,8 @@ test("a personal Claude subscription login runs on Pi with its OAuth token as th
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "personal-claude-oauth" },
     text: "hello",
-    liveActor: true,
     async: true,
+    origin: { kind: "human" },
   });
   assert.ok(submitted.runId, JSON.stringify(submitted));
   built.runtime.start();
@@ -272,8 +272,8 @@ test("a company ChatGPT login feeds pi's subscription provider while personal Ch
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "legacy-bare-pin" },
     text: "hello",
-    liveActor: true,
     async: true,
+    origin: { kind: "human" },
   });
   assert.ok(submitted.runId, JSON.stringify(submitted));
   built.runtime.start();

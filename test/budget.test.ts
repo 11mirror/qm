@@ -43,6 +43,7 @@ test("a principal over budget is refused by the app", async () => {
   const config = testConfig({ budgetUsdPerWindow: 0.00001 });
   const { app } = buildApp(config);
   const dm = (text: string): TurnRequest => ({
+    origin: { kind: "direct" },
     surface: "test",
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "dm:U1:t1" },

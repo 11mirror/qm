@@ -16,7 +16,13 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 const SECRET = "agent-conversations-secret".repeat(2);
 
 function dm(externalId: string, text: string, thread: string): TurnRequest {
-  return { surface: "test", actor: { externalId }, conversation: { kind: "dm", threadRef: thread }, text };
+  return {
+    origin: { kind: "direct" },
+    surface: "test",
+    actor: { externalId },
+    conversation: { kind: "dm", threadRef: thread },
+    text,
+  };
 }
 
 describe("agent conversations self-API", async () => {

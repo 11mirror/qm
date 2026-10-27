@@ -13,6 +13,7 @@ const approval = (sessionId: string, actor: string, command: string, blocksInput
   createdAt: 1,
   blocksInput,
   request: {
+    origin: { kind: "direct" },
     surface: "web",
     actor: { externalId: actor },
     conversation: { kind: "dm", threadRef: `dm:${actor}` },

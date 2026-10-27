@@ -38,6 +38,7 @@ test("history /llm: per-call usage (cacheRead/cacheWrite) is plumbed through to 
   const s = start();
   try {
     const dm: TurnRequest = {
+      origin: { kind: "direct" },
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "dm:U1:llm" },

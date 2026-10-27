@@ -7,7 +7,6 @@ import { pgTextSafe } from "../util/text.ts";
 import { isObj } from "../util/objects.ts";
 import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
-import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStop, RunStore } from "./run-store.ts";
 import type { RunPriority } from "./run-store.ts";
 import {
@@ -34,12 +33,11 @@ function isUniqueViolation(err: unknown): boolean {
 }
 
 export function rowToRun(r: Record<string, unknown>): Run {
-  const request = JSON.parse(r.request as string) as OrchestratorInput;
   return {
     id: r.id as string,
     sessionId: r.session_id as string,
     status: r.status as Run["status"],
-    request: { ...request, origin: resolveTurnOrigin(request) },
+    request: JSON.parse(r.request as string) as OrchestratorInput,
     result: r.result != null ? (JSON.parse(r.result as string) as TurnResult) : null,
     deliveryState: r.delivery_state != null ? (JSON.parse(r.delivery_state as string) as RunDeliveryState) : null,
     turnUserSeq: r.turn_user_seq != null ? Number(r.turn_user_seq) : null,
@@ -94,6 +92,25 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       statements: [
         `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_session_in_flight ON runs(session_id, created_at, seq) WHERE status IN ('queued','pending','running')`,
         `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_session_queued ON runs(session_id, claim_priority, created_at, seq) WHERE status = 'queued'`,
+      ],
+    },
+    {
+      id: "runs/store/0013-turn-origin-backfill",
+      statements: [
+        `CREATE FUNCTION pg_temp.qm_turn_origin(r jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
+          SELECT (r - 'triggered' - 'unprompted' - 'liveActor' - 'securityScreenData' - 'triggerDestination' - 'ownerKeychainUnion' - 'triggerTs' - 'entryTs')
+            || jsonb_build_object('origin', COALESCE(r -> 'origin', jsonb_strip_nulls(CASE
+              WHEN r -> 'triggered' = 'true' THEN jsonb_build_object('kind', 'automation', 'screenData', r -> 'securityScreenData',
+                'destination', r -> 'triggerDestination', 'useOwnerKeychain', CASE WHEN r -> 'ownerKeychainUnion' = 'true' THEN 'true'::jsonb END)
+              WHEN r -> 'unprompted' = 'true' THEN jsonb_build_object('kind', 'ambient', 'entryTs', to_jsonb(NULLIF(r ->> 'entryTs', '')),
+                'live', CASE WHEN r -> 'liveActor' = 'true' THEN 'true'::jsonb END)
+              WHEN r -> 'liveActor' = 'true' THEN jsonb_build_object('kind', 'human', 'messageTs', to_jsonb(NULLIF(r ->> 'triggerTs', '')),
+                'entryTs', to_jsonb(NULLIF(r ->> 'entryTs', '')))
+              ELSE '{"kind":"direct"}'::jsonb END)))
+        $$`,
+        `UPDATE runs SET request = pg_temp.qm_turn_origin(request::jsonb)::text WHERE strpos(request, '"origin":{"kind":') = 0`,
+        `DO $$ BEGIN IF to_regclass('approvals') IS NOT NULL THEN UPDATE approvals SET json = jsonb_set(json, '{request}', pg_temp.qm_turn_origin(json -> 'request')) WHERE jsonb_typeof(json -> 'request') = 'object' AND NOT (json -> 'request') ? 'origin'; END IF; END $$`,
+        `DO $$ BEGIN IF to_regclass('run_signals') IS NOT NULL THEN UPDATE run_signals SET payload = jsonb_set(payload, '{request}', pg_temp.qm_turn_origin(payload -> 'request')) WHERE jsonb_typeof(payload -> 'request') = 'object' AND NOT (payload -> 'request') ? 'origin'; END IF; END $$`,
       ],
     },
   ]);

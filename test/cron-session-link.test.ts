@@ -23,7 +23,13 @@ function claims(extra: Partial<CapabilityClaims> = {}): CapabilityClaims {
 }
 
 function dm(text: string, threadRef: string): TurnRequest {
-  return { surface: "test", actor: { externalId: "U1" }, conversation: { kind: "dm", threadRef }, text };
+  return {
+    origin: { kind: "direct" },
+    surface: "test",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef },
+    text,
+  };
 }
 
 async function setup() {

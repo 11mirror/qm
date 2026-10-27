@@ -46,7 +46,6 @@ interface SandboxProviderProfile {
 export interface SandboxResources {
   profiles(): SandboxProviderProfile[];
   forTurn(turn: { actorId: string; scopeId: ScopeId; isCurrent: () => Promise<boolean> }): SandboxResources;
-  initialize(): Promise<void>;
   list(
     actorId: string,
     scopeId: ScopeId,
@@ -92,7 +91,6 @@ export async function accessConversationSandbox(
 }
 
 export function createSandboxResources(opts: {
-  upgrade?: () => Promise<void>;
   records: DurableMap<SandboxResource>;
   defaults: DurableMap<SandboxDefault>;
   backends: Partial<Record<SandboxBackendName, Sandbox>>;
@@ -103,15 +101,6 @@ export function createSandboxResources(opts: {
   lock: AdvisoryLock;
   canUseScope(actorId: string, scopeId: ScopeId): Promise<boolean>;
 }): SandboxResources {
-  let upgraded: Promise<void> | undefined;
-  const initialize = async (): Promise<void> => {
-    if (!opts.upgrade) return;
-    upgraded ??= opts.upgrade().catch((error: unknown) => {
-      upgraded = undefined;
-      throw error;
-    });
-    await upgraded;
-  };
   const actionsFor = (backend: Sandbox | undefined): string[] => {
     if (!backend) return [];
     return [
@@ -126,7 +115,6 @@ export function createSandboxResources(opts: {
       throw new SandboxAccessError("sandbox access requires permission to use its owning scope");
   };
   const get = async (id: string): Promise<SandboxResource> => {
-    await initialize();
     const record = await opts.records.get(id);
     if (!record) throw new SandboxAccessError(`sandbox not found: ${id}`);
     return record;
@@ -157,7 +145,6 @@ export function createSandboxResources(opts: {
           withLiveTurnMembership(opts.canUseScope, { ...turn, verified: await turn.isCurrent() })(actorId, scopeId),
       }),
     defaultBackend: () => opts.defaultBackend,
-    initialize,
     get,
     use,
     async hold(id, runId) {
@@ -183,7 +170,6 @@ export function createSandboxResources(opts: {
       return live.includes(true);
     },
     async retire(actorId, id) {
-      await initialize();
       const record = await get(id);
       await authorize(actorId, record.ownerScopeId);
       await opts.lock.withLock(`sandbox-resource:${id}`, () =>
@@ -221,7 +207,6 @@ export function createSandboxResources(opts: {
       return use(id, () => backend.computerStatus!(record.backingScopeId));
     },
     async restart(actorId, id) {
-      await initialize();
       const record = await get(id);
       if (record.state === "retired") throw new Error("sandbox has been retired");
       await authorize(actorId, record.ownerScopeId);
@@ -230,13 +215,11 @@ export function createSandboxResources(opts: {
       await use(id, () => backend.restartComputer!(record.backingScopeId), true);
     },
     async resolve(scopeId) {
-      await initialize();
       const route = await opts.defaults.get(scopeId);
       return route?.sandboxId ? get(route.sandboxId) : null;
     },
     async list(actorId, scopeId) {
       await authorize(actorId, scopeId);
-      await initialize();
       const route = await opts.defaults.get(scopeId);
       const sandboxes: SandboxResource[] = [];
       const records = await opts.records.all();
@@ -262,7 +245,6 @@ export function createSandboxResources(opts: {
       };
     },
     async create(actorId, scopeId, backend, name, reservationId) {
-      await initialize();
       await authorize(actorId, scopeId);
       if (!Object.hasOwn(opts.backends, backend) || !opts.backends[backend as SandboxBackendName])
         throw new Error(`sandbox backend unavailable: ${backend}`);
@@ -313,7 +295,6 @@ export function createSandboxResources(opts: {
       });
     },
     async setDefault(actorId, scopeId, id) {
-      await initialize();
       await authorize(actorId, scopeId);
       await opts.lock.withLock(`sandbox-default:${scopeId}`, async () => {
         if (id !== null) {

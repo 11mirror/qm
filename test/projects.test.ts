@@ -354,6 +354,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
 
   const turn = (actor: string, threadRef: string, text = "hello project") =>
     built.app.turn({
+      origin: { kind: "direct" },
       surface: "web",
       actor: { externalId: actor },
       conversation: {
@@ -441,6 +442,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     "a roster change invalidates approvals minted for the previous Project audience",
   );
   const forgedApproval = await built.app.turn({
+    origin: { kind: "direct" },
     surface: "web",
     actor: { externalId: "member" },
     conversation: { kind: "group", channelRef: groupRef, threadRef: "web:owner:approval", audience: [] },
@@ -491,6 +493,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal((await built.app.listSessionApprovals(sharedApproval.sessionId!, "owner")).length, 1);
   assert.deepEqual(await built.app.listSessionApprovals(sharedApproval.sessionId!, "member"), []);
   const crossMemberApproval = await built.app.turn({
+    origin: { kind: "direct" },
     surface: "web",
     actor: { externalId: "member" },
     conversation: { kind: "group", channelRef: groupRef, threadRef: "web:owner:shared-approval", audience: [] },
@@ -618,7 +621,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
         audience: [{ externalId: "outsider" }],
       },
       text: "background project work",
-      triggered: true,
+      origin: { kind: "automation" },
     });
   assert.equal((await background()).status, "ok");
   const removableApprovalThread = "web:member:approval-to-cancel";
@@ -696,6 +699,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal((await turn("member", removableApprovalThread, "continue after rejoining")).status, "ok");
 
   const queued = await built.app.turn({
+    origin: { kind: "direct" },
     surface: "web",
     actor: { externalId: "member" },
     conversation: { kind: "group", channelRef: groupRef, threadRef: "web:member:queued-before-removal", audience: [] },
@@ -747,6 +751,7 @@ test("a member added mid-turn sees the thread but never the prior roster's outpu
 
   const threadRef = "web:owner:roster-race";
   const turn = built.app.turn({
+    origin: { kind: "direct" },
     surface: "web",
     actor: { externalId: "owner" },
     conversation: {
@@ -793,8 +798,15 @@ test("a member added to a Project inherits the chats that predate them", async (
   const threadRef = "web:owner:pre-join";
   const conversation = { kind: "group" as const, channelRef: projectGroupRef(project.id), threadRef, audience: [] };
   assert.equal(
-    (await built.app.turn({ surface: "web", actor: { externalId: "owner" }, conversation, text: "BEFORE_JOIN_TOPIC" }))
-      .status,
+    (
+      await built.app.turn({
+        origin: { kind: "direct" },
+        surface: "web",
+        actor: { externalId: "owner" },
+        conversation,
+        text: "BEFORE_JOIN_TOPIC",
+      })
+    ).status,
     "ok",
   );
   const session = await built.sessions.getByThread(threadRef);
@@ -813,6 +825,7 @@ test("a member added to a Project inherits the chats that predate them", async (
   assert.equal(
     (
       await built.app.turn({
+        origin: { kind: "direct" },
         surface: "web",
         actor: { externalId: "member" },
         conversation,
@@ -837,16 +850,30 @@ test("leaving a Project still cuts off everything after the member left", async 
   const conversation = { kind: "group" as const, channelRef: projectGroupRef(project.id), threadRef, audience: [] };
   assert.equal((await built.app.addProjectMember(project.id, "owner", "member")).status, "ok");
   assert.equal(
-    (await built.app.turn({ surface: "web", actor: { externalId: "owner" }, conversation, text: "WHILE_A_MEMBER" }))
-      .status,
+    (
+      await built.app.turn({
+        origin: { kind: "direct" },
+        surface: "web",
+        actor: { externalId: "owner" },
+        conversation,
+        text: "WHILE_A_MEMBER",
+      })
+    ).status,
     "ok",
   );
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "member")).status, "ok");
   const session = await built.sessions.getByThread(threadRef);
   assert.ok(session);
   assert.equal(
-    (await built.app.turn({ surface: "web", actor: { externalId: "owner" }, conversation, text: "AFTER_THEY_LEFT" }))
-      .status,
+    (
+      await built.app.turn({
+        origin: { kind: "direct" },
+        surface: "web",
+        actor: { externalId: "owner" },
+        conversation,
+        text: "AFTER_THEY_LEFT",
+      })
+    ).status,
     "ok",
   );
   assert.equal(await built.app.getSessionForViewer(session.id, "member"), null);
@@ -933,6 +960,7 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
 
   // a session predating the link, so channel-derived members should inherit it
   await built.app.turn({
+    origin: { kind: "direct" },
     surface: "web",
     actor: { externalId: "owner" },
     conversation: { kind: "group", channelRef: groupRef, threadRef: "web:owner:pre", audience: [] },
@@ -1045,6 +1073,7 @@ test("Slack-linked project turns use the inherited channel roster", async () => 
 
   const turn = (actor: string, threadRef: string, text = "hello linked project") =>
     built.app.turn({
+      origin: { kind: "direct" },
       surface: "web",
       actor: { externalId: actor },
       conversation: {

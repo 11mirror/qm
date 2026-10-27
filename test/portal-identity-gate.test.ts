@@ -343,6 +343,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       scopeId("org", "default-org"),
     );
     const pending = await built.app.turn({
+      origin: { kind: "direct" },
       surface: "web",
       actor: { externalId: "U2" },
       conversation: { kind: "dm", threadRef: "web:U2:private" },
@@ -362,7 +363,13 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
   it("a web turn whose body actor doesn't match the portal identity is rejected", async () => {
     const r = await post(
       "/v1/turns",
-      { surface: "web", text: "hi", actor: { externalId: "U2" }, conversation: { kind: "dm", threadRef: "t" } },
+      {
+        origin: { kind: "direct" },
+        surface: "web",
+        text: "hi",
+        actor: { externalId: "U2" },
+        conversation: { kind: "dm", threadRef: "t" },
+      },
       { "x-portal-identity": await token("U1") },
     );
     assert.equal(r.status, 403);
@@ -370,6 +377,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
 
   it("a web turn is gated whichever way its path is spelled", async () => {
     const turn = {
+      origin: { kind: "direct" },
       surface: "web",
       text: "hi",
       actor: { externalId: "U2" },
@@ -383,6 +391,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
 
   it("a slack turn carries no portal identity and is not gated (different trust authority)", async () => {
     const r = await post("/v1/turns", {
+      origin: { kind: "direct" },
       surface: "slack",
       text: "hi",
       actor: { externalId: "U9" },

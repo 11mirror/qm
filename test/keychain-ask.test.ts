@@ -401,7 +401,7 @@ test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate cl
     },
   );
   assert.equal(outcome.ran, true);
-  assert.equal(seen?.triggered, true);
+  assert.equal(seen?.origin.kind, "automation");
   assert.equal(seen?.thinkingLevel, undefined);
   assert.equal(seen?.fastMode, undefined);
   assert.equal(seen?.conversation.threadRef, "ch:C1-t1", "an explicit threadRef overrides the per-fire fireKey thread");
@@ -838,6 +838,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     assert.ok(ask, "the pending ask is visible from the asking conversation");
 
     const seeded = await built.app.turn({
+      origin: { kind: "direct" },
       surface: "slack",
       actor: { externalId: "U_BOB" },
       conversation: {
@@ -956,7 +957,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
         });
         const seed = await built.app.turn({
           surface: "cron",
-          triggered: true,
+          origin: { kind: "automation" },
           actor: { externalId: requesterId },
           conversation: {
             kind: kind === "channel" ? "channel" : "group",
@@ -1067,6 +1068,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
         )
       ).json()) as any;
       const seed = await built.app.turn({
+        origin: { kind: "direct" },
         surface: "slack",
         actor: { externalId: "U_ALICE" },
         conversation: { kind: "dm", threadRef },
@@ -1208,7 +1210,7 @@ test("turn e2e: trigger-fired turns mint `triggered` into the capability token; 
       actor: { externalId: "U_ALICE" },
       conversation: { kind: "channel", threadRef: "ch:C9-t", channelRef: "C9", audience: [{ externalId: "U_ALICE" }] },
       text: "!run true",
-      ...(triggered ? { triggered: true } : {}),
+      origin: triggered ? { kind: "automation" } : { kind: "direct" },
     }) as TurnRequest;
 
   assert.equal((await built.app.turn(turn(false))).status, "ok");

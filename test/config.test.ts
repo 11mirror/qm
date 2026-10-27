@@ -532,28 +532,6 @@ test("suggestion generation defaults on and can be explicitly disabled", () => {
   assert.throws(() => loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "maybe" }));
 });
 
-test("legacy sandbox scope defaults are parsed for upgrade", () => {
-  const credentials = {
-    SPRITES_TOKEN: "unit-test-sprites",
-    MODAL_TOKEN_ID: "unit-test-modal-id",
-    MODAL_TOKEN_SECRET: "unit-test-modal-secret",
-  };
-  assert.deepEqual(
-    loadConfig({ ...credentials, SANDBOX_SCOPE_BACKENDS: '{"personal":"modal","channel":"sprites"}' })
-      .legacySandboxScopeDefaults,
-    { personal: "modal", channel: "sprites" },
-  );
-  for (const value of [
-    "[]",
-    "null",
-    '{"personal:someone":"modal"}',
-    '{"personal":"missing"}',
-    '{"unknown":"sprites"}',
-    '{"personal":""}',
-  ])
-    assert.throws(() => loadConfig({ ...credentials, SANDBOX_SCOPE_BACKENDS: value }));
-});
-
 test("background ownership requires durable storage and an independent deployment authority", () => {
   const env = {
     BACKGROUND_DEPLOYMENT_ID: "core:release-a",

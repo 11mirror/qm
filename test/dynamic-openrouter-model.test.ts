@@ -29,6 +29,7 @@ test("web turns hydrate persisted OpenRouter catalog models before runtime resol
   });
 
   const turn = await built.app.turn({
+    origin: { kind: "direct" },
     surface: "web",
     actor: { externalId: "alice" },
     conversation: { kind: "dm", threadRef: "web:alice:dynamic-openrouter-model" },

@@ -22,8 +22,8 @@ function channelTurn(text: string, extra: Partial<TurnRequest> = {}): TurnReques
     deliveryTarget: "slack:C9:t1",
     surfaceTools: true,
     addressed: true,
-    liveActor: true,
     text,
+    origin: { kind: "human" },
     ...extra,
   };
 }
@@ -78,10 +78,9 @@ test("a retried automation fire (surface 'monitor') still seeds past its recorde
     actor,
     conversation: { kind: "channel", threadRef: "monitor:M1:t1", channelRef: "C9", audience: [actor] },
     surfaceTools: true,
-    triggered: true,
-    triggerDestination: { type: "slack", target: "slack:C9:t1" },
     text: "!post-then-boom monitor first|monitor second",
     idempotencyKey: "dedup-monitor-1",
+    origin: { kind: "automation", destination: { type: "slack", target: "slack:C9:t1" } },
   };
 
   await assert.rejects(built.app.turn(req), /boom/);

@@ -15,14 +15,12 @@ available until the new revision has passed operational checks.
 - The `sandbox_routing` table, `SANDBOX_RESOURCES_ENABLED`, and the sandbox
   migration endpoints and agent action are retired. Sandbox resources are always
   on; scoped execution uses the selected sandbox resource. Disposable computers use
-  that resource's provider, or the installation provider when no resource is selected. On upgrade,
-  existing routes and `SANDBOX_SCOPE_BACKENDS` mappings are imported once as
-  sandbox records so existing computers are preserved; afterwards
-  `SANDBOX_SCOPE_BACKENDS` has no runtime effect. To move a scope to another
-  provider, create a sandbox there, copy durable work via git or Files, and set
-  it as the default. Keep credentials and provider settings for all legacy mappings
-  until the import completes; an unconfigured provider needed by the import stops
-  startup before any adoption state is written.
+  that resource's provider, or the installation provider when no resource is selected. Builds
+  from 2026-10-02 to 2026-10-26 imported existing routes and `SANDBOX_SCOPE_BACKENDS`
+  mappings once as sandbox records; later builds no longer carry that import, so a
+  deployment older than 2026-10-02 must boot one of those builds first.
+  `SANDBOX_SCOPE_BACKENDS` is ignored. To move a scope to another provider, create a
+  sandbox there, copy durable work via git or Files, and set it as the default.
 - Reach-denied Slack notifications are retired. Consult the audit log for denied
   requests.
 

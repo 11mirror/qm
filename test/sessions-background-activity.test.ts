@@ -16,7 +16,13 @@ function freshApp() {
 
 const actor = { externalId: "U1" };
 function dm(text: string, thread: string): TurnRequest {
-  return { surface: "test", actor, conversation: { kind: "dm", threadRef: thread }, text };
+  return {
+    origin: { kind: "direct" },
+    surface: "test",
+    actor,
+    conversation: { kind: "dm", threadRef: thread },
+    text,
+  };
 }
 
 test("background output selects the recorded private resource and fails closed when it is unavailable", async () => {

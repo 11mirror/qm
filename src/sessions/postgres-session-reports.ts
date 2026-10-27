@@ -61,11 +61,11 @@ export function createSessionReports(
            FROM (SELECT r.created_at, r.session_id, r.model,
                         ${SPEND_FIELDS.map(
                           ([column, key, type]) =>
-                            `COALESCE(r.${column}, ${spendValue("legacy.usage", key, type)}) AS ${column}`,
+                            `COALESCE(r.${column}, ${spendValue("unparsed.usage", key, type)}) AS ${column}`,
                         ).join(",\n                        ")}
                    FROM session_llm_requests r
                    LEFT JOIN LATERAL (SELECT llm_spend_usage(r.usage_json) AS usage
-                                       WHERE r.spend_cost_usd IS NULL) legacy ON TRUE
+                                       WHERE r.spend_cost_usd IS NULL) unparsed ON TRUE
                   WHERE r.created_at >= $1 AND r.created_at < $2 AND r.usage_json IS NOT NULL
                  OFFSET 0) r
            JOIN sessions s ON s.id = r.session_id
@@ -145,12 +145,12 @@ export function createSessionReports(
       const started = Date.now();
       await q(
         `UPDATE session_llm_requests r
-            SET ${SPEND_FIELDS.map(([column, key, type]) => `${column} = ${spendValue("legacy.usage", key, type)}`).join(", ")}
+            SET ${SPEND_FIELDS.map(([column, key, type]) => `${column} = ${spendValue("unparsed.usage", key, type)}`).join(", ")}
            FROM (SELECT id, llm_spend_usage(usage_json) AS usage FROM session_llm_requests
-                  WHERE usage_json IS NOT NULL AND spend_cost_usd IS NULL LIMIT $1) legacy
-          WHERE r.id = legacy.id`,
+                  WHERE usage_json IS NOT NULL AND spend_cost_usd IS NULL LIMIT $1) unparsed
+          WHERE r.id = unparsed.id`,
         [SPEND_BACKFILL_BATCH],
-      ).catch((error) => reportFailure("spend: parse legacy usage", error));
+      ).catch((error) => reportFailure("spend: backfill usage columns", error));
       await withPgTransaction(await pool(), async (client) => {
         const changed = await client.query(
           "DELETE FROM session_spend_dirty WHERE session_id IS NOT NULL RETURNING session_id",

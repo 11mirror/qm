@@ -62,6 +62,7 @@ function freshApp() {
 test("gateway context flows into the system prompt the harness sees", async () => {
   const { app } = freshApp();
   const res = await app.turn({
+    origin: { kind: "direct" },
     surface: "slack",
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "dm:U1:t1" },
@@ -77,6 +78,7 @@ test("gateway context flows into the system prompt the harness sees", async () =
 test("no gateway context: prompt names the surface but adds no identifier lines", async () => {
   const { app } = freshApp();
   const res = await app.turn({
+    origin: { kind: "direct" },
     surface: "slack",
     actor: { externalId: "U2" },
     conversation: { kind: "dm", threadRef: "dm:U2:t1" },
@@ -90,6 +92,7 @@ test("no gateway context: prompt names the surface but adds no identifier lines"
 test("web prompt tells cron creators to use a real notification destination", async () => {
   const { app } = freshApp();
   const res = await app.turn({
+    origin: { kind: "direct" },
     surface: "web",
     actor: { externalId: "U3" },
     conversation: { kind: "dm", threadRef: "web:U3:t1" },
@@ -107,12 +110,14 @@ test("triggered destination turns tell the agent to return the deliverable, not 
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "cron:c1:slot" },
     text: "!sysprompt",
-    triggered: true,
-    triggerDestination: {
-      type: "principal",
-      target: "U1",
-      audienceScopeId: scopeId("personal", "U1"),
-      onBehalfOf: "U1",
+    origin: {
+      kind: "automation",
+      destination: {
+        type: "principal",
+        target: "U1",
+        audienceScopeId: scopeId("personal", "U1"),
+        onBehalfOf: "U1",
+      },
     },
   });
   assert.equal(res.status, "ok");

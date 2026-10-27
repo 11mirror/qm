@@ -28,7 +28,6 @@ export interface SlackPluginConfig {
   coreSingleton?: boolean;
   appToken?: string;
   apiUrl?: string;
-  eventsMode?: "socket" | "http";
   signingSecret?: string;
   userToken?: string;
   webUiPublicUrl?: string;
@@ -50,10 +49,8 @@ export function slackPluginConfigFromEnv(
   receiverFactory?: SlackPluginConfig["receiverFactory"],
 ): SlackPluginConfig | null {
   if (env.DEV_INSTANCE_NO_SLACK === "1") return null;
-  const eventsMode = env.SLACK_EVENTS_MODE?.trim() === "http" ? "http" : "socket";
   if (!env.SLACK_BOT_TOKEN) return null;
-  if (!receiverFactory && eventsMode === "socket" && !env.SLACK_APP_TOKEN) return null;
-  if (!receiverFactory && eventsMode === "http" && !env.SLACK_SIGNING_SECRET) return null;
+  if (!receiverFactory && !env.SLACK_APP_TOKEN && !env.SLACK_SIGNING_SECRET) return null;
   const num = (v: string | undefined): number | undefined => {
     const n = Number(v);
     return Number.isFinite(n) && n > 0 ? n : undefined;
@@ -71,7 +68,6 @@ export function slackPluginConfigFromEnv(
     ...opt("historyLimit", parseSlackHistoryLimit(env.SLACK_HISTORY_LIMIT)),
     ...opt("appToken", env.SLACK_APP_TOKEN),
     ...opt("apiUrl", env.SLACK_API_URL),
-    ...(eventsMode === "http" ? { eventsMode } : {}),
     ...opt("signingSecret", env.SLACK_SIGNING_SECRET),
     ...opt("userToken", env.SLACK_USER_TOKEN),
     ...opt("webUiPublicUrl", env.WEB_UI_PUBLIC_URL),
@@ -122,7 +118,6 @@ export function slackAccountConfigsFromEnv(env: Record<string, string | undefine
     const accountEnv: Record<string, string | undefined> = {
       SLACK_BOT_TOKEN: str(a.botToken),
       SLACK_APP_TOKEN: str(a.appToken),
-      SLACK_EVENTS_MODE: str(a.eventsMode),
       SLACK_SIGNING_SECRET: str(a.signingSecret),
       SLACK_API_URL: str(a.apiUrl),
       SLACK_IDENTITY_EMAIL: str(a.identityEmail) ?? "1",
@@ -132,7 +127,10 @@ export function slackAccountConfigsFromEnv(env: Record<string, string | undefine
       QM_SLACK_SERVICE_URL: env.QM_SLACK_SERVICE_URL,
     };
     const config = slackPluginConfigFromEnv(accountEnv);
-    if (!config) throw new Error(`SLACK_ACCOUNTS[${i}] ("${id}") is missing required tokens for its events mode`);
+    if (!config)
+      throw new Error(
+        `SLACK_ACCOUNTS[${i}] ("${id}") is missing required tokens (botToken, and appToken or signingSecret)`,
+      );
     const allowFrom = Array.isArray(a.allowFrom) ? normalizeAllowFrom(a.allowFrom) : parseAllowFrom(str(a.allowFrom));
     const denyMessage = str(a.denyMessage)?.trim();
     out.push({

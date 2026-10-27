@@ -74,6 +74,7 @@ export function dm(text: string, extra: Partial<TurnRequest> = {}): TurnRequest 
     actor: internalActor,
     conversation: { kind: "dm", threadRef: "dm:U1:t1" },
     text,
+    origin: { kind: "direct" },
     ...extra,
   };
 }
@@ -85,6 +86,7 @@ export function channel(text: string, extra: Partial<TurnRequest> = {}): TurnReq
     conversation: { kind: "channel", threadRef: "ch:C1:t1", channelRef: "C1", audience: [internalActor] },
     text,
     gatewayContext: { reactionGuidance: "react with a Slack emoji short-name like :pray:" },
+    origin: { kind: "direct" },
     ...extra,
   };
 }

@@ -229,7 +229,7 @@ function storedBlock(body: Record<string, unknown>): Record<string, unknown> {
   return rest;
 }
 
-export function legacyAssistant(content: AssistantMessage["content"], timestamp: number): AssistantMessage {
+export function textAssistant(content: AssistantMessage["content"], timestamp: number): AssistantMessage {
   return {
     role: "assistant",
     content,
@@ -408,7 +408,7 @@ export function reconstructMessagesFromHistory(
       }
     } else if (isReply(e)) {
       const t = itemText(e);
-      if (t) raw.push(legacyAssistant([{ type: "text", text: t }], e.createdAt));
+      if (t) raw.push(textAssistant([{ type: "text", text: t }], e.createdAt));
     } else if (e.kind === "AgentMessage" && e.variant === "files_delivered") {
       const t = itemText(e);
       if (t) raw.push(userMsg(deliveryNote(t), e.createdAt));
@@ -433,7 +433,7 @@ export function reconstructMessagesFromHistory(
       };
       if (prior?.kind === "ToolCall" && batch && raw.at(-1) === batch) batch.content.push(block);
       else {
-        batch = legacyAssistant([block], e.createdAt);
+        batch = textAssistant([block], e.createdAt);
         raw.push(batch);
       }
     }

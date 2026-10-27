@@ -75,7 +75,7 @@ export type SessionType = "dm" | "channel" | "group";
 
 export interface SpawnMeta {
   source?: TurnSource;
-  slackSource?: LegacySlackSource;
+  slackSource?: SlackIdSource;
   externalSlack?: TurnRequest["externalSlack"];
   surfaceTools?: boolean;
   deliveryCandidates?: TurnRequest["deliveryCandidates"];
@@ -181,13 +181,13 @@ export interface DestinationSource {
   policyNamespace?: string;
 }
 
-interface LegacySlackDestination {
+interface SlackIdDestination {
   slackAccountId?: string;
   slackTeamId?: string;
   slackPolicyNamespace?: string;
 }
 
-export function destinationSource(destination: DestinationSource & LegacySlackDestination): DestinationSource {
+export function destinationSource(destination: DestinationSource & SlackIdDestination): DestinationSource {
   const account = destination.account ?? destination.slackAccountId;
   const workspaceId = destination.workspaceId ?? destination.slackTeamId;
   const policyNamespace = destination.policyNamespace ?? destination.slackPolicyNamespace;
@@ -207,7 +207,7 @@ export function sourceDestination(source: TurnSource | undefined): DestinationSo
   };
 }
 
-export interface Destination extends DestinationSource, LegacySlackDestination {
+export interface Destination extends DestinationSource, SlackIdDestination {
   keychainAskId?: string;
   deploymentAccess?: { deploymentId: string; requesterId: string };
   commandApprovalId?: string;
@@ -506,7 +506,7 @@ export interface TurnSource {
   replyThread?: string;
 }
 
-interface LegacySlackSource {
+interface SlackIdSource {
   accountId: string;
   teamId: string;
   userId: string;
@@ -514,23 +514,23 @@ interface LegacySlackSource {
   replyThreadTs?: string;
 }
 
-export function turnSource(request: { source?: TurnSource; slackSource?: LegacySlackSource }): TurnSource | undefined {
+export function turnSource(request: { source?: TurnSource; slackSource?: SlackIdSource }): TurnSource | undefined {
   if (request.source) return request.source;
-  const legacy = request.slackSource;
-  if (!legacy) return undefined;
+  const ids = request.slackSource;
+  if (!ids) return undefined;
   return {
-    account: legacy.accountId,
-    workspaceId: legacy.teamId,
-    userId: legacy.userId,
-    ...(legacy.externalPolicyNamespace ? { policyNamespace: legacy.externalPolicyNamespace } : {}),
-    ...(legacy.replyThreadTs ? { replyThread: legacy.replyThreadTs } : {}),
+    account: ids.accountId,
+    workspaceId: ids.teamId,
+    userId: ids.userId,
+    ...(ids.externalPolicyNamespace ? { policyNamespace: ids.externalPolicyNamespace } : {}),
+    ...(ids.replyThreadTs ? { replyThread: ids.replyThreadTs } : {}),
   };
 }
 
 export interface TurnRequest {
   desktopClientId?: string;
   source?: TurnSource;
-  slackSource?: LegacySlackSource;
+  slackSource?: SlackIdSource;
   externalSlack?: {
     accountId: string;
     teamId: string;
@@ -559,17 +559,9 @@ export interface TurnRequest {
     publishMembers?: ActorAssertion[];
   };
   text: string;
-  origin?: TurnOrigin;
-  triggerTs?: string;
-  entryTs?: string;
+  origin: TurnOrigin;
   gatewayContext?: GatewayContext;
-  triggered?: boolean;
   unattendedGrants?: string[];
-  securityScreenData?: string;
-  triggerDestination?: Destination;
-  ownerKeychainUnion?: boolean;
-  unprompted?: boolean;
-  liveActor?: boolean;
   botActor?: boolean;
   conversationHeader?: string;
   priorTurns?: ConversationTurn[];

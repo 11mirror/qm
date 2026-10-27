@@ -9,6 +9,7 @@ import type { KeychainAsk } from "../src/credentials/keychain.ts";
 import type { Cron, Destination, TurnRequest } from "../src/types.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { automationOrigin } from "./support/turn-origin.ts";
 
 const recipient: Destination = {
   type: "principal",
@@ -73,10 +74,10 @@ test("cron credential approval resumes the original fire once and delivers to th
 
   assert.equal(f.requests.length, 1);
   const request = f.requests[0]!;
-  assert.equal(request.triggered, true);
+  assert.equal(request.origin.kind === "automation", true);
   assert.equal(request.actor.externalId, "U_ALICE");
   assert.equal(request.conversation.threadRef, f.ask.requesterThreadRef);
-  assert.deepEqual(request.triggerDestination, destination);
+  assert.deepEqual(automationOrigin(request)?.destination, destination);
   assert.equal(request.unattendedGrants, undefined, "grants never ride a fire that delivers to another person");
   assert.match(request.text, /approved access until revoked/);
   assert.ok(!request.text.includes(f.ask.id) && !request.text.includes(f.ask.purpose));
@@ -126,7 +127,7 @@ test("cron credential approval does not restore a removed delivery destination",
   await fireAskResolution(f.deps, f.ask);
 
   assert.equal(f.requests.length, 1);
-  assert.equal(f.requests[0]!.triggerDestination, undefined);
+  assert.equal(automationOrigin(f.requests[0]!)?.destination, undefined);
   assert.equal((await f.outbound.pending("principal")).length, 0);
 });
 

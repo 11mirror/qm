@@ -213,7 +213,13 @@ describe("capability-token control plane (SOUL)", () => {
   it("refuses a capability token on a non-self-service route (e.g. /v1/turns) with 403", async () => {
     const res = await post(
       "/v1/turns",
-      { surface: "x", actor: { externalId: "U1" }, conversation: { kind: "dm", threadRef: "t" }, text: "hi" },
+      {
+        origin: { kind: "direct" },
+        surface: "x",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "t" },
+        text: "hi",
+      },
       { "x-agent-capability": await capFor("U1") },
     );
     assert.equal(res.status, 403);

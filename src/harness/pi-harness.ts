@@ -108,7 +108,7 @@ import {
   replayPreamble,
   userPromptText,
   seedPriorTurns,
-  legacyAssistant,
+  textAssistant,
   type PiReplayMessage,
   type SeededMessage,
 } from "./replay.ts";
@@ -452,7 +452,7 @@ interface PiSeedTarget {
 
 export function toPiMessage(m: SeededMessage): PiReplayMessage {
   return m.role === "assistant"
-    ? legacyAssistant([{ type: "text", text: m.text }], Date.now())
+    ? textAssistant([{ type: "text", text: m.text }], Date.now())
     : { role: "user", content: [{ type: "text", text: m.text }], timestamp: Date.now() };
 }
 

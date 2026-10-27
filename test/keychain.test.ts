@@ -814,8 +814,8 @@ test("legacy rows are rewritten once to the current shape and materialize as bef
     secretEnc: encryptSecret("machine x", KEY),
   } as never);
 
-  assert.equal(await k.normalizeLegacyCredentials(), 2);
-  assert.equal(await k.normalizeLegacyCredentials(), 0, "a second pass finds nothing to rewrite");
+  assert.equal(await k.rewriteTargetUsernameCredentials(), 2);
+  assert.equal(await k.rewriteTargetUsernameCredentials(), 0, "a second pass finds nothing to rewrite");
   const rewritten = (await creds.get(password.id))!;
   assert.equal((rewritten as { username?: string }).username, undefined);
   assert.deepEqual(rewritten.fields, [
@@ -1252,6 +1252,7 @@ function channelTurn(
   audience: Array<{ externalId: string; displayName?: string }>,
 ): TurnRequest {
   return {
+    origin: { kind: "direct" },
     surface: "slack",
     actor: { externalId: actorId },
     conversation: { kind: "channel", threadRef: "ch:C1", channelRef: "C1", audience },

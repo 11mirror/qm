@@ -17,7 +17,13 @@ function freshApp() {
 
 const actor = { externalId: "U1" };
 function dm(text: string, thread: string): TurnRequest {
-  return { surface: "test", actor, conversation: { kind: "dm", threadRef: thread }, text };
+  return {
+    origin: { kind: "direct" },
+    surface: "test",
+    actor,
+    conversation: { kind: "dm", threadRef: thread },
+    text,
+  };
 }
 
 test("forking copies the transcript into a fresh independent web session", async () => {

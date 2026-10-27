@@ -17,18 +17,24 @@ test("document uploads survive follow-up turns and stay isolated to their conver
     conversation: { kind: "dm" as const, threadRef: "dm:U1:docs" },
   };
   const first = await built.app.turn({
+    origin: { kind: "direct" },
     ...request,
     text: "summarize",
     attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
   });
   assert.equal(first.status, "ok");
-  const followup = await built.app.turn({ ...request, text: "what was the verification code?" });
+  const followup = await built.app.turn({
+    origin: { kind: "direct" },
+    ...request,
+    text: "what was the verification code?",
+  });
   assert.equal(followup.status, "ok");
   const requests = (await built.sessions.listLlmRequests(followup.sessionId!)).filter((r) => r.model === "mock");
   assert.equal(requests.length, 2);
   for (const recorded of requests)
     assert.match(JSON.stringify(recorded.promptEnvelope), /"documents":\[\{"name":"notes.txt"/);
   const other = await built.app.turn({
+    origin: { kind: "direct" },
     ...request,
     conversation: { kind: "dm", threadRef: "dm:U1:other" },
     text: "hello",
@@ -46,6 +52,7 @@ test("compaction stops automatic document replay while preserving the original f
     conversation: { kind: "dm" as const, threadRef: "dm:U1:compacted-docs" },
   };
   const first = await built.app.turn({
+    origin: { kind: "direct" },
     ...request,
     text: "summarize",
     attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
@@ -62,7 +69,11 @@ test("compaction stops automatic document replay while preserving the original f
     throughSeq: entries.at(-1)!.seq,
   });
   await built.sessions.releaseLease(lease);
-  const result = await built.app.turn({ ...request, text: "what was in the document?" });
+  const result = await built.app.turn({
+    origin: { kind: "direct" },
+    ...request,
+    text: "what was in the document?",
+  });
   assert.equal(result.status, "ok");
   const calls = (await built.sessions.listLlmRequests(result.sessionId!)).filter((record) => record.model === "mock");
   assert.doesNotMatch(JSON.stringify(calls.at(-1)?.promptEnvelope), /"documents":/);
@@ -86,6 +97,7 @@ test("compaction during a turn stops document replay immediately", async () => {
     conversation: { kind: "dm" as const, threadRef: "dm:U1:compacted-docs" },
   };
   const first = await built.app.turn({
+    origin: { kind: "direct" },
     ...request,
     text: "summarize",
     attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
@@ -103,7 +115,11 @@ test("compaction during a turn stops document replay immediately", async () => {
     });
   }
   await built.sessions.releaseLease(lease);
-  const result = await built.app.turn({ ...request, text: "what was in the document?" });
+  const result = await built.app.turn({
+    origin: { kind: "direct" },
+    ...request,
+    text: "what was in the document?",
+  });
   assert.equal(result.status, "ok");
   const compacted = await built.sessions.getItems(first.sessionId!);
   assert.ok(compacted.some((item) => item.kind === "ContextCompaction"));
@@ -133,13 +149,18 @@ test("large documents never push a follow-up turn past the context budget", asyn
     const blob = await built.blobTransfer.put(Buffer.from(`${name} `.repeat(4_000)));
     sizes.set(name, blob.sizeBytes);
     const turn = await built.app.turn({
+      origin: { kind: "direct" },
       ...request,
       text: `read ${name}`,
       attachments: [{ name, mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
     });
     assert.equal(turn.status, "ok");
   }
-  const followup = await built.app.turn({ ...request, text: "compare the three files" });
+  const followup = await built.app.turn({
+    origin: { kind: "direct" },
+    ...request,
+    text: "compare the three files",
+  });
   assert.equal(followup.status, "ok");
   const calls = (await built.sessions.listLlmRequests(followup.sessionId!)).filter((r) => r.model === "mock");
   const replayed = (

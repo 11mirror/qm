@@ -1,12 +1,13 @@
 import { fromJSONSchema, z, ZodObject } from "zod";
 import type { ClientToolDeclaration, TurnRequest } from "../../types.ts";
-import { resolveTurnOrigin } from "../../core/turn-origin.ts";
 import { samePerson } from "../../directory/person.ts";
 import type { ServerResponse } from "node:http";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 import { zodMessage } from "./shared.ts";
+
+const TURN_ORIGIN_KINDS = new Set<unknown>(["human", "ambient", "automation", "direct"]);
 
 function isTurnRequest(body: unknown): body is TurnRequest {
   return (
@@ -81,7 +82,6 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
     source: _source,
     slackSource: _slackSource,
     externalSlack: _externalSlack,
-    ownerKeychainUnion: _ownerKeychainUnion,
     spawned: _spawned,
     unattendedGrants: _unattendedGrants,
     redeliveryKey: _redeliveryKey,
@@ -90,19 +90,13 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   } = body;
   if (typeof rest.idempotencyKey === "string" && rest.idempotencyKey.startsWith("slack:"))
     return { error: "idempotencyKey must not use the reserved slack: prefix" };
-  let typed = rest.origin;
-  if (typed?.kind === "automation") {
-    const { useOwnerKeychain: _internalOnly, ...safe } = typed;
-    typed = safe;
-    if (
-      rest.triggered === true &&
-      typed.screenData !== undefined &&
-      rest.securityScreenData !== undefined &&
-      typed.screenData !== rest.securityScreenData
-    )
-      return { error: "conflicting typed and legacy automation screen data" };
+  if (!isObj(rest.origin) || !TURN_ORIGIN_KINDS.has(rest.origin.kind))
+    return { error: "origin.kind must be human, ambient, automation or direct" };
+  let origin = rest.origin;
+  if (origin.kind === "automation") {
+    const { useOwnerKeychain: _internalOnly, ...safe } = origin;
+    origin = safe;
   }
-  const origin = resolveTurnOrigin({ ...rest, origin: typed });
   if (rest.desktopClientId !== undefined && !z.uuid().safeParse(rest.desktopClientId).success)
     return { error: "desktopClientId must be a UUID" };
   let clientTools: ClientToolDeclaration[] | undefined;

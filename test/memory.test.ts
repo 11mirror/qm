@@ -28,11 +28,18 @@ function freshApp(overrides: Partial<Config> = {}) {
 const actor = { externalId: "U1" };
 
 function dm(text: string, thread: string): TurnRequest {
-  return { surface: "test", actor, conversation: { kind: "dm", threadRef: thread }, text };
+  return {
+    origin: { kind: "direct" },
+    surface: "test",
+    actor,
+    conversation: { kind: "dm", threadRef: thread },
+    text,
+  };
 }
 
 function channel(text: string): TurnRequest {
   return {
+    origin: { kind: "direct" },
     surface: "test",
     actor,
     conversation: { kind: "channel", threadRef: "C1:t1", channelRef: "C1", audience: [actor] },

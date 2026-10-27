@@ -16,8 +16,8 @@ function dm(text: string): TurnRequest {
     conversation: { kind: "dm", threadRef: "dm:D-tools", audience: [actor] },
     deliveryTarget: "slack:D-tools",
     text,
-    liveActor: true,
     async: true,
+    origin: { kind: "human" },
   };
 }
 

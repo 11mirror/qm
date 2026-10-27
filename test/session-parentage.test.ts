@@ -132,6 +132,7 @@ test("late human child messages retain their sender and revalidate access", asyn
       kind: "steer",
       text,
       request: {
+        origin: { kind: "direct" },
         surface: "web",
         actor: { externalId: "U2" },
         conversation: { ...conversation, audience: [{ externalId: "U1" }, { externalId: "U2" }] },

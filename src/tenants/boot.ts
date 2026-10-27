@@ -31,16 +31,12 @@ export async function bootTenant(
   const built = buildApp(config, { env });
   await migrateRegisteredPgSchemas(config.databaseUrl);
   if (config.databaseUrl) await ensureTenantQueues(config.databaseUrl);
-  await built.sandboxResources.initialize();
-  const rewrittenCredentials = (await built.keychain?.normalizeLegacyCredentials()) ?? 0;
+  const rewrittenCredentials = (await built.keychain?.rewriteTargetUsernameCredentials()) ?? 0;
   if (rewrittenCredentials > 0)
     console.log(`[qm] rewrote ${rewrittenCredentials} keychain credential(s) to the current shape`);
-  const envSlackConfig = slackPluginConfigFromEnv(env);
-  const slackConfig = envSlackConfig;
-  const envSlackAttempted = Boolean(env.SLACK_BOT_TOKEN || env.SLACK_APP_TOKEN);
-  let slackEnvironmentState: "absent" | "configured" | "partial" = "absent";
-  if (slackConfig) slackEnvironmentState = "configured";
-  else if (envSlackAttempted) slackEnvironmentState = "partial";
+  const slackConfig = slackPluginConfigFromEnv(env);
+  let slackEnvironmentState: "absent" | "configured" | "partial" = slackConfig ? "configured" : "absent";
+  if (!slackConfig && (env.SLACK_BOT_TOKEN || env.SLACK_APP_TOKEN)) slackEnvironmentState = "partial";
   const managedSlack = env.QM_SLACK_SERVICE_URL
     ? createManagedSlack({
         serviceUrl: env.QM_SLACK_SERVICE_URL,
@@ -51,7 +47,7 @@ export async function bootTenant(
       })
     : undefined;
   const server = createServer(built.app, {
-    ...serverDeps(config, built, slackEnvironmentState, envSlackConfig?.botToken),
+    ...serverDeps(config, built, slackEnvironmentState, slackConfig?.botToken),
     managedSlack,
   });
 
@@ -62,31 +58,7 @@ export async function bootTenant(
 
   await serve(server, config);
 
-  if (config.deployAppsDomain) {
-    const domain = config.deployAppsDomain;
-    const probe = `qm-probe-${randomBytes(4).toString("hex")}.${domain}`;
-    void lookup(probe).catch(() => {
-      console.warn(
-        `[qm] app subdomains are configured but *.${domain} does not resolve (probed ${probe}) — ` +
-          `add a wildcard DNS record for *.${domain} pointing at this instance's ingress, or apps will only be reachable at /d/<app>/`,
-      );
-    });
-  }
-
-  if (config.databaseUrl && !config.adminGrants) {
-    console.warn(
-      "[qm] ADMIN_GRANTS is unset with a durable store — if this deployment has never named an admin, the admin console is unreachable and cannot be unlocked from inside the product; set ADMIN_GRANTS=<email>:org_admin (ignore this if an admin was already promoted in the Users tab).",
-    );
-  }
-
-  if (config.deployProvider === "docker") {
-    void dockerDaemonFailure().then((failure) => {
-      if (failure)
-        console.warn(
-          `[qm] publishing is unavailable: the docker deploy provider is selected but no Docker daemon is reachable from core (${failure}) — make a daemon reachable, or set DEPLOY_PROVIDER to aws`,
-        );
-    });
-  }
+  warnAboutUnreachableFeatures(config);
 
   if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) {
     built.scheduler.start();
@@ -106,7 +78,6 @@ export async function bootTenant(
             ...env,
             SLACK_BOT_TOKEN: stored.botToken,
             SLACK_APP_TOKEN: stored.appToken,
-            SLACK_EVENTS_MODE: stored.appToken ? "socket" : env.SLACK_EVENTS_MODE,
           },
           stored.installId && managedSlack ? (staging) => managedSlack.receiver(stored.installId!, staging) : undefined,
         );
@@ -197,4 +168,32 @@ export async function bootTenant(
     },
     releaseInFlightRuns: () => built.runtime.releaseInFlightRuns(),
   };
+}
+
+function warnAboutUnreachableFeatures(config: Config): void {
+  if (config.deployAppsDomain) {
+    const domain = config.deployAppsDomain;
+    const probe = `qm-probe-${randomBytes(4).toString("hex")}.${domain}`;
+    void lookup(probe).catch(() => {
+      console.warn(
+        `[qm] app subdomains are configured but *.${domain} does not resolve (probed ${probe}) — ` +
+          `add a wildcard DNS record for *.${domain} pointing at this instance's ingress, or apps will only be reachable at /d/<app>/`,
+      );
+    });
+  }
+
+  if (config.databaseUrl && !config.adminGrants) {
+    console.warn(
+      "[qm] ADMIN_GRANTS is unset with a durable store — if this deployment has never named an admin, the admin console is unreachable and cannot be unlocked from inside the product; set ADMIN_GRANTS=<email>:org_admin (ignore this if an admin was already promoted in the Users tab).",
+    );
+  }
+
+  if (config.deployProvider === "docker") {
+    void dockerDaemonFailure().then((failure) => {
+      if (failure)
+        console.warn(
+          `[qm] publishing is unavailable: the docker deploy provider is selected but no Docker daemon is reachable from core (${failure}) — make a daemon reachable, or set DEPLOY_PROVIDER to aws`,
+        );
+    });
+  }
 }

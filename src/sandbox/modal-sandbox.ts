@@ -42,8 +42,8 @@ export interface ModalSandboxOptions extends SandboxShared {
 }
 
 /** One-off rewrite of rows written by the previous Modal record shape (nativeSnapshotId era). */
-export function modalLegacyRecordMigration(table: string): PgMigrationDefinition {
-  const legacy = [
+export function modalRecordShapeMigration(table: string): PgMigrationDefinition {
+  const retiredKeys = [
     "hydrationPending",
     "nativeSnapshotId",
     "nativeSnapshotExpiresAtMs",
@@ -55,7 +55,7 @@ export function modalLegacyRecordMigration(table: string): PgMigrationDefinition
     id: `durable-map/${table}/0002-legacy-modal-record-shape`,
     statements: [
       `CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
-      `UPDATE ${table} SET json = (json - ${legacy.map((k) => `'${k}'`).join(" - ")})
+      `UPDATE ${table} SET json = (json - ${retiredKeys.map((k) => `'${k}'`).join(" - ")})
         || CASE WHEN json->>'hydrationPending' = 'true' THEN '{"initializationPending": true}'::jsonb ELSE '{}'::jsonb END
         || CASE WHEN coalesce(json->>'nativeSnapshotId', '') <> '' THEN jsonb_strip_nulls(jsonb_build_object(
              'checkpointId', json->'nativeSnapshotId',
@@ -65,7 +65,7 @@ export function modalLegacyRecordMigration(table: string): PgMigrationDefinition
            ELSE '{}'::jsonb END
         || CASE WHEN coalesce(json->>'recoveryError', '') <> '' THEN jsonb_build_object('snapshotError', json->'recoveryError')
            ELSE '{}'::jsonb END
-       WHERE json ?| array[${legacy.map((k) => `'${k}'`).join(", ")}]`,
+       WHERE json ?| array[${retiredKeys.map((k) => `'${k}'`).join(", ")}]`,
     ],
   };
 }

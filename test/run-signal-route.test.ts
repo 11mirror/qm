@@ -92,8 +92,8 @@ function steererRequest(externalId: string, threadRef: string, text: string, dis
     surface: "web",
     actor: { externalId, ...(displayName ? { displayName } : {}) },
     conversation: { kind: "dm", threadRef },
-    liveActor: true,
     text,
+    origin: { kind: "human" },
   };
 }
 
@@ -135,7 +135,7 @@ test("core route: a malformed request is rejected 400, and privileged fields are
 
   const smuggled = {
     ...steererRequest("internal:U1", "t-sanitize", "x"),
-    ownerKeychainUnion: true,
+    origin: { kind: "automation", useOwnerKeychain: true },
     spawned: true,
     unattendedGrants: ["admin-read"],
   };
@@ -143,7 +143,7 @@ test("core route: a malformed request is rejected 400, and privileged fields are
   assert.equal(r.status, 200);
   const [signal] = await built.signals.takePending(run.id);
   assert.ok(signal?.request);
-  assert.equal("ownerKeychainUnion" in signal.request, false);
+  assert.deepEqual(signal.request.origin, { kind: "automation" });
   assert.equal("spawned" in signal.request, false);
   assert.equal("unattendedGrants" in signal.request, false);
 });
@@ -290,8 +290,8 @@ test("an orphaned steer whose own request is refused falls back to replaying on 
       surface: "web",
       actor: { externalId: "web-eve" },
       conversation: { kind: "group", threadRef: `web:web-eve:${crypto.randomUUID()}`, channelRef: "G-NOPE" },
-      liveActor: true,
       text: "still matters",
+      origin: { kind: "human" },
     },
   });
   const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
@@ -617,11 +617,19 @@ test("web proxy: a Project member can resolve their own approval in another memb
   const conversation = { kind: "group" as const, channelRef, channelName: project.name, threadRef, audience: [] };
 
   assert.equal(
-    (await built.app.turn({ surface: "web", actor: { externalId: "approval-owner" }, conversation, text: "start" }))
-      .status,
+    (
+      await built.app.turn({
+        origin: { kind: "direct" },
+        surface: "web",
+        actor: { externalId: "approval-owner" },
+        conversation,
+        text: "start",
+      })
+    ).status,
     "ok",
   );
   const pending = await built.app.turn({
+    origin: { kind: "direct" },
     surface: "web",
     actor: { externalId: "approval-member" },
     conversation,
@@ -801,6 +809,7 @@ const pageTool = (name: string, extra: Record<string, unknown> = {}) => ({
 
 function turnWithTools(clientTools: unknown, threadRef = `web:internal:U1:${crypto.randomUUID()}`): TurnRequest {
   return {
+    origin: { kind: "direct" },
     surface: "web",
     actor: { externalId: "internal:U1" },
     conversation: { kind: "dm", threadRef },

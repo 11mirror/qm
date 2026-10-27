@@ -286,6 +286,7 @@ test("the broker serves a deployment credential with its pins, injection, usage 
 });
 
 const dm = (text: string): TurnRequest => ({
+  origin: { kind: "direct" },
   surface: "test",
   actor: { externalId: "U1" },
   conversation: { kind: "dm", threadRef: "dm:U1:t1" },

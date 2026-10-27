@@ -31,6 +31,7 @@ for (const backend of ["memory", "postgres"] as const) {
       );
       try {
         const request: TurnRequest = {
+          origin: { kind: "direct" },
           surface: "test",
           actor: { externalId: "U1" },
           conversation: { kind: "dm", threadRef: `inline-wait-${randomUUID()}` },

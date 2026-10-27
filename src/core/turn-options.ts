@@ -1,4 +1,5 @@
 import type { RuntimePurpose } from "../resolution/config-store.ts";
+import type { TurnOrigin } from "../types.ts";
 import {
   defaultWebuiModelIds,
   THINKING_LEVELS,
@@ -13,11 +14,11 @@ export const NON_INTERACTIVE_THINKING_LEVEL = "xhigh";
 export const NON_INTERACTIVE_FAST_MODE = false;
 
 export function turnRuntimePurpose(
-  input: { surface?: string; triggered?: boolean },
+  input: { surface?: string; origin: Pick<TurnOrigin, "kind"> },
   subagent = false,
 ): RuntimePurpose | undefined {
   if (subagent) return "subagent";
-  if (input.triggered && input.surface === "cron") return "cron";
+  if (input.origin.kind === "automation" && input.surface === "cron") return "cron";
   return undefined;
 }
 
@@ -30,20 +31,15 @@ export function resolveTurnFastMode(
   return humanTurn && interactiveDefault ? true : undefined;
 }
 
-export function turnModelOptions(input: {
-  triggered?: boolean;
-  surface?: string;
-  thinkingLevel?: string;
-  fastMode?: boolean;
-}): {
+export function turnModelOptions(input: { surface?: string; thinkingLevel?: string; fastMode?: boolean }): {
   thinkingLevel?: string;
   fastMode?: boolean;
 } {
-  const legacyDefaults = input.triggered && input.surface !== "cron";
+  const triggerDefaults = input.surface !== "cron";
   let thinkingLevel = input.thinkingLevel;
-  if (!thinkingLevel && legacyDefaults) thinkingLevel = NON_INTERACTIVE_THINKING_LEVEL;
+  if (!thinkingLevel && triggerDefaults) thinkingLevel = NON_INTERACTIVE_THINKING_LEVEL;
   let fastMode = input.fastMode;
-  if (typeof fastMode !== "boolean" && legacyDefaults) fastMode = NON_INTERACTIVE_FAST_MODE;
+  if (typeof fastMode !== "boolean" && triggerDefaults) fastMode = NON_INTERACTIVE_FAST_MODE;
   return {
     ...(thinkingLevel ? { thinkingLevel } : {}),
     ...(typeof fastMode === "boolean" ? { fastMode } : {}),

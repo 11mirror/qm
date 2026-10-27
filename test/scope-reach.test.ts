@@ -327,6 +327,7 @@ async function roomApp() {
 }
 
 const dm = (text: string): TurnRequest => ({
+  origin: { kind: "direct" },
   surface: "test",
   actor: { externalId: "U1", displayName: "Alice" },
   conversation: { kind: "dm", threadRef: "dm:U1:t1" },
@@ -334,6 +335,7 @@ const dm = (text: string): TurnRequest => ({
 });
 
 const channelTurn = (text: string): TurnRequest => ({
+  origin: { kind: "direct" },
   surface: "test",
   actor: { externalId: "U1", displayName: "Alice" },
   conversation: {

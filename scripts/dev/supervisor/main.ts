@@ -264,7 +264,7 @@ async function verifySlack(spec: BootSpec): Promise<{ ok: boolean; result: Parti
   };
 }
 
-function writeLegacyMeta(booting: boolean): void {
+function writeLeaseMeta(booting: boolean): void {
   const branch = specInputs ? currentBranch(worktree) : "?";
   const meta: Record<string, string> = {
     slot,
@@ -426,7 +426,7 @@ async function boot(): Promise<void> {
   watch = spec.watch;
   bootId = randomUUID();
   try {
-    writeLegacyMeta(true);
+    writeLeaseMeta(true);
     persistState();
     specInputs = await assembleAndPrepare(spec);
     currentEnvSha = computeEnvSha(specInputs.baseEnv);
@@ -475,7 +475,7 @@ async function boot(): Promise<void> {
       handle,
       ...verified.result,
     } as BootResult;
-    writeLegacyMeta(false);
+    writeLeaseMeta(false);
     persistState();
     finishBoot();
     startLoops();
@@ -744,7 +744,7 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
     if (!verified.ok) return { ok: false, reason: verified.result.reason, ...verified.result };
   }
   bootedAt = nowEpoch();
-  writeLegacyMeta(false);
+  writeLeaseMeta(false);
   persistState();
   return {
     ok: true,

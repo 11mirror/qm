@@ -536,7 +536,7 @@ test("a channel cron belongs to its creator: members see it, only the owner or a
   assert.equal(viaOldGrant.ok ? "" : viaOldGrant.code, "forbidden", "an older write grant can't steer a personal cron");
 });
 
-test("app.turn forwards ownerKeychainUnion onto the persisted run request (else scheduled fires lose the union)", async () => {
+test("app.turn keeps the automation origin's owner-keychain union on the persisted run request", async () => {
   const { built } = setup();
   const base = {
     surface: "cron",
@@ -548,39 +548,20 @@ test("app.turn forwards ownerKeychainUnion onto the persisted run request (else 
       audience: [{ externalId: "U1" }],
     },
     text: "compute digest",
-    triggered: true,
     async: true,
   };
-  const withUnion = await built.app.turn({ ...base, ownerKeychainUnion: true });
+  const withUnion = await built.app.turn({ ...base, origin: { kind: "automation", useOwnerKeychain: true } });
   assert.equal(withUnion.status, "queued");
   const runU = await built.runs.get((withUnion as { runId?: string }).runId!);
-  assert.deepEqual(
-    runU?.request.origin,
-    { kind: "automation", useOwnerKeychain: true },
-    "the union flag must survive app.turn → persisted run origin",
-  );
-
-  const without = await built.app.turn({ ...base, conversation: { ...base.conversation, threadRef: "t-nounion" } });
-  const runN = await built.runs.get((without as { runId?: string }).runId!);
-  assert.deepEqual(runN?.request.origin, { kind: "automation" });
+  assert.deepEqual(runU?.request.origin, { kind: "automation", useOwnerKeychain: true });
 
   const typed = await built.app.turn({
     ...base,
     conversation: { ...base.conversation, threadRef: "t-typed-origin" },
-    triggered: undefined,
     origin: { kind: "automation", screenData: "external event" },
   });
   const runT = await built.runs.get((typed as { runId?: string }).runId!);
   assert.deepEqual(runT?.request.origin, { kind: "automation", screenData: "external event" });
-
-  const conflicted = await built.app.turn({
-    ...base,
-    conversation: { ...base.conversation, threadRef: "t-conflicting-origin" },
-    origin: { kind: "human" },
-    securityScreenData: "external event",
-  });
-  const runC = await built.runs.get((conflicted as { runId?: string }).runId!);
-  assert.deepEqual(runC?.request.origin, { kind: "automation", screenData: "external event" });
 });
 
 test("cron list / get / patch / delete / run round-trip with owner authz", async () => {
@@ -970,11 +951,11 @@ test("scheduled runtime is refused before execution when its model is no longer 
   for (const surface of ["cron", "keychain-ask"]) {
     const result = await built.app.turn({
       surface,
-      triggered: true,
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: `cron-runtime-${surface}` },
       text: "must not execute",
       model: "claude-sonnet-5",
+      origin: { kind: "automation" },
     });
     assert.equal(result.status, "refused", JSON.stringify(result));
     assert.match(result.reason ?? "", /runtime is no longer available/);
@@ -994,12 +975,12 @@ test("queued cron rechecks its runtime after admission and preserves the overrid
   await assert.rejects(
     built.app.turn({
       surface: "cron",
-      triggered: true,
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "cron-runtime-revoked-after-enqueue" },
       text: "must not execute",
       model: "claude-sonnet-5",
       fastMode: false,
+      origin: { kind: "automation" },
     }),
     /runtime is no longer available/,
   );

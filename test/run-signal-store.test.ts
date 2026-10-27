@@ -349,6 +349,7 @@ test("memory store: a signal round-trips ts and request intact", async () => {
     actor: { externalId: "U1" },
     conversation: { kind: "channel" as const, threadRef: "ch:C1:1.1" },
     text: "why did you do it wrong?",
+    origin: { kind: "human" as const },
   };
   await store.send("r1", { kind: "steer", text: "why did you do it wrong?", ts: "1.2", request });
   const [taken] = await store.takePending("r1");
@@ -364,6 +365,7 @@ test("pg store: a signal round-trips ts and request intact", { skip }, async () 
     actor: { externalId: "U1" },
     conversation: { kind: "channel" as const, threadRef: "ch:C1:1.1" },
     text: "why did you do it wrong?",
+    origin: { kind: "human" as const },
   };
   try {
     await store.send(runId, { kind: "steer", text: "why did you do it wrong?", ts: "1784151699.674169", request });
@@ -471,6 +473,7 @@ test("startSignalPoll delivers the request and files even when a steer has no ca
     actor: { externalId: "U1" },
     conversation: { kind: "dm" as const, threadRef: "files" },
     text: "",
+    origin: { kind: "human" as const },
     attachments: [{ name: "report.txt", mimetype: "text/plain", sizeBytes: 3, blobId: "b1" }],
   };
   let received: unknown;

@@ -75,7 +75,8 @@ test("role broker vends only for explicitly selected scoped execution", async ()
   const owner = scopeId("personal", actor.externalId);
   await selectDefaultSandbox(built, actor.externalId, owner);
   const conversation = { kind: "dm" as const, threadRef: "dm:legacy-selected", audience: [actor] };
-  const run = (text: string) => built.app.turn({ surface: "slack", actor, conversation, text });
+  const run = (text: string) =>
+    built.app.turn({ origin: { kind: "direct" }, surface: "slack", actor, conversation, text });
   assert.equal((await run('!run test -z "${AWS_ACCESS_KEY_ID-}" && echo absent')).reply, "absent");
   assert.equal(assumes, 0);
   await assert.rejects(
@@ -131,6 +132,7 @@ test("selected broker execute honors deployment approval rules before vending cr
   await selectDefaultSandbox(built, actor.externalId, personal);
 
   const gated = await built.app.turn({
+    origin: { kind: "direct" },
     surface: "slack",
     actor,
     conversation,
@@ -142,6 +144,7 @@ test("selected broker execute honors deployment approval rules before vending cr
   assert.match(pending.reason, /mutating subcommand/);
 
   const approved = await built.app.turn({
+    origin: { kind: "direct" },
     surface: "slack",
     actor,
     conversation,
@@ -152,6 +155,7 @@ test("selected broker execute honors deployment approval rules before vending cr
   assert.equal(assumes, 1, "approval unblocks exactly one vended invocation");
 
   const unrelated = await built.app.turn({
+    origin: { kind: "direct" },
     surface: "slack",
     actor,
     conversation: { ...conversation, threadRef: "dm:credexec-approval-3" },

@@ -39,6 +39,7 @@ function sign(method: string, pathWithQuery: string, body: string): Record<strin
 
 const turnBody = (actorId: string) =>
   JSON.stringify({
+    origin: { kind: "direct" },
     surface: "test",
     actor: { externalId: actorId },
     conversation: { kind: "dm", threadRef: `t-${actorId}` },
