@@ -3,6 +3,8 @@ import { test } from "node:test";
 import type { Sandbox } from "../../src/sandbox/sandbox.ts";
 import {
   cutToolOutput,
+  cutUnparkedToolOutput,
+  parkIfOverCap,
   DEFAULT_INLINE_TOKENS,
   inlineTokensFrom,
   parkedOutputKey,
@@ -31,6 +33,37 @@ test("cutToolOutput keeps text within the budget untouched and halves the rest b
   const path = /tool-output\/\S+(?=;)/.exec(cut.text)![0];
   assert.equal(path.length, "tool-output/md5/".length + 32);
   assert.equal(parkedOutputKey(path)?.callId, undefined);
+});
+
+test("an unparked cut keeps head and tail and says the full output was not kept", () => {
+  const text = "H".repeat(500) + "T".repeat(500);
+  assert.equal(cutUnparkedToolOutput("short", 10), "short");
+  const cut = cutUnparkedToolOutput(text, 50);
+  assert.ok(cut.startsWith("H".repeat(100)));
+  assert.ok(cut.endsWith("T".repeat(100)));
+  assert.match(
+    cut,
+    /showing the first 100 and last 100 of 1000 chars\. The middle was dropped and the full output was not kept/,
+  );
+  assert.doesNotMatch(cut, /tool-output\//);
+});
+
+test("parkIfOverCap falls back to the inline budget without a store, and to an unparked cut when saving fails", async () => {
+  const text = "x".repeat(DEFAULT_INLINE_TOKENS * 4 + 1);
+  const bare = await parkIfOverCap(undefined, text, "c1");
+  assert.equal(bare.inlineTokens, DEFAULT_INLINE_TOKENS);
+  assert.equal(bare.output, undefined);
+  assert.match(bare.text, /was not kept/);
+  const failing = { inlineTokens: async () => 10, save: async () => Promise.reject(new Error("disk")) };
+  const unsaved = await parkIfOverCap(failing, text, "c1");
+  assert.equal(unsaved.inlineTokens, 10);
+  assert.equal(unsaved.output, undefined);
+  assert.match(unsaved.text, /was not kept/);
+  const saving = { inlineTokens: async () => 10, save: async () => "sha" };
+  const parked = await parkIfOverCap(saving, text, "c1");
+  assert.deepEqual(parked.output, { blob: "sha", chars: text.length, shownChars: 40 });
+  assert.match(parked.text, /tool-output\/md5\//);
+  assert.equal((await parkIfOverCap(saving, "short", "c1")).text, "short");
 });
 
 test("tool-output paths name one call", () => {

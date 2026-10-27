@@ -49,32 +49,51 @@ export function parkedOutputKey(path: string): ParkedOutputKey | null {
   return name && !name.includes("/") ? { digest: md5Hex(name), callId: name } : null;
 }
 
+function cutMarker(text: string, head: string, tail: string, kept: string): string {
+  return `\n…[output cut: showing the first ${head.length} and last ${tail.length} of ${text.length} chars. ${kept}]…\n`;
+}
+
+function headAndTail(text: string, inlineTokens: number): { head: string; tail: string } | null {
+  if (inlineTokens <= 0) return null;
+  const budget = inlineTokens * CHARS_PER_TOKEN;
+  if (text.length <= budget) return null;
+  return { head: headSlice(text, Math.floor(budget / 2)), tail: tailSlice(text, Math.floor(budget / 2)) };
+}
+
 export function cutToolOutput(
   text: string,
   inlineTokens: number,
   callId: string,
 ): { text: string; shownChars: number } | null {
-  if (inlineTokens <= 0) return null;
-  const budget = inlineTokens * CHARS_PER_TOKEN;
-  if (text.length <= budget) return null;
-  const head = headSlice(text, Math.floor(budget / 2));
-  const tail = tailSlice(text, Math.floor(budget / 2));
-  const marker =
-    `\n…[output cut: showing the first ${head.length} and last ${tail.length} of ${text.length} chars. ` +
-    `The full output is in ${TOOL_OUTPUT_PATH}${DIGEST_DIR}${md5Hex(callId)}; reading it with the files tool copies it onto the computer (kept 30 days)]…\n`;
-  return { text: head + marker + tail, shownChars: head.length + tail.length };
+  const parts = headAndTail(text, inlineTokens);
+  if (!parts) return null;
+  const { head, tail } = parts;
+  const kept = `The full output is in ${TOOL_OUTPUT_PATH}${DIGEST_DIR}${md5Hex(callId)}; reading it with the files tool copies it onto the computer (kept 30 days)`;
+  return { text: head + cutMarker(text, head, tail, kept) + tail, shownChars: head.length + tail.length };
+}
+
+export function cutUnparkedToolOutput(text: string, inlineTokens: number): string {
+  const parts = headAndTail(text, inlineTokens);
+  if (!parts) return text;
+  const { head, tail } = parts;
+  const kept =
+    "The middle was dropped and the full output was not kept; refetch narrower (filter or paginate the call, or redirect to a file and read it in pieces) if you need it";
+  return head + cutMarker(text, head, tail, kept) + tail;
 }
 
 export async function parkIfOverCap(
-  store: Pick<ToolOutputStore, "inlineTokens" | "save">,
+  store: Pick<ToolOutputStore, "inlineTokens" | "save"> | undefined,
   text: string,
   callId: string,
-): Promise<{ text: string; output: ToolOutputRef } | null> {
-  const inlineTokens = await store.inlineTokens().catch(swallowAs("tool output: inline cap", DEFAULT_INLINE_TOKENS));
+): Promise<{ text: string; inlineTokens: number; output?: ToolOutputRef }> {
+  const inlineTokens = store
+    ? await store.inlineTokens().catch(swallowAs("tool output: inline cap", DEFAULT_INLINE_TOKENS))
+    : DEFAULT_INLINE_TOKENS;
   const cut = cutToolOutput(text, inlineTokens, callId);
-  if (!cut) return null;
-  const blob = await store.save(text).catch(swallowAs("tool output: park full text", null));
-  return blob ? { text: cut.text, output: { blob, chars: text.length, shownChars: cut.shownChars } } : null;
+  if (!cut) return { text, inlineTokens };
+  const blob = store ? await store.save(text).catch(swallowAs("tool output: park full text", null)) : null;
+  if (!blob) return { text: cutUnparkedToolOutput(text, inlineTokens), inlineTokens };
+  return { text: cut.text, inlineTokens, output: { blob, chars: text.length, shownChars: cut.shownChars } };
 }
 
 async function readText(bytes: DurableByteStore, blobKey: string): Promise<string | null> {
