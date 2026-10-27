@@ -38,13 +38,14 @@ const publishInput = (id = owner, name = "mysite") => ({
 const request = { deploymentId: "00000000-0000-4000-8000-000000000001", requesterId: requester };
 
 async function fixture(t: { after(fn: () => void): void }) {
+  const databaseUrl = testDatabaseUrl();
   const dir = mkdtempSync(join(tmpdir(), "deploy-access-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const auditLog = createPostgresAuditLog(testDatabaseUrl());
+  const acl = createAclStore(createPostgresGrantStore(databaseUrl));
+  const auditLog = createPostgresAuditLog(databaseUrl);
   const outbound = recordingOutbound();
-  const identity = createIdentityService(testDatabaseUrl());
-  const directory = createPostgresDirectoryStore(testDatabaseUrl());
+  const identity = createIdentityService(databaseUrl);
+  const directory = createPostgresDirectoryStore(databaseUrl);
   await directory.replace(
     [owner, requester, "carol@example.com"].map((principalId) => ({
       principalId,
@@ -76,7 +77,7 @@ async function fixture(t: { after(fn: () => void): void }) {
     outbound,
     auditLog,
     directory,
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(databaseUrl),
     deployAppsDomain: "apps.example.com",
   } as unknown as Parameters<typeof createApp>[0]);
   const d = await app.deploy(publishInput());

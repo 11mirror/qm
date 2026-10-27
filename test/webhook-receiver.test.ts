@@ -57,9 +57,10 @@ function harness(
   runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" },
   extra: Partial<Pick<TriggerDeps, "directory" | "sessions" | "currentScopeMembers">> = {},
 ) {
-  const webhooks = tracked(createWebhookStore(testDatabaseUrl()));
+  const databaseUrl = testDatabaseUrl();
+  const webhooks = tracked(createWebhookStore(databaseUrl));
   const outbound = recordingOutbound();
-  const identity = tracked(createIdentityService(testDatabaseUrl()));
+  const identity = tracked(createIdentityService(databaseUrl));
   const calls: TurnRequest[] = [];
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);
@@ -69,7 +70,7 @@ function harness(
     webhooks,
     jobs: inlineJobs(),
     outbound,
-    idempotency: tracked(createIdempotencyStore(testDatabaseUrl())),
+    idempotency: tracked(createIdempotencyStore(databaseUrl)),
     identity,
     run,
     ...extra,

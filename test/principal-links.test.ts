@@ -104,8 +104,8 @@ describe("principal link service: one person, several sign-ins", () => {
 describe("person primitives fold a linked sign-in to its canonical principal", () => {
   afterEach(() => installPrincipalLinks(null));
 
-  async function installed() {
-    const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
+  async function installed(databaseUrl = testDatabaseUrl()) {
+    const links = createPrincipalLinkService(databaseUrl, testAdvisoryLock());
     await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
     installPrincipalLinks(links);
     return links;
@@ -126,10 +126,9 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
   });
 
   it("the identity service classifies a linked sign-in as the canonical principal and deactivates the person", async () => {
-    const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
-    await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
-    installPrincipalLinks(links);
-    const identity = createIdentityService(testDatabaseUrl(), { principalLinks: links });
+    const databaseUrl = testDatabaseUrl();
+    const links = await installed(databaseUrl);
+    const identity = createIdentityService(databaseUrl, { principalLinks: links });
     await identity.refresh(true);
     assert.equal(identity.classify(OIDC).id, EMAIL);
     assert.equal(identity.resolve({ externalId: OIDC }).id, EMAIL);
@@ -141,9 +140,10 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
   });
 
   it("a deactivation recorded before the link is still reversible after it", async () => {
+    const databaseUrl = testDatabaseUrl();
     installPrincipalLinks(null);
-    const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
-    const identity = createIdentityService(testDatabaseUrl(), { principalLinks: links });
+    const links = createPrincipalLinkService(databaseUrl, testAdvisoryLock());
+    const identity = createIdentityService(databaseUrl, { principalLinks: links });
     await identity.deactivate(OIDC);
     await identity.putExternalMember({
       email: "guest@partner.test",
@@ -441,11 +441,11 @@ describe("link mutation serialization", () => {
   });
   it("manual blocks win over directory records during hydration and refresh in either order", async () => {
     for (const reverse of [false, true]) {
-      const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
+      const databaseUrl = testDatabaseUrl();
+      const links = createPrincipalLinkService(databaseUrl, testAdvisoryLock());
       await links.link({ principalId: "A", canonicalId: "B", evidence: "qa", linkedBy: "qa" });
       installPrincipalLinks(links);
       try {
-        const databaseUrl = testDatabaseUrl();
         const rows = [
           { principalId: "A", source: reverse ? "directory-sync" : "manual", at: 1 },
           { principalId: "B", source: reverse ? "manual" : "directory-sync", at: 2 },

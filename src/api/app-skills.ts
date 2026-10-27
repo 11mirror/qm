@@ -74,12 +74,8 @@ function groupBy<K, V>(entries: ReadonlyArray<readonly [K, V]>): Map<K, V[]> {
 }
 
 async function nativeNamesFor(deps: AppDeps, packId: string, scope: ScopeId): Promise<Set<string>> {
-  const all = await deps.skills.list();
-  return new Set(
-    all
-      .filter((s) => s.scopeId === scope && s.status !== "archived" && s.pack?.packId !== packId)
-      .map((s) => s.manifest.name),
-  );
+  const all = await deps.skills.listInScopes([scope]);
+  return new Set(all.filter((s) => s.status !== "archived" && s.pack?.packId !== packId).map((s) => s.manifest.name));
 }
 
 async function importedPackSkills(deps: AppDeps, packId: string): Promise<Array<[ScopeId, string]>> {
@@ -92,8 +88,8 @@ async function importedPackSkills(deps: AppDeps, packId: string): Promise<Array<
 
 async function buildClaimedPaths(deps: AppDeps, exceptPackId: string, scopeId: ScopeId): Promise<Map<string, string>> {
   const claimed = new Map<string, string>();
-  for (const s of await deps.skills.list()) {
-    if (s.status !== "published" || s.pack?.packId === exceptPackId || s.scopeId !== scopeId) continue;
+  for (const s of await deps.skills.listInScopes([scopeId])) {
+    if (s.status !== "published" || s.pack?.packId === exceptPackId) continue;
     for (const p of persistedSkillRecordPaths(s.manifest.name, s.manifest.files)) claimed.set(p, s.createdBy);
   }
   return claimed;
@@ -113,8 +109,8 @@ async function buildClaimedBundlePaths(deps: AppDeps): Promise<Map<string, strin
 async function archiveRemoved(deps: AppDeps, packId: string, scopeId: ScopeId, kept: string[]): Promise<string[]> {
   const keptSet = new Set(kept);
   const archived: string[] = [];
-  for (const s of await deps.skills.list()) {
-    if (s.pack?.packId !== packId || s.scopeId !== scopeId || s.status === "archived") continue;
+  for (const s of await deps.skills.listInScopes([scopeId])) {
+    if (s.pack?.packId !== packId || s.status === "archived") continue;
     const upstream = s.pack?.upstreamName;
     if (upstream && !keptSet.has(upstream)) {
       await deps.skills.archive(s.id);
@@ -326,7 +322,7 @@ export function createSkillMethods(deps: AppDeps, h: AppHelpers) {
           "a skill cannot be created directly in an org or team scope — promote a published skill instead",
         );
       }
-      const existing = (await deps.skills.list()).find((s) => s.scopeId === homeScope && s.manifest.name === name);
+      const existing = (await deps.skills.listInScopes([homeScope])).find((s) => s.manifest.name === name);
       if (existing && existing.status !== "archived") return null;
       if (existing) await deps.skills.delete(existing.id);
       const manifest: SkillManifest = {

@@ -19,12 +19,13 @@ const CH = "CBUILT";
 const CH_OTHER = "CSHARED";
 
 async function setup(opts: { withResolver: boolean } = { withResolver: true }) {
+  const databaseUrl = testDatabaseUrl();
   const deployStore = createDeployStore(
     testDeployBackings({ git: { repoRoot: mkdtempSync(join(tmpdir(), "parity-repo-")) } }),
   );
-  const acl: AclStore = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const directory: DirectoryStore = createPostgresDirectoryStore(testDatabaseUrl());
-  const identity = createIdentityService(testDatabaseUrl());
+  const acl: AclStore = createAclStore(createPostgresGrantStore(databaseUrl));
+  const directory: DirectoryStore = createPostgresDirectoryStore(databaseUrl);
+  const identity = createIdentityService(databaseUrl);
   await directory.replaceChannels(
     [
       { channelId: CH, name: "built", isPrivate: true },

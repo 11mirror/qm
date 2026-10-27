@@ -147,6 +147,7 @@ test("reachDeployment: a provider without resolveEndpoint returns the frozen sto
 });
 
 function appServingUpstream(upstreamPort: number) {
+  const databaseUrl = testDatabaseUrl();
   const deployStore = createDeployStore(testDeployBackings());
   const deploy = createDeployService({
     ...singleProcessDeps(),
@@ -159,15 +160,15 @@ function appServingUpstream(upstreamPort: number) {
       destroy: async () => {},
     },
     auditLog,
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+    acl: createAclStore(createPostgresGrantStore(databaseUrl)),
     deployDir: mkdtempSync(join(tmpdir(), "subdomain-")),
   });
   const app = createApp({
     deploy,
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-    directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    acl: createAclStore(createPostgresGrantStore(databaseUrl)),
+    directory: createPostgresDirectoryStore(databaseUrl),
+    sessions: createPostgresSessionStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
   } as unknown as Parameters<typeof createApp>[0]);
   return app;
 }

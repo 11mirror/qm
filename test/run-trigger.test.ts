@@ -33,10 +33,11 @@ function deps(
   run: (req: TurnRequest) => Promise<TurnResult>,
   dir?: ReturnType<typeof directory>,
 ): TriggerDeps & { outbound: PostLog } {
+  const databaseUrl = testDatabaseUrl();
   return {
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     run,
     ...(dir ? { directory: dir } : {}),
   };

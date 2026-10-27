@@ -27,14 +27,15 @@ function deps(
   dir: ReturnType<typeof unknownChannelDirectory>,
   opts: { sessions?: TriggerDeps["sessions"]; onRun?: () => void } = {},
 ): TriggerDeps {
+  const databaseUrl = testDatabaseUrl();
   const run = async (_r: TurnRequest): Promise<TurnResult> => {
     opts.onRun?.();
     return { status: "ok", reply: "posted" };
   };
   return {
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     run,
     directory: dir,
     currentScopeMembers: createCurrentScopeMembers({ directory: dir }),
@@ -151,6 +152,7 @@ describe("runTrigger home-scope gate for group homes", () => {
   });
 
   it("without currentScopeMembers wired, an affirmative tri-state non-membership wins over session history", async () => {
+    const databaseUrl = testDatabaseUrl();
     let ranTurn = false;
     const dir = {
       ...unknownChannelDirectory(),
@@ -161,8 +163,8 @@ describe("runTrigger home-scope gate for group homes", () => {
     };
     const d: TriggerDeps = {
       outbound: recordingOutbound(),
-      idempotency: createIdempotencyStore(testDatabaseUrl()),
-      identity: createIdentityService(testDatabaseUrl()),
+      idempotency: createIdempotencyStore(databaseUrl),
+      identity: createIdentityService(databaseUrl),
       run: async () => {
         ranTurn = true;
         return { status: "ok", reply: "posted" };

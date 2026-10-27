@@ -18,7 +18,8 @@ const recipient: Destination = {
 };
 
 async function fixture() {
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const databaseUrl = testDatabaseUrl();
+  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const cron = await crons.create({
     owner: "U_ALICE",
     createdBy: "U_ALICE",
@@ -31,8 +32,8 @@ async function fixture() {
   const requests: TurnRequest[] = [];
   const deps: AskResolutionDeps = {
     outbound,
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     getCron: (id) => crons.get(id),
     run: async (request) => {
       requests.push(request);

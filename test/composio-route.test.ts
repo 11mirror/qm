@@ -420,11 +420,11 @@ test("Slack connection links verified workspace identity to the web owner and pe
   await f.own();
   const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
   const { installPrincipalLinks, canonicalPerson } = await import("../src/directory/person.ts");
-  f.deps.principalLinks = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
+  f.deps.principalLinks = createPrincipalLinkService(f.url, testAdvisoryLock());
   installPrincipalLinks(f.deps.principalLinks);
   f.deps.slackAccounts = createSlackAccounts(f.url);
   f.deps.signingSecret = "qa-slack-link-secret";
-  f.deps.directory = createPostgresDirectoryStore(testDatabaseUrl());
+  f.deps.directory = createPostgresDirectoryStore(f.url);
   await f.deps.directory.replace([
     { principalId: "work@example.test", slackId: "U123", displayName: "Alice", type: "internal" },
   ]);
@@ -478,9 +478,9 @@ test("Slack link rejects changed browser accounts, wrong owner, bots, other work
     await f.own();
     await f.own("bob");
     f.deps.signingSecret = "slack-test";
-    f.deps.principalLinks = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
+    f.deps.principalLinks = createPrincipalLinkService(f.url, testAdvisoryLock());
     f.deps.slackAccounts = createSlackAccounts(f.url);
-    f.deps.directory = createPostgresDirectoryStore(testDatabaseUrl());
+    f.deps.directory = createPostgresDirectoryStore(f.url);
     await f.deps.directory.replace([
       { principalId: "work@example.test", slackId: "U123", displayName: "Alice", type: "internal" },
     ]);
@@ -815,7 +815,7 @@ test("linked aliases can execute their existing accounts until the identity link
   const { installPrincipalLinks } = await import("../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
+  const links = createPrincipalLinkService(f.url, testAdvisoryLock());
   installPrincipalLinks(links);
   const aliasId = "oidc:alice";
   const aliasUserId = composioUserId(tenant().orgId, aliasId);
@@ -851,7 +851,7 @@ test("linked account discovery and Slack status preserve historical aliases with
   const { installPrincipalLinks } = await import("../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
+  const links = createPrincipalLinkService(f.url, testAdvisoryLock());
   f.deps.principalLinks = links;
   f.deps.slackAccounts = createSlackAccounts(f.url);
   installPrincipalLinks(links);
@@ -907,7 +907,7 @@ test("unlinking an account owner during tool lookup prevents provider execution"
   const { installPrincipalLinks } = await import("../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
+  const links = createPrincipalLinkService(f.url, testAdvisoryLock());
   installPrincipalLinks(links);
   const aliasId = "oidc:alice";
   try {
@@ -934,7 +934,7 @@ test("consent and browser verification use the canonical identity when signed in
   const { installPrincipalLinks } = await import("../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
+  const links = createPrincipalLinkService(f.url, testAdvisoryLock());
   installPrincipalLinks(links);
   const aliasId = "oidc:alice";
   const userId = composioUserId(tenant().orgId, "alice");
@@ -964,7 +964,7 @@ test("linked identities retain provider accounts and Slack status until unlinked
   const { installPrincipalLinks } = await import("../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  f.deps.principalLinks = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
+  f.deps.principalLinks = createPrincipalLinkService(f.url, testAdvisoryLock());
   f.deps.slackAccounts = createSlackAccounts(f.url);
   installPrincipalLinks(f.deps.principalLinks);
   const canonical = composioUserId(tenant().orgId, "alice");
@@ -1206,7 +1206,7 @@ async function nativeSlackFixture(linked = true) {
   await testQuery(f.url, `DELETE FROM slack_accounts`);
   f.deps.connectorTokens = f.deps.keychain;
   f.deps.oauthEnv = { SLACK_OAUTH_CLIENT_ID: "native-client", SLACK_OAUTH_CLIENT_SECRET: "native-secret" };
-  f.deps.directory = createPostgresDirectoryStore(testDatabaseUrl());
+  f.deps.directory = createPostgresDirectoryStore(f.url);
   await f.deps.directory.replace([{ principalId: "alice", slackId: "U123", displayName: "Alice", type: "internal" }]);
   f.deps.slackEnvBotToken = "workspace-bot";
   if (linked) await f.deps.connectorTokens!.setConnectorToken("slack.com", "alice", { accessToken: "alice-user" });

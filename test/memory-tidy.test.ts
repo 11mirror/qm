@@ -15,10 +15,11 @@ import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { idleCronQueue } from "./support/cron-slots.ts";
 
 function fixture() {
+  const databaseUrl = testDatabaseUrl();
   const notebooks = new Map<ScopeId, MemoryFact[]>();
   const timezones = new Map<string, string>();
-  const store = createMemoryTidyProfileStore(testDatabaseUrl());
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const store = createMemoryTidyProfileStore(databaseUrl);
+  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const calls: TurnRequest[] = [];
   const fact = (updatedAt: number): MemoryFact => ({
     id: String(updatedAt),
@@ -42,8 +43,8 @@ function fixture() {
     ...singleProcessDeps(),
     crons,
     outbound: recordingOutbound(),
-    identity: createIdentityService(testDatabaseUrl()),
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
+    identity: createIdentityService(databaseUrl),
+    idempotency: createIdempotencyStore(databaseUrl),
     skipFire: (cron) => service.skipFire(cron),
     run: async (request) => {
       calls.push(request);

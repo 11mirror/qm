@@ -18,9 +18,10 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 
 async function fixture() {
+  const databaseUrl = testDatabaseUrl();
   let now = Date.now();
   let member = true;
-  const store = createKeychainStore(testDatabaseUrl());
+  const store = createKeychainStore(databaseUrl);
   const { grants, asks } = store;
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
@@ -29,7 +30,7 @@ async function fixture() {
     now: () => now,
   });
   const credential = await keychain.save({ ownerId: "alice@example.com", service: "aws", secret: "fixture-secret" });
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const sessions = createPostgresSessionStore(databaseUrl);
   const session = await sessions.getOrCreateByThread("web:alice:fixture", "dm", "personal:alice@example.com");
   await sessions.addParticipant(session.id, "alice@example.com");
   const { ask } = await keychain.createAsk({
@@ -46,7 +47,7 @@ async function fixture() {
     belongsToScope: async () => member,
     listContexts: async () => [{ scopeId: ask.requesterScopeId, name: "the Reports conversation" }],
   } as unknown as Pick<App, "belongsToScope" | "listContexts">;
-  const identity = createIdentityService(testDatabaseUrl());
+  const identity = createIdentityService(databaseUrl);
   const sent: Array<{ destination: { target: string; keychainAskId?: string }; idempotencyKey?: string }> = [];
   const approvals = createKeychainApprovals({
     outbound: {

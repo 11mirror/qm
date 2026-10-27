@@ -102,11 +102,12 @@ function buildOrchestrator(
     isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   } = {},
 ) {
+  const databaseUrl = testDatabaseUrl();
   const config = testConfigStore(ORG);
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const auditLog = createPostgresAuditLog(testDatabaseUrl());
+  const acl = createAclStore(createPostgresGrantStore(databaseUrl));
+  const auditLog = createPostgresAuditLog(databaseUrl);
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "spo-")));
-  const memory = createPostgresMemoryService(testDatabaseUrl());
+  const memory = createPostgresMemoryService(databaseUrl);
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore: createDeployStore(testDeployBackings()),
@@ -115,11 +116,11 @@ function buildOrchestrator(
     auditLog,
     acl,
   });
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const sessions = createPostgresSessionStore(databaseUrl);
+  const files = createPostgresFileArtifactStore(databaseUrl, createMemoryDurableByteStore());
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
-    identity: createIdentityService(testDatabaseUrl()),
+    identity: createIdentityService(databaseUrl),
     resolution: createResolutionService(ORG, config, acl),
     sessions,
     workspace,
@@ -127,7 +128,7 @@ function buildOrchestrator(
     sandbox: fakeSandbox(),
     modelGateway: createModelGateway(),
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 1000, windowMs: 60_000 }),
+    rateLimiter: createPostgresRateLimiter(databaseUrl, { maxPerWindow: 1000, windowMs: 60_000 }),
     harness: createMockHarness(),
     memory,
     deploy,

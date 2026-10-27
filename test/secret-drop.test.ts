@@ -93,10 +93,11 @@ describe("SecretDropStore", () => {
 });
 
 describe("fireDropResolution", () => {
+  const databaseUrl = testDatabaseUrl();
   const depsWith = (run: (req: TurnRequest) => Promise<TurnResult>) => ({
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     run,
   });
 
@@ -186,8 +187,8 @@ describe("fireDropResolution", () => {
     const outbound = recordingOutbound();
     const deps = {
       outbound,
-      idempotency: createIdempotencyStore(testDatabaseUrl()),
-      identity: createIdentityService(testDatabaseUrl()),
+      idempotency: createIdempotencyStore(databaseUrl),
+      identity: createIdentityService(databaseUrl),
       run: async () => ({ status: "pending_approval" }) as TurnResult,
     };
     const destination = { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") } as const;

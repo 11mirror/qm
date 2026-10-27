@@ -13,7 +13,8 @@ import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const databaseUrl = testDatabaseUrl();
+  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const cron = await crons.create({
     owner: "U_ALICE",
     createdBy: "U_ALICE",
@@ -29,7 +30,7 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
     },
   });
   const outbound = recordingOutbound();
-  const idempotency = createIdempotencyStore(testDatabaseUrl());
+  const idempotency = createIdempotencyStore(databaseUrl);
   const ask: KeychainAsk = {
     id: "retry-ask",
     credentialId: "dummy-credential",
@@ -48,7 +49,7 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   const deps: AskResolutionDeps = {
     outbound,
     idempotency,
-    identity: createIdentityService(testDatabaseUrl()),
+    identity: createIdentityService(databaseUrl),
     getCron: (id) => crons.get(id),
     run,
   };

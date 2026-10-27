@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
-import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { cols, columnName, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { cols, columnName, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import type { PackConfig } from "./normalize.ts";
 
 type PackKind = "git";
@@ -56,44 +56,39 @@ const SKILL_PACKS: TableSpec = {
 
 export const SKILL_PACKS_MIGRATION = mapToTableMigration("skills/packs/0001-typed", SKILL_PACKS);
 
-const codec = tableCodec<SkillPack>(SKILL_PACKS);
 const FIELDS = Object.keys(SKILL_PACKS.columns);
 
 export function createSkillPackStore(opts: { databaseUrl: string; now?: () => number }): SkillPackStore {
-  const { q } = createPgPool(opts.databaseUrl, [SKILL_PACKS_MIGRATION]);
+  const db = createPgPool(opts.databaseUrl, [SKILL_PACKS_MIGRATION]);
+  const table = typedTable<SkillPack>(db, SKILL_PACKS);
   const now = opts.now ?? (() => Date.now());
   const patch = async (id: string, changes: Partial<SkillPack>): Promise<SkillPack | null> => {
-    const values = codec.values(id, changes as SkillPack);
+    const values = table.codec.values(id, changes as SkillPack);
     const set = FIELDS.flatMap((field, i) =>
       field in changes ? [{ col: columnName(field), value: values[i + 1] }] : [],
     );
-    if (!set.length)
-      return codec.rows(await q(`SELECT ${codec.columns} FROM skill_packs WHERE id = $1`, [id]))[0] ?? null;
-    const rows = await q(
-      `UPDATE skill_packs SET ${set.map((c, i) => `${c.col} = $${i + 2}`).join(", ")} WHERE id = $1 RETURNING ${codec.columns}`,
+    if (!set.length) return table.get(id);
+    const rows = await db.q(
+      `UPDATE skill_packs SET ${set.map((c, i) => `${c.col} = $${i + 2}`).join(", ")} WHERE id = $1 RETURNING ${table.codec.columns}`,
       [id, ...set.map((c) => c.value)],
     );
-    return codec.rows(rows)[0] ?? null;
+    return table.codec.rows(rows)[0] ?? null;
   };
   return {
     async create(input) {
       const pack: SkillPack = { ...input, id: randomUUID(), createdAt: now() };
-      await q(
-        `INSERT INTO skill_packs (${codec.columns}) VALUES (${codec.placeholders})
-         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET ${codec.updates}`,
-        codec.values(pack.id, pack),
-      );
+      await table.put(pack.id, pack);
       return pack;
     },
-    get: async (id) => codec.rows(await q(`SELECT ${codec.columns} FROM skill_packs WHERE id = $1`, [id]))[0] ?? null,
-    list: async () => codec.rows(await q(`SELECT ${codec.columns} FROM skill_packs ORDER BY id`)),
+    get: table.get,
+    list: table.all,
     async update(id, changes) {
       const merged = await patch(id, changes);
       if (!merged) throw new Error(`unknown skill pack: ${id}`);
       return merged;
     },
     async remove(id) {
-      await q(`DELETE FROM skill_packs WHERE id = $1`, [id]);
+      await table.delete(id);
     },
     async recordImport(id, result) {
       await patch(id, { lastImport: result });

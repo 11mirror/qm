@@ -57,16 +57,17 @@ const SUBAGENT_EXCEPTIONS = {
 const exceptions = Object.keys(SUBAGENT_EXCEPTIONS) as (keyof AgentToolsOptions)[];
 
 async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean) => Call | undefined) {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const databaseUrl = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(databaseUrl);
   const { runs } = createMemoryRunStore();
-  const featureFlags = createFeatureFlagStore(testDatabaseUrl());
+  const featureFlags = createFeatureFlagStore(databaseUrl);
   for (const flag of flags) await featureFlags.setEnabled(flag, scope, true, "test");
   const sidebar: Session[] = [];
   const sessionSyscalls = createSessionSyscalls({
     advisoryLock: testAdvisoryLock(),
     sessions,
     runs,
-    mailbox: createSessionMailbox(testDatabaseUrl()),
+    mailbox: createSessionMailbox(databaseUrl),
     signals: createMemoryRunSignalStore(),
     maxAttempts: 1,
     conversations: {
@@ -132,8 +133,8 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
       return { reply: "done", modelCalls: 1 };
     },
   });
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const auditLog = createPostgresAuditLog(testDatabaseUrl());
+  const acl = createAclStore(createPostgresGrantStore(databaseUrl));
+  const auditLog = createPostgresAuditLog(databaseUrl);
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "subagent-parity-")));
   const config = testConfigStore("org");
   await config.setSetting("interactiveFastMode", true);
@@ -144,18 +145,18 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
       { config, baseModelDefault: "claude-opus-5" },
       { authorizesCapabilityScope: async () => true },
     ),
-    identity: createIdentityService(testDatabaseUrl()),
+    identity: createIdentityService(databaseUrl),
     resolution: createResolutionService("org", config, acl),
     sessions,
     runs,
     workspace,
-    files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
+    files: createPostgresFileArtifactStore(databaseUrl, createMemoryDurableByteStore()),
     sandbox: { profile: { backend: "fake", writablePersistence: "resident_disk" } } as Sandbox,
     modelGateway: createModelGateway(),
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 100, windowMs: 60_000 }),
+    rateLimiter: createPostgresRateLimiter(databaseUrl, { maxPerWindow: 100, windowMs: 60_000 }),
     harness,
-    memory: createPostgresMemoryService(testDatabaseUrl()),
+    memory: createPostgresMemoryService(databaseUrl),
     deploy: createDeployService({
       ...singleProcessDeps(),
       deployStore: createDeployStore(testDeployBackings()),

@@ -57,7 +57,6 @@ async function extractFacts(
   };
 }
 
-/** A burst of turns waiting out the quiet window, kept in Postgres so a restart or another instance can finish it. */
 export interface PendingCapture extends MemoryCaptureMetadata {
   scopeId: ScopeId;
   actorId?: string;
@@ -65,7 +64,6 @@ export interface PendingCapture extends MemoryCaptureMetadata {
   sessionId?: string;
   idempotencyKey?: string;
   turns: Array<{ input: string; reply: string }>;
-  /** Written by the latest append; only the holder of the latest token may take the burst. */
   token: string;
   at: number;
 }
@@ -126,7 +124,6 @@ function createPendingCaptures(databaseUrl: string) {
   };
 }
 
-/** How long past its quiet window a burst waits before the sweep takes it from an instance that went away. */
 const ORPHAN_GRACE_MS = 60_000;
 
 function createBurstBuffer(
@@ -137,7 +134,6 @@ function createBurstBuffer(
   onError?: (e: unknown, burst: Burst) => void,
 ): { add(ctx: TurnEndCtx): Promise<void>; sweep(): Promise<void> } {
   const timers = new Map<string, NodeJS.Timeout>();
-  const take = async (key: string, burst: PendingCapture): Promise<boolean> => pending!.take(key, burst.token);
   return {
     async add({
       scopeId,
@@ -167,13 +163,13 @@ function createBurstBuffer(
       clearTimeout(timers.get(key));
       timers.delete(key);
       if (active.turns.length >= maxTurns) {
-        if (await take(key, active)) await flush(active);
+        if (await pending.take(key, active.token)) await flush(active);
         return;
       }
       const timer = setTimeout(() => {
         timers.delete(key);
         void (async () => {
-          if (await take(key, active)) await flush(active);
+          if (await pending.take(key, active.token)) await flush(active);
         })().catch((e) => onError?.(e, active));
       }, quietMs);
       timer.unref?.();
@@ -183,7 +179,7 @@ function createBurstBuffer(
       if (!pending) return;
       const cutoff = Date.now() - quietMs - ORPHAN_GRACE_MS;
       for (const [key, burst] of await pending.orphans(cutoff)) {
-        if (!(await take(key, burst))) continue;
+        if (!(await pending.take(key, burst.token))) continue;
         await flush(burst).catch((e) => onError?.(e, burst));
       }
     },
@@ -206,9 +202,7 @@ function burstCaptureContext(burst: Burst): MemoryCaptureContext {
 export function createPerTurnStrategy(deps: {
   harness: HarnessModelUtilities;
   memory: MemoryService;
-  /** With a quiet window, turns from one speaker in one conversation are extracted together once it passes. */
   captureQuietMs?: number;
-  /** Where bursts wait out the quiet window; required when captureQuietMs is set. */
   databaseUrl?: string;
   captureMaxTurns?: number;
   onCaptureError?: (e: unknown, scopeId: ScopeId) => void;

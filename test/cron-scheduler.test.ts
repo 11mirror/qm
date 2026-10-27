@@ -30,9 +30,10 @@ function harness(
   directory?: DirectoryStore,
   maxFiresPerTick?: number,
 ) {
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const databaseUrl = testDatabaseUrl();
+  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const outbound = recordingOutbound();
-  const identity = createIdentityService(testDatabaseUrl());
+  const identity = createIdentityService(databaseUrl);
   const calls: TurnRequest[] = [];
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);
@@ -44,7 +45,7 @@ function harness(
     ...singleProcessDeps(),
     crons,
     outbound,
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
     identity,
     run,
     ...(directory ? { directory } : {}),
@@ -258,10 +259,11 @@ test("a one-shot cron is auto-disabled after it fires", async () => {
 });
 
 test("only the leader instance fires due crons on tick (non-leader skips)", async () => {
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const databaseUrl = testDatabaseUrl();
+  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const outbound = recordingOutbound();
-  const idempotency = createIdempotencyStore(testDatabaseUrl());
-  const identity = createIdentityService(testDatabaseUrl());
+  const idempotency = createIdempotencyStore(databaseUrl);
+  const identity = createIdentityService(databaseUrl);
   const calls: TurnRequest[] = [];
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);
@@ -466,8 +468,9 @@ test("a cron fires into fresh per-fire threads while keeping per-fire idempotenc
 });
 
 test("cron fires do not replay prior sessions or inline prior fire context", async () => {
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const databaseUrl = testDatabaseUrl();
+  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
+  const sessions = createPostgresSessionStore(databaseUrl);
   const scope = scopeId("personal", "U1");
   const sessionIds: string[] = [];
   const priorAssistantSeen: number[] = [];
@@ -490,8 +493,8 @@ test("cron fires do not replay prior sessions or inline prior fire context", asy
     ...singleProcessDeps(),
     crons,
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     run,
   });
   const cron = await crons.create({
@@ -523,7 +526,8 @@ test("cron fires do not replay prior sessions or inline prior fire context", asy
 });
 
 test("an idempotency-skipped cron fire does not create fire log history", async () => {
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const databaseUrl = testDatabaseUrl();
+  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const calls: TurnRequest[] = [];
   const scheduler = createScheduler({
     jobQueue: idleCronQueue(),
@@ -534,7 +538,7 @@ test("an idempotency-skipped cron fire does not create fire log history", async 
       once: async () => false,
       committed: async () => true,
     },
-    identity: createIdentityService(testDatabaseUrl()),
+    identity: createIdentityService(databaseUrl),
     run: async (req) => {
       calls.push(req);
       return { status: "ok", reply: "OUT" };
@@ -595,18 +599,19 @@ test("a calendar cron uses the scheduled instant for a missed tick idempotency k
 });
 
 test("a failing cron fire is logged, not swallowed", async (t) => {
+  const databaseUrl = testDatabaseUrl();
   const logged: string[] = [];
   t.mock.method(console, "error", (...args: unknown[]) => {
     logged.push(args.map(String).join(" "));
   });
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const scheduler = createScheduler({
     jobQueue: idleCronQueue(),
     ...singleProcessDeps(),
     crons,
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     run: async () => {
       throw new Error("boom");
     },
@@ -630,7 +635,8 @@ test("a failing cron fire is logged, not swallowed", async (t) => {
 });
 
 test("queue mode: fires claim the slot before running, and stale or lost claims never run", async () => {
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const databaseUrl = testDatabaseUrl();
+  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const calls: TurnRequest[] = [];
   let onFire: ((job: { cronId: string; scheduledAt: number }) => Promise<unknown>) | undefined;
   const enqueued: Array<{ cronId: string; scheduledAt: number }> = [];
@@ -638,8 +644,8 @@ test("queue mode: fires claim the slot before running, and stale or lost claims 
     ...singleProcessDeps(),
     crons,
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     run: async (req) => {
       calls.push(req);
       return { status: "ok", reply: "OUT" };
@@ -682,7 +688,8 @@ test("queue mode: fires claim the slot before running, and stale or lost claims 
 
 for (const queued of [false, true]) {
   test(`${queued ? "queue" : "interval"} mode: a busy cron defers without blocking other crons or losing its slot`, async () => {
-    const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+    const databaseUrl = testDatabaseUrl();
+    const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
     const gate = Promise.withResolvers<TurnResult>();
     const started = Promise.withResolvers<void>();
     const calls: TurnRequest[] = [];
@@ -704,8 +711,8 @@ for (const queued of [false, true]) {
       ...singleProcessDeps(),
       crons,
       outbound: recordingOutbound(),
-      idempotency: createIdempotencyStore(testDatabaseUrl()),
-      identity: createIdentityService(testDatabaseUrl()),
+      idempotency: createIdempotencyStore(databaseUrl),
+      identity: createIdentityService(databaseUrl),
       advisoryLock: testAdvisoryLock(),
       now: () => clock,
       jobQueue,
@@ -782,7 +789,8 @@ for (const queued of [false, true]) {
 }
 
 test("queue mode: concurrent reconciliation cannot consume an overdue slot while its lifecycle lock is held", async () => {
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const databaseUrl = testDatabaseUrl();
+  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const cron = await crons.create({
     schedule: { cron: "* * * * *", timezone: "UTC" },
     action: "overdue calendar task",
@@ -809,8 +817,8 @@ test("queue mode: concurrent reconciliation cannot consume an overdue slot while
     ...singleProcessDeps(),
     crons,
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     now: () => clock,
     advisoryLock: {
       ...mutex,
@@ -874,14 +882,15 @@ test("queue mode: concurrent reconciliation cannot consume an overdue slot while
 });
 
 test("queue mode: while the queue runs, the interval scheduler's leader lease is held as a guard", async (t) => {
+  const databaseUrl = testDatabaseUrl();
   t.mock.timers.enable({ apis: ["setInterval"] });
   const heldKeys: string[] = [];
   const scheduler = createScheduler({
     ...singleProcessDeps(),
-    crons: createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
+    crons: createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) }),
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     run: async () => ({ status: "ok", reply: "OUT" }),
     leaderLease: {
       async hold<T>(key: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
@@ -915,15 +924,16 @@ test("queue mode: while the queue runs, the interval scheduler's leader lease is
 });
 
 test("queue mode: an authz-failed fire disables the cron but gives the slot back (parity with the interval path)", async () => {
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  const identity = createIdentityService(testDatabaseUrl());
+  const databaseUrl = testDatabaseUrl();
+  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
+  const identity = createIdentityService(databaseUrl);
   let onFire: ((job: { cronId: string; scheduledAt: number }) => Promise<unknown>) | undefined;
   const calls: TurnRequest[] = [];
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons,
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
     identity,
     run: async (req) => {
       calls.push(req);
@@ -1136,7 +1146,8 @@ function busyOnce(calls: TurnRequest[]) {
 }
 
 test("a one-shot whose session is busy is deferred, stays enabled, and fires once the deferral passes", async () => {
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const databaseUrl = testDatabaseUrl();
+  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const calls: TurnRequest[] = [];
   let clock = 1000;
   const scheduler = createScheduler({
@@ -1144,8 +1155,8 @@ test("a one-shot whose session is busy is deferred, stays enabled, and fires onc
     ...singleProcessDeps(),
     crons,
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     run: busyOnce(calls),
     now: () => clock,
   });
@@ -1188,15 +1199,16 @@ test("a one-shot whose session is busy is deferred, stays enabled, and fires onc
 });
 
 test("a fire that is still busy ten minutes past its slot gives up: consumed and recorded refused", async () => {
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const databaseUrl = testDatabaseUrl();
+  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const calls: TurnRequest[] = [];
   const scheduler = createScheduler({
     jobQueue: idleCronQueue(),
     ...singleProcessDeps(),
     crons,
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     run: async (req) => {
       calls.push(req);
       return { status: "refused", refusalKind: "session_busy", reason: "busy" };
@@ -1219,7 +1231,8 @@ test("a fire that is still busy ten minutes past its slot gives up: consumed and
 });
 
 test("queue mode: a busy fire releases its slot and its job sleeps until the deferral", async () => {
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const databaseUrl = testDatabaseUrl();
+  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const calls: TurnRequest[] = [];
   let clock = 5000;
   let onFire: ((job: { cronId: string; scheduledAt: number; notBefore?: number }) => Promise<unknown>) | undefined;
@@ -1228,8 +1241,8 @@ test("queue mode: a busy fire releases its slot and its job sleeps until the def
     ...singleProcessDeps(),
     crons,
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     run: busyOnce(calls),
     now: () => clock,
     jobQueue: {
@@ -1276,15 +1289,16 @@ test("queue mode: a busy fire releases its slot and its job sleeps until the def
 });
 
 test("scheduler stop waits for delayed queue startup and supports an awaited restart", async () => {
+  const databaseUrl = testDatabaseUrl();
   const gate = Promise.withResolvers<void>();
   let starts = 0;
   let stops = 0;
   const scheduler = createScheduler({
     ...singleProcessDeps(),
-    crons: createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
+    crons: createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) }),
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     run: async () => ({ status: "ok", reply: "unused" }),
     jobQueue: {
       start: async () => {
@@ -1316,14 +1330,15 @@ test("scheduler stop waits for delayed queue startup and supports an awaited res
 });
 
 test("scheduler cannot resume after uncertain queue shutdown until a stop retry succeeds", async () => {
+  const databaseUrl = testDatabaseUrl();
   let starts = 0;
   let stops = 0;
   const scheduler = createScheduler({
     ...singleProcessDeps(),
-    crons: createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
+    crons: createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) }),
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     run: async () => ({ status: "ok", reply: "unused" }),
     jobQueue: {
       start: async () => {
@@ -1348,7 +1363,8 @@ test("scheduler cannot resume after uncertain queue shutdown until a stop retry 
 });
 
 test("scheduler relinquishes queue claims before a long turn drains and preserves its queue connection", async () => {
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const databaseUrl = testDatabaseUrl();
+  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const entered = Promise.withResolvers<void>();
   const finish = Promise.withResolvers<void>();
   let onFire: ((job: { cronId: string; scheduledAt: number }) => Promise<unknown>) | undefined;
@@ -1358,8 +1374,8 @@ test("scheduler relinquishes queue claims before a long turn drains and preserve
     ...singleProcessDeps(),
     crons,
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     now: () => 1000,
     run: async () => {
       entered.resolve();
@@ -1432,7 +1448,8 @@ test("scheduler pause fences the next cron in an already admitted polling batch"
 });
 
 test("scheduler resumes new queue claims while an older admitted turn remains alive", async () => {
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const databaseUrl = testDatabaseUrl();
+  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const entered = Promise.withResolvers<void>();
   const finish = Promise.withResolvers<void>();
   let onFire: ((job: { cronId: string; scheduledAt: number }) => Promise<unknown>) | undefined;
@@ -1443,8 +1460,8 @@ test("scheduler resumes new queue claims while an older admitted turn remains al
     ...singleProcessDeps(),
     crons,
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     now: () => 1000,
     run: async () => {
       if (++calls === 1) {
@@ -1498,9 +1515,10 @@ test("scheduler resumes new queue claims while an older admitted turn remains al
 });
 
 test("manual cron preparation and detached fire retain admission across pause", async () => {
+  const databaseUrl = testDatabaseUrl();
   const { createAdmittedWork } = await import("../src/util/admitted-work.ts");
   const work = createAdmittedWork();
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "test",
@@ -1524,8 +1542,8 @@ test("manual cron preparation and detached fire retain admission across pause", 
     admittedWork: work,
     crons,
     outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testDatabaseUrl()),
+    idempotency: createIdempotencyStore(databaseUrl),
+    identity: createIdentityService(databaseUrl),
     run: () =>
       work.run(async () => {
         called.resolve();

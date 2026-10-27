@@ -107,11 +107,12 @@ function buildOrchestrator(
   eagerProvision = false,
   surfaceCache?: SurfaceCache,
 ) {
+  const databaseUrl = testDatabaseUrl();
   const config = testConfigStore(ORG);
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const auditLog = createPostgresAuditLog(testDatabaseUrl());
+  const acl = createAclStore(createPostgresGrantStore(databaseUrl));
+  const auditLog = createPostgresAuditLog(databaseUrl);
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "frr-")));
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const sessions = createPostgresSessionStore(databaseUrl);
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore: createDeployStore(testDeployBackings()),
@@ -122,17 +123,17 @@ function buildOrchestrator(
   });
   const orch = createOrchestrator({
     ...singleProcessDeps(),
-    identity: createIdentityService(testDatabaseUrl()),
+    identity: createIdentityService(databaseUrl),
     resolution: createResolutionService(ORG, config, acl),
     sessions,
     workspace,
-    files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
+    files: createPostgresFileArtifactStore(databaseUrl, createMemoryDurableByteStore()),
     sandbox,
     modelGateway: createModelGateway(),
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 1000, windowMs: 60_000 }),
+    rateLimiter: createPostgresRateLimiter(databaseUrl, { maxPerWindow: 1000, windowMs: 60_000 }),
     harness,
-    memory: createPostgresMemoryService(testDatabaseUrl()),
+    memory: createPostgresMemoryService(databaseUrl),
     deploy,
     acl,
     eagerProvision,

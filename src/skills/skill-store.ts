@@ -3,8 +3,8 @@ import type { ScopeId } from "../types.ts";
 import { parseScopeId } from "../types.ts";
 import { assertSafeSkillName, isSafeSkillName } from "./skill-name.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 
 type SkillStatus = "draft" | "reviewed" | "published" | "archived";
 
@@ -86,15 +86,12 @@ export const SKILLS_MIGRATION = mapToTableMigration("skills/store/0001-typed", S
   ],
 });
 
-const codec = tableCodec<Skill>(SKILLS);
-
 export interface SkillStore {
   create(input: { scopeId: ScopeId; manifest: SkillManifest; createdBy: string; pack?: Skill["pack"] }): Promise<Skill>;
   update(id: string, manifest: SkillManifest): Promise<Skill>;
   withNameLock<T>(scopeId: ScopeId, name: string, fn: () => Promise<T>): Promise<T>;
   get(id: string): Promise<Skill | null>;
   list(): Promise<Skill[]>;
-  /** Skills owned by any of these scopes. */
   listInScopes(scopeIds: readonly ScopeId[]): Promise<Skill[]>;
   review(id: string, reviewer: string, grantCapabilities: string[]): Promise<Skill>;
   publish(id: string): Promise<Skill>;
@@ -175,31 +172,30 @@ export function visibleSkillRows<T extends SkillSummary>(
   return visible;
 }
 
-function skillTable(databaseUrl: string) {
-  const { q } = createPgPool(databaseUrl, [SKILLS_MIGRATION]);
-  const select = async (where: string, params: unknown[] = []): Promise<Skill[]> =>
-    codec.rows(await q(`SELECT ${codec.columns} FROM skills ${where} ORDER BY id`, params));
-  return {
-    q,
-    async put(skill: Skill): Promise<void> {
-      await q(
-        `INSERT INTO skills (${codec.columns}) VALUES (${codec.placeholders})
-         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET ${codec.updates}`,
-        codec.values(skill.id, skill),
-      );
-    },
-    get: async (id: string): Promise<Skill | null> => (await select("WHERE id = $1", [id]))[0] ?? null,
-    list: () => select(""),
-    listInScopes: async (scopeIds: readonly ScopeId[]): Promise<Skill[]> =>
-      scopeIds.length ? select("WHERE scope_id = ANY($1::text[])", [[...scopeIds]]) : [],
-  };
-}
-
 export function createSkillStore(opts: SkillStoreOptions): SkillStore {
-  const { q, put, get, list, listInScopes } = skillTable(opts.databaseUrl);
-  const advisoryLock = opts.advisoryLock;
+  const db = createPgPool(opts.databaseUrl, [SKILLS_MIGRATION]);
+  const table = typedTable<Skill>(db, SKILLS);
+  const put = (skill: Skill) => table.put(skill.id, skill);
+  const listInScopes = async (scopeIds: readonly ScopeId[]): Promise<Skill[]> =>
+    scopeIds.length
+      ? table.codec.rows(
+          await db.q(`SELECT ${table.codec.columns} FROM skills WHERE scope_id = ANY($1::text[]) ORDER BY id`, [
+            [...scopeIds],
+          ]),
+        )
+      : [];
   const withNameLock = <T>(scopeId: ScopeId, name: string, fn: () => Promise<T>) =>
-    advisoryLock.withLock(`skill-name:${scopeId}:${name}`, fn);
+    opts.advisoryLock.withLock(`skill-name:${scopeId}:${name}`, fn);
+  const load = async (id: string): Promise<Skill> => {
+    const s = await table.get(id);
+    if (!s) throw new Error(`unknown skill: ${id}`);
+    return s;
+  };
+  const save = async (s: Skill): Promise<Skill> => {
+    s.updatedAt = Date.now();
+    await put(s);
+    return s;
+  };
 
   return {
     withNameLock,
@@ -224,57 +220,44 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
     },
     async update(id, manifest) {
       assertSafeSkillName(manifest.name);
-      const s = await get(id);
-      if (!s) throw new Error(`unknown skill: ${id}`);
+      const s = await load(id);
       if (manifest.name !== s.manifest.name) throw new Error("skill update cannot rename — create a new skill instead");
       s.manifest = manifest;
       if (scopeKind(s.scopeId) !== "personal") s.status = "draft";
       s.version += 1;
-      s.updatedAt = Date.now();
-      await put(s);
-      return s;
+      return save(s);
     },
 
-    get,
-    list,
+    get: table.get,
+    list: table.all,
     listInScopes,
 
     async review(id, reviewer, grantCapabilities) {
-      const s = await get(id);
-      if (!s) throw new Error(`unknown skill: ${id}`);
+      const s = await load(id);
       assertSafeSkillName(s.manifest.name);
       s.grantedCapabilities = [...new Set([...s.grantedCapabilities, ...grantCapabilities])];
       if (!s.approvals.includes(reviewer)) s.approvals.push(reviewer);
       s.status = "reviewed";
-      s.updatedAt = Date.now();
-      await put(s);
-      return s;
+      return save(s);
     },
 
     async publish(id) {
-      const s = await get(id);
-      if (!s) throw new Error(`unknown skill: ${id}`);
+      const s = await load(id);
       assertSafeSkillName(s.manifest.name);
       if (s.status === "draft") throw new Error("skill must be reviewed before it is published");
       const missing = s.manifest.requiredCapabilities.filter((c) => !s.grantedCapabilities.includes(c));
       if (missing.length) throw new Error(`skill requires ungranted capabilities: ${missing.join(", ")}`);
       s.status = "published";
-      s.updatedAt = Date.now();
-      await put(s);
-      return s;
+      return save(s);
     },
 
     async archive(id) {
-      const existing = await get(id);
-      if (!existing) throw new Error(`unknown skill: ${id}`);
+      const existing = await load(id);
       return withNameLock(existing.scopeId, existing.manifest.name, async () => {
-        const s = await get(id);
-        if (!s) throw new Error(`unknown skill: ${id}`);
+        const s = await load(id);
         if (s.status === "archived") return s;
         s.status = "archived";
-        s.updatedAt = Date.now();
-        await put(s);
-        return s;
+        return save(s);
       });
     },
 
@@ -284,11 +267,11 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
     },
 
     async delete(id) {
-      await q(`DELETE FROM skills WHERE id = $1`, [id]);
+      await table.delete(id);
     },
 
     async recordUse(id, at) {
-      await q(`UPDATE skills SET last_used_at = $2 WHERE id = $1`, [id, at ?? Date.now()]);
+      await db.q(`UPDATE skills SET last_used_at = $2 WHERE id = $1`, [id, at ?? Date.now()]);
     },
 
     async resolve(name, orderedScopes) {
@@ -301,12 +284,11 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
     },
 
     async promote(id, targetScopeId) {
-      const s = await get(id);
-      if (!s) throw new Error(`unknown skill: ${id}`);
+      const s = await load(id);
       assertSafeSkillName(s.manifest.name);
       if (s.status !== "published") throw new Error("only a published skill can be promoted");
-      const existing = (await listInScopes([targetScopeId])).find(
-        (x) => x.status === "published" && x.scopeId === targetScopeId && x.manifest.name === s.manifest.name,
+      const existing = (await table.where("scopeId", targetScopeId)).find(
+        (x) => x.status === "published" && x.manifest.name === s.manifest.name,
       );
       const at = Date.now();
       const promoted: Skill = {
@@ -326,16 +308,13 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
     },
 
     async move(id, toScopeId) {
-      const s = await get(id);
-      if (!s) throw new Error(`unknown skill: ${id}`);
+      const s = await load(id);
       assertSafeSkillName(s.manifest.name);
       if (scopeKind(toScopeId) === "org") {
         throw new Error("ceding a skill to the org goes through promote (admin-gated), not move");
       }
       s.scopeId = toScopeId;
-      s.updatedAt = Date.now();
-      await put(s);
-      return s;
+      return save(s);
     },
   };
 }
