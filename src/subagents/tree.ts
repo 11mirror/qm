@@ -74,7 +74,6 @@ export async function workingSessionThreadRefs(
 
 type TreeNode = Pick<Session, "id" | "threadRef" | "scopeId">;
 
-/** The root and every descendant, in one recursive query. */
 async function treeSessions(sessions: Pick<SessionStore, "descendantsOf">, root: Session): Promise<TreeNode[]> {
   return [root, ...(await sessions.descendantsOf([root.id])).filter((node) => node.id !== root.id)];
 }

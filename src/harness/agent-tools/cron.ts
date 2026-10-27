@@ -1,4 +1,3 @@
-// The cron and webhook tools: scheduled and inbound-event work.
 
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
@@ -31,7 +30,6 @@ export function schedulingTools(kit: ToolKit) {
   return { cron, webhook };
 }
 
-/** The cron tool: create, inspect and manage scheduled work. */
 function cronTool(kit: ToolKit) {
   const cron = defineTool({
     name: "cron",
@@ -143,7 +141,6 @@ function cronParams() {
   });
 }
 
-/** Runs one cron-tool action against the turn's tool context. */
 async function runCronAction(kit: ToolKit, callId: string, params: Static<ReturnType<typeof cronParams>>) {
   const { ref, recordCall, recordResult, recordText, recordFail, refused } = kit;
   const tc = ref.current;
@@ -241,7 +238,6 @@ async function runCronAction(kit: ToolKit, callId: string, params: Static<Return
   }
 }
 
-/** cron list: this scope's crons plus the read-only ones visible here, one page at a time. */
 async function cronListAction(
   kit: ToolKit,
   tc: ToolContext,
@@ -277,7 +273,6 @@ async function cronListAction(
   );
 }
 
-/** cron create: validates the request and schedules the job. */
 async function cronCreateAction(
   kit: ToolKit,
   tc: ToolContext,
@@ -324,7 +319,6 @@ async function cronCreateAction(
   );
 }
 
-/** The webhook tool: create, list, update and disable inbound webhooks. */
 function webhookTool(kit: ToolKit) {
   const { ref, recordCall, recordText, recordFail, refused, unavailable, isUnavailable } = kit;
   const webhook = defineTool({
