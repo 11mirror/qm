@@ -1,20 +1,20 @@
-import "./support/auto-fake-sprites.ts";
+import "../support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildApp } from "./support/build-app.ts";
-import { createControlService } from "../src/api/control-service.ts";
-import { createToolContext, type ToolContextDeps } from "../src/tools/tool-context.ts";
-import { CONTROL_UNAVAILABLE } from "../src/tools/primitives.ts";
-import { scopeId, type WorkspaceLayer } from "../src/types.ts";
-import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
-import type { ToolLedger } from "../src/runs/tool-ledger.ts";
-import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
-import { testConfig } from "./support/test-config.ts";
-import { createAgentTools } from "../src/harness/agent-tools.ts";
-import { createSurfaceToolDeps, type SurfaceToolsContext } from "../src/core/orchestrator/surface-tools.ts";
-import { createPostgresChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { buildApp } from "../support/build-app.ts";
+import { createControlService } from "../../src/api/control-service.ts";
+import { createToolContext, type ToolContextDeps } from "../../src/tools/tool-context.ts";
+import { CONTROL_UNAVAILABLE } from "../../src/tools/primitives.ts";
+import { scopeId, type WorkspaceLayer } from "../../src/types.ts";
+import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../../src/auth/capability-token.ts";
+import type { ToolLedger } from "../../src/runs/tool-ledger.ts";
+import type { Sandbox, SandboxHandle } from "../../src/sandbox/sandbox.ts";
+import { testConfig } from "../support/test-config.ts";
+import { createAgentTools } from "../../src/harness/agent-tools.ts";
+import { createSurfaceToolDeps, type SurfaceToolsContext } from "../../src/core/orchestrator/surface-tools.ts";
+import { createPostgresChannelPolicyStore } from "../../src/surface-cache/channel-policy-store.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 const SECRET = "control-tool-ctx";
 const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };

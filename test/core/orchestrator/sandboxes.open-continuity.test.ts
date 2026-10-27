@@ -1,10 +1,47 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
-import { createToolContext, type ToolContextDeps } from "../src/tools/tool-context.ts";
-import { NeedsApproval } from "../src/tools/primitives.ts";
-import { intersectEgressPolicies } from "../src/resolution/egress-policy.ts";
-import type { SandboxHandle } from "../src/sandbox/sandbox.ts";
+import { createTurnSandboxes, type TurnSandboxContext } from "../../../src/core/orchestrator/sandboxes.ts";
+import { createToolContext, type ToolContextDeps } from "../../../src/tools/tool-context.ts";
+import { NeedsApproval } from "../../../src/tools/primitives.ts";
+import { intersectEgressPolicies } from "../../../src/resolution/egress-policy.ts";
+import type { SandboxHandle } from "../../../src/sandbox/sandbox.ts";
+
+function roomSkillFor(source: string) {
+  return {
+    skill: {
+      id: "room-tool",
+      scopeId: source,
+      manifest: {
+        name: "room-tool",
+        description: "room helper",
+        requiredCapabilities: [],
+        body: "synthetic-room-skill: run scripts/run.js",
+        files: [{ path: "scripts/run.js", content: "synthetic-room-skill-file" }],
+      },
+      signature: "",
+      status: "published",
+      createdBy: "bob",
+      version: 1,
+      grantedCapabilities: [],
+      approvals: [],
+    },
+    shadowed: [],
+  };
+}
+
+function fakeResources(state: { allowed: boolean }, resource: { id: string; ownerScopeId: string }) {
+  return {
+    get: async () => resource,
+    access: async () => {
+      if (!state.allowed) throw new Error("permission revoked");
+      return resource;
+    },
+    list: async () => ({ sandboxes: [resource], defaultSandboxId: null }),
+    status: async () => ({ machine: "machine" }),
+    restart: async () => {},
+    retire: async () => {},
+  };
+}
 
 function fixture(
   source = "group:project",
@@ -16,9 +53,9 @@ function fixture(
     member: true,
     allowed: true,
     liveJobs: [] as Array<{ sandboxId: string; scopeId: string }>,
-    targetPolicy: { mode: "denylist", rules: [] } as import("../src/types.ts").CommandPolicy,
-    targetEgress: { allowedHosts: [], deniedHosts: [] } as import("../src/types.ts").EgressPolicy,
-    sourcePolicy: { mode: "denylist", rules: [] } as import("../src/types.ts").CommandPolicy,
+    targetPolicy: { mode: "denylist", rules: [] } as import("../../../src/types.ts").CommandPolicy,
+    targetEgress: { allowedHosts: [], deniedHosts: [] } as import("../../../src/types.ts").EgressPolicy,
+    sourcePolicy: { mode: "denylist", rules: [] } as import("../../../src/types.ts").CommandPolicy,
     provisionGate: null as Promise<void> | null,
   };
   const provisions: unknown[][] = [];
@@ -60,37 +97,10 @@ function fixture(
       released.push(args);
     },
   };
-  const roomSkill = {
-    skill: {
-      id: "room-tool",
-      scopeId: source,
-      manifest: {
-        name: "room-tool",
-        description: "room helper",
-        requiredCapabilities: [],
-        body: "synthetic-room-skill: run scripts/run.js",
-        files: [{ path: "scripts/run.js", content: "synthetic-room-skill-file" }],
-      },
-      signature: "",
-      status: "published",
-      createdBy: "bob",
-      version: 1,
-      grantedCapabilities: [],
-      approvals: [],
-    },
-    shadowed: [],
-  };
-  const resources = {
-    get: async () => resource,
-    access: async () => {
-      if (!state.allowed) throw new Error("permission revoked");
-      return resource;
-    },
-    list: async () => ({ sandboxes: [resource], defaultSandboxId: null }),
-    status: async () => ({ machine: "machine" }),
-    restart: async () => {},
-    retire: async () => {},
-  };
+  const roomSkill = roomSkillFor(source);
+
+  const resources = fakeResources(state, resource);
+
   const turn = createTurnSandboxes({
     deps: {
       sandbox,

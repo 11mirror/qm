@@ -1,12 +1,12 @@
-import "./support/auto-fake-sprites.ts";
+import "../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import { hashId } from "../src/util/crypto.ts";
+import { hashId } from "../../src/util/crypto.ts";
 import { mock, test } from "node:test";
-import * as piHarness from "../src/harness/pi-harness.ts";
-import * as mockHarness from "./support/mock-harness.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
-import { resolveModel } from "../src/model/pi-models.ts";
-import { testConfig } from "./support/test-config.ts";
+import * as piHarness from "../../src/harness/pi-harness.ts";
+import * as mockHarness from "../support/mock-harness.ts";
+import type { HarnessTurnInput } from "../../src/harness/harness.ts";
+import { resolveModel } from "../../src/model/pi-models.ts";
+import { testConfig } from "../support/test-config.ts";
 
 const turns: HarnessTurnInput[] = [];
 let piOptions: Parameters<typeof piHarness.createPiHarness>[0];
@@ -24,10 +24,10 @@ function observedHarness() {
   return harness;
 }
 
-mock.module("../src/harness/pi-harness.ts", {
+mock.module("../../src/harness/pi-harness.ts", {
   namedExports: { ...piHarness, createPiHarness: observedPiHarness },
 });
-const { buildApp } = await import("../src/wiring.ts");
+const { buildApp } = await import("../../src/wiring.ts");
 
 for (const provider of ["anthropic", "openai"] as const) {
   test(`queued personal ${provider} turns use only that provider's credentials after switching to company`, async () => {
