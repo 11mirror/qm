@@ -61,74 +61,101 @@ interface ModelPickerBindings<T> {
   emptyLabel?: string;
 }
 
-export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
-  const { state: composerState, presets } = bindings;
-  const loadoutMenuId = `model-picker-${crypto.randomUUID()}`;
-  let loadoutSection: "effort" | "add" | null = null;
-  let loadoutSectionHovered = false;
-  let loadoutCloseTimer: ReturnType<typeof setTimeout> | null = null;
-  let disposed = false;
-  const catalog: ModelCatalog = bindings.catalog ?? {
-    options: () => getModelOptions(bindings.scopeKey()),
-    supportsFast: (modelId) => modelSupportsFastMode(bindings.scopeKey(), modelId),
-    overridden: () => !!getRuntimeConfig(bindings.scopeKey())?.scopeOverride,
+class ModelPicker<T> {
+  readonly bindings: ModelPickerBindings<T>;
+  readonly composerState: ModelPickerBindings<T>["state"];
+  readonly presets: ModelPickerBindings<T>["presets"];
+  readonly catalog: ModelCatalog;
+  readonly loadoutMenuId = `model-picker-${crypto.randomUUID()}`;
+  loadoutSection: "effort" | "add" | null = null;
+  loadoutSectionHovered = false;
+  loadoutCloseTimer: ReturnType<typeof setTimeout> | null = null;
+  disposed = false;
+
+  constructor(bindings: ModelPickerBindings<T>) {
+    this.bindings = bindings;
+    this.composerState = bindings.state;
+    this.presets = bindings.presets;
+    this.catalog = bindings.catalog ?? {
+      options: () => getModelOptions(bindings.scopeKey()),
+      supportsFast: (modelId) => modelSupportsFastMode(bindings.scopeKey(), modelId),
+      overridden: () => !!getRuntimeConfig(bindings.scopeKey())?.scopeOverride,
+    };
+    window.addEventListener("resize", this.place);
+    window.visualViewport?.addEventListener("resize", this.place);
+    document.addEventListener("click", this.outsideClick);
+  }
+
+  place = (): void => {
+    requestAnimationFrame(() => this.positionLoadout());
   };
 
-  function seededLoadout(selected: ModelOption): LoadoutEntry[] {
-    if (presets) return presets.entries(selected);
-    return modelLoadoutOptions(catalog.options(), []).map((option) => ({
+  outsideClick = (event: Event): void => {
+    if (this.composerState.openMenu !== "loadout") return;
+    const target = event.target;
+    if (target instanceof Element && this.bindings.host()?.contains(target) && target.closest(".loadout-control"))
+      return;
+    this.closeMenus();
+    this.bindings.redraw();
+  };
+
+  seededLoadout(selected: ModelOption): LoadoutEntry[] {
+    if (this.presets) return this.presets.entries(selected);
+    return modelLoadoutOptions(this.catalog.options(), []).map((option) => ({
       value: option.value,
       effort: defaultEffortForModel(option.model),
       fast: false,
     }));
   }
 
-  function focusSpeedControl(label: string): void {
-    requestAnimationFrame(() => bindings.host()?.querySelector<HTMLElement>(`button[aria-label="${label}"]`)?.focus());
+  focusSpeedControl(label: string): void {
+    requestAnimationFrame(() =>
+      this.bindings.host()?.querySelector<HTMLElement>(`button[aria-label="${label}"]`)?.focus(),
+    );
   }
 
-  function toggleFastMode(target: T): void {
-    bindings.toggleFastMode(target);
-    focusSpeedControl("Fast");
+  toggleFastMode(target: T): void {
+    this.bindings.toggleFastMode(target);
+    this.focusSpeedControl("Fast");
   }
 
-  function removeLoadoutEntry(value: string, selected: ModelOption): void {
-    if (value === bindings.activeEntry(selected).value) return;
-    const entries = seededLoadout(selected);
+  removeLoadoutEntry(value: string, selected: ModelOption): void {
+    if (value === this.bindings.activeEntry(selected).value) return;
+    const entries = this.seededLoadout(selected);
     const index = entries.findIndex((entry) => entry.value === value);
     const next = entries.filter((entry) => entry.value !== value);
-    presets?.save(next);
-    bindings.redraw();
-    placeLoadout();
+    this.presets?.save(next);
+    this.bindings.redraw();
+    this.place();
     requestAnimationFrame(() => {
-      const rows = bindings.host()?.querySelectorAll<HTMLButtonElement>(".loadout-pick");
+      const rows = this.bindings.host()?.querySelectorAll<HTMLButtonElement>(".loadout-pick");
       rows?.[Math.max(0, Math.min(index, next.length - 1))]?.focus();
     });
   }
 
-  function modelLabel(option: ModelOption): string {
+  modelLabel(option: ModelOption): string {
     return isUltrafastModel(option.model.id)
-      ? (catalog.options().find((candidate) => candidate.model.id === presetModelId(option.value))?.label ??
+      ? (this.catalog.options().find((candidate) => candidate.model.id === presetModelId(option.value))?.label ??
           option.label)
       : option.label;
   }
 
-  function modelGlyph(option: ModelOption): TemplateResult {
+  modelGlyph(option: ModelOption): TemplateResult {
     const provider = option.displayProvider ?? String(option.model.provider);
     return html`<span class="loadout-icon" data-provider=${provider} aria-hidden="true"
       >${modelMark(provider, 16) ?? icon(Sparkles, 16)}</span
     >`;
   }
 
-  function loadoutRow(entry: LoadoutEntry, selected: ModelOption, agent: T): TemplateResult | typeof nothing {
-    const option = catalog.options().find((option) => option.value === entry.value);
+  loadoutRow(entry: LoadoutEntry, selected: ModelOption, agent: T): TemplateResult | typeof nothing {
+    const option = this.catalog.options().find((option) => option.value === entry.value);
     if (!option) return nothing;
-    const active = entry.value === bindings.activeEntry(selected).value;
-    const settings = active ? bindings.activeEntry(selected) : entry;
-    const isDefault = entry.value === defaultModelValue(bindings.scopeKey());
-    const activeRuntimeConfig = getRuntimeConfig(bindings.scopeKey());
+    const active = entry.value === this.bindings.activeEntry(selected).value;
+    const settings = active ? this.bindings.activeEntry(selected) : entry;
+    const isDefault = entry.value === defaultModelValue(this.bindings.scopeKey());
+    const activeRuntimeConfig = getRuntimeConfig(this.bindings.scopeKey());
     const canMakeDefault =
-      bindings.showDefaultAction !== false &&
+      this.bindings.showDefaultAction !== false &&
       activeRuntimeConfig !== null &&
       (!isDefault ||
         settings.effort !== (activeRuntimeConfig.effective.effortLevel ?? defaultEffortForModel(option.model)) ||
@@ -143,14 +170,14 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
         aria-checked=${active ? "true" : "false"}
         @click=${(event: MouseEvent) => {
           burstEffortConfetti(event, settings.effort);
-          dismissSelection();
-          bindings.apply(entry, agent);
+          this.dismissSelection();
+          this.bindings.apply(entry, agent);
         }}
       >
-        ${modelGlyph(option)}
+        ${this.modelGlyph(option)}
         <span class="loadout-model-copy">
           <span class="loadout-title">
-            <span class="loadout-name">${modelLabel(option)}</span>
+            <span class="loadout-name">${this.modelLabel(option)}</span>
             ${isDefault ? html`<span class="loadout-default">my default</span>` : nothing}
           </span>
           <span class="loadout-details">
@@ -167,14 +194,14 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
               data-default=${isDefault ? "true" : "false"}
               type="button"
               role="menuitem"
-              aria-label=${`Make ${modelLabel(option)} default`}
+              aria-label=${`Make ${this.modelLabel(option)} default`}
               ${tip("Make default")}
               @click=${async (event: MouseEvent) => {
                 const row = (event.currentTarget as HTMLElement).closest(".loadout-row");
                 const change = { modelId: option.model.id, effortLevel: settings.effort, fastMode: settings.fast };
-                await bindings.changeDefault(change, agent, true);
+                await this.bindings.changeDefault(change, agent, true);
                 row?.querySelector<HTMLElement>(".loadout-pick")?.focus();
-                placeLoadout();
+                this.place();
               }}
             >
               ${icon(Star, 14)}
@@ -183,13 +210,13 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
       }
       ${isDefault && !canMakeDefault ? html`<span class="loadout-default-star" role="img" aria-label="My default" ${tip("My default")}>${icon(Star, 14)}</span>` : nothing}
       ${
-        !active && presets
+        !active && this.presets
           ? html`<button
               class="loadout-remove"
               type="button"
-              aria-label=${`Remove ${modelLabel(option)} from presets`}
+              aria-label=${`Remove ${this.modelLabel(option)} from presets`}
               ${tip("Remove from presets")}
-              @click=${() => removeLoadoutEntry(entry.value, selected)}
+              @click=${() => this.removeLoadoutEntry(entry.value, selected)}
             >
               ${icon(X, 14)}
             </button>`
@@ -198,41 +225,41 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     </div>`;
   }
 
-  function cancelLoadoutClose(): void {
-    if (loadoutCloseTimer !== null) clearTimeout(loadoutCloseTimer);
-    loadoutCloseTimer = null;
+  cancelLoadoutClose(): void {
+    if (this.loadoutCloseTimer !== null) clearTimeout(this.loadoutCloseTimer);
+    this.loadoutCloseTimer = null;
   }
 
-  function loadoutSubmenuHasFocus(): boolean {
-    return bindings.host()?.querySelector<HTMLElement>(".loadout-submenu")?.matches(":focus-within") === true;
+  loadoutSubmenuHasFocus(): boolean {
+    return this.bindings.host()?.querySelector<HTMLElement>(".loadout-submenu")?.matches(":focus-within") === true;
   }
 
-  function queueLoadoutClose(): void {
-    if (isPhone() || !loadoutSectionHovered || !loadoutSection || loadoutSubmenuHasFocus()) return;
-    const section = loadoutSection;
-    cancelLoadoutClose();
-    loadoutCloseTimer = setTimeout(() => {
-      loadoutCloseTimer = null;
-      if (loadoutSection === section && !loadoutSubmenuHasFocus()) closeLoadoutSection(false);
+  queueLoadoutClose(): void {
+    if (isPhone() || !this.loadoutSectionHovered || !this.loadoutSection || this.loadoutSubmenuHasFocus()) return;
+    const section = this.loadoutSection;
+    this.cancelLoadoutClose();
+    this.loadoutCloseTimer = setTimeout(() => {
+      this.loadoutCloseTimer = null;
+      if (this.loadoutSection === section && !this.loadoutSubmenuHasFocus()) this.closeLoadoutSection(false);
     }, 140);
   }
 
-  function trackLoadoutHover(e: MouseEvent): void {
-    if (isPhone() || !loadoutSection) return;
+  trackLoadoutHover(e: MouseEvent): void {
+    if (isPhone() || !this.loadoutSection) return;
     const target = e.target as HTMLElement;
-    if (target.closest(`.loadout-submenu, [data-loadout-section="${loadoutSection}"]`)) cancelLoadoutClose();
-    else queueLoadoutClose();
+    if (target.closest(`.loadout-submenu, [data-loadout-section="${this.loadoutSection}"]`)) this.cancelLoadoutClose();
+    else this.queueLoadoutClose();
   }
 
-  function openLoadoutSection(section: "effort" | "add", keyboard = false): void {
-    cancelLoadoutClose();
-    if (loadoutSection === section && !keyboard) return;
-    loadoutSection = section;
-    bindings.redraw();
-    placeLoadout();
+  openLoadoutSection(section: "effort" | "add", keyboard = false): void {
+    this.cancelLoadoutClose();
+    if (this.loadoutSection === section && !keyboard) return;
+    this.loadoutSection = section;
+    this.bindings.redraw();
+    this.place();
     if (keyboard)
       requestAnimationFrame(() => {
-        const menu = bindings.host()?.querySelector<HTMLElement>(".loadout-submenu");
+        const menu = this.bindings.host()?.querySelector<HTMLElement>(".loadout-submenu");
         const target =
           menu?.querySelector<HTMLElement>('input, [aria-checked="true"]') ??
           [...(menu?.querySelectorAll<HTMLElement>("button:not(:disabled)") ?? [])].find(
@@ -242,42 +269,42 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
       });
   }
 
-  function closeLoadoutSection(refocus = true): void {
-    const previous = loadoutSection;
-    resetSection();
-    bindings.redraw();
-    placeLoadout();
+  closeLoadoutSection(refocus = true): void {
+    const previous = this.loadoutSection;
+    this.resetSection();
+    this.bindings.redraw();
+    this.place();
     if (previous && refocus)
       requestAnimationFrame(() =>
-        bindings.host()?.querySelector<HTMLElement>(`[data-loadout-section="${previous}"]`)?.focus(),
+        this.bindings.host()?.querySelector<HTMLElement>(`[data-loadout-section="${previous}"]`)?.focus(),
       );
   }
 
-  function loadoutSubmenu(agent: T, selected: ModelOption): TemplateResult | typeof nothing {
-    if (!loadoutSection) return nothing;
-    const effort = loadoutSection === "effort";
-    const entries = seededLoadout(selected);
-    const query = composerState.menuQuery.trim().toLocaleLowerCase();
-    const addable = modelLoadoutOptions(catalog.options(), entries).filter(
+  loadoutSubmenu(agent: T, selected: ModelOption): TemplateResult | typeof nothing {
+    if (!this.loadoutSection) return nothing;
+    const effort = this.loadoutSection === "effort";
+    const entries = this.seededLoadout(selected);
+    const query = this.composerState.menuQuery.trim().toLocaleLowerCase();
+    const addable = modelLoadoutOptions(this.catalog.options(), entries).filter(
       (option) =>
         !entries.some((entry) => presetModelId(entry.value) === presetModelId(option.value)) &&
-        (!query || modelLabel(option).toLocaleLowerCase().includes(query)),
+        (!query || this.modelLabel(option).toLocaleLowerCase().includes(query)),
     );
     return html`<div
       class="loadout-submenu"
       role="menu"
-      aria-label=${{ effort: "Effort levels", add: "Add models" }[loadoutSection]}
-      @mouseenter=${() => cancelLoadoutClose()}
-      @mouseleave=${() => queueLoadoutClose()}
+      aria-label=${{ effort: "Effort levels", add: "Add models" }[this.loadoutSection]}
+      @mouseenter=${() => this.cancelLoadoutClose()}
+      @mouseleave=${() => this.queueLoadoutClose()}
       @keydown=${(e: KeyboardEvent) => {
         if (e.key === "ArrowLeft" || e.key === "Escape") {
           e.preventDefault();
           e.stopPropagation();
-          closeLoadoutSection();
-        } else menuArrowKeys(e);
+          this.closeLoadoutSection();
+        } else this.menuArrowKeys(e);
       }}
     >
-      <button class="loadout-back" type="button" @click=${() => closeLoadoutSection()}>
+      <button class="loadout-back" type="button" @click=${() => this.closeLoadoutSection()}>
         ${icon(ChevronDown, 13)} Back
       </button>
       ${
@@ -288,35 +315,35 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                   class="loadout-effort"
                   type="button"
                   role="menuitemradio"
-                  aria-checked=${composerState.effortLevel === level.value ? "true" : "false"}
+                  aria-checked=${this.composerState.effortLevel === level.value ? "true" : "false"}
                   @click=${(event: MouseEvent) => {
                     burstEffortConfetti(event, level.value);
-                    bindings.selectEffort(level.value, agent);
-                    closeLoadoutSection();
+                    this.bindings.selectEffort(level.value, agent);
+                    this.closeLoadoutSection();
                   }}
                 >
                   <span>${effortText(level.value)}</span
-                  >${composerState.effortLevel === level.value ? icon(Check, 15) : nothing}
+                  >${this.composerState.effortLevel === level.value ? icon(Check, 15) : nothing}
                 </button>`,
             )
           : nothing
       }
       ${
-        loadoutSection === "add"
+        this.loadoutSection === "add"
           ? html` <label class="loadout-search"
                 ><span class="sr-only">Search models</span>
                 <input
                   type="search"
-                  data-focus-key=${`${loadoutMenuId}-search`}
+                  data-focus-key=${`${this.loadoutMenuId}-search`}
                   placeholder="Search models…"
-                  .value=${live(composerState.menuQuery)}
+                  .value=${live(this.composerState.menuQuery)}
                   @input=${(e: InputEvent) => {
                     const input = e.currentTarget as HTMLInputElement;
                     const selection = [input.selectionStart, input.selectionEnd] as const;
-                    composerState.menuQuery = input.value;
-                    bindings.redraw();
-                    positionLoadout();
-                    const next = bindings.host()?.querySelector<HTMLInputElement>(".loadout-search input");
+                    this.composerState.menuQuery = input.value;
+                    this.bindings.redraw();
+                    this.positionLoadout();
+                    const next = this.bindings.host()?.querySelector<HTMLInputElement>(".loadout-search input");
                     next?.focus();
                     if (selection[0] !== null && selection[1] !== null)
                       next?.setSelectionRange(selection[0], selection[1]);
@@ -329,14 +356,14 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                     class="menu-option"
                     type="button"
                     role="menuitem"
-                    aria-label=${`Add ${modelLabel(option)} to presets`}
+                    aria-label=${`Add ${this.modelLabel(option)} to presets`}
                     @click=${() => {
-                      dismissSelection();
-                      presets?.add(option, agent);
+                      this.dismissSelection();
+                      this.presets?.add(option, agent);
                     }}
                   >
-                    ${modelGlyph(option)}<span class="menu-option-copy"
-                      ><span>${modelLabel(option)}</span
+                    ${this.modelGlyph(option)}<span class="menu-option-copy"
+                      ><span>${this.modelLabel(option)}</span
                       >${isUltrafastModel(option.model.id) ? html`<span class="loadout-meta">Ultrafast · 6× cost</span>` : nothing}</span
                     ><span class="loadout-add-label" aria-hidden="true">Add</span>
                   </button>`,
@@ -347,20 +374,15 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     </div>`;
   }
 
-  function setMenu(next: string | null): void {
-    resetSection();
-    composerState.openMenu = next;
-    bindings.redraw();
-    placeLoadout();
+  setMenu(next: string | null): void {
+    this.resetSection();
+    this.composerState.openMenu = next;
+    this.bindings.redraw();
+    this.place();
   }
 
-  function sectionButton(
-    section: "effort" | "add",
-    className: string,
-    disabled: boolean,
-    body: TemplateResult,
-  ): TemplateResult {
-    const open = loadoutSection === section;
+  sectionButton(section: "effort" | "add", className: string, disabled: boolean, body: TemplateResult): TemplateResult {
+    const open = this.loadoutSection === section;
     return html`<button
       class="${className} ${open ? "open" : ""}"
       type="button"
@@ -371,25 +393,25 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
       ?disabled=${disabled}
       @mouseenter=${() => {
         if (isPhone() || disabled) return;
-        loadoutSectionHovered = true;
-        openLoadoutSection(section);
+        this.loadoutSectionHovered = true;
+        this.openLoadoutSection(section);
       }}
       @keydown=${(e: KeyboardEvent) => {
         if (e.key !== "ArrowRight") return;
         e.preventDefault();
-        loadoutSectionHovered = false;
-        openLoadoutSection(section, true);
+        this.loadoutSectionHovered = false;
+        this.openLoadoutSection(section, true);
       }}
       @click=${(e: MouseEvent) => {
-        loadoutSectionHovered = e.detail !== 0 && !isPhone();
-        openLoadoutSection(section, e.detail === 0);
+        this.loadoutSectionHovered = e.detail !== 0 && !isPhone();
+        this.openLoadoutSection(section, e.detail === 0);
       }}
     >
       ${body}
     </button>`;
   }
 
-  function speedToggle(
+  speedToggle(
     name: "Fast" | "Ultrafast",
     on: boolean,
     disabled: boolean,
@@ -415,29 +437,26 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     </button>`;
   }
 
-  function render(
-    agent: T,
-    choice: ModelOption | undefined,
-    disabled: boolean,
-    routed?: RoutedRuntime,
-  ): TemplateResult {
-    const selected = choice ?? catalog.options()[0];
+  render(agent: T, choice: ModelOption | undefined, disabled: boolean, routed?: RoutedRuntime): TemplateResult {
+    const selected = choice ?? this.catalog.options()[0];
     if (!selected) return html`<span class="context-model-status">No models available</span>`;
-    const open = composerState.openMenu === "loadout";
-    const entries = seededLoadout(selected);
+    const open = this.composerState.openMenu === "loadout";
+    const entries = this.seededLoadout(selected);
     const full = entries.length >= LOADOUT_CAP;
     const ultrafastOn = isUltrafastModel(selected.model.id);
-    const ultrafastTarget = ultrafastChoice(catalog.options(), selected);
-    const modelSupportsFast = catalog.supportsFast(presetModelId(selected.value));
+    const ultrafastTarget = ultrafastChoice(this.catalog.options(), selected);
+    const modelSupportsFast = this.catalog.supportsFast(presetModelId(selected.value));
     const fastAvailable = !!choice && (!ultrafastOn || !!ultrafastTarget) && modelSupportsFast;
-    const fastOn = fastAvailable && bindings.effectiveFastMode();
+    const fastOn = fastAvailable && this.bindings.effectiveFastMode();
     const speedLabel = (ultrafastOn && ", Ultrafast") || (fastOn && ", Fast") || "";
-    const settingLabel = choice ? modelLabel(choice) : (bindings.emptyLabel ?? "Choose model");
+    const settingLabel = choice ? this.modelLabel(choice) : (this.bindings.emptyLabel ?? "Choose model");
     const settingAria = choice
-      ? `Model: ${settingLabel}, ${effortLabel(composerState.effortLevel)} effort${speedLabel}`
+      ? `Model: ${settingLabel}, ${effortLabel(this.composerState.effortLevel)} effort${speedLabel}`
       : settingLabel;
-    const routedOption = routed ? catalog.options().find((option) => option.model.id === routed.modelId) : undefined;
-    const routedName = routedOption ? modelLabel(routedOption) : (routed?.label ?? routed?.modelId ?? "");
+    const routedOption = routed
+      ? this.catalog.options().find((option) => option.model.id === routed.modelId)
+      : undefined;
+    const routedName = routedOption ? this.modelLabel(routedOption) : (routed?.label ?? routed?.modelId ?? "");
     const rule = routed?.change && "rule" in routed.change ? routed.change.rule : undefined;
     const reason = rule ? `routed by ${rule}` : "switched for this request";
     const triggerLabel = routed
@@ -446,7 +465,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     const routedTip = routed
       ? `${rule ? `The ${rule} rule` : "The agent"} ran this ${rule ? "turn" : "request"} on ${routedName}. Your setting is ${settingLabel}.`
       : "";
-    const suffix = routed ? reason : choice && effortText(composerState.effortLevel);
+    const suffix = routed ? reason : choice && effortText(this.composerState.effortLevel);
     return html`<div
       class="menu-control loadout-control"
       data-align="left"
@@ -454,29 +473,29 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
         const hotkey = event.metaKey && event.shiftKey && event.code === "KeyE";
         if (disabled || !fastAvailable || event.defaultPrevented || !hotkey) return;
         event.preventDefault();
-        toggleFastMode(agent);
+        this.toggleFastMode(agent);
       }}
     >
       <button
         class="menu-button loadout-button ${ultrafastOn ? "ultrafast-active" : ""}"
-        data-focus-key=${`${loadoutMenuId}-trigger`}
+        data-focus-key=${`${this.loadoutMenuId}-trigger`}
         type="button"
         aria-label=${triggerLabel}
         ${tip(routedTip)}
         aria-haspopup="menu"
         aria-expanded=${open ? "true" : "false"}
-        aria-controls=${loadoutMenuId}
+        aria-controls=${this.loadoutMenuId}
         ?disabled=${disabled}
         @keydown=${(e: KeyboardEvent) => {
           if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
           e.preventDefault();
-          setMenu("loadout");
-          requestAnimationFrame(() => bindings.host()?.querySelector<HTMLElement>(".loadout-pick")?.focus());
+          this.setMenu("loadout");
+          requestAnimationFrame(() => this.bindings.host()?.querySelector<HTMLElement>(".loadout-pick")?.focus());
         }}
         @click=${(e: Event) => {
           e.stopPropagation();
-          composerState.menuQuery = "";
-          setMenu(open ? null : "loadout");
+          this.composerState.menuQuery = "";
+          this.setMenu(open ? null : "loadout");
         }}
       >
         <span class="menu-label">${routed ? routedName : settingLabel}</span>
@@ -489,28 +508,28 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
           ? html`<div
               class="menu-popover loadout-popover"
               popover="manual"
-              id=${loadoutMenuId}
+              id=${this.loadoutMenuId}
               role="menu"
               aria-label="Model settings"
               @click=${(e: Event) => e.stopPropagation()}
-              @mouseover=${(e: MouseEvent) => trackLoadoutHover(e)}
-              @mouseleave=${() => queueLoadoutClose()}
+              @mouseover=${(e: MouseEvent) => this.trackLoadoutHover(e)}
+              @mouseleave=${() => this.queueLoadoutClose()}
               @keydown=${(e: KeyboardEvent) => {
                 if (e.key === "Escape") {
                   e.preventDefault();
                   e.stopPropagation();
-                  dismissSelection();
-                  bindings.redraw();
-                } else if (!(e.target as HTMLElement).closest(".loadout-submenu")) menuArrowKeys(e);
+                  this.dismissSelection();
+                  this.bindings.redraw();
+                } else if (!(e.target as HTMLElement).closest(".loadout-submenu")) this.menuArrowKeys(e);
               }}
             >
               <div class="loadout-panel">
-                ${presets ? html`<div class="loadout-head">Presets</div>` : nothing}
-                <div class="loadout-list">${entries.map((entry) => loadoutRow(entry, selected, agent))}</div>
+                ${this.presets ? html`<div class="loadout-head">Presets</div>` : nothing}
+                <div class="loadout-list">${entries.map((entry) => this.loadoutRow(entry, selected, agent))}</div>
                 ${
-                  presets
+                  this.presets
                     ? html`<div class="loadout-submenu-anchor" ${tip(full ? "Remove a preset to add another." : "")}>
-                        ${sectionButton(
+                        ${this.sectionButton(
                           "add",
                           "loadout-add",
                           full,
@@ -524,49 +543,49 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                   choice
                     ? html`<div class="loadout-divider"></div>
                         <div class="loadout-submenu-anchor">
-                          ${sectionButton(
+                          ${this.sectionButton(
                             "effort",
                             "loadout-setting",
                             false,
                             html`<span class="loadout-setting-label">Effort</span
                               ><span class="loadout-setting-value"
-                                >${effortText(composerState.effortLevel)}<span class="loadout-end"
+                                >${effortText(this.composerState.effortLevel)}<span class="loadout-end"
                                   >${icon(ChevronRight, 14)}</span
                                 ></span
                               >`,
                           )}
                         </div>
-                        ${speedToggle(
+                        ${this.speedToggle(
                           "Fast",
                           fastOn,
                           !fastAvailable,
                           fastAvailable ? "⌘⇧E" : "Not supported by this model",
-                          () => toggleFastMode(agent),
+                          () => this.toggleFastMode(agent),
                         )}
                         ${
                           ultrafastTarget || ultrafastOn
-                            ? speedToggle("Ultrafast", ultrafastOn, !ultrafastTarget, "6× cost", () => {
+                            ? this.speedToggle("Ultrafast", ultrafastOn, !ultrafastTarget, "6× cost", () => {
                                 if (!ultrafastTarget) return;
-                                bindings.apply(
-                                  { ...bindings.activeEntry(selected), value: ultrafastTarget.value, fast: false },
+                                this.bindings.apply(
+                                  { ...this.bindings.activeEntry(selected), value: ultrafastTarget.value, fast: false },
                                   agent,
                                 );
-                                focusSpeedControl("Ultrafast");
+                                this.focusSpeedControl("Ultrafast");
                               })
                             : nothing
                         }`
                     : nothing
                 }
               </div>
-              ${bindings.showInheritAction !== false && catalog.overridden() ? html`<div class="loadout-foot"><button class="loadout-foot-btn" type="button" @click=${() => bindings.changeDefault({ inherit: true }, agent)}>${bindings.inheritLabel ?? "Use org default"}</button></div>` : nothing}
-              ${loadoutSubmenu(agent, selected)}
+              ${this.bindings.showInheritAction !== false && this.catalog.overridden() ? html`<div class="loadout-foot"><button class="loadout-foot-btn" type="button" @click=${() => this.bindings.changeDefault({ inherit: true }, agent)}>${this.bindings.inheritLabel ?? "Use org default"}</button></div>` : nothing}
+              ${this.loadoutSubmenu(agent, selected)}
             </div>`
           : nothing
       }
     </div>`;
   }
 
-  function menuArrowKeys(e: KeyboardEvent): void {
+  menuArrowKeys(e: KeyboardEvent): void {
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
     const target = e.target as HTMLElement;
     if (target.matches("input") && !["ArrowDown", "ArrowUp"].includes(e.key)) return;
@@ -586,9 +605,9 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     buttons[(next + buttons.length) % buttons.length]?.focus();
   }
 
-  function positionLoadout(): void {
-    if (disposed) return;
-    const host = bindings.host();
+  positionLoadout(): void {
+    if (this.disposed) return;
+    const host = this.bindings.host();
     const menu = host?.querySelector<HTMLElement>(".loadout-popover");
     const trigger = host?.querySelector<HTMLElement>(".loadout-button");
     if (!menu || !trigger) return;
@@ -607,7 +626,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     menu.style.top = `${up ? Math.max(top, rect.top - menu.offsetHeight - 8) : rect.bottom + 8}px`;
     menu.style.bottom = "auto";
     const submenu = menu.querySelector<HTMLElement>(".loadout-submenu");
-    const anchor = menu.querySelector<HTMLElement>(`[data-loadout-section="${loadoutSection}"]`);
+    const anchor = menu.querySelector<HTMLElement>(`[data-loadout-section="${this.loadoutSection}"]`);
     if (!submenu || !anchor) return;
     const menuRect = menu.getBoundingClientRect();
     const width = Math.min(260, right - left);
@@ -627,46 +646,31 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     }
   }
 
-  function placeLoadout(): void {
-    requestAnimationFrame(positionLoadout);
+  resetSection(): void {
+    this.cancelLoadoutClose();
+    this.loadoutSection = null;
+    this.loadoutSectionHovered = false;
   }
 
-  window.addEventListener("resize", placeLoadout);
-  window.visualViewport?.addEventListener("resize", placeLoadout);
-
-  function resetSection(): void {
-    cancelLoadoutClose();
-    loadoutSection = null;
-    loadoutSectionHovered = false;
+  dismissSelection(): void {
+    this.closeMenus();
+    requestAnimationFrame(() => this.bindings.host()?.querySelector<HTMLElement>(".loadout-button")?.focus());
   }
 
-  function dismissSelection(): void {
-    closeMenus();
-    requestAnimationFrame(() => bindings.host()?.querySelector<HTMLElement>(".loadout-button")?.focus());
+  closeMenus(): void {
+    this.resetSection();
+    this.composerState.openMenu = null;
   }
 
-  function closeMenus(): void {
-    resetSection();
-    composerState.openMenu = null;
+  dispose(): void {
+    this.disposed = true;
+    this.resetSection();
+    document.removeEventListener("click", this.outsideClick);
+    window.removeEventListener("resize", this.place);
+    window.visualViewport?.removeEventListener("resize", this.place);
   }
+}
 
-  function outsideClick(event: Event): void {
-    if (composerState.openMenu !== "loadout") return;
-    const target = event.target;
-    if (target instanceof Element && bindings.host()?.contains(target) && target.closest(".loadout-control")) return;
-    closeMenus();
-    bindings.redraw();
-  }
-
-  document.addEventListener("click", outsideClick);
-
-  function dispose(): void {
-    disposed = true;
-    resetSection();
-    document.removeEventListener("click", outsideClick);
-    window.removeEventListener("resize", placeLoadout);
-    window.visualViewport?.removeEventListener("resize", placeLoadout);
-  }
-
-  return { render, place: placeLoadout, resetSection, dispose };
+export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
+  return new ModelPicker(bindings);
 }

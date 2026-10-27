@@ -5,8 +5,7 @@ import { html, nothing, render } from "lit";
 import { MAX_ATTACHMENT_BYTES, MAX_FILES_PER_MESSAGE, oversizeAttachmentNote, tooManyFilesNote } from "./attachments";
 import { errMessage } from "../../chassis/src/errors";
 import { bytesToBase64 } from "./paste-text";
-import type { ConvCtx } from "./conv-types";
-import type { createFileDragState } from "./file-open";
+import type { Composer } from "./composer";
 
 const LARGE_PASTE_CHARS = 2000;
 
@@ -40,6 +39,24 @@ function combineNote(existing: string, note: string | null): string {
 function dragHasFiles(e: DragEvent): boolean {
   const types = e.dataTransfer?.types;
   return types ? Array.from(types).includes("Files") : false;
+}
+
+function planAdmission(files: File[], folderCount: number, attached: number) {
+  const notes: string[] = [];
+  const sized: File[] = [];
+  for (const file of files) {
+    if (file.size > MAX_ATTACHMENT_BYTES) notes.push(oversizeAttachmentNote(file.name));
+    else sized.push(file);
+  }
+  const room = Math.max(0, MAX_FILES_PER_MESSAGE - attached);
+  const admittedFiles = sized.slice(0, room);
+  const admittedFolders = Math.min(folderCount, Math.max(0, room - admittedFiles.length));
+  const overflow = [
+    ...sized.slice(room).map((f) => f.name),
+    ...Array.from({ length: folderCount - admittedFolders }, () => "a folder"),
+  ];
+  if (overflow.length) notes.push(tooManyFilesNote(overflow));
+  return { files: admittedFiles, folders: admittedFolders, note: notes.length ? notes.join(" ") : null };
 }
 
 export function attachmentSrc(a: Attachment): string {
@@ -80,24 +97,7 @@ export function openImagePreview(attachment: Attachment): void {
   dialog.showModal();
 }
 
-export function createComposerAttachments({
-  ctx,
-  composerState,
-  fileDrag,
-  pastedTextIds,
-  approvalPending,
-}: {
-  ctx: ConvCtx;
-  composerState: {
-    attachments: Attachment[];
-    error: string;
-    processingFiles: boolean;
-    pasteView: { readonly id: string } | null;
-  };
-  fileDrag: ReturnType<typeof createFileDragState>;
-  pastedTextIds: Set<string>;
-  approvalPending: () => boolean;
-}) {
+export function createComposerAttachments(c: Composer) {
   async function onComposerPaste(e: ClipboardEvent, agent: Agent): Promise<void> {
     const data = e.clipboardData;
     if (!data) return;
@@ -112,10 +112,10 @@ export function createComposerAttachments({
     }
     const text = data.getData("text/plain");
     if (text.length <= LARGE_PASTE_CHARS) return;
-    if (approvalPending() || composerState.processingFiles) return;
-    if (composerState.attachments.length >= MAX_FILES_PER_MESSAGE) return;
+    if (c.approvalPending() || c.state.processingFiles) return;
+    if (c.state.attachments.length >= MAX_FILES_PER_MESSAGE) return;
     e.preventDefault();
-    const names = new Set(composerState.attachments.map((a) => a.fileName));
+    const names = new Set(c.state.attachments.map((a) => a.fileName));
     let n = 1;
     while (names.has(n === 1 ? "pasted-text.txt" : `pasted-text-${n}.txt`)) n++;
     const attachment = textAttachment(
@@ -124,9 +124,9 @@ export function createComposerAttachments({
       "text/plain",
       text,
     );
-    pastedTextIds.add(attachment.id);
-    composerState.attachments = [...composerState.attachments, attachment];
-    ctx.chat.drawActiveChat(agent);
+    c.pastedTextIds.add(attachment.id);
+    c.state.attachments = [...c.state.attachments, attachment];
+    c.ctx.chat.drawActiveChat(agent);
   }
 
   async function onFilesSelected(e: Event, agent: Agent): Promise<void> {
@@ -137,66 +137,48 @@ export function createComposerAttachments({
   }
 
   function restageAttachments(attachments: Attachment[], note: string): void {
-    const merged = [...attachments, ...composerState.attachments].filter(
+    const merged = [...attachments, ...c.state.attachments].filter(
       (a, i, all) => all.findIndex((b) => b.id === a.id) === i,
     );
     const dropped = merged.slice(MAX_FILES_PER_MESSAGE);
-    composerState.attachments = merged.slice(0, MAX_FILES_PER_MESSAGE);
-    composerState.error = combineNote(note, dropped.length ? tooManyFilesNote(dropped.map((a) => a.fileName)) : null);
-  }
-
-  function planAdmission(files: File[], folderCount: number): { files: File[]; folders: number; note: string | null } {
-    const notes: string[] = [];
-    const sized: File[] = [];
-    for (const file of files) {
-      if (file.size > MAX_ATTACHMENT_BYTES) notes.push(oversizeAttachmentNote(file.name));
-      else sized.push(file);
-    }
-    const room = Math.max(0, MAX_FILES_PER_MESSAGE - composerState.attachments.length);
-    const admittedFiles = sized.slice(0, room);
-    const admittedFolders = Math.min(folderCount, Math.max(0, room - admittedFiles.length));
-    const overflow = [
-      ...sized.slice(room).map((f) => f.name),
-      ...Array.from({ length: folderCount - admittedFolders }, () => "a folder"),
-    ];
-    if (overflow.length) notes.push(tooManyFilesNote(overflow));
-    return { files: admittedFiles, folders: admittedFolders, note: notes.length ? notes.join(" ") : null };
+    c.state.attachments = merged.slice(0, MAX_FILES_PER_MESSAGE);
+    c.state.error = combineNote(note, dropped.length ? tooManyFilesNote(dropped.map((a) => a.fileName)) : null);
   }
 
   async function addFiles(files: File[], agent: Agent, folders: DropEntryLike[] = []): Promise<void> {
-    if ((!files.length && !folders.length) || approvalPending()) return;
-    if (composerState.processingFiles) {
-      composerState.error = "Still preparing the previous drop. Try again in a moment.";
-      ctx.chat.drawActiveChat(agent);
+    if ((!files.length && !folders.length) || c.approvalPending()) return;
+    if (c.state.processingFiles) {
+      c.state.error = "Still preparing the previous drop. Try again in a moment.";
+      c.ctx.chat.drawActiveChat(agent);
       return;
     }
-    composerState.processingFiles = true;
-    composerState.error = "";
-    ctx.chat.drawActiveChat(agent);
-    const plan = planAdmission(files, folders.length);
+    c.state.processingFiles = true;
+    c.state.error = "";
+    c.ctx.chat.drawActiveChat(agent);
+    const plan = planAdmission(files, folders.length, c.state.attachments.length);
     try {
       const zipped: File[] = [];
       for (const folder of folders.slice(0, plan.folders)) zipped.push(await folderToZipFile(folder));
       const loaded = await Promise.all([...plan.files, ...zipped].map((file) => loadAnyAttachment(file)));
-      composerState.attachments = [...composerState.attachments, ...loaded];
-      if (plan.note) composerState.error = plan.note;
+      c.state.attachments = [...c.state.attachments, ...loaded];
+      if (plan.note) c.state.error = plan.note;
     } catch (err) {
       let message: string;
       if (err instanceof FolderDropError) message = err.message;
       else if (isFolderReadError(err))
         message = "That drop included a folder this browser can't read. Zip it and drop the archive instead.";
       else message = errMessage(err, "Could not attach that file.");
-      composerState.error = combineNote(plan.note ?? "", message);
+      c.state.error = combineNote(plan.note ?? "", message);
     } finally {
-      composerState.processingFiles = false;
-      ctx.chat.drawActiveChat(agent);
+      c.state.processingFiles = false;
+      c.ctx.chat.drawActiveChat(agent);
     }
   }
 
   function onDragEnter(e: DragEvent): void {
     if (!dragHasFiles(e)) return;
     e.preventDefault();
-    fileDrag.enter(e);
+    c.fileDrag.enter(e);
   }
 
   function onDragOver(e: DragEvent): void {
@@ -208,23 +190,23 @@ export function createComposerAttachments({
   async function onDrop(e: DragEvent, agent: Agent): Promise<void> {
     if (!dragHasFiles(e)) return;
     e.preventDefault();
-    fileDrag.reset();
+    c.fileDrag.reset();
     const { files, folders } = splitDropItems(Array.from(e.dataTransfer?.items ?? []));
     if (!files.length && !folders.length) files.push(...Array.from(e.dataTransfer?.files ?? []));
-    ctx.chat.drawActiveChat(agent);
+    c.ctx.chat.drawActiveChat(agent);
     await addFiles(files, agent, folders);
   }
 
   function pickFiles(): void {
-    if (approvalPending()) return;
-    ctx.chat.state.host?.querySelector<HTMLInputElement>(".file-input")?.click();
+    if (c.approvalPending()) return;
+    c.ctx.chat.state.host?.querySelector<HTMLInputElement>(".file-input")?.click();
   }
 
   function removeAttachment(id: string, agent: Agent): void {
-    composerState.attachments = composerState.attachments.filter((a) => a.id !== id);
-    pastedTextIds.delete(id);
-    if (composerState.pasteView?.id === id) composerState.pasteView = null;
-    ctx.chat.drawActiveChat(agent);
+    c.state.attachments = c.state.attachments.filter((a) => a.id !== id);
+    c.pastedTextIds.delete(id);
+    if (c.state.pasteView?.id === id) c.state.pasteView = null;
+    c.ctx.chat.drawActiveChat(agent);
   }
 
   return {
