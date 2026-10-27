@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createDockerDeployProvider, dockerDaemonFailure } from "../src/deploy/docker-deploy-provider.ts";
-import { createDeployStore } from "../src/deploy/deploy-store.ts";
-import type { DockerExec } from "../src/sandbox/docker-exec.ts";
-import { scopeId } from "../src/types.ts";
-import { testDeployBackings } from "./support/test-database.ts";
+import { createDockerDeployProvider, dockerDaemonFailure } from "../../src/deploy/docker-deploy-provider.ts";
+import { createDeployStore } from "../../src/deploy/deploy-store.ts";
+import type { DockerExec } from "../../src/sandbox/docker-exec.ts";
+import { scopeId } from "../../src/types.ts";
+import { testDeployBackings } from "../support/test-database.ts";
 
 test("Docker deployments use isolated networks and remove them on destroy", async () => {
   const calls: string[][] = [];

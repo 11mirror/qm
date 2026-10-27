@@ -5,16 +5,16 @@ import { mkdtempSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createPorterDeployProvider, type StoredPorterDeployBody } from "../src/deploy/porter-deploy-provider.ts";
-import { type DurableMap } from "../src/persistence/durable-map.ts";
-import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
-import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
+import { createPorterDeployProvider, type StoredPorterDeployBody } from "../../src/deploy/porter-deploy-provider.ts";
+import { type DurableMap } from "../../src/persistence/durable-map.ts";
+import type { Deployment, DeploymentVersion } from "../../src/deploy/deploy-store.ts";
+import type { DeployProvider } from "../../src/deploy/deploy-provider.ts";
 import { NotFoundError, SandboxError } from "porter-sandbox";
-import { createPorterClient } from "../src/deploy/porter-client.ts";
-import { scopeId } from "../src/types.ts";
-import { installFakePorter, type FakePorter } from "./support/fake-porter.ts";
-import { singleProcessDeps } from "./support/single-process.ts";
-import { testMap } from "./support/test-database.ts";
+import { createPorterClient } from "../../src/deploy/porter-client.ts";
+import { scopeId } from "../../src/types.ts";
+import { installFakePorter, type FakePorter } from "../support/fake-porter.ts";
+import { singleProcessDeps } from "../support/single-process.ts";
+import { testMap } from "../support/test-database.ts";
 
 const SERVER = [
   "const fs = require('fs');",

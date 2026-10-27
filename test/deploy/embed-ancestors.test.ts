@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseEmbedAncestors } from "../src/deploy/embed-ancestors.ts";
+import { parseEmbedAncestors } from "../../src/deploy/embed-ancestors.ts";
 
 test("embed ancestors: https origins on named hosts, lowercased and deduplicated", () => {
   assert.deepEqual(

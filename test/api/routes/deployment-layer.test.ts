@@ -1,4 +1,4 @@
-import "./support/auto-fake-sprites.ts";
+import "../../support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -6,15 +6,15 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
-import { signRequest } from "../src/auth/source-auth.ts";
-import { buildApp } from "./support/build-app.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
-import { scopeId } from "../src/types.ts";
-import { testConfig } from "./support/test-config.ts";
-import { DeploymentLayerPersistedError } from "../src/deployment/deployment-layer-store.ts";
-import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { createServer } from "../../../src/api/server.ts";
+import { signRequest } from "../../../src/auth/source-auth.ts";
+import { buildApp } from "../../support/build-app.ts";
+import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../../src/auth/capability-token.ts";
+import { scopeId } from "../../../src/types.ts";
+import { testConfig } from "../../support/test-config.ts";
+import { DeploymentLayerPersistedError } from "../../../src/deployment/deployment-layer-store.ts";
+import { createPostgresReplayDedupe } from "../../../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "../../support/test-database.ts";
 
 const SECRET = "layer-routes-secret".repeat(3);
 const PATH = "/v1/deployment-layer";

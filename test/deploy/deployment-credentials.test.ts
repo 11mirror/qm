@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { deploymentCredentialSlugs } from "../src/deploy/deployment-credentials.ts";
-import { createAclStore } from "../src/acl/acl-store.ts";
-import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
-import type { PublicServiceCredential } from "../src/credentials/keychain.ts";
-import { scopeId } from "../src/types.ts";
-import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { deploymentCredentialSlugs } from "../../src/deploy/deployment-credentials.ts";
+import { createAclStore } from "../../src/acl/acl-store.ts";
+import { encodeRef, serviceCredRef } from "../../src/acl/resource-ref.ts";
+import type { PublicServiceCredential } from "../../src/credentials/keychain.ts";
+import { scopeId } from "../../src/types.ts";
+import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 const ORG = scopeId("org", "default-org");
 const cred = (slug: string, over: Partial<PublicServiceCredential> = {}): PublicServiceCredential => ({

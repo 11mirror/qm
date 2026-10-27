@@ -5,17 +5,17 @@ import { NoSuchKey } from "@aws-sdk/client-s3";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createAwsDeployProvider, type StoredDeployBody } from "../src/deploy/aws-deploy-provider.ts";
+import { createAwsDeployProvider, type StoredDeployBody } from "../../src/deploy/aws-deploy-provider.ts";
 import {
   AwsApiError,
   type AwsMicrovmApi,
   type MicrovmDescription,
   type MicrovmLifecycleState,
-} from "../src/sandbox/aws-microvm-api.ts";
-import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
-import { scopeId } from "../src/types.ts";
-import { singleProcessDeps } from "./support/single-process.ts";
-import { testMap } from "./support/test-database.ts";
+} from "../../src/sandbox/aws-microvm-api.ts";
+import type { Deployment, DeploymentVersion } from "../../src/deploy/deploy-store.ts";
+import { scopeId } from "../../src/types.ts";
+import { singleProcessDeps } from "../support/single-process.ts";
+import { testMap } from "../support/test-database.ts";
 
 const REGION = "us-west-2";
 

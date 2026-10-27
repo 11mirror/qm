@@ -6,16 +6,16 @@ import {
   DeploymentLayerValidationError,
   type DeploymentLayerBundle,
   type StoredDeploymentLayer,
-} from "../src/deployment/deployment-layer-store.ts";
-import { emptyDeploymentLayer, resolvedDeploymentLayer } from "../src/deployment/load-layer.ts";
-import { type DurableMap } from "../src/persistence/durable-map.ts";
-import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
-import { scopeId } from "../src/types.ts";
-import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { computeBundleHash, createSkillBundleStore } from "../src/skills/skill-bundle-store.ts";
-import { singleProcessDeps } from "./support/single-process.ts";
-import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
-import { testDatabaseUrl, testMap, testAdvisoryLock } from "./support/test-database.ts";
+} from "../../src/deployment/deployment-layer-store.ts";
+import { emptyDeploymentLayer, resolvedDeploymentLayer } from "../../src/deployment/load-layer.ts";
+import { type DurableMap } from "../../src/persistence/durable-map.ts";
+import { createSkillStore, type Skill } from "../../src/skills/skill-store.ts";
+import { scopeId } from "../../src/types.ts";
+import type { AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
+import { computeBundleHash, createSkillBundleStore } from "../../src/skills/skill-bundle-store.ts";
+import { singleProcessDeps } from "../support/single-process.ts";
+import { createPostgresAuditLog } from "../../src/admin/postgres-audit-log.ts";
+import { testDatabaseUrl, testMap, testAdvisoryLock } from "../support/test-database.ts";
 
 const tool = (advertise: string): DeploymentLayerBundle["tools"][number] => ({
   path: "tools/acme/tool.json",

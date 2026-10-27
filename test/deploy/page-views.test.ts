@@ -1,25 +1,26 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createHmac } from "node:crypto";
+import { mkdtempSync } from "node:fs";
 import { request as httpRequest, createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { createApp } from "../src/api/app.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { createDeployStore } from "../src/deploy/deploy-store.ts";
-import { createDeployService } from "../src/deploy/deploy-service.ts";
-import { createAclStore } from "../src/acl/acl-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
-import { scopeId } from "../src/types.ts";
-import type { FeatureFlagStore } from "../src/feature-flags.ts";
-import type { AppPageView, AppPageViewLog } from "../src/deploy/page-views.ts";
-import { singleProcessDeps } from "./support/single-process.ts";
-import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
-import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
-import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
+import { createAclStore } from "../../src/acl/acl-store.ts";
+import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts";
+import { createApp } from "../../src/api/app.ts";
+import { createInsecureTestServer } from "../../src/api/server.ts";
+import { createDeployService } from "../../src/deploy/deploy-service.ts";
+import { createDeployStore } from "../../src/deploy/deploy-store.ts";
+import { type AppPageView, type AppPageViewLog, createPostgresAppPageViewLog } from "../../src/deploy/page-views.ts";
+import { createPostgresDirectoryStore } from "../../src/directory/postgres-directory-store.ts";
+import type { FeatureFlagStore } from "../../src/feature-flags.ts";
+import { createIdentityService } from "../../src/identity/identity-service.ts";
+import { createPgPool } from "../../src/persistence/pg-pool.ts";
+import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
+import { scopeId } from "../../src/types.ts";
+import { singleProcessDeps } from "../support/single-process.ts";
+import { testDatabaseUrl, testDeployBackings, testMap } from "../support/test-database.ts";
 
 const SESSION_SECRET = "portal-session-secret";
 const LOGIN_URL = "https://portal.example.com";
@@ -208,5 +209,85 @@ test("a failing page-view log never blocks the page and is reported", async () =
   } finally {
     console.error = original;
     await h.close();
+  }
+});
+
+const URL = process.env.DATABASE_URL;
+const view = () => ({
+  deploymentId: "dep-1",
+  version: null,
+  viewer: null,
+  authMode: "public" as const,
+  at: 1_700_000_000_002,
+  path: "/",
+  ip: null,
+  userAgent: null,
+});
+const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres page-view tests";
+
+test("pg page-view log stores one row per view with clipped request fields", { skip }, async () => {
+  const pg = (await import("pg")).default;
+  const admin = new pg.Pool({ connectionString: URL });
+  try {
+    await admin.query("DROP TABLE IF EXISTS app_page_views CASCADE");
+    await admin.query("DELETE FROM qm_schema_migrations WHERE id LIKE 'deploy/app-page-views/%'").catch(() => {});
+    const schema = createPgPool(URL!, []);
+    await schema.pool();
+    await schema.close();
+    await admin.query(`INSERT INTO deployments (id, json) VALUES ('dep-1', '{}') ON CONFLICT (id) DO NOTHING`);
+    const log = createPostgresAppPageViewLog(URL!);
+    await log.record({
+      deploymentId: "dep-1",
+      version: 3,
+      viewer: "alice@example.com",
+      authMode: "signed_in",
+      at: 1_700_000_000_000,
+      path: "/reports",
+      ip: "203.0.113.7",
+      userAgent: "ua".repeat(400),
+    });
+    await log.record({
+      deploymentId: "dep-1",
+      version: null,
+      viewer: null,
+      authMode: "public",
+      at: 1_700_000_000_001,
+      path: `/${"p".repeat(5000)}`,
+      ip: null,
+      userAgent: null,
+    });
+    const { rows } = await admin.query(
+      "SELECT deployment_id, version, viewer, auth_mode, at, path, ip, user_agent FROM app_page_views ORDER BY at",
+    );
+    assert.equal(rows.length, 2);
+    assert.deepEqual(
+      { ...rows[0], at: Number(rows[0].at), user_agent: rows[0].user_agent.length },
+      {
+        deployment_id: "dep-1",
+        version: 3,
+        viewer: "alice@example.com",
+        auth_mode: "signed_in",
+        at: 1_700_000_000_000,
+        path: "/reports",
+        ip: "203.0.113.7",
+        user_agent: 512,
+      },
+    );
+    assert.equal(rows[1].viewer, null);
+    assert.equal(rows[1].auth_mode, "public");
+    assert.equal(rows[1].path.length, 2048);
+    assert.equal(rows[1].ip, null);
+    await assert.rejects(
+      log.record({ ...view(), deploymentId: "no-such-app" }),
+      (err: { code?: string }) => err.code === "23503",
+    );
+    await assert.rejects(
+      admin.query("DELETE FROM deployments WHERE id = 'dep-1'"),
+      (err: { code?: string }) => err.code === "23503",
+    );
+  } finally {
+    await admin.query("DROP TABLE IF EXISTS app_page_views CASCADE").catch(() => {});
+    await admin.query("DELETE FROM deployments WHERE id = 'dep-1'").catch(() => {});
+    await admin.end();
   }
 });

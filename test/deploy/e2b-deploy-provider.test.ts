@@ -4,14 +4,14 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createE2bDeployProvider, type StoredE2bDeployBody } from "../src/deploy/e2b-deploy-provider.ts";
-import { type DurableMap } from "../src/persistence/durable-map.ts";
-import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
-import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
-import { scopeId } from "../src/types.ts";
-import { installFakeE2b, type FakeE2b } from "./support/fake-e2b.ts";
-import { singleProcessDeps } from "./support/single-process.ts";
-import { testMap } from "./support/test-database.ts";
+import { createE2bDeployProvider, type StoredE2bDeployBody } from "../../src/deploy/e2b-deploy-provider.ts";
+import { type DurableMap } from "../../src/persistence/durable-map.ts";
+import type { Deployment, DeploymentVersion } from "../../src/deploy/deploy-store.ts";
+import type { DeployProvider } from "../../src/deploy/deploy-provider.ts";
+import { scopeId } from "../../src/types.ts";
+import { installFakeE2b, type FakeE2b } from "../support/fake-e2b.ts";
+import { singleProcessDeps } from "../support/single-process.ts";
+import { testMap } from "../support/test-database.ts";
 
 const SERVER = [
   "const fs = require('fs');",

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mintDeployGitAccess, verifyDeployGitAccess } from "../src/deploy/access-token.ts";
-import { mintSignedPayload } from "../src/auth/signed-token.ts";
+import { mintDeployGitAccess, verifyDeployGitAccess } from "../../src/deploy/access-token.ts";
+import { mintSignedPayload } from "../../src/auth/signed-token.ts";
 
 const secret = "edge-secret";
 

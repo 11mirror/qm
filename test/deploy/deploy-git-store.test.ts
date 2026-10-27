@@ -1,31 +1,114 @@
+import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import { createServer as createHttpServer, request as httpRequest, type Server } from "node:http";
+import { type Server, createServer as createHttpServer, request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { test } from "node:test";
-import assert from "node:assert/strict";
-import { createApp } from "../src/api/app.ts";
-import { createServer } from "../src/api/server.ts";
-import { createDeployStore } from "../src/deploy/deploy-store.ts";
-import { createDeployService } from "../src/deploy/deploy-service.ts";
-import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
-import { mintDeployGitAccess, verifyDeployGitAccess } from "../src/deploy/access-token.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
-import { scopeId } from "../src/types.ts";
-import { singleProcessDeps } from "./support/single-process.ts";
-import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
-import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
-import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { promisify } from "node:util";
+import { createAclStore, type AclStore } from "../../src/acl/acl-store.ts";
+import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts";
+import { type App, createApp } from "../../src/api/app.ts";
+import { createServer } from "../../src/api/server.ts";
+import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../../src/auth/capability-token.ts";
+import { createPostgresReplayDedupe } from "../../src/auth/replay-dedupe.ts";
+import { mintDeployGitAccess, verifyDeployGitAccess } from "../../src/deploy/access-token.ts";
+import type { DeployGitArchive } from "../../src/deploy/deploy-git-store.ts";
+import { createDeployService } from "../../src/deploy/deploy-service.ts";
+import { createDeployStore, type Deployment } from "../../src/deploy/deploy-store.ts";
+import { createPostgresDirectoryStore } from "../../src/directory/postgres-directory-store.ts";
+import { createIdentityService } from "../../src/identity/identity-service.ts";
+import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
+import { scopeId } from "../../src/types.ts";
+import { singleProcessDeps } from "../support/single-process.ts";
+import { testMap, testDeployBackings, testDatabaseUrl } from "../support/test-database.ts";
 
 const execFileP = promisify(execFile);
-const SECRET = "deploy-git-rw-secret".repeat(3);
+const SECRET = "deploy-git-remote-secret".repeat(3);
+
+async function fixture(): Promise<{
+  base: string;
+  close: () => Promise<void>;
+  deployment: Deployment;
+}> {
+  const backing = testDeployBackings();
+  const archiveStore = testMap<DeployGitArchive>();
+  const writerStore = createDeployStore({
+    ...backing,
+    git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-remote-writer-")), archiveStore },
+  });
+  const deployment = await writerStore.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    snapshotDir: "/unused",
+    files: [
+      { path: "server.js", data: "console.log('hello')" },
+      { path: "data.json", data: '{"n":1}' },
+    ],
+    name: "git-remote",
+  });
+  await writerStore.setAppliedVersion(deployment.id, 1);
+  const readerStore = createDeployStore({
+    ...backing,
+    git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-remote-reader-")), archiveStore },
+  });
+  const app = {
+    listDeployments: async () => [deployment],
+    deploymentGitRepoPath: async (id: string) => (id === deployment.id ? await readerStore.repoUrl(id) : null),
+  } as unknown as App;
+  const server: Server = createServer(app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: SECRET,
+  });
+  server.listen(0);
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  return { base, deployment, close: () => new Promise<void>((r) => server.close(() => r())) };
+}
+
+async function authedGitUrl(
+  base: string,
+  deploymentId: string,
+  permission: "read" | "write" = "read",
+): Promise<string> {
+  const token = await mintDeployGitAccess(SECRET, { deploymentId, permission, exp: Date.now() + 60_000 });
+  const url = new URL(`/v1/deployments/${encodeURIComponent(deploymentId)}/git`, base);
+  url.username = "deployment";
+  url.password = token;
+  return url.toString();
+}
+
+test("deployment git remote serves the current ref to a real git client", async () => {
+  const f = await fixture();
+  try {
+    const v = f.deployment.versions[0]!;
+    const { stdout } = await execFileP("git", [
+      "ls-remote",
+      await authedGitUrl(f.base, f.deployment.id),
+      "refs/heads/current",
+    ]);
+    assert.equal(stdout.trim(), `${v.commit}\trefs/heads/current`);
+  } finally {
+    await f.close();
+  }
+});
+
+test("deployment git remote rejects unauthenticated fetches when core auth is configured", async () => {
+  const f = await fixture();
+  try {
+    const res = await fetch(
+      `${f.base}/v1/deployments/${encodeURIComponent(f.deployment.id)}/git/info/refs?service=git-upload-pack`,
+    );
+    assert.equal(res.status, 401);
+    assert.match(res.headers.get("www-authenticate") ?? "", /deployment git/);
+  } finally {
+    await f.close();
+  }
+});
+
+const GIT_RW_SECRET = "deploy-git-rw-secret".repeat(3);
 const GIT_ENV = {
   ...process.env,
   GIT_AUTHOR_NAME: "T",
@@ -34,7 +117,7 @@ const GIT_ENV = {
   GIT_COMMITTER_EMAIL: "t@t",
 };
 
-function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
+function gitRwFixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
   const deployStore = createDeployStore(
     testDeployBackings({ git: { repoRoot: mkdtempSync(join(tmpdir(), "git-rw-repo-")) } }),
   );
@@ -63,7 +146,7 @@ function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
   } as unknown as Parameters<typeof createApp>[0]);
   const server: Server = createServer(app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-    signingSecret: SECRET,
+    signingSecret: GIT_RW_SECRET,
     identity,
     ...urls,
   });
@@ -73,7 +156,7 @@ function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
 }
 
 async function gitUrl(base: string, deploymentId: string, permission: "read" | "write"): Promise<string> {
-  const token = await mintDeployGitAccess(SECRET, {
+  const token = await mintDeployGitAccess(GIT_RW_SECRET, {
     deploymentId,
     permission,
     principalId: "U1",
@@ -109,11 +192,11 @@ const capFor = (actorId: string, scope?: string) =>
       liveActor: true,
       exp: Date.now() + CAPABILITY_TTL_MS,
     },
-    SECRET,
+    GIT_RW_SECRET,
   );
 
 test("a read token can clone but cannot push (403 on receive-pack)", async () => {
-  const f = fixture();
+  const f = gitRwFixture();
   try {
     const d = await f.app.deploy({
       ownerScopeId: scopeId("personal", "U1"),
@@ -144,7 +227,7 @@ test("a read token can clone but cannot push (403 on receive-pack)", async () =>
 });
 
 test("a write token can push, and the push registers a new immutable version", async () => {
-  const f = fixture();
+  const f = gitRwFixture();
   try {
     const d = await f.app.deploy({
       ownerScopeId: scopeId("personal", "U1"),
@@ -175,7 +258,7 @@ test("a write token can push, and the push registers a new immutable version", a
 });
 
 test("a write token minted before principal deactivation is revoked at push time", async () => {
-  const f = fixture();
+  const f = gitRwFixture();
   try {
     const d = await f.app.deploy({
       ownerScopeId: scopeId("personal", "U1"),
@@ -192,7 +275,7 @@ test("a write token minted before principal deactivation is revoked at push time
 });
 
 test("git-url endpoint: write for the owner, read for a read-grantee, 403 for no access", async () => {
-  const f = fixture();
+  const f = gitRwFixture();
   try {
     const d = await f.app.deploy({
       ownerScopeId: scopeId("personal", "U1"),
@@ -218,7 +301,7 @@ test("git-url endpoint: write for the owner, read for a read-grantee, 403 for no
     const ownerBody = (await owner.json()) as { url: string; permission: string };
     assert.equal(ownerBody.permission, "write");
     assert.match(ownerBody.url, new RegExp(`/v1/deployments/${d.id}/git`));
-    assert.equal((await verifyDeployGitAccess(SECRET, new URL(ownerBody.url).password))?.principalId, "U1");
+    assert.equal((await verifyDeployGitAccess(GIT_RW_SECRET, new URL(ownerBody.url).password))?.principalId, "U1");
 
     await f.identity.deactivate("U1");
     await assert.rejects(
@@ -267,7 +350,7 @@ test("git-url endpoint returns a clonable API URL when web and API origins diffe
   });
   ingress.listen(0);
   const apiBaseUrl = `http://127.0.0.1:${(ingress.address() as AddressInfo).port}`;
-  const f = fixture({ apiBaseUrl, publicUrl: "https://web.example" });
+  const f = gitRwFixture({ apiBaseUrl, publicUrl: "https://web.example" });
   coreBase = f.base;
   try {
     const deployment = await f.app.deploy({
@@ -291,7 +374,7 @@ test("git-url endpoint returns a clonable API URL when web and API origins diffe
 });
 
 test("git-url endpoint: an org-owned deployment is read for a plain member, write only with a write grant", async () => {
-  const f = fixture();
+  const f = gitRwFixture();
   try {
     const d = await f.app.deploy({
       ownerScopeId: scopeId("org", "default-org"),
@@ -323,7 +406,7 @@ test("git-url endpoint: an org-owned deployment is read for a plain member, writ
 });
 
 test("a garbage push body that git rejects early fails the request without crashing core", async () => {
-  const f = fixture();
+  const f = gitRwFixture();
   const uncaught: unknown[] = [];
   const onUncaught = (error: unknown) => uncaught.push(error);
   process.on("uncaughtException", onUncaught);
