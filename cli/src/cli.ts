@@ -236,6 +236,337 @@ function logOpts(flags: Flags): LogOpts {
   return { follow: followFlag(flags), ...(tail !== undefined ? { tail } : {}) };
 }
 
+async function initCommand(positionals: string[], flags: Flags): Promise<void> {
+  rejectUnknownFlags(flags, ["org", "target", "model-provider", "email-transport"]);
+  rejectExtraPositionals(positionals, 1);
+  const target = targetFlag(flags);
+  const modelProvider = modelProviderFlag(flags);
+  const emailTransport = emailTransportFlag(flags);
+  const org = strFlag(flags, "org");
+  const dir = positionals[0] !== undefined ? resolve(positionals[0]) : resolve(process.cwd());
+  runInit({
+    dir,
+    ...(org ? { org } : {}),
+    ...(target ? { target } : {}),
+    ...(modelProvider ? { modelProvider } : {}),
+    ...(emailTransport ? { emailTransport } : {}),
+  });
+  return;
+}
+
+async function devCommand(argv: string[], positionals: string[], flags: Flags): Promise<void> {
+  if (flags.ci !== undefined) {
+    rejectUnknownFlags(flags, ["ci"]);
+    const explicitCiSub = typeof flags.ci === "string" ? flags.ci : undefined;
+    rejectExtraPositionals(positionals, explicitCiSub === undefined ? 1 : 0);
+    const sub = explicitCiSub ?? positionals[0] ?? "up";
+    if (sub === "up") return devCiUp();
+    if (sub === "down") return devCiDown();
+    throw new CliError(`'dev --ci' supports up|down (got: ${sub})`);
+  }
+  rejectUnknownFlags(flags, [
+    "json",
+    "force",
+    "strict",
+    "rotate",
+    "f",
+    "follow",
+    "fix",
+    "sandbox",
+    "surface",
+    "no-slack",
+    "no-watch",
+    "org",
+  ]);
+  if (!["up", "down", "status", "restart", "canary", "logs", "doctor"].includes(positionals[0] ?? "up"))
+    rejectExtraPositionals(positionals, 1);
+  const root = gitTopLevel();
+  const configPath = findConfigPath(root);
+  const orgId = strFlag(flags, "org") ?? (configPath && readConfigOrgId(configPath)) ?? "acme";
+  const result = spawnSync(process.execPath, [join(root, "scripts/dev/cli.ts"), ...argv.slice(1)], {
+    cwd: root,
+    stdio: "inherit",
+    env: { ...process.env, DEV_INSTANCE_ORG_ID: orgId },
+  });
+  if (result.error) throw result.error;
+  process.exitCode = result.status ?? 1;
+  return;
+}
+
+async function tenantCommand(argv: string[], positionals: string[]): Promise<void> {
+  if (positionals[0] !== "import") {
+    throw new CliError(
+      `usage: ${CLI_NAME} tenant import --source-url <url> --staging-url <url> --slug <slug> --org-id <id> [options]`,
+      {
+        clause: "cli.invocation",
+      },
+    );
+  }
+  const root = gitTopLevel();
+  const result = spawnSync(process.execPath, [join(root, "src/tenant-import-main.ts"), ...argv.slice(2)], {
+    cwd: root,
+    stdio: "inherit",
+  });
+  if (result.error) throw result.error;
+  process.exitCode = result.status ?? 1;
+  return;
+}
+
+async function checkCommand(positionals: string[], flags: Flags): Promise<void> {
+  if (boolFlag(flags, "json")) {
+    try {
+      rejectUnknownFlags(flags, ["json", "live", "config", "env-file", "sandbox-dir", "target"]);
+      rejectExtraPositionals(positionals, 0);
+      const ctx = deployContext(flags);
+      const result = await runCheckCommand(ctx.config, ctx.configDir, ctx.sandboxDir, ctx.envFile, false);
+      if (boolFlag(flags, "live")) {
+        const checkLive = deploymentBackend(ctx).checkLive;
+        if (!checkLive)
+          throw new CliError(`check --live is not implemented for target ${ctx.target}`, {
+            clause: "cli.invocation",
+          });
+        await checkLive({ report: false });
+      }
+      const live = boolFlag(flags, "live");
+      note(
+        JSON.stringify({
+          contract: 1,
+          valid: true,
+          clauses: {
+            "config.v1": { status: "pass" },
+            "sandbox.descriptors": { status: "pass", warnings: result.layer.warnings },
+            "plugins.resolved": { status: "pass", count: result.plugins.length },
+            "secrets.computed-set": { status: "pass", names: result.secrets.map((secret) => secret.name) },
+            ...(live
+              ? {
+                  [`${ctx.target}.live-drift`]: { status: "pass" },
+                }
+              : {}),
+          },
+        }),
+      );
+    } catch (error) {
+      if (error instanceof CliError) {
+        const problems = error.problems ?? [{ clause: error.clause ?? "config.v1", message: error.message }];
+        const clauses: Record<string, { status: "fail" | "error"; errors: string[] }> = {};
+        for (const problem of problems) {
+          const entry = (clauses[problem.clause] ??= {
+            status: problem.clause === "cli.invocation" ? "error" : "fail",
+            errors: [],
+          });
+          entry.errors.push(...problem.message.split("\n").filter(Boolean));
+        }
+        note(JSON.stringify({ contract: 1, valid: false, clauses }));
+        process.exit(clauses["cli.invocation"] ? 2 : 1);
+      } else {
+        note(
+          JSON.stringify({
+            contract: 1,
+            valid: false,
+            clauses: { "cli.internal": { status: "error", errors: [errMessage(error)] } },
+          }),
+        );
+        process.exit(2);
+      }
+    }
+    return;
+  }
+  rejectUnknownFlags(flags, ["json", "live", "config", "env-file", "sandbox-dir", "target"]);
+  rejectExtraPositionals(positionals, 0);
+  const ctx = deployContext(flags);
+  if (boolFlag(flags, "live")) {
+    const checkLive = deploymentBackend(ctx).checkLive;
+    if (!checkLive)
+      throw new CliError(`check --live is not implemented for target ${ctx.target}`, { clause: "cli.invocation" });
+    await runCheckCommand(ctx.config, ctx.configDir, ctx.sandboxDir, ctx.envFile);
+    await checkLive();
+    return;
+  }
+  await runCheckCommand(ctx.config, ctx.configDir, ctx.sandboxDir, ctx.envFile);
+  return;
+}
+
+async function configCommand(positionals: string[], flags: Flags): Promise<void> {
+  rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target"]);
+  rejectExtraPositionals(positionals, 2);
+  const path = positionals[1];
+  if (positionals[0] !== "get" || path === undefined) {
+    throw new CliError(`usage: ${CLI_NAME} config get <dot.path>`, { clause: "cli.invocation" });
+  }
+  const ctx = deployContext(flags);
+  let value: unknown = ctx.config;
+  for (const key of path.split(".")) {
+    value =
+      value !== null && typeof value === "object" && key in value ? (value as Record<string, unknown>)[key] : undefined;
+    if (value === undefined) throw new CliError(`config get: "${path}" is not set in ${ctx.configPath}`);
+  }
+  note(typeof value === "object" ? JSON.stringify(value) : String(value));
+  return;
+}
+
+async function infraCommand(positionals: string[], flags: Flags): Promise<void> {
+  rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target", "yes"]);
+  rejectExtraPositionals(positionals, 1);
+  const operation = positionals[0];
+  if (
+    operation !== "render" &&
+    operation !== "build-image" &&
+    operation !== "delete-image" &&
+    operation !== "delete-task-definitions"
+  ) {
+    throw new CliError(`usage: ${CLI_NAME} infra render|build-image|delete-image|delete-task-definitions`);
+  }
+  const ctx = deployContext(flags);
+  const run = hostingProvider(ctx.target).infra?.[operation];
+  if (!run) throw new CliError(`infra ${operation} is not available for target ${ctx.target}`);
+  if (operation === "delete-image" || operation === "delete-task-definitions") {
+    if (!boolFlag(flags, "yes")) throw new CliError(`infra ${operation} requires --yes`, { clause: "cli.invocation" });
+  }
+  if (operation === "render") runChecks(ctx.config, ctx.configDir, ctx.sandboxDir, { report: false });
+  await run(ctx);
+  return;
+}
+
+async function upCommand(cmd: string, positionals: string[], flags: Flags): Promise<void> {
+  const common = ["config", "env-file", "sandbox-dir", "target", "dry-run"];
+  rejectUnknownFlags(flags, [...common, ...hostingProviderUpFlags()]);
+  rejectExtraPositionals(positionals, 0);
+  const dryRun = cmd === "plan" || boolFlag(flags, "dry-run");
+  const ctx = deployContext(flags);
+  const provider = hostingProvider(ctx.target);
+  rejectUnknownFlags(flags, [...common, ...provider.upFlags]);
+  const upOptions = provider.upOptions(ctx, flags, dryRun);
+  runChecks(ctx.config, ctx.configDir, ctx.sandboxDir, { report: false });
+  await provider.createBackend(ctx).up(upOptions);
+  return;
+}
+
+async function sandboxCommand(positionals: string[], flags: Flags): Promise<void> {
+  const sub = positionals[0];
+  if (sub !== "build") {
+    throw new CliError(`usage: ${CLI_NAME} sandbox build [--from <image>] [--tag <label>] [--dry-run]`);
+  }
+  rejectExtraPositionals(positionals, 1);
+  rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target", "from", "tag", "dry-run"]);
+  const ctx = deployContext(flags);
+  runChecks(ctx.config, ctx.configDir, ctx.sandboxDir, { report: false });
+  const from = strFlag(flags, "from");
+  const tag = strFlag(flags, "tag");
+  runSandboxBuild({
+    sandboxDir: ctx.sandboxDir,
+    config: ctx.config,
+    ...(from ? { from } : {}),
+    ...(tag ? { tag } : {}),
+    dryRun: boolFlag(flags, "dry-run"),
+  });
+  return;
+}
+
+async function uiCommand(positionals: string[], flags: Flags): Promise<void> {
+  if (positionals[0] !== "publish")
+    throw new CliError(
+      `usage: ${CLI_NAME} ui publish --bucket <name> [--channel <name>] [--release <id>] [--distribution <id>] [--dir <path>]`,
+    );
+  rejectExtraPositionals(positionals, 1);
+  rejectUnknownFlags(flags, ["bucket", "channel", "release", "distribution", "dir"]);
+  const bucket = strFlag(flags, "bucket");
+  if (!bucket) throw new CliError("--bucket is required", { clause: "cli.invocation" });
+  const release = strFlag(flags, "release");
+  const distribution = strFlag(flags, "distribution");
+  runUiPublish({
+    bucket,
+    channel: strFlag(flags, "channel") ?? "live",
+    dir: resolve(strFlag(flags, "dir") ?? "plugins/web-ui/dist-web"),
+    ...(release ? { release } : {}),
+    ...(distribution ? { distribution } : {}),
+  });
+  return;
+}
+
+async function secretsCommand(positionals: string[], flags: Flags): Promise<void> {
+  if (positionals[0] === "set") {
+    rejectExtraPositionals(positionals, 3);
+    rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target", "from-file"]);
+    const key = positionals[1];
+    if (!key) {
+      throw new CliError(`usage: ${CLI_NAME} secrets set <KEY> [<value>] [--from-file <path>]`, {
+        clause: "cli.invocation",
+      });
+    }
+    const fromFile = strFlag(flags, "from-file");
+    if (positionals[2] !== undefined && fromFile !== undefined) {
+      throw new CliError(`secrets set takes a value argument or --from-file, not both`, {
+        clause: "cli.invocation",
+      });
+    }
+    const ctx = deployContext(flags);
+    let value = positionals[2];
+    if (value === undefined && fromFile !== undefined) value = readFileSync(fromFile, "utf8");
+    if (value === undefined) value = process.stdin.isTTY ? await promptHidden(key) : await readStdin();
+    value = value.replace(/\r?\n$/, "");
+    if (!value) throw new CliError(`secrets set: no value provided for ${key}`, { clause: "cli.invocation" });
+    const envPath = ctx.envFile ?? join(ctx.configDir, ".env");
+    writeEnvValue(envPath, key, value);
+    ok(`set ${key} in ${envPath}`);
+    return;
+  }
+  if (positionals[0] !== "push") {
+    throw new CliError(
+      `usage: ${CLI_NAME} secrets push [--from <env-file>] | secrets set <KEY> [<value>] [--from-file <path>]`,
+    );
+  }
+  rejectExtraPositionals(positionals, 1);
+  rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target", "from"]);
+  const ctx = deployContext(flags);
+  const from = strFlag(flags, "from") ?? ctx.envFile;
+  return deploymentBackend(ctx).secretsPush(from);
+}
+
+async function migrateCommand(positionals: string[], flags: Flags): Promise<void> {
+  rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target", "candidate", "yes"]);
+  rejectExtraPositionals(positionals, 0);
+  const ctx = deployContext(flags);
+  const candidate = strFlag(flags, "candidate");
+  if (!candidate) throw new CliError("migrate requires --candidate <file>", { clause: "cli.invocation" });
+  if (!boolFlag(flags, "yes")) throw new CliError("migrate requires --yes", { clause: "cli.invocation" });
+  const backend = deploymentBackend(ctx);
+  if (!backend.migrateCandidate) {
+    throw new CliError("migrate is only available for target aws", { clause: "cli.invocation" });
+  }
+  await backend.migrateCandidate(candidate);
+  return;
+}
+
+async function doctorCommand(positionals: string[], flags: Flags): Promise<void> {
+  rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target"]);
+  rejectExtraPositionals(positionals, 0);
+  const ctx = deployContext(flags);
+  runChecks(ctx.config, ctx.configDir, ctx.sandboxDir, { report: false });
+  await deploymentBackend(ctx).doctor();
+  note(`doctor: ${ctx.target} prerequisites are ready`);
+  return;
+}
+
+async function adminLoginCommand(positionals: string[], flags: Flags): Promise<void> {
+  rejectUnknownFlags(flags, ["config", "env-file", "email"]);
+  rejectExtraPositionals(positionals, 0);
+  runAdminLogin({
+    configPath: strFlag(flags, "config"),
+    envFile: strFlag(flags, "env-file"),
+    email: strFlag(flags, "email"),
+  });
+  return;
+}
+
+async function layerCommand(positionals: string[], flags: Flags): Promise<void> {
+  rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target"]);
+  rejectExtraPositionals(positionals, 1);
+  if (positionals[0] !== "sync") throw new CliError(`usage: ${CLI_NAME} layer sync`);
+  const ctx = deployContext(flags);
+  await syncDeploymentLayer({ ...ctx, transport: hostingProvider(ctx.target).deploymentLayerTransport });
+  return;
+}
+
 async function dispatch(argv: string[]): Promise<void> {
   const cmd = argv[0];
   const { positionals, flags } = parse(argv.slice(1));
@@ -265,23 +596,8 @@ async function dispatch(argv: string[]): Promise<void> {
       return;
     }
 
-    case "init": {
-      rejectUnknownFlags(flags, ["org", "target", "model-provider", "email-transport"]);
-      rejectExtraPositionals(positionals, 1);
-      const target = targetFlag(flags);
-      const modelProvider = modelProviderFlag(flags);
-      const emailTransport = emailTransportFlag(flags);
-      const org = strFlag(flags, "org");
-      const dir = positionals[0] !== undefined ? resolve(positionals[0]) : resolve(process.cwd());
-      runInit({
-        dir,
-        ...(org ? { org } : {}),
-        ...(target ? { target } : {}),
-        ...(modelProvider ? { modelProvider } : {}),
-        ...(emailTransport ? { emailTransport } : {}),
-      });
-      return;
-    }
+    case "init":
+      return initCommand(positionals, flags);
 
     case "setup": {
       rejectUnknownFlags(flags, []);
@@ -290,157 +606,17 @@ async function dispatch(argv: string[]): Promise<void> {
       return;
     }
 
-    case "dev": {
-      if (flags.ci !== undefined) {
-        rejectUnknownFlags(flags, ["ci"]);
-        const explicitCiSub = typeof flags.ci === "string" ? flags.ci : undefined;
-        rejectExtraPositionals(positionals, explicitCiSub === undefined ? 1 : 0);
-        const sub = explicitCiSub ?? positionals[0] ?? "up";
-        if (sub === "up") return devCiUp();
-        if (sub === "down") return devCiDown();
-        throw new CliError(`'dev --ci' supports up|down (got: ${sub})`);
-      }
-      rejectUnknownFlags(flags, [
-        "json",
-        "force",
-        "strict",
-        "rotate",
-        "f",
-        "follow",
-        "fix",
-        "sandbox",
-        "surface",
-        "no-slack",
-        "no-watch",
-        "org",
-      ]);
-      if (!["up", "down", "status", "restart", "canary", "logs", "doctor"].includes(positionals[0] ?? "up"))
-        rejectExtraPositionals(positionals, 1);
-      const root = gitTopLevel();
-      const configPath = findConfigPath(root);
-      const orgId = strFlag(flags, "org") ?? (configPath && readConfigOrgId(configPath)) ?? "acme";
-      const result = spawnSync(process.execPath, [join(root, "scripts/dev/cli.ts"), ...argv.slice(1)], {
-        cwd: root,
-        stdio: "inherit",
-        env: { ...process.env, DEV_INSTANCE_ORG_ID: orgId },
-      });
-      if (result.error) throw result.error;
-      process.exitCode = result.status ?? 1;
-      return;
-    }
+    case "dev":
+      return devCommand(argv, positionals, flags);
 
-    case "tenant": {
-      if (positionals[0] !== "import") {
-        throw new CliError(
-          `usage: ${CLI_NAME} tenant import --source-url <url> --staging-url <url> --slug <slug> --org-id <id> [options]`,
-          {
-            clause: "cli.invocation",
-          },
-        );
-      }
-      const root = gitTopLevel();
-      const result = spawnSync(process.execPath, [join(root, "src/tenant-import-main.ts"), ...argv.slice(2)], {
-        cwd: root,
-        stdio: "inherit",
-      });
-      if (result.error) throw result.error;
-      process.exitCode = result.status ?? 1;
-      return;
-    }
+    case "tenant":
+      return tenantCommand(argv, positionals);
 
-    case "check": {
-      if (boolFlag(flags, "json")) {
-        try {
-          rejectUnknownFlags(flags, ["json", "live", "config", "env-file", "sandbox-dir", "target"]);
-          rejectExtraPositionals(positionals, 0);
-          const ctx = deployContext(flags);
-          const result = await runCheckCommand(ctx.config, ctx.configDir, ctx.sandboxDir, ctx.envFile, false);
-          if (boolFlag(flags, "live")) {
-            const checkLive = deploymentBackend(ctx).checkLive;
-            if (!checkLive)
-              throw new CliError(`check --live is not implemented for target ${ctx.target}`, {
-                clause: "cli.invocation",
-              });
-            await checkLive({ report: false });
-          }
-          const live = boolFlag(flags, "live");
-          note(
-            JSON.stringify({
-              contract: 1,
-              valid: true,
-              clauses: {
-                "config.v1": { status: "pass" },
-                "sandbox.descriptors": { status: "pass", warnings: result.layer.warnings },
-                "plugins.resolved": { status: "pass", count: result.plugins.length },
-                "secrets.computed-set": { status: "pass", names: result.secrets.map((secret) => secret.name) },
-                ...(live
-                  ? {
-                      [`${ctx.target}.live-drift`]: { status: "pass" },
-                    }
-                  : {}),
-              },
-            }),
-          );
-        } catch (error) {
-          if (error instanceof CliError) {
-            const problems = error.problems ?? [{ clause: error.clause ?? "config.v1", message: error.message }];
-            const clauses: Record<string, { status: "fail" | "error"; errors: string[] }> = {};
-            for (const problem of problems) {
-              const entry = (clauses[problem.clause] ??= {
-                status: problem.clause === "cli.invocation" ? "error" : "fail",
-                errors: [],
-              });
-              entry.errors.push(...problem.message.split("\n").filter(Boolean));
-            }
-            note(JSON.stringify({ contract: 1, valid: false, clauses }));
-            process.exit(clauses["cli.invocation"] ? 2 : 1);
-          } else {
-            note(
-              JSON.stringify({
-                contract: 1,
-                valid: false,
-                clauses: { "cli.internal": { status: "error", errors: [errMessage(error)] } },
-              }),
-            );
-            process.exit(2);
-          }
-        }
-        return;
-      }
-      rejectUnknownFlags(flags, ["json", "live", "config", "env-file", "sandbox-dir", "target"]);
-      rejectExtraPositionals(positionals, 0);
-      const ctx = deployContext(flags);
-      if (boolFlag(flags, "live")) {
-        const checkLive = deploymentBackend(ctx).checkLive;
-        if (!checkLive)
-          throw new CliError(`check --live is not implemented for target ${ctx.target}`, { clause: "cli.invocation" });
-        await runCheckCommand(ctx.config, ctx.configDir, ctx.sandboxDir, ctx.envFile);
-        await checkLive();
-        return;
-      }
-      await runCheckCommand(ctx.config, ctx.configDir, ctx.sandboxDir, ctx.envFile);
-      return;
-    }
+    case "check":
+      return checkCommand(positionals, flags);
 
-    case "config": {
-      rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target"]);
-      rejectExtraPositionals(positionals, 2);
-      const path = positionals[1];
-      if (positionals[0] !== "get" || path === undefined) {
-        throw new CliError(`usage: ${CLI_NAME} config get <dot.path>`, { clause: "cli.invocation" });
-      }
-      const ctx = deployContext(flags);
-      let value: unknown = ctx.config;
-      for (const key of path.split(".")) {
-        value =
-          value !== null && typeof value === "object" && key in value
-            ? (value as Record<string, unknown>)[key]
-            : undefined;
-        if (value === undefined) throw new CliError(`config get: "${path}" is not set in ${ctx.configPath}`);
-      }
-      note(typeof value === "object" ? JSON.stringify(value) : String(value));
-      return;
-    }
+    case "config":
+      return configCommand(positionals, flags);
 
     case "slack": {
       rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target"]);
@@ -459,16 +635,8 @@ async function dispatch(argv: string[]): Promise<void> {
       return;
     }
 
-    case "admin-login": {
-      rejectUnknownFlags(flags, ["config", "env-file", "email"]);
-      rejectExtraPositionals(positionals, 0);
-      runAdminLogin({
-        configPath: strFlag(flags, "config"),
-        envFile: strFlag(flags, "env-file"),
-        email: strFlag(flags, "email"),
-      });
-      return;
-    }
+    case "admin-login":
+      return adminLoginCommand(positionals, flags);
 
     case "conformance": {
       rejectUnknownFlags(flags, ["static", "config", "env-file", "sandbox-dir", "target"]);
@@ -478,110 +646,24 @@ async function dispatch(argv: string[]): Promise<void> {
       return;
     }
 
-    case "infra": {
-      rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target", "yes"]);
-      rejectExtraPositionals(positionals, 1);
-      const operation = positionals[0];
-      if (
-        operation !== "render" &&
-        operation !== "build-image" &&
-        operation !== "delete-image" &&
-        operation !== "delete-task-definitions"
-      ) {
-        throw new CliError(`usage: ${CLI_NAME} infra render|build-image|delete-image|delete-task-definitions`);
-      }
-      const ctx = deployContext(flags);
-      const run = hostingProvider(ctx.target).infra?.[operation];
-      if (!run) throw new CliError(`infra ${operation} is not available for target ${ctx.target}`);
-      if (operation === "delete-image" || operation === "delete-task-definitions") {
-        if (!boolFlag(flags, "yes"))
-          throw new CliError(`infra ${operation} requires --yes`, { clause: "cli.invocation" });
-      }
-      if (operation === "render") runChecks(ctx.config, ctx.configDir, ctx.sandboxDir, { report: false });
-      await run(ctx);
-      return;
-    }
+    case "infra":
+      return infraCommand(positionals, flags);
 
-    case "layer": {
-      rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target"]);
-      rejectExtraPositionals(positionals, 1);
-      if (positionals[0] !== "sync") throw new CliError(`usage: ${CLI_NAME} layer sync`);
-      const ctx = deployContext(flags);
-      await syncDeploymentLayer({ ...ctx, transport: hostingProvider(ctx.target).deploymentLayerTransport });
-      return;
-    }
+    case "layer":
+      return layerCommand(positionals, flags);
 
     case "up":
-    case "plan": {
-      const common = ["config", "env-file", "sandbox-dir", "target", "dry-run"];
-      rejectUnknownFlags(flags, [...common, ...hostingProviderUpFlags()]);
-      rejectExtraPositionals(positionals, 0);
-      const dryRun = cmd === "plan" || boolFlag(flags, "dry-run");
-      const ctx = deployContext(flags);
-      const provider = hostingProvider(ctx.target);
-      rejectUnknownFlags(flags, [...common, ...provider.upFlags]);
-      const upOptions = provider.upOptions(ctx, flags, dryRun);
-      runChecks(ctx.config, ctx.configDir, ctx.sandboxDir, { report: false });
-      await provider.createBackend(ctx).up(upOptions);
-      return;
-    }
+    case "plan":
+      return upCommand(cmd, positionals, flags);
 
-    case "migrate": {
-      rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target", "candidate", "yes"]);
-      rejectExtraPositionals(positionals, 0);
-      const ctx = deployContext(flags);
-      const candidate = strFlag(flags, "candidate");
-      if (!candidate) throw new CliError("migrate requires --candidate <file>", { clause: "cli.invocation" });
-      if (!boolFlag(flags, "yes")) throw new CliError("migrate requires --yes", { clause: "cli.invocation" });
-      const backend = deploymentBackend(ctx);
-      if (!backend.migrateCandidate) {
-        throw new CliError("migrate is only available for target aws", { clause: "cli.invocation" });
-      }
-      await backend.migrateCandidate(candidate);
-      return;
-    }
+    case "migrate":
+      return migrateCommand(positionals, flags);
 
-    case "sandbox": {
-      const sub = positionals[0];
-      if (sub !== "build") {
-        throw new CliError(`usage: ${CLI_NAME} sandbox build [--from <image>] [--tag <label>] [--dry-run]`);
-      }
-      rejectExtraPositionals(positionals, 1);
-      rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target", "from", "tag", "dry-run"]);
-      const ctx = deployContext(flags);
-      runChecks(ctx.config, ctx.configDir, ctx.sandboxDir, { report: false });
-      const from = strFlag(flags, "from");
-      const tag = strFlag(flags, "tag");
-      runSandboxBuild({
-        sandboxDir: ctx.sandboxDir,
-        config: ctx.config,
-        ...(from ? { from } : {}),
-        ...(tag ? { tag } : {}),
-        dryRun: boolFlag(flags, "dry-run"),
-      });
-      return;
-    }
+    case "sandbox":
+      return sandboxCommand(positionals, flags);
 
-    case "ui": {
-      if (positionals[0] !== "publish")
-        throw new CliError(
-          `usage: ${CLI_NAME} ui publish --bucket <name> [--channel <name>] [--release <id>] [--distribution <id>] [--dir <path>]`,
-        );
-      rejectExtraPositionals(positionals, 1);
-      rejectUnknownFlags(flags, ["bucket", "channel", "release", "distribution", "dir"]);
-      const bucket = strFlag(flags, "bucket");
-      if (!bucket) throw new CliError("--bucket is required", { clause: "cli.invocation" });
-      const release = strFlag(flags, "release");
-      const distribution = strFlag(flags, "distribution");
-      runUiPublish({
-        bucket,
-        channel: strFlag(flags, "channel") ?? "live",
-        dir: resolve(strFlag(flags, "dir") ?? "plugins/web-ui/dist-web"),
-        ...(release ? { release } : {}),
-        ...(distribution ? { distribution } : {}),
-      });
-      return;
-    }
+    case "ui":
+      return uiCommand(positionals, flags);
 
     case "status": {
       rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target"]);
@@ -613,54 +695,11 @@ async function dispatch(argv: string[]): Promise<void> {
       return deploymentBackend(ctx).rollback(strFlag(flags, "to"));
     }
 
-    case "doctor": {
-      rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target"]);
-      rejectExtraPositionals(positionals, 0);
-      const ctx = deployContext(flags);
-      runChecks(ctx.config, ctx.configDir, ctx.sandboxDir, { report: false });
-      await deploymentBackend(ctx).doctor();
-      note(`doctor: ${ctx.target} prerequisites are ready`);
-      return;
-    }
+    case "doctor":
+      return doctorCommand(positionals, flags);
 
-    case "secrets": {
-      if (positionals[0] === "set") {
-        rejectExtraPositionals(positionals, 3);
-        rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target", "from-file"]);
-        const key = positionals[1];
-        if (!key) {
-          throw new CliError(`usage: ${CLI_NAME} secrets set <KEY> [<value>] [--from-file <path>]`, {
-            clause: "cli.invocation",
-          });
-        }
-        const fromFile = strFlag(flags, "from-file");
-        if (positionals[2] !== undefined && fromFile !== undefined) {
-          throw new CliError(`secrets set takes a value argument or --from-file, not both`, {
-            clause: "cli.invocation",
-          });
-        }
-        const ctx = deployContext(flags);
-        let value = positionals[2];
-        if (value === undefined && fromFile !== undefined) value = readFileSync(fromFile, "utf8");
-        if (value === undefined) value = process.stdin.isTTY ? await promptHidden(key) : await readStdin();
-        value = value.replace(/\r?\n$/, "");
-        if (!value) throw new CliError(`secrets set: no value provided for ${key}`, { clause: "cli.invocation" });
-        const envPath = ctx.envFile ?? join(ctx.configDir, ".env");
-        writeEnvValue(envPath, key, value);
-        ok(`set ${key} in ${envPath}`);
-        return;
-      }
-      if (positionals[0] !== "push") {
-        throw new CliError(
-          `usage: ${CLI_NAME} secrets push [--from <env-file>] | secrets set <KEY> [<value>] [--from-file <path>]`,
-        );
-      }
-      rejectExtraPositionals(positionals, 1);
-      rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target", "from"]);
-      const ctx = deployContext(flags);
-      const from = strFlag(flags, "from") ?? ctx.envFile;
-      return deploymentBackend(ctx).secretsPush(from);
-    }
+    case "secrets":
+      return secretsCommand(positionals, flags);
 
     default:
       throw new CliError(`unknown command: ${cmd}\n\n${HELP}`);

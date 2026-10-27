@@ -93,102 +93,10 @@ export async function runDoctor(opts: { json: boolean; fix: boolean; store: stri
   if (!mine) {
     checks.push({ id: "lease", ok: true, severity: "info", detail: "no dev instance for this worktree" });
   } else {
-    const sock = resolveSocketPath(mine.lockDir);
-    const reachable = await supervisorReachable(sock);
-    checks.push({
-      id: "supervisor",
-      ok: reachable,
-      severity: "critical",
-      detail: reachable ? `supervisor live on ${mine.slot}` : `lease held for ${mine.slot} but no supervisor answering`,
-      remedy: reachable ? undefined : "dev down && dev up",
-      autoFixable: !reachable,
-    });
-    if (reachable) {
-      const status = (await supervisorRequest(sock, "GET", "/status", undefined, 8000)).body as StatusReport;
-      for (const name of CHILD_ORDER) {
-        const child = status.children[name];
-        checks.push({
-          id: `child:${name}`,
-          ok: child?.state === "healthy",
-          severity: "critical",
-          detail: child
-            ? `${name}: ${child.state} (pid ${child.pid ?? "-"}, restarts ${child.restarts})`
-            : `${name}: missing`,
-          remedy:
-            child?.state === "healthy" ? undefined : `dev restart ${name}  (log: ${join(mine.lockDir, `${name}.log`)})`,
-          autoFixable: child?.state !== "healthy",
-        });
-      }
-      if (status.slackEnabled !== false) {
-        const slack = status.children.core?.slack;
-        const conns = slack?.numConnections ?? null;
-        checks.push({
-          id: "slack-socket",
-          ok: conns === 1,
-          severity: "critical",
-          detail:
-            conns === null
-              ? "num_connections unknown (introspection tap degraded)"
-              : `num_connections=${conns} at last hello${slack?.helloHost ? ` (Slack server ${slack.helloHost})` : ""}`,
-          remedy:
-            conns !== null && conns > 1
-              ? "check for other instances; reconnect and verify with dev up --rotate"
-              : undefined,
-        });
-        const canary = (await supervisorRequest(sock, "POST", "/canary", {}, 40_000)).body as CanaryReply;
-        checks.push(eventDeliveryCheck(canary));
-      }
-      const gitNow = gitHead(worktree);
-      checks.push({
-        id: "git-drift",
-        ok: status.gitSha === gitNow || status.watch,
-        severity: "info",
-        detail:
-          status.gitSha === gitNow
-            ? `running HEAD (${gitNow})`
-            : `booted at ${status.gitSha}, HEAD is ${gitNow}${status.watch ? " (watch mode reloads code live)" : ""}`,
-        remedy: status.gitSha === gitNow || status.watch ? undefined : "dev up  (reloads with current code)",
-      });
-      const reload = await supervisorRequest(
-        sock,
-        "POST",
-        "/reload",
-        { callerEnv: callerEnvSnapshot(), force: false, dryRun: true },
-        60_000,
-      ).then(
-        (r) => ({ noop: r.body?.noop }),
-        (error: unknown) => ({ error: errMessage(error) }),
-      );
-      checks.push({
-        id: "env-drift",
-        ok: "noop" in reload && reload.noop === true,
-        severity: "warn",
-        detail: envDriftDetail(reload, status.envSha),
-        remedy: "noop" in reload && reload.noop === false ? "dev up  (rolling reload with fresh env)" : undefined,
-      });
-    }
+    await supervisorChecks(checks, mine, worktree);
   }
 
-  for (const lease of listLeases(opts.store)) {
-    if (leaseStale(lease)) {
-      checks.push({
-        id: `stale-lease:${lease.slot}`,
-        ok: false,
-        severity: "warn",
-        detail: `${lease.slot} lease is stale (worktree ${lease.meta.worktree ?? "?"})`,
-        remedy: "any 'dev up' reaps it automatically",
-        autoFixable: true,
-      });
-    } else if (lease.heartbeat && !heartbeatFresh(lease) && supervisorAlive(lease)) {
-      checks.push({
-        id: `wedged:${lease.slot}`,
-        ok: false,
-        severity: "warn",
-        detail: `${lease.slot} supervisor alive but heartbeat stale -- possibly wedged`,
-        remedy: `kill ${lease.heartbeat.pid} and re-run dev up`,
-      });
-    }
-  }
+  leaseChecks(checks, opts.store);
 
   if (worktree) {
     for (const [slot, ports] of validSlots) {
@@ -260,6 +168,110 @@ export async function runDoctor(opts: { json: boolean; fix: boolean; store: stri
     if (fixed.length) console.log(`fixed: ${fixed.join(", ")}`);
   }
   return critical.length ? EXIT.doctorCritical : EXIT.ok;
+}
+
+async function supervisorChecks(
+  checks: Check[],
+  mine: NonNullable<ReturnType<typeof myLease>>,
+  worktree: string,
+): Promise<void> {
+  const sock = resolveSocketPath(mine.lockDir);
+  const reachable = await supervisorReachable(sock);
+  checks.push({
+    id: "supervisor",
+    ok: reachable,
+    severity: "critical",
+    detail: reachable ? `supervisor live on ${mine.slot}` : `lease held for ${mine.slot} but no supervisor answering`,
+    remedy: reachable ? undefined : "dev down && dev up",
+    autoFixable: !reachable,
+  });
+  if (reachable) {
+    const status = (await supervisorRequest(sock, "GET", "/status", undefined, 8000)).body as StatusReport;
+    for (const name of CHILD_ORDER) {
+      const child = status.children[name];
+      checks.push({
+        id: `child:${name}`,
+        ok: child?.state === "healthy",
+        severity: "critical",
+        detail: child
+          ? `${name}: ${child.state} (pid ${child.pid ?? "-"}, restarts ${child.restarts})`
+          : `${name}: missing`,
+        remedy:
+          child?.state === "healthy" ? undefined : `dev restart ${name}  (log: ${join(mine.lockDir, `${name}.log`)})`,
+        autoFixable: child?.state !== "healthy",
+      });
+    }
+    if (status.slackEnabled !== false) {
+      const slack = status.children.core?.slack;
+      const conns = slack?.numConnections ?? null;
+      checks.push({
+        id: "slack-socket",
+        ok: conns === 1,
+        severity: "critical",
+        detail:
+          conns === null
+            ? "num_connections unknown (introspection tap degraded)"
+            : `num_connections=${conns} at last hello${slack?.helloHost ? ` (Slack server ${slack.helloHost})` : ""}`,
+        remedy:
+          conns !== null && conns > 1
+            ? "check for other instances; reconnect and verify with dev up --rotate"
+            : undefined,
+      });
+      const canary = (await supervisorRequest(sock, "POST", "/canary", {}, 40_000)).body as CanaryReply;
+      checks.push(eventDeliveryCheck(canary));
+    }
+    const gitNow = gitHead(worktree);
+    checks.push({
+      id: "git-drift",
+      ok: status.gitSha === gitNow || status.watch,
+      severity: "info",
+      detail:
+        status.gitSha === gitNow
+          ? `running HEAD (${gitNow})`
+          : `booted at ${status.gitSha}, HEAD is ${gitNow}${status.watch ? " (watch mode reloads code live)" : ""}`,
+      remedy: status.gitSha === gitNow || status.watch ? undefined : "dev up  (reloads with current code)",
+    });
+    const reload = await supervisorRequest(
+      sock,
+      "POST",
+      "/reload",
+      { callerEnv: callerEnvSnapshot(), force: false, dryRun: true },
+      60_000,
+    ).then(
+      (r) => ({ noop: r.body?.noop }),
+      (error: unknown) => ({ error: errMessage(error) }),
+    );
+    checks.push({
+      id: "env-drift",
+      ok: "noop" in reload && reload.noop === true,
+      severity: "warn",
+      detail: envDriftDetail(reload, status.envSha),
+      remedy: "noop" in reload && reload.noop === false ? "dev up  (rolling reload with fresh env)" : undefined,
+    });
+  }
+}
+
+function leaseChecks(checks: Check[], store: string): void {
+  for (const lease of listLeases(store)) {
+    if (leaseStale(lease)) {
+      checks.push({
+        id: `stale-lease:${lease.slot}`,
+        ok: false,
+        severity: "warn",
+        detail: `${lease.slot} lease is stale (worktree ${lease.meta.worktree ?? "?"})`,
+        remedy: "any 'dev up' reaps it automatically",
+        autoFixable: true,
+      });
+    } else if (lease.heartbeat && !heartbeatFresh(lease) && supervisorAlive(lease)) {
+      checks.push({
+        id: `wedged:${lease.slot}`,
+        ok: false,
+        severity: "warn",
+        detail: `${lease.slot} supervisor alive but heartbeat stale -- possibly wedged`,
+        remedy: `kill ${lease.heartbeat.pid} and re-run dev up`,
+      });
+    }
+  }
 }
 
 function envDriftDetail(reload: { noop?: unknown } | { error: string }, envSha: unknown): string {

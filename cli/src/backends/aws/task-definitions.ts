@@ -14,9 +14,9 @@ import {
   sandboxCoreEnv,
   awsWorkloadArchitecture,
   isDigestPinned,
-  awsTaskRoleArn,
   type AwsConfig,
 } from "../../config.ts";
+import { awsTaskRoleArn } from "../../config-aws.ts";
 import { CliError, step, note } from "../../log.ts";
 import { type ComputedSecret, runtimeSecretNames, secretsForService, computedSecrets } from "../../secrets.ts";
 import {

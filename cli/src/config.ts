@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { resolve } from "node:path";
 import {
   applyEdits,
   findNodeAtLocation,
@@ -9,38 +9,37 @@ import {
   printParseErrorCode,
   type ParseError,
 } from "jsonc-parser";
-import { CliError, die, errMessage, warn } from "./log.ts";
+import { CliError, die, errMessage } from "./log.ts";
 import {
   AUTH_BROKER_ENV_KEYS,
   SERVICE_NAMES,
   VIRTUAL_SERVICE_NAMES,
   isDeclaredService,
   isServiceName,
-  isVirtualService,
-  pluginNameError,
   runnableServices,
   type DeclaredServiceName,
   type ServiceName,
 } from "./services.ts";
-import {
-  hostingProviderChoices,
-  isSandboxBackendId,
-  isTarget,
-  type SandboxBackendId,
-  type Target,
-  SANDBOX_BACKEND_POLICY,
-  SANDBOX_BACKENDS,
-  targetsAllowingSandboxBackend,
-} from "./providers.ts";
+import { hostingProviderChoices, isTarget, type SandboxBackendId, type Target } from "./providers.ts";
 import { envNum, isEnvVarName, isMissingOrPlaceholder } from "./util.ts";
+import { validateAws, type AwsAccount } from "./config-aws.ts";
+import {
+  DNS_LABEL,
+  isPlainObject,
+  rejectRetiredAdminService,
+  validatePlugins,
+  validateSandbox,
+  validateSecurityScreen,
+  validateServiceMap,
+  validateStringArray,
+  validateStringMap,
+} from "./config-validators.ts";
 
 export const CONFIG_FILENAME = "qm.config.jsonc";
 
 export const CONTRACT_VERSION = 1 as const;
 
-const DNS_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-const IAM_ROLE_ARN = /^arn:aws:iam::([0-9]{12}):role\/[A-Za-z0-9_+=,.@/-]{1,512}$/;
 
 export const validOrgId = (value: string): boolean =>
   value.length <= 63 && /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(value);
@@ -85,19 +84,6 @@ export interface AwsServiceConfig {
   publicPaths?: string[];
   logGroup?: string;
   stopTimeout?: number;
-}
-
-type AwsAccount = Pick<AwsConfig, "accountId" | "cluster">;
-
-/** The per-service task role Terraform creates when it manages the role. */
-export const awsManagedTaskRoleArn = (aws: AwsAccount, name: string): string =>
-  `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-${name}-task`;
-
-/** The task role a service runs as: configured, its own managed role, or the shared default. */
-export function awsTaskRoleArn(aws: AwsAccount, name: string, service: AwsServiceConfig): string {
-  if (service.taskRoleArn) return service.taskRoleArn;
-  if (name === "core" || service.assumeRoleArns?.length) return awsManagedTaskRoleArn(aws, name);
-  return `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-task`;
 }
 
 export const awsMicrovmExecRoleArn = (config: QmConfig, aws: AwsAccount): string =>
@@ -279,48 +265,6 @@ export function loadConfigAt(path: string, overrides?: { target?: Target }): { c
   return { config: validate(raw, abs), path: abs };
 }
 
-const isPlainObject = (x: unknown): x is Record<string, unknown> =>
-  typeof x === "object" && x !== null && !Array.isArray(x);
-
-function validateSecurityScreen(raw: unknown, path: string): SecurityScreenConfig | undefined {
-  if (raw === undefined) return undefined;
-  if (!isPlainObject(raw)) throw new CliError(`${path}: "securityScreen" must be an object`);
-  const allowed = new Set(["provider", "endpoint"]);
-  for (const key of Object.keys(raw)) {
-    if (!allowed.has(key)) throw new CliError(`${path}: "securityScreen.${key}" is not recognized`);
-  }
-  if (
-    typeof raw.provider !== "string" ||
-    raw.provider.length > 63 ||
-    !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(raw.provider)
-  ) {
-    throw new CliError(`${path}: "securityScreen.provider" must be a lowercase DNS label`);
-  }
-  if (raw.provider === "surface" || raw.provider === "origin") {
-    throw new CliError(`${path}: "securityScreen.provider" must not collide with a security screen metadata field`);
-  }
-  if (typeof raw.endpoint !== "string") {
-    throw new CliError(`${path}: "securityScreen.endpoint" must be an HTTPS URL`);
-  }
-  try {
-    const endpoint = new URL(raw.endpoint);
-    if (
-      endpoint.protocol !== "https:" ||
-      endpoint.username ||
-      endpoint.password ||
-      endpoint.hash ||
-      endpoint.hostname.endsWith(".")
-    ) {
-      throw new Error("endpoint");
-    }
-  } catch {
-    throw new CliError(
-      `${path}: "securityScreen.endpoint" must be an HTTPS URL without credentials, a fragment, or a trailing hostname dot`,
-    );
-  }
-  return { provider: raw.provider, endpoint: raw.endpoint };
-}
-
 export function readConfigOrgId(path: string): string | undefined {
   try {
     const raw = parseConfigJson(readFileSync(path, "utf8"));
@@ -368,47 +312,7 @@ function requireOriginUrl(value: unknown, field: string): asserts value is strin
   }
 }
 
-/** An OCI/ECR image tag: 1-128 letters, digits, underscores, periods or hyphens, not starting with a period or hyphen. */
-export const IMAGE_TAG = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
-
-function validate(raw: unknown, path: string): QmConfig {
-  if (!isPlainObject(raw)) throw new CliError(`${path}: expected a JSON object`);
-  const o = raw;
-
-  for (const key of Object.keys(o)) {
-    if (key !== "//" && !VALID_TOP_LEVEL_KEYS.has(key)) {
-      throw new CliError(`${path}: unknown top-level field ${JSON.stringify(key)}`);
-    }
-  }
-
-  const contract = o["contract"];
-  if (contract !== CONTRACT_VERSION) {
-    if (typeof contract === "number" && Number.isInteger(contract)) {
-      throw new CliError(
-        `${path}: unsupported contract major ${contract}; this CLI supports contract ${CONTRACT_VERSION}`,
-      );
-    }
-    throw new CliError(`${path}: "contract" must be ${CONTRACT_VERSION}`);
-  }
-
-  const orgId = o["orgId"];
-  if (typeof orgId !== "string" || !validOrgId(orgId)) {
-    throw new CliError(`${path}: "orgId" must be a lowercase DNS label (a-z, 0-9, and hyphens between)`);
-  }
-
-  const publicUrl = o["publicUrl"];
-  requireOriginUrl(publicUrl, `${path}: "publicUrl"`);
-
-  const apiUrl = o["apiUrl"];
-  if (apiUrl !== undefined) {
-    requireOriginUrl(apiUrl, `${path}: "apiUrl"`);
-  }
-
-  rejectRetiredAdminService(o, path);
-
-  const target = o["target"];
-  if (!isTarget(target)) throw new CliError(`${path}: "target" must be ${hostingProviderChoices()}`);
-
+function validateServiceList(o: Record<string, unknown>, path: string): DeclaredServiceName[] {
   const servicesRaw = o["services"];
   if (!Array.isArray(servicesRaw)) throw new CliError(`${path}: "services" must be an array`);
   const services: DeclaredServiceName[] = [];
@@ -425,22 +329,16 @@ function validate(raw: unknown, path: string): QmConfig {
   if (unfronted && !services.includes("portal")) {
     throw new CliError(`${path}: "${unfronted}" requires "portal" — core serves it only behind the portal`);
   }
-  const plugins = validatePlugins(o["plugins"], path);
-  const skills = validateStringArray(o["skills"], path, "skills");
-  const env = validateServiceMap(o["env"], path, "env", (v, k) => validateStringMap(v, path, `env.${k}`));
-  const secretEnv = validateServiceMap(o["secretEnv"], path, "secretEnv", (v, k) => {
-    const entries = validateStringMap(v, path, `secretEnv.${k}`);
-    for (const [envName, storeName] of Object.entries(entries)) {
-      if (!isEnvVarName(envName))
-        throw new CliError(`${path}: "secretEnv.${k}" key ${JSON.stringify(envName)} is not a valid env var name`);
-      if (!isEnvVarName(storeName))
-        throw new CliError(
-          `${path}: "secretEnv.${k}.${envName}" must name a secret-store entry (a valid env-var-shaped name)`,
-        );
-    }
-    return entries;
-  });
-  const securityScreen = validateSecurityScreen(o["securityScreen"], path);
+  return services;
+}
+
+function rejectManagedEnv(
+  path: string,
+  env: Partial<Record<DeclaredServiceName, Record<string, string>>>,
+  secretEnv: Partial<Record<DeclaredServiceName, Record<string, string>>>,
+  securityScreen: SecurityScreenConfig | undefined,
+  plugins: PluginEntry[],
+): void {
   const managedSecurityScreenEnv = ["SECURITY_SCREEN_PROXY_PROVIDER", "SECURITY_SCREEN_PROXY_ENDPOINT"];
   for (const [service, values] of Object.entries(env)) {
     for (const name of [...managedSecurityScreenEnv, "SECURITY_SCREEN_PROXY_TOKEN"]) {
@@ -487,6 +385,88 @@ function validate(raw: unknown, path: string): QmConfig {
       );
     }
   }
+}
+
+function validateAwsTarget(
+  out: QmConfig,
+  path: string,
+  plugins: PluginEntry[],
+  imageOverrides: Partial<Record<DeclaredServiceName, string>>,
+  services: DeclaredServiceName[],
+): void {
+  validateAwsFrontDoor(out, path);
+  if (
+    out.env.core?.BACKGROUND_DEPLOYMENT_ID !== undefined ||
+    out.secretEnv?.core?.BACKGROUND_DEPLOYMENT_ID !== undefined
+  )
+    throw new CliError(
+      `${path}: BACKGROUND_DEPLOYMENT_ID is allocated by aws.backgroundWorkControl and cannot be configured directly`,
+    );
+  const externalImages = [
+    ...plugins.filter((plugin) => plugin.image).map((plugin) => plugin.name),
+    ...Object.keys(imageOverrides).filter((service) => services.includes(service as DeclaredServiceName)),
+  ];
+  for (const workload of new Set([...runnableServices(services), ...externalImages])) {
+    if (out.aws?.services[workload]) awsWorkloadArchitecture(out, workload);
+  }
+}
+
+function validate(raw: unknown, path: string): QmConfig {
+  if (!isPlainObject(raw)) throw new CliError(`${path}: expected a JSON object`);
+  const o = raw;
+
+  for (const key of Object.keys(o)) {
+    if (key !== "//" && !VALID_TOP_LEVEL_KEYS.has(key)) {
+      throw new CliError(`${path}: unknown top-level field ${JSON.stringify(key)}`);
+    }
+  }
+
+  const contract = o["contract"];
+  if (contract !== CONTRACT_VERSION) {
+    if (typeof contract === "number" && Number.isInteger(contract)) {
+      throw new CliError(
+        `${path}: unsupported contract major ${contract}; this CLI supports contract ${CONTRACT_VERSION}`,
+      );
+    }
+    throw new CliError(`${path}: "contract" must be ${CONTRACT_VERSION}`);
+  }
+
+  const orgId = o["orgId"];
+  if (typeof orgId !== "string" || !validOrgId(orgId)) {
+    throw new CliError(`${path}: "orgId" must be a lowercase DNS label (a-z, 0-9, and hyphens between)`);
+  }
+
+  const publicUrl = o["publicUrl"];
+  requireOriginUrl(publicUrl, `${path}: "publicUrl"`);
+
+  const apiUrl = o["apiUrl"];
+  if (apiUrl !== undefined) {
+    requireOriginUrl(apiUrl, `${path}: "apiUrl"`);
+  }
+
+  rejectRetiredAdminService(o, path);
+
+  const target = o["target"];
+  if (!isTarget(target)) throw new CliError(`${path}: "target" must be ${hostingProviderChoices()}`);
+
+  const services = validateServiceList(o, path);
+  const plugins = validatePlugins(o["plugins"], path);
+  const skills = validateStringArray(o["skills"], path, "skills");
+  const env = validateServiceMap(o["env"], path, "env", (v, k) => validateStringMap(v, path, `env.${k}`));
+  const secretEnv = validateServiceMap(o["secretEnv"], path, "secretEnv", (v, k) => {
+    const entries = validateStringMap(v, path, `secretEnv.${k}`);
+    for (const [envName, storeName] of Object.entries(entries)) {
+      if (!isEnvVarName(envName))
+        throw new CliError(`${path}: "secretEnv.${k}" key ${JSON.stringify(envName)} is not a valid env var name`);
+      if (!isEnvVarName(storeName))
+        throw new CliError(
+          `${path}: "secretEnv.${k}.${envName}" must name a secret-store entry (a valid env-var-shaped name)`,
+        );
+    }
+    return entries;
+  });
+  const securityScreen = validateSecurityScreen(o["securityScreen"], path);
+  rejectManagedEnv(path, env, secretEnv, securityScreen, plugins);
   const imageOverrides = validateServiceMap(o["imageOverrides"], path, "imageOverrides", (v, k) => {
     if (typeof v !== "string") throw new CliError(`${path}: "imageOverrides.${k}" must be a string`);
     return v;
@@ -551,23 +531,7 @@ function validate(raw: unknown, path: string): QmConfig {
   if (target === "aws" && !out.aws) throw new CliError(`${path}: target "aws" requires an "aws" block`);
   validateModelProvider(out, path);
   validatePortalTrust(out, path);
-  if (target === "aws") {
-    validateAwsFrontDoor(out, path);
-    if (
-      out.env.core?.BACKGROUND_DEPLOYMENT_ID !== undefined ||
-      out.secretEnv?.core?.BACKGROUND_DEPLOYMENT_ID !== undefined
-    )
-      throw new CliError(
-        `${path}: BACKGROUND_DEPLOYMENT_ID is allocated by aws.backgroundWorkControl and cannot be configured directly`,
-      );
-    const externalImages = [
-      ...plugins.filter((plugin) => plugin.image).map((plugin) => plugin.name),
-      ...Object.keys(imageOverrides).filter((service) => services.includes(service as DeclaredServiceName)),
-    ];
-    for (const workload of new Set([...runnableServices(services), ...externalImages])) {
-      if (out.aws?.services[workload]) awsWorkloadArchitecture(out, workload);
-    }
-  }
+  if (target === "aws") validateAwsTarget(out, path, plugins, imageOverrides, services);
   return out;
 }
 
@@ -737,587 +701,4 @@ function validateAwsFrontDoor(config: QmConfig, path: string): void {
       `${path}: AWS requires an HTTPS publicUrl so sandbox capabilities never cross the Internet in cleartext`,
     );
   }
-}
-
-function validatePlugins(raw: unknown, path: string): PluginEntry[] {
-  if (raw === undefined) return [];
-  if (!Array.isArray(raw)) throw new CliError(`${path}: "plugins" must be an array`);
-  const seen = new Set<string>();
-  return raw.map((p, i) => {
-    if (typeof p !== "object" || p === null) throw new CliError(`${path}: plugins[${i}] must be an object`);
-    const e = p as Record<string, unknown>;
-    if (typeof e["name"] !== "string" || !e["name"].trim()) throw new CliError(`${path}: plugins[${i}].name required`);
-    const name = e["name"];
-    const nameError = pluginNameError(name);
-    if (nameError) throw new CliError(`${path}: plugins[${i}].name ${JSON.stringify(name)} ${nameError}`);
-    if (seen.has(name)) throw new CliError(`${path}: duplicate plugin name ${JSON.stringify(name)}`);
-    seen.add(name);
-    const entry: PluginEntry = { name };
-    if (e["image"] !== undefined) {
-      if (typeof e["image"] !== "string" || !e["image"].trim()) {
-        throw new CliError(`${path}: plugins[${i}].image must be a non-empty string (a pullable image ref) when set`);
-      }
-      entry.image = e["image"];
-    }
-    if (e["env"] !== undefined) entry.env = validateStringMap(e["env"], path, `plugins[${i}].env`);
-    if (e["secrets"] !== undefined) entry.secrets = validatePluginSecrets(e["secrets"], path, i);
-    if (e["coreAccess"] !== undefined) {
-      if (typeof e["coreAccess"] !== "boolean") {
-        throw new CliError(`${path}: plugins[${i}].coreAccess must be a boolean`);
-      }
-      entry.coreAccess = e["coreAccess"];
-    }
-    if (entry.coreAccess === false) {
-      const forbidden = ["CORE_API_URL", "CORE_SIGNING_SECRET"].filter(
-        (name) => entry.env?.[name] !== undefined || entry.secrets?.some((secret) => secret.name === name),
-      );
-      if (forbidden.length) {
-        throw new CliError(`${path}: plugins[${i}] cannot declare ${forbidden.join(", ")} when coreAccess is false`);
-      }
-    }
-    return entry;
-  });
-}
-
-function validatePluginSecrets(raw: unknown, path: string, pluginIndex: number): PluginSecret[] {
-  if (!Array.isArray(raw)) throw new CliError(`${path}: plugins[${pluginIndex}].secrets must be an array`);
-  const seen = new Set<string>();
-  return raw.map((value, i) => {
-    const field = `plugins[${pluginIndex}].secrets[${i}]`;
-    if (!isPlainObject(value)) throw new CliError(`${path}: ${field} must be an object`);
-    const name = value["name"];
-    if (typeof name !== "string" || !isEnvVarName(name))
-      throw new CliError(`${path}: ${field}.name must be a valid env var name`);
-    if (seen.has(name)) throw new CliError(`${path}: duplicate plugin secret ${JSON.stringify(name)}`);
-    seen.add(name);
-    const out: PluginSecret = { name };
-    if (value["description"] !== undefined) {
-      if (typeof value["description"] !== "string")
-        throw new CliError(`${path}: ${field}.description must be a string`);
-      out.description = value["description"];
-    }
-    if (value["required"] !== undefined) {
-      if (typeof value["required"] !== "boolean") throw new CliError(`${path}: ${field}.required must be a boolean`);
-      out.required = value["required"];
-    }
-    return out;
-  });
-}
-
-function validateAws(
-  raw: unknown,
-  path: string,
-  enabledServices: ServiceName[],
-  configuredSecretNames: string[],
-): AwsConfig {
-  if (!isPlainObject(raw)) throw new CliError(`${path}: "aws" must be an object`);
-  const requiredString = (value: unknown, field: string): string => {
-    if (typeof value !== "string" || !value.trim())
-      throw new CliError(`${path}: "aws.${field}" must be a non-empty string`);
-    return value;
-  };
-  const networking = raw["networking"];
-  if (!isPlainObject(networking)) throw new CliError(`${path}: "aws.networking" must be an object`);
-  const accountId = requiredString(raw["accountId"], "accountId");
-  if (!/^\d{12}$/.test(accountId)) throw new CliError(`${path}: "aws.accountId" must be exactly 12 digits`);
-  const cluster = requiredString(raw["cluster"], "cluster");
-  if (cluster.length > 49 || !/^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/.test(cluster)) {
-    throw new CliError(
-      `${path}: "aws.cluster" must be at most 49 lowercase letters, digits, and single hyphens, start with a letter, and end with a letter or digit so its derived IAM and RDS names are valid`,
-    );
-  }
-  const region = requiredString(raw["region"], "region");
-  if (/^(?:cn-|us-gov-|us-iso|eu-isoe-)/.test(region)) {
-    throw new CliError(
-      `${path}: "aws.region" must be in the commercial AWS partition; GovCloud, China, and isolated partitions are not supported`,
-    );
-  }
-  const secretsPrefix = requiredString(raw["secretsPrefix"], "secretsPrefix");
-  if (secretsPrefix.length > 256 || !/^[A-Za-z0-9/_+=.@-]+$/.test(secretsPrefix)) {
-    throw new CliError(
-      `${path}: "aws.secretsPrefix" must be at most 256 AWS secret-name characters (letters, digits, /_+=.@-) so computed secret names fit`,
-    );
-  }
-  const oversizedSecret = configuredSecretNames.find((name) => `${secretsPrefix}${name}`.length > 512);
-  if (oversizedSecret) {
-    throw new CliError(
-      `${path}: "aws.secretsPrefix" plus computed secret ${JSON.stringify(oversizedSecret)} exceeds the 512-character AWS secret-name limit`,
-    );
-  }
-  const imageLabel = requiredString(raw["imageLabel"], "imageLabel");
-  if (!IMAGE_TAG.test(imageLabel)) {
-    throw new CliError(
-      `${path}: "aws.imageLabel" must be a valid OCI/ECR tag (1-128 letters, digits, underscores, periods, or hyphens; the first character cannot be a period or hyphen)`,
-    );
-  }
-  let deploymentState: AwsConfig["deploymentState"];
-  if (raw["deploymentState"] !== undefined) {
-    const state = raw["deploymentState"];
-    if (
-      !isPlainObject(state) ||
-      typeof state.table !== "string" ||
-      !/^[A-Za-z0-9_.-]{3,255}$/.test(state.table) ||
-      typeof state.namespace !== "string" ||
-      !/^[a-z0-9][a-z0-9-]{0,62}$/.test(state.namespace)
-    ) {
-      throw new CliError(
-        `${path}: "aws.deploymentState" requires a valid DynamoDB table name and a lowercase company namespace`,
-      );
-    }
-    deploymentState = { table: state.table, namespace: state.namespace };
-  }
-  let alb: string | undefined;
-  if (raw["alb"] !== undefined) {
-    alb = requiredString(raw["alb"], "alb");
-    if (alb.length > 32 || !DNS_LABEL.test(alb) || alb.startsWith("internal-")) {
-      throw new CliError(
-        `${path}: "aws.alb" must be a valid load balancer name (at most 32 letters, digits, and interior hyphens, not starting with "internal-")`,
-      );
-    }
-  }
-  if (raw["backgroundWorkControl"] !== undefined && typeof raw["backgroundWorkControl"] !== "boolean") {
-    throw new CliError(`${path}: "aws.backgroundWorkControl" must be a boolean`);
-  }
-  if (raw["sharedAlb"] !== undefined && typeof raw["sharedAlb"] !== "boolean") {
-    throw new CliError(`${path}: "aws.sharedAlb" must be a boolean`);
-  }
-  if (raw["sharedAlb"] === true && !alb) {
-    throw new CliError(`${path}: "aws.sharedAlb" requires "aws.alb"`);
-  }
-  let rdsInstance: string | undefined;
-  if (raw["rdsInstance"] !== undefined) {
-    rdsInstance = requiredString(raw["rdsInstance"], "rdsInstance");
-    if (rdsInstance.length > 63 || !/^[a-z](?:[a-z0-9-]*[a-z0-9])?$/.test(rdsInstance) || rdsInstance.includes("--")) {
-      throw new CliError(
-        `${path}: "aws.rdsInstance" must be a valid DB instance identifier (at most 63 lowercase characters, starting with a letter, no double or trailing hyphens)`,
-      );
-    }
-  }
-  let predeployDbSnapshot: boolean | undefined;
-  let dbInstanceClass: string | undefined;
-  if (raw["dbInstanceClass"] !== undefined) {
-    dbInstanceClass = requiredString(raw["dbInstanceClass"], "dbInstanceClass");
-    if (!/^db\.[a-z0-9]+\.[a-z0-9]+$/.test(dbInstanceClass)) {
-      throw new CliError(`${path}: "aws.dbInstanceClass" must be a valid RDS DB instance class such as db.t4g.small`);
-    }
-  }
-  if (raw["predeployDbSnapshot"] !== undefined) {
-    if (typeof raw["predeployDbSnapshot"] !== "boolean") {
-      throw new CliError(
-        `${path}: "aws.predeployDbSnapshot" must be a boolean (false skips the pre-deploy RDS restore-point check)`,
-      );
-    }
-    predeployDbSnapshot = raw["predeployDbSnapshot"];
-  }
-  let dbRetentionMinDays: number | undefined;
-  if (raw["dbRetentionMinDays"] !== undefined) {
-    const days = raw["dbRetentionMinDays"];
-    if (typeof days !== "number" || !Number.isInteger(days) || days < 0 || days > 35) {
-      throw new CliError(
-        `${path}: "aws.dbRetentionMinDays" must be an integer between 0 and 35 (the RDS automated-backup retention range)`,
-      );
-    }
-    dbRetentionMinDays = days;
-  }
-  let objectStoreBucket: string | undefined;
-  if (raw["objectStoreBucket"] !== undefined) {
-    objectStoreBucket = requiredString(raw["objectStoreBucket"], "objectStoreBucket");
-    if (
-      objectStoreBucket.length < 3 ||
-      objectStoreBucket.length > 63 ||
-      !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(objectStoreBucket) ||
-      objectStoreBucket.includes("..") ||
-      /^\d{1,3}(\.\d{1,3}){3}$/.test(objectStoreBucket)
-    ) {
-      throw new CliError(
-        `${path}: "aws.objectStoreBucket" must be a valid S3 bucket name (3-63 lowercase letters, digits, and interior hyphens or dots; not IP-address-formatted)`,
-      );
-    }
-  }
-  let deployBranch: string | undefined;
-  if (raw["deployBranch"] !== undefined) {
-    deployBranch = requiredString(raw["deployBranch"], "deployBranch");
-    const segments = deployBranch.split("/");
-    if (
-      deployBranch.length > 255 ||
-      deployBranch.startsWith("refs/") ||
-      deployBranch.includes("..") ||
-      !/^[A-Za-z0-9._/-]+$/.test(deployBranch) ||
-      segments.some(
-        (segment) => !segment || segment.startsWith(".") || segment.endsWith(".") || segment.endsWith(".lock"),
-      )
-    ) {
-      throw new CliError(`${path}: "aws.deployBranch" must be a valid git branch name (not a refs/* path)`);
-    }
-  }
-  let deployEnvironment: string | undefined;
-  if (raw["deployEnvironment"] !== undefined) {
-    deployEnvironment = requiredString(raw["deployEnvironment"], "deployEnvironment");
-    if (deployEnvironment.length > 255 || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(deployEnvironment)) {
-      throw new CliError(`${path}: "aws.deployEnvironment" must be a valid GitHub environment name`);
-    }
-  }
-  const cloudMapNamespace = requiredString(networking["cloudMapNamespace"], "networking.cloudMapNamespace");
-  const namespaceLabels = cloudMapNamespace.split(".");
-  if (
-    cloudMapNamespace.length > 253 ||
-    namespaceLabels.some((label) => label.length === 0 || label.length > 63 || !DNS_LABEL.test(label))
-  ) {
-    throw new CliError(
-      `${path}: "aws.networking.cloudMapNamespace" must be a valid DNS namespace of at most 253 characters with labels of at most 63 characters`,
-    );
-  }
-  const roleArn = (value: unknown, field: string): string => {
-    const arn = requiredString(value, field);
-    const match = IAM_ROLE_ARN.exec(arn);
-    if (!match || match[1] !== accountId) {
-      throw new CliError(
-        `${path}: "aws.${field}" must be an IAM role ARN in account ${accountId} and the commercial AWS partition`,
-      );
-    }
-    return arn;
-  };
-  const deployRoleArn = roleArn(raw["deployRoleArn"], "deployRoleArn");
-  const servicesRaw = raw["services"];
-  if (!isPlainObject(servicesRaw))
-    throw new CliError(`${path}: "aws.services" must be an object keyed by service name`);
-  const services: Record<string, AwsServiceConfig> = {};
-  const coordinates = {
-    ecrRepository: new Map<string, string>(),
-    ecsService: new Map<string, string>(),
-    targetGroup: new Map<string, string>(),
-  };
-  const validFargateSize = (cpu: number, memory: number): boolean => {
-    const range = (min: number, max: number, step: number): boolean =>
-      memory >= min && memory <= max && (memory - min) % step === 0;
-    if (cpu === 256) return [512, 1024, 2048].includes(memory);
-    if (cpu === 512) return range(1024, 4096, 1024);
-    if (cpu === 1024) return range(2048, 8192, 1024);
-    if (cpu === 2048) return range(4096, 16384, 1024);
-    if (cpu === 4096) return range(8192, 30720, 1024);
-    if (cpu === 8192) return range(16384, 61440, 4096);
-    if (cpu === 16384) return range(32768, 122880, 8192);
-    return false;
-  };
-  for (const [name, value] of Object.entries(servicesRaw)) {
-    if (isVirtualService(name)) {
-      const move =
-        name === "portal" && isPlainObject(value) && value["targetGroup"] !== undefined
-          ? " and move its targetGroup to aws.services.core.targetGroup"
-          : "";
-      throw new CliError(
-        `${path}: "aws.services.${name}" is no longer a workload — core runs ${name}. Delete the entry${move}; the next terraform apply retires its ECS service and ECR repository`,
-      );
-    }
-    if (!isServiceName(name) && pluginNameError(name)) {
-      throw new CliError(`${path}: "aws.services" has invalid workload name "${name}"`);
-    }
-    if (!isPlainObject(value)) throw new CliError(`${path}: "aws.services.${name}" must be an object`);
-    const positiveInt = (field: "cpu" | "memory"): number => {
-      const n = value[field];
-      if (typeof n !== "number" || !Number.isInteger(n) || n <= 0) {
-        throw new CliError(`${path}: "aws.services.${name}.${field}" must be a positive integer`);
-      }
-      return n;
-    };
-    const service: AwsServiceConfig = {
-      ecrRepository: requiredString(value["ecrRepository"], `services.${name}.ecrRepository`),
-      ecsService: requiredString(value["ecsService"], `services.${name}.ecsService`),
-      cpu: positiveInt("cpu"),
-      memory: positiveInt("memory"),
-    };
-    if (!validFargateSize(service.cpu, service.memory)) {
-      throw new CliError(
-        `${path}: "aws.services.${name}" cpu ${service.cpu} and memory ${service.memory} are not a supported Fargate task size`,
-      );
-    }
-    for (const field of ["ecrRepository", "ecsService"] as const) {
-      const previous = coordinates[field].get(service[field]);
-      if (previous) {
-        throw new CliError(
-          `${path}: "aws.services.${name}.${field}" duplicates aws.services.${previous}.${field} (${JSON.stringify(service[field])})`,
-        );
-      }
-      coordinates[field].set(service[field], name);
-    }
-    for (const role of ["taskRoleArn", "executionRoleArn"] as const) {
-      if (value[role] !== undefined) service[role] = roleArn(value[role], `services.${name}.${role}`);
-    }
-    if (value["publicPaths"] !== undefined) {
-      const paths = validateStringArray(value["publicPaths"], path, `aws.services.${name}.publicPaths`);
-      if (
-        isDeclaredService(name) ||
-        ["v1", "d", "key", "models", "slack", "api", "assets", "oauth", "healthz", "readyz", "metrics"].includes(
-          name,
-        ) ||
-        paths.length === 0 ||
-        paths.length > 5 ||
-        new Set(paths).size !== paths.length
-      ) {
-        throw new CliError(`${path}: aws.services.${name}.publicPaths requires 1–5 unique plugin path prefixes`);
-      }
-      for (const prefix of paths) {
-        if (
-          prefix.length > 128 ||
-          !prefix.startsWith(`/${name}/`) ||
-          !/^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*\/\*$/.test(prefix)
-        ) {
-          throw new CliError(`${path}: aws.services.${name}.publicPaths must use /${name}/ paths ending in /*`);
-        }
-      }
-      service.publicPaths = paths;
-    }
-    if (value["assumeRoleArns"] !== undefined) {
-      const arns = validateStringArray(value["assumeRoleArns"], path, `aws.services.${name}.assumeRoleArns`);
-      if (arns.length === 0) {
-        throw new CliError(`${path}: "aws.services.${name}.assumeRoleArns" must contain at least one IAM role ARN`);
-      }
-      for (const arn of arns) {
-        if (!IAM_ROLE_ARN.test(arn)) {
-          throw new CliError(
-            `${path}: "aws.services.${name}.assumeRoleArns" must contain commercial AWS IAM role ARNs`,
-          );
-        }
-      }
-      service.assumeRoleArns = [...new Set(arns)];
-      if (!service.taskRoleArn && `${cluster}-${name}-task`.length > 64) {
-        throw new CliError(
-          `${path}: "aws.services.${name}.assumeRoleArns" requires an explicit taskRoleArn because the derived IAM role name exceeds 64 characters`,
-        );
-      }
-    }
-    if (value["architecture"] !== undefined) {
-      if (value["architecture"] !== "arm64" && value["architecture"] !== "amd64") {
-        throw new CliError(`${path}: "aws.services.${name}.architecture" must be "arm64" or "amd64"`);
-      }
-      service.architecture = value["architecture"];
-    }
-    if (value["desiredCount"] !== undefined) {
-      const desiredCount = value["desiredCount"];
-      if (typeof desiredCount !== "number" || !Number.isInteger(desiredCount) || desiredCount <= 0) {
-        throw new CliError(`${path}: "aws.services.${name}.desiredCount" must be a positive integer`);
-      }
-      service.desiredCount = desiredCount;
-    }
-    if (value["targetGroup"] !== undefined) {
-      const targetGroup = requiredString(value["targetGroup"], `services.${name}.targetGroup`);
-      if (targetGroup.length > 32 || !DNS_LABEL.test(targetGroup)) {
-        throw new CliError(
-          `${path}: "aws.services.${name}.targetGroup" must be a valid target group name (at most 32 letters, digits, and interior hyphens)`,
-        );
-      }
-      const previous = coordinates.targetGroup.get(targetGroup);
-      if (previous) {
-        throw new CliError(
-          `${path}: "aws.services.${name}.targetGroup" duplicates aws.services.${previous}.targetGroup (${JSON.stringify(targetGroup)})`,
-        );
-      }
-      coordinates.targetGroup.set(targetGroup, name);
-      service.targetGroup = targetGroup;
-    }
-    if (value["logGroup"] !== undefined) {
-      const logGroup = requiredString(value["logGroup"], `services.${name}.logGroup`);
-      if (logGroup.length > 512 || !/^[A-Za-z0-9_/.#-]+$/.test(logGroup)) {
-        throw new CliError(
-          `${path}: "aws.services.${name}.logGroup" must be a valid CloudWatch log group name (at most 512 characters: letters, digits, _ / . # -)`,
-        );
-      }
-      service.logGroup = logGroup;
-    }
-    if (value["stopTimeout"] !== undefined) {
-      const stopTimeout = value["stopTimeout"];
-      if (typeof stopTimeout !== "number" || !Number.isInteger(stopTimeout) || stopTimeout < 2 || stopTimeout > 120) {
-        throw new CliError(
-          `${path}: "aws.services.${name}.stopTimeout" must be an integer between 2 and 120 seconds (the Fargate limit)`,
-        );
-      }
-      service.stopTimeout = stopTimeout;
-    }
-    if (value["buildArgs"] !== undefined)
-      service.buildArgs = validateStringMap(value["buildArgs"], path, `aws.services.${name}.buildArgs`);
-    if (value["dockerfile"] !== undefined) {
-      const dockerfile = requiredString(value["dockerfile"], `services.${name}.dockerfile`);
-      if (isAbsolute(dockerfile) || dockerfile.includes("\\") || dockerfile.split("/").includes("..")) {
-        throw new CliError(
-          `${path}: "aws.services.${name}.dockerfile" must be a forward-slash relative path inside the build checkout`,
-        );
-      }
-      service.dockerfile = dockerfile;
-    }
-    services[name] = service;
-  }
-  const effectiveTaskRoleArn = (name: string, service: AwsServiceConfig): string =>
-    awsTaskRoleArn({ accountId, cluster }, name, service);
-  const taskRoleOwners = new Map<string, string[]>();
-  for (const [name, service] of Object.entries(services)) {
-    const role = effectiveTaskRoleArn(name, service);
-    taskRoleOwners.set(role, [...(taskRoleOwners.get(role) ?? []), name]);
-  }
-  for (const [name, service] of Object.entries(services)) {
-    if (!service.assumeRoleArns) continue;
-    const role = effectiveTaskRoleArn(name, service);
-    const owners = taskRoleOwners.get(role)!;
-    if (owners.length > 1) {
-      throw new CliError(
-        `${path}: "aws.services.${name}.taskRoleArn" must be unique because assumeRoleArns grants workload-scoped permissions; ${role} is also used by ${owners.filter((owner) => owner !== name).join(", ")}`,
-      );
-    }
-  }
-  for (const name of enabledServices) {
-    if (!services[name]) throw new CliError(`${path}: "aws.services.${name}" is required because ${name} is enabled`);
-  }
-  const netOut: AwsConfig["networking"] = {
-    cloudMapNamespace,
-  };
-  for (const key of ["subnets", "securityGroups"] as const) {
-    if (networking[key] !== undefined) {
-      throw new CliError(
-        `${path}: "aws.networking.${key}" is not supported; network placement belongs to the provisioned ECS services`,
-      );
-    }
-  }
-  const out: AwsConfig = {
-    accountId,
-    region,
-    cluster,
-    deployRoleArn,
-    secretsPrefix,
-    imageLabel,
-    networking: netOut,
-    services,
-  };
-  if (deploymentState) out.deploymentState = deploymentState;
-  if (alb) out.alb = alb;
-  if (raw["sharedAlb"] !== undefined) out.sharedAlb = raw["sharedAlb"] as boolean;
-  if (raw["backgroundWorkControl"] !== undefined) out.backgroundWorkControl = raw["backgroundWorkControl"] as boolean;
-  if (out.backgroundWorkControl && (services.core?.ecsService.length ?? 0) > 219)
-    throw new CliError(
-      `${path}: controlled core service names must leave room for a unique deployment identity (maximum 219 characters)`,
-    );
-  if (rdsInstance) out.rdsInstance = rdsInstance;
-  if (dbInstanceClass) out.dbInstanceClass = dbInstanceClass;
-  if (predeployDbSnapshot !== undefined) out.predeployDbSnapshot = predeployDbSnapshot;
-  if (dbRetentionMinDays !== undefined) out.dbRetentionMinDays = dbRetentionMinDays;
-  if (deployBranch) out.deployBranch = deployBranch;
-  if (deployEnvironment) out.deployEnvironment = deployEnvironment;
-  if (objectStoreBucket) out.objectStoreBucket = objectStoreBucket;
-  return out;
-}
-
-function validateSandbox(raw: unknown, path: string, target: Target): SandboxConfig | undefined {
-  if (raw === undefined) return undefined;
-  if (!isPlainObject(raw)) {
-    throw new CliError(`${path}: "sandbox" must be an object (e.g. { "backend": "sprites" })`);
-  }
-  const o = raw;
-  const out: SandboxConfig = {};
-  if (o["backend"] !== undefined) {
-    if (!isSandboxBackendId(o["backend"])) {
-      const choices = Object.entries(SANDBOX_BACKENDS).map(([id, label]) => (label ? `"${id}" (${label})` : `"${id}"`));
-      throw new CliError(`${path}: "sandbox.backend" must be ${choices.slice(0, -1).join(", ")}, or ${choices.at(-1)}`);
-    }
-    out.backend = o["backend"];
-  }
-  if (o["image"] !== undefined) {
-    if (o["backend"] === "local") {
-      if (typeof o["image"] !== "string" || !o["image"].trim()) {
-        throw new CliError(`${path}: "sandbox.image" must be a non-empty runnable image ref for the local backend`);
-      }
-      out.image = o["image"];
-    } else {
-      warn(
-        `${path}: "sandbox.image" is retired and ignored — sandboxes boot the platform's stock image; remove the key`,
-      );
-    }
-  }
-  if (o["baseImage"] !== undefined) {
-    if (typeof o["baseImage"] !== "string" || !o["baseImage"].trim()) {
-      throw new CliError(`${path}: "sandbox.baseImage" must be a non-empty digest-pinned image ref`);
-    }
-    if (!o["baseImage"].includes("@sha256:")) {
-      throw new CliError(`${path}: "sandbox.baseImage" must be pinned by digest (@sha256:...)`);
-    }
-    out.baseImage = o["baseImage"];
-  }
-  if (out.backend !== undefined && !SANDBOX_BACKEND_POLICY[target].allowed.includes(out.backend)) {
-    const targets = targetsAllowingSandboxBackend(out.backend)
-      .map((allowed) => JSON.stringify(allowed))
-      .join(" or ");
-    throw new CliError(`${path}: "sandbox.backend": ${JSON.stringify(out.backend)} requires target ${targets}`);
-  }
-  if (out.backend === "local") {
-    const stray = (["baseImage"] as const).filter((key) => out[key] !== undefined);
-    if (stray.length) {
-      throw new CliError(
-        `${path}: "sandbox.backend": "local" ignores ${stray.map((key) => `"sandbox.${key}"`).join(", ")} — remove them; use "sandbox.image" for the runnable local sandbox image`,
-      );
-    }
-  }
-  if (out.backend === "e2b") {
-    const stray = (["baseImage"] as const).filter((key) => out[key] !== undefined);
-    if (stray.length) {
-      throw new CliError(
-        `${path}: "sandbox.backend": "${out.backend}" ignores ${stray.map((key) => `"sandbox.${key}"`).join(", ")} — remove them`,
-      );
-    }
-  }
-  if (SANDBOX_BACKEND_POLICY[target].requireExplicit && out.backend === undefined) {
-    throw new CliError(
-      `${path}: target ${JSON.stringify(target)} requires an explicit "sandbox.backend" — "sprites" runs Fly Sprites; "e2b" runs E2B sandboxes`,
-    );
-  }
-  return out;
-}
-
-function validateStringArray(raw: unknown, path: string, field: string): string[] {
-  if (raw === undefined) return [];
-  if (!Array.isArray(raw) || raw.some((v) => typeof v !== "string")) {
-    throw new CliError(`${path}: "${field}" must be an array of strings`);
-  }
-  return raw as string[];
-}
-
-function validateStringMap(raw: unknown, path: string, field: string): Record<string, string> {
-  if (!isPlainObject(raw)) {
-    throw new CliError(`${path}: "${field}" must be an object of string values`);
-  }
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(raw)) {
-    if (typeof v !== "string") throw new CliError(`${path}: "${field}.${k}" must be a string`);
-    out[k] = v;
-  }
-  return out;
-}
-
-function rejectRetiredAdminService(o: Record<string, unknown>, path: string): void {
-  const hasAdmin = (v: unknown): boolean => isPlainObject(v) && Object.hasOwn(v, "admin");
-  const aws = o["aws"];
-  const found = [
-    ...(Array.isArray(o["services"]) && o["services"].includes("admin") ? ['"admin" from services'] : []),
-    ...["env", "secretEnv", "imageOverrides"].filter((field) => hasAdmin(o[field])).map((field) => `${field}.admin`),
-    ...(isPlainObject(aws) && hasAdmin(aws["services"]) ? ["aws.services.admin"] : []),
-  ];
-  if (found.length) {
-    throw new CliError(
-      `${path}: the admin service no longer exists; admin settings are part of web-ui at /settings. Remove ${found.join(", ")}`,
-    );
-  }
-}
-
-function validateServiceMap<T>(
-  raw: unknown,
-  path: string,
-  field: string,
-  value: (v: unknown, key: string) => T,
-): Partial<Record<DeclaredServiceName, T>> {
-  if (raw === undefined) return {};
-  if (!isPlainObject(raw)) {
-    throw new CliError(`${path}: "${field}" must be an object keyed by service name`);
-  }
-  const out: Partial<Record<DeclaredServiceName, T>> = {};
-  for (const [k, v] of Object.entries(raw)) {
-    if (!isDeclaredService(k)) throw new CliError(`${path}: "${field}" has unknown service "${k}"`);
-    out[k as DeclaredServiceName] = value(v, k);
-  }
-  return out;
 }

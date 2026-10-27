@@ -17,6 +17,188 @@ const replaceBetween = (source, start, end, replacement) => {
   if (a < 0 || b < 0 || source.indexOf(start, a + 1) !== -1) throw new Error(`Devbar adapter mismatch: ${start}`);
   return source.slice(0, a) + replacement + source.slice(b);
 };
+function adaptSelectOverlay(source) {
+  const selectStart = source.indexOf("function SelectOverlay(");
+  const selectEnd = source.indexOf("function DrawOverlay(", selectStart);
+  let select = source.slice(selectStart, selectEnd);
+  select = replaceRequired(select, "  onCapture,", "  passive = false,\n  onCapture,");
+  select = replaceRequired(select, 'a.type === "element"', 'a.type === "element" && !a.data.textSelection');
+  select = replaceRequired(
+    select,
+    "const beginComment = useCallback((el) => {",
+    "const beginComment = useCallback((el, quote = null) => {",
+  );
+  select = replaceRequired(
+    select,
+    "    const r = rectOf(el);\n    if (captureRef.current?.elementScreenshot !== false)",
+    "    const r = quote ? quote.rect : rectOf(el);\n    if (quote) { data.boundingRect = r; data.textSelection = quote.textSelection; data.innerText = quote.textSelection.exact; }\n    if (!quote && captureRef.current?.elementScreenshot !== false)",
+  );
+  select = replaceRequired(
+    select,
+    "label: `${tag}${ident}`,",
+    "label: quote ? quote.textSelection.exact : `${tag}${ident}`,",
+  );
+  select = replaceRequired(
+    select,
+    "  useEffect(() => {",
+    `  const captureText = () => {
+            if (commentOpenRef.current) return false;
+            const selected = readTextSelection(window.getSelection());
+            if (!selected) return false;
+            const r = window.getSelection().getRangeAt(0).getBoundingClientRect();
+            beginComment(selected.element, { ...selected, rect: { x: r.x, y: r.y, width: r.width, height: r.height } });
+            return true;
+          };
+          useEffect(() => {`,
+  );
+  select = replaceRequired(
+    select,
+    "      if (commentOpenRef.current)\n        return;\n      const prev",
+    "      if (passive || commentOpenRef.current) return;\n      const prev",
+  );
+  select = replaceRequired(
+    select,
+    "    const onClick = (e) => {",
+    "    const onClick = (e) => {\n      if (passive) return;",
+  );
+  select = replaceRequired(
+    select,
+    "      const existing2 = findExistingAnnotation(el);",
+    "      if (captureText()) return;\n      const existing2 = findExistingAnnotation(el);",
+  );
+  select = replaceRequired(
+    select,
+    "    const onKeyDown = (e) => {",
+    "    const onKeyDown = (e) => {\n      if (passive) return;",
+  );
+  select = replaceRequired(
+    select,
+    '    window.addEventListener("mousemove", onMouseMove, true);',
+    `    const onMouseUp = (e) => {
+            if (e.target.closest?.("[data-devbar]")) return;
+            captureText();
+          };
+          window.addEventListener("mouseup", onMouseUp);
+          window.addEventListener("mousemove", onMouseMove, true);`,
+  );
+  select = replaceRequired(
+    select,
+    '      window.removeEventListener("mousemove", onMouseMove, true);',
+    '      window.removeEventListener("mouseup", onMouseUp);\n      window.removeEventListener("mousemove", onMouseMove, true);',
+  );
+  select = replaceRequired(
+    select,
+    "[findExistingAnnotation, beginComment, quickCapture, retarget]",
+    "[findExistingAnnotation, beginComment, quickCapture, retarget, passive]",
+  );
+  select = replaceRequired(
+    select,
+    "    commentOpenRef.current = false;\n    setCommentInput(null);",
+    "    window.getSelection()?.removeAllRanges();\n    commentOpenRef.current = false;\n    setCommentInput(null);",
+  );
+  select = replaceRequired(
+    select,
+    "    const shot = pendingScreenshot.current;",
+    "    window.getSelection()?.removeAllRanges();\n    const shot = pendingScreenshot.current;",
+  );
+  select = replaceRequired(
+    select,
+    "setCommentInput((prev) => prev ? { ...prev, rect: r } : null);",
+    "setCommentInput((prev) => prev ? { ...prev, rect: getAnnotationRect(prev.annotation) ?? prev.rect } : null);",
+  );
+  select = replaceRequired(select, "      rect && !commentInput", "      !passive && rect && !commentInput");
+  select = replaceRequired(
+    select,
+    '/* @__PURE__ */ jsxs("div", {\n        className: "devbar-instruction",',
+    '!passive && /* @__PURE__ */ jsxs("div", {\n        className: "devbar-instruction",',
+  );
+  select = replaceRequired(
+    select,
+    "        const selector = a.data.cssSelector;",
+    `        const quoteRange = a.data.textSelection ? resolveTextSelection(a.data.textSelection, document) : null;
+        if (a.data.textSelection && !quoteRange) { wrapper.style.display = "none"; continue; }
+        const selector = a.data.cssSelector;`,
+  );
+  select = replaceRequired(
+    select,
+    "        let el = null;",
+    "        let el = quoteRange?.commonAncestorContainer ?? null;",
+  );
+  select = replaceRequired(
+    select,
+    "          if (selector)\n            el =",
+    "          if (!quoteRange && selector)\n            el =",
+  );
+  select = replaceRequired(
+    select,
+    "        const rect = el.getBoundingClientRect();",
+    "        const rect = quoteRange ? quoteRange.getBoundingClientRect() : el.getBoundingClientRect();",
+  );
+  source = source.slice(0, selectStart) + select + source.slice(selectEnd);
+  return source;
+}
+
+function adaptDrawOverlay(source) {
+  const drawStart = source.indexOf("function DrawOverlay(");
+  const drawEnd = source.indexOf("function CaptureOverlay(", drawStart);
+  let draw = source.slice(drawStart, drawEnd);
+  draw = replaceBetween(
+    draw,
+    "  const remembered =",
+    "  const [shapes, setShapes]",
+    '  const activeTool = "pen", activeColor = "#ff3b30", activeWidth = 2.5;\n',
+  );
+  draw = replaceBetween(
+    draw,
+    "      if (!e.metaKey && !e.ctrlKey && !e.altKey) {",
+    "    };\n    window.addEventListener",
+    "",
+  );
+  draw = replaceBetween(
+    draw,
+    "          ALL_TOOLS.map((tool, i) => {",
+    '          /* @__PURE__ */ jsx3("button", {\n            type: "button",\n            onClick: handleUndo,',
+    "",
+  );
+  draw = replaceBetween(
+    draw,
+    '          "Draw on the page · ",',
+    '          /* @__PURE__ */ jsx3("kbd", {\n            children: "⌘Z"',
+    '          "Draw on the page · ",\n',
+  );
+  source = source.slice(0, drawStart) + draw + source.slice(drawEnd);
+  return source;
+}
+
+function adaptCaptureOverlay(source) {
+  const captureStart = source.indexOf("function CaptureOverlay(");
+  const captureEnd = source.indexOf("  const selectionRect =", captureStart);
+  let capture = source.slice(captureStart, captureEnd);
+  capture = replaceRequired(
+    capture,
+    "  const dragging = useRef4(false);",
+    "  const dragging = useRef4(false);\n  const regionPointer = useRef4({ start: null, end: null });",
+  );
+  capture = replaceRequired(
+    capture,
+    "    dragging.current = true;",
+    "    dragging.current = true;\n    regionPointer.current = { start: { x: e.clientX, y: e.clientY }, end: { x: e.clientX, y: e.clientY } };",
+  );
+  capture = replaceRequired(
+    capture,
+    "    setRegionEnd({ x: e.clientX, y: e.clientY });\n  }, [captureMode]);\n  const onMouseUp",
+    "    regionPointer.current.end = { x: e.clientX, y: e.clientY };\n    setRegionEnd({ x: e.clientX, y: e.clientY });\n  }, [captureMode]);\n  const onMouseUp",
+  );
+  capture = replaceRequired(
+    capture,
+    "  const onMouseUp = useCallback4(async () => {",
+    "  const onMouseUp = useCallback4(async () => {\n    const { start: regionStart, end: regionEnd } = regionPointer.current;",
+  );
+  if (!capture.includes("regionPointer.current.end =")) throw new Error("Devbar capture adapter mismatch");
+  source = source.slice(0, captureStart) + capture + source.slice(captureEnd);
+  return source;
+}
+
 await build({
   entryPoints: [resolve(root, "plugins/web-ui/src/app-devbar.ts")],
   outfile: resolve(root, "src/deploy/vendor/devbar.js"),
@@ -33,123 +215,7 @@ await build({
         builder.onLoad({ filter: /devbar\.sh\/dist\/index\.js$/ }, async () => {
           let source = await readFile(entry, "utf8");
           source = `import { flushSync as qmFlushSync } from "react-dom";\nimport { readTextSelection, resolveTextSelection } from ${JSON.stringify(resolve(root, "plugins/web-ui/src/app-text-selection.ts"))};\n${source}`;
-          const selectStart = source.indexOf("function SelectOverlay(");
-          const selectEnd = source.indexOf("function DrawOverlay(", selectStart);
-          let select = source.slice(selectStart, selectEnd);
-          select = replaceRequired(select, "  onCapture,", "  passive = false,\n  onCapture,");
-          select = replaceRequired(select, 'a.type === "element"', 'a.type === "element" && !a.data.textSelection');
-          select = replaceRequired(
-            select,
-            "const beginComment = useCallback((el) => {",
-            "const beginComment = useCallback((el, quote = null) => {",
-          );
-          select = replaceRequired(
-            select,
-            "    const r = rectOf(el);\n    if (captureRef.current?.elementScreenshot !== false)",
-            "    const r = quote ? quote.rect : rectOf(el);\n    if (quote) { data.boundingRect = r; data.textSelection = quote.textSelection; data.innerText = quote.textSelection.exact; }\n    if (!quote && captureRef.current?.elementScreenshot !== false)",
-          );
-          select = replaceRequired(
-            select,
-            "label: `${tag}${ident}`,",
-            "label: quote ? quote.textSelection.exact : `${tag}${ident}`,",
-          );
-          select = replaceRequired(
-            select,
-            "  useEffect(() => {",
-            `  const captureText = () => {
-            if (commentOpenRef.current) return false;
-            const selected = readTextSelection(window.getSelection());
-            if (!selected) return false;
-            const r = window.getSelection().getRangeAt(0).getBoundingClientRect();
-            beginComment(selected.element, { ...selected, rect: { x: r.x, y: r.y, width: r.width, height: r.height } });
-            return true;
-          };
-          useEffect(() => {`,
-          );
-          select = replaceRequired(
-            select,
-            "      if (commentOpenRef.current)\n        return;\n      const prev",
-            "      if (passive || commentOpenRef.current) return;\n      const prev",
-          );
-          select = replaceRequired(
-            select,
-            "    const onClick = (e) => {",
-            "    const onClick = (e) => {\n      if (passive) return;",
-          );
-          select = replaceRequired(
-            select,
-            "      const existing2 = findExistingAnnotation(el);",
-            "      if (captureText()) return;\n      const existing2 = findExistingAnnotation(el);",
-          );
-          select = replaceRequired(
-            select,
-            "    const onKeyDown = (e) => {",
-            "    const onKeyDown = (e) => {\n      if (passive) return;",
-          );
-          select = replaceRequired(
-            select,
-            '    window.addEventListener("mousemove", onMouseMove, true);',
-            `    const onMouseUp = (e) => {
-            if (e.target.closest?.("[data-devbar]")) return;
-            captureText();
-          };
-          window.addEventListener("mouseup", onMouseUp);
-          window.addEventListener("mousemove", onMouseMove, true);`,
-          );
-          select = replaceRequired(
-            select,
-            '      window.removeEventListener("mousemove", onMouseMove, true);',
-            '      window.removeEventListener("mouseup", onMouseUp);\n      window.removeEventListener("mousemove", onMouseMove, true);',
-          );
-          select = replaceRequired(
-            select,
-            "[findExistingAnnotation, beginComment, quickCapture, retarget]",
-            "[findExistingAnnotation, beginComment, quickCapture, retarget, passive]",
-          );
-          select = replaceRequired(
-            select,
-            "    commentOpenRef.current = false;\n    setCommentInput(null);",
-            "    window.getSelection()?.removeAllRanges();\n    commentOpenRef.current = false;\n    setCommentInput(null);",
-          );
-          select = replaceRequired(
-            select,
-            "    const shot = pendingScreenshot.current;",
-            "    window.getSelection()?.removeAllRanges();\n    const shot = pendingScreenshot.current;",
-          );
-          select = replaceRequired(
-            select,
-            "setCommentInput((prev) => prev ? { ...prev, rect: r } : null);",
-            "setCommentInput((prev) => prev ? { ...prev, rect: getAnnotationRect(prev.annotation) ?? prev.rect } : null);",
-          );
-          select = replaceRequired(select, "      rect && !commentInput", "      !passive && rect && !commentInput");
-          select = replaceRequired(
-            select,
-            '/* @__PURE__ */ jsxs("div", {\n        className: "devbar-instruction",',
-            '!passive && /* @__PURE__ */ jsxs("div", {\n        className: "devbar-instruction",',
-          );
-          select = replaceRequired(
-            select,
-            "        const selector = a.data.cssSelector;",
-            `        const quoteRange = a.data.textSelection ? resolveTextSelection(a.data.textSelection, document) : null;
-        if (a.data.textSelection && !quoteRange) { wrapper.style.display = "none"; continue; }
-        const selector = a.data.cssSelector;`,
-          );
-          select = replaceRequired(
-            select,
-            "        let el = null;",
-            "        let el = quoteRange?.commonAncestorContainer ?? null;",
-          );
-          select = replaceRequired(
-            select,
-            "          if (selector)\n            el =",
-            "          if (!quoteRange && selector)\n            el =",
-          );
-          select = replaceRequired(
-            select,
-            "        const rect = el.getBoundingClientRect();",
-            "        const rect = quoteRange ? quoteRange.getBoundingClientRect() : el.getBoundingClientRect();",
-          );
-          source = source.slice(0, selectStart) + select + source.slice(selectEnd);
+          source = adaptSelectOverlay(source);
           source = replaceRequired(
             source,
             "function getAnnotationRect(a) {",
@@ -245,64 +311,13 @@ await build({
           );
           source = source.replaceAll('title: "Minimize",', '"data-shortcut": "Alt+H", title: "Minimize",');
           source = source.replaceAll("onClick: togglePanel,", '"data-shortcut": "Alt+A", onClick: togglePanel,');
-          const drawStart = source.indexOf("function DrawOverlay(");
-          const drawEnd = source.indexOf("function CaptureOverlay(", drawStart);
-          let draw = source.slice(drawStart, drawEnd);
-          draw = replaceBetween(
-            draw,
-            "  const remembered =",
-            "  const [shapes, setShapes]",
-            '  const activeTool = "pen", activeColor = "#ff3b30", activeWidth = 2.5;\n',
-          );
-          draw = replaceBetween(
-            draw,
-            "      if (!e.metaKey && !e.ctrlKey && !e.altKey) {",
-            "    };\n    window.addEventListener",
-            "",
-          );
-          draw = replaceBetween(
-            draw,
-            "          ALL_TOOLS.map((tool, i) => {",
-            '          /* @__PURE__ */ jsx3("button", {\n            type: "button",\n            onClick: handleUndo,',
-            "",
-          );
-          draw = replaceBetween(
-            draw,
-            '          "Draw on the page · ",',
-            '          /* @__PURE__ */ jsx3("kbd", {\n            children: "⌘Z"',
-            '          "Draw on the page · ",\n',
-          );
-          source = source.slice(0, drawStart) + draw + source.slice(drawEnd);
+          source = adaptDrawOverlay(source);
           source = replaceRequired(
             source,
             'state.activeMode && /* @__PURE__ */ jsxs10("div", {\n        className: `devbar-minibar',
             'state.activeMode && state.activeMode !== "draw" && /* @__PURE__ */ jsxs10("div", {\n        className: `devbar-minibar',
           );
-          const captureStart = source.indexOf("function CaptureOverlay(");
-          const captureEnd = source.indexOf("  const selectionRect =", captureStart);
-          let capture = source.slice(captureStart, captureEnd);
-          capture = replaceRequired(
-            capture,
-            "  const dragging = useRef4(false);",
-            "  const dragging = useRef4(false);\n  const regionPointer = useRef4({ start: null, end: null });",
-          );
-          capture = replaceRequired(
-            capture,
-            "    dragging.current = true;",
-            "    dragging.current = true;\n    regionPointer.current = { start: { x: e.clientX, y: e.clientY }, end: { x: e.clientX, y: e.clientY } };",
-          );
-          capture = replaceRequired(
-            capture,
-            "    setRegionEnd({ x: e.clientX, y: e.clientY });\n  }, [captureMode]);\n  const onMouseUp",
-            "    regionPointer.current.end = { x: e.clientX, y: e.clientY };\n    setRegionEnd({ x: e.clientX, y: e.clientY });\n  }, [captureMode]);\n  const onMouseUp",
-          );
-          capture = replaceRequired(
-            capture,
-            "  const onMouseUp = useCallback4(async () => {",
-            "  const onMouseUp = useCallback4(async () => {\n    const { start: regionStart, end: regionEnd } = regionPointer.current;",
-          );
-          if (!capture.includes("regionPointer.current.end =")) throw new Error("Devbar capture adapter mismatch");
-          source = source.slice(0, captureStart) + capture + source.slice(captureEnd);
+          source = adaptCaptureOverlay(source);
           const anchor = "  const copiedTimerRef = useRef10(undefined);";
           if (!source.includes(anchor)) throw new Error("Devbar annotation observer hook changed");
           source = replaceRequired(

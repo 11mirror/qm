@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { CliError, bold, die, dim, errMessage, header, note, ok, step, warn } from "../log.ts";
+import { CliError, bold, die, dim, header, note, ok, step, warn } from "../log.ts";
 import {
   capture,
   captureBoth,
@@ -12,11 +12,9 @@ import {
   isInvalidSecret,
   readEnvFile,
   resolveBuildRepoRoot,
-  runInherit,
   sleep,
   streamLabeled,
   tailString,
-  which,
 } from "../util.ts";
 import { manifestRef, sandboxBaseRef } from "../manifest.ts";
 import {
@@ -39,6 +37,7 @@ import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
 import { computedSecrets, runtimeSecretNames, secretsForService } from "../secrets.ts";
 import { readDeploymentState, withDeploymentLock, writeDeploymentState, type DeploymentState } from "../state.ts";
 import { templateUrl } from "../templates.ts";
+import { containerExists, containerRunning, docker, dockerInherit, requireDocker, volumeExists } from "./docker-cli.ts";
 
 /** Deployment-layer transport for docker: signed HTTP to the locally published core port. */
 export const dockerDeploymentLayerTransport: DeploymentLayerTransport = httpDeploymentLayerTransport({
@@ -140,62 +139,6 @@ export function hostDockerSocket(): { path: string; gid?: string } {
     throw new CliError(`sandbox.backend "local" cannot read the Docker socket at ${path}`);
   }
   return { path, ...(gid ? { gid } : {}) };
-}
-
-function requireDocker(): void {
-  if (!which("docker")) die("docker not found on PATH (the docker target needs a running Docker daemon).");
-  try {
-    capture("docker", ["version", "-f", "{{.Server.Version}}"]);
-  } catch {
-    die("the Docker daemon is not reachable — start Docker (or OrbStack) and retry.");
-  }
-}
-
-function docker(args: string[], allow?: RegExp): string {
-  try {
-    return capture("docker", args, allow ? { allow } : {});
-  } catch (e) {
-    throw dockerError(args, errMessage(e));
-  }
-}
-
-function dockerInherit(args: string[], hint?: string): void {
-  try {
-    runInherit("docker", args);
-  } catch (error) {
-    throw new CliError(`docker ${args.slice(0, 2).join(" ")} failed: ${errMessage(error)}${hint ? `\n${hint}` : ""}`, {
-      cause: error,
-    });
-  }
-}
-
-function dockerError(args: string[], message: string): CliError {
-  let hint = "";
-  if (/port is already allocated|address already in use/i.test(message)) {
-    hint = `\nhint: a host port is already in use — set QM_BASE_PORT to a free base port.`;
-  }
-  return new CliError(`docker ${args.slice(0, 3).join(" ")}… failed:\n${message}${hint}`);
-}
-
-function containerRunning(name: string): boolean {
-  try {
-    return docker(["inspect", "-f", "{{.State.Running}}", name], /No such object/).trim() === "true";
-  } catch {
-    return false;
-  }
-}
-
-function inspectExists(args: string[], notFound: RegExp): boolean {
-  const out = docker(args, notFound);
-  return out.trim().length > 0 && !notFound.test(out);
-}
-
-function containerExists(name: string): boolean {
-  return inspectExists(["inspect", "-f", "{{.Id}}", name], /No such object|No such container/i);
-}
-
-function volumeExists(name: string): boolean {
-  return inspectExists(["volume", "inspect", "-f", "{{.Name}}", name], /No such volume|not found/i);
 }
 
 function pgContainerPassword(ctx: DockerCtx): string | undefined {

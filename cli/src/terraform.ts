@@ -2,13 +2,8 @@ import { awsCoreHostnames } from "./aws-routing.ts";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import {
-  awsManagedTaskRoleArn,
-  awsMicrovmExecRoleArn,
-  awsTaskRoleArn,
-  awsWorkloadArchitecture,
-  type QmConfig,
-} from "./config.ts";
+import { awsMicrovmExecRoleArn, awsWorkloadArchitecture, type QmConfig } from "./config.ts";
+import { awsManagedTaskRoleArn, awsTaskRoleArn } from "./config-aws.ts";
 import { CliError, ok } from "./log.ts";
 import { computedSecrets } from "./secrets.ts";
 import { hostsWebEdge, isServiceName, PUBLIC_PORT, serviceDef } from "./services.ts";

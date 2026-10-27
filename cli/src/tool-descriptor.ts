@@ -367,128 +367,151 @@ const SPLIT_ENV_KEY_RE = /^[A-Z][A-Z0-9_]*$/;
 const POSIX_FUNCTION_NAME_RE = /^[a-z_][a-z0-9_]*$/;
 
 const MAX_APPROVAL_PATTERN_LEN = 256;
-function approvalPatternTooSlow(pattern: string): boolean {
-  if (/\\[1-9]|\\k<[^>]+>/.test(pattern)) return true;
-  type AtomChars = { ascii: Set<number>; asciiOnly: boolean };
-  const unknownChars = (): AtomChars => ({
-    ascii: new Set(Array.from({ length: 128 }, (_, i) => i)),
-    asciiOnly: false,
-  });
-  const atomChars = (source: string): AtomChars => {
-    let atom: RegExp;
-    try {
-      atom = new RegExp(`^(?:${source})$`, "i");
-    } catch {
-      return unknownChars();
+type AtomChars = { ascii: Set<number>; asciiOnly: boolean };
+const unknownChars = (): AtomChars => ({
+  ascii: new Set(Array.from({ length: 128 }, (_, i) => i)),
+  asciiOnly: false,
+});
+const atomChars = (source: string): AtomChars => {
+  let atom: RegExp;
+  try {
+    atom = new RegExp(`^(?:${source})$`, "i");
+  } catch {
+    return unknownChars();
+  }
+  const ascii = new Set<number>();
+  for (let code = 0; code < 128; code++) if (atom.test(String.fromCharCode(code))) ascii.add(code);
+  const asciiOnly =
+    (source.length === 1 && source.charCodeAt(0) < 128 && source !== ".") ||
+    /^\\(?:[dw]|x[0-7][0-9a-f]|u00[0-7][0-9a-f])$/i.test(source) ||
+    /^\[(?!\^)(?:[^\\\]]|\\(?:[dw]|x[0-7][0-9a-f]|u00[0-7][0-9a-f]))+\]$/i.test(source);
+  return { ascii, asciiOnly };
+};
+const overlaps = (left: AtomChars | undefined, right: AtomChars | undefined): boolean => {
+  if (!left || !right) return false;
+  for (const code of left.ascii) if (right.ascii.has(code)) return true;
+  return !left.asciiOnly && !right.asciiOnly;
+};
+const splitAlternatives = (source: string): string[] => {
+  const branches: string[] = [];
+  let start = 0;
+  let depth = 0;
+  let inClass = false;
+  for (let i = 0; i < source.length; i++) {
+    const char = source[i]!;
+    if (char === "\\") {
+      i++;
+      continue;
     }
-    const ascii = new Set<number>();
-    for (let code = 0; code < 128; code++) if (atom.test(String.fromCharCode(code))) ascii.add(code);
-    const asciiOnly =
-      (source.length === 1 && source.charCodeAt(0) < 128 && source !== ".") ||
-      /^\\(?:[dw]|x[0-7][0-9a-f]|u00[0-7][0-9a-f])$/i.test(source) ||
-      /^\[(?!\^)(?:[^\\\]]|\\(?:[dw]|x[0-7][0-9a-f]|u00[0-7][0-9a-f]))+\]$/i.test(source);
-    return { ascii, asciiOnly };
-  };
-  const overlaps = (left: AtomChars | undefined, right: AtomChars | undefined): boolean => {
-    if (!left || !right) return false;
-    for (const code of left.ascii) if (right.ascii.has(code)) return true;
-    return !left.asciiOnly && !right.asciiOnly;
-  };
-  const splitAlternatives = (source: string): string[] => {
-    const branches: string[] = [];
-    let start = 0;
-    let depth = 0;
-    let inClass = false;
-    for (let i = 0; i < source.length; i++) {
-      const char = source[i]!;
-      if (char === "\\") {
+    if (char === "[") inClass = true;
+    else if (char === "]" && inClass) inClass = false;
+    else if (!inClass && char === "(") depth++;
+    else if (!inClass && char === ")") depth--;
+    else if (!inClass && depth === 0 && char === "|") {
+      branches.push(source.slice(start, i));
+      start = i + 1;
+    }
+  }
+  branches.push(source.slice(start));
+  return branches;
+};
+const branchShape = (branch: string): { domains: AtomChars[]; nullable: boolean } => {
+  const domains: AtomChars[] = [];
+  let nullable = true;
+  for (let i = 0; i < branch.length; i++) {
+    const char = branch[i]!;
+    if (char === "^" || char === "$") continue;
+    let end = i + 1;
+    let domain: AtomChars;
+    if (char === "\\") {
+      if (branch[i + 1] === "b" || branch[i + 1] === "B") {
         i++;
         continue;
       }
-      if (char === "[") inClass = true;
-      else if (char === "]" && inClass) inClass = false;
-      else if (!inClass && char === "(") depth++;
-      else if (!inClass && char === ")") depth--;
-      else if (!inClass && depth === 0 && char === "|") {
-        branches.push(source.slice(start, i));
-        start = i + 1;
-      }
-    }
-    branches.push(source.slice(start));
-    return branches;
-  };
-  const branchShape = (branch: string): { domains: AtomChars[]; nullable: boolean } => {
-    const domains: AtomChars[] = [];
-    let nullable = true;
-    for (let i = 0; i < branch.length; i++) {
-      const char = branch[i]!;
-      if (char === "^" || char === "$") continue;
-      let end = i + 1;
-      let domain: AtomChars;
-      if (char === "\\") {
-        if (branch[i + 1] === "b" || branch[i + 1] === "B") {
-          i++;
-          continue;
+      end = i + 2;
+      if (branch[i + 1] === "x" && /^[0-9a-f]{2}$/i.test(branch.slice(i + 2, i + 4))) end = i + 4;
+      else if (branch[i + 1] === "u" && /^[0-9a-f]{4}$/i.test(branch.slice(i + 2, i + 6))) end = i + 6;
+      domain = atomChars(branch.slice(i, end));
+    } else if (char === "[") {
+      end = i + 1;
+      for (; end < branch.length; end++) {
+        if (branch[end] === "\\") end++;
+        else if (branch[end] === "]") {
+          end++;
+          break;
         }
-        end = i + 2;
-        if (branch[i + 1] === "x" && /^[0-9a-f]{2}$/i.test(branch.slice(i + 2, i + 4))) end = i + 4;
-        else if (branch[i + 1] === "u" && /^[0-9a-f]{4}$/i.test(branch.slice(i + 2, i + 6))) end = i + 6;
-        domain = atomChars(branch.slice(i, end));
-      } else if (char === "[") {
-        end = i + 1;
-        for (; end < branch.length; end++) {
-          if (branch[end] === "\\") end++;
-          else if (branch[end] === "]") {
-            end++;
-            break;
-          }
-        }
-        domain = atomChars(branch.slice(i, end));
-      } else if (char === "(" || char === "*" || char === "+" || char === "?" || char === "{") {
-        return { domains: domains.length ? domains : [unknownChars()], nullable: true };
-      } else {
-        domain = atomChars(char);
       }
-      domains.push(domain);
-      const quantifier = /^(?:[*+?]|\{\d+(?:,\d*)?\})\??/.exec(branch.slice(end))?.[0];
-      if (quantifier) {
-        if (quantifier === "+" || /^\{[1-9]/.test(quantifier)) nullable = false;
-        end += quantifier.length;
-      } else nullable = false;
-      i = end - 1;
+      domain = atomChars(branch.slice(i, end));
+    } else if (char === "(" || char === "*" || char === "+" || char === "?" || char === "{") {
+      return { domains: domains.length ? domains : [unknownChars()], nullable: true };
+    } else {
+      domain = atomChars(char);
     }
-    return domains.length ? { domains, nullable } : { domains: [unknownChars()], nullable: true };
-  };
-  const prefixAmbiguous = (left: ReturnType<typeof branchShape>, right: ReturnType<typeof branchShape>): boolean => {
-    if (left.nullable || right.nullable) return true;
-    const length = Math.min(left.domains.length, right.domains.length);
-    for (let i = 0; i < length; i++) if (!overlaps(left.domains[i], right.domains[i])) return false;
-    return true;
-  };
-  const alternativeFactor = (source: string): number => {
-    const branches = splitAlternatives(source).map(branchShape);
-    let overlapsCount = 0;
-    for (let i = 0; i < branches.length; i++) {
-      for (let j = i + 1; j < branches.length; j++) if (prefixAmbiguous(branches[i]!, branches[j]!)) overlapsCount++;
+    domains.push(domain);
+    const quantifier = /^(?:[*+?]|\{\d+(?:,\d*)?\})\??/.exec(branch.slice(end))?.[0];
+    if (quantifier) {
+      if (quantifier === "+" || /^\{[1-9]/.test(quantifier)) nullable = false;
+      end += quantifier.length;
+    } else nullable = false;
+    i = end - 1;
+  }
+  return domains.length ? { domains, nullable } : { domains: [unknownChars()], nullable: true };
+};
+const prefixAmbiguous = (left: ReturnType<typeof branchShape>, right: ReturnType<typeof branchShape>): boolean => {
+  if (left.nullable || right.nullable) return true;
+  const length = Math.min(left.domains.length, right.domains.length);
+  for (let i = 0; i < length; i++) if (!overlaps(left.domains[i], right.domains[i])) return false;
+  return true;
+};
+const alternativeFactor = (source: string): number => {
+  const branches = splitAlternatives(source).map(branchShape);
+  let overlapsCount = 0;
+  for (let i = 0; i < branches.length; i++) {
+    for (let j = i + 1; j < branches.length; j++) if (prefixAmbiguous(branches[i]!, branches[j]!)) overlapsCount++;
+  }
+  return 1 + overlapsCount;
+};
+
+type PatternFrame = {
+  start: number;
+  bodyStart: number;
+  hasQuantifier: boolean;
+  hasAlternative: boolean;
+  directAlternative: boolean;
+  assertion: boolean;
+  branchStart: boolean;
+  startsQuantified?: AtomChars;
+  endsQuantified?: AtomChars;
+  lastQuantified?: AtomChars;
+  firstChars?: AtomChars;
+  lastChars?: AtomChars;
+  hasAtom: boolean;
+};
+
+function groupPrefix(pattern: string, i: number): { prefixEnd: number; assertion: boolean } {
+  let prefixEnd = i + 1;
+  let assertion = false;
+  if (pattern[prefixEnd] === "?") {
+    const kind = pattern[prefixEnd + 1];
+    if (kind === ":") prefixEnd += 2;
+    else if (kind === "=" || kind === "!") {
+      assertion = true;
+      prefixEnd += 2;
+    } else if (kind === "<" && (pattern[prefixEnd + 2] === "=" || pattern[prefixEnd + 2] === "!")) {
+      assertion = true;
+      prefixEnd += 3;
+    } else if (kind === "<") {
+      const close = pattern.indexOf(">", prefixEnd + 2);
+      if (close !== -1) prefixEnd = close + 1;
     }
-    return 1 + overlapsCount;
-  };
+  }
+  return { prefixEnd, assertion };
+}
+
+function approvalPatternTooSlow(pattern: string): boolean {
+  if (/\\[1-9]|\\k<[^>]+>/.test(pattern)) return true;
   let ambiguityBudget = 1;
-  const stack: Array<{
-    start: number;
-    bodyStart: number;
-    hasQuantifier: boolean;
-    hasAlternative: boolean;
-    directAlternative: boolean;
-    assertion: boolean;
-    branchStart: boolean;
-    startsQuantified?: AtomChars;
-    endsQuantified?: AtomChars;
-    lastQuantified?: AtomChars;
-    firstChars?: AtomChars;
-    lastChars?: AtomChars;
-    hasAtom: boolean;
-  }> = [
+  const stack: PatternFrame[] = [
     {
       start: -1,
       bodyStart: 0,
@@ -553,22 +576,7 @@ function approvalPatternTooSlow(pattern: string): boolean {
       continue;
     }
     if (char === "(") {
-      let prefixEnd = i + 1;
-      let assertion = false;
-      if (pattern[prefixEnd] === "?") {
-        const kind = pattern[prefixEnd + 1];
-        if (kind === ":") prefixEnd += 2;
-        else if (kind === "=" || kind === "!") {
-          assertion = true;
-          prefixEnd += 2;
-        } else if (kind === "<" && (pattern[prefixEnd + 2] === "=" || pattern[prefixEnd + 2] === "!")) {
-          assertion = true;
-          prefixEnd += 3;
-        } else if (kind === "<") {
-          const close = pattern.indexOf(">", prefixEnd + 2);
-          if (close !== -1) prefixEnd = close + 1;
-        }
-      }
+      const { prefixEnd, assertion } = groupPrefix(pattern, i);
       stack.push({
         start: i,
         bodyStart: prefixEnd,

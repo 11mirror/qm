@@ -24,6 +24,7 @@ import { envSha as computeEnvSha, errMessage, nowEpoch, sleep } from "../lib/uti
 import { discoverCanaryChannel } from "../lib/canary.ts";
 import { buildChildSpecs, type SpecInputs } from "./specs.ts";
 import { Child } from "./children.ts";
+import { fetchSlackHealth, logTail, readBody, runCanary } from "./probes.ts";
 import type {
   BootPhaseEvent,
   BootResult,
@@ -143,45 +144,11 @@ async function resolveCanaryChannel(spec: BootSpec): Promise<void> {
   }
 }
 
-function logTail(name: ChildName, lines = 20): string[] {
-  try {
-    return readFileSync(join(lock, `${name}.log`), "utf8")
-      .trimEnd()
-      .split("\n")
-      .slice(-lines);
-  } catch {
-    return [];
-  }
-}
-
-async function fetchSlackHealth(): Promise<SlackHealth | null> {
-  try {
-    const res = await fetch(`http://127.0.0.1:${ports.slackHealth}/healthz`, { signal: AbortSignal.timeout(2000) });
-    if (!res.ok) return null;
-    return (await res.json()) as SlackHealth;
-  } catch {
-    return null;
-  }
-}
-
-async function runCanary(channel: string, timeoutMs = 15_000): Promise<CanaryReply> {
-  try {
-    const res = await fetch(`http://127.0.0.1:${ports.slackHealth}/canary`, {
-      method: "POST",
-      body: JSON.stringify({ channel, timeoutMs }),
-      signal: AbortSignal.timeout(timeoutMs + 5000),
-    });
-    return (await res.json()) as CanaryReply;
-  } catch (err) {
-    return { ok: false, reason: `canary endpoint unreachable: ${errMessage(err)}` };
-  }
-}
-
 async function verifySlack(spec: BootSpec): Promise<{ ok: boolean; result: Partial<BootResult> }> {
   let health: SlackHealth | null = null;
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
-    health = await fetchSlackHealth();
+    health = await fetchSlackHealth(ports.slackHealth);
     if (health?.connectedAs) break;
     await sleep(500);
   }
@@ -193,7 +160,7 @@ async function verifySlack(spec: BootSpec): Promise<{ ok: boolean; result: Parti
 
   if ((health.numConnections ?? 1) > 1) {
     await sleep(5000);
-    health = (await fetchSlackHealth()) ?? health;
+    health = (await fetchSlackHealth(ports.slackHealth)) ?? health;
     lastSlackHealth = health;
     if ((health.numConnections ?? 1) > 1) {
       return {
@@ -230,7 +197,7 @@ async function verifySlack(spec: BootSpec): Promise<{ ok: boolean; result: Parti
   }
   let last: { ok: boolean; rttMs?: number; reason?: string } = { ok: false, reason: "not run" };
   for (let attempt = 1; attempt <= 3; attempt++) {
-    last = await runCanary(channel);
+    last = await runCanary(ports.slackHealth, channel);
     if (last.ok) break;
     phase("canary", "warn", `attempt ${attempt}/3 failed: ${last.reason}`);
     await sleep(1500);
@@ -438,7 +405,7 @@ async function boot(): Promise<void> {
         reason: `${started.failedChild} failed to start: ${started.detail}`,
         slot,
         failedChild: started.failedChild,
-        logTail: started.failedChild ? logTail(started.failedChild) : [],
+        logTail: started.failedChild ? logTail(lock, started.failedChild) : [],
       };
       finishBoot();
       await teardown("boot failed");
@@ -525,7 +492,7 @@ function startLoops(): void {
         log(`${name} healthy again`);
       }
     }
-    const slackHealth = slackOn(readBootSpec()) ? await fetchSlackHealth() : null;
+    const slackHealth = slackOn(readBootSpec()) ? await fetchSlackHealth(ports.slackHealth) : null;
     if (slackHealth) {
       if (slackHealth.lastActivityAt) {
         lastSlackActivitySec = Math.max(lastSlackActivitySec, Math.floor(slackHealth.lastActivityAt / 1000));
@@ -544,7 +511,7 @@ function startLoops(): void {
     const canary = setInterval(async () => {
       if (!canaryChannel) await resolveCanaryChannel(readBootSpec());
       if (!canaryChannel) return;
-      const res = await runCanary(canaryChannel);
+      const res = await runCanary(ports.slackHealth, canaryChannel);
       if (!res.ok) log(`periodic canary FAILED: ${res.reason} -- event delivery is broken (run 'dev doctor')`);
     }, CANARY_INTERVAL_MS);
     canary.unref();
@@ -648,7 +615,7 @@ function serveApi(): Server {
         respond(
           200,
           channel
-            ? await runCanary(channel)
+            ? await runCanary(ports.slackHealth, channel)
             : ({ ok: false, code: "unconfigured", reason: "no canary channel configured" } satisfies CanaryReply),
         );
         return;
@@ -666,13 +633,6 @@ function serveApi(): Server {
   rmSync(socketPathResolved, { force: true });
   server.listen(socketPathResolved);
   return server;
-}
-
-async function readBody(req: import("node:http").IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(chunk as Buffer);
-  if (!chunks.length) return {};
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
 }
 
 async function reload(body: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -734,7 +694,7 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
       return {
         ok: false,
         reason: `${childSpec.name} failed to restart: ${res.detail}`,
-        logTail: logTail(childSpec.name),
+        logTail: logTail(lock, childSpec.name),
       };
   }
   let verified: { ok: boolean; result: Partial<BootResult> } = { ok: true, result: {} };
@@ -764,7 +724,7 @@ async function statusReport(): Promise<StatusReport> {
     childStatuses[name] = child.status();
   }
   const slackEnabled = slackOn(readBootSpec());
-  const slackHealth = slackEnabled ? await fetchSlackHealth() : null;
+  const slackHealth = slackEnabled ? await fetchSlackHealth(ports.slackHealth) : null;
   if (slackHealth && childStatuses.core) childStatuses.core.slack = slackHealth;
   return {
     slot,

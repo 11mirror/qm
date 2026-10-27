@@ -267,6 +267,70 @@ async function showInstance(url) {
   }
 }
 
+function applicationMenu(checkForUpdates) {
+  return [
+    {
+      label: "QM",
+      submenu: [
+        { role: "about" },
+        { label: "Check for Updates", enabled: Boolean(checkForUpdates), click: checkForUpdates },
+        {
+          label: "Computer Access…",
+          visible: process.platform === "darwin",
+          click: () => {
+            void showComputerPermissions().catch((error) => dialog.showErrorBox("Computer access", error.message));
+          },
+        },
+        { label: "Change Instance…", accelerator: "CmdOrCtrl+,", click: showSetup },
+        {
+          label: "Open in Browser",
+          click: () => {
+            if (target) openExternal(target);
+          },
+        },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    },
+    { role: "editMenu" },
+    {
+      label: "View",
+      submenu: [
+        {
+          label: "Back",
+          accelerator: "Alt+Left",
+          click: () => {
+            const contents = BrowserWindow.getFocusedWindow()?.webContents;
+            if (contents?.navigationHistory.canGoBack()) contents.navigationHistory.goBack();
+          },
+        },
+        {
+          label: "Forward",
+          accelerator: "Alt+Right",
+          click: () => {
+            const contents = BrowserWindow.getFocusedWindow()?.webContents;
+            if (contents?.navigationHistory.canGoForward()) contents.navigationHistory.goForward();
+          },
+        },
+        { role: "reload" },
+        { role: "forceReload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
+    { role: "windowMenu" },
+  ];
+}
+
 async function start() {
   registerComputerPermissions();
   app.setAsDefaultProtocolClient("qm-desktop");
@@ -368,69 +432,7 @@ async function start() {
       return { error: error.message };
     }
   });
-  Menu.setApplicationMenu(
-    Menu.buildFromTemplate([
-      {
-        label: "QM",
-        submenu: [
-          { role: "about" },
-          { label: "Check for Updates", enabled: Boolean(checkForUpdates), click: checkForUpdates },
-          {
-            label: "Computer Access…",
-            visible: process.platform === "darwin",
-            click: () => {
-              void showComputerPermissions().catch((error) => dialog.showErrorBox("Computer access", error.message));
-            },
-          },
-          { label: "Change Instance…", accelerator: "CmdOrCtrl+,", click: showSetup },
-          {
-            label: "Open in Browser",
-            click: () => {
-              if (target) openExternal(target);
-            },
-          },
-          { type: "separator" },
-          { role: "hide" },
-          { role: "hideOthers" },
-          { role: "unhide" },
-          { type: "separator" },
-          { role: "quit" },
-        ],
-      },
-      { role: "editMenu" },
-      {
-        label: "View",
-        submenu: [
-          {
-            label: "Back",
-            accelerator: "Alt+Left",
-            click: () => {
-              const contents = BrowserWindow.getFocusedWindow()?.webContents;
-              if (contents?.navigationHistory.canGoBack()) contents.navigationHistory.goBack();
-            },
-          },
-          {
-            label: "Forward",
-            accelerator: "Alt+Right",
-            click: () => {
-              const contents = BrowserWindow.getFocusedWindow()?.webContents;
-              if (contents?.navigationHistory.canGoForward()) contents.navigationHistory.goForward();
-            },
-          },
-          { role: "reload" },
-          { role: "forceReload" },
-          { role: "toggleDevTools" },
-          { type: "separator" },
-          { role: "resetZoom" },
-          { role: "zoomIn" },
-          { role: "zoomOut" },
-          { type: "separator" },
-          { role: "togglefullscreen" },
-        ],
-      },
-      { role: "windowMenu" },
-    ]),
-  );
+  Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenu(checkForUpdates)));
   app.on("activate", () => {
     if (focusComputerPermissions()) return;
     if (setupWindow) setupWindow.show();
