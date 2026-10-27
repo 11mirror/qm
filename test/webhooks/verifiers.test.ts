@@ -92,7 +92,7 @@ test("slack dedup key is the signed body's event_id, not the unsigned x-slack-ev
 test("stripe verifier validates t=…,v1=… over `t.body` and uses the event id for dedup", () => {
   const v = getVerifier("stripe")!;
   const rawBody = JSON.stringify({ id: "evt_123", type: "charge.failed" });
-  const t = "1700000000";
+  const t = String(Math.floor(Date.now() / 1000));
   const v1 = hmac(`${t}.${rawBody}`);
   const input = { secret: SECRET, headers: { "stripe-signature": `t=${t},v1=${v1}` }, rawBody };
   assert.equal(v.verify(input), true);
@@ -100,10 +100,18 @@ test("stripe verifier validates t=…,v1=… over `t.body` and uses the event id
   assert.equal(v.verify({ ...input, headers: { "stripe-signature": `t=${t},v1=deadbeef` } }), false);
 });
 
+test("stripe verifier rejects a correctly signed event whose timestamp is stale, so a captured delivery can't be replayed", () => {
+  const v = getVerifier("stripe")!;
+  const rawBody = JSON.stringify({ id: "evt_old" });
+  const t = String(Math.floor(Date.now() / 1000) - 6 * 60);
+  const sig = `t=${t},v1=${hmac(`${t}.${rawBody}`)}`;
+  assert.equal(v.verify({ secret: SECRET, headers: { "stripe-signature": sig }, rawBody }), false);
+});
+
 test("stripe verifier accepts any valid v1 signature during key rotation", () => {
   const v = getVerifier("stripe")!;
   const rawBody = JSON.stringify({ id: "evt_rot" });
-  const t = "1700000000";
+  const t = String(Math.floor(Date.now() / 1000));
   const valid = hmac(`${t}.${rawBody}`);
   const rotated = { secret: SECRET, headers: { "stripe-signature": `t=${t},v1=oldkeysig,v1=${valid}` }, rawBody };
   assert.equal(v.verify(rotated), true);
