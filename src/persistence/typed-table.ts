@@ -1,4 +1,11 @@
-import type { PgMigrationDefinition, Rows } from "./pg-pool.ts";
+import {
+  tenantCols,
+  tenantLockKey,
+  withPgTransaction,
+  type PgMigrationDefinition,
+  type PgPool,
+  type Rows,
+} from "./pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 
 export type ColumnType = "text" | "bigint" | "double precision" | "boolean" | "jsonb" | "text[]";
@@ -15,18 +22,24 @@ export interface TableSpec {
   columns: Readonly<Record<string, ColumnSpec>>;
 }
 
+export interface MapConversion extends PgMigrationDefinition {
+  spec: TableSpec;
+  dropKeys: readonly string[];
+  contract: PgMigrationDefinition;
+}
+
 export const columnName = (field: string): string => `"${field.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)}"`;
 
-function fromJson(field: string, type: ColumnType): string {
-  const v = `json->'${field}'`;
+function fromJson(source: string, field: string, type: ColumnType): string {
+  const v = `${source}->'${field}'`;
   const when = (kind: string, expr: string) => `CASE WHEN jsonb_typeof(${v}) = '${kind}' THEN ${expr} END`;
   switch (type) {
     case "text":
-      return when("string", `json->>'${field}'`);
+      return when("string", `${source}->>'${field}'`);
     case "bigint":
-      return when("number", `round((json->>'${field}')::numeric)::bigint`);
+      return when("number", `round((${source}->>'${field}')::numeric)::bigint`);
     case "double precision":
-      return when("number", `(json->>'${field}')::float8`);
+      return when("number", `(${source}->>'${field}')::float8`);
     case "boolean":
       return when("boolean", `(${v})::boolean`);
     case "jsonb":
@@ -36,9 +49,14 @@ function fromJson(field: string, type: ColumnType): string {
   }
 }
 
-export interface MapConversion extends PgMigrationDefinition {
-  spec: TableSpec;
-  dropKeys: readonly string[];
+function shape(spec: TableSpec) {
+  const keyCol = columnName(spec.key);
+  const cols = Object.entries(spec.columns).map(([field, c]) => ({ field, col: columnName(field), ...c }));
+  const fields = (row: string, key: string) => [
+    ...(spec.keyIsField ? [`'${spec.key}', to_jsonb(${key})`] : []),
+    ...cols.map((c) => `'${c.field}', to_jsonb(${row}${c.col})`),
+  ];
+  return { keyCol, renamed: keyCol !== `"id"`, cols, fields };
 }
 
 export function mapToTableMigration(
@@ -46,35 +64,96 @@ export function mapToTableMigration(
   spec: TableSpec,
   opts: { dropKeys?: readonly string[]; statements?: readonly string[] } = {},
 ): MapConversion {
-  const { table, key } = spec;
-  const keyCol = columnName(key);
-  const cols = Object.entries(spec.columns).map(([field, c]) => ({ field, col: columnName(field), ...c }));
-  const required = cols.filter((c) => c.required);
-  const rebuilt = [
-    ...(spec.keyIsField ? [`'${key}', CASE WHEN json ? '${key}' THEN to_jsonb(id) END`] : []),
-    ...cols.map((c) => `'${c.field}', to_jsonb(${c.col})`),
-  ];
+  const { table } = spec;
+  const { keyCol, renamed, cols, fields } = shape(spec);
+  const all = renamed ? [...cols, { col: keyCol, type: "text", required: true, field: spec.key }] : cols;
+  const required = all.filter((c) => c.required);
   const dropKeys = `ARRAY[${(opts.dropKeys ?? []).map((k) => `'${k}'`).join(", ")}]::text[]`;
-  const convert = `DO $convert$ DECLARE bad text; BEGIN
-      IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = '${table}'::regclass AND attname = 'json' AND NOT attisdropped) THEN
-        ALTER TABLE ${table} ${cols.map((c) => `ADD COLUMN IF NOT EXISTS ${c.col} ${c.type}`).join(", ")};
-        UPDATE ${table} SET ${cols.map((c) => `${c.col} = ${fromJson(c.field, c.type)}`).join(", ")};
-        SELECT id INTO bad FROM ${table}
-         WHERE jsonb_typeof(json) <> 'object'${required.map((c) => ` OR ${c.col} IS NULL`).join("")}
-            OR jsonb_strip_nulls(json) - ${dropKeys}
-               IS DISTINCT FROM jsonb_strip_nulls(jsonb_build_object(${rebuilt.join(", ")}))
-         LIMIT 1;
-        IF bad IS NOT NULL THEN RAISE EXCEPTION '${table}: row % does not convert to typed columns', bad; END IF;
-        ${required.length ? `ALTER TABLE ${table} ${required.map((c) => `ALTER COLUMN ${c.col} SET NOT NULL`).join(", ")};` : ""}
-        ALTER TABLE ${table} DROP COLUMN json;
-        ${keyCol === `"id"` ? "" : `ALTER TABLE ${table} RENAME COLUMN id TO ${keyCol};`}
+  const keyIndex = `${table}_${keyCol.slice(1, -1)}_key`;
+  const expand = `DO $expand$ DECLARE bad text; old record; BEGIN
+      FOR old IN SELECT indexrelid::regclass::text AS name FROM pg_index
+        WHERE indrelid = '${table}'::regclass AND NOT indisprimary AND pg_get_indexdef(indexrelid) LIKE '%json%'
+      LOOP EXECUTE 'DROP INDEX ' || old.name; END LOOP;
+      FOR old IN SELECT stxname AS name FROM pg_statistic_ext WHERE stxrelid = '${table}'::regclass
+      LOOP EXECUTE format('DROP STATISTICS %I', old.name); END LOOP;
+      ALTER TABLE ${table} ${all.map((c) => `ADD COLUMN IF NOT EXISTS ${c.col} ${c.type}`).join(", ")};
+      IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = '${table}'::regclass AND tgname = '${table}_sync') THEN
+        UPDATE ${table} SET ${[
+          ...cols.map((c) => `${c.col} = ${fromJson("json", c.field, c.type)}`),
+          ...(renamed ? [`${keyCol} = id`] : []),
+        ].join(", ")};
       END IF;
-      IF to_regclass('durable_map_versions') IS NOT NULL THEN DELETE FROM durable_map_versions WHERE tbl = '${table}'; END IF;
-    END $convert$`;
-  const create = `CREATE TABLE IF NOT EXISTS ${table} (${keyCol} TEXT PRIMARY KEY, ${cols
-    .map((c) => `${c.col} ${c.type}${c.required ? " NOT NULL" : ""}`)
-    .join(", ")})`;
-  return { id, statements: [create, convert, ...(opts.statements ?? [])], spec, dropKeys: opts.dropKeys ?? [] };
+      SELECT id INTO bad FROM ${table}
+       WHERE jsonb_typeof(json) <> 'object'${required.map((c) => ` OR ${c.col} IS NULL`).join("")}
+          OR jsonb_strip_nulls(json) - ${dropKeys} IS DISTINCT FROM jsonb_strip_nulls(jsonb_build_object(${fields("", "id").join(", ")}))
+             - ARRAY(SELECT k FROM unnest(ARRAY['${spec.key}']) k WHERE NOT json ? k)
+       LIMIT 1;
+      IF bad IS NOT NULL THEN RAISE EXCEPTION '${table}: row % does not convert to typed columns', bad; END IF;
+      ${required.length ? `ALTER TABLE ${table} ${required.map((c) => `ALTER COLUMN ${c.col} SET NOT NULL`).join(", ")};` : ""}
+      ${
+        renamed
+          ? `IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = '${table}'::regclass AND attname = 'tenant_id' AND NOT attisdropped)
+        THEN CREATE UNIQUE INDEX IF NOT EXISTS ${keyIndex} ON ${table} (tenant_id, ${keyCol});
+        ELSE CREATE UNIQUE INDEX IF NOT EXISTS ${keyIndex} ON ${table} (${keyCol}); END IF;`
+          : ""
+      }
+    END $expand$`;
+  const sync = `CREATE OR REPLACE FUNCTION ${table}_sync() RETURNS trigger LANGUAGE plpgsql AS $sync$ BEGIN
+      IF TG_OP = 'INSERT' AND NEW.json IS NOT NULL OR TG_OP = 'UPDATE' AND NEW.json IS DISTINCT FROM OLD.json THEN
+        ${cols.map((c) => `NEW.${c.col} := ${fromJson("NEW.json", c.field, c.type)};`).join("\n        ")}
+        ${renamed ? `NEW.${keyCol} := NEW.id;` : ""}
+      ELSE
+        ${renamed ? `NEW.id := NEW.${keyCol};` : ""}
+        NEW.json := (SELECT COALESCE(jsonb_object_agg(k, v), '{}'::jsonb)
+          FROM jsonb_each(jsonb_build_object(${fields("NEW.", "NEW.id").join(", ")})) AS e(k, v)
+          WHERE jsonb_typeof(v) <> 'null');
+      END IF;
+      RETURN NEW;
+    END $sync$`;
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
+    expand,
+    sync,
+    `DROP TRIGGER IF EXISTS ${table}_sync ON ${table}`,
+    `CREATE TRIGGER ${table}_sync BEFORE INSERT OR UPDATE ON ${table} FOR EACH ROW EXECUTE FUNCTION ${table}_sync()`,
+    `DO $bump$ BEGIN IF to_regclass('durable_map_versions') IS NOT NULL THEN
+      CREATE OR REPLACE FUNCTION qm_durable_map_bump() RETURNS trigger LANGUAGE plpgsql AS $fn$ BEGIN
+        UPDATE durable_map_versions SET v = v + 1 WHERE tbl = TG_ARGV[0];
+        RETURN NULL;
+      END $fn$;
+      DROP TRIGGER IF EXISTS ${table}_bump ON ${table};
+      CREATE TRIGGER ${table}_bump AFTER INSERT OR UPDATE OR DELETE ON ${table}
+        FOR EACH STATEMENT EXECUTE FUNCTION qm_durable_map_bump('${table}');
+    END IF; END $bump$`,
+    ...(opts.statements ?? []),
+  ];
+  const column = (name: string) =>
+    `EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = '${table}'::regclass AND attname = '${name}' AND NOT attisdropped)`;
+  const contract = {
+    id: `${id}/contract`,
+    statements: [
+      `DO $contract$ BEGIN
+        IF to_regclass('${table}') IS NULL THEN RETURN; END IF;
+        IF ${column("json")} AND NOT ${column(all[0]!.col.slice(1, -1))} THEN
+          RAISE EXCEPTION '${table}: contract before expand';
+        END IF;
+        DROP TRIGGER IF EXISTS ${table}_sync ON ${table};
+        DROP TRIGGER IF EXISTS ${table}_bump ON ${table};
+        DROP FUNCTION IF EXISTS ${table}_sync();
+        ALTER TABLE ${table} DROP COLUMN IF EXISTS json;
+        ${
+          renamed
+            ? `IF ${column("id")} THEN
+          ALTER TABLE ${table} DROP COLUMN id;
+          ALTER TABLE ${table} ADD CONSTRAINT ${table}_pkey PRIMARY KEY USING INDEX ${keyIndex};
+        END IF;`
+            : ""
+        }
+        IF to_regclass('durable_map_versions') IS NOT NULL THEN DELETE FROM durable_map_versions WHERE tbl = '${table}'; END IF;
+      END $contract$`,
+    ],
+  };
+  return { id, statements, spec, dropKeys: opts.dropKeys ?? [], contract };
 }
 
 function toParam(value: unknown, type: ColumnType): unknown {
@@ -113,3 +192,49 @@ export function tableCodec<T>(spec: TableSpec) {
     rows: (rows: Rows): T[] => rows.map(row),
   };
 }
+
+export function typedTable<T>(db: Pick<PgPool, "q" | "pool">, spec: TableSpec) {
+  const codec = tableCodec<T>(spec);
+  const key = columnName(spec.key);
+  const select = `SELECT ${codec.columns} FROM ${spec.table}`;
+  const insert = `INSERT INTO ${spec.table} (${codec.columns}) VALUES (${codec.placeholders})`;
+  const conflict = () => `ON CONFLICT (${tenantCols(key)})`;
+  const upsert = () => `${insert} ${conflict()} DO UPDATE SET ${codec.updates}`;
+  const one = (rows: Rows) => (rows[0] ? codec.row(rows[0]) : null);
+  return {
+    codec,
+    get: async (id: string) => one(await db.q(`${select} WHERE ${key} = $1`, [id])),
+    all: async () => codec.rows(await db.q(`${select} ORDER BY ${key}`)),
+    where: async (field: Extract<keyof T, string>, value: unknown) =>
+      codec.rows(await db.q(`${select} WHERE ${columnName(field)} = $1 ORDER BY ${key}`, [value])),
+    async put(id: string, record: T): Promise<void> {
+      await db.q(upsert(), codec.values(id, record));
+    },
+    insert: async (id: string, record: T) =>
+      (await db.q(`${insert} ${conflict()} DO NOTHING RETURNING 1 AS ok`, codec.values(id, record))).length > 0,
+    insertOrGet: async (id: string, record: T) =>
+      codec.row(
+        (
+          await db.q(`${insert} ${conflict()} DO UPDATE SET ${key} = EXCLUDED.${key} RETURNING ${codec.columns}`, [
+            ...codec.values(id, record),
+          ])
+        )[0]!,
+      ),
+    delete: async (id: string) =>
+      (await db.q(`DELETE FROM ${spec.table} WHERE ${key} = $1 RETURNING 1 AS ok`, [id])).length > 0,
+    take: async (id: string) =>
+      one(await db.q(`DELETE FROM ${spec.table} WHERE ${key} = $1 RETURNING ${codec.columns}`, [id])),
+    modify: async (id: string, fn: (current: T | null) => T | null): Promise<T | null> =>
+      withPgTransaction(await db.pool(), async (client) => {
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [tenantLockKey(`${spec.table}:${id}`)]);
+        const current = one((await client.query(`${select} WHERE ${key} = $1`, [id])).rows);
+        const next = fn(current);
+        if (next === current) return current;
+        if (next) await client.query(upsert(), codec.values(id, next));
+        else await client.query(`DELETE FROM ${spec.table} WHERE ${key} = $1`, [id]);
+        return next;
+      }),
+  };
+}
+
+export type TypedTable<T> = ReturnType<typeof typedTable<T>>;
