@@ -12,8 +12,6 @@ import { jsonbSafeStringify } from "../../util/text.ts";
 import type { ScopeId, TurnResult } from "../../types.ts";
 import type { OrchestratorDeps } from "./types.ts";
 
-const AUTOMATED_TURN_LEASE_WAIT_MS = 1_000;
-
 const SESSION_GONE_REASON = "this conversation is no longer available — start a new one";
 
 function recordSessionBusy(
@@ -59,13 +57,9 @@ export async function acquireTurnLeaseOrRefuse(
   },
 ): Promise<{ lease: Lease; waitedMs: number } | { lease: null; waitedMs: number; refusal: TurnResult }> {
   const budget = deps.turnLeaseWaitMs ?? CONFIG_DEFAULTS.turnLeaseWaitMs;
-  const attempt = await acquireLeaseWithin(
-    deps.sessions,
-    args.sessionId,
-    "turn",
-    args.automated ? Math.min(AUTOMATED_TURN_LEASE_WAIT_MS, budget) : budget,
-    { waitFor: (heldBy) => heldBy !== undefined && heldBy !== "turn" },
-  );
+  const attempt = await acquireLeaseWithin(deps.sessions, args.sessionId, "turn", budget, {
+    waitFor: (heldBy) => heldBy !== undefined && heldBy !== "turn",
+  });
   const waitedMs = attempt.waitedMs ?? 0;
   if (attempt.lease)
     return {
