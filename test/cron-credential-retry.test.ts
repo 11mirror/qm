@@ -115,7 +115,7 @@ test("a concurrent sweep cannot mark an in-flight busy resume notified before it
     return release.promise;
   });
   const store = createKeychainStore(testDatabaseUrl());
-  await store.asks.put(f.ask);
+  await store.asks.put(f.ask.id, f.ask);
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
     store,

@@ -1,6 +1,6 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { createOneTimeStore, type OneTimeResult } from "../persistence/one-time-store.ts";
-import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import type { Destination, ScopeId } from "../types.ts";
 import type { GrantMode } from "./keychain.ts";
 
@@ -49,25 +49,24 @@ const SECRET_DROPS: TableSpec = {
 
 export const SECRET_DROPS_MIGRATION = mapToTableMigration("credentials/secret-drops/0001-typed", SECRET_DROPS);
 
-const codec = tableCodec<SecretDropRecord>(SECRET_DROPS);
-
 export function createSecretDropStore(
   databaseUrl: string,
   opts: { ttlMs?: number; now?: () => number } = {},
 ): SecretDropStore {
   const ttl = opts.ttlMs ?? SECRET_DROP_TTL_MS;
   const clock = opts.now ?? (() => Date.now());
-  const drops = createOneTimeStore<SecretDropRecord>(databaseUrl, SECRET_DROPS_MIGRATION, ttl, clock);
-  const { q } = createPgPool(databaseUrl, [SECRET_DROPS_MIGRATION]);
+  const pg = createPgPool(databaseUrl, [SECRET_DROPS_MIGRATION]);
+  const table = typedTable<SecretDropRecord>(pg, SECRET_DROPS);
+  const drops = createOneTimeStore(table, ttl, clock);
   return {
     ...drops,
     mint: async (rec, now) => ({ dropId: await drops.mint(rec, now) }),
     async siblings(rec, now) {
       const cutoff = (now ?? clock()) - ttl;
-      await q(`DELETE FROM secret_drops WHERE created_at < $1`, [cutoff]);
-      return codec.rows(
-        await q(
-          `SELECT ${codec.columns} FROM secret_drops
+      await pg.q(`DELETE FROM secret_drops WHERE created_at < $1`, [cutoff]);
+      return table.codec.rows(
+        await pg.q(
+          `SELECT ${table.codec.columns} FROM secret_drops
            WHERE org_id IS NOT DISTINCT FROM $1 AND audience_scope_id IS NOT DISTINCT FROM $2
              AND thread_ref IS NOT DISTINCT FROM $3 AND service <> $4
            ORDER BY id`,

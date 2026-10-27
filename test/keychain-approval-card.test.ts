@@ -237,7 +237,7 @@ test("a crash after grant persistence recovers approval before denial or expiry"
 test("an expired notification cannot hide an approval recovered after a failed write", async () => {
   for (const notifyBeforeRecovery of [true, false]) {
     const f = await fixture();
-    const put = f.grants.putIfAbsent.bind(f.grants);
+    const put = f.grants.insertOrGet.bind(f.grants);
     let release!: () => void;
     let entered!: () => void;
     const started = new Promise<void>((resolve) => {
@@ -246,10 +246,10 @@ test("an expired notification cannot hide an approval recovered after a failed w
     const paused = new Promise<void>((resolve) => {
       release = resolve;
     });
-    f.grants.putIfAbsent = async (grant) => {
+    f.grants.insertOrGet = async (id, grant) => {
       entered();
       await paused;
-      return put(grant);
+      return put(id, grant);
     };
     const merge = f.asks.merge.bind(f.asks);
     f.asks.merge = async (id, patch) => {

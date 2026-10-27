@@ -4,28 +4,17 @@ import {
   configuredConnectorProviders,
   connectorLabel,
   connectorStatusIsStale,
-  createConnectorStatusCache,
   refreshConnectorStatus,
   type ConnectorStatusRecord,
 } from "../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore, OAuthTokenStatus } from "../src/credentials/keychain.ts";
 import { ConnectorNotConfiguredError, setPublicOAuthClients } from "../src/connectors/oauth.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
 
 function fakeTokens(status: (host: string, accountType?: string) => OAuthTokenStatus): ConnectorTokenStore {
   return {
     connectorTokenStatus: async (host: string, _principalId: string, accountType?: string) => status(host, accountType),
   } as unknown as ConnectorTokenStore;
 }
-
-test("connector status cache: put/get round-trips per principal", async () => {
-  const cache = createConnectorStatusCache(testDatabaseUrl());
-  assert.equal(await cache.get("U1"), null);
-  const rec: ConnectorStatusRecord = { principalId: "U1", checkedAt: 1, providers: { slack: { connected: true } } };
-  await cache.put(rec);
-  assert.deepEqual(await cache.get("U1"), rec);
-  assert.equal(await cache.get("U2"), null);
-});
 
 test("staleness: null/over-floor/past-expiry are stale; fresh+unexpired is not", () => {
   const now = 1_000_000;

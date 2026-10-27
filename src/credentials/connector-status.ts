@@ -1,5 +1,5 @@
-import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import type { ConnectorTokenStore, OAuthTokenStatus } from "./keychain.ts";
 import {
   ACCOUNT_TYPES,
@@ -43,23 +43,12 @@ export const CONNECTOR_STATUS_MIGRATION = mapToTableMigration(
   CONNECTOR_STATUS,
 );
 
-const codec = tableCodec<ConnectorStatusRecord>(CONNECTOR_STATUS);
-
 export function createConnectorStatusCache(databaseUrl: string): ConnectorStatusCache {
-  const { q } = createPgPool(databaseUrl, [CONNECTOR_STATUS_MIGRATION]);
-  return {
-    async get(principalId) {
-      const rows = await q(`SELECT ${codec.columns} FROM connector_status WHERE principal_id = $1`, [principalId]);
-      return rows[0] ? codec.row(rows[0]) : null;
-    },
-    async put(record) {
-      await q(
-        `INSERT INTO connector_status (${codec.columns}) VALUES (${codec.placeholders})
-         ON CONFLICT (${tenantCols("principal_id")}) DO UPDATE SET ${codec.updates}`,
-        codec.values(record.principalId, record),
-      );
-    },
-  };
+  const table = typedTable<ConnectorStatusRecord>(
+    createPgPool(databaseUrl, [CONNECTOR_STATUS_MIGRATION]),
+    CONNECTOR_STATUS,
+  );
+  return { get: table.get, put: (record) => table.put(record.principalId, record) };
 }
 
 const CONNECTOR_STATUS_MAX_TTL_MS = 15 * 60_000;

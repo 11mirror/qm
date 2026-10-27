@@ -1,5 +1,5 @@
-import { createPgPool, tenantCols, withPgTransaction, type PgPool } from "../persistence/pg-pool.ts";
-import { cols, columnName, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
+import { cols, mapToTableMigration, typedTable, updateRow, type TableSpec } from "../persistence/typed-table.ts";
 import { pgTextSafe } from "../util/text.ts";
 import type { KeychainAsk, KeychainCredential, KeychainGrant } from "./keychain.ts";
 
@@ -57,46 +57,12 @@ export const KEYCHAIN_ASKS_MIGRATION = mapToTableMigration("credentials/keychain
 const OWNED_BY = `(lower(owner_id) = ANY($1::text[]) OR owner_id ~ '[^\\x01-\\x7f]')`;
 
 function rowTable<T>(spec: TableSpec, pg: PgPool) {
-  const codec = tableCodec<T>(spec);
-  const key = columnName(spec.key);
-  const select = `SELECT ${codec.columns} FROM ${spec.table}`;
-  const insert = `INSERT INTO ${spec.table} (${codec.columns}) VALUES (${codec.placeholders})`;
-  const upsert = () => `${insert} ON CONFLICT (${tenantCols(key)}) DO UPDATE SET ${codec.updates}`;
-  const idOf = (rec: T) => (rec as Record<string, unknown>)[spec.key] as string;
-  const where = async (clause: string, params: unknown[] = []): Promise<T[]> =>
-    codec.rows(await pg.q(`${select} ${clause}`, params));
+  const table = typedTable<T>(pg, spec);
   return {
-    where,
-    async get(id: string): Promise<T | null> {
-      return (await where(`WHERE ${key} = $1`, [id]))[0] ?? null;
-    },
-    async put(rec: T): Promise<void> {
-      await pg.q(upsert(), codec.values(idOf(rec), rec));
-    },
-    async insertIfAbsent(rec: T): Promise<boolean> {
-      const res = await pg.query(`${insert} ON CONFLICT DO NOTHING`, codec.values(idOf(rec), rec));
-      return res.rowCount > 0;
-    },
-    async putIfAbsent(rec: T): Promise<T> {
-      const rows = await pg.q(
-        `${insert} ON CONFLICT (${tenantCols(key)}) DO UPDATE SET ${key} = ${spec.table}.${key} RETURNING ${codec.columns}`,
-        codec.values(idOf(rec), rec),
-      );
-      return codec.row(rows[0]!);
-    },
-    async delete(id: string): Promise<void> {
-      await pg.q(`DELETE FROM ${spec.table} WHERE ${key} = $1`, [id]);
-    },
-    async update(id: string, fn: (current: T) => T): Promise<T | null> {
-      return withPgTransaction(await pg.pool(), async (client) => {
-        const found = await client.query(`${select} WHERE ${key} = $1 FOR UPDATE`, [id]);
-        if (!found.rows[0]) return null;
-        const current = codec.row(found.rows[0]);
-        const next = fn(current);
-        if (next !== current) await client.query(upsert(), codec.values(id, next));
-        return next;
-      });
-    },
+    ...table,
+    select: async (clause: string, params: unknown[] = []): Promise<T[]> =>
+      table.codec.rows(await pg.q(`SELECT ${table.codec.columns} FROM ${spec.table} ${clause}`, params)),
+    update: async (id: string, fn: (current: T) => T) => updateRow(await pg.pool(), spec, id, fn),
   };
 }
 
@@ -106,9 +72,8 @@ function credentialTable(pg: PgPool) {
   const creds = rowTable<LegacyCredential>(CREDENTIALS, pg);
   return {
     ...creds,
-    all: () => creds.where(`ORDER BY id`),
-    byOwners: (ownerIds: string[]) => creds.where(`WHERE ${OWNED_BY} ORDER BY id`, [folded(ownerIds)]),
-    legacy: () => creds.where(`WHERE target IS NOT NULL OR username IS NOT NULL ORDER BY id`),
+    byOwners: (ownerIds: string[]) => creds.select(`WHERE ${OWNED_BY} ORDER BY id`, [folded(ownerIds)]),
+    legacy: () => creds.select(`WHERE target IS NOT NULL OR username IS NOT NULL ORDER BY id`),
     async deleteBrokerIfCurrent(id: string, ownerId: string, updatedAt: number): Promise<boolean> {
       const res = await pg.query(
         `DELETE FROM keychain_credentials WHERE id = $1 AND kind = 'broker' AND owner_id = $2 AND updated_at = $3`,
@@ -139,16 +104,16 @@ function grantTable(pg: PgPool) {
   return {
     ...grants,
     list: (ownerIds?: string[]) =>
-      ownerIds ? grants.where(`WHERE ${OWNED_BY} ORDER BY id`, [folded(ownerIds)]) : grants.where(`ORDER BY id`),
-    forAsks: (askIds: string[]) => grants.where(`WHERE ask_id = ANY($1::text[]) ORDER BY id`, [askIds]),
+      ownerIds ? grants.select(`WHERE ${OWNED_BY} ORDER BY id`, [folded(ownerIds)]) : grants.all(),
+    forAsks: (askIds: string[]) => grants.select(`WHERE ask_id = ANY($1::text[]) ORDER BY id`, [askIds]),
     activeFor: (scopeId: string, at: number) =>
-      grants.where(
+      grants.select(
         `WHERE audience_scope_id = $1 AND status = 'active' AND NOT (mode = 'once' AND used_at IS NOT NULL)
            AND (expires_at IS NULL OR expires_at >= $2) ORDER BY id`,
         [scopeId, at],
       ),
     async standing(credentialId: string, scopeId: string): Promise<KeychainGrant | null> {
-      const found = await grants.where(
+      const found = await grants.select(
         `WHERE credential_id = $1 AND audience_scope_id = $2 AND mode = 'standing' AND status = 'active'
          ORDER BY id LIMIT 1`,
         [credentialId, scopeId],
@@ -173,7 +138,7 @@ export function createKeychainStore(databaseUrl: string) {
     asks: {
       ...asks,
       list: (newestFirst: boolean) =>
-        asks.where(newestFirst ? `ORDER BY created_at DESC, id DESC` : `ORDER BY created_at, id`),
+        asks.select(newestFirst ? `ORDER BY created_at DESC, id DESC` : `ORDER BY created_at, id`),
       merge: (id: string, patch: Partial<KeychainAsk>) => asks.update(id, (current) => ({ ...current, ...patch })),
     },
   };

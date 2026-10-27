@@ -1,6 +1,6 @@
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
-import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import { validateCustomProviderSpec, type CustomProviderSpec } from "./custom-providers.ts";
 
 export interface StoredCustomProvider extends CustomProviderSpec {
@@ -35,8 +35,6 @@ const CUSTOM_PROVIDERS: TableSpec = {
 
 export const CUSTOM_PROVIDERS_MIGRATION = mapToTableMigration("model/custom-providers/0001-typed", CUSTOM_PROVIDERS);
 
-const codec = tableCodec<StoredCustomProvider>(CUSTOM_PROVIDERS);
-
 function strip(saved: StoredCustomProvider): CustomProviderSpec {
   return {
     id: saved.id,
@@ -54,36 +52,29 @@ export function createCustomProviderStore(input: {
 }): CustomProviderStore {
   const write = input.write ?? (<T>(fn: () => Promise<T>) => fn());
   const key = deriveConnectorKey(input.keyMaterial, "custom-model-providers");
-  const { q } = createPgPool(input.databaseUrl, [CUSTOM_PROVIDERS_MIGRATION]);
-  const select = async (where: string, params: unknown[] = []) =>
-    codec.rows(await q(`SELECT ${codec.columns} FROM custom_model_providers ${where} ORDER BY id`, params));
-  const save = async (rec: StoredCustomProvider) => {
-    await q(
-      `INSERT INTO custom_model_providers (${codec.columns}) VALUES (${codec.placeholders})
-       ON CONFLICT (${tenantCols("id")}) DO UPDATE SET ${codec.updates}`,
-      codec.values(rec.id, rec),
-    );
-  };
+  const pg = createPgPool(input.databaseUrl, [CUSTOM_PROVIDERS_MIGRATION]);
+  const table = typedTable<StoredCustomProvider>(pg, CUSTOM_PROVIDERS);
 
   return {
     async enabled() {
-      return (await select(`WHERE disabled IS NOT TRUE`)).map(strip);
+      const rows = await pg.q(
+        `SELECT ${table.codec.columns} FROM custom_model_providers WHERE disabled IS NOT TRUE ORDER BY id`,
+      );
+      return table.codec.rows(rows).map(strip);
     },
 
     async statuses() {
-      return (await select(``))
-        .map((p) => ({
-          ...strip(p),
-          disabled: p.disabled ?? false,
-          hasKey: Boolean(p.apiKeyEnc),
-          updatedAt: p.updatedAt,
-          updatedBy: p.updatedBy,
-        }))
-        .sort((a, b) => a.id.localeCompare(b.id));
+      return (await table.all()).map((p) => ({
+        ...strip(p),
+        disabled: p.disabled ?? false,
+        hasKey: Boolean(p.apiKeyEnc),
+        updatedAt: p.updatedAt,
+        updatedBy: p.updatedBy,
+      }));
     },
 
     async resolveKey(id) {
-      const [saved] = await select(`WHERE id = $1`, [id]);
+      const saved = await table.get(id);
       if (!saved || saved.disabled || !saved.apiKeyEnc) return null;
       return decryptSecret(saved.apiKeyEnc, key);
     },
@@ -93,10 +84,10 @@ export function createCustomProviderStore(input: {
         validateCustomProviderSpec(spec);
         const actor = updatedBy.trim();
         if (!actor) throw new Error("updatedBy is required");
-        const [existing] = await select(`WHERE id = $1`, [spec.id]);
+        const existing = await table.get(spec.id);
         const trimmedKey = apiKey?.trim();
         const apiKeyEnc = trimmedKey ? encryptSecret(trimmedKey, key) : existing?.apiKeyEnc;
-        await save({
+        await table.put(spec.id, {
           ...spec,
           ...(apiKeyEnc ? { apiKeyEnc } : {}),
           disabled: false,
@@ -108,7 +99,7 @@ export function createCustomProviderStore(input: {
 
     async delete(id, updatedBy) {
       return write(async () => {
-        const rows = await q(
+        const rows = await pg.q(
           `UPDATE custom_model_providers SET disabled = true, updated_at = $2, updated_by = $3
            WHERE id = $1 AND disabled IS NOT TRUE RETURNING id`,
           [id, Date.now(), updatedBy],

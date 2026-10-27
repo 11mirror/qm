@@ -1,5 +1,5 @@
-import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import { encryptSecret, decryptSecret, type SecretKey } from "./connector-client-store.ts";
 import { swallow } from "../util/errors.ts";
 
@@ -26,19 +26,19 @@ export const BROWSER_SESSIONS_MIGRATION = mapToTableMigration(
   BROWSER_SESSIONS,
 );
 
-const codec = tableCodec<StoredBrowserSession>(BROWSER_SESSIONS);
-
 export function createBrowserSessionStore(deps: {
   databaseUrl: string;
   key: SecretKey;
   now?: () => number;
 }): BrowserSessionStore {
   const now = deps.now ?? Date.now;
-  const { q } = createPgPool(deps.databaseUrl, [BROWSER_SESSIONS_MIGRATION]);
+  const table = typedTable<StoredBrowserSession>(
+    createPgPool(deps.databaseUrl, [BROWSER_SESSIONS_MIGRATION]),
+    BROWSER_SESSIONS,
+  );
   return {
     async get(principalId) {
-      const rows = await q(`SELECT ${codec.columns} FROM browser_sessions WHERE principal_id = $1`, [principalId]);
-      const rec = rows[0] ? codec.row(rows[0]) : null;
+      const rec = await table.get(principalId);
       if (!rec) return null;
       try {
         return decryptSecret(rec.stateEnc, deps.key);
@@ -48,15 +48,11 @@ export function createBrowserSessionStore(deps: {
       }
     },
     async put(principalId, storageStateJson) {
-      await q(
-        `INSERT INTO browser_sessions (${codec.columns}) VALUES (${codec.placeholders})
-         ON CONFLICT (${tenantCols("principal_id")}) DO UPDATE SET ${codec.updates}`,
-        codec.values(principalId, {
-          principalId,
-          stateEnc: encryptSecret(storageStateJson, deps.key),
-          updatedAt: now(),
-        }),
-      );
+      await table.put(principalId, {
+        principalId,
+        stateEnc: encryptSecret(storageStateJson, deps.key),
+        updatedAt: now(),
+      });
     },
   };
 }

@@ -1,6 +1,6 @@
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
-import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import { MODEL_PROVIDERS, type ModelProvider, type ModelProviderAvailability } from "./pi-models.ts";
 
 export { isModelProvider, type ModelProvider } from "./pi-models.ts";
@@ -38,34 +38,20 @@ const MODEL_CREDENTIALS: TableSpec = {
 
 export const MODEL_CREDENTIALS_MIGRATION = mapToTableMigration("model/credentials/0001-typed", MODEL_CREDENTIALS);
 
-const codec = tableCodec<StoredModelCredential>(MODEL_CREDENTIALS);
-
 export function createModelCredentialStore(input: {
   databaseUrl: string;
   keyMaterial: string | Buffer;
   fallback?: Partial<Record<ModelProvider, string>>;
 }): ModelCredentialStore {
   const key = deriveConnectorKey(input.keyMaterial, "model-credentials");
-  const { q } = createPgPool(input.databaseUrl, [MODEL_CREDENTIALS_MIGRATION]);
-
-  async function records(providers: readonly ModelProvider[]): Promise<Map<string, StoredModelCredential>> {
-    const rows = codec.rows(
-      await q(`SELECT ${codec.columns} FROM model_credentials WHERE provider = ANY($1::text[])`, [providers]),
-    );
-    return new Map(rows.map((row) => [row.provider, row]));
-  }
-
-  async function save(rec: StoredModelCredential): Promise<void> {
-    await q(
-      `INSERT INTO model_credentials (${codec.columns}) VALUES (${codec.placeholders})
-       ON CONFLICT (${tenantCols("provider")}) DO UPDATE SET ${codec.updates}`,
-      codec.values(rec.provider, rec),
-    );
-  }
+  const table = typedTable<StoredModelCredential>(
+    createPgPool(input.databaseUrl, [MODEL_CREDENTIALS_MIGRATION]),
+    MODEL_CREDENTIALS,
+  );
 
   return {
     async resolve(provider) {
-      const saved = (await records([provider])).get(provider);
+      const saved = await table.get(provider);
       if (saved?.disabled) return null;
       return saved?.secretEnc ? decryptSecret(saved.secretEnc, key) : input.fallback?.[provider]?.trim() || null;
     },
@@ -75,7 +61,7 @@ export function createModelCredentialStore(input: {
       if (!secret) throw new Error("API key is required");
       const actor = updatedBy.trim();
       if (!actor) throw new Error("updatedBy is required");
-      await save({
+      await table.put(provider, {
         provider,
         secretEnc: encryptSecret(secret, key),
         disabled: false,
@@ -85,7 +71,7 @@ export function createModelCredentialStore(input: {
     },
 
     async delete(provider, updatedBy) {
-      await save({
+      await table.put(provider, {
         provider,
         disabled: true,
         updatedAt: Date.now(),
@@ -94,7 +80,7 @@ export function createModelCredentialStore(input: {
     },
 
     async statuses() {
-      const saved = await records(MODEL_PROVIDERS);
+      const saved = new Map((await table.all()).map((row) => [row.provider, row]));
       return MODEL_PROVIDERS.map((provider): ModelCredentialStatus => {
         const rec = saved.get(provider);
         if (rec)

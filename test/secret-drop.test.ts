@@ -33,8 +33,8 @@ const SECRET = "secret-drop-test-secret".repeat(3);
 const execFileAsync = promisify(execFile);
 
 describe("SecretDropStore", () => {
-  it("mint → peek (non-consuming) → redeem (single-use)", async () => {
-    const t = 1_000_000;
+  it("mint → peek (non-consuming) → redeem (single-use); expires after the TTL on both peek and redeem", async () => {
+    let t = 1_000_000;
     const store = createSecretDropStore(testDatabaseUrl(), { now: () => t });
     const { dropId } = await store.mint({
       ownerId: "U_A",
@@ -52,15 +52,11 @@ describe("SecretDropStore", () => {
     const r2 = await store.redeem(dropId);
     assert.ok(!r2.ok && r2.reason === "not_found", "single-use: a second redeem finds nothing");
     assert.ok(!(await store.peek(dropId)).ok, "the record is gone after redemption");
-  });
 
-  it("expires after the TTL, on both peek and redeem", async () => {
-    let t = 1_000_000;
-    const store = createSecretDropStore(testDatabaseUrl(), { now: () => t });
-    const { dropId } = await store.mint({ ownerId: "U_A", service: "x", purpose: "p", requestedBy: "U_A" });
+    const { dropId: later } = await store.mint({ ownerId: "U_A", service: "x", purpose: "p", requestedBy: "U_A" });
     t += SECRET_DROP_TTL_MS + 1;
-    assert.deepEqual(await store.peek(dropId), { ok: false, reason: "expired" });
-    assert.deepEqual(await store.redeem(dropId), { ok: false, reason: "expired" });
+    assert.deepEqual(await store.peek(later), { ok: false, reason: "expired" });
+    assert.deepEqual(await store.redeem(later), { ok: false, reason: "expired" });
   });
 
   it("siblings: pending drops for the same conversation only — other threads, expired links, and same-service twins excluded", async () => {
@@ -93,13 +89,15 @@ describe("SecretDropStore", () => {
 });
 
 describe("fireDropResolution", () => {
-  const databaseUrl = testDatabaseUrl();
-  const depsWith = (run: (req: TurnRequest) => Promise<TurnResult>) => ({
-    outbound: recordingOutbound(),
-    idempotency: createIdempotencyStore(databaseUrl),
-    identity: createIdentityService(databaseUrl),
-    run,
-  });
+  const depsWith = (run: (req: TurnRequest) => Promise<TurnResult>) => {
+    const databaseUrl = testDatabaseUrl();
+    return {
+      outbound: recordingOutbound(),
+      idempotency: createIdempotencyStore(databaseUrl),
+      identity: createIdentityService(databaseUrl),
+      run,
+    };
+  };
 
   it("resumes the channel as the owner with the credential handle, exactly once", async () => {
     const seen: TurnRequest[] = [];
@@ -184,13 +182,7 @@ describe("fireDropResolution", () => {
   });
 
   it("enqueues a fallback delivery when the resume turn doesn't land (drop is single-use, no sweep)", async () => {
-    const outbound = recordingOutbound();
-    const deps = {
-      outbound,
-      idempotency: createIdempotencyStore(databaseUrl),
-      identity: createIdentityService(databaseUrl),
-      run: async () => ({ status: "pending_approval" }) as TurnResult,
-    };
+    const deps = depsWith(async () => ({ status: "pending_approval" }) as TurnResult);
     const destination = { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") } as const;
     await fireDropResolution(deps, {
       id: "dropF",
@@ -203,7 +195,7 @@ describe("fireDropResolution", () => {
       credentialHandle: "kc_stripe",
       granted: true,
     });
-    const fb = (await outbound.pending("slack")).filter((d) => d.idempotencyKey === "drop:dropF:fallback");
+    const fb = (await deps.outbound.pending("slack")).filter((d) => d.idempotencyKey === "drop:dropF:fallback");
     assert.equal(fb.length, 1, "the conversation hears the key arrived even when the resume turn didn't run");
     assert.match(fb[0]!.text, /saved to the keychain/);
   });
