@@ -1,0 +1,716 @@
+#app-view .message-body pre code {
+  padding: 0;
+  background: transparent;
+  font-size: 12px;
+}
+#app-view .message-body blockquote {
+  margin: 0 0 8px;
+  padding-left: 10px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+#app-view .message-entry .entry-label {
+  color: var(--text);
+  font-size: 13px;
+}
+#app-view .entry.cron-prompt-entry .message-body {
+  padding: 8px 10px;
+  border: 1px solid var(--warn-border);
+  border-radius: 6px;
+  background: var(--warn-surface);
+}
+#app-view .entry.system-entry pre {
+  border-left: 3px solid #cbd5e1;
+}
+#app-view .entry.thinking-entry pre {
+  font-style: italic;
+  color: var(--muted);
+  background: var(--subtle);
+  border-color: var(--border);
+  max-height: 320px;
+  overflow: auto;
+}
+#app-view .entry.llm .role {
+  color: var(--muted);
+}
+#app-view .entry.llm pre {
+  border-left: 3px solid var(--border);
+}
+#app-view .tool-entry {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+#app-view .tool-entry + .tool-entry {
+  margin-top: 2px;
+}
+#app-view .tool-entry .who {
+  padding-left: 2px;
+}
+#app-view .tool-label {
+  color: #525252;
+  flex: 0 1 auto;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+#app-view .tool-entry .who .when {
+  margin-left: auto;
+  text-align: right;
+}
+#app-view .tool-body {
+  margin: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+#app-view .tool-entry .tool-command {
+  max-height: calc(1.45em * 3 + 10px);
+  overflow: auto;
+  border: 1px solid #444;
+  border-radius: 6px;
+  background: #555;
+  color: #ddd;
+  line-height: 1.45;
+}
+#app-view .tool-entry.expanded .tool-command {
+  max-height: 480px;
+}
+#app-view .tool-line .tool-label {
+  flex: none;
+}
+#app-view .tool-line .when {
+  white-space: nowrap;
+}
+#app-view .tool-line-caret {
+  flex: 0 0 auto;
+  width: 10px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+}
+#app-view .tool-line-preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+}
+#app-view .tool-line-entry.open > .tool-entry {
+  display: block;
+  margin: 2px 0 6px 18px;
+}
+#app-view .tool-line-entry.open .tool-line-preview {
+  visibility: hidden;
+}
+#app-view .context-turn {
+  margin: 0 0 2px 18px;
+}
+#app-view .context-turn.cache-miss {
+  border-left: 3px solid var(--danger);
+  padding-left: 10px;
+}
+#app-view .context-turn.collapsed {
+  margin-bottom: 12px;
+}
+#app-view .tool-line-entry > .tool-entry > .who,
+#app-view .context-turn.collapsed .context-overview,
+#app-view .context-turn.collapsed .context-details {
+  display: none;
+}
+#app-view .context-turn.collapsed .who {
+  margin-bottom: 0;
+}
+#app-view .context-turn.collapsed .copy {
+  opacity: 0;
+}
+#app-view .context-turn .who {
+  align-items: baseline;
+}
+#app-view .context-stats {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 14px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+#app-view .context-overview {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+#app-view .context-stack {
+  display: flex;
+  height: 30px;
+  width: 100%;
+  overflow: hidden;
+  background: var(--subtle);
+  border: 1px solid var(--border);
+}
+#app-view .context-segment {
+  appearance: none;
+  border: 0;
+  border-right: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--surface);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 28px;
+  padding: 0 8px;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  overflow: hidden;
+  text-align: left;
+}
+#app-view .context-segment:last-child {
+  border-right: 0;
+}
+#app-view .context-segment:hover {
+  background: var(--subtle);
+  color: var(--text);
+}
+#app-view .context-segment:focus-visible {
+  outline: 2px solid #111827;
+  outline-offset: 2px;
+  position: relative;
+  z-index: 1;
+}
+#app-view .context-segment.active {
+  background: var(--surface);
+  color: var(--text);
+  outline: 2px solid #111827;
+  outline-offset: -2px;
+}
+#app-view .context-segment span,
+#app-view .context-segment small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#app-view .context-segment small {
+  flex: 0 0 auto;
+  opacity: 0.78;
+  font-variant-numeric: tabular-nums;
+}
+#app-view .context-segment[data-tiny="true"] span,
+#app-view .context-segment[data-tiny="true"] small {
+  display: none;
+}
+#app-view .context-details {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+#app-view .context-request {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+#app-view .context-request-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+  margin: 0 0 8px;
+}
+#app-view .context-request-head strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+#app-view .context-request-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+#app-view .context-raw {
+  appearance: none;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+#app-view .context-raw:hover,
+#app-view .context-raw.active {
+  color: var(--text);
+  background: none;
+}
+#app-view .context-selection {
+  margin-top: 10px;
+}
+#app-view .context-selection:empty {
+  display: none;
+}
+#app-view .context-section-view {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+#app-view .context-section-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+  margin: 0 0 8px;
+}
+#app-view .context-section-head strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+#app-view .context-section-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+#app-view .context-section-view pre {
+  max-height: 360px;
+  overflow: auto;
+}
+#app-view .context-note {
+  color: var(--danger);
+  font-size: 12px;
+  margin: 6px 0 0;
+}
+#app-view .disclosure {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0;
+}
+#app-view .disclosure:hover {
+  color: var(--text);
+  background: var(--subtle);
+  border-color: var(--muted);
+}
+#app-view .disclosure:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: 2px;
+}
+#app-view .context-icon {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  padding: 0;
+  margin-left: -2px;
+}
+#app-view .context-icon svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+}
+#app-view .context-icon:hover,
+#app-view .context-icon.active {
+  color: var(--text);
+  background: var(--subtle);
+}
+#app-view .context-page-head {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin: 0 0 14px;
+}
+#app-view .context-page-head h2 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+}
+#app-view .context-page-head .context-stats {
+  margin-left: auto;
+}
+#app-view .context-back {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+}
+#app-view .context-back:hover {
+  color: var(--text);
+  border-color: var(--muted);
+  background: var(--subtle);
+}
+#app-view .context-page .context-stack {
+  height: 36px;
+}
+#app-view .context-page.context-turn {
+  margin: 0;
+}
+#app-view .context-page.cache-miss {
+  border-left: 0;
+  padding-left: 0;
+}
+#app-view .context-page .context-overview {
+  padding: 10px 0;
+  margin: 0;
+}
+#app-view .context-page .context-section-view {
+  border-top: 0;
+  padding-top: 0;
+}
+#app-view .context-page .context-section-view pre {
+  max-height: none;
+  overflow: visible;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--subtle);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+#app-view .context-page .context-selection:empty::after {
+  content: "Pick a section above to read it verbatim.";
+  color: var(--muted);
+  font-size: 12px;
+}
+#app-view .context-page .context-selection:empty {
+  display: block;
+  padding-top: 8px;
+}
+#app-view .context-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+#app-view.context-fullpage .shellbar {
+  position: static;
+}
+#app-view .entry .who .when {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+#app-view .entry-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+#app-view .meta-row,
+#app-view .credential-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+#app-view .step-dur {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+#app-view .step-dur .seg-label {
+  opacity: 0.65;
+  margin-right: 2px;
+}
+#app-view .step-dur .dur-warm {
+  color: var(--warn);
+}
+#app-view .step-dur .dur-hot {
+  color: var(--danger);
+  font-weight: 600;
+}
+#app-view .meta-chip {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+#app-view .meta-chip.danger {
+  color: var(--danger);
+  font-weight: 600;
+}
+#app-view .entry pre {
+  margin: 0;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+#app-view .copy {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  line-height: 1.5;
+}
+#app-view .copy:hover {
+  color: var(--text);
+  background: var(--subtle);
+}
+#app-view .copy.copied {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+#app-view .entry .who .copy {
+  margin-left: 0;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+#app-view .entry:hover .who .copy,
+#app-view .entry .who .copy:focus-visible {
+  opacity: 1;
+}
+#app-view .entry.noise > pre {
+  max-height: 220px;
+  overflow: auto;
+}
+#app-view .field-hint {
+  color: var(--muted);
+  font-size: 12px;
+  margin: -2px 0 8px;
+}
+#app-view .credential-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+#app-view .credential-row.is-editing {
+  background: var(--subtle);
+  margin: 0 -10px;
+  padding: 10px;
+  border-radius: var(--radius);
+}
+#app-view .credential-main,
+#app-view .instructions-diff section,
+#app-view .governance-content,
+#app-view .setting-copy {
+  min-width: 0;
+}
+#app-view .credential-title strong {
+  overflow-wrap: anywhere;
+}
+#app-view .credential-actions {
+  gap: 8px;
+  flex-shrink: 0;
+}
+#app-view .credential-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 5px;
+}
+#app-view .sc-form-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 8px;
+}
+#app-view .sc-form-head .hint,
+#app-view .instructions-revision p {
+  margin: 0;
+}
+#app-view .editor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(250px, 34%);
+  gap: 18px;
+  align-items: start;
+}
+#app-view .editor-panel {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--subtle);
+}
+#app-view .editor-panel h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 500;
+}
+#app-view .capability-summary {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+}
+#app-view .capability-summary div {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 8px;
+}
+#app-view .capability-summary dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+#app-view .capability-summary dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+#app-view .identity-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+#app-view .identity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11px;
+}
+#app-view .identity-chip small {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#app-view .sc-semantics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 10px 0 14px;
+}
+#app-view .sc-semantics div {
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+}
+#app-view .sc-semantics strong {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 11px;
+}
+#app-view .sc-semantics span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+#app-view .instructions-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 8px;
+  color: var(--muted);
+}
+#app-view .instructions-diff {
+  display: grid;
+  margin-top: 14px;
+}
+#app-view .instructions-diff h3 {
+  margin: 0 0 5px;
+}
+#app-view .instructions-diff pre {
+  min-height: 90px;
+  max-height: 210px;
+  margin: 0;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--border);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+#app-view .instructions-history {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+}
+#app-view .instructions-revision {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+}
+#app-view .instructions-revision small {
+  display: block;
+  color: var(--muted);
+}
+#app-view[data-subview="models"] #view-governance .governance-layout,
+#app-view[data-subview="credentials"] #view-governance .governance-layout,
+#app-view[data-subview="slack-settings"] #view-governance .governance-layout,
+#app-view[data-subview="customize"] #view-governance .governance-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+#app-view[data-subview="slack-settings"] #view-governance section.card:not(.sv-slack-settings),
+#app-view[data-subview="models"] #view-governance section.card:not(.sv-models),
+#app-view[data-subview="credentials"] #view-governance section.card:not(.sv-credentials),
+#app-view[data-subview="customize"] #view-governance section.card:not(.sv-customize),
+#app-view[data-subview="governance"] #view-governance section.card:not(.sv-governance),
+#app-view select[data-dd-host] {
+  display: none !important;
+}
+#app-view .dd {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+#app-view .dd-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  color: var(--text);
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 7px 10px;
+}
+#app-view .dd-btn:hover {
+  background: var(--surface);
+  border-color: color-mix(in srgb, var(--muted) 40%, var(--border));
+}
