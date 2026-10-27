@@ -81,7 +81,7 @@ const configSchema = z.object({
     .regex(/^[A-Za-z0-9_.-]{1,64}$/)
     .default("default"),
   label: z.string().min(1).max(60),
-  apiUrl: z.url().refine((url) => /^https?:\/\//.test(url), { message: "must be http(s)" }),
+  apiUrl: z.url().refine((url) => ["http:", "https:"].includes(new URL(url).protocol), { message: "must be http(s)" }),
   apiToken: z.string().min(16),
   signingSecret: z.string().refine(isStrongSigningSecret, { message: "must be at least 32 characters" }),
   internalEmailDomains: z.array(z.string().regex(/^[a-z0-9.-]+\.[a-z]{2,}$/)).default([]),
