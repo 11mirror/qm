@@ -4,8 +4,7 @@ import { stopWithBackstop } from "./wiring.ts";
 import { shutdownOnUncaught } from "./util/process-guard.ts";
 import { startWebEdge } from "./web-edge.ts";
 import { bootApp } from "./boot.ts";
-import { createTenantFront, publishEdgeTenants } from "./tenants/host.ts";
-import { hostOfUrl } from "../plugins/chassis/src/tenant-hosts.ts";
+import { createTenantFront } from "./tenants/host.ts";
 
 const servers: Server[] = [];
 const booted = await bootApp(process.env, async (server, config) => {
@@ -16,12 +15,6 @@ const booted = await bootApp(process.env, async (server, config) => {
     `[qm] listening on :${config.port} (org=${config.orgId}, ` +
       `workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled}, multitenant=${config.multitenant})`,
   );
-  if (config.multitenant)
-    await publishEdgeTenants(
-      [config.publicUrl, config.apiBaseUrl, config.publicWebUrl]
-        .map(hostOfUrl)
-        .filter((host): host is string => Boolean(host)),
-    );
   if (config.publicPort)
     servers.push(
       ...(await startWebEdge(

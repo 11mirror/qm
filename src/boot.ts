@@ -11,11 +11,11 @@ import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { createPgPool, migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
-import { ensureTenantQueues } from "./turns/absurd-schema.ts";
-import { hostOfUrl } from "../plugins/chassis/src/tenant-hosts.ts";
+import { mergeTenantQueues } from "./turns/absurd-schema.ts";
+import { hostOfUrl, setEdgeTenants } from "../plugins/chassis/src/tenant-hosts.ts";
 import { tagErrorDeployment } from "../plugins/chassis/src/error-reporting.ts";
-import { homeHosts } from "../plugins/chassis/src/tenant-settings.ts";
-import { tenant, withTenant, type Tenant } from "./tenant.ts";
+import { homeHosts, homeTenantSettings } from "../plugins/chassis/src/tenant-settings.ts";
+import { tenant, tenantSettings, withTenant, type Tenant } from "./tenant.ts";
 import {
   activeTenants,
   createTenantDirectory,
@@ -43,18 +43,15 @@ export async function bootApp(
 
   const built = buildApp(config, { env });
   await migrateRegisteredPgSchemas(config.databaseUrl);
-  const rewriteKeychain = async () => {
-    const rewritten = (await built.keychain?.rewriteTargetUsernameCredentials()) ?? 0;
-    if (rewritten > 0) console.log(`[qm] rewrote ${rewritten} keychain credential(s) to the current shape`);
-  };
-  if (config.multitenant)
+  if (config.databaseUrl) await mergeTenantQueues(config.databaseUrl);
+  const publishEdge = config.multitenant ? edgeTenantFeed(config, env) : undefined;
+  if (publishEdge) {
     await useRegistryTenants(config, env, async () => {
-      await ensureTenantQueues(config.databaseUrl!);
-      await rewriteKeychain();
       await built.start();
       await built.refreshCustomProviders();
     });
-  await rewriteKeychain();
+    watchActiveTenants(publishEdge);
+  }
   const slackConfig = slackPluginConfigFromEnv(env);
   let slackEnvironmentState: "absent" | "configured" | "partial" = slackConfig ? "configured" : "absent";
   if (!slackConfig && (env.SLACK_BOT_TOKEN || env.SLACK_APP_TOKEN)) slackEnvironmentState = "partial";
@@ -68,6 +65,7 @@ export async function bootApp(
   await built.refreshCustomProviders();
   built.runtime.start();
 
+  publishEdge?.(await activeTenants());
   await serve(server, config);
 
   warnAboutUnreachableFeatures(config);
@@ -139,6 +137,18 @@ function warnAboutUnreachableFeatures(config: Config): void {
 
 type SlackRuntime = ReturnType<typeof createSlackRuntimeReconciler>;
 
+function configHosts(config: Config): string[] {
+  return [config.publicUrl, config.apiBaseUrl, config.publicWebUrl]
+    .map(hostOfUrl)
+    .filter((host): host is string => Boolean(host));
+}
+
+export function edgeTenantFeed(config: Config, env: NodeJS.ProcessEnv): (active: Tenant[]) => void {
+  const home = homeTenantSettings(env, tenant());
+  const homeEdge = { ...home, hosts: [...new Set([...home.hosts, ...configHosts(config)])] };
+  return (active) => setEdgeTenants(active.map((t) => (isHomeTenant(t) ? homeEdge : tenantSettings(t))));
+}
+
 async function useRegistryTenants(config: Config, env: NodeJS.ProcessEnv, prepare: () => Promise<void>): Promise<void> {
   const databaseUrl = config.databaseUrl;
   if (!databaseUrl) throw new Error("QM_MULTITENANT=1 needs DATABASE_URL to read the tenant registry");
@@ -154,10 +164,7 @@ async function useRegistryTenants(config: Config, env: NodeJS.ProcessEnv, prepar
       pool,
       secretsKey,
       home: tenant(),
-      homeHosts: [config.publicUrl, config.apiBaseUrl, config.publicWebUrl]
-        .map(hostOfUrl)
-        .filter((host): host is string => Boolean(host))
-        .concat(homeHosts(env)),
+      homeHosts: configHosts(config).concat(homeHosts(env)),
       ...(config.deployAppsDomain ? { homeAppsDomain: config.deployAppsDomain } : {}),
       homeSandboxPrefix: config.sandbox.namePrefix ?? "qm",
       prepare,

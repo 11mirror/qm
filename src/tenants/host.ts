@@ -1,9 +1,9 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
-import { requestHost, setEdgeTenants } from "../../plugins/chassis/src/tenant-hosts.ts";
-import { tenant, tenantSettings, withTenant, type Tenant } from "../tenant.ts";
+import { requestHost } from "../../plugins/chassis/src/tenant-hosts.ts";
+import { tenant, withTenant, type Tenant } from "../tenant.ts";
 import { reportFailure } from "../util/errors.ts";
-import { activeTenants, isHomeTenant, tenantByHost, watchActiveTenants } from "./directory.ts";
+import { tenantByHost } from "./directory.ts";
 
 const HEALTH_PATHS: ReadonlySet<string> = new Set(["/healthz", "/readyz"]);
 const LOOPBACK: ReadonlySet<string> = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
@@ -46,16 +46,4 @@ export function createTenantFront(server: Server): Server {
   front.headersTimeout = 10_000;
   front.keepAliveTimeout = 5_000;
   return front;
-}
-
-export async function publishEdgeTenants(homeHosts: readonly string[]): Promise<void> {
-  const publish = (active: Tenant[]) =>
-    setEdgeTenants(
-      active.map((t) => {
-        const settings = tenantSettings(t);
-        return isHomeTenant(t) ? { ...settings, hosts: [...new Set([...homeHosts, ...settings.hosts])] } : settings;
-      }),
-    );
-  watchActiveTenants(publish);
-  publish(await activeTenants());
 }

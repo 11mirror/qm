@@ -18,7 +18,7 @@ import {
 } from "./core-relay.ts";
 import { stagedFile } from "./uploads.ts";
 
-export const ADMIN_WRITES: Record<string, string> = {
+const ADMIN_WRITES: Record<string, string> = {
   grants: "POST DELETE",
   "principal-links": "POST DELETE",
   "external-users": "POST DELETE",
@@ -33,7 +33,7 @@ export const ADMIN_WRITES: Record<string, string> = {
   "mcp-servers": "PUT DELETE",
 };
 
-export const ADMIN_READS = new Set(
+const ADMIN_READS = new Set(
   [
     "whoami scopes resources spend egress errors audit crons deployments skills skill-packs sessions runs files",
     "retention users directory keychain memory ambient-context ambient-judgments ack-emoji-picks slack-installation",

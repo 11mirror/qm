@@ -4,7 +4,7 @@ import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/
 
 import { portalIdentitySecret } from "../../chassis/src/env.ts";
 
-export const ALLOW = (process.env.WEB_UI_PRINCIPALS ?? "")
+const ALLOW = (process.env.WEB_UI_PRINCIPALS ?? "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
@@ -15,9 +15,9 @@ export interface Identity {
   impersonator: string | null;
 }
 
-export type Denial = "unauthenticated" | "not_allowed";
+type Denial = "unauthenticated" | "not_allowed";
 
-export function authenticate(req: IncomingMessage): { identity: Identity } | { denied: Denial } {
+function authenticate(req: IncomingMessage): { identity: Identity } | { denied: Denial } {
   const raw = req.headers[PORTAL_IDENTITY_HEADER];
   const token = Array.isArray(raw) ? raw[0] : raw;
   const secret = portalIdentitySecret();

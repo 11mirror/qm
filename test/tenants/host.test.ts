@@ -5,15 +5,16 @@ import { isDeepStrictEqual } from "node:util";
 import { test, after, before } from "node:test";
 import pg from "pg";
 import {
-  createHostFront,
+  edgeTenant,
   normalizeHost,
-  onEdgeTenants,
   requestHost,
   routeForHost,
+  serveForHost,
+  setEdgeTenants,
   type HostRoute,
-  type HostTarget,
 } from "../../plugins/chassis/src/tenant-hosts.ts";
-import { deriveTenantSecret, type TenantSettings } from "../../plugins/chassis/src/tenant-settings.ts";
+import { deriveTenantSecret } from "../../plugins/chassis/src/tenant-settings.ts";
+import { edgeTenantFeed } from "../../src/boot.ts";
 import { configurePgTenancy, createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
 import { loadConfig } from "../../src/config.ts";
 import { registerTenantSettings, tenant, tenantFor, tenantSettings, withTenant } from "../../src/tenant.ts";
@@ -24,9 +25,8 @@ import {
   useTenantDirectory,
   type TenantDirectory,
 } from "../../src/tenants/directory.ts";
-import { createTenantFront, publishEdgeTenants } from "../../src/tenants/host.ts";
+import { createTenantFront } from "../../src/tenants/host.ts";
 import { type TenantRecord, upsertTenant } from "../../src/tenants/registry.ts";
-import { tenantQueue } from "../../src/turns/absurd-schema.ts";
 
 const ACME_ID = "0f8e2c4a-1b2c-4d3e-8f90-123456789abc";
 
@@ -83,13 +83,6 @@ function get(port: number, path: string, headers: Record<string, string>): Promi
   });
 }
 
-function named(name: string): HostTarget {
-  return {
-    request: (_req, res) => void res.end(name),
-    upgrade: (_req, socket) => void socket.end(),
-  };
-}
-
 test("request host prefers the forwarded host and drops the port", () => {
   assert.equal(
     requestHost({ host: "core.internal:8080", "x-forwarded-host": "Acme.Example.test:443" }),
@@ -114,25 +107,6 @@ test("routes match exact hosts before published-app domains", () => {
   assert.equal(routeForHost(routes, undefined), undefined);
 });
 
-test("the front dispatches by host and sends unknown hosts to home only for health checks", async (t) => {
-  const front = createHostFront(
-    () => [
-      { hosts: ["acme.example.test"], target: named("acme") },
-      { hosts: ["home.example.test"], target: named("home") },
-    ],
-    () => named("home"),
-  );
-  const port = await listen(front);
-  t.after(() => front.close());
-  assert.deepEqual(await get(port, "/v1/x", { host: "acme.example.test" }), { status: 200, body: "acme" });
-  assert.deepEqual(await get(port, "/v1/x", { host: "internal", "x-forwarded-host": "home.example.test" }), {
-    status: 200,
-    body: "home",
-  });
-  assert.deepEqual(await get(port, "/healthz", { host: "10.0.0.7:8080" }), { status: 200, body: "home" });
-  assert.equal((await get(port, "/v1/x", { host: "stranger.test" })).status, 404);
-});
-
 test("core verifies each tenant with the derived secrets its surfaces sign with, distinct per tenant", () => {
   const config = loadConfig({
     ...deployment,
@@ -144,7 +118,7 @@ test("core verifies each tenant with the derived secrets its surfaces sign with,
   const other = { ...record, id: "0f8e2c4a-1b2c-4d3e-8f90-000000000002", slug: "other", orgId: "other" };
   registerTenantSettings([record, other]);
   const coreFor = (t: TenantRecord) => withTenant(tenantFor(t.orgId, t.id, t.slug), () => tenantConfig(config));
-  assert.equal(coreFor(record).signingSecret, deriveTenantSecret(deployment.CORE_SIGNING_SECRET, ACME_ID));
+  assert.equal(coreFor(record).signingSecret, deriveTenantSecret(deployment.CORE_SIGNING_SECRET, record.id));
   assert.notEqual(coreFor(record).signingSecret, deployment.CORE_SIGNING_SECRET);
   assert.notEqual(coreFor(other).signingSecret, coreFor(record).signingSecret);
   assert.equal(tenantConfig(config).signingSecret, deployment.CORE_SIGNING_SECRET);
@@ -157,10 +131,29 @@ test("core verifies each tenant with the derived secrets its surfaces sign with,
   registerTenantSettings([]);
 });
 
-test("Absurd queues are tenant-scoped except for the home tenant", () => {
-  assert.equal(tenantQueue("turns_people", undefined), "turns_people");
-  assert.equal(tenantQueue("turns_background", ACME_ID), "turns_background_t0f8e2c4a1b2c");
-  assert.equal(tenantQueue("turns_people"), "turns_people");
+test("the one portal and web UI learn every active tenant's settings and serve each by host", async (t) => {
+  const config = loadConfig({
+    ...deployment,
+    CAPABILITY_SECRET: "home-capability-secret",
+    PORTAL_IDENTITY_SECRET: "home-portal-identity-secret",
+    MODEL_GATEWAY_URL: "https://gateway.example.test",
+    MODEL_GATEWAY_API_KEY_HEADER: "authorization",
+  });
+  registerTenantSettings([record]);
+  t.after(() => {
+    registerTenantSettings([]);
+    setEdgeTenants([]);
+  });
+  edgeTenantFeed(config, deployment)([tenant(), tenantFor(record.orgId, record.id, record.slug)]);
+  const edge = createServer((req, res) =>
+    serveForHost(req, res, () => void res.end(`${edgeTenant()?.orgId}:${edgeTenant()?.sandboxNamePrefix ?? ""}`)),
+  );
+  const port = await listen(edge);
+  t.after(() => edge.close());
+  assert.deepEqual(await get(port, "/", { host: "acme.example.test" }), { status: 200, body: "acme:qm-acme-sbx" });
+  assert.deepEqual(await get(port, "/", { host: "home.example.test" }), { status: 200, body: `${tenant().orgId}:` });
+  assert.deepEqual(await get(port, "/healthz", { host: "10.0.0.7" }), { status: 200, body: `${tenant().orgId}:` });
+  assert.equal((await get(port, "/", { host: "stranger.example.test" })).status, 404);
 });
 
 const URL_ADMIN = process.env.DATABASE_URL!;
@@ -280,27 +273,6 @@ test("a tenant's changed settings are live on its next request without a restart
   assert.equal(await prefix(), "none");
   await upsertTenant(registry, { ...tenantRow(ACME, "acme"), sandboxNamePrefix: "a2" }, undefined);
   await eventually(prefix, "a2");
-});
-
-test("the web edge serves the tenants the app serves, with their live settings", async () => {
-  let edge: readonly TenantSettings[] = [];
-  onEdgeTenants((tenants) => (edge = tenants));
-  await publishEdgeTenants(["home.example.test"]);
-  assert.deepEqual(
-    edge.map((t) => [t.id ?? null, t.hosts[0]]),
-    [
-      [null, "home.example.test"],
-      [ACME, "acme.example.test"],
-      [GAMMA, "gamma.example.test"],
-    ],
-  );
-  assert.equal(edge.find((t) => t.id === ACME)?.sandboxNamePrefix, "a2");
-  await upsertTenant(
-    registry,
-    { ...tenantRow(ACME, "acme"), sandboxNamePrefix: "a2", faviconSvg: "<svg/>" },
-    undefined,
-  );
-  await eventually(async () => edge.find((t) => t.id === ACME)?.faviconSvg, "<svg/>");
 });
 
 test("a tenant reusing another tenant's org id is not served", async () => {

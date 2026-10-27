@@ -7,7 +7,7 @@ import type { TenantSettings } from "../../chassis/src/tenant-settings.ts";
 
 export const eventClients = perEdgeTenant(() => new Map<string, Set<ServerResponse>>());
 
-export const ownerOfWebThread = (threadRef: string) => /^web:([^:]+):/.exec(threadRef)?.[1];
+const ownerOfWebThread = (threadRef: string) => /^web:([^:]+):/.exec(threadRef)?.[1];
 
 export const SSE_HEADERS = {
   "content-type": "text/event-stream; charset=utf-8",
@@ -16,27 +16,27 @@ export const SSE_HEADERS = {
   "x-accel-buffering": "no",
 };
 
-export function sseEvent(res: ServerResponse, event: string, data: unknown): void {
+function sseEvent(res: ServerResponse, event: string, data: unknown): void {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
-export function sendTo(users: Iterable<string>, event: string, data: unknown = {}): void {
+function sendTo(users: Iterable<string>, event: string, data: unknown = {}): void {
   const clients = eventClients();
   for (const user of users) for (const res of clients.get(user) ?? []) sseEvent(res, event, data);
 }
 
 export const SSE_HEARTBEAT_MS = 15_000;
 
-export const STATE_FEED_RECONNECT_MS = Number(process.env.STATE_FEED_RECONNECT_MS ?? 3_000);
+const STATE_FEED_RECONNECT_MS = Number(process.env.STATE_FEED_RECONNECT_MS ?? 3_000);
 
-export interface SessionStateFrame {
+interface SessionStateFrame {
   threadRef?: string;
   state?: string;
   participants?: string[];
   [k: string]: unknown;
 }
 
-export function forwardSessionState(frame: SessionStateFrame): void {
+function forwardSessionState(frame: SessionStateFrame): void {
   const threadRef = typeof frame.threadRef === "string" ? frame.threadRef : "";
   if (!threadRef) return;
   const targets = new Set<string>(
@@ -50,7 +50,7 @@ export function forwardSessionState(frame: SessionStateFrame): void {
   sendTo(targets, "session_state", visible);
 }
 
-export async function consumeCoreFeed(
+async function consumeCoreFeed(
   path: string,
   eventName: string,
   onEvent: (data: unknown) => void,
@@ -143,9 +143,9 @@ export function startLiveFeeds(): void {
   });
 }
 
-export const resyncInbox = () => sendTo(eventClients().keys(), "inbox_resync");
+const resyncInbox = () => sendTo(eventClients().keys(), "inbox_resync");
 
-export async function forwardInboxItem(ev: { cronId?: string; itemId?: string; op?: string }): Promise<void> {
+async function forwardInboxItem(ev: { cronId?: string; itemId?: string; op?: string }): Promise<void> {
   const clients = eventClients();
   if (!ev.cronId || !ev.itemId || !clients.size) return;
   const r = await coreFetch(

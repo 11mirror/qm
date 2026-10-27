@@ -1,13 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { TenantSettings } from "./tenant-settings.ts";
-import {
-  createServer,
-  type IncomingHttpHeaders,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from "node:http";
-import type { Duplex } from "node:stream";
+import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
 
 const HEALTH_PATHS: ReadonlySet<string> = new Set(["/healthz", "/readyz"]);
 
@@ -15,11 +8,6 @@ export interface HostRoute<T> {
   hosts: readonly string[];
   appsDomain?: string;
   target: T;
-}
-
-export interface HostTarget {
-  request(req: IncomingMessage, res: ServerResponse): void;
-  upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void;
 }
 
 export function tenantPublicUrl(tenant: TenantSettings): string {
@@ -116,23 +104,4 @@ function pathOf(req: IncomingMessage): string {
   const url = req.url ?? "/";
   const q = url.indexOf("?");
   return q < 0 ? url : url.slice(0, q);
-}
-
-export function createHostFront(
-  routes: () => readonly HostRoute<HostTarget>[],
-  fallback: () => HostTarget | undefined,
-): Server {
-  const resolve = (req: IncomingMessage): HostTarget | undefined =>
-    routeForHost(routes(), requestHost(req.headers)) ?? (HEALTH_PATHS.has(pathOf(req)) ? fallback() : undefined);
-  const server = createServer((req, res) => {
-    const target = resolve(req);
-    if (target) return target.request(req, res);
-    res.writeHead(404, { "content-type": "text/plain; charset=utf-8" }).end("unknown host\n");
-  });
-  server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-    const target = resolve(req);
-    if (target) return target.upgrade(req, socket, head);
-    socket.end("HTTP/1.1 404 Not Found\r\nconnection: close\r\n\r\n");
-  });
-  return server;
 }
