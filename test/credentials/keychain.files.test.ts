@@ -272,7 +272,7 @@ test("legacy rows are rewritten once to the current shape and materialize as bef
   const file = await k.save({ ownerId: "U1", service: "netrc", target: ".netrc", secret: "machine x" });
   const stored = (await creds.get(file.id))!;
   const { targets: _targets, ...withoutTargets } = stored;
-  await creds.put({ ...withoutTargets, target: ".netrc", secretEnc: encryptSecret("machine x", KEY) });
+  await creds.put(file.id, { ...withoutTargets, target: ".netrc", secretEnc: encryptSecret("machine x", KEY) });
 
   assert.equal(await k.rewriteTargetUsernameCredentials(), 2);
   assert.equal(await k.rewriteTargetUsernameCredentials(), 0, "a second pass finds nothing to rewrite");

@@ -172,7 +172,7 @@ test("legacy retry grants remain consumed and invalidate prepared uses", async (
     purpose: "one use",
   });
   const prepared = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
-  await store.grants.put({ ...grant, status: "active", usedAt: Date.now(), usedBy: "U2" });
+  await store.grants.put(grant.id, { ...grant, status: "active", usedAt: Date.now(), usedBy: "U2" });
   assert.equal((await k.grantsForScope("channel:C1")).length, 0);
   for (const actor of ["U2", "U3"])
     await assert.rejects(materializeGrant(k, grant.id, "channel:C1", actor), (e: KeychainError) => e.status === 410);
@@ -225,7 +225,7 @@ test("a grant row pointing at a broker credential cannot materialize (defense in
   const ORG = scopeId("org", "default-org");
   await k.setServiceCredential(ORG, { slug: "serp", name: "SERP", secret: "s3", host: "api.serper.dev" });
   const broker = (await store.creds.all()).find((c) => c.kind === "broker")!;
-  await store.grants.put({
+  await store.grants.put("g-broker", {
     id: "g-broker",
     credentialId: broker.id,
     ownerId: ORG,

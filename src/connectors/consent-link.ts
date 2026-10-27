@@ -1,5 +1,6 @@
 import { createOneTimeStore, type OneTimeResult } from "../persistence/one-time-store.ts";
-import { cols, mapToTableMigration } from "../persistence/typed-table.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { cols, mapToTableMigration, typedTable } from "../persistence/typed-table.ts";
 import type { AccountType } from "./oauth.ts";
 
 interface ConsentLinkRecord {
@@ -31,11 +32,10 @@ export function createConsentLinkStore(
   databaseUrl: string,
   opts: { ttlMs?: number; now?: () => number } = {},
 ): ConsentLinkStore {
-  const links = createOneTimeStore<ConsentLinkRecord>(
-    databaseUrl,
-    CONSENT_LINKS_MIGRATION,
-    opts.ttlMs ?? CONSENT_LINK_TTL_MS,
-    opts.now,
+  const table = typedTable<ConsentLinkRecord>(
+    createPgPool(databaseUrl, [CONSENT_LINKS_MIGRATION]),
+    CONSENT_LINKS_MIGRATION.spec,
   );
+  const links = createOneTimeStore(table, opts.ttlMs ?? CONSENT_LINK_TTL_MS, opts.now);
   return { ...links, mint: async (rec, now) => ({ linkId: await links.mint(rec, now) }) };
 }

@@ -111,7 +111,7 @@ test("spec validation rejects reserved ids, bad slugs, bad URLs, and empty model
   assert.throws(() => validateCustomProviderSpec({ ...GATEWAY, models: [{ id: "a" }, { id: "a" }] }), /duplicate/);
 });
 
-test("store round-trip: upsert encrypts the key, statuses never leak it, delete disables", async () => {
+test("store round-trip: upsert validates and encrypts the key, statuses never leak it, delete disables", async () => {
   const databaseUrl = testDatabaseUrl();
   const store = createCustomProviderStore({ databaseUrl, keyMaterial: "test-key-material" });
 
@@ -130,7 +130,6 @@ test("store round-trip: upsert encrypts the key, statuses never leak it, delete 
   assert.equal(await store.resolveKey("acme-gateway"), "sk-secret-123");
   assert.deepEqual(await store.enabled(), [GATEWAY]);
 
-  // Upsert without a key keeps the existing one.
   await store.upsert({ ...GATEWAY, name: "Renamed" }, undefined, "admin@example.com");
   assert.equal(await store.resolveKey("acme-gateway"), "sk-secret-123");
 
@@ -139,13 +138,6 @@ test("store round-trip: upsert encrypts the key, statuses never leak it, delete 
   assert.deepEqual(await store.enabled(), []);
   assert.equal((await store.statuses())[0]!.disabled, true);
   assert.equal(await store.delete("never-existed", "admin@example.com"), false);
-});
-
-test("store validates specs on upsert", async () => {
-  const store = createCustomProviderStore({
-    databaseUrl: testDatabaseUrl(),
-    keyMaterial: "k",
-  });
   await assert.rejects(store.upsert({ ...GATEWAY, id: "anthropic" }, "k", "a@b.c"), /reserved/);
 });
 
