@@ -1,4 +1,4 @@
-import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
+import { externalSlackAdmitted } from "../resolution/external-slack.ts";
 import { availableRuntimeError, runtimeConfigBody, userRuntimeConfigBody } from "./runtime-config.ts";
 import { type Run, isTerminal, isUnstarted, leaseLapsed, stopRun } from "../runs/run-store.ts";
 import { isSubagentThreadRef } from "../sessions/thread-ref.ts";
@@ -76,10 +76,7 @@ export function createTurnMethods(deps: AppDeps, h: AppHelpers, ambient: Ambient
     return deps.advisoryLock.withLock("session-tree-admission", stop);
   }
   async function admitTurn(req: TurnRequest): Promise<TurnResult | TurnAdmission> {
-    const historicalSlack = Object.keys(deps.externalSlackPolicies ?? {}).length
-      ? (await deps.sessions.getByThread(req.conversation.threadRef))?.surface === "slack"
-      : false;
-    if (!externalSlackRequestAllowed(req, deps.externalSlackPolicies, historicalSlack))
+    if (!(await externalSlackAdmitted(req, deps.externalSlackPolicies, deps.sessions)))
       return {
         status: "refused",
         reason: "External Slack requests require their current authenticated source context.",

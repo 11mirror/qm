@@ -1,5 +1,6 @@
+import { surfaceTraits } from "../../surfaces/surface.ts";
 import { scopeTeamsToTurn } from "../../teams/teams.ts";
-import { externalSlackRequestAllowed } from "../../resolution/external-slack.ts";
+import { externalSlackAdmitted } from "../../resolution/external-slack.ts";
 import { delegatedAuthorizationOrigin } from "../../subagents/delegation.ts";
 import { isSubagentThreadRef } from "../../sessions/thread-ref.ts";
 import { createCanWriteScope, rosterAdmits } from "../../resolution/scope-membership.ts";
@@ -59,12 +60,11 @@ export async function admitTurn(
   requested: OrchestratorInput,
 ): Promise<{ admitted: AdmittedTurn } | { refused: TurnResult }> {
   if (
-    !externalSlackRequestAllowed(
+    !(await externalSlackAdmitted(
       { ...requested, surface: requested.surface ?? "" },
       deps.externalSlackPolicies,
-      Object.keys(deps.externalSlackPolicies ?? {}).length > 0 &&
-        (await deps.sessions.getByThread(requested.conversation.threadRef))?.surface === "slack",
-    )
+      deps.sessions,
+    ))
   )
     return {
       refused: { status: "refused", reason: "Slack workspace access changed; start a fresh request in Slack." },
@@ -180,7 +180,7 @@ export async function admitTurn(
   if (conversation.kind !== "dm" && !deps.identity.audienceIsAllInternal(conversation.audience)) {
     const externalAllowed =
       external ||
-      (input.surface === "slack" &&
+      (surfaceTraits(input.surface).externalParticipants &&
         (deps.config ? await deps.config.settingDurable("externalSlackParticipants", tenant().orgScope) : false));
     if (!externalAllowed) {
       return {

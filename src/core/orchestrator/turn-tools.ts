@@ -1,3 +1,4 @@
+import { surfaceTraits } from "../../surfaces/surface.ts";
 import type { TurnCtx } from "./turn-context.ts";
 import type { ApprovalLedger } from "./approvals.ts";
 import type { buildCredentialCatalog } from "./credential-catalog.ts";
@@ -217,7 +218,11 @@ export async function buildTurnTools(
       sourceSessionId: session.id,
     });
   const earlyTaskAck =
-    input.surface === "slack" && humanInput && conversation.kind === "dm" && !input.approval && !input.botActor;
+    surfaceTraits(input.surface).earlyAck &&
+    humanInput &&
+    conversation.kind === "dm" &&
+    !input.approval &&
+    !input.botActor;
   let readableHandles: Awaited<ReturnType<typeof deps.acl.handlesForAudience>> | undefined;
   const mayReadArtifact = async (artifact: FileArtifact, fresh = false): Promise<boolean> => {
     if (
@@ -385,7 +390,7 @@ export async function buildTurnTools(
     memoryScopeId,
     ...(memoryAccess ? { memoryAccess } : {}),
     ...(!external && deps.mcp ? { mcp: deps.mcp } : {}),
-    ...(input.surface === "slack" ? { actingSlackUserId: actor.id } : {}),
+    ...(surfaceTraits(input.surface).nativeActorIds ? { actingSlackUserId: actor.id } : {}),
     ...(deps.deploymentLayer
       ? {
           layerAuth: {

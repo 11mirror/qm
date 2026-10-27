@@ -1,3 +1,4 @@
+import { surfaceTraits } from "../../surfaces/surface.ts";
 import type { Session } from "../../types.ts";
 import { isBackendCredential } from "../../credentials/keychain.ts";
 import { resolveBrowserModel } from "../../model/browser-model.ts";
@@ -363,7 +364,7 @@ export async function buildCredentialCatalog(
         .catch(swallowAs("orchestrator: admin status for turn", { isAdmin: false }));
       actorIsOrgAdmin = status.isAdmin;
     }
-    const turnSurface = input.surface === "web" ? "web" : (session.surface ?? input.surface);
+    const turnSurface = surfaceTraits(input.surface).transcript ? input.surface : (session.surface ?? input.surface);
     controlClaims = {
       ...scopeAttestation,
       aud: CONTROL_PLANE_AUD,

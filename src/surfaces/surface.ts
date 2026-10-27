@@ -58,6 +58,7 @@ export interface SurfaceTraits {
   memberGate: boolean;
   externalParticipants: boolean;
   earlyAck: boolean;
+  nativeActorIds: boolean;
   revisions: boolean;
   delegates: boolean;
   nativeApprovals: boolean;
@@ -72,6 +73,7 @@ const NO_TRAITS: SurfaceTraits = {
   memberGate: false,
   externalParticipants: false,
   earlyAck: false,
+  nativeActorIds: false,
   revisions: false,
   delegates: false,
   nativeApprovals: false,
@@ -80,6 +82,7 @@ const NO_TRAITS: SurfaceTraits = {
 
 interface SurfaceProfile {
   label?: string;
+  promptFlavor?: "web" | "slack";
   toolHint?: string;
   traits: SurfaceTraits;
 }
@@ -90,12 +93,14 @@ const PROFILES: Readonly<Record<string, SurfaceProfile>> = {
   },
   slack: {
     label: "Slack",
+    promptFlavor: "slack",
     toolHint:
       " To @-mention on Slack, use `<@U…>` for a person or `<!subteam^S…>` for a user group (ids appear in People here / read / search results). A typed `@name` is plain text and pings no one; @here/@channel/@everyone never ping.",
     traits: {
       ...NO_TRAITS,
       externalParticipants: true,
       earlyAck: true,
+      nativeActorIds: true,
       revisions: true,
       delegates: true,
       nativeApprovals: true,

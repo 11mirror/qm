@@ -1,3 +1,4 @@
+import { surfaceTraits } from "../surfaces/surface.ts";
 import { swallowAs } from "../util/errors.ts";
 import { type PendingApprovalRecord, sourceDestination, type TurnRequest, turnSource } from "../types.ts";
 import type { SurfaceRegistry } from "../surfaces/registry.ts";
@@ -35,7 +36,7 @@ export function createApprovalStore(
   async function deliver(id: string, record: PendingApprovalRecord): Promise<void> {
     const request = record.request;
     if (!request?.surface) return;
-    if (request.surface !== "slack") {
+    if (!surfaceTraits(request.surface).nativeApprovals) {
       if (opts.surfaces?.get(request.surface)) await deliverText(id, record, request);
       return;
     }

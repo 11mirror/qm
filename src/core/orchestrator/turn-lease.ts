@@ -1,3 +1,4 @@
+import { surfaceTraits } from "../../surfaces/surface.ts";
 import type { TurnCtx } from "./turn-context.ts";
 import type { TurnRunState } from "./turn-segment.ts";
 import type { Session } from "../../types.ts";
@@ -136,7 +137,7 @@ export async function holdTurnLease(
   });
   if (!acquired.lease) return { refused: acquired.refusal };
   const lease = acquired.lease;
-  const trackRevisions = input.surface === "slack" && Boolean(deps.surfaceCache);
+  const trackRevisions = surfaceTraits(input.surface).revisions && Boolean(deps.surfaceCache);
   const revisionAnchor = trackRevisions ? await revisionAnchorAt(deps.sessions, session.id) : undefined;
   const catchUpMessageRevisions = async (): Promise<void> => {
     if (!trackRevisions || !deps.surfaceCache) return;

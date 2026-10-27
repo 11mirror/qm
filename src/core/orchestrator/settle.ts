@@ -1,3 +1,4 @@
+import { surfaceTraits } from "../../surfaces/surface.ts";
 import type { OutgoingAttachment } from "../../types.ts";
 import type { TurnOutcome } from "../turn-outcome.ts";
 import type { MemoryStrategy } from "../../memory/strategy.ts";
@@ -237,7 +238,7 @@ export async function concludeTurn(
   } = turn;
   const stagedAttachments = attachStaging.staged();
   const harvestedAck = (() => {
-    if (input.surface !== "slack" || input.surfaceTools || !input.runId) return undefined;
+    if (!surfaceTraits(input.surface).earlyAck || input.surfaceTools || !input.runId) return undefined;
     const fb = deps.turnStream?.firstBlock(input.runId);
     const text = fb?.text.trim();
     return fb?.closed && text ? text : undefined;
