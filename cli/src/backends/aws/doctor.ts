@@ -21,6 +21,7 @@ import { isServiceName } from "../../services.ts";
 import { hclString, awsObjectStoreBucket, declaredVariables, terraformVarsDrift } from "../../terraform.ts";
 import { capture, isInvalidSecret } from "../../util.ts";
 import { doctorCommon } from "../doctor.ts";
+import { type ResolvedPlugin } from "../../plugins.ts";
 import { awsBackgroundWorkStatus, awsBackgroundWorkTransport } from "./background-work.ts";
 import {
   all,
@@ -36,6 +37,7 @@ import {
   rdsInstanceIdentifier,
   requireAws,
   s3,
+  type EcsServiceState,
 } from "./clients.ts";
 import {
   assertAwsDeployImage,
@@ -44,7 +46,12 @@ import {
   plannedWorkloadImage,
   workloadSourceImage,
 } from "./images.ts";
-import { currentDeploymentManifest, getDeploymentLayerArtifact, retryLiveProbe } from "./manifest.ts";
+import {
+  currentDeploymentManifest,
+  getDeploymentLayerArtifact,
+  retryLiveProbe,
+  type DeploymentManifest,
+} from "./manifest.ts";
 import { awsLiveSession, describedServices, workloadDesiredCount } from "./rollout.ts";
 import {
   type AwsEcsRoutingService,
@@ -157,21 +164,10 @@ export async function assertAwsDeploymentStorage(config: QmConfig): Promise<void
   );
 }
 
-export async function awsDoctor(config: QmConfig, configDir: string): Promise<void> {
-  const { aws } = awsTopology(config, configDir);
-  header(`qm doctor — ${config.orgId} (aws)`);
-  await assertAwsCallerAccount(aws);
-  step("AWS caller account: ok");
-  const failures: string[] = [];
-  const check = async (label: string, fn: () => unknown): Promise<void> => {
-    try {
-      await fn();
-      step(`${label}: ok`);
-    } catch (error) {
-      failures.push(`${label}: ${(error as Error).message}`);
-      warn(`${label}: failed`);
-    }
-  };
+type DoctorCheck = (label: string, fn: () => unknown) => Promise<void>;
+
+async function doctorInfrastructure(config: QmConfig, configDir: string, check: DoctorCheck): Promise<void> {
+  const aws = requireAws(config);
   const tfvarsPath = join(configDir, "infra", "terraform.tfvars");
   if (existsSync(tfvarsPath))
     await check("Terraform coordinates", async () => {
@@ -201,6 +197,10 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
       }
     });
   await check("Lambda MicroVM deploy image", () => assertAwsDeployImage(config));
+}
+
+async function doctorIdentity(config: QmConfig, configDir: string, check: DoctorCheck): Promise<void> {
+  const aws = requireAws(config);
   await check("deploy role", async () => {
     const expectedSubject = githubTrustSubject(configDir, aws.deployBranch, aws.deployEnvironment);
     const { Role: role } = await iam(aws).send(new GetRoleCommand({ RoleName: aws.deployRoleArn.split("/").pop()! }));
@@ -222,6 +222,10 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
     if (!provider.ClientIDList?.includes("sts.amazonaws.com"))
       throw new Error("GitHub OIDC provider does not trust sts.amazonaws.com");
   });
+}
+
+async function doctorDatabase(config: QmConfig, check: DoctorCheck): Promise<void> {
+  const aws = requireAws(config);
   await check("RDS", async () => {
     const database = await describeDbInstance(aws, rdsInstanceIdentifier(aws));
     if (database?.DBInstanceStatus !== "available" && database?.DBInstanceStatus !== "storage-optimization")
@@ -253,6 +257,10 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
     if (!database.Endpoint?.Address || new URL(databaseUrl).hostname !== database.Endpoint.Address)
       throw new Error("DATABASE_URL does not point at the configured RDS endpoint");
   });
+}
+
+async function doctorServices(config: QmConfig, check: DoctorCheck): Promise<void> {
+  const aws = requireAws(config);
   const ecsServices = new Map<string, AwsEcsRoutingService>();
   for (const service of Object.keys(aws.services)) {
     const spec = aws.services[service]!;
@@ -291,6 +299,10 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
   await check("Cloud Map routing", () => assertAwsServiceDiscovery(config, ecsServices));
   await check("ALB routing", async () => void (await assertAwsPublicRouting(config, ecsServices)));
   await check("public URL DNS and TLS", () => assertAwsPublicNetwork(config));
+}
+
+async function doctorSecrets(config: QmConfig, check: DoctorCheck, failures: string[]): Promise<Map<string, string>> {
+  const aws = requireAws(config);
   const runtimeSecrets = new Map<string, string>();
   for (const secret of computedSecrets(config)) {
     const inspect = async (): Promise<void> => {
@@ -318,6 +330,29 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
       }
     }
   }
+  return runtimeSecrets;
+}
+
+export async function awsDoctor(config: QmConfig, configDir: string): Promise<void> {
+  const { aws } = awsTopology(config, configDir);
+  header(`qm doctor — ${config.orgId} (aws)`);
+  await assertAwsCallerAccount(aws);
+  step("AWS caller account: ok");
+  const failures: string[] = [];
+  const check = async (label: string, fn: () => unknown): Promise<void> => {
+    try {
+      await fn();
+      step(`${label}: ok`);
+    } catch (error) {
+      failures.push(`${label}: ${(error as Error).message}`);
+      warn(`${label}: failed`);
+    }
+  };
+  await doctorInfrastructure(config, configDir, check);
+  await doctorIdentity(config, configDir, check);
+  await doctorDatabase(config, check);
+  await doctorServices(config, check);
+  const runtimeSecrets = await doctorSecrets(config, check, failures);
   if (failures.length) throw new CliError(`doctor failed:\n${failures.map((failure) => `  - ${failure}`).join("\n")}`);
   const runtimeNames = ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"] as const;
   const priorRuntime = new Map(runtimeNames.map((name) => [name, process.env[name]]));
@@ -338,29 +373,23 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
   ok("all AWS deployment prerequisites are ready");
 }
 
-async function checkLive(
+type LiveCheckOpts = { report?: boolean; configDir?: string; envFile?: string; sandboxDir?: string };
+
+/** The image each prebuilt workload should run; records provenance drift against the manifest. */
+function desiredLiveImages(
   config: QmConfig,
-  opts: { report?: boolean; configDir?: string; envFile?: string; sandboxDir?: string } = {},
-): Promise<void> {
-  const configDir = opts.configDir ?? process.cwd();
-  const { aws, workloads: services, plugins: resolvedPlugins } = awsTopology(config, configDir);
-  const plugins = new Map(resolvedPlugins.map((plugin) => [plugin.name, plugin]));
-  await assertAwsCallerAccount(aws);
-  const failures: string[] = [];
-  try {
-    await assertAwsDeployImage(config);
-  } catch (error) {
-    failures.push(`deploy image drift: ${errMessage(error)}`);
-  }
-  const arns = await secretArns(config);
-  const states = await describedServices(config, services);
-  const manifest = await currentDeploymentManifest(aws);
-  if (!manifest)
-    throw new CliError("live drift detected: no current AWS deployment manifest", { clause: "aws.live-drift" });
+  services: string[],
+  plugins: ReadonlyMap<string, ResolvedPlugin>,
+  manifest: DeploymentManifest,
+  failures: string[],
+): Record<string, string> {
   const desiredImages: Record<string, string> = {};
-  for (const service of services) {
+  for (const service of services) desiredLiveImage(service);
+  return desiredImages;
+
+  function desiredLiveImage(service: string): void {
     const provenance = manifest.imageProvenance?.[service];
-    if (!provenance) continue;
+    if (!provenance) return;
     const plugin = plugins.get(service);
     if (provenance.kind === "source-build") {
       if (plugin?.kind === "image" || (isServiceName(service) && config.imageOverrides[service])) {
@@ -368,18 +397,18 @@ async function checkLive(
           `${service}: image build provenance drift (deployed from source, current workload uses a configured image)`,
         );
       }
-      continue;
+      return;
     }
     if (plugin?.kind === "source") {
       failures.push(
         `${service}: image build provenance drift (deployed from a configured image, current workload builds from source)`,
       );
-      continue;
+      return;
     }
     const source = workloadSourceImage(config, service, plugin);
     if (!source) {
       failures.push(`${service}: configured image source is missing for prebuilt deployment`);
-      continue;
+      return;
     }
     try {
       desiredImages[service] = plannedWorkloadImage(config, service, plugin);
@@ -387,83 +416,87 @@ async function checkLive(
       failures.push(`${service}: could not resolve desired image: ${errMessage(error)}`);
     }
   }
-  if (manifest.imageLabel !== aws.imageLabel)
+}
+
+/** Records runtime, task, environment, secret and image drift for one workload. */
+async function recordServiceDrift(
+  config: QmConfig,
+  service: string,
+  state: EcsServiceState,
+  manifest: DeploymentManifest,
+  arns: Record<string, string>,
+  desiredImages: Record<string, string>,
+  failures: string[],
+): Promise<void> {
+  const aws = requireAws(config);
+  const expectedTask = manifest.tasks[service];
+  if (!expectedTask) {
+    failures.push(`${service}: missing from current deployment manifest ${manifest.id}`);
+    return;
+  }
+  const primary = (state.deployments ?? []).filter((deployment) => deployment.status === "PRIMARY");
+  const wantCount = workloadDesiredCount(config, service);
+  if (state.status !== "ACTIVE" || state.desiredCount !== wantCount || state.runningCount !== wantCount) {
     failures.push(
-      `deployment manifest label ${manifest.imageLabel ?? "missing"} does not match configured release ${aws.imageLabel ?? "missing"}`,
+      `${service}: runtime is ${state.status ?? "missing"} with ${state.runningCount ?? 0}/${state.desiredCount ?? 0} running, expected ${wantCount}`,
     );
-  for (const service of services) {
-    const state = states.get(service)!;
-    const expectedTask = manifest.tasks[service];
-    if (!expectedTask) {
-      failures.push(`${service}: missing from current deployment manifest ${manifest.id}`);
-      continue;
-    }
-    const primary = (state.deployments ?? []).filter((deployment) => deployment.status === "PRIMARY");
-    const wantCount = workloadDesiredCount(config, service);
-    if (state.status !== "ACTIVE" || state.desiredCount !== wantCount || state.runningCount !== wantCount) {
-      failures.push(
-        `${service}: runtime is ${state.status ?? "missing"} with ${state.runningCount ?? 0}/${state.desiredCount ?? 0} running, expected ${wantCount}`,
-      );
-    }
-    if (
-      primary.length !== 1 ||
-      primary[0]?.taskDefinition !== state.taskDefinition ||
-      primary[0]?.rolloutState !== "COMPLETED"
-    ) {
-      failures.push(`${service}: configured task is not the sole healthy PRIMARY deployment`);
-    }
-    if (state.taskDefinition !== expectedTask)
-      failures.push(`${service}: service task does not match deployment manifest ${manifest.id}`);
-    const live = ((await describeTaskDefinition(aws, expectedTask)) as Record<string, unknown> | undefined) ?? null;
-    if (!live) {
-      failures.push(`${service}: no live task definition`);
-      continue;
-    }
-    const container = (live.containerDefinitions as Array<Record<string, unknown>> | undefined)?.find(
-      (item) => item.name === service,
-    );
-    const liveEnv = Object.fromEntries(
-      ((container?.environment as Array<{ name: string; value: string }> | undefined) ?? []).map((item) => [
-        item.name,
-        item.value,
-      ]),
-    );
-    const expectedEnv = workloadEnvironment(config, service, manifest.backgroundDeploymentId);
-    if (canonicalJson(liveEnv) !== canonicalJson(expectedEnv))
-      failures.push(`${service}: environment drift (including live-only keys)`);
-    const expectedSecrets = workloadSecrets(config, service, arns)
-      .flatMap((secret) => containerSecretNames(service, secret))
-      .sort();
-    const liveSecretEntries = (container?.secrets as Array<{ name: string; valueFrom?: string }> | undefined) ?? [];
-    const liveSecrets = liveSecretEntries.map((secret) => secret.name).sort();
-    if (JSON.stringify(liveSecrets) !== JSON.stringify(expectedSecrets)) failures.push(`${service}: secret-name drift`);
-    const repository = expectedWorkloadImageRepository(config, service);
-    if (typeof container?.image !== "string" || !isPinnedWorkloadImage(config, service, container.image)) {
-      failures.push(`${service}: live image is not a digest from ${repository}`);
-    } else {
-      const desiredImage = desiredImages[service];
-      if (desiredImage && container.image !== desiredImage) {
-        failures.push(`${service}: image drift (live ${container.image}, desired ${desiredImage})`);
-      }
-      const comparisonImage = desiredImage ?? `${repository}@sha256:${"0".repeat(64)}`;
-      const fields = taskDefinitionDiff(
-        renderTaskDefinition(config, service, comparisonImage, arns, manifest.backgroundDeploymentId),
-        live,
-      ).filter((field) => desiredImage || field !== `taskDefinition.containerDefinitions.${service}.image`);
-      if (fields.length) failures.push(`${service}: task-definition drift (${fields.join(", ")})`);
-    }
   }
-  try {
-    const targets = await assertAwsPublicRouting(config);
-    await assertAwsHealthyIngress(config, targets);
-  } catch (error) {
-    failures.push(`public front-door drift: ${errMessage(error)}`);
+  if (
+    primary.length !== 1 ||
+    primary[0]?.taskDefinition !== state.taskDefinition ||
+    primary[0]?.rolloutState !== "COMPLETED"
+  ) {
+    failures.push(`${service}: configured task is not the sole healthy PRIMARY deployment`);
   }
-  try {
-    await retryLiveProbe(() => assertAwsPublicNetwork(config, true));
-  } catch (error) {
-    failures.push(`public network drift: ${errMessage(error)}`);
+  if (state.taskDefinition !== expectedTask)
+    failures.push(`${service}: service task does not match deployment manifest ${manifest.id}`);
+  const live = ((await describeTaskDefinition(aws, expectedTask)) as Record<string, unknown> | undefined) ?? null;
+  if (!live) {
+    failures.push(`${service}: no live task definition`);
+    return;
   }
+  const container = (live.containerDefinitions as Array<Record<string, unknown>> | undefined)?.find(
+    (item) => item.name === service,
+  );
+  const liveEnv = Object.fromEntries(
+    ((container?.environment as Array<{ name: string; value: string }> | undefined) ?? []).map((item) => [
+      item.name,
+      item.value,
+    ]),
+  );
+  const expectedEnv = workloadEnvironment(config, service, manifest.backgroundDeploymentId);
+  if (canonicalJson(liveEnv) !== canonicalJson(expectedEnv))
+    failures.push(`${service}: environment drift (including live-only keys)`);
+  const expectedSecrets = workloadSecrets(config, service, arns)
+    .flatMap((secret) => containerSecretNames(service, secret))
+    .sort();
+  const liveSecretEntries = (container?.secrets as Array<{ name: string; valueFrom?: string }> | undefined) ?? [];
+  const liveSecrets = liveSecretEntries.map((secret) => secret.name).sort();
+  if (JSON.stringify(liveSecrets) !== JSON.stringify(expectedSecrets)) failures.push(`${service}: secret-name drift`);
+  const repository = expectedWorkloadImageRepository(config, service);
+  if (typeof container?.image !== "string" || !isPinnedWorkloadImage(config, service, container.image)) {
+    failures.push(`${service}: live image is not a digest from ${repository}`);
+  } else {
+    const desiredImage = desiredImages[service];
+    if (desiredImage && container.image !== desiredImage) {
+      failures.push(`${service}: image drift (live ${container.image}, desired ${desiredImage})`);
+    }
+    const comparisonImage = desiredImage ?? `${repository}@sha256:${"0".repeat(64)}`;
+    const fields = taskDefinitionDiff(
+      renderTaskDefinition(config, service, comparisonImage, arns, manifest.backgroundDeploymentId),
+      live,
+    ).filter((field) => desiredImage || field !== `taskDefinition.containerDefinitions.${service}.image`);
+    if (fields.length) failures.push(`${service}: task-definition drift (${fields.join(", ")})`);
+  }
+}
+
+async function recordLayerDrift(
+  config: QmConfig,
+  configDir: string,
+  opts: LiveCheckOpts,
+  manifest: DeploymentManifest,
+  failures: string[],
+): Promise<void> {
   if (!manifest.layer) {
     failures.push(`deployment manifest ${manifest.id} has no deployment-layer artifact`);
   } else {
@@ -490,24 +523,70 @@ async function checkLive(
       failures.push(`deployment layer drift: ${errMessage(error)}`);
     }
   }
-  if (!failures.length) {
-    try {
-      const cohort = aws.backgroundWorkControl ? await awsBackgroundWorkStatus(config, configDir) : undefined;
-      if (cohort && cohort.status.ownerDeploymentId === cohort.deploymentId) {
-        const transport = awsBackgroundWorkTransport(config, "/v1/deployment/live-session", 600_000, 65_536);
-        await checkControlledLiveSession({
-          before: cohort,
-          read: () => awsBackgroundWorkStatus(config, configDir),
-          request: (body) => transport("POST", body),
-        });
-      } else {
-        await awsLiveSession(config, states.get("core")!);
-      }
-      if (opts.report ?? true) step("core: private live session smoke passed");
-    } catch (error) {
-      failures.push(`core: private live session smoke failed: ${errMessage(error)}`);
+}
+
+async function recordLiveSessionSmoke(
+  config: QmConfig,
+  configDir: string,
+  opts: LiveCheckOpts,
+  core: EcsServiceState,
+  failures: string[],
+): Promise<void> {
+  const aws = requireAws(config);
+  try {
+    const cohort = aws.backgroundWorkControl ? await awsBackgroundWorkStatus(config, configDir) : undefined;
+    if (cohort && cohort.status.ownerDeploymentId === cohort.deploymentId) {
+      const transport = awsBackgroundWorkTransport(config, "/v1/deployment/live-session", 600_000, 65_536);
+      await checkControlledLiveSession({
+        before: cohort,
+        read: () => awsBackgroundWorkStatus(config, configDir),
+        request: (body) => transport("POST", body),
+      });
+    } else {
+      await awsLiveSession(config, core);
     }
+    if (opts.report ?? true) step("core: private live session smoke passed");
+  } catch (error) {
+    failures.push(`core: private live session smoke failed: ${errMessage(error)}`);
   }
+}
+
+async function checkLive(config: QmConfig, opts: LiveCheckOpts = {}): Promise<void> {
+  const configDir = opts.configDir ?? process.cwd();
+  const { aws, workloads: services, plugins: resolvedPlugins } = awsTopology(config, configDir);
+  const plugins = new Map(resolvedPlugins.map((plugin) => [plugin.name, plugin]));
+  await assertAwsCallerAccount(aws);
+  const failures: string[] = [];
+  try {
+    await assertAwsDeployImage(config);
+  } catch (error) {
+    failures.push(`deploy image drift: ${errMessage(error)}`);
+  }
+  const arns = await secretArns(config);
+  const states = await describedServices(config, services);
+  const manifest = await currentDeploymentManifest(aws);
+  if (!manifest)
+    throw new CliError("live drift detected: no current AWS deployment manifest", { clause: "aws.live-drift" });
+  const desiredImages = desiredLiveImages(config, services, plugins, manifest, failures);
+  if (manifest.imageLabel !== aws.imageLabel)
+    failures.push(
+      `deployment manifest label ${manifest.imageLabel ?? "missing"} does not match configured release ${aws.imageLabel ?? "missing"}`,
+    );
+  for (const service of services)
+    await recordServiceDrift(config, service, states.get(service)!, manifest, arns, desiredImages, failures);
+  try {
+    const targets = await assertAwsPublicRouting(config);
+    await assertAwsHealthyIngress(config, targets);
+  } catch (error) {
+    failures.push(`public front-door drift: ${errMessage(error)}`);
+  }
+  try {
+    await retryLiveProbe(() => assertAwsPublicNetwork(config, true));
+  } catch (error) {
+    failures.push(`public network drift: ${errMessage(error)}`);
+  }
+  await recordLayerDrift(config, configDir, opts, manifest, failures);
+  if (!failures.length) await recordLiveSessionSmoke(config, configDir, opts, states.get("core")!, failures);
   if (failures.length)
     throw new CliError(`live drift detected:\n${failures.map((failure) => `  - ${failure}`).join("\n")}`, {
       clause: "aws.live-drift",

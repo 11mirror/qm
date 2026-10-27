@@ -1,19 +1,21 @@
 import https from "node:https";
 import { CloudFrontClient, paginateListDistributions } from "@aws-sdk/client-cloudfront";
-import { DescribeServicesCommand } from "@aws-sdk/client-ecs";
+import { DescribeServicesCommand, type Service, type ServiceConnectConfiguration } from "@aws-sdk/client-ecs";
 import {
   DescribeLoadBalancersCommand,
   paginateDescribeListeners,
   paginateDescribeTargetGroups,
   paginateDescribeRules,
   DescribeTargetHealthCommand,
+  type Listener,
+  type Rule,
 } from "@aws-sdk/client-elastic-load-balancing-v2";
 import { ServiceDiscoveryClient, paginateListNamespaces, paginateListServices } from "@aws-sdk/client-servicediscovery";
 import { createHash } from "node:crypto";
 import { resolveCname, lookup } from "node:dns/promises";
 import { validAlbHostname, awsCoreHostnames, awsPortalAppsDomain } from "../../aws-routing.ts";
 import { awsClient } from "../../aws-sdk.ts";
-import { type QmConfig } from "../../config.ts";
+import { type AwsConfig, type QmConfig } from "../../config.ts";
 import { type DeploymentLayerTransport, httpDeploymentLayerTransport } from "../../deployment-layer.ts";
 import { CliError, errMessage } from "../../log.ts";
 import { isServiceName, serviceDef, hostsWebEdge, PUBLIC_PORT } from "../../services.ts";
@@ -137,18 +139,7 @@ export function assertAwsPublicListener(
   throw new Error(`publicUrl must use http or https (got ${protocol})`);
 }
 
-interface AwsPublicListener {
-  ListenerArn?: string;
-  Protocol?: string;
-  Port?: number;
-  Certificates?: Array<{ CertificateArn?: string }>;
-  DefaultActions?: Array<{
-    Type?: string;
-    TargetGroupArn?: string;
-    FixedResponseConfig?: { StatusCode?: string };
-    RedirectConfig?: { Protocol?: string; Port?: string; StatusCode?: string };
-  }>;
-}
+type AwsPublicListener = Listener;
 
 interface AwsPublicFrontDoor {
   loadBalancerArn: string;
@@ -173,41 +164,10 @@ function isHttpsRedirectListener(listener: AwsPublicListener): boolean {
   return actions.length === 1 && actions[0]?.Type === "redirect" && actions[0].RedirectConfig?.Protocol === "HTTPS";
 }
 
-interface AwsServiceConnectConfiguration {
-  enabled?: boolean;
-  namespace?: string;
-  services?: Array<{
-    portName?: string;
-    discoveryName?: string;
-    clientAliases?: Array<{ dnsName?: string; port?: number }>;
-  }>;
-}
+export type AwsEcsRoutingService = Service;
 
-export interface AwsEcsRoutingService {
-  serviceName?: string;
-  status?: string;
-  serviceConnectConfiguration?: AwsServiceConnectConfiguration;
-  deployments?: Array<{
-    status?: string;
-    serviceConnectConfiguration?: AwsServiceConnectConfiguration;
-  }>;
-  loadBalancers?: Array<{
-    targetGroupArn?: string;
-    containerPort?: number;
-    advancedConfiguration?: {
-      alternateTargetGroupArn?: string;
-      productionListenerRule?: string;
-    };
-  }>;
-}
-
-function awsServiceConnectConfiguration(
-  service: Pick<AwsEcsRoutingService, "serviceConnectConfiguration" | "deployments">,
-): AwsServiceConnectConfiguration | undefined {
-  return (
-    service.serviceConnectConfiguration ??
-    service.deployments?.find((deployment) => deployment.status === "PRIMARY")?.serviceConnectConfiguration
-  );
+function awsServiceConnectConfiguration(service: AwsEcsRoutingService): ServiceConnectConfiguration | undefined {
+  return service.deployments?.find((deployment) => deployment.status === "PRIMARY")?.serviceConnectConfiguration;
 }
 
 export async function assertAwsServiceDiscovery(
@@ -364,6 +324,244 @@ async function assertCloudFrontLayerTarget(config: QmConfig, url: URL, target: s
   }
 }
 
+/** What the live ALB must route, derived from config and the target groups found for it. */
+interface RoutingLayout {
+  config: QmConfig;
+  aws: AwsConfig;
+  hasPortal: boolean;
+  coreHosts: string[];
+  ingress: string[];
+  publicPaths: ReadonlyMap<string, string[]>;
+  targets: Map<string, string>;
+  alternateTargets: ReadonlyMap<string, string>;
+  productionRules: ReadonlyMap<string, string>;
+  expectedTargetArns: ReadonlySet<string>;
+  listener: AwsPublicListener;
+}
+
+function assertListenerDefault(layout: RoutingLayout): void {
+  const { hasPortal, targets, alternateTargets, listener } = layout;
+  const defaults = listener.DefaultActions ?? [];
+  if (alternateTargets.size) {
+    if (
+      defaults.length !== 1 ||
+      defaults[0]?.Type !== "fixed-response" ||
+      defaults[0].FixedResponseConfig?.StatusCode !== "404" ||
+      defaults[0].TargetGroupArn
+    ) {
+      throw new Error("blue/green listener default must return a fixed 404 response");
+    }
+  } else if (hasPortal) {
+    if (
+      defaults.length !== 1 ||
+      defaults[0]?.Type !== "forward" ||
+      defaults[0].TargetGroupArn !== targets.get("portal")
+    ) {
+      throw new Error("portal listener default does not route only to portal");
+    }
+  } else if (
+    defaults.length !== 1 ||
+    defaults[0]?.Type !== "fixed-response" ||
+    defaults[0].FixedResponseConfig?.StatusCode !== "404" ||
+    defaults[0].TargetGroupArn
+  ) {
+    throw new Error("non-portal listener default must return a fixed 404 response");
+  }
+}
+
+/** On a shared ALB, checks that no other company's rule overlaps ours and keeps only our rule. */
+function ownSharedAlbRules(layout: RoutingLayout, nonDefault: Rule[]): Rule[] {
+  const { config, productionRules, expectedTargetArns } = layout;
+  const hostname = new URL(config.publicUrl).hostname.toLowerCase();
+  const portalAppsDomain = awsPortalAppsDomain(config);
+  const expectedHosts = [hostname, ...(portalAppsDomain ? [`*.${portalAppsDomain}`] : [])];
+  const overlaps = (a: string, b: string): boolean => {
+    if (a === b) return true;
+    if (a.startsWith("*.")) return b.endsWith(a.slice(1));
+    if (b.startsWith("*.")) return a.endsWith(b.slice(1));
+    return false;
+  };
+  const ownRule = productionRules.get("portal");
+  for (const rule of nonDefault) {
+    const hosts = rule.Conditions?.filter((condition) => condition.Field === "host-header");
+    const values = (hosts?.[0]?.HostHeaderConfig?.Values ?? hosts?.[0]?.Values ?? []).map((value) =>
+      value.toLowerCase(),
+    );
+    const companyHosts = values.filter((value) => validAlbHostname(value));
+    if (
+      hosts?.length !== 1 ||
+      companyHosts.length !== 1 ||
+      values.some(
+        (value) =>
+          !validAlbHostname(value) &&
+          !(
+            value.startsWith("*.") &&
+            validAlbHostname(value.slice(2)) &&
+            value.slice(2).endsWith(`.${companyHosts[0]}`)
+          ),
+      )
+    ) {
+      throw new Error("shared ALB rules require one company hostname and company-contained app wildcards");
+    }
+    const matchesHost = values.some((value) =>
+      expectedHosts.some((expected) => overlaps(value, expected) || overlaps(expected, value)),
+    );
+    if (rule.RuleArn === ownRule) {
+      if (values.length !== expectedHosts.length || expectedHosts.some((value) => !values.includes(value)))
+        throw new Error("shared ALB portal rule must match only this company and its configured app hostname");
+    } else {
+      const referencesOwnTarget = rule.Actions?.some(
+        (action) =>
+          expectedTargetArns.has(action.TargetGroupArn ?? "") ||
+          action.ForwardConfig?.TargetGroups?.some((target) => expectedTargetArns.has(target.TargetGroupArn ?? "")),
+      );
+      if (matchesHost || referencesOwnTarget) throw new Error("shared ALB has an overlapping company route");
+    }
+  }
+  return nonDefault
+    .filter((rule) => rule.RuleArn === ownRule)
+    .map((rule) => ({
+      ...rule,
+      Conditions: rule.Conditions?.filter((condition) => condition.Field !== "host-header"),
+    }));
+}
+
+/** The rule routing each public plugin's declared paths; they must precede core and portal routes. */
+function publicPluginRules(layout: RoutingLayout, nonDefault: Rule[]): Set<Rule> {
+  const { publicPaths, targets, alternateTargets, productionRules } = layout;
+  const pluginRules = new Set<(typeof nonDefault)[number]>();
+  for (const [name, paths] of publicPaths) {
+    const matches = nonDefault.filter((rule) =>
+      alternateTargets.size
+        ? rule.RuleArn === productionRules.get(name)
+        : rule.Actions?.length === 1 &&
+          rule.Actions[0]?.Type === "forward" &&
+          rule.Actions[0]?.TargetGroupArn === targets.get(name),
+    );
+    const rule = matches[0];
+    const condition = rule?.Conditions?.length === 1 ? rule.Conditions[0] : undefined;
+    const actual =
+      condition?.Field === "path-pattern" ? (condition.PathPatternConfig?.Values ?? condition.Values ?? []) : [];
+    if (
+      matches.length !== 1 ||
+      !rule ||
+      actual.length !== paths.length ||
+      paths.some((path) => !actual.includes(path))
+    ) {
+      throw new Error(`public plugin ${name} must route exactly its declared publicPaths`);
+    }
+    pluginRules.add(rule);
+  }
+  for (const rule of pluginRules) {
+    const priority = Number(rule.Priority);
+    if (
+      !Number.isInteger(priority) ||
+      priority < 1 ||
+      nonDefault.some(
+        (other) =>
+          !pluginRules.has(other) && (!Number.isInteger(Number(other.Priority)) || priority >= Number(other.Priority)),
+      )
+    ) {
+      throw new Error("public plugin routes must precede core and portal routes");
+    }
+  }
+  return pluginRules;
+}
+
+function blueGreenTargets(layout: RoutingLayout, nonDefault: Rule[]): ReadonlyMap<string, string> {
+  const { hasPortal, coreHosts, ingress, publicPaths, targets, alternateTargets, productionRules } = layout;
+  if (nonDefault.length !== ingress.length) {
+    throw new Error("blue/green ALB has unexpected non-default rules");
+  }
+  for (const name of ingress) {
+    const rule = nonDefault.find((candidate) => candidate.RuleArn === productionRules.get(name));
+    const action = rule?.Actions?.length === 1 ? rule.Actions[0] : undefined;
+    const weightedTargets = action?.ForwardConfig?.TargetGroups ?? [];
+    const primary = targets.get(name)!;
+    const alternate = alternateTargets.get(name)!;
+    const expected = new Set([primary, alternate]);
+    const active = weightedTargets.filter((target) => (target.Weight ?? 0) > 0);
+    if (
+      action?.Type !== "forward" ||
+      weightedTargets.length !== 2 ||
+      weightedTargets.some((target) => !target.TargetGroupArn || !expected.has(target.TargetGroupArn)) ||
+      active.length !== 1 ||
+      !active[0]?.TargetGroupArn
+    ) {
+      throw new Error(`blue/green ALB rule for ${name} must route to exactly one of its two target groups`);
+    }
+    const condition = rule?.Conditions?.length === 1 ? rule.Conditions[0] : undefined;
+    const pathValues =
+      condition?.Field === "path-pattern" ? (condition.PathPatternConfig?.Values ?? condition.Values ?? []) : [];
+    const hostValues =
+      condition?.Field === "host-header" ? (condition.HostHeaderConfig?.Values ?? condition.Values ?? []) : [];
+    let expectedPaths: string[];
+    if (publicPaths.has(name)) expectedPaths = publicPaths.get(name)!;
+    else if (name === "portal") expectedPaths = ["/*"];
+    else if (hasPortal) expectedPaths = [];
+    else expectedPaths = ["/v1/*"];
+    const expectedHosts = name === "core" && hasPortal ? coreHosts : [];
+    if (
+      pathValues.length !== expectedPaths.length ||
+      expectedPaths.some((value) => !pathValues.includes(value)) ||
+      hostValues.length !== expectedHosts.length ||
+      expectedHosts.some((value) => !hostValues.map((host) => host.toLowerCase()).includes(value))
+    ) {
+      throw new Error(`blue/green ALB rule for ${name} does not match its production route`);
+    }
+    targets.set(name, active[0].TargetGroupArn);
+  }
+  return targets;
+}
+
+function rollingTargets(
+  layout: RoutingLayout,
+  nonDefault: Rule[],
+  pluginRules: Set<Rule>,
+): ReadonlyMap<string, string> {
+  const { hasPortal, coreHosts, targets } = layout;
+  const rules = nonDefault.filter((rule) => !pluginRules.has(rule));
+  if (hasPortal && !coreHosts.length && rules.length)
+    throw new Error("portal mode must not expose non-default ALB rules");
+  if (hasPortal && coreHosts.length) {
+    const found: string[] = [];
+    for (const rule of rules) {
+      const action = rule.Actions?.length === 1 ? rule.Actions[0] : undefined;
+      const condition = rule.Conditions?.length === 1 ? rule.Conditions[0] : undefined;
+      const values =
+        condition?.Field === "host-header" ? (condition.HostHeaderConfig?.Values ?? condition.Values ?? []) : [];
+      if (action?.Type !== "forward" || action.TargetGroupArn !== targets.get("core") || !values.length) {
+        throw new Error(
+          `portal ALB has a non-default rule that is not a single host-header forward to core (expected only ${coreHosts.join(", ")})`,
+        );
+      }
+      found.push(...values.map((value) => value.toLowerCase()));
+    }
+    if (found.length !== coreHosts.length || coreHosts.some((host) => !found.includes(host))) {
+      throw new Error(
+        `portal ALB host rules must route exactly ${coreHosts.join(", ")} to core (live: ${found.join(", ") || "none"})`,
+      );
+    }
+  }
+  if (!hasPortal) {
+    const coreRule = rules.filter(
+      (rule) =>
+        rule.Actions?.length === 1 &&
+        rule.Actions[0]?.Type === "forward" &&
+        rule.Actions[0].TargetGroupArn === targets.get("core") &&
+        rule.Conditions?.length === 1 &&
+        rule.Conditions[0]?.Field === "path-pattern" &&
+        rule.Conditions[0].PathPatternConfig?.Values?.length === 1 &&
+        rule.Conditions[0].PathPatternConfig.Values[0] === "/v1/*",
+    );
+    if (coreRule.length !== 1) {
+      throw new Error("non-portal ALB must route only /v1/* directly to core");
+    }
+    if (rules.length !== 1) throw new Error("non-portal ALB has unexpected non-default rules");
+  }
+  return targets;
+}
+
 export async function assertAwsPublicRouting(
   config: QmConfig,
   ecsServices?: ReadonlyMap<string, AwsEcsRoutingService>,
@@ -451,212 +649,29 @@ export async function assertAwsPublicRouting(
   if (aws.sharedAlb && (!hasPortal || coreHosts.length || publicPaths.size || alternateTargets.size !== 1)) {
     throw new Error("shared ALB requires one blue/green portal ingress without additional public routes");
   }
-  const defaults = listener.DefaultActions ?? [];
-  if (alternateTargets.size) {
-    if (
-      defaults.length !== 1 ||
-      defaults[0]?.Type !== "fixed-response" ||
-      defaults[0].FixedResponseConfig?.StatusCode !== "404" ||
-      defaults[0].TargetGroupArn
-    ) {
-      throw new Error("blue/green listener default must return a fixed 404 response");
-    }
-  } else if (hasPortal) {
-    if (
-      defaults.length !== 1 ||
-      defaults[0]?.Type !== "forward" ||
-      defaults[0].TargetGroupArn !== targets.get("portal")
-    ) {
-      throw new Error("portal listener default does not route only to portal");
-    }
-  } else if (
-    defaults.length !== 1 ||
-    defaults[0]?.Type !== "fixed-response" ||
-    defaults[0].FixedResponseConfig?.StatusCode !== "404" ||
-    defaults[0].TargetGroupArn
-  ) {
-    throw new Error("non-portal listener default must return a fixed 404 response");
-  }
+  const layout: RoutingLayout = {
+    config,
+    aws,
+    hasPortal,
+    coreHosts,
+    ingress,
+    publicPaths,
+    targets,
+    alternateTargets,
+    productionRules,
+    expectedTargetArns,
+    listener,
+  };
+  assertListenerDefault(layout);
   const rules = await all(
     paginateDescribeRules({ client: elb(aws) }, { ListenerArn: listener.ListenerArn! }),
     (page) => page.Rules,
   );
   let nonDefault = rules.filter((rule) => !rule.IsDefault);
-  if (aws.sharedAlb) {
-    const hostname = new URL(config.publicUrl).hostname.toLowerCase();
-    const portalAppsDomain = awsPortalAppsDomain(config);
-    const expectedHosts = [hostname, ...(portalAppsDomain ? [`*.${portalAppsDomain}`] : [])];
-    const overlaps = (a: string, b: string): boolean => {
-      if (a === b) return true;
-      if (a.startsWith("*.")) return b.endsWith(a.slice(1));
-      if (b.startsWith("*.")) return a.endsWith(b.slice(1));
-      return false;
-    };
-    const ownRule = productionRules.get("portal");
-    for (const rule of nonDefault) {
-      const hosts = rule.Conditions?.filter((condition) => condition.Field === "host-header");
-      const values = (hosts?.[0]?.HostHeaderConfig?.Values ?? hosts?.[0]?.Values ?? []).map((value) =>
-        value.toLowerCase(),
-      );
-      const companyHosts = values.filter((value) => validAlbHostname(value));
-      if (
-        hosts?.length !== 1 ||
-        companyHosts.length !== 1 ||
-        values.some(
-          (value) =>
-            !validAlbHostname(value) &&
-            !(
-              value.startsWith("*.") &&
-              validAlbHostname(value.slice(2)) &&
-              value.slice(2).endsWith(`.${companyHosts[0]}`)
-            ),
-        )
-      ) {
-        throw new Error("shared ALB rules require one company hostname and company-contained app wildcards");
-      }
-      const matchesHost = values.some((value) =>
-        expectedHosts.some((expected) => overlaps(value, expected) || overlaps(expected, value)),
-      );
-      if (rule.RuleArn === ownRule) {
-        if (values.length !== expectedHosts.length || expectedHosts.some((value) => !values.includes(value)))
-          throw new Error("shared ALB portal rule must match only this company and its configured app hostname");
-      } else {
-        const referencesOwnTarget = rule.Actions?.some(
-          (action) =>
-            expectedTargetArns.has(action.TargetGroupArn ?? "") ||
-            action.ForwardConfig?.TargetGroups?.some((target) => expectedTargetArns.has(target.TargetGroupArn ?? "")),
-        );
-        if (matchesHost || referencesOwnTarget) throw new Error("shared ALB has an overlapping company route");
-      }
-    }
-    nonDefault = nonDefault
-      .filter((rule) => rule.RuleArn === ownRule)
-      .map((rule) => ({
-        ...rule,
-        Conditions: rule.Conditions?.filter((condition) => condition.Field !== "host-header"),
-      }));
-  }
-  const pluginRules = new Set<(typeof nonDefault)[number]>();
-  for (const [name, paths] of publicPaths) {
-    const matches = nonDefault.filter((rule) =>
-      alternateTargets.size
-        ? rule.RuleArn === productionRules.get(name)
-        : rule.Actions?.length === 1 &&
-          rule.Actions[0]?.Type === "forward" &&
-          rule.Actions[0]?.TargetGroupArn === targets.get(name),
-    );
-    const rule = matches[0];
-    const condition = rule?.Conditions?.length === 1 ? rule.Conditions[0] : undefined;
-    const actual =
-      condition?.Field === "path-pattern" ? (condition.PathPatternConfig?.Values ?? condition.Values ?? []) : [];
-    if (
-      matches.length !== 1 ||
-      !rule ||
-      actual.length !== paths.length ||
-      paths.some((path) => !actual.includes(path))
-    ) {
-      throw new Error(`public plugin ${name} must route exactly its declared publicPaths`);
-    }
-    pluginRules.add(rule);
-  }
-  for (const rule of pluginRules) {
-    const priority = Number(rule.Priority);
-    if (
-      !Number.isInteger(priority) ||
-      priority < 1 ||
-      nonDefault.some(
-        (other) =>
-          !pluginRules.has(other) && (!Number.isInteger(Number(other.Priority)) || priority >= Number(other.Priority)),
-      )
-    ) {
-      throw new Error("public plugin routes must precede core and portal routes");
-    }
-  }
-
-  if (alternateTargets.size) {
-    if (nonDefault.length !== ingress.length) {
-      throw new Error("blue/green ALB has unexpected non-default rules");
-    }
-    for (const name of ingress) {
-      const rule = nonDefault.find((candidate) => candidate.RuleArn === productionRules.get(name));
-      const action = rule?.Actions?.length === 1 ? rule.Actions[0] : undefined;
-      const weightedTargets = action?.ForwardConfig?.TargetGroups ?? [];
-      const primary = targets.get(name)!;
-      const alternate = alternateTargets.get(name)!;
-      const expected = new Set([primary, alternate]);
-      const active = weightedTargets.filter((target) => (target.Weight ?? 0) > 0);
-      if (
-        action?.Type !== "forward" ||
-        weightedTargets.length !== 2 ||
-        weightedTargets.some((target) => !target.TargetGroupArn || !expected.has(target.TargetGroupArn)) ||
-        active.length !== 1 ||
-        !active[0]?.TargetGroupArn
-      ) {
-        throw new Error(`blue/green ALB rule for ${name} must route to exactly one of its two target groups`);
-      }
-      const condition = rule?.Conditions?.length === 1 ? rule.Conditions[0] : undefined;
-      const pathValues =
-        condition?.Field === "path-pattern" ? (condition.PathPatternConfig?.Values ?? condition.Values ?? []) : [];
-      const hostValues =
-        condition?.Field === "host-header" ? (condition.HostHeaderConfig?.Values ?? condition.Values ?? []) : [];
-      let expectedPaths: string[];
-      if (publicPaths.has(name)) expectedPaths = publicPaths.get(name)!;
-      else if (name === "portal") expectedPaths = ["/*"];
-      else if (hasPortal) expectedPaths = [];
-      else expectedPaths = ["/v1/*"];
-      const expectedHosts = name === "core" && hasPortal ? coreHosts : [];
-      if (
-        pathValues.length !== expectedPaths.length ||
-        expectedPaths.some((value) => !pathValues.includes(value)) ||
-        hostValues.length !== expectedHosts.length ||
-        expectedHosts.some((value) => !hostValues.map((host) => host.toLowerCase()).includes(value))
-      ) {
-        throw new Error(`blue/green ALB rule for ${name} does not match its production route`);
-      }
-      targets.set(name, active[0].TargetGroupArn);
-    }
-    return targets;
-  }
-  nonDefault = nonDefault.filter((rule) => !pluginRules.has(rule));
-  if (hasPortal && !coreHosts.length && nonDefault.length)
-    throw new Error("portal mode must not expose non-default ALB rules");
-  if (hasPortal && coreHosts.length) {
-    const found: string[] = [];
-    for (const rule of nonDefault) {
-      const action = rule.Actions?.length === 1 ? rule.Actions[0] : undefined;
-      const condition = rule.Conditions?.length === 1 ? rule.Conditions[0] : undefined;
-      const values =
-        condition?.Field === "host-header" ? (condition.HostHeaderConfig?.Values ?? condition.Values ?? []) : [];
-      if (action?.Type !== "forward" || action.TargetGroupArn !== targets.get("core") || !values.length) {
-        throw new Error(
-          `portal ALB has a non-default rule that is not a single host-header forward to core (expected only ${coreHosts.join(", ")})`,
-        );
-      }
-      found.push(...values.map((value) => value.toLowerCase()));
-    }
-    if (found.length !== coreHosts.length || coreHosts.some((host) => !found.includes(host))) {
-      throw new Error(
-        `portal ALB host rules must route exactly ${coreHosts.join(", ")} to core (live: ${found.join(", ") || "none"})`,
-      );
-    }
-  }
-  if (!hasPortal) {
-    const coreRule = nonDefault.filter(
-      (rule) =>
-        rule.Actions?.length === 1 &&
-        rule.Actions[0]?.Type === "forward" &&
-        rule.Actions[0].TargetGroupArn === targets.get("core") &&
-        rule.Conditions?.length === 1 &&
-        rule.Conditions[0]?.Field === "path-pattern" &&
-        rule.Conditions[0].PathPatternConfig?.Values?.length === 1 &&
-        rule.Conditions[0].PathPatternConfig.Values[0] === "/v1/*",
-    );
-    if (coreRule.length !== 1) {
-      throw new Error("non-portal ALB must route only /v1/* directly to core");
-    }
-    if (nonDefault.length !== 1) throw new Error("non-portal ALB has unexpected non-default rules");
-  }
-  return targets;
+  if (aws.sharedAlb) nonDefault = ownSharedAlbRules(layout, nonDefault);
+  const pluginRules = publicPluginRules(layout, nonDefault);
+  if (alternateTargets.size) return blueGreenTargets(layout, nonDefault);
+  return rollingTargets(layout, nonDefault, pluginRules);
 }
 
 export async function assertAwsPublicFrontDoor(config: QmConfig): Promise<void> {

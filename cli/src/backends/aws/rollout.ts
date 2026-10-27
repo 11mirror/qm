@@ -12,9 +12,8 @@ import {
   UpdateServiceCommand,
 } from "@aws-sdk/client-ecs";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, writeFileSync, rmSync, existsSync, statSync, accessSync, constants, linkSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, isAbsolute, dirname } from "node:path";
+import { writeFileSync, rmSync, existsSync, statSync, accessSync, constants, linkSync } from "node:fs";
+import { isAbsolute, dirname } from "node:path";
 import { withAwsLease } from "../../aws-lease.ts";
 import { type QmConfig, type AwsConfig } from "../../config.ts";
 import { CliError, note, header, step, ok, warn, errMessage } from "../../log.ts";
@@ -74,19 +73,16 @@ export async function runAwsCandidateMigration(
   ) {
     throw new CliError(`AWS core service ${spec.ecsService} does not expose a reusable Fargate network configuration`);
   }
-  const temp = mkdtempSync(join(tmpdir(), "qm-migration-task-"));
   let taskDefinition: string | undefined;
   try {
     if (existingTaskDefinition) {
       taskDefinition = existingTaskDefinition;
     } else {
-      const definitionPath = join(temp, "core.json");
       const definition = renderTaskDefinition(config, "core", coreImage, await secretArns(config));
       const container = definition.containerDefinitions.find((candidate) => candidate.name === "core");
       if (!container) throw new CliError("AWS migration task definition has no core container");
       delete container.healthCheck;
-      writeFileSync(definitionPath, JSON.stringify(definition));
-      taskDefinition = await registerTaskDefinition(config, definitionPath);
+      taskDefinition = await registerTaskDefinition(config, definition);
     }
     header(`qm migrate — ${config.orgId} (AWS candidate ${label})`);
     const started = await ecs(aws).send(
@@ -121,7 +117,6 @@ export async function runAwsCandidateMigration(
         warn(`could not deregister migration task definition ${taskDefinition}: ${errMessage(error)}`);
       }
     }
-    rmSync(temp, { recursive: true, force: true });
   }
 }
 
