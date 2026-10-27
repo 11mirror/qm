@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { scopeId } from "../src/types.ts";
@@ -14,7 +13,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
-function svc(opts: { lease?: LeaderLease; lock?: AdvisoryLock; managed?: boolean } = {}) {
+function svc(opts: { lock?: AdvisoryLock; managed?: boolean } = {}) {
   const deployStore = createDeployStore(testDeployBackings());
   let destroys = 0;
   const provider: DeployProvider = {
@@ -33,7 +32,6 @@ function svc(opts: { lease?: LeaderLease; lock?: AdvisoryLock; managed?: boolean
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
     acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     deployDir: mkdtempSync(join(tmpdir(), "concurrency-")),
-    ...(opts.lease ? { leaderLease: opts.lease } : {}),
     ...(opts.lock ? { advisoryLock: opts.lock } : {}),
   });
   return {

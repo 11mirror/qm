@@ -1,12 +1,8 @@
 import type { ProcessRecord, ProcessRegistry } from "./process-registry.ts";
-import { createSweeper } from "../util/sweeper.ts";
-import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
 import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import type { ProcessSandbox, SandboxHandle } from "../sandbox/sandbox.ts";
 import { errMessage, swallow } from "../util/errors.ts";
-
-const PROCESS_REAPER_LEASE_KEY = "processes:reaper";
 
 export interface ReaperKillHookOptions {
   termGraceMs?: number;
@@ -53,22 +49,17 @@ export function createReaperKillHook(
 }
 
 export interface ProcessReaper {
-  start(): void;
-  stop(): Promise<void>;
   sweep(): Promise<{ reaped: number }>;
 }
 
 export const PROCESS_REAPER_INTERVAL_MS = 30_000;
 
 export interface ProcessReaperOptions {
-  intervalMs: number;
   kill?: (rec: ProcessRecord) => Promise<void>;
   onReaped?: (rec: ProcessRecord) => Promise<void>;
-  leaderLease: LeaderLease;
 }
 
 export function createProcessReaper(registry: ProcessRegistry, opts: ProcessReaperOptions): ProcessReaper {
-  const leaderLease = opts.leaderLease;
   async function sweep(): Promise<{ reaped: number }> {
     const expired = await registry.listExpired();
     let reaped = 0;
@@ -92,10 +83,5 @@ export function createProcessReaper(registry: ProcessRegistry, opts: ProcessReap
     return { reaped };
   }
 
-  const sweeper = createSweeper(() => leaderLease.hold(PROCESS_REAPER_LEASE_KEY, sweep), opts.intervalMs);
-  return {
-    start: () => sweeper.start(),
-    stop: () => sweeper.stop(),
-    sweep,
-  };
+  return { sweep };
 }
