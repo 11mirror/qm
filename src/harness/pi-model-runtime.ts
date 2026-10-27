@@ -8,6 +8,7 @@ import {
   InMemoryCredentialStore,
   retryAssistantCall,
   type Api,
+  type AssistantMessage,
   type Context,
   type Model,
   type ModelThinkingLevel,
@@ -15,6 +16,8 @@ import {
   type ModelsSimpleStreamOptions,
   type ProviderHeaders,
 } from "@earendil-works/pi-ai";
+import { type Static, type TSchema } from "typebox";
+import { Check } from "typebox/value";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { providerTurnError } from "./provider-error.ts";
 import { swallow } from "../util/errors.ts";
@@ -208,23 +211,23 @@ export async function buildModelRuntime(
 
 const ONE_SHOT_RETRY = { enabled: true, maxRetries: 3, baseDelayMs: 2_000 };
 
-export async function complete(
+interface OneShotOptions {
+  signal?: AbortSignal;
+  modelGateway?: ModelGatewayTransportConfig;
+  thinkingLevel?: ModelThinkingLevel;
+  maxTokens?: number;
+  retry?: false;
+}
+
+async function completeMessage(
   model: Model<Api>,
   keys: ProviderKeys,
-  systemPrompt: string,
-  prompt: string,
-  opts?: {
-    signal?: AbortSignal;
-    modelGateway?: ModelGatewayTransportConfig;
-    thinkingLevel?: ModelThinkingLevel;
-    maxTokens?: number;
-    retry?: false;
-  },
-): Promise<string | undefined> {
+  context: Context,
+  opts?: OneShotOptions,
+): Promise<AssistantMessage | undefined> {
   if (opts?.signal?.aborted) return undefined;
   const runtime = await buildModelRuntime(keys, opts?.modelGateway);
   const reasoning = clampThinkingLevel(model, opts?.thinkingLevel ?? "medium");
-  const context: Context = { systemPrompt, messages: [{ role: "user", content: prompt, timestamp: Date.now() }] };
   const message = await retryAssistantCall(
     () =>
       runtime.completeSimple(model, context, {
@@ -235,13 +238,58 @@ export async function complete(
     opts?.retry === false ? undefined : ONE_SHOT_RETRY,
     opts?.signal,
   );
-  if (message.stopReason === "error") {
-    const contextWindow = (resolveModel(message.model) as { contextWindow?: number } | undefined)?.contextWindow;
-    throw providerTurnError(message, { contextWindow, lastInputTokens: undefined });
-  }
+  if (message.stopReason === "error") throw providerTurnError(message);
   if (message.stopReason === "aborted" && message.content.length === 0) return undefined;
-  const text = message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("");
-  return text.trim() || undefined;
+  return message;
+}
+
+function userContext(systemPrompt: string, prompt: string): Context {
+  return { systemPrompt, messages: [{ role: "user", content: prompt, timestamp: Date.now() }] };
+}
+
+function messageText(message: AssistantMessage): string {
+  return message.content
+    .flatMap((block) => (block.type === "text" ? [block.text] : []))
+    .join("")
+    .trim();
+}
+
+export async function complete(
+  model: Model<Api>,
+  keys: ProviderKeys,
+  systemPrompt: string,
+  prompt: string,
+  opts?: OneShotOptions,
+): Promise<string | undefined> {
+  const message = await completeMessage(model, keys, userContext(systemPrompt, prompt), opts);
+  return (message && messageText(message)) || undefined;
+}
+
+export const STRUCTURED_ANSWER_TOOL = "answer";
+
+export type StructuredAnswer<T extends TSchema> = { ok: true; value: Static<T> } | { ok: false; text: string };
+
+export async function completeStructured<T extends TSchema>(
+  model: Model<Api>,
+  keys: ProviderKeys,
+  systemPrompt: string,
+  prompt: string,
+  schema: T,
+  opts?: OneShotOptions,
+): Promise<StructuredAnswer<T> | undefined> {
+  const context: Context = {
+    ...userContext(
+      `${systemPrompt}\n\nGive your answer by calling the ${STRUCTURED_ANSWER_TOOL} tool exactly once.`,
+      prompt,
+    ),
+    tools: [{ name: STRUCTURED_ANSWER_TOOL, description: "Return your answer.", parameters: schema }],
+  };
+  const message = await completeMessage(model, keys, context, opts);
+  if (!message) return undefined;
+  const call = message.content.find((block) => block.type === "toolCall" && block.name === STRUCTURED_ANSWER_TOOL);
+  const args: unknown = call?.type === "toolCall" ? call.arguments : undefined;
+  if (Check(schema, args)) return { ok: true, value: args };
+  return { ok: false, text: args === undefined ? messageText(message) : JSON.stringify(args) };
 }
 
 const FAST_MODE_BETA = "fast-mode-2026-02-01";

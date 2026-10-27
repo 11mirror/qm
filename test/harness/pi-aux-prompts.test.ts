@@ -1,31 +1,43 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildDetectionPrompt, parseDetectVerdict, renderDetectPrompt } from "../../src/harness/pi-aux-prompts.ts";
+import { buildDetectionPrompt, detectResult, renderDetectPrompt } from "../../src/harness/pi-aux-prompts.ts";
 import { storedItem } from "../../src/sessions/items.ts";
 
-test("parseDetectVerdict: a YES whose rationale contains 'no' still replies (anchored on the verdict token)", () => {
-  assert.equal(parseDetectVerdict("YES (a direct answer to you, no mention needed)", false).respond, true);
-  assert.equal(parseDetectVerdict("YES — no question mark, but it's feedback aimed at you", true).respond, true);
-  assert.equal(parseDetectVerdict("Verdict: YES (no mention needed)", false).respond, true);
-  assert.equal(parseDetectVerdict("**YES** — follow-up to your work", false).respond, true);
+test("detectResult replies only on a yes verdict", () => {
+  assert.equal(detectResult({ ok: true, value: { verdict: "yes", reason: "no mention needed" } }, false).respond, true);
+  assert.equal(
+    detectResult({ ok: true, value: { verdict: "no", reason: "they said yes to each other" } }, false).respond,
+    false,
+  );
+  const unrecognized = detectResult({ ok: false, text: "Maybe?" }, false);
+  assert.equal(unrecognized.respond, false, "an answer outside the schema fails quiet");
+  assert.equal(unrecognized.reason, "unrecognized verdict: Maybe?");
 });
 
-test("parseDetectVerdict: NO verdicts stay silent even when the rationale contains 'yes'", () => {
-  assert.equal(parseDetectVerdict("NO (they said yes to each other, not to you)", false).respond, false);
-  assert.equal(parseDetectVerdict("Answer: no — chit-chat", false).respond, false);
-  assert.equal(parseDetectVerdict("", false).respond, false);
-  assert.equal(parseDetectVerdict("Maybe?", false).respond, false, "an unrecognized verdict fails quiet");
-  assert.equal(parseDetectVerdict("Eyes on this one", false).respond, false, "'yes' inside a word does not count");
-});
-
-test("parseDetectVerdict: REACT verdicts return reactions without replying", () => {
-  const r = parseDetectVerdict("REACT :pray:", true);
+test("detectResult returns every reaction of a react verdict without replying", () => {
+  const r = detectResult(
+    { ok: true, value: { verdict: "react", reactions: ["pray", "🙏", "raised_hands", "tada"] } },
+    true,
+  );
   assert.equal(r.respond, false);
-  assert.deepEqual(r.reactions, ["pray"]);
-  const noEmoji = parseDetectVerdict("REACT", true);
-  assert.equal(noEmoji.respond, false);
-  assert.equal(noEmoji.reactions, undefined);
-  assert.equal(parseDetectVerdict("REACT :pray:", false).respond, false, "reactions disabled → REACT is not a YES");
+  assert.deepEqual(r.reactions, ["pray", "🙏", "raised_hands", "tada"]);
+  assert.equal(detectResult({ ok: true, value: { verdict: "react" } }, true).reactions, undefined);
+  const disabled = detectResult({ ok: true, value: { verdict: "react", reactions: ["pray"] } }, false);
+  assert.equal(disabled.respond, false, "reactions disabled → react is not a yes");
+  assert.equal(disabled.reactions, undefined);
+});
+
+test("renderDetectPrompt keeps the whole persona", () => {
+  const persona = `Persona start. ${"x".repeat(5_000)} Only answer when named.`;
+  const prompt = renderDetectPrompt({
+    session: {} as never,
+    message: "hi",
+    recentContext: "",
+    systemPrompt: persona,
+    history: [],
+    recordModelCall: () => {},
+  });
+  assert.ok(prompt.includes("Only answer when named."));
 });
 
 test("turn-detection prompt treats plain-text assistant handle + sensitive question as a reply", () => {

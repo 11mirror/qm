@@ -1,5 +1,6 @@
 import { refusalFallbackModelId } from "./turn-recovery.ts";
 import { type ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { type TSchema } from "typebox";
 import { ProviderTurnError } from "../core/turn-error.ts";
 import { swallow } from "../util/errors.ts";
 import { auxiliaryModelForProvider, resolveModel, contextTokenBudgetForModel } from "../model/pi-models.ts";
@@ -12,16 +13,20 @@ import {
   SECURITY_SCREEN_SYSTEM_PROMPT,
 } from "../security/security-screen.ts";
 import {
+  AckEmojiAnswer,
+  ApprovalSummaryAnswer,
   buildDetectionPrompt,
-  parseDetectVerdict,
+  DetectAnswer,
+  detectResult,
   renderDetectPrompt,
   TITLE_GENERATION_PROMPT,
+  TitleAnswer,
+  titleFromAnswer,
   titleUserPrompt,
   ACK_EMOJI_PROMPT,
   APPROVAL_SUMMARY_PROMPT,
-  sanitizeTitle,
 } from "./pi-aux-prompts.ts";
-import { buildModelRuntime, complete } from "./pi-model-runtime.ts";
+import { buildModelRuntime, complete, completeStructured, type StructuredAnswer } from "./pi-model-runtime.ts";
 import type { PiModelAccess } from "./pi-model-access.ts";
 import type { HarnessSecurityScreenInput } from "./harness.ts";
 import type { SecurityScreenVerdict } from "../security/security-screen.ts";
@@ -54,10 +59,10 @@ export async function piShouldRespond(
     inputTokens: countTokens(detectSystemPrompt) + countTokens(prompt),
     entryCount: detect.history.length,
   });
-  const out = (
-    (await complete(model, providerKeys, detectSystemPrompt, prompt, { modelGateway: access.gateway })) ?? ""
-  ).trim();
-  return parseDetectVerdict(out, Boolean(detect.reactionGuidance?.trim()));
+  const answer = await completeStructured(model, providerKeys, detectSystemPrompt, prompt, DetectAnswer, {
+    modelGateway: access.gateway,
+  });
+  return answer ? detectResult(answer, Boolean(detect.reactionGuidance?.trim())) : { respond: false };
 }
 
 export async function piCompactHistory(
@@ -185,21 +190,32 @@ export async function piPickAckEmoji(
     const model = access.model(ackModelId);
     const providerKeys = await access.providerKeys();
     if (!access.keyFor(providerKeys, model)) return undefined;
-    const prompt = `Candidates: ${candidates.join(", ")}\n\nMessage: ${text.slice(0, 2000)}`;
-    const raw = await complete(model, providerKeys, ACK_EMOJI_PROMPT, prompt, {
+    const prompt = `Candidates: ${candidates.join(", ")}\n\nMessage: ${text}`;
+    const answer = await completeStructured(model, providerKeys, ACK_EMOJI_PROMPT, prompt, AckEmojiAnswer, {
       modelGateway: access.gateway,
       thinkingLevel: "off",
       maxTokens: 64,
       retry: false,
       signal: AbortSignal.timeout(2_000),
     });
-    if (!raw) return undefined;
-    const emoji = (JSON.parse(raw.replace(/```json|```/g, "").trim()) as { emoji?: unknown }).emoji;
-    return typeof emoji === "string" && candidates.includes(emoji) ? emoji : undefined;
+    return answer?.ok && candidates.includes(answer.value.emoji) ? answer.value.emoji : undefined;
   } catch (e) {
     swallow("pi: ack emoji", e);
     return undefined;
   }
+}
+
+async function keyedStructured<T extends TSchema>(
+  access: PiModelAccess,
+  modelId: string,
+  systemPrompt: string,
+  prompt: string,
+  schema: T,
+): Promise<StructuredAnswer<T> | undefined | null> {
+  const model = access.model(modelId);
+  const providerKeys = await access.providerKeys();
+  if (!access.keyFor(providerKeys, model)) return null;
+  return completeStructured(model, providerKeys, systemPrompt, prompt, schema, { modelGateway: access.gateway });
 }
 
 export async function piGenerateTitle(
@@ -208,8 +224,10 @@ export async function piGenerateTitle(
   transcript: string,
 ): Promise<string | undefined> {
   if (!transcript.trim()) return undefined;
-  const out = await keyedOneShot(access, titleModelId(), TITLE_GENERATION_PROMPT, titleUserPrompt(transcript));
-  return out === null ? undefined : sanitizeTitle(out);
+  const modelId = titleModelId();
+  const prompt = titleUserPrompt(transcript, contextTokenBudgetForModel(modelId));
+  const answer = await keyedStructured(access, modelId, TITLE_GENERATION_PROMPT, prompt, TitleAnswer);
+  return answer ? titleFromAnswer(answer) : undefined;
 }
 
 export async function piSummarizeApproval(
@@ -225,9 +243,8 @@ export async function piSummarizeApproval(
     purpose ? `Agent's stated purpose: ${purpose}` : "",
     "",
     "Command:",
-    command.slice(0, 4000),
+    command,
   ].join("\n");
-  const out = (await keyedOneShot(access, titleModelId(), APPROVAL_SUMMARY_PROMPT, prompt))?.trim();
-  if (!out || out === "NONE") return undefined;
-  return out.replace(/^["']|["']$/g, "").slice(0, 300);
+  const answer = await keyedStructured(access, titleModelId(), APPROVAL_SUMMARY_PROMPT, prompt, ApprovalSummaryAnswer);
+  return (answer?.ok && answer.value.summary?.trim()) || undefined;
 }
