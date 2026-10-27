@@ -8,7 +8,7 @@ import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
 import type { Principal, TurnResult } from "../../src/types.ts";
 import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../../plugins/chassis/src/security-quarantine.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl } from "../support/test-database.ts";
+import { testDatabaseUrl, testQuery } from "../support/test-database.ts";
 import { claimTurn, completeTurn, finishTurn, testRunStore } from "../support/turns.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
@@ -316,6 +316,28 @@ test("sweep marks a permanently undeliverable reply done instead of retrying it 
   assert.equal(await recovery.sweep(Date.now() + 120_000), 0);
   assert.equal(await recovery.sweep(Date.now() + 120_000), 0);
   assert.equal(attempts, 1);
+});
+
+test("sweep recovers a reply owed by a run that finished long ago", async (t) => {
+  const { runs, ledger, databaseUrl, close } = testRunStore();
+  t.after(close);
+  const outbound = recordingOutbound();
+  const stale = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
+  await completeTurn(ledger, stale.id, { status: "ok", reply: "from last week" });
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60_000;
+  await testQuery(databaseUrl, `UPDATE runs SET finished_at = ${weekAgo} WHERE id = '${stale.id}'`);
+  const quiet = (await runs.enqueue({ sessionId: "sB", request: turn("b") })).run;
+  await completeTurn(ledger, quiet.id, { status: "ok", reply: "nowhere to post" });
+  const recovery = wireRunResultPosts(runs, outbound, { graceMs: 0 });
+  assert.equal(await recovery.sweep(Date.now() + 120_000), 1);
+  assert.deepEqual(
+    (await outbound.pending("slack")).map((d) => [d.idempotencyKey, d.text]),
+    [[`run:${stale.id}`, "from last week"]],
+  );
+  assert.equal(typeof (await runs.get(quiet.id))?.deliveryState?.settledAt, "number", "a run owing nothing is settled");
+  assert.equal((await runs.get(quiet.id))?.deliveryState?.postedAt, undefined);
+  assert.deepEqual(await runs.unsettledTerminal({ finishedAt: 0, id: "" }, Date.now() + 120_000, 10), []);
+  assert.equal(await recovery.sweep(Date.now() + 120_000), 0);
 });
 
 test("sweep pages through terminal runs by (finishedAt, id) without skipping ties", async (t) => {

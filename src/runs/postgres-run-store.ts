@@ -102,7 +102,7 @@ function runReads(
   | "latestForThreads"
   | "latestForThread"
   | "pendingReturns"
-  | "terminalFinished"
+  | "unsettledTerminal"
   | "activeForThread"
   | "inFlightForThread"
   | "activeSessionIds"
@@ -156,10 +156,11 @@ function runReads(
       );
       return rows.map(rowToRun);
     },
-    async terminalFinished(after, beforeMs, limit) {
+    async unsettledTerminal(after, beforeMs, limit) {
       const { rows } = await q(
         `SELECT * FROM runs WHERE status IN ('done','failed') AND finished_at <= $1
-           AND (finished_at > $2 OR (finished_at = $2 AND id > $3))
+           AND (delivery_state IS NULL OR NOT (delivery_state::jsonb ? 'settledAt'))
+           AND (finished_at, id) > ($2, $3)
          ORDER BY finished_at, id LIMIT $4`,
         [beforeMs, after.finishedAt, after.id, limit],
       );
