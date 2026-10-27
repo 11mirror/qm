@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { runEventRoutes } from "../src/api/routes/run-events.ts";
-import { type ApiCtx, respond } from "../src/api/routes/route.ts";
-import type { App } from "../src/api/app.ts";
-import { createMemoryEventBus } from "../src/util/event-bus.ts";
-import { emitRunReasoning, emitRunText, type RunStreamEvent } from "../src/runs/run-stream-events.ts";
-import { storedItem, type Item } from "../src/sessions/items.ts";
+import { runEventRoutes } from "../../../src/api/routes/run-events.ts";
+import { type ApiCtx, respond } from "../../../src/api/routes/route.ts";
+import type { App } from "../../../src/api/app.ts";
+import { createMemoryEventBus } from "../../../src/util/event-bus.ts";
+import { emitRunReasoning, emitRunText, type RunStreamEvent } from "../../../src/runs/run-stream-events.ts";
+import { storedItem, type Item } from "../../../src/sessions/items.ts";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 

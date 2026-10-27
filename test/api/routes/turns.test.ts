@@ -1,14 +1,14 @@
-import "./support/auto-fake-sprites.ts";
+import "../../support/auto-fake-sprites.ts";
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
-import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
-import { testConfig } from "./support/test-config.ts";
-import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { createServer } from "../../../src/api/server.ts";
+import { buildApp } from "../../support/build-app.ts";
+import { signedHeaders } from "../../../plugins/chassis/src/core-client.ts";
+import { testConfig } from "../../support/test-config.ts";
+import { createPostgresReplayDedupe } from "../../../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "../../support/test-database.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 const built = buildApp(testConfig());

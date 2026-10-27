@@ -1,12 +1,12 @@
-import "./support/auto-fake-sprites.ts";
-import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import "../support/auto-fake-sprites.ts";
+import { selectDefaultSandbox } from "../support/default-sandbox.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildApp } from "./support/build-app.ts";
-import type { TurnRequest } from "../src/types.ts";
-import { testConfig } from "./support/test-config.ts";
-import { settledRun } from "./support/turns.ts";
+import { buildApp } from "../support/build-app.ts";
+import type { TurnRequest } from "../../src/types.ts";
+import { testConfig } from "../support/test-config.ts";
+import { settledRun } from "../support/turns.ts";
 
 const actor = { externalId: "U1" };
 function dm(text: string): TurnRequest {

@@ -2,18 +2,23 @@ import { after, before, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
-import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
-import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import type { Run, RunPriority } from "../src/runs/run-store.ts";
-import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { registerAbsurdSchema, TURN_QUEUES } from "../src/turns/absurd-schema.ts";
-import { createPostgresNotifyBus } from "../src/persistence/postgres-notify-bus.ts";
-import { createTurnLedger, TURN_READY_CHANNEL, TURN_YIELD_CHANNEL, type TurnLedger } from "../src/turns/turn-ledger.ts";
-import { createTurnRunner } from "../src/turns/turn-runner.ts";
-import { scopeId, type TurnResult } from "../src/types.ts";
-import { sleep } from "../src/util/async.ts";
-import { eventually } from "./support/settle.ts";
+import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
+import type { Orchestrator, OrchestratorInput } from "../../src/core/orchestrator.ts";
+import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
+import type { Run, RunPriority } from "../../src/runs/run-store.ts";
+import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
+import { registerAbsurdSchema, TURN_QUEUES } from "../../src/turns/absurd-schema.ts";
+import { createPostgresNotifyBus } from "../../src/persistence/postgres-notify-bus.ts";
+import {
+  createTurnLedger,
+  TURN_READY_CHANNEL,
+  TURN_YIELD_CHANNEL,
+  type TurnLedger,
+} from "../../src/turns/turn-ledger.ts";
+import { createTurnRunner } from "../../src/turns/turn-runner.ts";
+import { scopeId, type TurnResult } from "../../src/types.ts";
+import { sleep } from "../../src/util/async.ts";
+import { eventually } from "../support/settle.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Absurd turn tests";

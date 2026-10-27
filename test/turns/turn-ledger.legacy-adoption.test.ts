@@ -2,9 +2,9 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import type { OrchestratorInput } from "../src/core/orchestrator.ts";
-import type { RunPriority } from "../src/runs/run-store.ts";
-import { claimTurn, testRunStore } from "./support/turns.ts";
+import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
+import type { RunPriority } from "../../src/runs/run-store.ts";
+import { claimTurn, testRunStore } from "../support/turns.ts";
 
 const store = testRunStore();
 const admin = new pg.Pool({ connectionString: store.databaseUrl });

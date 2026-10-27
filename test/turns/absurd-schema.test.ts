@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { definePgMigration, pgMigrationFrom } from "../src/persistence/pg-pool.ts";
-import { ABSURD_JOBS_MIGRATION, ABSURD_MIGRATION, ABSURD_SQL_URL, TURN_QUEUES } from "../src/turns/absurd-schema.ts";
+import { definePgMigration, pgMigrationFrom } from "../../src/persistence/pg-pool.ts";
+import { ABSURD_JOBS_MIGRATION, ABSURD_MIGRATION, ABSURD_SQL_URL, TURN_QUEUES } from "../../src/turns/absurd-schema.ts";
 
 test("Absurd migration runs the vendored file whole, matches its pin and accepts the 0.5.1 release checksum", () => {
   const migration = pgMigrationFrom(ABSURD_MIGRATION);

@@ -1,8 +1,8 @@
 import { after, afterEach, before, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
-import { applyPgMigrations, pgMigrationFrom, type PoolClient } from "../src/persistence/pg-pool.ts";
-import { ABSURD_MIGRATION, TURN_QUEUES, registerAbsurdSchema, type TurnQueue } from "../src/turns/absurd-schema.ts";
+import { applyPgMigrations, pgMigrationFrom, type PoolClient } from "../../src/persistence/pg-pool.ts";
+import { ABSURD_MIGRATION, TURN_QUEUES, registerAbsurdSchema, type TurnQueue } from "../../src/turns/absurd-schema.ts";
 import {
   RunFailed,
   TaskCancelled,
@@ -18,7 +18,7 @@ import {
   holdsClaim,
   scheduleRun,
   spawnTask,
-} from "../src/turns/absurd.ts";
+} from "../../src/turns/absurd.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Absurd tests";

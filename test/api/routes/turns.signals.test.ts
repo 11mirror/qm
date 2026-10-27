@@ -1,21 +1,21 @@
-import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../plugins/chassis/src/portal-identity.ts";
-import "./support/auto-fake-sprites.ts";
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../../plugins/chassis/src/portal-identity.ts";
+import "../../support/auto-fake-sprites.ts";
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
-import { attributedSteerText } from "../src/api/app-turn.ts";
-import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
-import type { OrchestratorInput } from "../src/core/orchestrator.ts";
-import type { Principal, TurnRequest } from "../src/types.ts";
-import { scopeId } from "../src/types.ts";
-import { testConfig } from "./support/test-config.ts";
-import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
-import { completeTurn } from "./support/turns.ts";
+import { createServer } from "../../../src/api/server.ts";
+import { buildApp } from "../../support/build-app.ts";
+import { attributedSteerText } from "../../../src/api/app-turn.ts";
+import { signedHeaders } from "../../../plugins/chassis/src/core-client.ts";
+import type { OrchestratorInput } from "../../../src/core/orchestrator.ts";
+import type { Principal, TurnRequest } from "../../../src/types.ts";
+import { scopeId } from "../../../src/types.ts";
+import { testConfig } from "../../support/test-config.ts";
+import { createPostgresReplayDedupe } from "../../../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "../../support/test-database.ts";
+import { completeTurn } from "../../support/turns.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -41,7 +41,7 @@ const coreBase = `http://localhost:${corePort}`;
 process.env.CORE_API_URL = coreBase;
 process.env.CORE_SIGNING_SECRET = SECRET;
 process.env.WEB_UI_PRINCIPALS = "";
-const { handler } = await import("../plugins/web-ui/server/index.ts");
+const { handler } = await import("../../../plugins/web-ui/server/index.ts");
 const web = createHttpServer(handler);
 web.listen(0);
 const webBase = `http://localhost:${(web.address() as AddressInfo).port}`;
@@ -760,7 +760,7 @@ test("web proxy: /api/runs/active tracks queued runs — the live one first, the
 test("web steering atomically transfers file-only queues and deduplicates retries", async () => {
   const threadRef = "web:U1:steer-files";
   const attachments = [{ name: "report.txt", mimetype: "text/plain", sizeBytes: 6, blobId: "steer-blob" }];
-  const submit = async (text: string, files: import("../src/types.ts").IncomingAttachment[] = []) => {
+  const submit = async (text: string, files: import("../../../src/types.ts").IncomingAttachment[] = []) => {
     const res = await fetch(
       `${webBase}/api/turn`,
       asUser("U1", {

@@ -1,18 +1,18 @@
-import "./support/auto-fake-sprites.ts";
+import "../support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer } from "../../src/api/server.ts";
 import type { AddressInfo } from "node:net";
-import { buildApp } from "./support/build-app.ts";
-import type { OrchestratorInput } from "../src/core/orchestrator.ts";
-import { testConfig } from "./support/test-config.ts";
-import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
-import { dmFor } from "./support/dm-turn.ts";
-import { claimTurn, finishTurn } from "./support/turns.ts";
+import { buildApp } from "../support/build-app.ts";
+import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
+import { testConfig } from "../support/test-config.ts";
+import type { SessionStateEvent } from "../../src/runs/session-state-bus.ts";
+import { dmFor } from "../support/dm-turn.ts";
+import { claimTurn, finishTurn } from "../support/turns.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-state-"));
