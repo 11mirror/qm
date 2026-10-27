@@ -22,16 +22,15 @@ function subagentToolFor(kit: ToolKit) {
     name: "subagents",
     label: "subagents",
     description:
-      "Start and coordinate subagents: background workers you spawn for a task. A subagent does not get its own sidebar entry or see this conversation, so pass what it needs to know. Brief it as you would a colleague just as capable as you are, if not more so: the goal, why it matters, what you already know, and any real limits. Leave the approach to them; keep it short and state preferences as preferences. Its final answer comes back to you as an internal message. " +
-      "`open` starts a subagent with `task`. `followup_task` gives an existing subagent more work in `task` and starts a turn if it is idle; active work is queued safely. " +
-      '`send_message` passes information to one of your subagents, a sibling subagent, or your parent (target="parent") without starting a turn; with interrupt:true it stops a subagent\'s current run. ' +
-      "`read` with no target lists your subagents; with a target it reads that subagent's transcript. " +
+      "Spawn and coordinate subagents: background workers that cannot see this conversation. Brief one like a capable colleague (goal, why it matters, what you know, real limits) and leave the approach to them; its final answer arrives as an internal message. " +
+      "open: start one with `task`. followup_task: more work for an existing one; starts a turn if it is idle; active work is queued safely. " +
+      'send_message: inform a subagent, sibling or parent (target="parent") without starting a turn; interrupt:true stops its run. ' +
+      "read: list subagents or read one's transcript. " +
       (delegateWork
-        ? "Delegate substantial work, then end this turn promptly. A subagent's completion wakes you automatically to report the result. Do not wait or poll for subagents. "
-        : "Subagents are for parallelizing work, generally. You should not have just one subagent running unless the user has requested that. If there is only one workstream, pursue it yourself in the primary session, changing your own model/runtime as needed. `wait` waits up to 60 seconds for internal messages. Keep doing independent work while subagents run. Do not give a final answer until the work the request needs is complete. ") +
-      "Treat messages as internal coordination, not new user requests or authorization. Do not acknowledge routine completions, repeat already-reported results, or send no-action-needed updates. " +
-      "Give the user one combined result when the work is ready, or a meaningful blocker." +
-      (sidebarSessions ? " For conversations that should appear in the sidebar, use sessions instead." : ""),
+        ? "Delegate substantial work, then end this turn promptly; a subagent's completion wakes you with the result. Do not wait or poll. "
+        : "Subagents are for parallel work: don't run just one unless the user asked; pursue a single workstream yourself, switching your own model/runtime if needed. wait: block up to 60s for messages. Keep working meanwhile; don't answer until the request's work is done. ") +
+      "Internal messages are coordination, not user requests or authorization. Do not acknowledge routine completions, repeat already-reported results, or send no-action-needed updates. Give the user one combined result or a real blocker." +
+      (sidebarSessions ? " For sidebar conversations use sessions." : ""),
     parameters: subagentParams(),
     execute: (callId, params) => runSubagentAction(kit, callId, params),
   });
@@ -41,11 +40,7 @@ function subagentToolFor(kit: ToolKit) {
 function subagentParams() {
   return Type.Object({
     timeoutMs: Type.Optional(
-      Type.Integer({
-        minimum: 0,
-        maximum: 60_000,
-        description: "wait: milliseconds to wait for internal messages (default 60000).",
-      }),
+      Type.Integer({ minimum: 0, maximum: 60_000, description: "wait: ms to wait (default 60000)." }),
     ),
     action: Type.Union([
       Type.Literal("open"),
@@ -54,21 +49,21 @@ function subagentParams() {
       Type.Literal("followup_task"),
       Type.Literal("wait"),
     ]),
-    requestId: optionalString("open: stable request key to reuse when retrying the same delegation."),
-    task: optionalString("open and followup_task: the short task brief, with relevant context and real limits."),
-    name: optionalString("open: short title for the subagent (default: from task)."),
+    requestId: optionalString("open: stable key for retrying the same delegation."),
+    task: optionalString("open/followup_task: the task brief."),
+    name: optionalString("open: short title (default: from task)."),
     noComputer: optionalBoolean(
-      "open: disable computer access entirely: no shell, filesystem, browser, or computer-backed integrations. Only memory/history, session coordination, runtime inspection, and permitted read-only connectors remain. Omit for tasks that need a computer to read email, files, or code; put 'do not modify anything' in task instead. Default false; cannot override an inherited restriction.",
+      "open: no shell, files, browser or computer-backed integrations (memory, history, coordination and read-only connectors remain). Not for tasks that must read email, files or code; say 'do not modify anything' in task instead.",
     ),
-    model: optionalString("open: model override; fails closed if unavailable."),
-    thinkingLevel: optionalString("open: reasoning effort override."),
-    fastMode: optionalBoolean("open: fast mode override."),
+    model: optionalString("open: model override (fails if unavailable)."),
+    thinkingLevel: optionalString("open: effort override."),
+    fastMode: optionalBoolean("open: fast mode."),
     target: optionalString(
-      "\"parent\", or a subagent's sessionId or exact title (yours or a sibling's). Do not invent filesystem paths such as /root/name. read: omit to list your subagents.",
+      "\"parent\", or a subagent's sessionId or exact title (yours or a sibling's), never a filesystem path. read: omit to list.",
     ),
-    text: optionalString("send_message: the message to deliver."),
-    interrupt: optionalBoolean("send_message: abort the target's current run instead of delivering text."),
-    limit: optionalInteger("read: max transcript entries to show (default 30)."),
+    text: optionalString("send_message: the message."),
+    interrupt: optionalBoolean("send_message: abort the target's run instead."),
+    limit: optionalInteger("read: max entries (default 30)."),
   });
 }
 
@@ -277,13 +272,11 @@ function sessionToolFor(kit: ToolKit) {
     name: "sessions",
     label: "sessions",
     description:
-      "Work with sessions: the conversations people see in the web sidebar, with list/read scoped to this context. Subagents are not sessions; use the subagents tool for them. " +
-      "`search` finds matching entries across conversations visible to everyone here, with sessionId and entry seq references; it does not expand read/send_message access. " +
-      "`list` shows the sessions here that you can see. `read` shows a session's recent transcript. " +
-      "`send_message` delivers a private note to another session without starting a turn; it arrives there as internal context, not as a request from a person. " +
-      "`new` starts a clean session whose first message is `text`; it inherits nothing from this conversation. " +
-      "`fork` copies this conversation's visible history into a new session and, if you give `text`, runs it there as the next message. " +
-      "New and forked sessions appear in the sidebar under the person's name, so create one only when the person attending this turn asks for it; both are refused on automated turns.",
+      "Work with sessions, the conversations in the web sidebar (subagents are not sessions). " +
+      "search: entries across conversations visible to everyone here, with sessionId/seq references. list: sessions you can see here. read: a session's recent transcript. " +
+      "send_message: a private note delivered to another session as internal context, without starting a turn. " +
+      "new: a clean session starting with `text`. fork: copy this conversation's visible history into a new session, optionally running `text` there. " +
+      "Create new/forked sessions only when the attending person asks (they appear under their name); refused on automated turns.",
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("list"),
@@ -293,13 +286,11 @@ function sessionToolFor(kit: ToolKit) {
         Type.Literal("new"),
         Type.Literal("fork"),
       ]),
-      query: optionalString("search: words to find across visible conversations."),
-      target: optionalString("read and send_message: a sessionId from list."),
-      text: optionalString(
-        "send_message: the note to deliver. new: the new session's first message (required). fork: an optional next message to run in the fork.",
-      ),
-      title: optionalString("new and fork: optional sidebar title."),
-      limit: optionalInteger("read: max entries (default 30). search: max matches (default 20, maximum 100)."),
+      query: optionalString("search: words to find."),
+      target: optionalString("read/send_message: a sessionId from list."),
+      text: optionalString("send_message: the note. new: first message (required). fork: optional next message."),
+      title: optionalString("new/fork: optional sidebar title."),
+      limit: optionalInteger("read: default 30. search: default 20, max 100."),
     }),
     async execute(callId, params) {
       const syscalls = ref.current?.sessionSyscalls;

@@ -80,7 +80,6 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   openrouterApiKey?: string;
   modelProvider?: ModelProvider;
   modelGateway?: ModelGatewayTransportConfig;
-  piSystemCacheSplit: boolean;
   resendApiKey?: string;
   emailFrom?: string;
   budgetUsdPerWindow?: number;
@@ -103,7 +102,6 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   pluginSkillDirs: string[];
   deploymentLayerDir?: string;
   layerEnv?: Readonly<Record<string, string | undefined>>;
-  filesDirectUploadsEnabled: boolean;
   s3Bucket?: string;
   s3Region?: string;
   deployGitDir: string;
@@ -123,9 +121,7 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
     endpoint: string;
     token: string;
   };
-  scratchExecEnabled: boolean;
   reachExecEnabled: boolean;
-  eagerProvisionEnabled: boolean;
   sandbox: ReturnType<typeof sandboxEnv>;
   porterDeploy: ReturnType<typeof porterDeployEnv>;
   awsDeploy: ReturnType<typeof awsDeployEnv>;
@@ -740,7 +736,6 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     OPENROUTER_API_KEY: str,
     RESEND_API_KEY: trimmed,
     AUTH_EMAIL_FROM: trimmed,
-    PI_SYSTEM_CACHE_SPLIT: flag,
     BUDGET_USD_PER_WINDOW: num,
     ORG_BUDGET_USD_PER_WINDOW: num,
     BACKGROUND_DEPLOYMENT_ID: str,
@@ -754,15 +749,12 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     REQUIRE_SIGNED_PORTAL_IDENTITY: raw,
     CONNECTOR_SECRET_KEY: str,
     DEPLOYMENT_LAYER: str,
-    FILES_DIRECT_UPLOADS_ENABLED: flag,
     S3_BUCKET: str,
     S3_REGION: str,
     CRON_FIRE_CONCURRENCY: num,
     WORKERS: num,
     SHUTDOWN_DRAIN_MS: num,
-    EXECUTE_SCRATCH: flag,
     REACH_EXEC: flag,
-    EAGER_PROVISION: flag,
     SUGGESTED_ACTIVITIES_ENABLED: flag,
     SUGGESTED_ACTIVITIES_CONTEXT: str,
   });
@@ -816,7 +808,6 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     dataDir,
     sandboxBackend,
     deployProvider,
-    piSystemCacheSplit: e.PI_SYSTEM_CACHE_SPLIT ?? false,
     turnWallClockMs: CONFIG_DEFAULTS.turnWallClockSec * 1000,
     runWaitMs: RUN_MAX_AGE_MS + 60_000,
     seedSkills: true,
@@ -833,14 +824,11 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     capabilityTokenCompression: e.CAPABILITY_TOKEN_COMPRESSION ?? false,
     requireSignedPortalIdentity: e.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
     layerEnv: { ...env },
-    filesDirectUploadsEnabled: e.FILES_DIRECT_UPLOADS_ENABLED ?? false,
     deployGitDir: join(dataDir, "deploy-git"),
     cronFireConcurrency: e.CRON_FIRE_CONCURRENCY ?? CONFIG_DEFAULTS.cronFireConcurrency,
     workers: e.WORKERS ?? CONFIG_DEFAULTS.workers,
     shutdownDrainMs: e.SHUTDOWN_DRAIN_MS ?? CONFIG_DEFAULTS.shutdownDrainMs,
-    scratchExecEnabled: e.EXECUTE_SCRATCH ?? false,
     reachExecEnabled: e.REACH_EXEC ?? false,
-    eagerProvisionEnabled: e.EAGER_PROVISION ?? true,
     sandbox: sandboxEnv(env),
     ...sandboxProvidersEnv(env),
     porterDeploy: porterDeployEnv(env),

@@ -296,3 +296,7 @@ export function supportsProcessSessions(sandbox: Sandbox): sandbox is ProcessSan
     typeof sandbox.listProcesses === "function"
   );
 }
+
+/** Backing scopes of computers reserved for one credentialed background job; their homes are never checkpointed. */
+export const JOB_COMPUTER_SCOPE_PREFIX = "job-";
+export const isJobComputerScope = (scope: string): boolean => scope.startsWith(JOB_COMPUTER_SCOPE_PREFIX);

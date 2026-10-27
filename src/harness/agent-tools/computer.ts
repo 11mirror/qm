@@ -1,6 +1,6 @@
 import { Check } from "typebox/value";
 import { isObj } from "../../util/objects.ts";
-// The execute, sandbox and background tools: one command path for scoped, scratch, owner and reached computers.
+// The execute, sandbox and background tools: one command path for scoped, scratch and reached computers.
 
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type Static, type TSchema } from "typebox";
@@ -39,47 +39,35 @@ export function computerTools(kit: ToolKit) {
 function executeShared(kit: ToolKit) {
   const { ref, execTimeoutSec, execCeilingSec, bgTtlSec, bgTtlMaxSec, recordResult } = kit;
   const EXECUTE_TIMEOUT_GUIDANCE =
-    "Commands may run under a POSIX sh such as dash, not bash: wrap bash-only syntax like ${var/a/b} or arrays in bash -c. " +
-    `Each command has a wall-clock timeout (default ${execTimeoutSec}s, max ${execCeilingSec}s) — set \`timeout_seconds\` ` +
-    "higher for builds/installs/tsc/test runs that legitimately take minutes, or lower for " +
-    "commands you expect to be quick so a hang frees the machine fast. For work that " +
-    `legitimately exceeds the ${execCeilingSec}s ceiling (long builds, installs, test suites, servers), use ` +
-    "execute with background:true to run it detached, then use background to poll or watch the result across turns. " +
-    "Always start servers with execute background:true, not shell ampersand: inherited output streams can keep execute waiting even after its shell exits. " +
-    "If commands hang or fail with transport errors that nothing you ran explains, the computer itself may be " +
-    "wedged — use sandbox action=status to inspect it out-of-band and action=restart to recover it. If a restart or two does not bring the shell back, stop restarting: create a fresh sandbox, set it as the default, and retry there, recovering work from git or Files.";
+    "Commands may run under POSIX sh; wrap bash-only syntax in bash -c. " +
+    `Timeout default ${execTimeoutSec}s, max ${execCeilingSec}s: raise \`timeout_seconds\` for builds/installs/tests, lower it for quick commands. ` +
+    "For anything longer, and for servers, use background:true (never a shell ampersand) and the background tool. " +
+    "On hangs or unexplained transport errors use sandbox status/restart; if that fails twice, create a fresh sandbox, set it default, and recover work from git or Files.";
 
   const executeBaseParams = {
     command: Type.String({ description: "The shell command to run." }),
-    background: optionalBoolean(
-      "Run detached and return a process_id. Use background to poll, send input, stop, or watch the process. Only scoped execution supports background jobs.",
-    ),
+    background: optionalBoolean("Run detached and return a process_id for the background tool. Scoped only."),
     sandbox_id: Type.Optional(
       Type.String({
         minLength: 1,
-        description:
-          "Exact sandbox ID. Omit only when this scope has a stored default; otherwise select a target with sandbox list/create.",
+        description: "Exact sandbox ID; omit to use this scope's default.",
       }),
     ),
     purpose: Type.String({
       description:
-        "A human-readable intent label, at most 4 words (e.g. 'Check Python version'). " +
-        "Describe the purpose, not the code. Required on every call; shown in tool activity and approval requests.",
+        "Intent label, at most 4 words, describing the purpose not the code; shown in activity and approval requests.",
     }),
     timeout_seconds: Type.Optional(
       Type.Integer({
         minimum: 1,
-        description:
-          `Max wall-clock seconds before the command is killed (exit 124). Default ${execTimeoutSec}, max ${execCeilingSec}; background:true uses a job lifetime (default ${bgTtlSec}, max ${bgTtlMaxSec}). ` +
-          "Raise this for builds/installs/tsc/test runs that legitimately take minutes; lower it " +
-          "for commands you expect to be quick so a hang frees the machine fast.",
+        description: `Seconds until kill (exit 124); default ${execTimeoutSec}, max ${execCeilingSec}. With background:true, the job lifetime (default ${bgTtlSec}, max ${bgTtlMaxSec}).`,
       }),
     ),
 
     credentials: Type.Optional(
       Type.Array(Type.String(), {
         description:
-          "Exact authorized credential handles to materialize for this command only (for a background job, until it exits). Newly granted handles are accepted.",
+          "Exact authorized credential handles to materialize for this command only (for a background job, until it exits). Newly granted handles are accepted. In a shared conversation, credentials other than brokered org services run on this turn's scratch computer instead, even with sandbox_id (no shared workspace files: fetch scripts from Files or git in the command); a background job naming them gets its own computer that nothing else can reach.",
       }),
     ),
   };
@@ -113,7 +101,7 @@ function executeShared(kit: ToolKit) {
 
 /** Runs one foreground command and records its call and result. */
 function executeRunner(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeof executeShared>, "blockOnApproval">) {
-  const { ref, scratchExec, log, recordCall, recordResult, recordFail } = kit;
+  const { ref, log, recordCall, recordResult, recordFail } = kit;
   const runExecute = async (
     callId: string,
     params: {
@@ -126,7 +114,7 @@ function executeRunner(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeof
       purpose?: string;
       credentials?: string[];
     },
-    route?: { scratch?: boolean; ownerAuth?: boolean; reachTarget?: string },
+    route?: { scratch?: boolean; reachTarget?: string },
   ) => {
     const tc = ref.current;
     if (!tc) return text("[error] no active tool context");
@@ -134,10 +122,7 @@ function executeRunner(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeof
     if (route?.reachTarget !== undefined) {
       scopeNote = { scope: route.reachTarget };
     } else if (route !== undefined) {
-      let scope = "scoped";
-      if (route.ownerAuth) scope = "owner";
-      else if (route.scratch) scope = "scratch";
-      scopeNote = { scope };
+      scopeNote = { scope: route.scratch ? "scratch" : "scoped" };
     }
     await recordCall(callId, {
       tool: "execute",
@@ -152,25 +137,29 @@ function executeRunner(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeof
         ...(params.sandbox_id !== undefined ? { sandboxId: params.sandbox_id } : {}),
         ...(params.timeout_seconds !== undefined ? { timeoutSeconds: params.timeout_seconds } : {}),
         ...(route?.scratch ? { scratch: true } : {}),
-        ...(route?.ownerAuth ? { ownerAuth: true } : {}),
         ...(route?.reachTarget !== undefined ? { reachTarget: route.reachTarget } : {}),
         ...(params.credentials?.length ? { credentials: params.credentials } : {}),
         ...(ref.abortSignal ? { signal: ref.abortSignal } : {}),
       };
       const r = await tc.execute(params.command, Object.keys(execOpts).length ? execOpts : undefined);
-      const { stdout: _stdout, stderr: _stderr, ...execMeta } = r;
+      const { stdout: _stdout, stderr: _stderr, scratchReroute, ...execMeta } = r;
+      const resultScope = scratchReroute ? { scope: "scratch" } : scopeNote;
       const parts = [r.stdout, r.stderr ? `[stderr]\n${r.stderr}` : ""].filter(Boolean).join("\n");
-      const reachedPrefix = r.reached ? `[ran on ${r.reached.label}'s computer]\n` : "";
-      const localExec = !route?.scratch && !route?.ownerAuth && route?.reachTarget === undefined && !r.reached;
+      let placePrefix = "";
+      if (r.reached) placePrefix = `[ran on ${r.reached.label}'s computer]\n`;
+      else if (scratchReroute)
+        placePrefix =
+          "[ran on this turn's scratch computer, not the shared one, because it names a private credential; its files are discarded after the turn]\n";
+      const localExec = !route?.scratch && !scratchReroute && route?.reachTarget === undefined && !r.reached;
       const pressureNote =
         localExec && r.pressure && r.pressure.ioFull60 >= PRESSURE_WARN_FULL60
-          ? `\n[pressure] this computer's disk is saturated (io ${r.pressure.ioFull60}%, load ${r.pressure.load1}) — sequence heavy work${scratchExec ? ', move self-contained runs to scope:"scratch"' : ""}, or check sandbox action=status`
+          ? `\n[pressure] this computer's disk is saturated (io ${r.pressure.ioFull60}%, load ${r.pressure.load1}) — sequence heavy work, move self-contained runs to scope:"scratch", or check sandbox action=status`
           : "";
       return recordResult(
         callId,
-        { tool: "execute", ...scopeNote, ...execMeta },
+        { tool: "execute", ...resultScope, ...execMeta },
         {
-          ...text(`${reachedPrefix}${parts}\n[exit ${r.code}${r.timedOut ? " timed-out" : ""}]${pressureNote}`),
+          ...text(`${placePrefix}${parts}\n[exit ${r.code}${r.timedOut ? " timed-out" : ""}]${pressureNote}`),
           details: r,
         },
         r.timedOut,
@@ -212,17 +201,17 @@ function sandboxTool(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeof e
     name: "sandbox",
     label: "sandbox",
     description:
-      "Manage sandbox resources. list returns providers, supported actions, inventory, and this scope's optional default. If work needs a computer and this scope has no default, do not report blocked: list providers, create a sandbox, set_default to it, and retry. Only report blocked if creation fails. create provisions a blank sandbox without changing the default or copying files. set_default changes routing only; pass sandbox_id:null to clear it. status reports health and recovery expiry without provisioning. restart recovers working state where supported and stops running processes. retire deletes the named sandbox after its default and jobs are cleared. Durable outputs belong in Files or git. Select an exact sandbox_id for status/restart or omit it to use the stored default.",
+      "Manage sandbox computers. list: providers, inventory, this scope's default. create: a blank sandbox (default unchanged). set_default: route commands there (null clears). status: health. restart: stop processes, recover state where supported. retire: delete (not while default or running jobs). If work needs a computer and there is no default, list, create, set_default and retry; report blocked only if creation fails. Durable outputs belong in git or Files.",
     parameters: Type.Object({
       action: Type.String({ enum: sandboxActions }),
       sandbox_id: Type.Optional(
         Type.Union([Type.String({ minLength: 1 }), Type.Null()], {
-          description: "Exact sandbox ID; null is allowed only for set_default.",
+          description: "Sandbox ID; status/restart use the default if omitted. null only for set_default.",
         }),
       ),
-      backend: optionalString("create only: provider from list."),
-      name: optionalString("create only: human-readable name."),
-      purpose: Type.String({ description: "Human-readable purpose, at most 4 words (e.g. 'Check sandbox health')." }),
+      backend: optionalString("create: provider from list."),
+      name: optionalString("create: display name."),
+      purpose: Type.String({ description: "As for execute." }),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -315,30 +304,25 @@ function executeTool(
   }: Pick<ReturnType<typeof executeShared>, "EXECUTE_TIMEOUT_GUIDANCE" | "executeBaseParams" | "blockOnApproval"> &
     Pick<ReturnType<typeof executeRunner>, "runExecute" | "invalidExecute">,
 ) {
-  const { ref, scratchExec, reachExec, recordCall, recordResult, recordFail } = kit;
-  const scopedBullet =
-    '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, and $AGENT_API_* tokens; saved credentials require execute.credentials; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n';
-  const scratchBullet = scratchExec
-    ? '- "scratch": a blank computer for this turn, with the same OS/tooling, read-only org-global files and skills, this conversation\'s scoped $AGENT_API_* capabilities (including Files), and only credentials explicitly requested for this execute call. It does not restore the resident workspace or cached CLI logins. Its local files are discarded after the turn. Use it for self-contained commands and API work, including credential-using work; publish any needed outputs to Files and verify success before finishing. Use scope:"scoped" when you need existing workspace files, installed state, or local work that must continue later.\n'
-    : "";
+  const { ref, reachExec, recordCall, recordResult, recordFail } = kit;
+  const scopedLine =
+    '- "scoped" (default): this conversation\'s sandbox: its workspace files and $AGENT_API_* tokens; saved credentials only via `credentials`. Working state survives only within provider recovery limits: push code to git, save artifacts to Files.\n';
+  const scratchLine =
+    '- "scratch": blank per-turn computer with the same tooling, read-only org-global files and skills, this conversation\'s $AGENT_API_* capabilities and requested credentials; no workspace or cached logins; files discarded after the turn, so publish outputs to Files and verify it worked.\n';
   const reachScopeDescription =
-    (scratchExec ? '"scoped" (default) | "scratch" | ' : '"scoped" (default) | ') +
-    '"owner" | ' +
-    "a room like \"#project-alpha\" — a channel you and this person are both in; runs the command on THAT room's computer (read-only by etiquette: read, search, fetch — don't rearrange).";
+    '"scoped" (default) | "scratch" | ' +
+    'a room like "#project-alpha" (a shared channel): runs on that room\'s computer, read-only by etiquette.';
   const reachDescription =
-    "Run a shell command and return its stdout/stderr/exit code. Pick where it runs with `scope`:\n" +
-    scopedBullet +
-    scratchBullet +
-    '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus explicitly requested credentials, no room workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use for commands that need the owner\'s login without putting it on the shared computer.\n' +
-    "- a room like \"#project-alpha\": a channel you and this person are both in — runs the command on THAT room's computer. Other rooms are places you VISIT: read, search, fetch (ls/grep/cat); don't rearrange. That box has none of this conversation's logins or capability tokens. Say where anything you bring back came from.\n" +
-    "If a file or piece of work isn't on this computer, don't declare it lost — check the rooms listed under 'Other computers you can reach'.\n" +
+    "Run a shell command and return stdout/stderr/exit code. `scope` picks the computer:\n" +
+    scopedLine +
+    scratchLine +
+    "- a room like \"#project-alpha\" (a shared channel): runs on that room's computer. Visit only — read, search, fetch; don't rearrange. It has none of this conversation's logins or tokens; say where anything you bring back came from. Before calling work lost, check the rooms under 'Other computers you can reach'.\n" +
     FILE_SEND_GUIDANCE +
     EXECUTE_TIMEOUT_GUIDANCE;
   const scopeDescription =
-    `Run a shell command and return its stdout/stderr/exit code. Pick a computer with \`scope\`:\n` +
-    scopedBullet +
-    '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus explicitly requested credentials, no shared workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use it for credential-using commands without putting personal logins on the shared computer.\n' +
-    scratchBullet +
+    "Run a shell command and return stdout/stderr/exit code. `scope` picks the computer:\n" +
+    scopedLine +
+    scratchLine +
     FILE_SEND_GUIDANCE +
     EXECUTE_TIMEOUT_GUIDANCE;
 
@@ -356,17 +340,8 @@ function executeTool(
     const keyword = scope.toLowerCase();
     if (keyword === "scoped") return runExecute(callId, params, { scratch: false });
     if (keyword === "scratch") {
-      if (!scratchExec) {
-        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope });
-        return invalidExecute(
-          callId,
-          { tool: "execute", invalid: "scratch_unavailable" },
-          '[error] a scratch box isn\'t available here — use scope:"scoped" or name a room like "#project-alpha".',
-        );
-      }
       return runExecute(callId, params, { scratch: true });
     }
-    if (keyword === "owner") return runExecute(callId, params, { ownerAuth: true });
     return runExecute(callId, params, { reachTarget: scope });
   };
 
@@ -384,13 +359,9 @@ function executeTool(
       scope: reachExec
         ? Type.Optional(Type.String({ description: reachScopeDescription }))
         : Type.Optional(
-            Type.Union(
-              [Type.Literal("scoped"), ...(scratchExec ? [Type.Literal("scratch")] : []), Type.Literal("owner")],
-              {
-                description:
-                  'Which computer runs this command: "scoped" (default — this conversation\'s sandbox: its working files and explicitly requested credentials; recovery depends on the provider) or "scratch" (blank filesystem for this turn, scoped API capabilities and explicitly requested credentials; no resident workspace or cached logins).',
-              },
-            ),
+            Type.Union([Type.Literal("scoped"), Type.Literal("scratch")], {
+              description: "Which computer runs this; see the tool description.",
+            }),
           ),
     }),
     execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
@@ -425,13 +396,16 @@ function executeTool(
         ...(params.sandbox_id ? { sandboxId: params.sandbox_id } : {}),
         ...(params.credentials?.length ? { credentials: params.credentials } : {}),
       });
-      const { output: _output, ...startMeta } = r;
+      const { output: _output, jobComputer, ...startMeta } = r;
+      const placePrefix = jobComputer
+        ? "[running on a computer reserved for this job because it names a private credential; nobody can run commands on it, and it is destroyed after the job ends]\n"
+        : "";
       return recordResult(
         callId,
         { tool: "execute", background: true, ...startMeta },
         {
           ...text(
-            `started ${r.processId}${r.reattached ? " (reattached)" : ""}\n${r.output}\n[cursor ${r.cursor} | ${fmtStatus(r.status)}]`,
+            `${placePrefix}started ${r.processId}${r.reattached ? " (reattached)" : ""}\n${r.output}\n[cursor ${r.cursor} | ${fmtStatus(r.status)}]`,
           ),
           details: r,
         },
@@ -459,32 +433,12 @@ function backgroundTool(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeo
     name: "background",
     label: "background",
     description:
-      "Manage a command launched with execute background:true, which returns a process_id immediately. The " +
-      "command keeps running across turns, even after you reply. action=poll reads new output and " +
-      "tells you whether it's still running or has exited (with its exit code); pass the cursor " +
-      "from your last poll as since_cursor to get only what's new, and call again to drain more " +
-      "(output is paginated, ~64KB per read). action=stop terminates it (and its child processes). " +
-      "action=list shows your background jobs (id, status, start time, command). " +
-      "action=watch turns a running job into a push notifier for THIS conversation: instead of you " +
-      "polling, new output (optionally only lines matching `pattern`) wakes you here as a new turn, " +
-      "and you're woken once more when the job exits — use it to keep the user posted on long work " +
-      "(builds, deploys, data jobs) without anyone asking. Pass the cursor from execute/poll as " +
-      "since_cursor so the first wake carries only output you haven't seen, and `instructions` to " +
-      "remind your future self what to do with each wake. action=unwatch (with monitor_id from " +
-      `watch) disarms it. Each job has a hard time-to-live (default ${bgTtlMin} minutes, max ${bgTtlMaxMin}) after which ` +
-      "it's stopped automatically (a watch survives just long enough to tell you) — for anything " +
-      `that finishes within ${execCeilingSec}s, just use \`execute\`. Start jobs with execute background:true on the default sandbox or an authorized explicit sandbox_id; ` +
-      "elsewhere, use `execute`. A background job carries the same environment a foreground `execute` " +
-      `does — $AGENT_API_URL, $AGENT_API_TOKEN and $AGENT_CREDENTIAL_TOKEN all work, so self-API calls and shared-credential broker calls run fine from background work. ${capabilityExpiry}, and a background job cannot deliver a file itself, so write results to ordinary workspace paths and attach them from a live turn after polling.\n` +
-      "INTERACTIVE LOGINS: device-flow logins (`gh auth login`, " +
-      "`glab auth login`, `gcloud auth login`, and anything that prints a verification URL/code then " +
-      "blocks waiting on a human) need execute background:true. Read the " +
-      "URL/code from the returned output and relay it to the user, then `watch` (or `poll`) until the " +
-      "command exits — that's when the login is done. If a prompt needs an answer typed in, use " +
-      "action=send_input. Never run a login with foreground execute (it blocks the whole turn) and never `stop`/kill a " +
-      "login mid-flight — that throws away the pending approval and wedges it. Read the `interactive-login` skill " +
-      "before starting one and run it as the skill says: under a temporary home, never this computer's $HOME, then " +
-      "saved to the keychain.",
+      "Manage a job started with execute background:true; it keeps running across turns. " +
+      "poll: new output and running/exited state (pass the last cursor as since_cursor; ~64KB per read). send_input: write to stdin. stop: terminate it. list: your jobs. " +
+      "watch: wake this conversation as a new turn on new output (optionally only lines matching `pattern`) and once on exit, to keep the user posted on long work; pass since_cursor and `instructions` for your future self. unwatch: disarm by monitor_id. " +
+      `Jobs stop after a hard TTL (default ${bgTtlMin} min, max ${bgTtlMaxMin}); anything that finishes within ${execCeilingSec}s should just use execute. ` +
+      `The job has the same environment as foreground execute ($AGENT_API_URL, $AGENT_API_TOKEN, $AGENT_CREDENTIAL_TOKEN). ${capabilityExpiry} It cannot deliver files; attach them from a live turn.\n` +
+      "INTERACTIVE LOGINS (`gh auth login` etc., anything printing a URL/code then waiting) must run with background:true: relay the URL/code to the user, then watch or poll until exit; answer prompts with send_input; never run one in the foreground or stop it mid-flight. Read and follow the `interactive-login` skill first.",
     parameters: backgroundParams(),
     execute: (callId, params) => runBackgroundAction(kit, blockOnApproval, callId, params),
   });
@@ -493,58 +447,40 @@ function backgroundTool(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeo
 
 function backgroundParams() {
   return Type.Object({
-    action: Type.Union(
-      [
-        Type.Literal("poll"),
-        Type.Literal("send_input"),
-        Type.Literal("stop"),
-        Type.Literal("list"),
-        Type.Literal("watch"),
-        Type.Literal("unwatch"),
-      ],
-      {
-        description:
-          "poll output by id, send_input to its stdin, stop it, list your background jobs, watch a job so its output/exit wakes you in this conversation, or unwatch.",
-      },
-    ),
-    purpose: optionalString(
-      "Short job description, about 5 words (e.g. 'App preview server'). Optional context for approval requests.",
-    ),
-    process_id: optionalString("poll/send_input/stop/watch only: the process_id execute returned."),
-    data: optionalString(
-      "send_input only: text sent to the job's stdin (a trailing newline is NOT added — include \\n to submit a line).",
-    ),
+    action: Type.Union([
+      Type.Literal("poll"),
+      Type.Literal("send_input"),
+      Type.Literal("stop"),
+      Type.Literal("list"),
+      Type.Literal("watch"),
+      Type.Literal("unwatch"),
+    ]),
+    purpose: optionalString("Short job description, about 5 words."),
+    process_id: optionalString("The process_id execute returned."),
+    data: optionalString("send_input: stdin text; include \\n to submit a line."),
     since_cursor: Type.Optional(
       Type.Integer({
         minimum: 0,
-        description:
-          "poll/watch only: the cursor from your last poll (watch: only output past it wakes you); omit to read from the start.",
+        description: "poll/watch: cursor from the last poll; omit for the start.",
       }),
     ),
     pattern: optionalString(
-      'watch only: literal alternatives separated by |, with optional ^/$ anchors; only matching output lines wake you (e.g. "error|FAILED|passed"). Omit to be woken on any new output.',
+      "watch: literal alternatives separated by |, optional ^/$ anchors; omit to wake on any output.",
     ),
-    instructions: optionalString(
-      "watch only: a note replayed to you with each wake, e.g. 'summarize test failures only'.",
-    ),
-    monitor_id: optionalString("unwatch only: the monitor id watch returned."),
+    instructions: optionalString("watch: note replayed to you on each wake."),
+    monitor_id: optionalString("unwatch: the monitor id watch returned."),
     wait_seconds: Type.Optional(
       Type.Integer({
         minimum: 0,
         maximum: 60,
-        description: "poll only: block up to this long for new output or exit, then answer (default 0).",
+        description: "poll: block up to this long for output or exit (default 0).",
       }),
     ),
-    max_bytes: Type.Optional(
-      Type.Integer({
-        minimum: 1,
-        description: "poll only: cap bytes this read (default 65536); re-poll with the returned cursor for more.",
-      }),
-    ),
+    max_bytes: Type.Optional(Type.Integer({ minimum: 1, description: "poll: cap bytes this read (default 65536)." })),
     signal: Type.Optional(
       Type.Union(
         [Type.Literal("TERM"), Type.Literal("KILL"), Type.Literal("INT"), Type.Literal("HUP"), Type.Literal("QUIT")],
-        { description: "stop only: default TERM; use KILL to force." },
+        { description: "stop: default TERM." },
       ),
     ),
   });

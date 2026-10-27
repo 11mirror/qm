@@ -1,4 +1,4 @@
-import type { TurnRequest } from "../types.ts";
+import { turnSource, type TurnRequest, type TurnResult } from "../types.ts";
 import type { KeychainAsk, KeychainGrant } from "../credentials/keychain.ts";
 import {
   fireAskResolution,
@@ -14,9 +14,16 @@ import type { StoresModule } from "./stores.ts";
 import type { CronsModule } from "./crons.ts";
 import type { CredentialsModule } from "./credentials.ts";
 import type { DeploymentLayerModule } from "./deployment-layer.ts";
+import type { RunsModule } from "./runs.ts";
 
 export function buildTriggers(
-  w: ApiAppModule & OutboundModule & StoresModule & CronsModule & CredentialsModule & DeploymentLayerModule,
+  w: ApiAppModule &
+    OutboundModule &
+    StoresModule &
+    CronsModule &
+    CredentialsModule &
+    DeploymentLayerModule &
+    RunsModule,
 ) {
   const {
     app,
@@ -32,14 +39,23 @@ export function buildTriggers(
     inboxItems,
     recordInboxEvent,
     auditLog,
+    runs,
   } = w;
 
   const resolveRecipient = (query: string) => app.resolveRecipient(query);
+  const runTriggered = async (req: TurnRequest): Promise<TurnResult> => {
+    const recorded = await runs.latestForThread(req.conversation.threadRef);
+    const source =
+      !turnSource(req) && (await sessions.getByThread(req.conversation.threadRef))?.surface === "slack" && recorded
+        ? turnSource(recorded.request)
+        : undefined;
+    return app.turn(source ? { ...req, source } : req);
+  };
   const triggerDeps = {
     outbound,
     idempotency,
     identity,
-    run: (req: TurnRequest) => app.turn(req),
+    run: runTriggered,
     directory,
     resolveRecipient,
     currentScopeMembers,

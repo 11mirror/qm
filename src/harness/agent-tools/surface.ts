@@ -487,9 +487,7 @@ function attachAndFinishTools(kit: ToolKit) {
   const attach = defineTool({
     name: "attach",
     label: "Attach",
-    description:
-      "Send files with this turn's reply, using workspace paths or stored Files IDs. " +
-      "Repeated sources replace their staged copy. Any invalid file stages nothing; the result lists what will be delivered.",
+    description: "Send files with this turn's reply; the result lists what will be delivered.",
     parameters: Type.Object({
       files: outboundFilesSchema,
       sandbox_id: outboundSandboxSchema,
@@ -515,14 +513,9 @@ function attachAndFinishTools(kit: ToolKit) {
     name: "finish_silently",
     label: "finish_silently",
     description:
-      "Ends this turn silently. Use on surface turns when choosing not to reply at all, and on " +
-      "scheduled background fires with nothing worth reporting. After posting a reply, just stop; " +
-      "this is not needed. Keeps the audit log and any messages already posted. " +
-      "On a direct human turn without surface tools this does nothing — just answer.",
+      "End this turn without replying (surface turns that deserve none; scheduled fires with nothing to report). Not needed after posting; does nothing on a turn without surface tools unless it is a cron, webhook or watch fire.",
     parameters: Type.Object({
-      reason: optionalString(
-        "Optional one short phrase on why there's nothing to report — recorded for the audit log, never delivered.",
-      ),
+      reason: optionalString("Short phrase for the audit log."),
     }),
     async execute(callId, params) {
       if (!ref.pollFire && !surfaceTools) {

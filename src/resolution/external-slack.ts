@@ -34,7 +34,7 @@ export function externalSlackRequestAllowed(
   }
   if (ref.includes("external-slack:")) return false;
   const native = surfaceHas(request.surface, "externalParticipants");
-  const source = native ? turnSource(request) : undefined;
+  const source = native || historicalSlack ? turnSource(request) : undefined;
   if (source) {
     const policy = policies[source.account];
     return (
