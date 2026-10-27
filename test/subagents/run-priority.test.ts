@@ -5,6 +5,7 @@ import { runPriority } from "../../src/runs/run-store.ts";
 import { createSessionSyscalls } from "../../src/subagents/session-tools.ts";
 import { createPostgresSwarmBoard } from "../../src/swarms/swarm-board.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
+import { deliverSubagentMail } from "../../src/subagents/mail.ts";
 import { completeTurn } from "../support/turns.ts";
 import { actor, closeRigStores, conversation, freshSession, rig, scope } from "../support/subagent-rig.ts";
 
@@ -54,7 +55,16 @@ test("swarm members queue behind subagents opened by the same person's turn, and
   assert.equal(memberRun.priority, 2);
   assert.equal(memberRun.absurdQueue, "turns_background");
 
-  await completeTurn(r.ledger, memberRun.id, { status: "ok", sessionId: memberSession.threadRef, reply: "mapped" });
+  const done = await completeTurn(r.ledger, memberRun.id, {
+    status: "ok",
+    sessionId: memberSession.threadRef,
+    reply: "mapped",
+  });
+  await deliverSubagentMail({ sessions: r.sessions, runs: r.runs, mailbox: r.mailbox, maxAttempts: 3 }, done);
+  const wake = (await r.runs.inFlightForThread(r.room.threadRef)).find((run) => run.request.wakeCause === "child_done");
+  assert.ok(wake);
+  assert.equal(wake.request.swarm, undefined);
+  assert.equal(wake.priority, 1);
   const followup = await api.write({ target: memberSession.id, text: "also check auth", followup: true });
   assert.ok(followup.ok, JSON.stringify(followup));
   const [queued] = await r.runs.inFlightForThread(memberSession.threadRef);
