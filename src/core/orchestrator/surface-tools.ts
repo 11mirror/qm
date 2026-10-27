@@ -48,6 +48,8 @@ import { parseFileRef } from "../../surfaces/refs.ts";
 const SURFACE_SEARCH_DEFAULT = 10;
 const SURFACE_FILE_PAGE_CHARS = 20_000;
 const REACH_POSTS_PER_TURN = 5;
+const SLACK_CONVERSATIONS_HISTORY_TIER3_PER_MINUTE = 50;
+const HISTORY_PAGES_PER_CALL = SLACK_CONVERSATIONS_HISTORY_TIER3_PER_MINUTE / 5;
 
 interface PulledPages {
   messages: unknown[];
@@ -63,23 +65,28 @@ async function pullPages(
   signal: AbortSignal,
   done: (messages: unknown[]) => boolean,
 ): Promise<PulledPages | null> {
-  const first = await puller.pull(source, query);
-  if (!first) return null;
-  const messages = [...first.messages];
-  const selfTs = [...(first.selfTs ?? [])];
-  const notes = new Set(first.note ? [first.note] : []);
-  let page = first;
-  while (page.hasMore && page.nextBefore && page.messages.length && !page.note && !signal.aborted && !done(messages)) {
-    const next = await puller.pull(source, { ...query, before: page.nextBefore });
-    if (!next) break;
-    messages.push(...next.messages);
-    selfTs.push(...(next.selfTs ?? []));
-    if (next.note) notes.add(next.note);
-    page = next;
+  const messages: unknown[] = [];
+  const selfTs: string[] = [];
+  const notes = new Set<string>();
+  let before: string | undefined;
+  let exhausted = false;
+  for (let pages = 0; pages < HISTORY_PAGES_PER_CALL; pages++) {
+    const page = await puller.pull(source, before ? { ...query, before } : query);
+    if (!page) {
+      if (pages === 0) return null;
+      break;
+    }
+    messages.push(...page.messages);
+    selfTs.push(...(page.selfTs ?? []));
+    if (page.note) notes.add(page.note);
+    const advanced = page.nextBefore !== undefined && page.nextBefore !== before;
+    const failed = Boolean(page.note) && !page.messages.length && !advanced;
+    exhausted = !failed && !page.hasMore;
+    if (failed || exhausted || !advanced || signal.aborted || done(messages)) break;
+    before = page.nextBefore;
   }
   const note = [...notes].join(" ");
-  const failed = Boolean(page.note) && !page.messages.length;
-  return { messages, selfTs, ...(note ? { note } : {}), exhausted: !failed && !page.hasMore };
+  return { messages, selfTs, ...(note ? { note } : {}), exhausted };
 }
 
 export interface SpineState {
@@ -591,7 +598,6 @@ function searchTool(
           viewer: actor.id,
           ...rateLimitRecipient,
           count: RECENT_THREAD_LIMIT,
-          match: q,
         },
         signal,
         (messages) => matching(messages).length >= limit,

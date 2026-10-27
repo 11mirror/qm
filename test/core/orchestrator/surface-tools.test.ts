@@ -376,10 +376,14 @@ test("replacing a path preserves its artifact when staged again by ID", async ()
   assert.ok(await store.open(id), "the staged file ID remains readable");
 });
 
+const MIRROR_NOTE =
+  "Context comes from stored Slack events. Earlier messages, missed events, reactions, and attachment details may be absent; this is not a complete Slack history.";
+const TRUNCATED_NOTE = "Slack history is truncated; older messages may be absent.";
+
 function pagedSurface(
   messages: Array<{ ts: string; text: string }>,
   pageSize: number,
-  opts: { failAfterPulls?: number; abortAfterPulls?: number } = {},
+  opts: { failAfterPulls?: number; abortAfterPulls?: number; live?: boolean } = {},
 ) {
   const pulls: Array<{ before?: string; match?: string }> = [];
   const abort = new AbortController();
@@ -389,9 +393,24 @@ function pagedSurface(
       return { messages: [], note: "Slack is rate limiting history reads; try again in a minute." };
     if (opts.abortAfterPulls !== undefined && pulls.length >= opts.abortAfterPulls) abort.abort();
     const older = query.before ? messages.filter((m) => m.ts < query.before!) : messages;
-    const page = older.slice(-pageSize);
-    const hasMore = page.length < older.length;
-    return { messages: page, hasMore, ...(hasMore ? { nextBefore: page[0]!.ts } : {}), selfTs: [] };
+    const scanned = older.slice(-pageSize);
+    const scanHasMore = scanned.length < older.length;
+    const needle = query.match?.trim().toLowerCase();
+    const matched = needle ? scanned.filter((m) => m.text.toLowerCase().includes(needle)) : scanned;
+    const kept = matched.slice(-(query.count ?? pageSize));
+    const droppedMatches = matched.length > kept.length;
+    let nextBefore: string | undefined;
+    if (droppedMatches) nextBefore = kept[0]?.ts;
+    else if (scanHasMore) nextBefore = scanned[0]?.ts;
+    let note: string | undefined = MIRROR_NOTE;
+    if (opts.live) note = scanHasMore ? TRUNCATED_NOTE : undefined;
+    return {
+      messages: kept,
+      hasMore: scanHasMore || droppedMatches,
+      ...(nextBefore ? { nextBefore } : {}),
+      ...(note ? { note } : {}),
+      selfTs: [],
+    };
   };
   const tools = createSurfaceToolDeps({
     deps: { outbound: {}, surfaceContext: { pull } },
@@ -419,20 +438,22 @@ const history = (count: number, text: (i: number) => string = (i) => `m${i}`) =>
   Array.from({ length: count }, (_, i) => ({ ts: String(1000 + i).padStart(6, "0"), text: text(i) }));
 
 test("whatsNew pages back through the surface until it reaches the caller's checkpoint", async () => {
-  const { tools, pulls } = pagedSurface(history(1000), 200);
-  const result = await tools.whatsNew({ since: "001300" });
-  assert.ok(result.ok);
-  assert.equal(result.hereNew, 699);
-  assert.equal(result.message, undefined, "every message after the checkpoint was counted");
-  assert.equal(pulls.length, 4);
-  const unanchored = await pagedSurface(history(1000), 200).tools.whatsNew();
-  assert.ok(unanchored.ok);
-  assert.match(unanchored.message!, /Counts cover only the newest 200 messages\./);
+  for (const live of [false, true]) {
+    const { tools, pulls } = pagedSurface(history(1000), 200, { live });
+    const result = await tools.whatsNew({ since: "001300" });
+    assert.ok(result.ok);
+    assert.equal(result.hereNew, 699);
+    assert.doesNotMatch(result.message ?? "", /Counts cover only/, "every message after the checkpoint was counted");
+    assert.equal(pulls.length, 4, `${live ? "live" : "mirror"} pages carry their standing note and still page`);
+    const unanchored = await pagedSurface(history(1000), 200, { live }).tools.whatsNew();
+    assert.ok(unanchored.ok);
+    assert.match(unanchored.message!, /Counts cover only the newest 200 messages\./);
+  }
 });
 
 test("live search pages back until it has the requested hits, and says how far it got when it stops short", async () => {
   const needles = history(1000, (i) => (i % 150 === 0 ? `needle ${"x".repeat(900)} ${i}` : `hay ${i}`));
-  const { tools, pulls } = pagedSurface(needles, 200);
+  const { tools, pulls } = pagedSurface(needles, 200, { live: true });
   const result = await tools.search("needle", { limit: 3 });
   assert.ok(result.ok);
   assert.equal(result.hits!.length, 3);
@@ -441,11 +462,20 @@ test("live search pages back until it has the requested hits, and says how far i
     "hits carry the whole message",
   );
   assert.equal(pulls.length, 2);
-  assert.match(result.message!, /Searched only the newest 400 messages\./);
-  const everything = await pagedSurface(needles, 200).tools.search("needle", { limit: 50 });
+  assert.match(result.message!, /Searched only the newest 400 messages\./, "the scanned count, not the matched count");
+  const everything = await pagedSurface(needles, 200, { live: true }).tools.search("needle", { limit: 50 });
   assert.ok(everything.ok);
   assert.equal(everything.hits!.length, 7);
-  assert.equal(everything.message, undefined);
+  assert.doesNotMatch(everything.message ?? "", /Searched only/);
+});
+
+test("search keeps paging through pages with no match while the surface still advances", async () => {
+  const sparse = history(1000, (i) => (i === 10 ? "needle here" : `hay ${i}`));
+  const { tools, pulls } = pagedSurface(sparse, 200);
+  const result = await tools.search("needle", { limit: 1 });
+  assert.ok(result.ok);
+  assert.equal(result.hits!.length, 1);
+  assert.equal(pulls.length, 5);
 });
 
 test("paging stops at the first surface failure such as a rate limit, keeping what it has", async () => {
@@ -464,4 +494,12 @@ test("paging stops when the turn is aborted", async () => {
   assert.ok(result.ok);
   assert.equal(pulls.length, 2);
   assert.match(result.message!, /Counts cover only the newest 400 messages\./);
+});
+
+test("one call reads at most a fifth of Slack's per-minute history budget, then says how far it got", async () => {
+  const { tools, pulls } = pagedSurface(history(5000), 200);
+  const result = await tools.whatsNew({ since: "000000" });
+  assert.ok(result.ok);
+  assert.equal(pulls.length, 10);
+  assert.match(result.message!, /Counts cover only the newest 2000 messages\./);
 });
