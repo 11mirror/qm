@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { createJobWorker } from "../../src/jobs/job-worker.ts";
 import { createPostgresNotifyBus } from "../../src/persistence/postgres-notify-bus.ts";
-import { tenant, tenantFor, withTenant, type Tenant } from "../../src/tenant.ts";
+import { registerTenantSettings, tenant, tenantFor, withTenant, type Tenant } from "../../src/tenant.ts";
 import { useTenantDirectory, type TenantDirectory } from "../../src/tenants/directory.ts";
 import { tenantJobWorkers, tenantTurnRunners } from "../../src/tenants/fan-out.ts";
 import { ABSURD_QUEUES, ensureTenantQueues, tenantQueue } from "../../src/turns/absurd-schema.ts";
@@ -22,9 +22,25 @@ const acme = tenantFor("acme", randomUUID(), "acme");
 const beta = tenantFor("beta", randomUUID(), "beta");
 
 function directoryOf(tenants: Tenant[]): TenantDirectory {
+  registerTenantSettings(
+    tenants.flatMap((t) =>
+      t.id
+        ? [
+            {
+              id: t.id,
+              slug: t.slug!,
+              orgId: t.orgId,
+              hosts: [],
+              status: "active" as const,
+              oidcAdmin: false,
+              secrets: {},
+            },
+          ]
+        : [],
+    ),
+  );
   return {
     byHost: async () => undefined,
-    byId: async (id) => tenants.find((t) => t.id === id),
     active: async () => tenants,
     watch: () => {},
     close: async () => {},

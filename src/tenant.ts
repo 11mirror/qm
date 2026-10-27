@@ -44,6 +44,11 @@ export function registerTenantSettings(list: readonly TenantSettings[]): void {
   registered = new Map(list.flatMap((settings) => (settings.id ? [[settings.id, settings] as const] : [])));
 }
 
+export function registeredTenant(id: string): Tenant | undefined {
+  const settings = registered.get(id);
+  return settings && tenantFor(settings.orgId, id, settings.slug);
+}
+
 export function tenantSettings(t: Tenant = tenant()): TenantSettings {
   if (t.id) {
     const own = registered.get(t.id);

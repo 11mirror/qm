@@ -1,7 +1,6 @@
 import { AsyncResource } from "node:async_hooks";
 import { createPgPool } from "./pg-pool.ts";
-import { scopedTenant, tenant, withTenant } from "../tenant.ts";
-import { tenantById } from "../tenants/directory.ts";
+import { registeredTenant, scopedTenant, tenant, withTenant } from "../tenant.ts";
 import { swallowAs } from "../util/errors.ts";
 import { createMemoryEventBus, type EventBus } from "../util/event-bus.ts";
 
@@ -47,9 +46,8 @@ function deliverTo<T>(cb: (event: T) => void): (notice: Notice<T>) => void {
     };
   return (notice) => {
     if (notice.t === null) return here(() => cb(notice.e));
-    void tenantById(notice.t)
-      .then((t) => t && here(() => withTenant(t, () => cb(notice.e))))
-      .catch(swallowAs("notify: tenant lookup", undefined));
+    const t = registeredTenant(notice.t);
+    if (t) here(() => withTenant(t, () => cb(notice.e)));
   };
 }
 

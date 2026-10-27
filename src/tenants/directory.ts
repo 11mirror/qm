@@ -12,7 +12,6 @@ const PREPARE_RETRY_MS = 30_000;
 
 export interface TenantDirectory {
   byHost(host: string | undefined): Promise<Tenant | undefined>;
-  byId(id: string): Promise<Tenant | undefined>;
   active(): Promise<Tenant[]>;
   watch(listener: (active: Tenant[]) => void): void;
   close(): Promise<void>;
@@ -158,11 +157,6 @@ export function createTenantDirectory(opts: DirectoryOptions): TenantDirectory {
       if (found) await ready(found);
       return found;
     },
-    async byId(id) {
-      if (typeof id !== "string") return undefined;
-      const find = (snap: Snapshot) => snap.tenants.find((t) => t.id === id);
-      return find(await snapshot()) ?? find(await fresher());
-    },
     async active() {
       await snapshot();
       return readyTenants();
@@ -187,10 +181,6 @@ export function tenantByHost(host: string | undefined): Promise<Tenant | undefin
 
 export function watchActiveTenants(listener: (active: Tenant[]) => void): void {
   directory?.watch(listener);
-}
-
-export async function tenantById(id: string): Promise<Tenant | undefined> {
-  return directory?.byId(id);
 }
 
 export async function activeTenants(): Promise<Tenant[]> {
