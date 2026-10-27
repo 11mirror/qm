@@ -1,3 +1,4 @@
+import { recordedRerun } from "../sessions/rerun-record.ts";
 import type { RuntimeChoice } from "../harness/harness.ts";
 import { unrecordedToolResult } from "../harness/context-compaction.ts";
 import type { RunStop } from "../runs/run-store.ts";
@@ -97,20 +98,9 @@ export function resumeStrategy(entries: readonly Item[], partial: PartialTurn): 
   const settle: ResumeStrategy = unrecorded.length ? { kind: "settle", calls: unrecorded } : { kind: "continue" };
   if (dangling.length !== 1) return settle;
   const call = dangling[0]!;
-  const rerun = call.body.rerun as { tool?: unknown; input?: unknown } | undefined;
-  if (
-    call.body.retrySafe !== true ||
-    !call.callId ||
-    typeof rerun?.tool !== "string" ||
-    rerun.input === null ||
-    typeof rerun.input !== "object" ||
-    Array.isArray(rerun.input)
-  )
-    return settle;
-  return {
-    kind: "retry",
-    call: { callId: call.callId, tool: rerun.tool, input: rerun.input as Record<string, unknown> },
-  };
+  const rerun = recordedRerun(call.body);
+  if (call.body.retrySafe !== true || !call.callId || !rerun) return settle;
+  return { kind: "retry", call: { callId: call.callId, tool: rerun.tool, input: rerun.input } };
 }
 
 export function unrecordedResultItems(

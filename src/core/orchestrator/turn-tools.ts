@@ -105,6 +105,7 @@ export async function buildTurnTools(ctx: TurnCtx, turn: TurnToolsInput) {
     postProvenance,
     postKeys,
     spine,
+    signal: turn.turnAbort.signal,
   });
   const attachStaging = createAttachStaging({
     sandbox: deps.sandbox,

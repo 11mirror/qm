@@ -387,7 +387,7 @@ for (const origin of ["human", "direct", "automation", "ambient"] as const) {
     assert.equal(envelope.payload, payload);
     assert.equal(envelope.request.origin, origin);
     assert.ok(envelope.request.text.startsWith("Inspect this transcript."));
-    assert.ok(envelope.request.text.length <= 2000);
+    assert.ok(envelope.request.text.length <= 1600);
     assert.ok(envelope.request.text.isWellFormed());
     assert.equal(envelope.request.truncated, true);
     assert.equal(proxyCalls[0]?.payload, payload);

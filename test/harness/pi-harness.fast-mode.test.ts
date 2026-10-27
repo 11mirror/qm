@@ -547,6 +547,7 @@ test("compaction retries a refused summary on the configured fallback model", as
   try {
     const text = await harness.models.compactHistory!({
       session: { id: "compact-fallback" } as HarnessTurnInput["session"],
+      summaryTokenBudget: 4_000,
       history: [
         storedItem({ kind: "UserMessage", text: "hello" }, { sessionId: "compact-fallback", seq: 1, createdAt: 1 }),
         storedItem({ kind: "AgentMessage", text: "hi" }, { sessionId: "compact-fallback", seq: 2, createdAt: 2 }),

@@ -6,7 +6,9 @@ import type { Lease } from "../../sessions/session-store.ts";
 import { acquireLeaseWithin, contextSummary, contextSummaryItem } from "../../sessions/session-store.ts";
 import {
   COMPACT_HARD_FRACTION,
+  COMPACT_KEEP_RECENT_FRACTION,
   COMPACT_SOFT_FRACTION,
+  compactSummaryTokenBudget,
   validateCompactSummary,
   compactionThroughSeq,
   estimateItemTokens,
@@ -22,9 +24,7 @@ import { createKeyedQueue } from "../../util/async.ts";
 import type { OrchestratorDeps } from "./types.ts";
 
 const MAX_CONTEXT_TOKENS = 120_000;
-const KEEP_RECENT_TOKEN_FRACTION = 0.6;
 const DOCUMENT_TOKEN_FRACTION = 0.5;
-const KEEP_RECENT_FRACTION = Math.min(KEEP_RECENT_TOKEN_FRACTION, COMPACT_SOFT_FRACTION - 0.1);
 const WRITE_LEASE_WAIT_MS = 60_000;
 
 interface Summarized {
@@ -68,7 +68,11 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     documentTokenBudget: (scopeId, model) => documentTokenBudget(deps, scopeId, model),
   };
 }
-function tokenBudgetFor(deps: OrchestratorDeps, scopeLabel?: string, model?: string): number {
+export function tokenBudgetFor(
+  deps: Pick<OrchestratorDeps, "maxContextTokens" | "harness">,
+  scopeLabel?: string,
+  model?: string,
+): number {
   return deps.maxContextTokens ?? deps.harness.models.contextTokenBudget?.(scopeLabel, model) ?? MAX_CONTEXT_TOKENS;
 }
 function documentTokenBudget(deps: OrchestratorDeps, scopeId: string, model?: string): number {
@@ -107,8 +111,8 @@ async function summarizeForCompaction(
   if (isManagedGroupScope(deps, input.scopeId)) return null;
   if (!deps.harness.models.compactHistory) return null;
   const maxContextTokens = historyBudgetFor(deps, input);
-  const reuseBudgetTokens = Math.floor(maxContextTokens * KEEP_RECENT_FRACTION);
-  const plan = planCompaction(input.visibleHistory, maxContextTokens, KEEP_RECENT_FRACTION, reuseBudgetTokens);
+  const reuseBudgetTokens = Math.floor(maxContextTokens * COMPACT_KEEP_RECENT_FRACTION);
+  const plan = planCompaction(input.visibleHistory, maxContextTokens, COMPACT_KEEP_RECENT_FRACTION, reuseBudgetTokens);
   if (!plan || !plan.toSummarize.length) return null;
 
   const summaryLabel = input.scopeId;
@@ -116,9 +120,11 @@ async function summarizeForCompaction(
   input.cancel?.throwIfAborted();
   let text: string;
   try {
+    const summaryTokenBudget = compactSummaryTokenBudget(maxContextTokens);
     const raw = await deps.harness.models.compactHistory({
       session: input.session,
       history: plan.toSummarize,
+      summaryTokenBudget,
       recordModelCall: (rec) => {
         deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: summaryLabel, ...rec });
         void deps.budget?.record(input.actorId, estimateCostUsd(rec.inputTokens));
@@ -184,7 +190,7 @@ async function compactContextIfNeeded(deps: OrchestratorDeps, input: CompactInpu
 
 async function compactRecent(deps: OrchestratorDeps, input: CompactInput): Promise<Item[]> {
   input.cancel?.throwIfAborted();
-  const budget = Math.floor(historyBudgetFor(deps, input) * KEEP_RECENT_FRACTION);
+  const budget = Math.floor(historyBudgetFor(deps, input) * COMPACT_KEEP_RECENT_FRACTION);
   const prior = input.visibleHistory.findLast((entry) => contextSummary(entry));
   const rest = input.visibleHistory.filter((entry) => !contextSummary(entry));
   const notice =

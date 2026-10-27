@@ -16,7 +16,6 @@ import { hashId } from "../util/crypto.ts";
 import { utcMinute } from "../util/time.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
 
-const CRON_FIRE_REPLY_MAX_CHARS = 2000;
 const BUSY_DEFER_MS = 30_000;
 const BUSY_DEFER_MAX_LATE_MS = 10 * 60_000;
 
@@ -88,10 +87,6 @@ export interface SchedulerDeps {
   deleteCron?: (id: string) => Promise<void>;
 }
 
-function truncate(s: string, maxChars: number): string {
-  return s.length <= maxChars ? s : `${s.slice(0, maxChars - 3)}...`;
-}
-
 const CRON_CONTEXT_MARKERS = ["[Cron runtime context]", "[End cron runtime context]"] as const;
 
 export function echoesCronContextMarkers(s: string): boolean {
@@ -102,7 +97,7 @@ function cronFireLogReply(s: string): string {
   if (echoesCronContextMarkers(s)) {
     return "[reply echoed cron runtime context; omitted]";
   }
-  return truncate(s, CRON_FIRE_REPLY_MAX_CHARS);
+  return s;
 }
 
 function isOneShotSchedule(schedule: Cron["schedule"]): boolean {
@@ -136,8 +131,6 @@ function cronFireThreadRef(cronId: string, fireKey: string): string {
   return `cron:${cronId}:fire:${hashId([fireKey], 12)}`;
 }
 
-const CRON_MENTION_ROSTER_MAX = 40;
-
 function mentionable(m: DirectoryMember): string {
   const mentionId = m.slackId ?? (/^[A-Z0-9]+$/i.test(m.principalId) ? m.principalId : undefined);
   return `@${m.displayName}${mentionId ? ` (<@${mentionId}>)` : ""}`;
@@ -146,7 +139,7 @@ function mentionable(m: DirectoryMember): string {
 function cronMentionRoster(cron: Cron, homeRoster: DirectoryMember[] | undefined): string | undefined {
   if (cron.destination?.audienceScopeId !== cron.ownerScopeId) return undefined;
   const internal = homeRoster?.filter((m) => m.type === "internal") ?? [];
-  if (!internal.length || internal.length > CRON_MENTION_ROSTER_MAX) return undefined;
+  if (!internal.length) return undefined;
   return internal.map(mentionable).join(", ");
 }
 
@@ -278,7 +271,7 @@ async function fireEnabled(
       endedAt: now(),
       ...(scheduledAt !== undefined ? { scheduledAt } : {}),
       status: "failed",
-      note: truncate(errMessage(e), CRON_FIRE_REPLY_MAX_CHARS),
+      note: errMessage(e),
     });
     throw e;
   }
@@ -304,7 +297,7 @@ async function fireEnabled(
       endedAt: now(),
       ...(scheduledAt !== undefined ? { scheduledAt } : {}),
       status: outcome.status ?? (outcome.authzFailed ? "refused" : "ok"),
-      ...(outcome.note ? { note: truncate(outcome.note, CRON_FIRE_REPLY_MAX_CHARS) } : {}),
+      ...(outcome.note ? { note: outcome.note } : {}),
       ...(outcome.reply !== undefined ? { reply: cronFireLogReply(outcome.reply) } : {}),
       ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
     });
@@ -379,7 +372,7 @@ function manualFireRunner(ctx: ManualFireContext): Scheduler["runNow"] {
         firedAt: t,
         endedAt: now(),
         status: "failed",
-        note: truncate(errMessage(e), CRON_FIRE_REPLY_MAX_CHARS),
+        note: errMessage(e),
       });
       throw e;
     }

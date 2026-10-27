@@ -1,5 +1,5 @@
 import { baseModelProviders, configuredModel, CONFIG_DEFAULTS, type Config } from "../config.ts";
-import { auxiliaryModelFor, defaultModel } from "../model/pi-models.ts";
+import { auxiliaryModelFor, contextTokenBudgetForModel, defaultModel } from "../model/pi-models.ts";
 import { type ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
 import { defineHarness, type Harness } from "./harness.ts";
 import { coreToolOptions, type CoreToolOptions } from "./agent-tools.ts";
@@ -83,6 +83,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     contextTokenBudget: (_scopeLabel, model) => piContextTokenBudget(primaryModelId, model),
     oneShot: (systemPrompt, prompt) => piOneShot(access, primaryModelId, systemPrompt, prompt),
     judge: (systemPrompt, prompt, signal) => piJudge(access, judgeModelId, systemPrompt, prompt, signal),
+    judgeTokenBudget: () => contextTokenBudgetForModel(access.servedId(judgeModelId())),
     screenSecurity: (input) => piScreenSecurity(access, detectModelId, input),
     pickAckEmoji: (text, candidates) => piPickAckEmoji(access, text, candidates),
     generateTitle: (transcript) => piGenerateTitle(access, titleModelId, transcript),

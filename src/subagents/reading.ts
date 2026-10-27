@@ -2,16 +2,15 @@ import type { SessionMessage } from "../sessions/session-mailbox.ts";
 import { sleep } from "../util/async.ts";
 import { isReply, proseText } from "../sessions/items.ts";
 import type { Item } from "../sessions/items.ts";
-import { itemVisibleToAll, snippet, assertAudienceCompatible } from "./audience.ts";
+import type { Session } from "../types.ts";
+import { contextSummary } from "../sessions/session-store.ts";
+import { itemVisibleToAll, assertAudienceCompatible } from "./audience.ts";
 import type { SessionReadInput, SessionChildSummary, SessionReadResult } from "./types.ts";
 import type { TurnContext } from "./turn-context.ts";
+import { sessionTreeRoot } from "./tree.ts";
 
 const READ_DEFAULT_LIMIT = 30;
 const READ_DEFAULT_MAX_CHARS = 4_000;
-const READ_MAX_CHARS_CEILING = 20_000;
-const LAST_SAID_SCAN = 40;
-/** Messages handed to the agent per receive call; the rest stay pending for the next call. */
-const RECEIVE_BATCH_MAX = 4;
 
 function itemText(item: Item): string | undefined {
   const text = proseText(item);
@@ -20,27 +19,78 @@ function itemText(item: Item): string | undefined {
   return undefined;
 }
 
-function lastAssistantText(items: readonly Item[]): string | undefined {
-  for (let i = items.length - 1; i >= 0; i--) {
-    const e = items[i]!;
-    if (e.kind === "Stop") {
-      const before = items[i - 1];
-      const partial = before && isReply(before) ? itemText(before) : "";
-      const reason = e.body.reason;
-      return partial || `[system] Subagent stopped${typeof reason === "string" ? ` ${reason}` : ""}. No reply.`;
-    }
-    if (e.kind !== "AgentMessage" || e.variant === "files_delivered") continue;
-    const text = itemText(e);
-    if (text) return text;
+async function* newestFirst(ctx: TurnContext, target: Session): AsyncGenerator<Item[]> {
+  let beforeSeq: number | undefined;
+  for (let size = 1; ; size *= 2) {
+    const page = await ctx.visibleHistory(target, size, beforeSeq);
+    if (!page.length) return;
+    yield page;
+    beforeSeq = page[0]!.seq;
   }
-  return undefined;
 }
 
-export async function receiveMessages(ctx: TurnContext, timeoutMs = 0): Promise<SessionMessage[]> {
+function stoppedNote(stop: Item, before: Item | undefined): string {
+  const partial = before && isReply(before) ? itemText(before) : "";
+  const reason = stop.body.reason;
+  return partial || `[system] Subagent stopped${typeof reason === "string" ? ` ${reason}` : ""}. No reply.`;
+}
+
+async function lastAssistantText(ctx: TurnContext, child: Session): Promise<string | undefined> {
+  let newer: Item | undefined;
+  for await (const page of newestFirst(ctx, child)) {
+    for (let i = page.length - 1; i >= 0; i--) {
+      const e = page[i]!;
+      if (newer?.kind === "Stop") return stoppedNote(newer, e);
+      if (contextSummary(e)) return undefined;
+      newer = e;
+      if (e.kind !== "AgentMessage" || e.variant === "files_delivered") continue;
+      const text = itemText(e);
+      if (text) return text;
+    }
+  }
+  return newer?.kind === "Stop" ? stoppedNote(newer, undefined) : undefined;
+}
+
+async function readableLines(ctx: TurnContext, target: Session, limit: number, maxChars: number): Promise<string[]> {
+  const lines: string[] = [];
+  let entries = 0;
+  let chars = 0;
+  for await (const page of newestFirst(ctx, target)) {
+    for (let i = page.length - 1; i >= 0 && entries < limit && chars <= maxChars; i--) {
+      const entry = page[i]!;
+      entries++;
+      const text = itemText(entry);
+      if (!text) continue;
+      const line = `${entry.kind}#${entry.seq} ${text}`;
+      lines.unshift(line);
+      chars += line.length + 1;
+    }
+    if (entries >= limit || chars > maxChars) break;
+  }
+  return lines;
+}
+
+async function othersWorkingInTree(ctx: TurnContext): Promise<boolean> {
+  const { deps, binding } = ctx;
+  const root = await sessionTreeRoot(deps.sessions, binding.session);
+  for (const session of [root, ...(await deps.sessions.descendantsOf([root.id]))]) {
+    if (session.scopeId !== binding.scopeId) continue;
+    for (const run of await deps.runs.inFlightForThread(session.threadRef))
+      if (run.id !== binding.request.runId) return true;
+  }
+  return false;
+}
+
+export async function receiveMessages(
+  ctx: TurnContext,
+  timeoutMs = 0,
+  signal?: AbortSignal,
+): Promise<SessionMessage[]> {
   const { deps, binding, currentCaller } = ctx;
-  const deadline = Date.now() + Math.min(60_000, Math.max(0, timeoutMs));
+  const deadline = Date.now() + Math.max(0, timeoutMs);
   do {
     binding.request.cancel?.throwIfAborted();
+    if (signal?.aborted) return [];
     const caller = await currentCaller();
     const messages = await deps.mailbox.pending(binding.session.id);
     const visible: SessionMessage[] = [];
@@ -65,9 +115,8 @@ export async function receiveMessages(ctx: TurnContext, timeoutMs = 0): Promise<
       )
         continue;
       visible.push(message);
-      if (visible.length >= RECEIVE_BATCH_MAX) break;
     }
-    if (visible.length || Date.now() >= deadline) return visible;
+    if (visible.length || Date.now() >= deadline || !(await othersWorkingInTree(ctx))) return visible;
     await sleep(Math.min(250, deadline - Date.now()));
   } while (Date.now() <= deadline);
   return [];
@@ -79,7 +128,7 @@ export async function acknowledgeMessages(ctx: TurnContext, ids: string[]): Prom
 }
 
 export async function readSession(ctx: TurnContext, input: SessionReadInput): Promise<SessionReadResult> {
-  const { deps, binding, resolveTarget, peerRefusal, statusOf, visibleTitle, visibleHistory, currentCaller } = ctx;
+  const { deps, binding, resolveTarget, peerRefusal, statusOf, visibleTitle, currentCaller } = ctx;
   await currentCaller();
   if (!input.target?.trim()) {
     const children = await deps.sessions.childrenOf(binding.session.id);
@@ -90,13 +139,12 @@ export async function readSession(ctx: TurnContext, input: SessionReadInput): Pr
         !(await deps.sessions.getForParticipant(child.id, binding.request.actor.id))
       )
         continue;
-      const entries = await visibleHistory(child, LAST_SAID_SCAN);
-      const said = lastAssistantText(entries);
+      const said = await lastAssistantText(ctx, child);
       summaries.push({
         sessionId: child.id,
         title: visibleTitle(child),
         status: await statusOf(child),
-        ...(said ? { lastSaid: snippet(said, 200) } : {}),
+        ...(said ? { lastSaid: said } : {}),
       });
     }
     return { ok: true, mode: "children", children: summaries };
@@ -111,19 +159,13 @@ export async function readSession(ctx: TurnContext, input: SessionReadInput): Pr
   if (refusal) return { ok: false, message: refusal };
   if (target.scopeId !== binding.scopeId)
     return { ok: false, message: "that session lives in a different context and cannot be read from here." };
-  const limit = Math.min(Math.max(1, input.limit ?? READ_DEFAULT_LIMIT), 200);
-  const maxChars = Math.min(Math.max(200, input.maxChars ?? READ_DEFAULT_MAX_CHARS), READ_MAX_CHARS_CEILING);
+  const limit = Math.max(1, input.limit ?? READ_DEFAULT_LIMIT);
+  const maxChars = Math.max(1, input.maxChars ?? READ_DEFAULT_MAX_CHARS);
   if (!(await deps.sessions.getForParticipant(target.id, binding.request.actor.id)))
     return { ok: false, message: "you are not a participant in that session." };
-  const entries = await visibleHistory(target, limit);
-  const lines: string[] = [];
-  for (const entry of entries) {
-    const text = itemText(entry);
-    if (!text) continue;
-    lines.push(`${entry.kind}#${entry.seq} ${snippet(text, 300)}`);
-  }
-  let rendered = lines.join("\n");
-  if (rendered.length > maxChars) rendered = `…${rendered.slice(rendered.length - maxChars)}`;
+  let rendered = (await readableLines(ctx, target, limit, maxChars)).join("\n");
+  if (rendered.length > maxChars)
+    rendered = `…[${rendered.length - maxChars} earlier chars not shown; raise maxChars or lower limit to see them]\n${rendered.slice(rendered.length - maxChars)}`;
   return {
     ok: true,
     mode: "transcript",

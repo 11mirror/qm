@@ -1,19 +1,16 @@
 import type { RunStop } from "../runs/run-store.ts";
 import { contextSummary } from "../sessions/session-store.ts";
 import { isOverheard, isUserMessage, itemFields, proseText, stepMessage, type Item } from "../sessions/items.ts";
-import { headTailSlice } from "../util/text.ts";
-import { countTokens } from "../util/tokens.ts";
+import { countTokens, fitPartsToTokens } from "../util/tokens.ts";
 import { documentAttachmentTokens, replayableDocumentMetas } from "../core/document-kinds.ts";
 
-const MAX_COMPACT_ENTRY_CHARS = 16_000;
-const COMPACT_ENTRY_TAIL_CHARS = 2_000;
-const CHAINED_SUMMARY_PREFIX_HEADROOM = 1_000;
-const FALLBACK_SUMMARY_BODY_CHARS = 8_000;
-const FALLBACK_SUMMARY_TAIL_CHARS = 6_000;
+export const COMPACT_KEEP_RECENT_FRACTION = 0.6;
 
-function truncatedMiddle(s: string, maxChars: number, tailChars: number): string {
-  return headTailSlice(s, maxChars, tailChars, `…[truncated — ${s.length} chars]…`);
+export function compactSummaryTokenBudget(historyBudgetTokens: number): number {
+  return Math.max(1, Math.floor(historyBudgetTokens * (1 - COMPACT_KEEP_RECENT_FRACTION)));
 }
+
+const cutNotice = (cutChars: number) => `…[truncated — ${cutChars} chars cut from the middle]…`;
 
 export const INTERRUPTED_TOOL_RESULT =
   "[system] This call was interrupted; its outcome wasn't recorded. Check what happened before retrying.";
@@ -114,12 +111,16 @@ function itemStamp(createdAt: number): string {
   return Number.isFinite(createdAt) && createdAt > 0 ? ` ${new Date(createdAt).toISOString().slice(0, 16)}Z` : "";
 }
 
-export function compactTranscript(history: Item[]): string {
+export function compactTranscript(history: Item[], maxTokens = Number.POSITIVE_INFINITY): string {
+  return fitPartsToTokens(compactTranscriptLines(history), maxTokens, cutNotice).join("\n");
+}
+
+function compactTranscriptLines(history: Item[]): string[] {
   const recorded = new Set<string>();
   for (const item of history)
     if (item.kind === "ToolResult" && item.callId && item.body.interrupted !== true) recorded.add(item.callId);
   const lines: string[] = [];
-  const push = (line: string) => lines.push(truncatedMiddle(line, MAX_COMPACT_ENTRY_CHARS, COMPACT_ENTRY_TAIL_CHARS));
+  const push = (line: string) => lines.push(line);
   for (const item of history) {
     if (item.kind === "Reasoning") continue;
     const stamp = itemStamp(item.createdAt);
@@ -152,7 +153,7 @@ export function compactTranscript(history: Item[]): string {
       lines.push(`ToolResult for ToolCall#${item.seq} (none recorded): ${INTERRUPTED_TOOL_RESULT}`);
     }
   }
-  return lines.join("\n");
+  return lines;
 }
 
 export const COMPACT_SOFT_FRACTION = 0.7;
@@ -208,17 +209,11 @@ export function compactionThroughSeq(items: Item[]): number {
   }, -1);
 }
 
-export function deterministicCompactSummary(history: Item[]): string {
-  const throughSeq = compactionThroughSeq(history);
-  const body = truncatedMiddle(compactTranscript(history), FALLBACK_SUMMARY_BODY_CHARS, FALLBACK_SUMMARY_TAIL_CHARS);
-  return `Compacted ${history.length} prior entr${history.length === 1 ? "y" : "ies"} through seq ${throughSeq}.\n${body}`;
-}
-
-export const MAX_COMPACT_SUMMARY_CHARS = MAX_COMPACT_ENTRY_CHARS - CHAINED_SUMMARY_PREFIX_HEADROOM;
-
-export function validateCompactSummary(candidate: string | undefined): string {
+export function validateCompactSummary(candidate: string | undefined, maxTokens = Number.POSITIVE_INFINITY): string {
   const text = candidate?.trim();
   if (!text) throw new Error("Compaction returned an empty summary");
-  if (text.length > MAX_COMPACT_SUMMARY_CHARS) throw new Error("Compaction summary exceeds the character limit");
+  const tokens = countTokens(text);
+  if (tokens > maxTokens)
+    throw new Error(`Compaction summary is ${tokens} tokens; the budget it was asked to fit is ${maxTokens}`);
   return text;
 }

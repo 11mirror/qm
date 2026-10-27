@@ -1,7 +1,7 @@
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { GrantedHandle, ScopeId } from "../types.ts";
 import { collectBytes } from "../util/bytes.ts";
-import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
+import { MAX_LLM_REQUEST_BYTES } from "../core/document-kinds.ts";
 
 const tooLargeForModel = (name: string, sizeBytes: number) =>
   new Error(

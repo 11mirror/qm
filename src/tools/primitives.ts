@@ -270,12 +270,7 @@ export interface ToolContext extends SurfaceToolDeps {
     expectedVersion?: number,
   ): Promise<
     | ControlOk<{ version: number }>
-    | ControlErr<
-        | "instructions_update_denied"
-        | "instructions_version_conflict"
-        | "payload_too_large"
-        | "instructions_update_failed"
-      >
+    | ControlErr<"instructions_update_denied" | "instructions_version_conflict" | "instructions_update_failed">
     | ControlUnavailable
   >;
   shareArtifact(req: ShareArtifactRequest): Promise<ShareArtifactResult | ControlUnavailable>;

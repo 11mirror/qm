@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveTurnContext } from "../../src/resolution/turn-context.ts";
 import { createMemoryDurableByteStore } from "../../src/files/durable-byte-store.ts";
-import type { Resolution, Session } from "../../src/types.ts";
+import type { Resolution } from "../../src/types.ts";
 import { renderRecall } from "../../src/memory/cross-scope.ts";
 import { createPostgresAuditLog } from "../../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-artifact-store.ts";
@@ -36,7 +36,7 @@ async function fixture() {
     targetScope: "personal:alice",
     origin: { kind: "human" },
     trustedLiveHuman: true,
-    sessions: { listByParticipant: async () => [{ scopeId: "channel:eng", createdAt: 1 }] as Session[] },
+    sessions: { participantScopes: async () => [{ scopeId: "channel:eng", sessionCount: 1, lastActivityAt: 1 }] },
     isCurrentSharedScopeMember: async (actor, scope) => member && actor === "alice" && scope === "channel:eng",
     resolution,
     memoryPolicy: { recall: "visible", capture: "writable" },

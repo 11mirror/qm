@@ -4,9 +4,9 @@ import type { SessionMailbox } from "../sessions/session-mailbox.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { Session } from "../types.ts";
 import { mapBounded } from "../util/async.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
-import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
+import { errMessage } from "../util/errors.ts";
 import type { SwarmBoard, SwarmBoardPost } from "./swarm-board.ts";
+import { notifySubscribers } from "./swarm-notices.ts";
 
 export const SWARM_ACTIONS = [
   "start",
@@ -69,11 +69,8 @@ export interface SwarmCallContext {
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
 const PREVIEW_CHARS = 500;
-const NOTICE_CHARS = 2_000;
 const THREAD_CHARS = 64_000;
-const NOTIFY_GRACE_MS = 60_000;
 const OPEN_CONCURRENCY = 4;
-const NOTIFY_CONCURRENCY = 8;
 const CHANNEL_NAME = /^[a-z0-9][a-z0-9_-]{0,39}$/;
 
 function memberNote(swarmId: string, coordinator: string): string {
@@ -113,18 +110,6 @@ function view(post: SwarmBoardPost): PostView {
   };
 }
 
-function renderNotice(swarmId: string, post: SwarmBoardPost): string {
-  const body =
-    post.body.length > NOTICE_CHARS ? `${post.body.slice(0, NOTICE_CHARS)}… [read_post for the rest]` : post.body;
-  return [
-    `<swarm-board-post swarm="${swarmId}" channel="${xmlAttrEscape(post.channel)}" postId="${post.id}"${
-      post.threadId ? ` replyTo="${post.threadId}"` : ""
-    } from="${xmlAttrEscape(post.authorName)}" fromSessionId="${post.authorId}">`,
-    xmlEscape(body),
-    "</swarm-board-post>",
-  ].join("\n");
-}
-
 async function chain(sessions: SwarmCallContext["sessions"], session: Session): Promise<string[]> {
   const ids = [session.id];
   let current = session;
@@ -135,24 +120,6 @@ async function chain(sessions: SwarmCallContext["sessions"], session: Session): 
     current = parent;
   }
   return ids;
-}
-
-async function notifySubscribers(ctx: SwarmCallContext, post: SwarmBoardPost): Promise<number> {
-  const notice = renderNotice(post.swarmId, post);
-  const notified = (await ctx.board.subscribers(post.swarmId, post.channel)).filter((id) => id !== post.authorId);
-  await mapBounded(notified, NOTIFY_CONCURRENCY, (recipientId) =>
-    ctx.mailbox.send({
-      id: `swarm-post-${post.id}-${recipientId}`,
-      recipientId,
-      senderId: post.authorId,
-      actor: ctx.actor,
-      text: notice,
-      audience: ctx.audience,
-      createdAt: post.createdAt,
-    }),
-  );
-  await ctx.board.markNotified(post.swarmId, post.id);
-  return notified.length;
 }
 
 const clampLimit = (limit: number | undefined) => Math.min(MAX_LIMIT, Math.max(1, limit ?? DEFAULT_LIMIT));
@@ -190,12 +157,6 @@ export async function swarmCall(ctx: SwarmCallContext, input: SwarmInput): Promi
       ok: false,
       message: "this session is not in a swarm. A coordinator creates one with swarm start; its members inherit it.",
     };
-  const stranded = await ctx.board
-    .unnotified(swarmId, Date.now() - NOTIFY_GRACE_MS)
-    .catch(swallowAs("swarm board: list stranded notices", []));
-  await mapBounded(stranded, NOTIFY_CONCURRENCY, (post) =>
-    notifySubscribers(ctx, post).catch(swallowAs("swarm board: redeliver a stranded notice", 0)),
-  );
   const channel = input.channel?.trim().toLowerCase();
   switch (input.action) {
     case "channels":
@@ -277,7 +238,7 @@ export async function swarmCall(ctx: SwarmCallContext, input: SwarmInput): Promi
         createdAt: Date.now(),
       };
       await ctx.board.insert(post);
-      const notified = await notifySubscribers(ctx, post).catch((e: unknown) => errMessage(e));
+      const notified = await notifySubscribers(ctx, ctx, post).catch((e: unknown) => errMessage(e));
       return {
         ok: true,
         result: {
@@ -285,7 +246,7 @@ export async function swarmCall(ctx: SwarmCallContext, input: SwarmInput): Promi
           post: view(post),
           ...(typeof notified === "number"
             ? { notified }
-            : { notified: 0, notifyError: `${notified} — subscribers are told on the next board action` }),
+            : { notified: 0, notifyError: `${notified} — subscribers are told by the notice sweep` }),
         },
       };
     }

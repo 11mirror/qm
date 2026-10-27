@@ -2,6 +2,13 @@ import cronstrue from "cronstrue";
 import { DEFAULT_CRON_TIMEZONE } from "../../cron/schedule.ts";
 import type { CandidateDestination, Cron, Monitor, Webhook } from "../../types.ts";
 import type { DirectoryChannel, DirectoryMember } from "../../directory/directory-store.ts";
+import { linesWithinTokenBudget } from "../../util/tokens.ts";
+
+const INVENTORY_CONTEXT_FRACTION = 0.02;
+
+export function inventoryTokenBudget(maxContextTokens: number): number {
+  return Math.max(1, Math.floor(maxContextTokens * INVENTORY_CONTEXT_FRACTION));
+}
 
 export function deliveryMenu(candidates: CandidateDestination[], defaultKey: string | undefined): string {
   const lines = candidates
@@ -64,62 +71,71 @@ function cronSchedulePromptLabel(c: Cron, timezone: string): string {
   return `once at ${localIsoTime(timezone, schedule.firstFireAt ?? c.createdAt)}`;
 }
 
-const OBLIGATIONS_CAP = 30;
 export function renderStandingObligations(
   crons: Cron[],
   webhooks: Webhook[],
   monitors: Monitor[],
+  budgetTokens: number,
   timezone = DEFAULT_CRON_TIMEZONE,
 ): string {
-  const summary = (text: string) => (text.length > 100 ? `${text.slice(0, 97)}…` : text);
+  const firstLine = (text: string) => text.trim().split("\n")[0] ?? "";
   const lines = [
     ...crons
       .toSorted((a, b) => a.id.localeCompare(b.id))
       .map((c) => `- ${c.title || "Untitled scheduled task"} — ${cronSchedulePromptLabel(c, timezone)}`),
-    ...webhooks.toSorted((a, b) => a.id.localeCompare(b.id)).map((w) => `- Webhook: ${summary(w.action)}`),
+    ...webhooks.toSorted((a, b) => a.id.localeCompare(b.id)).map((w) => `- Webhook: ${firstLine(w.action)}`),
     ...monitors
       .toSorted((a, b) => a.id.localeCompare(b.id))
-      .map((m) => `- Job watch: ${summary(m.purpose ?? m.command)}`),
+      .map((m) => `- Job watch: ${firstLine(m.purpose ?? m.command)}`),
   ];
+  const { kept, omitted } = linesWithinTokenBudget(lines, budgetTokens);
   return [
     "## Already scheduled here",
-    ...(lines.length ? lines.slice(0, OBLIGATIONS_CAP) : ["No active scheduled work was found for this conversation."]),
-    ...(lines.length > OBLIGATIONS_CAP
-      ? [`…and ${lines.length - OBLIGATIONS_CAP} more — list crons, webhooks or job watches to see them all.`]
-      : []),
+    ...(lines.length ? kept : ["No active scheduled work was found for this conversation."]),
+    ...(omitted ? [`…and ${omitted} more — list crons, webhooks or job watches to see them all.`] : []),
   ].join("\n");
 }
 
-const REACH_ROSTER_CAP = 30;
-export function renderReachRoster(channels: DirectoryChannel[], displayName: string): string | null {
+export function renderReachRoster(
+  channels: DirectoryChannel[],
+  displayName: string,
+  budgetTokens: number,
+): string | null {
   if (channels.length === 0) return null;
-  const shown = channels
-    .toSorted((a, b) => a.channelId.localeCompare(b.channelId))
-    .slice(0, REACH_ROSTER_CAP)
-    .map((c) => `#${c.name}`)
-    .join(", ");
-  const more =
-    channels.length > REACH_ROSTER_CAP ? ` …and ${channels.length - REACH_ROSTER_CAP} more — name one to check` : "";
+  const { kept, omitted } = linesWithinTokenBudget(
+    channels.toSorted((a, b) => a.channelId.localeCompare(b.channelId)).map((c) => `#${c.name}`),
+    budgetTokens,
+  );
+  const more = omitted ? ` …and ${omitted} more — name one to check` : "";
   return [
     "## Other computers you can reach",
-    `Rooms you and ${displayName} share: ${shown}${more}`,
+    `Rooms you and ${displayName} share: ${kept.join(", ")}${more}`,
     "This conversation's computer is where you work. Other rooms' computers are places you visit:",
     'read, search, fetch — don\'t rearrange. Run a command there with execute(scope: "#room").',
     "Say where anything you bring back came from.",
   ].join("\n");
 }
 
-const ROSTER_CAP = 20;
-export function renderConversationRoster(members: DirectoryMember[]): string | null {
+export function renderConversationRoster(
+  members: DirectoryMember[],
+  budgetTokens: number,
+  speakerId?: string,
+): string | null {
   if (members.length === 0) return null;
-  const shown = members.toSorted((a, b) => a.principalId.localeCompare(b.principalId)).slice(0, ROSTER_CAP);
-  const lines = shown.map((m) => `- ${m.displayName} (${m.principalId})`);
-  const more = members.length > ROSTER_CAP ? `\n…and ${members.length - ROSTER_CAP} more in this conversation.` : "";
+  const speaker = members.filter((m) => m.principalId === speakerId);
+  const others = members.filter((m) => m.principalId !== speakerId);
+  const { kept, omitted } = linesWithinTokenBudget(
+    [...speaker, ...others.toSorted((a, b) => a.principalId.localeCompare(b.principalId))].map(
+      (m) => `- ${m.displayName} (${m.principalId})`,
+    ),
+    budgetTokens,
+  );
+  const more = omitted ? `\n…and ${omitted} more in this conversation.` : "";
   return (
     [
       "## Who's in this conversation",
       "The people party to this conversation, from the company directory. Each is a distinct, real person — when a request names someone, it means this specific person, not anyone who merely posted here:",
-      ...lines,
+      ...kept,
     ].join("\n") + more
   );
 }

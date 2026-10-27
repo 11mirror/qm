@@ -86,7 +86,7 @@ export async function handleTurn(o: OrchestratorInstance, requested: Orchestrato
     session,
     emitGapWork: run.gap.emit,
   });
-  const held = await holdTurnLease(ctx, { session, run });
+  const held = await holdTurnLease(ctx, session);
   if ("refused" in held) return held.refused;
   if (!ctx.ambientTurn) titling.assignSessionTitle();
   try {
@@ -427,7 +427,6 @@ async function releaseTurn(
 function newTurnRunState(): TurnRunState {
   return {
     toolCalls: 0,
-    turnProgress: 0,
     firstTokenMarked: false,
     runtimeHandoffs: 0,
     contextRecovered: false,

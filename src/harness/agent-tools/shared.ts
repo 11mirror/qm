@@ -1,10 +1,8 @@
-// Schema helpers, result capping and list/cron formatting shared by the agent tool families.
+// Schema helpers, result cutting and list/cron formatting shared by the agent tool families.
 
 import { Type } from "typebox";
-import { MAX_OUTBOUND_FILES } from "../../core/attachments.ts";
 import type { PublishAudienceDescriptor } from "../../tools/primitives.ts";
 import type { CronFireLogEntry } from "../../types.ts";
-import { headTailSlice } from "../../util/text.ts";
 import { utcMinute } from "../../util/time.ts";
 import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
 
@@ -36,26 +34,14 @@ export function isPolicyNotice(summary: Record<string, unknown>): boolean {
   return summary.blocked !== undefined || summary.denied !== undefined;
 }
 
-const MAX_TOOL_RESULT_CHARS = 100_000;
 export const PRESSURE_WARN_FULL60 = 50;
-const TRUNCATED_TAIL_CHARS = 10_000;
 
-export function capResultText(t: string): string {
-  return headTailSlice(
-    t,
-    MAX_TOOL_RESULT_CHARS,
-    TRUNCATED_TAIL_CHARS,
-    `\n…[truncated — full result was ${t.length} chars and the middle was dropped; ` +
-      `refetch narrower (filter or paginate the call, or redirect to a file and read it in pieces) if you need it]…\n`,
-  );
-}
-
-export function capPayloadStrings(v: unknown): unknown {
-  if (typeof v === "string") return capResultText(v);
+export function cutPayloadStrings(v: unknown, cut: (text: string) => string): unknown {
+  if (typeof v === "string") return cut(v);
   if (Array.isArray(v)) {
     let out: unknown[] | null = null;
     for (let i = 0; i < v.length; i++) {
-      const c = capPayloadStrings(v[i]);
+      const c = cutPayloadStrings(v[i], cut);
       if (c !== v[i]) (out ??= v.slice())[i] = c;
     }
     return out ?? v;
@@ -65,16 +51,12 @@ export function capPayloadStrings(v: unknown): unknown {
     if (proto !== Object.prototype && proto !== null) return v;
     let out: Record<string, unknown> | null = null;
     for (const [k, x] of Object.entries(v)) {
-      const c = capPayloadStrings(x);
+      const c = cutPayloadStrings(x, cut);
       if (c !== x) (out ??= { ...(v as Record<string, unknown>) })[k] = c;
     }
     return out ?? v;
   }
   return v;
-}
-
-export function capText(t: string): string {
-  return t.length > MAX_TOOL_RESULT_CHARS ? `${t.slice(0, MAX_TOOL_RESULT_CHARS)}…[truncated]` : t;
 }
 
 export function fmtStatus(s: { state: "running" } | { state: "exited"; code: number }): string {
@@ -123,7 +105,6 @@ export const CRON_ID_ACTIONS = new Set(["get", "runs", "patch", "delete", "disab
 export const SENDER_WEBHOOK_SCHEMES = WEBHOOK_SCHEMES.filter(
   (scheme) => scheme !== "hmac-sha256" && scheme !== "google-pubsub",
 );
-const LIST_PAGE_MAX = 100;
 const LIST_TASK_PREVIEW_CHARS = 200;
 export const WEBHOOK_ACTION_PREVIEW_CHARS = 2000;
 
@@ -158,7 +139,7 @@ export function pageOf<T>(
   opts: { offset?: number; limit?: number },
 ): { page: T[]; offset: number; note: string | null } {
   const offset = Math.max(0, opts.offset ?? 0);
-  const limit = Math.min(Math.max(1, opts.limit ?? LIST_PAGE_SIZE), LIST_PAGE_MAX);
+  const limit = Math.max(1, opts.limit ?? LIST_PAGE_SIZE);
   const page = items.slice(offset, offset + limit);
   const last = offset + page.length;
   if (page.length === 0) return { page, offset, note: `nothing at offset ${offset} — ${items.length} total` };
@@ -229,7 +210,7 @@ export const outboundFilesSchema = Type.Array(
     Type.String({ minLength: 1 }),
     Type.Object({ file_id: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
   ]),
-  { maxItems: MAX_OUTBOUND_FILES, description: 'Workspace paths or {file_id: "stored Files ID"} objects.' },
+  { description: 'Workspace paths or {file_id: "stored Files ID"} objects.' },
 );
 export const outboundSandboxSchema = Type.Optional(
   Type.String({

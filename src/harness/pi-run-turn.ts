@@ -295,13 +295,16 @@ async function continueGoal(o: {
         piRoundFailed(session, messagesBefore),
       ...(governGoal
         ? {
-            govern: (previous: GovernorVerdict | undefined) =>
-              governGoal({
+            govern: (previous: GovernorVerdict | undefined) => {
+              const recentWork = goal.recentWork();
+              goal.workChecked();
+              return governGoal({
                 objective: goalAfterPrompt.objective,
                 trigger: "checkpoint",
-                recentWork: goal.recentWork(),
+                recentWork,
                 ...(previous ? { previous } : {}),
-              }),
+              });
+            },
           }
         : {}),
       beforePrompt: async () => {
@@ -465,7 +468,13 @@ export async function runPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInpu
     const unsubscribe = session.subscribe(telemetry.onSessionEvent(steps, grindMeter));
     let wallClock!: TurnWallClockOutcome;
     const messagesBefore = session.messages.length;
-    goal.setRecentWork(() => piGoalWork(session.messages.slice(-80)));
+    let goalWorkFrom = messagesBefore;
+    goal.setRecentWork(
+      () => piGoalWork(session.messages.slice(goalWorkFrom)),
+      () => {
+        goalWorkFrom = session.messages.length;
+      },
+    );
     const stop: TurnStop = { userAborted: false };
     let recoveryDead = false;
     state.bindAbort(toolAbort.signal);

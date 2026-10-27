@@ -1,16 +1,17 @@
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../../types.ts";
 import type { TurnOrigin } from "../turn-origin.ts";
-import type { SecurityScreenClassification, SecurityScreenHook } from "../../security/security-screener.ts";
+import {
+  SECURITY_SCREEN_CHUNK_CHARS,
+  type SecurityScreenClassification,
+  type SecurityScreenHook,
+} from "../../security/security-screener.ts";
 import { securityScreenSystemPrompt } from "../../security/security-screen.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { headSlice } from "../../util/text.ts";
 import type { OrchestratorDeps } from "./types.ts";
 import { SCREENING_ALLOW, screeningGate, type ScreeningGateDecision } from "./screening-gate.ts";
-
-const MAX_SCREEN_REQUEST_CHARS = 2_000;
-const MAX_AUDITED_SOURCES = 20;
 
 type ScreenStatus = "allow" | "would_block" | "error";
 type Screened = Pick<SecurityScreenClassification, "verdict"> & Partial<SecurityScreenClassification>;
@@ -42,9 +43,9 @@ function screenSources(payload: string): string[] {
   }
   if (!Array.isArray(parsed)) return [];
   const sources = parsed.flatMap((item: { source?: unknown } | null) =>
-    typeof item?.source === "string" ? [item.source.slice(0, 120)] : [],
+    typeof item?.source === "string" ? [item.source] : [],
   );
-  return [...new Set(sources)].slice(0, MAX_AUDITED_SOURCES);
+  return [...new Set(sources)];
 }
 
 export function createSecurityObserver(deps: OrchestratorDeps): SecurityObserver {
@@ -58,8 +59,8 @@ export function createSecurityObserver(deps: OrchestratorDeps): SecurityObserver
     if (hook === "tool_response" && context.request?.trim()) {
       request = {
         origin: context.origin ?? "unknown",
-        text: headSlice(context.request, MAX_SCREEN_REQUEST_CHARS).toWellFormed(),
-        truncated: context.request.length > MAX_SCREEN_REQUEST_CHARS,
+        text: headSlice(context.request, SECURITY_SCREEN_CHUNK_CHARS).toWellFormed(),
+        truncated: context.request.length > SECURITY_SCREEN_CHUNK_CHARS,
       };
     }
 

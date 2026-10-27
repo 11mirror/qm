@@ -11,13 +11,7 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import { acquireLeaseWithin, type SessionStore } from "../sessions/session-store.ts";
 import { reportFailureAs } from "../util/errors.ts";
 
-function turnRecordedFailure(tail: readonly Item[], note: { notBefore: number; runId?: string }): boolean {
-  return tail.some((item) => {
-    if (item.kind !== "Error") return false;
-    if (item.turnId !== null) return item.turnId === note.runId;
-    return item.createdAt >= note.notBefore;
-  });
-}
+const turnRecordedFailure = (turnItems: readonly Item[]): boolean => turnItems.some((item) => item.kind === "Error");
 
 export type AdminUrlFor = (sessionId: string) => string | undefined;
 
@@ -98,26 +92,30 @@ export type TurnFailureSessions = Pick<
   "append" | "getByThread" | "acquireLease" | "peekLease" | "releaseLease" | "getItems"
 >;
 
-const FAILURE_RECORD_SCAN_LIMIT = 200;
 const FAILURE_RECORD_WAIT_MS = 10 * 60_000;
 
-export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: Run): Promise<boolean> {
-  if (run.status !== "failed") return false;
+export type FailureEntryOutcome = "recorded" | "present" | "unneeded" | "busy";
+
+export async function recordRunFailureEntry(
+  sessions: TurnFailureSessions,
+  run: Run,
+  waitMs = FAILURE_RECORD_WAIT_MS,
+): Promise<FailureEntryOutcome> {
+  if (run.status !== "failed") return "unneeded";
   const session = await sessions.getByThread(run.sessionId);
   if (!session) {
     console.error(
       `[run-results] failed run ${run.id} targets ${run.sessionId}, which has no session — no turn_failure entry recorded`,
     );
-    return false;
+    return "unneeded";
   }
-  const { lease } = await acquireLeaseWithin(sessions, session.id, "append", FAILURE_RECORD_WAIT_MS);
+  const { lease } = await acquireLeaseWithin(sessions, session.id, "append", waitMs);
   if (!lease) {
     console.error(`[run-results] session ${session.id} stayed busy — failed run ${run.id} has no turn_failure entry`);
-    return false;
+    return "busy";
   }
   try {
-    const tail = await sessions.getItems(session.id, { limit: FAILURE_RECORD_SCAN_LIMIT });
-    if (turnRecordedFailure(tail, { notBefore: run.startedAt ?? run.createdAt, runId: run.id })) return false;
+    if (turnRecordedFailure(await sessions.getItems(session.id, { turnId: run.id }))) return "present";
     await sessions.append(
       lease,
       turnFailureItem(
@@ -125,13 +123,12 @@ export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: 
         run.id,
       ),
     );
-    return true;
+    return "recorded";
   } finally {
     await sessions.releaseLease(lease);
   }
 }
 
-const RUN_RESULT_SWEEP_LOOKBACK_MS = 60 * 60_000;
 const RUN_RESULT_SWEEP_GRACE_MS = 60_000;
 const RUN_RESULT_SWEEP_PAGE = 200;
 const RUN_RECOVERY_GRACE_MS = 15_000;
@@ -141,7 +138,7 @@ export interface RunResultRecovery {
 }
 
 export function wireRunResultPosts(
-  runs: Pick<RunStore, "onTerminal" | "terminalFinished" | "get" | "setDeliveryState">,
+  runs: Pick<RunStore, "onTerminal" | "unsettledTerminal" | "get" | "setDeliveryState">,
   outbound: Pick<Outbound, "send">,
   opts: {
     adminUrlFor?: AdminUrlFor;
@@ -153,6 +150,10 @@ export function wireRunResultPosts(
   const graceMs = opts.graceMs ?? RUN_RECOVERY_GRACE_MS;
   const owed = (run: Run): OutboundPost | null =>
     run.deliveryState?.postedAt === undefined ? runResultPost(run, opts.adminUrlFor) : null;
+  const settled = (run: Run, posted: boolean) => {
+    const at = Date.now();
+    return runs.setDeliveryState(run.id, null, posted ? { postedAt: at, settledAt: at } : { settledAt: at });
+  };
   const postOwed = async (run: Run, post: OutboundPost): Promise<boolean> => {
     try {
       const receipt = await outbound.send(post);
@@ -160,19 +161,16 @@ export function wireRunResultPosts(
     } catch (error) {
       if (!(error as { permanent?: boolean }).permanent) throw error;
       reportFailureAs("run results: reply is undeliverable (not retried)", undefined, `run=${run.id}`)(error);
-      await runs.setDeliveryState(run.id, null, { postedAt: Date.now() });
+      await settled(run, true);
       return false;
     }
-    await runs.setDeliveryState(run.id, null, { postedAt: Date.now() });
+    await settled(run, true);
     return true;
   };
   runs.onTerminal((run) => {
-    if (opts.sessions)
-      void recordRunFailureEntry(opts.sessions, run).catch(
-        reportFailureAs("run results: record turn_failure entry", undefined, `run=${run.id}`),
-      );
-    if (!owed(run)) return;
     void (async () => {
+      const failure = opts.sessions ? await recordRunFailureEntry(opts.sessions, run) : "unneeded";
+      if (failure === "busy" || !owed(run)) return;
       const surface = run.request.surface;
       if (!surfaceHas(surface, "transcript") && !(surface && opts.postsImmediately?.(surface)))
         await new Promise((resolve) => setTimeout(resolve, graceMs).unref?.());
@@ -184,17 +182,24 @@ export function wireRunResultPosts(
   return {
     async sweep(now = Date.now()) {
       const before = now - RUN_RESULT_SWEEP_GRACE_MS;
-      let cursor = { finishedAt: now - RUN_RESULT_SWEEP_LOOKBACK_MS, id: "" };
+      let cursor = { finishedAt: 0, id: "" };
       let recovered = 0;
       for (;;) {
-        const batch = await runs.terminalFinished(cursor, before, RUN_RESULT_SWEEP_PAGE);
+        const batch = await runs.unsettledTerminal(cursor, before, RUN_RESULT_SWEEP_PAGE);
         for (const run of batch) {
           const post = owed(run);
-          if (!post) continue;
           try {
-            if (!(await postOwed(run, post))) continue;
-            console.error(`[run-results] terminal run ${run.id} still owed its reply — posted it`);
-            recovered += 1;
+            const failure = opts.sessions ? await recordRunFailureEntry(opts.sessions, run, 0) : "unneeded";
+            if (failure === "busy") continue;
+            if (failure === "recorded") {
+              console.error(`[run-results] failed run ${run.id} had no turn_failure entry — recorded it`);
+              recovered += 1;
+            }
+            if (!post) await settled(run, false);
+            else if (await postOwed(run, post)) {
+              console.error(`[run-results] terminal run ${run.id} still owed its reply — posted it`);
+              recovered += 1;
+            }
           } catch (error) {
             reportFailureAs("run results: sweep post", undefined, `run=${run.id}`)(error);
           }

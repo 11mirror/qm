@@ -30,16 +30,16 @@ const RESERVED_SURFACES = new Set([
 const POST_TIMEOUT_MS = 15_000;
 
 const id = z
-  .union([z.string().regex(/^[A-Za-z0-9_.-]{1,128}$/), z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)])
+  .union([z.string().regex(/^[A-Za-z0-9_.-]+$/), z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)])
   .transform(String);
 
 const userSchema = z.object({
   id,
-  email: z.string().max(320).optional(),
-  name: z.string().max(200).optional(),
+  email: z.string().optional(),
+  name: z.string().optional(),
   guest: z.boolean().optional(),
   bot: z.boolean().optional(),
-  timezone: z.string().max(64).optional(),
+  timezone: z.string().optional(),
 });
 
 const messageEventSchema = z.object({
@@ -47,25 +47,24 @@ const messageEventSchema = z.object({
   chat: z.object({
     id,
     kind: z.enum(["dm", "group", "channel"]),
-    name: z.string().max(200).optional(),
-    members: z.array(userSchema).max(500).optional(),
+    name: z.string().optional(),
+    members: z.array(userSchema).optional(),
   }),
   message: z.object({
     id,
     thread_id: id.nullish(),
-    text: z.string().max(100_000),
+    text: z.string(),
     mentions_bot: z.boolean().optional(),
     attachments: z
       .array(
         z.object({
           id,
-          name: z.string().max(500).optional(),
-          mimetype: z.string().max(200).optional(),
+          name: z.string().optional(),
+          mimetype: z.string().optional(),
           size: z.number().int().nonnegative().optional(),
           url: z.url().optional(),
         }),
       )
-      .max(20)
       .optional(),
     thread_has_bot: z.boolean().optional(),
     sent_at: z.number().int().positive().optional(),
@@ -80,9 +79,9 @@ const configSchema = z.object({
     .refine((surface) => !RESERVED_SURFACES.has(surface), { message: "is reserved" }),
   account: z
     .string()
-    .regex(/^[A-Za-z0-9_.-]{1,64}$/)
+    .regex(/^[A-Za-z0-9_.-]+$/)
     .default("default"),
-  label: z.string().min(1).max(60),
+  label: z.string().min(1),
   apiUrl: z.url().refine((url) => ["http:", "https:"].includes(new URL(url).protocol), { message: "must be http(s)" }),
   apiToken: z.string().min(16),
   signingSecret: z.string().refine(isStrongSigningSecret, { message: "must be at least 32 characters" }),

@@ -1,3 +1,4 @@
+import { contextTokenBudgetForModel } from "../../src/model/pi-models.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -399,6 +400,7 @@ test("complete routes configured models through the model gateway without mutati
   const compact = harness.models.compactHistory!;
   const input: Parameters<typeof compact>[0] = {
     session: { id: "summary-session" } as Parameters<typeof compact>[0]["session"],
+    summaryTokenBudget: 4_000,
     history: [
       storedItem(
         { kind: "UserMessage", text: "what? local recovery what?" },
@@ -459,6 +461,12 @@ test("Pi judge uses supported reasoning effort when configured with Astra", asyn
   assert.ok(request);
   assert.equal(request.model, "gpt-6-astra");
   assert.equal(request.reasoning?.effort, "low");
+  assert.equal(
+    harness.models.judgeTokenBudget!(),
+    contextTokenBudgetForModel("gpt-6-astra"),
+    "the governor's budget is the judge model's, not the turn model's auxiliary",
+  );
+  assert.notEqual(harness.models.judgeTokenBudget!(), undefined);
 });
 
 test("complete stops a request whose abort lands before Pi starts its run", { timeout: 10_000 }, async (t) => {

@@ -25,8 +25,9 @@ test("a transient renew failure does not kill the keepalive", async () => {
   stop();
 });
 
-test("a genuinely lost lease stops the keepalive", async () => {
+test("a genuinely lost lease stops the keepalive and aborts the turn", async () => {
   let calls = 0;
+  let lost = 0;
   const stop = startLeaseKeepalive(
     {
       renewLease: async () => {
@@ -37,17 +38,40 @@ test("a genuinely lost lease stops the keepalive", async () => {
     lease,
     10,
     () => false,
+    () => lost++,
   );
-  await settle(() => calls === 1);
+  await settle(() => lost === 1);
   const after = calls;
   await new Promise((resolve) => setTimeout(resolve, 60));
   assert.equal(calls, after, "no further renewals after the lease is lost");
+  assert.equal(lost, 1, "the abort fires exactly once");
   stop();
 });
 
-test("a turn making no progress trips the liveness bound and aborts instead of renewing forever", async () => {
+test("an expected release is not reported as a lost lease", async () => {
+  let lost = 0;
+  let calls = 0;
+  const stop = startLeaseKeepalive(
+    {
+      renewLease: async () => {
+        calls += 1;
+        return false;
+      },
+    },
+    lease,
+    10,
+    () => true,
+    () => lost++,
+  );
+  await settle(() => calls === 1);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(lost, 0);
+  stop();
+});
+
+test("a turn that stays alive on its lease is never aborted, however long it makes no visible progress", async () => {
   let renewals = 0;
-  let stalled = 0;
+  let lost = 0;
   const stop = startLeaseKeepalive(
     {
       renewLease: async () => {
@@ -56,40 +80,16 @@ test("a turn making no progress trips the liveness bound and aborts instead of r
       },
     },
     lease,
-    5,
+    2,
     () => false,
-    { progress: () => 0, stalledRenewals: 3, onStalled: () => stalled++ },
+    () => lost++,
   );
-  await settle(() => stalled === 1);
+  await settle(() => renewals >= 40);
+  assert.equal(lost, 0);
+  stop();
   const after = renewals;
-  await new Promise((resolve) => setTimeout(resolve, 40));
-  assert.equal(renewals, after, "renewal stops once the stall bound trips");
-  assert.equal(stalled, 1, "the abort fires exactly once");
-  assert.ok(renewals < 3, "the stalled interval aborts before renewing again");
-  stop();
-});
-
-test("turn progress resets the stall counter and keeps the lease renewing", async () => {
-  let renewals = 0;
-  let stalled = 0;
-  let progress = 0;
-  const stop = startLeaseKeepalive(
-    {
-      renewLease: async () => {
-        renewals += 1;
-        return true;
-      },
-    },
-    lease,
-    5,
-    () => false,
-    { progress: () => progress, stalledRenewals: 3, onStalled: () => stalled++ },
-  );
-  const feeder = setInterval(() => progress++, 5);
-  await settle(() => renewals >= 10);
-  clearInterval(feeder);
-  assert.equal(stalled, 0, "a progressing turn is never aborted");
-  stop();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(renewals, after, "stop() ends renewal");
 });
 
 test("wall-clock failure survives a cancel only for abandoned turns", () => {

@@ -11,11 +11,6 @@ export async function itemVisibleToAll(
   return (await sessions.visibleItems(sessionId, principalIds, { sinceSeq: seq, beforeSeq: seq + 1 })).length > 0;
 }
 
-export function snippet(text: string, max: number): string {
-  const oneLine = text.replace(/\s+/g, " ").trim();
-  return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 1).trimEnd()}…`;
-}
-
 export function assertAudienceCompatible(
   source: Pick<OrchestratorInput, "actor" | "conversation">,
   target: Pick<OrchestratorInput, "actor" | "conversation">,

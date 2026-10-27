@@ -10,12 +10,11 @@ import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { isSubagentThreadRef } from "../sessions/thread-ref.ts";
-import { itemVisibleToAll, snippet, assertAudienceCompatible } from "./audience.ts";
+import { itemVisibleToAll, assertAudienceCompatible } from "./audience.ts";
 import { sessionRunCancelled } from "./tree.ts";
 import { requiresDelegation } from "./delegation.ts";
 
 const CHILD_DONE_RECHECK_MS = 60_000;
-const MAIL_ERROR_CAP = 1_000;
 
 export type SubagentMailKind = "final_answer" | "no_reply" | "awaiting_input" | "errored" | "refused";
 
@@ -86,16 +85,13 @@ function mailContent(run: Run): { kind: SubagentMailKind; body: string } {
   let body: string;
   if (run.status === "failed" || result?.status === "failed") {
     kind = "errored";
-    body = snippet(result?.reason ?? "the turn failed", MAIL_ERROR_CAP);
+    body = result?.reason ?? "the turn failed";
   } else if (result?.pendingApprovals?.length || result?.status === "pending_approval") {
     kind = "awaiting_input";
-    body = snippet(
-      result.pendingApprovals?.map((a) => a.command).join("; ") ?? "a command needs human approval",
-      MAIL_ERROR_CAP,
-    );
+    body = result.pendingApprovals?.map((a) => a.command).join("; ") ?? "a command needs human approval";
   } else if (result?.status === "refused") {
     kind = "refused";
-    body = snippet(result.reason ?? "the turn was refused", MAIL_ERROR_CAP);
+    body = result.reason ?? "the turn was refused";
   } else if (result?.status === "ok" && (result.reply?.trim() || result.attachments?.length)) {
     kind = "final_answer";
     body = result.reply?.trim() || `Produced ${result.attachments!.map((file) => file.name).join(", ")}.`;
@@ -222,13 +218,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   const title = child.title?.trim() || child.id;
   const result = run.result;
   const { kind, body } = mailContent(run);
-  const text = renderSubagentMail({
-    title,
-    sessionId: child.id,
-    kind,
-    body:
-      body.length > 16_000 ? `${body.slice(0, 16_000)}\n[truncated; read the child session for the full result]` : body,
-  });
+  const text = renderSubagentMail({ title, sessionId: child.id, kind, body });
   const inherited = { ...meta };
   delete (inherited as Partial<SpawnMeta>).openFingerprint;
   const request: OrchestratorInput = {

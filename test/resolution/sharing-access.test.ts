@@ -1,17 +1,13 @@
 import { readContextFile } from "../../src/resolution/context-files.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  carriedFileHandles,
-  isOpenScopeMember,
-  MAX_OPEN_SHARED_SCOPES,
-  sharingSourcesForTurn,
-} from "../../src/resolution/sharing-access.ts";
-import { scopeId, type Principal, type Session } from "../../src/types.ts";
+import { carriedFileHandles, isOpenScopeMember, sharingSourcesForTurn } from "../../src/resolution/sharing-access.ts";
+import { scopeId, type Principal } from "../../src/types.ts";
 import { createMemoryDurableByteStore } from "../../src/files/durable-byte-store.ts";
 import { createIsCurrentSharedScopeMember } from "../../src/resolution/scope-membership.ts";
 import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
+import type { ParticipantScope } from "../../src/sessions/session-store.ts";
 
 test("Open membership re-checks current room membership and never treats a personal scope as a room", async () => {
   const personal = scopeId("personal", "U1");
@@ -26,7 +22,7 @@ test("Open membership re-checks current room membership and never treats a perso
 });
 
 test("open sources accept live human-authored ambient turns and bind carry to the authenticated actor", async () => {
-  const sessions = { listByParticipant: async () => [] };
+  const sessions = { participantScopes: async () => [] };
   const targetScope = scopeId("channel", "C1");
   const actor: Principal = { id: "U2", type: "internal" };
   const base = {
@@ -82,38 +78,28 @@ test("current membership resolves directory identity aliases and fails closed wh
   assert.equal(await member("u1@example.com", scopeId("personal", "u1@example.com")), false);
 });
 
-test("DM carry is recent, bounded, non-transitive, and revoked by current membership", async () => {
+test("DM carry covers every room the actor is in, most recent first, non-transitive, and revoked by current membership", async () => {
   const actor: Principal = { id: "U1", type: "internal" };
   const personal = scopeId("personal", actor.id);
-  const sessions: Session[] = Array.from({ length: 30 }, (_, index) => ({
-    id: `s${index}`,
-    type: "channel" as const,
+  const scopes: ParticipantScope[] = Array.from({ length: 300 }, (_, index) => ({
     scopeId: scopeId("channel", `C${index}`),
-    threadRef: `C${index}:t`,
-    createdAt: index,
+    sessionCount: 1,
     lastActivityAt: index,
   }));
-  sessions.push({
-    id: "personal",
-    type: "dm",
-    scopeId: personal,
-    threadRef: "dm:U1:t",
-    createdAt: 100,
-    lastActivityAt: 100,
-  });
-  const removed = scopeId("channel", "C29");
+  scopes.push({ scopeId: personal, sessionCount: 1, lastActivityAt: 1000 });
+  const removed = scopeId("channel", "C299");
   const sources = await sharingSourcesForTurn({
     actor,
     origin: { kind: "human" },
     trustedLiveHuman: true,
     targetScope: personal,
-    sessions: { listByParticipant: async () => sessions },
+    sessions: { participantScopes: async () => scopes },
     isCurrentSharedScopeMember: async (_actorId, source) => source !== removed,
   });
-  assert.equal(sources.length, MAX_OPEN_SHARED_SCOPES);
+  assert.equal(sources.length, 299);
   assert.equal(sources.includes(removed), false);
   assert.equal(sources.includes(personal), false);
-  assert.deepEqual(sources.slice(0, 2), [scopeId("channel", "C28"), scopeId("channel", "C27")]);
+  assert.deepEqual(sources.slice(0, 2), [scopeId("channel", "C298"), scopeId("channel", "C297")]);
 });
 
 test("carried file handles expose only selected source scopes read-only without mounting them", async () => {
@@ -173,38 +159,7 @@ test("carried file handles expose only selected source scopes read-only without 
   );
 });
 
-test("Open examines a bounded candidate window even when every membership is revoked", async () => {
-  let checks = 0;
-  let requestedLimit = 0;
-  const candidates = Array.from({ length: 1000 }, (_, i) => ({
-    id: String(i),
-    type: "channel" as const,
-    scopeId: scopeId("channel", `C${i}`),
-    createdAt: i,
-    threadRef: `C${i}:t`,
-  }));
-  const sources = await sharingSourcesForTurn({
-    actor: { id: "U1", type: "internal" },
-    origin: { kind: "human" },
-    trustedLiveHuman: true,
-    targetScope: scopeId("personal", "U1"),
-    sessions: {
-      listByParticipant: async (_id, opts) => {
-        requestedLimit = opts?.limit ?? 0;
-        return candidates;
-      },
-    },
-    isCurrentSharedScopeMember: async () => {
-      checks++;
-      return false;
-    },
-  });
-  assert.deepEqual(sources, []);
-  assert.equal(requestedLimit, 100);
-  assert.equal(checks, 100);
-});
-
-test("Open file enumeration is globally capped across selected scopes", async () => {
+test("Open file enumeration pages every selected scope to completion", async () => {
   const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const scopes = [scopeId("personal", "U1"), scopeId("channel", "C1")];
   for (let i = 0; i < 210; i++) {
@@ -220,6 +175,6 @@ test("Open file enumeration is globally capped across selected scopes", async ()
     });
   }
   const handles = await carriedFileHandles(scopes, files);
-  assert.equal(handles.length, 200);
+  assert.equal(handles.length, 210);
   assert.equal(new Set(handles.map((handle) => handle.ownerScopeId)).size, 2);
 });

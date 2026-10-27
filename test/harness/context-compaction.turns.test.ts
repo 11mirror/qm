@@ -3,9 +3,8 @@ import assert from "node:assert/strict";
 import {
   COMPACT_HARD_FRACTION,
   COMPACT_SOFT_FRACTION,
-  MAX_COMPACT_SUMMARY_CHARS,
   validateCompactSummary,
-  deterministicCompactSummary,
+  compactSummaryTokenBudget,
   estimateHistoryTokens,
   forModelContext,
   overBudgetFraction,
@@ -217,7 +216,8 @@ for (const [kind, mkTurn] of [
 ] as const) {
   test(`a ${kind} turn between soft and hard does NOT block on compaction; the background pass sheds it`, async () => {
     const { harness, compactCalls } = spyHarness();
-    const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
+    const budget = budgetBetweenSoftAndHard(tokensOf(...msgTexts(8)));
+    const { orch, sessions } = buildOrchestrator(harness, budget);
     const sid = await seed(
       sessions,
       msgTexts(8).map((text) => ({ text })),
@@ -230,6 +230,11 @@ for (const [kind, mkTurn] of [
     const summaries = await waitForSummary(sessions, sid);
     assert.equal(summaries.length, 1, "the background pass compacts off the hot path");
     assert.equal(compactCalls.length, 1, "exactly one (background) compaction, none inline");
+    assert.equal(
+      compactCalls[0]!.summaryTokenBudget,
+      compactSummaryTokenBudget(budget),
+      "the summarizer is handed the summary's share of this session's context budget",
+    );
   });
 }
 
@@ -367,26 +372,20 @@ test("a session parked over soft with a too-large prior summary re-summarizes (B
   );
 });
 
-test("validateCompactSummary accepts a trimmed summary and rejects missing or oversized output", () => {
+test("validateCompactSummary accepts a trimmed summary and rejects missing output or one over the budget it was asked to fit", () => {
   assert.equal(validateCompactSummary("  a tidy summary  "), "a tidy summary");
   assert.throws(() => validateCompactSummary(undefined), /empty summary/);
   assert.throws(() => validateCompactSummary("   "), /empty summary/);
-  assert.throws(() => validateCompactSummary("x".repeat(MAX_COMPACT_SUMMARY_CHARS + 1)), /character limit/);
+  const long = Array.from({ length: 400 }, (_, i) => `point ${i}`).join(", ");
+  assert.throws(() => validateCompactSummary(long, 100), /is \d+ tokens; the budget it was asked to fit is 100/);
+  assert.equal(validateCompactSummary(long, 10_000), long);
+  assert.equal(validateCompactSummary(long), long);
 });
 
-test("the deterministic fallback keeps the newest entries — a late stated constraint survives the slice", () => {
-  const history = [
-    ...Array.from({ length: 40 }, (_, i) => mkEntry({ seq: i, text: `filler ${i} ${"x".repeat(400)}` })),
-    mkEntry({ seq: 40, text: "don't touch prod" }),
-  ];
-  const out = deterministicCompactSummary(history);
-  assert.match(out, /don't touch prod/);
-  assert.ok(out.length <= MAX_COMPACT_SUMMARY_CHARS);
-});
-
-test("a runaway summarizer output does not commit a compaction checkpoint", async () => {
+test("a summarizer that rejects its own output does not commit a compaction checkpoint", async () => {
   const { harness } = spyHarness();
-  harness.models.compactHistory = async () => "I'll scan for new signed replies… ".repeat(2_000);
+  harness.models.compactHistory = async () =>
+    validateCompactSummary("I'll scan for new signed replies… ".repeat(2_000), 8_000);
   const { orch, sessions, errors } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(12))));
   const sid = await seed(
     sessions,

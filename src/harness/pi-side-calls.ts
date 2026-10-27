@@ -70,14 +70,19 @@ export async function piCompactHistory(
   const providerKeys = await access.providerKeys();
   const runtime = await buildModelRuntime(providerKeys, access.gateway);
   const summarize = (compactModelId: string) =>
-    summarizeHistory(input.history, access.model(compactModelId), (summaryModel, context, options) => {
-      input.recordModelCall({
-        model: compactModelId,
-        inputTokens: countTokens(context.systemPrompt ?? "") + countTokens(JSON.stringify(context.messages)),
-        entryCount: input.history.length,
-      });
-      return runtime.streamSimple(summaryModel, context, options);
-    });
+    summarizeHistory(
+      input.history,
+      access.model(compactModelId),
+      (summaryModel, context, options) => {
+        input.recordModelCall({
+          model: compactModelId,
+          inputTokens: countTokens(context.systemPrompt ?? "") + countTokens(JSON.stringify(context.messages)),
+          entryCount: input.history.length,
+        });
+        return runtime.streamSimple(summaryModel, context, options);
+      },
+      input.summaryTokenBudget,
+    );
   try {
     return await summarize(primaryId);
   } catch (error) {

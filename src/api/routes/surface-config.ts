@@ -5,7 +5,6 @@ import { defaultModel, modelSupported, thinkingLevelsFor, fastModeModelIds } fro
 import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage } from "../../util/errors.ts";
 import { InstructionsUpdateDeniedError } from "../app-types.ts";
-import { InstructionsTooLargeError } from "../../resolution/config-instructions.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { audit, isObj } from "./shared.ts";
 import { type ApiCtx, isConfigured, ok, reply, type RouteResult } from "./route.ts";
@@ -181,7 +180,6 @@ export async function postInstructions(ctx: ApiCtx): Promise<RouteResult> {
   } catch (e) {
     if (e instanceof InstructionsUpdateDeniedError)
       return reply(403, { error: "instructions_update_denied", message: e.message });
-    if (e instanceof InstructionsTooLargeError) return reply(413, { error: "payload_too_large", message: e.message });
     return reply(500, { error: "instructions_update_failed", message: errMessage(e) });
   }
 }

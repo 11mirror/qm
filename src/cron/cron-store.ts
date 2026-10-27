@@ -96,9 +96,7 @@ export function isDeferred(cron: Pick<Cron, "deferUntil">, now: number): boolean
 }
 
 function normalizeTitle(title: string | undefined): string | undefined {
-  const trimmed = title?.trim().replace(/\s+/g, " ");
-  if (!trimmed) return undefined;
-  return trimmed.length > 80 ? `${trimmed.slice(0, 79)}...` : trimmed;
+  return title?.trim().replace(/\s+/g, " ") || undefined;
 }
 
 const CRONS: TableSpec = {

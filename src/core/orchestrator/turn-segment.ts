@@ -44,7 +44,6 @@ const ADDRESSED_NUDGE_MD = loadProtocolFile("turn-addressed-nudge");
 
 export interface TurnRunState {
   toolCalls: number;
-  turnProgress: number;
   failureUserItem?: NewItem<"UserMessage">;
   firstTokenMarked: boolean;
   turnRuntime?: TurnRuntime;
@@ -209,7 +208,6 @@ function createSegmentEmit(
   const emitGapWork = run.gap.emit;
   let recordedRecall = false;
   const emit: HarnessTurnInput["emit"] = async (entry) => {
-    run.turnProgress++;
     const persistStart = Date.now();
     try {
       const stored = ((): NewItem => {
@@ -311,7 +309,7 @@ function createPrepareSteer(
     const seed = `${fileRegistration.seed}:steer:${randomUUID()}`;
     const inboxDir = `${turnInboxDir}/${randomUUID()}`;
     const received = strictReadOnly
-      ? { metas: [], images: [], tooMany: [], unavailable: [] }
+      ? { metas: [], images: [], unavailable: [] }
       : await materializeInbound(
           deps.sandbox,
           provision,

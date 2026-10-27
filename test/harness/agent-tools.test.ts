@@ -1,3 +1,4 @@
+import { DEFAULT_INLINE_TOKENS } from "../../src/sessions/tool-output.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgentTools } from "../../src/harness/agent-tools.ts";
@@ -12,6 +13,7 @@ import { testDatabaseUrl } from "../support/test-database.ts";
 import { storedItem, type NewItem } from "../../src/sessions/items.ts";
 import type { ComputerStatus } from "../../src/sandbox/sandbox.ts";
 import { fakeToolContext, type Emitted, emittedItem, call, textOut } from "../support/agent-tools.ts";
+import type { ToolContext } from "../../src/tools/primitives.ts";
 
 test("each agent tool emits a tool_call then a tool_result", async () => {
   const emitted: Emitted[] = [];
@@ -318,7 +320,7 @@ test("an exec under io pressure carries a [pressure] warning; a calm one doesn't
   );
 });
 
-test("a giant tool result is capped for the model, keeping the tail and matching the persisted replay record", async () => {
+test("without a parking store a giant tool result is cut to the inline budget, keeping the tail and matching the persisted replay record", async () => {
   const emitted: Emitted[] = [];
   const tc = {
     ...fakeToolContext(),
@@ -337,8 +339,12 @@ test("a giant tool result is capped for the model, keeping the tail and matching
     content: Array<{ type: string; text: string }>;
   };
   const seen = ret.content.map((c) => c.text).join("\n");
-  assert.ok(seen.length <= 100_000, `model-facing text stays within the declared cap (got ${seen.length} chars)`);
-  assert.ok(seen.includes("…[truncated — full result was"), "truncation notice names the full size");
+  assert.ok(
+    seen.length <= DEFAULT_INLINE_TOKENS * 4 + 400,
+    `model-facing text stays within the inline budget (got ${seen.length} chars)`,
+  );
+  assert.ok(seen.includes("[output cut: showing the first"), "the cut marker names what was shown");
+  assert.ok(seen.includes("the full output was not kept"), "the marker says the full text was not parked");
   assert.ok(seen.endsWith("[exit 1]"), "the tail — stderr and exit marker — survives the cut");
   assert.ok(seen.includes("[stderr]\nboom"), "stderr survives the cut");
   const payload = emitted.find((e) => e.kind === "ToolResult")!.fields;
@@ -407,6 +413,54 @@ test("a result over the inline cap keeps its head and tail and parks the full te
   assert.equal(uncapped.output, undefined, "0 turns the cap off");
   assert.ok(uncapped.text.includes("line 1000"));
   await store.releaseLease(lease);
+  await pool.close();
+});
+
+test("mailbox messages appended to a result share its inline-token bound and park with it", async () => {
+  const emitted: Emitted[] = [];
+  const pool = createPgPool(testDatabaseUrl());
+  await pool.q("INSERT INTO qm_settings(key, value) VALUES ('tool_result_inline_tokens', '100')");
+  const bytes = createMemoryDurableByteStore();
+  const outputs = createPostgresToolOutputStore({ pool, bytesFor: () => bytes });
+  const acknowledged: string[][] = [];
+  const mail = Array.from({ length: 10 }, (_, i) => ({
+    id: `m${i}`,
+    text: `MAIL-${i}-START ${Array.from({ length: 3_000 }, (_, j) => `word${j}`).join(" ")} MAIL-${i}-END`,
+  }));
+  const tc = {
+    ...fakeToolContext(),
+    toolOutput: outputs,
+    execute: async () => ({ stdout: "ok", stderr: "", code: 0, timedOut: false }),
+    sessionSyscalls: {
+      receive: async () => mail,
+      acknowledge: async (ids: string[]) => void acknowledged.push(ids),
+      open: async () => ({ ok: false as const, message: "unused" }),
+      write: async () => ({ ok: false as const, message: "unused" }),
+      read: async () => ({ ok: false as const, message: "unused" }),
+    },
+  } as unknown as ToolContext;
+  const ref: TurnToolStateInit = {
+    current: tc,
+    emit: (e) => void emitted.push(emittedItem(e)),
+    scopeLabel: "personal:U1",
+  };
+  const [execute] = createAgentTools(createTurnToolState(ref));
+  const ret = (await call(execute, { command: "true", purpose: "Run test command" })) as {
+    content: Array<{ type: string; text: string }>;
+  };
+  const seen = ret.content.map((c) => c.text).join("\n");
+  const payload = emitted.find((e) => e.kind === "ToolResult")!.fields as {
+    text: string;
+    output?: { chars: number; shownChars: number };
+  };
+  assert.equal(payload.text, seen, "the item stores exactly what the model saw");
+  assert.ok(seen.length < 1_000, `the result with its mail is cut to the 100-token budget (${seen.length})`);
+  assert.ok(payload.output, "the whole result, mail included, is parked");
+  assert.match(seen, /Internal agent message/);
+  assert.match(seen, /MAIL-9-END/, "the newest mail's tail survives");
+  assert.ok(payload.output.chars > mail.reduce((n, m) => n + m.text.length, 0), "the parked text holds every message");
+  assert.match(seen, /The full output is in tool-output\//);
+  assert.deepEqual(acknowledged, [mail.map((m) => m.id)], "every delivered message is acknowledged");
   await pool.close();
 });
 

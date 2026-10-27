@@ -27,11 +27,9 @@ const FALLBACK_POLL_MS = 1_000;
 const HANDBACK_SETTLE_MS = 2_000;
 const FINISH_RETRY_MAX_MS = 5_000;
 const FINISH_RETRY_MS = 500;
-const FINISH_ATTEMPTS = 20;
 const FAILURE_REPORT_CONSECUTIVE = 5;
 const CLAIM_FAIL_REPORT_CONSECUTIVE = 20;
 const LEASE_LOST_CONSECUTIVE = 3;
-/** Times a turn may be claimed before it is failed. */
 export const RUN_MAX_CLAIMS = 8;
 
 function runTurnInput(
@@ -195,20 +193,22 @@ async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
       });
   }, extendMs);
   beat.unref?.();
-  // Gives up after FINISH_ATTEMPTS: the claim then lapses and Absurd re-runs the turn, as after a crash.
   const finishWith = async (outcome: TurnOutcome): Promise<void> => {
-    for (let attempt = 1; attempt <= FINISH_ATTEMPTS && !shutdown.signal.aborted; attempt++) {
+    for (let attempt = 1; !shutdown.signal.aborted && !lost; attempt++) {
       try {
         if (!(await deps.ledger.finish(run, token, outcome)))
           console.warn(`[turns] turn ${run.id} ended after losing its claim; its result was not recorded`);
         return;
       } catch (error) {
-        if (attempt === FAILURE_REPORT_CONSECUTIVE || attempt === FINISH_ATTEMPTS)
+        if (attempt % FAILURE_REPORT_CONSECUTIVE === 0)
           reportFailure(`turns: turn end keeps failing for turn ${run.id} (attempt ${attempt})`, error);
         else swallow(`turns: turn end failed for turn ${run.id} (retrying)`, error);
-        if (attempt < FINISH_ATTEMPTS) await sleep(Math.min(FINISH_RETRY_MS * attempt, FINISH_RETRY_MAX_MS));
+        await sleep(Math.min(FINISH_RETRY_MS * attempt, FINISH_RETRY_MAX_MS));
       }
     }
+    console.warn(
+      `[turns] turn ${run.id} ended after ${lost ? "losing its claim" : "shutdown"}; its result was not recorded`,
+    );
   };
   let ended: { kind: "result"; result: TurnResult } | { kind: "error"; err: unknown };
   try {

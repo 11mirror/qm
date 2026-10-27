@@ -1,6 +1,5 @@
 import { surfaceHas } from "../../surfaces/surface.ts";
 import type { TurnCtx } from "./turn-context.ts";
-import type { TurnRunState } from "./turn-segment.ts";
 import type { Session } from "../../types.ts";
 import { startLeaseKeepalive } from "./lease-keepalive.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../message-revisions.ts";
@@ -12,8 +11,6 @@ import { CONFIG_DEFAULTS } from "../../config.ts";
 import { jsonbSafeStringify } from "../../util/text.ts";
 import type { ScopeId, TurnResult } from "../../types.ts";
 import type { OrchestratorDeps } from "./types.ts";
-
-const AUTOMATED_TURN_LEASE_WAIT_MS = 1_000;
 
 const SESSION_GONE_REASON = "this conversation is no longer available — start a new one";
 
@@ -60,13 +57,9 @@ async function acquireTurnLeaseOrRefuse(
   },
 ): Promise<{ lease: Lease; waitedMs: number } | { lease: null; waitedMs: number; refusal: TurnResult }> {
   const budget = deps.turnLeaseWaitMs ?? CONFIG_DEFAULTS.turnLeaseWaitMs;
-  const attempt = await acquireLeaseWithin(
-    deps.sessions,
-    args.sessionId,
-    "turn",
-    args.automated ? Math.min(AUTOMATED_TURN_LEASE_WAIT_MS, budget) : budget,
-    { waitFor: (heldBy) => heldBy !== undefined && heldBy !== "turn" },
-  );
+  const attempt = await acquireLeaseWithin(deps.sessions, args.sessionId, "turn", budget, {
+    waitFor: (heldBy) => heldBy !== undefined && heldBy !== "turn",
+  });
   const waitedMs = attempt.waitedMs ?? 0;
   if (attempt.lease)
     return {
@@ -112,7 +105,7 @@ async function acquireTurnLeaseOrRefuse(
 
 export async function holdTurnLease(
   ctx: TurnCtx,
-  turn: { session: Session; run: TurnRunState },
+  session: Session,
 ): Promise<
   | { refused: TurnResult }
   | {
@@ -124,7 +117,6 @@ export async function holdTurnLease(
     }
 > {
   const { deps, input, automatedTurn, scopeId, messageTs } = ctx;
-  const { session, run } = turn;
   const leaseStart = Date.now();
   const acquired = await acquireTurnLeaseOrRefuse(deps, {
     sessionId: session.id,
@@ -160,10 +152,7 @@ export async function holdTurnLease(
     lease,
     Math.floor(deps.sessions.leaseTtlMs / 3),
     () => leaseState.released,
-    {
-      progress: () => run.turnProgress,
-      onStalled: () => turnAbort.abort(),
-    },
+    () => turnAbort.abort(),
   );
   return { lease, turnAbort, catchUpMessageRevisions, stopLeaseKeepalive, leaseState };
 }
