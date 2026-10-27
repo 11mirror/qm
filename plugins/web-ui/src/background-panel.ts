@@ -265,5 +265,11 @@ class BackgroundPanel {
 }
 
 export function createBackgroundPanel(deps: BackgroundPanelDeps) {
-  return new BackgroundPanel(deps);
+  const w = new BackgroundPanel(deps);
+  return {
+    requestBackgroundPanel: w.requestBackgroundPanel,
+    resetBackgroundPanel: w.resetBackgroundPanel,
+    consumeBackgroundPanelRequest: w.consumeBackgroundPanelRequest,
+    backgroundActivityStrip: w.backgroundActivityStrip,
+  };
 }

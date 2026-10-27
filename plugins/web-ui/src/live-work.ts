@@ -240,5 +240,12 @@ class LiveWork {
 }
 
 export function createLiveWork(deps: LiveWorkDeps) {
-  return new LiveWork(deps);
+  const w = new LiveWork(deps);
+  return {
+    liveWorkStatus: w.liveWorkStatus,
+    workBlock: w.workBlock,
+    waitingSteerRows: w.waitingSteerRows,
+    renderTimelineItem: w.renderTimelineItem,
+    resetThinking: w.resetThinking,
+  };
 }

@@ -234,5 +234,6 @@ class SubagentStrip {
 }
 
 export function createSubagentStrip(deps: SubagentStripDeps) {
-  return new SubagentStrip(deps);
+  const w = new SubagentStrip(deps);
+  return { subagentStrip: w.subagentStrip, subagentsTicking: w.subagentsTicking };
 }
