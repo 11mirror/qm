@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { hashId } from "../util/crypto.ts";
+import { readTextPrefix } from "../util/response-body.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { isStrongSigningSecret, SOURCE_AUTH_REPLAY_WINDOW_MS, verifySignature } from "../auth/source-auth.ts";
 import { tenant } from "../tenant.ts";
@@ -81,7 +83,7 @@ const configSchema = z.object({
     .regex(/^[A-Za-z0-9_.-]{1,64}$/)
     .default("default"),
   label: z.string().min(1).max(60),
-  apiUrl: z.url().refine((url) => /^https?:\/\//.test(url), { message: "must be http(s)" }),
+  apiUrl: z.url().refine((url) => ["http:", "https:"].includes(new URL(url).protocol), { message: "must be http(s)" }),
   apiToken: z.string().min(16),
   signingSecret: z.string().refine(isStrongSigningSecret, { message: "must be at least 32 characters" }),
   internalEmailDomains: z.array(z.string().regex(/^[a-z0-9.-]+\.[a-z]{2,}$/)).default([]),
@@ -138,8 +140,8 @@ export function createHttpChatSurface(
   const doFetch = opts.fetch ?? fetch;
   const now = opts.now ?? Date.now;
   const apiBase = config.apiUrl.replace(/\/+$/, "");
-  let mirrorSeq = 0;
-  const mirrorTs = (at: number): string => `${(at / 1000).toFixed(3)}${String(mirrorSeq++ % 1000).padStart(3, "0")}`;
+  const mirrorTs = (at: number, key: string): string =>
+    `${(at / 1000).toFixed(3)}${String(parseInt(hashId([key], 8), 16) % 1000).padStart(3, "0")}`;
   const conversationKey = (container: string): string =>
     surfaceContainerRef({ surface: config.surface, account: config.account, container });
   const mirror = async (event: IngestEvent): Promise<void> => {
@@ -209,7 +211,7 @@ export function createHttpChatSurface(
       const { conversation } = message;
       const recorded = mirror({
         container: conversationKey(conversation.key),
-        ts: mirrorTs(event.data.message.sent_at ?? now()),
+        ts: mirrorTs(event.data.message.sent_at ?? now(), `in:${event.data.message.id}`),
         sub: conversation.thread ?? null,
         authorId: message.author.id,
         ...(message.author.displayName ? { authorName: message.author.displayName } : {}),
@@ -254,7 +256,7 @@ export function createHttpChatSurface(
         signal: AbortSignal.timeout(POST_TIMEOUT_MS),
       });
       if (!response.ok) {
-        const body = (await response.text()).trim().slice(0, FAILURE_BODY_CHARS);
+        const body = (await readTextPrefix(response, FAILURE_BODY_CHARS)).trim();
         const status = `HTTP ${response.status}${body ? `: ${body}` : ""}`;
         if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429)
           throw permanent(`${config.surface} refused the post: ${status}`);
@@ -262,7 +264,7 @@ export function createHttpChatSurface(
       }
       await mirror({
         container: conversationKey(target.container),
-        ts: mirrorTs(now()),
+        ts: mirrorTs(post.createdAt ?? now(), `out:${post.idempotencyKey}`),
         sub: target.thread ?? null,
         text,
         self: true,

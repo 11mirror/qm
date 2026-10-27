@@ -3,6 +3,8 @@ import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { SessionMailbox } from "../sessions/session-mailbox.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { Session } from "../types.ts";
+import { mapBounded } from "../util/async.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import type { SwarmBoard, SwarmBoardPost } from "./swarm-board.ts";
 
@@ -70,6 +72,10 @@ const MAX_LIMIT = 100;
 const MAX_POST_CHARS = 16_000;
 const PREVIEW_CHARS = 500;
 const NOTICE_CHARS = 2_000;
+const THREAD_CHARS = 64_000;
+const NOTIFY_GRACE_MS = 60_000;
+const OPEN_CONCURRENCY = 4;
+const NOTIFY_CONCURRENCY = 8;
 const CHANNEL_NAME = /^[a-z0-9][a-z0-9_-]{0,39}$/;
 
 function memberNote(swarmId: string, coordinator: string): string {
@@ -133,6 +139,24 @@ async function chain(sessions: SwarmCallContext["sessions"], session: Session): 
   return ids;
 }
 
+async function notifySubscribers(ctx: SwarmCallContext, post: SwarmBoardPost): Promise<number> {
+  const notice = renderNotice(post.swarmId, post);
+  const notified = (await ctx.board.subscribers(post.swarmId, post.channel)).filter((id) => id !== post.authorId);
+  await mapBounded(notified, NOTIFY_CONCURRENCY, (recipientId) =>
+    ctx.mailbox.send({
+      id: `swarm-post-${post.id}-${recipientId}`,
+      recipientId,
+      senderId: post.authorId,
+      actor: ctx.actor,
+      text: notice,
+      audience: ctx.audience,
+      createdAt: post.createdAt,
+    }),
+  );
+  await ctx.board.markNotified(post.swarmId, post.id);
+  return notified.length;
+}
+
 const clampLimit = (limit: number | undefined) => Math.min(MAX_LIMIT, Math.max(1, limit ?? DEFAULT_LIMIT));
 
 export async function swarmCall(ctx: SwarmCallContext, input: SwarmInput): Promise<SwarmResult> {
@@ -149,8 +173,7 @@ export async function swarmCall(ctx: SwarmCallContext, input: SwarmInput): Promi
     if (members.length > MAX_MEMBERS_PER_START)
       return { ok: false, message: `start opens at most ${MAX_MEMBERS_PER_START} members per call.` };
     await ctx.board.ensure(ctx.session.id, ctx.session.id, Date.now());
-    const opened: Array<Record<string, unknown>> = [];
-    for (const [index, member] of members.entries()) {
+    const opened = await mapBounded(members, OPEN_CONCURRENCY, async (member, index) => {
       const result = await ctx.open({
         requestId: `${input.requestId}:${index}`,
         task: `${member.task.trim()}\n\n${memberNote(ctx.session.id, title)}`,
@@ -160,12 +183,10 @@ export async function swarmCall(ctx: SwarmCallContext, input: SwarmInput): Promi
         ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
         ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
       });
-      opened.push(
-        result.ok
-          ? { sessionId: result.sessionId, title: result.title }
-          : { error: result.message, task: member.name?.trim() || member.task.trim().slice(0, 60) },
-      );
-    }
+      return result.ok
+        ? { sessionId: result.sessionId, title: result.title }
+        : { error: result.message, task: member.name?.trim() || member.task.trim().slice(0, 60) };
+    });
     return { ok: true, result: { swarmId: ctx.session.id, members: opened } };
   }
   if (!swarmId)
@@ -173,6 +194,12 @@ export async function swarmCall(ctx: SwarmCallContext, input: SwarmInput): Promi
       ok: false,
       message: "this session is not in a swarm. A coordinator creates one with swarm start; its members inherit it.",
     };
+  const stranded = await ctx.board
+    .unnotified(swarmId, Date.now() - NOTIFY_GRACE_MS)
+    .catch(swallowAs("swarm board: list stranded notices", []));
+  await mapBounded(stranded, NOTIFY_CONCURRENCY, (post) =>
+    notifySubscribers(ctx, post).catch(swallowAs("swarm board: redeliver a stranded notice", 0)),
+  );
   const channel = input.channel?.trim().toLowerCase();
   switch (input.action) {
     case "channels":
@@ -215,14 +242,16 @@ export async function swarmCall(ctx: SwarmCallContext, input: SwarmInput): Promi
       const root = await ctx.board.post(swarmId, input.postId);
       if (!root) return { ok: false, message: `no post ${input.postId} on this board.` };
       const limit = clampLimit(input.limit);
-      const posts = (await ctx.board.thread(swarmId, root.threadId ?? root.id, input.after, limit)).map(view);
+      const fetched = await ctx.board.thread(swarmId, root.threadId ?? root.id, input.after, limit);
+      let budget = THREAD_CHARS;
+      const posts = fetched.filter((post, index) => (budget -= post.body.length) >= 0 || index === 0).map(view);
       return {
         ok: true,
         result: {
           swarmId,
           threadId: root.threadId ?? root.id,
           posts,
-          ...(posts.length === limit ? { nextAfter: posts.at(-1)!.cursor } : {}),
+          ...(posts.length < fetched.length || posts.length === limit ? { nextAfter: posts.at(-1)!.cursor } : {}),
         },
       };
     }
@@ -253,19 +282,17 @@ export async function swarmCall(ctx: SwarmCallContext, input: SwarmInput): Promi
         createdAt: Date.now(),
       };
       await ctx.board.insert(post);
-      const notice = renderNotice(swarmId, post);
-      const notified = (await ctx.board.subscribers(swarmId, target)).filter((id) => id !== ctx.session.id);
-      for (const recipientId of notified)
-        await ctx.mailbox.send({
-          id: `swarm-post-${post.id}-${recipientId}`,
-          recipientId,
-          senderId: ctx.session.id,
-          actor: ctx.actor,
-          text: notice,
-          audience: ctx.audience,
-          createdAt: post.createdAt,
-        });
-      return { ok: true, result: { swarmId, post: view(post), notified: notified.length } };
+      const notified = await notifySubscribers(ctx, post).catch((e: unknown) => errMessage(e));
+      return {
+        ok: true,
+        result: {
+          swarmId,
+          post: view(post),
+          ...(typeof notified === "number"
+            ? { notified }
+            : { notified: 0, notifyError: `${notified} — subscribers are told on the next board action` }),
+        },
+      };
     }
     case "subscribe":
     case "unsubscribe": {

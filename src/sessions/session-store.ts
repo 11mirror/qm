@@ -527,6 +527,7 @@ export interface SessionStore {
   appendMany(lease: Lease, items: readonly NewItem[]): Promise<Item[]>;
   getItems(sessionId: string, opts?: GetItemsOptions): Promise<Item[]>;
   hasDeliveryItem(sessionId: string, deliveryKey: string, slackTs?: string): Promise<boolean>;
+  recordedMessageTimestamps(sessionId: string, timestamps: readonly string[]): Promise<Set<string>>;
   countItemsBefore(sessionId: string, beforeSeq: number, principalId?: string): Promise<number>;
   getContextWindow(sessionId: string): Promise<ContextWindow>;
   getItem(sessionId: string, seq: number): Promise<Item | undefined>;

@@ -354,10 +354,17 @@ test("http-chat writes its inbound and outbound messages to the surface message 
   );
   await adapter.deliver({ destination: { type: "forum", target: "42:500" }, text: "hi back", idempotencyKey: "run:1" });
   await settle(async () => mirrored.length === 2);
-  assert.deepEqual(mirrored, [
+  const [inboundTs, outboundTs] = mirrored.map((event) => event.ts);
+  assert.match(inboundTs!, /^1700000000\.000\d{3}$/);
+  assert.match(outboundTs!, /^1700000000\.000\d{3}$/);
+  assert.notEqual(inboundTs, outboundTs);
+  await adapter.deliver({ destination: { type: "forum", target: "42:500" }, text: "hi back", idempotencyKey: "run:1" });
+  await settle(async () => mirrored.length === 3);
+  assert.equal(mirrored[2]!.ts, outboundTs, "a resent post mirrors under the same identity");
+  assert.deepEqual(mirrored.slice(0, 2), [
     {
       container: "forum:prod:42",
-      ts: "1700000000.000000",
+      ts: inboundTs,
       sub: "500",
       authorId: "7",
       authorName: "Alice",
@@ -366,7 +373,7 @@ test("http-chat writes its inbound and outbound messages to the surface message 
       kind: "dm",
       members: ["alice@example.com"],
     },
-    { container: "forum:prod:42", ts: "1700000000.000001", sub: "500", text: "hi back", self: true, handled: true },
+    { container: "forum:prod:42", ts: outboundTs, sub: "500", text: "hi back", self: true, handled: true },
   ]);
 });
 

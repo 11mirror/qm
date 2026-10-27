@@ -40,9 +40,12 @@ function itemSource(item: InboxItem): string {
 }
 
 function followUpPrompt(cron: Cron, item: InboxItem, message: string): string {
+  const thread = item.thread ?? [];
+  const last = thread.at(-1);
+  const earlier = last?.role === "human" && last.text === message ? thread.slice(0, -1) : thread;
   const review = JSON.stringify({
     ...(item.proposal ? { proposal: item.proposal.data } : {}),
-    thread: (item.thread ?? []).slice(-ITEM_THREAD_CONTEXT).map((entry) => ({ role: entry.role, text: entry.text })),
+    thread: earlier.slice(-ITEM_THREAD_CONTEXT).map((entry) => ({ role: entry.role, text: entry.text })),
   });
   return [
     "[Inbox item chat]",

@@ -11,7 +11,7 @@ import type { Item, NewItem } from "../../sessions/items.ts";
 import type { Lease } from "../../sessions/session-store.ts";
 import type { DurableMap } from "../../persistence/durable-map.ts";
 import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
-import { samePerson } from "../../directory/person.ts";
+import { rosterIds, samePerson } from "../../directory/person.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { sleep } from "../../util/async.ts";
 import { errMessage } from "../../util/errors.ts";
@@ -133,7 +133,10 @@ export function loadActorGrants(
   actorId: string,
 ): () => Promise<CommandApprovalGrant[]> {
   let loaded: Promise<CommandApprovalGrant[]> | undefined;
-  return () => (loaded ??= grants.all().then((all) => all.filter((grant) => samePerson(grant.actorId, actorId))));
+  return () =>
+    (loaded ??= grants
+      .select({ where: { field: "actorId", anyOfFold: rosterIds(actorId) } })
+      .then((rows) => rows.filter((grant) => samePerson(grant.actorId, actorId))));
 }
 
 export function loadApprovalLedger(
@@ -169,10 +172,13 @@ export function loadApprovalLedger(
 export type ApprovalDecisionOutcome =
   { kind: "settled"; result: TurnResult } | { kind: "approved"; approvalNote: string };
 
+type DecidedScope = NonNullable<NonNullable<OrchestratorInput["approval"]>["scope"]>;
+
 export async function consumeApprovalDecision(args: {
   deps: Pick<OrchestratorDeps, "approvals" | "approvalGrants" | "auditLog" | "sessions" | "sessionSyscalls">;
   decision: NonNullable<OrchestratorInput["approval"]>;
   sessionId: string;
+  runId?: string;
   lease: Lease;
   actorId: string;
   scopeId: ScopeId;
@@ -194,17 +200,54 @@ export async function consumeApprovalDecision(args: {
       status,
       ...(detail ? { detail: JSON.stringify(detail) } : {}),
     });
-  const append = (item: NewItem) => args.withRosterVersion(() => deps.sessions.append(lease, item));
+  const denied = (command: string): ApprovalDecisionOutcome => {
+    audit("command_approval.deny", command, "refused", { approvalOutcome: "denied" });
+    return settled({
+      status: "refused",
+      sessionId,
+      reason: `approval denied for ${command}`,
+      refusalKind: "approval_denied",
+    });
+  };
+  const approved = async (command: string, scope: DecidedScope, approvalKey?: string) => {
+    args.ledger.credit(approvalKey ?? command, scope);
+    if (scope === "session" || scope === "always") {
+      const grant: CommandApprovalGrant = {
+        actorId,
+        command,
+        scope,
+        createdAt: Date.now(),
+        ...(approvalKey ? { approvalKey } : {}),
+        ...(scope === "session" ? { sessionId } : {}),
+      };
+      await deps.approvalGrants.put(approvalGrantId(grant), grant);
+    }
+    audit(`command_approval.${scope}`, command, "ok");
+    return { kind: "approved" as const, approvalNote: OPERATION_APPROVED_NOTE };
+  };
+  const recorded = args.runId
+    ? (await deps.sessions.getItems(sessionId, { turnId: args.runId })).find(
+        (e) => e.kind === "ElicitationResponse" && e.elicitId === requestId,
+      )
+    : undefined;
+  if (recorded) {
+    await deps.approvals.delete(requestId);
+    const command = String(recorded.body.command);
+    if (!recorded.approved) return denied(command);
+    const approvalKey = typeof recorded.body.approvalKey === "string" ? recorded.body.approvalKey : undefined;
+    return approved(command, (recorded.body.scope as DecidedScope | undefined) ?? "once", approvalKey);
+  }
   const p = await deps.approvals.get(requestId);
   const verb = decision.approved ? "approve" : "deny";
-  if (!p || p.sessionId !== sessionId) {
-    audit(`command_approval.${verb}`, requestId, "refused", { approvalOutcome: p ? "foreign_session" : "expired" });
+  const expired = (outcome: "expired" | "foreign_session") => {
+    audit(`command_approval.${verb}`, requestId, "refused", { approvalOutcome: outcome });
     return settled({
       status: "refused",
       sessionId,
       reason: "that approval request expired — ask again if you still want it to run",
     });
-  }
+  };
+  if (!p || p.sessionId !== sessionId) return expired(p ? "foreign_session" : "expired");
   const requesterId = p.request?.actor.externalId;
   if (!samePerson(requesterId, actorId)) {
     audit(`command_approval.${verb}`, p.command, "refused", {
@@ -217,66 +260,44 @@ export async function consumeApprovalDecision(args: {
       reason: "only the person who requested this command can approve or deny it",
     });
   }
-  if (!decision.approved) {
-    await args.mirror(
-      await append({
-        kind: "ElicitationResponse",
-        elicitId: requestId,
-        approved: false,
-        author: actorId,
-        body: { command: p.command },
-      }),
-    );
-    await append({
-      kind: "UserMessage",
-      hidden: true,
-      text: `The requesting human denied this pending operation, so it did not run: ${headSlice(p.summary ?? p.command, 2_000)}\nDo not retry it unless they ask again.`,
-    });
-    await deps.approvals.delete(requestId);
-    audit("command_approval.deny", p.command, "refused", { approvalOutcome: "denied" });
-    return settled({
-      status: "refused",
-      sessionId,
-      reason: `approval denied for ${p.command}`,
-      refusalKind: "approval_denied",
-    });
-  }
   const scope = decision.scope ?? "once";
-  const recordDisallowsScope = scope !== "once" && p.grantModes?.[scope] === false;
-  if (scope !== "once" && (!resolution.approvalGrantModes[scope] || recordDisallowsScope)) {
-    let reason = `the "${scope}" approval option is disabled by an admin here — approve once or deny`;
-    if (recordDisallowsScope && resolution.approvalGrantModes[scope])
-      reason = `this approval does not allow the "${scope}" option — approve once or deny`;
-    audit(`command_approval.${scope}`, p.command, "refused", { approvalOutcome: "grant_mode_disabled" });
-    return settled({
-      status: "pending_approval",
-      sessionId,
-      reason,
-      pendingApprovals: [approvalView(requestId, p, resolution.approvalGrantModes)],
-    });
+  if (decision.approved && scope !== "once") {
+    const recordDisallowsScope = p.grantModes?.[scope] === false;
+    if (!resolution.approvalGrantModes[scope] || recordDisallowsScope) {
+      let reason = `the "${scope}" approval option is disabled by an admin here — approve once or deny`;
+      if (recordDisallowsScope && resolution.approvalGrantModes[scope])
+        reason = `this approval does not allow the "${scope}" option — approve once or deny`;
+      audit(`command_approval.${scope}`, p.command, "refused", { approvalOutcome: "grant_mode_disabled" });
+      return settled({
+        status: "pending_approval",
+        sessionId,
+        reason,
+        pendingApprovals: [approvalView(requestId, p, resolution.approvalGrantModes)],
+      });
+    }
   }
-  await args.mirror(
-    await append({
-      kind: "ElicitationResponse",
-      elicitId: requestId,
-      approved: true,
-      author: actorId,
-      body: { command: p.command, scope },
-    }),
-  );
-  await deps.approvals.delete(requestId);
-  args.ledger.credit(p.approvalKey ?? p.command, scope);
-  if (scope === "session" || scope === "always") {
-    const grant: CommandApprovalGrant = {
-      actorId,
-      command: p.command,
-      scope,
-      createdAt: Date.now(),
-      ...(p.approvalKey ? { approvalKey: p.approvalKey } : {}),
-      ...(scope === "session" ? { sessionId } : {}),
-    };
-    await deps.approvalGrants.put(approvalGrantId(grant), grant);
-  }
-  audit(`command_approval.${scope}`, p.command, "ok");
-  return { kind: "approved", approvalNote: OPERATION_APPROVED_NOTE };
+  const response: NewItem = {
+    kind: "ElicitationResponse",
+    elicitId: requestId,
+    approved: decision.approved,
+    author: actorId,
+    body: decision.approved
+      ? { command: p.command, scope, ...(p.approvalKey ? { approvalKey: p.approvalKey } : {}) }
+      : { command: p.command },
+  };
+  const items: NewItem[] = decision.approved
+    ? [response]
+    : [
+        response,
+        {
+          kind: "UserMessage",
+          hidden: true,
+          text: `The requesting human denied this pending operation, so it did not run: ${headSlice(p.summary ?? p.command, 2_000)}\nDo not retry it unless they ask again.`,
+        },
+      ];
+  const [written] = await args.withRosterVersion(() => deps.sessions.appendMany(lease, items));
+  if (!(await deps.approvals.take(requestId))) return expired("expired");
+  await args.mirror(written!);
+  if (!decision.approved) return denied(p.command);
+  return approved(p.command, scope, p.approvalKey);
 }

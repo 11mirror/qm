@@ -20,7 +20,6 @@ type RetryStrategy =
 
 export interface SpawnOptions {
   idempotencyKey?: string;
-  /** null retries without limit. */
   maxAttempts: number | null;
   retryStrategy?: RetryStrategy;
 }
@@ -169,8 +168,12 @@ export async function completeRun(db: AbsurdDb, queue: AbsurdQueue, runId: strin
 }
 
 export async function retryTask(db: AbsurdDb, queue: AbsurdQueue, taskId: string): Promise<boolean> {
-  const [task] = await call(db, `SELECT state, attempts FROM ${tasksTable(queue)} WHERE task_id = $1`, [taskId]);
-  if (task?.state !== "failed") return false;
+  const failedTask = async () =>
+    (await call(db, `SELECT state, attempts FROM ${tasksTable(queue)} WHERE task_id = $1`, [taskId])).find(
+      (task) => task.state === "failed",
+    );
+  const task = await failedTask();
+  if (!task) return false;
   try {
     await call(db, "SELECT 1 FROM absurd.retry_task($1, $2, $3::jsonb)", [
       tenantQueue(queue),
@@ -179,7 +182,7 @@ export async function retryTask(db: AbsurdDb, queue: AbsurdQueue, taskId: string
     ]);
     return true;
   } catch (error) {
-    if (/is not currently failed/.test(errMessage(error))) return false;
+    if (!(await failedTask().catch(() => task))) return false;
     throw error;
   }
 }

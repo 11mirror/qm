@@ -1,4 +1,5 @@
 import { reportFailure } from "../util/errors.ts";
+import { readTextPrefix } from "../util/response-body.ts";
 import { isObj } from "../util/objects.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
@@ -33,7 +34,7 @@ export const realBrokerFetch: BrokerFetch = async (url, init) => {
   return {
     status: r.status,
     ...(r.headers.get("content-type") ? { contentType: r.headers.get("content-type")! } : {}),
-    text: () => r.text(),
+    text: () => readTextPrefix(r, MAX_RESPONSE_BYTES + 1),
   };
 };
 

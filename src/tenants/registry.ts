@@ -61,7 +61,11 @@ export async function listTenants(pool: PgPool, key: Buffer | undefined): Promis
   return rows.map((row) => rowToRecord(row, key));
 }
 
-export async function upsertTenant(pool: PgPool, rec: TenantRecord, key: Buffer | undefined): Promise<void> {
+export interface SqlRunner {
+  query(text: string, params?: unknown[]): Promise<unknown>;
+}
+
+export async function upsertTenant(pool: SqlRunner, rec: TenantRecord, key: Buffer | undefined): Promise<void> {
   const hasSecrets = Object.values(rec.secretEnv).some((vars) => Object.keys(vars).length > 0);
   if (hasSecrets && !key) throw new Error("QM_TENANT_SECRETS_KEY is required to store tenant secrets");
   const secret = hasSecrets && key ? encryptSecretEnv(rec.secretEnv, key) : null;

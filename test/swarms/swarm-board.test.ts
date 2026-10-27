@@ -5,6 +5,7 @@ import { createPostgresSwarmBoard } from "../../src/swarms/swarm-board.ts";
 import { swarmCall, type SwarmCallContext, type SwarmInput, type SwarmMemberOpen } from "../../src/swarms/swarm.ts";
 import type { SessionMailbox, SessionMessage } from "../../src/sessions/session-mailbox.ts";
 import type { Session } from "../../src/types.ts";
+import pg from "pg";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the swarm board tests";
@@ -14,6 +15,7 @@ function world() {
   const board = createPostgresSwarmBoard(URL!);
   const sessions = new Map<string, Session>();
   const sent: SessionMessage[] = [];
+  const mailboxDown = { value: false };
   const opened: SwarmMemberOpen[] = [];
   const add = (title: string, parentSessionId?: string) => {
     const session = { id: randomUUID(), title, ...(parentSessionId ? { parentSessionId } : {}) } as Session;
@@ -23,7 +25,12 @@ function world() {
   const ctx = (session: Session): SwarmCallContext => ({
     board,
     sessions: { get: async (id: string) => sessions.get(id) ?? null },
-    mailbox: { send: async (message: SessionMessage) => void sent.push(message) } as unknown as SessionMailbox,
+    mailbox: {
+      send: async (message: SessionMessage) => {
+        if (mailboxDown.value) throw new Error("mailbox unavailable");
+        sent.push(message);
+      },
+    } as unknown as SessionMailbox,
     session,
     actor,
     audience: [],
@@ -38,7 +45,7 @@ function world() {
     if (!result.ok) throw new Error(result.message);
     return result.result;
   };
-  return { board, sessions, sent, opened, add, ctx, call };
+  return { board, sessions, sent, mailboxDown, opened, add, ctx, call };
 }
 
 test("start opens ordinary subagents that share the coordinator's board", { skip }, async () => {
@@ -125,4 +132,81 @@ test("members post, reply, search and read threads; subscribers are told about n
   assert.equal(w.sent.filter((m) => m.recipientId === a!.id).length, 1);
   const missing = await swarmCall(w.ctx(a!), { requestId: "z", action: "post", channel: "nope", text: "x" });
   assert.equal(missing.ok, false);
+});
+
+test("a post whose notices failed is redelivered on a later board action", { skip }, async () => {
+  const w = world();
+  const coordinator = w.add("Coordinator");
+  await w.call(coordinator, { action: "start", members: [{ task: "a", name: "a" }] });
+  const [a] = [...w.sessions.values()].filter((s) => s.parentSessionId === coordinator.id);
+  await w.call(coordinator, { action: "subscribe" });
+  w.mailboxDown.value = true;
+  const posted = await w.call(a!, { action: "post", text: "stranded" });
+  assert.equal(posted.notified, 0);
+  assert.match(String(posted.notifyError), /mailbox unavailable/);
+  w.mailboxDown.value = false;
+  await w.call(a!, { action: "channels" });
+  assert.equal(w.sent.length, 0, "a fresh post is left to its own delivery for the grace period");
+  const client = new pg.Client({ connectionString: URL });
+  await client.connect();
+  await client.query("UPDATE swarm_board_posts SET created_at = created_at - 120000 WHERE id = $1", [
+    (posted.post as { id: string }).id,
+  ]);
+  await client.end();
+  await w.call(a!, { action: "channels" });
+  assert.deepEqual(
+    w.sent.map((m) => [m.recipientId, m.senderId]),
+    [[coordinator.id, a!.id]],
+  );
+  await w.call(a!, { action: "channels" });
+  assert.equal(w.sent.length, 1, "a delivered post is not sent again");
+});
+
+test("start opens members concurrently and keeps their order", { skip }, async () => {
+  const w = world();
+  const coordinator = w.add("Coordinator");
+  let inFlight = 0;
+  let peak = 0;
+  const base = w.ctx(coordinator);
+  const result = await swarmCall(
+    {
+      ...base,
+      async open(input) {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        inFlight -= 1;
+        return base.open(input);
+      },
+    },
+    {
+      requestId: "r",
+      action: "start",
+      members: Array.from({ length: 6 }, (_, i) => ({ task: `t${i}`, name: `m${i}` })),
+    },
+  );
+  assert.ok(result.ok);
+  assert.deepEqual(
+    (result.result.members as Array<{ title: string }>).map((m) => m.title),
+    ["m0", "m1", "m2", "m3", "m4", "m5"],
+  );
+  assert.equal(peak, 4);
+});
+
+test("read_thread stops at a text budget and pages on", { skip }, async () => {
+  const w = world();
+  const coordinator = w.add("Coordinator");
+  await w.call(coordinator, { action: "start", members: [{ task: "a", name: "a" }] });
+  const root = (await w.call(coordinator, { action: "post", text: "root" })).post as { id: string };
+  for (let i = 0; i < 6; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 3));
+    await w.call(coordinator, { action: "post", replyTo: root.id, text: `${i}`.repeat(15_000) });
+  }
+  const first = await w.call(coordinator, { action: "read_thread", postId: root.id });
+  const page = first.posts as Array<{ text: string; cursor: number }>;
+  assert.equal(page.length, 5);
+  assert.equal(first.nextAfter, page.at(-1)!.cursor);
+  const rest = (await w.call(coordinator, { action: "read_thread", postId: root.id, after: first.nextAfter as number }))
+    .posts as Array<{ text: string }>;
+  assert.equal(rest.length, 2);
 });
