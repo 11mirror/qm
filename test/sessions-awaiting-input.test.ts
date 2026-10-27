@@ -6,8 +6,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
-import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmFor } from "./support/dm-turn.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-awaiting-"));
@@ -15,15 +15,7 @@ function freshApp() {
 }
 
 const actor = { externalId: "U1" };
-function dm(text: string, thread: string): TurnRequest {
-  return {
-    origin: { kind: "direct" },
-    surface: "test",
-    actor,
-    conversation: { kind: "dm", threadRef: thread },
-    text,
-  };
-}
+const dm = dmFor(actor);
 
 const BLOCKED_CMD = ["git", "push", `--${"force"}`, "origin", "main"].join(" ");
 

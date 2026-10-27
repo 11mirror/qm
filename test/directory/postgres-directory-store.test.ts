@@ -4,11 +4,9 @@ import { createPostgresDirectoryStore } from "../../src/directory/postgres-direc
 import { tenantFor, withTenant } from "../../src/tenant.ts";
 import { truncateTables } from "../support/test-database.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres directory-store tests";
+const URL = process.env.DATABASE_URL!;
 
 before(async () => {
-  if (!URL) return;
   await truncateTables(URL, [
     "directory_members",
     "directory_channels",
@@ -37,44 +35,40 @@ const seed = async (store: ReturnType<typeof createPostgresDirectoryStore>) => {
   ]);
 };
 
-test(
-  "pg directory: indexed resolve — exact id, prefix, ambiguity, none; guests unaddressable (G1)",
-  { skip },
-  async () => {
-    const store = createPostgresDirectoryStore(URL!);
-    await seed(store);
+test("pg directory: indexed resolve — exact id, prefix, ambiguity, none; guests unaddressable (G1)", async () => {
+  const store = createPostgresDirectoryStore(URL);
+  await seed(store);
 
-    const exactId = await store.resolve("U-alice");
-    assert.equal(exactId.kind, "one");
-    if (exactId.kind === "one") assert.equal(exactId.member.principalId, "U-alice");
+  const exactId = await store.resolve("U-alice");
+  assert.equal(exactId.kind, "one");
+  if (exactId.kind === "one") assert.equal(exactId.member.principalId, "U-alice");
 
-    const prefix = await store.resolve("Alice");
-    assert.equal(prefix.kind, "one");
-    if (prefix.kind === "one") assert.equal(prefix.member.principalId, "U-alice");
+  const prefix = await store.resolve("Alice");
+  assert.equal(prefix.kind, "one");
+  if (prefix.kind === "one") assert.equal(prefix.member.principalId, "U-alice");
 
-    const atHandle = await store.resolve("@carol");
-    assert.equal(atHandle.kind, "one");
-    if (atHandle.kind === "one") assert.equal(atHandle.member.principalId, "U-carol");
+  const atHandle = await store.resolve("@carol");
+  assert.equal(atHandle.kind, "one");
+  if (atHandle.kind === "one") assert.equal(atHandle.member.principalId, "U-carol");
 
-    const amb = await store.resolve("Sam");
-    assert.equal(amb.kind, "ambiguous");
-    if (amb.kind === "ambiguous") {
-      assert.deepEqual(amb.candidates.map((c) => c.principalId).sort(), ["U-sam1", "U-sam2"]);
-    }
+  const amb = await store.resolve("Sam");
+  assert.equal(amb.kind, "ambiguous");
+  if (amb.kind === "ambiguous") {
+    assert.deepEqual(amb.candidates.map((c) => c.principalId).sort(), ["U-sam1", "U-sam2"]);
+  }
 
-    assert.equal((await store.resolve("Nobody")).kind, "none");
-    assert.equal((await store.resolve("   ")).kind, "none");
+  assert.equal((await store.resolve("Nobody")).kind, "none");
+  assert.equal((await store.resolve("   ")).kind, "none");
 
-    assert.equal((await store.resolve("Gwen")).kind, "none");
-    assert.equal((await store.resolve("U-guest")).kind, "none");
-    assert.equal(await store.get("U-guest"), null);
-    assert.equal((await store.get("U-alice"))?.displayName, "Alice Example");
-    assert.equal((await store.list()).length, 4);
-  },
-);
+  assert.equal((await store.resolve("Gwen")).kind, "none");
+  assert.equal((await store.resolve("U-guest")).kind, "none");
+  assert.equal(await store.get("U-guest"), null);
+  assert.equal((await store.get("U-alice"))?.displayName, "Alice Example");
+  assert.equal((await store.list()).length, 4);
+});
 
-test("pg directory: exact channel-id resolution has a matching expression index", { skip }, async () => {
-  const store = createPostgresDirectoryStore(URL!);
+test("pg directory: exact channel-id resolution has a matching expression index", async () => {
+  const store = createPostgresDirectoryStore(URL);
   await seed(store);
   const pg = (await import("pg")).default;
   const raw = new pg.Pool({ connectionString: URL });
@@ -86,8 +80,8 @@ test("pg directory: exact channel-id resolution has a matching expression index"
   }
 });
 
-test("pg directory: slackId round-trips through replace → get/list/resolve; a change re-writes", { skip }, async () => {
-  const store = createPostgresDirectoryStore(URL!);
+test("pg directory: slackId round-trips through replace → get/list/resolve; a change re-writes", async () => {
+  const store = createPostgresDirectoryStore(URL);
   await store.replace([
     {
       principalId: "eve@acme.com",
@@ -115,8 +109,8 @@ test("pg directory: slackId round-trips through replace → get/list/resolve; a 
   assert.equal((await store.get("eve@acme.com"))?.slackId, "U99");
 });
 
-test("pg directory: get folds email case in BOTH directions; non-email ids stay byte-exact", { skip }, async () => {
-  const store = createPostgresDirectoryStore(URL!);
+test("pg directory: get folds email case in BOTH directions; non-email ids stay byte-exact", async () => {
+  const store = createPostgresDirectoryStore(URL);
   await store.replace([
     { principalId: "Eve@Acme.com", displayName: "Eve", type: "internal", slackId: "U9" },
     { principalId: "U5", displayName: "Morgan", type: "internal" },
@@ -132,8 +126,8 @@ test("pg directory: get folds email case in BOTH directions; non-email ids stay 
   assert.equal((await store.get("U5"))?.displayName, "Morgan");
 });
 
-test("pg directory: channel resolve carries isPrivate; exact name and id, ambiguity, none", { skip }, async () => {
-  const store = createPostgresDirectoryStore(URL!);
+test("pg directory: channel resolve carries isPrivate; exact name and id, ambiguity, none", async () => {
+  const store = createPostgresDirectoryStore(URL);
   await seed(store);
 
   const byName = await store.resolveChannel("#eng");
@@ -155,15 +149,15 @@ test("pg directory: channel resolve carries isPrivate; exact name and id, ambigu
   assert.equal((await store.resolveChannel("nonexistent")).kind, "none");
 });
 
-test("pg directory: replace is a full per-org swap and skips an unchanged roster", { skip }, async () => {
-  const store = createPostgresDirectoryStore(URL!);
+test("pg directory: replace is a full per-org swap and skips an unchanged roster", async () => {
+  const store = createPostgresDirectoryStore(URL);
   await store.replace([
     { principalId: "U-a", displayName: "Alice", type: "internal" },
     { principalId: "U-b", displayName: "Bob", type: "internal" },
   ]);
   assert.equal((await store.list()).length, 2);
 
-  const direct = (await freshPg(URL!)).query;
+  const direct = (await freshPg(URL)).query;
   const t0 = await direct("SELECT updated_at FROM directory_sync WHERE org_id = $1", ["default-org"]);
   await store.replace([
     { principalId: "U-b", displayName: "Bob", type: "internal" },
@@ -178,50 +172,46 @@ test("pg directory: replace is a full per-org swap and skips an unchanged roster
   assert.equal((await store.resolve("Alice")).kind, "none");
 });
 
-test(
-  "pg directory: channelMember reflects pushed membership; omit keeps it; a membership change re-writes",
-  { skip },
-  async () => {
-    const store = createPostgresDirectoryStore(URL!);
-    await store.replace([
-      { principalId: "U-alice", displayName: "Alice", type: "internal" },
-      { principalId: "U-carol", displayName: "Carol", type: "internal" },
-    ]);
-    await store.replaceChannels(
-      [{ channelId: "C-sec", name: "secret", isPrivate: true }],
-      [{ channelId: "C-sec", principalId: "U-carol" }],
-    );
-    assert.equal(await store.channelMember("C-sec", "U-carol"), true);
-    assert.equal(await store.channelMembership("C-sec", "U-carol"), true);
-    assert.equal(await store.channelMembership("C-sec", "U-alice"), false);
-    assert.equal(await store.channelMember("C-sec", "U-alice"), false);
-    assert.equal(await store.channelMember("C-other", "U-carol"), false);
-    assert.deepEqual(
-      (await store.conversationMembers("channel", "C-sec"))?.map((member) => member.principalId),
-      ["U-carol"],
-    );
+test("pg directory: channelMember reflects pushed membership; omit keeps it; a membership change re-writes", async () => {
+  const store = createPostgresDirectoryStore(URL);
+  await store.replace([
+    { principalId: "U-alice", displayName: "Alice", type: "internal" },
+    { principalId: "U-carol", displayName: "Carol", type: "internal" },
+  ]);
+  await store.replaceChannels(
+    [{ channelId: "C-sec", name: "secret", isPrivate: true }],
+    [{ channelId: "C-sec", principalId: "U-carol" }],
+  );
+  assert.equal(await store.channelMember("C-sec", "U-carol"), true);
+  assert.equal(await store.channelMembership("C-sec", "U-carol"), true);
+  assert.equal(await store.channelMembership("C-sec", "U-alice"), false);
+  assert.equal(await store.channelMember("C-sec", "U-alice"), false);
+  assert.equal(await store.channelMember("C-other", "U-carol"), false);
+  assert.deepEqual(
+    (await store.conversationMembers("channel", "C-sec"))?.map((member) => member.principalId),
+    ["U-carol"],
+  );
 
-    await store.replaceChannels([{ channelId: "C-sec", name: "secret", isPrivate: true }]);
-    assert.equal(await store.channelMember("C-sec", "U-carol"), true);
+  await store.replaceChannels([{ channelId: "C-sec", name: "secret", isPrivate: true }]);
+  assert.equal(await store.channelMember("C-sec", "U-carol"), true);
 
-    await store.replaceChannels(
-      [{ channelId: "C-sec", name: "secret", isPrivate: true }],
-      [{ channelId: "C-sec", principalId: "U-alice" }],
-    );
-    assert.equal(await store.channelMember("C-sec", "U-carol"), false);
-    assert.equal(await store.channelMember("C-sec", "U-alice"), true);
+  await store.replaceChannels(
+    [{ channelId: "C-sec", name: "secret", isPrivate: true }],
+    [{ channelId: "C-sec", principalId: "U-alice" }],
+  );
+  assert.equal(await store.channelMember("C-sec", "U-carol"), false);
+  assert.equal(await store.channelMember("C-sec", "U-alice"), true);
 
-    await store.replaceChannels(
-      [{ channelId: "C-sec", name: "secret", isPrivate: true }],
-      [{ channelId: "C-sec", principalId: "U-alice" }],
-    );
-    assert.equal(await store.channelMember("C-sec", "U-alice"), true);
-  },
-);
+  await store.replaceChannels(
+    [{ channelId: "C-sec", name: "secret", isPrivate: true }],
+    [{ channelId: "C-sec", principalId: "U-alice" }],
+  );
+  assert.equal(await store.channelMember("C-sec", "U-alice"), true);
+});
 
-test("pg directory: private nonmembership is definitive only after a membership-bearing push", { skip }, async () => {
-  const store = createPostgresDirectoryStore(URL!);
-  const direct = (await freshPg(URL!)).query;
+test("pg directory: private nonmembership is definitive only after a membership-bearing push", async () => {
+  const store = createPostgresDirectoryStore(URL);
+  const direct = (await freshPg(URL)).query;
   await direct("UPDATE directory_sync SET channel_members_synced = FALSE", []);
   await store.replaceChannels([{ channelId: "C-privdef", name: "secret", isPrivate: true }]);
   assert.equal(await store.channelMembership("C-privdef", "U-alice"), undefined);
@@ -229,99 +219,87 @@ test("pg directory: private nonmembership is definitive only after a membership-
   assert.equal(await store.channelMembership("C-privdef", "U-alice"), false);
 });
 
-test(
-  "pg directory: group-DM resolve-by-set + membership gate; a change re-writes, identical skips",
-  { skip },
-  async () => {
-    const store = createPostgresDirectoryStore(URL!);
-    await store.replace([
-      { principalId: "U-alice", displayName: "Alice", type: "internal" },
-      { principalId: "U-carol", displayName: "Carol", type: "internal" },
-      { principalId: "U-sam", displayName: "Sam", type: "internal" },
-    ]);
-    await store.replaceGroups([
-      { groupId: "G-1", principalId: "U-alice" },
-      { groupId: "G-1", principalId: "U-carol" },
-      { groupId: "G-1", principalId: "U-sam" },
-      { groupId: "G-2", principalId: "U-alice" },
-      { groupId: "G-2", principalId: "U-carol" },
-    ]);
+test("pg directory: group-DM resolve-by-set + membership gate; a change re-writes, identical skips", async () => {
+  const store = createPostgresDirectoryStore(URL);
+  await store.replace([
+    { principalId: "U-alice", displayName: "Alice", type: "internal" },
+    { principalId: "U-carol", displayName: "Carol", type: "internal" },
+    { principalId: "U-sam", displayName: "Sam", type: "internal" },
+  ]);
+  await store.replaceGroups([
+    { groupId: "G-1", principalId: "U-alice" },
+    { groupId: "G-1", principalId: "U-carol" },
+    { groupId: "G-1", principalId: "U-sam" },
+    { groupId: "G-2", principalId: "U-alice" },
+    { groupId: "G-2", principalId: "U-carol" },
+  ]);
 
-    const r = await store.resolveGroupByParticipants(["U-sam", "U-alice", "U-carol", "U-alice"]);
-    assert.equal(r.kind, "one");
-    if (r.kind === "one") assert.equal(r.groupId, "G-1");
-    assert.equal((await store.resolveGroupByParticipants(["U-alice", "U-carol"])).kind, "one");
-    assert.equal((await store.resolveGroupByParticipants(["U-alice", "U-carol", "U-extra"])).kind, "none");
-    assert.equal((await store.resolveGroupByParticipants([])).kind, "none");
+  const r = await store.resolveGroupByParticipants(["U-sam", "U-alice", "U-carol", "U-alice"]);
+  assert.equal(r.kind, "one");
+  if (r.kind === "one") assert.equal(r.groupId, "G-1");
+  assert.equal((await store.resolveGroupByParticipants(["U-alice", "U-carol"])).kind, "one");
+  assert.equal((await store.resolveGroupByParticipants(["U-alice", "U-carol", "U-extra"])).kind, "none");
+  assert.equal((await store.resolveGroupByParticipants([])).kind, "none");
 
-    assert.equal(await store.groupMember("G-1", "U-sam"), true);
-    assert.equal(await store.groupMember("G-2", "U-sam"), false);
-    assert.equal(await store.groupMembership("G-2", "U-sam"), false);
-    assert.deepEqual(
-      (await store.conversationMembers("group", "G-1"))?.map((member) => member.principalId),
-      ["U-alice", "U-carol", "U-sam"],
-    );
-    assert.deepEqual(await store.listGroupsFor("U-sam"), ["G-1"]);
+  assert.equal(await store.groupMember("G-1", "U-sam"), true);
+  assert.equal(await store.groupMember("G-2", "U-sam"), false);
+  assert.equal(await store.groupMembership("G-2", "U-sam"), false);
+  assert.deepEqual(
+    (await store.conversationMembers("group", "G-1"))?.map((member) => member.principalId),
+    ["U-alice", "U-carol", "U-sam"],
+  );
+  assert.deepEqual(await store.listGroupsFor("U-sam"), ["G-1"]);
 
-    const direct = (await freshPg(URL!)).query;
-    const t0 = await direct("SELECT groups_hash FROM directory_sync WHERE org_id = $1", ["default-org"]);
-    await store.replaceGroups([
-      { groupId: "G-2", principalId: "U-carol" },
-      { groupId: "G-2", principalId: "U-alice" },
-      { groupId: "G-1", principalId: "U-sam" },
-      { groupId: "G-1", principalId: "U-alice" },
-      { groupId: "G-1", principalId: "U-carol" },
-    ]);
-    const t1 = await direct("SELECT groups_hash FROM directory_sync WHERE org_id = $1", ["default-org"]);
-    assert.equal(t0.rows[0]?.groups_hash, t1.rows[0]?.groups_hash, "identical set must not rewrite the hash");
-    assert.equal(await store.groupMember("G-1", "U-sam"), true);
+  const direct = (await freshPg(URL)).query;
+  const t0 = await direct("SELECT groups_hash FROM directory_sync WHERE org_id = $1", ["default-org"]);
+  await store.replaceGroups([
+    { groupId: "G-2", principalId: "U-carol" },
+    { groupId: "G-2", principalId: "U-alice" },
+    { groupId: "G-1", principalId: "U-sam" },
+    { groupId: "G-1", principalId: "U-alice" },
+    { groupId: "G-1", principalId: "U-carol" },
+  ]);
+  const t1 = await direct("SELECT groups_hash FROM directory_sync WHERE org_id = $1", ["default-org"]);
+  assert.equal(t0.rows[0]?.groups_hash, t1.rows[0]?.groups_hash, "identical set must not rewrite the hash");
+  assert.equal(await store.groupMember("G-1", "U-sam"), true);
 
-    await store.replaceGroups([{ groupId: "G-3", principalId: "U-alice" }]);
-    assert.equal(await store.groupMember("G-1", "U-sam"), false);
-    assert.equal((await store.resolveGroupByParticipants(["U-alice", "U-carol", "U-sam"])).kind, "none");
-    assert.equal((await store.resolveGroupByParticipants(["U-alice"])).kind, "one");
-  },
-);
+  await store.replaceGroups([{ groupId: "G-3", principalId: "U-alice" }]);
+  assert.equal(await store.groupMember("G-1", "U-sam"), false);
+  assert.equal((await store.resolveGroupByParticipants(["U-alice", "U-carol", "U-sam"])).kind, "none");
+  assert.equal((await store.resolveGroupByParticipants(["U-alice"])).kind, "one");
+});
 
-test(
-  "pg directory: listChannelsFor returns public ∪ private-member, ordered by name (§10 reach roster)",
-  { skip },
-  async () => {
-    const store = createPostgresDirectoryStore(URL!);
-    await store.replaceChannels(
-      [
-        { channelId: "C-pub", name: "general" },
-        { channelId: "C-mine", name: "mine", isPrivate: true },
-        { channelId: "C-theirs", name: "theirs", isPrivate: true },
-      ],
-      [
-        { channelId: "C-mine", principalId: "U1" },
-        { channelId: "C-theirs", principalId: "U2" },
-      ],
-    );
-    assert.deepEqual(
-      (await store.listChannelsFor("U1")).map((c) => c.name),
-      ["general", "mine"],
-    );
-    assert.deepEqual(
-      (await store.listChannelsFor("U2")).map((c) => c.name),
-      ["general", "theirs"],
-    );
-  },
-);
+test("pg directory: listChannelsFor returns public ∪ private-member, ordered by name (§10 reach roster)", async () => {
+  const store = createPostgresDirectoryStore(URL);
+  await store.replaceChannels(
+    [
+      { channelId: "C-pub", name: "general" },
+      { channelId: "C-mine", name: "mine", isPrivate: true },
+      { channelId: "C-theirs", name: "theirs", isPrivate: true },
+    ],
+    [
+      { channelId: "C-mine", principalId: "U1" },
+      { channelId: "C-theirs", principalId: "U2" },
+    ],
+  );
+  assert.deepEqual(
+    (await store.listChannelsFor("U1")).map((c) => c.name),
+    ["general", "mine"],
+  );
+  assert.deepEqual(
+    (await store.listChannelsFor("U2")).map((c) => c.name),
+    ["general", "theirs"],
+  );
+});
 
-test(
-  "pg directory: a second store instance reads what the first wrote (multi-instance consistency)",
-  { skip },
-  async () => {
-    const writer = createPostgresDirectoryStore(URL!);
-    await writer.replace([{ principalId: "U-cross", displayName: "Cross Instance", type: "internal" }]);
-    const reader = createPostgresDirectoryStore(URL!);
-    const r = await reader.resolve("Cross");
-    assert.equal(r.kind, "one");
-    if (r.kind === "one") assert.equal(r.member.principalId, "U-cross");
-  },
-);
+test("pg directory: a second store instance reads what the first wrote (multi-instance consistency)", async () => {
+  const writer = createPostgresDirectoryStore(URL);
+  await writer.replace([{ principalId: "U-cross", displayName: "Cross Instance", type: "internal" }]);
+  const reader = createPostgresDirectoryStore(URL);
+  const r = await reader.resolve("Cross");
+  assert.equal(r.kind, "one");
+  if (r.kind === "one") assert.equal(r.member.principalId, "U-cross");
+});
 
 async function freshPg(url: string) {
   const pg = (await import("pg")).default;
@@ -329,8 +307,8 @@ async function freshPg(url: string) {
   return { query: (text: string, params?: unknown[]) => p.query(text, params) };
 }
 
-test("pg directory: concurrent pushes for one org serialize instead of 500ing on the PK", { skip }, async () => {
-  const stores = Array.from({ length: 6 }, () => createPostgresDirectoryStore(URL!));
+test("pg directory: concurrent pushes for one org serialize instead of 500ing on the PK", async () => {
+  const stores = Array.from({ length: 6 }, () => createPostgresDirectoryStore(URL));
 
   await Promise.all(
     stores.map((store, i) =>
@@ -359,8 +337,8 @@ test("pg directory: concurrent pushes for one org serialize instead of 500ing on
   assert.equal(await stores[0]!.channelMember("C-shared", "U-shared"), true);
 });
 
-test("pg directory: workspace URL survives roster swaps and reads back per org", { skip }, async () => {
-  const store = createPostgresDirectoryStore(URL!);
+test("pg directory: workspace URL survives roster swaps and reads back per org", async () => {
+  const store = createPostgresDirectoryStore(URL);
 
   assert.deepEqual(await store.meta(), { workspaceUrl: null });
   await store.setWorkspaceUrl("https://acme.slack.com");
@@ -373,8 +351,8 @@ test("pg directory: workspace URL survives roster swaps and reads back per org",
   assert.deepEqual(await store.meta(), { workspaceUrl: "https://acme2.slack.com" });
 });
 
-test("pg directory: a swap stamped older than the stored snapshot is refused", { skip }, async () => {
-  const store = createPostgresDirectoryStore(URL!);
+test("pg directory: a swap stamped older than the stored snapshot is refused", async () => {
+  const store = createPostgresDirectoryStore(URL);
 
   assert.equal(await store.replaceGroups([{ groupId: "G-fresh", principalId: "U-alice" }], 2000), true);
   assert.equal(await store.replaceGroups([], 1000), false, "a stale instance's swap must not clobber a fresh sync");
@@ -397,8 +375,8 @@ test("pg directory: a swap stamped older than the stored snapshot is refused", {
   assert.equal((await store.listChannels()).length, 0);
 });
 
-test("pg directory: a partial roster swap preserves channels whose roster is unknown", { skip }, async () => {
-  const store = createPostgresDirectoryStore(URL!);
+test("pg directory: a partial roster swap preserves channels whose roster is unknown", async () => {
+  const store = createPostgresDirectoryStore(URL);
   const channels = [
     { channelId: "C-one", name: "one", isPrivate: true },
     { channelId: "C-two", name: "two", isPrivate: true },
@@ -415,8 +393,8 @@ test("pg directory: a partial roster swap preserves channels whose roster is unk
   assert.equal(await store.channelMembership("C-new", "U-new"), undefined);
 });
 
-test("pg directory: removals apply without clearing a failed channel refresh", { skip }, async () => {
-  const store = createPostgresDirectoryStore(URL!);
+test("pg directory: removals apply without clearing a failed channel refresh", async () => {
+  const store = createPostgresDirectoryStore(URL);
   await store.replaceChannels(
     [{ channelId: "C-one", name: "one", isPrivate: true }],
     [
@@ -435,8 +413,8 @@ test("pg directory: removals apply without clearing a failed channel refresh", {
   assert.equal(await store.channelMembership("C-one", "U-keep"), true);
 });
 
-test("pg directory: a private Slack Connect roster is not an ordinary send target", { skip }, async () => {
-  const store = createPostgresDirectoryStore(URL!);
+test("pg directory: a private Slack Connect roster is not an ordinary send target", async () => {
+  const store = createPostgresDirectoryStore(URL);
   await store.replace([{ principalId: "U-member", displayName: "Member", type: "internal" }]);
   await store.replaceChannels(
     [{ channelId: "C-connect", name: "connect", isPrivate: true, isExternal: true }],
@@ -448,8 +426,8 @@ test("pg directory: a private Slack Connect roster is not an ordinary send targe
   assert.deepEqual(await store.listChannelsFor("U-member"), []);
 });
 
-test("pg directory: a partial group swap preserves unknown rosters", { skip }, async () => {
-  const store = createPostgresDirectoryStore(URL!);
+test("pg directory: a partial group swap preserves unknown rosters", async () => {
+  const store = createPostgresDirectoryStore(URL);
   await store.replaceGroups(
     [
       { groupId: "G-one", principalId: "U-old-one" },
@@ -471,34 +449,30 @@ test("pg directory: a partial group swap preserves unknown rosters", { skip }, a
   assert.equal(await store.groupMembership("G-new", "U-new"), undefined);
 });
 
-test(
-  "pg directory: an identical push still advances the stamp, so ordering survives content-idempotent pushes",
-  { skip },
-  async () => {
-    const store = createPostgresDirectoryStore(URL!);
-    const roster = [{ groupId: "G-idem", principalId: "U-alice" }];
+test("pg directory: an identical push still advances the stamp, so ordering survives content-idempotent pushes", async () => {
+  const store = createPostgresDirectoryStore(URL);
+  const roster = [{ groupId: "G-idem", principalId: "U-alice" }];
 
-    assert.equal(await store.replaceGroups(roster, 12000), true);
-    assert.equal(await store.replaceGroups(roster, 13000), true);
-    assert.equal(await store.replaceGroups([], 12500), false, "a swap older than the newest snapshot seen must lose");
-    assert.equal(await store.groupMember("G-idem", "U-alice"), true);
-  },
-);
+  assert.equal(await store.replaceGroups(roster, 12000), true);
+  assert.equal(await store.replaceGroups(roster, 13000), true);
+  assert.equal(await store.replaceGroups([], 12500), false, "a swap older than the newest snapshot seen must lose");
+  assert.equal(await store.groupMember("G-idem", "U-alice"), true);
+});
 
-test("pg live channel observations survive older snapshots but yield to later removal", { skip }, async () => {
+test("pg live channel observations survive older snapshots but yield to later removal", async () => {
   const { directoryObservationCases } = await import("../support/directory-observation-cases.ts");
-  const store = createPostgresDirectoryStore(URL!);
+  const store = createPostgresDirectoryStore(URL);
   await store.replaceChannels([], [], Date.now());
   const pg = (await import("pg")).default;
-  const pool = new pg.Pool({ connectionString: URL! });
+  const pool = new pg.Pool({ connectionString: URL });
   await pool.query("UPDATE directory_sync SET channels_synced_at = NULL, channels_hash = NULL");
   await pool.end();
   await directoryObservationCases(store);
 });
 
-test("pg directory: room membership follows a person's linked identities", { skip }, async () => {
+test("pg directory: room membership follows a person's linked identities", async () => {
   const { installPrincipalLinks } = await import("../../src/directory/person.ts");
-  const store = createPostgresDirectoryStore(URL!);
+  const store = createPostgresDirectoryStore(URL);
   await store.replaceChannels(
     [{ channelId: "C-linked", name: "linked", isPrivate: true }],
     [{ channelId: "C-linked", principalId: "slack-person@example.com" }],
@@ -526,8 +500,8 @@ test("pg directory: room membership follows a person's linked identities", { ski
   }
 });
 
-test("pg directory: one store keeps each tenant's roster to itself", { skip }, async () => {
-  const store = createPostgresDirectoryStore(URL!);
+test("pg directory: one store keeps each tenant's roster to itself", async () => {
+  const store = createPostgresDirectoryStore(URL);
   const alpha = tenantFor("tenant-alpha");
   const beta = tenantFor("tenant-beta");
   await withTenant(alpha, () =>

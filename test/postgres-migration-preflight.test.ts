@@ -7,22 +7,13 @@ import pg from "pg";
 import { applyPgMigrations, definePgMigration, pgMigrationChecksum } from "../src/persistence/pg-pool.ts";
 import { MEMORY_FACTS_MIGRATIONS } from "../src/memory/postgres-memory-service.ts";
 import { CONTRACT_MIGRATIONS } from "../src/persistence/contract-migrations.ts";
+import { withClient } from "./support/pg-client.ts";
 
 // A refused migration run must leave the database exactly as it found it: no baseline adoption, no pending migration.
 
 const base = process.env.DATABASE_URL;
 const skip = base ? false : "set DATABASE_URL (a Postgres) to run the migration preflight tests";
 const created: string[] = [];
-
-async function withClient<T>(url: string, fn: (client: pg.Client) => Promise<T>): Promise<T> {
-  const client = new pg.Client({ connectionString: url });
-  await client.connect();
-  try {
-    return await fn(client);
-  } finally {
-    await client.end();
-  }
-}
 
 async function createDatabase(fixture?: string): Promise<string> {
   const name = `qm_preflight_${randomBytes(6).toString("hex")}`;

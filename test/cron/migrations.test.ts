@@ -5,8 +5,7 @@ import { LOOPS_TO_CRONS_MIGRATION } from "../../src/cron/migrations.ts";
 import { pgMigrationChecksum } from "../../src/persistence/pg-pool.ts";
 import { applyTenancy } from "../../src/persistence/tenancy.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the loops-to-crons migration test";
+const URL = process.env.DATABASE_URL!;
 
 test("the loops-to-crons migration stays byte-identical as the inbox task evolves", () => {
   assert.equal(
@@ -15,7 +14,7 @@ test("the loops-to-crons migration stays byte-identical as the inbox task evolve
   );
 });
 
-test("loops become crons with an inbox and keep their items", { skip }, async () => {
+test("loops become crons with an inbox and keep their items", async () => {
   const pg = (await import("pg")).default;
   const pool = new pg.Pool({ connectionString: URL });
   try {
@@ -95,13 +94,13 @@ test("loops become crons with an inbox and keep their items", { skip }, async ()
   }
 });
 
-test("a tenantized database migrates each tenant's loops into that tenant's crons", { skip }, async () => {
+test("a tenantized database migrates each tenant's loops into that tenant's crons", async () => {
   const pg = (await import("pg")).default;
   const db = `qm_loops_tenancy_${randomBytes(4).toString("hex")}`;
   const admin = new pg.Client({ connectionString: URL });
   await admin.connect();
   await admin.query(`CREATE DATABASE ${db}`);
-  const target = new globalThis.URL(URL!);
+  const target = new globalThis.URL(URL);
   target.pathname = `/${db}`;
   const pool = new pg.Pool({ connectionString: target.toString() });
   try {

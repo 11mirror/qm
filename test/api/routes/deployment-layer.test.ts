@@ -5,7 +5,6 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import { createServer } from "../../../src/api/server.ts";
 import { signRequest } from "../../../src/auth/source-auth.ts";
 import { buildApp } from "../../support/build-app.ts";
@@ -15,6 +14,7 @@ import { testConfig } from "../../support/test-config.ts";
 import { DeploymentLayerPersistedError } from "../../../src/deployment/deployment-layer-store.ts";
 import { createPostgresReplayDedupe } from "../../../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "../../support/test-database.ts";
+import { listenLocal } from "../../support/listen-local.ts";
 
 const SECRET = "layer-routes-secret".repeat(3);
 const PATH = "/v1/deployment-layer";
@@ -28,8 +28,7 @@ function start(overrides: { deploymentLayerDir?: string } = {}, serverDeps: Reco
     auditLog: built.auditLog,
     ...serverDeps,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   return {
     base,
     close: () => new Promise<void>((r) => server.close(() => r())),

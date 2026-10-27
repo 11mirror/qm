@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { mkdtempSync } from "node:fs";
-import { request as httpRequest, createServer as createHttpServer } from "node:http";
+import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo, Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +23,7 @@ import { createPostgresSessionStore } from "../../src/sessions/postgres-session-
 import { scopeId } from "../../src/types.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
 import { testDatabaseUrl, testDeployBackings, testMap } from "../support/test-database.ts";
+import { httpGet } from "../support/http-get.ts";
 
 const audits: Array<(e: AuditEvent) => void> = [];
 const onceKeys = new Set<string>();
@@ -170,22 +171,6 @@ function appServingUpstream(upstreamPort: number) {
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   return app;
-}
-
-function httpGet(
-  port: number,
-  path: string,
-  headers: Record<string, string>,
-): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string }> {
-  return new Promise((resolve, reject) => {
-    const req = httpRequest({ host: "localhost", port, path, method: "GET", headers }, (res) => {
-      let body = "";
-      res.on("data", (c) => (body += c));
-      res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body }));
-    });
-    req.on("error", reject);
-    req.end();
-  });
 }
 
 test("subdomain ingress: a capability link grants nothing — reach is the ACL alone", async () => {

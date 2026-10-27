@@ -9,9 +9,9 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
-import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import { dmFor } from "./support/dm-turn.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-title-"));
@@ -20,15 +20,7 @@ function freshApp() {
 }
 
 const actor = { externalId: "U1" };
-function dm(text: string, thread: string): TurnRequest {
-  return {
-    origin: { kind: "direct" },
-    surface: "test",
-    actor,
-    conversation: { kind: "dm", threadRef: thread },
-    text,
-  };
-}
+const dm = dmFor(actor);
 
 test("names a conversation from its first completed turn (auto-title)", async () => {
   const { app } = freshApp();

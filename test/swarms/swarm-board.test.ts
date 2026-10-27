@@ -7,12 +7,11 @@ import type { SessionMailbox, SessionMessage } from "../../src/sessions/session-
 import type { Session } from "../../src/types.ts";
 import pg from "pg";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the swarm board tests";
+const URL = process.env.DATABASE_URL!;
 const actor = { id: "alice@example.com" } as SwarmCallContext["actor"];
 
 function world() {
-  const board = createPostgresSwarmBoard(URL!);
+  const board = createPostgresSwarmBoard(URL);
   const sessions = new Map<string, Session>();
   const sent: SessionMessage[] = [];
   const mailboxDown = { value: false };
@@ -48,7 +47,7 @@ function world() {
   return { board, sessions, sent, mailboxDown, opened, add, ctx, call };
 }
 
-test("start opens ordinary subagents that share the coordinator's board", { skip }, async () => {
+test("start opens ordinary subagents that share the coordinator's board", async () => {
   const w = world();
   const parent = w.add("Requester");
   const coordinator = w.add("Coordinator", parent.id);
@@ -74,7 +73,7 @@ test("start opens ordinary subagents that share the coordinator's board", { skip
   assert.equal(nested.ok, false);
 });
 
-test("members post, reply, search and read threads; subscribers are told about new posts", { skip }, async () => {
+test("members post, reply, search and read threads; subscribers are told about new posts", async () => {
   const w = world();
   const coordinator = w.add("Coordinator");
   await w.call(coordinator, {
@@ -134,7 +133,7 @@ test("members post, reply, search and read threads; subscribers are told about n
   assert.equal(missing.ok, false);
 });
 
-test("a post whose notices failed is redelivered on a later board action", { skip }, async () => {
+test("a post whose notices failed is redelivered on a later board action", async () => {
   const w = world();
   const coordinator = w.add("Coordinator");
   await w.call(coordinator, { action: "start", members: [{ task: "a", name: "a" }] });
@@ -162,7 +161,7 @@ test("a post whose notices failed is redelivered on a later board action", { ski
   assert.equal(w.sent.length, 1, "a delivered post is not sent again");
 });
 
-test("start opens members concurrently and keeps their order", { skip }, async () => {
+test("start opens members concurrently and keeps their order", async () => {
   const w = world();
   const coordinator = w.add("Coordinator");
   let inFlight = 0;
@@ -193,7 +192,7 @@ test("start opens members concurrently and keeps their order", { skip }, async (
   assert.equal(peak, 4);
 });
 
-test("read_thread stops at a text budget and pages on", { skip }, async () => {
+test("read_thread stops at a text budget and pages on", async () => {
   const w = world();
   const coordinator = w.add("Coordinator");
   await w.call(coordinator, { action: "start", members: [{ task: "a", name: "a" }] });

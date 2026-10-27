@@ -3,20 +3,19 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
-import pg from "pg";
 import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
 import { SCHEMA_BASELINE } from "../../src/persistence/schema-baseline.ts";
 import { tenantFor, withTenant } from "../../src/tenant.ts";
 import { ensureTenantQueues } from "../../src/turns/absurd-schema.ts";
 import { buildApp } from "../../src/wiring.ts";
 import { testConfig } from "../support/test-config.ts";
+import { withClient } from "../support/pg-client.ts";
 
 // An upgraded database must end up with exactly the schema a fresh one gets from the baseline plus later migrations.
 // The fixtures are pg_dump snapshots (schema, plus the ledger and tenant rows) of databases built and booted by real
 // releases: qm main at 9be16d35 (single-tenant, prod-shaped) and qm 323baddc (StyleUp: row-level tenancy, six tenants).
 
-const base = process.env.DATABASE_URL;
-const skip = base ? false : "set DATABASE_URL (a Postgres) to run the schema baseline tests";
+const base = process.env.DATABASE_URL!;
 const created: string[] = [];
 
 // Tables an upgraded database keeps that a fresh migration here does not create: durable maps main still had and this
@@ -100,24 +99,14 @@ SELECT line FROM (
 ) lines(line) ORDER BY line`;
 
 function urlFor(name: string): string {
-  const url = new URL(base!);
+  const url = new URL(base);
   url.pathname = `/${name}`;
   return url.toString();
 }
 
-async function withClient<T>(url: string, fn: (client: pg.Client) => Promise<T>): Promise<T> {
-  const client = new pg.Client({ connectionString: url });
-  await client.connect();
-  try {
-    return await fn(client);
-  } finally {
-    await client.end();
-  }
-}
-
 async function createDatabase(fixture?: string): Promise<string> {
   const name = `qm_baseline_${randomBytes(6).toString("hex")}`;
-  await withClient(base!, (client) => client.query(`CREATE DATABASE ${name}`));
+  await withClient(base, (client) => client.query(`CREATE DATABASE ${name}`));
   created.push(name);
   const url = urlFor(name);
   if (fixture) {
@@ -185,31 +174,26 @@ function assertSameSchema(upgraded: string[], fresh: string[]): void {
 }
 
 after(async () => {
-  if (!base) return;
   await withClient(base, async (client) => {
     for (const name of created) await client.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
   });
 });
 
-test(
-  "a prod-shaped database from main 9be16d35 adopts the baseline and migrates to the fresh schema",
-  { skip },
-  async () => {
-    const upgraded = await createDatabase("main-9be16d35.sql.gz");
-    const fresh = await createDatabase();
-    await migrate(upgraded, false);
-    await migrate(fresh, false);
-    assertSameSchema(await fingerprint(upgraded), await fingerprint(fresh));
-    const ledger = await withClient(
-      upgraded,
-      async (client) =>
-        (await client.query("SELECT checksum FROM qm_schema_migrations WHERE id = $1", [SCHEMA_BASELINE.id])).rows,
-    );
-    assert.deepEqual(ledger, [{ checksum: SCHEMA_BASELINE.checksum }], "the baseline was adopted, not applied");
-  },
-);
+test("a prod-shaped database from main 9be16d35 adopts the baseline and migrates to the fresh schema", async () => {
+  const upgraded = await createDatabase("main-9be16d35.sql.gz");
+  const fresh = await createDatabase();
+  await migrate(upgraded, false);
+  await migrate(fresh, false);
+  assertSameSchema(await fingerprint(upgraded), await fingerprint(fresh));
+  const ledger = await withClient(
+    upgraded,
+    async (client) =>
+      (await client.query("SELECT checksum FROM qm_schema_migrations WHERE id = $1", [SCHEMA_BASELINE.id])).rows,
+  );
+  assert.deepEqual(ledger, [{ checksum: SCHEMA_BASELINE.checksum }], "the baseline was adopted, not applied");
+});
 
-test("a StyleUp multitenant database adopts the baseline and keeps its tenancy", { skip }, async () => {
+test("a StyleUp multitenant database adopts the baseline and keeps its tenancy", async () => {
   const upgraded = await createDatabase("styleup-323baddc.sql.gz");
   const fresh = await createDatabase();
   await migrate(upgraded, true);
@@ -221,7 +205,7 @@ test("a StyleUp multitenant database adopts the baseline and keeps its tenancy",
   assertSameSchema(lines, await fingerprint(fresh));
 });
 
-test("a database older than the baseline is refused with what it lacks", { skip }, async () => {
+test("a database older than the baseline is refused with what it lacks", async () => {
   const url = await createDatabase();
   await withClient(url, async (client) => {
     await client.query(
@@ -235,7 +219,7 @@ test("a database older than the baseline is refused with what it lacks", { skip 
   );
 });
 
-test("a database with QM tables but no migration history is refused", { skip }, async () => {
+test("a database with QM tables but no migration history is refused", async () => {
   const url = await createDatabase();
   await withClient(url, (client) => client.query("CREATE TABLE sessions(id TEXT PRIMARY KEY)"));
   await assert.rejects(migrate(url, false), /has QM tables but no qm_schema_migrations history/);

@@ -11,11 +11,19 @@ import {
   markFirstToken,
   traceQueued,
 } from "../../../plugins/chassis/src/error-reporting.ts";
+import { eventually } from "../../support/settle.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres tracing test";
+const URL = process.env.DATABASE_URL!;
 
 const captured: Record<string, any>[] = [];
+const capturedTransaction = (name: string) =>
+  eventually(
+    async () => {
+      await flushErrorReporting();
+      return captured.find((event) => event.transaction === name);
+    },
+    { label: `${name} transaction`, timeoutMs: 2_000 },
+  );
 const collector = createServer(async (req, res) => {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
@@ -37,7 +45,7 @@ after(async () => {
   await new Promise<void>((resolve) => collector.close(() => resolve()));
 });
 
-test("Postgres queries become pool and query spans that name the SQL verb and nothing else", { skip }, async () => {
+test("Postgres queries become pool and query spans that name the SQL verb and nothing else", async () => {
   const pg = (await import("pg")).default;
   const pool = new pg.Pool({ connectionString: URL, max: 1 });
   let detached: Promise<unknown> | undefined;
@@ -55,11 +63,7 @@ test("Postgres queries become pool and query spans that name the SQL verb and no
       ]);
     });
     await detached;
-    for (let i = 0; i < 40 && !captured.some((event) => event.transaction === "probe"); i++) {
-      await flushErrorReporting();
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    const probe = captured.find((event) => event.transaction === "probe");
+    const probe = await capturedTransaction("probe");
     assert.ok(probe, "the transaction arrived");
     await flushErrorReporting();
     assert.doesNotMatch(JSON.stringify(captured), /private/);
@@ -85,40 +89,32 @@ test("Postgres queries become pool and query spans that name the SQL verb and no
   }
 });
 
-test(
-  "a long run keeps its queries, waiting checkouts and first-token time within Sentry's event size",
-  { skip },
-  async () => {
-    const pg = (await import("pg")).default;
-    const pool = new pg.Pool({ connectionString: URL, max: 1 });
-    try {
-      await traceQueued(undefined, "long-run", {}, async () => {
-        await Promise.all([pool.query("SELECT pg_sleep(0.02)"), pool.query("SELECT 'contended'")]);
-        for (let i = 0; i < 700; i++) await pool.query("SELECT $1::int", [i]);
-        markFirstToken();
-        await pool.query("SELECT pg_sleep(0.02)");
-      });
-      for (let i = 0; i < 40 && !captured.some((event) => event.transaction === "long-run"); i++) {
-        await flushErrorReporting();
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-      const run = captured.find((event) => event.transaction === "long-run");
-      assert.ok(run, "the transaction arrived");
-      assert.ok(run.measurements.time_to_first_token.value > 0, "first-token time survives a late first token");
-      const spans: Record<string, any>[] = run.spans;
-      assert.ok(spans.length <= 500, `sent ${spans.length} spans`);
-      assert.ok(run.contexts.trace.data["qm.truncated_spans"] > 0, "the cut is recorded");
-      assert.ok(spans.some((span) => span.description === "SELECT"));
-      const checkouts = spans.filter((span) => span.description === "pg-pool.connect");
-      assert.ok(
-        checkouts.some((span) => span.timestamp - span.start_timestamp >= 0.01),
-        "a waiting checkout is kept",
-      );
-    } finally {
-      await pool.end();
-    }
-  },
-);
+test("a long run keeps its queries, waiting checkouts and first-token time within Sentry's event size", async () => {
+  const pg = (await import("pg")).default;
+  const pool = new pg.Pool({ connectionString: URL, max: 1 });
+  try {
+    await traceQueued(undefined, "long-run", {}, async () => {
+      await Promise.all([pool.query("SELECT pg_sleep(0.02)"), pool.query("SELECT 'contended'")]);
+      for (let i = 0; i < 700; i++) await pool.query("SELECT $1::int", [i]);
+      markFirstToken();
+      await pool.query("SELECT pg_sleep(0.02)");
+    });
+    const run = await capturedTransaction("long-run");
+    assert.ok(run, "the transaction arrived");
+    assert.ok(run.measurements.time_to_first_token.value > 0, "first-token time survives a late first token");
+    const spans: Record<string, any>[] = run.spans;
+    assert.ok(spans.length <= 500, `sent ${spans.length} spans`);
+    assert.ok(run.contexts.trace.data["qm.truncated_spans"] > 0, "the cut is recorded");
+    assert.ok(spans.some((span) => span.description === "SELECT"));
+    const checkouts = spans.filter((span) => span.description === "pg-pool.connect");
+    assert.ok(
+      checkouts.some((span) => span.timestamp - span.start_timestamp >= 0.01),
+      "a waiting checkout is kept",
+    );
+  } finally {
+    await pool.end();
+  }
+});
 
 test("a truncated run keeps every sent span's parent even when parent and child start together", async () => {
   await traceQueued(undefined, "tied-run", {}, async () => {
@@ -135,11 +131,7 @@ test("a truncated run keeps every sent span's parent even when parent and child 
       });
     });
   });
-  for (let i = 0; i < 40 && !captured.some((event) => event.transaction === "tied-run"); i++) {
-    await flushErrorReporting();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  const run = captured.find((event) => event.transaction === "tied-run");
+  const run = await capturedTransaction("tied-run");
   assert.ok(run, "the transaction arrived");
   const spans: Record<string, any>[] = run.spans;
   assert.equal(spans.length, 500);
@@ -176,11 +168,7 @@ test("only quick, successful, childless pool checkouts are left out", async () =
       span("e", "d", "pg.connect", 0.0001),
     ],
   });
-  for (let i = 0; i < 40 && !captured.some((event) => event.transaction === "checkouts"); i++) {
-    await flushErrorReporting();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  const run = captured.find((event) => event.transaction === "checkouts");
+  const run = await capturedTransaction("checkouts");
   assert.ok(run, "the transaction arrived");
   assert.deepEqual(run.spans.map((sent: { span_id: string }) => sent.span_id.replace(/^0+/, "")).sort(), [
     "b",

@@ -1,6 +1,5 @@
 import "../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
 import { test, afterEach } from "node:test";
 import { createInsecureTestServer } from "../../src/api/server.ts";
 import { createCustomProviderStore, type StoredCustomProvider } from "../../src/model/custom-provider-store.ts";
@@ -17,6 +16,7 @@ import { modelSupported, modelServiceable, resolveModel, defaultModel } from "..
 import { buildApp, serverDeps } from "../../src/wiring.ts";
 import { testConfig } from "../support/test-config.ts";
 import { testMap } from "../support/test-database.ts";
+import { listenLocal } from "../support/listen-local.ts";
 
 afterEach(() => setCustomProviders([]));
 
@@ -253,8 +253,7 @@ test("serverDeps wires the custom-provider store and resolves a custom boot defa
   assert.equal(deps.baseModelDefault, "custom/acme-gateway/acme-large");
 
   const server = createInsecureTestServer(built.app, deps);
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   try {
     assert.notEqual(defaultModel(deps.baseModelDefault), "custom/acme-gateway/acme-large");
 

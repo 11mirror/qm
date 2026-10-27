@@ -1,0 +1,472 @@
+import "../support/auto-fake-sprites.ts";
+
+import { it, before, after } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import type { AddressInfo } from "node:net";
+import type { Server } from "node:http";
+import { type BuiltApp } from "../../src/wiring.ts";
+import { buildApp } from "../support/build-app.ts";
+import { createServer } from "../../src/api/server.ts";
+import { SECRET_DROP_TTL_MS } from "../../src/credentials/secret-drop.ts";
+import {
+  mintCapabilityToken,
+  verifyCapabilityToken,
+  CAPABILITY_TTL_MS,
+  SECRET_DROP_AUD,
+  type CapabilityClaims,
+} from "../../src/auth/capability-token.ts";
+import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
+import { scopeId } from "../../src/types.ts";
+import { testConfig } from "../support/test-config.ts";
+import { materializeGrant } from "../support/materialize-grant.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
+import { createPostgresReplayDedupe } from "../../src/auth/replay-dedupe.ts";
+
+const SECRET = "secret-drop-test-secret".repeat(3);
+const execFileAsync = promisify(execFile);
+
+let server: Server;
+let base: string;
+let built: BuiltApp;
+
+const capFor = (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
+  mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, ...extra }, SECRET);
+const post = (path: string, body: unknown, cap?: string) =>
+  fetch(`${base}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(cap ? { "x-agent-capability": cap } : {}) },
+    body: JSON.stringify(body),
+  });
+let nonce = 0;
+const signed = (method: string, rawPath: string, body: string, owner?: string | null) => {
+  const path = `${rawPath}${rawPath.includes("?") ? "&" : "?"}_n=${nonce++}`;
+  const headers: Record<string, string> = {
+    ...signedRequestHeaders(SECRET, method, path, body),
+    ...(owner !== null ? { "x-drop-owner": owner ?? "U_A", "x-drop-owner-org": "acme" } : {}),
+    ...(body ? { "content-type": "application/json" } : {}),
+  };
+  return fetch(`${base}${path}`, { method, headers, ...(body ? { body } : {}) });
+};
+const getForm = (dropId: string, owner?: string | null, token?: string | null) =>
+  signed("GET", `/v1/keychain/drops/${dropId}/form${token ? `?t=${encodeURIComponent(token)}` : ""}`, "", owner);
+const redeem = (dropId: string, body: unknown, owner?: string | null, token?: string | null) =>
+  signed(
+    "POST",
+    `/v1/keychain/drops/${encodeURIComponent(dropId)}${token ? `?t=${encodeURIComponent(token)}` : ""}`,
+    JSON.stringify(body),
+    owner,
+  );
+const linkToken = (formPath: string) => new URL(formPath, "http://x").searchParams.get("t");
+
+before(async () => {
+  built = buildApp(testConfig({ signingSecret: SECRET }));
+  await built.directory.replaceChannels(
+    [{ channelId: "C1", name: "drops", isPrivate: false }],
+    [
+      { channelId: "C1", principalId: "U_A" },
+      { channelId: "C1", principalId: "U_SPEAKER" },
+    ],
+  );
+  server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: SECRET,
+    keychain: built.keychain,
+    secretDrops: built.secretDrops,
+    outbound: built.outbound,
+    workspace: built.workspace,
+    auditLog: built.auditLog,
+    runs: built.runs,
+    signals: built.signals,
+    identity: built.identity,
+  });
+  await new Promise<void>((resolve) => server.listen(0, resolve));
+  base = `http://localhost:${(server.address() as AddressInfo).port}`;
+});
+after(async () => {
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+});
+
+it("a triggered turn cannot mint a drop", async () => {
+  const res = await post(
+    "/v1/keychain/drops",
+    { service: "stripe", purpose: "p" },
+    await capFor("U_A", scopeId("channel", "C1"), { triggered: true }),
+  );
+  assert.equal(res.status, 403);
+});
+
+it("mints onBehalfOf a teammate who steered this live turn, binding the link to them", async () => {
+  const THREAD = "ch:C1:1700000000.000200";
+  const { run } = await built.runs.enqueue({
+    sessionId: THREAD,
+    request: {
+      surface: "slack",
+      actor: { id: "U_A", type: "internal" },
+      conversation: { kind: "channel", threadRef: THREAD, audience: [] },
+      origin: { kind: "human" },
+      text: "@bot connect linear",
+    } as any,
+  });
+  await built.signals.send(run.id, {
+    kind: "steer",
+    text: "U_SPEAKER: I can provide my linear key",
+    request: { actor: { externalId: "U_SPEAKER" } } as any,
+  });
+  const cap = await capFor("U_A", scopeId("channel", "C1"), { threadRef: THREAD });
+
+  const silent = await post(
+    "/v1/keychain/drops",
+    { service: "linear", purpose: "p", onBehalfOf: "U_NEVER_SPOKE" },
+    cap,
+  );
+  assert.equal(silent.status, 403, "onBehalfOf must have spoken in this turn");
+
+  const minted = await post("/v1/keychain/drops", { service: "linear", purpose: "p", onBehalfOf: "U_SPEAKER" }, cap);
+  assert.equal(minted.status, 200);
+  const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
+  const t = linkToken(formPath)!;
+  const claims = JSON.parse(Buffer.from(t.split(".")[1]!, "base64url").toString("utf8")) as { actorId: string };
+  assert.equal(claims.actorId, "U_SPEAKER", "the link token is bound to the speaker, not the turn's actor");
+
+  assert.equal((await getForm(dropId, "U_A", t)).status, 403, "the minting turn's actor cannot open it");
+  assert.equal((await getForm(dropId, "U_SPEAKER", t)).status, 200, "the speaker it was minted for can");
+
+  const redeemRes = await redeem(dropId, { secret: "lin_from_speaker" }, "U_SPEAKER", t);
+  assert.equal(redeemRes.status, 200);
+  const { credential } = (await redeemRes.json()) as { credential: { ownerId: string } };
+  assert.equal(credential.ownerId, "U_SPEAKER");
+});
+
+it("channel mint → redeem saves the credential AND grants it to the asking conversation", async () => {
+  const minted = await post(
+    "/v1/keychain/drops",
+    { service: "stripe", purpose: "charge the test card", envKey: "STRIPE_API_KEY" },
+    await capFor("U_A", scopeId("channel", "C1")),
+  );
+  assert.equal(minted.status, 200);
+  const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
+  assert.ok(formPath.startsWith(`/drop/${dropId}/form?t=`), "the link carries its drop-scoped token");
+  const t = linkToken(formPath);
+
+  const form = await getForm(dropId, "U_A", t);
+  assert.equal(form.status, 200);
+  assert.match(form.headers.get("content-type") ?? "", /text\/html/);
+  const html = await form.text();
+  assert.match(html, /stripe/);
+  assert.match(html, /charge the test card/);
+  assert.match(html, /['"]\/drop\/['"]/);
+  assert.doesNotMatch(html, /\/v1\/keychain\/drops\//);
+
+  assert.equal((await getForm(dropId, "U_someone_else", t)).status, 403);
+  assert.equal((await redeem(dropId, { secret: "sk_evil" }, "U_someone_else", t)).status, 403);
+  assert.equal((await getForm(dropId, null, t)).status, 403);
+  assert.equal((await getForm(dropId, "U_A", t)).status, 200, "the rejected attempts left the link usable");
+
+  const redeemRes = await redeem(dropId, { secret: "sk_test_alice" }, "U_A", t);
+  assert.equal(redeemRes.status, 200);
+  const { credential } = (await redeemRes.json()) as { credential: { id: string; service: string; ownerId: string } };
+  assert.equal(credential.service, "stripe");
+  assert.equal(credential.ownerId, "U_A");
+
+  const grants = await built.keychain!.grantsForScope(scopeId("channel", "C1"));
+  const g = grants.find((x) => x.credential.id === credential.id);
+  assert.ok(g, "a standing grant for the asking channel was minted on redeem");
+  const m = await materializeGrant(built.keychain!, g!.grant.id, scopeId("channel", "C1"), "U_A");
+  assert.ok(m.kind === "env" && m.env[0]!.value === "sk_test_alice");
+
+  assert.equal((await redeem(dropId, { secret: "sk_test_again" }, "U_A", t)).status, 404);
+  assert.equal((await getForm(dropId, "U_A", t)).status, 404, "the form 404s once the drop is redeemed");
+});
+
+it("DM mint → redeem saves the credential under the owner with NO grant (own scope)", async () => {
+  const minted = await post(
+    "/v1/keychain/drops",
+    { service: "openai", purpose: "summarize my notes" },
+    await capFor("U_B"),
+  );
+  const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
+  const redeemRes = await redeem(dropId, { secret: "sk-openai-bob" }, "U_B", linkToken(formPath));
+  assert.equal(redeemRes.status, 200);
+
+  const owned = await built.keychain!.listByOwner("U_B");
+  assert.ok(
+    owned.some((c) => c.service === "openai"),
+    "the credential landed in the owner's keychain",
+  );
+  assert.equal(
+    (await built.keychain!.listGrants({ ownerId: "U_B" })).length,
+    0,
+    "a DM drop grants nothing — own creds need no grant",
+  );
+});
+
+it("a Project roster change refuses an unredeemed drop on every attempt", async () => {
+  await built.app.upsertDirectory([
+    { principalId: "U_PROJECT_OWNER", displayName: "Owner", type: "internal" },
+    { principalId: "U_PROJECT_MEMBER", displayName: "Member", type: "internal" },
+  ]);
+  const project = await built.app.createProject("U_PROJECT_OWNER", "Drop fence");
+  assert.ok(project);
+  const scopeVersion = await built.projects.version(project.scopeId.slice("group:".length));
+  assert.ok(scopeVersion);
+  const cap = await capFor("U_PROJECT_OWNER", project.scopeId, { scopeVersion });
+  const minted = await post("/v1/keychain/drops", { service: "project-stale", purpose: "test the fence" }, cap);
+  assert.equal(minted.status, 200);
+  const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
+
+  assert.equal((await built.app.addProjectMember(project.id, "U_PROJECT_OWNER", "U_PROJECT_MEMBER")).status, "ok");
+  for (let attempt = 0; attempt < 2; attempt++)
+    assert.equal(
+      (await redeem(dropId, { secret: "must-not-save" }, "U_PROJECT_OWNER", linkToken(formPath))).status,
+      409,
+    );
+  assert.ok((await built.secretDrops.peek(dropId)).ok);
+
+  assert.ok(
+    !(await built.keychain!.listByOwner("U_PROJECT_OWNER")).some(
+      (credential) => credential.service === "project-stale",
+    ),
+  );
+});
+
+it("a membership lookup outage leaves the drop link usable for a retry", async () => {
+  const minted = await post(
+    "/v1/keychain/drops",
+    { service: "outage-drop", purpose: "survive a membership outage" },
+    await capFor("U_A", scopeId("channel", "C1")),
+  );
+  const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
+  const directory = built.directory as unknown as Record<string, unknown>;
+  const originals = Object.fromEntries(
+    ["channelMember", "channelMembership", "channelPrivacy", "get"].map((name) => [name, directory[name]]),
+  );
+  for (const name of Object.keys(originals))
+    directory[name] = async () => {
+      throw new Error("membership store unavailable");
+    };
+  try {
+    const failed = await redeem(dropId, { secret: "sk_outage" }, "U_A", linkToken(formPath));
+    assert.equal(failed.status, 409);
+    assert.ok((await built.secretDrops.peek(dropId)).ok);
+  } finally {
+    Object.assign(directory, originals);
+  }
+  assert.equal((await redeem(dropId, { secret: "sk_outage" }, "U_A", linkToken(formPath))).status, 200);
+});
+
+it("an agent-declared fields[] drop renders each input, saves them all, and materializes them in order", async () => {
+  const fields = [
+    { key: "DOORDASH_EMAIL", label: "Email", secret: false },
+    { key: "DOORDASH_PASSWORD", label: "Password" },
+  ];
+  const minted = await post(
+    "/v1/keychain/drops",
+    { service: "doordash", purpose: "place a pickup order", fields },
+    await capFor("U_A", scopeId("channel", "C1")),
+  );
+  assert.equal(minted.status, 200);
+  const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
+  const t = linkToken(formPath);
+
+  const html = await (await getForm(dropId, "U_A", t)).text();
+  assert.match(html, /placeholder="Email"/, "the form renders the declared labels");
+  assert.match(html, /placeholder="Password"/);
+  assert.match(html, /type=text[^>]*placeholder="Email"/, "a non-secret field is a visible input");
+
+  assert.equal((await redeem(dropId, { values: { DOORDASH_EMAIL: "alice@acme.co" } }, "U_A", t)).status, 400);
+  assert.equal((await getForm(dropId, "U_A", t)).status, 200, "a rejected submit leaves the link usable");
+
+  const redeemRes = await redeem(
+    dropId,
+    { values: { DOORDASH_EMAIL: "alice@acme.co", DOORDASH_PASSWORD: "hunter2" } },
+    "U_A",
+    t,
+  );
+  assert.equal(redeemRes.status, 200);
+  const { credential } = (await redeemRes.json()) as {
+    credential: { id: string; fields?: Array<{ envKey: string; secret: boolean }> };
+  };
+  assert.deepEqual(credential.fields, [
+    { envKey: "DOORDASH_EMAIL", secret: false },
+    { envKey: "DOORDASH_PASSWORD", secret: true },
+  ]);
+
+  const grants = await built.keychain!.grantsForScope(scopeId("channel", "C1"));
+  const g = grants.find((x) => x.credential.id === credential.id);
+  const m = await materializeGrant(built.keychain!, g!.grant.id, scopeId("channel", "C1"), "U_A");
+  assert.ok(m.kind === "env");
+  assert.deepEqual(m.kind === "env" ? m.env : [], [
+    { key: "DOORDASH_EMAIL", value: "alice@acme.co", secret: false },
+    { key: "DOORDASH_PASSWORD", value: "hunter2", secret: true },
+  ]);
+});
+
+it("an agent call without the capability header is told which header to send", async () => {
+  const cap = await capFor("U_A");
+  const res = await fetch(`${base}/v1/keychain/drops`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${cap}` },
+    body: JSON.stringify({ service: "stripe", purpose: "p" }),
+  });
+  assert.equal(res.status, 401);
+  assert.match(((await res.json()) as { message: string }).message, /x-agent-capability/);
+  const ok = await post("/v1/keychain/drops", { service: "stripe", purpose: "p" }, cap);
+  assert.equal(ok.status, 200, "the same token in x-agent-capability mints");
+});
+
+it("the secret-drop skill's mint command works as written", async () => {
+  const skill = readFileSync(new URL("../../skills-seed/secret-drop/SKILL.md", import.meta.url), "utf8");
+  const start = skill.indexOf("```sh\n") + "```sh\n".length;
+  const command = skill.slice(start, skill.indexOf("```", start));
+  const { stdout } = await execFileAsync("sh", ["-c", command], {
+    env: { PATH: process.env.PATH, AGENT_API_URL: base, AGENT_API_TOKEN: await capFor("U_A") },
+  });
+  assert.match((JSON.parse(stdout) as { formPath: string }).formPath, /^\/drop\//);
+});
+
+it("rejects a malformed fields[] at mint", async () => {
+  const bad = await post(
+    "/v1/keychain/drops",
+    { service: "x", purpose: "p", fields: [{ key: "not a valid env key" }] },
+    await capFor("U_A", scopeId("channel", "C1")),
+  );
+  assert.equal(bad.status, 400);
+});
+
+it("redeem rejects a missing secret and an unknown link", async () => {
+  const minted = await post(
+    "/v1/keychain/drops",
+    { service: "x", purpose: "p" },
+    await capFor("U_A", scopeId("channel", "C1")),
+  );
+  const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
+  assert.equal((await redeem(dropId, {}, "U_A", linkToken(formPath))).status, 400, "no secret → 400");
+  assert.equal(
+    (await redeem("deadbeef", { secret: "x" }, "U_A", linkToken(formPath))).status,
+    404,
+    "unknown link → 404",
+  );
+});
+
+const mintFor = async (owner: string, service = "tokensvc") => {
+  const r = await post(
+    "/v1/keychain/drops",
+    { service, purpose: "token contract" },
+    await capFor(owner, scopeId("channel", "C1")),
+  );
+  assert.equal(r.status, 200);
+  const { dropId, formPath } = (await r.json()) as { dropId: string; formPath: string };
+  return { dropId, t: linkToken(formPath)! };
+};
+
+it("the minted link's token is drop-scoped: our signature, the secret-drop audience, pinned to this drop and its owner, expiring with the record", async () => {
+  const before = Date.now();
+  const { dropId, t } = await mintFor("U_A");
+  const claims = await verifyCapabilityToken(t, SECRET);
+  assert.ok(claims, "the link token verifies against the capability secret");
+  assert.equal(claims!.aud, SECRET_DROP_AUD);
+  assert.equal(claims!.drop, dropId, "pinned to exactly this drop");
+  assert.equal(claims!.actorId, "U_A", "pinned to the drop's owner");
+  assert.ok(
+    claims!.exp >= before + SECRET_DROP_TTL_MS && claims!.exp <= Date.now() + SECRET_DROP_TTL_MS,
+    "the token lives exactly as long as the record",
+  );
+});
+
+it("both legs refuse a missing, tampered, cross-drop, or wrong-audience token — without burning the link", async () => {
+  const a = await mintFor("U_A", "alphatoken");
+  const b = await mintFor("U_A", "betatoken");
+  const tampered = a.t.slice(0, -4) + (a.t.endsWith("AAAA") ? "BBBB" : "AAAA");
+  const controlPlane = await capFor("U_A", scopeId("channel", "C1"));
+
+  assert.equal((await getForm(a.dropId, "U_A")).status, 404, "no token → 404");
+  assert.equal((await getForm(a.dropId, "U_A", b.t)).status, 404, "another drop's token → 404");
+  assert.equal((await getForm(a.dropId, "U_A", tampered)).status, 404, "tampered token → 404");
+  assert.equal((await getForm(a.dropId, "U_A", controlPlane)).status, 404, "control-plane token → 404");
+
+  const probe = await redeem(a.dropId, { secret: "x" }, "U_A");
+  assert.equal(probe.status, 404, "no token → the spent-link 404, not a live-link tell");
+  assert.match(
+    ((await probe.json()) as { message: string }).message,
+    /invalid or was already used/,
+    "indistinguishable from a spent link",
+  );
+  assert.equal((await redeem(a.dropId, { secret: "x" }, "U_A", b.t)).status, 404, "another drop's token → 404");
+  assert.equal((await redeem(a.dropId, { secret: "x" }, "U_A", tampered)).status, 404, "tampered token → 404");
+  assert.equal((await redeem(a.dropId, { secret: "x" }, "U_A", controlPlane)).status, 404, "control-plane token → 404");
+
+  assert.equal((await getForm(a.dropId, "U_A", a.t)).status, 200, "the probes left the link usable");
+  assert.equal((await redeem(a.dropId, { secret: "sk-alpha" }, "U_A", a.t)).status, 200);
+});
+
+it("an expired link token is refused even while the record lives", async () => {
+  const { dropId } = await mintFor("U_A", "expiredtoken");
+  const stale = await mintCapabilityToken(
+    {
+      actorId: "U_A",
+      scopeId: scopeId("channel", "C1"),
+      aud: SECRET_DROP_AUD,
+      drop: dropId,
+      exp: Date.now() - 1_000,
+    },
+    SECRET,
+  );
+  assert.equal((await getForm(dropId, "U_A", stale)).status, 404);
+  assert.equal((await redeem(dropId, { secret: "x" }, "U_A", stale)).status, 404);
+});
+
+it("a valid token never overrides the owner gate: possession is still not authority", async () => {
+  const { dropId, t } = await mintFor("U_A", "possession");
+  assert.equal(
+    (await getForm(dropId, "U_thief", t)).status,
+    403,
+    "someone else signed in, holding the whole link → not yours",
+  );
+  assert.equal((await redeem(dropId, { secret: "x" }, "U_thief", t)).status, 403);
+  assert.equal((await redeem(dropId, { secret: "x" }, null, t)).status, 403, "no verified owner at all → refused");
+});
+
+it("a pre-token record (minted before links carried tokens) still works under the owner gate alone", async () => {
+  const { dropId } = await built.secretDrops!.mint({
+    ownerId: "U_LEGACY",
+    service: "legacysvc",
+    purpose: "old link",
+    requestedBy: "U_LEGACY",
+  });
+  assert.equal((await getForm(dropId, "U_LEGACY")).status, 200, "no requiresToken flag → the token is not demanded");
+  assert.equal((await redeem(dropId, { secret: "sk-legacy" }, "U_LEGACY")).status, 200);
+});
+
+it("the paste form re-presents the link's query string on submit, so the redeem leg sees the same token", async () => {
+  const { dropId, t } = await mintFor("U_A", "formcarry");
+  const html = await (await getForm(dropId, "U_A", t)).text();
+  assert.match(html, /location\.search/, "the submit fetch carries location.search");
+  assert.ok(!html.includes(t), "the token itself is never embedded in the page body");
+});
+
+it("a live bot attestation survives mint and private-scope redemption", async () => {
+  await built.directory.replaceChannels(
+    [{ channelId: "C1", name: "drops", isPrivate: true }],
+    [{ channelId: "C1", principalId: "U_A" }],
+  );
+  const members = [{ id: "B-LEGACY", type: "internal" as const }];
+  const minted = await post(
+    "/v1/keychain/drops",
+    { service: "botsvc", purpose: "bot credential" },
+    await capFor("B-LEGACY", scopeId("channel", "C1"), {
+      botActor: true,
+      liveActor: true,
+      members,
+    }),
+  );
+  assert.equal(minted.status, 200);
+  const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
+  const token = await verifyCapabilityToken(linkToken(formPath)!, SECRET);
+  assert.equal(token?.botActor, true);
+  assert.equal(token?.liveActor, true);
+  assert.deepEqual(token?.members, members);
+  assert.equal((await redeem(dropId, { secret: "bot-secret" }, "B-LEGACY", linkToken(formPath))).status, 200);
+});

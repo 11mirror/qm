@@ -1,11 +1,11 @@
 import "../../../support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../../../../src/api/server.ts";
 import { buildApp } from "../../../support/build-app.ts";
 import type { TurnRequest } from "../../../../src/types.ts";
 import { testConfig } from "../../../support/test-config.ts";
+import { listenLocal } from "../../../support/listen-local.ts";
 
 const URL = process.env.DATABASE_URL;
 
@@ -24,8 +24,7 @@ test("admin list endpoints accept fractional limit values", { skip: !URL }, asyn
     outbound: built.outbound,
     crons: built.crons,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   const headers = { "x-admin-actor": "admin-alice@default-org" };
   try {
     const dm: TurnRequest = {

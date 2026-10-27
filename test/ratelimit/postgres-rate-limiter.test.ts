@@ -4,17 +4,15 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { createPostgresRateLimiter } from "../../src/ratelimit/postgres-rate-limiter.ts";
 import { truncateTables, testDatabaseUrl } from "../support/test-database.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL to run the Postgres rate-limiter test";
+const URL = process.env.DATABASE_URL!;
 
 beforeEach(async () => {
-  if (!URL) return;
   await truncateTables(URL, ["rate_limit_windows"]);
 });
 
-test("Postgres rate limits are shared across instances", { skip }, async () => {
-  const a = createPostgresRateLimiter(URL!, { maxPerWindow: 2, windowMs: 60_000 });
-  const b = createPostgresRateLimiter(URL!, { maxPerWindow: 2, windowMs: 60_000 });
+test("Postgres rate limits are shared across instances", async () => {
+  const a = createPostgresRateLimiter(URL, { maxPerWindow: 2, windowMs: 60_000 });
+  const b = createPostgresRateLimiter(URL, { maxPerWindow: 2, windowMs: 60_000 });
   assert.equal((await a.check("alice")).allowed, true);
   assert.equal((await b.check("alice")).allowed, true);
   assert.equal((await a.check("alice")).allowed, false);

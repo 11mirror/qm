@@ -1,316 +1,15 @@
 import "../../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import type { Server } from "node:http";
-import type { AddressInfo } from "node:net";
-import { describe, it, before, after, test } from "node:test";
-import { createServer, createInsecureTestServer } from "../../../src/api/server.ts";
-import { startSession } from "../../../src/api/start-session.ts";
-import {
-  mintCapabilityToken,
-  CAPABILITY_TTL_MS,
-  CONTROL_PLANE_AUD,
-  type CapabilityClaims,
-} from "../../../src/auth/capability-token.ts";
-import { createPostgresReplayDedupe } from "../../../src/auth/replay-dedupe.ts";
+import { test } from "node:test";
+import { createInsecureTestServer } from "../../../src/api/server.ts";
 import type { OrchestratorInput } from "../../../src/core/orchestrator.ts";
-import { scopeId, type TurnRequest, type Principal, type Session } from "../../../src/types.ts";
-import { type BuiltApp, buildApp as buildWiredApp } from "../../../src/wiring.ts";
+import type { Principal, Session } from "../../../src/types.ts";
+import { buildApp as buildWiredApp } from "../../../src/wiring.ts";
 import { buildApp } from "../../support/build-app.ts";
 import { testConfig } from "../../support/test-config.ts";
-import { testDatabaseUrl } from "../../support/test-database.ts";
-
-const SECRET = "agent-conversations-secret".repeat(2);
-
-function dm(externalId: string, text: string, thread: string): TurnRequest {
-  return {
-    origin: { kind: "direct" },
-    surface: "test",
-    actor: { externalId },
-    conversation: { kind: "dm", threadRef: thread },
-    text,
-  };
-}
-
-describe("agent conversations self-API", async () => {
-  let server: Server;
-  let base: string;
-  let built: BuiltApp;
-  let mineId: string;
-  let theirsId: string;
-
-  const capFor = (actorId: string, scope = scopeId("personal", actorId), live = true) =>
-    mintCapabilityToken(
-      { actorId, scopeId: scope, aud: CONTROL_PLANE_AUD, exp: Date.now() + CAPABILITY_TTL_MS, liveActor: live },
-      SECRET,
-    );
-
-  const get = async (path: string, token?: string) =>
-    fetch(`${base}${path}`, { headers: token ? { "x-agent-capability": token } : {} });
-  const post = async (path: string, body: unknown, token?: string) =>
-    fetch(`${base}${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...(token ? { "x-agent-capability": token } : {}) },
-      body: JSON.stringify(body),
-    });
-
-  before(async () => {
-    built = buildApp(testConfig({ signingSecret: SECRET }));
-    server = createServer(built.app, {
-      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-      signingSecret: SECRET,
-      portalUrl: "https://portal.example/",
-      sessions: built.sessions,
-      memory: built.memory,
-      config: built.config,
-    });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    mineId = (await built.app.turn(dm("U1", "plan the launch", "web:U1:c1"))).sessionId!;
-    theirsId = (await built.app.turn(dm("U2", "someone else's chat", "web:U2:c1"))).sessionId!;
-  });
-
-  after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
-
-  it("web conversations go unread on an agent reply until read; other threads never do", async () => {
-    const unread = async (id: string) => (await built.app.listSessions("U1")).find((s) => s.id === id)?.unread === true;
-    assert.equal(await unread(mineId), true);
-    await built.app.updateSession(mineId, "U1", { readAt: Date.now() });
-    assert.equal(await unread(mineId), false);
-    await built.app.updateSession(mineId, "U1", { readAt: 0 });
-    assert.equal(await unread(mineId), true);
-    const slackId = (await built.app.turn(dm("U1", "from slack", "dm:D1")))!.sessionId!;
-    assert.equal(await unread(slackId), false);
-  });
-
-  it("new sessions start clean with only the seed text", async () => {
-    const out = await startSession(built.app, built.sessions, "U1", {
-      scopeId: scopeId("personal", "U1"),
-      text: "investigate the flaky test",
-      title: "Flaky test hunt",
-    });
-    assert.ok("session" in out);
-    assert.notEqual(out.session.id, mineId);
-    assert.equal(out.session.title, "Flaky test hunt");
-    const [run] = await built.runs.inFlightForThread(out.session.threadRef);
-    assert.equal(run?.request.text, "investigate the flaky test");
-    assert.equal(run?.request.surface, "web");
-    const items = await built.sessions.getItems(out.session.id);
-    assert.ok(!items.some((e) => JSON.stringify(e).includes("plan the launch")));
-    const listed = await built.app.listSessions("U1");
-    assert.ok(listed.some((s) => s.id === out.session.id));
-  });
-
-  it("new sessions and forks seeded by a person's turn keep that person's origin and provenance", async () => {
-    const source = await built.runs.latestForThread("web:U1:c1");
-    const provenance = {
-      origin: { kind: "human" as const, messageTs: "1700000000.000100" },
-      sessionSenderId: mineId,
-      ...(source ? { delegatingRunId: source.id } : {}),
-    };
-    for (const extra of [{}, { forkOf: mineId }]) {
-      const out = await startSession(built.app, built.sessions, "U1", {
-        scopeId: scopeId("personal", "U1"),
-        text: "follow up on the launch",
-        ...extra,
-        ...provenance,
-      });
-      assert.ok("session" in out);
-      const [run] = await built.runs.inFlightForThread(out.session.threadRef);
-      assert.deepEqual(run?.request.origin, { kind: "human" });
-      assert.equal(run?.request.sessionSenderId, mineId);
-      assert.equal(run?.request.delegatingRunId, source?.id);
-    }
-  });
-
-  it("a blank fork starts no turn", async () => {
-    const out = await startSession(built.app, built.sessions, "U1", {
-      scopeId: scopeId("personal", "U1"),
-      forkOf: mineId,
-      origin: { kind: "human" },
-      sessionSenderId: mineId,
-    });
-    assert.ok("session" in out);
-    assert.deepEqual(await built.runs.inFlightForThread(out.session.threadRef), []);
-  });
-
-  it("spawned provenance fields stay out of public turns", async () => {
-    await built.app.turn({
-      ...dm("U1", "pretend", "web:U1:c9"),
-      sessionSenderId: mineId,
-      delegatingRunId: "run-forged",
-      async: true,
-    });
-    const [run] = await built.runs.inFlightForThread("web:U1:c9");
-    assert.ok(run);
-    assert.equal(run.request.sessionSenderId, undefined);
-    assert.equal(run.request.delegatingRunId, undefined);
-  });
-
-  it("new sessions in a channel seed their turn on that channel", async () => {
-    await built.app.upsertDirectory([{ principalId: "U1", displayName: "User One", type: "internal" }]);
-    await built.app.upsertChannels(
-      [{ channelId: "C1", name: "engineering", isPrivate: true }],
-      [{ channelId: "C1", principalId: "U1" }],
-    );
-    const out = await startSession(built.app, built.sessions, "U1", {
-      scopeId: scopeId("channel", "C1"),
-      text: "investigate the channel deployment",
-    });
-    assert.ok("session" in out);
-    assert.equal(out.session.scopeId, scopeId("channel", "C1"));
-    const [run] = await built.runs.inFlightForThread(out.session.threadRef);
-    assert.equal(run?.request.conversation.channelRef, "C1");
-  });
-
-  it("a refused seed discards a new session but reports a fork it left", async () => {
-    const raced: typeof built.app = {
-      ...built.app,
-      turn: async (req) =>
-        (req as { spawned?: boolean }).spawned
-          ? { status: "refused", reason: "project membership changed" }
-          : built.app.turn(req),
-    };
-    const ids = async () => (await built.app.listSessions("U1")).map((s) => s.id).sort();
-    const before = await ids();
-    assert.deepEqual(
-      await startSession(raced, built.sessions, "U1", { scopeId: scopeId("personal", "U1"), text: "refused" }),
-      { error: "project membership changed" },
-    );
-    assert.deepEqual(await ids(), before);
-    const forked = await startSession(raced, built.sessions, "U1", {
-      scopeId: scopeId("personal", "U1"),
-      forkOf: mineId,
-      text: "refused",
-    });
-    assert.ok("session" in forked);
-    assert.equal(forked.refused, "project membership changed");
-  });
-
-  it("refuses a scope or fork source the actor can't use", async () => {
-    assert.ok(
-      "error" in
-        (await startSession(built.app, built.sessions, "U1", { scopeId: scopeId("personal", "U2"), text: "peek" })),
-    );
-    assert.ok(
-      "error" in
-        (await startSession(built.app, built.sessions, "U1", { scopeId: scopeId("personal", "U1"), forkOf: theirsId })),
-    );
-  });
-
-  it("requires a capability token", async () => {
-    assert.equal((await get("/v1/conversations")).status, 401);
-    assert.equal((await get(`/v1/conversations/${mineId}`)).status, 401);
-    assert.equal((await post(`/v1/conversations/${mineId}`, { archived: true })).status, 401);
-  });
-
-  it("lists only the actor's own conversations", async () => {
-    const res = await get("/v1/conversations", await capFor("U1"));
-    assert.equal(res.status, 200);
-    const { conversations } = (await res.json()) as { conversations: Array<{ id: string; archived: boolean }> };
-    assert.ok(conversations.some((c) => c.id === mineId));
-    assert.ok(!conversations.some((c) => c.id === theirsId), "another person's conversation never appears");
-  });
-
-  it("archives and unarchives one of the actor's own conversations", async () => {
-    const token = await capFor("U1");
-    const res = await post(`/v1/conversations/${mineId}`, { archived: true }, token);
-    assert.equal(res.status, 200);
-    const { conversation } = (await res.json()) as { conversation: { archived: boolean } };
-    assert.equal(conversation.archived, true);
-
-    const back = await post(`/v1/conversations/${mineId}`, { archived: false }, token);
-    assert.equal(back.status, 200);
-    assert.equal(((await back.json()) as { conversation: { archived: boolean } }).conversation.archived, false);
-  });
-
-  it("archiving is per-participant view state, not visible to the other viewer's list semantics", async () => {
-    const token = await capFor("U1");
-    await post(`/v1/conversations/${mineId}`, { archived: true }, token);
-    const other = await built.app.listSessions("U2");
-    assert.ok(!other.some((s) => s.id === mineId && s.archived), "U1's archive never marks U2's view");
-    await post(`/v1/conversations/${mineId}`, { archived: false }, token);
-  });
-
-  it("refuses a conversation the actor can't see (404, no existence leak)", async () => {
-    const token = await capFor("U1");
-    assert.equal((await get(`/v1/conversations/${theirsId}`, token)).status, 404);
-    assert.equal((await post(`/v1/conversations/${theirsId}`, { archived: true }, token)).status, 404);
-  });
-
-  it("reads and tail-pages one of the actor's own conversations", async () => {
-    for (let turn = 2; turn <= 21; turn++) {
-      await built.app.turn(dm("U1", `launch question ${turn}`, "web:U1:c1"));
-    }
-    const token = await capFor("U1");
-    const bounded = await get(`/v1/conversations/${mineId}`, token);
-    assert.equal(bounded.status, 200);
-    const boundedBody = (await bounded.json()) as {
-      items: Array<{ kind: string; text: string | null }>;
-      earlierItems?: number;
-    };
-    assert.ok(!boundedBody.items.some((item) => item.text === "plan the launch"));
-    assert.ok(boundedBody.items.some((item) => item.text === "launch question 21"));
-    assert.ok((boundedBody.earlierItems ?? 0) > 0);
-
-    const tail = await get(`/v1/conversations/${mineId}?tailTurns=1`, token);
-    assert.equal(tail.status, 200);
-    const tailBody = (await tail.json()) as {
-      items: Array<{ kind: string; text: string | null }>;
-      earlierItems?: number;
-    };
-    assert.ok(tailBody.items.some((item) => item.text === "launch question 21"));
-    assert.ok(!tailBody.items.some((item) => item.text === "launch question 20"));
-    assert.ok((tailBody.earlierItems ?? 0) > 0);
-    assert.equal((await get(`/v1/conversations/${mineId}?sinceSeq=0`, token)).status, 400);
-  });
-
-  it("forks carry the source transcript into a new sidebar session", async () => {
-    const out = await startSession(built.app, built.sessions, "U1", {
-      scopeId: scopeId("personal", "U1"),
-      forkOf: mineId,
-    });
-    assert.ok("session" in out);
-    assert.notEqual(out.session.id, mineId);
-    const items = await built.sessions.getItems(out.session.id);
-    assert.ok(items.some((e) => JSON.stringify(e).includes("plan the launch")));
-    assert.ok((await built.app.listSessions("U1")).some((s) => s.id === out.session.id));
-  });
-
-  it("refuses to color a conversation the actor can't see", async () => {
-    const res = await post(`/v1/conversations/${theirsId}`, { color: "#123456" }, await capFor("U1"));
-    assert.equal(res.status, 404);
-  });
-
-  it("validates the patch body", async () => {
-    const token = await capFor("U1");
-    assert.equal((await post(`/v1/conversations/${mineId}`, {}, token)).status, 400);
-    assert.equal((await post(`/v1/conversations/${mineId}`, { archived: "yes" }, token)).status, 400);
-    assert.equal((await post(`/v1/conversations/${mineId}`, { title: 5 }, token)).status, 400);
-    assert.equal((await post(`/v1/conversations/${mineId}`, { color: "red" }, token)).status, 400);
-  });
-
-  it("sets and clears the sidebar color", async () => {
-    const token = await capFor("U1");
-    const set = await post(`/v1/conversations/${mineId}`, { color: "#A1B2C3" }, token);
-    assert.equal(set.status, 200);
-    assert.equal(((await set.json()) as { conversation: { color: string | null } }).conversation.color, "#a1b2c3");
-
-    const clear = await post(`/v1/conversations/${mineId}`, { color: null }, token);
-    assert.equal(clear.status, 200);
-    assert.equal(((await clear.json()) as { conversation: { color: string | null } }).conversation.color, null);
-  });
-
-  it("renames and pins through the same patch", async () => {
-    const token = await capFor("U1");
-    const res = await post(`/v1/conversations/${mineId}`, { title: "Launch plan", pinned: true }, token);
-    assert.equal(res.status, 200);
-    const { conversation } = (await res.json()) as { conversation: { title: string | null; pinned: boolean } };
-    assert.equal(conversation.title, "Launch plan");
-    assert.equal(conversation.pinned, true);
-  });
-});
+import { listenLocal } from "../../support/listen-local.ts";
+import type { AddressInfo } from "node:net";
+import type { ContextSummary } from "../../../src/api/app.ts";
 
 type Page = { sessions: Session[]; pinned?: Session[]; nextCursor: string | null; hasArchived?: boolean };
 
@@ -322,8 +21,7 @@ async function withServer<T>(
 ): Promise<T> {
   const built = buildWiredApp(testConfig());
   const server = createInsecureTestServer(built.app);
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   try {
     return await fn(built, async (path) => {
       const res = await fetch(base + path);
@@ -451,259 +149,235 @@ test("one row can be looked up by id or thread, and only by someone who can see 
   });
 });
 
-const CAPABILITY_ROUTES_SECRET = "route-test-secret".repeat(3);
+function start() {
+  const built = buildApp(testConfig());
+  const server = createInsecureTestServer(built.app);
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  return { built, base, close: () => new Promise<void>((r) => server.close(() => r())) };
+}
 
-describe("capability-token control plane (SOUL)", () => {
-  let server: Server;
-  let base: string;
-  let built: BuiltApp;
+const contexts = async (base: string, principalId: string): Promise<ContextSummary[]> => {
+  const res = await fetch(`${base}/v1/contexts?principalId=${encodeURIComponent(principalId)}`);
+  assert.equal(res.status, 200);
+  return ((await res.json()) as { contexts: ContextSummary[] }).contexts;
+};
 
-  const capFor = async (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
-    await mintCapabilityToken(
-      {
-        actorId,
-        scopeId: scope,
-        destination: { type: "slack", target: `D-${actorId}`, audienceScopeId: scope },
-        exp: Date.now() + CAPABILITY_TTL_MS,
-        ...extra,
-      },
-      CAPABILITY_ROUTES_SECRET,
-    );
-
-  const THREAD = {
-    key: "k-thread",
-    type: "slack",
-    target: "C:111",
-    audienceScopeId: scopeId("channel", "C"),
-    label: "this thread",
-  } as const;
-  const ROOT = {
-    key: "k-root",
-    type: "slack",
-    target: "C",
-    audienceScopeId: scopeId("channel", "C"),
-    label: "#eng (the whole channel)",
-  } as const;
-  const capChannel = async (actorId: string, extra: Partial<CapabilityClaims> = {}) =>
-    await mintCapabilityToken(
-      {
-        actorId,
-        scopeId: scopeId("channel", "C"),
-        destination: { type: THREAD.type, target: THREAD.target, audienceScopeId: THREAD.audienceScopeId },
-        destinations: [THREAD, ROOT],
-        defaultDestinationKey: THREAD.key,
-        exp: Date.now() + CAPABILITY_TTL_MS,
-        ...extra,
-      },
-      CAPABILITY_ROUTES_SECRET,
-    );
-
-  before(async () => {
-    built = buildApp(testConfig({ signingSecret: CAPABILITY_ROUTES_SECRET }));
-    await built.directory.replaceChannels(
-      [{ channelId: "C", name: "eng", isPrivate: false }],
-      ["admin-alice", "U1", "U2", "U8"].map((principalId) => ({ channelId: "C", principalId })),
-    );
-    server = createServer(built.app, {
-      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-      signingSecret: CAPABILITY_ROUTES_SECRET,
-      scheduler: built.scheduler,
-      config: built.config,
-      admin: built.admin,
-    });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+const webTurn = (base: string, actor: string, conversation: unknown, text = "hi") =>
+  fetch(`${base}/v1/turns`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      origin: { kind: "direct" },
+      surface: "web",
+      actor: { externalId: actor },
+      conversation,
+      text,
+    }),
   });
 
-  after(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
+test("GET /v1/contexts: personal always; public channels and current private memberships", async () => {
+  const s = start();
+  try {
+    const before = await contexts(s.base, "alice");
+    assert.equal(before.length, 1);
+    assert.equal(before[0]!.scopeId, "personal:alice");
+    assert.equal(before[0]!.kind, "personal");
 
-  const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
-    fetch(`${base}${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...headers },
-      body: JSON.stringify(body),
-    });
-  const get = (path: string, headers: Record<string, string> = {}) => fetch(`${base}${path}`, { headers });
-  it("updates only the caller's OWN personal SOUL, ignoring body scope/actor", async () => {
-    const orgVerBefore = built.config.instructionsVersion(scopeId("org", "default-org"));
-    const res = await post(
-      "/v1/instructions",
-      { content: "Always answer in bullet points.", scopeId: "org:default-org", actorId: "U2" },
-      { "x-agent-capability": await capFor("U1") },
+    await s.built.app.upsertChannels(
+      [
+        { channelId: "C1", name: "eng", isPrivate: false },
+        { channelId: "C2", name: "sekrit", isPrivate: true },
+      ],
+      [{ channelId: "C2", principalId: "alice" }],
     );
-    assert.equal(res.status, 200);
-    assert.ok(built.config.instructionsVersion(scopeId("personal", "U1")) >= 1, "U1's personal SOUL was updated");
+
+    const alice = await contexts(s.base, "alice");
+    assert.deepEqual(alice.map((c) => c.scopeId).sort(), ["channel:C1", "channel:C2", "personal:alice"]);
+    assert.equal(alice[0]!.kind, "personal", "personal sorts first");
+    assert.equal(alice.find((c) => c.scopeId === "channel:C2")!.isPrivate, true);
+
+    const bob = await contexts(s.base, "bob");
+    assert.deepEqual(
+      bob.map((c) => c.scopeId).sort(),
+      ["channel:C1", "personal:bob"],
+      "public rooms remain usable without stale-session authority",
+    );
+  } finally {
+    await s.close();
+  }
+});
+
+test("web turns into a shared scope are membership-checked; sessions then count toward the context", async () => {
+  const s = start();
+  try {
+    await s.built.app.upsertDirectory([
+      { principalId: "alice", displayName: "Alice", type: "internal" },
+      { principalId: "bob", displayName: "Bob", type: "internal" },
+    ]);
+    await s.built.app.upsertChannels(
+      [
+        { channelId: "C1", name: "eng", isPrivate: false },
+        { channelId: "C2", name: "sekrit", isPrivate: true },
+      ],
+      [{ channelId: "C2", principalId: "alice" }],
+    );
+
+    const aliceOk = await webTurn(s.base, "alice", { kind: "channel", threadRef: "web:alice:t1", channelRef: "C2" });
+    assert.equal(aliceOk.status, 200);
+    const bobNo = await webTurn(s.base, "bob", { kind: "channel", threadRef: "web:bob:t1", channelRef: "C2" });
+    assert.equal(bobNo.status, 403);
     assert.equal(
-      built.config.instructionsVersion(scopeId("org", "default-org")),
-      orgVerBefore,
-      "org SOUL floor untouched",
+      (await webTurn(s.base, "bob", { kind: "channel", threadRef: "web:bob:t2", channelRef: "C1" })).status,
+      200,
     );
-  });
 
-  it("updates the token's shared-scope SOUL without touching the actor's personal SOUL", async () => {
-    const personalScope = scopeId("personal", "U8");
-    const channelScope = scopeId("channel", "C");
-    const personalBefore = built.config.instructionsVersion(personalScope);
-    const res = await post(
-      "/v1/instructions",
-      { content: "Channel C speaks in haiku.", scopeId: personalScope, actorId: "U2" },
-      { "x-agent-capability": await capChannel("U8") },
-    );
-    assert.equal(res.status, 200);
-
-    assert.equal(built.config.getInstructions(channelScope), "Channel C speaks in haiku.");
-    assert.ok(built.config.instructionsVersion(channelScope) >= 1, "channel SOUL was updated");
     assert.equal(
-      built.config.instructionsVersion(personalScope),
-      personalBefore,
-      "actor's personal SOUL was not touched",
-    );
-  });
-
-  it("does not let capability self-update org or team SOUL", async () => {
-    const orgScope = scopeId("org", "default-org");
-    const teamScope = scopeId("team", "T");
-    const orgBefore = built.config.instructionsVersion(orgScope);
-
-    const orgRes = await post(
-      "/v1/instructions",
-      { content: "replace org" },
-      { "x-agent-capability": await capFor("U1", orgScope) },
-    );
-    const teamRes = await post(
-      "/v1/instructions",
-      { content: "replace team" },
-      { "x-agent-capability": await capFor("U1", teamScope) },
-    );
-
-    assert.equal(orgRes.status, 403);
-    assert.equal(teamRes.status, 403);
-    assert.equal(built.config.instructionsVersion(orgScope), orgBefore);
-    assert.equal(built.config.getInstructions(teamScope), null);
-  });
-
-  it("reads the caller's in-scope SOUL under a capability", async () => {
-    const personalScope = scopeId("personal", "U7");
-    await built.config.setInstructions(personalScope, "Prefer precise, compact answers.");
-
-    const res = await get("/v1/instructions?scopeId=personal:U2", { "x-agent-capability": await capFor("U7") });
-    assert.equal(res.status, 200);
-
-    const got = (await res.json()) as any;
-    assert.equal(got.scopeId, personalScope, "query scope is ignored; the token's signed scope wins");
-    assert.equal(got.instructions, "Prefer precise, compact answers.");
-    assert.ok(got.instructionsVersion >= 1);
-    assert.equal(got.orgScopeId, scopeId("org", "default-org"));
-    assert.equal(typeof got.orgInstructions, "string");
-    assert.ok(got.effectiveInstructions.includes("Prefer precise, compact answers."));
-    assert.ok(got.effectiveInstructions.includes(got.orgInstructions));
-  });
-
-  it("effective SOUL deduplicates organization text without rewriting stored scope policy", async () => {
-    const orgScope = scopeId("org", "default-org");
-    const personalScope = scopeId("personal", "U7");
-    const orgInstructions = built.config.getInstructions(orgScope)!;
-    await built.config.setInstructions(personalScope, ` ${orgInstructions} `);
-    const res = await get("/v1/instructions", { "x-agent-capability": await capFor("U7") });
-    assert.equal(res.status, 200);
-    const got = (await res.json()) as any;
-    assert.equal(got.instructions, ` ${orgInstructions} `);
-    assert.equal(got.effectiveInstructions.split(orgInstructions).length - 1, 1);
-    assert.equal(built.config.getInstructions(personalScope), got.instructions);
-  });
-
-  it("reads channel SOUL for a channel-scoped token without exposing the actor's personal SOUL", async () => {
-    await built.config.setInstructions(scopeId("personal", "U8"), "Private U8 instruction.");
-    await built.config.setInstructions(scopeId("channel", "C"), "Channel C instruction.");
-
-    const res = await get("/v1/instructions?scopeId=personal:U8", { "x-agent-capability": await capChannel("U8") });
-    assert.equal(res.status, 200);
-
-    const got = (await res.json()) as any;
-    assert.equal(got.scopeId, scopeId("channel", "C"));
-    assert.equal(got.instructions, "Channel C instruction.");
-    assert.ok(got.effectiveInstructions.includes("Channel C instruction."));
-    assert.equal(got.effectiveInstructions.includes("Private U8 instruction."), false);
-  });
-
-  it("channel-header-pin takes the actor and scope from the token and refuses non-live tokens", async () => {
-    const put = (body: unknown, token: string) =>
-      fetch(`${base}/v1/channel-header-pin`, {
-        method: "PUT",
-        headers: { "content-type": "application/json", "x-agent-capability": token },
-        body: JSON.stringify(body),
-      });
-    const live = await capChannel("U1", { liveActor: true });
-    const spoofed = await put({ on: true, principalId: "U2", scopeId: "channel:OTHER" }, live);
-    assert.equal(spoofed.status, 200);
-    assert.equal(((await spoofed.json()) as { scopeId: string }).scopeId, "channel:C");
-    const triggered = await put({ on: false }, await capChannel("U1", { triggered: true }));
-    assert.equal(triggered.status, 403);
-    assert.deepEqual(await triggered.json(), { error: "live_actor_required" });
-  });
-
-  it("rejects an invalid/expired token with 401", async () => {
-    assert.equal((await post("/v1/instructions", { content: "x" }, { "x-agent-capability": "garbage" })).status, 401);
-    const expired = await mintCapabilityToken(
-      { actorId: "U1", scopeId: "personal:U1", exp: Date.now() - 1 },
-      CAPABILITY_ROUTES_SECRET,
-    );
-    assert.equal((await post("/v1/instructions", { content: "x" }, { "x-agent-capability": expired })).status, 401);
-  });
-
-  it("refuses a capability token on a non-self-service route (e.g. /v1/turns) with 403", async () => {
-    const res = await post(
-      "/v1/turns",
-      {
-        origin: { kind: "direct" },
-        surface: "x",
-        actor: { externalId: "U1" },
-        conversation: { kind: "dm", threadRef: "t" },
-        text: "hi",
-      },
-      { "x-agent-capability": await capFor("U1") },
-    );
-    assert.equal(res.status, 403);
-  });
-
-  it("refuses a capability token minted for another audience on a self-service route", async () => {
-    const foreign = await capFor("U1", scopeId("personal", "U1"), { aud: "some-other-surface" });
-    const res = await get("/v1/keychain/overview", { "x-agent-capability": foreign });
-    assert.equal(res.status, 403);
-    assert.match(await res.text(), /audience not valid/);
-    const ok = await get("/v1/keychain/overview", { "x-agent-capability": await capFor("U1") });
-    assert.notEqual(ok.status, 403);
-  });
-
-  it("a public channel remains available to an active internal principal outside its current roster", async () => {
-    await built.directory.replaceChannels(
-      [{ channelId: "C", name: "eng", isPrivate: false }],
-      ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
-    );
-    assert.equal((await get("/v1/instructions", { "x-agent-capability": await capChannel("U8") })).status, 200);
-  });
-
-  it("a live verified bot retains private-channel tools without a Slack user principal", async () => {
-    await built.directory.replaceChannels(
-      [{ channelId: "C", name: "eng", isPrivate: true }],
-      ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
-    );
-    const members = [{ id: "B-LEGACY", type: "internal" as const }];
-    const token = await capFor("B-LEGACY", scopeId("channel", "C"), {
-      botActor: true,
-      liveActor: true,
-      members,
-    });
-    assert.equal((await get("/v1/instructions", { "x-agent-capability": token })).status, 200);
-    assert.equal(
-      (
-        await get("/v1/instructions", {
-          "x-agent-capability": await capFor("B-LEGACY", scopeId("channel", "C"), { members }),
-        })
-      ).status,
+      (await webTurn(s.base, "bob", { kind: "channel", threadRef: "web:bob:t3", channelRef: "C9" })).status,
       403,
     );
-  });
+    assert.equal((await webTurn(s.base, "bob", { kind: "group", threadRef: "web:bob:t4" })).status, 403);
+
+    const bob = await contexts(s.base, "bob");
+    assert.ok(bob.some((c) => c.scopeId === "channel:C1"));
+
+    const alice = await contexts(s.base, "alice");
+    const c2 = alice.find((c) => c.scopeId === "channel:C2")!;
+    assert.equal(c2.sessionCount, 1);
+    assert.ok((c2.lastActivityAt ?? 0) > 0);
+    const aliceSessions = await s.built.app.listSessions("alice");
+    const expected = Math.max(
+      ...aliceSessions.filter((x) => x.scopeId === "channel:C2").map((x) => x.lastActivityAt ?? x.createdAt),
+    );
+    assert.equal(
+      c2.lastActivityAt,
+      expected,
+      "context recency is derived from session lastActivityAt, not a separate signal",
+    );
+  } finally {
+    await s.close();
+  }
+});
+
+test("a web turn carrying fastMode on a non-fast model is accepted; dispatch masks the flag", async () => {
+  const s = start();
+  try {
+    const res = await fetch(`${s.base}/v1/turns`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        origin: { kind: "direct" },
+        surface: "web",
+        actor: { externalId: "alice" },
+        conversation: { kind: "dm", threadRef: "web:alice:fast1" },
+        text: "hi",
+        model: "claude-fable-5",
+        fastMode: true,
+      }),
+    });
+    assert.equal(res.status, 200);
+  } finally {
+    await s.close();
+  }
+});
+
+test("prior participation never authorizes a shared scope after directory membership is absent", async () => {
+  const s = start();
+  try {
+    const slack = await fetch(`${s.base}/v1/turns`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        origin: { kind: "direct" },
+        surface: "slack",
+        actor: { externalId: "alice" },
+        conversation: { kind: "group", threadRef: "grp:G1:1", channelRef: "G1" },
+        text: "hello",
+      }),
+    });
+    assert.equal(slack.status, 200);
+
+    assert.equal(
+      (await webTurn(s.base, "alice", { kind: "group", threadRef: "web:alice:g1", channelRef: "G1" })).status,
+      403,
+    );
+    assert.equal(
+      (await webTurn(s.base, "bob", { kind: "group", threadRef: "web:bob:g1", channelRef: "G1" })).status,
+      403,
+    );
+
+    const alice = await contexts(s.base, "alice");
+    assert.equal(
+      alice.find((c) => c.scopeId === "group:G1"),
+      undefined,
+    );
+  } finally {
+    await s.close();
+  }
+});
+
+test("a web turn can't pair an authorized scope claim with a thread living elsewhere", async () => {
+  const s = start();
+  try {
+    await s.built.app.upsertChannels(
+      [{ channelId: "C2", name: "sekrit", isPrivate: true }],
+      [
+        { channelId: "C2", principalId: "alice" },
+        { channelId: "C2", principalId: "carol" },
+      ],
+    );
+
+    assert.equal((await webTurn(s.base, "alice", { kind: "dm", threadRef: "web:alice:p1" })).status, 200);
+    assert.equal(
+      (await webTurn(s.base, "alice", { kind: "channel", threadRef: "web:alice:t1", channelRef: "C2" })).status,
+      200,
+    );
+
+    assert.equal(
+      (await webTurn(s.base, "carol", { kind: "channel", threadRef: "web:alice:t1", channelRef: "C2" })).status,
+      200,
+    );
+
+    assert.equal((await webTurn(s.base, "carol", { kind: "dm", threadRef: "web:alice:t1" })).status, 403);
+    assert.equal(
+      (await webTurn(s.base, "carol", { kind: "channel", threadRef: "web:alice:p1", channelRef: "C2" })).status,
+      403,
+    );
+    assert.equal(
+      (await webTurn(s.base, "alice", { kind: "channel", threadRef: "web:alice:p1", channelRef: "C2" })).status,
+      403,
+    );
+
+    assert.equal(
+      (await webTurn(s.base, "carol", { kind: "channel", threadRef: "web:alice:default", channelRef: "C2" })).status,
+      403,
+    );
+    assert.equal((await webTurn(s.base, "alice", { kind: "dm", threadRef: "web:alice:default" })).status, 200);
+  } finally {
+    await s.close();
+  }
+});
+
+test("directory push stores the workspace URL; /v1/directory/meta serves it", async () => {
+  const s = start();
+  try {
+    const before = await fetch(`${s.base}/v1/directory/meta`);
+    assert.equal(before.status, 200);
+    assert.deepEqual(await before.json(), { workspaceUrl: null });
+
+    const push = await fetch(`${s.base}/v1/directory`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        members: [{ principalId: "alice", displayName: "Alice", type: "internal" }],
+        workspaceUrl: "https://acme.slack.com/",
+      }),
+    });
+    assert.equal(push.status, 200);
+
+    const after = (await (await fetch(`${s.base}/v1/directory/meta`)).json()) as { workspaceUrl: string | null };
+    assert.equal(after.workspaceUrl, "https://acme.slack.com", "stored normalized, trailing slash dropped");
+  } finally {
+    await s.close();
+  }
 });

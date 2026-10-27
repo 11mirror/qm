@@ -6,9 +6,10 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
-import type { Principal, TurnRequest } from "../src/types.ts";
+import type { Principal } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
+import { dmFor } from "./support/dm-turn.ts";
 import { claimTurn, finishTurn } from "./support/turns.ts";
 
 function freshApp() {
@@ -17,15 +18,7 @@ function freshApp() {
 }
 
 const actor = { externalId: "U1" };
-function dm(text: string, thread: string): TurnRequest {
-  return {
-    origin: { kind: "direct" },
-    surface: "test",
-    actor,
-    conversation: { kind: "dm", threadRef: thread },
-    text,
-  };
-}
+const dm = dmFor(actor);
 
 function enqueueRequest(threadRef: string): OrchestratorInput {
   const principal: Principal = { id: "internal:U1", type: "internal" };

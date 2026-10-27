@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import type { App } from "../../../src/api/app.ts";
 import { createInsecureTestServer } from "../../../src/api/server.ts";
+import { listenLocal } from "../../support/listen-local.ts";
 
 function appWith(endpoint: Record<string, unknown>): App {
   return { reachDeployment: async () => ({ status: "ok", endpoint }) } as unknown as App;
@@ -22,8 +23,7 @@ test("/d/ proxy attaches the endpoint's proxyHeaders — the internal path authe
   const server = createInsecureTestServer(
     appWith({ host: "127.0.0.1", port: upstreamPort, proxyHeaders: { cookie: "dpl_access=tok" } }),
   );
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   try {
     const res = await fetch(`${base}/d/some-id/`);
     assert.equal(res.status, 200);
@@ -64,8 +64,7 @@ test("/d/ proxy multiplexes concurrent requests over one HTTP/2 session", async 
       proxyHeaders: { "X-aws-proxy-auth": "vm-token" },
     }),
   );
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   try {
     const eventsAbort = new AbortController();
     const events = await fetch(`${base}/d/some-id/events`, { signal: eventsAbort.signal });
@@ -113,8 +112,7 @@ test("/d/ proxy retires a GOAWAY session even while an SSE stream is open", asyn
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
   const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort, httpVersion: "2" }));
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
 
   try {
     const events = await fetch(`${base}/d/some-id/events`);
@@ -186,8 +184,7 @@ test("/d/ proxy retries a GOAWAY-refused GET once but never replays a POST body"
   const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort, httpVersion: "2" }), {
     deployDialTimeoutMs: 30,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
 
   try {
     assert.equal((await fetch(`${base}/d/some-id/warm`)).status, 200);
@@ -249,8 +246,7 @@ test("/d/ proxy keeps the shared HTTP/2 session when one request has invalid hea
     }),
   } as unknown as App;
   const server = createInsecureTestServer(app);
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
 
   try {
     const eventsAbort = new AbortController();
@@ -289,8 +285,7 @@ test("/d/ proxy never retries after an HTTP/2 timeout has committed a 504", asyn
   const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort, httpVersion: "2" }), {
     deployDialTimeoutMs: 30,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
 
   try {
     const response = await fetch(`${base}/d/some-id/timeout`);
@@ -353,8 +348,7 @@ test("/d/ proxy returns 504 instead of hanging when the deployment accepts but n
   const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }), {
     deployDialTimeoutMs: 200,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   try {
     const res = await fetch(`${base}/d/some-id/`);
     assert.equal(res.status, 504);
@@ -385,8 +379,7 @@ test("/d/ proxy forwards the client's content-type and body with an explicit con
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
   const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }));
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   try {
     const payload = JSON.stringify({ fund: "Fund I", as_of: "2026-03-31" });
     const res = await fetch(`${base}/d/some-id/api/query`, {
@@ -471,8 +464,7 @@ test("/d/ proxy forwards client cookies but scrubs the dpl_access gate token, an
   const server = createInsecureTestServer(
     appWith({ host: "127.0.0.1", port: upstreamPort, proxyHeaders: { "X-aws-proxy-auth": "vm-token" } }),
   );
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   try {
     const res = await fetch(`${base}/d/some-id/`, {
       headers: {
@@ -576,8 +568,7 @@ test("/d/ proxy scrubs the dpl_access gate cookie even with stray whitespace aro
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
   const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }));
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   try {
     const res = await fetch(`${base}/d/some-id/`, {
       headers: { cookie: "theme=dark; dpl_access = sneaky-gate-token; session=abc" },
@@ -601,8 +592,7 @@ test("/d/ proxy serves the warming page to a browser navigation when the deploym
   const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }), {
     deployDialTimeoutMs: 200,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   try {
     const res = await fetch(`${base}/d/some-id/`, {
       headers: { accept: "text/html,application/xhtml+xml", "sec-fetch-dest": "document" },
@@ -627,8 +617,7 @@ test("/d/ proxy serves the warming page to a browser navigation when the deploym
   await new Promise<void>((r) => upstream.close(() => r()));
 
   const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }));
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   try {
     const res = await fetch(`${base}/d/some-id/`, { headers: { accept: "text/html" } });
     assert.equal(res.status, 503);
@@ -649,8 +638,7 @@ test("/d/ proxy keeps JSON gateway errors for non-document requests", async () =
   const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }), {
     deployDialTimeoutMs: 200,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   try {
     const apiRes = await fetch(`${base}/d/some-id/api/data`, { headers: { accept: "application/json" } });
     assert.equal(apiRes.status, 504);
@@ -682,8 +670,7 @@ test("a recently-healthy upstream keeps the full dial timeout for slow pages", a
   const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }), {
     deployDialTimeoutMs: 1000,
   });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const base = listenLocal(server);
   try {
     const first = await fetch(`${base}/d/some-id/`, { headers: { accept: "text/html" } });
     assert.equal(await first.text(), "fast-ok");
