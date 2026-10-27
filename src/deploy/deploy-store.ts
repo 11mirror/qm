@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
-import { swallow } from "../util/errors.ts";
 import {
   createDeployGitStore,
   type DeployGitInputFile,
@@ -153,12 +152,19 @@ function createPgDeployAccess(pg: PgPool): DeployAccess {
             `CREATE UNIQUE INDEX IF NOT EXISTS ${NAME_INDEX}
              ON deployments ((json->>'name')) WHERE json->>'name' IS NOT NULL`,
           )
-          .catch((e) =>
-            swallow(
-              "deploy-store: could not create unique name index on deployments (concurrent boot, or duplicate names)",
-              e,
-            ),
-          );
+          .catch(async (e) => {
+            const duplicates = await pg.q(
+              `SELECT json->>'name' AS name, count(*) AS n FROM deployments
+               WHERE json->>'name' IS NOT NULL GROUP BY 1 HAVING count(*) > 1 ORDER BY 1`,
+            );
+            if (duplicates.length)
+              throw new Error(
+                `deployment names must be unique, but ${duplicates.map((row) => `${String(row.name)} (${String(row.n)} deployments)`).join(", ")} are shared; rename or delete the duplicates`,
+              );
+            // A concurrent boot may have created the index first; anything else is a real failure.
+            const [index] = await pg.q("SELECT to_regclass($1) AS index", [NAME_INDEX]);
+            if (!index?.index) throw e;
+          });
       })().catch((e) => {
         readyP = null;
         throw e;
