@@ -274,16 +274,8 @@ export type OrchestratorModule = ReturnType<typeof buildOrchestrator>;
 function buildSessionSyscalls(deps: OrchestratorInputs) {
   const { config, overrides, late } = deps;
   const { resolution } = deps.files;
-  const {
-    canWriteScope,
-    projects,
-    currentScopeMembers,
-    databaseUrl,
-    featureFlags,
-    sessions,
-    advisoryLock,
-    configStore,
-  } = deps.stores;
+  const { canWriteScope, projects, currentScopeMembers, databaseUrl, sessions, advisoryLock, configStore } =
+    deps.stores;
   const { runs, maxAttempts } = deps.runs;
   const { runSignals, runtimeOrgScope, fallback, hydrateModelCatalog } = deps.harness;
 
@@ -332,9 +324,6 @@ function buildSessionSyscalls(deps: OrchestratorInputs) {
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
     board: createPostgresSwarmBoard(databaseUrl),
-    enabled: async (actorId) =>
-      (await featureFlags.enabled("persistent_subagents", scopeId("personal", actorId))) ||
-      (await featureFlags.enabled("responsive_spine", scopeId("personal", actorId))),
     sessions,
     runs,
     signals: runSignals,
