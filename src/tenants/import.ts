@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import pg from "pg";
 import { pgCaOptions } from "../persistence/pg-pool.ts";
 import { TENANCY_EXCLUDED_TABLES } from "../persistence/tenancy.ts";
-import { swallowAs } from "../util/errors.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
 import { copyRows, insertableColumns, primaryKey, qualified, type TableRef } from "./row-copy.ts";
 
 const STAGED_SCHEMAS = ["public", "absurd", "pgboss"];
@@ -55,13 +55,26 @@ async function connect(url: string, readOnly = false): Promise<pg.Client> {
   return client;
 }
 
+async function closingAfter<T>(fn: () => Promise<T>, close: () => Promise<unknown>): Promise<T> {
+  let result: T;
+  try {
+    result = await fn();
+  } catch (error) {
+    await close().catch((closeError: unknown) => {
+      throw new AggregateError([error, closeError], errMessage(error));
+    });
+    throw error;
+  }
+  await close();
+  return result;
+}
+
 async function withClient<T>(url: string, fn: (client: pg.Client) => Promise<T>, readOnly = false): Promise<T> {
   const client = await connect(url, readOnly);
-  try {
-    return await fn(client);
-  } finally {
-    await client.end();
-  }
+  return closingAfter(
+    () => fn(client),
+    () => client.end(),
+  );
 }
 
 async function createDatabase(options: TenantImportOptions): Promise<void> {
@@ -393,51 +406,52 @@ export async function importTenant(options: TenantImportOptions): Promise<Tenant
   options.log(`importing as tenant ${tenantId}`);
   const staging = await connect(options.stagingUrl);
   const target = await connect(options.targetUrl);
-  try {
-    const stagingShape = await publicColumns(staging);
-    const targetShape = await publicColumns(target);
-    const differences = schemaDifferences(stagingShape, targetShape, options.allowExtraColumns);
-    if (differences.length) {
-      throw new Error(`staging and target schemas differ:\n  ${differences.join("\n  ")}`);
-    }
-    const targetTables = new Set(targetShape.map((shape) => shape.table));
-    await checkUnsharedTables(staging, new Set(stagingShape.map((shape) => shape.table)), targetTables, options.log);
-    await staging.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
-    await staging.query("SET LOCAL qm.tenant_bypass = 'on'");
-    let counts: TableCount[];
-    try {
-      counts = await copyToTarget(options, tenantId, staging, target, targetTables);
-      options.log(formatCounts(counts));
-      for (const count of counts.filter((count) => count.target > count.staging)) {
-        options.log(
-          `warning: ${count.table} has ${count.target} target rows for ${count.staging} staging rows (trigger-derived rows)`,
-        );
+  return closingAfter(
+    async () => {
+      const stagingShape = await publicColumns(staging);
+      const targetShape = await publicColumns(target);
+      const differences = schemaDifferences(stagingShape, targetShape, options.allowExtraColumns);
+      if (differences.length) {
+        throw new Error(`staging and target schemas differ:\n  ${differences.join("\n  ")}`);
       }
-      const missing = counts.filter((count) => count.target < count.staging);
-      if (missing.length) {
-        throw new Error(`rows are missing from the target for ${missing.map((count) => count.table).join(", ")}`);
+      const targetTables = new Set(targetShape.map((shape) => shape.table));
+      await checkUnsharedTables(staging, new Set(stagingShape.map((shape) => shape.table)), targetTables, options.log);
+      await staging.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      await staging.query("SET LOCAL qm.tenant_bypass = 'on'");
+      let counts: TableCount[];
+      try {
+        counts = await copyToTarget(options, tenantId, staging, target, targetTables);
+        options.log(formatCounts(counts));
+        for (const count of counts.filter((count) => count.target > count.staging)) {
+          options.log(
+            `warning: ${count.table} has ${count.target} target rows for ${count.staging} staging rows (trigger-derived rows)`,
+          );
+        }
+        const missing = counts.filter((count) => count.target < count.staging);
+        if (missing.length) {
+          throw new Error(`rows are missing from the target for ${missing.map((count) => count.table).join(", ")}`);
+        }
+        if (options.dryRun) {
+          await target.query("ROLLBACK");
+          options.log("dry run: rolled back the target transaction");
+          return { tenantId, tables: counts, committed: false };
+        }
+        await target.query("SELECT set_config('qm.tenant_bypass', 'on', true)");
+        const bumped = await bumpSequences(target);
+        options.log(`advanced ${bumped} sequences`);
+        await target.query("COMMIT");
+      } catch (error) {
+        await target.query("ROLLBACK").catch(swallowAs("tenant import: rollback target", undefined));
+        throw error;
+      } finally {
+        await staging.query("ROLLBACK").catch(swallowAs("tenant import: release staging", undefined));
       }
-      if (options.dryRun) {
-        await target.query("ROLLBACK");
-        options.log("dry run: rolled back the target transaction");
-        return { tenantId, tables: counts, committed: false };
-      }
-      await target.query("SELECT set_config('qm.tenant_bypass', 'on', true)");
-      const bumped = await bumpSequences(target);
-      options.log(`advanced ${bumped} sequences`);
-      await target.query("COMMIT");
-    } catch (error) {
-      await target.query("ROLLBACK").catch(swallowAs("tenant import: rollback target", undefined));
-      throw error;
-    } finally {
-      await staging.query("ROLLBACK").catch(swallowAs("tenant import: release staging", undefined));
-    }
-    await options.writeTenant(tenantId);
-    options.log(`tenant ${options.slug} (${tenantId}) is active`);
-    return { tenantId, tables: counts, committed: true };
-  } finally {
-    await Promise.all([staging.end(), target.end()]);
-  }
+      await options.writeTenant(tenantId);
+      options.log(`tenant ${options.slug} (${tenantId}) is active`);
+      return { tenantId, tables: counts, committed: true };
+    },
+    () => Promise.all([staging.end(), target.end()]),
+  );
 }
 
 function runMigrate(entry: string, env: NodeJS.ProcessEnv): Promise<void> {
