@@ -2,7 +2,7 @@ import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../../plugins/cha
 import "../../support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { attributedSteerText } from "../../../src/api/app-turn.ts";
+import { attributedSteerText } from "../../../src/api/app-turn-pipeline.ts";
 import { CORE_SECRET } from "../../support/core-route-server.ts";
 import type { OrchestratorInput } from "../../../src/core/orchestrator.ts";
 import type { TurnRequest } from "../../../src/types.ts";

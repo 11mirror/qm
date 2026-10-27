@@ -69,49 +69,7 @@ function settledContext(outcome: { result?: SurfaceContextResult; error?: string
     : { status: "done", result: outcome.result ?? { messages: [] } };
 }
 
-export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: AmbientHelpers) {
-  const { adminBase, resolveReachTargetFor } = h;
-  const { judgeAmbientContainer, ambientSelf } = ambient;
-  const contextRequests = deps.contextRequests;
-  const contextRequestEvents =
-    deps.contextRequestEvents ?? createMemoryEventBus<ContextRequestEvent>("context requests");
-  const viewerTokenKey = deps.contextViewerTokenKey ?? deriveConnectorKey(randomBytes(32), "context-viewer-tokens");
-  const withViewerToken = ({ sealedViewerToken, ...request }: SurfaceContextRequest): SurfaceContextRequest => {
-    if (!sealedViewerToken) return request;
-    try {
-      return { ...request, query: { ...request.query, viewerToken: decryptSecret(sealedViewerToken, viewerTokenKey) } };
-    } catch (error) {
-      reportFailureAs("context: viewer token unreadable", undefined)(error);
-      return request;
-    }
-  };
-  const identityMembers = async (): Promise<DirectoryMember[]> => {
-    const [externals, participants] = await Promise.all([
-      deps.identity.listExternalMembers(),
-      deps.sessions?.distinctParticipants() ?? [],
-    ]);
-    const candidates: DirectoryMember[] = [
-      ...(deps.emailAuthMembers ?? []),
-      ...externals
-        .filter((member) => externalMemberActive(member))
-        .map((member) => ({ principalId: member.email, displayName: member.email, type: "internal" as const })),
-      ...participants
-        .filter((principalId) => deps.identity.classify(principalId).type === "internal")
-        .map((principalId) => ({ principalId, displayName: principalId, type: "internal" as const })),
-    ];
-    const byKey = new Map<string, DirectoryMember>();
-    for (const member of candidates) {
-      const key = personKey(member.principalId);
-      if (key && !byKey.has(key)) byKey.set(key, member);
-    }
-    return [...byKey.values()];
-  };
-  const mergedDirectoryMembers = async () => {
-    const [stored, viaEmail] = await Promise.all([deps.directory.list(), identityMembers()]);
-    const seen = new Set(stored.map((member) => personKey(member.principalId)));
-    return [...stored, ...viaEmail.filter((member) => !seen.has(personKey(member.principalId)))];
-  };
-
+function cronMethods(deps: AppDeps, h: AppHelpers) {
   const validateRuntime = async (cron: Pick<Cron, "runtime" | "ownerScopeId" | "action" | "message">) => {
     assertCronRuntime(cron);
     if (!cron.runtime) return;
@@ -120,7 +78,6 @@ export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: Am
       (await availableRuntimeError({ deps }, cron.ownerScopeId, cron.runtime, "cron"));
     if (error) throw new Error(error);
   };
-
   return {
     async createCron(input) {
       await validateRuntime(input);
@@ -187,46 +144,24 @@ export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: Am
       h.audit(before.owner, "cron_retarget", id, before.ownerScopeId);
       return deps.crons.get(id);
     },
-    async createWebhook(input) {
-      const webhook = await deps.webhooks.create(input);
-      h.audit(webhook.createdBy, "webhook_create", webhook.id, webhook.ownerScopeId);
-      return webhook;
-    },
-    getWebhook: (id) => deps.webhooks.get(id),
-    async listWebhookEvents(id, viewer) {
-      const events = await deps.webhooks.listEvents(id);
-      return Promise.all(
-        events.map(async (event) => {
-          const session = await deps.sessions.getByThread(`webhook:${id}:${event.deliveryId}`);
-          const visible = session && (await h.sessionForViewer(session.id, viewer));
-          return { ...event, ...(visible ? { sessionId: session.id } : {}) };
-        }),
-      );
-    },
-    listWebhooks: () => deps.webhooks.list(),
-    setWebhookEnabled: (id, enabled) => deps.webhooks.setEnabled(id, enabled),
-    updateWebhook: (id, patch) => deps.webhooks.update(id, patch),
-    async postToSurface(input) {
-      await deps.outbound.send(input);
-    },
-    async ingestSurfaceEvents(events, surface = "slack", self) {
-      if (!deps.surfaceCache || !events.length) return { upserted: 0 };
-      if (self && (self.name || self.mentionId)) ambientSelf.set(`${tenant().orgId}:${surface}`, self);
-      const out = await deps.surfaceCache.ingest(events.map((event) => ({ ...event, surface })));
-      if (surfaceHas(surface, "revisions") && hasRevisionEvents(events)) {
-        void recordMessageRevisions(deps.sessions, events).catch(
-          reportFailureAs("revisions: surface revision record", undefined),
-        );
-      }
-      for (const container of new Set(events.filter((e) => !e.self).map((e) => e.container))) {
-        void judgeAmbientContainer(surface, container).catch(reportFailureAs("ambient: judge", undefined));
-      }
-      return out;
-    },
-    searchSurface: async (queryText, opts) => (await deps.surfaceCache?.search(queryText, opts)) ?? [],
-    readSurfaceMessages: async (container, opts) => (await deps.surfaceCache?.readMessages(container, opts)) ?? [],
-    listSurfaceContainers: async (opts) => (await deps.surfaceCache?.listContainers(opts)) ?? [],
-    judgeAmbientContainer: (surface, container) => judgeAmbientContainer(surface, container),
+  } satisfies Partial<App>;
+}
+
+function contextRequestMethods(deps: AppDeps) {
+  const contextRequests = deps.contextRequests;
+  const contextRequestEvents =
+    deps.contextRequestEvents ?? createMemoryEventBus<ContextRequestEvent>("context requests");
+  const viewerTokenKey = deps.contextViewerTokenKey ?? deriveConnectorKey(randomBytes(32), "context-viewer-tokens");
+  const withViewerToken = ({ sealedViewerToken, ...request }: SurfaceContextRequest): SurfaceContextRequest => {
+    if (!sealedViewerToken) return request;
+    try {
+      return { ...request, query: { ...request.query, viewerToken: decryptSecret(sealedViewerToken, viewerTokenKey) } };
+    } catch (error) {
+      reportFailureAs("context: viewer token unreadable", undefined)(error);
+      return request;
+    }
+  };
+  return {
     async createContextRequest(source, query) {
       const { viewerToken, ...storedQuery } = query;
       const request: SurfaceContextRequest = {
@@ -292,8 +227,38 @@ export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: Am
         });
       });
     },
-    setRunDeliveryState: (runId, state) => deps.runs.setDeliveryState(runId, null, state),
+  } satisfies Partial<App>;
+}
 
+function directoryMethods(deps: AppDeps, h: AppHelpers) {
+  const { adminBase } = h;
+  const identityMembers = async (): Promise<DirectoryMember[]> => {
+    const [externals, participants] = await Promise.all([
+      deps.identity.listExternalMembers(),
+      deps.sessions?.distinctParticipants() ?? [],
+    ]);
+    const candidates: DirectoryMember[] = [
+      ...(deps.emailAuthMembers ?? []),
+      ...externals
+        .filter((member) => externalMemberActive(member))
+        .map((member) => ({ principalId: member.email, displayName: member.email, type: "internal" as const })),
+      ...participants
+        .filter((principalId) => deps.identity.classify(principalId).type === "internal")
+        .map((principalId) => ({ principalId, displayName: principalId, type: "internal" as const })),
+    ];
+    const byKey = new Map<string, DirectoryMember>();
+    for (const member of candidates) {
+      const key = personKey(member.principalId);
+      if (key && !byKey.has(key)) byKey.set(key, member);
+    }
+    return [...byKey.values()];
+  };
+  const mergedDirectoryMembers = async () => {
+    const [stored, viaEmail] = await Promise.all([deps.directory.list(), identityMembers()]);
+    const seen = new Set(stored.map((member) => personKey(member.principalId)));
+    return [...stored, ...viaEmail.filter((member) => !seen.has(personKey(member.principalId)))];
+  };
+  return {
     async upsertDirectory(members, syncedAt) {
       const previous = await deps.directory.list();
       if (!(await deps.directory.replace(members, syncedAt))) return false;
@@ -361,7 +326,12 @@ export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: Am
       const chan = (await deps.directory.listChannels()).find((c) => c.channelId === channelId);
       return chan ? `#${chan.name.replace(/^#/, "")}` : undefined;
     },
-    ...(deps.ambientJudge ? { ambientJudge: deps.ambientJudge } : {}),
+  } satisfies Partial<App>;
+}
+
+function reachMethods(deps: AppDeps, h: AppHelpers) {
+  const { resolveReachTargetFor } = h;
+  return {
     async reachNow(input): Promise<ReachNowResult> {
       const hasNamedTarget =
         input.recipient !== undefined || input.channel !== undefined || input.participants !== undefined;
@@ -430,5 +400,57 @@ export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: Am
     },
 
     resolveReachTarget: (target, authorityId, opts) => resolveReachTargetFor(target, authorityId, opts),
+  } satisfies Partial<App>;
+}
+
+export function createMessagingMethods(deps: AppDeps, h: AppHelpers, ambient: AmbientHelpers) {
+  const { judgeAmbientContainer, ambientSelf } = ambient;
+  return {
+    ...cronMethods(deps, h),
+    async createWebhook(input) {
+      const webhook = await deps.webhooks.create(input);
+      h.audit(webhook.createdBy, "webhook_create", webhook.id, webhook.ownerScopeId);
+      return webhook;
+    },
+    getWebhook: (id) => deps.webhooks.get(id),
+    async listWebhookEvents(id, viewer) {
+      const events = await deps.webhooks.listEvents(id);
+      return Promise.all(
+        events.map(async (event) => {
+          const session = await deps.sessions.getByThread(`webhook:${id}:${event.deliveryId}`);
+          const visible = session && (await h.sessionForViewer(session.id, viewer));
+          return { ...event, ...(visible ? { sessionId: session.id } : {}) };
+        }),
+      );
+    },
+    listWebhooks: () => deps.webhooks.list(),
+    setWebhookEnabled: (id, enabled) => deps.webhooks.setEnabled(id, enabled),
+    updateWebhook: (id, patch) => deps.webhooks.update(id, patch),
+    async postToSurface(input) {
+      await deps.outbound.send(input);
+    },
+    async ingestSurfaceEvents(events, surface = "slack", self) {
+      if (!deps.surfaceCache || !events.length) return { upserted: 0 };
+      if (self && (self.name || self.mentionId)) ambientSelf.set(`${tenant().orgId}:${surface}`, self);
+      const out = await deps.surfaceCache.ingest(events.map((event) => ({ ...event, surface })));
+      if (surfaceHas(surface, "revisions") && hasRevisionEvents(events)) {
+        void recordMessageRevisions(deps.sessions, events).catch(
+          reportFailureAs("revisions: surface revision record", undefined),
+        );
+      }
+      for (const container of new Set(events.filter((e) => !e.self).map((e) => e.container))) {
+        void judgeAmbientContainer(surface, container).catch(reportFailureAs("ambient: judge", undefined));
+      }
+      return out;
+    },
+    searchSurface: async (queryText, opts) => (await deps.surfaceCache?.search(queryText, opts)) ?? [],
+    readSurfaceMessages: async (container, opts) => (await deps.surfaceCache?.readMessages(container, opts)) ?? [],
+    listSurfaceContainers: async (opts) => (await deps.surfaceCache?.listContainers(opts)) ?? [],
+    judgeAmbientContainer: (surface, container) => judgeAmbientContainer(surface, container),
+    ...contextRequestMethods(deps),
+    setRunDeliveryState: (runId, state) => deps.runs.setDeliveryState(runId, null, state),
+    ...directoryMethods(deps, h),
+    ...(deps.ambientJudge ? { ambientJudge: deps.ambientJudge } : {}),
+    ...reachMethods(deps, h),
   } satisfies Partial<App>;
 }

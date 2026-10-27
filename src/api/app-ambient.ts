@@ -19,341 +19,366 @@ import { isTerminal } from "../runs/run-store.ts";
 import type { App, AppDeps } from "./app-types.ts";
 import { tenant } from "../tenant.ts";
 
-export function createAmbientHelpers(deps: AppDeps, app: App) {
-  function shouldRouteToSpine(input: OrchestratorInput): boolean {
-    const { conversation } = input;
-    return (
-      !surfaceHas(input.surface, "transcript") &&
-      conversation.kind !== "dm" &&
-      (input.origin.kind === "human" || input.origin.kind === "ambient")
-    );
-  }
+type AmbientSelf = Map<string, { name?: string; mentionId?: string }>;
 
-  function markTriggerHandled(input: OrchestratorInput): void {
-    if (input.origin.kind !== "human" || !input.origin.messageTs) return;
-    const container = input.conversation.channelRef ?? input.conversation.threadRef;
-    void deps.surfaceCache
-      ?.markHandled(container, input.origin.messageTs)
-      .catch((e) => swallow("ambient: mark handled", e));
-  }
+function shouldRouteToSpine(input: OrchestratorInput): boolean {
+  const { conversation } = input;
+  return (
+    !surfaceHas(input.surface, "transcript") &&
+    conversation.kind !== "dm" &&
+    (input.origin.kind === "human" || input.origin.kind === "ambient")
+  );
+}
 
-  const ambientSelf = new Map<string, { name?: string; mentionId?: string }>();
-  async function judgeAmbientContainer(surface: string, container: string): Promise<AmbientDecision> {
-    if (!deps.surfaceCache || !deps.ambientJudge) return { act: false };
-    const policy = await deps.channelPolicy?.get(container);
-    const containerKind = (
-      await deps.surfaceCache.containerState(container).catch(swallowAs("ambient: container state", null))
-    )?.kind;
-    const instructions =
-      (await deps.config
-        ?.getInstructionsDurable(scopeId(containerKind === "group" ? "group" : "channel", container))
-        .catch(swallowAs("ambient: read channel instructions", null))) ?? "";
-    const cursorKey = `${tenant().orgId}:${surface}:${container}`;
-    const cursor = deps.ambientCursors ? await deps.ambientCursors.get(cursorKey) : null;
-    const after = cursor?.lastJudgedTs;
-    const fresh = await deps.surfaceCache.readMessages(
-      container,
-      after ? { after, oldestFirst: true, limit: 60, noFallback: true } : { limit: 60, noFallback: true },
-    );
-    const backdrop =
-      after && fresh.length
-        ? await deps.surfaceCache.readMessages(container, { before: fresh[0]!.ts, limit: 10, noFallback: true })
-        : [];
-    const rawDelta = fresh.filter((m) => !m.self);
-    const ledger = new Map<string, BotPolicy>();
-    for (const [name, b] of Object.entries(policy?.bots ?? {})) ledger.set(name.toLowerCase(), b);
-    const botModeOf = (m: CachedMessage): BotPolicy["mode"] | undefined =>
-      m.bot && m.authorName ? ledger.get(m.authorName.toLowerCase())?.mode : undefined;
-    const delta = rawDelta
-      .filter((m) => !m.handled)
-      .filter((m) => botModeOf(m) !== "ignore")
-      .map((m) => (botModeOf(m) === "user" ? { ...m, bot: false } : m));
-    const rawLatestTs = rawDelta.reduce((max, m) => (m.ts > max ? m.ts : max), after ?? "");
-    const advanceCursor = async (): Promise<void> => {
-      if (deps.ambientCursors && rawDelta.length && rawLatestTs)
-        await deps.ambientCursors
-          .put(cursorKey, { lastJudgedTs: rawLatestTs, lastJudgedAt: Date.now() })
-          .catch(reportFailureAs("ambient: advance cursor", undefined));
-    };
-    if (!delta.length) {
-      await advanceCursor();
-      return { act: false };
-    }
-    if (delta.every((m) => botModeOf(m) === "rollup")) {
-      const lastAt = cursor?.lastJudgedAt;
-      const held =
-        lastAt !== undefined &&
-        delta.every((m) => {
-          const hours = ledger.get((m.authorName ?? "").toLowerCase())?.rollupHours ?? DEFAULT_ROLLUP_HOURS;
-          return Date.now() - lastAt < hours * 3_600_000;
-        });
-      if (held) return { act: false };
-    }
-    const tsFrom = delta.reduce((min, m) => (min === "" || m.ts < min ? m.ts : min), "");
-    const tsTo = delta.reduce((max, m) => (m.ts > max ? m.ts : max), "");
-    const recordJudgment = (
-      j: Omit<Parameters<AmbientJudgmentStore["record"]>[0], "surface" | "container" | "createdAt">,
-    ): void => {
-      void deps.ambientJudgments
-        ?.record({
-          surface,
-          container,
-          ...j,
-          ...(tsFrom ? { tsFrom } : {}),
-          ...(tsTo ? { tsTo } : {}),
-          createdAt: Date.now(),
-        })
-        .catch(reportFailureAs("ambient: record judgment", undefined));
-    };
-    const watchReason =
-      instructions.trim().length > 0 || Object.values(policy?.bots ?? {}).some((b) => b.mode === "action");
-    let ambientOffReason: string | null = null;
-    if ((await deps.config?.settingDurable("orgAmbient")) === false) {
-      ambientOffReason = "ambient is switched off org-wide";
-    } else if (policy?.ambientEnabled === false) {
-      ambientOffReason = "ambient is switched off for this channel";
-    } else if (policy?.ambientEnabled === undefined && !watchReason) {
-      ambientOffReason =
-        "ambient defaults off — no channel instructions or action-bot triggers here, so only @mentions engage";
-    }
-    if (ambientOffReason) {
-      recordJudgment({ decision: "ignore", reason: ambientOffReason });
-      await advanceCursor();
-      return { act: false };
-    }
-    const self = ambientSelf.get(`${tenant().orgId}:${surface}`);
-    const forJudge = delta.filter((m) => !m.mentionsSelf);
-    if (forJudge.length < delta.length) recordJudgment({ decision: "fastlane" });
-    const actionBots = [
-      ...new Set(
-        delta
-          .filter((m) => botModeOf(m) === "action")
-          .map((m) => m.authorName ?? "")
-          .filter(Boolean),
-      ),
-    ];
-    const actionLines = actionBots.map((n) => `Posts from bot "${n}" are triggers you should act on.`);
-    const judgeInstructions = [actionLines.join("\n"), instructions].filter((s) => s.trim()).join("\n");
-    let decision: AmbientDecision = { act: false };
-    if (forJudge.length) {
-      const judgeBatch: AmbientBatch = {
-        container,
-        surface,
-        ...(containerKind ? { kind: containerKind } : {}),
-        instructions: judgeInstructions,
-        ...(self ? { self } : {}),
-        messages: forJudge,
-        ...(backdrop.length ? { backdrop } : {}),
-      };
-      const prompt = renderAmbientPrompt(judgeBatch);
-      const startedAt = Date.now();
-      const judgeModel = deps.judgeModelId?.();
-      const botTs = new Set(rawDelta.filter((m) => m.bot).map((m) => m.ts));
-      const judge = deps.ambientJudge;
-      let judgeDown = false;
-      const judged = await judgeAmbientBatch(
-        {
-          judge: (system: string, prompt: string) =>
-            judge(system, prompt).catch((e: unknown) => {
-              judgeDown = true;
-              throw e;
-            }),
-          spawnWorker: (b: AmbientBatch, d: AmbientDecision) =>
-            spawnAmbientWorker(
-              { ...b, messages: b.messages.map((m) => (botTs.has(m.ts) && !m.bot ? { ...m, bot: true } : m)) },
-              d,
-            ),
-        },
-        judgeBatch,
-      ).catch(reportFailureAs("ambient: judge failed", null));
-      if (judgeDown) return { act: false };
-      decision = judged ?? { act: false };
-      recordJudgment({
-        decision: decision.act ? "act" : "ignore",
-        ...(decision.reason ? { reason: decision.reason } : {}),
-        ...(decision.askedBy ? { askedBy: decision.askedBy } : {}),
-        prompt,
-        ...(judgeModel ? { model: judgeModel } : {}),
-        latencyMs: Date.now() - startedAt,
-      });
-    }
+function markTriggerHandled(deps: AppDeps, input: OrchestratorInput): void {
+  if (input.origin.kind !== "human" || !input.origin.messageTs) return;
+  const container = input.conversation.channelRef ?? input.conversation.threadRef;
+  void deps.surfaceCache
+    ?.markHandled(container, input.origin.messageTs)
+    .catch((e) => swallow("ambient: mark handled", e));
+}
+
+async function judgeAmbientContainer(
+  deps: AppDeps,
+  app: App,
+  ambientSelf: AmbientSelf,
+  surface: string,
+  container: string,
+): Promise<AmbientDecision> {
+  if (!deps.surfaceCache || !deps.ambientJudge) return { act: false };
+  const policy = await deps.channelPolicy?.get(container);
+  const containerKind = (
+    await deps.surfaceCache.containerState(container).catch(swallowAs("ambient: container state", null))
+  )?.kind;
+  const instructions =
+    (await deps.config
+      ?.getInstructionsDurable(scopeId(containerKind === "group" ? "group" : "channel", container))
+      .catch(swallowAs("ambient: read channel instructions", null))) ?? "";
+  const cursorKey = `${tenant().orgId}:${surface}:${container}`;
+  const cursor = deps.ambientCursors ? await deps.ambientCursors.get(cursorKey) : null;
+  const after = cursor?.lastJudgedTs;
+  const fresh = await deps.surfaceCache.readMessages(
+    container,
+    after ? { after, oldestFirst: true, limit: 60, noFallback: true } : { limit: 60, noFallback: true },
+  );
+  const backdrop =
+    after && fresh.length
+      ? await deps.surfaceCache.readMessages(container, { before: fresh[0]!.ts, limit: 10, noFallback: true })
+      : [];
+  const rawDelta = fresh.filter((m) => !m.self);
+  const ledger = new Map<string, BotPolicy>();
+  for (const [name, b] of Object.entries(policy?.bots ?? {})) ledger.set(name.toLowerCase(), b);
+  const botModeOf = (m: CachedMessage): BotPolicy["mode"] | undefined =>
+    m.bot && m.authorName ? ledger.get(m.authorName.toLowerCase())?.mode : undefined;
+  const delta = rawDelta
+    .filter((m) => !m.handled)
+    .filter((m) => botModeOf(m) !== "ignore")
+    .map((m) => (botModeOf(m) === "user" ? { ...m, bot: false } : m));
+  const rawLatestTs = rawDelta.reduce((max, m) => (m.ts > max ? m.ts : max), after ?? "");
+  const advanceCursor = async (): Promise<void> => {
+    if (deps.ambientCursors && rawDelta.length && rawLatestTs)
+      await deps.ambientCursors
+        .put(cursorKey, { lastJudgedTs: rawLatestTs, lastJudgedAt: Date.now() })
+        .catch(reportFailureAs("ambient: advance cursor", undefined));
+  };
+  if (!delta.length) {
     await advanceCursor();
-    return decision;
+    return { act: false };
   }
-
-  async function solicitedAsker(
-    batch: AmbientBatch,
-    decision: AmbientDecision,
-  ): Promise<{ message: CachedMessage; member: DirectoryMember } | undefined> {
-    if (!decision.askedBy) return undefined;
-    const eligible = batch.messages.filter(
-      (m) => !m.deleted && !m.bot && !m.self && m.authorId && (m.text ?? "").trim(),
-    );
-    const asking = eligible.find((m) => m.ts === decision.askedBy);
-    const newest = eligible.reduce<CachedMessage | undefined>((max, m) => (!max || m.ts > max.ts ? m : max), undefined);
-    if (!asking?.authorId || asking.authorId !== newest?.authorId) return undefined;
-    const authorId = asking.authorId;
-    const roster = await deps.directory.list().catch(swallowAs("ambient: roster read", [] as DirectoryMember[]));
-    const member = roster.find((r) => samePerson(r.principalId, authorId) || samePerson(r.slackId, authorId));
-    if (!member) return undefined;
-    if (batch.kind === "group") {
-      const inGroup = await deps.directory
-        .groupMember(batch.container, member.principalId)
-        .catch(swallowAs("ambient: group membership", false));
-      return inGroup ? { message: asking, member } : undefined;
-    }
-    const isPrivate = await deps.directory
-      .channelPrivacy(batch.container)
-      .catch(swallowAs("ambient: channel privacy", undefined));
-    if (isPrivate === undefined) return undefined;
-    if (
-      isPrivate &&
-      !(await deps.directory
-        .channelMember(batch.container, member.principalId)
-        .catch(swallowAs("ambient: channel membership", false)))
-    )
-      return undefined;
-    return { message: asking, member };
+  if (delta.every((m) => botModeOf(m) === "rollup")) {
+    const lastAt = cursor?.lastJudgedAt;
+    const held =
+      lastAt !== undefined &&
+      delta.every((m) => {
+        const hours = ledger.get((m.authorName ?? "").toLowerCase())?.rollupHours ?? DEFAULT_ROLLUP_HOURS;
+        return Date.now() - lastAt < hours * 3_600_000;
+      });
+    if (held) return { act: false };
   }
-
-  function workerConversation(
-    batch: AmbientBatch,
-    threadRef: string,
-    audience: ActorAssertion[],
-  ): TurnRequest["conversation"] {
-    const roster: Pick<TurnRequest["conversation"], "audience" | "publishMembers"> = audience.length
-      ? { audience, publishMembers: audience }
-      : { audience };
-    return batch.kind === "group"
-      ? { kind: "group" as const, threadRef, channelRef: batch.container, isMpim: true, ...roster }
-      : { kind: "channel" as const, threadRef, channelRef: batch.container, ...roster };
+  const tsFrom = delta.reduce((min, m) => (min === "" || m.ts < min ? m.ts : min), "");
+  const tsTo = delta.reduce((max, m) => (m.ts > max ? m.ts : max), "");
+  const recordJudgment = (
+    j: Omit<Parameters<AmbientJudgmentStore["record"]>[0], "surface" | "container" | "createdAt">,
+  ): void => {
+    void deps.ambientJudgments
+      ?.record({
+        surface,
+        container,
+        ...j,
+        ...(tsFrom ? { tsFrom } : {}),
+        ...(tsTo ? { tsTo } : {}),
+        createdAt: Date.now(),
+      })
+      .catch(reportFailureAs("ambient: record judgment", undefined));
+  };
+  const watchReason =
+    instructions.trim().length > 0 || Object.values(policy?.bots ?? {}).some((b) => b.mode === "action");
+  let ambientOffReason: string | null = null;
+  if ((await deps.config?.settingDurable("orgAmbient")) === false) {
+    ambientOffReason = "ambient is switched off org-wide";
+  } else if (policy?.ambientEnabled === false) {
+    ambientOffReason = "ambient is switched off for this channel";
+  } else if (policy?.ambientEnabled === undefined && !watchReason) {
+    ambientOffReason =
+      "ambient defaults off — no channel instructions or action-bot triggers here, so only @mentions engage";
   }
-
-  async function conversationAudience(batch: AmbientBatch): Promise<ActorAssertion[] | undefined> {
-    const members = await deps.directory
-      .conversationMembers(batch.kind === "group" ? "group" : "channel", batch.container)
-      .catch(swallowAs("ambient: conversation members", undefined));
-    if (!members?.length) return undefined;
-    return members.map((member) => ({
-      externalId: member.principalId,
-      ...(member.displayName ? { displayName: member.displayName } : {}),
-    }));
+  if (ambientOffReason) {
+    recordJudgment({ decision: "ignore", reason: ambientOffReason });
+    await advanceCursor();
+    return { act: false };
   }
-
-  async function spawnAmbientWorker(batch: AmbientBatch, decision: AmbientDecision): Promise<void> {
-    const latestTs = batch.messages.reduce((max, m) => (m.ts > max ? m.ts : max), "");
-    const threadRef = `${batch.surface}:${batch.container}:ambient:${latestTs}`;
-    let solicited = await solicitedAsker(batch, decision);
-    let audience: ActorAssertion[] = [];
-    if (solicited) {
-      const askerId = solicited.member.principalId;
-      const resolved = await conversationAudience(batch);
-      if (!resolved?.some((member) => samePerson(member.externalId, askerId))) {
-        console.error(`[ambient] solicited wake has no complete roster (container=${batch.container})`);
-        solicited = undefined;
-      } else {
-        audience = resolved;
-      }
-    }
-    const conversation = workerConversation(batch, threadRef, audience);
-    if (decision.askedBy && !solicited)
-      console.error(
-        `[ambient] solicited wake degraded to proactive (asked_by=${decision.askedBy}, container=${batch.container})`,
-      );
-    const shown = batch.messages.filter((m) => !m.deleted && (m.text ?? "").trim()).slice(-4);
-    const common = {
-      surface: batch.surface,
-      conversation,
-      deliveryTarget: batch.container,
-      surfaceTools: true,
-      async: true,
-      spawned: true,
-      idempotencyKey: `ambient:${tenant().orgId}:${batch.surface}:${batch.container}:${latestTs}`,
-    };
-    const req: TurnRequest = solicited
-      ? {
-          ...common,
-          actor: {
-            externalId: solicited.member.principalId,
-            ...(solicited.member.displayName ? { displayName: solicited.member.displayName } : {}),
-          },
-          text: solicited.message.text,
-          origin: { kind: "human", messageTs: solicited.message.ts },
-        }
-      : {
-          ...common,
-          actor: { externalId: `system:ambient:${tenant().orgId}` },
-          text: buildWakeEnvelope({
-            reason: "ambient",
-            surface: batch.surface,
-            channel: batch.container,
-            at: new Date(),
-            why: decision.reason ?? "The recent messages here may warrant a reply.",
-            recentMessages: shown,
-            instructions: `You don't need to have been @mentioned. Respond with the \`${batch.surface}\` tool's \`post\` action — set \`ts\` to the triggering message id to reply in its thread, or \`broadcast: true\` to post at the channel top level — or stay silent if nothing is needed. To include an image or file, name its workspace path in \`post\`'s \`files\` (it uploads with your message, in that thread). Use \`reach\` only to send to a DIFFERENT channel or person. Use the \`read_thread\` or \`search\` action if you need more context than shown.`,
-          }),
-          origin: {
-            kind: "automation",
-            screenData: JSON.stringify({
-              messages: shown.map(({ authorId, authorName, ts, text }) => ({ authorId, authorName, ts, text })),
-              judgeReason: decision.reason ?? null,
-            }),
-          },
-        };
-    if (!solicited && (await steerIntoLiveAmbientRun(batch, latestTs, req))) return;
-    await app.turn(req).catch(reportFailureAs("ambient: spawn worker", undefined));
-  }
-
-  async function steerIntoLiveAmbientRun(batch: AmbientBatch, latestTs: string, req: TurnRequest): Promise<boolean> {
-    if (!deps.signals) return false;
-    const prefix = `${batch.surface}:${batch.container}:ambient:`;
-    const activeIds = await deps.runs
-      .activeSessionIds()
-      .catch(swallowAs("ambient: active session ids", [] as string[]));
-    const liveRef = activeIds.find((id) => id.startsWith(prefix) && id !== req.conversation.threadRef);
-    if (!liveRef) return false;
-    const live = await deps.runs.activeForThread(liveRef);
-    if (!live || isTerminal(live.status)) return false;
-    const session = await deps.sessions.getByThread(liveRef).catch(swallowAs("ambient: live session", null));
-    deps.orchestrator.observeSecuritySteer({
-      payload: req.text,
-      actor: { id: `system:ambient:${tenant().orgId}`, type: "internal" },
-      conversation:
-        batch.kind === "group"
-          ? { kind: "group", threadRef: liveRef, channelRef: batch.container, isMpim: true, audience: [] }
-          : { kind: "channel", threadRef: liveRef, channelRef: batch.container, audience: [] },
-      ...(session ? { sessionId: session.id } : {}),
-    });
-    await deps.signals.send(live.id, { kind: "steer", text: req.text, ts: latestTs, request: req });
-    const after = await deps.runs.get(live.id);
-    if (!after || isTerminal(after.status)) await app.replayOrphanedRunSignals(live.id);
-    return true;
-  }
-
-  async function addressedWakeText(input: OrchestratorInput): Promise<string> {
-    const container = input.conversation.channelRef ?? input.conversation.threadRef;
-    const sender = input.actor.displayName?.trim() || input.actor.id;
-    const surface = input.surface ?? "slack";
-    return buildWakeEnvelope({
-      reason: "addressed",
+  const self = ambientSelf.get(`${tenant().orgId}:${surface}`);
+  const forJudge = delta.filter((m) => !m.mentionsSelf);
+  if (forJudge.length < delta.length) recordJudgment({ decision: "fastlane" });
+  const actionBots = [
+    ...new Set(
+      delta
+        .filter((m) => botModeOf(m) === "action")
+        .map((m) => m.authorName ?? "")
+        .filter(Boolean),
+    ),
+  ];
+  const actionLines = actionBots.map((n) => `Posts from bot "${n}" are triggers you should act on.`);
+  const judgeInstructions = [actionLines.join("\n"), instructions].filter((s) => s.trim()).join("\n");
+  let decision: AmbientDecision = { act: false };
+  if (forJudge.length) {
+    const judgeBatch: AmbientBatch = {
+      container,
       surface,
-      channel: container,
-      at: new Date(),
-      why: `${sender} addressed you directly; they expect a response.`,
-      recentMessages: [],
-      addressedMessages: [
-        {
-          ts: input.origin.kind === "human" ? (input.origin.messageTs ?? "") : "",
-          ...(input.actor.displayName ? { authorName: input.actor.displayName } : {}),
-          authorId: input.actor.id,
-          text: input.text,
-        },
-      ],
-      instructions: `Act on the addressed message above. Respond with the \`${surface}\` tool's \`post\` action — set \`ts\` to the triggering message id to reply in its thread, or \`broadcast: true\` to post at the channel top level. To include an image or file, name its workspace path in \`post\`'s \`files\`. Use \`reach\` only to send to a DIFFERENT channel or person. Use the \`read_thread\` or \`search\` action if you need more context than shown.`,
+      ...(containerKind ? { kind: containerKind } : {}),
+      instructions: judgeInstructions,
+      ...(self ? { self } : {}),
+      messages: forJudge,
+      ...(backdrop.length ? { backdrop } : {}),
+    };
+    const prompt = renderAmbientPrompt(judgeBatch);
+    const startedAt = Date.now();
+    const judgeModel = deps.judgeModelId?.();
+    const botTs = new Set(rawDelta.filter((m) => m.bot).map((m) => m.ts));
+    const judge = deps.ambientJudge;
+    let judgeDown = false;
+    const judged = await judgeAmbientBatch(
+      {
+        judge: (system: string, prompt: string) =>
+          judge(system, prompt).catch((e: unknown) => {
+            judgeDown = true;
+            throw e;
+          }),
+        spawnWorker: (b: AmbientBatch, d: AmbientDecision) =>
+          spawnAmbientWorker(
+            deps,
+            app,
+            { ...b, messages: b.messages.map((m) => (botTs.has(m.ts) && !m.bot ? { ...m, bot: true } : m)) },
+            d,
+          ),
+      },
+      judgeBatch,
+    ).catch(reportFailureAs("ambient: judge failed", null));
+    if (judgeDown) return { act: false };
+    decision = judged ?? { act: false };
+    recordJudgment({
+      decision: decision.act ? "act" : "ignore",
+      ...(decision.reason ? { reason: decision.reason } : {}),
+      ...(decision.askedBy ? { askedBy: decision.askedBy } : {}),
+      prompt,
+      ...(judgeModel ? { model: judgeModel } : {}),
+      latencyMs: Date.now() - startedAt,
     });
   }
+  await advanceCursor();
+  return decision;
+}
 
-  return { shouldRouteToSpine, markTriggerHandled, judgeAmbientContainer, addressedWakeText, ambientSelf };
+async function solicitedAsker(
+  deps: AppDeps,
+  batch: AmbientBatch,
+  decision: AmbientDecision,
+): Promise<{ message: CachedMessage; member: DirectoryMember } | undefined> {
+  if (!decision.askedBy) return undefined;
+  const eligible = batch.messages.filter((m) => !m.deleted && !m.bot && !m.self && m.authorId && (m.text ?? "").trim());
+  const asking = eligible.find((m) => m.ts === decision.askedBy);
+  const newest = eligible.reduce<CachedMessage | undefined>((max, m) => (!max || m.ts > max.ts ? m : max), undefined);
+  if (!asking?.authorId || asking.authorId !== newest?.authorId) return undefined;
+  const authorId = asking.authorId;
+  const roster = await deps.directory.list().catch(swallowAs("ambient: roster read", [] as DirectoryMember[]));
+  const member = roster.find((r) => samePerson(r.principalId, authorId) || samePerson(r.slackId, authorId));
+  if (!member) return undefined;
+  if (batch.kind === "group") {
+    const inGroup = await deps.directory
+      .groupMember(batch.container, member.principalId)
+      .catch(swallowAs("ambient: group membership", false));
+    return inGroup ? { message: asking, member } : undefined;
+  }
+  const isPrivate = await deps.directory
+    .channelPrivacy(batch.container)
+    .catch(swallowAs("ambient: channel privacy", undefined));
+  if (isPrivate === undefined) return undefined;
+  if (
+    isPrivate &&
+    !(await deps.directory
+      .channelMember(batch.container, member.principalId)
+      .catch(swallowAs("ambient: channel membership", false)))
+  )
+    return undefined;
+  return { message: asking, member };
+}
+
+function workerConversation(
+  batch: AmbientBatch,
+  threadRef: string,
+  audience: ActorAssertion[],
+): TurnRequest["conversation"] {
+  const roster: Pick<TurnRequest["conversation"], "audience" | "publishMembers"> = audience.length
+    ? { audience, publishMembers: audience }
+    : { audience };
+  return batch.kind === "group"
+    ? { kind: "group" as const, threadRef, channelRef: batch.container, isMpim: true, ...roster }
+    : { kind: "channel" as const, threadRef, channelRef: batch.container, ...roster };
+}
+
+async function conversationAudience(deps: AppDeps, batch: AmbientBatch): Promise<ActorAssertion[] | undefined> {
+  const members = await deps.directory
+    .conversationMembers(batch.kind === "group" ? "group" : "channel", batch.container)
+    .catch(swallowAs("ambient: conversation members", undefined));
+  if (!members?.length) return undefined;
+  return members.map((member) => ({
+    externalId: member.principalId,
+    ...(member.displayName ? { displayName: member.displayName } : {}),
+  }));
+}
+
+async function spawnAmbientWorker(
+  deps: AppDeps,
+  app: App,
+  batch: AmbientBatch,
+  decision: AmbientDecision,
+): Promise<void> {
+  const latestTs = batch.messages.reduce((max, m) => (m.ts > max ? m.ts : max), "");
+  const threadRef = `${batch.surface}:${batch.container}:ambient:${latestTs}`;
+  let solicited = await solicitedAsker(deps, batch, decision);
+  let audience: ActorAssertion[] = [];
+  if (solicited) {
+    const askerId = solicited.member.principalId;
+    const resolved = await conversationAudience(deps, batch);
+    if (!resolved?.some((member) => samePerson(member.externalId, askerId))) {
+      console.error(`[ambient] solicited wake has no complete roster (container=${batch.container})`);
+      solicited = undefined;
+    } else {
+      audience = resolved;
+    }
+  }
+  const conversation = workerConversation(batch, threadRef, audience);
+  if (decision.askedBy && !solicited)
+    console.error(
+      `[ambient] solicited wake degraded to proactive (asked_by=${decision.askedBy}, container=${batch.container})`,
+    );
+  const shown = batch.messages.filter((m) => !m.deleted && (m.text ?? "").trim()).slice(-4);
+  const common = {
+    surface: batch.surface,
+    conversation,
+    deliveryTarget: batch.container,
+    surfaceTools: true,
+    async: true,
+    spawned: true,
+    idempotencyKey: `ambient:${tenant().orgId}:${batch.surface}:${batch.container}:${latestTs}`,
+  };
+  const req: TurnRequest = solicited
+    ? {
+        ...common,
+        actor: {
+          externalId: solicited.member.principalId,
+          ...(solicited.member.displayName ? { displayName: solicited.member.displayName } : {}),
+        },
+        text: solicited.message.text,
+        origin: { kind: "human", messageTs: solicited.message.ts },
+      }
+    : {
+        ...common,
+        actor: { externalId: `system:ambient:${tenant().orgId}` },
+        text: buildWakeEnvelope({
+          reason: "ambient",
+          surface: batch.surface,
+          channel: batch.container,
+          at: new Date(),
+          why: decision.reason ?? "The recent messages here may warrant a reply.",
+          recentMessages: shown,
+          instructions: `You don't need to have been @mentioned. Respond with the \`${batch.surface}\` tool's \`post\` action — set \`ts\` to the triggering message id to reply in its thread, or \`broadcast: true\` to post at the channel top level — or stay silent if nothing is needed. To include an image or file, name its workspace path in \`post\`'s \`files\` (it uploads with your message, in that thread). Use \`reach\` only to send to a DIFFERENT channel or person. Use the \`read_thread\` or \`search\` action if you need more context than shown.`,
+        }),
+        origin: {
+          kind: "automation",
+          screenData: JSON.stringify({
+            messages: shown.map(({ authorId, authorName, ts, text }) => ({ authorId, authorName, ts, text })),
+            judgeReason: decision.reason ?? null,
+          }),
+        },
+      };
+  if (!solicited && (await steerIntoLiveAmbientRun(deps, app, batch, latestTs, req))) return;
+  await app.turn(req).catch(reportFailureAs("ambient: spawn worker", undefined));
+}
+
+async function steerIntoLiveAmbientRun(
+  deps: AppDeps,
+  app: App,
+  batch: AmbientBatch,
+  latestTs: string,
+  req: TurnRequest,
+): Promise<boolean> {
+  if (!deps.signals) return false;
+  const prefix = `${batch.surface}:${batch.container}:ambient:`;
+  const activeIds = await deps.runs.activeSessionIds().catch(swallowAs("ambient: active session ids", [] as string[]));
+  const liveRef = activeIds.find((id) => id.startsWith(prefix) && id !== req.conversation.threadRef);
+  if (!liveRef) return false;
+  const live = await deps.runs.activeForThread(liveRef);
+  if (!live || isTerminal(live.status)) return false;
+  const session = await deps.sessions.getByThread(liveRef).catch(swallowAs("ambient: live session", null));
+  deps.orchestrator.observeSecuritySteer({
+    payload: req.text,
+    actor: { id: `system:ambient:${tenant().orgId}`, type: "internal" },
+    conversation:
+      batch.kind === "group"
+        ? { kind: "group", threadRef: liveRef, channelRef: batch.container, isMpim: true, audience: [] }
+        : { kind: "channel", threadRef: liveRef, channelRef: batch.container, audience: [] },
+    ...(session ? { sessionId: session.id } : {}),
+  });
+  await deps.signals.send(live.id, { kind: "steer", text: req.text, ts: latestTs, request: req });
+  const after = await deps.runs.get(live.id);
+  if (!after || isTerminal(after.status)) await app.replayOrphanedRunSignals(live.id);
+  return true;
+}
+
+async function addressedWakeText(input: OrchestratorInput): Promise<string> {
+  const container = input.conversation.channelRef ?? input.conversation.threadRef;
+  const sender = input.actor.displayName?.trim() || input.actor.id;
+  const surface = input.surface ?? "slack";
+  return buildWakeEnvelope({
+    reason: "addressed",
+    surface,
+    channel: container,
+    at: new Date(),
+    why: `${sender} addressed you directly; they expect a response.`,
+    recentMessages: [],
+    addressedMessages: [
+      {
+        ts: input.origin.kind === "human" ? (input.origin.messageTs ?? "") : "",
+        ...(input.actor.displayName ? { authorName: input.actor.displayName } : {}),
+        authorId: input.actor.id,
+        text: input.text,
+      },
+    ],
+    instructions: `Act on the addressed message above. Respond with the \`${surface}\` tool's \`post\` action — set \`ts\` to the triggering message id to reply in its thread, or \`broadcast: true\` to post at the channel top level. To include an image or file, name its workspace path in \`post\`'s \`files\`. Use \`reach\` only to send to a DIFFERENT channel or person. Use the \`read_thread\` or \`search\` action if you need more context than shown.`,
+  });
+}
+
+export function createAmbientHelpers(deps: AppDeps, app: App) {
+  const ambientSelf: AmbientSelf = new Map();
+  return {
+    shouldRouteToSpine,
+    markTriggerHandled: (input: OrchestratorInput) => markTriggerHandled(deps, input),
+    judgeAmbientContainer: (surface: string, container: string) =>
+      judgeAmbientContainer(deps, app, ambientSelf, surface, container),
+    addressedWakeText,
+    ambientSelf,
+  };
 }
 
 export type AmbientHelpers = ReturnType<typeof createAmbientHelpers>;

@@ -44,14 +44,11 @@ export function createDeploymentMethods(
   | "attachScope"
 > {
   const { effectiveDeploymentPermission, principalCanReadDeployment, principalGitPermission } = h;
-  const invitationLock = deps.advisoryLock;
   const readableDeployment = async (id: string, principalId: string) => {
     const deployment = await deps.deploy.getDeployment(id);
     if (!deployment) return "not_found" as const;
     return (await principalCanReadDeployment(deployment, principalId)) ? deployment : ("denied" as const);
   };
-  const recordEnvironment = (action: string, input: { actorId: string; scopeId: string }, resource: string) =>
-    deps.auditLog.record({ at: Date.now(), principalId: input.actorId, action, resource, scopeLabel: input.scopeId });
   return {
     deploy: (input) => deps.deploy.deploy(input),
     redeploy: (id, input) => deps.deploy.redeploy(id, input),
@@ -59,57 +56,7 @@ export function createDeploymentMethods(
     getDeployment: (idOrName) => deps.deploy.getDeployment(idOrName),
     shareDeployment: (idOrName, grantee, permission, actor) =>
       deps.deploy.shareDeployment(idOrName, grantee, permission, actor),
-    async inviteToDeployment(idOrName, rawEmail, actorId) {
-      const email = rawEmail.trim().toLowerCase();
-      if (!validEmail(email)) throw new Error("a valid email address is required");
-      const grantee = await deploymentShareScope(`personal:${email}`, "read");
-      const deployment = await deps.deploy.getDeployment(idOrName);
-      if (!deployment) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
-      if (deployment.ownerScopeId !== `personal:${actorId}`)
-        throw new DeployAccessError(
-          "forbidden",
-          `only the owner can change who can reach "${deployment.name ?? deployment.id}"`,
-        );
-      return invitationLock.withLock(`deployment-invite:${deployment.id}:${email}`, async () => {
-        const previous = await deps.deploy.deploymentGrantees(deployment.id);
-        const alreadyShared = previous.some((g) => g.scope === grantee);
-        const grantees = previous.some((g) => g.scope === grantee && g.permission === "read")
-          ? previous
-          : await deps.deploy.shareDeployment(deployment.id, grantee, "read", { createdBy: actorId });
-        const appUrl = deps.deployAppsDomain
-          ? `https://${deployment.name ?? deployment.id}.${deps.deployAppsDomain}/`
-          : undefined;
-        if (alreadyShared)
-          return { grantees, invitation: { emailSent: false, alreadyShared: true, ...(appUrl ? { appUrl } : {}) } };
-        let emailSent = false;
-        let emailProblem: string | undefined;
-        if (!deps.inviteMailer) emailProblem = INVITE_EMAIL_NOT_CONFIGURED;
-        else if (!appUrl)
-          emailProblem = "app URLs are not configured (set DEPLOY_APPS_DOMAIN); share the app link manually";
-        else {
-          try {
-            await deps.inviteMailer.send({
-              to: email,
-              ...renderInviteEmail({
-                to: email,
-                brandName: deployment.displayName ?? deployment.name ?? "a shared app",
-                invitedBy: actorId,
-                signInUrl: appUrl,
-                expiresAt: null,
-                magicLink: false,
-              }),
-            });
-            emailSent = true;
-          } catch (e) {
-            emailProblem = errMessage(e);
-          }
-        }
-        return {
-          grantees,
-          invitation: { emailSent, ...(emailProblem ? { emailProblem } : {}), ...(appUrl ? { appUrl } : {}) },
-        };
-      });
-    },
+    ...inviteMethods(deps),
     deploymentGrantees: (idOrName) => deps.deploy.deploymentGrantees(idOrName),
     async listDeploymentsForViewer(principalId) {
       const deployments = await deps.deploy.listDeployments();
@@ -172,6 +119,73 @@ export function createDeploymentMethods(
       return permission === "write" ? current === "write" : current !== null;
     },
 
+    ...environmentMethods(deps),
+  };
+}
+
+function inviteMethods(deps: AppDeps): Pick<App, "inviteToDeployment"> {
+  const invitationLock = deps.advisoryLock;
+  return {
+    async inviteToDeployment(idOrName, rawEmail, actorId) {
+      const email = rawEmail.trim().toLowerCase();
+      if (!validEmail(email)) throw new Error("a valid email address is required");
+      const grantee = await deploymentShareScope(`personal:${email}`, "read");
+      const deployment = await deps.deploy.getDeployment(idOrName);
+      if (!deployment) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
+      if (deployment.ownerScopeId !== `personal:${actorId}`)
+        throw new DeployAccessError(
+          "forbidden",
+          `only the owner can change who can reach "${deployment.name ?? deployment.id}"`,
+        );
+      return invitationLock.withLock(`deployment-invite:${deployment.id}:${email}`, async () => {
+        const previous = await deps.deploy.deploymentGrantees(deployment.id);
+        const alreadyShared = previous.some((g) => g.scope === grantee);
+        const grantees = previous.some((g) => g.scope === grantee && g.permission === "read")
+          ? previous
+          : await deps.deploy.shareDeployment(deployment.id, grantee, "read", { createdBy: actorId });
+        const appUrl = deps.deployAppsDomain
+          ? `https://${deployment.name ?? deployment.id}.${deps.deployAppsDomain}/`
+          : undefined;
+        if (alreadyShared)
+          return { grantees, invitation: { emailSent: false, alreadyShared: true, ...(appUrl ? { appUrl } : {}) } };
+        let emailSent = false;
+        let emailProblem: string | undefined;
+        if (!deps.inviteMailer) emailProblem = INVITE_EMAIL_NOT_CONFIGURED;
+        else if (!appUrl)
+          emailProblem = "app URLs are not configured (set DEPLOY_APPS_DOMAIN); share the app link manually";
+        else {
+          try {
+            await deps.inviteMailer.send({
+              to: email,
+              ...renderInviteEmail({
+                to: email,
+                brandName: deployment.displayName ?? deployment.name ?? "a shared app",
+                invitedBy: actorId,
+                signInUrl: appUrl,
+                expiresAt: null,
+                magicLink: false,
+              }),
+            });
+            emailSent = true;
+          } catch (e) {
+            emailProblem = errMessage(e);
+          }
+        }
+        return {
+          grantees,
+          invitation: { emailSent, ...(emailProblem ? { emailProblem } : {}), ...(appUrl ? { appUrl } : {}) },
+        };
+      });
+    },
+  };
+}
+
+function environmentMethods(
+  deps: AppDeps,
+): Pick<App, "listEnvironments" | "createEnvironment" | "resolveEnvironmentByName" | "attachScope"> {
+  const recordEnvironment = (action: string, input: { actorId: string; scopeId: string }, resource: string) =>
+    deps.auditLog.record({ at: Date.now(), principalId: input.actorId, action, resource, scopeLabel: input.scopeId });
+  return {
     async listEnvironments() {
       if (!deps.environments) return [];
       const envs = await deps.environments.list();
