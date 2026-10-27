@@ -522,31 +522,27 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const prepareTurnFiles = async (handle: SandboxHandle): Promise<void> => {
     await Promise.all([pruneSkills(handle), clearStaleTurnFiles(handle)]);
   };
-  const hasLiveProcesses = async (handle: SandboxHandle): Promise<boolean> => {
+  const keepWarmAfterTurn = async (handle: SandboxHandle): Promise<boolean> => {
+    const held = await releaseHold(handle).catch((error: unknown) => {
+      reportSandboxError("hold_release_failed", error);
+      return true;
+    });
+    if (held) return true;
     if (!deps.processes || !handle.resourceId) return false;
-    return deps.processes.hasLive(handle.resourceId);
+    return deps.processes.hasLive(handle.resourceId).catch((error: unknown) => {
+      reportSandboxError("live_process_check_failed", error);
+      return true;
+    });
   };
   const reclaimBox = async (): Promise<void> => {
     const reachHandles = [...reachBoxes.values()];
     reachBoxes.clear();
     await Promise.all(
       reachHandles.map(async (h) => {
-        let keepReachWarm = await releaseHold(h).catch(swallowAs("orchestrator: reach hold release", true));
-        if (!keepReachWarm && deps.processes && supportsProcessSessions(deps.sandbox)) {
-          try {
-            keepReachWarm = await hasLiveProcesses(h);
-          } catch (e) {
-            swallow("orchestrator: reach live process check", e);
-            keepReachWarm = false;
-          }
-        }
-        if (keepReachWarm) {
-          await deps.sandbox
-            .teardown(h, { keepWarm: true })
-            .catch((error: unknown) => reportSandboxError("reach_teardown_failed", error));
-          return;
-        }
-        await deps.sandbox.teardown(h).catch((error: unknown) => reportSandboxError("reach_teardown_failed", error));
+        const keepWarm = await keepWarmAfterTurn(h);
+        await deps.sandbox
+          .teardown(h, keepWarm ? { keepWarm: true } : undefined)
+          .catch((error: unknown) => reportSandboxError("reach_teardown_failed", error));
       }),
     );
     const disposableFailures = (await Promise.allSettled([ownerAuth.release(), scratch.release()])).flatMap((r) =>
@@ -566,11 +562,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
             if (handle.scopeId === undefined || handle.scopeId === writableScopeId || handle.scopeId === scopeId)
               await clearTurnFiles(handle);
           } finally {
-            await deps.sandbox.teardown(handle, {
-              keepWarm:
-                (await releaseHold(handle).catch(swallowAs("orchestrator: resource hold release", true))) ||
-                (await hasLiveProcesses(handle).catch(swallowAs("orchestrator: live process check", true))),
-            });
+            await deps.sandbox.teardown(handle, { keepWarm: await keepWarmAfterTurn(handle) });
           }
         })(),
       );
@@ -590,15 +582,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       return;
     }
     await clearTurnFiles(handle);
-    let keepWarm = await releaseHold(handle).catch(swallowAs("orchestrator: hold release", true));
-    if (!keepWarm && deps.processes && supportsProcessSessions(deps.sandbox)) {
-      try {
-        keepWarm = await hasLiveProcesses(handle);
-      } catch (e) {
-        swallow("orchestrator: live process check", e);
-        keepWarm = false;
-      }
-    }
+    const keepWarm = await keepWarmAfterTurn(handle);
     await deps.sandbox.teardown(handle, {
       ...(keepWarm ? { keepWarm: true } : {}),
       ...(box.used ? {} : { homeUnchanged: true }),
