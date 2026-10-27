@@ -3,7 +3,7 @@ import { mock, test } from "node:test";
 import type { TriggerOutcome, TriggerSpec } from "../src/triggers/run-trigger.ts";
 import type { Cron } from "../src/types.ts";
 import { createInboxLedger } from "../src/inbox/ledger.ts";
-import { testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const specs: TriggerSpec[] = [];
 let reply = "";
@@ -25,7 +25,7 @@ const CRON = {
 } as unknown as Cron;
 
 async function seeded() {
-  const items = createInboxLedger(testMap());
+  const items = createInboxLedger(testDatabaseUrl());
   await items.ingest([
     {
       cronId: CRON.id,

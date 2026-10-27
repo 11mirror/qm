@@ -5,7 +5,7 @@ import type { BackgroundWatchArmedResult, BackgroundWatchResult } from "../src/m
 import { createMonitorStore } from "../src/monitors/monitor-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SCOPE = "personal:U1";
 type ReadOutputTail = Parameters<typeof createMonitorBroker>[0]["readOutputTail"];
@@ -16,7 +16,7 @@ function armed(r: BackgroundWatchResult): BackgroundWatchArmedResult {
 }
 
 async function harness(readOutputTail: ReadOutputTail = async () => ({ outputTail: "" })) {
-  const store = createMonitorStore(testMap());
+  const store = createMonitorStore(testDatabaseUrl());
   const registry = createPostgresProcessRegistry(testDatabaseUrl());
   const rec = await registry.register({
     processId: "p-1",

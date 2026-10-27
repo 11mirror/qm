@@ -14,11 +14,7 @@ import { flushErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
 import { createAdmittedWork } from "./util/admitted-work.ts";
 import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
-import {
-  createBackgroundOwnershipStore,
-  type BackgroundOwnershipControl,
-  type BackgroundOwnership,
-} from "./runs/background-ownership.ts";
+import { createBackgroundOwnershipStore, type BackgroundOwnershipControl } from "./runs/background-ownership.ts";
 import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
 import { emitRunReasoning, emitRunText, reasoningKey, type RunStreamEvent } from "./runs/run-stream-events.ts";
@@ -26,8 +22,8 @@ import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createSessionMailbox } from "./sessions/session-mailbox.ts";
 import type { TaskAckState } from "./slack/task-ack.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
-import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
-import { createMemoryTidyService, withMemoryTidy, type MemoryTidyProfile } from "./memory/tidy.ts";
+import { createSuggestedActivityProfileStore, createSuggestedActivityService } from "./suggestions/activities.ts";
+import { createMemoryTidyProfileStore, createMemoryTidyService, withMemoryTidy } from "./memory/tidy.ts";
 import { createRuntimeService } from "./harness/runtime-control.ts";
 import { createSessionSyscalls } from "./subagents/session-tools.ts";
 import { deliverSubagentMail } from "./subagents/mail.ts";
@@ -96,15 +92,11 @@ import { createPostgresLeaderLease, type LeaderLease } from "./persistence/leade
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "./persistence/advisory-lock.ts";
 import type {
   CommandApprovalGrant,
-  Cron,
-  InboxItem,
-  Monitor,
   PendingApprovalRecord,
   ScopeId,
   Session,
   SurfaceContextRequest,
   TurnRequest,
-  Webhook,
 } from "./types.ts";
 import { personalScope, scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
@@ -140,7 +132,7 @@ import { createIdempotencyStore } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { cronJobQueue } from "./cron/job-queue.ts";
 import { createJobWorker, type JobWorker } from "./jobs/job-worker.ts";
-import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
+import { createWebhookStore } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
 import { createDeployStore, type Deployment } from "./deploy/deploy-store.ts";
 import { viewerIdentityKey } from "./deploy/access-token.ts";
@@ -1474,7 +1466,7 @@ export function buildApp(
       : {}),
   });
   const environments = createPostgresEnvironmentStore(databaseUrl);
-  const monitors = createMonitorStore(artifactMap<Monitor>("monitors"));
+  const monitors = createMonitorStore(databaseUrl);
   const cronOwnerCache = new Map<string, string>();
   const publishInboxEvent = (event: LedgerEvent): void => {
     void (async () => {
@@ -1486,15 +1478,12 @@ export function buildApp(
       if (owner) ledgerEventBus.emit({ ...event, owner });
     })().catch(swallowAs("inbox: publish ledger event", undefined));
   };
-  const inboxItems = createInboxLedger(
-    artifactMap<InboxItem>("cron_items", ["cronId", "conversationKey"]),
-    publishInboxEvent,
-  );
+  const inboxItems = createInboxLedger(databaseUrl, publishInboxEvent);
   const recordInboxEvent: InboxEventSink = async (item, event) => {
     if (await inboxItems.recordEvent(item, event)) await scheduler.runNow(item.cronId);
   };
   const cronFires = createPostgresCronFireStore(databaseUrl);
-  const cronsBase = createCronStore(artifactMap<Cron>("crons"), {
+  const cronsBase = createCronStore(databaseUrl, {
     staleRunningMs: RUN_MAX_AGE_MS,
     fires: cronFires,
   });
@@ -1548,7 +1537,7 @@ export function buildApp(
       "DO $$ BEGIN IF to_regclass('feature_flags') IS NOT NULL THEN DELETE FROM feature_flags WHERE id = 'swarms'; END IF; END $$",
     ],
   });
-  const webhooks = createWebhookStore(artifactMap<Webhook>("webhooks"), artifactMap<WebhookHistory>("webhook_history"));
+  const webhooks = createWebhookStore(databaseUrl);
   const webUiBase = (config.slack?.webUiPublicUrl ?? config.publicWebUrl)?.replace(/\/+$/, "");
   const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), outbound, {
     surfaces: chatSurfaces,
@@ -2092,9 +2081,9 @@ export function buildApp(
     }),
   };
   const sweepAsks = createAskExpirySweep({ keychain, fire: askResolution, auditLog });
-  const suggestedActivityProfiles = artifactMap<SuggestedActivityProfile>("suggested_activity_profiles");
+  const suggestedActivityProfiles = createSuggestedActivityProfileStore(databaseUrl);
   const memoryTidy = createMemoryTidyService({
-    store: artifactMap<MemoryTidyProfile>("memory_tidy_profiles"),
+    store: createMemoryTidyProfileStore(databaseUrl),
     memory: baseMemory,
     timezone: async (principalId) => (await suggestedActivityProfiles.get(principalId))?.timezone,
     crons,
@@ -2177,7 +2166,7 @@ export function buildApp(
   });
   const backgroundOwnership: BackgroundOwnershipControl | undefined = config.backgroundDeploymentId
     ? {
-        store: createBackgroundOwnershipStore(artifactMap<BackgroundOwnership>("background_ownership")),
+        store: createBackgroundOwnershipStore(databaseUrl),
         instanceId: randomUUID(),
         deploymentId: config.backgroundDeploymentId,
         active: () => backgroundActive(),

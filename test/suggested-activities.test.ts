@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createSuggestedActivityService, type SuggestedActivityProfile } from "../src/suggestions/activities.ts";
+import { createSuggestedActivityProfileStore, createSuggestedActivityService } from "../src/suggestions/activities.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import { recordingOutbound } from "./support/recording-outbound.ts";
@@ -23,9 +23,9 @@ const activities = ["app", "brief", "deck", "hire", "plan"].map((id) => ({
 function fixture() {
   let time = Date.now();
   let output = JSON.stringify(activities);
-  const store = testMap<SuggestedActivityProfile>();
+  const store = createSuggestedActivityProfileStore(testDatabaseUrl());
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const outbound = recordingOutbound();
   const calls: TurnRequest[] = [];
   const settled: Promise<void>[] = [];

@@ -1,60 +1,24 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import test from "node:test";
-import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src/runs/background-ownership.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
-test(
-  "Postgres serializes concurrent owner changes and migrates a member-protocol record",
-  { skip: !databaseUrl },
-  async () => {
-    const table = `background_test_${randomUUID().replaceAll("-", "")}`;
-    const factories = [createPostgresMapFactory(databaseUrl!), createPostgresMapFactory(databaseUrl!)];
-    try {
-      const maps = factories.map((factory) => factory.map<BackgroundOwnership>(table));
-      const stores = maps.map((map) => createBackgroundOwnershipStore(map));
-      const claims = await Promise.allSettled(
-        stores.map((store, i) =>
-          store.set({ ownerDeploymentId: `d${i}`, expectedOwnerDeploymentId: null, setBy: `d${i}` }),
-        ),
-      );
-      assert.equal(claims.filter((result) => result.status === "fulfilled").length, 1);
-      assert.equal(claims.filter((result) => result.status === "rejected").length, 1);
-      const state = await stores[0]!.get();
-      assert.ok(["d0", "d1"].includes(state.ownerDeploymentId!));
-      assert.deepEqual(await stores[1]!.get(), state);
-      await maps[0]!.put("ownership", {
-        enabled: true,
-        generation: 3,
-        desiredDeploymentId: "core:blue",
-        lastRequestId: null,
-        lastRequest: null,
-        members: [{ instanceId: "old", deploymentId: "core:blue", state: "admitted" }],
-      } as unknown as BackgroundOwnership);
-      assert.equal((await stores[1]!.get()).ownerDeploymentId, "core:blue");
-      const migrated = await stores[1]!.set({
-        ownerDeploymentId: "core:green",
-        expectedOwnerDeploymentId: "core:blue",
-        setBy: "core:green",
-      });
-      assert.equal(migrated.ownerDeploymentId, "core:green");
-      assert.deepEqual(await maps[0]!.get("ownership"), {
-        ...migrated,
-        enabled: true,
-        generation: 3,
-        desiredDeploymentId: "core:green",
-        lastRequestId: null,
-        lastRequest: null,
-        members: [{ instanceId: "old", deploymentId: "core:blue", state: "admitted" }],
-      });
-    } finally {
-      const pool = await factories[0]!.pool.pool();
-      await pool.query(`DROP TABLE IF EXISTS ${table}`);
-      await Promise.all(factories.map((factory) => factory.pool.close()));
-    }
-  },
-);
+test("Postgres serializes concurrent owner changes", { skip: !databaseUrl }, async () => {
+  const url = testDatabaseUrl();
+  const stores = [createBackgroundOwnershipStore(url), createBackgroundOwnershipStore(url)];
+  const claims = await Promise.allSettled(
+    stores.map((store, i) =>
+      store.set({ ownerDeploymentId: `d${i}`, expectedOwnerDeploymentId: null, setBy: `d${i}` }),
+    ),
+  );
+  assert.equal(claims.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(claims.filter((result) => result.status === "rejected").length, 1);
+  const state = await stores[0]!.get();
+  assert.ok(["d0", "d1"].includes(state.ownerDeploymentId!));
+  assert.deepEqual(await stores[1]!.get(), state);
+});
 
 test(
   "cron job queue resumes polling without terminating a prior generation callback",
@@ -104,10 +68,10 @@ test(
   { skip: !databaseUrl, timeout: 20_000 },
   async () => {
     const { setBackgroundOwner } = await import("../cli/src/background-work.ts");
-    const table = `background_test_${randomUUID().replaceAll("-", "")}`;
-    const factory = createPostgresMapFactory(databaseUrl!);
-    const store = createBackgroundOwnershipStore(factory.map<BackgroundOwnership>(table));
-    const pool = await factory.pool.pool();
+    const url = testDatabaseUrl();
+    const store = createBackgroundOwnershipStore(url);
+    const pg = createPgPool(url);
+    const pool = await pg.pool();
     const blocker = await pool.connect();
     let first: Promise<BackgroundOwnership> | undefined;
     const status = (state: BackgroundOwnership) =>
@@ -115,7 +79,7 @@ test(
     try {
       await store.set({ ownerDeploymentId: "a", setBy: "a" });
       await blocker.query("BEGIN");
-      await blocker.query("SELECT * FROM durable_map_versions WHERE tbl = $1 FOR UPDATE", [table]);
+      await blocker.query("SELECT * FROM background_ownership WHERE id = 'ownership' FOR UPDATE");
       const change = { ownerDeploymentId: "b", expectedOwnerDeploymentId: "a" };
       let posts = 0;
       let reads = 0;
@@ -148,8 +112,7 @@ test(
       await blocker.query("ROLLBACK").catch(() => {});
       blocker.release();
       await first?.catch(() => {});
-      await pool.query(`DROP TABLE IF EXISTS ${table}`);
-      await factory.pool.close();
+      await pg.close();
     }
   },
 );

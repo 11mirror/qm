@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { tenantCols, type PgPool } from "../persistence/pg-pool.ts";
+import { columnName, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import type { Cron } from "../types.ts";
 import type { CreateCronInput, CronStore } from "./cron-store.ts";
 import type { Scheduler } from "./scheduler.ts";
@@ -12,7 +13,48 @@ export interface ManagedCronClaim {
   arming?: boolean;
 }
 
-type ManagedCronDeps<T> = { store: DurableMap<T>; crons: CronStore; scheduler: Pick<Scheduler, "notifyChanged"> };
+export const MANAGED_CRON_COLUMNS = {
+  cronId: { type: "text" },
+  arming: { type: "boolean" },
+} as const;
+
+export interface ManagedCronProfiles<T extends ManagedCronClaim> {
+  get(key: string): Promise<T | null>;
+  claim(key: string, initial: T, patch: Partial<T>): Promise<T>;
+  armed(key: string): Promise<T | null>;
+}
+
+export function managedCronProfiles<T extends ManagedCronClaim>(
+  q: PgPool["q"],
+  spec: TableSpec,
+): ManagedCronProfiles<T> {
+  const codec = tableCodec<T>(spec);
+  const { table } = spec;
+  const key = columnName(spec.key);
+  const select = `SELECT ${codec.columns} FROM ${table} WHERE ${key} = $1`;
+  return {
+    get: async (id) => codec.rows(await q(select, [id]))[0] ?? null,
+    async claim(id, initial, patch) {
+      const sets = Object.keys(patch).map((field) => `${columnName(field)} = EXCLUDED.${columnName(field)}`);
+      const claimed = await q(
+        `INSERT INTO ${table} (${codec.columns}) VALUES (${codec.placeholders})
+         ON CONFLICT (${tenantCols(key)}) DO UPDATE SET ${sets.join(", ")} WHERE ${table}.cron_id IS NULL
+         RETURNING ${codec.columns}`,
+        codec.values(id, { ...initial, ...patch }),
+      );
+      return codec.rows(claimed.length ? claimed : await q(select, [id]))[0]!;
+    },
+    armed: async (id) =>
+      codec.rows(await q(`UPDATE ${table} SET arming = NULL WHERE ${key} = $1 RETURNING ${codec.columns}`, [id]))[0] ??
+      null,
+  };
+}
+
+type ManagedCronDeps<T extends ManagedCronClaim> = {
+  store: ManagedCronProfiles<T>;
+  crons: CronStore;
+  scheduler: Pick<Scheduler, "notifyChanged">;
+};
 
 export async function claimManagedCron<T extends ManagedCronClaim>(
   deps: ManagedCronDeps<T>,
@@ -24,19 +66,16 @@ export async function claimManagedCron<T extends ManagedCronClaim>(
   const existing = await deps.store.get(key);
   if (existing?.cronId) return existing.arming ? arm(deps, key, existing.cronId) : existing;
   const cron = await deps.crons.create({ ...input, enabled: false });
-  await deps.store.putIfAbsent(key, initial);
-  const stored = await deps.store.update(key, (value) =>
-    value.cronId ? value : { ...value, cronId: cron.id, arming: true, ...fields(cron) },
-  );
-  if (stored?.cronId === cron.id) return arm(deps, key, cron.id);
+  const stored = await deps.store.claim(key, initial, { cronId: cron.id, arming: true, ...fields(cron) } as Partial<T>);
+  if (stored.cronId === cron.id) return arm(deps, key, cron.id);
   await deps.crons.delete(cron.id);
-  return stored ?? initial;
+  return stored;
 }
 
 async function arm<T extends ManagedCronClaim>(deps: ManagedCronDeps<T>, key: string, cronId: string): Promise<T> {
   await deps.crons.setEnabled(cronId, true);
   deps.scheduler.notifyChanged(cronId);
-  const armed = await deps.store.update(key, ({ arming: _arming, ...value }) => value as T);
+  const armed = await deps.store.armed(key);
   if (!armed) throw new Error(`managed cron profile ${key} disappeared while arming`);
   return armed;
 }

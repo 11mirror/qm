@@ -8,11 +8,11 @@ import type { PersistedUiState } from "../src/surfaces/ui-state.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { installPrincipalLinks } from "../src/directory/person.ts";
 import { inboxApp } from "./support/inbox-app.ts";
-import { testMap } from "./support/test-database.ts";
+import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 
 function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefresh"]) {
   const { crons, app } = inboxApp();
-  const items = createInboxLedger(testMap());
+  const items = createInboxLedger(testDatabaseUrl());
   const uiState = testMap<PersistedUiState>();
   const defaults = async (owner = "alice") => [
     await ensureInboxCron(crons, owner, "gmail"),

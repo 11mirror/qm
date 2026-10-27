@@ -1,9 +1,17 @@
 import { parseSuggestedActivities, type SuggestedActivity } from "../../plugins/chassis/src/suggested-activities.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
+import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { jsonbStringify } from "../util/text.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
-import { claimManagedCron, nightlyAt, type ManagedCronClaim } from "../cron/managed.ts";
+import {
+  claimManagedCron,
+  managedCronProfiles,
+  MANAGED_CRON_COLUMNS,
+  nightlyAt,
+  type ManagedCronClaim,
+} from "../cron/managed.ts";
 import { scopeId, type Cron } from "../types.ts";
 import { isReply } from "../sessions/items.ts";
 import { swallow } from "../util/errors.ts";
@@ -46,8 +54,88 @@ const GENERATED_COUNT = 5;
 const VISIBLE_COUNT = 3;
 const MAX_DISMISSED = 30;
 
+const SUGGESTED_ACTIVITY_PROFILES: TableSpec = {
+  table: "suggested_activity_profiles",
+  key: "id",
+  columns: {
+    ...MANAGED_CRON_COLUMNS,
+    timezone: { type: "text", required: true },
+    lastSeenAt: { type: "bigint", required: true },
+    lastBootstrapAt: { type: "bigint" },
+    dismissalRefreshAt: { type: "bigint" },
+    managedAction: { type: "text" },
+    seeds: { type: "jsonb" },
+    dismissed: { type: "jsonb" },
+  },
+};
+
+export const SUGGESTED_ACTIVITY_PROFILES_MIGRATION = mapToTableMigration(
+  "suggestions/activity-profiles/0001-typed",
+  SUGGESTED_ACTIVITY_PROFILES,
+  { dropKeys: ["lastCadenceCheckAt", "managedSchedule"] },
+);
+
+const codec = tableCodec<SuggestedActivityProfile>(SUGGESTED_ACTIVITY_PROFILES);
+
+export function createSuggestedActivityProfileStore(databaseUrl: string) {
+  const { q } = createPgPool(databaseUrl, [SUGGESTED_ACTIVITY_PROFILES_MIGRATION]);
+  const changed = async (sql: string, params: unknown[]) => (await q(sql, params)).length > 0;
+  return {
+    ...managedCronProfiles<SuggestedActivityProfile>(q, SUGGESTED_ACTIVITY_PROFILES),
+    async touch(
+      principalId: string,
+      visit: { timezone: string; at: number; seen: boolean; seeds: SuggestedActivity[] },
+    ): Promise<SuggestedActivityProfile> {
+      const rows = await q(
+        `INSERT INTO suggested_activity_profiles AS p (id, timezone, last_seen_at, seeds) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET seeds = EXCLUDED.seeds,
+           last_seen_at = CASE WHEN $5 THEN EXCLUDED.last_seen_at ELSE p.last_seen_at END
+         RETURNING ${codec.columns}`,
+        [principalId, visit.timezone, visit.at, jsonbStringify(visit.seeds), visit.seen],
+      );
+      return codec.row(rows[0]!);
+    },
+    async setManagedAction(principalId: string, action: string): Promise<void> {
+      await q(`UPDATE suggested_activity_profiles SET managed_action = $2 WHERE id = $1`, [principalId, action]);
+    },
+    claimDismissalRefresh: (principalId: string, dismissedAt: number) =>
+      changed(
+        `UPDATE suggested_activity_profiles SET dismissal_refresh_at = $2
+         WHERE id = $1 AND COALESCE(dismissal_refresh_at, 0) < $2 RETURNING id`,
+        [principalId, dismissedAt],
+      ),
+    async releaseDismissalRefresh(principalId: string, dismissedAt: number): Promise<void> {
+      await q(
+        `UPDATE suggested_activity_profiles SET dismissal_refresh_at = 0 WHERE id = $1 AND dismissal_refresh_at = $2`,
+        [principalId, dismissedAt],
+      );
+    },
+    claimBootstrap: (principalId: string, at: number, windowMs: number) =>
+      changed(
+        `UPDATE suggested_activity_profiles SET last_bootstrap_at = $2
+         WHERE id = $1 AND COALESCE(last_bootstrap_at, 0) <= $3 RETURNING id`,
+        [principalId, at, at - windowMs],
+      ),
+    async dismiss(principalId: string, entry: DismissedActivity): Promise<SuggestedActivityProfile | null> {
+      const rows = await q(
+        `UPDATE suggested_activity_profiles SET dismissed = (
+           SELECT jsonb_agg(e ORDER BY n) FROM (
+             SELECT e, n FROM jsonb_array_elements(
+               COALESCE((SELECT jsonb_agg(d) FROM jsonb_array_elements(dismissed) d WHERE d->>'id' <> $2), '[]'::jsonb)
+               || jsonb_build_array($3::jsonb)
+             ) WITH ORDINALITY AS kept(e, n) ORDER BY n DESC LIMIT $4) recent)
+         WHERE id = $1 RETURNING ${codec.columns}`,
+        [principalId, entry.id, jsonbStringify(entry), MAX_DISMISSED],
+      );
+      return codec.rows(rows)[0] ?? null;
+    },
+  };
+}
+
+export type SuggestedActivityProfileStore = ReturnType<typeof createSuggestedActivityProfileStore>;
+
 export function createSuggestedActivityService(deps: {
-  store: DurableMap<SuggestedActivityProfile>;
+  store: SuggestedActivityProfileStore;
   sessions: Pick<SessionStore, "latestItemSeq" | "getItems" | "get">;
   crons: CronStore;
   scheduler: Pick<Scheduler, "notifyChanged" | "runNow">;
@@ -72,7 +160,7 @@ export function createSuggestedActivityService(deps: {
     if (action === cron.action) return;
     if (cron.action !== profile.managedAction && !cron.action?.startsWith(managedPrefix)) return;
     await deps.crons.update(cron.id, { action });
-    await deps.store.merge(cron.owner, { managedAction: action });
+    await deps.store.setManagedAction(cron.owner, action);
   };
 
   const latestResult = async (cron: Cron, principalId: string) => {
@@ -115,10 +203,7 @@ export function createSuggestedActivityService(deps: {
     ): Promise<SuggestedActivityResult> {
       if (!deps.enabled) return { activities: seeds.slice(0, GENERATED_COUNT), pending: false };
       new Intl.DateTimeFormat("en-US", { timeZone: timezone });
-      let profile = await deps.store.putIfAbsent(principalId, { timezone, lastSeenAt: now() });
-      const seen = poll ? {} : { lastSeenAt: now() };
-      await deps.store.merge(principalId, { ...seen, seeds });
-      profile = { ...profile, ...seen, seeds };
+      let profile = await deps.store.touch(principalId, { timezone, at: now(), seen: !poll, seeds });
       if (!profile.cronId || profile.arming) {
         profile = await claimManagedCron(
           deps,
@@ -143,19 +228,11 @@ export function createSuggestedActivityService(deps: {
       let pending = runs.some((run) => run.status === "running");
       const dismissedAt = Math.max(0, ...(profile.dismissed ?? []).map((entry) => entry.at));
       if ((refresh || !poll) && !pending && cron.enabled && dismissedAt > (runs.at(-1)?.firedAt ?? 0)) {
-        let won = false;
-        await deps.store.update(principalId, (value) => {
-          won = (value.dismissalRefreshAt ?? 0) < dismissedAt;
-          return won ? { ...value, dismissalRefreshAt: dismissedAt } : value;
-        });
-        if (!won) pending = true;
+        if (!(await deps.store.claimDismissalRefresh(principalId, dismissedAt))) pending = true;
         else {
           const result = await deps.scheduler.runNow(cron.id);
           pending = result.started || result.reason === "already_running";
-          if (!pending)
-            await deps.store.update(principalId, (value) =>
-              value.dismissalRefreshAt === dismissedAt ? { ...value, dismissalRefreshAt: 0 } : value,
-            );
+          if (!pending) await deps.store.releaseDismissalRefresh(principalId, dismissedAt);
         }
       } else if (
         !pending &&
@@ -163,13 +240,7 @@ export function createSuggestedActivityService(deps: {
         latestAt <= now() - REFRESH_AFTER_MS &&
         (profile.lastBootstrapAt ?? 0) <= now() - REFRESH_AFTER_MS
       ) {
-        const timestamp = now();
-        const claimed = await deps.store.update(principalId, (value) =>
-          (value.lastBootstrapAt ?? 0) > timestamp - REFRESH_AFTER_MS
-            ? value
-            : { ...value, lastBootstrapAt: timestamp },
-        );
-        if (claimed?.lastBootstrapAt === timestamp) {
+        if (await deps.store.claimBootstrap(principalId, now(), REFRESH_AFTER_MS)) {
           const result = await deps.scheduler.runNow(cron.id);
           pending = result.started || result.reason === "already_running";
         }
@@ -185,14 +256,7 @@ export function createSuggestedActivityService(deps: {
       const latest = owned(cron, principalId) ? (await latestResult(cron, principalId)).activities : undefined;
       const activity = [...(latest ?? []), ...(profile.seeds ?? [])].find((candidate) => candidate.id === id);
       if (!activity) return false;
-      const dismiss = (value: SuggestedActivityProfile): SuggestedActivityProfile => ({
-        ...value,
-        dismissed: [
-          ...(value.dismissed ?? []).filter((entry) => entry.id !== id),
-          { id, title: activity.title, at: now() },
-        ].slice(-MAX_DISMISSED),
-      });
-      const updated = await deps.store.update(principalId, dismiss);
+      const updated = await deps.store.dismiss(principalId, { id, title: activity.title, at: now() });
       if (!updated) return false;
       if (owned(cron, principalId)) await syncAction(cron, updated);
       return true;

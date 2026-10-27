@@ -21,8 +21,8 @@ const orgScope = scopeId("org", ORG);
 
 function makeDeps() {
   const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  const webhooks = createWebhookStore(testMap(), testMap());
+  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const webhooks = createWebhookStore(testDatabaseUrl());
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
     resolveFiles: (refs) => files.resolveByIds(refs),
   });

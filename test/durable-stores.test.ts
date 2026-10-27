@@ -4,15 +4,14 @@ import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
-import type { Cron } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testMap, testAdvisoryLock, testDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { markFired } from "./support/cron-slots.ts";
 
 test("crons persist to the backing map (a second store instance reads them back)", async () => {
-  const map = testMap<Cron>();
-  const s1 = createCronStore(map, { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const url = testDatabaseUrl();
+  const s1 = createCronStore(url, { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const c = await s1.create({
     schedule: { everyMs: 60_000 },
     action: "summarize signups",
@@ -23,7 +22,7 @@ test("crons persist to the backing map (a second store instance reads them back)
   });
   await markFired(s1, c.id, 123);
 
-  const s2 = createCronStore(map, { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const s2 = createCronStore(url, { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const got = await s2.get(c.id);
   assert.equal(got?.action, "summarize signups");
   assert.equal(got?.lastFiredAt, 123);

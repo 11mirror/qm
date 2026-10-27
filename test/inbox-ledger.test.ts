@@ -1,10 +1,9 @@
-import { type DurableMapSelect } from "../src/persistence/durable-map.ts";
-import type { InboxItem } from "../src/types.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { agentDraftOf, createInboxLedger, inboxItemId, type IngestEntryInput } from "../src/inbox/ledger.ts";
 import { ledgerItemView, ledgerState, sortLedgerItems } from "../src/inbox/view.ts";
-import { testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 
 const CRON = "cron-1";
 
@@ -21,7 +20,7 @@ function entry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
 }
 
 test("ingest creates pending items and holds the ones that arrive with a proposal", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   const outcome = await ledger.ingest([
     entry(),
     entry({ dedupeKey: "gmail:thread-2", proposal: { data: { body: "on it" }, by: "agent" } }),
@@ -40,7 +39,7 @@ test("ingest creates pending items and holds the ones that arrive with a proposa
 });
 
 test("the ledger id is the dedupe key scoped to its loop", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry(), entry({ cronId: "loop-2" })]);
   assert.equal((await ledger.byCron(CRON)).length, 1);
   assert.equal((await ledger.byCron("loop-2")).length, 1);
@@ -48,13 +47,13 @@ test("the ledger id is the dedupe key scoped to its loop", async () => {
 });
 
 test("re-ingesting the same source event with nothing new is skipped", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry()]);
   assert.deepEqual(await ledger.ingest([entry()]), { created: 0, updated: 0, skipped: 1 });
 });
 
 test("a newer source event refreshes the payload and the proposal", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry({ proposal: { data: { body: "first" }, by: "agent" } })]);
   const outcome = await ledger.ingest([
     entry({
@@ -71,7 +70,7 @@ test("a newer source event refreshes the payload and the proposal", async () => 
 });
 
 test("a proposal the person edited survives a sync that brings no newer message", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry({ proposal: { data: { body: "agent draft" }, by: "agent" } })]);
   const [before] = await ledger.byCron(CRON);
   await ledger.setProposal(before!.id, { data: { body: "my own words" }, by: "human" });
@@ -82,7 +81,7 @@ test("a proposal the person edited survives a sync that brings no newer message"
 });
 
 test("a newer message overrides even an edited proposal", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry({ proposal: { data: { body: "agent draft" }, by: "agent" } })]);
   const [before] = await ledger.byCron(CRON);
   await ledger.setProposal(before!.id, { data: { body: "my own words" }, by: "human" });
@@ -92,7 +91,7 @@ test("a newer message overrides even an edited proposal", async () => {
 });
 
 test("actioned items are never resurrected by a stale sync", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry()]);
   const [item] = await ledger.byCron(CRON);
   await ledger.recordAction(item!.id, { kind: "send", outcome: "actioned", result: "sent" });
@@ -103,7 +102,7 @@ test("actioned items are never resurrected by a stale sync", async () => {
 });
 
 test("a newer message revives a dismissed item", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry()]);
   const [item] = await ledger.byCron(CRON);
   await ledger.recordAction(item!.id, { kind: "dismiss", outcome: "dismissed" });
@@ -115,7 +114,7 @@ test("a newer message revives a dismissed item", async () => {
 });
 
 test("an actioned item cannot be actioned or edited again", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry()]);
   const [item] = await ledger.byCron(CRON);
   await ledger.recordAction(item!.id, { kind: "send", outcome: "actioned" });
@@ -125,7 +124,7 @@ test("an actioned item cannot be actioned or edited again", async () => {
 });
 
 test("reopen brings a dismissed item back to held when it holds a proposal", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry({ proposal: { data: { body: "reply" }, by: "agent" } })]);
   const [item] = await ledger.byCron(CRON);
   await ledger.recordAction(item!.id, { kind: "dismiss", outcome: "dismissed" });
@@ -134,7 +133,7 @@ test("reopen brings a dismissed item back to held when it holds a proposal", asy
 });
 
 test("the thread keeps every chat turn", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry()]);
   const [item] = await ledger.byCron(CRON);
   await ledger.appendThread(item!.id, [{ role: "human", text: "make it shorter", actorId: "josh" }]);
@@ -154,7 +153,7 @@ test("the thread keeps every chat turn", async () => {
 });
 
 test("setProposal promotes a pending item to held", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry()]);
   const [item] = await ledger.byCron(CRON);
   const held = await ledger.setProposal(item!.id, { data: { body: "draft" }, by: "agent", sessionId: "s1" });
@@ -163,7 +162,7 @@ test("setProposal promotes a pending item to held", async () => {
 });
 
 test("annotate merges into the source payload, leaving the item's state and proposal alone", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry({ proposal: { data: { body: "on it" }, by: "agent" } })]);
   const [item] = await ledger.byCron(CRON);
   const annotated = await ledger.annotate(item!.id, { reactions: ["eyes"] });
@@ -180,7 +179,7 @@ test("annotate merges into the source payload, leaving the item's state and prop
 });
 
 test("a newer source event replaces the payload the annotation lived in", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry()]);
   const [item] = await ledger.byCron(CRON);
   await ledger.annotate(item!.id, { reactions: ["eyes"] });
@@ -189,7 +188,7 @@ test("a newer source event replaces the payload the annotation lived in", async 
 });
 
 test("prune drops resolved items past retention and over the cap, never open ones", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([
     entry({ dedupeKey: "a" }),
     entry({ dedupeKey: "b" }),
@@ -212,7 +211,7 @@ test("prune drops resolved items past retention and over the cap, never open one
 });
 
 test("prune keeps resolved items inside retention while under the cap", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry({ dedupeKey: "a" }), entry({ dedupeKey: "b" })]);
   const items = await ledger.byCron(CRON);
   await ledger.recordAction(items[0]!.id, { kind: "send", outcome: "actioned" });
@@ -220,7 +219,7 @@ test("prune keeps resolved items inside retention while under the cap", async ()
 });
 
 test("open items sort ahead of resolved ones, newest source event first", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([
     entry({ dedupeKey: "old", sourceAt: 1 }),
     entry({ dedupeKey: "new", sourceAt: 100 }),
@@ -236,7 +235,7 @@ test("open items sort ahead of resolved ones, newest source event first", async 
 });
 
 test("the ledger view exposes the generic shape and never leaks decision tokens", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry({ proposal: { data: { body: "hi" }, by: "agent" } })]);
   const [item] = await ledger.byCron(CRON);
   const view = ledgerItemView(item!);
@@ -249,7 +248,7 @@ test("the ledger view exposes the generic shape and never leaks decision tokens"
 });
 
 test("a failed item reads as failed, not dismissed, and keeps its reason", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry()]);
   const [item] = await ledger.byCron(CRON);
   await ledger.recordAction(item!.id, { kind: "fail", outcome: "failed", result: "connector down" });
@@ -259,7 +258,7 @@ test("a failed item reads as failed, not dismissed, and keeps its reason", async
 });
 
 test("a person's edit keeps the agent drafts alongside it, and new agent drafts accumulate", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry({ proposal: { data: { body: "agent v1" }, by: "agent" } })]);
   const [item] = await ledger.byCron(CRON);
   assert.equal(item!.proposal?.by, "agent");
@@ -289,7 +288,7 @@ test("a person's edit keeps the agent drafts alongside it, and new agent drafts 
 });
 
 test("a re-ingested agent draft becomes the draft authorship is judged against, even after a human edit", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry({ proposal: { data: { body: "agent v1" }, by: "agent" } })]);
   const [item] = await ledger.byCron(CRON);
   await ledger.setProposal(item!.id, { data: { body: "my words" }, by: "human" });
@@ -305,7 +304,7 @@ test("a re-ingested agent draft becomes the draft authorship is judged against, 
 });
 
 test("setProposal can be conditioned on the draft version the caller saw", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry({ proposal: { data: { body: "agent v1" }, by: "agent" } })]);
   const [item] = await ledger.byCron(CRON);
   const seenAt = item!.proposal!.at;
@@ -318,14 +317,14 @@ test("setProposal can be conditioned on the draft version the caller saw", async
 });
 
 test("an item ingested without a draft still carries an empty agent-draft history", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry()]);
   const [item] = await ledger.byCron(CRON);
   assert.deepEqual(item!.agentDrafts, []);
 });
 
 test("mention identities the agent ever wrote are kept even after the draft history rolls over", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry({ proposal: { data: { body: "team <!here> look" }, by: "agent" } })]);
   const [item] = await ledger.byCron(CRON);
   for (let i = 0; i < 12; i++) await ledger.setProposal(item!.id, { data: { body: `calm v${i}` }, by: "agent" });
@@ -336,7 +335,7 @@ test("mention identities the agent ever wrote are kept even after the draft hist
 });
 
 test("re-ingesting the identical agent draft does not bump its timestamp", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry({ proposal: { data: { body: "same" }, by: "agent" } })]);
   const [item] = await ledger.byCron(CRON);
   const at = item!.proposal!.at;
@@ -346,7 +345,7 @@ test("re-ingesting the identical agent draft does not bump its timestamp", async
 });
 
 test("draft identity ignores key order, as stored JSON does not preserve it", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry({ proposal: { data: { body: "hi", to: ["a@x"], subject: "s" }, by: "agent" } })]);
   const [item] = await ledger.byCron(CRON);
   const at = item!.proposal!.at;
@@ -358,7 +357,7 @@ test("draft identity ignores key order, as stored JSON does not preserve it", as
 });
 
 test("continuing a sent reply clears the old draft without losing chat or allowing a second reset", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([
     entry({ sourcePayload: { sentChat: true }, proposal: { data: { body: "First reply" }, by: "human" } }),
   ]);
@@ -386,9 +385,8 @@ test("continuing a sent reply clears the old draft without losing chat or allowi
   assert.equal(await ledger.reopen(ordinary.id, { sentReply: true }), null);
 });
 
-test("email classification projection is opt-in, scoped, and never changes stored previews", async (t) => {
-  const backing = testMap<InboxItem>();
-  const ledger = createInboxLedger(backing);
+test("email classification projection is opt-in, scoped, and never changes stored previews", async () => {
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([
     entry({
       sourcePayload: { automated: true, privateDetail: "hidden" },
@@ -397,22 +395,6 @@ test("email classification projection is opt-in, scoped, and never changes store
     entry({ cronId: "unselected", sourcePayload: { automated: true } }),
   ]);
   const stored = structuredClone(await ledger.get(inboxItemId(CRON, "gmail:thread-1")));
-  t.mock.method(backing, "all", async () => {
-    assert.fail("summaries must not scan the full ledger");
-  });
-  const originalSelect = backing.select.bind(backing);
-  t.mock.method(backing, "select", async (query: DurableMapSelect<InboxItem, keyof InboxItem>) => {
-    assert.deepEqual(query.where, { field: "cronId", anyOfFold: [CRON] });
-    assert.ok(query.omit?.includes("proposal"));
-    assert.ok(query.omit?.includes("thread"));
-    if (!query.omit?.includes("sourcePayload"))
-      assert.deepEqual(query.pickNested, {
-        sourcePayload: ["automated", "participants", "slackAvatarsRefreshAt"],
-      });
-    const rows = await originalSelect(query);
-    for (const row of rows) assert.equal((row as InboxItem).sourcePayload?.privateDetail, undefined);
-    return rows;
-  });
   const before = await ledger.summaries([CRON]);
   assert.equal(before.length, 1);
   assert.equal(before[0]!.inboxPreview!.automated, undefined);
@@ -425,41 +407,23 @@ test("email classification projection is opt-in, scoped, and never changes store
   assert.deepEqual(await ledger.get(inboxItemId(CRON, "gmail:thread-1")), stored);
 });
 
-test("ingest batches writes and reuses the stored id of a known source key", async () => {
-  const backing = testMap<InboxItem>();
-  const seed = createInboxLedger(backing);
-  await seed.ingest([entry()]);
-  const original = (await seed.byCron(CRON))[0]!;
-  await backing.delete(original.id);
-  await backing.put("legacy", { ...original, id: "legacy" });
-  let selects = 0;
-  let writes = 0;
-  const ledger = createInboxLedger({
-    ...backing,
-    select: async (query) => {
-      selects++;
-      return backing.select(query);
-    },
-    get: async () => {
-      throw new Error("per-item read");
-    },
-    mutateMany: async (updates) => {
-      writes++;
-      return backing.mutateMany(updates);
-    },
-  });
+test("ingest reuses the stored id of a known source key", async () => {
+  const url = testDatabaseUrl();
+  const ledger = createInboxLedger(url);
+  await ledger.ingest([entry()]);
+  const original = (await ledger.byCron(CRON))[0]!;
+  await createPgPool(url).q(`UPDATE cron_items SET id = 'legacy' WHERE id = $1`, [original.id]);
   const batch = Array.from({ length: 100 }, (_, i) => entry({ dedupeKey: `new:${i}` }));
   const outcome = await ledger.ingest([entry(), ...batch, ...batch]);
   assert.deepEqual(outcome, { created: 100, updated: 0, skipped: 101 });
-  assert.deepEqual({ selects, writes }, { selects: 1, writes: 1 });
-  assert.equal((await backing.all()).length, 101);
-  assert.ok(await backing.get("legacy"));
-  assert.equal(await backing.get(original.id), null);
+  assert.equal((await ledger.byCron(CRON)).length, 101);
+  assert.ok(await ledger.get("legacy"));
+  assert.equal(await ledger.get(original.id), null);
 });
 
 test("conditional annotations reject changed source payloads even within the same clock tick", async (t) => {
   t.mock.method(Date, "now", () => 1000);
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry()]);
   const [item] = await ledger.byCron(CRON);
   const snapshot = structuredClone(item!.sourcePayload!);
@@ -484,7 +448,7 @@ test("conditional annotations reject changed source payloads even within the sam
 });
 
 test("agent ledger views omit cosmetic Slack data without changing UI data or task images", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   const payload = {
     source: "slack",
     slackAvatarsRefreshAt: 12345,
@@ -514,7 +478,7 @@ test("agent ledger views omit cosmetic Slack data without changing UI data or ta
 });
 
 test("ordinary ledger annotations leave previews unchanged and do not project avatar metadata", async () => {
-  const ledger = createInboxLedger(testMap());
+  const ledger = createInboxLedger(testDatabaseUrl());
   await ledger.ingest([entry()]);
   const [item] = await ledger.byCron(CRON);
   const before = structuredClone(item!.inboxPreview);
@@ -540,15 +504,9 @@ test("ordinary ledger annotations leave previews unchanged and do not project av
   assert.equal("sourcePayload" in projected, false);
 });
 
-test("per-cron reads, prune and delete query only that cron's items instead of scanning the table", async () => {
-  const backing = testMap<InboxItem>(["cronId"]);
-  const seed = createInboxLedger(backing);
-  await seed.ingest([entry(), entry({ dedupeKey: "gmail:thread-2" }), entry({ cronId: "cron-2" })]);
-  const ledger = createInboxLedger({
-    ...backing,
-    all: async () => assert.fail("full table scan"),
-    entries: async () => assert.fail("full table scan"),
-  });
+test("per-cron reads, prune and delete touch only that cron's items", async () => {
+  const ledger = createInboxLedger(testDatabaseUrl());
+  await ledger.ingest([entry(), entry({ dedupeKey: "gmail:thread-2" }), entry({ cronId: "cron-2" })]);
   assert.equal((await ledger.byCron(CRON)).length, 2);
   assert.deepEqual((await ledger.byCrons([CRON, "cron-2", "cron-missing"])).map((item) => item.cronId).sort(), [
     CRON,
@@ -558,7 +516,7 @@ test("per-cron reads, prune and delete query only that cron's items instead of s
   assert.equal(await ledger.prune(CRON, { maxItems: 10, retentionMs: 0 }), 0);
   await ledger.deleteByCron(CRON);
   assert.deepEqual(
-    (await backing.all()).map((item) => item.cronId),
+    (await ledger.byCrons([CRON, "cron-2"])).map((item) => item.cronId),
     ["cron-2"],
   );
 });

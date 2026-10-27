@@ -18,7 +18,7 @@ const recipient: Destination = {
 };
 
 async function fixture() {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const cron = await crons.create({
     owner: "U_ALICE",
     createdBy: "U_ALICE",

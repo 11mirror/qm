@@ -1,17 +1,18 @@
 import type { Webhook } from "../types.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
+import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
   contentPart,
   createDeduped,
-  setTriggerEnabled,
+  TRIGGER_COLUMNS,
   type CreateTriggerInput,
 } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
+import { jsonbStringify } from "../util/text.ts";
 import { getVerifier } from "./verifiers.ts";
 
-/** Most recent deliveries kept per webhook for the history view; payloads arrive already capped by the receiver. */
 const HISTORY_EVENTS = 50;
 
 export interface CreateWebhookInput extends CreateTriggerInput {
@@ -26,10 +27,6 @@ export interface WebhookEvent {
   payload: string;
 }
 
-export interface WebhookHistory {
-  events: WebhookEvent[];
-}
-
 export interface WebhookStore {
   recordEvent(id: string, event: WebhookEvent): Promise<void>;
   listEvents(id: string): Promise<WebhookEvent[]>;
@@ -41,22 +38,59 @@ export interface WebhookStore {
   recordFire(id: string, info: { at: number; deliveryId?: string; error?: string }): Promise<void>;
 }
 
-export function createWebhookStore(backing: DurableMap<Webhook>, history: DurableMap<WebhookHistory>): WebhookStore {
-  const updateHistory = history.update.bind(history);
+const WEBHOOKS: TableSpec = {
+  table: "webhooks",
+  key: "id",
+  keyIsField: true,
+  columns: {
+    ...TRIGGER_COLUMNS,
+    action: { type: "text", required: true },
+    verification: { type: "jsonb", required: true },
+    filters: { type: "jsonb" },
+    lastDeliveryId: { type: "text" },
+    lastError: { type: "text" },
+  },
+};
+
+const WEBHOOK_HISTORY: TableSpec = {
+  table: "webhook_history",
+  key: "id",
+  columns: { events: { type: "jsonb", required: true } },
+};
+
+export const WEBHOOKS_MIGRATION = mapToTableMigration("triggers/webhooks/0001-typed", WEBHOOKS, {
+  statements: [
+    `CREATE INDEX IF NOT EXISTS webhooks_resource_search_gin ON webhooks USING gin
+     (to_tsvector('simple', coalesce(action, '') || ' ' || coalesce(verification->>'scheme', '')))`,
+  ],
+});
+
+export const WEBHOOK_HISTORY_MIGRATION = mapToTableMigration("triggers/webhook-history/0001-typed", WEBHOOK_HISTORY);
+
+const codec = tableCodec<Webhook>(WEBHOOKS);
+
+const NEWEST_FIRST = `(e->>'receivedAt')::float8 DESC, e->>'deliveryId'`;
+
+export function createWebhookStore(databaseUrl: string): WebhookStore {
+  const { q } = createPgPool(databaseUrl, [WEBHOOKS_MIGRATION, WEBHOOK_HISTORY_MIGRATION]);
+  const setEnabled = async (id: string, enabled: boolean) => {
+    await q(`UPDATE webhooks SET enabled = $2 WHERE id = $1`, [id, enabled]);
+  };
   return {
     async recordEvent(id, event) {
-      await history.putIfAbsent(id, { events: [] });
-      await updateHistory(id, (value) => {
-        if (value.events.some((e) => e.deliveryId === event.deliveryId)) return value;
-        return {
-          events: [...value.events, event]
-            .sort((a, b) => b.receivedAt - a.receivedAt || a.deliveryId.localeCompare(b.deliveryId))
-            .slice(0, HISTORY_EVENTS),
-        };
-      });
+      await q(
+        `INSERT INTO webhook_history AS h (id, events) VALUES ($1, jsonb_build_array($2::jsonb))
+         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET events = (
+           SELECT jsonb_agg(e ORDER BY ${NEWEST_FIRST}) FROM (
+             SELECT e FROM jsonb_array_elements(h.events || EXCLUDED.events) e ORDER BY ${NEWEST_FIRST} LIMIT $3
+           ) newest)
+         WHERE NOT h.events @> jsonb_build_array(jsonb_build_object('deliveryId', $4::text))`,
+        [id, jsonbStringify(event), HISTORY_EVENTS, event.deliveryId],
+      );
     },
     async listEvents(id) {
-      return structuredClone((await history.get(id))?.events ?? []);
+      const rows = await q(`SELECT events FROM webhook_history WHERE id = $1`, [id]);
+      return (rows[0]?.events as WebhookEvent[] | undefined) ?? [];
     },
     async create(input) {
       assertNoEscalation(input);
@@ -79,30 +113,32 @@ export function createWebhookStore(backing: DurableMap<Webhook>, history: Durabl
         contentPart(filters),
         contentPart(input.destination),
       ]);
-      const webhook = await createDeduped(backing, contentId, (id) => ({
-        ...buildTriggerBase(input, id, Date.now()),
+      const webhook = await createDeduped<Webhook>(q, WEBHOOKS, {
+        ...buildTriggerBase(input, contentId, Date.now()),
         action: input.action,
         verification: input.verification,
         ...(filters ? { filters } : {}),
-      }));
+      });
       if (webhook.enabled) return webhook;
-      await setTriggerEnabled(backing, webhook.id, true);
+      await setEnabled(webhook.id, true);
       return { ...webhook, enabled: true };
     },
-    get: (id) => backing.get(id),
-    list: () => backing.all(),
-    setEnabled(id, enabled) {
-      return setTriggerEnabled(backing, id, enabled);
-    },
-    update(id, patch) {
-      return backing.merge(id, { action: patch.action });
+    get: async (id) => codec.rows(await q(`SELECT ${codec.columns} FROM webhooks WHERE id = $1`, [id]))[0] ?? null,
+    list: async () => codec.rows(await q(`SELECT ${codec.columns} FROM webhooks ORDER BY id`)),
+    setEnabled,
+    async update(id, patch) {
+      const rows = await q(`UPDATE webhooks SET action = $2 WHERE id = $1 RETURNING ${codec.columns}`, [
+        id,
+        patch.action,
+      ]);
+      return codec.rows(rows)[0] ?? null;
     },
     async recordFire(id, info) {
-      await backing.merge(id, {
-        lastFiredAt: info.at,
-        ...(info.deliveryId ? { lastDeliveryId: info.deliveryId } : {}),
-        lastError: info.error,
-      });
+      await q(
+        `UPDATE webhooks SET last_fired_at = $2, last_delivery_id = COALESCE($3, last_delivery_id), last_error = $4
+         WHERE id = $1`,
+        [id, info.at, info.deliveryId || null, info.error ?? null],
+      );
     },
   };
 }

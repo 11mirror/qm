@@ -3,7 +3,9 @@ import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresResourceSearch } from "../src/search/resource-search.ts";
+import { CRONS_MIGRATION } from "../src/cron/cron-store.ts";
 import { DEPLOYMENTS_MIGRATION } from "../src/deploy/deploy-store.ts";
+import { WEBHOOKS_MIGRATION } from "../src/webhooks/webhook-store.ts";
 
 const database = process.env.DATABASE_URL;
 test(
@@ -15,7 +17,7 @@ test(
     await admin.q(`CREATE SCHEMA ${schema}`);
     const url = new URL(database!);
     url.searchParams.set("options", `-c search_path=${schema}`);
-    const pg = createPgPool(url.toString(), [DEPLOYMENTS_MIGRATION]);
+    const pg = createPgPool(url.toString(), [CRONS_MIGRATION, WEBHOOKS_MIGRATION, DEPLOYMENTS_MIGRATION]);
     try {
       let searchSql = "";
       let searchParams: unknown[] = [];
@@ -30,47 +32,58 @@ test(
         },
       });
       for (const kind of ["skills", "crons", "deploys", "webhooks"] as const) await store.search(kind, "zanzibar", 50);
-      for (const [table, record] of [
+      const owned = { owner: "U1", ownerScopeId: "personal:U1", scopeId: "personal:U1" };
+      const jsonRow = (record: object) => [
+        `INSERT INTO $table (id, json) VALUES ('hit', $1)`,
+        [JSON.stringify({ id: "hit", ...record, ...owned })],
+        `UPDATE $table SET json = $1 WHERE id = 'hit'`,
+        [JSON.stringify({ id: "hit", name: "other", manifest: { name: "other" } })],
+      ];
+      const triggerColumns = `id, owner_scope_id, owner, created_by, enabled, created_at, action`;
+      for (const [table, [insert, insertParams, update, updateParams]] of [
         [
           "skills",
-          {
+          jsonRow({
             manifest: {
               name: "zanzibar-review",
               description: "release checklist",
               body: "privatebody ".repeat(10000),
               files: [{ content: "asset".repeat(10000) }],
             },
-          },
+          }),
         ],
         [
           "crons",
-          { title: "zanzibar digest", action: "release checklist", fireLog: [{ note: "history ".repeat(10000) }] },
+          [
+            `INSERT INTO crons (${triggerColumns}, title, schedule, last_fire_note)
+             VALUES ('hit', 'personal:U1', 'U1', 'U1', true, 1, 'release checklist', 'zanzibar digest', '{}', $1)`,
+            [JSON.stringify({ text: "privatebody ".repeat(10000), at: 1 })],
+            `UPDATE crons SET title = $1, action = $1 WHERE id = 'hit'`,
+            ["other"],
+          ],
         ],
         [
           "deployments",
-          {
-            name: "zanzibar",
-            displayName: "Release checklist",
-            versions: [{ files: "version ".repeat(10000) }],
-            endpoint: { secret: "never return" },
-          },
+          [
+            `INSERT INTO deployments (id, name, display_name, owner_scope_id, created_by, current_version, status, endpoint, versions)
+             VALUES ('hit', 'zanzibar', 'Release checklist', 'personal:U1', 'U1', 1, 'stopped', $1, $2)`,
+            [JSON.stringify({ secret: "never return" }), JSON.stringify([{ files: "version ".repeat(10000) }])],
+            `UPDATE deployments SET name = 'other', display_name = NULL`,
+            [],
+          ],
         ],
         [
           "webhooks",
-          { action: "zanzibar release checklist", verification: { scheme: "github", secret: "never return" } },
+          [
+            `INSERT INTO webhooks (${triggerColumns}, verification)
+             VALUES ('hit', 'personal:U1', 'U1', 'U1', true, 1, 'zanzibar release checklist', $1)`,
+            [JSON.stringify({ scheme: "github", secret: "never return" })],
+            `UPDATE webhooks SET action = $1 WHERE id = 'hit'`,
+            ["other"],
+          ],
         ],
       ] as const) {
-        if (table === "deployments")
-          await pg.q(
-            `INSERT INTO deployments (id, name, display_name, owner_scope_id, created_by, current_version, status, endpoint, versions)
-             VALUES ('hit', $1, $2, 'personal:U1', 'U1', 1, 'stopped', $3, $4)`,
-            [record.name, record.displayName, record.endpoint, JSON.stringify(record.versions)],
-          );
-        else
-          await pg.q(`INSERT INTO ${table} (id, json) VALUES ($1, $2)`, [
-            "hit",
-            JSON.stringify({ id: "hit", ...record, owner: "U1", ownerScopeId: "personal:U1", scopeId: "personal:U1" }),
-          ]);
+        await pg.q((insert as string).replace("$table", table), [...insertParams]);
         const kind = table === "deployments" ? "deploys" : table;
         const rows = await store.search(kind, "zanz release", 50);
         const actualSql = searchSql;
@@ -95,11 +108,7 @@ test(
         } finally {
           client.release();
         }
-        if (table === "deployments") await pg.q(`UPDATE deployments SET name = 'other', display_name = NULL`);
-        else
-          await pg.q(`UPDATE ${table} SET json = $1 WHERE id = 'hit'`, [
-            JSON.stringify({ id: "hit", title: "other", action: "other", name: "other", manifest: { name: "other" } }),
-          ]);
+        await pg.q((update as string).replace("$table", table), [...updateParams]);
         assert.equal((await store.search(kind, "zanzibar", 50)).length, 0);
       }
     } finally {

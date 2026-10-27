@@ -3,11 +3,11 @@ import { after, test } from "node:test";
 import { createServer } from "node:http";
 import { createInboxSourceRefresh as createRefresh } from "../src/inbox/source-refresh.ts";
 import { createInboxLedger, type LatestEvent } from "../src/inbox/ledger.ts";
-import { testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
 
 async function fixture(source = "gmail", meta: Record<string, unknown> = { threadId: "t1" }) {
-  const items = createInboxLedger(testMap());
+  const items = createInboxLedger(testDatabaseUrl());
   await items.ingest([
     {
       cronId: "inbox",

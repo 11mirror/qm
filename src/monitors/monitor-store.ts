@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { Monitor } from "../types.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { pgTextSafe } from "../util/text.ts";
+import { columnName, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
-  setTriggerEnabled,
+  TRIGGER_COLUMNS,
   type CreateTriggerInput,
 } from "../triggers/trigger-store.ts";
 
@@ -34,15 +36,41 @@ export interface MonitorStore {
 
 const DEFUNCT_MONITOR_GRACE_MS = 7 * 24 * 60 * 60_000;
 
-function lastActivityAt(m: Monitor): number {
-  return Math.max(m.expiresAt ?? 0, m.lastFiredAt ?? 0, m.createdAt);
-}
+const MONITORS: TableSpec = {
+  table: "monitors",
+  key: "id",
+  keyIsField: true,
+  columns: {
+    ...TRIGGER_COLUMNS,
+    processId: { type: "text", required: true },
+    command: { type: "text", required: true },
+    purpose: { type: "text" },
+    threadRef: { type: "text", required: true },
+    instructions: { type: "text" },
+    pattern: { type: "text" },
+    cursor: { type: "bigint", required: true },
+    tail: { type: "text" },
+    expiresAt: { type: "bigint" },
+    lastError: { type: "text" },
+  },
+};
 
-function defunctBefore(cutoff: number): (m: Monitor) => boolean {
-  return (m) => !m.enabled && lastActivityAt(m) <= cutoff;
-}
+export const MONITORS_MIGRATION = mapToTableMigration("triggers/monitors/0001-typed", MONITORS);
 
-export function createMonitorStore(backing: DurableMap<Monitor>): MonitorStore {
+const codec = tableCodec<Monitor>(MONITORS);
+
+export function createMonitorStore(databaseUrl: string): MonitorStore {
+  const { q } = createPgPool(databaseUrl, [MONITORS_MIGRATION]);
+  const select = async (where: string, params: unknown[] = []) =>
+    codec.rows(await q(`SELECT ${codec.columns} FROM monitors ${where} ORDER BY id`, params));
+  const set = async (id: string, fields: Partial<Monitor>) => {
+    const entries = Object.entries(fields);
+    if (!entries.length) return;
+    await q(
+      `UPDATE monitors SET ${entries.map(([field], i) => `${columnName(field)} = $${i + 2}`).join(", ")} WHERE id = $1`,
+      [id, ...entries.map(([, value]) => (typeof value === "string" ? pgTextSafe(value) : (value ?? null)))],
+    );
+  };
   return {
     async create(input) {
       assertNoEscalation(input);
@@ -57,43 +85,39 @@ export function createMonitorStore(backing: DurableMap<Monitor>): MonitorStore {
         cursor: input.cursor ?? 0,
         expiresAt: input.expiresAt,
       };
-      await backing.put(monitor.id, monitor);
+      await q(
+        `INSERT INTO monitors (${codec.columns}) VALUES (${codec.placeholders})`,
+        codec.values(monitor.id, monitor),
+      );
       return monitor;
     },
-    get: (id) => backing.get(id),
-    list: () => backing.all(),
-    async enabled() {
-      return (await backing.all()).filter((m) => m.enabled);
+    get: async (id) => (await select(`WHERE id = $1`, [id]))[0] ?? null,
+    list: () => select(""),
+    enabled: () => select(`WHERE enabled`),
+    setEnabled: (id, enabled) => set(id, { enabled }),
+    async delete(id) {
+      await q(`DELETE FROM monitors WHERE id = $1`, [id]);
     },
-    setEnabled(id, enabled) {
-      return setTriggerEnabled(backing, id, enabled);
-    },
-    delete: (id) => backing.delete(id),
     async deleteDefunct(now) {
-      const isDefunct = defunctBefore(now - DEFUNCT_MONITOR_GRACE_MS);
-      let deleted = 0;
-      for (const m of (await backing.all()).filter(isDefunct)) {
-        if (await backing.deleteIf(m.id, isDefunct)) deleted++;
-      }
-      return deleted;
+      const result = await q(
+        `DELETE FROM monitors WHERE NOT enabled
+           AND GREATEST(COALESCE(expires_at, 0), COALESCE(last_fired_at, 0), created_at) <= $1 RETURNING id`,
+        [now - DEFUNCT_MONITOR_GRACE_MS],
+      );
+      return result.length;
     },
-    async advance(id, fields) {
-      await backing.merge(id, {
+    advance: (id, fields) =>
+      set(id, {
         cursor: fields.cursor,
         tail: fields.tail,
         ...(fields.firedAt !== undefined ? { lastFiredAt: fields.firedAt } : {}),
-      });
-    },
-    async update(id, fields) {
-      const patch: Partial<Monitor> = {
+      }),
+    update: (id, fields) =>
+      set(id, {
         ...(fields.instructions !== undefined ? { instructions: fields.instructions } : {}),
         ...(fields.pattern !== undefined ? { pattern: fields.pattern } : {}),
         ...(fields.cursor !== undefined ? { cursor: fields.cursor, tail: undefined } : {}),
-      };
-      if (Object.keys(patch).length) await backing.merge(id, patch);
-    },
-    async recordError(id, error) {
-      await backing.merge(id, { lastError: error });
-    },
+      }),
+    recordError: (id, error) => set(id, { lastError: error }),
   };
 }

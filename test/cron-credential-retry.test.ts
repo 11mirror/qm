@@ -13,7 +13,7 @@ import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-datab
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const cron = await crons.create({
     owner: "U_ALICE",
     createdBy: "U_ALICE",
