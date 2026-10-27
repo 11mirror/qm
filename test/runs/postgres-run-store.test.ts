@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import pg from "pg";
-import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
 
 const database = process.env.DATABASE_URL;
 const MIGRATION = "runs/store/0013-turn-origin-backfill";

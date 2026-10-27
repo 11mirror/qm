@@ -1,8 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryRunSignalStore, startSignalPoll, waitForClientResult } from "../src/runs/run-signal-store.ts";
-import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import { settle } from "./support/settle.ts";
+import {
+  createMemoryRunSignalStore,
+  startSignalPoll,
+  waitForClientResult,
+  type RunSignal,
+} from "../../src/runs/run-signal-store.ts";
+import { createPostgresRunSignalStore } from "../../src/runs/postgres-run-signal-store.ts";
+import { settle } from "../support/settle.ts";
+import { randomUUID } from "node:crypto";
+import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
+import { completeTurn, testRunStore } from "../support/turns.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the pg run-signal tests";
@@ -726,4 +734,58 @@ test("a queued steer remains durable until its native intake acknowledges it", a
   await acknowledge!();
   await stop();
   assert.deepEqual(await store.pending("intake"), []);
+});
+
+test("queued steering transfers files once or leaves the original queue intact", async () => {
+  const { runs, ledger, databaseUrl, close } = testRunStore();
+  const signals = createPostgresRunSignalStore(databaseUrl);
+  const sessionId = randomUUID();
+  const actor = { id: "queued-owner", type: "internal" as const };
+  const request: OrchestratorInput = {
+    actor,
+    conversation: { kind: "dm", threadRef: sessionId, audience: [actor] },
+    origin: { kind: "direct" },
+    text: "",
+  };
+  const attachments = [{ name: "file.txt", blobId: "queued-blob", sizeBytes: 3, mimetype: "text/plain" }];
+  try {
+    const { run: target } = await runs.enqueue({ sessionId, request: { ...request, text: "working" } });
+    const { run: queued } = await runs.enqueue({ sessionId, request: { ...request, attachments } });
+    const signal: RunSignal = {
+      kind: "steer",
+      text: "",
+      dedupeKey: randomUUID(),
+      request: {
+        origin: { kind: "direct" },
+        surface: "web",
+        actor: { externalId: actor.id },
+        conversation: { kind: "dm", threadRef: sessionId },
+        text: "",
+        attachments,
+      },
+    };
+    const moved = await Promise.all([
+      runs.steerQueued(queued.id, target.id, signal, signals),
+      runs.steerQueued(queued.id, target.id, signal, signals),
+    ]);
+    assert.equal(moved.filter(Boolean).length, 1);
+    assert.equal(await runs.get(queued.id), null);
+    const pending = await signals.takePending(target.id);
+    assert.equal(pending.length, 1);
+    assert.deepEqual(pending[0]?.request?.attachments, attachments);
+    const { run: edited } = await runs.enqueue({ sessionId, request: { ...request, attachments } });
+    assert.equal(await runs.editPendingText(edited.id, "new caption", ""), true);
+    assert.equal(await runs.steerQueued(edited.id, target.id, { ...signal, dedupeKey: randomUUID() }, signals), false);
+    assert.equal((await runs.get(edited.id))?.request.text, "new caption");
+    assert.equal((await signals.pending(target.id)).length, 0);
+    await runs.withdraw(edited.id);
+    await completeTurn(ledger, target.id, { status: "ok", reply: "done" });
+    const { run: late } = await runs.enqueue({ sessionId, request: { ...request, attachments } });
+    assert.equal(await runs.steerQueued(late.id, target.id, { ...signal, dedupeKey: randomUUID() }, signals), false);
+    assert.deepEqual((await runs.get(late.id))?.request.attachments, attachments);
+    await runs.withdraw(late.id);
+  } finally {
+    await signals.close?.();
+    await close();
+  }
 });

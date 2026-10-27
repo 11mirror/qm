@@ -1,9 +1,9 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
-import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { createPostgresInstanceRegistry } from "../src/runs/instance-registry.ts";
-import { settle } from "./support/settle.ts";
-import { truncateTables } from "./support/test-database.ts";
+import { createPgPool } from "../../src/persistence/pg-pool.ts";
+import { createPostgresInstanceRegistry } from "../../src/runs/instance-registry.ts";
+import { settle } from "../support/settle.ts";
+import { truncateTables } from "../support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the instance-registry tests";
@@ -54,10 +54,10 @@ test(
   "a core with background work disabled never heartbeats, so it cannot drain a peer that does",
   { skip },
   async () => {
-    await import("./support/auto-fake-sprites.ts");
+    await import("../support/auto-fake-sprites.ts");
     const [{ buildApp }, { testConfig }] = await Promise.all([
-      import("./support/build-app.ts"),
-      import("./support/test-config.ts"),
+      import("../support/build-app.ts"),
+      import("../support/test-config.ts"),
     ]);
     const pool = createPgPool(URL!, []);
     const boot = async (backgroundWorkEnabled: boolean, buildSha: string): Promise<number> => {

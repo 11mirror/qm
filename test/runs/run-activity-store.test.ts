@@ -4,8 +4,8 @@ import {
   createMemoryRunActivityStore,
   RUN_ACTIVITY_TTL_MS,
   type RunActivityEntry,
-} from "../src/runs/run-activity-store.ts";
-import { storedItem } from "../src/sessions/items.ts";
+} from "../../src/runs/run-activity-store.ts";
+import { storedItem } from "../../src/sessions/items.ts";
 
 const entry = (seq: number, kind: "status" | "tool" = "status", createdAt = 0): RunActivityEntry =>
   kind === "tool"

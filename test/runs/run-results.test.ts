@@ -1,15 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { recordingOutbound } from "./support/recording-outbound.ts";
-import { createOutbound } from "../src/surfaces/outbound.ts";
-import { runResultPost, wireRunResultPosts } from "../src/runs/run-results.ts";
-import type { Run } from "../src/runs/run-store.ts";
-import type { OrchestratorInput } from "../src/core/orchestrator.ts";
-import type { Principal, TurnResult } from "../src/types.ts";
-import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../plugins/chassis/src/security-quarantine.ts";
-import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
-import { claimTurn, completeTurn, finishTurn, testRunStore } from "./support/turns.ts";
+import { recordingOutbound } from "../support/recording-outbound.ts";
+import { createOutbound } from "../../src/surfaces/outbound.ts";
+import { runResultPost, wireRunResultPosts } from "../../src/runs/run-results.ts";
+import type { Run } from "../../src/runs/run-store.ts";
+import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
+import type { Principal, TurnResult } from "../../src/types.ts";
+import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../../plugins/chassis/src/security-quarantine.ts";
+import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
+import { claimTurn, completeTurn, finishTurn, testRunStore } from "../support/turns.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
@@ -360,7 +360,7 @@ test("wired stores: a parked run posts a failure note", async (t) => {
 
 const failureSessions = async () => {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const scope = "personal:u1@example.test" as import("../src/types.ts").ScopeId;
+  const scope = "personal:u1@example.test" as import("../../src/types.ts").ScopeId;
   const session = await sessions.getOrCreateByThread("slack:D1", "dm", scope, undefined, "slack");
   return { sessions, session };
 };
@@ -374,7 +374,7 @@ const failedRun = (over: Partial<Run> = {}): Run =>
   });
 
 test("a parked run's failure lands as a turn_failure entry in the run's own session, once", async () => {
-  const { recordRunFailureEntry } = await import("../src/runs/run-results.ts");
+  const { recordRunFailureEntry } = await import("../../src/runs/run-results.ts");
   const { sessions, session } = await failureSessions();
 
   assert.equal(await recordRunFailureEntry(sessions, failedRun()), true);
@@ -389,7 +389,7 @@ test("a parked run's failure lands as a turn_failure entry in the run's own sess
 });
 
 test("an orchestrator-recorded in-turn failure suppresses the onTerminal entry", async () => {
-  const { recordRunFailureEntry } = await import("../src/runs/run-results.ts");
+  const { recordRunFailureEntry } = await import("../../src/runs/run-results.ts");
   const { sessions, session } = await failureSessions();
   const { lease } = await sessions.acquireLease(session.id);
   await sessions.append(lease!, {
@@ -405,7 +405,7 @@ test("an orchestrator-recorded in-turn failure suppresses the onTerminal entry",
 });
 
 test("a legacy failure entry without a run id suppresses the onTerminal entry", async () => {
-  const { recordRunFailureEntry } = await import("../src/runs/run-results.ts");
+  const { recordRunFailureEntry } = await import("../../src/runs/run-results.ts");
   const { sessions, session } = await failureSessions();
   const { lease } = await sessions.acquireLease(session.id);
   await sessions.append(lease!, {
@@ -421,7 +421,7 @@ test("a legacy failure entry without a run id suppresses the onTerminal entry", 
 });
 
 test("a done run records nothing", async () => {
-  const { recordRunFailureEntry } = await import("../src/runs/run-results.ts");
+  const { recordRunFailureEntry } = await import("../../src/runs/run-results.ts");
   const { sessions, session } = await failureSessions();
   assert.equal(await recordRunFailureEntry(sessions, run({ sessionId: "slack:D1" })), false);
   assert.equal((await sessions.getItems(session.id)).length, 0);

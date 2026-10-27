@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src/runs/background-ownership.ts";
-import { createBackgroundController } from "../src/runs/background-controller.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../../src/runs/background-ownership.ts";
+import { createBackgroundController } from "../../src/runs/background-controller.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 function setup() {
   const store = createBackgroundOwnershipStore(testDatabaseUrl());

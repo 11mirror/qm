@@ -1,12 +1,12 @@
-import "./support/auto-fake-sprites.ts";
+import "../support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { createTurnStream, goalView } from "../src/runs/turn-stream.ts";
-import { buildApp } from "./support/build-app.ts";
-import { testConfig } from "./support/test-config.ts";
-import { settledRun } from "./support/turns.ts";
+import { createTurnStream, goalView } from "../../src/runs/turn-stream.ts";
+import { buildApp } from "../support/build-app.ts";
+import { testConfig } from "../support/test-config.ts";
+import { settledRun } from "../support/turns.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 

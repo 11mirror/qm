@@ -1,14 +1,14 @@
-import "./support/auto-fake-sprites.ts";
+import "../support/auto-fake-sprites.ts";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
-import * as mockHarness from "./support/mock-harness.ts";
-import { testConfig } from "./support/test-config.ts";
-import { settledRun } from "./support/turns.ts";
+import * as mockHarness from "../support/mock-harness.ts";
+import { testConfig } from "../support/test-config.ts";
+import { settledRun } from "../support/turns.ts";
 
 let started!: () => void;
 let release!: () => void;
 let handoffTo: string | undefined;
-mock.module("./support/mock-harness.ts", {
+mock.module("../support/mock-harness.ts", {
   namedExports: {
     ...mockHarness,
     createMockHarness: () => {
@@ -32,7 +32,7 @@ mock.module("./support/mock-harness.ts", {
     },
   },
 });
-const { buildApp } = await import("./support/build-app.ts");
+const { buildApp } = await import("../support/build-app.ts");
 
 test("a run reports the runtime its turn runs on while working and after it finishes", async () => {
   const built = buildApp(testConfig({ workers: 1 }));

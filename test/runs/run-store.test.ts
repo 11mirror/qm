@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import type { OrchestratorInput } from "../src/core/orchestrator.ts";
-import type { Principal } from "../src/types.ts";
-import { claimTurn, finishTurn, testRunStore, type TestRunStore } from "./support/turns.ts";
+import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
+import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
+import type { Principal } from "../../src/types.ts";
+import { claimTurn, finishTurn, testRunStore, type TestRunStore } from "../support/turns.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 function turn(text: string, surface?: string): OrchestratorInput {

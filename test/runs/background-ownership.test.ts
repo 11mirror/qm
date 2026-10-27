@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src/runs/background-ownership.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPgPool } from "../../src/persistence/pg-pool.ts";
+import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../../src/runs/background-ownership.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 test("a fresh record has no owner and the first set records who set it and when", async () => {
@@ -49,7 +49,7 @@ test(
   "the job worker resumes polling without terminating a prior generation's job",
   { skip: !databaseUrl, timeout: 20_000 },
   async () => {
-    const { createJobWorker } = await import("../src/jobs/job-worker.ts");
+    const { createJobWorker } = await import("../../src/jobs/job-worker.ts");
     const queue = createJobWorker(databaseUrl!);
     const oldEntered = Promise.withResolvers<void>();
     const oldFinish = Promise.withResolvers<void>();
@@ -88,7 +88,7 @@ test(
   "a delayed owner change committed after the client gave up is confirmed by the readback",
   { skip: !databaseUrl, timeout: 20_000 },
   async () => {
-    const { setBackgroundOwner } = await import("../cli/src/background-work.ts");
+    const { setBackgroundOwner } = await import("../../cli/src/background-work.ts");
     const url = testDatabaseUrl();
     const store = createBackgroundOwnershipStore(url);
     const pg = createPgPool(url);

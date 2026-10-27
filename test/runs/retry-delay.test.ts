@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { retryDelay } from "../src/runs/retry-delay.ts";
+import { retryDelay } from "../../src/runs/retry-delay.ts";
 
 test("retry delays grow with bounded jitter and stay capped", (t) => {
   for (const random of [0, 0.5, 0.999999]) {

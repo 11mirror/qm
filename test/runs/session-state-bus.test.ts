@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemorySessionStateBus, type SessionStateEvent } from "../src/runs/session-state-bus.ts";
-import { createPostgresSessionStateBus } from "../src/runs/postgres-session-state-bus.ts";
-import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { createMemorySessionStateBus, type SessionStateEvent } from "../../src/runs/session-state-bus.ts";
+import { createPostgresSessionStateBus } from "../../src/runs/postgres-session-state-bus.ts";
+import { createPgPool } from "../../src/persistence/pg-pool.ts";
 
 const PG = process.env.DATABASE_URL;
 const pgSkip = PG ? false : "set DATABASE_URL to run the Postgres session-state bus test";
@@ -66,7 +66,7 @@ test("[postgres] events cross bus instances (pg_notify)", { skip: pgSkip }, asyn
 });
 
 test("encodeWirePayload measures UTF-8 bytes and sheds participants before dropping the event", async () => {
-  const { encodeWirePayload } = await import("../src/runs/postgres-session-state-bus.ts");
+  const { encodeWirePayload } = await import("../../src/runs/postgres-session-state-bus.ts");
   const small = { threadRef: "web:U1:t", state: "idle" as const, at: 1, participants: ["a", "b"] };
   assert.equal(encodeWirePayload(small), JSON.stringify(small), "a small event ships whole");
 
