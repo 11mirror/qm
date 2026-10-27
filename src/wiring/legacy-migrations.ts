@@ -1,5 +1,6 @@
 import { LOOPS_TO_CRONS_MIGRATION } from "../cron/migrations.ts";
 import { INBOX_ITEM_SOURCE_MIGRATION, inboxConversationKeyMigration } from "../inbox/ledger.ts";
+import { CONTRACT_MIGRATIONS } from "../persistence/contract-migrations.ts";
 import type { StoresModule } from "./stores.ts";
 
 /** Legacy durable-map and runtime table migrations, registered on the shared pool before first use. */
@@ -35,4 +36,5 @@ export function registerLegacyMigrations(w: Pick<StoresModule, "pgPool">) {
       "DO $$ BEGIN IF to_regclass('feature_flags') IS NOT NULL THEN DELETE FROM feature_flags WHERE id = 'swarms'; END IF; END $$",
     ],
   });
+  for (const migration of CONTRACT_MIGRATIONS) pgPool.registerMigration(migration);
 }
