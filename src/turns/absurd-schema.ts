@@ -43,7 +43,7 @@ const RETIRED_FUNCTIONS = [
   "disable_cron",
 ];
 
-export const ABSURD_UNPARTITIONED_MIGRATION: PgMigrationDefinition = {
+const ABSURD_UNPARTITIONED_MIGRATION: PgMigrationDefinition = {
   id: "absurd/0.5.1-unpartitioned",
   script: true,
   statements: [

@@ -1,4 +1,4 @@
-export interface ModelDispatch {
+interface ModelDispatch {
   start: number;
   first?: number;
   gateway?: Record<string, string>;
@@ -7,7 +7,7 @@ export interface ModelDispatch {
   transformContext?: number;
 }
 
-export interface CapturedRequest {
+interface CapturedRequest {
   envelope: unknown;
   truncated: boolean;
   transport?: { modelId?: string; headers?: Record<string, string> };

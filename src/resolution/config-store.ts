@@ -172,7 +172,7 @@ type SettingTable = Exclude<
   | "deploymentIdentity"
 >;
 
-export interface ScopeSettingValues {
+interface ScopeSettingValues {
   commandPolicy: CommandPolicy | null;
   egress: EgressPolicy | null;
   unfulfilledInsights: boolean;

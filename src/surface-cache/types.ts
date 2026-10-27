@@ -22,17 +22,6 @@ export interface CachedMessage {
   createdAt: number;
 }
 
-export interface CachedFile {
-  container: string;
-  ts: string;
-  fileId: string;
-  name?: string;
-  title?: string;
-  size?: number;
-  mimetype?: string;
-  createdAt: number;
-}
-
 export interface ContainerState {
   container: string;
   lastTs?: string;
