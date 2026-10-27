@@ -19,7 +19,7 @@ import {
 import { createRefreshCoalescer } from "./message-gating.ts";
 import { isReservedMentionName, setMentionIndex } from "./mrkdwn.ts";
 import { sleep } from "../util/async.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 
 export interface BotIdentity {
@@ -48,20 +48,15 @@ export function createDirectory(deps: {
   externalAccess?: ExternalSlackAccess;
   core: SlackCoreClient;
   ids: BotIdentity;
-  userSnapshotTtlMs?: number;
-  channelMembersTtlMs?: number;
   syncRetryMs?: number;
-  maxPrivateChannels?: number;
-  userCacheTtlMs?: number;
   coreSingleton?: boolean;
 }) {
   const { core, ids } = deps;
   const CORE_SINGLETON = deps.coreSingleton !== false;
-  const USER_SNAPSHOT_TTL_MS = deps.userSnapshotTtlMs ?? 5 * 60_000;
-  const CHANNEL_MEMBERS_TTL_MS = deps.channelMembersTtlMs ?? 30 * 60_000;
+  const USER_SNAPSHOT_TTL_MS = 5 * 60_000;
+  const CHANNEL_MEMBERS_TTL_MS = 30 * 60_000;
   const SYNC_RETRY_MS = deps.syncRetryMs ?? 30_000;
-  const MAX_PRIVATE_CHANNELS = deps.maxPrivateChannels ?? Infinity;
-  const userCache = createUserCache(deps.userCacheTtlMs ? { ttlMs: deps.userCacheTtlMs } : {});
+  const userCache = createUserCache();
   const classify = (u: SlackUser | undefined): ActorAssertion =>
     deps.externalAccess ? companySlackActor(u, deps.externalAccess) : classifyUser(u, ids.ownTeamId, ids.identityMode);
 
@@ -217,12 +212,10 @@ export function createDirectory(deps: {
       !targetChannelIds?.size &&
       (lastFullRosterFetchAt === undefined || fetchedAt - lastFullRosterFetchAt >= CHANNEL_MEMBERS_TTL_MS);
     const refs = listed.filter((c) => fullRefresh || targetChannelIds?.has(c.id));
-    const publicCount = refs.filter((c) => !c.is_private).length;
     const rosters = await allClassifiedRosters(client, refs, {
       plural: "channels",
       authz: "channel",
       item: "channel",
-      limit: publicCount + Math.min(refs.length - publicCount, MAX_PRIVATE_CHANNELS),
     });
     const channelMembers: Array<{ channelId: string; principalId: string }> = [];
     const channelRosterIds: string[] = [];
@@ -380,7 +373,7 @@ export function createDirectory(deps: {
     }
   });
 
-  function forceDirectorySync(
+  async function forceDirectorySync(
     client: any,
     invalidateChannelId?: string,
     invalidatePrincipalId?: string,
@@ -395,7 +388,13 @@ export function createDirectory(deps: {
       }
       targetedChannelIds.add(invalidateChannelId);
     }
-    return coalescedDirectorySync();
+    await coalescedDirectorySync();
+    if (
+      invalidateChannelId &&
+      invalidatePrincipalId &&
+      invalidatedChannelMembers.get(invalidateChannelId)?.has(invalidatePrincipalId)
+    )
+      throw new Error("Slack channel membership revocation was not persisted");
   }
 
   function syncForUnseenGroup(client: any, groupId: string): void {
@@ -415,7 +414,8 @@ export function createDirectory(deps: {
       const classified = { actor: classify(user), ...(timezone ? { timezone } : {}) };
       if (ids.ownTeamId && userId !== undefined) userCache.set(userId, classified);
       return { ...classified, ok: true };
-    } catch {
+    } catch (err) {
+      swallow("slack: users.info classify", err);
       return { actor: { externalId: userId ?? "", isExternalGuest: true }, ok: false };
     }
   }
@@ -423,7 +423,8 @@ export function createDirectory(deps: {
   async function getChannelInfo(client: any, channel: string): Promise<ChannelMeta | undefined> {
     try {
       return (await client.conversations.info({ channel })).channel as ChannelMeta;
-    } catch {
+    } catch (err) {
+      swallow("slack: conversations.info", err);
       return undefined;
     }
   }
@@ -446,7 +447,8 @@ export function createDirectory(deps: {
         info,
         classify: (id) => classifyUserCached(client, id),
       });
-    } catch {
+    } catch (err) {
+      swallow("slack: channel membership", err);
       return { audience: [actor, externalMarker()] };
     }
     if (CORE_SINGLETON && !deps.externalAccess && !actor.isBot && !info?.is_mpim) {

@@ -24,7 +24,6 @@ function fixture() {
   const readHistory = createSlackHistoryReader({
     core,
     ids,
-    source: "mirror",
     managed: true,
     setupUrl: "https://qm.test/admin/?setup=slack",
   });
@@ -197,7 +196,6 @@ test("read_thread, whats_new and mirror search retain coverage notes and contain
     deps: {
       outbound: {},
       surfaceCache: cache,
-      slackContextSource: "mirror",
       surfaceContext: {
         pull: async () => ({
           messages: [{ ts: "2.000000", threadTs: "1.000000", text: "reply" }],
@@ -324,8 +322,8 @@ test("deleted messages do not consume context page slots or reappear through fal
   );
 });
 
-test("shared-app shadow compares equal pages while mirror reads retain stored history", async (t) => {
-  const { cache, core, readHistory, client } = fixture();
+test("shared-app mirror reads retain stored history beyond the live page", async () => {
+  const { cache, readHistory, client } = fixture();
   const messages = Array.from({ length: 30 }, (_, i) => ({
     ts: `${1000 + i}.000000`,
     text: `message ${i}`,
@@ -333,22 +331,6 @@ test("shared-app shadow compares equal pages while mirror reads retain stored hi
   }));
   await cache.ingest(messages.map((m) => ({ container: "C1", ts: m.ts, text: m.text, authorId: m.user })));
   assert.equal((await readHistory(client, "C1")).raw.length, 30);
-  let resolveReport!: (value: any) => void;
-  const report = new Promise<any>((resolve) => {
-    resolveReport = resolve;
-  });
-  t.mock.method(console, "info", (value: string) => resolveReport(JSON.parse(value)));
-  const shadow = createSlackHistoryReader({ core, ids, source: "shadow", managed: true });
-  const liveClient = {
-    conversations: {
-      history: async () => ({ messages: messages.slice(-15).reverse(), has_more: true }),
-    },
-  };
-  assert.equal((await shadow(liveClient, "C1")).raw.length, 15);
-  const comparison = await report;
-  assert.equal(comparison.matchingMessages, 15);
-  assert.equal(comparison.mirrorMessagesOutsideLiveWindow, 0);
-  assert.equal(comparison.mirrorHasMore, true);
 });
 
 test("thread history keeps file references and authors but only current files are turn attachments", async () => {
@@ -429,7 +411,7 @@ test("automatic context keeps the thread parent and recent exchange but excludes
   );
 });
 
-for (const source of ["live", "mirror", "explicit-live"] as const) {
+for (const source of ["cached", "explicit-live"] as const) {
   test(`own status cards are excluded from ${source} history and backfill`, async () => {
     const f = fixture();
     const messages = [
@@ -438,11 +420,7 @@ for (const source of ["live", "mirror", "explicit-live"] as const) {
       { user: "UBOT", ts: "3", text: "ordinary answer" },
       { user: "UOTHER", ts: "4", text: "other bot task", blocks: [{ type: "task_card", task_id: "qm_status:other" }] },
     ];
-    const read = createSlackHistoryReader({
-      core: f.core,
-      ids,
-      source: source === "explicit-live" ? "mirror" : source,
-    });
+    const read = createSlackHistoryReader({ core: f.core, ids });
     const client = { conversations: { history: async () => ({ messages }), replies: async () => ({ messages }) } };
     const result = await read(client, "C1", "1", undefined, false, source === "explicit-live");
     assert.deepEqual(
@@ -480,7 +458,7 @@ test("explicit live context verifies reactions and never substitutes mirrored da
       replies: async () => ({ messages: [{ ts: "1.0", text: "waiting", user: "U1" }] }),
     },
   };
-  const readHistory = createSlackHistoryReader({ core, ids, source: "mirror", historyClient });
+  const readHistory = createSlackHistoryReader({ core, ids, historyClient });
   let outcome: any;
   const fulfiller = createSurfaceContextFulfiller({
     core: {
@@ -547,7 +525,7 @@ test("explicit live context verifies reactions and never substitutes mirrored da
 
 test("explicit live reads reject truncated threads instead of returning an unusable backward cursor", async () => {
   const f = fixture();
-  const read = createSlackHistoryReader({ core: f.core, ids, source: "mirror", managed: true });
+  const read = createSlackHistoryReader({ core: f.core, ids, managed: true });
   const client = {
     conversations: {
       replies: async ({ limit }: { limit: number }) => ({
@@ -557,4 +535,27 @@ test("explicit live reads reject truncated threads instead of returning an unusa
     },
   };
   await assert.rejects(read(client, "C1", "1.0", undefined, false, true), /thread exceeds the history limit/);
+});
+
+test("a room over the member cap lists recent authors first and says how many were left out", async () => {
+  const { cache, readHistory, client } = fixture();
+  await cache.ingest([{ container: "C1", ts: "1000.000001", text: "late joiner speaks", authorId: "U44" }]);
+  const serializer = createConversationSerializer({
+    ids,
+    directory,
+    externalParticipantsEnabled: async () => false,
+    readHistory,
+  });
+  const audience = Array.from({ length: 45 }, (_, i) => ({ externalId: `U${i}`, displayName: `Member${i}` }));
+  const result = await serializer.serializeSlackConversation(
+    client,
+    { kind: "channel", channel: "C1", ts: "1000.000002", rawText: "trigger", userId: "U0", files: [] },
+    { audience },
+  );
+  const { header } = renderConversationView(result.view);
+  assert.match(
+    header,
+    /People here: @Member0 \(<@U0>\), @Member44 \(<@U44>\), [^\n]*@Member38 \(<@U38>\), and 5 others\./,
+  );
+  assert.doesNotMatch(header, /@Member39\b/);
 });

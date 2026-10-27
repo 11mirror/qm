@@ -4,7 +4,8 @@ import { sleep, type SlackMessage } from "./slack.ts";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
 
 const EVENTS_URL = () =>
-  process.env.SLACK_EVENTS_TARGET_URL ?? `http://127.0.0.1:${process.env.SLACK_EVENTS_PORT ?? "8182"}/slack/events`;
+  process.env.SLACK_EVENTS_TARGET_URL ??
+  `${(process.env.CORE_API_URL ?? "http://localhost:8181").replace(/\/+$/, "")}/slack/events`;
 const LEAK = /\b[0-9a-f]{12}\b|mention me|paused|keychain ask/i;
 
 async function waitFor<T>(label: string, fn: () => Promise<T | undefined>, timeoutMs = 360_000): Promise<T> {

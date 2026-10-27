@@ -5,6 +5,7 @@ import type { TurnResult } from "../src/types.ts";
 import type { SurfaceSender } from "../src/surfaces/outbound.ts";
 import type { SlackNative } from "../src/chat-surface/slack.ts";
 import { settle } from "./support/settle.ts";
+import { collectBytes, type ByteSource } from "../src/util/bytes.ts";
 
 type Handler = (args: any) => Promise<void>;
 
@@ -274,8 +275,8 @@ class FakeCore implements SlackCoreClient {
   onChannelHeaderPinChanged(listener: (scope: any) => void): void {
     this.headerPinChangeListeners.push(listener);
   }
-  async stageBlob(bytes: Uint8Array): Promise<{ blobId: string; sizeBytes: number }> {
-    return { blobId: "blob-1", sizeBytes: bytes.byteLength };
+  async stageBlob(source: ByteSource): Promise<{ blobId: string; sizeBytes: number }> {
+    return { blobId: "blob-1", sizeBytes: (await collectBytes(source)).sizeBytes };
   }
   async readBlob(): Promise<Buffer> {
     return Buffer.alloc(0);
@@ -350,6 +351,8 @@ class FakeCore implements SlackCoreClient {
       this.senders.push(send);
       return () => void this.senders.splice(this.senders.indexOf(send), 1);
     },
+    serveEvents: () => () => {},
+    events: () => undefined,
   };
   async pendingContextRequests(): Promise<[]> {
     return [];
@@ -435,11 +438,8 @@ test("config is all-or-nothing and numeric tuning fails closed", () => {
   const config = slackPluginConfigFromEnv({
     SLACK_BOT_TOKEN: "xoxb",
     SLACK_APP_TOKEN: "xapp",
-    SLACK_USER_SNAPSHOT_TTL_MS: "-1",
-    SLACK_CHANNEL_MEMBERS_TTL_MS: "NaN",
-    SLACK_MAX_PRIVATE_CHANNELS: "10",
   });
-  assert.deepEqual(config, { botToken: "xoxb", appToken: "xapp", maxPrivateChannels: 10 });
+  assert.deepEqual(config, { botToken: "xoxb", appToken: "xapp" });
 });
 
 test("a core failure the user is told about counts as handled; a quiet one reports failure and forgets the dedup key", async () => {

@@ -1,4 +1,5 @@
 import type { SurfaceRegistry } from "../chat-surface/registry.ts";
+import type { SlackEventsHandler } from "../chat-surface/slack.ts";
 import type { SlackWebClientFactory } from "../slack/web-client.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { DecisionStore } from "../decisions/store.ts";
@@ -97,11 +98,10 @@ export interface ServerDeps {
   connectorTokens?: ConnectorTokenStore;
   managedSlack?: ManagedSlack;
   slackInstallation?: SlackInstallationStore;
-  slackInstallationFetch?: typeof fetch;
   slackWebClient?: SlackWebClientFactory;
   slackInstallationSocketAppId?: SlackSocketAppIdReader;
   slackEnvironmentState?: "absent" | "configured" | "partial";
-  slackEventsPort?: number;
+  slackEvents?: (account: string) => SlackEventsHandler | undefined;
   chatSurfaces?: SurfaceRegistry;
   slackEnvBotToken?: string;
   oauthStateSecret?: string;

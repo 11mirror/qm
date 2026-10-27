@@ -11,7 +11,8 @@ const SECRET = () => process.env.CORE_SIGNING_SECRET ?? "";
 const APPS_DOMAIN = () => process.env.DEPLOY_APPS_DOMAIN ?? "";
 const SESSION_SECRET = () => process.env.PORTAL_SESSION_SECRET ?? "";
 const EVENTS_URL = () =>
-  process.env.SLACK_EVENTS_TARGET_URL ?? `http://127.0.0.1:${process.env.SLACK_EVENTS_PORT ?? "8182"}/slack/events`;
+  process.env.SLACK_EVENTS_TARGET_URL ??
+  `${(process.env.CORE_API_URL ?? "http://localhost:8181").replace(/\/+$/, "")}/slack/events`;
 
 const APP_SOURCE = (marker: string) =>
   `import { createServer } from "node:http";\ncreateServer((req, res) => { res.writeHead(200, { "content-type": "text/plain" }); res.end("hello from ${marker}"); }).listen(Number(process.env.PORT), "127.0.0.1");\n`;

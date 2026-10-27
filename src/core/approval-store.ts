@@ -35,9 +35,8 @@ export function createApprovalStore(
   async function deliver(id: string, record: PendingApprovalRecord): Promise<void> {
     const request = record.request;
     if (!request?.surface) return;
-    const surface = opts.surfaces?.get(request.surface);
-    if (request.surface !== "slack" && !surface?.native("slack")) {
-      if (surface) await deliverText(id, record, request);
+    if (request.surface !== "slack") {
+      if (opts.surfaces?.get(request.surface)) await deliverText(id, record, request);
       return;
     }
     const actorId = approvalDeliveryRecipient(request.actor);

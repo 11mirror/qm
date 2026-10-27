@@ -1,10 +1,10 @@
 import type { SlackRateLimitNotice } from "./rate-limit-notice.ts";
 import { SHARED_SLACK_HISTORY_LIMIT, slackHistoryRateLimitMessage } from "./rate-limit-notice.ts";
 import type { SlackHistoryReader } from "./history.ts";
-import { swallowAs } from "../util/errors.ts";
+import { swallow, swallowAs } from "../util/errors.ts";
 import { WebClient } from "@slack/web-api";
 import { type RecentMessage, buildContextWindow } from "./conversation.ts";
-import { downloadSlackFile, isOversize, oversizeMsg, slackFileName } from "./attachments.ts";
+import { downloadSlackFile, fileReadIssue, isOversize, oversizeMsg, slackFileName } from "./attachments.ts";
 import { isExternallyShared } from "./identity.ts";
 import { openConversationFor, parseDeliveryTarget } from "./delivery.ts";
 import { SLACK_AUTH_ERRORS, type SlackHistoryMessage, parseMessageList, slackErrorCode } from "./payloads.ts";
@@ -108,13 +108,18 @@ export function createSurfaceContextFulfiller(deps: {
     const file = files[at]!;
     const name = names[at]!;
     if (isOversize(file)) return { error: oversizeMsg(name) };
-    const staged = await downloadSlackFile(file, {
-      token: botToken,
-      ...(trustedFileHost ? { trustedHost: trustedFileHost } : {}),
-    })
-      .then(async (bytes) => ({ bytes, ...(await core.stageBlob(bytes)) }))
-      .catch(swallowAs("slack: surface-file fetch", undefined));
-    if (!staged) return { error: `I couldn't read "${name}" — it may be restricted, deleted, or too large for me` };
+    let staged: { blobId: string; sizeBytes: number };
+    try {
+      staged = await core.stageBlob(
+        await downloadSlackFile(file, {
+          token: botToken,
+          ...(trustedFileHost ? { trustedHost: trustedFileHost } : {}),
+        }),
+      );
+    } catch (err) {
+      swallow("slack: surface-file fetch", err);
+      return { error: fileReadIssue(name, err) };
+    }
     const author = file.user
       ? await directory.classifyUserCached(client, file.user).then(
           (c) => c.actor.displayName,
@@ -125,7 +130,7 @@ export function createSurfaceContextFulfiller(deps: {
       file: {
         blobId: staged.blobId,
         name,
-        sizeBytes: staged.bytes.length,
+        sizeBytes: staged.sizeBytes,
         ...(file.mimetype ? { mimetype: file.mimetype } : {}),
         ...(author ? { author } : {}),
       },

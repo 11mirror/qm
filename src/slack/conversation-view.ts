@@ -35,14 +35,10 @@ export function createConversationSerializer(deps: {
   ids: BotIdentity;
   directory: Directory;
   externalParticipantsEnabled(): Promise<boolean>;
-  recentMessages?: number;
   readHistory: SlackHistoryReader;
   historyRateLimitOptions?: { managed?: boolean; setupUrl?: string };
 }) {
   const { ids, directory, externalParticipantsEnabled } = deps;
-  const RECENT_MESSAGE_WINDOW = deps.recentMessages
-    ? Math.min(RECENT_THREAD_LIMIT, Math.floor(deps.recentMessages))
-    : MAX_RECENT_MESSAGES;
 
   function isConversationMessage(m: SlackHistoryMessage): m is SlackHistoryMessage & { ts: string } {
     return Boolean(m.ts && !(m.subtype && !RECENT_KEEP_SUBTYPES.has(m.subtype)));
@@ -169,22 +165,25 @@ export function createConversationSerializer(deps: {
     const raw = page.raw;
     if (inc.rawText !== undefined && !raw.some((m) => m.ts === inc.ts))
       raw.push({ ts: inc.ts, text: inc.rawText, user: inc.userId, thread_ts: inc.threadTs, files: inc.files });
-    const messages = recentWindow(await shapeRecentMessages(client, raw, inc.ts, nameById), RECENT_MESSAGE_WINDOW);
+    const messages = recentWindow(await shapeRecentMessages(client, raw, inc.ts, nameById), MAX_RECENT_MESSAGES);
 
-    const members =
-      ctx.audience.length > 0 && ctx.audience.length <= MEMBERS_SHOW_MAX
+    const slackIdOf = (a: ActorAssertion): string => ctx.slackIdsByPrincipal?.get(a.externalId) ?? a.externalId;
+    const authors = new Set(messages.map((m) => m.authorId));
+    const prominent = (a: ActorAssertion): boolean => slackIdOf(a) === ids.botUserId || authors.has(slackIdOf(a));
+    const shown =
+      ctx.audience.length <= MEMBERS_SHOW_MAX
         ? ctx.audience
-            .filter((a) => a.displayName)
-            .map((a) => ({
-              id: a.externalId,
-              name: a.displayName as string,
-              ...(ctx.slackIdsByPrincipal?.get(a.externalId)
-                ? { mentionId: ctx.slackIdsByPrincipal.get(a.externalId) }
-                : {}),
-              ...(a.externalId === ids.botUserId ? { isYou: true } : {}),
-              ...(a.isBot ? { isBot: true } : {}),
-            }))
-        : [];
+        : [...ctx.audience.filter(prominent), ...ctx.audience.filter((a) => !prominent(a))].slice(0, MEMBERS_SHOW_MAX);
+    const membersOmitted = ctx.audience.length - shown.length;
+    const members = shown
+      .filter((a) => a.displayName)
+      .map((a) => ({
+        id: a.externalId,
+        name: a.displayName as string,
+        ...(ctx.slackIdsByPrincipal?.get(a.externalId) ? { mentionId: ctx.slackIdsByPrincipal.get(a.externalId) } : {}),
+        ...(a.externalId === ids.botUserId ? { isYou: true } : {}),
+        ...(a.isBot ? { isBot: true } : {}),
+      }));
 
     let here: ConversationView["here"];
     if (inc.threadTs) {
@@ -213,6 +212,7 @@ export function createConversationSerializer(deps: {
         ...(ctx.isPrivate !== undefined ? { isPrivate: ctx.isPrivate } : {}),
       },
       members,
+      ...(membersOmitted > 0 ? { membersOmitted } : {}),
       messages,
       here,
       files,
@@ -223,5 +223,5 @@ export function createConversationSerializer(deps: {
     return { view };
   }
 
-  return { shapeRecentMessages, serializeSlackConversation, recentMessageWindow: RECENT_MESSAGE_WINDOW };
+  return { shapeRecentMessages, serializeSlackConversation, recentMessageWindow: MAX_RECENT_MESSAGES };
 }

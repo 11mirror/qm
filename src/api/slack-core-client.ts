@@ -13,9 +13,8 @@ import type { ActorAssertion } from "../types.ts";
 import type { KeychainApprovals } from "../credentials/keychain-approval.ts";
 import { createTaskAcknowledgements, type TaskAckState, type TaskAcknowledgements } from "../slack/task-ack.ts";
 import type { StagedEnvelope } from "../slack/envelope-staging.ts";
+import type { HandledEvent } from "../slack/message-gating.ts";
 import { resolveBranding } from "../resolution/branding.ts";
-import { createHash } from "node:crypto";
-import { Readable } from "node:stream";
 import { buffer } from "node:stream/consumers";
 import type { App } from "./app.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
@@ -34,6 +33,7 @@ import type { CachedMessage, ReadMessagesOpts, SurfaceCache, IngestEvent } from 
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
 import type { OrgBranding, ScopedConfigStore } from "../resolution/config-store.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
+import type { ByteSource } from "../util/bytes.ts";
 import { MAX_BLOB_BYTES } from "../persistence/blob-transfer.ts";
 import type { SlackNative } from "../chat-surface/slack.ts";
 import type { RunStore } from "../runs/run-store.ts";
@@ -91,7 +91,7 @@ export interface SlackCoreClient {
   channelHeaderPinEnabled(scope: ScopeId): Promise<boolean>;
   onScopeModelChanged(listener: (scope: ScopeId) => void): void;
   onChannelHeaderPinChanged(listener: (scope: ScopeId) => void): void;
-  stageBlob(bytes: Uint8Array): Promise<{ blobId: string; sizeBytes: number }>;
+  stageBlob(source: ByteSource): Promise<{ blobId: string; sizeBytes: number }>;
   readBlob(blobId: string): Promise<Buffer>;
   readFileArtifact(artifactId: string, viewerId: string): Promise<Buffer>;
   rememberSurfaceHistory?(events: IngestEvent[]): Promise<void>;
@@ -108,6 +108,7 @@ export interface SlackCoreClient {
   slack: SlackNative;
   holdEnvelopeReplay<T>(account: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
   stagedEnvelopes?: DurableMap<StagedEnvelope>;
+  handledEvents?: DurableMap<HandledEvent>;
   holdDirectorySync<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
   pendingContextRequests(): Promise<SurfaceContextRequest[]>;
   onContextRequest(listener: (request: SurfaceContextRequest) => void): () => void;
@@ -158,6 +159,7 @@ export interface SlackCoreClientDeps {
   brandingDefault?: OrgBranding;
   leaderLease: LeaderLease;
   stagedEnvelopes?: DurableMap<StagedEnvelope>;
+  handledEvents?: DurableMap<HandledEvent>;
   surfaceCache?: SurfaceCache;
   memory?: MemoryService;
   inboxEvent?(event: ConversationEvent): Promise<void>;
@@ -219,12 +221,8 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       deps.config.onChannelHeaderPinChanged((scope) => listener(scope));
     },
 
-    async stageBlob(bytes) {
-      const sha256 = createHash("sha256").update(bytes).digest("hex");
-      const info = await deps.blobTransfer.put(Readable.from([Buffer.from(bytes)]), {
-        maxBytes: MAX_BLOB_BYTES,
-        expectedSha256: sha256,
-      });
+    async stageBlob(source) {
+      const info = await deps.blobTransfer.put(source, { maxBytes: MAX_BLOB_BYTES });
       return { blobId: info.blobId, sizeBytes: info.sizeBytes };
     },
 
@@ -410,6 +408,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     holdDirectorySync: (fn) => lease.hold("slack:directory-sync", fn),
     holdEnvelopeReplay: (account, fn) => lease.hold(`slack:envelope-replay:${account}`, fn),
     stagedEnvelopes: deps.stagedEnvelopes,
+    handledEvents: deps.handledEvents,
 
     pendingContextRequests: () => deps.app.pendingContextRequests("slack"),
 

@@ -93,7 +93,10 @@ export function envelopeStageFor(
 
 export function isGatedEnvelope(body: Record<string, unknown>): boolean {
   const event = body.event as { type?: string } | undefined;
-  return body.type === "event_callback" && (event?.type === "message" || event?.type === "app_mention");
+  return (
+    body.type === "event_callback" &&
+    (event?.type === "message" || event?.type === "app_mention" || event?.type === "member_left_channel")
+  );
 }
 
 export function describeEnvelope(body: Record<string, unknown>): string {

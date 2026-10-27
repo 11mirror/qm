@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { createMirror, slackMessageToIngestEvent } from "../src/slack/mirror.ts";
 import { toEvent } from "../src/api/routes/surface-cache.ts";
-import { createSlackHistoryReader } from "../src/slack/history.ts";
+import { createSlackHistoryReader, type SlackHistoryReader } from "../src/slack/history.ts";
 import { buildContextWindow } from "../src/slack/conversation.ts";
 import { createConversationSerializer } from "../src/slack/conversation-view.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
@@ -11,6 +11,11 @@ import type { BotIdentity, Directory } from "../src/slack/directory.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
 const ids = { botUserId: "UBOT", ownBotId: "BBOT" } as BotIdentity;
+
+const liveOr =
+  (read: SlackHistoryReader, live: boolean): SlackHistoryReader =>
+  (client, channel, threadTs, before, expandThreads) =>
+    read(client, channel, threadTs, before, expandThreads, live);
 const directory = {
   classifyUserCached: async (_client: unknown, user: string) => ({ actor: { displayName: user } }),
 } as unknown as Directory;
@@ -77,12 +82,12 @@ test("mirror and live render the same allowed message subtypes", async () => {
   const core = { readSurfaceMessages: cache.readMessages } as SlackCoreClient;
   const client = { conversations: { history: async () => ({ messages: raw.slice().reverse(), has_more: false }) } };
   const views = [];
-  for (const source of ["live", "mirror"] as const) {
+  for (const live of [true, false]) {
     const serializer = createConversationSerializer({
       ids,
       directory,
       externalParticipantsEnabled: async () => false,
-      readHistory: createSlackHistoryReader({ core, ids, source }),
+      readHistory: liveOr(createSlackHistoryReader({ core, ids }), live),
     });
     const result = await serializer.serializeSlackConversation(
       client,
@@ -104,7 +109,7 @@ test("fallback prefers fresh live duplicates and replaces removed files", async 
       await cache.ingest(events.map((e) => toEvent(e)!));
     },
   } as SlackCoreClient;
-  const read = createSlackHistoryReader({ core, ids, source: "mirror" });
+  const read = createSlackHistoryReader({ core, ids });
   const page = await read(
     {
       conversations: {
@@ -126,23 +131,27 @@ test("fallback prefers fresh live duplicates and replaces removed files", async 
   assert.equal(stored.files?.length ?? 0, 0);
 });
 
-test("live and shadow do not repair their own comparison source", async () => {
-  for (const source of ["live", "shadow"] as const) {
-    let writes = 0;
-    const read = createSlackHistoryReader({
-      ids,
-      source,
-      core: {
-        readSurfaceMessages: async () => [],
-        rememberSurfaceHistory: async () => {
-          writes++;
-        },
-      } as unknown as SlackCoreClient,
-    });
-    await read({ conversations: { history: async () => ({ messages: [{ ts: "1", text: "live" }] }) } }, "C");
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(writes, 0);
-  }
+test("live reads do not repair the mirror", async () => {
+  let writes = 0;
+  const reader = createSlackHistoryReader({
+    ids,
+    core: {
+      readSurfaceMessages: async () => [],
+      rememberSurfaceHistory: async () => {
+        writes++;
+      },
+    } as unknown as SlackCoreClient,
+  });
+  await reader(
+    { conversations: { history: async () => ({ messages: [{ ts: "1", text: "live" }] }) } },
+    "C",
+    undefined,
+    undefined,
+    false,
+    true,
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(writes, 0);
 });
 
 test("event mirroring preserves mention IDs for current-context rendering", async () => {
@@ -174,8 +183,8 @@ test("event mirroring preserves mention IDs for current-context rendering", asyn
   assert.equal(stored.text, "Hi <@U1> and <@U2> & welcome");
   assert.deepEqual(stored.mentions, { U1: "Old name", U2: "Old name" });
   const shaped = [];
-  for (const source of ["live", "mirror"] as const) {
-    const readHistory = createSlackHistoryReader({ core, ids, source });
+  for (const live of [true, false]) {
+    const readHistory = liveOr(createSlackHistoryReader({ core, ids }), live);
     const serializer = createConversationSerializer({
       ids,
       directory: mentionDirectory,
@@ -232,12 +241,12 @@ test(`bot and attachment presentation metadata roundtrip`, async () => {
       },
     };
     const views = [];
-    for (const source of ["live", "mirror"] as const) {
+    for (const live of [true, false]) {
       const serializer = createConversationSerializer({
         ids,
         directory,
         externalParticipantsEnabled: async () => true,
-        readHistory: createSlackHistoryReader({ core, ids, source }),
+        readHistory: liveOr(createSlackHistoryReader({ core, ids }), live),
       });
       const result = await serializer.serializeSlackConversation(
         client,

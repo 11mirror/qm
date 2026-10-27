@@ -38,6 +38,7 @@ import { parseChannelPage, parseLogLevel } from "./payloads.ts";
 import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
 import type { AuthTestResponse } from "@slack/web-api";
 const { App } = bolt;
+const HANDLED_EVENT_TTL_MS = 24 * 60 * 60_000;
 
 export type { SlackCoreClient };
 export type { SlackPluginConfig };
@@ -52,10 +53,8 @@ export async function startSlackPlugin(
   if (!cfg.botToken) throw new Error("Slack plugin needs botToken (SLACK_BOT_TOKEN, xoxb-…)");
   if (!cfg.receiverFactory && EVENTS_MODE === "socket" && !cfg.appToken)
     throw new Error("Slack plugin needs appToken (SLACK_APP_TOKEN, xapp-…) in socket events mode");
-  if (!cfg.receiverFactory && EVENTS_MODE === "http" && (!cfg.signingSecret || !cfg.eventsPort))
-    throw new Error(
-      "Slack plugin needs signingSecret (SLACK_SIGNING_SECRET) and eventsPort (SLACK_EVENTS_PORT) in http events mode",
-    );
+  if (!cfg.receiverFactory && EVENTS_MODE === "http" && !cfg.signingSecret)
+    throw new Error("Slack plugin needs signingSecret (SLACK_SIGNING_SECRET) in http events mode");
   const BOT_TOKEN = cfg.botToken;
   const APP_TOKEN = cfg.appToken;
   const SLACK_API_URL = cfg.apiUrl ? normalizeSlackApiUrl(cfg.apiUrl) : undefined;
@@ -65,17 +64,8 @@ export async function startSlackPlugin(
     attachOriginalToWebAPIRequestError: false,
     ...(SLACK_API_URL ? { slackApiUrl: SLACK_API_URL } : {}),
   } as const;
-  const IDENTITY_TOKENS: Record<string, string | undefined> = { copilot: cfg.copilotBotToken };
   const webClient = (token: string, extra: Record<string, unknown> = {}) =>
     new WebClient(token, { ...CLIENT_OPTIONS, ...extra });
-  const identityClients = new Map<string, WebClient>();
-  function clientForIdentity(identity: string): WebClient {
-    const token = IDENTITY_TOKENS[identity];
-    if (!token) throw new Error(`no token for post identity "${identity}" (set its *_BOT_TOKEN env)`);
-    let c = identityClients.get(identity);
-    if (!c) identityClients.set(identity, (c = webClient(token)));
-    return c;
-  }
   let stopped = false;
   const CORE_SINGLETON = cfg.coreSingleton !== false;
   const ACCOUNT_LABEL = cfg.accountId ?? "default";
@@ -131,15 +121,13 @@ export async function startSlackPlugin(
     return EVENTS_MODE === "http"
       ? createHttpEventsReceiver({
           signingSecret: cfg.signingSecret!,
-          port: cfg.eventsPort!,
-          capMs: cfg.ackCapMs,
           staging,
+          serve: (handler) => core.slack.serveEvents(cfg.accountId ?? "", handler),
         })
       : createDeferredAckReceiver({
           appToken: APP_TOKEN!,
           logLevel: cfg.logLevel,
           slackApiUrl: SLACK_API_URL,
-          capMs: cfg.ackCapMs,
           staging,
         });
   };
@@ -180,7 +168,12 @@ export async function startSlackPlugin(
     cfg.devIntrospection ? { enabled: true, port: cfg.devIntrospection.port } : {},
   );
 
-  const deduper = createDeduper(1000);
+  const deduper = createDeduper(1000, core.handledEvents);
+  const handledPrune = core.handledEvents
+    ? createSweeper(() => core.handledEvents!.deleteBelow("at", Date.now() - HANDLED_EVENT_TTL_MS), 60 * 60_000, {
+        label: "slack handled events",
+      })
+    : undefined;
   const threads = createThreadTracker();
 
   const flow = createTurnFlow(core);
@@ -190,10 +183,6 @@ export async function startSlackPlugin(
     core,
     ids,
     coreSingleton: CORE_SINGLETON && !cfg.externalAccess,
-    userSnapshotTtlMs: cfg.userSnapshotTtlMs || undefined,
-    channelMembersTtlMs: cfg.channelMembersTtlMs || undefined,
-    maxPrivateChannels: cfg.maxPrivateChannels || undefined,
-    userCacheTtlMs: cfg.userCacheTtlMs || undefined,
   });
   const mirror = cfg.externalAccess
     ? { pushSurfaceEvents: async () => {}, mirrorMessageEvent: async () => {} }
@@ -229,7 +218,6 @@ export async function startSlackPlugin(
     core,
     ids,
     historyClient,
-    source: cfg.contextSource ?? "live",
     ...historyRateLimitOptions,
   });
   const serializer = createConversationSerializer({
@@ -238,7 +226,6 @@ export async function startSlackPlugin(
     ids,
     directory,
     externalParticipantsEnabled,
-    ...(cfg.recentMessages ? { recentMessages: cfg.recentMessages } : {}),
   });
   const approvals = createApprovals({ core, flow, directory, threads, externalAccess: !!cfg.externalAccess });
   registerKeychainApprovalActions(app, { core, directory, webUiPublicUrl: cfg.webUiPublicUrl });
@@ -353,8 +340,7 @@ export async function startSlackPlugin(
     allowActor,
     denyResponder,
     webUiPublicUrl: cfg.webUiPublicUrl || undefined,
-    backfillHistory:
-      cfg.contextSource === "mirror" ? (client: unknown, channel: string) => readHistory(client, channel) : undefined,
+    backfillHistory: (client: unknown, channel: string) => readHistory(client, channel),
     ensureHeader,
   });
   const surfaceContext = createSurfaceContextFulfiller({
@@ -385,7 +371,6 @@ export async function startSlackPlugin(
     core,
     flow,
     threads,
-    clientForIdentity,
     webUiPublicUrl: cfg.webUiPublicUrl,
     defaultClient: app.client,
     runInFlight: (runId) =>
@@ -422,6 +407,7 @@ export async function startSlackPlugin(
     });
     await app.start();
     replaySweeper?.start();
+    handledPrune?.start();
   } catch (err) {
     releaseAccount();
     stopped = true;
@@ -443,31 +429,31 @@ export async function startSlackPlugin(
   ackEmoji.refreshAckEmoji(app.client);
   ackEmojiOverride();
 
-  const publishEmojiCatalog = (): void => {
-    if (stopped) return;
-    void Promise.resolve(app.client.emoji.list())
-      .then((res: { emoji?: Record<string, string> }) =>
-        core.publishEmojiCatalog(
-          Object.fromEntries(
-            Object.entries(res.emoji ?? {}).filter(([, url]) => typeof url === "string" && !url.startsWith("alias:")),
+  const emojiCatalogSweep = createSweeper(
+    () =>
+      Promise.resolve(app.client.emoji.list())
+        .then((res: { emoji?: Record<string, string> }) =>
+          core.publishEmojiCatalog(
+            Object.fromEntries(
+              Object.entries(res.emoji ?? {}).filter(([, url]) => typeof url === "string" && !url.startsWith("alias:")),
+            ),
           ),
-        ),
-      )
-      .catch(swallowAs("slack: emoji catalog publish", undefined));
-  };
-  if (CORE_SINGLETON) publishEmojiCatalog();
-  const emojiCatalogTimer = CORE_SINGLETON ? setInterval(publishEmojiCatalog, 6 * 60 * 60_000) : undefined;
+        )
+        .catch(swallowAs("slack: emoji catalog publish", undefined)),
+    6 * 60 * 60_000,
+    { label: "slack emoji catalog", immediate: true },
+  );
+  if (CORE_SINGLETON) emojiCatalogSweep.start();
 
   statusSweep.start();
   const unregisterSender = core.slack.attach(sendToSlack);
-  const reconcileTaskAcks = (): void => {
-    if (!stopped)
-      void core.taskAcknowledgements
-        ?.reconcile(app.client)
-        .catch(swallowAs("slack: task ack reconciliation", undefined));
-  };
-  const taskAckTimer = CORE_SINGLETON ? setInterval(reconcileTaskAcks, 60_000) : undefined;
-  taskAckTimer?.unref?.();
+  const taskAckSweep = createSweeper(
+    () =>
+      core.taskAcknowledgements?.reconcile(app.client).catch(swallowAs("slack: task ack reconciliation", undefined)),
+    60_000,
+    { label: "slack task ack reconciliation" },
+  );
+  if (CORE_SINGLETON) taskAckSweep.start();
 
   const contextRequestsInFlight = new Set<string>();
 
@@ -490,6 +476,7 @@ export async function startSlackPlugin(
     async stop(): Promise<void> {
       if (stopped) {
         await replaySweeper?.stop();
+        await handledPrune?.stop();
         await app.stop();
         return;
       }
@@ -497,8 +484,9 @@ export async function startSlackPlugin(
       releaseAccount();
       await statusSweep.stop();
       await replaySweeper?.stop();
-      if (emojiCatalogTimer) clearInterval(emojiCatalogTimer);
-      if (taskAckTimer) clearInterval(taskAckTimer);
+      await emojiCatalogSweep.stop();
+      await taskAckSweep.stop();
+      await handledPrune?.stop();
       unregisterSender();
       unsubscribeContextRequests();
       try {

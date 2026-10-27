@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { classMap } from "lit/directives/class-map.js";
-import { badge, renderer, node, scroller, empty, denseList as dense } from "./shared.ts";
+import { badge, renderer, empty, denseList as dense } from "./shared.ts";
 import { fmtTime, relTime } from "./format.ts";
 import { slackParseText } from "./rich-text.ts";
 type Row = Record<string, any>;
@@ -15,37 +15,29 @@ const failure = (result: Row, fallback = `Failed to load (${result.status}).`) =
 const refused = (result: Row, denied: string) => empty(result.status === 403 ? denied : failure(result));
 const param = (key: string, value?: string | null) => (value ? "&" + key + "=" + encodeURIComponent(value) : "");
 const reply = (m: Row) => m.sub && m.sub !== m.ts;
-export const groupKey = (m: Row) => (m.authorId || m.authorName || m.ts) + "|" + (reply(m) ? m.sub : "root");
 const author = (m: Row) => (m.self ? context.brandSelfLabel() : m.authorName || m.authorId || "unknown");
-const time = (m: Row) => new Date(m.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 export function message(m: Row, opts: Row = {}) {
   return html`<div
-    class=${classMap({ "sm-msg": true, "sm-cont": !!opts.cont, "sm-self": !!m.self, "sm-reply": !!reply(m), "sm-deleted": !!m.deleted, "sm-target": !!opts.target, "sm-openable": !!opts.onOpen })}
+    class=${classMap({ "sm-msg": true, "sm-self": !!m.self, "sm-reply": !!reply(m), "sm-deleted": !!m.deleted, "sm-target": !!opts.target })}
     data-ts=${m.ts}
-    @click=${opts.onOpen ? () => opts.onOpen(m) : nothing}
   >
     <div class="sm-gutter">
-      ${opts.cont ? html`<span class="sm-guttertime">${time(m)}</span>` : html`<span class="sm-avatar">${(author(m).trim()[0] || "?").toUpperCase()}</span>`}
+      <span class="sm-avatar">${(author(m).trim()[0] || "?").toUpperCase()}</span>
     </div>
     <div class="sm-body">
-      ${opts.cont ? nothing : html`<div class="sm-head"><span class="sm-author">${author(m)}</span>${messageTag(m)}${reply(m) ? html`<span class="sm-tag" title=${"Reply in the thread rooted at " + m.sub}>Thread reply</span>` : nothing}${opts.containerLabel ? html`<span class="sm-tag">${opts.containerLabel}</span>` : nothing}<span class="sm-when" title=${fmtTime(m.createdAt) + " · ts " + m.ts}>${context.view() === "slack" && !opts.onOpen ? time(m) : relTime(m.createdAt)}</span></div>`}
+      <div class="sm-head">
+        <span class="sm-author">${author(m)}</span
+        >${messageTag(m)}${reply(m) ? html`<span class="sm-tag" title=${"Reply in the thread rooted at " + m.sub}>Thread reply</span>` : nothing}<span
+          class="sm-when"
+          title=${fmtTime(m.createdAt) + " · ts " + m.ts}
+          >${relTime(m.createdAt)}</span
+        >
+      </div>
       <div class="sm-text">
         ${slackParseText(m.text || "", m.mentions)}${m.editedAt ? html`<span class="sm-flag" title=${fmtTime(m.editedAt)}>(edited)</span>` : nothing}${m.deleted ? html`<span class="sm-flag">(deleted in Slack)</span>` : nothing}
       </div>
     </div>
   </div>`;
-}
-export function groupedMessages(messages: Row[], target?: string) {
-  return repeat(
-    messages,
-    (m) => m.ts,
-    (m, index) => {
-      const previous = messages[index - 1],
-        day = new Date(m.createdAt).toDateString(),
-        sameDay = previous && new Date(previous.createdAt).toDateString() === day;
-      return html`${sameDay ? nothing : html`<div class="sm-day">${day === new Date().toDateString() ? "Today" : new Date(m.createdAt).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}</div>`}${message(m, { target: target === m.ts, cont: !!sameDay && groupKey(previous) === groupKey(m) && target !== m.ts })}`;
-    },
-  );
 }
 function messageTag(m: Row) {
   if (m.self) return html`<span class="sm-tag sm-tag-agent">agent</span>`;
@@ -113,138 +105,13 @@ export class SlackActivity {
     } else this.error = failure(result, fallback);
     paint();
   }
-  searchBox(container: string | null) {
-    let timer: ReturnType<typeof setTimeout>;
-    return {
-      placeholder: container ? "Search this channel…" : "Search all mirrored messages…",
-      onInput: (value: string) => {
-        clearTimeout(timer);
-        timer = setTimeout(() => {
-          if (context.view() === "slack" && (context.urlToState().container || null) === container)
-            void this.search(value.trim(), container);
-        }, 250);
-      },
-    };
-  }
-  async search(query: string, container: string | null) {
-    if (context.view() !== "slack") return;
-    if (!query) return this.mirror({ ...context.urlToState(), ts: null });
-    const generation = this.begin({ ...context.urlToState(), query });
-    const result = await context.api(
-      "GET",
-      "/api/slack-mirror/messages?q=" + encodeURIComponent(query) + param("container", container),
-    );
-    if (!this.current("slack", generation)) return;
-    if (!result.ok) return this.draw(empty(failure(result, `Search failed (${result.status}).`)));
-    this.messages = result.data.messages || [];
-    this.draw(
-      this.messages.length
-        ? html`${stream(
-            this.messages,
-            (m) => m.container + ":" + m.ts,
-            (m) => ({
-              containerLabel: container ? null : context.slackContainerLabel(m.container),
-              onOpen: (msg: Row) => context.go({ view: "slack", container: msg.container, ts: msg.ts }),
-            }),
-          )}
-          ${result.data.hasMore ? empty(`First ${this.messages.length.toLocaleString()} matches shown. Refine the search to see the rest.`) : nothing}`
-        : empty("No matches in the mirror."),
-    );
-  }
-  async mirror(st: Row) {
-    const generation = this.begin(st);
-    if (!st.container) {
-      context.pageShell({ title: "Slack", search: this.searchBox(null) });
-      this.draw(loading("Loading Slack mirror..."));
-      const result = await context.loadSlackContainers();
-      if (!this.current("slack", generation)) return;
-      if (!result.ok) return this.draw(refused(result, "Only an org admin can read the Slack mirror."));
-      context.loaded();
-      const containers = context.containers() || [];
-      context.pageShell({
-        title: "Slack",
-        tally: [context.truncated() ? containers.length + "+" : containers.length, "conversations"],
-        search: this.searchBox(null),
-      });
-      return this.draw(
-        html`${dense(
-          containers,
-          (c) => ({
-            name: context.slackContainerLabel(c.container),
-            preview: `${Number(c.messageCount).toLocaleString()} mirrored · ${(c.members || []).length} ${(c.members || []).length === 1 ? "member" : "members"}`,
-            time: relTime(c.updatedAt),
-            href: context.stateToUrl({ view: "slack", container: c.container }),
-          }),
-          (c) => context.go({ view: "slack", container: c.container }),
-          "Nothing mirrored yet. The surface pushes messages here as it sees them.",
-        )}${context.truncated() ? empty(`Showing the ${containers.length.toLocaleString()} most recently active conversations.`) : nothing}`,
-      );
-    }
-    if (!context.containers()) await context.loadSlackContainers();
-    if (!this.current("slack", generation)) return;
-    const container = st.container,
-      scope = context.slackContainerScope(container);
-    context.pageShell({
-      stacked: true,
-      back: { label: "← Slack", onClick: () => context.go({ view: "slack", container: null, ts: null }) },
-      title: context.slackContainerLabel(container),
-      context: container,
-      search: this.searchBox(container),
-      actions: [
-        context.navLink("Judgments →", { view: "judgments", container }),
-        ...(scope ? [context.navLink("Governance →", { view: "governance", scope, session: null })] : []),
-        node(
-          html`<a
-            href=${"/api/slack-mirror/messages?container=" + encodeURIComponent(container)}
-            target="_blank"
-            rel="noopener"
-            title="Open the raw mirrored JSON rows for this container in a new tab"
-            >Raw feed ↗</a
-          >`,
-        ),
-      ],
-    });
-    this.draw(loading("Loading messages..."));
-    let result = await this.fetchMessages(container);
-    if (!this.current("slack", generation)) return;
-    if (!result.ok) return this.draw(empty(failure(result)));
-    this.messages = result.data.messages || [];
-    this.hasMore = !!result.data.hasMore;
-    for (let hops = 0; st.ts && this.hasMore && this.messages[0]?.ts > st.ts && hops < 10; hops++) {
-      result = await this.fetchMessages(container, this.messages[0].ts);
-      if (!this.current("slack", generation)) return;
-      if (!result.ok) break;
-      this.messages = [...(result.data.messages || []), ...this.messages];
-      this.hasMore = !!result.data.hasMore;
-    }
-    this.paintMessages();
-    requestAnimationFrame(() => {
-      if (!this.current("slack", generation)) return;
-      if (st.ts) this.root.querySelector(".sm-target")?.scrollIntoView({ block: "center" });
-      else scroller(this.root).scrollTo({ top: scroller(this.root).scrollHeight });
-    });
-  }
   fetchMessages(container: string, before?: string) {
     return context.api(
       "GET",
-      "/api/slack-mirror/messages?container=" + encodeURIComponent(container) + "&limit=200" + param("before", before),
-    );
-  }
-  paintMessages() {
-    this.draw(
-      html`${this.state.ts && !this.messages.some((m) => m.ts === this.state.ts) ? html`<div class="sm-day">${"Message " + this.state.ts + " isn't in the loaded window. It may be older than what's shown (use “Load earlier messages”) or was never mirrored."}</div>` : nothing}${this.more("Load earlier messages", () => this.earlierMessages())}
-        <div class="sm-stream">
-          ${this.messages.length ? groupedMessages(this.messages, this.state.ts) : empty("Nothing mirrored for this channel yet.")}
-        </div>`,
-    );
-  }
-  earlierMessages() {
-    return this.earlier(
-      "slack",
-      () => this.paintMessages(),
-      () => this.fetchMessages(this.state.container, this.messages[0]?.ts),
-      (data) => (this.messages = [...(data.messages || []), ...this.messages]),
-      "Failed to load earlier messages.",
+      "/api/ambient-context/messages?container=" +
+        encodeURIComponent(container) +
+        "&limit=200" +
+        param("before", before),
     );
   }
   async log(st: Row, kind: Log) {
@@ -264,7 +131,6 @@ export class SlackActivity {
       navigation = {
         ...back("← " + title, kind, st.decision),
         context: context.slackContainerLabel(container),
-        contextGo: { view: "slack", container },
       };
     else if (ack) navigation = back("← Judgments", "judgments", null);
     const shell = (extra: Row) =>
@@ -371,7 +237,6 @@ export class SlackActivity {
       back,
       title,
       context: context.slackContainerLabel(container),
-      contextGo: { view: "slack", container, ts: ack ? item.ts : item.tsFrom },
       actions: !ack && scope ? [context.navLink("Governance →", { view: "governance", scope, session: null })] : [],
     });
     if (ack) return this.draw(ackDetail(item, result.data.workspaceUrl));
@@ -471,6 +336,5 @@ function ackDetail(item: Row, workspace: string) {
   </div>`;
 }
 export const activity = new SlackActivity();
-export const renderSlackMirror = (state: Row) => activity.mirror(state);
 export const renderAmbientJudgments = (state: Row) => activity.log(state, "judgments");
 export const renderAckEmojiPicks = (state: Row) => activity.log(state, "ackemoji");

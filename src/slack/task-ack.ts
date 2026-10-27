@@ -1,9 +1,10 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
-import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { sleep, createKeyedQueue } from "../util/async.ts";
+import { holdUntilDone, type LeaderLease } from "../persistence/leader-lease.ts";
 import { swallowAs } from "../util/errors.ts";
 import { isTerminal, type RunStore } from "../runs/run-store.ts";
 import { runResultPost } from "../runs/run-results.ts";
+import { slackErrorCode } from "./payloads.ts";
 
 export interface TaskAckState {
   channel: string;
@@ -32,83 +33,70 @@ export function createTaskAcknowledgements(
   const update = store.update.bind(store);
   const queue = createKeyedQueue<string>();
   const change = (client: ReactionClient, runId: string, next?: Next) => queue(runId, () => apply(client, runId, next));
-  async function apply(client: ReactionClient, runId: string, next?: Next) {
-    const started = Date.now();
-    while (Date.now() - started < 15_000) {
-      const result = await lease.hold(`slack:task-ack:${runId}`, async (lost) => {
-        let leaseLost = false;
-        void lost.then(() => {
-          leaseLost = true;
+  const apply = (client: ReactionClient, runId: string, next?: Next) =>
+    holdUntilDone(lease, `slack:task-ack:${runId}`, "Task acknowledgement lock timed out", async (lost) => {
+      let state = await store.get(runId);
+      if (!state) {
+        if (next?.existing) return true;
+        const emoji = next?.pick
+          ? await Promise.race([
+              next.pick().catch(swallowAs("slack: pick task ack emoji", undefined)),
+              sleep(1500).then(() => undefined),
+            ])
+          : undefined;
+        if (lost()) return false;
+        await store.putIfAbsent(runId, {
+          channel: next?.channel ?? "",
+          emoji: emoji || "eyes",
+          target: next?.ts ?? "",
+          previous: [],
+          finished: !next,
         });
-        let state = await store.get(runId);
-        if (!state) {
-          if (next?.existing) return true;
-          const emoji = next?.pick
-            ? await Promise.race([
-                next.pick().catch(swallowAs("slack: pick task ack emoji", undefined)),
-                sleep(1500).then(() => undefined),
-              ])
-            : undefined;
-          if (leaseLost) return false;
-          await store.putIfAbsent(runId, {
-            channel: next?.channel ?? "",
-            emoji: emoji || "eyes",
-            target: next?.ts ?? "",
-            previous: [],
-            finished: !next,
-          });
-        }
-        if (leaseLost) return false;
-        state = await update(runId, (current) => {
-          if (current.finished) return current;
-          if (!next) return { ...current, finished: true, synced: false, previous: retire(current) };
-          if (current.channel === next.channel && Number(next.ts) > Number(current.target))
-            return { ...current, target: next.ts, synced: false, previous: retire(current) };
-          return current;
-        });
-        if (!state || leaseLost) return false;
-        const snapshot = state;
-        const reaction = async (action: "add" | "remove", ts: string) => {
-          try {
-            await client.reactions[action]({ channel: snapshot.channel, timestamp: ts, name: snapshot.emoji });
-          } catch (error) {
-            const code = (error as { data?: { error?: string } }).data?.error;
-            if (
-              !(action === "add" ? code === "already_reacted" : code === "no_reaction" || code === "message_not_found")
-            )
-              throw error;
-          }
-        };
-        if (!state.finished) {
-          await reaction("add", state.target);
-          const current = await store.get(runId);
-          if (current?.finished || current?.target !== state.target) {
-            await update(runId, (value) => ({
-              ...value,
-              previous: [...new Set([...value.previous, snapshot.target])],
-              synced: false,
-            }));
-            await reaction("remove", state.target);
-          }
-        }
-        if (leaseLost) return false;
-        for (const ts of state.previous) {
-          if (leaseLost) return false;
-          await reaction("remove", ts);
-          await update(runId, (current) => ({ ...current, previous: current.previous.filter((old) => old !== ts) }));
-        }
-        await update(runId, (current) =>
-          current.target === snapshot.target && current.finished === snapshot.finished && current.previous.length === 0
-            ? { ...current, synced: true }
-            : current,
-        );
-        return true;
+      }
+      if (lost()) return false;
+      state = await update(runId, (current) => {
+        if (current.finished) return current;
+        if (!next) return { ...current, finished: true, synced: false, previous: retire(current) };
+        if (current.channel === next.channel && Number(next.ts) > Number(current.target))
+          return { ...current, target: next.ts, synced: false, previous: retire(current) };
+        return current;
       });
-      if (result) return;
-      await sleep(50);
-    }
-    throw new Error("Task acknowledgement lock timed out");
-  }
+      if (!state || lost()) return false;
+      const snapshot = state;
+      const reaction = async (action: "add" | "remove", ts: string) => {
+        try {
+          await client.reactions[action]({ channel: snapshot.channel, timestamp: ts, name: snapshot.emoji });
+        } catch (error) {
+          const code = slackErrorCode(error);
+          if (!(action === "add" ? code === "already_reacted" : code === "no_reaction" || code === "message_not_found"))
+            throw error;
+        }
+      };
+      if (!state.finished) {
+        await reaction("add", state.target);
+        const current = await store.get(runId);
+        if (current?.finished || current?.target !== state.target) {
+          await update(runId, (value) => ({
+            ...value,
+            previous: [...new Set([...value.previous, snapshot.target])],
+            synced: false,
+          }));
+          await reaction("remove", state.target);
+        }
+      }
+      if (lost()) return false;
+      for (const ts of state.previous) {
+        if (lost()) return false;
+        await reaction("remove", ts);
+        await update(runId, (current) => ({ ...current, previous: current.previous.filter((old) => old !== ts) }));
+      }
+      await update(runId, (current) =>
+        current.target === snapshot.target && current.finished === snapshot.finished && current.previous.length === 0
+          ? { ...current, synced: true }
+          : current,
+      );
+      return true;
+    });
   return {
     reconcile: async (client: ReactionClient) => {
       for (const [runId, state] of await store.entries()) {

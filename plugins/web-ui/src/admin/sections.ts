@@ -1,4 +1,4 @@
-const LOGS = ["history", "slack", "judgments", "errors", "audit", "egress"];
+const LOGS = ["history", "judgments", "errors", "audit", "egress"];
 const ARTIFACTS = ["files", "skills", "memory", "deployments", "crons"];
 
 export const ADMIN_SECTIONS = [
@@ -20,16 +20,11 @@ export const ADMIN_VIEWS = new Set([
 
 export const SETTINGS_VIEWS = new Set(["governance", "models", "credentials", "customize", "slack-settings"]);
 export const LOG_VIEWS = new Set([...LOGS, "memory"]);
-export const SCOPED_VIEWS = new Set([
-  "governance",
-  ...LOGS.filter((view) => view !== "slack" && view !== "judgments"),
-  ...ARTIFACTS,
-]);
+export const SCOPED_VIEWS = new Set(["governance", ...LOGS.filter((view) => view !== "judgments"), ...ARTIFACTS]);
 
 const TITLES: Record<string, string> = {
   history: "Sessions",
   deployments: "Apps",
-  slack: "Slack messages",
   "slack-settings": "Slack",
   ackemoji: "Ack emoji",
 };

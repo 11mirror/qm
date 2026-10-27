@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { createKeyedQueue } from "../../src/util/async.ts";
 import { sleep } from "./slack.ts";
-import slackManifest from "../../src/slack/manifest.json" with { type: "json" };
+import slackManifest from "../../cli/templates/slack-manifest.json" with { type: "json" };
 import qaManifest from "./qa-driver.manifest.json" with { type: "json" };
 
 const ARGA_API_BASE = process.env.ARGA_API_BASE ?? "https://api.argalabs.com";

@@ -7,15 +7,6 @@ import { normalizeAllowFrom, parseAllowFrom } from "./allow-from.ts";
 export const NO_RETRY = { retryConfig: { retries: 0 } } as const;
 export const HISTORY_NO_RETRY = { ...NO_RETRY, rejectRateLimitedCalls: true } as const;
 
-export type SlackContextSource = "live" | "shadow" | "mirror";
-
-export function parseSlackContextSource(value: string | undefined): SlackContextSource {
-  const source = value?.trim() || "live";
-  if (source !== "live" && source !== "shadow" && source !== "mirror")
-    throw new Error("SLACK_CONTEXT_SOURCE must be live, shadow, or mirror");
-  return source;
-}
-
 function parseSlackHistoryLimit(value: string | undefined): number | undefined {
   if (!value?.trim()) return undefined;
   const limit = Number(value);
@@ -26,7 +17,6 @@ function parseSlackHistoryLimit(value: string | undefined): number | undefined {
 
 export interface SlackPluginConfig {
   externalAccess?: ExternalSlackAccess;
-  contextSource?: SlackContextSource;
   historyLimit?: number;
   installationId?: string;
   sharedServiceUrl?: string;
@@ -40,18 +30,10 @@ export interface SlackPluginConfig {
   apiUrl?: string;
   eventsMode?: "socket" | "http";
   signingSecret?: string;
-  eventsPort?: number;
-  ackCapMs?: number;
   userToken?: string;
-  copilotBotToken?: string;
   webUiPublicUrl?: string;
   identityEmail?: string;
   logLevel?: string;
-  userSnapshotTtlMs?: number;
-  channelMembersTtlMs?: number;
-  maxPrivateChannels?: number;
-  recentMessages?: number;
-  userCacheTtlMs?: number;
   botIdentity?: { username?: string; icon_emoji?: string };
   devIntrospection?: { port: number };
 }
@@ -85,17 +67,13 @@ export function slackPluginConfigFromEnv(
     ...(env.SLACK_EXTERNAL_ACCESS
       ? { externalAccess: parseExternalSlackAccess(JSON.parse(env.SLACK_EXTERNAL_ACCESS)) }
       : {}),
-    ...(env.SLACK_CONTEXT_SOURCE ? { contextSource: parseSlackContextSource(env.SLACK_CONTEXT_SOURCE) } : {}),
     ...(receiverFactory ? { receiverFactory } : {}),
     ...opt("historyLimit", parseSlackHistoryLimit(env.SLACK_HISTORY_LIMIT)),
     ...opt("appToken", env.SLACK_APP_TOKEN),
     ...opt("apiUrl", env.SLACK_API_URL),
     ...(eventsMode === "http" ? { eventsMode } : {}),
     ...opt("signingSecret", env.SLACK_SIGNING_SECRET),
-    ...opt("eventsPort", num(env.SLACK_EVENTS_PORT)),
-    ...opt("ackCapMs", num(env.SLACK_ACK_CAP_MS)),
     ...opt("userToken", env.SLACK_USER_TOKEN),
-    ...opt("copilotBotToken", env.SLACK_COPILOT_BOT_TOKEN),
     ...opt("webUiPublicUrl", env.WEB_UI_PUBLIC_URL),
     ...opt("sharedServiceUrl", env.QM_SLACK_SERVICE_URL),
     ...opt("identityEmail", env.SLACK_IDENTITY_EMAIL),
@@ -105,11 +83,6 @@ export function slackPluginConfigFromEnv(
       return { ...(allowFrom.length ? { allowFrom } : {}), ...(denyMessage ? { denyMessage } : {}) };
     })(),
     ...opt("logLevel", env.SLACK_LOG_LEVEL),
-    ...opt("userSnapshotTtlMs", num(env.SLACK_USER_SNAPSHOT_TTL_MS)),
-    ...opt("channelMembersTtlMs", num(env.SLACK_CHANNEL_MEMBERS_TTL_MS)),
-    ...opt("maxPrivateChannels", num(env.SLACK_MAX_PRIVATE_CHANNELS)),
-    ...opt("recentMessages", num(env.SLACK_RECENT_MESSAGES)),
-    ...opt("userCacheTtlMs", num(env.SLACK_USER_CACHE_TTL_MS)),
     ...(() => {
       const identity = botIdentityFromEnv(env);
       return Object.keys(identity).length ? { botIdentity: identity } : {};
@@ -151,11 +124,9 @@ export function slackAccountConfigsFromEnv(env: Record<string, string | undefine
       SLACK_APP_TOKEN: str(a.appToken),
       SLACK_EVENTS_MODE: str(a.eventsMode),
       SLACK_SIGNING_SECRET: str(a.signingSecret),
-      SLACK_EVENTS_PORT: a.eventsPort === undefined ? undefined : String(a.eventsPort),
       SLACK_API_URL: str(a.apiUrl),
       SLACK_IDENTITY_EMAIL: str(a.identityEmail) ?? "1",
       SLACK_LOG_LEVEL: env.SLACK_LOG_LEVEL,
-      SLACK_CONTEXT_SOURCE: env.SLACK_CONTEXT_SOURCE,
       SLACK_HISTORY_LIMIT: env.SLACK_HISTORY_LIMIT,
       WEB_UI_PUBLIC_URL: env.WEB_UI_PUBLIC_URL,
       QM_SLACK_SERVICE_URL: env.QM_SLACK_SERVICE_URL,

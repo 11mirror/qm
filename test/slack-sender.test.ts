@@ -80,7 +80,6 @@ async function send(
       fetchFileArtifactFromCore: async () => Buffer.from("artifact"),
     } as never,
     threads: { mark: (channel: string, ts: string) => void marks.push({ channel, ts }) } as never,
-    clientForIdentity: () => client,
     defaultClient: client,
   });
 
@@ -387,7 +386,6 @@ function bareSender(postMessage: (args: Record<string, unknown>) => Promise<unkn
     core: {} as never,
     flow: { inFlightRuns: new Set(inFlight) } as never,
     threads: { mark: () => {} } as never,
-    clientForIdentity: () => client,
     defaultClient: client,
   });
 }

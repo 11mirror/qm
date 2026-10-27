@@ -1,9 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { tenantFor, withTenant } from "../src/tenant.ts";
 import {
   slackReplyArgs,
   botIdentityArgs,
   botIdentityFromEnv,
+  setDefaultBotIdentity,
   encodeDeliveryTarget,
   parseDeliveryTarget,
   deliveryCandidatesFor,
@@ -55,6 +57,22 @@ test("botIdentityArgs/slackReplyArgs stay a no-op without an env override", () =
     channel: "C1",
     text: "reply",
   });
+});
+
+test("each tenant posts under its own bot display identity", () => {
+  const alpha = tenantFor("alpha", "00000000-0000-4000-8000-00000000000a");
+  const beta = tenantFor("beta", "00000000-0000-4000-8000-00000000000b");
+  withTenant(alpha, () => setDefaultBotIdentity({ username: "Alpha Bot", icon_emoji: ":a:" }));
+  withTenant(beta, () => setDefaultBotIdentity({ username: "Beta Bot" }));
+  assert.deepEqual(
+    withTenant(alpha, () => slackReplyArgs("C1", "hi", undefined)),
+    { channel: "C1", text: "hi", username: "Alpha Bot", icon_emoji: ":a:" },
+  );
+  assert.deepEqual(
+    withTenant(beta, () => botIdentityArgs()),
+    { username: "Beta Bot" },
+  );
+  assert.deepEqual(botIdentityArgs(), {});
 });
 
 test("slackReplyArgs can suppress Slack link and media unfurls per message", () => {

@@ -75,7 +75,7 @@ export function startAdmin(host, env) {
     page = st.page || 1;
     historyCursor = st.cursor || null;
     historyKind = st.historyKind || "conversation";
-    for (const v of ["history", "slack", "judgments", "errors", "deployments", "crons"])
+    for (const v of ["history", "judgments", "errors", "deployments", "crons"])
       root.classList.toggle(v + "-view", view === v);
     root.classList.toggle("governance-view", isGovLike(view));
     root.dataset.subview = view;
@@ -102,7 +102,6 @@ export function startAdmin(host, env) {
     }
     if (view === "connectors") return void governanceUI.integrations.loadConnectors();
     if (view === "user") return void showUserDetail(st.principal);
-    if (view === "slack") return void governanceUI.slackActivity.renderSlackMirror(st);
     if (view === "judgments") return void governanceUI.slackActivity.renderAmbientJudgments(st);
     if (view === "ackemoji") return void governanceUI.slackActivity.renderAckEmojiPicks(st);
     if (view === "history" && st.session && st.turn != null)
@@ -267,16 +266,6 @@ export function startAdmin(host, env) {
     };
     const back = opts.back && el("button.back", { type: "button", onclick: opts.back.onClick }, backArrow());
     back?.append(el("span", opts.back.label.replace(/^←\s*/, "")));
-    if (opts.stacked) {
-      const context = el("span.shell-context", opts.context || "");
-      bar.append(
-        el("div.sm-toolbar", {}, back, ...(opts.actions || [])),
-        el("div.sm-channel-heading", {}, el("h2.shell-title", opts.title), context),
-        counts,
-      );
-      if (opts.search) bar.appendChild(searchField(opts.search));
-      return;
-    }
     if (back) bar.appendChild(el("div.shell-back-row", {}, back));
     if (opts.title) bar.appendChild(el("h2.shell-title", opts.title));
     if (logView) bar.appendChild(counts);
@@ -343,8 +332,7 @@ export function startAdmin(host, env) {
     if (view === "memory" && !(orgWideView() && urlToState().mem !== "edit")) return;
     if (view === "history" && urlToState().session) return;
     if (view === "onboarding") return void governanceUI.onboarding.load();
-    if (view === "slack" && !urlToState().container) governanceUI.slackActivity.renderSlackMirror(urlToState());
-    if (view === "slack" || (view === "crons" && cronDestinationEditId)) return;
+    if (view === "crons" && cronDestinationEditId) return;
     renderData();
   });
   const settingsUi = startSettings({
@@ -534,13 +522,9 @@ export function startAdmin(host, env) {
     });
   }
   let slackContainers = null;
-  let slackContainersTruncated = false;
   async function loadSlackContainers() {
-    const r = await api("GET", "/api/slack-mirror");
-    if (r.ok) {
-      slackContainers = r.data.containers || [];
-      slackContainersTruncated = !!r.data.hasMore;
-    }
+    const r = await api("GET", "/api/ambient-context");
+    if (r.ok) slackContainers = r.data.containers || [];
     return r;
   }
   function slackContainerLabel(id) {
@@ -621,11 +605,7 @@ export function startAdmin(host, env) {
   governanceUI.slackActivity.configure({
     ...helpers(),
     containers: () => slackContainers,
-    truncated: () => slackContainersTruncated,
     view: () => view,
-    loaded: () => {
-      viewLoadedAt.slack = Date.now();
-    },
   });
   route();
   return {

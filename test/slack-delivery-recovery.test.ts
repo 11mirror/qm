@@ -38,7 +38,6 @@ function harness(opts: { thread?: Array<Record<string, unknown>>; errors?: Recor
     core: core as never,
     flow: { inFlightRuns: new Set<string>() } as never,
     threads: { mark: () => {} } as never,
-    clientForIdentity: () => client,
     defaultClient: client,
   });
   return {
