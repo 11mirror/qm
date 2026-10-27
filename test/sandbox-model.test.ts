@@ -8,6 +8,7 @@ import type { AddressInfo } from "node:net";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
+import type { ServerDeps } from "../src/api/deps.ts";
 import {
   mintCapabilityToken,
   verifyCapabilityToken,
@@ -23,6 +24,19 @@ const routes = {
   "claude-haiku-5-5": "router/claude-haiku-latest",
   "gpt-6-luna": "openai/gpt-6-luna",
 };
+
+const liveRun = {
+  id: "run-1",
+  attempts: 1,
+  sessionId: "dm:U1:t",
+  status: "running",
+  leaseToken: "lease-1",
+  leaseExpiresAt: Date.now() + 3_600_000,
+  request: { actor: { id: "U1" } },
+};
+const runClaims = { runId: "run-1", runAttempt: 1, runLeaseToken: "lease-1", threadRef: "dm:U1:t" };
+const liveRuns = (run: Record<string, unknown> = liveRun) =>
+  ({ get: async (id: string) => (id === run.id ? run : null) }) as unknown as ServerDeps["runs"];
 
 async function listen(server: ReturnType<typeof httpServer>): Promise<string> {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -53,8 +67,10 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
   const config = testConfig({ signingSecret: "ingress-secret".repeat(3) });
   const built = buildApp(config);
   let overBudget = false;
+  const run = { ...liveRun };
   const server = createServer(built.app, {
     ...serverDeps(config, built),
+    runs: liveRuns(run),
     modelGatewayTransport: { url: `${upstreamUrl}/v1`, apiKey: key, apiKeyHeader: "api-key", models: routes },
     budget: {
       check: async () => ({ allowed: !overBudget, spentUsd: 0, limitUsd: 1 }),
@@ -63,7 +79,13 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
   });
   const base = `${await listen(server as unknown as ReturnType<typeof httpServer>)}/v1/sandbox-model`;
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
-  const claims = { actorId: "U1", scopeId: "personal:U1" as const, aud: SANDBOX_MODEL_AUD, exp: Date.now() + 60_000 };
+  const claims = {
+    actorId: "U1",
+    scopeId: "personal:U1" as const,
+    aud: SANDBOX_MODEL_AUD,
+    ...runClaims,
+    exp: Date.now() + 60_000,
+  };
   const token = await mintCapabilityToken(claims, TEST_CAPABILITY_SECRET);
   const openai = (body: unknown, credential = token) =>
     fetch(`${base}/v1/chat/completions`, {
@@ -138,6 +160,12 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
     401,
   );
   assert.equal((await openai(chat, "not-a-token")).status, 401);
+  const anonymous = await fetch(`${base}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(chat),
+  });
+  assert.equal(anonymous.status, 401);
   assert.equal(calls.length, 4);
 
   status = 429;
@@ -154,6 +182,19 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
   overBudget = true;
   assert.equal((await openai(chat)).status, 429);
   overBudget = false;
+  assert.equal(calls.length, 8);
+
+  const staleLease = await mintCapabilityToken({ ...claims, runLeaseToken: "lease-0" }, TEST_CAPABILITY_SECRET);
+  assert.equal((await openai(chat, staleLease)).status, 403);
+  const runless = await mintCapabilityToken(
+    { actorId: "U1", scopeId: "personal:U1", aud: SANDBOX_MODEL_AUD, exp: Date.now() + 60_000 },
+    TEST_CAPABILITY_SECRET,
+  );
+  assert.equal((await openai(chat, runless)).status, 403);
+  run.status = "done";
+  const ended = await openai(chat);
+  assert.equal(ended.status, 403);
+  assert.deepEqual(await ended.json(), { error: { message: "the turn this token was issued for has ended" } });
   assert.equal(calls.length, 8);
 });
 
@@ -184,7 +225,7 @@ test("a sandbox-model token is refused on every other route", async (t) => {
   assert.equal(admin.status, 403);
 });
 
-test("gateway deployments hand the sandbox a gateway URL and turn token, never the gateway key", async () => {
+test("gateway deployments hand the sandbox a gateway URL and turn token, never the gateway key", async (t) => {
   const config = testConfig({
     signingSecret: "ingress-secret".repeat(3),
     apiBaseUrl: "https://core.example.test/",
@@ -213,6 +254,18 @@ test("gateway deployments hand the sandbox a gateway URL and turn token, never t
   assert.equal(claims?.aud, SANDBOX_MODEL_AUD);
   assert.equal(claims?.actorId, "U1");
   assert.equal(claims?.scopeId, "personal:U1");
+  assert.ok(claims?.runId && claims.runLeaseToken);
+  assert.equal(claims?.threadRef, "dm:U1:run");
+  const server = createServer(built.app, serverDeps(config, built));
+  const origin = await listen(server as unknown as ReturnType<typeof httpServer>);
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const afterTurn = await fetch(`${origin}/v1/sandbox-model/v1/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${env.MODEL_GATEWAY_TOKEN}` },
+    body: JSON.stringify({ model: "gpt-6-luna", messages: [] }),
+  });
+  assert.equal(afterTurn.status, 403);
+  assert.deepEqual(await afterTurn.json(), { error: { message: "the turn this token was issued for has ended" } });
   assert.match((await turn("!sysprompt", "prompt")).reply ?? "", /MODEL_GATEWAY_TOKEN/);
 });
 
@@ -249,12 +302,13 @@ test("only model API routes reach the gateway; admin and traversal paths get 404
   const built = buildApp(config);
   const server = createServer(built.app, {
     ...serverDeps(config, built),
+    runs: liveRuns(),
     modelGatewayTransport: { url: upstreamUrl, apiKey: key, apiKeyHeader: "api-key", models: routes },
   });
   const origin = await listen(server as unknown as ReturnType<typeof httpServer>);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const token = await mintCapabilityToken(
-    { actorId: "U1", scopeId: "personal:U1", aud: SANDBOX_MODEL_AUD, exp: Date.now() + 60_000 },
+    { actorId: "U1", scopeId: "personal:U1", aud: SANDBOX_MODEL_AUD, ...runClaims, exp: Date.now() + 60_000 },
     TEST_CAPABILITY_SECRET,
   );
   const raw = (method: string, path: string, auth = true) =>
