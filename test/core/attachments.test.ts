@@ -6,8 +6,6 @@ import type { GrantedHandle, IncomingAttachment, TurnRequest } from "../../src/t
 import { storedItem, type NewItem } from "../../src/sessions/items.ts";
 import { createMemoryBlobTransferStore, type BlobTransferStore } from "../../src/persistence/blob-transfer.ts";
 import {
-  MAX_INBOUND_FILES,
-  MAX_SHARED_FILES_LISTED,
   environmentNote,
   inboundIssueList,
   inboundIssuesNote,
@@ -71,13 +69,10 @@ test("inboundManifest lists files under ./inbox/", () => {
 test("inboundIssueList is empty when nothing failed, and names each problem otherwise", () => {
   assert.deepEqual(inboundIssueList({}), []);
   const issues = inboundIssueList({
-    tooMany: ["x.png", "y.png"],
     unavailable: ["z.pdf"],
     surfaceNotes: ['I couldn\'t read "big.zip" — check my file-access permission'],
   });
   const joined = issues.join(" | ");
-  assert.match(joined, /x\.png, y\.png/);
-  assert.match(joined, /too many files/);
   assert.match(joined, /z\.pdf/);
   assert.match(joined, /no longer available/);
   assert.match(joined, /big\.zip/);
@@ -124,8 +119,8 @@ test("sharedManifest lists shared/<name> handles, flags writable, dedups, and re
   assert.equal(sharedManifest([]), "");
 });
 
-test("sharedManifest caps the listing at MAX_SHARED_FILES_LISTED with a '…and N more' tail", () => {
-  const total = MAX_SHARED_FILES_LISTED + 7;
+test("sharedManifest lists every shared file, sorted, however many there are", () => {
+  const total = 600;
   const handles: GrantedHandle[] = Array.from({ length: total }, (_, i) => ({
     handlePath: `shared/file-${i}.txt`,
     ownerScopeId: "personal:U2",
@@ -133,27 +128,15 @@ test("sharedManifest caps the listing at MAX_SHARED_FILES_LISTED with a '…and 
     permission: "read" as const,
   }));
   const m = sharedManifest(handles);
-  assert.equal((m.match(/^- shared\//gm) ?? []).length, MAX_SHARED_FILES_LISTED, "only the cap is listed");
-  assert.match(m, /…and 7 more \(read shared\/<name> to fetch\)/);
+  assert.equal((m.match(/^- shared\//gm) ?? []).length, total);
+  assert.doesNotMatch(m, /…and \d+ more/);
   assert.match(m, new RegExp(`^${total} files shared with you`));
   const sortedPaths = handles.map((h) => h.handlePath).sort();
   assert.deepEqual(
     m.split("\n").filter((line) => line.startsWith("- ")),
-    sortedPaths.slice(0, MAX_SHARED_FILES_LISTED).map((path) => `- ${path}`),
+    sortedPaths.map((path) => `- ${path}`),
   );
   assert.equal(sharedManifest(handles.toReversed()), m);
-});
-
-test("sharedManifest at exactly the cap lists every file with no '…and N more' tail", () => {
-  const handles: GrantedHandle[] = Array.from({ length: MAX_SHARED_FILES_LISTED }, (_, i) => ({
-    handlePath: `shared/f${i}.txt`,
-    ownerScopeId: "personal:U2",
-    fileId: i.toString(16).padStart(32, "0"),
-    permission: "read" as const,
-  }));
-  const m = sharedManifest(handles);
-  assert.equal((m.match(/^- shared\//gm) ?? []).length, MAX_SHARED_FILES_LISTED);
-  assert.doesNotMatch(m, /…and \d+ more/);
 });
 
 test("sharedFilesSystemSection wraps the listing in a ## heading, '' when nothing is shared", () => {
@@ -332,15 +315,13 @@ test("materializeInbound skips an attachment whose blob is missing (expired/neve
   assert.deepEqual(unavailable, ["ghost.bin"]);
 });
 
-test("materializeInbound caps inbound file count (core-side defense in depth)", async () => {
+test("materializeInbound takes every file in the message", async () => {
   const { sandbox, handle } = fakeSandbox();
   const transfer = createMemoryBlobTransferStore();
-  const attachments = await Promise.all(
-    Array.from({ length: MAX_INBOUND_FILES + 3 }, (_, i) => inFile(transfer, `f${i}.txt`, "x")),
-  );
-  const { metas, tooMany } = await materializeInbound(sandbox, handle, attachments, transfer);
-  assert.equal(metas.length, MAX_INBOUND_FILES);
-  assert.equal(tooMany.length, 3);
+  const attachments = await Promise.all(Array.from({ length: 40 }, (_, i) => inFile(transfer, `f${i}.txt`, "x")));
+  const { metas, unavailable } = await materializeInbound(sandbox, handle, attachments, transfer);
+  assert.equal(metas.length, 40);
+  assert.deepEqual(unavailable, []);
 });
 
 test("materializeInbound feeds supported images as vision, but not svg", async () => {

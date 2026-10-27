@@ -1,7 +1,6 @@
 // Schema helpers, result capping and list/cron formatting shared by the agent tool families.
 
 import { Type } from "typebox";
-import { MAX_OUTBOUND_FILES } from "../../core/attachments.ts";
 import type { PublishAudienceDescriptor } from "../../tools/primitives.ts";
 import type { CronFireLogEntry } from "../../types.ts";
 import { headTailSlice } from "../../util/text.ts";
@@ -227,7 +226,7 @@ export const outboundFilesSchema = Type.Array(
     Type.String({ minLength: 1 }),
     Type.Object({ file_id: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
   ]),
-  { maxItems: MAX_OUTBOUND_FILES, description: 'Workspace paths or {file_id: "stored Files ID"} objects.' },
+  { description: 'Workspace paths or {file_id: "stored Files ID"} objects.' },
 );
 export const outboundSandboxSchema = Type.Optional(
   Type.String({
