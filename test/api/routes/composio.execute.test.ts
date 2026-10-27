@@ -3,8 +3,7 @@ import assert from "node:assert/strict";
 import { composioUserId } from "../../../src/api/routes/composio.ts";
 import { scopeId } from "../../../src/types.ts";
 import { tenant } from "../../../src/tenant.ts";
-import { testAdvisoryLock } from "../../support/test-database.ts";
-import { testMap } from "../../support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "../../support/test-database.ts";
 import { fakeRuns, fixture, privateCap } from "../../support/composio-routes.ts";
 import { createSlackAccounts } from "../../../src/connectors/composio-links.ts";
 import { testQuery } from "../../support/test-database.ts";
@@ -284,7 +283,7 @@ test("linked aliases can execute their existing accounts until the identity link
   const { installPrincipalLinks } = await import("../../../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
+  const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
   installPrincipalLinks(links);
   const aliasId = "oidc:alice";
   const aliasUserId = composioUserId(tenant().orgId, aliasId);
@@ -320,7 +319,7 @@ test("linked account discovery and Slack status preserve historical aliases with
   const { installPrincipalLinks } = await import("../../../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
+  const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
   f.deps.principalLinks = links;
   f.deps.slackAccounts = createSlackAccounts(f.url);
   installPrincipalLinks(links);
@@ -376,7 +375,7 @@ test("unlinking an account owner during tool lookup prevents provider execution"
   const { installPrincipalLinks } = await import("../../../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
+  const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
   installPrincipalLinks(links);
   const aliasId = "oidc:alice";
   try {
@@ -403,7 +402,7 @@ test("consent and browser verification use the canonical identity when signed in
   const { installPrincipalLinks } = await import("../../../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
+  const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
   installPrincipalLinks(links);
   const aliasId = "oidc:alice";
   const userId = composioUserId(tenant().orgId, "alice");
@@ -433,7 +432,7 @@ test("linked identities retain provider accounts and Slack status until unlinked
   const { installPrincipalLinks } = await import("../../../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  f.deps.principalLinks = createPrincipalLinkService(testMap(), testAdvisoryLock());
+  f.deps.principalLinks = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
   f.deps.slackAccounts = createSlackAccounts(f.url);
   installPrincipalLinks(f.deps.principalLinks);
   const canonical = composioUserId(tenant().orgId, "alice");

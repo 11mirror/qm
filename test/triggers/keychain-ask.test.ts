@@ -18,7 +18,7 @@ import { createIdempotencyStore } from "../../src/idempotency/idempotency-store.
 import { createIdentityService } from "../../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../../src/types.ts";
 import { materializeGrant } from "../support/materialize-grant.ts";
-import { testAdvisoryLock, testMap, testDatabaseUrl } from "../support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";
 import { KEY, kcAt, GH } from "../support/keychain-ask-app.ts";
 
 test("createAsk: owner derived from the credential, purpose frozen, dedup per (credential, scope, task)", async () => {
@@ -356,7 +356,7 @@ test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate cl
     {
       outbound: recordingOutbound(),
       idempotency: createIdempotencyStore(testDatabaseUrl()),
-      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      identity: createIdentityService(testDatabaseUrl()),
       run: async (req) => ((seen = req), { status: "ok" } as TurnResult),
     },
     {
@@ -381,7 +381,7 @@ test("runTrigger: silent markers never silence a notification-shaped fire (keych
     {
       outbound,
       idempotency: createIdempotencyStore(testDatabaseUrl()),
-      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      identity: createIdentityService(testDatabaseUrl()),
       run: async () => ({ status: "ok", reply: "The keychain ask was approved." }) as TurnResult,
     },
     {
@@ -417,7 +417,7 @@ test("fireAskResolution: a turn that fires but doesn't land falls back to a plai
     return {
       outbound,
       idempotency: createIdempotencyStore(testDatabaseUrl()),
-      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      identity: createIdentityService(testDatabaseUrl()),
       run,
       getAsk: async () => current,
     };

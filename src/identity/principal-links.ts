@@ -1,5 +1,6 @@
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
+import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
 
 export interface PrincipalLink {
@@ -36,11 +37,28 @@ const MAX_ID_LENGTH = 255;
 const MAX_EVIDENCE_LENGTH = 500;
 const REFRESH_TTL_MS = 10_000;
 
+const PRINCIPAL_LINKS: TableSpec = {
+  table: "principal_links",
+  key: "id",
+  columns: {
+    principalId: { type: "text", required: true },
+    canonicalId: { type: "text", required: true },
+    evidence: { type: "text", required: true },
+    linkedBy: { type: "text", required: true },
+    createdAt: { type: "bigint", required: true },
+  },
+};
+
+export const PRINCIPAL_LINKS_MIGRATION = mapToTableMigration("identity/principal-links/0001-typed", PRINCIPAL_LINKS);
+
+const codec = tableCodec<PrincipalLink>(PRINCIPAL_LINKS);
+
 function validId(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.trim().length <= MAX_ID_LENGTH;
 }
 
-export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, lock: AdvisoryLock): PrincipalLinkService {
+export function createPrincipalLinkService(databaseUrl: string, lock: AdvisoryLock): PrincipalLinkService {
+  const { q } = createPgPool(databaseUrl, [PRINCIPAL_LINKS_MIGRATION]);
   const byAlias = new Map<string, PrincipalLink>();
   const byCanonical = new Map<string, PrincipalLink[]>();
   let refreshedAt = 0;
@@ -62,9 +80,8 @@ export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, loc
     if (refreshP && !force) return refreshP;
     while (refreshP) await refreshP;
     if (!force && Date.now() - refreshedAt < REFRESH_TTL_MS) return Promise.resolve();
-    refreshP = store
-      .all()
-      .then(index)
+    refreshP = q(`SELECT ${codec.columns} FROM principal_links ORDER BY id`)
+      .then((rows) => index(codec.rows(rows)))
       .then(() => {
         refreshedAt = Date.now();
       })
@@ -120,13 +137,20 @@ export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, loc
             400,
             `${principalId} is the canonical principal of other links; unlink those first`,
           );
-        const stored = await store.putIfAbsent(aliasKey, {
+        const link: PrincipalLink = {
           principalId,
           canonicalId,
           evidence,
           linkedBy: input.linkedBy,
           createdAt: Date.now(),
-        });
+        };
+        const [stored] = codec.rows(
+          await q(
+            `INSERT INTO principal_links (${codec.columns}) VALUES (${codec.placeholders})
+             ON CONFLICT (${tenantCols("id")}) DO UPDATE SET id = principal_links.id RETURNING ${codec.columns}`,
+            codec.values(aliasKey, link),
+          ),
+        ) as [PrincipalLink];
         await refresh(true);
         if (foldPrincipalId(stored.canonicalId) !== canonicalKey)
           throw new PrincipalLinkError(409, `${principalId} is already linked to ${stored.canonicalId}`);
@@ -135,7 +159,11 @@ export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, loc
     },
     async unlink(principalId) {
       return lock.withLock("principal-links", async () => {
-        const row = await store.take(foldPrincipalId(principalId));
+        const [row = null] = codec.rows(
+          await q(`DELETE FROM principal_links WHERE id = $1 RETURNING ${codec.columns}`, [
+            foldPrincipalId(principalId),
+          ]),
+        );
         await refresh(true);
         return row;
       });

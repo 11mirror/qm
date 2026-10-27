@@ -9,12 +9,12 @@ import { createCronStore } from "../../src/cron/cron-store.ts";
 import type { Sandbox } from "../../src/sandbox/sandbox.ts";
 import { createSkillStore } from "../../src/skills/skill-store.ts";
 import { scopeId, type TurnRequest } from "../../src/types.ts";
-import { testDatabaseUrl, testAdvisoryLock, testMap } from "../support/test-database.ts";
+import { testDatabaseUrl, testAdvisoryLock } from "../support/test-database.ts";
 import { createPostgresCronFireStore } from "../../src/cron/fire-store.ts";
 import { actor, fakeSandbox, readSandbox, buildOrchestrator, dm, slackDm } from "../support/system-prompt.ts";
 
 test("Open uses the exact skill snapshot that passed screening despite an in-flight source update", async () => {
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   const owner = scopeId("personal", actor.id);
   const skill = await skills.create({
     scopeId: owner,

@@ -15,7 +15,7 @@ import { type FileArtifactStore } from "../../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../../src/files/durable-byte-store.ts";
 import type { ManagesArtifactHome } from "../../src/resolution/scope-membership.ts";
 import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-artifact-store.ts";
-import { testDatabaseUrl, testAdvisoryLock, testMap } from "../support/test-database.ts";
+import { testDatabaseUrl, testAdvisoryLock } from "../support/test-database.ts";
 import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts";
 
 const ORG = "default-org";
@@ -638,7 +638,7 @@ test("splitToScope classifies a real scope id vs a name (incl. a colon name)", (
 });
 
 test("SkillStore.move changes the home scope in place; org move is refused (use promote)", async () => {
-  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   const created = await store.create({
     scopeId: scopeId("personal", "U1"),
     manifest: { name: "tidy", description: "d", requiredCapabilities: [], body: "b" },
@@ -653,7 +653,7 @@ test("SkillStore.move changes the home scope in place; org move is refused (use 
 });
 
 test("SkillStore.promote supersedes an existing same-name org record instead of duplicating it", async () => {
-  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   const src = await store.create({
     scopeId: scopeId("personal", "U1"),
     manifest: { name: "tidy", description: "d", requiredCapabilities: [], body: "b" },
@@ -665,6 +665,8 @@ test("SkillStore.promote supersedes an existing same-name org record instead of 
   const second = await store.promote(src.id, scopeId("org", ORG));
   assert.equal(second.id, first.id, "retry re-uses the org record");
   assert.equal(second.version, first.version + 1);
-  const orgRecords = (await store.list()).filter((x) => x.scopeId === scopeId("org", ORG) && x.status === "published");
+  const orgRecords = (await store.listInScopes([scopeId("org", ORG)])).filter(
+    (x) => x.status === "published" && x.manifest.name === "tidy",
+  );
   assert.equal(orgRecords.length, 1);
 });

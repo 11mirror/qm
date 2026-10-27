@@ -5,7 +5,7 @@ import { createCronStore } from "../../src/cron/cron-store.ts";
 import type { Sandbox } from "../../src/sandbox/sandbox.ts";
 import { createSkillStore, type SkillStore } from "../../src/skills/skill-store.ts";
 import { scopeId, type Conversation, type Principal, type ScopeId } from "../../src/types.ts";
-import { testDatabaseUrl, testAdvisoryLock, testMap } from "../support/test-database.ts";
+import { testDatabaseUrl, testAdvisoryLock } from "../support/test-database.ts";
 import { createPostgresCronFireStore } from "../../src/cron/fire-store.ts";
 import { ORG, actor, fakeSandbox, readSandbox, buildOrchestrator, dm, slackDm } from "../support/system-prompt.ts";
 
@@ -162,7 +162,7 @@ test("Open carries only the live actor's personal reads into a shared turn and a
 
 test("Open advertises the source and audits a carried skill read without granting it to the room", async () => {
   const personal = scopeId("personal", actor.id);
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   const skill = await skills.create({
     scopeId: personal,
     createdBy: actor.id,

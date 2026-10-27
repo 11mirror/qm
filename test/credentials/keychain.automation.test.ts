@@ -14,7 +14,7 @@ import { installGlobalFakeSprites, type FakeSprites } from "../support/fake-spri
 import { materializeGrant } from "../support/materialize-grant.ts";
 import { recordingOutbound } from "../support/recording-outbound.ts";
 import { testConfig } from "../support/test-config.ts";
-import { testAdvisoryLock, testMap, testDatabaseUrl } from "../support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";
 import { automationOrigin } from "../support/turn-origin.ts";
 import { failedTurn } from "../support/orchestrator-app.ts";
 import { buildTestApp } from "../support/test-app.ts";
@@ -136,7 +136,7 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
   const deps: AskResolutionDeps = {
     outbound,
     idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     currentScopeMembers: async () => state.members,
     getCron: (id) => crons.get(id),
     getGrant: (id) => k.getGrant(id),

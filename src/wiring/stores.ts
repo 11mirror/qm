@@ -2,15 +2,14 @@ import type { Head } from "./late.ts";
 import { createPostgresMapFactory, type DurableMap } from "../persistence/durable-map.ts";
 import { registerAbsurdSchema } from "../turns/absurd-schema.ts";
 import { type AdvisoryLock, createPostgresAdvisoryLock } from "../persistence/advisory-lock.ts";
-import { createPrincipalLinkService, type PrincipalLink } from "../identity/principal-links.ts";
+import { createPrincipalLinkService } from "../identity/principal-links.ts";
 import { installPrincipalLinks } from "../directory/person.ts";
-import { createIdentityService, type DeactivationRecord } from "../identity/identity-service.ts";
-import type { ExternalMember } from "../identity/external-members.ts";
+import { createIdentityService } from "../identity/identity-service.ts";
 import { type LeaderLease, createPostgresLeaderLease } from "../persistence/leader-lease.ts";
 import { createConfigStore } from "../resolution/config-store.ts";
-import { type SkillStore, createSkillStore, type Skill } from "../skills/skill-store.ts";
-import { createSkillPackStore, type SkillPack } from "../skills/skill-pack-store.ts";
-import { createSkillBundleStore, type SkillBundle } from "../skills/skill-bundle-store.ts";
+import { type SkillStore, createSkillStore } from "../skills/skill-store.ts";
+import { createSkillPackStore } from "../skills/skill-pack-store.ts";
+import { createSkillBundleStore } from "../skills/skill-bundle-store.ts";
 import { createFeatureFlagStore } from "../feature-flags.ts";
 import { createPostgresTeamStore } from "../teams/teams.ts";
 import { scopeId } from "../types.ts";
@@ -43,21 +42,20 @@ export function buildStores(w: Head) {
   const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
     pgArtifactMap.map<T>(table, indexedFields);
   const advisoryLock: AdvisoryLock = createPostgresAdvisoryLock(pgArtifactMap.pool);
-  const principalLinks = createPrincipalLinkService(artifactMap<PrincipalLink>("principal_links"), advisoryLock);
+  const principalLinks = createPrincipalLinkService(databaseUrl, advisoryLock);
   installPrincipalLinks(principalLinks);
-  const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"), {
+  const identity = createIdentityService(databaseUrl, {
     directorySyncProtected: config.emailAuthPrincipals,
-    externalMembers: artifactMap<ExternalMember>("external_members"),
     principalLinks,
   });
   const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
   const configStore = createConfigStore(config.orgId, { databaseUrl, connectorSecretKey });
   const skills: SkillStore = createSkillStore({
-    backing: artifactMap<Skill>("skills"),
+    databaseUrl,
     advisoryLock,
   });
-  const skillPacks = createSkillPackStore({ backing: artifactMap<SkillPack>("skill_packs") });
-  const skillBundles = createSkillBundleStore({ backing: artifactMap<SkillBundle>("skill_bundles") });
+  const skillPacks = createSkillPackStore({ databaseUrl });
+  const skillBundles = createSkillBundleStore(databaseUrl);
   const featureFlags = createFeatureFlagStore(databaseUrl);
   const teams = createPostgresTeamStore(databaseUrl, featureFlags, scopeId("org", config.orgId));
   const sessions: SessionStore = createPostgresSessionStore(databaseUrl);

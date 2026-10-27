@@ -25,7 +25,6 @@ import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-a
 import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
 import { createPostgresRateLimiter } from "../../src/ratelimit/postgres-rate-limiter.ts";
 import { testConfigStore, testDeployBackings } from "../support/test-database.ts";
-import { testMap } from "../support/test-database.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
 import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
@@ -75,7 +74,7 @@ function buildOrchestrator(
   });
   return createOrchestrator({
     ...singleProcessDeps(),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     resolution: createResolutionService(ORG, config, acl),
     sessions,
     workspace,

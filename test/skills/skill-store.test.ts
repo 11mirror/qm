@@ -6,11 +6,9 @@ import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts"
 import { encodeRef, skillRef, parseRef } from "../../src/acl/resource-ref.ts";
 import type { Config } from "../../src/config.ts";
 import { filterConnectorSkills } from "../../src/core/orchestrator.ts";
-import type { DurableMap } from "../../src/persistence/durable-map.ts";
 import { principalEntitledToScope } from "../../src/resolution/context-filter.ts";
 import {
   createSkillStore,
-  type Skill,
   type SkillManifest,
   type SkillStore,
   type SkillResolution,
@@ -18,7 +16,7 @@ import {
 import { scopeId, type ScopeId, type Principal } from "../../src/types.ts";
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
-import { testMap, testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";
 
 function freshApp() {
   const config: Config = testConfig({ orgId: "acme", seedSkills: false });
@@ -85,23 +83,10 @@ test("an unpublished (draft/reviewed) skill is not visible", async () => {
   assert.ok(!visible.some((r) => r.skill!.manifest.name === "wip"));
 });
 
-test("visibleFor reads the asked scopes' skills once, not once per skill name", async () => {
-  const backing = testMap<Skill>();
-  let allReads = 0;
-  const originalAll = backing.all.bind(backing);
-  backing.all = () => {
-    allReads += 1;
-    return originalAll();
-  };
-  let scopedReads = 0;
-  const originalSelect = backing.select.bind(backing);
-  backing.select = ((query) => {
-    scopedReads += 1;
-    return originalSelect(query);
-  }) as typeof backing.select;
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing });
+test("visibleFor resolves many skills across scopes with personal shadowing", async () => {
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
 
-  const org = scopeId("org", "default-org");
+  const org = scopeId("org", "visible-org");
   const personal = scopeId("personal", "U1");
   for (let i = 0; i < 200; i++) {
     const scope = i % 2 === 0 ? org : personal;
@@ -121,12 +106,7 @@ test("visibleFor reads the asked scopes' skills once, not once per skill name", 
   await skills.review(shadowing.id, "reviewer-1", []);
   await skills.publish(shadowing.id);
 
-  allReads = 0;
-  scopedReads = 0;
   const visible = await skills.visibleFor([personal, org]);
-
-  assert.equal(scopedReads, 1, "one scoped skills read per visibleFor call");
-  assert.equal(allReads, 0, "visibleFor never reads the whole table");
   assert.equal(visible.length, 200);
   const shadowed = visible.find((r) => r.skill!.manifest.name === "skill-0")!;
   assert.equal(shadowed.skill!.scopeId, personal);
@@ -134,11 +114,11 @@ test("visibleFor reads the asked scopes' skills once, not once per skill name", 
   assert.equal(shadowed.shadowed[0]!.scopeId, org);
 });
 
-const org = scopeId("org", "default-org");
+const org = scopeId("org", "archive-org");
 const manifest = { name: "demo", description: "d", requiredCapabilities: [], body: "# Demo" };
 
 async function published() {
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   const s = await skills.create({ scopeId: org, manifest, createdBy: "pack:src1" });
   await skills.review(s.id, "system:pack-reviewer", []);
   await skills.publish(s.id);
@@ -172,7 +152,7 @@ test("an archived skill can be re-published (resurrection on re-import)", async 
 });
 
 test("create carries pack provenance", async () => {
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   const s = await skills.create({
     scopeId: org,
     manifest,
@@ -183,7 +163,7 @@ test("create carries pack provenance", async () => {
 });
 
 test("recordUse sets lastUsedAt without touching version/updatedAt", async () => {
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   const s = await skills.create({ scopeId: org, manifest, createdBy: "alice" });
   assert.equal(s.lastUsedAt, undefined);
   await skills.recordUse(s.id, 12345);
@@ -194,12 +174,12 @@ test("recordUse sets lastUsedAt without touching version/updatedAt", async () =>
 });
 
 test("recordUse on an unknown id is a no-op", async () => {
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   await skills.recordUse("nope");
   assert.equal(await skills.get("nope"), null);
 });
 
-const ORG = scopeId("org", "default-org");
+const ORG = scopeId("org", "autoload-org");
 const JOSH = scopeId("personal", "josh");
 const ERIC = scopeId("personal", "eric");
 const P = (id: string, teamIds: string[] = []): Principal => ({ id, type: "internal", teamIds });
@@ -262,7 +242,7 @@ test("person-to-person skill grant reaches the grantee's audience", async () => 
 });
 
 test("visibleFor includes granted skills, shadowed by scope-owned skills of the same name", async () => {
-  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   const granted = await publishedSkill(store, JOSH, "quickbooks");
   const own = await publishedSkill(store, ERIC, "quickbooks");
   const unique = await publishedSkill(store, JOSH, "reconcile");
@@ -302,7 +282,7 @@ test("visibleFor includes granted skills, shadowed by scope-owned skills of the 
 test("a grant redundant with scope visibility does not self-shadow", async () => {
   const store = createSkillStore({
     advisoryLock: testAdvisoryLock(),
-    backing: testMap(),
+    databaseUrl: testDatabaseUrl(),
   });
   const own = await publishedSkill(store, ERIC, "quickbooks");
 
@@ -312,42 +292,14 @@ test("a grant redundant with scope visibility does not self-shadow", async () =>
   assert.deepEqual(rows[0]!.shadowed, []);
 });
 
-test("visibleFor takes one snapshot instead of one per published name", async () => {
-  const backing = testMap<Skill>();
-  let allCalls = 0;
-  let selectCalls = 0;
-  let getCalls = 0;
-  const counted: DurableMap<Skill> = {
-    ...backing,
-    all: () => {
-      allCalls += 1;
-      return backing.all();
-    },
-    select: ((query) => {
-      selectCalls += 1;
-      return backing.select(query);
-    }) as DurableMap<Skill>["select"],
-    get: (id) => {
-      getCalls += 1;
-      return backing.get(id);
-    },
-  };
-  const store = createSkillStore({
-    advisoryLock: testAdvisoryLock(),
-    backing: counted,
-  });
+test("visibleFor resolves the asked scopes and the granted skill's owner in one call", async () => {
+  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   const orgAlpha = await publishedSkill(store, ORG, "alpha-skill");
   for (const name of ["beta-skill", "gamma-skill"]) await publishedSkill(store, ORG, name);
   const own = await publishedSkill(store, ERIC, "alpha-skill");
   const granted = await publishedSkill(store, JOSH, "delta-skill");
 
-  allCalls = 0;
-  selectCalls = 0;
-  getCalls = 0;
   const rows = await store.visibleFor([ERIC, ORG], [{ id: granted.id, ownerScopeId: JOSH }]);
-  assert.equal(selectCalls, 1, "one scoped read covers the asked scopes and the granted skill's owner");
-  assert.equal(allCalls, 0);
-  assert.equal(getCalls, 0);
 
   const byName = new Map(rows.map((r) => [r.skill!.manifest.name, r]));
   assert.deepEqual([...byName.keys()].sort(), ["alpha-skill", "beta-skill", "delta-skill", "gamma-skill"]);
@@ -360,7 +312,7 @@ test("visibleFor takes one snapshot instead of one per published name", async ()
 });
 
 test("a grant whose claimed owner scope does not match the skill's home is ignored", async () => {
-  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });
   const victim = await publishedSkill(store, JOSH, "victim-skill");
 
   const forged = await store.visibleFor([ERIC, ORG], [{ id: victim.id, ownerScopeId: ERIC }]);

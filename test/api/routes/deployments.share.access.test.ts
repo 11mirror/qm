@@ -9,7 +9,7 @@ import { type ApiCtx, respond } from "../../../src/api/routes/route.ts";
 import { scopeId } from "../../../src/types.ts";
 import type { FeatureFlagStore } from "../../../src/feature-flags.ts";
 import { createPostgresDirectoryStore } from "../../../src/directory/postgres-directory-store.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap } from "../../support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "../../support/test-database.ts";
 import {
   externalSharingOn,
   makeDeploy,
@@ -63,7 +63,7 @@ test("without an apps domain, a public link is refused on the share route and th
   const app = createApp({
     advisoryLock: testAdvisoryLock(),
     deploy,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
   } as unknown as Parameters<typeof createApp>[0]);
   await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
@@ -88,7 +88,7 @@ test("with external app sharing off, public links and outside emails are refused
   const app = createApp({
     advisoryLock: testAdvisoryLock(),
     deploy,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
   } as unknown as Parameters<typeof createApp>[0]);
   const off = { enabled: async () => false } as unknown as FeatureFlagStore;
   await app.deploy({
@@ -198,7 +198,7 @@ test("directory email recipients retain manage access", async () => {
 
 test("exact email read grants admit app-only login and guest reach without membership or source access", async () => {
   const { deploy, acl } = makeDeploy();
-  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const identity = createIdentityService(testDatabaseUrl());
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
   const app = createApp({
     advisoryLock: testAdvisoryLock(),
@@ -283,7 +283,7 @@ test("uniform app share accepts exact emails and enforces view-only outside the 
     advisoryLock: testAdvisoryLock(),
     deploy,
     acl,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
     auditLog: { record() {} },
   } as unknown as Parameters<typeof createApp>[0]);
@@ -314,7 +314,7 @@ test("new email grants send an app-specific invitation once; re-adds and revocat
     advisoryLock: testAdvisoryLock(),
     deploy,
     acl,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     deployAppsDomain: "apps.example.com",
     inviteMailer: {
       async send(message: (typeof sent)[number]) {
@@ -369,7 +369,7 @@ test("failed invitation delivery leaves the grant and reports the failure and ma
       advisoryLock: testAdvisoryLock(),
       deploy,
       acl,
-      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      identity: createIdentityService(testDatabaseUrl()),
       deployAppsDomain: "apps.example.com",
       inviteMailer: mailer,
     } as unknown as Parameters<typeof createApp>[0]);
@@ -398,7 +398,7 @@ test("uniform app share uses the same invitation sender", async () => {
     advisoryLock: testAdvisoryLock(),
     deploy,
     acl,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
     deployAppsDomain: "apps.example.com",
     inviteMailer: {

@@ -17,7 +17,7 @@ import type { Sandbox, SandboxHandle } from "../../src/sandbox/sandbox.ts";
 import { scopeId } from "../../src/types.ts";
 import type { FeatureFlagStore } from "../../src/feature-flags.ts";
 import { singleProcessDeps } from "./single-process.ts";
-import { testAdvisoryLock, testDatabaseUrl, testDeployBackings, testMap } from "./test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl, testDeployBackings } from "./test-database.ts";
 import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts";
 
 export const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
@@ -55,7 +55,7 @@ export function apiHarness(directory?: Dir) {
   const app = createApp({
     advisoryLock: testAdvisoryLock(),
     deploy,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     ...(directory ? { directory } : {}),
   } as unknown as Parameters<typeof createApp>[0]);
   return { app, deploy, acl };

@@ -19,7 +19,7 @@ import { createFeatureFlagStore } from "../../src/feature-flags.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
 import { createPostgresDirectoryStore } from "../../src/directory/postgres-directory-store.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testMap, testDeployBackings } from "../support/test-database.ts";
+import { testDatabaseUrl, testDeployBackings } from "../support/test-database.ts";
 import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts";
 import { httpGet } from "../support/http-get.ts";
 
@@ -52,7 +52,7 @@ function appServingUpstream(upstreamPort: number) {
     acl,
     directory,
     sessions: createPostgresSessionStore(testDatabaseUrl()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     orgId: "acme",
   } as unknown as Parameters<typeof createApp>[0]);
   return { app, directory, acl };

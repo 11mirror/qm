@@ -30,7 +30,7 @@ import type { Conversation, Principal } from "../../src/types.ts";
 import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
 import { createMockHarness } from "../support/mock-harness.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
-import { testDatabaseUrl, testConfigStore, testDeployBackings, testMap } from "../support/test-database.ts";
+import { testDatabaseUrl, testConfigStore, testDeployBackings } from "../support/test-database.ts";
 
 function backends(): Array<{ name: string; make: () => ProcessRegistry }> {
   return [{ name: "memory", make: () => createPostgresProcessRegistry(testDatabaseUrl()) }];
@@ -344,7 +344,7 @@ function buildOrchestrator(processes: ProcessRegistry, sandbox: Sandbox) {
   });
   return createOrchestrator({
     ...singleProcessDeps(),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     resolution: createResolutionService(ORG, config, acl),
     sessions: createPostgresSessionStore(testDatabaseUrl()),
     workspace,

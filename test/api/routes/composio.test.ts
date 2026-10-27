@@ -5,7 +5,6 @@ import { tenant } from "../../../src/tenant.ts";
 import { createPostgresDirectoryStore } from "../../../src/directory/postgres-directory-store.ts";
 import { testAdvisoryLock } from "../../support/test-database.ts";
 import { testDatabaseUrl } from "../../support/test-database.ts";
-import { testMap } from "../../support/test-database.ts";
 import { fixture, privateCap } from "../../support/composio-routes.ts";
 import { createSlackAccounts } from "../../../src/connectors/composio-links.ts";
 import { testQuery } from "../../support/test-database.ts";
@@ -316,7 +315,7 @@ test("Slack connection links verified workspace identity to the web owner and pe
   await f.own();
   const { createPrincipalLinkService } = await import("../../../src/identity/principal-links.ts");
   const { installPrincipalLinks, canonicalPerson } = await import("../../../src/directory/person.ts");
-  f.deps.principalLinks = createPrincipalLinkService(testMap(), testAdvisoryLock());
+  f.deps.principalLinks = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
   installPrincipalLinks(f.deps.principalLinks);
   f.deps.slackAccounts = createSlackAccounts(f.url);
   f.deps.signingSecret = "qa-slack-link-secret";
@@ -374,7 +373,7 @@ test("Slack link rejects changed browser accounts, wrong owner, bots, other work
     await f.own();
     await f.own("bob");
     f.deps.signingSecret = "slack-test";
-    f.deps.principalLinks = createPrincipalLinkService(testMap(), testAdvisoryLock());
+    f.deps.principalLinks = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
     f.deps.slackAccounts = createSlackAccounts(f.url);
     f.deps.directory = createPostgresDirectoryStore(testDatabaseUrl());
     await f.deps.directory.replace([

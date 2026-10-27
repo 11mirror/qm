@@ -23,7 +23,7 @@ import { createIdentityService } from "../../src/identity/identity-service.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 import { scopeId } from "../../src/types.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
-import { testMap, testDeployBackings, testDatabaseUrl } from "../support/test-database.ts";
+import { testDeployBackings, testDatabaseUrl } from "../support/test-database.ts";
 import { pushStatus } from "../support/deploy-git.ts";
 
 const execFileP = promisify(execFile);
@@ -137,7 +137,7 @@ function gitRwFixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
     acl,
     deployDir: mkdtempSync(join(tmpdir(), "git-rw-deploy-")),
   });
-  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const identity = createIdentityService(testDatabaseUrl());
   const app = createApp({
     deploy,
     acl,

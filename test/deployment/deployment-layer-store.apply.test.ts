@@ -14,7 +14,7 @@ import { computeBundleHash, createSkillBundleStore } from "../../src/skills/skil
 import { singleProcessDeps } from "../support/single-process.ts";
 import { readLayer } from "../support/deployment-layer.ts";
 import { createPostgresAuditLog } from "../../src/admin/postgres-audit-log.ts";
-import { testDatabaseUrl, testMap, testAdvisoryLock } from "../support/test-database.ts";
+import { testDatabaseUrl, testAdvisoryLock } from "../support/test-database.ts";
 import { tool, skill } from "../support/deployment-layer.ts";
 
 test("concurrent writes serialize into monotonic durable versions", async () => {
@@ -24,7 +24,7 @@ test("concurrent writes serialize into monotonic durable versions", async () => 
     ...singleProcessDeps(),
     databaseUrl,
     runtime,
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
     scopeId: scopeId("org", "default-org"),
   });
   await store.put({ contract: 1, tools: [tool("v1")], skills: [] }, "one");
@@ -69,7 +69,7 @@ test("two stores serialize the durable head and shared skill projection under on
   const databaseUrl = testDatabaseUrl();
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
-    backing: testMap(),
+    databaseUrl: testDatabaseUrl(),
   });
   const org = scopeId("org", "default-org");
   const firstRuntime = emptyDeploymentLayer();
@@ -113,7 +113,7 @@ test("a failed multi-skill apply rolls every deployment-owned skill back before 
   const databaseUrl = testDatabaseUrl();
   const baseSkills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
-    backing: testMap(),
+    databaseUrl: testDatabaseUrl(),
   });
   let failB = false;
   const skills = {
@@ -176,7 +176,7 @@ test("applied status detects and repairs deployment-skill drift", async () => {
   const databaseUrl = testDatabaseUrl();
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
-    backing: testMap(),
+    databaseUrl: testDatabaseUrl(),
   });
   const org = scopeId("org", "default-org");
   const store = createDeploymentLayerStore({
@@ -207,7 +207,7 @@ test("a later hydrate reconciles a persisted layer audit exactly once", async ()
     ...singleProcessDeps(),
     databaseUrl,
     runtime: emptyDeploymentLayer(),
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
     scopeId: org,
   }).put({ contract: 1, tools: [tool("persisted before crash")], skills: [] }, "source-cli");
   const audit = createPostgresAuditLog(testDatabaseUrl());
@@ -223,7 +223,7 @@ test("a later hydrate reconciles a persisted layer audit exactly once", async ()
     ...singleProcessDeps(),
     databaseUrl,
     runtime: emptyDeploymentLayer(),
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
     scopeId: org,
     auditPersisted,
   });
@@ -245,7 +245,7 @@ test("a failed audit remains recoverable after a later revision replaces the dur
     ...singleProcessDeps(),
     databaseUrl,
     runtime: emptyDeploymentLayer(),
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
     scopeId: org,
     retryDelaysMs: [],
     auditPersisted: async (record) => {
@@ -271,7 +271,7 @@ test("a foreign same-name skill rejects the PUT before anything persists", async
   const databaseUrl = testDatabaseUrl();
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
-    backing: testMap(),
+    databaseUrl: testDatabaseUrl(),
   });
   const org = scopeId("org", "default-org");
   await skills.create({
@@ -299,7 +299,7 @@ test("deployment skill names cannot contain path separators", async () => {
     ...singleProcessDeps(),
     databaseUrl,
     runtime: emptyDeploymentLayer(),
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
     scopeId: scopeId("org", "default-org"),
   });
   const markdown = (name: string) => `---\nname: ${name}\ndescription: Test.\n---\n${name}\n`;
@@ -322,9 +322,9 @@ test("a deployment skill cannot materialize over an active pack's shared bundle"
   const databaseUrl = testDatabaseUrl();
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
-    backing: testMap(),
+    databaseUrl: testDatabaseUrl(),
   });
-  const skillBundles = createSkillBundleStore({ backing: testMap() });
+  const skillBundles = createSkillBundleStore(testDatabaseUrl());
   const org = scopeId("org", "default-org");
   const packed = await skills.create({
     scopeId: org,
@@ -365,7 +365,7 @@ test("a foreign skill racing after validation reports the revision as persisted 
   const databaseUrl = testDatabaseUrl();
   const baseSkills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
-    backing: testMap(),
+    databaseUrl: testDatabaseUrl(),
   });
   const org = scopeId("org", "default-org");
   const realList = baseSkills.list.bind(baseSkills);
@@ -401,7 +401,7 @@ test("an archived foreign skill does not block the layer; a later live collision
   const databaseUrl = testDatabaseUrl();
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
-    backing: testMap(),
+    databaseUrl: testDatabaseUrl(),
   });
   const org = scopeId("org", "default-org");
   const archived = await skills.create({
@@ -460,7 +460,7 @@ test("a bundle may carry the files a tool declares under install.files, and noth
     ...singleProcessDeps(),
     databaseUrl: testDatabaseUrl(),
     runtime,
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
     scopeId: scopeId("org", "default-org"),
   });
   const descriptor = {

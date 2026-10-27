@@ -5,13 +5,7 @@ import { recoveredRuntime } from "../../src/harness/runtime-recovery.ts";
 import type { CapabilityClaims } from "../../src/auth/capability-token.ts";
 import { type RuntimeChoice, defineHarness } from "../../src/harness/harness.ts";
 import { storedItem } from "../../src/sessions/items.ts";
-import {
-  testConfigStore,
-  testDatabaseUrl,
-  testMap,
-  testDeployBackings,
-  testAdvisoryLock,
-} from "../support/test-database.ts";
+import { testConfigStore, testDatabaseUrl, testDeployBackings, testAdvisoryLock } from "../support/test-database.ts";
 import type { RuntimeControl } from "../../src/harness/runtime-types.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -403,7 +397,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
       { config, baseModelDefault: "claude-opus-5" },
       { authorizesCapabilityScope: async () => true },
     ),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     resolution: createResolutionService("org", config, acl),
     sessions,
     runs,

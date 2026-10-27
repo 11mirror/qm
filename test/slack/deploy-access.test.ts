@@ -22,7 +22,7 @@ import { singleProcessDeps } from "../support/single-process.ts";
 import { createPostgresAuditLog } from "../../src/admin/postgres-audit-log.ts";
 import { createPostgresDirectoryStore } from "../../src/directory/postgres-directory-store.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testDeployBackings, testMap } from "../support/test-database.ts";
+import { testDatabaseUrl, testDeployBackings } from "../support/test-database.ts";
 import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts";
 
 const owner = "alice@example.com";
@@ -43,7 +43,7 @@ async function fixture(t: { after(fn: () => void): void }) {
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const outbound = recordingOutbound();
-  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const identity = createIdentityService(testDatabaseUrl());
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
   await directory.replace(
     [owner, requester, "carol@example.com"].map((principalId) => ({

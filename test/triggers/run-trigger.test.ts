@@ -5,7 +5,7 @@ import { createIdempotencyStore } from "../../src/idempotency/idempotency-store.
 import { createIdentityService } from "../../src/identity/identity-service.ts";
 import { scopeId, type Destination, type TurnRequest, type TurnResult, type ScopeId } from "../../src/types.ts";
 import { SESSION_BUSY_FIRE_TEXT } from "../../src/core/failure-copy.ts";
-import { testMap, testDatabaseUrl } from "../support/test-database.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 import { automationOrigin } from "../support/turn-origin.ts";
 import { describe, it } from "node:test";
 import { createCurrentScopeMembers } from "../../src/resolution/scope-membership.ts";
@@ -38,7 +38,7 @@ function deps(
   return {
     outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     run,
     ...(dir ? { directory: dir } : {}),
   };
@@ -372,7 +372,7 @@ function runTriggerHomeScopeDeps(
   return {
     outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     run,
     directory: dir,
     currentScopeMembers: createCurrentScopeMembers({ directory: dir }),
@@ -500,7 +500,7 @@ describe("runTrigger home-scope gate for group homes", () => {
     const d: TriggerDeps = {
       outbound: recordingOutbound(),
       idempotency: createIdempotencyStore(testDatabaseUrl()),
-      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      identity: createIdentityService(testDatabaseUrl()),
       run: async () => {
         ranTurn = true;
         return { status: "ok", reply: "posted" };

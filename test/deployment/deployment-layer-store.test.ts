@@ -6,10 +6,10 @@ import {
 } from "../../src/deployment/deployment-layer-store.ts";
 import { emptyDeploymentLayer, resolvedDeploymentLayer } from "../../src/deployment/load-layer.ts";
 import { createPgPool } from "../../src/persistence/pg-pool.ts";
-import { createSkillStore, type Skill } from "../../src/skills/skill-store.ts";
+import { createSkillStore } from "../../src/skills/skill-store.ts";
 import { scopeId } from "../../src/types.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
-import { testMap, testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";
 import { tool, skill, readLayer, putLayer } from "../support/deployment-layer.ts";
 
 const publicRuntime = (runtime: ReturnType<typeof resolvedDeploymentLayer>) => {
@@ -21,7 +21,7 @@ test("the durable deployment layer versions by content, hydrates runtime state, 
   const databaseUrl = testDatabaseUrl();
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
-    backing: testMap(),
+    databaseUrl: testDatabaseUrl(),
   });
   const runtime = emptyDeploymentLayer();
   let now = 100;
@@ -74,7 +74,7 @@ test("invalid descriptors never replace the durable current layer", async () => 
     ...singleProcessDeps(),
     databaseUrl,
     runtime: emptyDeploymentLayer(),
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
     scopeId: scopeId("org", "default-org"),
   });
   const first = await store.put({ contract: 1, tools: [tool("acme")], skills: [] }, "test");
@@ -99,22 +99,14 @@ test("invalid descriptors never replace the durable current layer", async () => 
 });
 
 test("a legacy published skill with an unsafe name is quarantined without blocking layer replacement", async () => {
-  const skillBacking = testMap<Skill>();
-  const org = scopeId("org", "default-org");
-  await skillBacking.put("legacy", {
-    id: "legacy",
-    scopeId: org,
-    manifest: { name: "My Skill", description: "legacy", requiredCapabilities: [], body: "legacy" },
-    status: "published",
-    createdBy: "legacy-import",
-    version: 1,
-    grantedCapabilities: [],
-    approvals: [],
-  });
-  const skills = createSkillStore({
-    advisoryLock: testAdvisoryLock(),
-    backing: skillBacking,
-  });
+  const databaseUrl = testDatabaseUrl();
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl });
+  const org = scopeId("org", "legacy-org");
+  await createPgPool(databaseUrl).q(
+    `INSERT INTO skills (id, scope_id, manifest, status, created_by, version, granted_capabilities, approvals)
+     VALUES ('legacy', $1, $2, 'published', 'legacy-import', 1, '{}', '{}')`,
+    [org, { name: "My Skill", description: "legacy", requiredCapabilities: [], body: "legacy" }],
+  );
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
     databaseUrl: testDatabaseUrl(),
@@ -136,7 +128,7 @@ test("a stale baked-in filesystem seed never downgrades or resurrects the durabl
   const databaseUrl = testDatabaseUrl();
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
-    backing: testMap(),
+    databaseUrl: testDatabaseUrl(),
   });
   const org = scopeId("org", "default-org");
   const writer = createDeploymentLayerStore({
@@ -185,7 +177,7 @@ test("with no durable record the filesystem seed applies once, and a later durab
   const databaseUrl = testDatabaseUrl();
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
-    backing: testMap(),
+    databaseUrl: testDatabaseUrl(),
   });
   const org = scopeId("org", "default-org");
   let seeded = 0;
@@ -228,7 +220,7 @@ test("hydrate retries a transient backing read instead of failing boot", async (
   const databaseUrl = testDatabaseUrl();
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
-    backing: testMap(),
+    databaseUrl: testDatabaseUrl(),
   });
   const runtime = emptyDeploymentLayer();
   await createDeploymentLayerStore({
@@ -273,7 +265,7 @@ test("a stored record that no longer applies degrades to the seed instead of fai
   });
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
-    backing: testMap(),
+    databaseUrl: testDatabaseUrl(),
   });
   const runtime = resolvedDeploymentLayer("/fallback", []);
   let seeded = 0;
@@ -305,7 +297,7 @@ test("a failed seed is retried on the next hydrate (seeded only latches on succe
     ...singleProcessDeps(),
     databaseUrl,
     runtime: emptyDeploymentLayer(),
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
     scopeId: scopeId("org", "default-org"),
     seedFallback: async () => {
       attempts++;
@@ -334,7 +326,7 @@ test("a failed fallback seed after an incompatible stored layer fails boot and r
     ...singleProcessDeps(),
     databaseUrl,
     runtime: resolvedDeploymentLayer("/fallback", []),
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
     scopeId: scopeId("org", "default-org"),
     retryDelaysMs: [],
     seedFallback: async () => {
@@ -351,7 +343,7 @@ test("a PUT landing on another instance mid-seed is applied right after seeding 
   const databaseUrl = testDatabaseUrl();
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
-    backing: testMap(),
+    databaseUrl: testDatabaseUrl(),
   });
   const org = scopeId("org", "default-org");
   const writer = createDeploymentLayerStore({
@@ -406,7 +398,7 @@ test("a layer that appears mid-seed but fails to apply leaves the fallback live 
     ...singleProcessDeps(),
     databaseUrl,
     runtime,
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
     scopeId: scopeId("org", "default-org"),
     retryDelaysMs: [],
     seedFallback: async () => {
@@ -431,7 +423,7 @@ test("a mid-seed layer that fails during skill mutation keeps the fallback live 
   const databaseUrl = testDatabaseUrl();
   const baseSkills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
-    backing: testMap(),
+    databaseUrl: testDatabaseUrl(),
   });
   let creates = 0;
   const skills = {
@@ -479,7 +471,7 @@ test("misplaced tool files are rejected, not silently ignored", async () => {
     ...singleProcessDeps(),
     databaseUrl: testDatabaseUrl(),
     runtime: emptyDeploymentLayer(),
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
     scopeId: scopeId("org", "default-org"),
   });
   for (const path of ["tools/a/b/tool.json", "tools/loose.json", "tools/a/extra.txt"]) {
@@ -494,7 +486,7 @@ test("misplaced tool files are rejected, not silently ignored", async () => {
 test("live() reports the runtime source and durable reflects the backing", async () => {
   const skills = createSkillStore({
     advisoryLock: testAdvisoryLock(),
-    backing: testMap(),
+    databaseUrl: testDatabaseUrl(),
   });
   const none = createDeploymentLayerStore({
     ...singleProcessDeps(),
@@ -526,7 +518,7 @@ test("duplicate skill names across layer skill dirs are rejected at validation",
     ...singleProcessDeps(),
     databaseUrl: testDatabaseUrl(),
     runtime: emptyDeploymentLayer(),
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
     scopeId: scopeId("org", "default-org"),
   });
   await assert.rejects(
@@ -550,7 +542,7 @@ test("a NUL byte in the bundle is rejected at validation (Postgres JSONB would 5
     ...singleProcessDeps(),
     databaseUrl: testDatabaseUrl(),
     runtime: emptyDeploymentLayer(),
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
     scopeId: scopeId("org", "default-org"),
   });
   await assert.rejects(
@@ -571,7 +563,7 @@ test("unpaired Unicode surrogates are rejected before the JSONB write", async ()
     ...singleProcessDeps(),
     databaseUrl: testDatabaseUrl(),
     runtime: emptyDeploymentLayer(),
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
     scopeId: scopeId("org", "default-org"),
   });
   await assert.rejects(
@@ -593,7 +585,7 @@ test("PUT validates cross-tool credential paths before persisting", async () => 
     ...singleProcessDeps(),
     databaseUrl,
     runtime: emptyDeploymentLayer(),
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
     scopeId: scopeId("org", "default-org"),
   });
   await assert.rejects(
@@ -650,7 +642,7 @@ test("hydrate reparses bundle descriptors instead of trusting stored resolved fi
     ...singleProcessDeps(),
     databaseUrl,
     runtime,
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
     scopeId: scopeId("org", "default-org"),
     retryDelaysMs: [],
   });
@@ -667,7 +659,7 @@ test("hydrate derives runtime fields from the stored bundle, not the resolved ca
     ...singleProcessDeps(),
     databaseUrl,
     runtime: emptyDeploymentLayer(),
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
     scopeId: scopeId("org", "default-org"),
   });
   const record = await writer.put(bundle, "writer");
@@ -680,7 +672,7 @@ test("hydrate derives runtime fields from the stored bundle, not the resolved ca
     ...singleProcessDeps(),
     databaseUrl,
     runtime,
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() }),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
     scopeId: scopeId("org", "default-org"),
   });
   await reader.hydrate();

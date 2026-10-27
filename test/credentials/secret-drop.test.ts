@@ -14,7 +14,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../src/auth/capabilit
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../../src/types.ts";
 import { testConfig } from "../support/test-config.ts";
-import { testMap, testDatabaseUrl } from "../support/test-database.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 import { createPostgresReplayDedupe } from "../../src/auth/replay-dedupe.ts";
 
 const SECRET = "secret-drop-test-secret".repeat(3);
@@ -83,7 +83,7 @@ describe("fireDropResolution", () => {
   const depsWith = (run: (req: TurnRequest) => Promise<TurnResult>) => ({
     outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(testDatabaseUrl()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testDatabaseUrl()),
     run,
   });
 
@@ -174,7 +174,7 @@ describe("fireDropResolution", () => {
     const deps = {
       outbound,
       idempotency: createIdempotencyStore(testDatabaseUrl()),
-      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      identity: createIdentityService(testDatabaseUrl()),
       run: async () => ({ status: "pending_approval" }) as TurnResult,
     };
     const destination = { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") } as const;
