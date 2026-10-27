@@ -53,7 +53,7 @@ import type { LlmTransportMeta } from "../sessions/session-store.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
 import { providerTurnError } from "./provider-error.ts";
 import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
-import { asError, swallow, swallowAs } from "../util/errors.ts";
+import { asError, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import {
   DEFAULT_AGENT_MODEL_ID,
   auxiliaryModelFor,
@@ -122,7 +122,6 @@ import {
   SECURITY_SCREEN_STEP,
   SECURITY_SCREEN_SYSTEM_PROMPT,
 } from "../security/security-screen.ts";
-import { errMessage } from "../util/errors.ts";
 import { createGrindMeter } from "./grind.ts";
 import {
   createFloorCapPolicy,
@@ -1248,7 +1247,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     try {
       reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
     } catch (err) {
-      console.error("[pi-harness] history reconstruction failed; will fall back:", errMessage(err));
+      reportFailure("pi-harness: history reconstruction (falling back)", err);
       reconstructed = null;
     }
     const seedPlan = planColdStartSeed(reconstructed, !!priorTurns?.length);
@@ -1274,9 +1273,9 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           structured ? reconstructed! : seedPriorTurns(priorTurns!, []).map(toPiMessage),
         );
       } catch (err) {
-        console.error(
-          `[pi-harness] failed to seed ${structured ? "reconstructed history (continuing without it)" : "prior turns (continuing without them)"}:`,
-          errMessage(err),
+        reportFailure(
+          `pi-harness: seed ${structured ? "reconstructed history" : "prior turns"} (continuing without it)`,
+          err,
         );
       }
     }

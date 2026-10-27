@@ -97,7 +97,7 @@ export function createSlackRuntimeReconciler<Config>(opts: {
       if (timer) clearInterval(timer);
       timer = null;
       stopping = (async () => {
-        await inFlight?.catch(() => {});
+        await inFlight?.catch(() => {}); // the reconcile's callers get its failure
         if (pendingCleanup) {
           await pendingCleanup();
           pendingCleanup = null;
