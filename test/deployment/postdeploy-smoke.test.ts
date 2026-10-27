@@ -8,6 +8,7 @@ import {
   stagingApiHeaders,
 } from "../../src/deployment/postdeploy-smoke.ts";
 import { PORTAL_IDENTITY_HEADER, verifyPortalIdentity } from "../../src/auth/portal-identity.ts";
+import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 
 test("deployed database smoke rejects the parallel exception-handler failure class", () => {
   assert.match(PARALLEL_EXCEPTION_QUERY, /p\.proparallel = 's'/);
@@ -270,4 +271,20 @@ test("live session smoke rejects a title returned after the deadline", async () 
     /generated title/,
   );
   assert.equal(archived, true);
+});
+
+const databaseUrl = process.env.DATABASE_URL;
+const pgSkip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the Postgres store tests";
+
+test("no plpgsql exception handler is marked parallel-safe anywhere in the schema", { skip: pgSkip }, async () => {
+  const seed = createPostgresSessionStore(databaseUrl!);
+  await seed.countSessions();
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: databaseUrl });
+  try {
+    const offenders = await raw.query(PARALLEL_EXCEPTION_QUERY);
+    assert.deepEqual(offenders.rows, [], "plpgsql EXCEPTION handlers marked PARALLEL SAFE");
+  } finally {
+    await raw.end();
+  }
 });
