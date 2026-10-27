@@ -1,6 +1,6 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
-import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresInstanceRegistry } from "../src/runs/instance-registry.ts";
 import { settle } from "./support/settle.ts";
 import { truncateTables } from "./support/test-database.ts";
@@ -17,7 +17,7 @@ test(
   "supersession: a newer different-sha instance drains the old one; same sha and stale beats don't",
   { skip },
   async () => {
-    const pool = createPostgresMapFactory(URL!).pool;
+    const pool = createPgPool(URL!, []);
     const old = createPostgresInstanceRegistry(pool, {
       instanceId: "i-old",
       buildSha: "sha-a",
@@ -59,7 +59,7 @@ test(
       import("./support/build-app.ts"),
       import("./support/test-config.ts"),
     ]);
-    const pool = createPostgresMapFactory(URL!).pool;
+    const pool = createPgPool(URL!, []);
     const boot = async (backgroundWorkEnabled: boolean, buildSha: string): Promise<number> => {
       const built = buildApp(
         testConfig({ databaseUrl: URL, buildSha, backgroundWorkEnabled, workers: 1, reaperIntervalMs: 60_000 }),

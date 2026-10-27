@@ -60,7 +60,7 @@ export function assembleBuiltApp(w: AssembleBuiltAppInputs): BuiltApp {
 function builtAppHead(w: AssembleBuiltAppInputs) {
   const {
     app,
-    pgArtifactMap,
+    pgPool,
     screenSecurity,
     deploymentLayer,
     deploymentLayerStore,
@@ -105,7 +105,7 @@ function builtAppHead(w: AssembleBuiltAppInputs) {
   return {
     app,
     checkReadiness: async (signal) => {
-      await pgArtifactMap.pool.q("SELECT 1", [], { signal });
+      await pgPool.q("SELECT 1", [], { signal });
     },
     ...(screenSecurity ? { screenSecurity } : {}),
     deploymentLayer,

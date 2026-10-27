@@ -2,7 +2,7 @@ import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { jsonbStringify } from "../persistence/durable-map.ts";
+import { jsonbStringify } from "../util/text.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { isObj } from "../util/objects.ts";
 import type { TurnResult } from "../types.ts";

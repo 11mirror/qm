@@ -2,7 +2,7 @@ import { wireRunResultPosts, runResultPost } from "../src/runs/run-results.ts";
 import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import { deliveryCandidatesFor } from "../src/core/orchestrator/turn-helpers.ts";
-import { jsonbStringify } from "../src/persistence/durable-map.ts";
+import { jsonbStringify } from "../src/util/text.ts";
 import { createSessionMailbox, type SessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";

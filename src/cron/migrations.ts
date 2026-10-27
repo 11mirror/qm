@@ -1,4 +1,3 @@
-/** One-shot data migrations over the crons durable-map table, registered with the artifact map pool. */
 function sqlText(text: string): string {
   if (text.includes("$qm_text$")) throw new Error("migration text contains its own quote tag");
   return `$qm_text$${text}$qm_text$`;

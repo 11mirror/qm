@@ -1,5 +1,5 @@
+import { createPgPool } from "../persistence/pg-pool.ts";
 import type { Head } from "./late.ts";
-import { createPostgresMapFactory, type DurableMap } from "../persistence/durable-map.ts";
 import { registerAbsurdSchema } from "../turns/absurd-schema.ts";
 import { type AdvisoryLock, createPostgresAdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createPrincipalLinkService } from "../identity/principal-links.ts";
@@ -37,18 +37,16 @@ import { createSlackInstallationStore } from "../surfaces/slack-installation.ts"
 export function buildStores(w: Head) {
   const { databaseUrl, config, connectorSecretKey } = w;
 
-  const pgArtifactMap = createPostgresMapFactory(databaseUrl);
+  const pgPool = createPgPool(databaseUrl, []);
   registerAbsurdSchema(databaseUrl);
-  const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
-    pgArtifactMap.map<T>(table, indexedFields);
-  const advisoryLock: AdvisoryLock = createPostgresAdvisoryLock(pgArtifactMap.pool);
+  const advisoryLock: AdvisoryLock = createPostgresAdvisoryLock(pgPool);
   const principalLinks = createPrincipalLinkService(databaseUrl, advisoryLock);
   installPrincipalLinks(principalLinks);
   const identity = createIdentityService(databaseUrl, {
     directorySyncProtected: config.emailAuthPrincipals,
     principalLinks,
   });
-  const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
+  const leaderLease: LeaderLease = createPostgresLeaderLease(pgPool);
   const configStore = createConfigStore(config.orgId, { databaseUrl, connectorSecretKey });
   const skills: SkillStore = createSkillStore({
     databaseUrl,
@@ -85,14 +83,13 @@ export function buildStores(w: Head) {
   const connectorStatusCache = createConnectorStatusCache(databaseUrl);
   const slackInstallation = createSlackInstallationStore(config.orgId, databaseUrl, connectorSecretKey);
   return {
-    artifactMap,
     managesArtifactHome,
     skills,
     skillBundles,
     advisoryLock,
     identity,
     configStore,
-    pgArtifactMap,
+    pgPool,
     canUseSandboxScope,
     decisions,
     featureFlags,

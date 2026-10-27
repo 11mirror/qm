@@ -3,13 +3,13 @@ import { INBOX_ITEM_SOURCE_MIGRATION, inboxConversationKeyMigration } from "../i
 import type { StoresModule } from "./stores.ts";
 
 /** Legacy durable-map and runtime table migrations, registered on the shared pool before first use. */
-export function registerLegacyMigrations(w: Pick<StoresModule, "pgArtifactMap">) {
-  const { pgArtifactMap } = w;
+export function registerLegacyMigrations(w: Pick<StoresModule, "pgPool">) {
+  const { pgPool } = w;
 
-  pgArtifactMap.pool.registerMigration(LOOPS_TO_CRONS_MIGRATION);
-  pgArtifactMap.pool.registerMigration(INBOX_ITEM_SOURCE_MIGRATION);
-  pgArtifactMap.pool.registerMigration(inboxConversationKeyMigration());
-  pgArtifactMap.pool.registerMigration({
+  pgPool.registerMigration(LOOPS_TO_CRONS_MIGRATION);
+  pgPool.registerMigration(INBOX_ITEM_SOURCE_MIGRATION);
+  pgPool.registerMigration(inboxConversationKeyMigration());
+  pgPool.registerMigration({
     id: "runtime/0002-drop-harness-choice",
     // The first release also dropped approved_harness_configs; that moved to CONTRACT_MIGRATIONS so older images still boot.
     acceptedChecksums: ["2e7a8523090c84d00b557197f2e3038b5b2fd418e6b3b4b08c10ef0cf596a792"],
@@ -20,13 +20,13 @@ export function registerLegacyMigrations(w: Pick<StoresModule, "pgArtifactMap">)
       `DO $$ BEGIN IF to_regclass('swarms') IS NOT NULL THEN UPDATE swarms SET json = json #- '{template,harness}' WHERE (json -> 'template') ? 'harness'; END IF; END $$`,
     ],
   });
-  pgArtifactMap.pool.registerMigration({
+  pgPool.registerMigration({
     id: "runtime/0003-promote-legacy-base-models",
     statements: [
       `DO $$ BEGIN IF to_regclass('base_model_configs') IS NOT NULL THEN UPDATE base_model_configs SET json = json || '{"orgRevision":0}'::jsonb WHERE json ? 'modelId' AND NOT json ? 'orgRevision'; END IF; END $$`,
     ],
   });
-  pgArtifactMap.pool.registerMigration({
+  pgPool.registerMigration({
     id: "durable-map/swarms/0002-drop",
     // The first release also dropped the swarms table; that moved to CONTRACT_MIGRATIONS so older images still boot.
     acceptedChecksums: ["6fd03996fb6c9b0b5ea06db198f83a16cf39dafbf7bc9fddb8965e54b3030635"],
