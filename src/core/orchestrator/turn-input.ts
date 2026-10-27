@@ -84,7 +84,7 @@ export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
   const turnEnvironmentContents = await composeTurnEnvironment(ctx, turn, visibleHistory, history, manifest);
   const baseText = input.proactiveOpener && !input.text.trim() ? PROACTIVE_OPENER_PROMPT : input.text;
   const pausedTurnUserEntry = input.approval
-    ? [...visibleHistory].reverse().find((e) => isUserMessage(e) && !isOverheard(e))
+    ? [...visibleHistory].reverse().find((e) => isUserMessage(e) && !isOverheard(e) && e.body?.approvalDenial !== true)
     : undefined;
   const approvalReplay = !!pausedTurnUserEntry && (pausedTurnUserEntry.text ?? "").trim() === input.text.trim();
   if (partial) await noteResume(ctx, turn, partial, resume, resumePlan!);

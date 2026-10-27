@@ -131,11 +131,9 @@ async function closeTurn(open: OpenTurn, scriptedReply: string): Promise<Harness
   return { ...base, ...(t.silent ? { silent: true as const } : {}), cacheUsage };
 }
 
-const DENIAL_NOTE = /^The requesting human denied this pending operation/;
-
 function resumesAfterDenial(history: HarnessTurnInput["history"]): boolean {
   const last = [...history].reverse().find((e) => e.kind === "UserMessage" || e.kind === "AgentMessage");
-  return !!last && last.kind === "UserMessage" && !!last.hidden && DENIAL_NOTE.test(last.text ?? "");
+  return !!last && last.kind === "UserMessage" && !!last.hidden && last.body?.approvalDenial === true;
 }
 
 export async function runMockTurn(input: HarnessTurnInput, state: MockHarnessState): Promise<HarnessTurnResult> {

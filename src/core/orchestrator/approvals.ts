@@ -22,6 +22,7 @@ import { approvalGrantId } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
 const OPERATION_APPROVED_NOTE = loadProtocolFile("turn-approval-operation");
+const OPERATION_DENIED_NOTE = loadProtocolFile("turn-approval-denied");
 
 export interface ApprovalRequest {
   requestId: string;
@@ -194,7 +195,9 @@ export function loadApprovalLedger(
 }
 
 export type ApprovalDecisionOutcome =
-  { kind: "settled"; result: TurnResult } | { kind: "approved"; approvalNote: string } | { kind: "denied" };
+  | { kind: "settled"; result: TurnResult }
+  | { kind: "approved"; approvalNote: string }
+  | { kind: "denied"; approvalNote: string };
 
 type DecidedScope = NonNullable<NonNullable<OrchestratorInput["approval"]>["scope"]>;
 
@@ -226,7 +229,7 @@ export async function consumeApprovalDecision(args: {
     });
   const denied = (command: string): ApprovalDecisionOutcome => {
     audit("command_approval.deny", command, "refused", { approvalOutcome: "denied" });
-    return { kind: "denied" };
+    return { kind: "denied", approvalNote: OPERATION_DENIED_NOTE };
   };
   const approved = async (command: string, scope: DecidedScope, approvalKey?: string) => {
     args.ledger.credit(approvalKey ?? command, scope);
@@ -311,6 +314,7 @@ export async function consumeApprovalDecision(args: {
         {
           kind: "UserMessage",
           hidden: true,
+          body: { approvalDenial: true },
           text: `The requesting human denied this pending operation, so it did not run: ${headSlice(p.summary ?? p.command, 2_000)}\nContinue without it. You need not address the denial. Do not retry it unless they ask again.`,
         },
       ];

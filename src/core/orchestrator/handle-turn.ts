@@ -273,7 +273,7 @@ async function beginHeldTurn(o: OrchestratorInstance, t: HeldTurn) {
       mirror: mirrorRunActivity,
     });
     if (decided.kind === "settled") return { done: true as const, result: decided.result };
-    if (decided.kind === "approved") approvalNote = decided.approvalNote;
+    approvalNote = decided.approvalNote;
   }
 
   const { openSpeakerKeychain, credentialDescriptions, serviceCredRecords, grantedCredSlugs, actorIsOrgAdmin } =

@@ -186,6 +186,11 @@ test("denying a pending approval keeps the turn working without the command", as
     "The requesting human denied this pending operation, so it did not run: In plain English: rm -rf build (recursive delete).\nContinue without it. You need not address the denial. Do not retry it unless they ask again.",
   );
   assert.equal(items.filter((e) => e.kind === "ToolResult").length, 0, "the denied command never ran");
+  assert.equal(
+    items.filter((e) => e.kind === "UserMessage" && !e.hidden && e.text === "!run rm -rf build").length,
+    1,
+    "the paused request is replayed hidden, not shown a second time",
+  );
   const decision = items.find((e) => e.kind === "ElicitationResponse");
   assert.equal(decision?.approved, false);
   assert.ok(
