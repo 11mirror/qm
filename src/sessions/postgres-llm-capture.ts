@@ -33,7 +33,6 @@ function rowToLlmRequest(r: Record<string, unknown>): LlmRequestRecord {
   };
 }
 
-/** Per-call LLM capture: request records, their deduplicated prompt envelopes, screen samples, and envelope retention. */
 export function createLlmCapture(
   db: Pick<PgPool, "q" | "query">,
   now: () => number,

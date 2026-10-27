@@ -34,7 +34,6 @@ export function parseBotLedger(input: unknown): { bots: Record<string, BotPolicy
   return { bots: { ...bots } };
 }
 
-/** How the agent behaves in one channel. Its instructions live with the channel scope's instructions. */
 export interface ChannelPolicy {
   container: string;
   bots: Record<string, BotPolicy>;
@@ -68,19 +67,6 @@ export interface ChannelPolicyStore {
   close(): Promise<void>;
 }
 
-/**
- * One-time copy of channel guidance ("orders") into the conversation scope's instructions, so a
- * scope has one instruction text. Where the scope already has instructions the guidance is
- * appended after a separator, as a new instructions revision. The orders column is left as it
- * was: this build no longer reads it, and a rollback to an older build still finds it.
- *
- * A container maps to its group scope when it is a web project's group (the `web-project-`
- * prefix, as in isProjectGroupRef) or a Slack group DM (channel_state kind 'group'); every other
- * container maps to its channel scope.
- *
- * It also re-files instructions that the retired 0002 version of this move put on
- * `channel:web-project-…`, a scope no conversation uses, onto the project's group scope.
- */
 const ORDERS_INTO_INSTRUCTIONS: readonly string[] = [
   `ALTER TABLE channel_policy_history ALTER COLUMN orders SET DEFAULT ''`,
   `DO $orders_into_instructions$

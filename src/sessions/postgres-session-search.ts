@@ -59,7 +59,6 @@ export function sessionPinAndSearchMethods(ctx: SessionStoreCtx) {
       const ids = [...new Set([principals].flat())];
       if (!ids.length) return [];
       const params: unknown[] = [sessionId, ids, opts?.sinceSeq ?? 0];
-      // An item is visible only when every principal's participation window covers it.
       let sql = `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM}
           WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= $3
             AND (SELECT count(*) FROM participants p
