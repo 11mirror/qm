@@ -13,12 +13,27 @@ const NON_SECRET_ENV_KEYS = new Set([
   "GIT_HTTP_PROXY_AUTHMETHOD",
 ]);
 
-const MIN_MASKABLE_LENGTH = 8;
+const isWordChar = (c: string | undefined) =>
+  c !== undefined && ((c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c === "_");
+
+function replaceWholeValue(text: string, needle: string, replacement: string): string {
+  let out = "";
+  let from = 0;
+  for (let at = text.indexOf(needle); at >= 0; at = text.indexOf(needle, at + 1)) {
+    if (at < from) continue;
+    const joinsBefore = isWordChar(needle[0]) && isWordChar(text[at - 1]);
+    const joinsAfter = isWordChar(needle.at(-1)) && isWordChar(text[at + needle.length]);
+    if (joinsBefore || joinsAfter) continue;
+    out += text.slice(from, at) + replacement;
+    from = at + needle.length;
+  }
+  return out + text.slice(from);
+}
 
 export function createSecretValueMasker(env: Record<string, string> | undefined): (text: string) => string {
   const variants: Array<{ needle: string; label: string }> = [];
   for (const [key, value] of Object.entries(env ?? {})) {
-    if (NON_SECRET_ENV_KEYS.has(key) || value.length < MIN_MASKABLE_LENGTH) continue;
+    if (NON_SECRET_ENV_KEYS.has(key) || !value) continue;
     variants.push({ needle: value, label: key });
     const uri = encodeURIComponent(value);
     if (uri !== value) variants.push({ needle: uri, label: key });
@@ -29,7 +44,7 @@ export function createSecretValueMasker(env: Record<string, string> | undefined)
   variants.sort((a, b) => b.needle.length - a.needle.length);
   return (text) => {
     for (const { needle, label } of variants) {
-      if (text.includes(needle)) text = text.split(needle).join(`<redacted:${label}>`);
+      if (text.includes(needle)) text = replaceWholeValue(text, needle, `<redacted:${label}>`);
     }
     return text;
   };
