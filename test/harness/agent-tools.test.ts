@@ -79,7 +79,7 @@ test("sandbox manages the box out-of-band instead of running a command", async (
   );
   assert.match(
     status.content[0]!.text!,
-    /WEDGED: a machine exists but its shell is not answering/,
+    /wedged: a machine exists but its shell did not answer the probe/,
     "a provisioned machine with a dead guest is called out as wedged, not left as two contradicting fields",
   );
 
@@ -207,7 +207,7 @@ test("computer status exposes paused lifecycle and recovery deadlines without cl
   };
   const output = out.content[0]!.text!;
   assert.match(output, /shell: paused \(not probed\)/);
-  assert.doesNotMatch(output, /NOT answering|WEDGED/);
+  assert.doesNotMatch(output, /NOT answering|wedged/);
   for (const expected of [
     "lifecycle: paused",
     "machine expires: 2026-09-10T00:00:00.000Z",
@@ -253,7 +253,7 @@ test("computer status verdicts: answering guest is ok, dead guest without a mach
       content: Array<{ text?: string }>;
     };
     assert.equal(
-      /WEDGED/.test(out.content[0]!.text!),
+      /wedged/.test(out.content[0]!.text!),
       c.wedged,
       `machine=${c.status.machine} listed=${c.status.listed ?? ""} guest=${c.status.guestResponsive}`,
     );
