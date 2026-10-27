@@ -767,4 +767,8 @@ test("a denied operation without a summary is named by its first line and overal
   const label = deniedCommandLabel(script);
   assert.equal(label, `set -e … (401 lines, ${Buffer.byteLength(script)} bytes in all)`);
   assert.ok(label.length < 80);
+  const oneLine = `python3 -c "${"x".repeat(50_000)}"`;
+  const bounded = deniedCommandLabel(oneLine);
+  assert.equal(bounded, `${oneLine.slice(0, 80)} … (1 line, ${Buffer.byteLength(oneLine)} bytes in all)`);
+  assert.ok(bounded.length < 120);
 });

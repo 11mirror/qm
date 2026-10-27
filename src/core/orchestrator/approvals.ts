@@ -17,6 +17,7 @@ import { rosterIds, samePerson } from "../../directory/person.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { sleep } from "../../util/async.ts";
 import { errMessage } from "../../util/errors.ts";
+import { headSlice } from "../../util/text.ts";
 import { approvalGrantId } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
@@ -325,8 +326,10 @@ export async function consumeApprovalDecision(args: {
   return approved(p.command, scope, p.approvalKey);
 }
 
+const COMMAND_HEAD_COLUMNS = 80;
 export function deniedCommandLabel(command: string): string {
   const lines = command.split("\n");
-  if (lines.length === 1) return command;
-  return `${lines[0]} … (${lines.length} lines, ${Buffer.byteLength(command)} bytes in all)`;
+  const head = headSlice(lines[0]!, COMMAND_HEAD_COLUMNS);
+  if (head === command) return command;
+  return `${head} … (${lines.length} ${lines.length === 1 ? "line" : "lines"}, ${Buffer.byteLength(command)} bytes in all)`;
 }
