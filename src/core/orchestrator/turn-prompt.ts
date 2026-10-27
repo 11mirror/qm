@@ -319,7 +319,7 @@ export async function finishSystemPrompt(
     directoryIndexFor: (directory: DirectoryStore) => Promise<Map<string, DirectoryMember>>;
   },
 ): Promise<{ systemPrompt: string; volatileContext: string }> {
-  const { deps, input, actor, conversation, external, automatedTurn, turnTimezone, scopeId } = ctx;
+  const { deps, input, actor, conversation, external, automatedTurn } = ctx;
   const {
     strictReadOnly,
     turnContextBlocks,
@@ -345,34 +345,7 @@ export async function finishSystemPrompt(
   if (actorIsOrgAdmin) {
     systemPrompt += `\n\n${ORG_ADMIN_MD}`;
   }
-  if (deps.signingSecret && deps.apiBaseUrl && (deps.crons || deps.webhooks || deps.monitors)) {
-    const nowMs = Date.now();
-    const obligations = await Promise.all([
-      deps.crons?.list() ?? [],
-      deps.webhooks?.list() ?? [],
-      deps.monitors?.enabled() ?? [],
-    ])
-      .then(([crons, hooks, mons]) =>
-        renderStandingObligations(
-          crons.filter(
-            (c) =>
-              c.enabled &&
-              !c.archived &&
-              c.ownerScopeId === scopeId &&
-              (c.schedule.cron != null ||
-                c.schedule.everyMs != null ||
-                (c.schedule.firstFireAt ?? c.createdAt) > nowMs),
-          ),
-          hooks.filter((w) => w.enabled && w.ownerScopeId === scopeId),
-          mons.filter((m) => m.ownerScopeId === scopeId && m.expiresAt > nowMs),
-          turnTimezone,
-        ),
-      )
-      .catch(swallowAs("orchestrator: standing-obligations read", null));
-    turnContextBlocks["Already scheduled here"] =
-      obligations ??
-      "## Already scheduled here\nScheduled-work status is unavailable; check the live inventories before scheduling.";
-  }
+  await addStandingObligations(ctx, turnContextBlocks);
   if (input.origin.kind === "automation" && input.origin.destination && !input.surfaceTools) {
     systemPrompt += `\n\n${SCHEDULED_DESTINATION_MD}`;
   }
@@ -386,67 +359,11 @@ export async function finishSystemPrompt(
     );
     if (roster) turnContextBlocks["Other computers you can reach"] = roster;
   }
-  if (!external && deps.directory) {
-    const rosterBlock = await (async () => {
-      const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
-      const participants = [
-        ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
-        ...audienceMembers,
-      ];
-      const index = await directoryIndexFor(deps.directory!);
-      const seen = new Set<string>();
-      const resolved: DirectoryMember[] = [];
-      for (const p of participants) {
-        if (seen.has(personKey(p.id))) continue;
-        seen.add(personKey(p.id));
-        const m = index.get(personKey(p.id));
-        if (m) resolved.push(m);
-        else if (p.displayName) resolved.push({ principalId: p.id, displayName: p.displayName, type: "internal" });
-      }
-      return renderConversationRoster(resolved);
-    })().catch(swallowAs("orchestrator: conversation roster", null));
-    if (rosterBlock) turnContextBlocks["Who’s in this conversation"] = rosterBlock;
-  }
-  if (!strictReadOnly && (deps.keychain || credentialDescriptions.length)) {
-    const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
-    const members = [
-      ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
-      ...audienceMembers,
-    ].map((p) => ({ id: p.id, ...(p.displayName ? { displayName: p.displayName } : {}) }));
-    const [entriesByOwner, connectorsByOwner, scopeGrants, scopeAsks] = await Promise.all([
-      !external ? (deps.keychain?.listByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
-      !external ? (deps.keychain?.listConnectorsByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
-      !external ? (deps.keychain?.grantsForScope(scopeId) ?? []) : [],
-      !external ? (deps.keychain?.listAsks({ requesterScopeId: scopeId }) ?? []) : [],
-    ]);
-    const keychainBlock = renderKeychainManifest({
-      scopeId,
-      conversationKind: conversation.kind,
-      openSpeakerKeychain,
-      actorId: actor.id,
-      members,
-      entriesByOwner,
-      connectorsByOwner,
-      scopeGrants,
-      execution: credentialDescriptions,
-      scopeAsks,
-    });
-    if (keychainBlock) turnContextBlocks["Credentials"] = keychainBlock;
-  }
-  if (!strictReadOnly && deps.resolveConnectorClient && conversation.kind === "dm") {
-    let status = null;
-    try {
-      status = deps.connectorStatusCache ? await deps.connectorStatusCache.get(actor.id) : null;
-      if (deps.connectorTokens && deps.connectorStatusCache && connectorStatusIsStale(status, Date.now())) {
-        status = await refreshConnectorStatus(deps.connectorTokens, actor.id, Date.now());
-        await deps.connectorStatusCache.put(status);
-      }
-    } catch (e) {
-      swallow("orchestrator: connected-app status", e);
-    }
-    const connectionsUrl = deps.publicWebUrl ? `${deps.publicWebUrl.replace(/\/$/, "")}/keychain` : undefined;
-    turnContextBlocks["Connected apps"] = renderConnectedAppsBlock(status, configuredProviders, connectionsUrl);
-  }
+  if (!external && deps.directory) await addConversationRoster(ctx, turnContextBlocks, directoryIndexFor);
+  if (!strictReadOnly && (deps.keychain || credentialDescriptions.length))
+    await addKeychainManifest(ctx, turnContextBlocks, openSpeakerKeychain, credentialDescriptions);
+  if (!strictReadOnly && deps.resolveConnectorClient && conversation.kind === "dm")
+    await addConnectedApps(ctx, turnContextBlocks, configuredProviders);
   systemPrompt += `\n\n${USER_REPLY_RULES_MD.trim()}`;
   const stableSystemBytes = systemPrompt.length;
   if (timeBlock) systemPrompt += `\n\n${timeBlock}`;
@@ -454,4 +371,111 @@ export async function finishSystemPrompt(
   const volatileContext = systemPrompt.slice(stableSystemBytes).trim();
   systemPrompt = systemPrompt.slice(0, stableSystemBytes);
   return { systemPrompt, volatileContext };
+}
+
+async function addStandingObligations(
+  { deps, scopeId, turnTimezone }: TurnCtx,
+  turnContextBlocks: Record<string, string>,
+): Promise<void> {
+  if (!(deps.signingSecret && deps.apiBaseUrl && (deps.crons || deps.webhooks || deps.monitors))) return;
+  const nowMs = Date.now();
+  const obligations = await Promise.all([
+    deps.crons?.list() ?? [],
+    deps.webhooks?.list() ?? [],
+    deps.monitors?.enabled() ?? [],
+  ])
+    .then(([crons, hooks, mons]) =>
+      renderStandingObligations(
+        crons.filter(
+          (c) =>
+            c.enabled &&
+            !c.archived &&
+            c.ownerScopeId === scopeId &&
+            (c.schedule.cron != null || c.schedule.everyMs != null || (c.schedule.firstFireAt ?? c.createdAt) > nowMs),
+        ),
+        hooks.filter((w) => w.enabled && w.ownerScopeId === scopeId),
+        mons.filter((m) => m.ownerScopeId === scopeId && m.expiresAt > nowMs),
+        turnTimezone,
+      ),
+    )
+    .catch(swallowAs("orchestrator: standing-obligations read", null));
+  turnContextBlocks["Already scheduled here"] =
+    obligations ??
+    "## Already scheduled here\nScheduled-work status is unavailable; check the live inventories before scheduling.";
+}
+
+async function addConversationRoster(
+  { deps, actor, conversation }: TurnCtx,
+  turnContextBlocks: Record<string, string>,
+  directoryIndexFor: (directory: DirectoryStore) => Promise<Map<string, DirectoryMember>>,
+): Promise<void> {
+  const rosterBlock = await (async () => {
+    const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
+    const participants = [
+      ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
+      ...audienceMembers,
+    ];
+    const index = await directoryIndexFor(deps.directory!);
+    const seen = new Set<string>();
+    const resolved: DirectoryMember[] = [];
+    for (const p of participants) {
+      if (seen.has(personKey(p.id))) continue;
+      seen.add(personKey(p.id));
+      const m = index.get(personKey(p.id));
+      if (m) resolved.push(m);
+      else if (p.displayName) resolved.push({ principalId: p.id, displayName: p.displayName, type: "internal" });
+    }
+    return renderConversationRoster(resolved);
+  })().catch(swallowAs("orchestrator: conversation roster", null));
+  if (rosterBlock) turnContextBlocks["Who’s in this conversation"] = rosterBlock;
+}
+
+async function addKeychainManifest(
+  { deps, actor, conversation, external, scopeId }: TurnCtx,
+  turnContextBlocks: Record<string, string>,
+  openSpeakerKeychain: boolean,
+  credentialDescriptions: NonNullable<KeychainManifestInput["execution"]>,
+): Promise<void> {
+  const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
+  const members = [...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]), ...audienceMembers].map(
+    (p) => ({ id: p.id, ...(p.displayName ? { displayName: p.displayName } : {}) }),
+  );
+  const [entriesByOwner, connectorsByOwner, scopeGrants, scopeAsks] = await Promise.all([
+    !external ? (deps.keychain?.listByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
+    !external ? (deps.keychain?.listConnectorsByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
+    !external ? (deps.keychain?.grantsForScope(scopeId) ?? []) : [],
+    !external ? (deps.keychain?.listAsks({ requesterScopeId: scopeId }) ?? []) : [],
+  ]);
+  const keychainBlock = renderKeychainManifest({
+    scopeId,
+    conversationKind: conversation.kind,
+    openSpeakerKeychain,
+    actorId: actor.id,
+    members,
+    entriesByOwner,
+    connectorsByOwner,
+    scopeGrants,
+    execution: credentialDescriptions,
+    scopeAsks,
+  });
+  if (keychainBlock) turnContextBlocks["Credentials"] = keychainBlock;
+}
+
+async function addConnectedApps(
+  { deps, actor }: TurnCtx,
+  turnContextBlocks: Record<string, string>,
+  configuredProviders: Awaited<ReturnType<typeof configuredConnectorProviders>>,
+): Promise<void> {
+  let status = null;
+  try {
+    status = deps.connectorStatusCache ? await deps.connectorStatusCache.get(actor.id) : null;
+    if (deps.connectorTokens && deps.connectorStatusCache && connectorStatusIsStale(status, Date.now())) {
+      status = await refreshConnectorStatus(deps.connectorTokens, actor.id, Date.now());
+      await deps.connectorStatusCache.put(status);
+    }
+  } catch (e) {
+    swallow("orchestrator: connected-app status", e);
+  }
+  const connectionsUrl = deps.publicWebUrl ? `${deps.publicWebUrl.replace(/\/$/, "")}/keychain` : undefined;
+  turnContextBlocks["Connected apps"] = renderConnectedAppsBlock(status, configuredProviders, connectionsUrl);
 }
