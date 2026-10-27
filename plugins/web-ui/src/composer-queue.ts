@@ -12,56 +12,44 @@ import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./icons";
 import { bumpSessionActivity } from "./sessions";
 import { tip } from "./tooltip";
-import type { ConvCtx } from "./conv-types";
+import type { Composer } from "./composer";
 
-export function createComposerQueue({
-  ctx,
-  composerState,
-  canSteer,
-  clearActiveDraft,
-  clearComposerDom,
-  focusComposerEnd,
-  focusField,
-  restageAttachments,
-}: {
-  ctx: ConvCtx;
-  composerState: { draft: string; attachments: Attachment[]; error: string };
-  canSteer: (agent: Agent) => boolean;
-  clearActiveDraft: () => void;
-  clearComposerDom: (agent: Agent) => void;
-  focusComposerEnd: () => void;
-  focusField: (selector: string, cursor?: number) => void;
-  restageAttachments: (attachments: Attachment[], note: string) => void;
-}) {
-  const queuedRuns = new Map<string, QueuedRun[]>();
-  let queuedEdit: { runId: string; threadRef: string; original: string; text: string; saving: boolean } | null = null;
+export class ComposerQueue {
+  readonly composer: Composer;
+  readonly queuedRuns = new Map<string, QueuedRun[]>();
+  readonly steeringRuns = new Map<string, Array<QueuedRun & { ts: string }>>();
+  readonly pendingSteers = new Set<string>();
+  queuedEdit: { runId: string; threadRef: string; original: string; text: string; saving: boolean } | null = null;
+  failedQueueSend: { threadRef: string; text: string; filesKey: string; idempotencyKey: string } | null = null;
 
-  function queuedRunsFor(threadRef: string | null): QueuedRun[] {
-    return (threadRef ? queuedRuns.get(threadRef) : undefined) ?? [];
+  constructor(composer: Composer) {
+    this.composer = composer;
   }
 
-  function putRuns<T>(map: Map<string, T[]>, threadRef: string, runs: T[]): void {
+  queuedRunsFor(threadRef: string | null): QueuedRun[] {
+    return (threadRef ? this.queuedRuns.get(threadRef) : undefined) ?? [];
+  }
+
+  putRuns<T>(map: Map<string, T[]>, threadRef: string, runs: T[]): void {
     if (runs.length) map.set(threadRef, runs);
     else map.delete(threadRef);
   }
 
-  function setQueuedRuns(threadRef: string, runs: QueuedRun[]): void {
-    putRuns(queuedRuns, threadRef, runs);
+  setQueuedRuns(threadRef: string, runs: QueuedRun[]): void {
+    this.putRuns(this.queuedRuns, threadRef, runs);
   }
 
-  function forgetQueuedRun(threadRef: string, runId: string): void {
-    setQueuedRuns(
+  forgetQueuedRun(threadRef: string, runId: string): void {
+    this.setQueuedRuns(
       threadRef,
-      queuedRunsFor(threadRef).filter((r) => r.runId !== runId),
+      this.queuedRunsFor(threadRef).filter((r) => r.runId !== runId),
     );
   }
 
-  const steeringRuns = new Map<string, Array<QueuedRun & { ts: string }>>();
-
-  function steeringRunsFor(threadRef: string | null, agent: Agent): QueuedRun[] {
-    const steering = threadRef ? steeringRuns.get(threadRef) : undefined;
+  steeringRunsFor(threadRef: string | null, agent: Agent): QueuedRun[] {
+    const steering = threadRef ? this.steeringRuns.get(threadRef) : undefined;
     if (!threadRef || !steering) return [];
-    const settled = !agent.state.isStreaming && !ctx.chat.hasLiveRun();
+    const settled = !agent.state.isStreaming && !this.composer.ctx.chat.hasLiveRun();
     const intakes = new Set(
       agent.state.messages.flatMap((m) => {
         const { steered, ts } = m as { steered?: boolean; ts?: string };
@@ -69,55 +57,58 @@ export function createComposerQueue({
       }),
     );
     const waiting = settled ? [] : steering.filter((run) => !intakes.has(run.ts));
-    putRuns(steeringRuns, threadRef, waiting);
+    this.putRuns(this.steeringRuns, threadRef, waiting);
     return waiting;
   }
 
-  function queuedStrip(agent: Agent): TemplateResult | typeof nothing {
-    const threadRef = ctx.chat.state.threadRef;
-    const queued = queuedRunsFor(threadRef).filter((q) => !pendingSteers.has(q.runId));
-    if (queuedEdit?.threadRef === ctx.chat.state.threadRef && !queued.some((q) => q.runId === queuedEdit?.runId))
-      queued.push({ runId: queuedEdit.runId, text: queuedEdit.original });
+  queuedStrip(agent: Agent): TemplateResult | typeof nothing {
+    const threadRef = this.composer.ctx.chat.state.threadRef;
+    const queued = this.queuedRunsFor(threadRef).filter((q) => !this.pendingSteers.has(q.runId));
+    if (
+      this.queuedEdit?.threadRef === this.composer.ctx.chat.state.threadRef &&
+      !queued.some((q) => q.runId === this.queuedEdit?.runId)
+    )
+      queued.push({ runId: this.queuedEdit.runId, text: this.queuedEdit.original });
     if (!queued.length) return nothing;
-    const steerable = canSteer(agent);
+    const steerable = this.composer.canSteer(agent);
     return html`
       <div class="queued-strip" role="list" aria-label="Queued messages">
         ${queued.map((q) =>
-          queuedEdit?.runId === q.runId && queuedEdit.threadRef === ctx.chat.state.threadRef
+          this.queuedEdit?.runId === q.runId && this.queuedEdit.threadRef === this.composer.ctx.chat.state.threadRef
             ? html` <div class="queued-chip queued-editing" role="listitem">
                 <textarea
                   class="queued-edit-input"
-                  ${emojiCompletion(queuedEdit.text)}
+                  ${emojiCompletion(this.queuedEdit.text)}
                   aria-label="Edit queued message"
                   rows="3"
-                  .value=${live(queuedEdit.text)}
-                  ?disabled=${queuedEdit.saving}
+                  .value=${live(this.queuedEdit.text)}
+                  ?disabled=${this.queuedEdit.saving}
                   @input=${(event: Event) => {
-                    if (queuedEdit) queuedEdit.text = (event.target as HTMLTextAreaElement).value;
+                    if (this.queuedEdit) this.queuedEdit.text = (event.target as HTMLTextAreaElement).value;
                   }}
                   @keydown=${(event: KeyboardEvent) => {
                     const save = event.key === "Enter" && (event.metaKey || event.ctrlKey);
-                    if (event.isComposing || queuedEdit?.saving || (!save && event.key !== "Escape")) return;
+                    if (event.isComposing || this.queuedEdit?.saving || (!save && event.key !== "Escape")) return;
                     event.preventDefault();
                     event.stopPropagation();
-                    if (save) void saveQueuedEdit(agent);
-                    else cancelQueuedEdit(agent);
+                    if (save) void this.saveQueuedEdit(agent);
+                    else this.cancelQueuedEdit(agent);
                   }}
                 ></textarea>
                 <button
                   type="button"
                   class="queued-steer"
                   aria-keyshortcuts="Control+Enter Meta+Enter"
-                  ?disabled=${queuedEdit.saving}
-                  @click=${() => void saveQueuedEdit(agent)}
+                  ?disabled=${this.queuedEdit.saving}
+                  @click=${() => void this.saveQueuedEdit(agent)}
                 >
                   Save
                 </button>
                 <button
                   type="button"
                   class="queued-steer"
-                  ?disabled=${queuedEdit.saving}
-                  @click=${() => cancelQueuedEdit(agent)}
+                  ?disabled=${this.queuedEdit.saving}
+                  @click=${() => this.cancelQueuedEdit(agent)}
                 >
                   Cancel
                 </button>
@@ -137,7 +128,7 @@ export function createComposerQueue({
                         ? "Steer the running task with this instead of waiting"
                         : "Nothing running can take this. It will go out as its own turn",
                     )}
-                    @click=${() => void steerQueued(agent, q)}
+                    @click=${() => void this.steerQueued(agent, q)}
                   >
                     ${icon(CornerDownRight, 13)}<span>Steer</span>
                   </button>
@@ -146,21 +137,21 @@ export function createComposerQueue({
                     class="queued-steer"
                     aria-label="Edit queued message"
                     @click=${() => {
-                      const edit = (queuedEdit = {
+                      const edit = (this.queuedEdit = {
                         runId: q.runId,
-                        threadRef: ctx.chat.state.threadRef!,
+                        threadRef: this.composer.ctx.chat.state.threadRef!,
                         original: q.text,
                         text: q.text,
                         saving: false,
                       });
-                      ctx.chat.drawActiveChat(agent);
+                      this.composer.ctx.chat.drawActiveChat(agent);
                       requestAnimationFrame(() => {
                         if (
-                          queuedEdit === edit &&
-                          ctx.chat.state.threadRef === edit.threadRef &&
-                          ctx.chat.state.agent === agent
+                          this.queuedEdit === edit &&
+                          this.composer.ctx.chat.state.threadRef === edit.threadRef &&
+                          this.composer.ctx.chat.state.agent === agent
                         )
-                          focusField(".queued-edit-input");
+                          this.composer.focusField(".queued-edit-input");
                       });
                     }}
                   >
@@ -171,7 +162,7 @@ export function createComposerQueue({
                     class="chip-x"
                     aria-label="Remove queued message"
                     ${tip("Remove")}
-                    @click=${() => void removeQueued(agent, q)}
+                    @click=${() => void this.removeQueued(agent, q)}
                   >
                     ${icon(X, 13)}
                   </button>
@@ -182,60 +173,59 @@ export function createComposerQueue({
     `;
   }
 
-  let failedQueueSend: { threadRef: string; text: string; filesKey: string; idempotencyKey: string } | null = null;
-
-  function queuedFilesKey(staged: readonly Attachment[]): string {
+  queuedFilesKey(staged: readonly Attachment[]): string {
     return staged.map((a) => a.id).join(",");
   }
 
-  function queueSendKey(threadRef: string, text: string, filesKey: string): string {
-    return failedQueueSend?.threadRef === threadRef &&
-      failedQueueSend.text === text &&
-      failedQueueSend.filesKey === filesKey
-      ? failedQueueSend.idempotencyKey
+  queueSendKey(threadRef: string, text: string, filesKey: string): string {
+    return this.failedQueueSend?.threadRef === threadRef &&
+      this.failedQueueSend.text === text &&
+      this.failedQueueSend.filesKey === filesKey
+      ? this.failedQueueSend.idempotencyKey
       : mintSendKey();
   }
 
-  async function queueDraft(agent: Agent): Promise<void> {
-    const threadRef = ctx.chat.state.threadRef;
-    const text = composerState.draft.trim();
-    const staged = composerState.attachments;
+  async queueDraft(agent: Agent): Promise<void> {
+    const threadRef = this.composer.ctx.chat.state.threadRef;
+    const text = this.composer.state.draft.trim();
+    const staged = this.composer.state.attachments;
     if ((!text && !staged.length) || !threadRef) return;
-    clearActiveDraft();
-    composerState.draft = "";
-    composerState.attachments = [];
-    composerState.error = "";
-    ctx.chat.drawActiveChat(agent);
-    clearComposerDom(agent);
+    this.composer.clearActiveDraft();
+    this.composer.state.draft = "";
+    this.composer.state.attachments = [];
+    this.composer.state.error = "";
+    this.composer.ctx.chat.drawActiveChat(agent);
+    this.composer.clearComposerDom(agent);
     const { uploaded, skipped } = await uploadAttachments(staged);
-    const stillHere = (): boolean => ctx.chat.state.threadRef === threadRef;
-    if (skipped.length && stillHere()) composerState.error = skipped.map((s) => s.note).join(" ");
+    const stillHere = (): boolean => this.composer.ctx.chat.state.threadRef === threadRef;
+    if (skipped.length && stillHere()) this.composer.state.error = skipped.map((s) => s.note).join(" ");
     const droppedIds = new Set(skipped.filter((s) => s.permanent).flatMap((s) => (s.id ? [s.id] : [])));
     const transientIds = new Set(skipped.filter((s) => !s.permanent).flatMap((s) => (s.id ? [s.id] : [])));
     const sendable = staged.filter((a) => !droppedIds.has(a.id));
     if (!text && !uploaded.length) {
-      if (stillHere()) restoreStagedOnFailure(text, sendable, composerState.error || "Could not queue the files.");
-      return ctx.chat.drawActiveChat(agent);
+      if (stillHere())
+        this.restoreStagedOnFailure(text, sendable, this.composer.state.error || "Could not queue the files.");
+      return this.composer.ctx.chat.drawActiveChat(agent);
     }
-    const steer = alwaysSteer() && canSteer(agent);
-    if (!(await enqueueTurn(agent, threadRef, text, uploaded, queuedFilesKey(sendable), steer))) {
-      if (stillHere()) restoreStagedOnFailure(text, sendable, composerState.error);
+    const steer = alwaysSteer() && this.composer.canSteer(agent);
+    if (!(await this.enqueueTurn(agent, threadRef, text, uploaded, this.queuedFilesKey(sendable), steer))) {
+      if (stillHere()) this.restoreStagedOnFailure(text, sendable, this.composer.state.error);
     } else if (transientIds.size && stillHere()) {
-      restageAttachments(
+      this.composer.restageAttachments(
         staged.filter((a) => transientIds.has(a.id)),
-        composerState.error,
+        this.composer.state.error,
       );
     }
-    ctx.chat.drawActiveChat(agent);
+    this.composer.ctx.chat.drawActiveChat(agent);
   }
 
-  function restoreStagedOnFailure(text: string, staged: Attachment[], note: string): void {
-    const typedSince = composerState.draft.trim();
-    composerState.draft = !typedSince || typedSince === text ? text : `${text}\n${composerState.draft}`;
-    restageAttachments(staged, note);
+  restoreStagedOnFailure(text: string, staged: Attachment[], note: string): void {
+    const typedSince = this.composer.state.draft.trim();
+    this.composer.state.draft = !typedSince || typedSince === text ? text : `${text}\n${this.composer.state.draft}`;
+    this.composer.restageAttachments(staged, note);
   }
 
-  async function enqueueTurn(
+  async enqueueTurn(
     agent: Agent,
     threadRef: string,
     text: string,
@@ -243,135 +233,141 @@ export function createComposerQueue({
     filesKey = "",
     steer = false,
   ): Promise<boolean> {
-    const idempotencyKey = queueSendKey(threadRef, text, filesKey);
+    const idempotencyKey = this.queueSendKey(threadRef, text, filesKey);
     try {
-      const queued = await queueTurn(threadRef, text, agent, ctx.chat.currentTurnOptions, idempotencyKey, attachments);
-      failedQueueSend = null;
+      const queued = await queueTurn(
+        threadRef,
+        text,
+        agent,
+        this.composer.ctx.chat.currentTurnOptions,
+        idempotencyKey,
+        attachments,
+      );
+      this.failedQueueSend = null;
       bumpSessionActivity(threadRef);
-      if (steer && canSteer(agent) && threadRef === ctx.chat.state.threadRef) void steerQueued(agent, queued, true);
-      else addQueuedRun(threadRef, queued);
+      if (steer && this.composer.canSteer(agent) && threadRef === this.composer.ctx.chat.state.threadRef)
+        void this.steerQueued(agent, queued, true);
+      else this.addQueuedRun(threadRef, queued);
       return true;
     } catch (err) {
-      failedQueueSend = { threadRef, text, filesKey, idempotencyKey };
-      composerState.error = errMessage(err, "Could not queue the message.");
+      this.failedQueueSend = { threadRef, text, filesKey, idempotencyKey };
+      this.composer.state.error = errMessage(err, "Could not queue the message.");
       return false;
     }
   }
 
-  function cancelQueuedEdit(agent: Agent): void {
-    if (queuedEdit?.saving) return;
-    queuedEdit = null;
-    composerState.error = "";
-    ctx.chat.drawActiveChat(agent);
-    focusComposerEnd();
+  cancelQueuedEdit(agent: Agent): void {
+    if (this.queuedEdit?.saving) return;
+    this.queuedEdit = null;
+    this.composer.state.error = "";
+    this.composer.ctx.chat.drawActiveChat(agent);
+    this.composer.focusComposerEnd();
   }
 
-  async function saveQueuedEdit(agent: Agent): Promise<void> {
-    const edit = queuedEdit;
+  async saveQueuedEdit(agent: Agent): Promise<void> {
+    const edit = this.queuedEdit;
     if (!edit || edit.saving) return;
     edit.saving = true;
-    composerState.error = "";
-    ctx.chat.drawActiveChat(agent);
+    this.composer.state.error = "";
+    this.composer.ctx.chat.drawActiveChat(agent);
     try {
       await editQueuedRun(edit.runId, edit.text, edit.original);
-      setQueuedRuns(
+      this.setQueuedRuns(
         edit.threadRef,
-        queuedRunsFor(edit.threadRef).map((q) => (q.runId === edit.runId ? { ...q, text: edit.text } : q)),
+        this.queuedRunsFor(edit.threadRef).map((q) => (q.runId === edit.runId ? { ...q, text: edit.text } : q)),
       );
-      if (queuedEdit === edit) {
-        queuedEdit = null;
-        if (ctx.chat.state.threadRef === edit.threadRef && ctx.chat.state.agent === agent) focusComposerEnd();
+      if (this.queuedEdit === edit) {
+        this.queuedEdit = null;
+        if (this.composer.ctx.chat.state.threadRef === edit.threadRef && this.composer.ctx.chat.state.agent === agent)
+          this.composer.focusComposerEnd();
       }
     } catch (error) {
-      if (ctx.chat.state.threadRef === edit.threadRef)
-        composerState.error =
+      if (this.composer.ctx.chat.state.threadRef === edit.threadRef)
+        this.composer.state.error =
           error instanceof ApiError && error.status === 409
             ? "That message changed or already started. Your edit was not saved."
             : errMessage(error, "Could not edit the queued message.");
     } finally {
       edit.saving = false;
-      if (ctx.chat.state.threadRef === edit.threadRef) ctx.chat.drawActiveChat(agent);
+      if (this.composer.ctx.chat.state.threadRef === edit.threadRef) this.composer.ctx.chat.drawActiveChat(agent);
     }
   }
 
-  async function removeQueued(agent: Agent, queued: QueuedRun): Promise<void> {
-    const threadRef = ctx.chat.state.threadRef;
+  async removeQueued(agent: Agent, queued: QueuedRun): Promise<void> {
+    const threadRef = this.composer.ctx.chat.state.threadRef;
     if (!threadRef) return;
-    composerState.error = "";
+    this.composer.state.error = "";
     try {
       await withdrawRun(queued.runId);
     } catch (err) {
       if (!(err instanceof ApiError && (err.status === 409 || err.status === 404))) {
-        composerState.error = errMessage(err, "Could not remove the queued message.");
-        return ctx.chat.drawActiveChat(agent);
+        this.composer.state.error = errMessage(err, "Could not remove the queued message.");
+        return this.composer.ctx.chat.drawActiveChat(agent);
       }
     }
-    forgetQueuedRun(threadRef, queued.runId);
-    ctx.chat.drawActiveChat(agent);
+    this.forgetQueuedRun(threadRef, queued.runId);
+    this.composer.ctx.chat.drawActiveChat(agent);
   }
 
-  const pendingSteers = new Set<string>();
-
-  function addQueuedRun(threadRef: string, queued: QueuedRun): void {
-    setQueuedRuns(threadRef, [...queuedRunsFor(threadRef).filter((r) => r.runId !== queued.runId), queued]);
+  addQueuedRun(threadRef: string, queued: QueuedRun): void {
+    this.setQueuedRuns(threadRef, [...this.queuedRunsFor(threadRef).filter((r) => r.runId !== queued.runId), queued]);
   }
 
-  function markSteering(threadRef: string, queued: QueuedRun): void {
-    steeringRuns.set(threadRef, [
-      ...(steeringRuns.get(threadRef) ?? []).filter((run) => run.runId !== queued.runId),
+  markSteering(threadRef: string, queued: QueuedRun): void {
+    this.steeringRuns.set(threadRef, [
+      ...(this.steeringRuns.get(threadRef) ?? []).filter((run) => run.runId !== queued.runId),
       { ...queued, ts: `queued-steer:${threadRef}:${queued.runId}` },
     ]);
   }
 
-  function unmarkSteering(threadRef: string, runId: string): void {
-    putRuns(
-      steeringRuns,
+  unmarkSteering(threadRef: string, runId: string): void {
+    this.putRuns(
+      this.steeringRuns,
       threadRef,
-      (steeringRuns.get(threadRef) ?? []).filter((run) => run.runId !== runId),
+      (this.steeringRuns.get(threadRef) ?? []).filter((run) => run.runId !== runId),
     );
   }
 
-  async function steerQueued(agent: Agent, queued: QueuedRun, fresh = false): Promise<void> {
-    const threadRef = ctx.chat.state.threadRef;
-    if (!threadRef || !ctx.chat.hasLiveRun() || pendingSteers.has(queued.runId)) {
-      if (fresh && threadRef) addQueuedRun(threadRef, queued);
+  async steerQueued(agent: Agent, queued: QueuedRun, fresh = false): Promise<void> {
+    const threadRef = this.composer.ctx.chat.state.threadRef;
+    if (!threadRef || !this.composer.ctx.chat.hasLiveRun() || this.pendingSteers.has(queued.runId)) {
+      if (fresh && threadRef) this.addQueuedRun(threadRef, queued);
       return;
     }
-    pendingSteers.add(queued.runId);
-    composerState.error = "";
-    markSteering(threadRef, queued);
+    this.pendingSteers.add(queued.runId);
+    this.composer.state.error = "";
+    this.markSteering(threadRef, queued);
     let steered = false;
     let fallBackToQueue = fresh;
-    const here = (): boolean => agent === ctx.chat.state.agent && threadRef === ctx.chat.state.threadRef;
+    const here = (): boolean =>
+      agent === this.composer.ctx.chat.state.agent && threadRef === this.composer.ctx.chat.state.threadRef;
     try {
-      const outcome = await ctx.chat.signalLiveRun("steer", queued.text, queued.runId);
+      const outcome = await this.composer.ctx.chat.signalLiveRun("steer", queued.text, queued.runId);
       steered = outcome.ok;
       if (outcome.ok || outcome.replayed) {
         fallBackToQueue = false;
-        forgetQueuedRun(threadRef, queued.runId);
+        this.forgetQueuedRun(threadRef, queued.runId);
         bumpSessionActivity(threadRef);
         if (!outcome.ok && here())
           agent.state.messages.push({ role: "user", content: queued.text, timestamp: Date.now() } as AgentMessage);
       } else if (outcome.reason === "queued_started" || outcome.reason === "not_found") {
         fallBackToQueue = false;
-        forgetQueuedRun(threadRef, queued.runId);
+        this.forgetQueuedRun(threadRef, queued.runId);
       } else {
         reportHandledError("web:steer_refused", new Error(outcome.reason ?? "steer refused"));
         if (outcome.reason === "queued_changed" && here())
-          composerState.error = "The queued message changed. Try steering it again.";
+          this.composer.state.error = "The queued message changed. Try steering it again.";
       }
     } catch (err) {
       reportHandledError("web:steer_queued", err);
-      if (here()) composerState.error = errMessage(err, "Could not confirm steering. Try again.");
+      if (here()) this.composer.state.error = errMessage(err, "Could not confirm steering. Try again.");
     } finally {
-      pendingSteers.delete(queued.runId);
-      if (!steered) unmarkSteering(threadRef, queued.runId);
+      this.pendingSteers.delete(queued.runId);
+      if (!steered) this.unmarkSteering(threadRef, queued.runId);
     }
-    if (fallBackToQueue) addQueuedRun(threadRef, queued);
+    if (fallBackToQueue) this.addQueuedRun(threadRef, queued);
     if (!here()) return;
-    ctx.chat.drawActiveChat(agent);
-    ctx.chat.resumeIfIdle();
+    this.composer.ctx.chat.drawActiveChat(agent);
+    this.composer.ctx.chat.resumeIfIdle();
   }
-
-  return { queueDraft, queuedRunsFor, queuedStrip, restoreStagedOnFailure, setQueuedRuns, steeringRunsFor };
 }
