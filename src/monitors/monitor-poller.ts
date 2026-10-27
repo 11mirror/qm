@@ -13,9 +13,10 @@ import { mapBounded } from "../util/async.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { compileMonitorPattern } from "./monitor-broker.ts";
 import { buildEventWakeEnvelope, capForEscaping } from "../core/wake-envelope.ts";
+import { MAX_SCREEN_CHARS } from "../security/security-screen.ts";
 
-const MAX_EVENT_CHARS = 16_000;
-const MAX_TAIL_CHARS = 4_096;
+const TRUNCATED_MARK = "…[truncated]\n";
+const MAX_EVENT_CHARS = MAX_SCREEN_CHARS - TRUNCATED_MARK.length;
 const MAX_READ_BYTES = 64 * 1024;
 const DEFAULT_HEARTBEAT_MS = 180_000;
 export const MONITOR_POLL_MS = 10_000;
@@ -100,7 +101,7 @@ function replyGuidance(ev: MonitorEvent): string {
 function renderEvent(m: Monitor, output: string, ev: MonitorEvent): { input: string; securityScreenData: string } {
   const what = describeEvent(ev);
   const kept = capForEscaping(output, MAX_EVENT_CHARS, "tail");
-  const capped = kept.length < output.length ? `…[truncated]\n${kept}` : kept;
+  const capped = kept.length < output.length ? `${TRUNCATED_MARK}${kept}` : kept;
   return {
     input: buildEventWakeEnvelope({
       reason: "monitor",
@@ -170,7 +171,7 @@ async function pollMonitor(
       events = filterLines(raw, m.pattern);
     } else {
       const lastNl = raw.lastIndexOf("\n");
-      tail = (lastNl === -1 ? raw : raw.slice(lastNl + 1)).slice(-MAX_TAIL_CHARS) || undefined;
+      tail = (lastNl === -1 ? raw : raw.slice(lastNl + 1)).slice(-MAX_EVENT_CHARS) || undefined;
       events = lastNl === -1 ? "" : filterLines(raw.slice(0, lastNl + 1), m.pattern);
     }
   }
@@ -182,7 +183,7 @@ async function pollMonitor(
       const outcome = await fire(
         m,
         `monitor:${m.id}:quiet:${quietSince}`,
-        renderEvent(m, raw.slice(-MAX_TAIL_CHARS), { kind: "quiet", quietMins }),
+        renderEvent(m, raw, { kind: "quiet", quietMins }),
       );
       if (outcome.authzFailed) {
         await deps.monitors.setEnabled(m.id, false);
