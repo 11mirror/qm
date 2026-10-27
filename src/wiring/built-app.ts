@@ -1,108 +1,79 @@
-import type { Head } from "./late.ts";
-import { createSlackAccounts } from "../connectors/composio-links.ts";
-import type { BuiltApp } from "../wiring.ts";
-import { createSessionShareStore } from "../sessions/session-share.ts";
 import type { ApiAppModule } from "./api-app.ts";
 import type { StoresModule } from "./stores.ts";
-import type { AppServicesModule } from "./app-services.ts";
+import type { OrchestratorModule } from "./orchestrator.ts";
 import type { DeploymentLayerModule } from "./deployment-layer.ts";
-import type { StartupModule } from "./startup.ts";
+import type { CredentialsModule } from "./credentials.ts";
 import type { RunsModule } from "./runs.ts";
 import type { HarnessModule } from "./harness.ts";
-import type { OrchestratorModule } from "./orchestrator.ts";
 import type { BackgroundModule } from "./background.ts";
-import type { CredentialsModule } from "./credentials.ts";
-import type { ModelCredentialsModule } from "./model-credentials.ts";
 import type { FilesModule } from "./files.ts";
-import type { ModelKeysModule } from "./model-keys.ts";
 import type { SchedulerModule } from "./scheduler.ts";
-import type { TriggersModule } from "./triggers.ts";
 import type { ReceiversModule } from "./receivers.ts";
 import type { CronsModule } from "./crons.ts";
-import type { RunStreamsModule } from "./run-streams.ts";
 import type { WorkersModule } from "./workers.ts";
 import type { MemoryModule } from "./memory.ts";
 import type { OutboundModule } from "./outbound.ts";
 import type { SlackCoreModule } from "./slack-core.ts";
 import type { SandboxModule } from "./sandbox.ts";
-import type { SessionSyscallsModule } from "./session-syscalls.ts";
+import type { Head } from "./late.ts";
+import { createSlackAccounts } from "../connectors/composio-links.ts";
+import type { BuiltApp } from "../wiring.ts";
+import { createSessionShareStore } from "../sessions/session-share.ts";
 
-type AssembleBuiltAppInputs = Head &
-  ApiAppModule &
-  StoresModule &
-  AppServicesModule &
-  DeploymentLayerModule &
-  StartupModule &
-  RunsModule &
-  HarnessModule &
-  OrchestratorModule &
-  BackgroundModule &
-  CredentialsModule &
-  ModelCredentialsModule &
-  FilesModule &
-  ModelKeysModule &
-  SchedulerModule &
-  TriggersModule &
-  ReceiversModule &
-  CronsModule &
-  RunStreamsModule &
-  WorkersModule &
-  MemoryModule &
-  OutboundModule &
-  SlackCoreModule &
-  SandboxModule &
-  SessionSyscallsModule;
+type BuiltAppInputs = Pick<Head, "config"> & {
+  apiApp: ApiAppModule;
+  stores: StoresModule;
+  orchestrator: OrchestratorModule;
+  deploymentLayer: DeploymentLayerModule;
+  credentials: CredentialsModule;
+  runs: RunsModule;
+  harness: HarnessModule;
+  background: BackgroundModule;
+  files: FilesModule;
+  scheduler: SchedulerModule;
+  receivers: ReceiversModule;
+  crons: CronsModule;
+  workers: WorkersModule;
+  memory: MemoryModule;
+  outbound: OutboundModule;
+  slackCore: SlackCoreModule;
+  sandbox: SandboxModule;
+};
 
-export function assembleBuiltApp(w: AssembleBuiltAppInputs): BuiltApp {
-  return { ...builtAppHead(w), ...builtAppTail(w) };
+export function assembleBuiltApp(deps: BuiltAppInputs): BuiltApp {
+  return { ...builtAppHead(deps), ...builtAppTail(deps) };
 }
 
-function builtAppHead(w: AssembleBuiltAppInputs) {
+function builtAppHead(deps: BuiltAppInputs) {
+  const { app, sweepAsks, inbox } = deps.apiApp;
+  const { pgPool, sessions, configStore, slackInstallation, skills, skillBundles, jobs } = deps.stores;
+  const { screenSecurity, surfaceCache, skillFetcher } = deps.orchestrator;
+  const { deploymentLayer, deploymentLayerStore, brokeredTools, auditLog } = deps.deploymentLayer;
   const {
-    app,
-    pgPool,
-    screenSecurity,
-    deploymentLayer,
-    deploymentLayerStore,
-    brokeredTools,
     startOnce,
-    sessions,
-    runs,
-    turnLedger,
-    runSignals,
-    sessionStateBus,
-    ledgerEventBus,
-    surfaceCache,
-    runtime,
-    configStore,
     connectorTokens,
-    slackInstallation,
     resolveClient,
     consentLinks,
     oauthFlows,
     secretDrops,
-    gatewayTransport,
-    budget,
-    resolveBrowserCompanyKeys,
     modelGateway,
-    modelCredentials,
     userModelCredentials,
+    mcpToolService,
+  } = deps.credentials;
+  const { runs, turnLedger, sessionStateBus, ledgerEventBus } = deps.runs;
+  const {
+    runSignals,
+    gatewayTransport,
+    resolveBrowserCompanyKeys,
+    modelCredentials,
     refreshModels,
     customProviders,
     refreshCustomProviders,
-    mcpServers,
-    mcpToolService,
-    acl,
-    skills,
-    skillBundles,
-    skillFetcher,
-    auditLog,
-    scheduler,
-    sweepAsks,
-    inbox,
-    webhookReceiver,
-    jobs,
-  } = w;
+  } = deps.harness;
+  const { runtime } = deps.background;
+  const { budget, mcpServers, acl } = deps.files;
+  const { scheduler } = deps.scheduler;
+  const { webhookReceiver } = deps.receivers;
   return {
     app,
     checkReadiness: async (signal) => {
@@ -152,55 +123,33 @@ function builtAppHead(w: AssembleBuiltAppInputs) {
   } satisfies Partial<BuiltApp>;
 }
 
-function builtAppTail(w: AssembleBuiltAppInputs) {
+function builtAppTail(deps: BuiltAppInputs) {
   const {
     admin,
-    rateLimiter,
-    errors,
-    crons,
-    credentialUsage,
-    egressAudit,
     identity,
     principalLinks,
-    composioReturns,
-    workspace,
-    memory,
-    keychain,
-    serviceCreds,
-    outbound,
-    keychainApprovals,
-    askResolution,
-    dropResolution,
-    sandbox,
-    sandboxResources,
     advisoryLock,
-    blobTransfer,
-    files,
-    fileUploads,
     featureFlags,
     teams,
     decisions,
-    replayDedupe,
-    brokerSessions,
     directory,
     projects,
     environments,
-    processes,
-    appPageViews,
-    monitors,
-    browserSessionStore,
-    ambientJudgments,
-    ackEmojiPicks,
-    channelPolicy,
-    config,
-    suggestedActivities,
-    backgroundOwnership,
-    uiState,
-    byteStore,
-    slackCore,
-    chatSurfaces,
     databaseUrl,
-  } = w;
+  } = deps.stores;
+  const { rateLimiter, errors, workspace, blobTransfer, files, fileUploads, byteStore } = deps.files;
+  const { crons, monitors } = deps.crons;
+  const { credentialUsage, egressAudit, replayDedupe, brokerSessions, processes, appPageViews } = deps.runs;
+  const { composioReturns, backgroundOwnership } = deps.workers;
+  const { memory } = deps.memory;
+  const { keychain, serviceCreds, browserSessionStore } = deps.credentials;
+  const { outbound, chatSurfaces } = deps.outbound;
+  const { keychainApprovals, slackCore } = deps.slackCore;
+  const { askResolution, dropResolution } = deps.apiApp;
+  const { sandbox, sandboxResources } = deps.sandbox;
+  const { ambientJudgments, ackEmojiPicks, channelPolicy, uiState } = deps.orchestrator;
+  const { config } = deps;
+  const { suggestedActivities } = deps.scheduler;
   return {
     admin,
     rateLimiter,

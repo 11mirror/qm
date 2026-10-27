@@ -1,31 +1,32 @@
+import type { SandboxModule } from "./sandbox.ts";
+import type { RunsModule } from "./runs.ts";
+import type { CredentialsModule } from "./credentials.ts";
+import type { CronsModule } from "./crons.ts";
+import type { ApiAppModule } from "./api-app.ts";
+import type { StoresModule } from "./stores.ts";
 import type { Head } from "./late.ts";
 import { type SandboxHandle, supportsProcessSessions } from "../sandbox/sandbox.ts";
 import { finishProcessCredentials } from "../credentials/execute-files.ts";
-import { type MonitorPoller, createMonitorPoller } from "../monitors/monitor-poller.ts";
+import { type MonitorPoller, createMonitorPoller, MONITOR_POLL_MS } from "../monitors/monitor-poller.ts";
 import { createWebhookReceiver } from "../webhooks/webhook-receiver.ts";
-import type { SandboxModule } from "./sandbox.ts";
-import type { RunStreamsModule } from "./run-streams.ts";
-import type { CredentialsModule } from "./credentials.ts";
-import type { CronsModule } from "./crons.ts";
-import type { TriggersModule } from "./triggers.ts";
-import type { StoresModule } from "./stores.ts";
-import type { AppServicesModule } from "./app-services.ts";
-import type { ApiAppModule } from "./api-app.ts";
-import type { SchedulerModule } from "./scheduler.ts";
 
-export function buildReceivers(
-  w: Head &
-    SandboxModule &
-    RunStreamsModule &
-    CredentialsModule &
-    CronsModule &
-    TriggersModule &
-    StoresModule &
-    AppServicesModule &
-    ApiAppModule &
-    SchedulerModule,
-) {
-  const { sandbox, processes, keychain, admittedWork, monitors, triggerDeps, webhooks, jobs } = w;
+type ReceiversInputs = Pick<Head, "admittedWork"> & {
+  sandbox: SandboxModule;
+  runs: RunsModule;
+  credentials: CredentialsModule;
+  crons: CronsModule;
+  apiApp: ApiAppModule;
+  stores: StoresModule;
+};
+
+export function buildReceivers(deps: ReceiversInputs) {
+  const { sandbox } = deps.sandbox;
+  const { processes } = deps.runs;
+  const { keychain } = deps.credentials;
+  const { admittedWork } = deps;
+  const { monitors, webhooks } = deps.crons;
+  const { triggerDeps } = deps.apiApp;
+  const { jobs, every } = deps.stores;
 
   const finishCredentials = (handle: SandboxHandle, processId: string) =>
     finishProcessCredentials({ sandbox, processes: processes!, keychain }, handle, processId);
@@ -45,7 +46,8 @@ export function buildReceivers(
     ...triggerDeps,
     jobs,
   });
-  return { finishCredentials, monitorPoller, webhookReceiver };
+  if (monitorPoller) every("monitor:poll", MONITOR_POLL_MS, () => monitorPoller.tick());
+  return { finishCredentials, webhookReceiver };
 }
 
 export type ReceiversModule = ReturnType<typeof buildReceivers>;

@@ -1,3 +1,10 @@
+import type { StoresModule } from "./stores.ts";
+import type { FilesModule } from "./files.ts";
+import type { SandboxModule } from "./sandbox.ts";
+import type { OutboundModule } from "./outbound.ts";
+import type { RunsModule } from "./runs.ts";
+import type { DeploymentLayerModule } from "./deployment-layer.ts";
+import type { CredentialsModule } from "./credentials.ts";
 import type { Head } from "./late.ts";
 import { createDeployStore, type Deployment } from "../deploy/deploy-store.ts";
 import { createDeployGitArchiveStore } from "../deploy/deploy-git-store.ts";
@@ -15,43 +22,35 @@ import { viewerIdentityKey } from "../deploy/access-token.ts";
 import { scopeId, personalScope } from "../types.ts";
 import { deploymentCredentialSlugs } from "../deploy/deployment-credentials.ts";
 import { mintCapabilityToken, CREDENTIAL_BROKER_AUD, DEPLOYMENT_CREDENTIAL_TTL_MS } from "../auth/capability-token.ts";
-import type { StoresModule } from "./stores.ts";
-import type { FilesModule } from "./files.ts";
-import type { SandboxBackendsModule } from "./sandbox-backends.ts";
-import type { OutboundModule } from "./outbound.ts";
-import type { RunsModule } from "./runs.ts";
-import type { DeploymentLayerModule } from "./deployment-layer.ts";
-import type { CredentialsModule } from "./credentials.ts";
 
-export function buildDeploy(
-  w: Head &
-    StoresModule &
-    FilesModule &
-    SandboxBackendsModule &
-    OutboundModule &
-    RunsModule &
-    DeploymentLayerModule &
-    CredentialsModule,
-) {
+type DeployInputs = Pick<Head, "config"> & {
+  stores: StoresModule;
+  files: FilesModule;
+  sandbox: SandboxModule;
+  outbound: OutboundModule;
+  runs: RunsModule;
+  deploymentLayer: DeploymentLayerModule;
+  credentials: CredentialsModule;
+};
+
+export function buildDeploy(deps: DeployInputs) {
   const {
     databaseUrl,
-    config,
-    s3Bytes,
     advisoryLock,
-    sandboxOnError,
-    e2bClient,
-    outbound,
-    productAnalytics,
-    auditLog,
-    acl,
     canReadScope,
     canWriteScope,
     featureFlags,
     identity,
     directory,
     managesArtifactHome,
-    serviceCreds,
-  } = w;
+  } = deps.stores;
+  const { config } = deps;
+  const { s3Bytes, acl } = deps.files;
+  const { sandboxOnError, e2bClient } = deps.sandbox;
+  const { outbound } = deps.outbound;
+  const { productAnalytics } = deps.runs;
+  const { auditLog } = deps.deploymentLayer;
+  const { serviceCreds } = deps.credentials;
 
   const deployStore = createDeployStore({
     databaseUrl,
