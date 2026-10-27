@@ -1,5 +1,5 @@
 import type { Head } from "./late.ts";
-import { createIdempotencyStore, type IdempotencyRecord } from "../idempotency/idempotency-store.ts";
+import { createIdempotencyStore } from "../idempotency/idempotency-store.ts";
 import { type RecentDmPosts, rememberDmPost } from "../surfaces/recent-dm-posts.ts";
 import { createOutbound, type QueuedPost, createWebSurface } from "../surfaces/outbound.ts";
 import { scopeId } from "../types.ts";
@@ -11,9 +11,9 @@ import type { StoresModule } from "./stores.ts";
 import type { RunsModule } from "./runs.ts";
 
 export function buildOutbound(w: Head & StoresModule & RunsModule) {
-  const { artifactMap, sessions, sessionStateBus, config, late } = w;
+  const { artifactMap, databaseUrl, sessions, sessionStateBus, config, late } = w;
 
-  const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
+  const idempotency = createIdempotencyStore(databaseUrl);
   const transcripts = { sessions, sessionStates: sessionStateBus };
   const recentDmPosts = artifactMap<RecentDmPosts>("recent_dm_posts");
   const outbound = createOutbound({

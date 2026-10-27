@@ -43,7 +43,7 @@ function fixture() {
     crons,
     outbound: recordingOutbound(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    idempotency: createIdempotencyStore(testMap()),
+    idempotency: createIdempotencyStore(testDatabaseUrl()),
     skipFire: (cron) => service.skipFire(cron),
     run: async (request) => {
       calls.push(request);

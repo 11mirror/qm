@@ -3,7 +3,7 @@ import { type AwsRoleBroker, createAwsRoleBroker } from "../auth/aws-role-broker
 import type { BrokeredLayerTool } from "../deployment/load-layer.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import { rosterAdmits } from "../resolution/scope-membership.ts";
-import { createSessionMailbox, type SessionMessage } from "../sessions/session-mailbox.ts";
+import { createSessionMailbox } from "../sessions/session-mailbox.ts";
 import { createSessionSyscalls } from "../subagents/session-tools.ts";
 import { createPostgresSwarmBoard } from "../swarms/swarm-board.ts";
 import { scopeId } from "../types.ts";
@@ -79,7 +79,7 @@ export function buildSessionSyscalls(w: Head & FilesModule & StoresModule & Runs
       conversation: { ...request.conversation, audience, publishMembers: audience },
     };
   };
-  const sessionMailbox = createSessionMailbox(artifactMap<SessionMessage>("session_mailbox", ["recipientId"]));
+  const sessionMailbox = createSessionMailbox(databaseUrl);
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
     board: createPostgresSwarmBoard(databaseUrl),

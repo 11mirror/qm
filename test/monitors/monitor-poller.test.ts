@@ -119,7 +119,7 @@ async function harness(opts?: {
     processes,
     sandbox: fake.sandbox,
     outbound,
-    idempotency: createIdempotencyStore(testMap()),
+    idempotency: createIdempotencyStore(testDatabaseUrl()),
     identity,
     run,
     ...(opts?.heartbeatMs !== undefined ? { heartbeatMs: opts.heartbeatMs } : {}),

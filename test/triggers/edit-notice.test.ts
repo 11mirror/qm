@@ -11,7 +11,7 @@ import { recordingOutbound, type PostLog } from "../support/recording-outbound.t
 import { createIdempotencyStore } from "../../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../../src/identity/identity-service.ts";
 import { scopeId, type Destination, type TurnRequest, type TurnResult } from "../../src/types.ts";
-import { testMap } from "../support/test-database.ts";
+import { testMap, testDatabaseUrl } from "../support/test-database.ts";
 import { automationOrigin } from "../support/turn-origin.ts";
 
 const members = [
@@ -29,7 +29,7 @@ function captureDeps(): { deps: TriggerDeps & { outbound: PostLog }; seen: TurnR
   return {
     deps: {
       outbound: recordingOutbound(),
-      idempotency: createIdempotencyStore(testMap()),
+      idempotency: createIdempotencyStore(testDatabaseUrl()),
       identity: createIdentityService(testMap(), { externalMembers: testMap() }),
       run,
     },

@@ -7,7 +7,7 @@ import { recordingOutbound } from "../support/recording-outbound.ts";
 import { createIdempotencyStore } from "../../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../../src/types.ts";
-import { testMap } from "../support/test-database.ts";
+import { testMap, testDatabaseUrl } from "../support/test-database.ts";
 import type { JobHandler, JobWorker } from "../../src/jobs/job-worker.ts";
 import type { TriggerDeps } from "../../src/triggers/run-trigger.ts";
 import { automationOrigin } from "../support/turn-origin.ts";
@@ -70,7 +70,7 @@ function harness(
     webhooks,
     jobs: inlineJobs(),
     outbound,
-    idempotency: tracked(createIdempotencyStore(testMap())),
+    idempotency: tracked(createIdempotencyStore(testDatabaseUrl())),
     identity,
     run,
     ...extra,

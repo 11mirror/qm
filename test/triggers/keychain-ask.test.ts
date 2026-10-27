@@ -20,7 +20,7 @@ import { createAskExpirySweep, fireAskResolution } from "../../src/triggers/keyc
 import { createKeychainApprovals, type KeychainApprovals } from "../../src/credentials/keychain-approval.ts";
 import { runTrigger } from "../../src/triggers/run-trigger.ts";
 import { recordingOutbound } from "../support/recording-outbound.ts";
-import { createIdempotencyStore, type IdempotencyRecord } from "../../src/idempotency/idempotency-store.ts";
+import { createIdempotencyStore } from "../../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../../src/identity/identity-service.ts";
 import { deriveConnectorKey } from "../../src/connectors/connector-client-store.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../../src/auth/capability-token.ts";
@@ -387,7 +387,7 @@ test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate cl
   const outcome = await runTrigger(
     {
       outbound: recordingOutbound(),
-      idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
+      idempotency: createIdempotencyStore(testDatabaseUrl()),
       identity: createIdentityService(testMap(), { externalMembers: testMap() }),
       run: async (req) => ((seen = req), { status: "ok" } as TurnResult),
     },
@@ -412,7 +412,7 @@ test("runTrigger: silent markers never silence a notification-shaped fire (keych
   const outcome = await runTrigger(
     {
       outbound,
-      idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
+      idempotency: createIdempotencyStore(testDatabaseUrl()),
       identity: createIdentityService(testMap(), { externalMembers: testMap() }),
       run: async () => ({ status: "ok", reply: "The keychain ask was approved." }) as TurnResult,
     },
@@ -448,7 +448,7 @@ test("fireAskResolution: a turn that fires but doesn't land falls back to a plai
     const outbound = recordingOutbound();
     return {
       outbound,
-      idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
+      idempotency: createIdempotencyStore(testDatabaseUrl()),
       identity: createIdentityService(testMap(), { externalMembers: testMap() }),
       run,
       getAsk: async () => current,

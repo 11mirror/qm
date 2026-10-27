@@ -106,7 +106,7 @@ const poller = createMonitorPoller({
   processes: registry,
   sandbox: sb,
   outbound,
-  idempotency: createIdempotencyStore(smokeMap("idempotency")),
+  idempotency: createIdempotencyStore(databaseUrl),
   identity: createIdentityService(smokeMap("deactivated_principals"), {
     externalMembers: smokeMap("external_members"),
   }),

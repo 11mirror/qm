@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createOutbound, type OutboundPost, type QueuedPost } from "../src/surfaces/outbound.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
-import { testMap } from "./support/test-database.ts";
+import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 
 const post = (key: string, type = "slack"): OutboundPost => ({
   destination: { type, target: "C1:1.0" },
@@ -16,7 +16,7 @@ function rig() {
   const after: string[] = [];
   let failure: Error | null = null;
   const outbound = createOutbound({
-    idempotency: createIdempotencyStore(testMap()),
+    idempotency: createIdempotencyStore(testDatabaseUrl()),
     retries,
     afterSend: (p) => after.push(p.idempotencyKey),
   });
