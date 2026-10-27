@@ -40,8 +40,7 @@ type AssertNo413 = DeliverResult["status"] extends 202 | 200 | 401 | 404 ? true 
 const _deliverStatusIsNot413: AssertNo413 = true;
 void _deliverStatusIsNot413;
 
-/** In-process stand-in for the Absurd job worker: a spawn runs its handler once per key, in the background. */
-function inlineJobs(): Pick<JobWorker, "handle" | "spawn"> {
+function inlineJobs(failed: unknown[]): Pick<JobWorker, "handle" | "spawn"> {
   const handlers = new Map<string, JobHandler>();
   const keys = new Set<string>();
   return {
@@ -50,7 +49,10 @@ function inlineJobs(): Pick<JobWorker, "handle" | "spawn"> {
       if (keys.has(key)) return;
       keys.add(key);
       inFlight++;
-      void handlers.get(name)!(params).finally(() => inFlight--);
+      void handlers
+        .get(name)!(params)
+        .catch((e: unknown) => void failed.push(e))
+        .finally(() => inFlight--);
     },
   };
 }
@@ -64,20 +66,21 @@ function harness(
   const outbound = recordingOutbound();
   const identity = tracked(createIdentityService(url));
   const calls: TurnRequest[] = [];
+  const failedJobs: unknown[] = [];
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);
     return runResult;
   };
   const receiver = createWebhookReceiver({
     webhooks,
-    jobs: inlineJobs(),
+    jobs: inlineJobs(failedJobs),
     outbound,
     idempotency: tracked(createIdempotencyStore(url)),
     identity,
     run,
     ...extra,
   });
-  return { webhooks, outbound, identity, calls, receiver };
+  return { webhooks, outbound, identity, calls, receiver, failedJobs };
 }
 
 function githubReq(rawBody: string, deliveryId = "d-1", event = "issues") {
@@ -420,8 +423,8 @@ test("history capture failure rejects before acknowledging or starting a turn", 
   assert.equal(calls.length, 0);
 });
 
-test("webhook fire accounting failures remain contained when recording the failure also rejects", async (t) => {
-  const { webhooks, calls, receiver } = harness();
+test("a webhook fire whose failure cannot be recorded fails its job with both errors", async (t) => {
+  const { webhooks, calls, receiver, failedJobs } = harness();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",
@@ -432,11 +435,16 @@ test("webhook fire accounting failures remain contained when recording the failu
   const record = t.mock.method(webhooks, "recordFire", async () => {
     throw new Error("database unavailable");
   });
-  const errors = t.mock.method(console, "error", () => {});
   assert.deepEqual(await receiver.deliver(wh.id, githubReq("{}")), { status: 202 });
   await flush();
   assert.equal(record.mock.callCount(), 2);
-  assert.ok(errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes("persist fire failure")));
+  assert.equal(failedJobs.length, 1);
+  const failure = failedJobs[0] as AggregateError;
+  assert.ok(failure instanceof AggregateError);
+  assert.deepEqual(
+    failure.errors.map((e: Error) => e.message),
+    ["database unavailable", "database unavailable"],
+  );
   record.mock.restore();
   assert.deepEqual(await receiver.deliver(wh.id, githubReq('{"next":true}', "d-2")), { status: 202 });
   await flush();
