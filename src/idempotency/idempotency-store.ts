@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import { errMessage } from "../util/errors.ts";
 
-/** A committed key, or — while `claim` is set — a key some process is running right now. */
 interface IdempotencyRecord {
   key: string;
   at: number;
@@ -24,7 +23,6 @@ export interface IdempotencyStoreOptions {
 
 const DEFAULT_RETENTION_MS = 14 * 24 * 60 * 60_000;
 const DEFAULT_PRUNE_INTERVAL_MS = 60 * 60_000;
-/** How long an in-flight claim blocks other processes before it is presumed dead (its holder crashed). */
 const DEFAULT_CLAIM_LEASE_MS = 10 * 60_000;
 
 const IDEMPOTENCY: TableSpec = {
@@ -38,14 +36,13 @@ export const IDEMPOTENCY_MIGRATION = mapToTableMigration("idempotency/store/0001
   statements: [`CREATE INDEX IF NOT EXISTS idempotency_at ON idempotency (at)`],
 });
 
-const codec = tableCodec<IdempotencyRecord>(IDEMPOTENCY);
-
 export function createIdempotencyStore(databaseUrl: string, opts: IdempotencyStoreOptions = {}): IdempotencyStore {
   const retentionMs = opts.retentionMs ?? DEFAULT_RETENTION_MS;
   const pruneIntervalMs = opts.pruneIntervalMs ?? DEFAULT_PRUNE_INTERVAL_MS;
   const claimLeaseMs = opts.claimLeaseMs ?? DEFAULT_CLAIM_LEASE_MS;
   const now = opts.now ?? Date.now;
-  const { q } = createPgPool(databaseUrl, [IDEMPOTENCY_MIGRATION]);
+  const pg = createPgPool(databaseUrl, [IDEMPOTENCY_MIGRATION]);
+  const { codec, ...table } = typedTable<IdempotencyRecord>(pg, IDEMPOTENCY);
   const done = new Map<string, number>();
   let lastPruneAt = now();
 
@@ -54,7 +51,7 @@ export function createIdempotencyStore(databaseUrl: string, opts: IdempotencySto
     lastPruneAt = t;
     const cutoff = t - retentionMs;
     for (const [key, at] of done) if (at < cutoff) done.delete(key);
-    void q(`DELETE FROM idempotency WHERE at < $1`, [cutoff]).catch((e: unknown) => {
+    void pg.q(`DELETE FROM idempotency WHERE at < $1`, [cutoff]).catch((e: unknown) => {
       console.error("[idempotency] retention prune failed:", errMessage(e));
     });
   }
@@ -63,7 +60,7 @@ export function createIdempotencyStore(databaseUrl: string, opts: IdempotencySto
     const cutoff = now() - retentionMs;
     const cached = done.get(key);
     if (cached != null && cached >= cutoff) return true;
-    const record = codec.rows(await q(`SELECT ${codec.columns} FROM idempotency WHERE key = $1`, [key]))[0];
+    const record = await table.get(key);
     if (record != null && !record.claim && record.at >= cutoff) {
       done.set(record.key, record.at);
       return true;
@@ -74,7 +71,7 @@ export function createIdempotencyStore(databaseUrl: string, opts: IdempotencySto
   async function claimKey(key: string): Promise<string | null> {
     const t = now();
     const claim = randomUUID();
-    const rows = await q(
+    const rows = await pg.q(
       `INSERT INTO idempotency (${codec.columns}) VALUES (${codec.placeholders})
        ON CONFLICT (${tenantCols("key")}) DO UPDATE SET at = EXCLUDED.at, claim = EXCLUDED.claim
        WHERE CASE WHEN idempotency.claim IS NULL THEN idempotency.at < $4 ELSE idempotency.at <= $5 END
@@ -92,15 +89,11 @@ export function createIdempotencyStore(databaseUrl: string, opts: IdempotencySto
       try {
         await fn();
       } catch (error) {
-        await q(`DELETE FROM idempotency WHERE key = $1 AND claim = $2`, [key, claim]);
+        await pg.q(`DELETE FROM idempotency WHERE key = $1 AND claim = $2`, [key, claim]);
         throw error;
       }
       const at = now();
-      await q(
-        `INSERT INTO idempotency (key, at) VALUES ($1, $2)
-         ON CONFLICT (${tenantCols("key")}) DO UPDATE SET at = EXCLUDED.at, claim = NULL`,
-        [key, at],
-      );
+      await table.put(key, { key, at });
       done.set(key, at);
       pruneIfDue(at);
       return true;

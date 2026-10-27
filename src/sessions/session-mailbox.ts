@@ -1,5 +1,5 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 
 export interface SessionMessage {
@@ -26,20 +26,16 @@ export const SESSION_MAILBOX_MIGRATION = mapToTableMigration("sessions/mailbox/0
   statements: [`CREATE INDEX IF NOT EXISTS session_mailbox_recipient ON session_mailbox (recipient_id)`],
 });
 
-const codec = tableCodec<SessionMessage>(SESSION_MAILBOX);
-
 export function createSessionMailbox(databaseUrl: string) {
-  const { q } = createPgPool(databaseUrl, [SESSION_MAILBOX_MIGRATION]);
+  const pg = createPgPool(databaseUrl, [SESSION_MAILBOX_MIGRATION]);
+  const { codec, ...table } = typedTable<SessionMessage>(pg, SESSION_MAILBOX);
   return {
     async send(message: SessionMessage): Promise<void> {
-      await q(
-        `INSERT INTO session_mailbox (${codec.columns}) VALUES (${codec.placeholders}) ON CONFLICT DO NOTHING`,
-        codec.values(message.id, message),
-      );
+      await table.insert(message.id, message);
     },
     async pending(recipientId: string): Promise<SessionMessage[]> {
       return codec.rows(
-        await q(
+        await pg.q(
           `SELECT ${codec.columns} FROM session_mailbox
            WHERE recipient_id = $1 AND consumed IS NOT TRUE ORDER BY created_at, id`,
           [recipientId],
@@ -47,7 +43,7 @@ export function createSessionMailbox(databaseUrl: string) {
       );
     },
     async acknowledge(recipientId: string, ids: string[]): Promise<void> {
-      await q(`UPDATE session_mailbox SET consumed = true WHERE recipient_id = $1 AND id = ANY($2::text[])`, [
+      await pg.q(`UPDATE session_mailbox SET consumed = true WHERE recipient_id = $1 AND id = ANY($2::text[])`, [
         recipientId,
         ids,
       ]);

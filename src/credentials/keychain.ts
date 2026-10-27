@@ -829,7 +829,7 @@ export function createKeychain(deps: {
       createdAt: prior?.createdAt ?? t,
       updatedAt: t,
     };
-    await store.creds.put(rec);
+    await store.creds.put(rec.id, rec);
     return rec;
   }
 
@@ -1045,7 +1045,7 @@ export function createKeychain(deps: {
       };
     };
     const rec = buildRec(await store.creds.get(id));
-    await store.creds.put(rec);
+    await store.creds.put(rec.id, rec);
     return toMeta(rec);
   }
 
@@ -1169,8 +1169,8 @@ export function createKeychain(deps: {
       ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
       ...(input.askId ? { askId: input.askId } : {}),
     };
-    if (input.askId) return store.grants.putIfAbsent(grant);
-    await store.grants.put(grant);
+    if (input.askId) return store.grants.insertOrGet(grant.id, grant);
+    await store.grants.put(grant.id, grant);
     return grant;
   }
 
@@ -1346,7 +1346,7 @@ export function createKeychain(deps: {
         createdAt: t,
         expiresAt: input.expiresAt ?? t + ASK_TTL_MS,
       };
-      await store.asks.put(ask);
+      await store.asks.put(ask.id, ask);
       return { ask, existing: false };
     },
 
@@ -1441,12 +1441,12 @@ export function createKeychain(deps: {
     async setServiceCredential(orgScopeId, input) {
       const prior = await brokerRecord(orgScopeId, input.slug);
       const rec = serviceCredentialRecord(orgScopeId, input, prior);
-      await store.creds.put(rec);
+      await store.creds.put(rec.id, rec);
     },
 
     async setServiceCredentialIfAbsent(orgScopeId, input) {
       const rec = serviceCredentialRecord(orgScopeId, input, null);
-      return (await store.creds.insertIfAbsent(rec)) ? rec.updatedAt : null;
+      return (await store.creds.insert(rec.id, rec)) ? rec.updatedAt : null;
     },
 
     async setServiceCredentialIfCurrent(orgScopeId, input, expectedUpdatedAt) {
