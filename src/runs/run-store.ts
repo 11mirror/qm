@@ -27,6 +27,7 @@ export interface RunDeliveryState {
   replying?: boolean;
   editRef?: string;
   postedAt?: number;
+  settledAt?: number;
 }
 
 export type RunStop =
@@ -101,7 +102,7 @@ export interface RunStore {
   ): Promise<Map<string, Run>>;
   latestForThread(threadRef: string, opts?: { excludePrivateMessages?: boolean }): Promise<Run | null>;
   pendingReturns(limit?: number, afterId?: string): Promise<Run[]>;
-  terminalFinished(after: TerminalCursor, beforeMs: number, limit: number): Promise<Run[]>;
+  unsettledTerminal(after: TerminalCursor, beforeMs: number, limit: number): Promise<Run[]>;
   markReturned(runId: string): Promise<void>;
   deferReturn(runId: string, delayMs: number): Promise<void>;
 
