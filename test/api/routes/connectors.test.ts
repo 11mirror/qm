@@ -10,7 +10,8 @@ import { buildApp } from "../../support/build-app.ts";
 import { testConfig } from "../../support/test-config.ts";
 import { listenLocal } from "../../support/listen-local.ts";
 import { testDatabaseUrl } from "../../support/test-database.ts";
-import { createKeychain, type OAuthRefresh, type OAuthToken } from "../../../src/credentials/keychain.ts";
+import { type OAuthRefresh, type OAuthToken } from "../../../src/credentials/keychain.ts";
+import { createKeychain } from "../../../src/credentials/create-keychain.ts";
 import { createKeychainStore } from "../../../src/credentials/keychain-store.ts";
 import { deriveConnectorKey } from "../../../src/connectors/connector-client-store.ts";
 import { oauthRevoke } from "../../../src/api/routes/connectors.ts";
@@ -82,10 +83,12 @@ test("connector tokens: per-user token + refresh; no shared fallback", async () 
 test("disconnect revokes connector grants so reconnect does not resurrect sharing", async () => {
   const keychain = makeKeychain();
   await keychain.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "first" });
-  const grant = await keychain.grantConnectorToScope({
-    host: "gmail.googleapis.com",
-    principalId: "U1",
+  const [connector] = (await keychain.listConnectorsByOwners(["U1"])).get("U1")!;
+  const grant = await keychain.createGrant({
+    credentialId: connector!.credentialId,
+    ownerId: "U1",
     audienceScopeId: "channel:C1",
+    mode: "standing",
     purpose: "shared inbox",
   });
   assert.ok(grant);

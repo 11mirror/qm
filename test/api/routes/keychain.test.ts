@@ -271,10 +271,11 @@ it("overview includes safe connector metadata so its grants remain visible and r
     accessToken: "never-return-this-connector",
   });
   const connector = (await built.keychain!.listConnectorsByOwners([owner])).get(owner)![0]!;
-  const grant = await built.keychain!.grantConnectorToScope({
-    host: connector.host,
-    principalId: owner,
+  const grant = await built.keychain!.createGrant({
+    credentialId: connector.credentialId,
+    ownerId: owner,
     audienceScopeId: "channel:C_CONNECTOR_OVERVIEW",
+    mode: "standing",
     purpose: "read mail here",
   });
 

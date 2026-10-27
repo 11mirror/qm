@@ -6,7 +6,7 @@ import { composioUserId } from "../../../src/api/routes/composio.ts";
 import { composioTwitterMediaRoutes } from "../../../src/api/routes/composio-twitter-media.ts";
 import { type ApiCtx, respond } from "../../../src/api/routes/route.ts";
 import type { ServerDeps } from "../../../src/api/deps.ts";
-import { createKeychain } from "../../../src/credentials/keychain.ts";
+import { createKeychain } from "../../../src/credentials/create-keychain.ts";
 import { createKeychainStore } from "../../../src/credentials/keychain-store.ts";
 import { deriveConnectorKey } from "../../../src/connectors/connector-client-store.ts";
 import { tenant } from "../../../src/tenant.ts";

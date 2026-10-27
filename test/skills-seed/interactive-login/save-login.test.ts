@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { createKeychain } from "../../../src/credentials/keychain.ts";
+import { createKeychain } from "../../../src/credentials/create-keychain.ts";
 import { createKeychainStore } from "../../../src/credentials/keychain-store.ts";
 import { deriveConnectorKey } from "../../../src/connectors/connector-client-store.ts";
 import { scopeId } from "../../../src/types.ts";

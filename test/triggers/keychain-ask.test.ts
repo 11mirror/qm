@@ -3,13 +3,13 @@ import "../support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  createKeychain,
   renderKeychainManifest,
   KeychainError,
   ASK_TTL_MS,
   ASK_PRUNE_AFTER_MS,
   type KeychainAsk,
 } from "../../src/credentials/keychain.ts";
+import { createKeychain } from "../../src/credentials/create-keychain.ts";
 import { createKeychainStore } from "../../src/credentials/keychain-store.ts";
 import { createAskExpirySweep, fireAskResolution } from "../../src/triggers/keychain-ask.ts";
 import { runTrigger } from "../../src/triggers/run-trigger.ts";

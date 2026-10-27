@@ -7,7 +7,8 @@ import {
   type SecretKey,
 } from "../connectors/connector-client-store.ts";
 import { scopeId } from "../types.ts";
-import { type Keychain, createKeychain, type OAuthToken } from "../credentials/keychain.ts";
+import { type Keychain, type OAuthToken } from "../credentials/keychain.ts";
+import { createKeychain } from "../credentials/create-keychain.ts";
 import { createKeychainStore } from "../credentials/keychain-store.ts";
 import { refreshChatGPTTokens, refreshClaudeTokens } from "../model/subscription-oauth.ts";
 import { createUserModelCredentialStore } from "../model/user-model-credential-store.ts";

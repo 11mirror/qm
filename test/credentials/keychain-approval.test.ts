@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createKeychain, type KeychainAsk } from "../../src/credentials/keychain.ts";
+import { type KeychainAsk } from "../../src/credentials/keychain.ts";
+import { createKeychain } from "../../src/credentials/create-keychain.ts";
 import { createKeychainStore } from "../../src/credentials/keychain-store.ts";
 import { approvalCardDestination, createKeychainApprovals } from "../../src/credentials/keychain-approval.ts";
 import { deriveConnectorKey } from "../../src/connectors/connector-client-store.ts";

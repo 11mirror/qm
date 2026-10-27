@@ -3,12 +3,8 @@ import "../support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildApp } from "../support/build-app.ts";
-import {
-  createKeychain,
-  credentialHandle,
-  renderKeychainManifest,
-  KeychainError,
-} from "../../src/credentials/keychain.ts";
+import { credentialHandle, renderKeychainManifest, KeychainError } from "../../src/credentials/keychain.ts";
+import { createKeychain } from "../../src/credentials/create-keychain.ts";
 import { type TurnRequest } from "../../src/types.ts";
 import { fakeSprites } from "../support/auto-fake-sprites.ts";
 import { testConfig } from "../support/test-config.ts";

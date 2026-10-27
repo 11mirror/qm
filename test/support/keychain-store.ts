@@ -1,4 +1,5 @@
-import { createKeychain, type Keychain } from "../../src/credentials/keychain.ts";
+import { type Keychain } from "../../src/credentials/keychain.ts";
+import { createKeychain } from "../../src/credentials/create-keychain.ts";
 import { deriveConnectorKey } from "../../src/connectors/connector-client-store.ts";
 import { testAdvisoryLock } from "./test-database.ts";
 import { testDatabaseUrl } from "./test-database.ts";

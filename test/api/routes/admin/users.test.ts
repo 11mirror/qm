@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createInsecureTestServer } from "../../../../src/api/server.ts";
 import { deriveConnectorKey } from "../../../../src/connectors/connector-client-store.ts";
-import { createKeychain } from "../../../../src/credentials/keychain.ts";
+import { createKeychain } from "../../../../src/credentials/create-keychain.ts";
 import { createKeychainStore } from "../../../../src/credentials/keychain-store.ts";
 import { scopeId, type TurnRequest } from "../../../../src/types.ts";
 import { buildApp } from "../../../support/build-app.ts";

@@ -8,7 +8,7 @@ import {
   deriveConnectorKey,
   type SecretKey,
 } from "../../src/connectors/connector-client-store.ts";
-import { createKeychain } from "../../src/credentials/keychain.ts";
+import { createKeychain } from "../../src/credentials/create-keychain.ts";
 import { createKeychainStore } from "../../src/credentials/keychain-store.ts";
 import { createEnvSecretSource } from "../../src/credentials/secret-source.ts";
 import { scopeId } from "../../src/types.ts";
