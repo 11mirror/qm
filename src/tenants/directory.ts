@@ -201,10 +201,3 @@ export function foreignTenant(claimed: string | undefined, credential: string): 
 export function isHomeTenant(t: Tenant): boolean {
   return t.id === undefined;
 }
-
-export async function eachActiveTenant(fn: () => Promise<unknown>): Promise<void> {
-  for (const t of await activeTenants()) {
-    if (isHomeTenant(t)) await withTenant(t, fn);
-    else await withTenant(t, fn).catch(reportFailureAs(`tenant ${t.slug ?? t.id}: startup`, undefined));
-  }
-}
