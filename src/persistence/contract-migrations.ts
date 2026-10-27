@@ -1,4 +1,5 @@
 import type { PgMigrationDefinition } from "./pg-pool.ts";
+import { mapConversions } from "./typed-table.ts";
 
 /**
  * Destructive migrations held back from the expand phase. An image from before them must still boot on a database
@@ -43,4 +44,13 @@ export const CONTRACT_MIGRATIONS: readonly PgMigrationDefinition[] = [
       "ALTER TABLE channel_policy_history DROP COLUMN IF EXISTS orders",
     ],
   },
+  {
+    id: "contract/0007-drop-durable-map-versions",
+    statements: ["DROP FUNCTION IF EXISTS qm_durable_map_bump() CASCADE", "DROP TABLE IF EXISTS durable_map_versions"],
+  },
+];
+
+export const contractMigrations = (): PgMigrationDefinition[] => [
+  ...CONTRACT_MIGRATIONS,
+  ...mapConversions().map((conversion) => conversion.contract),
 ];
