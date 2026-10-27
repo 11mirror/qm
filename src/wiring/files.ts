@@ -89,3 +89,5 @@ export function buildFiles(
     fileUploads,
   };
 }
+
+export type Files = ReturnType<typeof buildFiles>;

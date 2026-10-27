@@ -70,3 +70,5 @@ export function buildDeploymentLayer(
   };
   return { deploymentLayerStore, installCatalogs, deploymentLayer, auditLog, brokeredTools, deploymentLayerRefresh };
 }
+
+export type DeploymentLayer = ReturnType<typeof buildDeploymentLayer>;

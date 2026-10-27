@@ -19,7 +19,6 @@ import {
   type BackgroundOwnershipControl,
   type BackgroundOwnership,
 } from "./runs/background-ownership.ts";
-import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
 import { emitRunReasoning, emitRunText, reasoningKey, type RunStreamEvent } from "./runs/run-stream-events.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
@@ -42,12 +41,7 @@ import { createMemoryEmbedder } from "./model/embeddings.ts";
 import { createSemanticMemory } from "./memory/semantic-memory.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { type DirectFileUploads } from "./files/direct-file-upload.ts";
-import {
-  createSandboxResources,
-  type SandboxResource,
-  type SandboxDefault,
-  type SandboxResources,
-} from "./sandbox/sandbox-resources.ts";
+import { type SandboxResources } from "./sandbox/sandbox-resources.ts";
 import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.ts";
 import type { SessionShare, SessionShareStore } from "./sessions/session-share.ts";
 import { mkdirSync } from "node:fs";
@@ -59,7 +53,6 @@ import {
   baseModelProviders,
   companySubscriptionAuth,
   configuredModel,
-  enabledSandboxBackends,
   providerKeysPresent,
   type Config,
 } from "./config.ts";
@@ -85,7 +78,6 @@ import type {
   InboxItem,
   Monitor,
   PendingApprovalRecord,
-  ScopeId,
   Session,
   SurfaceContextRequest,
   TurnRequest,
@@ -116,7 +108,7 @@ import { rememberDmPost, type RecentDmPosts } from "./surfaces/recent-dm-posts.t
 import { wireRunResultPosts } from "./runs/run-results.ts";
 import { adminSessionUrl } from "./util/admin-links.ts";
 import type { DirectoryStore } from "./directory/directory-store.ts";
-import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
+import { type EnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { cronJobQueue } from "./cron/job-queue.ts";
@@ -129,11 +121,7 @@ import { deploymentCredentialSlugs } from "./deploy/deployment-credentials.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
 import { createAwsDeployProvider, type StoredDeployBody } from "./deploy/aws-deploy-provider.ts";
 import { createPorterDeployProvider, type StoredPorterDeployBody } from "./deploy/porter-deploy-provider.ts";
-import {
-  createE2bDeployProvider,
-  E2B_DEPLOY_IDLE_TIMEOUT_SEC,
-  type StoredE2bDeployBody,
-} from "./deploy/e2b-deploy-provider.ts";
+import { createE2bDeployProvider, type StoredE2bDeployBody } from "./deploy/e2b-deploy-provider.ts";
 import type { DeployProvider } from "./deploy/deploy-provider.ts";
 import { createDeployService } from "./deploy/deploy-service.ts";
 import { createCurrentScopeMembers, rosterAdmits } from "./resolution/scope-membership.ts";
@@ -146,26 +134,7 @@ import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-servic
 import { type BlobTransferStore } from "./persistence/blob-transfer.ts";
 import { type DurableByteStore } from "./files/durable-byte-store.ts";
 import type { FileArtifactStore } from "./files/file-artifact-store.ts";
-import { createLocalSandbox, type StoredLocalSandbox } from "./sandbox/local-sandbox.ts";
-import { createSpritesSandbox, type StoredSpritesSandbox } from "./sandbox/sprites-sandbox.ts";
-import { createSmolmachinesSandbox, type StoredSmolmachinesSandbox } from "./sandbox/smolmachines-sandbox.ts";
-import { createE2bSandbox, E2B_TEMPLATE_TOOLS, type StoredE2bSandbox } from "./sandbox/e2b-sandbox.ts";
-import { createSdkE2bClient, type E2bClient } from "./sandbox/e2b-client.ts";
-import {
-  createManagedAgentsSandbox,
-  QM_TEMPLATE_TOOLS,
-  type StoredManagedAgentsSandbox,
-} from "./sandbox/managed-agents-sandbox.ts";
-import { createSdkManagedAgentsClient } from "./sandbox/managed-agents-client.ts";
-import { createModalSandbox, modalLegacyRecordMigration, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
-import { createSdkModalClient } from "./sandbox/modal-client.ts";
-import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
-import {
-  upgradeLegacySandboxes,
-  legacySandboxBackendForScope,
-  type LegacyRoute,
-} from "./sandbox/sandbox-resource-upgrade.ts";
-import { effectiveEgressEnforcement, type BackendSandbox, type Sandbox } from "./sandbox/sandbox.ts";
+import { effectiveEgressEnforcement, type Sandbox } from "./sandbox/sandbox.ts";
 import { createEnvSecretSource } from "./credentials/secret-source.ts";
 import {
   credentialRequestHeaders,
@@ -221,14 +190,8 @@ import type { Harness } from "./harness/harness.ts";
 import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
 import { classifiedMemory } from "./memory/classification.ts";
 import { createPerTurnStrategy, type PendingCapture } from "./memory/strategies/per-turn.ts";
-import { createOrchestrator, egressClaimAllowingControlPlane, type OrchestratorDeps } from "./core/orchestrator.ts";
-import {
-  mintCapabilityToken,
-  CAPABILITY_TTL_MS,
-  CREDENTIAL_BROKER_AUD,
-  DEPLOYMENT_CREDENTIAL_TTL_MS,
-  EGRESS_PROXY_AUD,
-} from "./auth/capability-token.ts";
+import { createOrchestrator, type OrchestratorDeps } from "./core/orchestrator.ts";
+import { mintCapabilityToken, CREDENTIAL_BROKER_AUD, DEPLOYMENT_CREDENTIAL_TTL_MS } from "./auth/capability-token.ts";
 import { createControlService } from "./api/control-service.ts";
 import { createMemoryRunStore } from "./runs/memory-run-store.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
@@ -306,12 +269,17 @@ import { type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 import type { ContextRequestEvent } from "./api/app-types.ts";
 
 import { buildStores } from "./wiring/stores.ts";
+import type { Late } from "./wiring/late.ts";
 
 import { buildModelCredentials } from "./wiring/model-credentials.ts";
 
 import { buildDeploymentLayer } from "./wiring/deployment-layer.ts";
 
 import { buildFiles } from "./wiring/files.ts";
+
+import { buildSandboxBackends } from "./wiring/sandbox.ts";
+
+import { buildSandbox } from "./wiring/sandbox.ts";
 
 export interface Runtime {
   start(): void;
@@ -466,6 +434,8 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
   let inlineShutdown = new AbortController();
   const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
     createUntrackedSweeper(() => admittedWork.run(work), interval, options);
+  // Values built later in buildApp that earlier modules reach through closures.
+  const late = {} as Late;
   const databaseUrl = config.databaseUrl;
   if (!databaseUrl) throw new Error("DATABASE_URL is required: QM keeps all state in Postgres");
   const connectorSecretKey = config.connectorSecretKey;
@@ -485,6 +455,7 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
   });
   mkdirSync(config.dataDir, { recursive: true });
   const {
+    environments,
     artifactMap,
     managesArtifactHome,
     skills,
@@ -569,188 +540,28 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     createSweeper,
   });
   const baseMemory: MemoryService = withMemoryTidy(semanticMemory.memory, (scope) => memoryTidy.ensure(scope));
-  const sandboxOnError = (
-    e: { category: string; code: string; message: string; scopeLabel?: string },
-    error?: unknown,
-  ) =>
-    errors.record(
-      {
-        category: e.category,
-        code: e.code,
-        message: e.message,
-        scopeLabel: (e.scopeLabel ?? "unknown") as ScopeId,
-      },
-      error,
-    );
-  const sandboxShared = {
-    ...config.sandbox,
-    keepWarmSec: Math.ceil(BACKGROUND_JOB_TTL_MAX_MS / 1000),
+  const { sandboxBackends, e2bBodies, modalBodies, sandboxOnError, e2bClient } = buildSandboxBackends({
+    errors,
+    config,
     advisoryLock,
     blobTransfer,
-    extraTools: deploymentLayer.advertisedTools,
-    credentialPaths: deploymentLayer.credentialPaths,
-    layerToolFiles: () => deploymentLayer.installFiles,
-    ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-    ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-    ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-    onError: sandboxOnError,
-  };
-  const e2bBodies = artifactMap<StoredE2bSandbox>("e2b_sandbox_bodies");
-  const modalBodies = artifactMap<StoredModalSandbox>("modal_sandbox_bodies");
-  pgArtifactMap.pool.registerMigration(modalLegacyRecordMigration("modal_sandbox_bodies"));
-  const buildLocal = (): BackendSandbox =>
-    createLocalSandbox(workspace, {
-      ...sandboxShared,
-      ...config.localSandbox,
-      store: artifactMap<StoredLocalSandbox>("local_sandbox_bodies"),
-    });
-  const buildSprites = (): BackendSandbox =>
-    createSpritesSandbox(workspace, {
-      ...sandboxShared,
-      ...config.spritesSandbox,
-      store: artifactMap<StoredSpritesSandbox>("sprites_initialization"),
-      connectorSdk: loadConnectorSdk,
-    });
-  const buildSmolmachines = (): BackendSandbox =>
-    createSmolmachinesSandbox(workspace, {
-      ...sandboxShared,
-      ...config.smolmachinesSandbox,
-      store: artifactMap<StoredSmolmachinesSandbox>("smolmachines_sandbox_bodies"),
-    });
-  const e2bClient = (use: "computers" | "apps"): E2bClient => {
-    const e2b = config.e2bSandbox;
-    if (!e2b.apiKey)
-      throw new Error(`${use === "apps" ? "DEPLOY_PROVIDER" : "SANDBOX_BACKEND"}=e2b requires E2B_API_KEY`);
-    return createSdkE2bClient({
-      apiKey: e2b.apiKey,
-      ...(e2b.templateId ? { templateId: e2b.templateId } : {}),
-      ...(use === "apps" ? { sandboxTtlMs: E2B_DEPLOY_IDLE_TIMEOUT_SEC * 1000 } : {}),
-      ...(use === "computers" && config.sandbox.idleParkSec ? { sandboxTtlMs: config.sandbox.idleParkSec * 1000 } : {}),
-      ...(config.sandbox.maxLifetimeSec ? { maxLifetimeMs: config.sandbox.maxLifetimeSec * 1000 } : {}),
-      ...(use === "computers" && config.sandbox.egressProxyUrl
-        ? { egressProxyUrl: config.sandbox.egressProxyUrl }
-        : {}),
-    });
-  };
-  const buildE2b = (): BackendSandbox =>
-    createE2bSandbox(workspace, {
-      ...sandboxShared,
-      client: e2bClient("computers"),
-      extraTools: [...(config.e2bSandbox.templateId ? E2B_TEMPLATE_TOOLS : []), ...deploymentLayer.advertisedTools],
-      store: e2bBodies,
-    });
-  const buildManagedAgents = (): BackendSandbox => {
-    const managedAgents = config.managedAgentsSandbox;
-    if (!managedAgents.apiToken) throw new Error("SANDBOX_BACKEND=do-managed-agents requires DO_AGENTS_API_TOKEN");
-    return createManagedAgentsSandbox(workspace, {
-      ...sandboxShared,
-      client: createSdkManagedAgentsClient({
-        apiToken: managedAgents.apiToken,
-        ...(managedAgents.template ? { template: managedAgents.template } : {}),
-        ...(config.sandbox.idleParkSec ? { idleTimeoutSec: config.sandbox.idleParkSec } : {}),
-        ...(config.sandbox.egressProxyUrl ? { egressProxyUrl: config.sandbox.egressProxyUrl } : {}),
-      }),
-      extraTools: [...(managedAgents.template ? QM_TEMPLATE_TOOLS : []), ...deploymentLayer.advertisedTools],
-      store: artifactMap<StoredManagedAgentsSandbox>("do_managed_agents_sandbox_bodies"),
-    });
-  };
-  const buildModal = (): BackendSandbox => {
-    const modal = config.modalSandbox;
-    if (!modal.tokenId || !modal.tokenSecret)
-      throw new Error("SANDBOX_BACKEND=modal requires MODAL_TOKEN_ID and MODAL_TOKEN_SECRET");
-    return createModalSandbox(workspace, {
-      ...sandboxShared,
-      client: createSdkModalClient({
-        tokenId: modal.tokenId,
-        tokenSecret: modal.tokenSecret,
-        appName: modal.appName ?? "qm",
-        ...(modal.image ? { image: modal.image } : {}),
-        ...(modal.environment ? { environment: modal.environment } : {}),
-        ...(config.sandbox.cpus !== undefined ? { cpus: config.sandbox.cpus } : {}),
-        ...(config.sandbox.memoryMb !== undefined ? { memoryMb: config.sandbox.memoryMb } : {}),
-        ...(config.sandbox.maxLifetimeSec ? { sandboxTimeoutMs: config.sandbox.maxLifetimeSec * 1000 } : {}),
-        ...(config.sandbox.idleParkSec ? { idleTimeoutMs: 2 * config.sandbox.idleParkSec * 1000 } : {}),
-        ...(config.sandbox.egressProxyUrl ? { egressProxyUrl: config.sandbox.egressProxyUrl } : {}),
-      }),
-      connectorSdk: loadConnectorSdk,
-      store: modalBodies,
-    });
-  };
-  const buildBackend: Record<Config["sandboxBackend"], () => BackendSandbox> = {
-    local: buildLocal,
-    sprites: buildSprites,
-    smolmachines: buildSmolmachines,
-    e2b: buildE2b,
-    modal: buildModal,
-    "do-managed-agents": buildManagedAgents,
-  };
-  const enabledBackends = new Set(enabledSandboxBackends(config));
-  const sandboxBackends: Partial<Record<SandboxBackendName, BackendSandbox>> = {
-    [config.sandboxBackend]: buildBackend[config.sandboxBackend](),
-  };
-  for (const name of Object.keys(buildBackend) as Array<Config["sandboxBackend"]>) {
-    if (name !== config.sandboxBackend && enabledBackends.has(name)) sandboxBackends[name] = buildBackend[name]();
-  }
-  const sandboxRecords = artifactMap<SandboxResource>("sandbox_resources");
-  const sandboxDefaults = artifactMap<SandboxDefault>("sandbox_defaults");
-  const sandboxResources = createSandboxResources({
-    records: sandboxRecords,
-    defaults: sandboxDefaults,
-    upgrade: () =>
-      upgradeLegacySandboxes({
-        availableBackends: Object.keys(sandboxBackends) as SandboxBackendName[],
-        records: sandboxRecords,
-        defaults: sandboxDefaults,
-        marker: artifactMap<{ activatedAt: string }>("sandbox_resource_rollout"),
-        routes: () => artifactMap<LegacyRoute>("sandbox_routing").entries(),
-        lock: advisoryLock,
-        legacyBackend: (scope) =>
-          legacySandboxBackendForScope(scope, config.sandboxBackend, config.legacySandboxScopeDefaults),
-        specFor: (backend) => sandboxBackends[backend]?.profile.spec,
-        legacyScopes: async () => [
-          ...(await sessions.distinctScopes()).map((scope) => scope.scopeId),
-          ...(await environments.list()).map((environment) => environment.id),
-        ],
-        legacySandboxes: async () => {
-          const [e2b, modal] = await Promise.all([e2bBodies.entries(), modalBodies.entries()]);
-          return [
-            ...e2b.map(([scopeId, body]) => ({ scopeId, backend: "e2b" as const, machineId: body.sandboxId })),
-            ...modal.flatMap(([scopeId, body]) =>
-              body.sandboxId ? [{ scopeId, backend: "modal" as const, machineId: body.sandboxId }] : [],
-            ),
-          ];
-        },
-      }),
-    backends: sandboxBackends,
-    defaultBackend: config.sandboxBackend,
-    lock: advisoryLock,
-    beforeRetire: async (record) => {
-      if ((await processes?.liveByScope(record.ownerScopeId))?.some((process) => process.sandboxId === record.id))
-        throw new Error("stop this sandbox's background jobs before retiring it");
-    },
-    provisionOptions: async (scopeId) => {
-      const secret = config.capabilitySecret ?? config.signingSecret;
-      if (!secret) return {};
-      const egressToken = await mintCapabilityToken(
-        {
-          actorId: "system:sandbox-create",
-          scopeId,
-          aud: EGRESS_PROXY_AUD,
-          egress: egressClaimAllowingControlPlane({ allowedHosts: [] }, config.apiBaseUrl ?? ""),
-          exp: Date.now() + CAPABILITY_TTL_MS,
-        },
-        secret,
-        config.capabilityTokenCompression,
-      );
-      return { egressToken };
-    },
-    canUseScope: canUseSandboxScope,
+    deploymentLayer,
+    artifactMap,
+    pgArtifactMap,
+    workspace,
   });
-  const sandbox: Sandbox = createSandboxRouter({
-    resources: sandboxResources,
-    backends: sandboxBackends,
-    defaultBackend: config.sandboxBackend,
-    onError: sandboxOnError,
+  const { sandbox, sandboxResources } = buildSandbox({
+    artifactMap,
+    sandboxBackends,
+    advisoryLock,
+    config,
+    sessions,
+    environments,
+    e2bBodies,
+    modalBodies,
+    late,
+    canUseSandboxScope,
+    sandboxOnError,
   });
   const secretSource = createEnvSecretSource(overrides.env);
   const resolveClient: OAuthClientResolver = withPublicOAuthClients(
@@ -1114,6 +925,7 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
   const ledger = runStore.ledger;
 
   const processes = supportsProcessSessions(sandbox) ? createPostgresProcessRegistry(databaseUrl) : undefined;
+  late.processes = processes;
 
   const appPageViews = config.awsDeploy.appsDomain ? createPostgresAppPageViewLog(databaseUrl) : undefined;
   const brokerSessions = createPostgresBrokerSessions(databaseUrl);
@@ -1313,7 +1125,6 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
         }
       : {}),
   });
-  const environments = createPostgresEnvironmentStore(databaseUrl);
   const monitors = createMonitorStore(artifactMap<Monitor>("monitors"));
   const cronOwnerCache = new Map<string, string>();
   const publishInboxEvent = (event: LedgerEvent): void => {

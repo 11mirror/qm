@@ -19,6 +19,7 @@ import { createAdminGrantStore } from "../admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "../admin/postgres-admin-grant-store.ts";
 import { parseAdminGrants, createAdminService } from "../admin/admin-service.ts";
 import { createPostgresDirectoryStore } from "../directory/postgres-directory-store.ts";
+import { createPostgresEnvironmentStore } from "../environments/environment-store.ts";
 import { createProjectStore, type Project } from "../projects/project-store.ts";
 import {
   createCanReadScope,
@@ -68,6 +69,7 @@ export function buildStores(w: { config: Config; databaseUrl: string; connectorS
   });
   const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
   const directory = createPostgresDirectoryStore(databaseUrl);
+  const environments = createPostgresEnvironmentStore(databaseUrl);
   const projects = createProjectStore(artifactMap<Project>("projects"), {
     isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
     advisoryLock,
@@ -92,6 +94,7 @@ export function buildStores(w: { config: Config; databaseUrl: string; connectorS
     connectorSecretKey,
   );
   return {
+    environments,
     artifactMap,
     managesArtifactHome,
     skills,
