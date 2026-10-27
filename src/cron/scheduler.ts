@@ -49,13 +49,13 @@ export interface CronFireJob {
   notBefore?: number;
 }
 
-export interface CronManualFireJob {
+interface CronManualFireJob {
   cronId: string;
   fireKey: string;
   firedAt: number;
 }
 
-export type CronFireDisposition = JobDisposition;
+type CronFireDisposition = JobDisposition;
 
 export const CRON_FIRE_JOB = "cron-fire";
 export const CRON_MANUAL_FIRE_JOB = "cron-fire-manual";

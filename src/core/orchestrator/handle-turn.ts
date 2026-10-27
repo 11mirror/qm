@@ -1,6 +1,6 @@
 import { surfaceHas } from "../../surfaces/surface.ts";
 import { UNTRACKED_PROVENANCE } from "../../memory/facts.ts";
-import { type ScopeId, type Session, type TurnResult } from "../../types.ts";
+import { type Session, type TurnResult } from "../../types.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../../directory/directory-store.ts";
 import type { GapPhase } from "../../sessions/session-store.ts";
 import { createTranscriptSource } from "../../sessions/transcript-source.ts";
