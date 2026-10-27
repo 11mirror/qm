@@ -73,10 +73,11 @@ export const SUGGESTED_ACTIVITY_PROFILES_MIGRATION = mapToTableMigration(
 const codec = tableCodec<SuggestedActivityProfile>(SUGGESTED_ACTIVITY_PROFILES);
 
 export function createSuggestedActivityProfileStore(databaseUrl: string) {
-  const { q } = createPgPool(databaseUrl, [SUGGESTED_ACTIVITY_PROFILES_MIGRATION]);
+  const db = createPgPool(databaseUrl, [SUGGESTED_ACTIVITY_PROFILES_MIGRATION]);
+  const { q } = db;
   const changed = async (sql: string, params: unknown[]) => (await q(sql, params)).length > 0;
   return {
-    ...managedCronProfiles<SuggestedActivityProfile>(q, SUGGESTED_ACTIVITY_PROFILES),
+    ...managedCronProfiles<SuggestedActivityProfile>(db, SUGGESTED_ACTIVITY_PROFILES),
     async touch(
       principalId: string,
       visit: { timezone: string; at: number; seen: boolean; seeds: SuggestedActivity[] },

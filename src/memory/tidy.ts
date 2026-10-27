@@ -33,7 +33,7 @@ export const MEMORY_TIDY_PROFILES_MIGRATION = mapToTableMigration(
 );
 
 export function createMemoryTidyProfileStore(databaseUrl: string): ManagedCronProfiles<MemoryTidyProfile> {
-  return managedCronProfiles(createPgPool(databaseUrl, [MEMORY_TIDY_PROFILES_MIGRATION]).q, MEMORY_TIDY_PROFILES);
+  return managedCronProfiles(createPgPool(databaseUrl, [MEMORY_TIDY_PROFILES_MIGRATION]), MEMORY_TIDY_PROFILES);
 }
 
 export function createMemoryTidyService(deps: {

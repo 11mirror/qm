@@ -10,11 +10,9 @@ import { createKeychainStore } from "../src/credentials/keychain-store.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import type { TurnRequest, TurnResult } from "../src/types.ts";
 import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
-import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
-  const databaseUrl = testDatabaseUrl();
-  const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
+  const crons = createCronStore(testDatabaseUrl());
   const cron = await crons.create({
     owner: "U_ALICE",
     createdBy: "U_ALICE",
@@ -30,7 +28,7 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
     },
   });
   const outbound = recordingOutbound();
-  const idempotency = createIdempotencyStore(databaseUrl);
+  const idempotency = createIdempotencyStore(testDatabaseUrl());
   const ask: KeychainAsk = {
     id: "retry-ask",
     credentialId: "dummy-credential",
@@ -49,7 +47,7 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   const deps: AskResolutionDeps = {
     outbound,
     idempotency,
-    identity: createIdentityService(databaseUrl),
+    identity: createIdentityService(testDatabaseUrl()),
     getCron: (id) => crons.get(id),
     run,
   };

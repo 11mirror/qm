@@ -10,7 +10,6 @@ import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl, testAdvisoryLock } from "./support/test-database.ts";
-import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const ORG = "default-org";
@@ -21,7 +20,7 @@ const orgScope = scopeId("org", ORG);
 
 function makeDeps() {
   const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-  const crons = createCronStore(testDatabaseUrl(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testDatabaseUrl());
   const webhooks = createWebhookStore(testDatabaseUrl());
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
     resolveFiles: (refs) => files.resolveByIds(refs),

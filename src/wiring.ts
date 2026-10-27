@@ -97,7 +97,6 @@ import type { SecurityScreenProbe } from "./security/security-screener.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, type CronStore } from "./cron/cron-store.ts";
 import { LOOPS_TO_CRONS_MIGRATION } from "./cron/migrations.ts";
-import { createPostgresCronFireStore } from "./cron/fire-store.ts";
 import {
   createInboxLedger,
   inboxConversationKeyMigration,
@@ -1462,11 +1461,7 @@ export function buildApp(
   const recordInboxEvent: InboxEventSink = async (item, event) => {
     if (await inboxItems.recordEvent(item, event)) await scheduler.runNow(item.cronId);
   };
-  const cronFires = createPostgresCronFireStore(databaseUrl);
-  const cronsBase = createCronStore(databaseUrl, {
-    staleRunningMs: RUN_MAX_AGE_MS,
-    fires: cronFires,
-  });
+  const cronsBase = createCronStore(databaseUrl, { staleRunningMs: RUN_MAX_AGE_MS });
   const crons: CronStore = {
     ...cronsBase,
     async create(input) {
