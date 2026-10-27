@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
 import { createPgPool, tenantCols, type PgPool } from "../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { cols, mapToTableMigration, tableCodec, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import { jsonbStringify } from "../util/text.ts";
 import {
   createDeployGitStore,
@@ -280,7 +280,9 @@ function fieldSetters(set: (id: string, column: string, value: unknown) => Promi
 }
 
 export function createDeployStore(backing: DeployStoreBackings): DeployStore {
-  const { q, query } = uniqueNamePool(backing.databaseUrl);
+  const db = uniqueNamePool(backing.databaseUrl);
+  const { q, query } = db;
+  const rows = typedTable<Deployment>(db, DEPLOYMENTS);
   const git = createDeployGitStore(backing.git);
   const touchDebounceMs = backing.touchDebounceMs ?? TOUCH_DEBOUNCE_MS;
   const lastTouch = new Map<string, number>();
@@ -330,13 +332,7 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
         endpoint: null,
         versions: [v],
       };
-      await named(d.name, () =>
-        q(
-          `INSERT INTO deployments (${codec.columns}) VALUES (${codec.placeholders})
-           ON CONFLICT (${tenantCols("id")}) DO UPDATE SET ${codec.updates}`,
-          codec.values(id, d),
-        ),
-      );
+      await named(d.name, () => rows.put(id, d));
       await setVersionRefs(git, id, v);
       return d;
     },

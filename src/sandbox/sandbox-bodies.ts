@@ -2,18 +2,10 @@ import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
 import {
   cols,
   mapToTableMigration,
-  tableCodec,
+  typedTable,
   type ColumnSpec,
   type MapConversion,
 } from "../persistence/typed-table.ts";
-
-export interface SandboxBodies<T> {
-  get(scopeId: string): Promise<T | null>;
-  entries(): Promise<Array<[string, T]>>;
-  update(scopeId: string, patch: Partial<T>): Promise<void>;
-  upsert(scopeId: string, patch: Partial<T>): Promise<void>;
-  delete(scopeId: string): Promise<void>;
-}
 
 const BODY_COLUMNS: Record<string, ColumnSpec> =
   cols(`initializationPending boolean, lastSnapshotMs bigint, homeDirty boolean, snapshotError text,
@@ -31,10 +23,12 @@ export function sandboxBodiesMigration(
   );
 }
 
-export function createSandboxBodies<T extends object>(databaseUrl: string, migration: MapConversion): SandboxBodies<T> {
+export function createSandboxBodies<T extends object>(databaseUrl: string, migration: MapConversion) {
   const { table } = migration.spec;
-  const { q } = createPgPool(databaseUrl, [migration]);
-  const codec = tableCodec<T>(migration.spec);
+  const db = createPgPool(databaseUrl, [migration]);
+  const { q } = db;
+  const rows = typedTable<T>(db, migration.spec);
+  const { codec } = rows;
   const names = codec.columns.split(", ");
   const fields = Object.keys(migration.spec.columns);
   const patched = (scopeId: string, patch: Partial<T>) => {
@@ -43,19 +37,19 @@ export function createSandboxBodies<T extends object>(databaseUrl: string, migra
     return { cols: picked.map((i) => names[i]!), params: [scopeId, ...picked.map((i) => values[i])] };
   };
   return {
-    get: async (scopeId) =>
-      codec.rows(await q(`SELECT ${codec.columns} FROM ${table} WHERE scope_id = $1`, [scopeId]))[0] ?? null,
-    entries: async () =>
+    get: rows.get,
+    delete: rows.delete,
+    entries: async (): Promise<Array<[string, T]>> =>
       (await q(`SELECT ${codec.columns} FROM ${table} ORDER BY scope_id`)).map((r) => [
         r.scope_id as string,
         codec.row(r),
       ]),
-    async update(scopeId, patch) {
+    async update(scopeId: string, patch: Partial<T>): Promise<void> {
       const { cols, params } = patched(scopeId, patch);
       if (cols.length)
         await q(`UPDATE ${table} SET ${cols.map((c, i) => `${c} = $${i + 2}`).join(", ")} WHERE scope_id = $1`, params);
     },
-    async upsert(scopeId, patch) {
+    async upsert(scopeId: string, patch: Partial<T>): Promise<void> {
       const { cols, params } = patched(scopeId, patch);
       const set = cols.length ? `UPDATE SET ${cols.map((c) => `${c} = EXCLUDED.${c}`).join(", ")}` : "NOTHING";
       await q(
@@ -64,8 +58,7 @@ export function createSandboxBodies<T extends object>(databaseUrl: string, migra
         params,
       );
     },
-    async delete(scopeId) {
-      await q(`DELETE FROM ${table} WHERE scope_id = $1`, [scopeId]);
-    },
   };
 }
+
+export type SandboxBodies<T extends object> = ReturnType<typeof createSandboxBodies<T>>;

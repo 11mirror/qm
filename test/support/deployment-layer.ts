@@ -1,5 +1,14 @@
-import { type DeploymentLayerBundle, type StoredDeploymentLayer } from "../../src/deployment/deployment-layer-store.ts";
+import {
+  createDeploymentLayerStore,
+  type DeploymentLayerBundle,
+  type StoredDeploymentLayer,
+} from "../../src/deployment/deployment-layer-store.ts";
 import { createPgPool } from "../../src/persistence/pg-pool.ts";
+import { testDatabaseUrl } from "./test-database.ts";
+import { createNoopAdvisoryLock, createPostgresAdvisoryLock } from "../../src/persistence/advisory-lock.ts";
+import { createSkillStore } from "../../src/skills/skill-store.ts";
+import { emptyDeploymentLayer } from "../../src/deployment/load-layer.ts";
+import { scopeId } from "../../src/types.ts";
 
 export const tool = (advertise: string): DeploymentLayerBundle["tools"][number] => ({
   path: "tools/acme/tool.json",
@@ -44,4 +53,21 @@ export async function putLayer(databaseUrl: string, r: StoredDeploymentLayer): P
       pending_audits: r.pendingAudits,
     },
   ]);
+}
+
+export const org = scopeId("org", "default-org");
+
+export function fixture() {
+  const databaseUrl = testDatabaseUrl();
+  const skills = createSkillStore({ advisoryLock: createPostgresAdvisoryLock(createPgPool(databaseUrl)), databaseUrl });
+  const layer = (opts: Partial<Parameters<typeof createDeploymentLayerStore>[0]> = {}) =>
+    createDeploymentLayerStore({
+      advisoryLock: createNoopAdvisoryLock(),
+      databaseUrl,
+      runtime: emptyDeploymentLayer(),
+      skills,
+      scopeId: org,
+      ...opts,
+    });
+  return { databaseUrl, skills, layer };
 }

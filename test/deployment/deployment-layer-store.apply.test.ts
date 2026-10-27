@@ -1,31 +1,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  createDeploymentLayerStore,
   DeploymentLayerPersistedError,
   DeploymentLayerValidationError,
   type StoredDeploymentLayer,
 } from "../../src/deployment/deployment-layer-store.ts";
 import { emptyDeploymentLayer } from "../../src/deployment/load-layer.ts";
-import { createSkillStore } from "../../src/skills/skill-store.ts";
-import { scopeId } from "../../src/types.ts";
 import type { AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import { computeBundleHash, createSkillBundleStore } from "../../src/skills/skill-bundle-store.ts";
-import { singleProcessDeps } from "../support/single-process.ts";
-import { readLayer } from "../support/deployment-layer.ts";
+import { fixture, org, readLayer } from "../support/deployment-layer.ts";
 import { createPostgresAuditLog } from "../../src/admin/postgres-audit-log.ts";
-import { testDatabaseUrl, testAdvisoryLock } from "../support/test-database.ts";
 import { tool, skill } from "../support/deployment-layer.ts";
 
 test("concurrent writes serialize into monotonic durable versions", async () => {
-  const databaseUrl = testDatabaseUrl();
+  const { layer } = fixture();
   const runtime = emptyDeploymentLayer();
-  const store = createDeploymentLayerStore({
-    ...singleProcessDeps(),
-    databaseUrl,
+  const store = layer({
     runtime,
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl }),
-    scopeId: scopeId("org", "default-org"),
   });
   await store.put({ contract: 1, tools: [tool("v1")], skills: [] }, "one");
   const [two, three] = await Promise.all([
@@ -38,6 +29,7 @@ test("concurrent writes serialize into monotonic durable versions", async () => 
 });
 
 test("two stores serialize the durable head and shared skill projection under one fleet lock", async () => {
+  const { databaseUrl, skills, layer } = fixture();
   let tail = Promise.resolve();
   let active = 0;
   let maxActive = 0;
@@ -66,17 +58,11 @@ test("two stores serialize the durable head and shared skill projection under on
     tryWithLocks: (_keys, fn) => fn(),
   };
 
-  const databaseUrl = testDatabaseUrl();
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl });
-  const org = scopeId("org", "default-org");
   const firstRuntime = emptyDeploymentLayer();
   const secondRuntime = emptyDeploymentLayer();
-  const first = createDeploymentLayerStore({ databaseUrl, runtime: firstRuntime, skills, scopeId: org, advisoryLock });
-  const second = createDeploymentLayerStore({
-    databaseUrl,
+  const first = layer({ runtime: firstRuntime, advisoryLock });
+  const second = layer({
     runtime: secondRuntime,
-    skills,
-    scopeId: org,
     advisoryLock,
   });
   const v1 = first.put(
@@ -107,8 +93,7 @@ test("two stores serialize the durable head and shared skill projection under on
 });
 
 test("a failed multi-skill apply rolls every deployment-owned skill back before reporting degraded", async () => {
-  const databaseUrl = testDatabaseUrl();
-  const baseSkills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl });
+  const { databaseUrl, skills: baseSkills, layer } = fixture();
   let failB = false;
   const skills = {
     ...baseSkills,
@@ -117,14 +102,10 @@ test("a failed multi-skill apply rolls every deployment-owned skill back before 
       return baseSkills.create(input);
     },
   };
-  const org = scopeId("org", "default-org");
   const runtime = emptyDeploymentLayer();
-  const store = createDeploymentLayerStore({
-    ...singleProcessDeps(),
-    databaseUrl,
+  const store = layer({
     runtime,
     skills,
-    scopeId: org,
     retryDelaysMs: [],
   });
   await store.put(
@@ -167,16 +148,8 @@ test("a failed multi-skill apply rolls every deployment-owned skill back before 
 });
 
 test("applied status detects and repairs deployment-skill drift", async () => {
-  const databaseUrl = testDatabaseUrl();
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl });
-  const org = scopeId("org", "default-org");
-  const store = createDeploymentLayerStore({
-    ...singleProcessDeps(),
-    databaseUrl,
-    runtime: emptyDeploymentLayer(),
-    skills,
-    scopeId: org,
-  });
+  const { skills, layer } = fixture();
+  const store = layer();
   const record = await store.put({ contract: 1, tools: [], skills: skill }, "api");
   const deployed = (await skills.resolve("acme", [org])).skill!;
   await skills.archive(deployed.id);
@@ -192,15 +165,8 @@ test("applied status detects and repairs deployment-skill drift", async () => {
 });
 
 test("a later hydrate reconciles a persisted layer audit exactly once", async () => {
-  const databaseUrl = testDatabaseUrl();
-  const org = scopeId("org", "default-org");
-  const record = await createDeploymentLayerStore({
-    ...singleProcessDeps(),
-    databaseUrl,
-    runtime: emptyDeploymentLayer(),
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl }),
-    scopeId: org,
-  }).put({ contract: 1, tools: [tool("persisted before crash")], skills: [] }, "source-cli");
+  const { databaseUrl, layer } = fixture();
+  const record = await layer().put({ contract: 1, tools: [tool("persisted before crash")], skills: [] }, "source-cli");
   const audit = createPostgresAuditLog(databaseUrl);
   const auditPersisted = (stored: StoredDeploymentLayer) =>
     audit.recordOnce!(`deployment-layer:${org}:${stored.version}`, {
@@ -210,12 +176,7 @@ test("a later hydrate reconciles a persisted layer audit exactly once", async ()
       resource: stored.contentHash,
       scopeLabel: org,
     });
-  const recovered = createDeploymentLayerStore({
-    ...singleProcessDeps(),
-    databaseUrl,
-    runtime: emptyDeploymentLayer(),
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl }),
-    scopeId: org,
+  const recovered = layer({
     auditPersisted,
   });
   await recovered.hydrate();
@@ -228,16 +189,10 @@ test("a later hydrate reconciles a persisted layer audit exactly once", async ()
 });
 
 test("a failed audit remains recoverable after a later revision replaces the durable head", async () => {
-  const databaseUrl = testDatabaseUrl();
-  const org = scopeId("org", "default-org");
+  const { databaseUrl, layer } = fixture();
   const audited: number[] = [];
   let auditAvailable = false;
-  const store = createDeploymentLayerStore({
-    ...singleProcessDeps(),
-    databaseUrl,
-    runtime: emptyDeploymentLayer(),
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl }),
-    scopeId: org,
+  const store = layer({
     retryDelaysMs: [],
     auditPersisted: async (record) => {
       if (!auditAvailable) throw new Error("audit unavailable");
@@ -259,21 +214,13 @@ test("a failed audit remains recoverable after a later revision replaces the dur
 });
 
 test("a foreign same-name skill rejects the PUT before anything persists", async () => {
-  const databaseUrl = testDatabaseUrl();
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl });
-  const org = scopeId("org", "default-org");
+  const { databaseUrl, skills, layer } = fixture();
   await skills.create({
     scopeId: org,
     manifest: { name: "acme", description: "user authored", requiredCapabilities: [], body: "mine" },
     createdBy: "user:alice",
   });
-  const store = createDeploymentLayerStore({
-    ...singleProcessDeps(),
-    databaseUrl,
-    runtime: emptyDeploymentLayer(),
-    skills,
-    scopeId: org,
-  });
+  const store = layer();
   await assert.rejects(
     store.put({ contract: 1, tools: [], skills: skill }, "test"),
     (e: unknown) => e instanceof DeploymentLayerValidationError && /created by user:alice/.test((e as Error).message),
@@ -282,14 +229,8 @@ test("a foreign same-name skill rejects the PUT before anything persists", async
 });
 
 test("deployment skill names cannot contain path separators", async () => {
-  const databaseUrl = testDatabaseUrl();
-  const store = createDeploymentLayerStore({
-    ...singleProcessDeps(),
-    databaseUrl,
-    runtime: emptyDeploymentLayer(),
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl }),
-    scopeId: scopeId("org", "default-org"),
-  });
+  const { databaseUrl, layer } = fixture();
+  const store = layer();
   const markdown = (name: string) => `---\nname: ${name}\ndescription: Test.\n---\n${name}\n`;
 
   await assert.rejects(
@@ -307,10 +248,8 @@ test("deployment skill names cannot contain path separators", async () => {
 });
 
 test("a deployment skill cannot materialize over an active pack's shared bundle", async () => {
-  const databaseUrl = testDatabaseUrl();
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl });
+  const { databaseUrl, skills, layer } = fixture();
   const skillBundles = createSkillBundleStore(databaseUrl);
-  const org = scopeId("org", "default-org");
   const packed = await skills.create({
     scopeId: org,
     manifest: { name: "packed", description: "Packed skill.", requiredCapabilities: [], body: "packed" },
@@ -321,13 +260,8 @@ test("a deployment skill cannot materialize over an active pack's shared bundle"
   await skills.publish(packed.id);
   const files = [{ path: "skills/acme/helpers/run.ts", content: "from pack" }];
   await skillBundles.put({ packId: "one", commit: "abc", files, hash: computeBundleHash(files) });
-  const store = createDeploymentLayerStore({
-    ...singleProcessDeps(),
-    databaseUrl,
-    runtime: emptyDeploymentLayer(),
-    skills,
+  const store = layer({
     skillBundles,
-    scopeId: org,
   });
 
   await assert.rejects(
@@ -347,9 +281,7 @@ test("a deployment skill cannot materialize over an active pack's shared bundle"
 });
 
 test("a foreign skill racing after validation reports the revision as persisted and degraded", async () => {
-  const databaseUrl = testDatabaseUrl();
-  const baseSkills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl });
-  const org = scopeId("org", "default-org");
+  const { databaseUrl, skills: baseSkills, layer } = fixture();
   const realList = baseSkills.list.bind(baseSkills);
   let calls = 0;
   const skills = {
@@ -367,7 +299,7 @@ test("a foreign skill racing after validation reports the revision as persisted 
     },
   };
   const runtime = emptyDeploymentLayer();
-  const store = createDeploymentLayerStore({ ...singleProcessDeps(), databaseUrl, runtime, skills, scopeId: org });
+  const store = layer({ runtime, skills });
   await assert.rejects(
     store.put({ contract: 1, tools: [tool("acme CLI")], skills: skill }, "test"),
     (error: unknown) =>
@@ -380,9 +312,7 @@ test("a foreign skill racing after validation reports the revision as persisted 
 });
 
 test("an archived foreign skill does not block the layer; a later live collision leaves the new revision unapplied", async () => {
-  const databaseUrl = testDatabaseUrl();
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl });
-  const org = scopeId("org", "default-org");
+  const { skills, layer } = fixture();
   const archived = await skills.create({
     scopeId: org,
     manifest: { name: "acme", description: "retired", requiredCapabilities: [], body: "old" },
@@ -393,7 +323,7 @@ test("an archived foreign skill does not block the layer; a later live collision
   await skills.archive(archived.id);
 
   const runtime = emptyDeploymentLayer();
-  const store = createDeploymentLayerStore({ ...singleProcessDeps(), databaseUrl, runtime, skills, scopeId: org });
+  const store = layer({ runtime });
   const record = await store.put({ contract: 1, tools: [tool("acme CLI")], skills: skill }, "test");
   assert.equal(
     (await skills.resolve("acme", [org])).skill?.createdBy,
@@ -412,12 +342,8 @@ test("an archived foreign skill does not block the layer; a later live collision
   await skills.review(mine.id, "user:alice", []);
   await skills.publish(mine.id);
   const fresh = emptyDeploymentLayer();
-  const rehydrated = createDeploymentLayerStore({
-    ...singleProcessDeps(),
-    databaseUrl,
+  const rehydrated = layer({
     runtime: fresh,
-    skills,
-    scopeId: org,
   });
   assert.equal(
     (await rehydrated.hydrate())?.contentHash,
@@ -434,13 +360,10 @@ test("an archived foreign skill does not block the layer; a later live collision
 });
 
 test("a bundle may carry the files a tool declares under install.files, and nothing else", async () => {
+  const { layer } = fixture();
   const runtime = emptyDeploymentLayer();
-  const store = createDeploymentLayerStore({
-    ...singleProcessDeps(),
-    databaseUrl: testDatabaseUrl(),
+  const store = layer({
     runtime,
-    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() }),
-    scopeId: scopeId("org", "default-org"),
   });
   const descriptor = {
     path: "tools/acme/tool.json",

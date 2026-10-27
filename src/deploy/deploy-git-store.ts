@@ -1,12 +1,12 @@
 import { spawn } from "node:child_process";
-import { cols } from "../persistence/typed-table.ts";
+import { cols, typedTable } from "../persistence/typed-table.ts";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { createDeployBodyStore, deploymentKeyedTable, type DeployBodyStore } from "./deploy-body-store.ts";
+import { deploymentKeyedTable } from "./deploy-body-store.ts";
 import type { DurableByteStore } from "../files/durable-byte-store.ts";
 import { collectBytes } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -42,7 +42,7 @@ export interface DeployGitStore {
   repoUrl(deploymentId: string): Promise<string>;
 }
 
-interface DeployGitArchive {
+export interface DeployGitArchive {
   deploymentId: string;
   bundleB64?: string;
   blobKey?: string;
@@ -55,16 +55,12 @@ export const DEPLOY_GIT_REPOS_MIGRATION = deploymentKeyedTable(
   cols(`bundleB64 text, blobKey text, etag text!, updatedAt bigint!`),
 );
 
-export interface DeployGitArchiveStore extends DeployBodyStore<DeployGitArchive> {
-  slim(archive: DeployGitArchive, blobKey: string): Promise<void>;
-}
-
-export function createDeployGitArchiveStore(databaseUrl: string): DeployGitArchiveStore {
-  const { q } = createPgPool(databaseUrl, [DEPLOY_GIT_REPOS_MIGRATION]);
+export function createDeployGitArchiveStore(databaseUrl: string) {
+  const db = createPgPool(databaseUrl, [DEPLOY_GIT_REPOS_MIGRATION]);
   return {
-    ...createDeployBodyStore<DeployGitArchive>(databaseUrl, DEPLOY_GIT_REPOS_MIGRATION),
-    async slim(archive, blobKey) {
-      await q(
+    ...typedTable<DeployGitArchive>(db, DEPLOY_GIT_REPOS_MIGRATION.spec),
+    async slim(archive: DeployGitArchive, blobKey: string): Promise<void> {
+      await db.q(
         `UPDATE deploy_git_repos SET blob_key = $2, bundle_b64 = NULL
          WHERE deployment_id = $1 AND bundle_b64 IS NOT NULL AND etag = $3`,
         [archive.deploymentId, blobKey, archive.etag],
@@ -72,6 +68,8 @@ export function createDeployGitArchiveStore(databaseUrl: string): DeployGitArchi
     },
   };
 }
+
+type DeployGitArchiveStore = ReturnType<typeof createDeployGitArchiveStore>;
 
 export interface DeployGitStoreOptions {
   repoRoot?: string;
@@ -155,17 +153,10 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
 
   async function storeArchive(deploymentId: string, data: Buffer, etag: string): Promise<void> {
     if (!archiveStore) return;
-    if (archiveBytes) {
-      const { blobKey } = await archiveBytes.put(data);
-      await archiveStore.put(deploymentId, { deploymentId, blobKey, etag, updatedAt: Date.now() });
-    } else {
-      await archiveStore.put(deploymentId, {
-        deploymentId,
-        bundleB64: data.toString("base64"),
-        etag,
-        updatedAt: Date.now(),
-      });
-    }
+    const body = archiveBytes
+      ? { blobKey: (await archiveBytes.put(data)).blobKey }
+      : { bundleB64: data.toString("base64") };
+    await archiveStore.put(deploymentId, { deploymentId, ...body, etag, updatedAt: Date.now() });
   }
 
   async function persistArchive(deploymentId: string, repo: string): Promise<void> {
