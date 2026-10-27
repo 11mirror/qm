@@ -5,68 +5,62 @@ import { scopeId } from "../../src/types.ts";
 import { settle } from "../support/settle.ts";
 import { truncateTables } from "../support/test-database.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres credential-usage tests";
+const URL = process.env.DATABASE_URL!;
 
 before(async () => {
-  if (!URL) return;
   await truncateTables(URL, ["credential_usage", "credential_daily_calls"]);
 });
 
-test(
-  "pg credential-usage sink: persists broker calls, filters by scope/slug/since, newest-first",
-  { skip },
-  async (t) => {
-    const sink = createPostgresCredentialUsageSink(URL!);
-    const s1 = scopeId("personal", "U1");
-    const s2 = scopeId("personal", "U2");
+test("pg credential-usage sink: persists broker calls, filters by scope/slug/since, newest-first", async (t) => {
+  const sink = createPostgresCredentialUsageSink(URL);
+  const s1 = scopeId("personal", "U1");
+  const s2 = scopeId("personal", "U2");
 
-    const now = Date.now();
-    const clock = t.mock.method(Date, "now", () => now);
-    sink.record({
-      slug: "x-firehose",
-      host: "api.x.com",
-      status: "ok",
-      upstreamStatus: 200,
-      scopeLabel: s1,
-      principalId: "U1",
-    });
-    clock.mock.mockImplementation(() => now + 1);
-    sink.record({ slug: "serp", host: "serpapi.com", status: "denied", scopeLabel: s2, principalId: "U2" });
-    clock.mock.restore();
-    await settle(async () => (await sink.list({ limit: 100 })).length === 2);
+  const now = Date.now();
+  const clock = t.mock.method(Date, "now", () => now);
+  sink.record({
+    slug: "x-firehose",
+    host: "api.x.com",
+    status: "ok",
+    upstreamStatus: 200,
+    scopeLabel: s1,
+    principalId: "U1",
+  });
+  clock.mock.mockImplementation(() => now + 1);
+  sink.record({ slug: "serp", host: "serpapi.com", status: "denied", scopeLabel: s2, principalId: "U2" });
+  clock.mock.restore();
+  await settle(async () => (await sink.list({ limit: 100 })).length === 2);
 
-    const all = await sink.list({ limit: 100 });
-    assert.equal(all.length, 2, "both brokered calls persisted");
-    assert.equal(all[0]!.ts, now + 1);
-    assert.equal(all[1]!.ts, now);
-    assert.equal(all[0]!.scopeLabel, s2, "newest first");
-    assert.equal(all[0]!.status, "denied");
-    assert.equal(all[0]!.upstreamStatus, undefined, "an absent upstream status stays absent (not 0)");
+  const all = await sink.list({ limit: 100 });
+  assert.equal(all.length, 2, "both brokered calls persisted");
+  assert.equal(all[0]!.ts, now + 1);
+  assert.equal(all[1]!.ts, now);
+  assert.equal(all[0]!.scopeLabel, s2, "newest first");
+  assert.equal(all[0]!.status, "denied");
+  assert.equal(all[0]!.upstreamStatus, undefined, "an absent upstream status stays absent (not 0)");
 
-    const onlyS1 = await sink.list({ scopeId: s1, limit: 100 });
-    assert.equal(onlyS1.length, 1, "scope filter narrows to one");
-    assert.equal(onlyS1[0]!.host, "api.x.com");
-    assert.equal(onlyS1[0]!.slug, "x-firehose");
-    assert.equal(onlyS1[0]!.upstreamStatus, 200, "captured upstream status round-trips");
-    assert.equal(onlyS1[0]!.principalId, "U1");
+  const onlyS1 = await sink.list({ scopeId: s1, limit: 100 });
+  assert.equal(onlyS1.length, 1, "scope filter narrows to one");
+  assert.equal(onlyS1[0]!.host, "api.x.com");
+  assert.equal(onlyS1[0]!.slug, "x-firehose");
+  assert.equal(onlyS1[0]!.upstreamStatus, 200, "captured upstream status round-trips");
+  assert.equal(onlyS1[0]!.principalId, "U1");
 
-    const onlySlug = await sink.list({ slug: "serp", limit: 100 });
-    assert.equal(onlySlug.length, 1, "slug filter narrows to one");
-    assert.equal(onlySlug[0]!.scopeLabel, s2);
+  const onlySlug = await sink.list({ slug: "serp", limit: 100 });
+  assert.equal(onlySlug.length, 1, "slug filter narrows to one");
+  assert.equal(onlySlug[0]!.scopeLabel, s2);
 
-    const future = await sink.list({ since: Date.now() + 60_000, limit: 100 });
-    assert.equal(future.length, 0, "nothing at/after a future cutoff");
-  },
-);
+  const future = await sink.list({ since: Date.now() + 60_000, limit: 100 });
+  assert.equal(future.length, 0, "nothing at/after a future cutoff");
+});
 
-test("pg credential-usage sink: survives a fresh sink over the same table (durability)", { skip }, async () => {
-  const reopened = createPostgresCredentialUsageSink(URL!);
+test("pg credential-usage sink: survives a fresh sink over the same table (durability)", async () => {
+  const reopened = createPostgresCredentialUsageSink(URL);
   const rows = await reopened.list({ limit: 100 });
   assert.ok(rows.length >= 2, "calls written by a prior sink instance are still readable");
 });
 
-test("pg credential-usage sink: sparse and absent credentials use an ordered index", { skip }, async () => {
+test("pg credential-usage sink: sparse and absent credentials use an ordered index", async () => {
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
   try {
@@ -112,9 +106,9 @@ function windowSummary(
   };
 }
 
-test("pg credential summaries aggregate a bounded window without transferring raw events", { skip }, async (t) => {
+test("pg credential summaries aggregate a bounded window without transferring raw events", async (t) => {
   const { CREDENTIAL_USAGE_WINDOW } = await import("../../src/admin/credential-usage-sink.ts");
-  const sink = createPostgresCredentialUsageSink(URL!);
+  const sink = createPostgresCredentialUsageSink(URL);
   const pg = (await import("pg")).default;
   const pool = new pg.Pool({ connectionString: URL });
   t.after(() => pool.end());
@@ -148,11 +142,11 @@ test("pg credential summaries aggregate a bounded window without transferring ra
   assert.equal((await sink.summary(["serp"]))[0]!.usageCount, 0);
 });
 
-test("pg credential summaries do not wait for pending telemetry writes", { skip }, async (t) => {
+test("pg credential summaries do not wait for pending telemetry writes", async (t) => {
   const pg = (await import("pg")).default;
   const pool = new pg.Pool({ connectionString: URL });
   const locker = await pool.connect();
-  const sink = createPostgresCredentialUsageSink(URL!);
+  const sink = createPostgresCredentialUsageSink(URL);
   await sink.summary(["summary-blocked"]);
   await locker.query("BEGIN");
   await locker.query("LOCK TABLE credential_usage IN SHARE MODE");
@@ -179,12 +173,12 @@ test("pg credential summaries do not wait for pending telemetry writes", { skip 
   assert.equal(result[0]!.usageCount, 0);
 });
 
-test("pg credential-usage sink: every process shares one daily cap per credential", { skip }, async () => {
-  const processes = [createPostgresCredentialUsageSink(URL!), createPostgresCredentialUsageSink(URL!)];
+test("pg credential-usage sink: every process shares one daily cap per credential", async () => {
+  const processes = [createPostgresCredentialUsageSink(URL), createPostgresCredentialUsageSink(URL)];
   const admitted = await Promise.all(
     Array.from({ length: 10 }, (_, i) => processes[i % 2]!.admitDailyCall("capped", 3)),
   );
   assert.equal(admitted.filter(Boolean).length, 3);
-  assert.equal(await createPostgresCredentialUsageSink(URL!).admitDailyCall("capped", 3), false);
+  assert.equal(await createPostgresCredentialUsageSink(URL).admitDailyCall("capped", 3), false);
   assert.equal(await processes[0]!.admitDailyCall("capped", 4), true);
 });

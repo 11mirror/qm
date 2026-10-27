@@ -4,11 +4,9 @@ import { createPostgresSurfaceCache } from "../../src/surface-cache/surface-cach
 import { createPostgresChannelPolicyStore } from "../../src/surface-cache/channel-policy-store.ts";
 import { truncateTables } from "../support/test-database.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres surface-cache tests";
+const URL = process.env.DATABASE_URL!;
 
 before(async () => {
-  if (!URL) return;
   await truncateTables(URL, [
     "channel_messages",
     "channel_state",
@@ -18,8 +16,8 @@ before(async () => {
   ]);
 });
 
-test("pg surface-cache: upsert idempotency + last-writer-wins on change-time", { skip }, async () => {
-  const cache = createPostgresSurfaceCache(URL!);
+test("pg surface-cache: upsert idempotency + last-writer-wins on change-time", async () => {
+  const cache = createPostgresSurfaceCache(URL);
   try {
     await cache.ingest([{ container: "C1", ts: "1.0", authorId: "U1", text: "original", createdAt: 1 }]);
     await cache.ingest([{ container: "C1", ts: "1.0", authorId: "U1", text: "original", createdAt: 1 }]);
@@ -36,8 +34,8 @@ test("pg surface-cache: upsert idempotency + last-writer-wins on change-time", {
   }
 });
 
-test("pg surface-cache: markHandled sets + survives a later ingest (edit) of the same ts", { skip }, async () => {
-  const cache = createPostgresSurfaceCache(URL!);
+test("pg surface-cache: markHandled sets + survives a later ingest (edit) of the same ts", async () => {
+  const cache = createPostgresSurfaceCache(URL);
   try {
     await cache.markHandled("CH1", "9.0");
     let msgs = await cache.readMessages("CH1", { noFallback: true });
@@ -69,8 +67,8 @@ test("pg surface-cache: markHandled sets + survives a later ingest (edit) of the
   }
 });
 
-test("pg surface-cache: tsvector search + membership", { skip }, async () => {
-  const cache = createPostgresSurfaceCache(URL!);
+test("pg surface-cache: tsvector search + membership", async () => {
+  const cache = createPostgresSurfaceCache(URL);
   try {
     await cache.ingest([
       {
@@ -102,8 +100,8 @@ test("pg surface-cache: tsvector search + membership", { skip }, async () => {
   }
 });
 
-test("pg surface-cache: oldest_ts is the numeric floor (ts::numeric compare, not lexical)", { skip }, async () => {
-  const cache = createPostgresSurfaceCache(URL!);
+test("pg surface-cache: oldest_ts is the numeric floor (ts::numeric compare, not lexical)", async () => {
+  const cache = createPostgresSurfaceCache(URL);
   try {
     await cache.ingest([{ container: "CF1", ts: "1000.1", text: "newest", createdAt: 3 }]);
     await cache.ingest([{ container: "CF1", ts: "999.1", text: "older", createdAt: 2 }]);
@@ -115,8 +113,8 @@ test("pg surface-cache: oldest_ts is the numeric floor (ts::numeric compare, not
   }
 });
 
-test("pg surface-cache: one ingest batch folds container state and keeps the last file list", { skip }, async () => {
-  const cache = createPostgresSurfaceCache(URL!);
+test("pg surface-cache: one ingest batch folds container state and keeps the last file list", async () => {
+  const cache = createPostgresSurfaceCache(URL);
   try {
     await cache.ingest([
       { container: "CB1", ts: "1000.1", text: "a", createdAt: 1, containerName: "general", kind: "channel" },
@@ -149,8 +147,8 @@ test("pg surface-cache: one ingest batch folds container state and keeps the las
   }
 });
 
-test("pg channel-policy: set + get + list", { skip }, async () => {
-  const store = createPostgresChannelPolicyStore(URL!);
+test("pg channel-policy: set + get + list", async () => {
+  const store = createPostgresChannelPolicyStore(URL);
   try {
     await store.set("C1", { setBy: "U-admin", bots: { news: { mode: "ignore" } } });
     const p = await store.get("C1");
@@ -166,34 +164,30 @@ test("pg channel-policy: set + get + list", { skip }, async () => {
   }
 });
 
-test(
-  "pg channel-policy: ambientEnabled tri-state — unset default, round-trip, omitted preserved, null clears",
-  { skip },
-  async () => {
-    const store = createPostgresChannelPolicyStore(URL!);
-    try {
-      await store.set("CPA1", { setBy: "U-admin" });
-      assert.equal((await store.get("CPA1"))?.ambientEnabled, undefined, "unset by default");
-      await store.set("CPA1", { setBy: "U-admin", ambientEnabled: false });
-      assert.equal((await store.get("CPA1"))?.ambientEnabled, false);
-      await store.set("CPA1", {});
-      assert.equal((await store.get("CPA1"))?.ambientEnabled, false, "omitted arg leaves the override unchanged");
-      await store.set("CPA1", { ambientEnabled: null });
-      assert.equal((await store.get("CPA1"))?.ambientEnabled, undefined, "null clears back to the default rule");
-      const h = await store.history("CPA1");
-      assert.deepEqual(
-        h.map((r) => r.ambientEnabled),
-        [undefined, false, false, undefined].reverse(),
-        "revisions record the override",
-      );
-    } finally {
-      await store.close();
-    }
-  },
-);
+test("pg channel-policy: ambientEnabled tri-state — unset default, round-trip, omitted preserved, null clears", async () => {
+  const store = createPostgresChannelPolicyStore(URL);
+  try {
+    await store.set("CPA1", { setBy: "U-admin" });
+    assert.equal((await store.get("CPA1"))?.ambientEnabled, undefined, "unset by default");
+    await store.set("CPA1", { setBy: "U-admin", ambientEnabled: false });
+    assert.equal((await store.get("CPA1"))?.ambientEnabled, false);
+    await store.set("CPA1", {});
+    assert.equal((await store.get("CPA1"))?.ambientEnabled, false, "omitted arg leaves the override unchanged");
+    await store.set("CPA1", { ambientEnabled: null });
+    assert.equal((await store.get("CPA1"))?.ambientEnabled, undefined, "null clears back to the default rule");
+    const h = await store.history("CPA1");
+    assert.deepEqual(
+      h.map((r) => r.ambientEnabled),
+      [undefined, false, false, undefined].reverse(),
+      "revisions record the override",
+    );
+  } finally {
+    await store.close();
+  }
+});
 
-test("pg channel-policy: history appends a revision per set with provenance", { skip }, async () => {
-  const store = createPostgresChannelPolicyStore(URL!);
+test("pg channel-policy: history appends a revision per set with provenance", async () => {
+  const store = createPostgresChannelPolicyStore(URL);
   try {
     await store.set("CPH1", { setBy: "U-alice", sessionId: "sess-1", ambientEnabled: true });
     await store.set("CPH1", {
@@ -212,8 +206,8 @@ test("pg channel-policy: history appends a revision per set with provenance", { 
   }
 });
 
-test("pg surface-cache: mentions JSONB round-trips and survives a mention-less edit", { skip }, async () => {
-  const cache = createPostgresSurfaceCache(URL!);
+test("pg surface-cache: mentions JSONB round-trips and survives a mention-less edit", async () => {
+  const cache = createPostgresSurfaceCache(URL);
   try {
     await cache.ingest([
       { container: "Cm", ts: "9.0", text: "hi @jordan", mentions: { U1: "jordan", U2: "avery" }, createdAt: 1 },
@@ -228,8 +222,8 @@ test("pg surface-cache: mentions JSONB round-trips and survives a mention-less e
   }
 });
 
-test("pg surface-cache: revisedSince returns edits and deletions after the watermark", { skip }, async () => {
-  const cache = createPostgresSurfaceCache(URL!);
+test("pg surface-cache: revisedSince returns edits and deletions after the watermark", async () => {
+  const cache = createPostgresSurfaceCache(URL);
   const container = `Crev-${Date.now()}`;
   try {
     await cache.ingest([
@@ -259,8 +253,8 @@ test("pg surface-cache: revisedSince returns edits and deletions after the water
   }
 });
 
-test("pg surface-cache: revisedSince includes self edits and scopes to a thread", { skip }, async () => {
-  const cache = createPostgresSurfaceCache(URL!);
+test("pg surface-cache: revisedSince includes self edits and scopes to a thread", async () => {
+  const cache = createPostgresSurfaceCache(URL);
   const container = `Cthr-${Date.now()}`;
   try {
     await cache.ingest([
@@ -288,8 +282,8 @@ test("pg surface-cache: revisedSince includes self edits and scopes to a thread"
   }
 });
 
-test("pg mirror reads sanitize NUL, retain files and preserve newer text on a handled replay", { skip }, async () => {
-  const cache = createPostgresSurfaceCache(URL!);
+test("pg mirror reads sanitize NUL, retain files and preserve newer text on a handled replay", async () => {
+  const cache = createPostgresSurfaceCache(URL);
   try {
     await cache.ingest([
       {
@@ -311,8 +305,8 @@ test("pg mirror reads sanitize NUL, retain files and preserve newer text on a ha
   }
 });
 
-test("cache revisions preserve attachments and parent against stale handled events", { skip }, async () => {
-  const cache = createPostgresSurfaceCache(URL!);
+test("cache revisions preserve attachments and parent against stale handled events", async () => {
+  const cache = createPostgresSurfaceCache(URL);
   try {
     const base = { container: "CSNAPSHOT", ts: "2.0" };
     await cache.ingest([{ ...base, sub: "1.0", text: "latest", editedAt: 20, files: [{ fileId: "F1", name: "one" }] }]);
@@ -358,8 +352,8 @@ test("cache revisions preserve attachments and parent against stale handled even
   }
 });
 
-test("cache selects exact timestamps and oldest pages with live reply counts", { skip }, async () => {
-  const cache = createPostgresSurfaceCache(URL!);
+test("cache selects exact timestamps and oldest pages with live reply counts", async () => {
+  const cache = createPostgresSurfaceCache(URL);
   try {
     const container = "CSELECT";
     await cache.ingest([
@@ -393,8 +387,8 @@ test("cache selects exact timestamps and oldest pages with live reply counts", {
   }
 });
 
-test("pg attachment snapshots roll back with a failed ingestion transaction", { skip }, async () => {
-  const cache = createPostgresSurfaceCache(URL!);
+test("pg attachment snapshots roll back with a failed ingestion transaction", async () => {
+  const cache = createPostgresSurfaceCache(URL);
   try {
     const base = { container: "CATOMIC", ts: "1.0" };
     await cache.ingest([{ ...base, text: "original", files: [{ fileId: "F1" }], editedAt: 10 }]);
@@ -415,8 +409,8 @@ test("pg attachment snapshots roll back with a failed ingestion transaction", { 
   }
 });
 
-test("channel history includes broadcasts while exact roots exclude them", { skip }, async () => {
-  const cache = createPostgresSurfaceCache(URL!);
+test("channel history includes broadcasts while exact roots exclude them", async () => {
+  const cache = createPostgresSurfaceCache(URL);
   try {
     const container = "CBROADCAST";
     await cache.ingest([
@@ -449,47 +443,43 @@ test("channel history includes broadcasts while exact roots exclude them", { ski
   }
 });
 
-test(
-  "pg surface-cache: each surface's conversations stay out of another surface's search and listings",
-  { skip },
-  async () => {
-    const cache = createPostgresSurfaceCache(URL!);
-    try {
-      await cache.ingest([
-        { container: "CSURF", ts: "100.000001", text: "quarterly zebra plan", kind: "channel", createdAt: 1 },
-        {
-          surface: "forum",
-          container: "forum:prod:42",
-          ts: "100.000002",
-          sub: "100.000001",
-          text: "private zebra note",
-          kind: "dm",
-          members: ["alice@example.com"],
-          createdAt: 1,
-        },
-      ]);
-      assert.deepEqual(
-        (await cache.search("zebra")).map((m) => m.container),
-        ["CSURF"],
-      );
-      assert.deepEqual(
-        (await cache.search("zebra", { surface: "forum" })).map((m) => [m.container, m.surface]),
-        [["forum:prod:42", "forum"]],
-      );
-      assert.equal(
-        (await cache.listContainers()).some((c) => c.container === "forum:prod:42"),
-        false,
-      );
-      assert.deepEqual(
-        (await cache.listContainers({ surface: "forum" })).map((c) => c.container),
-        ["forum:prod:42"],
-      );
-      const [dm] = await cache.readMessages("forum:prod:42", { noFallback: true });
-      assert.equal(dm?.surface, "forum");
-      assert.equal((await cache.readMessages("CSURF", { noFallback: true }))[0]?.surface, undefined);
-      assert.equal(await cache.isMember("forum:prod:42", "alice@example.com"), true);
-    } finally {
-      await cache.close();
-    }
-  },
-);
+test("pg surface-cache: each surface's conversations stay out of another surface's search and listings", async () => {
+  const cache = createPostgresSurfaceCache(URL);
+  try {
+    await cache.ingest([
+      { container: "CSURF", ts: "100.000001", text: "quarterly zebra plan", kind: "channel", createdAt: 1 },
+      {
+        surface: "forum",
+        container: "forum:prod:42",
+        ts: "100.000002",
+        sub: "100.000001",
+        text: "private zebra note",
+        kind: "dm",
+        members: ["alice@example.com"],
+        createdAt: 1,
+      },
+    ]);
+    assert.deepEqual(
+      (await cache.search("zebra")).map((m) => m.container),
+      ["CSURF"],
+    );
+    assert.deepEqual(
+      (await cache.search("zebra", { surface: "forum" })).map((m) => [m.container, m.surface]),
+      [["forum:prod:42", "forum"]],
+    );
+    assert.equal(
+      (await cache.listContainers()).some((c) => c.container === "forum:prod:42"),
+      false,
+    );
+    assert.deepEqual(
+      (await cache.listContainers({ surface: "forum" })).map((c) => c.container),
+      ["forum:prod:42"],
+    );
+    const [dm] = await cache.readMessages("forum:prod:42", { noFallback: true });
+    assert.equal(dm?.surface, "forum");
+    assert.equal((await cache.readMessages("CSURF", { noFallback: true }))[0]?.surface, undefined);
+    assert.equal(await cache.isMember("forum:prod:42", "alice@example.com"), true);
+  } finally {
+    await cache.close();
+  }
+});

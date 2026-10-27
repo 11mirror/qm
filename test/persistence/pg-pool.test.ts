@@ -138,15 +138,14 @@ test("an unreadable cert file fails loudly, not as silent no-verify", () => {
   assert.throws(() => resolvePgCaTrust({ certFile: "/does/not/exist.crt" }), /unreadable/);
 });
 
-const databaseUrl = process.env.DATABASE_URL;
-const skip = !databaseUrl;
+const databaseUrl = process.env.DATABASE_URL!;
 
 function names(): { id: string; table: string } {
   const suffix = randomUUID().replaceAll("-", "");
   return { id: `test/integration/${suffix}/0001`, table: `migration_test_${suffix}` };
 }
 
-test("concurrent index migrations adopt prebuilt indexes and serialize retries", { skip }, async () => {
+test("concurrent index migrations adopt prebuilt indexes and serialize retries", async () => {
   const a = new pg.Pool({ connectionString: databaseUrl });
   const b = new pg.Pool({ connectionString: databaseUrl });
   const { id, table } = names();
@@ -168,7 +167,7 @@ test("concurrent index migrations adopt prebuilt indexes and serialize retries",
   }
 });
 
-test("failed concurrent index builds are unrecorded and rebuild invalid indexes on retry", { skip }, async () => {
+test("failed concurrent index builds are unrecorded and rebuild invalid indexes on retry", async () => {
   const pool = new pg.Pool({ connectionString: databaseUrl });
   const { id, table } = names();
   const index = `${table}_idx`;
@@ -195,7 +194,7 @@ test("failed concurrent index builds are unrecorded and rebuild invalid indexes 
   }
 });
 
-test("concurrent index migrations reject mixed transactional statements before execution", { skip }, async () => {
+test("concurrent index migrations reject mixed transactional statements before execution", async () => {
   const pool = new pg.Pool({ connectionString: databaseUrl });
   const { id, table } = names();
   try {
@@ -214,7 +213,7 @@ test("concurrent index migrations reject mixed transactional statements before e
   }
 });
 
-test("concurrent index retry resolves indexes in the target table schema", { skip }, async () => {
+test("concurrent index retry resolves indexes in the target table schema", async () => {
   const pool = new pg.Pool({ connectionString: databaseUrl });
   const { id, table } = names();
   const schema = `s_${table}`;
@@ -245,7 +244,7 @@ test("concurrent index retry resolves indexes in the target table schema", { ski
   }
 });
 
-test("concurrent migrators apply one version exactly once", { skip }, async () => {
+test("concurrent migrators apply one version exactly once", async () => {
   const a = new pg.Pool({ connectionString: databaseUrl });
   const b = new pg.Pool({ connectionString: databaseUrl });
   const { id, table } = names();
@@ -266,7 +265,7 @@ test("concurrent migrators apply one version exactly once", { skip }, async () =
   }
 });
 
-test("an applied migration rejects checksum drift", { skip }, async () => {
+test("an applied migration rejects checksum drift", async () => {
   const pool = new pg.Pool({ connectionString: databaseUrl });
   const { id, table } = names();
   try {
@@ -282,7 +281,7 @@ test("an applied migration rejects checksum drift", { skip }, async () => {
   }
 });
 
-test("a failed migration rolls back and is not recorded", { skip }, async () => {
+test("a failed migration rolls back and is not recorded", async () => {
   const pool = new pg.Pool({ connectionString: databaseUrl });
   const { id, table } = names();
   try {
@@ -303,11 +302,11 @@ test("a failed migration rolls back and is not recorded", { skip }, async () => 
 });
 
 const lock = "qm:schema-migrations";
-test("waiting for the schema-migrations lock does not deadlock a concurrent index build", { skip }, async () => {
+test("waiting for the schema-migrations lock does not deadlock a concurrent index build", async () => {
   const admin = new pg.Pool({ connectionString: databaseUrl });
   const holder = new pg.Client({ connectionString: databaseUrl });
   const { id, table } = names();
-  const store = createPgPool(databaseUrl!, [{ id, statements: [`ALTER TABLE ${table} ADD COLUMN extra INT`] }]);
+  const store = createPgPool(databaseUrl, [{ id, statements: [`ALTER TABLE ${table} ADD COLUMN extra INT`] }]);
   await holder.connect();
   try {
     await admin.query(`CREATE TABLE ${table}(value INT NOT NULL)`);
@@ -351,7 +350,7 @@ async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>)
   const parent = new pg.Pool({ connectionString: databaseUrl });
   const name = `migration_startup_${randomUUID().replaceAll("-", "")}`;
   await parent.query(`CREATE DATABASE ${name}`);
-  const url = new URL(databaseUrl!);
+  const url = new URL(databaseUrl);
   url.pathname = `/${name}`;
   const admin = new pg.Pool({ connectionString: url.toString() });
   try {
@@ -363,7 +362,7 @@ async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>)
   }
 }
 
-test("slow lazy migrations queue with dynamic and bulk migrations before pool acquisition", { skip }, async () => {
+test("slow lazy migrations queue with dynamic and bulk migrations before pool acquisition", async () => {
   await withDatabase(async (url, admin) => {
     const slow = createPgPool(url, "startup/0001", ["SELECT pg_sleep(11)"]);
     const next = createPgPool(url, "startup/0002", ["CREATE TABLE startup_result(value INT)"]);
@@ -390,7 +389,7 @@ test("slow lazy migrations queue with dynamic and bulk migrations before pool ac
   });
 });
 
-test("concurrent cold and repeat migration entrypoints exit and reject checksum drift", { skip }, async () => {
+test("concurrent cold and repeat migration entrypoints exit and reject checksum drift", async () => {
   await withDatabase(async (url, admin) => {
     const run = () =>
       exec(process.execPath, ["src/migrate-main.ts"], {

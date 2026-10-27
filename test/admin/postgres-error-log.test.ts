@@ -4,16 +4,14 @@ import { createPostgresErrorLog } from "../../src/admin/postgres-error-log.ts";
 import { scopeId } from "../../src/types.ts";
 import { truncateTables } from "../support/test-database.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres error-log tests";
+const URL = process.env.DATABASE_URL!;
 
 before(async () => {
-  if (!URL) return;
   await truncateTables(URL, ["error_events"]);
 });
 
-test("pg error log: persists events, filters by scope, newest-first, shape-only", { skip }, async (t) => {
-  const log = createPostgresErrorLog(URL!);
+test("pg error log: persists events, filters by scope, newest-first, shape-only", async (t) => {
+  const log = createPostgresErrorLog(URL);
   const s1 = scopeId("channel", "C1");
   const s2 = scopeId("channel", "C2");
 
@@ -54,15 +52,15 @@ test("pg error log: persists events, filters by scope, newest-first, shape-only"
   assert.equal(await log.count({ sessionId: "sess-1" }), 1, "count honors the session filter");
 });
 
-test("pg error log: survives a fresh log over the same table (durability)", { skip }, async () => {
-  const reopened = createPostgresErrorLog(URL!);
+test("pg error log: survives a fresh log over the same table (durability)", async () => {
+  const reopened = createPostgresErrorLog(URL);
   const rows = await reopened.list({ limit: 100 });
   assert.ok(rows.length >= 2, "events written by a prior log instance are still readable");
 });
 
-test("pg error log: flush makes writes visible to another process", { skip }, async () => {
-  const writer = createPostgresErrorLog(URL!);
-  const reader = createPostgresErrorLog(URL!);
+test("pg error log: flush makes writes visible to another process", async () => {
+  const writer = createPostgresErrorLog(URL);
+  const reader = createPostgresErrorLog(URL);
   writer.record({
     category: "session_title",
     code: "generation_failed",
@@ -75,14 +73,14 @@ test("pg error log: flush makes writes visible to another process", { skip }, as
   assert.equal((await reader.list({ sessionId: "sess-cross-process" })).length, 1);
 });
 
-test("pg error log pages equal-timestamp records deterministically beyond 200", { skip }, async () => {
+test("pg error log pages equal-timestamp records deterministically beyond 200", async () => {
   const pg = (await import("pg")).default;
   const pool = new pg.Pool({ connectionString: URL });
   try {
     await pool.query(
       "INSERT INTO error_events(ts, scope_label, category, code, message, session_id) SELECT 123, 'personal:pagination', 'turn', n::text, 'failure', 'pagination' FROM generate_series(0,259) n",
     );
-    const log = createPostgresErrorLog(URL!);
+    const log = createPostgresErrorLog(URL);
     const page = await log.list({ scopeId: "personal:pagination", sessionId: "pagination", limit: 50, offset: 200 });
     assert.equal(page.length, 50);
     assert.equal(page[0]?.code, "59");

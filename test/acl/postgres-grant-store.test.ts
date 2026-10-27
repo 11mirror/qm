@@ -8,11 +8,9 @@ import { scopeId, type Grant, type Principal } from "../../src/types.ts";
 import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres grant-store tests";
+const URL = process.env.DATABASE_URL!;
 
 before(async () => {
-  if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
@@ -38,8 +36,8 @@ const grant = (over: Partial<Grant> = {}): Grant => ({
   ...over,
 });
 
-test("pg grant persistence: put is an idempotent upsert; remove is permission-keyed", { skip }, async () => {
-  const store = createPostgresGrantStore(URL!);
+test("pg grant persistence: put is an idempotent upsert; remove is permission-keyed", async () => {
+  const store = createPostgresGrantStore(URL);
 
   await store.put(grant());
   await store.put(grant());
@@ -61,20 +59,20 @@ test("pg grant persistence: put is an idempotent upsert; remove is permission-ke
   );
 });
 
-test("pg grant persistence survives across store instances (no per-process cache to diverge)", { skip }, async () => {
-  const writer = createPostgresGrantStore(URL!);
+test("pg grant persistence survives across store instances (no per-process cache to diverge)", async () => {
+  const writer = createPostgresGrantStore(URL);
   await writer.put(grant({ ref: "shared-across.md" }));
 
-  const reader = createPostgresGrantStore(URL!);
+  const reader = createPostgresGrantStore(URL);
   assert.equal(
     (await reader.all()).some((g) => g.ref === "shared-across.md"),
     true,
   );
 });
 
-test("pg grant persistence: a warm cache sees another instance's writes and revocations", { skip }, async () => {
-  const reader = createPostgresGrantStore(URL!);
-  const writer = createPostgresGrantStore(URL!);
+test("pg grant persistence: a warm cache sees another instance's writes and revocations", async () => {
+  const reader = createPostgresGrantStore(URL);
+  const writer = createPostgresGrantStore(URL);
   await reader.all();
 
   await writer.put(grant({ ref: "warm-cache.md" }));
@@ -93,8 +91,8 @@ test("pg grant persistence: a warm cache sees another instance's writes and revo
   );
 });
 
-test("pg grant persistence: a warm cache sees writes that bypass the store entirely", { skip }, async () => {
-  const reader = createPostgresGrantStore(URL!);
+test("pg grant persistence: a warm cache sees writes that bypass the store entirely", async () => {
+  const reader = createPostgresGrantStore(URL);
   await reader.all();
 
   const pg = (await import("pg")).default;
@@ -112,8 +110,8 @@ test("pg grant persistence: a warm cache sees writes that bypass the store entir
   );
 });
 
-test("pg grant persistence: the snapshot is served from cache until the version moves", { skip }, async () => {
-  const reader = createPostgresGrantStore(URL!);
+test("pg grant persistence: the snapshot is served from cache until the version moves", async () => {
+  const reader = createPostgresGrantStore(URL);
   await reader.put(grant({ ref: "cached.md" }));
   await reader.all();
 
@@ -139,9 +137,9 @@ test("pg grant persistence: the snapshot is served from cache until the version 
   await p.end();
 });
 
-test("pg grant persistence: a conditional replacement invalidates warm caches", { skip }, async () => {
-  const reader = createPostgresGrantStore(URL!);
-  const writer = createPostgresGrantStore(URL!);
+test("pg grant persistence: a conditional replacement invalidates warm caches", async () => {
+  const reader = createPostgresGrantStore(URL);
+  const writer = createPostgresGrantStore(URL);
   const before = grant({ ref: "cas-invalidate.md" });
   await writer.put(before);
   await reader.all();
@@ -155,8 +153,8 @@ test("pg grant persistence: a conditional replacement invalidates warm caches", 
   );
 });
 
-test("pg grant persistence: cached reads return independent arrays", { skip }, async () => {
-  const store = createPostgresGrantStore(URL!);
+test("pg grant persistence: cached reads return independent arrays", async () => {
+  const store = createPostgresGrantStore(URL);
   await store.put(grant({ ref: "aliasing.md" }));
   const first = await store.all();
   first.length = 0;
@@ -167,9 +165,9 @@ test("pg grant persistence: cached reads return independent arrays", { skip }, a
   );
 });
 
-test("pg grant persistence serializes competing empty-set conditional replacements", { skip }, async () => {
-  const left = createPostgresGrantStore(URL!);
-  const right = createPostgresGrantStore(URL!);
+test("pg grant persistence serializes competing empty-set conditional replacements", async () => {
+  const left = createPostgresGrantStore(URL);
+  const right = createPostgresGrantStore(URL);
   const a = grant({ ref: "empty-cas.md", granteeScopeId: scopeId("personal", "A") });
   const b = grant({ ref: "empty-cas.md", granteeScopeId: scopeId("personal", "B") });
   const results = await Promise.all([
@@ -181,55 +179,51 @@ test("pg grant persistence serializes competing empty-set conditional replacemen
   assert.equal(saved.length, 1);
 });
 
-test(
-  "pg-backed AclStore: owner-only grant, dedup, permission-agnostic revoke, handle surfacing",
-  { skip },
-  async () => {
-    const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-    for (const [id, name] of [
-      ["owner-only", "owner-only.md"],
-      ["poster", "poster.png"],
-    ]) {
-      await files.put({
-        id: id!,
-        ownerScopeId: owner,
-        createdBy: "U1",
-        name: name!,
-        path: name!,
-        mimetype: "application/octet-stream",
-        data: Buffer.from("file"),
-        direction: "out",
-      });
-    }
-    const acl = createAclStore(createPostgresGrantStore(URL!), { resolveFiles: (refs) => files.resolveByIds(refs) });
+test("pg-backed AclStore: owner-only grant, dedup, permission-agnostic revoke, handle surfacing", async () => {
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  for (const [id, name] of [
+    ["owner-only", "owner-only.md"],
+    ["poster", "poster.png"],
+  ]) {
+    await files.put({
+      id: id!,
+      ownerScopeId: owner,
+      createdBy: "U1",
+      name: name!,
+      path: name!,
+      mimetype: "application/octet-stream",
+      data: Buffer.from("file"),
+      direction: "out",
+    });
+  }
+  const acl = createAclStore(createPostgresGrantStore(URL), { resolveFiles: (refs) => files.resolveByIds(refs) });
 
-    await assert.rejects(acl.grant(grant({ ref: "owner-only", grantedBy: "U2" })), /only a manager/);
+  await assert.rejects(acl.grant(grant({ ref: "owner-only", grantedBy: "U2" })), /only a manager/);
 
-    await acl.grant(grant({ ref: "owner-only" }));
-    await acl.grant(grant({ ref: "owner-only" }));
-    assert.equal((await acl.grantsFor(owner, "owner-only")).length, 1);
+  await acl.grant(grant({ ref: "owner-only" }));
+  await acl.grant(grant({ ref: "owner-only" }));
+  assert.equal((await acl.grantsFor(owner, "owner-only")).length, 1);
 
-    const handles = await acl.handlesFor([carol]);
-    assert.equal(
-      handles.some((h) => h.handlePath === "shared/owner-only.md" && h.ownerScopeId === owner),
-      true,
-    );
+  const handles = await acl.handlesFor([carol]);
+  assert.equal(
+    handles.some((h) => h.handlePath === "shared/owner-only.md" && h.ownerScopeId === owner),
+    true,
+  );
 
-    await acl.grant(grant({ ref: "poster", granteeScopeId: org }));
-    const surfaced = await acl.handlesForAudience(
-      [person("U1"), person("U2")],
-      scopeId("channel", "C1"),
-      org,
-      principalEntitledToScope,
-    );
-    assert.equal(
-      surfaced.some((h) => h.handlePath === "shared/poster.png"),
-      true,
-    );
+  await acl.grant(grant({ ref: "poster", granteeScopeId: org }));
+  const surfaced = await acl.handlesForAudience(
+    [person("U1"), person("U2")],
+    scopeId("channel", "C1"),
+    org,
+    principalEntitledToScope,
+  );
+  assert.equal(
+    surfaced.some((h) => h.handlePath === "shared/poster.png"),
+    true,
+  );
 
-    await acl.grant(grant({ ref: "owner-only", permission: "write" }));
-    assert.equal((await acl.grantsFor(owner, "owner-only")).length, 2);
-    await acl.revoke(owner, "owner-only", carol, "U1");
-    assert.equal((await acl.grantsFor(owner, "owner-only")).length, 0, "revoke drops every permission for the triple");
-  },
-);
+  await acl.grant(grant({ ref: "owner-only", permission: "write" }));
+  assert.equal((await acl.grantsFor(owner, "owner-only")).length, 2);
+  await acl.revoke(owner, "owner-only", carol, "U1");
+  assert.equal((await acl.grantsFor(owner, "owner-only")).length, 0, "revoke drops every permission for the triple");
+});

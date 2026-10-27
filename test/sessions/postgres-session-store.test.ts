@@ -32,8 +32,7 @@ import { assertLateJoinerScopes, assertLeanListing } from "../support/participan
 import { testConfig } from "../support/test-config.ts";
 import { testDatabaseUrl, testMap } from "../support/test-database.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the items contract test";
+const URL = process.env.DATABASE_URL!;
 
 async function withSchema(
   prefix: string,
@@ -47,7 +46,7 @@ async function withSchema(
   const admin = new pg.Pool({ connectionString: URL });
   const schema = `${prefix}_${randomUUID().replaceAll("-", "")}`;
   await admin.query(`CREATE SCHEMA ${schema}`);
-  const url = new globalThis.URL(URL!);
+  const url = new globalThis.URL(URL);
   url.searchParams.set("options", `-c search_path=${schema}`);
   const raw = new pg.Pool({ connectionString: url.toString() });
   try {
@@ -59,7 +58,7 @@ async function withSchema(
   }
 }
 
-test("pg items keep turn, author and time in typed columns", { skip }, async () => {
+test("pg items keep turn, author and time in typed columns", async () => {
   await withSchema("items_columns", async ({ raw, store }) => {
     const scope = scopeId("personal", "alice");
     const session = await store.getOrCreateByThread("web:columns", "dm", scope);
@@ -108,7 +107,7 @@ test("pg items keep turn, author and time in typed columns", { skip }, async () 
   });
 });
 
-test("pg items reject a second call with the same call id, leaving the log untouched", { skip }, async () => {
+test("pg items reject a second call with the same call id, leaving the log untouched", async () => {
   await withSchema("items_calls", async ({ store }) => {
     const scope = scopeId("personal", "alice");
     const session = await store.getOrCreateByThread("web:calls", "dm", scope);
@@ -128,81 +127,77 @@ test("pg items reject a second call with the same call id, leaving the log untou
   });
 });
 
-test(
-  "pg tool output: the inline cap comes from qm_settings and parked text reads back by a gateway call id carrying a large thought signature",
-  { skip },
-  async () => {
-    await withSchema("items_tool_output", async ({ raw, url, store }) => {
-      const dir = await mkdtemp(join(tmpdir(), "tool-output-"));
-      const pool = createPgPool(url);
-      try {
-        const scope = scopeId("personal", "alice");
-        const session = await store.getOrCreateByThread("web:tool-output", "dm", scope);
-        let clock = Date.now();
-        const outputs = createPostgresToolOutputStore({
-          pool,
-          bytesFor: (prefix) => createLocalDurableByteStore(join(dir, prefix)),
-          now: () => clock,
-        });
-        assert.equal(await outputs.inlineTokens(), DEFAULT_INLINE_TOKENS);
+test("pg tool output: the inline cap comes from qm_settings and parked text reads back by a gateway call id carrying a large thought signature", async () => {
+  await withSchema("items_tool_output", async ({ raw, url, store }) => {
+    const dir = await mkdtemp(join(tmpdir(), "tool-output-"));
+    const pool = createPgPool(url);
+    try {
+      const scope = scopeId("personal", "alice");
+      const session = await store.getOrCreateByThread("web:tool-output", "dm", scope);
+      let clock = Date.now();
+      const outputs = createPostgresToolOutputStore({
+        pool,
+        bytesFor: (prefix) => createLocalDurableByteStore(join(dir, prefix)),
+        now: () => clock,
+      });
+      assert.equal(await outputs.inlineTokens(), DEFAULT_INLINE_TOKENS);
+      await raw.query(
+        "INSERT INTO qm_settings(key, value) VALUES ('tool_result_inline_tokens', '0') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+      );
+      assert.equal(await outputs.inlineTokens(), DEFAULT_INLINE_TOKENS, "cached for a short while");
+      clock += 60_000;
+      assert.equal(await outputs.inlineTokens(), 0);
+
+      const full = "ünï line\n".repeat(10_000);
+      const blob = await outputs.save(full);
+      const callId = `call_${randomUUID()}__thought__${randomBytes(4_500).toString("base64")}`;
+      const { lease } = await store.acquireLease(session.id);
+      assert.ok(lease);
+      const call = { kind: "ToolCall" as const, tool: "execute", callId };
+      await store.append(lease, call);
+      await store.append(lease, {
+        kind: "ToolResult",
+        tool: "execute",
+        callId,
+        text: "head…tail",
+        blobSha: blob,
+        body: { output: { chars: full.length, shownChars: 8 } },
+      });
+      await assert.rejects(store.append(lease, call), DuplicateCallError);
+      await store.append(lease, {
+        kind: "ToolResult",
+        tool: "execute",
+        callId: "toolu_short",
+        text: "head…tail",
+        blobSha: blob,
+        body: { output: {} },
+      });
+      await store.releaseLease(lease);
+      const items = await store.getItems(session.id);
+      assert.deepEqual(
+        items.map((item) => item.callId),
+        [callId, callId, "toolu_short"],
+      );
+      const markerPath = /tool-output\/\S+(?=;)/.exec(cutToolOutput(full, 1, callId)!.text)![0];
+      assert.deepEqual(await outputs.read(session.id, parkedOutputKey(markerPath)!), { text: full });
+      assert.deepEqual(await outputs.read(session.id, parkedOutputKey("tool-output/toolu_short")!), { text: full });
+      assert.equal(await outputs.read(session.id, parkedOutputKey("tool-output/missing")!), null);
+      assert.equal(await outputs.read("other-session", parkedOutputKey(markerPath)!), null);
+      const row = (
         await raw.query(
-          "INSERT INTO qm_settings(key, value) VALUES ('tool_result_inline_tokens', '0') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-        );
-        assert.equal(await outputs.inlineTokens(), DEFAULT_INLINE_TOKENS, "cached for a short while");
-        clock += 60_000;
-        assert.equal(await outputs.inlineTokens(), 0);
+          "SELECT size, storage_key, (extract(epoch FROM expires_at - created_at) / 86400)::int AS days FROM blobs",
+        )
+      ).rows[0];
+      assert.deepEqual([Number(row.size), row.days], [Buffer.byteLength(full), 30]);
+      assert.match(row.storage_key, /^tool-output\/[0-9a-f-]{36}\/files\/[0-9a-f]{64}$/);
+    } finally {
+      await pool.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
 
-        const full = "ünï line\n".repeat(10_000);
-        const blob = await outputs.save(full);
-        const callId = `call_${randomUUID()}__thought__${randomBytes(4_500).toString("base64")}`;
-        const { lease } = await store.acquireLease(session.id);
-        assert.ok(lease);
-        const call = { kind: "ToolCall" as const, tool: "execute", callId };
-        await store.append(lease, call);
-        await store.append(lease, {
-          kind: "ToolResult",
-          tool: "execute",
-          callId,
-          text: "head…tail",
-          blobSha: blob,
-          body: { output: { chars: full.length, shownChars: 8 } },
-        });
-        await assert.rejects(store.append(lease, call), DuplicateCallError);
-        await store.append(lease, {
-          kind: "ToolResult",
-          tool: "execute",
-          callId: "toolu_short",
-          text: "head…tail",
-          blobSha: blob,
-          body: { output: {} },
-        });
-        await store.releaseLease(lease);
-        const items = await store.getItems(session.id);
-        assert.deepEqual(
-          items.map((item) => item.callId),
-          [callId, callId, "toolu_short"],
-        );
-        const markerPath = /tool-output\/\S+(?=;)/.exec(cutToolOutput(full, 1, callId)!.text)![0];
-        assert.deepEqual(await outputs.read(session.id, parkedOutputKey(markerPath)!), { text: full });
-        assert.deepEqual(await outputs.read(session.id, parkedOutputKey("tool-output/toolu_short")!), { text: full });
-        assert.equal(await outputs.read(session.id, parkedOutputKey("tool-output/missing")!), null);
-        assert.equal(await outputs.read("other-session", parkedOutputKey(markerPath)!), null);
-        const row = (
-          await raw.query(
-            "SELECT size, storage_key, (extract(epoch FROM expires_at - created_at) / 86400)::int AS days FROM blobs",
-          )
-        ).rows[0];
-        assert.deepEqual([Number(row.size), row.days], [Buffer.byteLength(full), 30]);
-        assert.match(row.storage_key, /^tool-output\/[0-9a-f-]{36}\/files\/[0-9a-f]{64}$/);
-      } finally {
-        await pool.close();
-        await rm(dir, { recursive: true, force: true });
-      }
-    });
-  },
-);
-
-test("pg items hide a Slack reply receipt once the real message arrives", { skip }, async () => {
+test("pg items hide a Slack reply receipt once the real message arrives", async () => {
   await withSchema("items_receipts", async ({ store }) => {
     const scope = scopeId("personal", "alice");
     const session = await store.getOrCreateByThread("slack:T1:C1:1.0", "dm", scope);
@@ -694,7 +689,7 @@ test("getRun drops an unresolvable threadRef sessionId (turn failed before its s
   assert.equal(got?.result?.sessionId, undefined, "unresolvable id is dropped, not leaked");
 });
 
-test("pg items report which message timestamps a session already recorded", { skip }, async () => {
+test("pg items report which message timestamps a session already recorded", async () => {
   await withSchema("items_recorded_ts", async ({ store }) => {
     const session = await store.getOrCreateByThread("slack:T1:C1:2.0", "channel", scopeId("personal", "alice"));
     const { lease } = await store.acquireLease(session.id);

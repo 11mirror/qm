@@ -6,9 +6,8 @@ import { createPostgresNotifyBus } from "../../src/persistence/postgres-notify-b
 import { createPostgresRunSignalStore } from "../../src/runs/postgres-run-signal-store.ts";
 import { settle } from "../support/settle.ts";
 
-const url = process.env.DATABASE_URL;
-const skip = !url;
-test("channels share a backend, recover after termination, and release it after unsubscribe", { skip }, async () => {
+const url = process.env.DATABASE_URL!;
+test("channels share a backend, recover after termination, and release it after unsubscribe", async () => {
   const observer = new pg.Client({ connectionString: url });
   await observer.connect();
   const seen: string[] = [];
@@ -23,7 +22,7 @@ test("channels share a backend, recover after termination, and release it after 
   try {
     stops.push(
       subscribePostgresChannel(
-        url!,
+        url,
         "consolidation_a",
         (v) => seen.push(`a:${v}`),
         () => resyncs++,
@@ -31,7 +30,7 @@ test("channels share a backend, recover after termination, and release it after 
     );
     stops.push(
       subscribePostgresChannel(
-        url!,
+        url,
         "consolidation_b",
         (v) => seen.push(`b:${v}`),
         () => resyncs++,
@@ -57,10 +56,10 @@ test("channels share a backend, recover after termination, and release it after 
   }
 });
 
-test("notification buses and run signals share a listener without closing their siblings", { skip }, async () => {
-  const a = createPostgresNotifyBus<string>(url!, "consolidation_bus", "test");
-  const b = createPostgresNotifyBus<string>(url!, "consolidation_bus", "test");
-  const signals = createPostgresRunSignalStore(url!);
+test("notification buses and run signals share a listener without closing their siblings", async () => {
+  const a = createPostgresNotifyBus<string>(url, "consolidation_bus", "test");
+  const b = createPostgresNotifyBus<string>(url, "consolidation_bus", "test");
+  const signals = createPostgresRunSignalStore(url);
   const observer = new pg.Client({ connectionString: url });
   await observer.connect();
   let ready = 0;
@@ -93,9 +92,9 @@ test("notification buses and run signals share a listener without closing their 
   }
 });
 
-test("immediate unsubscribe and replacement do not leak a pending connection", { skip }, async () => {
+test("immediate unsubscribe and replacement do not leak a pending connection", async () => {
   const first = subscribePostgresChannel(
-    url!,
+    url,
     "consolidation_race",
     () => {},
     () => {},
@@ -103,7 +102,7 @@ test("immediate unsubscribe and replacement do not leak a pending connection", {
   const closing = first();
   let ready = false;
   const second = subscribePostgresChannel(
-    url!,
+    url,
     "consolidation_race",
     () => {},
     () => {

@@ -114,18 +114,16 @@ test("team scope read and write follow team membership", async () => {
   assert.equal(await createCanReadScope({ identity, teams })("cy@x.com", scopeId("team", "finance")), false);
 });
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres team tests";
+const URL = process.env.DATABASE_URL!;
 const org = scopeId("org", "default-org");
 
 beforeEach(async () => {
-  if (!URL) return;
   await truncateTables(URL, ["team_rooms", "team_members", "teams"]);
 });
 
-const store = (on = true) => createPostgresTeamStore(URL!, { enabled: async () => on }, org);
+const store = (on = true) => createPostgresTeamStore(URL, { enabled: async () => on }, org);
 
-test("pg teams: members are rows, edited one at a time, looked up by person", { skip }, async () => {
+test("pg teams: members are rows, edited one at a time, looked up by person", async () => {
   const teams = store();
   const members = Array.from({ length: 1000 }, (_, i) => `p${i}@x.com`);
   await teams.apply(
@@ -153,7 +151,7 @@ test("pg teams: members are rows, edited one at a time, looked up by person", { 
   );
 });
 
-test("pg teams: removing a team removes its members and rooms", { skip }, async () => {
+test("pg teams: removing a team removes its members and rooms", async () => {
   const teams = store();
   await teams.apply({ id: "finance", addMembers: ["ann@x.com"], addRooms: [room] }, "a");
   await teams.apply({ id: "finance", remove: true }, "a");
@@ -168,7 +166,7 @@ test("pg teams: removing a team removes its members and rooms", { skip }, async 
   assert.equal(rows[0].n, 0);
 });
 
-test("pg teams: the feature flag gates every read", { skip }, async () => {
+test("pg teams: the feature flag gates every read", async () => {
   await store().apply({ id: "finance", addMembers: ["ann@x.com"] }, "a");
   const off = store(false);
   assert.deepEqual(await off.list(), []);

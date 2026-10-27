@@ -6,15 +6,13 @@ import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-a
 import { fileArtifactId, type PutFileInput } from "../../src/files/file-artifact-store.ts";
 import { scopeId } from "../../src/types.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres file-artifact-store tests";
+const URL = process.env.DATABASE_URL!;
 
 const owner = scopeId("channel", "C1");
 const other = scopeId("personal", "U9");
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x7f]);
 
 beforeEach(async () => {
-  if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
   await p.query(
@@ -39,7 +37,7 @@ function put(over: Partial<PutFileInput> = {}): PutFileInput {
   };
 }
 
-test("pg put is an idempotent upsert by deterministic id (no dup, no byte re-store)", { skip }, async () => {
+test("pg put is an idempotent upsert by deterministic id (no dup, no byte re-store)", async () => {
   const bytes = createMemoryDurableByteStore();
   let putCount = 0;
   const counting = {
@@ -50,7 +48,7 @@ test("pg put is an idempotent upsert by deterministic id (no dup, no byte re-sto
     open: bytes.open,
     delete: bytes.delete,
   };
-  const store = createPostgresFileArtifactStore(URL!, counting as never);
+  const store = createPostgresFileArtifactStore(URL, counting as never);
 
   const first = await store.put(put());
   assert.equal(first.created, true);
@@ -61,8 +59,8 @@ test("pg put is an idempotent upsert by deterministic id (no dup, no byte re-sto
   assert.equal((await store.listOwnedByScopes([owner])).files.length, 1);
 });
 
-test("pg listOwnedByScopes: recency DESC, scope-filtered, keyset-paginated", { skip }, async () => {
-  const store = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
+test("pg listOwnedByScopes: recency DESC, scope-filtered, keyset-paginated", async () => {
+  const store = createPostgresFileArtifactStore(URL, createMemoryDurableByteStore());
   await store.put(put({ id: "a", path: "p/a", data: Buffer.from("a"), createdAt: 100 }));
   await store.put(put({ id: "b", path: "p/b", data: Buffer.from("b"), createdAt: 200 }));
   await store.put(put({ id: "c", path: "p/c", data: Buffer.from("c"), createdAt: 300 }));
@@ -86,8 +84,8 @@ test("pg listOwnedByScopes: recency DESC, scope-filtered, keyset-paginated", { s
   assert.equal(p2.nextCursor, undefined);
 });
 
-test("pg listOwnedByScopes: created-scope and enabled filters compose", { skip }, async () => {
-  const store = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
+test("pg listOwnedByScopes: created-scope and enabled filters compose", async () => {
+  const store = createPostgresFileArtifactStore(URL, createMemoryDurableByteStore());
   await store.put(put({ id: "a", path: "p/a", data: Buffer.from("a"), createdAt: 100 }));
   await store.put(put({ id: "b", ownerScopeId: other, path: "p/b", data: Buffer.from("b"), createdAt: 200 }));
   await store.put(put({ id: "c", path: "p/c", data: Buffer.from("c"), createdInScope: other, createdAt: 300 }));
@@ -106,8 +104,8 @@ test("pg listOwnedByScopes: created-scope and enabled filters compose", { skip }
   );
 });
 
-test("pg listOwnedByScopes: nameQuery is case-insensitive and treats wildcards as literals", { skip }, async () => {
-  const store = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
+test("pg listOwnedByScopes: nameQuery is case-insensitive and treats wildcards as literals", async () => {
+  const store = createPostgresFileArtifactStore(URL, createMemoryDurableByteStore());
   await store.put(put({ id: "a", name: "Quarterly Report.pdf", path: "p/a", data: Buffer.from("a"), createdAt: 100 }));
   await store.put(put({ id: "b", name: "notes.txt", path: "p/b", data: Buffer.from("b"), createdAt: 200 }));
   await store.put(put({ id: "c", name: "report-draft.txt", path: "p/c", data: Buffer.from("c"), createdAt: 300 }));
@@ -134,8 +132,8 @@ test("pg listOwnedByScopes: nameQuery is case-insensitive and treats wildcards a
   assert.equal((await store.listOwnedByScopes([owner], { nameQuery: "missing" })).files.length, 0);
 });
 
-test("pg scoped file pages have a matching enabled recency index", { skip }, async () => {
-  const store = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
+test("pg scoped file pages have a matching enabled recency index", async () => {
+  const store = createPostgresFileArtifactStore(URL, createMemoryDurableByteStore());
   await store.listOwnedByScopes([owner], { createdInScope: owner });
   const pg = (await import("pg")).default;
   const raw = new pg.Pool({ connectionString: URL });
@@ -150,8 +148,8 @@ test("pg scoped file pages have a matching enabled recency index", { skip }, asy
   }
 });
 
-test("pg resolveByIds returns the shared set; disabled excluded", { skip }, async () => {
-  const store = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
+test("pg resolveByIds returns the shared set; disabled excluded", async () => {
+  const store = createPostgresFileArtifactStore(URL, createMemoryDurableByteStore());
   await store.put(put({ id: "r1", path: "p/r1", data: Buffer.from("1") }));
   await store.put(put({ id: "r2", path: "p/r2", data: Buffer.from("2") }));
 
@@ -163,8 +161,8 @@ test("pg resolveByIds returns the shared set; disabled excluded", { skip }, asyn
   assert.equal((await store.resolveByIds([{ ownerScopeId: owner, id: "r1" }])).length, 0);
 });
 
-test("pg open round-trips bytes; delete removes the ROW only", { skip }, async () => {
-  const store = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
+test("pg open round-trips bytes; delete removes the ROW only", async () => {
+  const store = createPostgresFileArtifactStore(URL, createMemoryDurableByteStore());
   await store.put(put({ id: "o1", direction: "out", path: "p/o1", data: PNG }));
   await store.put(put({ id: "i1", direction: "in", path: "p/i1", data: PNG }));
 
@@ -179,42 +177,36 @@ test("pg open round-trips bytes; delete removes the ROW only", { skip }, async (
   assert.ok(await store.open("i1"), "shared bytes survive (no inline byte delete)");
 });
 
-test("pg rows survive across store instances (no per-process cache to diverge)", { skip }, async () => {
-  const writer = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
+test("pg rows survive across store instances (no per-process cache to diverge)", async () => {
+  const writer = createPostgresFileArtifactStore(URL, createMemoryDurableByteStore());
   await writer.put(put({ id: "across", path: "p/across", data: Buffer.from("x"), createdAt: 5 }));
-  const reader = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
+  const reader = createPostgresFileArtifactStore(URL, createMemoryDurableByteStore());
   assert.ok(await reader.get("across"));
 });
 
-test("pg document listing groups authorized copies before pagination", { skip }, async () => {
-  await assertDocumentListing(createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore()));
+test("pg document listing groups authorized copies before pagination", async () => {
+  await assertDocumentListing(createPostgresFileArtifactStore(URL, createMemoryDurableByteStore()));
 });
 
-test(
-  "pg document listing keeps unknown hashes separate and picks deterministic representatives",
-  { skip },
-  async () => {
-    const store = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
-    for (const id of ["b", "a", "unknown-1", "unknown-2"]) await store.put(put({ id, path: id, createdAt: 100 }));
-    const pg = (await import("pg")).default;
-    const raw = new pg.Pool({ connectionString: URL });
-    try {
-      await raw.query("UPDATE file_artifacts SET sha256 = NULL WHERE id = ANY($1::text[])", [
-        ["unknown-1", "unknown-2"],
-      ]);
-      assert.deepEqual(
-        (await store.listDocuments([owner], [])).files.map((f) => f.id),
-        ["unknown-2", "unknown-1", "a"],
-      );
-    } finally {
-      await raw.end();
-    }
-  },
-);
-test("pg deletion fences recovery publication across fresh store instances", { skip }, async () => {
+test("pg document listing keeps unknown hashes separate and picks deterministic representatives", async () => {
+  const store = createPostgresFileArtifactStore(URL, createMemoryDurableByteStore());
+  for (const id of ["b", "a", "unknown-1", "unknown-2"]) await store.put(put({ id, path: id, createdAt: 100 }));
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
+  try {
+    await raw.query("UPDATE file_artifacts SET sha256 = NULL WHERE id = ANY($1::text[])", [["unknown-1", "unknown-2"]]);
+    assert.deepEqual(
+      (await store.listDocuments([owner], [])).files.map((f) => f.id),
+      ["unknown-2", "unknown-1", "a"],
+    );
+  } finally {
+    await raw.end();
+  }
+});
+test("pg deletion fences recovery publication across fresh store instances", async () => {
   const bytes = createMemoryDurableByteStore();
-  const first = createPostgresFileArtifactStore(URL!, bytes);
-  const second = createPostgresFileArtifactStore(URL!, bytes);
+  const first = createPostgresFileArtifactStore(URL, bytes);
+  const second = createPostgresFileArtifactStore(URL, bytes);
   const { artifact } = await first.put(put());
   await second.delete(artifact.id);
   await assert.rejects(
@@ -225,10 +217,10 @@ test("pg deletion fences recovery publication across fresh store instances", { s
   assert.deepEqual((await first.listOwnedByScopes([owner])).files, []);
 });
 
-test("pg concurrent deletion and recovery publication always leave the file deleted", { skip }, async () => {
+test("pg concurrent deletion and recovery publication always leave the file deleted", async () => {
   const bytes = createMemoryDurableByteStore();
-  const first = createPostgresFileArtifactStore(URL!, bytes);
-  const second = createPostgresFileArtifactStore(URL!, bytes);
+  const first = createPostgresFileArtifactStore(URL, bytes);
+  const second = createPostgresFileArtifactStore(URL, bytes);
   const { artifact } = await first.put(put());
   await Promise.allSettled([
     first.publish({ ...put(), blobKey: artifact.blobKey!, sizeBytes: artifact.sizeBytes, sha256: artifact.sha256 }),
@@ -237,10 +229,10 @@ test("pg concurrent deletion and recovery publication always leave the file dele
   assert.equal(await first.get(artifact.id, { includeDisabled: true }), null);
 });
 
-test("pg concurrent first shares reuse one path generation and republish after deletion", { skip }, async () => {
+test("pg concurrent first shares reuse one path generation and republish after deletion", async () => {
   const bytes = createMemoryDurableByteStore();
-  const first = createPostgresFileArtifactStore(URL!, bytes);
-  const second = createPostgresFileArtifactStore(URL!, bytes);
+  const first = createPostgresFileArtifactStore(URL, bytes);
+  const second = createPostgresFileArtifactStore(URL, bytes);
   const input = { ...put(), reuseExistingPath: true };
   const initial = await Promise.all([
     first.put({ ...input, id: "share-one" }),
@@ -255,6 +247,6 @@ test("pg concurrent first shares reuse one path generation and republish after d
   assert.equal((await first.resolveByIds([{ ownerScopeId: owner, id: current.artifact.id }])).length, 1);
 });
 
-test("shared file refs authorize only the exact record ID", { skip }, async () => {
-  await assertSharedRecordIdentity(createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore()));
+test("shared file refs authorize only the exact record ID", async () => {
+  await assertSharedRecordIdentity(createPostgresFileArtifactStore(URL, createMemoryDurableByteStore()));
 });
