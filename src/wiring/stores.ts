@@ -35,6 +35,8 @@ import { createConnectorStatusCache } from "../credentials/connector-status.ts";
 import { createSlackInstallationStore } from "../surfaces/slack-installation.ts";
 import { mkdirSync } from "node:fs";
 import { createJobWorker } from "../jobs/job-worker.ts";
+import { tenantConfig } from "../tenants/tenant-config.ts";
+import { tenantJobWorkers } from "../tenants/fan-out.ts";
 
 type StoresInputs = Pick<Head, "databaseUrl" | "config" | "connectorSecretKey" | "admittedWork">;
 
@@ -99,8 +101,11 @@ export function buildStores(deps: StoresInputs) {
     ((await admin.adminStatusOf(identity.classify(actorId))).isAdmin || (await canWriteScope(actorId, scopeId)));
   const decisions = createPostgresDecisionStore(databaseUrl);
   const connectorStatusCache = createConnectorStatusCache(databaseUrl);
-  const slackInstallation = createSlackInstallationStore(config.orgId, databaseUrl, connectorSecretKey);
-  const jobs = createJobWorker(databaseUrl);
+  const slackInstallation = createSlackInstallationStore(
+    databaseUrl,
+    () => tenantConfig(config).connectorSecretKey ?? connectorSecretKey,
+  );
+  const jobs = tenantJobWorkers(() => createJobWorker(databaseUrl));
   const every = (name: string, everyMs: number, fn: () => unknown, opts?: { immediate?: boolean }) =>
     jobs.every(name, everyMs, () => admittedWork.run(fn), opts);
   every("spend:refresh", 60_000, () => sessions.refreshSpendRollup(), { immediate: true });

@@ -30,6 +30,10 @@ export function tenant(): Tenant {
   return processTenant;
 }
 
+export function scopedTenant(): Tenant | undefined {
+  return current.getStore();
+}
+
 export function withTenant<T>(t: Tenant, fn: () => T): T {
   return current.run(t, fn);
 }
