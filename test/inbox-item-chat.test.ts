@@ -60,3 +60,11 @@ test("a json block in the agent's reply is kept as text and never rewrites the d
   assert.deepEqual(after?.proposal?.data, { body: "Original" });
   assert.equal((await items.get(item.id))?.thread?.at(-1)?.text, reply);
 });
+
+test("the person's new message reaches the prompt once", async () => {
+  const { item, chat } = await seeded();
+  reply = "Sure.";
+  await chat.followUp(CRON, item, "zebra-unique-ask", "owner@example.com");
+  const input = specs.at(-1)!.input as string;
+  assert.equal(input.split("zebra-unique-ask").length - 1, 1);
+});

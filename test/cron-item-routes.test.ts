@@ -984,3 +984,10 @@ test("an owner cannot trigger Slack avatar enrichment through item detail when I
   assert.equal(result.status, 200);
   assert.deepEqual(await w.items.get(item!.id), before);
 });
+
+test("each inbox sync task carries only its own source's guidance", () => {
+  const gmail = renderSourceInboxTask("gmail");
+  const slack = renderSourceInboxTask("slack");
+  assert.ok(gmail.includes("rfcMessageId") && !gmail.includes("conversations.replies"));
+  assert.ok(slack.includes("conversations.replies") && !slack.includes("rfcMessageId"));
+});
