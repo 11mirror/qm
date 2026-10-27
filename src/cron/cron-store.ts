@@ -120,13 +120,11 @@ export const CRONS_MIGRATION = mapToTableMigration("triggers/crons/0001-typed", 
   ],
 });
 
-const CRONS_MIGRATIONS = [
-  retireJsonKeysMigration("triggers/crons/0000-drop-retired-keys", "crons", {
-    drop: ["adminAuthorization", "deliveryMigration", "initialVerificationRequestedAt", "groupDeliveryTestRequestedAt"],
-  }),
-  CRONS_MIGRATION,
-  ownerIndexMigration("crons"),
-];
+export const CRONS_RETIRED_KEYS = retireJsonKeysMigration("triggers/crons/0000-drop-retired-keys", "crons", {
+  drop: ["adminAuthorization", "deliveryMigration", "initialVerificationRequestedAt", "groupDeliveryTestRequestedAt"],
+});
+
+const CRONS_MIGRATIONS = [CRONS_RETIRED_KEYS, CRONS_MIGRATION, ownerIndexMigration("crons")];
 
 export function createCronStore(
   databaseUrl: string,

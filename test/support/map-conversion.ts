@@ -13,7 +13,7 @@ import {
 import { testDatabaseUrl } from "./test-database.ts";
 
 type Json = Record<string, unknown>;
-type Seed = [tenant: string | null, rows: ReadonlyArray<{ id: string; json: Json }>];
+type Seed = [tenant: string | null, rows: ReadonlyArray<{ id: string; json: Json; kept: Json }>];
 
 const SAMPLES: Record<ColumnType, (field: string, n: number) => unknown> = {
   text: (field, n) => `${field} ${n} \u00e9\u{1F600}`,
@@ -24,15 +24,16 @@ const SAMPLES: Record<ColumnType, (field: string, n: number) => unknown> = {
   "text[]": (field, n) => [`${field}-${n}`, "b"],
 };
 
-function sampleRows(spec: TableSpec, dropKeys: readonly string[]) {
+function sampleRows(spec: TableSpec, dropKeys: readonly string[], retiredKeys: Json) {
   return [1, 2].map((n) => {
     const id = `${spec.table}-${n}`;
-    const json: Json = spec.keyIsField ? { [spec.key]: id } : {};
+    const kept: Json = spec.keyIsField ? { [spec.key]: id } : {};
     for (const [field, c] of Object.entries(spec.columns))
-      if (n === 1 || c.required) json[field] = SAMPLES[c.type](field, n);
-    const want = { ...json };
-    for (const key of n === 1 ? dropKeys : []) json[key] = `legacy ${key}`;
-    return { id, json, want };
+      if (n === 1 || c.required) kept[field] = SAMPLES[c.type](field, n);
+    const want = { ...kept };
+    for (const key of n === 1 ? dropKeys : []) kept[key] = `legacy ${key}`;
+    const json = n === 1 ? { ...kept, ...retiredKeys } : kept;
+    return { id, json, kept, want };
   });
 }
 
@@ -104,10 +105,13 @@ async function assertDualWrites(pool: pg.Pool, conversion: MapConversion, sample
   }
 }
 
-export async function assertMapConversion(conversion: MapConversion): Promise<void> {
+export async function assertMapConversion(
+  conversion: MapConversion,
+  retired: { migration: PgMigrationDefinition; keys: Json } | null = null,
+): Promise<void> {
   const { spec } = conversion;
   const codec = tableCodec<Json>(spec);
-  const rows = sampleRows(spec, conversion.dropKeys);
+  const rows = sampleRows(spec, conversion.dropKeys, retired?.keys ?? {});
   const wanted = new Map(rows.map((row) => [row.id, row.want]));
   const cases: Seed[][] = [
     [[null, rows]],
@@ -129,6 +133,7 @@ export async function assertMapConversion(conversion: MapConversion): Promise<vo
     const pool = new pg.Pool({ connectionString: testDatabaseUrl(), options: TENANT_BYPASS_OPTION });
     try {
       await seedMap(pool, spec.table, seeds);
+      if (retired) await runMigration(pool, retired.migration);
       await runMigration(pool, conversion);
       for (const [tenant, seeded] of seeds) {
         const want = seeded.map((row) => wanted.get(row.id));
@@ -139,11 +144,11 @@ export async function assertMapConversion(conversion: MapConversion): Promise<vo
         );
         assert.deepEqual(
           json.rows.map((row) => row.json),
-          seeded.map((row) => row.json),
-          `${spec.table} json untouched`,
+          seeded.map((row) => row.kept),
+          `${spec.table} json keeps every key but the retired ones`,
         );
       }
-      if (!seeds[0]![0]) await assertDualWrites(pool, conversion, rows[0]!);
+      if (!seeds[0]![0]) await assertDualWrites(pool, conversion, { json: rows[0]!.kept, want: rows[0]!.want });
       await runMigration(pool, conversion.contract);
       const json = await pool.query(
         `SELECT 1 FROM information_schema.columns WHERE table_name = $1 AND column_name IN ('json', 'id')`,
