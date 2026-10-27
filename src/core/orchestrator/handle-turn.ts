@@ -95,7 +95,6 @@ async function openTurn(o: OrchestratorInstance, requested: OrchestratorInput) {
   const context = await resolveTurnWorkspace(ctx, { useMemory, memoryPolicy });
   const { sharingSources, memoryScopeId } = context;
   resolution.grantedHandles = context.listFiles();
-  await context.memorySnapshot(false);
   const framed = await frameTurnPrompt(ctx, {
     screenTrace,
     useMemory,
@@ -374,6 +373,7 @@ async function prepareHeldTurnInput(o: OrchestratorInstance, t: HeldTurn, b: Beg
     screenTrace,
     strictReadOnly,
     context,
+    memoryView: b.memoryView,
     framed,
     session,
     isRetry,

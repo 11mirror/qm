@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test, beforeEach } from "node:test";
 import pg from "pg";
-import { MemoryFactsMissing, factHash } from "../../src/memory/facts.ts";
+import { MemoryFactsMissing } from "../../src/memory/facts.ts";
 import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
 import { createPostgresVectorStore } from "../../src/memory/postgres-vector-store.ts";
 import { scopeId } from "../../src/types.ts";
@@ -81,13 +81,9 @@ test("a 4500-fact scope fully drains 3072-dimensional recall in under one second
     [scope, model, JSON.stringify(vector)],
   );
   await client.query("ANALYZE memory_facts; ANALYZE memory_fact_vectors");
-  const facts = (await base.facts!(scope)).map((fact) => ({
-    id: fact.id,
-    hash: factHash(fact.text),
-    at: fact.createdAt,
-  }));
+  const facts = await base.facts!(scope);
   const start = performance.now();
-  const matches = await index.search({ scope, model, vector, facts });
+  const matches = await index.search({ scope, model, vector, ids: facts.map((fact) => fact.id) });
   const elapsed = performance.now() - start;
   assert.equal(matches.length, 4500);
   assert.ok(matches.slice(0, 4490).every((row) => row.score > 0.99));

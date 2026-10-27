@@ -72,11 +72,17 @@ export interface ChannelPolicyStore {
 }
 
 /**
- * One-time move of channel guidance ("orders") into the channel scope's instructions, so a
+ * One-time copy of channel guidance ("orders") into the conversation scope's instructions, so a
  * scope has one instruction text. Where the scope already has instructions the guidance is
- * appended after a separator, as a new instructions revision; the orders column is then blanked
- * and no longer read. A group DM's container maps to its group scope, every other one to its
- * channel scope.
+ * appended after a separator, as a new instructions revision. The orders column is left as it
+ * was: this build no longer reads it, and a rollback to an older build still finds it.
+ *
+ * A container maps to its group scope when it is a web project's group (the `web-project-`
+ * prefix, as in isProjectGroupRef) or a Slack group DM (channel_state kind 'group'); every other
+ * container maps to its channel scope.
+ *
+ * It also re-files instructions that the retired 0002 version of this move put on
+ * `channel:web-project-…`, a scope no conversation uses, onto the project's group scope.
  */
 const ORDERS_INTO_INSTRUCTIONS: readonly string[] = [
   `ALTER TABLE channel_policy_history ALTER COLUMN orders SET DEFAULT ''`,
@@ -97,16 +103,30 @@ BEGIN
     WHERE table_schema = current_schema() AND table_name = 'soul_configs' AND column_name = 'tenant_id'
   );
   FOR r IN EXECUTE format(
-    'SELECT %s AS tenant, p.container, p.orders, p.set_by, %s AS kind FROM channel_policy p %s WHERE btrim(p.orders) <> %L',
+    $q$SELECT %1$s AS tenant, c.id AS misfiled, substr(c.id, 9) AS container,
+              COALESCE(c.json->>'content', '') AS orders, c.json->>'updatedBy' AS set_by, 'group' AS kind
+       FROM soul_configs c WHERE c.id LIKE 'channel:web-project-%%'
+       UNION ALL
+       SELECT %2$s, NULL, p.container, p.orders, p.set_by,
+              CASE WHEN p.container LIKE 'web-project-%%' THEN 'group' ELSE %3$s END
+       FROM channel_policy p %4$s WHERE btrim(p.orders) <> ''$q$,
+    CASE WHEN tenanted THEN 'c.tenant_id' ELSE 'NULL::uuid' END,
     CASE WHEN tenanted THEN 'p.tenant_id' ELSE 'NULL::uuid' END,
     CASE WHEN has_state THEN 's.kind' ELSE 'NULL::text' END,
     CASE WHEN has_state THEN
       'LEFT JOIN channel_state s ON s.org_id = p.org_id AND s.container = p.container'
         || CASE WHEN tenanted THEN ' AND s.tenant_id = p.tenant_id' ELSE '' END
-    ELSE '' END,
-    ''
+    ELSE '' END
   )
   LOOP
+    IF r.misfiled IS NOT NULL THEN
+      IF tenanted THEN
+        EXECUTE 'DELETE FROM soul_configs WHERE tenant_id = $1 AND id = $2' USING r.tenant, r.misfiled;
+      ELSE
+        EXECUTE 'DELETE FROM soul_configs WHERE id = $1' USING r.misfiled;
+      END IF;
+      IF btrim(r.orders) = '' THEN CONTINUE; END IF;
+    END IF;
     scope := CASE WHEN r.kind = 'group' THEN 'group:' ELSE 'channel:' END || r.container;
     IF tenanted THEN
       EXECUTE 'SELECT json FROM soul_configs WHERE tenant_id = $1 AND id = $2 FOR UPDATE'
@@ -150,7 +170,6 @@ BEGIN
         USING scope, revision;
     END IF;
   END LOOP;
-  UPDATE channel_policy SET orders = '' WHERE orders <> '';
 END
 $orders_into_instructions$`,
 ];
@@ -159,7 +178,7 @@ const HISTORY_DEFAULT_LIMIT = 50;
 
 export function createPostgresChannelPolicyStore(connectionString: string): ChannelPolicyStore {
   const { q, close } = createPgPool(connectionString, [
-    { id: "surface-cache/channel-policy/0002-orders-into-instructions", statements: ORDERS_INTO_INSTRUCTIONS },
+    { id: "surface-cache/channel-policy/0003-orders-into-instructions", statements: ORDERS_INTO_INSTRUCTIONS },
   ]);
   const row = (r: Record<string, unknown>): ChannelPolicy => ({
     container: r.container as string,
