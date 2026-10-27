@@ -1,26 +1,10 @@
-import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
 import type { SandboxDefault, SandboxResource } from "./sandbox-resources.ts";
 
 export interface LegacyRoute {
   backend: SandboxBackendName;
-}
-
-export interface SandboxResourceStore {
-  get(id: string): Promise<SandboxResource | null>;
-  list(): Promise<SandboxResource[]>;
-  put(record: SandboxResource): Promise<void>;
-  insertIfAbsent(record: SandboxResource): Promise<void>;
-  addHolder(id: string, runId: string): Promise<void>;
-  dropHolders(id: string, runIds: readonly string[]): Promise<SandboxResource | null>;
-  defaultFor(scopeId: string): Promise<SandboxDefault | null>;
-  defaults(): Promise<Array<[string, SandboxDefault]>>;
-  setDefault(scopeId: string, sandboxId: string | null): Promise<void>;
-  setDefaultIfAbsent(scopeId: string, sandboxId: string | null): Promise<void>;
-  upgraded(): Promise<boolean>;
-  markUpgraded(): Promise<void>;
-  legacyRoutes(): Promise<Array<[string, LegacyRoute]>>;
 }
 
 const SANDBOX_RESOURCES: TableSpec = {
@@ -62,83 +46,70 @@ export const SANDBOX_RESOURCE_ROLLOUT_MIGRATION = mapToTableMigration(
 );
 export const SANDBOX_ROUTING_MIGRATION = mapToTableMigration("sandbox/sandbox_routing/0001-typed", SANDBOX_ROUTING);
 
-const resources = tableCodec<SandboxResource>(SANDBOX_RESOURCES);
 const UPGRADE_MARKER = "explicit-defaults";
 
-export function createSandboxResourceStore(databaseUrl: string): SandboxResourceStore {
-  const { q } = createPgPool(databaseUrl, [
+export function createSandboxResourceStore(databaseUrl: string) {
+  const db = createPgPool(databaseUrl, [
     SANDBOX_RESOURCES_MIGRATION,
     SANDBOX_DEFAULTS_MIGRATION,
     SANDBOX_RESOURCE_ROLLOUT_MIGRATION,
     SANDBOX_ROUTING_MIGRATION,
   ]);
-  const insert = (record: SandboxResource, onConflict: string) =>
-    q(
-      `INSERT INTO sandbox_resources (${resources.columns}) VALUES (${resources.placeholders})
-       ON CONFLICT (${tenantCols("id")}) DO ${onConflict}`,
-      resources.values(record.id, record),
-    );
-  const insertDefault = (scopeId: string, sandboxId: string | null, onConflict: string) =>
-    q(
-      `INSERT INTO sandbox_defaults (scope_id, sandbox_id) VALUES ($1, $2)
-       ON CONFLICT (${tenantCols("scope_id")}) DO ${onConflict}`,
-      [scopeId, sandboxId],
-    );
+  const { q } = db;
+  const resources = typedTable<SandboxResource>(db, SANDBOX_RESOURCES);
+  const defaults = typedTable<{ sandboxId?: string }>(db, SANDBOX_DEFAULTS);
+  const rollout = typedTable<{ activatedAt: string }>(db, SANDBOX_RESOURCE_ROLLOUT);
   return {
-    get: async (id) =>
-      resources.rows(await q(`SELECT ${resources.columns} FROM sandbox_resources WHERE id = $1`, [id]))[0] ?? null,
-    list: async () => resources.rows(await q(`SELECT ${resources.columns} FROM sandbox_resources ORDER BY id`)),
-    async put(record) {
-      await insert(record, `UPDATE SET ${resources.updates}`);
+    get: resources.get,
+    list: resources.all,
+    async put(record: SandboxResource): Promise<void> {
+      await resources.put(record.id, record);
     },
-    async insertIfAbsent(record) {
-      await insert(record, "NOTHING");
+    async insertIfAbsent(record: SandboxResource): Promise<void> {
+      await resources.insert(record.id, record);
     },
-    async addHolder(id, runId) {
+    async addHolder(id: string, runId: string): Promise<void> {
       await q(
         `UPDATE sandbox_resources SET holders = coalesce(holders, '{}') || $2::text
          WHERE id = $1 AND NOT ($2 = ANY (coalesce(holders, '{}')))`,
         [id, runId],
       );
     },
-    async dropHolders(id, runIds) {
+    async dropHolders(id: string, runIds: readonly string[]): Promise<SandboxResource | null> {
       const rows = await q(
         `UPDATE sandbox_resources
          SET holders = ARRAY(SELECT h FROM unnest(coalesce(holders, '{}')) WITH ORDINALITY AS u(h, n)
                              WHERE h <> ALL ($2::text[]) ORDER BY n)
-         WHERE id = $1 RETURNING ${resources.columns}`,
+         WHERE id = $1 RETURNING ${resources.codec.columns}`,
         [id, runIds],
       );
-      return rows.length ? resources.row(rows[0]!) : null;
+      return rows.length ? resources.codec.row(rows[0]!) : null;
     },
-    async defaultFor(scopeId) {
-      const rows = await q(`SELECT sandbox_id FROM sandbox_defaults WHERE scope_id = $1`, [scopeId]);
-      return rows.length ? { sandboxId: (rows[0]!.sandbox_id as string | null) ?? null } : null;
+    async defaultFor(scopeId: string): Promise<SandboxDefault | null> {
+      const row = await defaults.get(scopeId);
+      return row && { sandboxId: row.sandboxId ?? null };
     },
-    defaults: async () =>
+    defaults: async (): Promise<Array<[string, SandboxDefault]>> =>
       (await q(`SELECT scope_id, sandbox_id FROM sandbox_defaults ORDER BY scope_id`)).map((r) => [
         r.scope_id as string,
         { sandboxId: (r.sandbox_id as string | null) ?? null },
       ]),
-    async setDefault(scopeId, sandboxId) {
-      await insertDefault(scopeId, sandboxId, "UPDATE SET sandbox_id = EXCLUDED.sandbox_id");
+    async setDefault(scopeId: string, sandboxId: string | null): Promise<void> {
+      await defaults.put(scopeId, sandboxId ? { sandboxId } : {});
     },
-    async setDefaultIfAbsent(scopeId, sandboxId) {
-      await insertDefault(scopeId, sandboxId, "NOTHING");
+    async setDefaultIfAbsent(scopeId: string, sandboxId: string | null): Promise<void> {
+      await defaults.insert(scopeId, sandboxId ? { sandboxId } : {});
     },
-    upgraded: async () =>
-      (await q(`SELECT 1 FROM sandbox_resource_rollout WHERE id = $1`, [UPGRADE_MARKER])).length > 0,
-    async markUpgraded() {
-      await q(
-        `INSERT INTO sandbox_resource_rollout (id, activated_at) VALUES ($1, $2)
-         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET activated_at = EXCLUDED.activated_at`,
-        [UPGRADE_MARKER, new Date().toISOString()],
-      );
+    upgraded: async () => (await rollout.get(UPGRADE_MARKER)) !== null,
+    async markUpgraded(): Promise<void> {
+      await rollout.put(UPGRADE_MARKER, { activatedAt: new Date().toISOString() });
     },
-    legacyRoutes: async () =>
+    legacyRoutes: async (): Promise<Array<[string, LegacyRoute]>> =>
       (await q(`SELECT scope_id, backend FROM sandbox_routing ORDER BY scope_id`)).map((r) => [
         r.scope_id as string,
         { backend: r.backend as SandboxBackendName },
       ]),
   };
 }
+
+export type SandboxResourceStore = ReturnType<typeof createSandboxResourceStore>;

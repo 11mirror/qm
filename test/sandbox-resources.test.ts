@@ -15,7 +15,8 @@ import {
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import type { BackendSandbox, Sandbox } from "../src/sandbox/sandbox.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
-import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const processStubs = {
   async startProcess() {
@@ -83,7 +84,7 @@ function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["person
     },
   };
   configure?.(backend);
-  const lock = testAdvisoryLock();
+  const lock = createPostgresAdvisoryLock(createPgPool(url));
   const upgrade =
     (overrides: Partial<Parameters<typeof upgradeLegacySandboxes>[0]> = {}) =>
     () =>
@@ -107,7 +108,7 @@ function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["person
   const resources = createSandboxResources(options);
   const router = createSandboxRouter({ backends: { local: backend }, defaultBackend: "local", resources });
   const layers = [{ scopeId: "personal:alice", mode: "rw" as const, mountPath: "/" }];
-  return { store, route, resources, router, provisioned, layers, backend, options, upgrade };
+  return { url, store, route, resources, router, provisioned, layers, backend, options, upgrade };
 }
 
 test("blank sandbox identities coexist and default changes never copy files or redirect existing handles", async () => {
@@ -571,7 +572,7 @@ test("retirement preserves core live-work and owning-scope guards before direct 
 });
 
 test("retirement waits for background startup to commit its live registry row", async () => {
-  const { options, backend, layers } = fixture((sandbox) => {
+  const { url, options, backend, layers } = fixture((sandbox) => {
     sandbox.profile.processSessions = true;
     sandbox.startProcess = async () => ({ processId: "job" });
     sandbox.readProcess = async () => ({ chunks: "", cursor: 0, status: { state: "running" } });
@@ -579,7 +580,7 @@ test("retirement waits for background startup to commit its live registry row", 
     sandbox.signalProcess = async () => {};
     sandbox.listProcesses = async () => [];
   });
-  const registry = createPostgresProcessRegistry(testDatabaseUrl());
+  const registry = createPostgresProcessRegistry(url);
   const resources = createSandboxResources({
     ...options,
     beforeRetire: async (record) => {
@@ -614,7 +615,7 @@ test("retirement waits for background startup to commit its live registry row", 
 });
 
 test("failed background registration kills its process and releases the resource lock", async () => {
-  const { resources, router, backend, layers } = fixture((sandbox) => {
+  const { url, resources, router, backend, layers } = fixture((sandbox) => {
     sandbox.profile.processSessions = true;
     sandbox.startProcess = async () => ({ processId: "unregistered" });
     sandbox.readProcess = async () => ({ chunks: "", cursor: 0, status: { state: "running" } });
@@ -625,7 +626,7 @@ test("failed background registration kills its process and releases the resource
   assert.ok(supportsProcessSessions(router));
   const record = await resources.create("alice", "personal:alice", "local");
   const handle = await router.provision(layers, { sandboxId: record.id });
-  const registry = createPostgresProcessRegistry(testDatabaseUrl());
+  const registry = createPostgresProcessRegistry(url);
   registry.register = async () => {
     throw new Error("registry unavailable");
   };
