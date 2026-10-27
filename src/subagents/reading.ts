@@ -2,13 +2,14 @@ import type { SessionMessage } from "../sessions/session-mailbox.ts";
 import { sleep } from "../util/async.ts";
 import { isReply, proseText } from "../sessions/items.ts";
 import type { Item } from "../sessions/items.ts";
-import { itemVisibleToAll, snippet, assertAudienceCompatible } from "./audience.ts";
+import type { Session } from "../types.ts";
+import { itemVisibleToAll, assertAudienceCompatible } from "./audience.ts";
 import type { SessionReadInput, SessionChildSummary, SessionReadResult } from "./types.ts";
 import type { TurnContext } from "./turn-context.ts";
 
 const READ_DEFAULT_LIMIT = 30;
 const READ_DEFAULT_MAX_CHARS = 4_000;
-const LAST_SAID_SCAN = 40;
+const LAST_SAID_PAGE = 40;
 
 function itemText(item: Item): string | undefined {
   const text = proseText(item);
@@ -17,20 +18,26 @@ function itemText(item: Item): string | undefined {
   return undefined;
 }
 
-function lastAssistantText(items: readonly Item[]): string | undefined {
-  for (let i = items.length - 1; i >= 0; i--) {
-    const e = items[i]!;
-    if (e.kind === "Stop") {
-      const before = items[i - 1];
-      const partial = before && isReply(before) ? itemText(before) : "";
-      const reason = e.body.reason;
-      return partial || `[system] Subagent stopped${typeof reason === "string" ? ` ${reason}` : ""}. No reply.`;
+async function lastAssistantText(ctx: TurnContext, child: Session): Promise<string | undefined> {
+  let newer: Item | undefined;
+  let beforeSeq: number | undefined;
+  for (;;) {
+    const page = await ctx.visibleHistory(child, LAST_SAID_PAGE, beforeSeq);
+    if (!page.length) return undefined;
+    for (let i = page.length - 1; i >= 0; i--) {
+      const e = page[i]!;
+      if (newer?.kind === "Stop") {
+        const partial = isReply(e) ? itemText(e) : "";
+        const reason = newer.body.reason;
+        return partial || `[system] Subagent stopped${typeof reason === "string" ? ` ${reason}` : ""}. No reply.`;
+      }
+      newer = e;
+      if (e.kind !== "AgentMessage" || e.variant === "files_delivered") continue;
+      const text = itemText(e);
+      if (text) return text;
     }
-    if (e.kind !== "AgentMessage" || e.variant === "files_delivered") continue;
-    const text = itemText(e);
-    if (text) return text;
+    beforeSeq = page[0]!.seq;
   }
-  return undefined;
 }
 
 export async function receiveMessages(ctx: TurnContext, timeoutMs = 0): Promise<SessionMessage[]> {
@@ -86,13 +93,12 @@ export async function readSession(ctx: TurnContext, input: SessionReadInput): Pr
         !(await deps.sessions.getForParticipant(child.id, binding.request.actor.id))
       )
         continue;
-      const entries = await visibleHistory(child, LAST_SAID_SCAN);
-      const said = lastAssistantText(entries);
+      const said = await lastAssistantText(ctx, child);
       summaries.push({
         sessionId: child.id,
         title: visibleTitle(child),
         status: await statusOf(child),
-        ...(said ? { lastSaid: snippet(said, 200) } : {}),
+        ...(said ? { lastSaid: said } : {}),
       });
     }
     return { ok: true, mode: "children", children: summaries };
