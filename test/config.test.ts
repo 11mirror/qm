@@ -3,13 +3,12 @@ import assert from "node:assert/strict";
 import {
   companySubscriptionAuth,
   baseModelProviders,
-  boolEnv,
   loadConfig,
   configuredModel,
-  numEnv,
   providerKeysPresent,
   CONFIG_DEFAULTS,
 } from "../src/config.ts";
+import { boolEnv, numEnv } from "../src/config-env.ts";
 
 const productionEnv = {
   NODE_ENV: "production",
