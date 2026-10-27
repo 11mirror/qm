@@ -44,6 +44,8 @@ export const dockerDeploymentLayerTransport: DeploymentLayerTransport = httpDepl
 });
 
 const safe = (s: string): string => s.replace(/[^A-Za-z0-9_.-]/g, "-");
+const VM_SOCKET_GID = "0";
+const daemonRunsInVm = (): boolean => process.platform === "darwin";
 const ORG_LABEL_KEY = "qm.org";
 const orgLabelArgs = (ctx: DockerCtx): string[] => ["--label", `${ORG_LABEL_KEY}=${ctx.config.orgId}`];
 const baseHostPort = (ctx: DockerCtx): number => dockerBasePort(ctx.config);
@@ -116,19 +118,19 @@ function ensureLocalSandboxImage(config: QmConfig): string {
   return image;
 }
 
-export function hostDockerSocket(): { path: string; gid?: string } {
+export function hostDockerSocket(): { path: string; gid: string } {
   const configured = process.env.DOCKER_HOST?.trim();
   if (configured && !configured.startsWith("unix://")) {
     throw new CliError('sandbox.backend "local" requires a Unix Docker socket');
   }
   const path = configured?.slice("unix://".length) || "/var/run/docker.sock";
-  let gid: string | undefined;
+  let hostGid: string;
   try {
-    gid = String(statSync(path).gid);
+    hostGid = String(statSync(path).gid);
   } catch {
     throw new CliError(`sandbox.backend "local" cannot read the Docker socket at ${path}`);
   }
-  return { path, ...(gid ? { gid } : {}) };
+  return { path, gid: daemonRunsInVm() ? VM_SOCKET_GID : hostGid };
 }
 
 function requireDocker(): void {
@@ -493,7 +495,7 @@ function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: s
     if (localSandboxActive(ctx.config)) {
       const socket = hostDockerSocket();
       args.push("-v", `${socket.path}:/var/run/docker.sock`);
-      if (socket.gid) args.push("--group-add", socket.gid);
+      args.push("--group-add", socket.gid);
     }
   }
   if (def.docker.hostPortOffset !== undefined) {

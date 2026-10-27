@@ -12,7 +12,8 @@ test("Docker socket group uses the configured host path without platform-specifi
   try {
     writeFileSync(path, "");
     process.env.DOCKER_HOST = `unix://${path}`;
-    assert.deepEqual(hostDockerSocket(), { path, gid: String(statSync(path).gid) });
+    const gidInsideContainer = process.platform === "darwin" ? "0" : String(statSync(path).gid);
+    assert.deepEqual(hostDockerSocket(), { path, gid: gidInsideContainer });
     rmSync(path);
     assert.throws(() => hostDockerSocket(), /cannot read the Docker socket/);
     process.env.DOCKER_HOST = "tcp://localhost:2375";
