@@ -3,7 +3,6 @@ src/tenants
 src/tenant.ts
 src/tenant-import-main.ts
 src/surfaces
-src/chat-surface
 src/swarms
 src/inbox
 src/api/credential-broker.ts

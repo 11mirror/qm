@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { blobTables, featureFlags, NAME_RULES, names } from "../scripts/code-ratchets.ts";
+import { blobTables, featureFlags, NAME_RULES, names } from "../../scripts/code-ratchets.ts";
 
 const [legacy, mode, kv, flag] = NAME_RULES;
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chunks, diffSource, fileSource, verifiedFindings } from "../scripts/zone-review.ts";
-import { inZone, isReviewable } from "../scripts/zone.ts";
+import { chunks, diffSource, fileSource, verifiedFindings } from "../../scripts/zone-review.ts";
+import { inZone, isReviewable } from "../../scripts/zone.ts";
 
 test("zone entries cover their directory and exact files only", () => {
   const zone = ["src/turns", "src/tenant.ts"];
