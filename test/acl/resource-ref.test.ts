@@ -9,7 +9,7 @@ import {
   refPrefix,
   serviceCredRef,
   skillRef,
-} from "../src/acl/resource-ref.ts";
+} from "../../src/acl/resource-ref.ts";
 
 test("encode/parse round-trips every kind", () => {
   for (const r of [skillRef("s1"), deployRef("d1"), cronRef("c1"), serviceCredRef("x")]) {
