@@ -12,3 +12,10 @@ export interface Late {
   memoryTidy: ReturnType<typeof createMemoryTidyService>;
   processes: ProcessRegistry | undefined;
 }
+
+/** Background-lifecycle switches buildApp flips at runtime. */
+export interface Gates {
+  backgroundAdmission: () => boolean;
+  backgroundActive: () => boolean;
+  inlineShutdown: AbortController;
+}

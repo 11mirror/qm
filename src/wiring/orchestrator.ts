@@ -304,3 +304,5 @@ function orchestratorDepsTail(w: OrchestratorInputs) {
     layerBrokerFor,
   } satisfies Partial<OrchestratorDeps>;
 }
+
+export type OrchestratorModule = ReturnType<typeof buildOrchestrator>;
