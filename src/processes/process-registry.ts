@@ -43,6 +43,8 @@ export interface ProcessRegistry {
   register(rec: NewProcessRecord): Promise<ProcessRecord>;
   get(processId: string): Promise<ProcessRecord | null>;
   listByScope(scopeId: string): Promise<ProcessRecord[]>;
+  listBySandbox(scopeId: string, sandboxId: string): Promise<ProcessRecord[]>;
+  openOnSandbox(scopeId: string, sandboxId: string | undefined): Promise<ProcessRecord[]>;
   liveByScope(scopeId: string, now?: number): Promise<ProcessRecord[]>;
   listLive(now?: number): Promise<ProcessRecord[]>;
   hasLive(sandboxId: string, now?: number): Promise<boolean>;
@@ -129,6 +131,21 @@ export function createPostgresProcessRegistry(connectionString: string): Process
     },
     async listByScope(scopeId) {
       return (await q("SELECT * FROM process_sessions WHERE scope_id = $1", [scopeId])).map(pgRowToRecord);
+    },
+    async listBySandbox(scopeId, sandboxId) {
+      const rows = await q("SELECT * FROM process_sessions WHERE scope_id = $1 AND sandbox_id = $2", [
+        scopeId,
+        sandboxId,
+      ]);
+      return rows.map(pgRowToRecord);
+    },
+    async openOnSandbox(scopeId, sandboxId) {
+      const rows = await q(
+        `SELECT * FROM process_sessions WHERE scope_id = $1 AND sandbox_id IS NOT DISTINCT FROM $2
+           AND (status = 'running' OR credential_files IS NOT NULL)`,
+        [scopeId, sandboxId ?? null],
+      );
+      return rows.map(pgRowToRecord);
     },
     async liveByScope(scopeId, now = Date.now()) {
       const rows = await q(
