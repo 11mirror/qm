@@ -120,7 +120,7 @@ for (const [name, input, expected] of [
 }
 
 for (const room of [scopeId("channel", "C1"), scopeId("group", "G1")]) {
-  test(`admin reads and writes from ${room} preserve live authorization`, async () => {
+  test(`from ${room}, admin private reads and writes need a turn a live admin started, are audited, and stop when the admin role is revoked`, async () => {
     const s = await start();
     try {
       await s.built.directory.replaceGroups([
@@ -160,7 +160,7 @@ for (const room of [scopeId("channel", "C1"), scopeId("group", "G1")]) {
         assert.equal(
           (await fetch(`${s.base}${path}`, { headers: { "x-agent-capability": token } })).status,
           liveAuthor ? 200 : 403,
-          "only a live human's authority may use Open",
+          "a room token reads private memory only when a live admin started the turn",
         );
         assert.equal((await write(token)).status, liveAuthor ? 200 : 403);
       }
@@ -176,7 +176,7 @@ for (const room of [scopeId("channel", "C1"), scopeId("group", "G1")]) {
           })
         ).status,
         403,
-        "Open does not widen unattended grants",
+        "an unattended admin.sessions.read grant does not open admin sessions from a room",
       );
       for (const [method, route] of [
         ["POST", "/v1/admin/grants"],
@@ -203,12 +203,12 @@ for (const room of [scopeId("channel", "C1"), scopeId("group", "G1")]) {
           })
         ).status,
         403,
-        "Open and a spoofed header cannot grant admin authority",
+        "a non-admin token with a spoofed x-admin-actor header is refused",
       );
-      assert.equal((await write(nonAdmin)).status, 403, "Open does not give members admin write access");
+      assert.equal((await write(nonAdmin)).status, 403, "a non-admin room member cannot write admin instructions");
       await s.built.admin.revokeGrant({ id: "admin-bob", type: "internal" }, "admin-alice", ORG, "org_admin");
-      assert.equal((await read()).status, 403, "revocation applies to an existing Open token");
-      assert.equal((await write()).status, 403, "revocation also stops writes on an existing Open token");
+      assert.equal((await read()).status, 403, "revoking the admin role stops reads on an already-issued room token");
+      assert.equal((await write()).status, 403, "revoking the admin role stops writes on an already-issued room token");
     } finally {
       await s.close();
     }
