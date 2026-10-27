@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createToolContext, type ToolContextDeps, type SkillResult } from "../src/tools/primitives.ts";
+import { createToolContext, type ToolContextDeps } from "../src/tools/tool-context.ts";
+import { type SkillResult } from "../src/tools/primitives.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 

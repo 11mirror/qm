@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createToolContext } from "../src/tools/primitives.ts";
+import { createToolContext } from "../src/tools/tool-context.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId, type ScopeId, type WorkspaceLayer } from "../src/types.ts";

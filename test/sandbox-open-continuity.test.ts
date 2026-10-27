@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
-import { createToolContext, NeedsApproval, type ToolContextDeps } from "../src/tools/primitives.ts";
+import { createToolContext, type ToolContextDeps } from "../src/tools/tool-context.ts";
+import { NeedsApproval } from "../src/tools/primitives.ts";
 import { intersectEgressPolicies } from "../src/resolution/egress-policy.ts";
 import type { SandboxHandle } from "../src/sandbox/sandbox.ts";
 

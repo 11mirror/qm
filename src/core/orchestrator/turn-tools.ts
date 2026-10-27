@@ -19,7 +19,8 @@ import { createMonitorBroker, readBackgroundOutputTail } from "../../monitors/mo
 import { finishProcessCredentials } from "../../credentials/execute-files.ts";
 import type { GapWork } from "../../harness/harness.ts";
 import { forSearchView } from "../../harness/context-compaction.ts";
-import { createToolContext, type CommandCredential } from "../../tools/primitives.ts";
+import { createToolContext } from "../../tools/tool-context.ts";
+import { type CommandCredential } from "../../tools/primitives.ts";
 import type { FileArtifact } from "../../files/file-artifact-store.ts";
 import { principalEntitledToScope } from "../../resolution/context-filter.ts";
 import { openSessionItem, searchSessionItems } from "../../sessions/history-search.ts";

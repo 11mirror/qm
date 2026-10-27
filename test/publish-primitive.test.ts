@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createToolContext } from "../src/tools/primitives.ts";
+import { createToolContext } from "../src/tools/tool-context.ts";
 import { createDeployStore, type DeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
 import { createDeployService, type DeployService, type DeployOrUpdateInput } from "../src/deploy/deploy-service.ts";
 import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createToolContext, type ToolContextDeps, CommandDenied, NeedsApproval } from "../src/tools/primitives.ts";
+import { createToolContext, type ToolContextDeps } from "../src/tools/tool-context.ts";
+import { CommandDenied, NeedsApproval } from "../src/tools/primitives.ts";
 import { scopeId, type WorkspaceLayer } from "../src/types.ts";
 import type { CommandPolicy } from "../src/types.ts";
 import type { ToolLedger } from "../src/runs/tool-ledger.ts";

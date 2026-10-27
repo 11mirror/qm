@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { carriedFileHandles } from "../src/resolution/sharing-access.ts";
-import { createToolContext } from "../src/tools/primitives.ts";
+import { createToolContext } from "../src/tools/tool-context.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { fileArtifactId, type FileArtifactStore } from "../src/files/file-artifact-store.ts";
