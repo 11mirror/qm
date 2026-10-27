@@ -14,7 +14,6 @@ export interface RunActivityStore {
 }
 
 export const RUN_ACTIVITY_TTL_MS = 60 * 60_000;
-const MAX_PER_RUN = 2_000;
 const PRUNE_INTERVAL_MS = 60_000;
 
 export function createMemoryRunActivityStore(now: () => number = Date.now): RunActivityStore {
@@ -33,7 +32,7 @@ export function createMemoryRunActivityStore(now: () => number = Date.now): RunA
         }
       }
       const list = runs.get(runId) ?? [];
-      if (list.length < MAX_PER_RUN) list.push(entry);
+      list.push(entry);
       runs.set(runId, list);
     },
     async list(runId) {
