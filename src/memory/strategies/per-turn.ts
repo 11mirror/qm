@@ -171,22 +171,20 @@ function createBurstBuffer(
         ...(sessionId !== undefined ? { sessionId } : {}),
         ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
       };
-      if (quietMs <= 0 || !pending) return flush(burst);
+      if (!pending) return flush(burst);
 
       const key = JSON.stringify([scopeId, burst.conversationScopeId, actorId ?? "", sessionId ?? ""]);
       const active = await pending.append(key, { ...burst, token: randomUUID(), at: Date.now() });
       clearTimeout(timers.get(key));
-      timers.delete(key);
-      if (active.turns.length >= maxTurns) {
-        if (await pending.take(key, active.token)) await flush(active);
-        return;
-      }
-      const timer = setTimeout(() => {
-        timers.delete(key);
-        void (async () => {
-          if (await pending.take(key, active.token)) await flush(active);
-        })().catch((e) => onError?.(e, active));
-      }, quietMs);
+      const timer = setTimeout(
+        () => {
+          timers.delete(key);
+          void (async () => {
+            if (await pending.take(key, active.token)) await flush(active);
+          })().catch((e) => onError?.(e, active));
+        },
+        active.turns.length >= maxTurns ? 0 : quietMs,
+      );
       timer.unref?.();
       timers.set(key, timer);
     },
