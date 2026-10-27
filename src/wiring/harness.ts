@@ -226,11 +226,13 @@ function buildModelKeys(deps: HarnessInputs, mc: ReturnType<typeof buildModelCre
     keyMaterial: () => tenantConfig(config).connectorSecretKey ?? connectorSecretKey,
   });
   const refreshCustomProviders = async () => {
-    setCustomProviders(await customProviders.enabled());
+    const enabled = await customProviders.enabled();
+    setCustomProviders(enabled);
+    return enabled;
   };
   const refreshModels = async () => {
     await gatewayCatalog?.refresh();
-    await refreshCustomProviders();
+    return refreshCustomProviders();
   };
   const resolveMemoryEmbedder = async (id: string): Promise<MemoryEmbedder> => {
     const model = resolveEmbeddingModel(id);
@@ -239,12 +241,11 @@ function buildModelKeys(deps: HarnessInputs, mc: ReturnType<typeof buildModelCre
     return createMemoryEmbedder(model, key, gatewayTransport, overrides.modelCredentialFetch);
   };
   const resolveModelProviderKeys = async () => {
-    await refreshModels();
-    const [anthropic, openai, openrouter, enabledCustom] = await Promise.all([
+    const [enabledCustom, anthropic, openai, openrouter] = await Promise.all([
+      refreshModels(),
       modelCredentials.resolve("anthropic"),
       modelCredentials.resolve("openai"),
       modelCredentials.resolve("openrouter"),
-      customProviders.enabled(),
     ]);
     const customKeys = Object.fromEntries(
       (
@@ -293,11 +294,11 @@ function buildModelKeys(deps: HarnessInputs, mc: ReturnType<typeof buildModelCre
       );
     return token ? { anthropic: token } : {};
   };
-  const resolvePiProviderKeys = async (): Promise<ProviderKeys> => ({
-    ...(await resolveCompanyClaudeKeys()),
-    ...(await resolveModelProviderKeys()),
-    ...(await resolveCompanySubscriptionKeys()),
-  });
+  const resolvePiProviderKeys = async (): Promise<ProviderKeys> =>
+    Object.assign(
+      {},
+      ...(await Promise.all([resolveCompanyClaudeKeys(), resolveModelProviderKeys(), resolveCompanySubscriptionKeys()])),
+    );
   const resolveBrowserCompanyKeys = async (includeSubscription = true): Promise<ProviderKeys> =>
     includeSubscription ? resolvePiProviderKeys() : resolveModelProviderKeys();
   return {
