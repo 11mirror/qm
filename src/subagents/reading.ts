@@ -8,10 +8,7 @@ import type { TurnContext } from "./turn-context.ts";
 
 const READ_DEFAULT_LIMIT = 30;
 const READ_DEFAULT_MAX_CHARS = 4_000;
-const READ_MAX_CHARS_CEILING = 20_000;
 const LAST_SAID_SCAN = 40;
-/** Messages handed to the agent per receive call; the rest stay pending for the next call. */
-const RECEIVE_BATCH_MAX = 4;
 
 function itemText(item: Item): string | undefined {
   const text = proseText(item);
@@ -38,7 +35,7 @@ function lastAssistantText(items: readonly Item[]): string | undefined {
 
 export async function receiveMessages(ctx: TurnContext, timeoutMs = 0): Promise<SessionMessage[]> {
   const { deps, binding, currentCaller } = ctx;
-  const deadline = Date.now() + Math.min(60_000, Math.max(0, timeoutMs));
+  const deadline = Date.now() + Math.max(0, timeoutMs);
   do {
     binding.request.cancel?.throwIfAborted();
     const caller = await currentCaller();
@@ -65,7 +62,6 @@ export async function receiveMessages(ctx: TurnContext, timeoutMs = 0): Promise<
       )
         continue;
       visible.push(message);
-      if (visible.length >= RECEIVE_BATCH_MAX) break;
     }
     if (visible.length || Date.now() >= deadline) return visible;
     await sleep(Math.min(250, deadline - Date.now()));
@@ -111,8 +107,8 @@ export async function readSession(ctx: TurnContext, input: SessionReadInput): Pr
   if (refusal) return { ok: false, message: refusal };
   if (target.scopeId !== binding.scopeId)
     return { ok: false, message: "that session lives in a different context and cannot be read from here." };
-  const limit = Math.min(Math.max(1, input.limit ?? READ_DEFAULT_LIMIT), 200);
-  const maxChars = Math.min(Math.max(200, input.maxChars ?? READ_DEFAULT_MAX_CHARS), READ_MAX_CHARS_CEILING);
+  const limit = Math.max(1, input.limit ?? READ_DEFAULT_LIMIT);
+  const maxChars = Math.max(1, input.maxChars ?? READ_DEFAULT_MAX_CHARS);
   if (!(await deps.sessions.getForParticipant(target.id, binding.request.actor.id)))
     return { ok: false, message: "you are not a participant in that session." };
   const entries = await visibleHistory(target, limit);
@@ -120,10 +116,11 @@ export async function readSession(ctx: TurnContext, input: SessionReadInput): Pr
   for (const entry of entries) {
     const text = itemText(entry);
     if (!text) continue;
-    lines.push(`${entry.kind}#${entry.seq} ${snippet(text, 300)}`);
+    lines.push(`${entry.kind}#${entry.seq} ${text}`);
   }
   let rendered = lines.join("\n");
-  if (rendered.length > maxChars) rendered = `…${rendered.slice(rendered.length - maxChars)}`;
+  if (rendered.length > maxChars)
+    rendered = `…[${rendered.length - maxChars} earlier chars not shown; raise maxChars or lower limit to see them]\n${rendered.slice(rendered.length - maxChars)}`;
   return {
     ok: true,
     mode: "transcript",

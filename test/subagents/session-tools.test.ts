@@ -270,6 +270,29 @@ test("participant can read child history and title across memory checkpoints", a
   assert.equal(listed.children[0]?.lastSaid, "PRIVATE_SENTINEL");
 });
 
+test("read shows whole entries, honours the caller's limit and maxChars, and says what it left out", async () => {
+  const r = await rig();
+  const child = await r.sessions.getOrCreateByThread("subagent:long", "dm", scope);
+  await r.sessions.setParentSession(child.id, r.room.id);
+  await r.sessions.addParticipant(child.id, actor.id);
+  const { lease } = await r.sessions.acquireLease(child.id);
+  assert.ok(lease);
+  const long = `LONG-START ${"detail ".repeat(200)}LONG-END`;
+  await r.sessions.append(lease, { kind: "AgentMessage", text: long });
+  for (let i = 0; i < 250; i++) await r.sessions.append(lease, { kind: "AgentMessage", text: `line ${i}` });
+  await r.sessions.releaseLease(lease);
+  const api = r.syscallsFor(r.room);
+  const whole = await api.read({ target: child.id, limit: 300, maxChars: 100_000 });
+  assert.ok(whole.ok && whole.mode === "transcript");
+  assert.match(whole.rendered, /LONG-START detail .*LONG-END/, "an entry is never cut to a snippet");
+  assert.match(whole.rendered, /line 249/);
+  const window = await api.read({ target: child.id, limit: 300, maxChars: 400 });
+  assert.ok(window.ok && window.mode === "transcript");
+  assert.match(window.rendered, /^…\[\d+ earlier chars not shown; raise maxChars or lower limit to see them\]\n/);
+  assert.match(window.rendered, /line 249$/);
+  assert.ok(window.rendered.length <= 400 + 120);
+});
+
 test("explicit source title changes reach fresh child tasks without copying history", async () => {
   const r = await rig();
   await r.sessions.updateTitle(r.room.id, "PRIVATE_SENTINEL");
