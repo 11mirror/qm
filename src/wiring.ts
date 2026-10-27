@@ -1437,10 +1437,6 @@ export function buildApp(
     outbound,
     turn: (request) => app.turn(request),
   });
-  pgArtifactMap.pool.registerMigration({
-    id: "delivery/store/0007-drop",
-    statements: ["DROP TABLE IF EXISTS deliveries"],
-  });
   const deployService = createDeployService({
     outbound,
     deployAppsDomain: config.awsDeploy.appsDomain,
@@ -1550,17 +1546,10 @@ export function buildApp(
   pgArtifactMap.pool.registerMigration(INBOX_ITEM_SOURCE_MIGRATION);
   pgArtifactMap.pool.registerMigration(inboxConversationKeyMigration());
   pgArtifactMap.pool.registerMigration({
-    id: "durable-map/model_registry/0002-drop",
-    statements: [
-      "DROP TABLE IF EXISTS model_registry",
-      "DELETE FROM durable_map_versions WHERE tbl = 'model_registry'",
-    ],
-  });
-  pgArtifactMap.pool.registerMigration({
     id: "runtime/0002-drop-harness-choice",
+    // The first release also dropped approved_harness_configs; that moved to CONTRACT_MIGRATIONS so older images still boot.
+    acceptedChecksums: ["2e7a8523090c84d00b557197f2e3038b5b2fd418e6b3b4b08c10ef0cf596a792"],
     statements: [
-      "DROP TABLE IF EXISTS approved_harness_configs",
-      "DELETE FROM durable_map_versions WHERE tbl = 'approved_harness_configs'",
       `DO $$ BEGIN IF to_regclass('base_model_configs') IS NOT NULL THEN UPDATE base_model_configs SET json = (CASE WHEN json ? 'harnessId' AND NOT json ? 'orgRevision' THEN json || '{"orgRevision":0}'::jsonb ELSE json END) - 'harnessId' #- '{cronRuntime,harnessId}' #- '{subagentRuntime,harnessId}' #- '{fallbackRuntime,harnessId}' WHERE json ? 'harnessId' OR (json -> 'cronRuntime') ? 'harnessId' OR (json -> 'subagentRuntime') ? 'harnessId' OR (json -> 'fallbackRuntime') ? 'harnessId'; END IF; END $$`,
       `DO $$ BEGIN IF to_regclass('auto_flagger_configs') IS NOT NULL THEN UPDATE auto_flagger_configs SET json = json - 'harnessId' WHERE json ? 'harnessId'; END IF; END $$`,
       `DO $$ BEGIN IF to_regclass('crons') IS NOT NULL THEN UPDATE crons SET json = json #- '{runtime,harnessId}' WHERE (json -> 'runtime') ? 'harnessId'; END IF; END $$`,
@@ -1575,10 +1564,10 @@ export function buildApp(
   });
   pgArtifactMap.pool.registerMigration({
     id: "durable-map/swarms/0002-drop",
+    // The first release also dropped the swarms table; that moved to CONTRACT_MIGRATIONS so older images still boot.
+    acceptedChecksums: ["6fd03996fb6c9b0b5ea06db198f83a16cf39dafbf7bc9fddb8965e54b3030635"],
     statements: [
       `DO $$ BEGIN IF to_regclass('runs') IS NOT NULL THEN UPDATE runs SET status = 'failed', result = json_build_object('status', 'failed', 'sessionId', session_id, 'reason', 'swarms were removed')::text, lease_token = NULL, lease_expires_at = NULL, worker_id = NULL, finished_at = (extract(epoch FROM clock_timestamp()) * 1000)::bigint WHERE status IN ('pending', 'running') AND (session_id LIKE 'swarm:%' OR request LIKE '%"swarm":%'); END IF; END $$`,
-      "DROP TABLE IF EXISTS swarms",
-      "DELETE FROM durable_map_versions WHERE tbl = 'swarms'",
       "DO $$ BEGIN IF to_regclass('feature_flags') IS NOT NULL THEN DELETE FROM feature_flags WHERE id = 'swarms'; END IF; END $$",
     ],
   });

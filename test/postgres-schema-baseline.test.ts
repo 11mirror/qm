@@ -32,6 +32,11 @@ const BOOT_OR_RETIRED_TABLES = [
   "sandbox_resource_rollout",
   "sandbox_routing",
   "local_sandbox_bodies",
+  // Kept for older images until the contract migrations drop them.
+  "deliveries",
+  "model_registry",
+  "approved_harness_configs",
+  "swarms",
 ];
 const RETIRED_INDEXES = [
   "loop_items_loopid_fold",

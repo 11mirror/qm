@@ -36,6 +36,12 @@ leaves the database as it was. When a released id has to change, the new definit
 lists the old checksum in `acceptedChecksums` and a follow-up migration brings
 databases that ran the old one to the same end state.
 
+Migrations only expand the schema while an older image may still be rolled back to:
+they add tables, columns and indexes and rewrite rows, but never drop what older code
+still reads. Drops wait in `src/persistence/contract-migrations.ts` until a later
+release registers them, once rollback to the images that need those objects is no
+longer possible.
+
 The schema starts from `src/persistence/schema-baseline.sql`, which folds every
 migration released up to qm main 9be16d35 (the list is in
 `src/persistence/schema-baseline.ts`). A new database gets the baseline, then the later

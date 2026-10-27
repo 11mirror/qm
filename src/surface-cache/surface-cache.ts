@@ -36,7 +36,10 @@ export function createPostgresSurfaceCache(
   const { q, pool, close } = createPgPool(connectionString, [
     {
       id: "surface-cache/store/0007",
+      // The first release ran without a lock timeout.
+      acceptedChecksums: ["d56a4323978d8233aab8258422908b794bf960dc2059e252b3850e6da3902a36"],
       statements: [
+        `SET LOCAL lock_timeout = '3s'`,
         `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS surface TEXT NOT NULL DEFAULT 'slack'`,
         `ALTER TABLE channel_state ADD COLUMN IF NOT EXISTS surface TEXT NOT NULL DEFAULT 'slack'`,
       ],

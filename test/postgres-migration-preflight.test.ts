@@ -6,6 +6,7 @@ import { gunzipSync } from "node:zlib";
 import pg from "pg";
 import { applyPgMigrations, definePgMigration, pgMigrationChecksum } from "../src/persistence/pg-pool.ts";
 import { MEMORY_FACT_MIGRATIONS } from "../src/memory/postgres-memory-service.ts";
+import { CONTRACT_MIGRATIONS } from "../src/persistence/contract-migrations.ts";
 
 // A refused migration run must leave the database exactly as it found it: no baseline adoption, no pending migration.
 
@@ -186,5 +187,66 @@ test("memory text_hash: a fresh database and a database on the current 0002 both
     assert.equal(await applyPgMigrations(pool, migrations), 1);
     assert.equal(await applyPgMigrations(pool, migrations), 0);
     assert.equal(await column(), "NO");
+  });
+});
+
+test("a concurrent index build leaves the schema lock free for other migration runs", { skip }, async () => {
+  const url = await createDatabase();
+  await withPool(url, async (pool) => {
+    await applyPgMigrations(pool, [definePgMigration("test/cic-table", ["CREATE TABLE cic_target(x int)"])]);
+    const holder = await pool.connect();
+    try {
+      // An open writer makes CREATE INDEX CONCURRENTLY wait, which keeps the build in flight.
+      await holder.query("BEGIN");
+      await holder.query("INSERT INTO cic_target VALUES (1)");
+      const build = applyPgMigrations(pool, [
+        definePgMigration("test/cic-table", ["CREATE TABLE cic_target(x int)"]),
+        definePgMigration("test/cic-index", ["CREATE INDEX CONCURRENTLY IF NOT EXISTS cic_target_x ON cic_target(x)"]),
+      ]);
+      const waiting = async () =>
+        (
+          await pool.query(
+            "SELECT count(*)::int AS n FROM pg_stat_activity WHERE query LIKE 'CREATE INDEX CONCURRENTLY%' AND wait_event_type = 'Lock'",
+          )
+        ).rows[0].n;
+      for (let i = 0; i < 100 && (await waiting()) === 0; i++) await new Promise((r) => setTimeout(r, 50));
+      assert.equal(await waiting(), 1);
+      const probe = await pool.connect();
+      try {
+        const locked = await probe.query("SELECT pg_try_advisory_lock(hashtext('qm:schema-migrations')) AS ok");
+        assert.equal(locked.rows[0].ok, true);
+        await probe.query("SELECT pg_advisory_unlock(hashtext('qm:schema-migrations'))");
+      } finally {
+        probe.release();
+      }
+      await holder.query("COMMIT");
+      assert.equal(await build, 1);
+    } finally {
+      holder.release();
+    }
+    assert.ok((await ledger(pool)).some((row) => row.id === "test/cic-index"));
+    assert.equal(await relation(pool, "cic_target_x"), "cic_target_x");
+  });
+});
+
+test("contract migrations are idempotent, before and after the drops they hold back", { skip }, async () => {
+  const url = await createDatabase();
+  const contract = CONTRACT_MIGRATIONS.map((m) => definePgMigration(m.id, m.statements));
+  await withPool(url, async (pool) => {
+    await applyPgMigrations(pool, []);
+    for (const migration of contract) {
+      for (let run = 0; run < 2; run++) {
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          for (const statement of migration.statements) await client.query(statement);
+          await client.query("COMMIT");
+        } finally {
+          client.release();
+        }
+      }
+    }
+    assert.equal(await relation(pool, "deliveries"), null);
+    assert.equal(await relation(pool, "swarms"), null);
   });
 });

@@ -88,7 +88,11 @@ test("stored harness choices are dropped while their runtime selections stay rec
     });
     assert.deepEqual(base["personal:a"], { scopeId: "personal:a", modelId: "x", orgRevision: 0 });
     assert.deepEqual(base["personal:b"], { scopeId: "personal:b", modelId: "legacy-only", orgRevision: 0 });
-    assert.equal((await admin.query("SELECT to_regclass('approved_harness_configs') AS t")).rows[0].t, null);
+    // The table stays for older images until the contract migrations drop it.
+    assert.equal(
+      (await admin.query("SELECT to_regclass('approved_harness_configs') AS t")).rows[0].t,
+      "approved_harness_configs",
+    );
     assert.deepEqual((await rows(admin, "auto_flagger_configs"))["org:o"], {
       scopeId: "org:o",
       modelId: "m",
@@ -97,6 +101,6 @@ test("stored harness choices are dropped while their runtime selections stay rec
     const crons = await rows(admin, "crons");
     assert.deepEqual(crons.c1?.runtime, { modelId: "m" });
     assert.equal(crons.c2?.runtime, null);
-    assert.equal((await admin.query("SELECT to_regclass('swarms') AS t")).rows[0].t, null);
+    assert.equal((await admin.query("SELECT to_regclass('swarms') AS t")).rows[0].t, "swarms");
   });
 });

@@ -439,39 +439,65 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
       await applySchemaBaseline(client, baseline);
       applied++;
     }
-    for (const migration of pending) {
+    let remaining = pending;
+    while (remaining.length) {
+      const migration = remaining[0]!;
+      remaining = remaining.slice(1);
       if (migration.statements.some((statement) => concurrentIndexName(statement))) {
-        for (const statement of migration.statements) {
-          const name = concurrentIndexName(statement)!;
-          const table =
-            /\sON\s+(?:ONLY\s+)?([a-z_][a-z0-9_$]*(?:\.[a-z_][a-z0-9_$]*)?)\s*(?:USING\s+[a-z_]+\s*)?\(/i.exec(
-              statement,
-            )?.[1];
-          if (!table) throw new Error(`pg-pool: unsupported concurrent index target in ${migration.id}`);
-          const inspect = () =>
-            client.query<{ indisvalid: boolean; indisready: boolean; same_table: boolean; qualified_name: string }>(
-              `SELECT i.indisvalid, i.indisready, i.indrelid = t.oid AS same_table,
-                    quote_ident(n.nspname) || '.' || quote_ident(c.relname) AS qualified_name
-             FROM pg_class t JOIN pg_namespace n ON n.oid = t.relnamespace
-             JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = $2
-             JOIN pg_index i ON i.indexrelid = c.oid WHERE t.oid = to_regclass($1)`,
-              [table.toLowerCase(), name.toLowerCase()],
-            );
-          const existing = (await inspect()).rows[0];
-          if (existing && !existing.same_table)
-            throw new Error(`pg-pool: concurrent index ${name} belongs to a different table`);
-          if (existing?.indisvalid === false) await client.query(`DROP INDEX CONCURRENTLY ${existing.qualified_name}`);
-          await client.query(statement);
-          const built = (await inspect()).rows[0];
-          if (!built?.indisvalid || !built.indisready || !built.same_table) {
-            throw new Error(`pg-pool: concurrent index ${name} is not ready and valid`);
+        // A concurrent build can run for minutes on a large table. It holds its own lock instead of the schema lock,
+        // so other processes' migration runs are not stuck behind it; they still wait here before passing this id.
+        await client.query("SELECT pg_advisory_unlock(hashtext('qm:schema-migrations'))");
+        const indexLock = `qm:schema-migrations:${migration.id}`;
+        await lockSchema(client, indexLock);
+        try {
+          const done = await client.query(`SELECT 1 FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [migration.id]);
+          if (!done.rowCount) {
+            for (const statement of migration.statements) {
+              const name = concurrentIndexName(statement)!;
+              const table =
+                /\sON\s+(?:ONLY\s+)?([a-z_][a-z0-9_$]*(?:\.[a-z_][a-z0-9_$]*)?)\s*(?:USING\s+[a-z_]+\s*)?\(/i.exec(
+                  statement,
+                )?.[1];
+              if (!table) throw new Error(`pg-pool: unsupported concurrent index target in ${migration.id}`);
+              const inspect = () =>
+                client.query<{ indisvalid: boolean; indisready: boolean; same_table: boolean; qualified_name: string }>(
+                  `SELECT i.indisvalid, i.indisready, i.indrelid = t.oid AS same_table,
+                        quote_ident(n.nspname) || '.' || quote_ident(c.relname) AS qualified_name
+                 FROM pg_class t JOIN pg_namespace n ON n.oid = t.relnamespace
+                 JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = $2
+                 JOIN pg_index i ON i.indexrelid = c.oid WHERE t.oid = to_regclass($1)`,
+                  [table.toLowerCase(), name.toLowerCase()],
+                );
+              const existing = (await inspect()).rows[0];
+              if (existing && !existing.same_table)
+                throw new Error(`pg-pool: concurrent index ${name} belongs to a different table`);
+              if (existing?.indisvalid === false)
+                await client.query(`DROP INDEX CONCURRENTLY ${existing.qualified_name}`);
+              await client.query(statement);
+              const built = (await inspect()).rows[0];
+              if (!built?.indisvalid || !built.indisready || !built.same_table) {
+                throw new Error(`pg-pool: concurrent index ${name} is not ready and valid`);
+              }
+            }
+            await client.query(`INSERT INTO ${PG_MIGRATIONS_TABLE}(id, checksum) VALUES ($1, $2)`, [
+              migration.id,
+              migration.checksum,
+            ]);
+            applied++;
           }
+        } finally {
+          await client
+            .query("SELECT pg_advisory_unlock(hashtext($1))", [indexLock])
+            .catch(swallowAs("pg-pool: concurrent index unlock", undefined));
         }
-        await client.query(`INSERT INTO ${PG_MIGRATIONS_TABLE}(id, checksum) VALUES ($1, $2)`, [
-          migration.id,
-          migration.checksum,
-        ]);
-        applied++;
+        await lockSchema(client, "qm:schema-migrations");
+        // Another process may have moved on while the lock was free: re-check what is left against the ledger.
+        const ledgerNow = new Map(
+          (
+            await client.query<{ id: string; checksum: string }>(`SELECT id, checksum FROM ${PG_MIGRATIONS_TABLE}`)
+          ).rows.map((row) => [row.id, row.checksum] as const),
+        );
+        remaining = preflightPgMigrations(ledgerNow, remaining);
         continue;
       }
       await client.query("BEGIN");

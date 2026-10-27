@@ -56,14 +56,6 @@ export const SESSION_STORE_MIGRATIONS: PgMigrationDefinition[] = [
     ],
   },
   {
-    id: "sessions/store/0047-drop-spend-json-indexes",
-    statements: [
-      `SET LOCAL lock_timeout = '3s'`,
-      `DROP INDEX IF EXISTS session_llm_requests_spend`,
-      `DROP INDEX IF EXISTS session_llm_requests_spend_wide`,
-    ],
-  },
-  {
     id: "sessions/store/0048-attributed-turns",
     statements: [
       `SET LOCAL lock_timeout = '3s'`,
