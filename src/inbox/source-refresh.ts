@@ -5,7 +5,7 @@ import type { ErrorLog } from "../admin/error-log.ts";
 import { redactSecrets } from "../../plugins/chassis/src/redact-secrets.ts";
 import { errMessage } from "../util/errors.ts";
 import type { InboxEventSink, InboxLedger } from "./ledger.ts";
-import { tokenFor, type ConnectorTokenSource } from "./sources/adapter.ts";
+import type { ConnectorTokenSource } from "./sources/adapter.ts";
 import type { RefreshKit, SourceRefresher } from "./sources/refresh.ts";
 import { createGmailRefresher } from "./sources/gmail-refresh.ts";
 import { createSlackRefresher } from "./sources/slack-refresh.ts";
@@ -90,7 +90,7 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     const refresher = item.source ? refreshers.get(item.source) : undefined;
     if (!refresher) return;
     await refresher.refresh(owner, item, async () => {
-      const token = await tokenFor(deps.tokens, refresher.connectorHost, owner);
+      const token = await refresher.connectorToken(deps.tokens, owner, item);
       if (!token) throw new Error(`${refresher.connectorName} is not connected. Source not refreshed.`);
       return token;
     });

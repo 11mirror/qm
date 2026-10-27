@@ -7,6 +7,7 @@ import { slackErrorCode } from "../../slack/payloads.ts";
 import { isObj } from "../../util/objects.ts";
 import { isResolved } from "../view.ts";
 import type { RefreshKit, SourceRefresher } from "./refresh.ts";
+import { tokenFor } from "./adapter.ts";
 
 interface SlackParticipant {
   id: string;
@@ -138,7 +139,7 @@ export function createSlackRefresher(
   }
 
   return {
-    connectorHost: "slack.com",
+    connectorToken: (tokens, owner) => tokenFor(tokens, "slack.com", owner),
     connectorName: "Slack",
     refreshAvatars,
     async refresh(owner, item, connectorToken) {

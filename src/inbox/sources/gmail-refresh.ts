@@ -2,6 +2,7 @@ import { GmailApiError, gmailApi } from "../../connectors/gmail-api.ts";
 import { isObj } from "../../util/objects.ts";
 import { isResolved } from "../view.ts";
 import type { RefreshKit, SourceRefresher } from "./refresh.ts";
+import { gmailToken } from "./gmail.ts";
 
 export function createGmailRefresher(kit: RefreshKit, opts: { fetchImpl?: typeof fetch }): SourceRefresher {
   async function gmailRead(owner: string, path: string, token: string): Promise<Record<string, unknown>> {
@@ -16,7 +17,7 @@ export function createGmailRefresher(kit: RefreshKit, opts: { fetchImpl?: typeof
   }
 
   return {
-    connectorHost: "gmail.googleapis.com",
+    connectorToken: gmailToken,
     connectorName: "Google",
     async refresh(owner, item, connectorToken) {
       if (isResolved(item)) return;
