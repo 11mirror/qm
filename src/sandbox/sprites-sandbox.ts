@@ -2,7 +2,14 @@ import { randomUUID } from "node:crypto";
 import { egressProxyHost } from "./sandbox-env.ts";
 import { setTimeout as wait } from "node:timers/promises";
 import type { Readable } from "node:stream";
-import { APIError, SpritesClient, type Checkpoint, type SpriteCheck, type StreamMessage } from "@fly/sprites";
+import {
+  APIError,
+  SpritesClient,
+  type Checkpoint,
+  type Sprite,
+  type SpriteCheck,
+  type StreamMessage,
+} from "@fly/sprites";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { jitteredBackoffMs, retryAfterMs, withAbort, withTimeout } from "../util/async.ts";
 import { swallow, errMessage } from "../util/errors.ts";
@@ -106,71 +113,82 @@ interface RawExec {
   stderr: Buffer;
 }
 
-export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSandboxOptions): BackendSandbox {
-  if (!opts.token) throw new Error("SANDBOX_BACKEND=sprites requires SPRITES_TOKEN");
-  const client = new SpritesClient(opts.token, opts.baseUrl ? { baseURL: opts.baseUrl } : {});
-  const sprite = (name: string) => client.sprite(name);
-
-  const live = new Set<string>();
-  const resourcesApplied = new Set<string>();
-  const egressPolicyByName = new Map<string, string>();
-  const pressureEpisodes = new Set<string>();
-
-  const reportError = (category: string, code: string, message: string, scopeLabel?: string): void => {
-    try {
-      opts.onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) });
-    } catch (e) {
-      swallow(`sprites-sandbox: ${code} report`, e);
-    }
-  };
-
-  async function attempt<T>(what: string, fn: () => Promise<T>): Promise<T> {
-    try {
-      return await fn();
-    } catch (e) {
-      throw new Error(`sprites ${what}: ${spritesErrorDetail(e)}`, { cause: e });
-    }
+async function attempt<T>(what: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    throw new Error(`sprites ${what}: ${spritesErrorDetail(e)}`, { cause: e });
   }
-  async function spawnExec(name: string, argv: string[], stdin: Buffer, deadlineMs: number): Promise<RawExec> {
-    const cmd = sprite(name).spawn(argv[0]!, argv.slice(1));
-    let submissionStarted = false;
-    const out: Buffer[] = [];
-    const err: Buffer[] = [];
-    const collect = (stream: Readable, into: Buffer[]): Promise<void> =>
-      new Promise((resolve) => {
-        stream.on("data", (chunk: Buffer) => into.push(chunk));
-        stream.once("end", resolve);
-      });
-    const exited = new Promise<number>((resolve, reject) => {
-      const fail = (detail: string): void => {
-        const phase = submissionStarted ? "script submission started; execution unknown" : "script not submitted";
-        reject(new Error(`sprites exec: WebSocket error (${phase}): ${detail}`));
-      };
-      cmd.on("error", (e) => fail(withoutSdkUrl(e.message)));
-      cmd.once("exit", (code) => {
-        if (code < 0) fail("connection closed without an exit status");
-        else resolve(code);
-      });
-      cmd.once("spawn", () => {
-        submissionStarted = true;
-        cmd.stdin.end(stdin);
-      });
+}
+
+async function spawnExec(
+  sprite: (name: string) => Sprite,
+  name: string,
+  argv: string[],
+  stdin: Buffer,
+  deadlineMs: number,
+): Promise<RawExec> {
+  const cmd = sprite(name).spawn(argv[0]!, argv.slice(1));
+  let submissionStarted = false;
+  const out: Buffer[] = [];
+  const err: Buffer[] = [];
+  const collect = (stream: Readable, into: Buffer[]): Promise<void> =>
+    new Promise((resolve) => {
+      stream.on("data", (chunk: Buffer) => into.push(chunk));
+      stream.once("end", resolve);
     });
-    try {
-      const [rc] = await withTimeout(
-        () => Promise.all([exited, collect(cmd.stdout, out), collect(cmd.stderr, err)]),
-        deadlineMs,
-        "sprites exec",
-      );
-      return { rc, stdout: Buffer.concat(out), stderr: Buffer.concat(err) };
-    } catch (e) {
-      cmd.kill();
-      throw e;
-    } finally {
-      cmd.close();
-    }
+  const exited = new Promise<number>((resolve, reject) => {
+    const fail = (detail: string): void => {
+      const phase = submissionStarted ? "script submission started; execution unknown" : "script not submitted";
+      reject(new Error(`sprites exec: WebSocket error (${phase}): ${detail}`));
+    };
+    cmd.on("error", (e) => fail(withoutSdkUrl(e.message)));
+    cmd.once("exit", (code) => {
+      if (code < 0) fail("connection closed without an exit status");
+      else resolve(code);
+    });
+    cmd.once("spawn", () => {
+      submissionStarted = true;
+      cmd.stdin.end(stdin);
+    });
+  });
+  try {
+    const [rc] = await withTimeout(
+      () => Promise.all([exited, collect(cmd.stdout, out), collect(cmd.stderr, err)]),
+      deadlineMs,
+      "sprites exec",
+    );
+    return { rc, stdout: Buffer.concat(out), stderr: Buffer.concat(err) };
+  } catch (e) {
+    cmd.kill();
+    throw e;
+  } finally {
+    cmd.close();
   }
+}
 
+async function settleStream(stream: AsyncIterable<StreamMessage>, what: string): Promise<void> {
+  let failure: string | undefined;
+  for await (const msg of stream) {
+    if (msg.type === "error") failure = msg.error ?? msg.data ?? "error";
+    else if (msg.type === "complete") failure = undefined;
+  }
+  if (failure !== undefined) throw new Error(`${what}: ${failure}`);
+}
+
+interface SpritesContext {
+  opts: SpritesSandboxOptions;
+  client: SpritesClient;
+  sprite: (name: string) => Sprite;
+  reportError: (category: string, code: string, message: string, scopeLabel?: string) => void;
+  scopeFor: (name: string) => string | undefined;
+  live: Set<string>;
+  resourcesApplied: Set<string>;
+  egressPolicyByName: Map<string, string>;
+  pressureEpisodes: Set<string>;
+}
+
+function createSpritesIo({ sprite, reportError, scopeFor, pressureEpisodes }: SpritesContext) {
   async function execRaw(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
     const uid = randomUUID();
     const out = `/tmp/.exec-${uid}.out`;
@@ -183,6 +201,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       `cat > ${body} <<'${eof}'\n${script}\n${eof}\n` +
       `timeout ${timeoutSec} sh ${body} > ${out} 2> ${err}; __rc=$?; printf '%s %s %s %s %s\\n' "$__rc" "$(wc -c < ${out})" "$(wc -c < ${err})" "${psi}" "${load}"; cat ${out} ${err}; rm -f ${out} ${err} ${body}`;
     const r = await spawnExec(
+      sprite,
       name,
       ["sh", "-c", SCRIPT_RUNNER],
       Buffer.from(wrapped, "utf8"),
@@ -223,7 +242,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
         "agent_computer",
         "io_pressure_high",
         `sprite ${name}: io pressure full avg60=${pressure.ioFull60}% (load ${pressure.load1}) — disk-bound work is stalling`,
-        sandbox.scopeFor(name),
+        scopeFor(name),
       );
     } else if (pressure.ioFull60 < PRESSURE_CLEAR_FULL60) {
       pressureEpisodes.delete(name);
@@ -248,6 +267,12 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     }
   }
 
+  return { execRaw, writeAbsBytes, readAbsBytes };
+}
+
+function createSpritesMachines(ctx: SpritesContext) {
+  const { opts, client, sprite, reportError, scopeFor, live, resourcesApplied, egressPolicyByName, pressureEpisodes } =
+    ctx;
   const proxyHost = opts.egressProxyUrl ? egressProxyHost(opts.egressProxyUrl) : "";
 
   async function ensureEgressPolicy(name: string): Promise<void> {
@@ -283,15 +308,6 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     } catch (e) {
       if (!isMissing(e)) throw new Error(`sprites delete ${name}: ${spritesErrorDetail(e)}`, { cause: e });
     }
-  }
-
-  async function settleStream(stream: AsyncIterable<StreamMessage>, what: string): Promise<void> {
-    let failure: string | undefined;
-    for await (const msg of stream) {
-      if (msg.type === "error") failure = msg.error ?? msg.data ?? "error";
-      else if (msg.type === "complete") failure = undefined;
-    }
-    if (failure !== undefined) throw new Error(`${what}: ${failure}`);
   }
 
   async function latestCheckpoint(name: string): Promise<Checkpoint | undefined> {
@@ -361,9 +377,52 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       "agent_computer",
       "checkpoint_restored",
       `sprite ${name}: restart failed (${restartFailure}); ${fault}; restored checkpoint ${restored.id} from ${restored.createTime.toISOString()}`,
-      sandbox.scopeFor(name),
+      scopeFor(name),
     );
   }
+
+  return {
+    ensureEgressPolicy,
+    adopt,
+    deleteSprite,
+    restoreCheckpoint,
+    captureCheckpoint,
+    forget,
+    restart,
+  };
+}
+
+export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSandboxOptions): BackendSandbox {
+  if (!opts.token) throw new Error("SANDBOX_BACKEND=sprites requires SPRITES_TOKEN");
+  const client = new SpritesClient(opts.token, opts.baseUrl ? { baseURL: opts.baseUrl } : {});
+  const sprite = (name: string) => client.sprite(name);
+
+  const live = new Set<string>();
+  const resourcesApplied = new Set<string>();
+  const egressPolicyByName = new Map<string, string>();
+  const pressureEpisodes = new Set<string>();
+
+  const reportError = (category: string, code: string, message: string, scopeLabel?: string): void => {
+    try {
+      opts.onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) });
+    } catch (e) {
+      swallow(`sprites-sandbox: ${code} report`, e);
+    }
+  };
+  const ctx: SpritesContext = {
+    opts,
+    client,
+    sprite,
+    reportError,
+    scopeFor: (name) => sandbox.scopeFor(name),
+    live,
+    resourcesApplied,
+    egressPolicyByName,
+    pressureEpisodes,
+  };
+  const { execRaw, writeAbsBytes, readAbsBytes } = createSpritesIo(ctx);
+  const { ensureEgressPolicy, adopt, deleteSprite, restoreCheckpoint, captureCheckpoint, forget, restart } =
+    createSpritesMachines(ctx);
 
   const sandbox = createProviderSandbox(
     workspace,

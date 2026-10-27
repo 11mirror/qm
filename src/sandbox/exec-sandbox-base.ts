@@ -79,8 +79,82 @@ export interface ExecSandboxBase {
   teardown(handle: SandboxHandle, opts?: TeardownOptions): Promise<void>;
 }
 
+async function prepareResident(
+  deps: ExecSandboxBaseDeps,
+  workspaceDir: string,
+  layers: WorkspaceLayer[],
+  handle: SandboxHandle,
+  provOpts: ProvisionOptions | undefined,
+  io: Pick<ExecSandboxBase, "readFile" | "writeFileBytes">,
+): Promise<void> {
+  const { workspace, label, homeDir } = deps;
+  const name = handle.id;
+  const scratch = provOpts?.scratch;
+  const { readFile, writeFileBytes } = io;
+  const forceEgress = !!deps.egressProxyUrl && !!provOpts?.egressToken;
+  if (forceEgress) await deps.ensureEgress?.(name);
+  const turnEnv = Object.fromEntries(Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)));
+  const env = forceEgress ? forceThroughProxyEnv(deps.egressProxyUrl!, provOpts!.egressToken!, turnEnv) : turnEnv;
+  if (Object.keys(env).length) handle.env = env;
+  const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, deps.credentialPaths)}`;
+  const prepare = `mkdir -p ${shq(workspaceDir)}${credLinks}`;
+  const toolIo = {
+    exec: (script: string, t: number) => deps.exec(name, script, t),
+    writeAbs: (abs: string, data: Uint8Array) => deps.writeAbsBytes(name, abs, data),
+  };
+  if (deps.combineLayerToolPrep && deps.installLayerTools) {
+    await deps.installLayerTools(toolIo, prepare);
+  } else {
+    const prep = await deps.exec(name, prepare, PREP_TIMEOUT_SEC);
+    if (prep.code !== 0)
+      throw new Error(`${label} provision prep failed: ${execFailureDetail(prep, PREP_TIMEOUT_SEC).slice(0, 200)}`);
+  }
+
+  await materializeRoLayers(
+    workspace,
+    layers,
+    handle,
+    {
+      readFile,
+      writeFileBytes,
+      exec: (script, t) => deps.exec(name, script, t),
+    },
+    { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label },
+  );
+  if (!deps.combineLayerToolPrep) await deps.installLayerTools?.(toolIo);
+}
+
+async function execInSandbox(
+  deps: ExecSandboxBaseDeps,
+  handle: SandboxHandle,
+  command: string,
+  execOpts?: ExecOptions,
+): Promise<ExecResult> {
+  const { label, defaultTimeoutSec } = deps;
+  const timeoutSec = execOpts?.timeoutMs ? Math.ceil(execOpts.timeoutMs / 1000) : defaultTimeoutSec;
+  const env = deps.envViaExec && handle.env ? handle.env : undefined;
+  const exports = Object.entries(env ? {} : (handle.env ?? {}))
+    .map(([k, v]) => `export ${k}=${shq(v)}`)
+    .join("; ");
+  const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
+  const signal = execOpts?.signal;
+  if (!signal) return deps.exec(handle.id, script, timeoutSec, env);
+  const killUid = randomUUID();
+  const fireKill = () => {
+    deps.exec(handle.id, killScript(killUid), 15).catch(swallowAs(`${label}-sandbox: kill in-flight exec`, undefined));
+  };
+  signal.throwIfAborted();
+  const onAbort = () => fireKill();
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    return await deps.exec(handle.id, killableScript(script, killUid), timeoutSec, env);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
+
 export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBase {
-  const { workspace, label, prefix, homeDir, defaultTimeoutSec } = deps;
+  const { label, prefix, homeDir } = deps;
   if (deps.egressProxyUrl && !new URL(deps.egressProxyUrl).hostname) {
     throw new Error(`${label}-sandbox: egress proxy url has no hostname: ${deps.egressProxyUrl}`);
   }
@@ -183,39 +257,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
     };
 
     try {
-      const forceEgress = !!deps.egressProxyUrl && !!provOpts?.egressToken;
-      if (forceEgress) await deps.ensureEgress?.(name);
-      const turnEnv = Object.fromEntries(
-        Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)),
-      );
-      const env = forceEgress ? forceThroughProxyEnv(deps.egressProxyUrl!, provOpts!.egressToken!, turnEnv) : turnEnv;
-      if (Object.keys(env).length) handle.env = env;
-      const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, deps.credentialPaths)}`;
-      const prepare = `mkdir -p ${shq(workspaceDir)}${credLinks}`;
-      const toolIo = {
-        exec: (script: string, t: number) => deps.exec(name, script, t),
-        writeAbs: (abs: string, data: Uint8Array) => deps.writeAbsBytes(name, abs, data),
-      };
-      if (deps.combineLayerToolPrep && deps.installLayerTools) {
-        await deps.installLayerTools(toolIo, prepare);
-      } else {
-        const prep = await deps.exec(name, prepare, PREP_TIMEOUT_SEC);
-        if (prep.code !== 0)
-          throw new Error(`${label} provision prep failed: ${execFailureDetail(prep, PREP_TIMEOUT_SEC).slice(0, 200)}`);
-      }
-
-      await materializeRoLayers(
-        workspace,
-        layers,
-        handle,
-        {
-          readFile,
-          writeFileBytes,
-          exec: (script, t) => deps.exec(name, script, t),
-        },
-        { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label },
-      );
-      if (!deps.combineLayerToolPrep) await deps.installLayerTools?.(toolIo);
+      await prepareResident(deps, workspaceDir, layers, handle, provOpts, { readFile, writeFileBytes });
 
       return handle;
     } catch (err) {
@@ -224,30 +266,8 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
     }
   }
 
-  async function run(handle: SandboxHandle, command: string, execOpts?: ExecOptions): Promise<ExecResult> {
-    const timeoutSec = execOpts?.timeoutMs ? Math.ceil(execOpts.timeoutMs / 1000) : defaultTimeoutSec;
-    const env = deps.envViaExec && handle.env ? handle.env : undefined;
-    const exports = Object.entries(env ? {} : (handle.env ?? {}))
-      .map(([k, v]) => `export ${k}=${shq(v)}`)
-      .join("; ");
-    const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
-    const signal = execOpts?.signal;
-    if (!signal) return deps.exec(handle.id, script, timeoutSec, env);
-    const killUid = randomUUID();
-    const fireKill = () => {
-      deps
-        .exec(handle.id, killScript(killUid), 15)
-        .catch(swallowAs(`${label}-sandbox: kill in-flight exec`, undefined));
-    };
-    signal.throwIfAborted();
-    const onAbort = () => fireKill();
-    signal.addEventListener("abort", onAbort, { once: true });
-    try {
-      return await deps.exec(handle.id, killableScript(script, killUid), timeoutSec, env);
-    } finally {
-      signal.removeEventListener("abort", onAbort);
-    }
-  }
+  const run = (handle: SandboxHandle, command: string, execOpts?: ExecOptions): Promise<ExecResult> =>
+    execInSandbox(deps, handle, command, execOpts);
 
   return {
     workspaceDir,

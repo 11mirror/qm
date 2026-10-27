@@ -11,7 +11,7 @@ import {
   createExecFileOps,
   type BlobStagingOptions,
 } from "./exec-file-ops.ts";
-import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
+import { createExecSandboxBase, sandboxScopeName, type ExecSandboxBase } from "./exec-sandbox-base.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import { withConnectorSdk, type ConnectorSdkBundle } from "./connector-sdk.ts";
 import { isJobComputerScope, visibleNotInstalled, visibleTools } from "./sandbox.ts";
@@ -116,46 +116,15 @@ export type ProviderSandbox = BackendSandbox & {
   readonly ensureResident: (scopeId: string) => Promise<void>;
 };
 
-export function createProviderSandbox(
-  workspace: WorkspaceStore,
-  driver: SandboxDriver,
-  shared: SandboxShared,
-  store: SandboxBodies<StoredSandboxRecord>,
-): ProviderSandbox {
-  const { backend, homeDir } = driver;
-  const prefix = shared.namePrefix ?? "qm";
-  const defaultTimeoutSec = shared.defaultTimeoutSec ?? DEFAULT_TIMEOUT_SEC;
-  const snapshotIntervalMs = (shared.snapshotIntervalSec ?? DEFAULT_SNAPSHOT_INTERVAL_SEC) * 1000;
-  const checkpointDue = (stored: StoredSandboxRecord | null | undefined, opts?: TeardownOptions): boolean => {
-    if (stored?.lastSnapshotMs && Date.now() - stored.lastSnapshotMs < snapshotIntervalMs) return false;
-    return !opts?.homeUnchanged || stored?.homeDirty !== false;
-  };
-  const lock = <T>(scope: string, fn: () => Promise<T>): Promise<T> =>
-    shared.advisoryLock.withLock(`${backend}-provision:${prefix}:${scope}`, fn);
-  const scopeByName = new Map<string, string>();
-  const nameFor = (scope: string): string => {
-    const name = sandboxScopeName(prefix, scope);
-    scopeByName.set(name, scope);
-    return name;
-  };
-  const scopeFor = (name: string): string | undefined => base.scopeFor(name) ?? scopeByName.get(name);
-  async function scopeOf(name: string): Promise<string | undefined> {
-    const known = scopeFor(name);
-    if (known) return known;
-    for (const [scope] of await store.entries()) nameFor(scope);
-    return scopeByName.get(name);
-  }
-  async function requireScope(name: string): Promise<string> {
-    const scope = await scopeOf(name);
-    if (!scope) throw new Error(`${backend} sandbox ${name}: no stored scope maps to this name`);
-    return scope;
-  }
-  const credentialPrefixes = ephemeralCredLinkPaths(shared.credentialPaths ?? []).map(({ rel }) => rel);
+interface ProviderContext {
+  driver: SandboxDriver;
+  store: SandboxBodies<StoredSandboxRecord>;
+  backend: string;
+  lock: <T>(scope: string, fn: () => Promise<T>) => Promise<T>;
+  report: (category: string, code: string, e: unknown, scopeLabel?: string) => void;
+}
 
-  const report = (category: string, code: string, e: unknown, scopeLabel?: string): void => {
-    shared.onError?.({ category, code, message: errMessage(e), ...(scopeLabel ? { scopeLabel } : {}) });
-  };
-
+function createProviderCheckpointing({ driver, store, backend, report }: ProviderContext) {
   async function captureCheckpoint(scope: string, name: string): Promise<void> {
     if (isJobComputerScope(scope)) return;
     const previous = (await store.get(scope))?.checkpointId;
@@ -247,7 +216,23 @@ export function createProviderSandbox(
     }
   }
 
-  const base = createExecSandboxBase({
+  return { captureCheckpoint, initialize };
+}
+
+function createProviderBase(
+  workspace: WorkspaceStore,
+  { driver, backend, lock }: ProviderContext,
+  shared: SandboxShared,
+  deps: {
+    prefix: string;
+    defaultTimeoutSec: number;
+    initialize: (scope: string, name: string, onStatus?: (text: string) => void) => Promise<boolean>;
+    scopeOf: (name: string) => Promise<string | undefined>;
+  },
+): ExecSandboxBase {
+  const { homeDir } = driver;
+  const { prefix, defaultTimeoutSec, initialize, scopeOf } = deps;
+  return createExecSandboxBase({
     workspace,
     label: backend,
     prefix,
@@ -286,9 +271,12 @@ export function createProviderSandbox(
     ...(driver.forget ? { forgetInstance: driver.forget } : {}),
     ...(driver.ensureEgress ? { ensureEgress: driver.ensureEgress } : {}),
   });
+}
 
+function providerProfile(driver: SandboxDriver, shared: SandboxShared, workdir: string): AgentComputerProfile {
+  const { backend, homeDir } = driver;
   const extraTools = shared.extraTools ?? [];
-  const profile: AgentComputerProfile = {
+  return {
     backend,
     writablePersistence: driver.writablePersistence ?? "resident_disk",
     processSessions: true,
@@ -312,42 +300,38 @@ export function createProviderSandbox(
         return driver.diskGb;
       },
       homeDir,
-      workdir: base.workspaceDir,
+      workdir,
     },
   };
+}
 
-  const procSessions = createExecProcessSessions({
-    run: (handle, command, execOpts) =>
-      driver.exec(handle.id, command, execOpts?.timeoutMs ? Math.ceil(execOpts.timeoutMs / 1000) : defaultTimeoutSec),
-  });
-  const fileOps = createExecFileOps({
-    label: backend,
-    exec: driver.exec,
-    writeInline: driver.writeAbsBytes,
-    ...(driver.combineRoundTrips ? { combineRemoveAndList: true } : {}),
-  });
-  const staging = createBackendBlobStaging(backend, driver.exec, shared);
-  const execExport = createExecExport({
-    label: backend,
-    exec: driver.exec,
-    readAbsBytes: driver.readAbsBytes,
-    defaultHomeDir: homeDir,
-    ephemeralCredentialPrefixes: credentialPrefixes,
-  });
+async function providerRecovery(
+  { driver, store }: ProviderContext,
+  scope: string,
+): Promise<Pick<ComputerStatus, "recovery">> {
+  if (!driver.checkpoints) return {};
+  const stored = await store.get(scope);
+  return {
+    recovery: {
+      strategy: "provider_snapshot",
+      ...(stored?.checkpointId ? { checkpointId: stored.checkpointId } : {}),
+      ...(stored?.lastSnapshotMs ? { checkpointAtMs: stored.lastSnapshotMs } : {}),
+      ...(stored?.snapshotError ? { error: stored.snapshotError } : {}),
+    },
+  };
+}
 
-  async function recovery(scope: string): Promise<Pick<ComputerStatus, "recovery">> {
-    if (!driver.checkpoints) return {};
-    const stored = await store.get(scope);
-    return {
-      recovery: {
-        strategy: "provider_snapshot",
-        ...(stored?.checkpointId ? { checkpointId: stored.checkpointId } : {}),
-        ...(stored?.lastSnapshotMs ? { checkpointAtMs: stored.lastSnapshotMs } : {}),
-        ...(stored?.snapshotError ? { error: stored.snapshotError } : {}),
-      },
-    };
-  }
-
+function createProviderResidency(
+  { driver, store, lock, report }: ProviderContext,
+  base: ExecSandboxBase,
+  deps: {
+    nameFor: (scope: string) => string;
+    requireScope: (name: string) => Promise<string>;
+    checkpointDue: (stored: StoredSandboxRecord | null | undefined, opts?: TeardownOptions) => boolean;
+    captureCheckpoint: (scope: string, name: string) => Promise<void>;
+  },
+) {
+  const { nameFor, requireScope, checkpointDue, captureCheckpoint } = deps;
   const residents = new Map<string, number>();
   const hold = (name: string, delta: number): void => {
     const count = (residents.get(name) ?? 0) + delta;
@@ -400,32 +384,13 @@ export function createProviderSandbox(
     return base.teardown(handle, opts);
   }
 
-  return {
-    profile,
-    scopeFor,
-    scopeOf,
-    nameFor,
-    lifecycle: (scope, fn) => base.provisionQueue(scope, () => lock(scope, fn)),
-    captureCheckpoint,
-    ensureResident: async (scope) => {
-      await base.provisionQueue(scope, () => lock(scope, () => initialize(scope, nameFor(scope))));
-    },
-    provision,
-    run: base.run,
-    writeFile: base.writeFile,
-    writeFileBytes: base.writeFileBytes,
-    readFile: base.readFile,
-    readFileBytes: base.readFileBytes,
-    ...fileOps,
-    ...staging,
-    exportFiles: execExport.exportFiles,
-    startProcess: procSessions.startProcess,
-    readProcess: procSessions.readProcess,
-    writeStdin: procSessions.writeStdin,
-    signalProcess: procSessions.signalProcess,
-    listProcesses: procSessions.listProcesses,
-    teardown,
+  return { provision, teardown };
+}
 
+function providerScopeMethods(ctx: ProviderContext, base: ExecSandboxBase, nameFor: (scope: string) => string) {
+  const { driver, store, backend, lock } = ctx;
+  const recovery = (scope: string) => providerRecovery(ctx, scope);
+  return {
     async computerStatus(scopeId: string): Promise<ComputerStatus> {
       const name = nameFor(scopeId);
       const rec = await recovery(scopeId);
@@ -493,5 +458,103 @@ export function createProviderSandbox(
         }),
       );
     },
+  } satisfies Partial<ProviderSandbox>;
+}
+
+export function createProviderSandbox(
+  workspace: WorkspaceStore,
+  driver: SandboxDriver,
+  shared: SandboxShared,
+  store: SandboxBodies<StoredSandboxRecord>,
+): ProviderSandbox {
+  const { backend, homeDir } = driver;
+  const prefix = shared.namePrefix ?? "qm";
+  const defaultTimeoutSec = shared.defaultTimeoutSec ?? DEFAULT_TIMEOUT_SEC;
+  const snapshotIntervalMs = (shared.snapshotIntervalSec ?? DEFAULT_SNAPSHOT_INTERVAL_SEC) * 1000;
+  const checkpointDue = (stored: StoredSandboxRecord | null | undefined, opts?: TeardownOptions): boolean => {
+    if (stored?.lastSnapshotMs && Date.now() - stored.lastSnapshotMs < snapshotIntervalMs) return false;
+    return !opts?.homeUnchanged || stored?.homeDirty !== false;
+  };
+  const lock = <T>(scope: string, fn: () => Promise<T>): Promise<T> =>
+    shared.advisoryLock.withLock(`${backend}-provision:${prefix}:${scope}`, fn);
+  const scopeByName = new Map<string, string>();
+  const nameFor = (scope: string): string => {
+    const name = sandboxScopeName(prefix, scope);
+    scopeByName.set(name, scope);
+    return name;
+  };
+  const scopeFor = (name: string): string | undefined => base.scopeFor(name) ?? scopeByName.get(name);
+  async function scopeOf(name: string): Promise<string | undefined> {
+    const known = scopeFor(name);
+    if (known) return known;
+    for (const [scope] of await store.entries()) nameFor(scope);
+    return scopeByName.get(name);
+  }
+  async function requireScope(name: string): Promise<string> {
+    const scope = await scopeOf(name);
+    if (!scope) throw new Error(`${backend} sandbox ${name}: no stored scope maps to this name`);
+    return scope;
+  }
+  const credentialPrefixes = ephemeralCredLinkPaths(shared.credentialPaths ?? []).map(({ rel }) => rel);
+
+  const report = (category: string, code: string, e: unknown, scopeLabel?: string): void => {
+    shared.onError?.({ category, code, message: errMessage(e), ...(scopeLabel ? { scopeLabel } : {}) });
+  };
+  const ctx: ProviderContext = { driver, store, backend, lock, report };
+  const { captureCheckpoint, initialize } = createProviderCheckpointing(ctx);
+  const base = createProviderBase(workspace, ctx, shared, { prefix, defaultTimeoutSec, initialize, scopeOf });
+  const profile = providerProfile(driver, shared, base.workspaceDir);
+
+  const procSessions = createExecProcessSessions({
+    run: (handle, command, execOpts) =>
+      driver.exec(handle.id, command, execOpts?.timeoutMs ? Math.ceil(execOpts.timeoutMs / 1000) : defaultTimeoutSec),
+  });
+  const fileOps = createExecFileOps({
+    label: backend,
+    exec: driver.exec,
+    writeInline: driver.writeAbsBytes,
+    ...(driver.combineRoundTrips ? { combineRemoveAndList: true } : {}),
+  });
+  const staging = createBackendBlobStaging(backend, driver.exec, shared);
+  const execExport = createExecExport({
+    label: backend,
+    exec: driver.exec,
+    readAbsBytes: driver.readAbsBytes,
+    defaultHomeDir: homeDir,
+    ephemeralCredentialPrefixes: credentialPrefixes,
+  });
+  const { provision, teardown } = createProviderResidency(ctx, base, {
+    nameFor,
+    requireScope,
+    checkpointDue,
+    captureCheckpoint,
+  });
+
+  return {
+    profile,
+    scopeFor,
+    scopeOf,
+    nameFor,
+    lifecycle: (scope, fn) => base.provisionQueue(scope, () => lock(scope, fn)),
+    captureCheckpoint,
+    ensureResident: async (scope) => {
+      await base.provisionQueue(scope, () => lock(scope, () => initialize(scope, nameFor(scope))));
+    },
+    provision,
+    run: base.run,
+    writeFile: base.writeFile,
+    writeFileBytes: base.writeFileBytes,
+    readFile: base.readFile,
+    readFileBytes: base.readFileBytes,
+    ...fileOps,
+    ...staging,
+    exportFiles: execExport.exportFiles,
+    startProcess: procSessions.startProcess,
+    readProcess: procSessions.readProcess,
+    writeStdin: procSessions.writeStdin,
+    signalProcess: procSessions.signalProcess,
+    listProcesses: procSessions.listProcesses,
+    teardown,
+    ...providerScopeMethods(ctx, base, nameFor),
   };
 }

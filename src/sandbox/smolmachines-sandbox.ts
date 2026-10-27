@@ -55,23 +55,24 @@ export interface SmolmachinesSandboxOptions extends SandboxShared {
   fetchImpl?: typeof fetch;
 }
 
-export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: SmolmachinesSandboxOptions): BackendSandbox {
-  if (!opts.token && !opts.fetchImpl) throw new Error("SANDBOX_BACKEND=smolmachines requires SMOLMACHINES_TOKEN");
-  const baseUrl = (opts.baseUrl ?? BASE_URL).replace(/\/+$/, "");
-  const resources = {
-    ...(opts.cpus ? { cpus: opts.cpus } : {}),
-    ...(opts.memoryMb ? { memoryMb: opts.memoryMb } : {}),
-    ...(opts.diskGb ? { diskGb: opts.diskGb } : {}),
-  };
-  const proxyHost = opts.egressProxyUrl ? egressProxyHost(opts.egressProxyUrl) : undefined;
-  const network: MachineNetwork = proxyHost ? { mode: "allowCidrs", hosts: [proxyHost] } : { mode: "open" };
+const isRunning = (info: MachineInfo): boolean => RUNNING_STATES.has(info.state.toLowerCase());
+const machinePath = (id: string): string => `/v1/machines/${encodeURIComponent(id)}`;
 
-  const idByName = new Map<string, string>();
-  const egressVerified = new Set<string>();
+function decodeStream(name: string, label: string, b64: string | undefined, text: string, truncated?: boolean): string {
+  if (b64 !== undefined) return Buffer.from(b64, "base64").toString("utf8");
+  if (truncated) throw new Error(`smolmachines exec ${name}: ${label} truncated and no byte-exact stream returned`);
+  return text;
+}
 
-  const isRunning = (info: MachineInfo): boolean => RUNNING_STATES.has(info.state.toLowerCase());
-  const machinePath = (id: string): string => `/v1/machines/${encodeURIComponent(id)}`;
+interface SmolmachinesClientDeps {
+  opts: SmolmachinesSandboxOptions;
+  baseUrl: string;
+  resources: { cpus?: number; memoryMb?: number; diskGb?: number };
+  network: MachineNetwork;
+  idByName: Map<string, string>;
+}
 
+function createSmolmachinesClient({ opts, baseUrl, resources, network, idByName }: SmolmachinesClientDeps) {
   const fetchImpl = opts.fetchImpl ?? fetch;
 
   function api(method: string, path: string, req: { body?: unknown; timeoutMs?: number } = {}): Promise<Response> {
@@ -174,18 +175,15 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     idByName.delete(name);
   }
 
-  function decodeStream(
-    name: string,
-    label: string,
-    b64: string | undefined,
-    text: string,
-    truncated?: boolean,
-  ): string {
-    if (b64 !== undefined) return Buffer.from(b64, "base64").toString("utf8");
-    if (truncated) throw new Error(`smolmachines exec ${name}: ${label} truncated and no byte-exact stream returned`);
-    return text;
-  }
+  return { api, apiJson, findMachine, createMachine, startMachine, machineIdFor, deleteMachine };
+}
 
+type SmolmachinesClient = ReturnType<typeof createSmolmachinesClient>;
+
+function createSmolmachinesIo(
+  { api, apiJson, startMachine, machineIdFor }: SmolmachinesClient,
+  idByName: Map<string, string>,
+) {
   async function postExec(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
     const id = await machineIdFor(name);
     const req = {
@@ -264,6 +262,26 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     }
     return new Uint8Array(await res.arrayBuffer());
   }
+
+  return { execRaw, writeAbsBytes, readAbsBytes };
+}
+
+export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: SmolmachinesSandboxOptions): BackendSandbox {
+  if (!opts.token && !opts.fetchImpl) throw new Error("SANDBOX_BACKEND=smolmachines requires SMOLMACHINES_TOKEN");
+  const baseUrl = (opts.baseUrl ?? BASE_URL).replace(/\/+$/, "");
+  const resources = {
+    ...(opts.cpus ? { cpus: opts.cpus } : {}),
+    ...(opts.memoryMb ? { memoryMb: opts.memoryMb } : {}),
+    ...(opts.diskGb ? { diskGb: opts.diskGb } : {}),
+  };
+  const proxyHost = opts.egressProxyUrl ? egressProxyHost(opts.egressProxyUrl) : undefined;
+  const network: MachineNetwork = proxyHost ? { mode: "allowCidrs", hosts: [proxyHost] } : { mode: "open" };
+
+  const idByName = new Map<string, string>();
+  const egressVerified = new Set<string>();
+  const client = createSmolmachinesClient({ opts, baseUrl, resources, network, idByName });
+  const { apiJson, findMachine, createMachine, startMachine, machineIdFor, deleteMachine } = client;
+  const { execRaw, writeAbsBytes, readAbsBytes } = createSmolmachinesIo(client, idByName);
 
   async function ensureEgress(name: string): Promise<void> {
     const id = await machineIdFor(name);

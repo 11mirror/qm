@@ -72,59 +72,19 @@ export const localVolumeName = (scopeId: string, prefix = DEFAULT_PREFIX): strin
 export const localNetworkName = (containerName: string, prefix = DEFAULT_PREFIX): string =>
   sibling("net", containerName, prefix);
 
-export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandboxOptions): BackendSandbox {
-  const image = opts.image ?? DEFAULT_LOCAL_SANDBOX_IMAGE;
-  const dexec = opts.dockerExec ?? spawnDockerExec(opts.dockerBin ?? "docker");
-  const fetchImpl = opts.fetchImpl ?? fetch;
-  const homeDir = opts.homeDir ?? HOME_DIR;
-  const prefix = opts.namePrefix ?? DEFAULT_PREFIX;
-  const networkOf = (name: string): string => localNetworkName(name, prefix);
-  const volumeOf = (name: string): string => sibling("home", name, prefix);
+interface LocalDocker {
+  opts: LocalSandboxOptions;
+  dexec: DockerExec;
+  image: string;
+  homeDir: string;
+  networkOf: (name: string) => string;
+  volumeOf: (name: string) => string;
+  portByName: Map<string, number>;
+  attached: Set<string>;
+}
 
-  const portByName = new Map<string, number>();
-  const attached = new Set<string>();
-
-  let preflightDone: Promise<string> | undefined;
-  let staleWarned = false;
-
-  async function preflight(): Promise<string> {
-    preflightDone ??= (async () => {
-      const version = await dexec(["version"], 15_000);
-      if (version.code !== 0) {
-        preflightDone = undefined;
-        throw new Error("SANDBOX_BACKEND=local requires a running Docker daemon (is Docker Desktop running?)");
-      }
-      const img = await dexec(["image", "inspect", "-f", "{{.Id}}", image]);
-      if (img.code !== 0) {
-        preflightDone = undefined;
-        throw new Error(`local sandbox image ${image} not found — ${BUILD_HINT}`);
-      }
-      const label = await dexec([
-        "image",
-        "inspect",
-        "-f",
-        `{{if .Config.Labels}}{{index .Config.Labels "${FINGERPRINT_LABEL}"}}{{end}}`,
-        image,
-      ]);
-      const labeled = label.code === 0 ? label.stdout.trim() : "";
-      if (!staleWarned) {
-        const want = await computeSandboxImageFingerprint(opts.repoRoot ?? process.cwd());
-        if (want && labeled && labeled !== want) {
-          staleWarned = true;
-          console.warn(`[local-sandbox] sandbox image ${image} is stale — ${BUILD_HINT}`);
-        }
-      }
-      return img.stdout.trim();
-    })();
-    return preflightDone;
-  }
-
-  async function containerState(name: string): Promise<{ running: boolean; imageId: string } | null> {
-    const r = await dexec(["inspect", "-f", "{{.State.Running}} {{.Image}}", name]);
-    if (r.code !== 0) return null;
-    const [running = "", imageId = ""] = r.stdout.trim().split(/\s+/);
-    return { running: running === "true", imageId };
-  }
+function createLocalDaemon(ld: LocalDocker, fetchImpl: typeof fetch) {
+  const { opts, dexec, networkOf, portByName, attached } = ld;
 
   async function resolvePort(name: string): Promise<number> {
     const cached = portByName.get(name);
@@ -185,6 +145,68 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     throw new Error(`local sandbox ${name}: exec daemon never became reachable: ${lastErr}`);
   }
 
+  async function writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void> {
+    const res = await daemon(name, "/write", { path: absPath, b64: Buffer.from(data).toString("base64") }, 120_000);
+    if (res.status !== 200)
+      throw new Error(`local sandbox write ${absPath} failed (${res.status}): ${res.text.slice(0, 200)}`);
+  }
+
+  async function readAbsBytes(name: string, absPath: string): Promise<Uint8Array | null> {
+    const res = await daemon(name, "/read", { path: absPath }, 120_000);
+    if (res.status === 404) return null;
+    if (res.status !== 200)
+      throw new Error(`local sandbox read ${absPath} failed (${res.status}): ${res.text.slice(0, 200)}`);
+    return Buffer.from((JSON.parse(res.text) as { b64: string }).b64, "base64");
+  }
+
+  return { daemon, waitDaemon, writeAbsBytes, readAbsBytes };
+}
+
+function createLocalContainers(ld: LocalDocker, waitDaemon: (name: string) => Promise<void>) {
+  const { opts, dexec, image, homeDir, networkOf, volumeOf, portByName } = ld;
+
+  let preflightDone: Promise<string> | undefined;
+  let staleWarned = false;
+
+  async function preflight(): Promise<string> {
+    preflightDone ??= (async () => {
+      const version = await dexec(["version"], 15_000);
+      if (version.code !== 0) {
+        preflightDone = undefined;
+        throw new Error("SANDBOX_BACKEND=local requires a running Docker daemon (is Docker Desktop running?)");
+      }
+      const img = await dexec(["image", "inspect", "-f", "{{.Id}}", image]);
+      if (img.code !== 0) {
+        preflightDone = undefined;
+        throw new Error(`local sandbox image ${image} not found — ${BUILD_HINT}`);
+      }
+      const label = await dexec([
+        "image",
+        "inspect",
+        "-f",
+        `{{if .Config.Labels}}{{index .Config.Labels "${FINGERPRINT_LABEL}"}}{{end}}`,
+        image,
+      ]);
+      const labeled = label.code === 0 ? label.stdout.trim() : "";
+      if (!staleWarned) {
+        const want = await computeSandboxImageFingerprint(opts.repoRoot ?? process.cwd());
+        if (want && labeled && labeled !== want) {
+          staleWarned = true;
+          console.warn(`[local-sandbox] sandbox image ${image} is stale — ${BUILD_HINT}`);
+        }
+      }
+      return img.stdout.trim();
+    })();
+    return preflightDone;
+  }
+
+  async function containerState(name: string): Promise<{ running: boolean; imageId: string } | null> {
+    const r = await dexec(["inspect", "-f", "{{.State.Running}} {{.Image}}", name]);
+    if (r.code !== 0) return null;
+    const [running = "", imageId = ""] = r.stdout.trim().split(/\s+/);
+    return { running: running === "true", imageId };
+  }
+
   async function startContainer(name: string): Promise<void> {
     portByName.delete(name);
     const r = await dexec(["start", name]);
@@ -239,26 +261,33 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     if (!state.running) await startContainer(name);
   }
 
+  return { preflight, containerState, startContainer, runContainer, recreate, ensureRunning };
+}
+
+export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandboxOptions): BackendSandbox {
+  const image = opts.image ?? DEFAULT_LOCAL_SANDBOX_IMAGE;
+  const dexec = opts.dockerExec ?? spawnDockerExec(opts.dockerBin ?? "docker");
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const homeDir = opts.homeDir ?? HOME_DIR;
+  const prefix = opts.namePrefix ?? DEFAULT_PREFIX;
+  const networkOf = (name: string): string => localNetworkName(name, prefix);
+  const volumeOf = (name: string): string => sibling("home", name, prefix);
+
+  const portByName = new Map<string, number>();
+  const attached = new Set<string>();
+  const ld: LocalDocker = { opts, dexec, image, homeDir, networkOf, volumeOf, portByName, attached };
+  const { daemon, waitDaemon, writeAbsBytes, readAbsBytes } = createLocalDaemon(ld, fetchImpl);
+  const { preflight, containerState, startContainer, runContainer, recreate, ensureRunning } = createLocalContainers(
+    ld,
+    waitDaemon,
+  );
+
   async function execRaw(name: string, command: string, timeoutSec: number): Promise<ExecResult> {
     await ensureRunning(name);
     const res = await daemon(name, "/exec", { cmd: command, timeoutSec }, (timeoutSec + 15) * 1000);
     if (res.status !== 200) throw new Error(`local sandbox exec failed (${res.status}): ${res.text.slice(0, 300)}`);
     const j = JSON.parse(res.text) as { stdout: string; stderr: string; code: number; timedOut: boolean };
     return { stdout: j.stdout ?? "", stderr: j.stderr ?? "", code: j.code, timedOut: !!j.timedOut };
-  }
-
-  async function writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void> {
-    const res = await daemon(name, "/write", { path: absPath, b64: Buffer.from(data).toString("base64") }, 120_000);
-    if (res.status !== 200)
-      throw new Error(`local sandbox write ${absPath} failed (${res.status}): ${res.text.slice(0, 200)}`);
-  }
-
-  async function readAbsBytes(name: string, absPath: string): Promise<Uint8Array | null> {
-    const res = await daemon(name, "/read", { path: absPath }, 120_000);
-    if (res.status === 404) return null;
-    if (res.status !== 200)
-      throw new Error(`local sandbox read ${absPath} failed (${res.status}): ${res.text.slice(0, 200)}`);
-    return Buffer.from((JSON.parse(res.text) as { b64: string }).b64, "base64");
   }
 
   async function destroy(name: string): Promise<void> {

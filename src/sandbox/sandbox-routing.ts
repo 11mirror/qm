@@ -34,7 +34,7 @@ export interface RoutingSandboxOptions {
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
-export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
+function createRouterContext(opts: RoutingSandboxOptions) {
   const { backends, resources, defaultBackend } = opts;
   const fallback = ((): BackendSandbox => {
     const s = backends[defaultBackend];
@@ -91,10 +91,24 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     return s as Sandbox & Required<Pick<Sandbox, K>>;
   };
   const some = (pred: (s: Sandbox) => boolean): boolean => constructed(backends).some(pred);
+  return {
+    backends,
+    resources,
+    defaultBackend,
+    fallback,
+    backendFor,
+    forHandle,
+    useHandle,
+    computerTarget,
+    requireCap,
+    some,
+  };
+}
 
-  const router: Sandbox = {
-    profile: fallback.profile,
+type RouterContext = ReturnType<typeof createRouterContext>;
 
+function routerHandleMethods({ resources, defaultBackend, fallback, backendFor, forHandle, useHandle }: RouterContext) {
+  return {
     async profileFor(scopeId: string): Promise<AgentComputerProfile> {
       const resource = await resources.resolve(scopeId);
       return resource ? backendFor(resource.backend).profile : fallback.profile;
@@ -171,7 +185,19 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
           )
         : action();
     },
+  } satisfies Partial<Sandbox>;
+}
 
+function routerProcessMethods({
+  backends,
+  resources,
+  forHandle,
+  useHandle,
+  computerTarget,
+  requireCap,
+  some,
+}: RouterContext) {
+  return {
     startRegisteredProcess: (handle: SandboxHandle, command: string, register, o?) =>
       useHandle(handle, async () => {
         const sandbox = forHandle(handle);
@@ -237,6 +263,17 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
           },
         }
       : {}),
+  } satisfies Partial<Sandbox>;
+}
+
+export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
+  const ctx = createRouterContext(opts);
+  const router: Sandbox = {
+    profile: ctx.fallback.profile,
+
+    ...routerHandleMethods(ctx),
+
+    ...routerProcessMethods(ctx),
   };
 
   return router;

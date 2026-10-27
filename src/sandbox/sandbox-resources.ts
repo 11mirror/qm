@@ -103,7 +103,7 @@ export async function accessConversationSandbox(
   return resource;
 }
 
-export function createSandboxResources(opts: {
+interface SandboxResourcesOptions {
   store: SandboxResourceStore;
   backends: Partial<Record<SandboxBackendName, Sandbox>>;
   defaultBackend: SandboxBackendName;
@@ -112,7 +112,9 @@ export function createSandboxResources(opts: {
   beforeRetire?: (record: SandboxResource) => Promise<void>;
   lock: AdvisoryLock;
   canUseScope(actorId: string, scopeId: ScopeId): Promise<boolean>;
-}): SandboxResources {
+}
+
+function sandboxResourceHelpers(opts: SandboxResourcesOptions) {
   const actionsFor = (backend: Sandbox | undefined): string[] => {
     if (!backend) return [];
     return [
@@ -167,17 +169,16 @@ export function createSandboxResources(opts: {
         ...(backend.profile.spec ? { spec: backend.profile.spec } : {}),
         actions: actionsFor(backend),
       }));
+  return { actionsFor, authorize, get, agentRecord, destroy, use, profiles };
+}
+
+type SandboxResourceHelpers = ReturnType<typeof sandboxResourceHelpers>;
+
+function sandboxResourceRecordMethods(
+  opts: SandboxResourcesOptions,
+  { get, agentRecord, destroy, use }: SandboxResourceHelpers,
+) {
   return {
-    profiles,
-    forTurn: (turn) =>
-      createSandboxResources({
-        ...opts,
-        canUseScope: async (actorId, scopeId) =>
-          withLiveTurnMembership(opts.canUseScope, { ...turn, verified: await turn.isCurrent() })(actorId, scopeId),
-      }),
-    defaultBackend: () => opts.defaultBackend,
-    get,
-    use,
     async hold(id, runId) {
       await opts.store.addHolder(id, runId);
     },
@@ -232,6 +233,14 @@ export function createSandboxResources(opts: {
       const route = await opts.store.defaultFor(scopeId);
       return route?.sandboxId ? get(route.sandboxId) : null;
     },
+  } satisfies Partial<SandboxResources>;
+}
+
+function sandboxResourceScopeMethods(
+  opts: SandboxResourcesOptions,
+  { actionsFor, authorize, agentRecord, profiles }: SandboxResourceHelpers,
+) {
+  return {
     async list(actorId, scopeId) {
       await authorize(actorId, scopeId);
       const route = await opts.store.defaultFor(scopeId);
@@ -328,5 +337,24 @@ export function createSandboxResources(opts: {
         await opts.store.setDefault(scopeId, id);
       });
     },
+  } satisfies Partial<SandboxResources>;
+}
+
+export function createSandboxResources(opts: SandboxResourcesOptions): SandboxResources {
+  const helpers = sandboxResourceHelpers(opts);
+  const { get, use, profiles } = helpers;
+  return {
+    profiles,
+    forTurn: (turn) =>
+      createSandboxResources({
+        ...opts,
+        canUseScope: async (actorId, scopeId) =>
+          withLiveTurnMembership(opts.canUseScope, { ...turn, verified: await turn.isCurrent() })(actorId, scopeId),
+      }),
+    defaultBackend: () => opts.defaultBackend,
+    get,
+    use,
+    ...sandboxResourceRecordMethods(opts, helpers),
+    ...sandboxResourceScopeMethods(opts, helpers),
   };
 }
