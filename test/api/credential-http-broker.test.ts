@@ -147,12 +147,12 @@ test("the HTTP broker applies the same daily cap and actor attestation as the JS
     },
   };
   const first = ctx("/v1/credentials/http/gitlab/acme/repo.git/info/refs", "GET", deps);
-  await brokerCredentialHttp(first);
+  await respond(brokerCredentialHttp, first);
   assert.equal(first.res.statusCode, 200);
   assert.equal(seen[0]!["x-qm-actor"], "U1");
   admitted = false;
   const second = ctx("/v1/credentials/http/gitlab/acme/repo.git/info/refs", "GET", deps);
-  await brokerCredentialHttp(second);
+  await respond(brokerCredentialHttp, second);
   assert.equal(second.res.statusCode, 429);
   assert.match(await text(second.res), /daily_cap_reached/);
   assert.equal(seen.length, 1);
