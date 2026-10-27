@@ -34,6 +34,19 @@ test("pg surface-cache: upsert idempotency + last-writer-wins on change-time", a
   }
 });
 
+test("pg surface-cache: listContainers returns every container unless the caller pages", async () => {
+  const cache = createPostgresSurfaceCache(URL);
+  try {
+    const containers = Array.from({ length: 520 }, (_, i) => `WIDE${i}`);
+    await cache.ingest(containers.map((container, i) => ({ container, ts: "1.0", text: "hi", createdAt: i + 1 })));
+    const all = await cache.listContainers();
+    assert.equal(containers.filter((c) => all.some((row) => row.container === c)).length, 520);
+    assert.equal((await cache.listContainers({ limit: 7 })).length, 7);
+  } finally {
+    await cache.close();
+  }
+});
+
 test("pg surface-cache: markHandled sets + survives a later ingest (edit) of the same ts", async () => {
   const cache = createPostgresSurfaceCache(URL);
   try {
