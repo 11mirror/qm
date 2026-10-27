@@ -7,6 +7,7 @@ import { registerAbsurdSchema, TURN_QUEUES } from "../../src/turns/absurd-schema
 import { bindTurnLedger } from "../../src/turns/turn-engine.ts";
 import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
 import { testMigratedDatabaseUrl } from "./test-database.ts";
+import { CONFIG_DEFAULTS } from "../../src/config.ts";
 
 type Runs = Pick<RunStore, "get" | "activeForThread" | "list">;
 
@@ -97,7 +98,7 @@ export function testRunStore(databaseUrl = testMigratedDatabaseUrl()): TestRunSt
   const store = createPostgresRunStore(databaseUrl);
   const ledger = createTurnLedger(databaseUrl, { onTerminal: (run) => store.runs.emitTerminal(run) });
   return {
-    runs: { ...store.runs, ...bindTurnLedger(store.runs, ledger) },
+    runs: { ...store.runs, ...bindTurnLedger(store.runs, ledger, CONFIG_DEFAULTS.maxAttempts) },
     ledger,
     databaseUrl,
     async close() {

@@ -45,6 +45,7 @@ async function admit(thread: string, text = "hello", dedupKey?: string, priority
     sessionId: thread,
     request: request(thread, text),
     priority,
+    maxAttempts: 3,
     ...(dedupKey ? { dedupKey } : {}),
   });
   assert.ok(result);

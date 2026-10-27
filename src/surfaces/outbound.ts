@@ -7,7 +7,7 @@ import type { NewItem } from "../sessions/items.ts";
 import type { SessionStateBus } from "../runs/session-state-bus.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import type { QueuedPostOutcome, QueuedPosts } from "./queued-posts.ts";
-import { errMessage, reportFailure, swallowAs } from "../util/errors.ts";
+import { errMessage, reportFailure, swallowAs, withCleanup } from "../util/errors.ts";
 
 export interface OutboundPost {
   destination: Destination;
@@ -180,15 +180,17 @@ export async function appendToTranscript(
       { busy: true },
     );
   const turnId = keyTurnId(key);
-  try {
-    const present = alreadyThere
-      ? await alreadyThere()
-      : (await deps.sessions.getItems(session.id, { turnId })).some((e) => e.kind === item.kind);
-    if (present) return;
-    await deps.sessions.appendMany({ ...lease, turnId }, [item]);
-  } finally {
-    await deps.sessions.releaseLease(lease);
-  }
+  const appended = await withCleanup(
+    async () => {
+      const present = alreadyThere
+        ? await alreadyThere()
+        : (await deps.sessions.getItems(session.id, { turnId })).some((e) => e.kind === item.kind);
+      if (!present) await deps.sessions.appendMany({ ...lease, turnId }, [item]);
+      return !present;
+    },
+    () => deps.sessions.releaseLease(lease),
+  );
+  if (!appended) return;
   const participants = await deps.sessions
     .participantsOf(session.id)
     .catch(swallowAs("surfaces: session participants lookup", []));

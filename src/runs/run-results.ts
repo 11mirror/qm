@@ -9,7 +9,7 @@ import { turnFailureItem } from "../core/turn-error.ts";
 import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { acquireLeaseWithin, type SessionStore } from "../sessions/session-store.ts";
-import { reportFailureAs } from "../util/errors.ts";
+import { reportFailureAs, withCleanup } from "../util/errors.ts";
 
 const turnRecordedFailure = (turnItems: readonly Item[]): boolean => turnItems.some((item) => item.kind === "Error");
 
@@ -114,19 +114,20 @@ export async function recordRunFailureEntry(
     console.error(`[run-results] session ${session.id} stayed busy — failed run ${run.id} has no turn_failure entry`);
     return "busy";
   }
-  try {
-    if (turnRecordedFailure(await sessions.getItems(session.id, { turnId: run.id }))) return "present";
-    await sessions.append(
-      lease,
-      turnFailureItem(
-        `I couldn't finish that turn: ${userFacingFailureClause(run.result ?? { status: "failed" })}`,
-        run.id,
-      ),
-    );
-    return "recorded";
-  } finally {
-    await sessions.releaseLease(lease);
-  }
+  return withCleanup(
+    async (): Promise<FailureEntryOutcome> => {
+      if (turnRecordedFailure(await sessions.getItems(session.id, { turnId: run.id }))) return "present";
+      await sessions.append(
+        lease,
+        turnFailureItem(
+          `I couldn't finish that turn: ${userFacingFailureClause(run.result ?? { status: "failed" })}`,
+          run.id,
+        ),
+      );
+      return "recorded";
+    },
+    () => sessions.releaseLease(lease),
+  );
 }
 
 const RUN_RESULT_SWEEP_GRACE_MS = 60_000;

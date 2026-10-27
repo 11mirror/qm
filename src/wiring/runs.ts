@@ -40,7 +40,7 @@ export function buildRuns(deps: RunsInputs) {
   const maxAttempts = config.maxAttempts;
   const runStore = createPostgresRunStore(databaseUrl);
   const turnLedger = createTurnLedger(databaseUrl, { onTerminal: (run) => runStore.runs.emitTerminal(run) });
-  const turnBinding = bindTurnLedger(runStore.runs, turnLedger);
+  const turnBinding = bindTurnLedger(runStore.runs, turnLedger, maxAttempts);
   const blockingApprovalSessions = async (sessionIds: readonly string[]): Promise<Set<string>> =>
     new Set(
       (await late.approvals.forSessions(sessionIds))

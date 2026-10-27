@@ -125,7 +125,7 @@ function admit(t: typeof acme, priority: RunPriority) {
     conversation: { kind: "dm", threadRef: thread },
     origin: { kind: "human" },
   } as unknown as OrchestratorInput;
-  return withTenant(t, async () => (await ledger.admit({ sessionId: thread, request, priority })).run);
+  return withTenant(t, async () => (await ledger.admit({ sessionId: thread, request, priority, maxAttempts: 3 })).run);
 }
 
 interface Seen {
