@@ -4,7 +4,8 @@ import { readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { countTokens } from "../src/util/tokens.ts";
-import { createPiHarness, stableCwd } from "../src/harness/pi-harness.ts";
+import { createPiHarness } from "../src/harness/pi-harness.ts";
+import { stableCwd } from "../src/harness/pi-turn-session.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 
 function countTempDirs(prefix: string): number {
