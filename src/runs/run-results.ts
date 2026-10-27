@@ -131,7 +131,6 @@ export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: 
   }
 }
 
-const RUN_RESULT_SWEEP_LOOKBACK_MS = 60 * 60_000;
 const RUN_RESULT_SWEEP_GRACE_MS = 60_000;
 const RUN_RESULT_SWEEP_PAGE = 200;
 const RUN_RECOVERY_GRACE_MS = 15_000;
@@ -141,7 +140,7 @@ export interface RunResultRecovery {
 }
 
 export function wireRunResultPosts(
-  runs: Pick<RunStore, "onTerminal" | "terminalFinished" | "get" | "setDeliveryState">,
+  runs: Pick<RunStore, "onTerminal" | "unsettledTerminal" | "get" | "setDeliveryState">,
   outbound: Pick<Outbound, "send">,
   opts: {
     adminUrlFor?: AdminUrlFor;
@@ -153,6 +152,10 @@ export function wireRunResultPosts(
   const graceMs = opts.graceMs ?? RUN_RECOVERY_GRACE_MS;
   const owed = (run: Run): OutboundPost | null =>
     run.deliveryState?.postedAt === undefined ? runResultPost(run, opts.adminUrlFor) : null;
+  const settled = (run: Run, posted: boolean) => {
+    const at = Date.now();
+    return runs.setDeliveryState(run.id, null, posted ? { postedAt: at, settledAt: at } : { settledAt: at });
+  };
   const postOwed = async (run: Run, post: OutboundPost): Promise<boolean> => {
     try {
       const receipt = await outbound.send(post);
@@ -160,10 +163,10 @@ export function wireRunResultPosts(
     } catch (error) {
       if (!(error as { permanent?: boolean }).permanent) throw error;
       reportFailureAs("run results: reply is undeliverable (not retried)", undefined, `run=${run.id}`)(error);
-      await runs.setDeliveryState(run.id, null, { postedAt: Date.now() });
+      await settled(run, true);
       return false;
     }
-    await runs.setDeliveryState(run.id, null, { postedAt: Date.now() });
+    await settled(run, true);
     return true;
   };
   runs.onTerminal((run) => {
@@ -184,17 +187,18 @@ export function wireRunResultPosts(
   return {
     async sweep(now = Date.now()) {
       const before = now - RUN_RESULT_SWEEP_GRACE_MS;
-      let cursor = { finishedAt: now - RUN_RESULT_SWEEP_LOOKBACK_MS, id: "" };
+      let cursor = { finishedAt: 0, id: "" };
       let recovered = 0;
       for (;;) {
-        const batch = await runs.terminalFinished(cursor, before, RUN_RESULT_SWEEP_PAGE);
+        const batch = await runs.unsettledTerminal(cursor, before, RUN_RESULT_SWEEP_PAGE);
         for (const run of batch) {
           const post = owed(run);
-          if (!post) continue;
           try {
-            if (!(await postOwed(run, post))) continue;
-            console.error(`[run-results] terminal run ${run.id} still owed its reply — posted it`);
-            recovered += 1;
+            if (!post) await settled(run, false);
+            else if (await postOwed(run, post)) {
+              console.error(`[run-results] terminal run ${run.id} still owed its reply — posted it`);
+              recovered += 1;
+            }
           } catch (error) {
             reportFailureAs("run results: sweep post", undefined, `run=${run.id}`)(error);
           }

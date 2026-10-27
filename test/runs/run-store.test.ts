@@ -37,7 +37,7 @@ test("conversation lookup includes independent tasks and status context but excl
     ]);
   }));
 
-test("terminalFinished pages finished runs by (finishedAt, id) within the bound", () =>
+test("unsettledTerminal pages unsettled finished runs by (finishedAt, id) within the bound", () =>
   withStore(async ({ runs, ledger }) => {
     const finished: string[] = [];
     for (const ref of ["a", "b", "c"]) {
@@ -48,22 +48,25 @@ test("terminalFinished pages finished runs by (finishedAt, id) within the bound"
     await runs.enqueue({ sessionId: "queued", request: turn("queued") });
     const running = (await runs.enqueue({ sessionId: "running", request: turn("running") })).run;
     assert.ok(await claimTurn(ledger, running.id));
+    const settled = (await runs.enqueue({ sessionId: "settled", request: turn("settled") })).run;
+    await finishTurn((await claimTurn(ledger, settled.id))!, { status: "ok", reply: "settled" });
+    await runs.setDeliveryState(settled.id, null, { settledAt: Date.now() });
     const far = Date.now() + 60_000;
-    const all = await runs.terminalFinished({ finishedAt: 0, id: "" }, far, 10);
-    assert.deepEqual(new Set(all.map((run) => run.id)), new Set(finished), "only terminal runs are listed");
+    const all = await runs.unsettledTerminal({ finishedAt: 0, id: "" }, far, 10);
+    assert.deepEqual(new Set(all.map((run) => run.id)), new Set(finished), "only unsettled terminal runs are listed");
     for (let i = 1; i < all.length; i++) {
       const prev = all[i - 1]!;
       const next = all[i]!;
       assert.ok(prev.finishedAt! < next.finishedAt! || (prev.finishedAt === next.finishedAt && prev.id < next.id));
     }
-    const first = await runs.terminalFinished({ finishedAt: 0, id: "" }, far, 2);
-    const rest = await runs.terminalFinished({ finishedAt: first[1]!.finishedAt!, id: first[1]!.id }, far, 2);
+    const first = await runs.unsettledTerminal({ finishedAt: 0, id: "" }, far, 2);
+    const rest = await runs.unsettledTerminal({ finishedAt: first[1]!.finishedAt!, id: first[1]!.id }, far, 2);
     assert.deepEqual(
       [...first, ...rest].map((run) => run.id),
       all.map((run) => run.id),
       "keyset paging is gapless",
     );
-    assert.deepEqual(await runs.terminalFinished({ finishedAt: 0, id: "" }, all[0]!.finishedAt! - 1, 10), []);
+    assert.deepEqual(await runs.unsettledTerminal({ finishedAt: 0, id: "" }, all[0]!.finishedAt! - 1, 10), []);
   }));
 
 test("enqueue dedups by dedup key", () =>
