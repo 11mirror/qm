@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
-import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
+import { createPgPool, tenantCols, type PgPool } from "../persistence/pg-pool.ts";
 import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import { jsonbStringify } from "../util/text.ts";
 import {
@@ -158,14 +158,16 @@ const DEPLOYMENTS: TableSpec = {
   },
 };
 
-export const DEPLOYMENTS_MIGRATION = mapToTableMigration("deploy/deployments/0001-typed", DEPLOYMENTS, {
-  statements: [
-    `DO $$ BEGIN
+const NAME_INDEX_SQL = `DO $$ BEGIN
       EXECUTE format('CREATE UNIQUE INDEX IF NOT EXISTS ${NAME_INDEX} ON deployments (%sname) WHERE name IS NOT NULL',
         CASE WHEN EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'deployments'::regclass
           AND attname = 'tenant_id' AND NOT attisdropped) THEN 'tenant_id, ' ELSE '' END);
     EXCEPTION WHEN unique_violation THEN RAISE WARNING 'deployments: duplicate names, no unique name index';
-    END $$`,
+    END $$`;
+
+export const DEPLOYMENTS_MIGRATION = mapToTableMigration("deploy/deployments/0001-typed", DEPLOYMENTS, {
+  statements: [
+    NAME_INDEX_SQL,
     `CREATE INDEX IF NOT EXISTS deployments_resource_search_gin ON deployments
       USING gin (to_tsvector('simple', coalesce(display_name, name, '') || ' ' || coalesce(name, '')))`,
   ],
@@ -181,6 +183,35 @@ function fromRow(r: Record<string, unknown>): Deployment {
     ...d,
     endpoint: d.endpoint ?? null,
     ...(r.touched_at != null ? { lastAccessAt: Number(r.touched_at) } : {}),
+  };
+}
+
+async function requireUniqueNames(q: PgPool["q"]): Promise<void> {
+  const indexed = async () => !!(await q("SELECT to_regclass($1) AS index", [NAME_INDEX]))[0]?.index;
+  if (await indexed()) return;
+  const duplicates = await q(
+    `SELECT name, count(*) AS n FROM deployments WHERE name IS NOT NULL GROUP BY 1 HAVING count(*) > 1 ORDER BY 1`,
+  );
+  if (duplicates.length)
+    throw new Error(
+      `deployment names must be unique, but ${duplicates.map((row) => `${String(row.name)} (${String(row.n)} deployments)`).join(", ")} are shared; rename or delete the duplicates`,
+    );
+  await q(NAME_INDEX_SQL);
+  if (!(await indexed())) throw new Error("deployments: unique name index missing after creation");
+}
+
+function uniqueNamePool(databaseUrl: string): Pick<PgPool, "q" | "query" | "pool"> {
+  const db = createPgPool(databaseUrl, [DEPLOYMENTS_MIGRATION]);
+  let checked: Promise<void> | null = null;
+  const ready = () =>
+    (checked ??= requireUniqueNames(db.q).catch((e) => {
+      checked = null;
+      throw e;
+    }));
+  return {
+    q: async (...args) => (await ready(), db.q(...args)),
+    query: async (...args) => (await ready(), db.query(...args)),
+    pool: async () => (await ready(), db.pool()),
   };
 }
 
@@ -262,7 +293,7 @@ function fieldSetters(set: (id: string, column: string, value: unknown) => Promi
 }
 
 export function createDeployStore(backing: DeployStoreBackings): DeployStore {
-  const { q, query } = createPgPool(backing.databaseUrl, [DEPLOYMENTS_MIGRATION]);
+  const { q, query } = uniqueNamePool(backing.databaseUrl);
   const git = createDeployGitStore(backing.git);
   const touchDebounceMs = backing.touchDebounceMs ?? TOUCH_DEBOUNCE_MS;
   const lastTouch = new Map<string, number>();

@@ -663,7 +663,7 @@ test("renaming onto a taken name is rejected by the unique index", async () => {
   assert.equal((await store.get(other.id))!.name, "free");
 });
 
-test("pre-existing duplicate names degrade gracefully: no index, deterministic getByName", async () => {
+test("pre-existing duplicate names fail store use, naming them, until one is renamed", async () => {
   await raw("DROP INDEX IF EXISTS deployments_name_unique");
   for (const id of ["dup-b", "dup-a"])
     await raw(
@@ -673,7 +673,17 @@ test("pre-existing duplicate names degrade gracefully: no index, deterministic g
     );
 
   const store = makeStore();
-  assert.equal((await store.getByName("doubled"))!.id, "dup-a", "lowest id wins");
-  const created = await store.create(createInput("fresh-name"));
-  assert.equal((await store.getByName("fresh-name"))!.id, created.id);
+  await assert.rejects(
+    store.getByName("doubled"),
+    /deployment names must be unique, but doubled \(2 deployments\) are shared; rename or delete the duplicates/,
+  );
+  await raw("UPDATE deployments SET name = 'single' WHERE id = 'dup-b'");
+  assert.equal((await store.getByName("doubled"))!.id, "dup-a");
+  assert.ok((await raw("SELECT to_regclass('deployments_name_unique') AS i"))[0]!.i, "the unique index is rebuilt");
+});
+
+test("stores booting together on a database without the name index all come up", async () => {
+  await raw("DROP INDEX IF EXISTS deployments_name_unique");
+  await Promise.all(Array.from({ length: 4 }, () => makeStore().list()));
+  assert.ok((await raw("SELECT to_regclass('deployments_name_unique') AS i"))[0]!.i);
 });
