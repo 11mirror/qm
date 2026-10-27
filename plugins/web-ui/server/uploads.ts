@@ -6,7 +6,7 @@ import { CORE_API_URL as CORE, coreSigningSecret } from "../../chassis/src/env.t
 
 import { type WebCtx } from "./core-relay.ts";
 
-export async function stageUploadStream(req: IncomingMessage, sha256: string): Promise<Response> {
+async function stageUploadStream(req: IncomingMessage, sha256: string): Promise<Response> {
   const corePath = withSourceAuthNonce("/v1/blobs", coreSigningSecret());
   const headers = {
     ...signedHeaders(coreSigningSecret(), "POST", corePath, "", sha256),

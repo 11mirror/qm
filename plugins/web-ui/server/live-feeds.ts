@@ -20,7 +20,7 @@ function sseEvent(res: ServerResponse, event: string, data: unknown): void {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
-export function sendTo(users: Iterable<string>, event: string, data: unknown = {}): void {
+function sendTo(users: Iterable<string>, event: string, data: unknown = {}): void {
   const clients = eventClients();
   for (const user of users) for (const res of clients.get(user) ?? []) sseEvent(res, event, data);
 }
@@ -143,9 +143,9 @@ export function startLiveFeeds(): void {
   });
 }
 
-export const resyncInbox = () => sendTo(eventClients().keys(), "inbox_resync");
+const resyncInbox = () => sendTo(eventClients().keys(), "inbox_resync");
 
-export async function forwardInboxItem(ev: { cronId?: string; itemId?: string; op?: string }): Promise<void> {
+async function forwardInboxItem(ev: { cronId?: string; itemId?: string; op?: string }): Promise<void> {
   const clients = eventClients();
   if (!ev.cronId || !ev.itemId || !clients.size) return;
   const r = await coreFetch(

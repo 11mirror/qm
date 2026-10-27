@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { definePgMigration, type PgMigration } from "./pg-pool.ts";
 
-export interface SchemaBaselineStep {
+interface SchemaBaselineStep {
   id: string;
   checksum: string;
   statements: readonly string[];
