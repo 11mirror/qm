@@ -257,7 +257,7 @@ interface ExecBlobStaging {
   stageOutAbs(handle: SandboxHandle, abs: string, timeoutSec?: number): Promise<string>;
 }
 
-export interface SandboxTenantConfig {
+interface SandboxTenantConfig {
   sandboxNamePrefix?: string;
   apiBaseUrl?: string;
   signingSecret?: string;

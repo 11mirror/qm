@@ -169,7 +169,7 @@ export function tenantServiceEnv(base: Env, tenant: TenantSettings): Record<stri
   );
 }
 
-export function appsDomainOf(env: Env): string | undefined {
+function appsDomainOf(env: Env): string | undefined {
   return env.PORTAL_APPS_DOMAIN || env.DEPLOY_APPS_DOMAIN || undefined;
 }
 
@@ -196,12 +196,12 @@ export async function relocateEmbeddedAuth(env: Record<string, string>): Promise
   );
 }
 
-export interface TenantWorker {
+interface TenantWorker {
   port: number;
   stop(): Promise<number>;
 }
 
-export function startTenantWorker(entry: URL, env: Record<string, string>): Promise<TenantWorker> {
+function startTenantWorker(entry: URL, env: Record<string, string>): Promise<TenantWorker> {
   const worker = new Worker(new URL("./tenant-worker.ts", import.meta.url), {
     env,
     workerData: { entry: entry.href },
