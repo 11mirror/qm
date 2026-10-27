@@ -16,7 +16,7 @@ import { withSlackUnfurlOption, type ReachResolution } from "../reach/reach.ts";
 import { notifyOwnerOfCronEdit, type CronEditDetail } from "../triggers/edit-notice.ts";
 import { errMessage } from "../util/errors.ts";
 import { InstructionsUpdateDeniedError, InstructionsVersionConflictError } from "./app-types.ts";
-import { InstructionsTooLargeError } from "../resolution/config-store.ts";
+import { InstructionsTooLargeError } from "../resolution/config-instructions.ts";
 import { AdminError } from "../admin/admin-service.ts";
 import type { AdminService } from "../admin/admin-service.ts";
 import {

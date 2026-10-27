@@ -4,6 +4,8 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import pg from "pg";
+import { CONFIG_TABLES } from "../src/resolution/config-tables.ts";
+import { tableCodec, type TableSpec } from "../src/persistence/typed-table.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the harness choice migration test";
@@ -52,6 +54,19 @@ const rows = async (pool: pg.Pool, table: string) =>
     (await pool.query(`SELECT id, json FROM ${table}`)).rows.map((row) => [row.id, row.json]),
   ) as Record<string, Record<string, unknown>>;
 
+const typedRows = async (pool: pg.Pool, spec: TableSpec) => {
+  const codec = tableCodec<Record<string, unknown>>(spec);
+  const found = await pool.query(`SELECT ${codec.columns} FROM ${spec.table}`);
+  return Object.fromEntries(codec.rows(found.rows).map((row) => [row[spec.key], row]));
+};
+
+const asMapTables = async (pool: pg.Pool, specs: readonly TableSpec[]) => {
+  for (const { table } of specs) {
+    await pool.query(`DROP TABLE ${table}`);
+    await pool.query(`DELETE FROM qm_schema_migrations WHERE id = $1`, [`typed/config/${table}/0001`]);
+  }
+};
+
 test("stored harness choices are dropped while their runtime selections stay recognised", { skip }, async () => {
   await withDatabase(async (url, admin) => {
     await migrate(url);
@@ -59,6 +74,7 @@ test("stored harness choices are dropped while their runtime selections stay rec
       "DELETE FROM qm_schema_migrations WHERE id IN ('runtime/0002-drop-harness-choice', 'runtime/0003-promote-legacy-base-models', 'durable-map/swarms/0002-drop', 'feature-flags/store/0001-typed')",
     );
     await admin.query("DROP TABLE feature_flags");
+    await asMapTables(admin, [CONFIG_TABLES.baseModels, CONFIG_TABLES.autoFlaggerConfigs]);
     for (const table of JSON_TABLES)
       await admin.query(`CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`);
     const insert = (table: string, id: string, json: unknown) =>
@@ -85,7 +101,7 @@ test("stored harness choices are dropped while their runtime selections stay rec
 
     await migrate(url);
 
-    const base = await rows(admin, "base_model_configs");
+    const base = await typedRows(admin, CONFIG_TABLES.baseModels);
     assert.deepEqual(base["org:o"], {
       scopeId: "org:o",
       modelId: "gpt-5.6-sol",
@@ -102,7 +118,7 @@ test("stored harness choices are dropped while their runtime selections stay rec
       (await admin.query("SELECT to_regclass('approved_harness_configs') AS t")).rows[0].t,
       "approved_harness_configs",
     );
-    assert.deepEqual((await rows(admin, "auto_flagger_configs"))["org:o"], {
+    assert.deepEqual((await typedRows(admin, CONFIG_TABLES.autoFlaggerConfigs))["org:o"], {
       scopeId: "org:o",
       modelId: "m",
       rubric: "r",

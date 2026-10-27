@@ -5,7 +5,7 @@ import { defaultModel, modelSupported, thinkingLevelsFor, fastModeModelIds } fro
 import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage } from "../../util/errors.ts";
 import { InstructionsUpdateDeniedError } from "../app-types.ts";
-import { InstructionsTooLargeError } from "../../resolution/config-store.ts";
+import { InstructionsTooLargeError } from "../../resolution/config-instructions.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { audit, isObj } from "./shared.ts";
 import { type ApiCtx, isConfigured, ok, reply, type RouteResult } from "./route.ts";

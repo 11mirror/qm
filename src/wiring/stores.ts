@@ -7,7 +7,7 @@ import { installPrincipalLinks } from "../directory/person.ts";
 import { createIdentityService, type DeactivationRecord } from "../identity/identity-service.ts";
 import type { ExternalMember } from "../identity/external-members.ts";
 import { type LeaderLease, createPostgresLeaderLease } from "../persistence/leader-lease.ts";
-import { createConfigStore, configStoreMaps } from "../resolution/config-store.ts";
+import { createConfigStore } from "../resolution/config-store.ts";
 import { type SkillStore, createSkillStore, type Skill } from "../skills/skill-store.ts";
 import { createSkillPackStore, type SkillPack } from "../skills/skill-pack-store.ts";
 import { createSkillBundleStore, type SkillBundle } from "../skills/skill-bundle-store.ts";
@@ -51,10 +51,7 @@ export function buildStores(w: Head) {
     principalLinks,
   });
   const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
-  const configStore = createConfigStore(config.orgId, {
-    ...configStoreMaps(artifactMap),
-    connectorSecretKey,
-  });
+  const configStore = createConfigStore(config.orgId, { databaseUrl, connectorSecretKey });
   const skills: SkillStore = createSkillStore({
     backing: artifactMap<Skill>("skills"),
     advisoryLock,

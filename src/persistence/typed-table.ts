@@ -10,7 +10,7 @@ import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 
 export type ColumnType = "text" | "bigint" | "double precision" | "boolean" | "jsonb" | "text[]";
 
-interface ColumnSpec {
+export interface ColumnSpec {
   type: ColumnType;
   required?: boolean;
 }

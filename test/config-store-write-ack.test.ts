@@ -1,24 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { setTimeout as sleep } from "node:timers/promises";
-import { type DurableMap } from "../src/persistence/durable-map.ts";
-import { scopeId, type ScopeId } from "../src/types.ts";
-import { testConfigStore, testMap } from "./support/test-database.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { scopeId } from "../src/types.ts";
+import { failTableWrites, testConfigStore, testDatabaseUrl } from "./support/test-database.ts";
 
 const channel = scopeId("channel", "C1");
 
-function withPut<T>(map: DurableMap<T>, put: DurableMap<T>["put"]): DurableMap<T> {
-  return new Proxy(map, { get: (target, key) => (key === "put" ? put : Reflect.get(target, key)) });
-}
-
 test("a config write resolves only after another instance can read it from the store", async () => {
-  const orgAmbient = testMap<{ scopeId: ScopeId; on: boolean }>();
-  const slow = withPut(orgAmbient, async (key, value) => {
-    await sleep(20);
-    return orgAmbient.put(key, value);
-  });
-  const writer = testConfigStore("default-org", { orgAmbient: slow });
-  const reader = testConfigStore("default-org", { orgAmbient });
+  const databaseUrl = testDatabaseUrl();
+  const writer = testConfigStore("default-org", { databaseUrl });
+  const reader = testConfigStore("default-org", { databaseUrl });
 
   await writer.setSetting("orgAmbient", false);
 
@@ -26,17 +17,16 @@ test("a config write resolves only after another instance can read it from the s
 });
 
 test("a failed config write rejects and leaves this instance's cache on the stored value", async () => {
-  const egressPolicies = testMap<{ scopeId: ScopeId; policy: { allowedHosts: string[] } }>();
-  const failing = withPut(egressPolicies, async () => {
-    throw new Error("database unavailable");
-  });
-  const config = testConfigStore("default-org", { egressPolicies: failing });
+  const databaseUrl = testDatabaseUrl();
+  const config = testConfigStore("default-org", { databaseUrl });
+  await config.hydrate!();
+  await failTableWrites(databaseUrl, "egress_policies");
 
   await assert.rejects(
-    config.setSetting("egress", { allowedHosts: ["api.example.com"] }, channel),
-    /database unavailable/,
+    config.setSetting("egress", { allowedHosts: ["api.example.com"], deniedHosts: [] }, channel),
+    /forced durable write failure/,
   );
 
   assert.equal(config.setting("egress", channel), null);
-  assert.equal(await egressPolicies.get(channel), null);
+  assert.deepEqual(await createPgPool(databaseUrl).q("SELECT scope_id FROM egress_policies"), []);
 });

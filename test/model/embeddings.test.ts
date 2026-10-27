@@ -9,7 +9,6 @@ import { afterEach, test } from "node:test";
 import { createGatewayCatalog } from "../../src/model/gateway-catalog.ts";
 import { gatewayModelsJson, setGatewayModels } from "../../src/model/gateway-models.ts";
 import { createMemoryEmbedder } from "../../src/model/embeddings.ts";
-import type { PersistedBaseModel } from "../../src/resolution/config-store.ts";
 import {
   resolveModel,
   resolveEmbeddingModel,
@@ -19,7 +18,7 @@ import {
   modelSupported,
 } from "../../src/model/pi-models.ts";
 import { recallText } from "../support/recall-text.ts";
-import { testConfigStore, testMap } from "../support/test-database.ts";
+import { testConfigStore, testDatabaseUrl } from "../support/test-database.ts";
 
 const OPENAI_EMBEDDING = "text-embedding-3-small";
 afterEach(() => {
@@ -99,12 +98,12 @@ test("key-scoped gateway embeddings need no chat capabilities and use gateway cr
 });
 
 test("org embedding selection is durable and survives chat runtime replacement and clearing", async () => {
-  const baseModels = testMap<PersistedBaseModel>();
-  const first = testConfigStore("test", { baseModels });
+  const databaseUrl = testDatabaseUrl();
+  const first = testConfigStore("test", { databaseUrl });
   await first.setEmbeddingModel("gateway/embed");
   await first.setRuntimeSelection("org:test", { modelId: "gpt-5.5" });
   await first.setRuntimeSelection("org:test", null);
-  const restarted = testConfigStore("test", { baseModels });
+  const restarted = testConfigStore("test", { databaseUrl });
   assert.equal(await restarted.getEmbeddingModelDurable(), "gateway/embed");
   await restarted.setEmbeddingModel(null);
   assert.equal(await first.getEmbeddingModelDurable(), null);

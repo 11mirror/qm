@@ -1,6 +1,6 @@
 import { parseScopeId, type ScopeId } from "../../types.ts";
 import { InstructionsVersionConflictError } from "../app-types.ts";
-import { InstructionsTooLargeError, MAX_INSTRUCTIONS_CHARS } from "../../resolution/config-store.ts";
+import { InstructionsTooLargeError, MAX_INSTRUCTIONS_CHARS } from "../../resolution/config-instructions.ts";
 import { parseBotLedger, type BotPolicy, type ChannelPolicyStore } from "../../surface-cache/channel-policy-store.ts";
 import { audit, isObj, refuse } from "./shared.ts";
 import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
