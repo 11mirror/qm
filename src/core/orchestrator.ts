@@ -1,4 +1,3 @@
-import { type ScopeId } from "../types.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../directory/directory-store.ts";
 import { isOverheard, isUserMessage } from "../sessions/items.ts";
 import { securityScreenChunks } from "../security/security-screen.ts";
@@ -33,8 +32,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const memoryStrategy =
     deps.memoryStrategy ?? createPerTurnStrategy({ harness: deps.harness.models, memory: deps.memory });
   const blobTransfer = deps.blobTransfer;
-
-  const pendingCaptures = new Map<ScopeId, Promise<void>>();
 
   const REACH_ROSTER_TTL_MS = 5 * 60_000;
   const reachRosterCache = new LRUCache<string, DirectoryChannel[]>({
@@ -80,7 +77,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     memoryPolicy,
     memoryStrategy,
     blobTransfer,
-    pendingCaptures,
     reachableChannelsFor,
     directoryIndexFor,
     compaction,
