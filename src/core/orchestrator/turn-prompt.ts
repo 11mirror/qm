@@ -87,7 +87,7 @@ export async function frameTurnPrompt(ctx: TurnCtx, turn: FrameTurnArgs) {
   const branding = await resolveBranding(deps.config, resolution.orgScopeId, deps.brandingDefault);
   const botName = branding.selfLabel ?? "QM";
   const orgName = branding.orgName ?? "this organization";
-  const rawHandle = cleanBrandingLabel(input.gatewayContext?.botHandle?.replace(/^@/, ""), 40);
+  const rawHandle = cleanBrandingLabel(input.gatewayContext?.botHandle?.replace(/^@/, ""));
   const botHandle = rawHandle && rawHandle.toLowerCase() !== botName.toLowerCase() ? rawHandle : undefined;
   let modeName = "mode-fallback";
   if (input.surfaceTools) modeName = "mode-autonomous";
@@ -107,7 +107,7 @@ export async function frameTurnPrompt(ctx: TurnCtx, turn: FrameTurnArgs) {
     slack: profile.promptFlavor === "slack",
   };
   if (modeName === "mode-conversation") {
-    frameVars.userName = cleanBrandingLabel(actor.displayName, 80) ?? "there";
+    frameVars.userName = cleanBrandingLabel(actor.displayName) ?? "there";
     frameVars.userEmail = actor.id.includes("@") ? actor.id : undefined;
   }
   const surfaceName =

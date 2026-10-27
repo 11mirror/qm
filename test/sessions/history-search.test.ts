@@ -135,13 +135,10 @@ test("openSessionItem keeps the overheard trust label — reopening never upgrad
   assert.doesNotMatch(opened, /^UserMessage#/);
 });
 
-test("openSessionItem elides only the middle of an oversized entry", () => {
-  const big = [entry(1, { kind: "AgentMessage", text: `HEAD ${"x".repeat(30_000)} TAIL` })];
-  const opened = openSessionItem(big, 1)!;
-  assert.ok(opened.length < 21_000);
-  assert.match(opened, /HEAD/);
-  assert.match(opened, /TAIL$/);
-  assert.match(opened, /chars total; middle elided/);
+test("openSessionItem returns an oversized entry whole", () => {
+  const body = `HEAD ${"x".repeat(30_000)} TAIL`;
+  const opened = openSessionItem([entry(1, { kind: "AgentMessage", text: body })], 1)!;
+  assert.ok(opened.endsWith(body));
 });
 
 test("history tool seq mode reopens an entry, reports a missing seq, and rejects a call with neither param", async () => {

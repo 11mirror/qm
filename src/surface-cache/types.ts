@@ -76,6 +76,7 @@ export interface ReadMessagesOpts {
 
 interface RevisedSinceOpts {
   thread?: string;
+  ts?: readonly string[];
 }
 
 export interface SearchOpts {

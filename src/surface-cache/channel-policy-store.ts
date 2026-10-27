@@ -5,13 +5,10 @@ export const BOT_MODES = ["ignore", "rollup", "action", "user"] as const;
 export const DEFAULT_ROLLUP_HOURS = 24;
 export type BotPolicy = { mode: (typeof BOT_MODES)[number]; rollupHours?: number };
 
-const MAX_LEDGER_BOTS = 200;
-
 export function parseBotLedger(input: unknown): { bots: Record<string, BotPolicy> } | { error: string } {
   if (typeof input !== "object" || input === null || Array.isArray(input))
     return { error: "bots must be an object keyed by bot author name" };
   const entries = Object.entries(input as Record<string, unknown>);
-  if (entries.length > MAX_LEDGER_BOTS) return { error: `bot ledger is capped at ${MAX_LEDGER_BOTS} entries` };
   const bots: Record<string, BotPolicy> = Object.create(null);
   const seen = new Set<string>();
   for (const [name, v] of entries) {

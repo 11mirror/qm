@@ -48,6 +48,17 @@ test("ciphertexts are v2 (HKDF) and unversioned ciphertexts are rejected", () =>
   assert.throws(() => decryptSecret("just-one-part", key), /malformed/);
 });
 
+test("a connector client secret saved by one store reads back from a fresh store with the same key, as after a restart", async () => {
+  const databaseUrl = testDatabaseUrl();
+  const opts = { databaseUrl, connectorSecretKey: "persistent-key" };
+  await testConfigStore(opts).setConnectorClient(orgScope("default-org"), "google", {
+    clientId: "cid",
+    clientSecret: "survives",
+  });
+  const restarted = testConfigStore(opts);
+  assert.equal((await restarted.getConnectorClientSecret(orgScope("default-org"), "google"))?.clientSecret, "survives");
+});
+
 test("BYO record wins over env; the secret is encrypted at rest and never echoed", async () => {
   const store = testConfigStore({ connectorSecretKey: "persistent-key" });
   await store.setConnectorClient(orgScope("default-org"), "google", {

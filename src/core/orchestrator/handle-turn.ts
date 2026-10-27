@@ -37,7 +37,6 @@ export interface OrchestratorInstance {
   memoryPolicy: MemoryPolicy;
   memoryStrategy: MemoryStrategy;
   blobTransfer: OrchestratorDeps["blobTransfer"];
-  pendingCaptures: Map<ScopeId, Promise<void>>;
   reachableChannelsFor: (directory: DirectoryStore, principalId: string) => Promise<DirectoryChannel[]>;
   directoryIndexFor: (directory: DirectoryStore) => Promise<Map<string, DirectoryMember>>;
   compaction: CompactionContext;
@@ -314,7 +313,7 @@ async function executeTurn(
     ready: ReadyTurn;
   },
 ): Promise<TurnResult> {
-  const { deps, memoryPolicy, memoryStrategy, pendingCaptures, observeSecurityData, titles } = o;
+  const { deps, memoryPolicy, memoryStrategy, observeSecurityData, titles } = o;
   const { input, scopeId } = ctx;
   const { frame, session, held, run, begun, ready, titling } = turn;
   const { spine, surfaceToolDeps, attachStaging } = ready.turnTools;
@@ -353,7 +352,6 @@ async function executeTurn(
       captureDependencies: begun.captureDependencies,
       memoryStrategy,
       memoryPolicy,
-      pendingCaptures,
     },
   );
 
