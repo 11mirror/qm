@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
+import { mapToTableMigration, tableCodec, type TableSpec } from "../persistence/typed-table.ts";
 import type { ScopeId } from "../types.ts";
 import {
   safeSkillFilePath,
@@ -83,6 +84,41 @@ export class DeploymentLayerPersistedError extends Error {
 class DeploymentLayerMutationError extends Error {}
 
 const CURRENT = "current";
+
+const DEPLOYMENT_LAYER: TableSpec = {
+  table: "deployment_layer",
+  key: "id",
+  columns: {
+    contentHash: { type: "text", required: true },
+    version: { type: "bigint", required: true },
+    updatedAt: { type: "bigint", required: true },
+    updatedBy: { type: "text", required: true },
+    bundle: { type: "jsonb", required: true },
+    resolved: { type: "jsonb", required: true },
+    pendingAudits: { type: "jsonb" },
+  },
+};
+
+export const DEPLOYMENT_LAYER_MIGRATION = mapToTableMigration("deployment/layer/0001-typed", DEPLOYMENT_LAYER);
+
+const codec = tableCodec<StoredDeploymentLayer>(DEPLOYMENT_LAYER);
+
+function createLayerRow(databaseUrl: string) {
+  const { q } = createPgPool(databaseUrl, [DEPLOYMENT_LAYER_MIGRATION]);
+  return {
+    async get(): Promise<StoredDeploymentLayer | null> {
+      return codec.rows(await q(`SELECT ${codec.columns} FROM deployment_layer WHERE id = $1`, [CURRENT]))[0] ?? null;
+    },
+    async put(record: StoredDeploymentLayer): Promise<void> {
+      await q(
+        `INSERT INTO deployment_layer (${codec.columns}) VALUES (${codec.placeholders})
+         ON CONFLICT (${tenantCols("id")}) DO UPDATE SET ${codec.updates}`,
+        codec.values(CURRENT, record),
+      );
+    },
+  };
+}
+
 export const LAYER_CREATED_BY = "system:deployment-layer";
 export const LAYER_REVIEWER = "system:deployment-layer-reviewer";
 const pathOrder = (a: DeploymentLayerFile, b: DeploymentLayerFile): number => {
@@ -247,8 +283,8 @@ function validateBundle(
   return { bundle, manifests, runtime: resolvedDeploymentLayer(dir, tools, installFiles) };
 }
 
-export function createDeploymentLayerStore(opts: {
-  backing: DurableMap<StoredDeploymentLayer>;
+interface DeploymentLayerStoreOptions {
+  databaseUrl: string;
   runtime: DeploymentLayerRuntime;
   skills: SkillStore;
   skillBundles?: SkillBundleStore;
@@ -258,17 +294,10 @@ export function createDeploymentLayerStore(opts: {
   retryDelaysMs?: readonly number[];
   advisoryLock: AdvisoryLock;
   auditPersisted?: (record: StoredDeploymentLayer) => Promise<void>;
-}): DeploymentLayerStore {
-  const now = opts.now ?? Date.now;
-  const retryDelaysMs = opts.retryDelaysMs ?? [250, 1000, 4000];
-  let appliedHash: string | null = null;
-  let failedHash: string | null = null;
-  let seeded = false;
-  const queue = createKeyedQueue<string>();
-  const advisoryLock = opts.advisoryLock;
-  const withFleetLock = <T>(fn: () => Promise<T>): Promise<T> => advisoryLock.withLock(SKILL_MATERIALIZATION_LOCK, fn);
+}
 
-  const retrying = async <T>(fn: () => Promise<T>): Promise<T> => {
+function retryingWith(retryDelaysMs: readonly number[]) {
+  return async <T>(fn: () => Promise<T>): Promise<T> => {
     for (let attempt = 0; ; attempt++) {
       try {
         return await fn();
@@ -279,15 +308,11 @@ export function createDeploymentLayerStore(opts: {
       }
     }
   };
+}
 
-  const reportApplyFailure = (record: StoredDeploymentLayer, error: unknown): void => {
-    if (failedHash === record.contentHash) return;
-    failedHash = record.contentHash;
-    console.error(
-      `[deployment-layer] stored layer ${record.contentHash} failed to apply — keeping the current runtime layer until a valid layer is PUT: ${errMessage(error)}`,
-    );
-  };
+type Retrying = ReturnType<typeof retryingWith>;
 
+function layerProjection(opts: DeploymentLayerStoreOptions, retrying: Retrying) {
   const layerSkills = (all: Skill[]): Skill[] =>
     all.filter((skill) => skill.scopeId === opts.scopeId && skill.createdBy === LAYER_CREATED_BY);
 
@@ -346,14 +371,7 @@ export function createDeploymentLayerStore(opts: {
     for (const skill of snapshot) await opts.skills.restore(skill);
   };
 
-  const apply = async (record: StoredDeploymentLayer): Promise<void> => {
-    const { manifests, runtime: nextRuntime } = validateBundle(record.bundle, `durable:${record.contentHash}`);
-    if (
-      appliedHash === record.contentHash &&
-      (await projectionMatches(record, { bundle: record.bundle, manifests, runtime: nextRuntime }))
-    )
-      return;
-    appliedHash = null;
+  const project = async (manifests: SkillManifest[], nextRuntime: DeploymentLayerRuntime): Promise<void> => {
     const all = await opts.skills.list();
     const snapshot = layerSkills(all).map((skill) => structuredClone(skill));
     const wanted = new Set<string>();
@@ -411,6 +429,111 @@ export function createDeploymentLayerStore(opts: {
       }
       throw new DeploymentLayerMutationError(errMessage(error), { cause: error });
     }
+  };
+
+  return { activeBundleClaims, projectionMatches, project };
+}
+
+async function assertPutAllowed(
+  opts: DeploymentLayerStoreOptions,
+  manifests: SkillManifest[],
+  activeBundleClaims: (all: Skill[]) => Promise<Map<string, string>>,
+): Promise<void> {
+  const existing = await opts.skills.list();
+  const claimed = new Map<string, string>();
+  for (const skill of existing) {
+    if (skill.status !== "published" || skill.scopeId !== opts.scopeId || skill.createdBy === LAYER_CREATED_BY)
+      continue;
+    for (const path of persistedSkillRecordPaths(skill.manifest.name, skill.manifest.files))
+      claimed.set(path, `skill "${skill.manifest.name}" created by ${skill.createdBy}`);
+  }
+  for (const [path, owner] of await activeBundleClaims(existing)) claimed.set(path, owner);
+  for (const manifest of manifests) {
+    const clash = foreignSkillCollision(
+      existing,
+      opts.scopeId,
+      manifest.name,
+      (skill) => skill.createdBy === LAYER_CREATED_BY,
+    );
+    if (clash) {
+      throw new DeploymentLayerValidationError(
+        `deployment layer skill "${manifest.name}" collides with an existing skill created by ${clash.createdBy} — rename it or remove the colliding skill`,
+      );
+    }
+    const pathClash = detectPathCollisions(skillRecordPaths(manifest.name, manifest.files), claimed)[0];
+    if (pathClash) {
+      throw new DeploymentLayerValidationError(
+        `deployment layer skill "${manifest.name}" materializes over ${pathClash.path}, already claimed by ${pathClash.owner}`,
+      );
+    }
+  }
+}
+
+function layerCandidate(
+  input: DeploymentLayerBundle,
+  updatedBy: string,
+  updatedAt: number,
+): { candidate: StoredDeploymentLayer; manifests: SkillManifest[] } {
+  let validated: ReturnType<typeof validateBundle>;
+  try {
+    validated = validateBundle(input, "durable:pending");
+  } catch (error) {
+    throw new DeploymentLayerValidationError(errMessage(error), { cause: error });
+  }
+  const revision = { contentHash: contentHash(validated.bundle), version: 1, updatedAt, updatedBy };
+  const candidate = {
+    ...revision,
+    bundle: validated.bundle,
+    resolved: publicResolved(validated.runtime),
+    pendingAudits: [revision],
+  };
+  return { candidate, manifests: validated.manifests };
+}
+
+function nextLayerRecord(
+  current: StoredDeploymentLayer | null,
+  candidate: StoredDeploymentLayer,
+): StoredDeploymentLayer {
+  if (!current) return candidate;
+  if (current.contentHash === candidate.contentHash) return current;
+  const { contentHash: hash, updatedAt, updatedBy } = candidate;
+  const version = current.version + 1;
+  return {
+    ...candidate,
+    version,
+    pendingAudits: [...pendingAuditRevisions(current), { contentHash: hash, version, updatedAt, updatedBy }],
+  };
+}
+
+export function createDeploymentLayerStore(opts: DeploymentLayerStoreOptions): DeploymentLayerStore {
+  const now = opts.now ?? Date.now;
+  const layer = createLayerRow(opts.databaseUrl);
+  const retrying = retryingWith(opts.retryDelaysMs ?? [250, 1000, 4000]);
+  const projection = layerProjection(opts, retrying);
+  let appliedHash: string | null = null;
+  let failedHash: string | null = null;
+  let seeded = false;
+  const queue = createKeyedQueue<string>();
+  const advisoryLock = opts.advisoryLock;
+  const withFleetLock = <T>(fn: () => Promise<T>): Promise<T> => advisoryLock.withLock(SKILL_MATERIALIZATION_LOCK, fn);
+
+  const reportApplyFailure = (record: StoredDeploymentLayer, error: unknown): void => {
+    if (failedHash === record.contentHash) return;
+    failedHash = record.contentHash;
+    console.error(
+      `[deployment-layer] stored layer ${record.contentHash} failed to apply — keeping the current runtime layer until a valid layer is PUT: ${errMessage(error)}`,
+    );
+  };
+
+  const apply = async (record: StoredDeploymentLayer): Promise<void> => {
+    const { manifests, runtime: nextRuntime } = validateBundle(record.bundle, `durable:${record.contentHash}`);
+    if (
+      appliedHash === record.contentHash &&
+      (await projection.projectionMatches(record, { bundle: record.bundle, manifests, runtime: nextRuntime }))
+    )
+      return;
+    appliedHash = null;
+    await projection.project(manifests, nextRuntime);
     appliedHash = record.contentHash;
     failedHash = null;
   };
@@ -422,11 +545,10 @@ export function createDeploymentLayerStore(opts: {
       try {
         await retrying(() => opts.auditPersisted!({ ...record, ...revision }));
         await retrying(async () => {
-          const updated = await opts.backing.update(CURRENT, (current) => ({
-            ...current,
-            pendingAudits: (current.pendingAudits ?? []).filter((entry) => entry.version !== revision.version),
-          }));
-          if (!updated) throw new Error("deployment layer disappeared while reconciling its audit");
+          const current = await layer.get();
+          if (!current) throw new Error("deployment layer disappeared while reconciling its audit");
+          const pendingAudits = (current.pendingAudits ?? []).filter((entry) => entry.version !== revision.version);
+          await layer.put({ ...current, pendingAudits });
         });
       } catch (error) {
         if (strict) throw error;
@@ -455,8 +577,8 @@ export function createDeploymentLayerStore(opts: {
     isApplied: async (hash) => {
       if (appliedHash !== hash) return false;
       try {
-        const record = await opts.backing.get(CURRENT);
-        return record?.contentHash === hash && projectionMatches(record);
+        const record = await layer.get();
+        return record?.contentHash === hash && projection.projectionMatches(record);
       } catch {
         return false;
       }
@@ -473,7 +595,7 @@ export function createDeploymentLayerStore(opts: {
     hydrate: () =>
       queue(CURRENT, () =>
         withFleetLock(async () => {
-          const record = await retrying(() => opts.backing.get(CURRENT));
+          const record = await retrying(() => layer.get());
           if (record) {
             await auditPersisted(record, false);
             return applyForHydrate(record);
@@ -483,7 +605,7 @@ export function createDeploymentLayerStore(opts: {
             seeded = true;
             let appeared: StoredDeploymentLayer | null = null;
             try {
-              appeared = await retrying(() => opts.backing.get(CURRENT));
+              appeared = await retrying(() => layer.get());
             } catch (error) {
               reportFailure(
                 "deployment-layer: recheck after seeding",
@@ -499,7 +621,7 @@ export function createDeploymentLayerStore(opts: {
     get: () =>
       queue(CURRENT, () =>
         withFleetLock(async () => {
-          const record = await opts.backing.get(CURRENT);
+          const record = await layer.get();
           if (!record) return null;
           await auditPersisted(record, false);
           if (failedHash !== record.contentHash) {
@@ -514,86 +636,12 @@ export function createDeploymentLayerStore(opts: {
       ),
     put: (input, updatedBy) =>
       queue(CURRENT, async () => {
-        let bundle: DeploymentLayerBundle;
-        let manifests: SkillManifest[];
-        let runtime: DeploymentLayerRuntime;
-        try {
-          const validated = validateBundle(input, "durable:pending");
-          bundle = validated.bundle;
-          manifests = validated.manifests;
-          runtime = validated.runtime;
-        } catch (error) {
-          throw new DeploymentLayerValidationError(errMessage(error), { cause: error });
-        }
-        const hash = contentHash(bundle);
-        const candidate: StoredDeploymentLayer = {
-          contentHash: hash,
-          version: 1,
-          updatedAt: now(),
-          updatedBy,
-          bundle,
-          resolved: publicResolved(runtime),
-          pendingAudits: [],
-        };
+        const { candidate, manifests } = layerCandidate(input, updatedBy, now());
         return withFleetLock(async () => {
-          const existing = await opts.skills.list();
-          const claimed = new Map<string, string>();
-          for (const skill of existing) {
-            if (skill.status !== "published" || skill.scopeId !== opts.scopeId || skill.createdBy === LAYER_CREATED_BY)
-              continue;
-            for (const path of persistedSkillRecordPaths(skill.manifest.name, skill.manifest.files))
-              claimed.set(path, `skill "${skill.manifest.name}" created by ${skill.createdBy}`);
-          }
-          for (const [path, owner] of await activeBundleClaims(existing)) claimed.set(path, owner);
-          for (const manifest of manifests) {
-            const clash = foreignSkillCollision(
-              existing,
-              opts.scopeId,
-              manifest.name,
-              (skill) => skill.createdBy === LAYER_CREATED_BY,
-            );
-            if (clash) {
-              throw new DeploymentLayerValidationError(
-                `deployment layer skill "${manifest.name}" collides with an existing skill created by ${clash.createdBy} — rename it or remove the colliding skill`,
-              );
-            }
-            const pathClash = detectPathCollisions(skillRecordPaths(manifest.name, manifest.files), claimed)[0];
-            if (pathClash) {
-              throw new DeploymentLayerValidationError(
-                `deployment layer skill "${manifest.name}" materializes over ${pathClash.path}, already claimed by ${pathClash.owner}`,
-              );
-            }
-          }
-          candidate.pendingAudits = [
-            {
-              contentHash: candidate.contentHash,
-              version: candidate.version,
-              updatedAt: candidate.updatedAt,
-              updatedBy: candidate.updatedBy,
-            },
-          ];
-          let record = await opts.backing.putIfAbsent(CURRENT, candidate);
-          if (record.contentHash !== hash) {
-            const updated = await opts.backing.update(CURRENT, (current) => {
-              if (current.contentHash === hash) return current;
-              const version = current.version + 1;
-              return {
-                ...candidate,
-                version,
-                pendingAudits: [
-                  ...pendingAuditRevisions(current),
-                  {
-                    contentHash: candidate.contentHash,
-                    version,
-                    updatedAt: candidate.updatedAt,
-                    updatedBy: candidate.updatedBy,
-                  },
-                ],
-              };
-            });
-            if (!updated) throw new Error("deployment layer write conflicted with a concurrent delete; retry");
-            record = updated;
-          }
+          await assertPutAllowed(opts, manifests, projection.activeBundleClaims);
+          const current = await layer.get();
+          const record = nextLayerRecord(current, candidate);
+          if (record !== current) await layer.put(record);
           try {
             await auditPersisted(record, true);
             await apply(record);

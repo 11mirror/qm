@@ -4,8 +4,12 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createPorterDeployProvider, type StoredPorterDeployBody } from "../../src/deploy/porter-deploy-provider.ts";
-import { type DurableMap } from "../../src/persistence/durable-map.ts";
+import {
+  PORTER_DEPLOY_BODIES_MIGRATION,
+  createPorterDeployProvider,
+  type StoredPorterDeployBody,
+} from "../../src/deploy/porter-deploy-provider.ts";
+import { createDeployBodyStore, type DeployBodyStore } from "../../src/deploy/deploy-body-store.ts";
 import type { Deployment, DeploymentVersion } from "../../src/deploy/deploy-store.ts";
 import type { DeployProvider } from "../../src/deploy/deploy-provider.ts";
 import { NotFoundError, SandboxError } from "porter-sandbox";
@@ -13,8 +17,11 @@ import { createPorterClient } from "../../src/deploy/porter-client.ts";
 import { scopeId } from "../../src/types.ts";
 import { installFakePorter, type FakePorter } from "../support/fake-porter.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
-import { testMap } from "../support/test-database.ts";
 import { freePort } from "../support/free-port.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
+
+const bodyStore = () =>
+  createDeployBodyStore<StoredPorterDeployBody>(testDatabaseUrl(), PORTER_DEPLOY_BODIES_MIGRATION);
 
 const SERVER = [
   "const fs = require('fs');",
@@ -27,7 +34,7 @@ const SERVER = [
 ].join(" ");
 
 let fake: FakePorter;
-let store: DurableMap<StoredPorterDeployBody>;
+let store: DeployBodyStore<StoredPorterDeployBody>;
 let provider: DeployProvider;
 let appPort: number;
 let reported: { category: string; code: string; message: string; scopeLabel: string }[] = [];
@@ -73,7 +80,7 @@ function make(
 ): void {
   fake?.cleanup();
   fake = installFakePorter(extra.terminateLag ? { terminateLag: extra.terminateLag } : {});
-  store = testMap<StoredPorterDeployBody>();
+  store = bodyStore();
   provider = createPorterDeployProvider({
     ...singleProcessDeps(),
     appsDomain: "apps.test",

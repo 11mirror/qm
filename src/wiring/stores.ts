@@ -21,7 +21,7 @@ import { createPostgresAdminGrantStore } from "../admin/postgres-admin-grant-sto
 import { parseAdminGrants, createAdminService } from "../admin/admin-service.ts";
 import { createPostgresDirectoryStore } from "../directory/postgres-directory-store.ts";
 import { createPostgresEnvironmentStore } from "../environments/environment-store.ts";
-import { createProjectStore, type Project } from "../projects/project-store.ts";
+import { createProjectStore } from "../projects/project-store.ts";
 import {
   createCanReadScope,
   createCanWriteScope,
@@ -67,7 +67,7 @@ export function buildStores(w: Head) {
   const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
   const directory = createPostgresDirectoryStore(databaseUrl);
   const environments = createPostgresEnvironmentStore(databaseUrl);
-  const projects = createProjectStore(artifactMap<Project>("projects"), {
+  const projects = createProjectStore(databaseUrl, {
     isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
     advisoryLock,
   });

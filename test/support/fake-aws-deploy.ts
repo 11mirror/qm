@@ -1,7 +1,11 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createAwsDeployProvider, type StoredDeployBody } from "../../src/deploy/aws-deploy-provider.ts";
+import {
+  AWS_DEPLOY_BODIES_MIGRATION,
+  createAwsDeployProvider,
+  type StoredDeployBody,
+} from "../../src/deploy/aws-deploy-provider.ts";
 import {
   AwsApiError,
   type AwsMicrovmApi,
@@ -11,7 +15,14 @@ import {
 import type { Deployment, DeploymentVersion } from "../../src/deploy/deploy-store.ts";
 import { scopeId } from "../../src/types.ts";
 import { singleProcessDeps } from "./single-process.ts";
-import { testMap } from "./test-database.ts";
+import { createDeployBodyStore } from "../../src/deploy/deploy-body-store.ts";
+import { createPgPool } from "../../src/persistence/pg-pool.ts";
+import { testDatabaseUrl } from "./test-database.ts";
+
+const bodiesUrl = testDatabaseUrl();
+export const store = createDeployBodyStore<StoredDeployBody>(bodiesUrl, AWS_DEPLOY_BODIES_MIGRATION);
+export const clearBodies = () =>
+  createPgPool(bodiesUrl, [AWS_DEPLOY_BODIES_MIGRATION]).q("DELETE FROM aws_deploy_bodies");
 
 export const REGION = "us-west-2";
 
@@ -123,7 +134,7 @@ export function fakeDaemon(
 export function provider(
   api: AwsMicrovmApi,
   fetchImpl: typeof fetch,
-  store = testMap<StoredDeployBody>(),
+  bodies = store,
   extra: Record<string, unknown> = {},
 ) {
   return createAwsDeployProvider({
@@ -134,7 +145,7 @@ export function provider(
     appsDomain: "apps.example.com",
     api,
     fetchImpl,
-    store,
+    store: bodies,
     ...extra,
   });
 }

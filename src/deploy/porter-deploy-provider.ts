@@ -28,7 +28,7 @@ import {
   type PorterClientLike,
   type PorterSandboxLike,
 } from "./porter-client.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { deploymentKeyedTable, type DeployBodyStore } from "./deploy-body-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
@@ -59,6 +59,14 @@ export interface StoredPorterDeployBody {
   createdAtMs: number;
 }
 
+export const PORTER_DEPLOY_BODIES_MIGRATION = deploymentKeyedTable("porter_deploy_bodies", {
+  sandboxId: { type: "text", required: true },
+  name: { type: "text", required: true },
+  host: { type: "text", required: true },
+  port: { type: "bigint" },
+  createdAtMs: { type: "bigint", required: true },
+});
+
 export interface PorterDeployProviderOptions {
   appsDomain?: string;
   token?: string;
@@ -70,7 +78,7 @@ export interface PorterDeployProviderOptions {
   readyWindowSec?: number;
   resolveCacheMs?: number;
   client?: PorterClientLike;
-  store: DurableMap<StoredPorterDeployBody>;
+  store: DeployBodyStore<StoredPorterDeployBody>;
   advisoryLock: AdvisoryLock;
   onError?: AppErrorSink;
 }

@@ -1,8 +1,6 @@
-import { test } from "node:test";
+import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { type StoredDeployBody } from "../../src/deploy/aws-deploy-provider.ts";
 import { AwsApiError } from "../../src/sandbox/aws-microvm-api.ts";
-import { testMap } from "../support/test-database.ts";
 import {
   fakeApi,
   fakeDaemon,
@@ -12,7 +10,11 @@ import {
   version,
   ID,
   written,
+  store,
+  clearBodies,
 } from "../support/fake-aws-deploy.ts";
+
+beforeEach(clearBodies);
 
 test("apply: launches a MicroVM, writes the snapshot into /app, starts the app, returns a TLS endpoint", async () => {
   const { api, counts } = fakeApi();
@@ -93,7 +95,6 @@ test("apply (relaunch): a missing ephemeral snapshot/home dir is tolerated — a
 test("resolveEndpoint (warm): a running, fresh body is reused — no relaunch — with a refreshed token", async () => {
   const { api, counts } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   const first = await p.apply(d, version(localSnapshot("a", "1")));
@@ -109,7 +110,6 @@ test("resolveEndpoint (warm): a running, fresh body is reused — no relaunch �
 test("resolveEndpoint (suspended): resumes the body and serves it warm", async () => {
   const { api, counts, vms } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -139,7 +139,7 @@ test("apply: an idle app stays suspended for its whole lifetime instead of being
 test("apply: an explicit suspended-duration setting still wins", async () => {
   const { api, launches } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const p = provider(api, fetchImpl, testMap<StoredDeployBody>(), { suspendedDurationSeconds: 600 });
+  const p = provider(api, fetchImpl, store, { suspendedDurationSeconds: 600 });
   await p.apply(deployment(ID), version(localSnapshot("a", "1")));
   assert.equal(launches[0]!.idlePolicy?.suspendedDurationSeconds, 600);
 });
@@ -159,7 +159,6 @@ test("rotation: the replacement body is launched before the old one is terminate
     return realTerminate(id);
   };
   const { fetchImpl } = fakeDaemon();
-  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   const placed = await p.apply(d, version(localSnapshot("a", "1")));
@@ -181,7 +180,6 @@ test("rotation: the replacement body is launched before the old one is terminate
 test("rotation: a replacement left behind by a crash mid-rotation is terminated on the next attempt", async () => {
   const { api, vms } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -199,7 +197,6 @@ test("rotation: a replacement left behind by a crash mid-rotation is terminated 
 test("resolveEndpoint: reaches within the cache window skip the control plane", async () => {
   const { api, counts } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -217,7 +214,6 @@ test("resolveEndpoint: an app in use is served from cache and re-checked in the 
   t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
   const { api, counts } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -239,7 +235,6 @@ test("resolveEndpoint: after the idle window the visit waits for a real check, s
   t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
   const { api, counts, vms } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -256,7 +251,6 @@ test("resolveEndpoint: after the idle window the visit waits for a real check, s
 test("resolveEndpoint: concurrent misses coalesce into one control-plane pass", async () => {
   const { api, counts } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -278,7 +272,6 @@ test("resolveEndpoint: concurrent misses coalesce into one control-plane pass", 
 test("resolveEndpoint: a control-plane 5xx serves the stored endpoint rather than failing the reach", async () => {
   const { api } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -298,7 +291,6 @@ test("resolveEndpoint: a control-plane 5xx serves the stored endpoint rather tha
 test("resolveEndpoint: a control-plane 429 serves the stored endpoint like a 5xx", async () => {
   const { api } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -315,7 +307,6 @@ test("resolveEndpoint: a control-plane 429 serves the stored endpoint like a 5xx
 test("resolveEndpoint: a resolve racing a body swap neither caches the old endpoint nor drops the new pointer", async () => {
   const { api, vms } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -346,7 +337,6 @@ test("resolveEndpoint: a resolve racing a body swap neither caches the old endpo
 test("resolveEndpoint: destroy invalidates a hot resolve cache", async () => {
   const { api } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -374,7 +364,6 @@ test("resolveEndpoint: an app whose process and supervisor are both gone returns
 test("resolveEndpoint (gone): a terminated body returns null (signal to re-apply) and clears the pointer", async () => {
   const { api, vms } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -389,7 +378,6 @@ test("resolveEndpoint (gone): a terminated body returns null (signal to re-apply
 test("resolveEndpoint (near the 8h cap): a stale-but-alive body keeps serving and reports itself due for renewal", async () => {
   const { api, vms } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   vms.set("mvm-old", { state: "RUNNING", endpoint: "mvm-old.lambda-microvm.us-west-2.on.aws" });
@@ -495,7 +483,7 @@ test("apply: a healthy app still publishes — the readiness gate does not fire 
 test("apply: a version whose snapshot is missing on this instance fails instead of publishing an empty app", async () => {
   const { api } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const p = provider(api, fetchImpl, testMap<StoredDeployBody>());
+  const p = provider(api, fetchImpl, store);
   await assert.rejects(p.apply(deployment(ID), version("/nonexistent/qm-snapshot")), /ENOENT/);
 });
 
@@ -506,7 +494,7 @@ test("apply: a 4xx launch error (bad image or config) fails at once instead of b
     counts.run++;
     throw new AwsApiError("validation failed", 400);
   };
-  const p = provider(api, fetchImpl, testMap<StoredDeployBody>());
+  const p = provider(api, fetchImpl, store);
   await assert.rejects(p.apply(deployment(ID), version(localSnapshot("a", "1"))), /validation failed/);
   assert.equal(counts.run, 1);
 });
@@ -514,7 +502,6 @@ test("apply: a 4xx launch error (bad image or config) fails at once instead of b
 test("destroy: terminates the body and clears its pointer", async () => {
   const { api, counts } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -526,7 +513,6 @@ test("destroy: terminates the body and clears its pointer", async () => {
 test("destroy: a failed terminate fails the destroy and keeps the pointer for a retry", async () => {
   const { api } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));

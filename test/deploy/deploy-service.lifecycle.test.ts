@@ -351,26 +351,12 @@ test("withDeployLock: same-instance lifecycle ops still serialize (no overlap)",
   assert.equal(maxActive, 1, "two redeploys on one deployment never ran apply() concurrently");
 });
 
-function copyingDeployStore(): DeployStore {
-  const backings = testDeployBackings();
-  const map = backings.deployments;
-  return createDeployStore({
-    ...backings,
-    deployments: {
-      ...map,
-      get: async (id: string) => structuredClone(await map.get(id)),
-      all: async () => structuredClone(await map.all()),
-      put: (id: string, value: Deployment) => map.put(id, structuredClone(value)),
-    },
-  });
-}
-
 for (const [visit, stop, status] of [
   ["reach", "archive", "archived"],
   ["keep-warm", "archive", "archived"],
 ] as const) {
   test(`withDeployLock: a ${visit} waiting on the ${stop} leaves the app ${status} and never re-applies it`, async () => {
-    const deployStore = copyingDeployStore();
+    const deployStore = createDeployStore(testDeployBackings());
     let applies = 0;
     const destroying = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();

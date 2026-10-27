@@ -5,9 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { DeleteObjectsCommand, ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
-import { createAwsDeployProvider, type StoredDeployBody } from "../src/deploy/aws-deploy-provider.ts";
+import {
+  AWS_DEPLOY_BODIES_MIGRATION,
+  createAwsDeployProvider,
+  type StoredDeployBody,
+} from "../src/deploy/aws-deploy-provider.ts";
+import { createDeployBodyStore } from "../src/deploy/deploy-body-store.ts";
 import { createMicrovmApi, createMicrovmClient } from "../src/sandbox/aws-microvm-api.ts";
-import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
 import { loadConfig } from "../src/config.ts";
 import { sleep } from "../src/util/async.ts";
@@ -16,8 +20,6 @@ import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
-const maps = createPostgresMapFactory(databaseUrl);
-const smokeMap = <T>(name: string) => maps.map<T>(`smoke_${name}_${Date.now()}`);
 
 const { awsDeploy } = loadConfig();
 if (!awsDeploy.dataBucket || !awsDeploy.dataRoleArn)
@@ -29,7 +31,7 @@ const api = createMicrovmApi({
   ...(awsDeploy.profile ? { profile: awsDeploy.profile } : {}),
 });
 const client = createMicrovmClient(api, { agentPort: awsDeploy.agentPort ?? 8080, tokenTtlMinutes: 30 });
-const store = smokeMap<StoredDeployBody>("aws_litestream");
+const store = createDeployBodyStore<StoredDeployBody>(databaseUrl, AWS_DEPLOY_BODIES_MIGRATION);
 const provider = createAwsDeployProvider({ advisoryLock: createNoopAdvisoryLock(), ...awsDeploy, store, api });
 const s3 = new S3Client({ region: awsDeploy.region, ...(awsDeploy.profile ? { profile: awsDeploy.profile } : {}) });
 
