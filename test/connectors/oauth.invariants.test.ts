@@ -1,17 +1,17 @@
-import "./support/auto-fake-sprites.ts";
+import "../support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { PROVIDERS, sealOAuthState } from "../src/connectors/oauth.ts";
-import { credentialHandle } from "../src/credentials/keychain.ts";
-import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
-import type { TurnRequest } from "../src/types.ts";
-import { fakeSprites } from "./support/auto-fake-sprites.ts";
-import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
+import { type BuiltApp } from "../../src/wiring.ts";
+import { buildApp } from "../support/build-app.ts";
+import { createInsecureTestServer, createServer } from "../../src/api/server.ts";
+import { PROVIDERS, sealOAuthState } from "../../src/connectors/oauth.ts";
+import { credentialHandle } from "../../src/credentials/keychain.ts";
+import { verifyCapabilityToken } from "../../src/auth/capability-token.ts";
+import type { TurnRequest } from "../../src/types.ts";
+import { fakeSprites } from "../support/auto-fake-sprites.ts";
+import { TEST_CAPABILITY_SECRET, testConfig } from "../support/test-config.ts";
 
 const BROKER = { signingSecret: "test-signing-secret", apiBaseUrl: "http://core.test" };
 
@@ -25,7 +25,7 @@ async function brokeredConnectors(reply: string | undefined) {
   assert.equal(word, "authenticated");
   return (await verifyCapabilityToken(`${head}${rest}`, TEST_CAPABILITY_SECRET))?.connectors;
 }
-import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import { selectDefaultSandbox } from "../support/default-sandbox.ts";
 
 const CATALOG_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 

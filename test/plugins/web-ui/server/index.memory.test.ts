@@ -1,50 +1,8 @@
-import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../plugins/chassis/src/portal-identity.ts";
-import "./support/auto-fake-sprites.ts";
-
-import { test, after } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createServer as createHttpServer } from "node:http";
-import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
-import { testConfig } from "./support/test-config.ts";
-import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { asUser, startWebUiRelay } from "../../../support/web-ui-relay.ts";
 
-const SECRET = "core-signing-secret".repeat(3);
-
-const built = buildApp(testConfig());
-const core = createServer(built.app, {
-  replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-  signingSecret: SECRET,
-  memory: built.memory,
-});
-core.listen(0);
-const corePort = (core.address() as AddressInfo).port;
-
-process.env.CORE_API_URL = `http://localhost:${corePort}`;
-process.env.CORE_SIGNING_SECRET = SECRET;
-process.env.WEB_UI_PRINCIPALS = "";
-const { handler } = await import("../plugins/web-ui/server/index.ts");
-const web = createHttpServer(handler);
-web.listen(0);
-const webBase = `http://localhost:${(web.address() as AddressInfo).port}`;
-
-after(async () => {
-  await new Promise<void>((r) => web.close(() => r()));
-  await new Promise<void>((r) => core.close(() => r()));
-});
-
-function asUser(user: string, init: RequestInit = {}): RequestInit {
-  return {
-    ...init,
-    headers: {
-      "content-type": "application/json",
-      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, SECRET),
-      ...init.headers,
-    },
-  };
-}
+const { built, webBase } = await startWebUiRelay((built) => ({ memory: built.memory }));
 
 type Facts = { facts: Array<{ id: string; text: string }> };
 

@@ -1,11 +1,11 @@
-import "./support/auto-fake-sprites.ts";
+import "../support/auto-fake-sprites.ts";
 
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
-import { testConfig } from "./support/test-config.ts";
+import { createInsecureTestServer } from "../../src/api/server.ts";
+import { buildApp } from "../../src/wiring.ts";
+import { testConfig } from "../support/test-config.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 

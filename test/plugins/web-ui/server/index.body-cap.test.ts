@@ -1,10 +1,10 @@
-import "./support/auto-fake-sprites.ts";
+import "../../../support/auto-fake-sprites.ts";
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../plugins/chassis/src/portal-identity.ts";
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../../../plugins/chassis/src/portal-identity.ts";
 
 const SECRET = "web-ui-body-cap-test-secret";
 const core = createHttpServer((_req, res) => {
@@ -15,7 +15,7 @@ core.listen(0);
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = SECRET;
 process.env.WEB_UI_PRINCIPALS = "";
-const { handler } = await import("../plugins/web-ui/server/index.ts");
+const { handler } = await import("../../../../plugins/web-ui/server/index.ts");
 const web = createHttpServer(handler);
 web.listen(0);
 const webBase = `http://localhost:${(web.address() as AddressInfo).port}`;
