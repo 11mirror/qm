@@ -1,7 +1,7 @@
 import { httpDeploymentLayerTransport, type DeploymentLayerTransport } from "../deployment-layer.ts";
 
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { CliError, bold, die, dim, errMessage, header, note, ok, step, warn } from "../log.ts";
@@ -44,6 +44,7 @@ export const dockerDeploymentLayerTransport: DeploymentLayerTransport = httpDepl
 });
 
 const safe = (s: string): string => s.replace(/[^A-Za-z0-9_.-]/g, "-");
+const VM_SOCKET_GID = "0";
 const ORG_LABEL_KEY = "qm.org";
 const orgLabelArgs = (ctx: DockerCtx): string[] => ["--label", `${ORG_LABEL_KEY}=${ctx.config.orgId}`];
 const baseHostPort = (ctx: DockerCtx): number => dockerBasePort(ctx.config);
@@ -116,35 +117,19 @@ function ensureLocalSandboxImage(config: QmConfig): string {
   return image;
 }
 
-export function hostDockerSocket(): { path: string } {
+export function hostDockerSocket(): { path: string; gids: string[] } {
   const configured = process.env.DOCKER_HOST?.trim();
   if (configured && !configured.startsWith("unix://")) {
     throw new CliError('sandbox.backend "local" requires a Unix Docker socket');
   }
   const path = configured?.slice("unix://".length) || "/var/run/docker.sock";
-  if (!existsSync(path)) {
+  let hostGid: string;
+  try {
+    hostGid = String(statSync(path).gid);
+  } catch {
     throw new CliError(`sandbox.backend "local" cannot read the Docker socket at ${path}`);
   }
-  return { path };
-}
-
-export function containerSocketGid(path: string, image: string): string {
-  const gid = docker([
-    "run",
-    "--rm",
-    "-v",
-    `${path}:/var/run/docker.sock`,
-    "--entrypoint",
-    "stat",
-    image,
-    "-c",
-    "%g",
-    "/var/run/docker.sock",
-  ]).trim();
-  if (!gid || !Number.isInteger(Number(gid))) {
-    throw new CliError(`sandbox.backend "local" could not read the Docker socket group inside ${image}`);
-  }
-  return gid;
+  return { path, gids: hostGid === VM_SOCKET_GID ? [hostGid] : [hostGid, VM_SOCKET_GID] };
 }
 
 function requireDocker(): void {
@@ -509,7 +494,7 @@ function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: s
     if (localSandboxActive(ctx.config)) {
       const socket = hostDockerSocket();
       args.push("-v", `${socket.path}:/var/run/docker.sock`);
-      args.push("--group-add", containerSocketGid(socket.path, image));
+      for (const gid of socket.gids) args.push("--group-add", gid);
     }
   }
   if (def.docker.hostPortOffset !== undefined) {
