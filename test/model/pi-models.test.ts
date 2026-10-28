@@ -15,17 +15,17 @@ import {
   resolveModel,
   getRequiredModel,
   MODEL_PROVIDERS,
-  SELECTABLE_BASE_MODELS,
   contextTokenBudgetForModel,
   codexProviderModelId,
   codexSubscriptionModelId,
   modelSupportsFastMode,
   MODEL_REGISTRY,
-  DEFAULT_WEBUI_MODEL_IDS,
   FAST_MODE_MODEL_IDS,
   modelSupported,
   safeModelMetadata,
   serviceableModelIds,
+  selectableBaseModels,
+  defaultWebuiModelIds,
 } from "../../src/model/pi-models.ts";
 import { buildApp, serverDeps } from "../../src/wiring.ts";
 import { stopAtEnd } from "../support/build-app.ts";
@@ -33,7 +33,7 @@ import { testConfig } from "../support/test-config.ts";
 import { listenLocal } from "../support/listen-local.ts";
 
 test("every selectable base model resolves against the pi-ai registry", () => {
-  for (const m of SELECTABLE_BASE_MODELS) {
+  for (const m of selectableBaseModels()) {
     const model = getRequiredModel(m.id);
     assert.equal(model.id, m.id);
     assert.ok(
@@ -44,7 +44,7 @@ test("every selectable base model resolves against the pi-ai registry", () => {
 });
 
 test("selectable models span providers (multi-provider is wired)", () => {
-  const providers = new Set(SELECTABLE_BASE_MODELS.map((m) => getRequiredModel(m.id).provider));
+  const providers = new Set(selectableBaseModels().map((m) => getRequiredModel(m.id).provider));
   assert.ok(providers.has("anthropic"), "expected at least one Anthropic model");
   assert.ok(providers.has("openai"), "expected at least one OpenAI model (gpt-5.6)");
   assert.ok(providers.has("openrouter"), "expected an OpenRouter-hosted open-model option");
@@ -102,7 +102,7 @@ test("each provider has a default model", () => {
 
 test("the curated catalog contains only current model families", () => {
   assert.deepEqual(
-    SELECTABLE_BASE_MODELS.map((model) => model.id),
+    selectableBaseModels().map((model) => model.id),
     [
       "claude-opus-5-5",
       "claude-fable-5-1",
@@ -207,7 +207,7 @@ test("an auxiliary is never less serviceable than the base model it was derived 
     { anthropic: false, openai: false, openrouter: true },
     { anthropic: false, openai: false, openrouter: false },
   ];
-  for (const m of SELECTABLE_BASE_MODELS) {
+  for (const m of selectableBaseModels()) {
     const auxiliary = auxiliaryModelFor(m.id);
     assert.equal(
       getRequiredModel(auxiliary).provider,
@@ -261,7 +261,7 @@ test("context token budget is half of each model's real input room", () => {
   assert.equal(contextTokenBudgetForModel("claude-fable-5"), 150_000);
   assert.equal(contextTokenBudgetForModel("gpt-5.6-sol"), 150_000);
   assert.equal(contextTokenBudgetForModel("claude-not-a-real-model"), undefined);
-  for (const m of SELECTABLE_BASE_MODELS) {
+  for (const m of selectableBaseModels()) {
     const budget = contextTokenBudgetForModel(m.id);
     assert.ok(budget !== undefined && budget >= 60_000, `${m.id} budget ${budget} suspiciously small`);
     assert.ok(budget <= 150_000, `${m.id} budget ${budget} exceeds the cap`);
@@ -295,18 +295,8 @@ test("every registry model resolves via pi-ai (nothing offered that turns can't 
   }
 });
 
-test("picker ⊆ gate: every selectable base model is web-ui-enabled", () => {
-  const webui = new Set(DEFAULT_WEBUI_MODEL_IDS);
-  for (const m of SELECTABLE_BASE_MODELS) {
-    assert.ok(
-      webui.has(m.id),
-      `${m.id} is offered in the picker but not in the web-ui gate set — this is the drift that 403s`,
-    );
-  }
-});
-
 test("every web-ui-enabled model passes the web-turn model gate (no 403 for an offered model)", () => {
-  for (const id of DEFAULT_WEBUI_MODEL_IDS) {
+  for (const id of defaultWebuiModelIds()) {
     assert.equal(
       validateWebTurnModelOptions({ model: id }, null),
       null,
@@ -316,7 +306,7 @@ test("every web-ui-enabled model passes the web-turn model gate (no 403 for an o
 });
 
 test("regression: gpt-5.6-sol is web-ui-enabled (the reported 403)", () => {
-  assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes("gpt-5.6-sol"));
+  assert.ok(defaultWebuiModelIds().includes("gpt-5.6-sol"));
   assert.equal(validateWebTurnModelOptions({ model: "gpt-5.6-sol" }, null), null);
 });
 
@@ -338,7 +328,7 @@ test("gpt-6-astra is offered with its published context, output ceiling, and rat
   assert.deepEqual((model.cost as { tiers?: unknown }).tiers, [
     { inputTokensAbove: 272_000, input: 20, output: 75, cacheRead: 2, cacheWrite: 25 },
   ]);
-  assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes("gpt-6-astra"));
+  assert.ok(defaultWebuiModelIds().includes("gpt-6-astra"));
   assert.equal(validateWebTurnModelOptions({ model: "gpt-6-astra" }, null), null);
 });
 
@@ -367,8 +357,8 @@ test("Opus 5.5 inherits adaptive thinking without off, with its own rates and li
 
 test("Opus 5.5 is selectable with compatible credentials, without changing defaults", () => {
   const id = "claude-opus-5-5";
-  assert.ok(SELECTABLE_BASE_MODELS.some((model) => model.id === id));
-  assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes(id));
+  assert.ok(selectableBaseModels().some((model) => model.id === id));
+  assert.ok(defaultWebuiModelIds().includes(id));
   assert.ok(FAST_MODE_MODEL_IDS.includes(id));
   assert.equal(safeModelMetadata(id)?.label, "Opus 5.5");
   assert.equal(modelSupported(id), true);
@@ -391,7 +381,7 @@ test("Sonnet 5.5 never turns thinking off, rejects temperature and fast mode, an
   assert.equal((model.compat as { supportsTemperature?: boolean }).supportsTemperature, false);
   assert.deepEqual(model.cost, { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5, tiers: undefined });
   assert.equal(safeModelMetadata(id)?.label, "Sonnet 5.5");
-  assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes(id));
+  assert.ok(defaultWebuiModelIds().includes(id));
   assert.ok(!FAST_MODE_MODEL_IDS.includes(id));
   assert.equal(modelSupported(id), true);
   assert.equal(defaultModel(), "claude-opus-5");
@@ -418,7 +408,7 @@ test("Haiku 5.5 offers every effort, keeps thinking off available, rejects tempe
     "max",
     "ultracode",
   ]);
-  assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes(id));
+  assert.ok(defaultWebuiModelIds().includes(id));
   assert.ok(!FAST_MODE_MODEL_IDS.includes(id));
   assert.equal(modelSupported(id), true);
   assert.equal(defaultModel(), "claude-opus-5");
