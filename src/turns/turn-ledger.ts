@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import pg from "pg";
 import { createPgPool, withPgTransaction, type PgPool, type PoolClient, tenantCols } from "../persistence/pg-pool.ts";
 import { jsonbStringify } from "../util/text.ts";
 import type { TurnResult } from "../types.ts";
@@ -7,6 +6,7 @@ import type { EnqueueInput, EnqueueResult, Run, RunPriority, RunStop } from "../
 import { isUnstarted, PARKED, releasesDedupKey, withTraceCarrier } from "../runs/run-store.ts";
 import { rowToRun } from "../runs/postgres-run-store.ts";
 import {
+  absurdTable,
   awaitEvent,
   abandonTask,
   cancelTask,
@@ -124,10 +124,6 @@ const QUEUE_BY_PRIORITY: Record<RunPriority, TurnQueue> = {
   2: "turns_background",
 };
 
-function turnQueueFor(priority: RunPriority): TurnQueue {
-  return QUEUE_BY_PRIORITY[priority];
-}
-
 function resumeEvent(turnId: string, parkings: number): string {
   return `resume:${turnId}:${parkings}`;
 }
@@ -136,10 +132,6 @@ function queueOf(run: Pick<Run, "absurdQueue">): TurnQueue {
   const queue = run.absurdQueue;
   if (!queue || !(TURN_QUEUES as readonly string[]).includes(queue)) throw new Error("turn has no Absurd queue");
   return queue as TurnQueue;
-}
-
-function absurdTable(queue: TurnQueue, prefix: "r_" | "t_"): string {
-  return `absurd.${pg.escapeIdentifier(prefix + queue)}`;
 }
 
 function repairReason(row: Record<string, unknown>): string {
@@ -371,7 +363,7 @@ function admission(ctx: LedgerContext): Pick<TurnLedger, "admit" | "claim" | "mu
               maxAttempts,
               Date.now(),
               priority,
-              turnQueueFor(priority),
+              QUEUE_BY_PRIORITY[priority],
             ],
           );
           inserted = rows[0];

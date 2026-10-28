@@ -5,7 +5,6 @@ import type { PoolClient } from "../../src/persistence/pg-pool.ts";
 import { applyPgMigrations, pgMigrationFrom } from "../../src/persistence/pg-migrations.ts";
 import { ABSURD_MIGRATION, TURN_QUEUES, registerAbsurdSchema, type TurnQueue } from "../../src/turns/absurd-schema.ts";
 import {
-  RunFailed,
   TaskCancelled,
   awaitEvent,
   cancelTask,
@@ -15,7 +14,6 @@ import {
   emitEvent,
   extendClaim,
   failRun,
-  getCheckpoint,
   holdsClaim,
   scheduleRun,
   spawnTask,
@@ -203,7 +201,7 @@ test("an expired lease is swept by the next claim into attempt 2", { skip }, asy
   assert.equal(old.failure_reason.name, "$ClaimTimeout");
   assert.equal(await holdsClaim(late, "turns_delegated", first!.runId, "worker-a"), false);
   assert.equal(await holdsClaim(late, "turns_delegated", second!.runId, "worker-b"), true);
-  await assert.rejects(extendClaim(early, "turns_delegated", first!.runId, 30), RunFailed);
+  await assert.rejects(extendClaim(early, "turns_delegated", first!.runId, 30), { code: "AB002" });
 });
 
 test("failRun retries at retryAt until max attempts, then fails the task", { skip }, async () => {
@@ -220,7 +218,7 @@ test("failRun retries at retryAt until max attempts, then fails the task", { ski
     spawned.taskId,
   ]);
   assert.deepEqual(rows, [{ state: "failed", attempts: 2 }]);
-  await assert.rejects(failRun(later, "turns_background", second!.runId, {}), RunFailed);
+  await assert.rejects(failRun(later, "turns_background", second!.runId, {}), { code: "AB002" });
 });
 
 test("an event emitted on another connection wakes the waiter; another queue does not", { skip }, async () => {
@@ -246,10 +244,6 @@ test("an event emitted on another connection wakes the waiter; another queue doe
     timedOut: false,
     payload: { children: 2 },
   });
-  const checkpoint = await getCheckpoint(worker, "turns_delegated", spawned.taskId, "children");
-  assert.deepEqual(checkpoint?.state, { children: 2 });
-  assert.equal(checkpoint?.ownerRunId, woken!.runId);
-  assert.equal(await getCheckpoint(worker, "turns_delegated", spawned.taskId, "missing"), undefined);
 });
 
 test("awaitEvent tells a timeout apart from an event emitted without a payload", { skip }, async () => {

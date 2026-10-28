@@ -10,19 +10,9 @@ export class TaskCancelled extends Error {
   override readonly name = "TaskCancelled";
 }
 
-export class RunFailed extends Error {
-  override readonly name = "RunFailed";
-}
-
-type RetryStrategy =
-  | { kind: "none" }
-  | { kind: "fixed"; baseSeconds?: number }
-  | { kind: "exponential"; baseSeconds?: number; factor?: number; maxSeconds?: number };
-
 export interface SpawnOptions {
   idempotencyKey?: string;
   maxAttempts: number | null;
-  retryStrategy?: RetryStrategy;
 }
 
 export interface SpawnedTask {
@@ -50,13 +40,6 @@ export interface AwaitedEvent {
   payload: unknown;
 }
 
-export interface Checkpoint {
-  state: unknown;
-  status: string;
-  ownerRunId: string;
-  updatedAt: Date;
-}
-
 export interface CleanupResult {
   tasks: number;
   events: number;
@@ -65,7 +48,6 @@ export interface CleanupResult {
 function mapAbsurdError(error: unknown): unknown {
   const code = (error as { code?: unknown } | null)?.code;
   if (code === "AB001") return new TaskCancelled(errMessage(error), { cause: error });
-  if (code === "AB002") return new RunFailed(errMessage(error), { cause: error });
   return error;
 }
 
@@ -81,25 +63,9 @@ function json(value: unknown): string {
   return JSON.stringify(value ?? null);
 }
 
-function runsTable(queue: AbsurdQueue): string {
+export function absurdTable(queue: AbsurdQueue, prefix: "r_" | "t_"): string {
   if (!ABSURD_QUEUES.includes(queue)) throw new Error(`absurd: unknown queue ${JSON.stringify(queue)}`);
-  return `absurd.${pg.escapeIdentifier(`r_${queue}`)}`;
-}
-
-function tasksTable(queue: AbsurdQueue): string {
-  if (!ABSURD_QUEUES.includes(queue)) throw new Error(`absurd: unknown queue ${JSON.stringify(queue)}`);
-  return `absurd.${pg.escapeIdentifier(`t_${queue}`)}`;
-}
-
-function retryStrategyJson(strategy: RetryStrategy): Record<string, unknown> {
-  if (strategy.kind === "none") return { kind: "none" };
-  if (strategy.kind === "fixed") return { kind: "fixed", base_seconds: strategy.baseSeconds };
-  return {
-    kind: "exponential",
-    base_seconds: strategy.baseSeconds,
-    factor: strategy.factor,
-    max_seconds: strategy.maxSeconds,
-  };
+  return `absurd.${pg.escapeIdentifier(prefix + queue)}`;
 }
 
 export async function spawnTask(
@@ -112,7 +78,6 @@ export async function spawnTask(
   const spawnOptions = {
     idempotency_key: options.idempotencyKey,
     max_attempts: options.maxAttempts,
-    retry_strategy: options.retryStrategy && retryStrategyJson(options.retryStrategy),
     headers: tenant().id ? { tenantId: tenant().id } : undefined,
   };
   const [row] = await call(
@@ -173,7 +138,7 @@ export async function completeRun(db: AbsurdDb, queue: AbsurdQueue, runId: strin
 
 export async function retryTask(db: AbsurdDb, queue: AbsurdQueue, taskId: string): Promise<boolean> {
   const failedTask = async () =>
-    (await call(db, `SELECT state, attempts FROM ${tasksTable(queue)} WHERE task_id = $1`, [taskId])).find(
+    (await call(db, `SELECT state, attempts FROM ${absurdTable(queue, "t_")} WHERE task_id = $1`, [taskId])).find(
       (task) => task.state === "failed",
     );
   const task = await failedTask();
@@ -237,26 +202,6 @@ export async function cancelTask(db: AbsurdDb, queue: AbsurdQueue, taskId: strin
   await call(db, "SELECT absurd.cancel_task($1, $2)", [queue, taskId]);
 }
 
-export async function getCheckpoint(
-  db: AbsurdDb,
-  queue: AbsurdQueue,
-  taskId: string,
-  step: string,
-): Promise<Checkpoint | undefined> {
-  const [row] = await call(
-    db,
-    "SELECT state, status, owner_run_id, updated_at FROM absurd.get_task_checkpoint_state($1, $2, $3)",
-    [queue, taskId, step],
-  );
-  if (!row) return undefined;
-  return {
-    state: row.state,
-    status: String(row.status),
-    ownerRunId: String(row.owner_run_id),
-    updatedAt: row.updated_at as Date,
-  };
-}
-
 export async function cleanup(db: AbsurdDb, queue: AbsurdQueue, ttlSec: number, limit: number): Promise<CleanupResult> {
   const [row] = await call(
     db,
@@ -269,7 +214,7 @@ export async function cleanup(db: AbsurdDb, queue: AbsurdQueue, ttlSec: number, 
 export async function holdsClaim(db: PoolClient, queue: AbsurdQueue, runId: string, token: string): Promise<boolean> {
   const rows = await call(
     db,
-    `SELECT 1 FROM ${runsTable(queue)} WHERE run_id = $1 AND state = 'running' AND claimed_by = $2 FOR SHARE`,
+    `SELECT 1 FROM ${absurdTable(queue, "r_")} WHERE run_id = $1 AND state = 'running' AND claimed_by = $2 FOR SHARE`,
     [runId, token],
   );
   return rows.length > 0;
