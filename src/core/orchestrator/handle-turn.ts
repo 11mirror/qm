@@ -12,7 +12,7 @@ import { openTurnSession, resolveTurnScope, resolveTurnWorkspace, type TurnCtx }
 import { observeInboundTurn } from "./inbound-screen.ts";
 import { buildCredentialCatalog } from "./credential-catalog.ts";
 import { frameTurnPrompt } from "./turn-prompt.ts";
-import { concludeTurn, mapTurnFailure, settleTurnResult } from "./settle.ts";
+import { mapTurnFailure, settleTurn } from "./settle.ts";
 import { detectAmbientDecline, findRecordedTurn, replayRecordedAnswer } from "./turn-replay.ts";
 import { openTurnSandboxes } from "./turn-sandboxes.ts";
 import { finishSystemPrompt } from "./turn-prompt.ts";
@@ -344,26 +344,25 @@ async function executeTurn(
   run.runtimeHandoffs = selected.restoredRuntime ? 1 : 0;
   const result = await runSegments(ctx, segmentTurn, o.compaction.compactRecent);
 
-  const { stagedAttachments, reply, cancelStopped, outcome, turnCompleted, pausing, turnUserSeq } = await concludeTurn(
-    ctx,
-    {
-      session,
-      result,
-      attachStaging,
-      spine,
-      partial,
-      turnInput: baseText,
-      emittedEntries: run.emittedEntries,
-      memoryScopeId: frame.context.memoryScopeId,
-      captureDependencies: begun.captureDependencies,
-      memoryStrategy,
-      memoryPolicy,
-    },
-  );
+  const { settled, completed } = await settleTurn(ctx, {
+    session,
+    result,
+    attachStaging,
+    spine,
+    partial,
+    turnInput: baseText,
+    emittedEntries: run.emittedEntries,
+    memoryScopeId: frame.context.memoryScopeId,
+    captureDependencies: begun.captureDependencies,
+    memoryStrategy,
+    memoryPolicy,
+    hasSurfaceToolDeps: Boolean(surfaceToolDeps),
+    isPollFire,
+  });
 
   const tail = (): Promise<void> =>
     withCleanup(async () => {
-      if (!pausing && turnCompleted && !session.title && !titling.title.write) {
+      if (completed && !session.title && !titling.title.write) {
         await titles.generateAndStore(
           session.id,
           scopeId,
@@ -372,20 +371,7 @@ async function executeTurn(
       }
     }, sandboxes.reclaimBox);
 
-  let finalResult = await settleTurnResult(ctx, {
-    session,
-    hasSurfaceToolDeps: Boolean(surfaceToolDeps),
-    isPollFire,
-    emittedEntries: run.emittedEntries,
-    result,
-    stagedAttachments,
-    reply,
-    cancelStopped,
-    outcome,
-    turnCompleted,
-    turnUserSeq,
-  });
-  if (run.turnRuntime) finalResult = { ...finalResult, runtime: run.turnRuntime };
+  const finalResult = run.turnRuntime ? { ...settled, runtime: run.turnRuntime } : settled;
   await titling.title.write;
 
   if (input.background) {
