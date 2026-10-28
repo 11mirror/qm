@@ -323,7 +323,7 @@ async function executeTurn(
   const { input, scopeId } = ctx;
   const { frame, session, held, run, begun, ready, titling } = turn;
   const { spine, surfaceToolDeps, attachStaging } = ready.turnTools;
-  const { inboundIssues, partial, turnInput, isPollFire } = ready.prepared;
+  const { inboundIssues, partial, baseText, isPollFire } = ready.prepared;
   const { sandboxes } = turn.sandboxes;
   run.turnStart = Date.now();
   run.failureUserItem = ready.syntheticPrompt ? undefined : turnFailureUserItem(ctx, inboundIssues);
@@ -352,7 +352,7 @@ async function executeTurn(
       attachStaging,
       spine,
       partial,
-      turnInput,
+      turnInput: baseText,
       emittedEntries: run.emittedEntries,
       memoryScopeId: frame.context.memoryScopeId,
       captureDependencies: begun.captureDependencies,

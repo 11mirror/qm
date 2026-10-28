@@ -506,7 +506,8 @@ export async function runSegments(
   const { deps, input, actor, withManagedRosterVersion, resolution, scopeId, filterHistory, strictReadOnly } = ctx;
   const { defaultDestination } = turn.frame.framed;
   const { surfaceToolDeps, spine, spineFirst, postKeys, postProvenance } = turn.ready.turnTools;
-  const { inbound, importedOverheard, priorTurns, baseText, turnInput, isPollFire } = turn.ready.prepared;
+  const { inbound, importedOverheard, baseText, isPollFire } = turn.ready.prepared;
+  const { priorTurns } = input;
   const { effectiveTurnWallClockMs, adoptRuntime, runtimeState } = turn.selected;
   const { session, run } = turn;
   const { lease, turnAbort } = turn.held;
@@ -559,7 +560,7 @@ export async function runSegments(
     spine.surfaceOutboundCount += 1;
     if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
   };
-  let result = await runHarnessTurn(turnInput, {
+  let result = await runHarnessTurn(baseText, {
     ...(priorTurns?.length ? { priorTurns } : {}),
     ...(importedOverheard.length ? { overheard: importedOverheard } : {}),
     ...(inbound.metas.length ? { attachments: inbound.metas } : {}),

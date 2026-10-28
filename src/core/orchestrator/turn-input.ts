@@ -70,7 +70,6 @@ export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
   const { spine } = turn.turnTools;
   const { inbound, manifest, inboundIssues } = await stageInbound(ctx, turn);
   const importedOverheard = await importOverheard(ctx, turn);
-  const priorTurns = input.priorTurns;
   const { visibleHistory, recalled, partial, resumePlan, resume } = await loadTurnHistory(ctx, turn);
   const { history, documentInputs, contextRecovered, observeDocuments, ...remaining } = await loadTurnDocuments(
     ctx,
@@ -86,7 +85,6 @@ export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
     : undefined;
   const approvalReplay = !!pausedTurnUserEntry && (pausedTurnUserEntry.text ?? "").trim() === input.text.trim();
   if (partial) await noteResume(ctx, turn, partial, resume);
-  const turnInput = baseText;
   const continueTurn = !!partial && history.some((entry) => entry.seq === partial.userSeq);
   if (partial) spine.turnUserEntrySeq = partial.userSeq;
   const isPollFire = automatedTurn && !!input.surface && isWakeTrigger(input.surface);
@@ -108,7 +106,6 @@ export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
     inbound,
     inboundIssues,
     importedOverheard,
-    priorTurns,
     recalled,
     partial,
     resumePlan,
@@ -119,7 +116,6 @@ export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
     baseText,
     approvalReplay,
     resume,
-    turnInput,
     continueTurn,
     isPollFire,
   };
