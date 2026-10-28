@@ -1,6 +1,5 @@
 import {
   type CandidateDestination,
-  type CommandApprovalGrant,
   type Destination,
   type EgressPolicy,
   type Principal,
@@ -9,28 +8,13 @@ import {
   type ActorAssertion,
   turnSource,
 } from "../../types.ts";
-import { isOverheard, isReply, isUserMessage, type Item } from "../../sessions/items.ts";
-import { forModelContext } from "../../harness/context-compaction.ts";
+import type { Item } from "../../sessions/items.ts";
 import type { SkillBundle, SkillBundleStore } from "../../skills/skill-bundle-store.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
 import { hostMatches } from "../../resolution/egress-policy.ts";
 import { swallow } from "../../util/errors.ts";
 import { hashId } from "../../util/crypto.ts";
 import type { OrchestratorInput } from "./types.ts";
-
-export function isScreenableTextAttachment(mimetype: string): boolean {
-  const mime = mimetype.split(";", 1)[0]!.trim().toLowerCase();
-  return (
-    mime.startsWith("text/") ||
-    [
-      "application/json",
-      "application/xml",
-      "application/javascript",
-      "application/yaml",
-      "application/x-yaml",
-    ].includes(mime)
-  );
-}
 
 export function stripAckPrefix(text: string, ack: string | undefined): string {
   if (!text || !ack) return text;
@@ -95,35 +79,6 @@ export function egressClaimAllowingControlPlane(egress: EgressPolicy, apiBaseUrl
   };
 }
 
-export function stripTurnBoilerplate(text: string): string {
-  const kept = text
-    .split("\n\n")
-    .filter((p) => !/^\s*\[/.test(p))
-    .join("\n\n")
-    .trim();
-  return kept || text.trim();
-}
-
-export function visibleTitleItemText(item: Item): string | undefined {
-  const value = isUserMessage(item) && typeof item.body.display === "string" ? item.body.display : item.text;
-  return typeof value === "string" ? value.trim() || undefined : undefined;
-}
-
-export function renderTitleTranscript(entries: Item[]): string {
-  const lines: string[] = [];
-  for (const e of forModelContext([...entries])) {
-    const user = isUserMessage(e);
-    if (!user && !isReply(e)) continue;
-    if (isOverheard(e)) continue;
-    const raw = visibleTitleItemText(e);
-    if (!raw) continue;
-    const text = user ? stripTurnBoilerplate(raw) : raw;
-    if (!text) continue;
-    lines.push(`${user ? "User" : "Assistant"}:\n${text}`);
-  }
-  return lines.join("\n\n");
-}
-
 function principalAssertion(p: Principal): ActorAssertion {
   return {
     externalId: p.id,
@@ -179,12 +134,6 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     origin,
     ...(privateSessionMessage ? { privateSessionMessage: true as const, sessionMessageDepth } : {}),
   };
-}
-
-export function approvalGrantId(
-  grant: Pick<CommandApprovalGrant, "actorId" | "command" | "scope" | "sessionId" | "approvalKey">,
-): string {
-  return hashId([grant.actorId, grant.scope, grant.sessionId ?? "*", grant.approvalKey ?? grant.command], 24);
 }
 
 function candidateKey(target: string, audienceScopeId: ScopeId): string {
