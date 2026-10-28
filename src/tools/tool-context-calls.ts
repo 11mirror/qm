@@ -12,7 +12,7 @@ import type {
   BackgroundWriteResult,
   BackgroundJobSummary,
 } from "../connectors/background-exec-broker.ts";
-import { withCleanup } from "../util/errors.ts";
+import { swallow, withCleanup } from "../util/errors.ts";
 import type { SandboxHandle } from "../sandbox/sandbox.ts";
 import { type ToolContext, CONTROL_UNAVAILABLE } from "./primitives.ts";
 import { type ToolContextDeps } from "./tool-context.ts";
@@ -80,6 +80,9 @@ export function backgroundOps(
             opts?.ttlSeconds ? opts.ttlSeconds * 1000 : undefined,
             credentials,
           );
+          await deps.monitorBroker
+            ?.watch(started.processId, { exitOnly: true })
+            .catch((error: unknown) => swallow("background: exit watch", error));
           return scratchOnly ? { ...started, jobComputer: true } : started;
         },
         () => true,
@@ -91,7 +94,7 @@ export function backgroundOps(
     ): Promise<BackgroundPollResult> {
       if (!deps.backgroundBroker) throw new Error(BACKGROUND_UNAVAILABLE_MESSAGE);
       const handle = (await deps.backgroundBroker.handleFor?.(processId)) ?? (await deps.provision());
-      return once(
+      const polled = await once(
         () =>
           deps.backgroundBroker!.poll(handle, processId, {
             ...(opts?.sinceCursor !== undefined ? { sinceCursor: opts.sinceCursor } : {}),
@@ -100,14 +103,18 @@ export function backgroundOps(
           }),
         (r) => r.status.state === "exited",
       );
+      if (polled.status.state === "exited") await deps.monitorBroker?.seenExit(processId);
+      return polled;
     },
     async backgroundStop(processId: string, signal?: string): Promise<BackgroundStopResult> {
       if (!deps.backgroundBroker) throw new Error(BACKGROUND_UNAVAILABLE_MESSAGE);
       const handle = (await deps.backgroundBroker.handleFor?.(processId)) ?? (await deps.provision());
-      return once(
+      const stopped = await once(
         () => deps.backgroundBroker!.stop(handle, processId, signal),
         () => true,
       );
+      await deps.monitorBroker?.seenExit(processId);
+      return stopped;
     },
     async backgroundWrite(processId: string, data: string): Promise<BackgroundWriteResult> {
       if (!deps.backgroundBroker) throw new Error(BACKGROUND_UNAVAILABLE_MESSAGE);

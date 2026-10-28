@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMonitorPoller } from "../../src/monitors/monitor-poller.ts";
+import { EXIT_ONLY_PATTERN } from "../../src/monitors/monitor-broker.ts";
 import { createMonitorStore } from "../../src/monitors/monitor-store.ts";
 import { recordingOutbound } from "../support/recording-outbound.ts";
 import { createIdempotencyStore } from "../../src/idempotency/idempotency-store.ts";
@@ -135,6 +136,7 @@ async function harness(opts?: {
     kind: "background",
     command: "bg: npm run build",
     ttlMs: 600_000,
+    runId: "run-1",
   });
   const arm = (overrides: Record<string, unknown> = {}) =>
     monitors.create({
@@ -521,4 +523,24 @@ test("watch wakes and Slack notices use the saved purpose with a legacy command 
     const notices = await h.outbound.pending("slack");
     assert.ok(notices[0]?.text.includes(purpose ?? "bg: npm run build"));
   }
+});
+
+test("an exit-only watch stays silent through output and quiet stretches, then wakes once on exit with the tail", async () => {
+  const h = await harness({ heartbeatMs: 180_000 });
+  const m = await h.arm({ pattern: EXIT_ONLY_PATTERN });
+  h.append("p-1", "compiling...\n");
+  await h.poller.tick();
+  h.append("p-1", "still compiling\n");
+  await h.poller.tick(Date.now() + 400_000);
+  assert.equal(h.calls.length, 0);
+
+  h.append("p-1", "tests passed\n");
+  h.finish("p-1", 0);
+  await h.poller.tick(Date.now() + 400_000);
+  assert.equal(h.calls.length, 1);
+  assert.match(h.calls[0]?.text ?? "", /exited with code 0/);
+  assert.match(h.calls[0]?.text ?? "", /still compiling\ntests passed/);
+  assert.match(h.calls[0]?.text ?? "", /If nobody is waiting on this result and nothing needs doing, finish silently/);
+  assert.equal(h.calls[0]?.delegatingRunId, "run-1");
+  assert.equal((await h.monitors.get(m.id))?.enabled, false);
 });

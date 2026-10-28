@@ -14,6 +14,7 @@ export interface BackgroundExecBrokerDeps {
   onExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
   scopeId: string;
   sessionRef?: string;
+  runId?: string;
   ttlMs?: number;
   ttlMaxMs?: number;
   pollMs?: number;
@@ -84,7 +85,7 @@ export interface BackgroundExecBroker {
 }
 
 export const BACKGROUND_JOB_TTL_MS = 1_800_000;
-export const BACKGROUND_JOB_TTL_MAX_MS = 3_600_000;
+export const BACKGROUND_JOB_TTL_MAX_MS = 7_200_000;
 const DEFAULT_MAX_BYTES = 64 * 1024;
 const DEFAULT_TERM_GRACE_MS = 2_000;
 const DEFAULT_KILL_GRACE_MS = 1_000;
@@ -196,6 +197,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
             purpose,
             ttlMs: ttl,
             ...(deps.sessionRef ? { sessionRef: deps.sessionRef } : {}),
+            ...(deps.runId ? { runId: deps.runId } : {}),
             ...(credentials?.files ? { credentialFiles: credentials.files } : {}),
           });
         };
