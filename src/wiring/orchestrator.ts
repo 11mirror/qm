@@ -12,7 +12,7 @@ import type { CronsModule } from "./crons.ts";
 import { tenantConfig } from "../tenants/tenant-config.ts";
 import { tenant } from "../tenant.ts";
 import type { Head } from "./late.ts";
-import { createApprovalGrants } from "../core/orchestrator/approvals.ts";
+import { createApprovalGrants } from "../core/approval-store.ts";
 import { type SurfaceCache, createPostgresSurfaceCache } from "../surface-cache/surface-cache.ts";
 import { type ChannelPolicyStore, createPostgresChannelPolicyStore } from "../surface-cache/channel-policy-store.ts";
 import { type OrchestratorDeps, createOrchestrator } from "../core/orchestrator.ts";

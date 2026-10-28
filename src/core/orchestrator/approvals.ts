@@ -9,33 +9,33 @@ import type {
 } from "../../types.ts";
 import type { Item, NewItem } from "../../sessions/items.ts";
 import type { Lease } from "../../sessions/session-store.ts";
-import { createPgPool } from "../../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, typedTable, type TableSpec } from "../../persistence/typed-table.ts";
-import type { ApprovalRecords } from "../approval-store.ts";
+import type { ApprovalGrants, ApprovalRecords } from "../approval-store.ts";
 import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
-import { rosterIds, samePerson } from "../../directory/person.ts";
+import { samePerson } from "../../directory/person.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { sleep } from "../../util/async.ts";
 import { errMessage } from "../../util/errors.ts";
 import { headSlice } from "../../util/text.ts";
-import { approvalGrantId } from "./turn-helpers.ts";
+import { hashId } from "../../util/crypto.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
 const OPERATION_APPROVED_NOTE = loadProtocolFile("turn-approval-operation");
 const OPERATION_DENIED_NOTE = loadProtocolFile("turn-approval-denied");
 
-export interface ApprovalRequest {
-  requestId: string;
-  command: string;
-  reason: string;
-  blocksInput: boolean;
-  grantModes?: ApprovalGrantModes;
-  matched?: string;
-  purpose?: string;
-  summary?: string;
-  summaryDetail?: string;
-  approvalKey?: string;
-  kind?: "approval" | "input";
+export type ApprovalRequest = PendingApproval & { blocksInput: boolean };
+
+const OPTIONAL_APPROVAL_FIELDS = ["matched", "purpose", "summary", "summaryDetail", "approvalKey", "kind"] as const;
+
+function presentApprovalFields(source: Pick<PendingApproval, (typeof OPTIONAL_APPROVAL_FIELDS)[number]>) {
+  const present: Pick<PendingApproval, (typeof OPTIONAL_APPROVAL_FIELDS)[number]> = {};
+  for (const field of OPTIONAL_APPROVAL_FIELDS) if (source[field]) Object.assign(present, { [field]: source[field] });
+  return present;
+}
+
+function approvalGrantId(
+  grant: Pick<CommandApprovalGrant, "actorId" | "command" | "scope" | "sessionId" | "approvalKey">,
+): string {
+  return hashId([grant.actorId, grant.scope, grant.sessionId ?? "*", grant.approvalKey ?? grant.command], 24);
 }
 
 function approvalView(
@@ -50,12 +50,7 @@ function approvalView(
     reason: record.reason ?? "requires approval",
     blocksInput: record.blocksInput !== false,
     ...(grantModes ? { grantModes } : {}),
-    ...(record.matched ? { matched: record.matched } : {}),
-    ...(record.purpose ? { purpose: record.purpose } : {}),
-    ...(record.summary ? { summary: record.summary } : {}),
-    ...(record.summaryDetail ? { summaryDetail: record.summaryDetail } : {}),
-    ...(record.approvalKey ? { approvalKey: record.approvalKey } : {}),
-    ...(record.kind ? { kind: record.kind } : {}),
+    ...presentApprovalFields(record),
   };
 }
 
@@ -83,12 +78,7 @@ export async function parkApprovals(
       request: owner.request,
       blocksInput: r.blocksInput,
       ...(grantModes ? { grantModes } : {}),
-      ...(r.matched ? { matched: r.matched } : {}),
-      ...(r.purpose ? { purpose: r.purpose } : {}),
-      ...(r.summary ? { summary: r.summary } : {}),
-      ...(r.summaryDetail ? { summaryDetail: r.summaryDetail } : {}),
-      ...(r.approvalKey ? { approvalKey: r.approvalKey } : {}),
-      ...(r.kind ? { kind: r.kind } : {}),
+      ...presentApprovalFields(r),
     };
     await store.put(r.requestId, record);
     views.push(approvalView(r.requestId, record));
@@ -126,38 +116,9 @@ export async function summarizeApproval(
 
 export interface ApprovalLedger {
   consume(key: string): boolean;
-  authorizeToolCall(tool: string): boolean;
   authorizeCommand(command: string, approvalKey?: string, exactApprovalKey?: boolean): boolean;
   credit(key: string, scope: "once" | "session" | "always"): void;
 }
-
-const APPROVAL_GRANTS: TableSpec = {
-  table: "approval_grants",
-  key: "id",
-  columns: cols(`actorId text!, command text!, scope text!, createdAt bigint!, sessionId text, approvalKey text`),
-};
-
-const APPROVAL_GRANTS_MIGRATION = mapToTableMigration("core/approval-grants/0001-typed", APPROVAL_GRANTS, {
-  statements: [`CREATE INDEX IF NOT EXISTS approval_grants_actor ON approval_grants (lower(btrim(actor_id)))`],
-});
-
-export function createApprovalGrants(databaseUrl: string) {
-  const pg = createPgPool(databaseUrl, [APPROVAL_GRANTS_MIGRATION]);
-  const { put, codec } = typedTable<CommandApprovalGrant>(pg, APPROVAL_GRANTS);
-  return {
-    put,
-    async forActor(actorId: string): Promise<CommandApprovalGrant[]> {
-      const keys = [...new Set(rosterIds(actorId).map((id) => id.toLowerCase()))];
-      const rows = await pg.q(
-        `SELECT ${codec.columns} FROM approval_grants WHERE lower(btrim(actor_id)) = ANY($1::text[]) ORDER BY id`,
-        [keys],
-      );
-      return codec.rows(rows).filter((grant) => samePerson(grant.actorId, actorId));
-    },
-  };
-}
-
-export type ApprovalGrants = ReturnType<typeof createApprovalGrants>;
 
 export function loadActorGrants(grants: ApprovalGrants, actorId: string): () => Promise<CommandApprovalGrant[]> {
   let loaded: Promise<CommandApprovalGrant[]> | undefined;
@@ -183,7 +144,6 @@ export function loadApprovalLedger(
   };
   return {
     consume,
-    authorizeToolCall: (tool) => consume(`tool:${tool}`),
     authorizeCommand: (command, approvalKey, exactApprovalKey = false) => {
       let key = approvalKey ?? command;
       if (approvalKey !== undefined && uses.has(approvalKey)) key = approvalKey;
