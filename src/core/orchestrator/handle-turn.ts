@@ -211,7 +211,7 @@ async function readyTurn(o: OrchestratorInstance, ctx: TurnCtx, turn: TurnState,
         ?.setDeliveryState(input.runId, input.runLeaseToken, { replying: true })
         .catch(swallowAs("orchestrator: persist reply engagement", false));
     }
-    deps.turnStream?.begin(input.runId);
+    deps.turnStream?.begin(input.runId, input.runLeaseToken);
   }
 
   const turnTools = await buildTurnTools(ctx, {

@@ -446,3 +446,43 @@ test("reasoning streams per block beside the reply text, whole, and settles when
   s.begin("r1");
   assert.deepEqual(s.reasoning("r1"), [], "a retried attempt never serves the previous attempt's blocks");
 });
+
+test("the first block counts as harvested only once it is saved under the attempt's lease", async () => {
+  const leases: Array<string | null> = [];
+  let accept = false;
+  const s = createTurnStream({
+    runs: {
+      async setDeliveryState(_runId, lease, _state) {
+        leases.push(lease);
+        return accept;
+      },
+    },
+  });
+  s.begin("r1", "lease-1");
+  s.publish("r1", "On it.");
+  s.noteToolCall("r1");
+  assert.equal(await s.savedFirstBlock("r1"), undefined, "a refused write leaves the block in the reply");
+  accept = true;
+  s.begin("r1", "lease-2");
+  assert.equal(s.firstBlock("r1"), null, "a new attempt starts without the old first block");
+  s.publish("r1", "Retrying.");
+  s.noteToolCall("r1");
+  s.markReplyDone("r1");
+  assert.equal(await s.savedFirstBlock("r1"), "Retrying.");
+  await flush();
+  assert.deepEqual(leases, ["lease-1", "lease-2", "lease-2"]);
+});
+
+test("a failed first-block write is not harvested", async () => {
+  const s = createTurnStream({
+    runs: {
+      async setDeliveryState() {
+        throw new Error("db down");
+      },
+    },
+  });
+  s.begin("r1", "lease-1");
+  s.publish("r1", "On it.");
+  s.noteToolCall("r1");
+  assert.equal(await s.savedFirstBlock("r1"), undefined);
+});

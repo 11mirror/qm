@@ -141,12 +141,10 @@ export async function settleTurn(
   const { deps, input, withManagedRosterVersion, approvalOwner, strictReadOnly } = ctx;
   const { session, result, partial, emittedEntries, hasSurfaceToolDeps, isPollFire } = turn;
   const stagedAttachments = turn.attachStaging.staged();
-  const harvestedAck = (() => {
-    if (!surfaceHas(input.surface, "earlyAck") || input.surfaceTools || !input.runId) return undefined;
-    const fb = deps.turnStream?.firstBlock(input.runId);
-    const text = fb?.text.trim();
-    return fb?.closed && text ? text : undefined;
-  })();
+  const harvestedAck =
+    surfaceHas(input.surface, "earlyAck") && !input.surfaceTools && input.runId
+      ? await deps.turnStream?.savedFirstBlock(input.runId)
+      : undefined;
   const reply = stripAckPrefix(result.reply ?? "", harvestedAck);
   const cancelStopped = input.cancel?.aborted === true && result.stopped === true;
   const outcome = deriveTurnOutcome({

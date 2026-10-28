@@ -19,7 +19,7 @@ export interface ReasoningBlock {
 }
 
 export interface TurnStream {
-  begin(runId: string): void;
+  begin(runId: string, leaseToken?: string): void;
   publish(runId: string, delta: string): void;
   publishBlockStart(runId: string): void;
   publishReasoning(runId: string, step: string, index: number, delta: string): void;
@@ -28,6 +28,7 @@ export interface TurnStream {
   noteToolCall(runId: string): void;
   noteRuntime(runId: string, runtime: TurnRuntime): void;
   firstBlock(runId: string): { text: string; closed: boolean } | null;
+  savedFirstBlock(runId: string): Promise<string | undefined>;
   markSurfacePosted(runId: string): void;
   snapshot(runId: string): string | null;
   startOffset(runId: string): number;
@@ -41,6 +42,8 @@ interface Entry {
   firstBlock: string;
   firstBlockOpen: boolean;
   firstBlockClosed: boolean;
+  firstBlockSaved: Promise<boolean> | null;
+  leaseToken: string | null;
   reasoning: ReasoningBlock[];
   surfacePosted: boolean;
   timer: ReturnType<typeof setTimeout> | null;
@@ -64,6 +67,8 @@ function makeEntry(): Entry {
     firstBlock: "",
     firstBlockOpen: true,
     firstBlockClosed: false,
+    firstBlockSaved: null,
+    leaseToken: null,
     reasoning: [],
     surfacePosted: false,
     timer: null,
@@ -87,24 +92,29 @@ function append(opts: TurnStreamOptions, runId: string, entry: Entry, delta: str
   opts.onDelta?.(runId, delta, offset, entry.totalChars - entry.text.length);
 }
 
-function persister(opts: TurnStreamOptions) {
-  return (runId: string, state: RunDeliveryState): void => {
-    void opts.runs
-      .setDeliveryState(runId, null, state)
-      .then(() => opts.onChange?.(runId), swallowAs("turn-stream: persist delivery state", undefined));
-  };
+function persister(opts: TurnStreamOptions, runs: Map<string, Entry>) {
+  return (runId: string, state: RunDeliveryState): Promise<boolean> =>
+    opts.runs.setDeliveryState(runId, runs.get(runId)?.leaseToken ?? null, state).then(
+      (saved) => {
+        opts.onChange?.(runId);
+        return saved;
+      },
+      swallowAs("turn-stream: persist delivery state", false),
+    );
 }
 
 function streamWriteMethods(opts: TurnStreamOptions, runs: Map<string, Entry>) {
-  const persist = persister(opts);
+  const persist = persister(opts, runs);
   return {
-    begin(runId) {
-      const entry = runs.get(runId);
-      if (entry) {
-        entry.reasoning = [];
-        if (entry.timer) clearTimeout(entry.timer);
-        entry.timer = null;
-      } else runs.set(runId, makeEntry());
+    begin(runId, leaseToken) {
+      const prior = runs.get(runId);
+      if (prior?.timer) clearTimeout(prior.timer);
+      const entry =
+        prior && prior.leaseToken === (leaseToken ?? null) ? prior : { ...makeEntry(), leaseToken: leaseToken ?? null };
+      if (prior) Object.assign(entry, { text: prior.text, totalChars: prior.totalChars });
+      entry.reasoning = [];
+      entry.timer = null;
+      runs.set(runId, entry);
       opts.onChange?.(runId);
     },
 
@@ -154,16 +164,16 @@ function streamWriteMethods(opts: TurnStreamOptions, runs: Map<string, Entry>) {
       if (!entry.firstBlockOpen) return;
       entry.firstBlockOpen = false;
       entry.firstBlockClosed = entry.firstBlock.trim().length > 0;
-      if (entry.firstBlockClosed) persist(runId, { firstBlock: entry.firstBlock });
+      if (entry.firstBlockClosed) entry.firstBlockSaved = persist(runId, { firstBlock: entry.firstBlock });
     },
   } satisfies Partial<TurnStream>;
 }
 
 function streamStateMethods(opts: TurnStreamOptions, runs: Map<string, Entry>) {
-  const persist = persister(opts);
+  const persist = persister(opts, runs);
   return {
     noteRuntime(runId, runtime) {
-      persist(runId, { runtime });
+      void persist(runId, { runtime });
     },
 
     firstBlock(runId) {
@@ -172,11 +182,17 @@ function streamStateMethods(opts: TurnStreamOptions, runs: Map<string, Entry>) {
       return { text: entry.firstBlock, closed: entry.firstBlockClosed };
     },
 
+    async savedFirstBlock(runId) {
+      const entry = runs.get(runId);
+      if (!entry?.firstBlockSaved || !(await entry.firstBlockSaved)) return undefined;
+      return entry.firstBlock.trim() || undefined;
+    },
+
     markSurfacePosted(runId) {
       const entry = ensure(runs, runId);
       if (entry.surfacePosted) return;
       entry.surfacePosted = true;
-      persist(runId, { surfacePosted: true });
+      void persist(runId, { surfacePosted: true });
     },
 
     snapshot(runId) {
@@ -190,7 +206,7 @@ function streamStateMethods(opts: TurnStreamOptions, runs: Map<string, Entry>) {
     },
 
     markReplyDone(runId) {
-      persist(runId, { replyDone: true });
+      void persist(runId, { replyDone: true });
     },
 
     end(runId) {
