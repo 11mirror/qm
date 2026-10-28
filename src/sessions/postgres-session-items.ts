@@ -3,7 +3,7 @@ import { jsonbStringify, jsonbSafeStringify, pgTextSafe } from "../util/text.ts"
 import { type PgPool, type PoolClient, withPgTransaction, tenantCols } from "../persistence/pg-pool.ts";
 import type { GoalRecord } from "../harness/goal.ts";
 import type { GetItemsOptions, Lease, SessionStore } from "./session-store.ts";
-import { userMessagePreview, DuplicateCallError } from "./session-store.ts";
+import { DuplicateCallError } from "./session-store.ts";
 import { nextSeq, TENANT, tsOf, userTurn, withinParticipantWindow } from "./postgres-session-sql.ts";
 import { rowToGoal, rowToItem, ITEM_FIELDS, ITEM_FROM } from "./postgres-session-rows.ts";
 import { ITEM_COLUMNS, isOverheard, isUserMessage, storedItem, type Item, type NewItem } from "./items.ts";
@@ -18,6 +18,11 @@ export interface SessionStoreCtx {
 const LAST_ACTIVITY_DEBOUNCE_MS = 60_000;
 const FIRST_PREVIEW_LEN = 160;
 const LAST_PREVIEW_LEN = 100;
+
+function userMessagePreview(text: string | null | undefined, maxLen = 160): string {
+  const oneLine = (text ?? "").replace(/\s+/g, " ").trim();
+  return oneLine.length > maxLen ? oneLine.slice(0, maxLen - 1) + "…" : oneLine;
+}
 
 const storedPreview = (text: string | null, maxLen: number): string => pgTextSafe(userMessagePreview(text, maxLen));
 

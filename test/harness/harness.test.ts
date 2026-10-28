@@ -8,7 +8,7 @@ import { buildTestApp, dm } from "../support/orchestrator-app.ts";
 import { testConfig } from "../support/test-config.ts";
 import type { Context } from "@earendil-works/pi-ai";
 import { sanitizeLlmPayload } from "../../src/harness/pi-payload.ts";
-import { promptEnvelopeBody } from "../../src/sessions/session-store.ts";
+import { promptEnvelopeBody } from "../../src/sessions/postgres-llm-capture.ts";
 
 test("model utilities are independent from turn control", async () => {
   const harness = createMockHarness();
