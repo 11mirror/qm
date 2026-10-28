@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { ClientToolResult, TurnRequest } from "../types.ts";
-import { swallowAs } from "../util/errors.ts";
+import { reportFailureAs, swallowAs } from "../util/errors.ts";
 
 export type RunSignalKind = "abort" | "steer" | "client_result";
 
@@ -31,8 +31,6 @@ export interface RunSignalStore {
   close?(): Promise<void>;
 }
 
-const MAX_MEMORY_DEDUPE_KEYS = 10_000;
-
 export function createMemoryRunSignalStore(): RunSignalStore {
   const pending = new Map<string, RunSignal[]>();
   const receipts = new WeakMap<RunSignal, string>();
@@ -44,7 +42,6 @@ export function createMemoryRunSignalStore(): RunSignalStore {
       if (signal.dedupeKey) {
         if (dedupeKeys.has(signal.dedupeKey)) return false;
         dedupeKeys.add(signal.dedupeKey);
-        if (dedupeKeys.size > MAX_MEMORY_DEDUPE_KEYS) dedupeKeys.delete(dedupeKeys.values().next().value!);
       }
       const list = pending.get(runId) ?? [];
       signal = { ...signal };
@@ -168,6 +165,7 @@ export function startSignalPoll(
   opts?: { intervalMs?: number; onError?: (e: unknown) => void; drainOnStop?: boolean },
 ): () => Promise<void> {
   const declined = new Set<string>();
+  const onError = opts?.onError ?? reportFailureAs("run signals: poll", undefined, `run=${runId}`);
   let draining = false;
   let redrain = false;
   let accepting = true;
@@ -202,11 +200,11 @@ export function startSignalPoll(
             await signals.acknowledge(runId, id);
           }
         } catch (e) {
-          opts?.onError?.(e);
+          onError(e);
         }
       }
     })()
-      .catch((e: unknown) => opts?.onError?.(e))
+      .catch(onError)
       .finally(() => {
         draining = false;
         if (redrain) {

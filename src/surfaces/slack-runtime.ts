@@ -1,3 +1,5 @@
+import { reportFailure } from "../util/errors.ts";
+
 export class SlackPluginStartCleanupError extends AggregateError {
   readonly cleanup: () => Promise<void>;
 
@@ -79,7 +81,7 @@ export function createSlackRuntimeReconciler<Config>(opts: {
     return inFlight;
   };
   const tick = (): void => {
-    void run().catch((error) => opts.onError?.(error));
+    void run().catch(opts.onError ?? ((error: unknown) => reportFailure("slack runtime: reconcile", error)));
   };
 
   return {
@@ -97,7 +99,7 @@ export function createSlackRuntimeReconciler<Config>(opts: {
       if (timer) clearInterval(timer);
       timer = null;
       stopping = (async () => {
-        await inFlight?.catch(() => {}); // the reconcile's callers get its failure
+        await inFlight?.catch(() => {});
         if (pendingCleanup) {
           await pendingCleanup();
           pendingCleanup = null;

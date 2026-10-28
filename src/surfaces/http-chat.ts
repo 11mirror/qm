@@ -75,7 +75,7 @@ const messageEventSchema = z.object({
 const configSchema = z.object({
   surface: z
     .string()
-    .regex(/^[a-z][a-z0-9-]{0,31}$/)
+    .regex(/^[a-z][a-z0-9-]*$/)
     .refine((surface) => !RESERVED_SURFACES.has(surface), { message: "is reserved" }),
   account: z
     .string()

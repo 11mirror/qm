@@ -1,23 +1,13 @@
 import { AsyncResource } from "node:async_hooks";
 import { createPgPool, type Rows, tenantCols } from "../persistence/pg-pool.ts";
 import { jsonbStringify } from "../util/text.ts";
-import { pgTextSafe } from "../util/text.ts";
 import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
-import type { RunSignal, RunSignalKind, RunSignalStore } from "./run-signal-store.ts";
+import type { RunSignal, RunSignalStore } from "./run-signal-store.ts";
 
 const CHANNEL = "run_signals";
 
 function toSignals(rows: Rows): RunSignal[] {
-  return rows
-    .sort((a, b) => Number(a.id) - Number(b.id))
-    .map((r): RunSignal =>
-      r.payload != null
-        ? (r.payload as RunSignal)
-        : {
-            kind: r.kind as RunSignalKind,
-            ...(r.text != null ? { text: r.text as string } : {}),
-          },
-    );
+  return rows.sort((a, b) => Number(a.id) - Number(b.id)).map((r) => r.payload as RunSignal);
 }
 
 export function createPostgresRunSignalStore(connectionString: string): RunSignalStore {
@@ -50,7 +40,7 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
     async send(runId, signal) {
       const { rows } = await q(
         `WITH ins AS (
-           INSERT INTO run_signals(run_id, kind, text, payload, created_at, dedupe_key) VALUES ($1,$2,$3,$4,$5,$6)
+           INSERT INTO run_signals(run_id, kind, payload, created_at, dedupe_key) VALUES ($1,$2,$3,$4,$5)
            ON CONFLICT (${tenantCols("dedupe_key")}) WHERE dedupe_key IS NOT NULL DO NOTHING
            RETURNING id
          )
@@ -58,7 +48,6 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
         [
           runId,
           signal.kind,
-          signal.text === undefined ? null : pgTextSafe(signal.text),
           jsonbStringify(signal),
           Date.now(),
           signal.dedupeKey ?? null,
@@ -74,7 +63,7 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
 
     async steerAuthors(runId) {
       const { rows } = await q(
-        `SELECT payload FROM run_signals WHERE run_id=$1 AND kind='steer' AND payload IS NOT NULL`,
+        `SELECT payload FROM run_signals WHERE run_id=$1 AND kind='steer'`,
         [runId],
       );
       const ids = rows
@@ -85,7 +74,7 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
 
     async pending(runId) {
       const { rows } = await q(
-        "SELECT id, kind, text, payload FROM run_signals WHERE run_id=$1 AND consumed_at IS NULL ORDER BY id",
+        "SELECT id, payload FROM run_signals WHERE run_id=$1 AND consumed_at IS NULL ORDER BY id",
         [runId],
       );
       return rows.map((row) => ({ id: String(row.id), signal: toSignals([row])[0]! }));
@@ -101,7 +90,7 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       const { rows } = await q(
         `UPDATE run_signals SET consumed_at=$2
          WHERE run_id=$1 AND consumed_at IS NULL
-         RETURNING id, kind, text, payload`,
+         RETURNING id, payload`,
         [runId, Date.now()],
       );
       return toSignals(rows);
@@ -117,7 +106,6 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
     },
 
     onSignal(runId, listener) {
-      // Wake the waiter in its own (tenant) context, not the shared LISTEN connection's.
       const cb = AsyncResource.bind(listener);
       const set = listeners.get(runId) ?? new Set();
       set.add(cb);

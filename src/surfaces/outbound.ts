@@ -6,8 +6,8 @@ import { acquireLeaseWithin, type SessionStore } from "../sessions/session-store
 import type { NewItem } from "../sessions/items.ts";
 import type { SessionStateBus } from "../runs/session-state-bus.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
-import type { QueuedPosts } from "./queued-posts.ts";
-import { errMessage, reportFailure, swallowAs } from "../util/errors.ts";
+import type { QueuedPostOutcome, QueuedPosts } from "./queued-posts.ts";
+import { errMessage, reportFailure, swallowAs, withCleanup } from "../util/errors.ts";
 
 export interface OutboundPost {
   destination: Destination;
@@ -96,35 +96,30 @@ export function createOutbound(opts: {
     async retryQueued(now = Date.now()) {
       if (!opts.retries) return 0;
       let sent = 0;
-      for (const [key, queued] of await opts.retries.entries()) {
+      await opts.retries.drain(async (key, queued): Promise<QueuedPostOutcome> => {
         const { post } = queued;
         if (now - queued.firstFailedAt > RETRY_MAX_AGE_MS) {
-          await opts.retries.delete(key);
           reportFailure("outbound: gave up on a queued post", new Error(queued.lastError), `key=${key}`);
-          continue;
+          return { settled: true };
         }
         const sender = senderFor(post.destination.type);
-        let receipt: PostReceipt;
         try {
           if (!sender) throw new Error(`no ${post.destination.type} connection is available to post this message`);
-          receipt = (await sender({ ...post, retry: true, createdAt: post.createdAt ?? queued.firstFailedAt })) ?? {};
-          if (receipt.deferred) continue;
-          await opts.retries.delete(key);
+          const receipt =
+            (await sender({ ...post, retry: true, createdAt: post.createdAt ?? queued.firstFailedAt })) ?? {};
+          if (receipt.deferred) return { kept: true };
           console.error(
             `[outbound] queued post ${key} went out ${Math.round((now - queued.firstFailedAt) / 1000)}s after it first failed (${queued.lastError})`,
           );
+          await opts.afterSend?.(post, receipt);
+          sent += 1;
+          return { settled: true };
         } catch (error) {
-          if (isPermanent(error)) {
-            await opts.retries.delete(key);
-            reportFailure("outbound: queued post refused (not retried)", error, `key=${key}`);
-            continue;
-          }
-          await opts.retries.put(key, { ...queued, lastError: errMessage(error) });
-          continue;
+          if (!isPermanent(error)) return { failed: errMessage(error) };
+          reportFailure("outbound: queued post refused (not retried)", error, `key=${key}`);
+          return { settled: true };
         }
-        sent += 1;
-        await opts.afterSend?.(post, receipt);
-      }
+      });
       return sent;
     },
   };
@@ -185,15 +180,17 @@ export async function appendToTranscript(
       { busy: true },
     );
   const turnId = keyTurnId(key);
-  try {
-    const present = alreadyThere
-      ? await alreadyThere()
-      : (await deps.sessions.getItems(session.id, { turnId })).some((e) => e.kind === item.kind);
-    if (present) return;
-    await deps.sessions.appendMany({ ...lease, turnId }, [item]);
-  } finally {
-    await deps.sessions.releaseLease(lease);
-  }
+  const appended = await withCleanup(
+    async () => {
+      const present = alreadyThere
+        ? await alreadyThere()
+        : (await deps.sessions.getItems(session.id, { turnId })).some((e) => e.kind === item.kind);
+      if (!present) await deps.sessions.appendMany({ ...lease, turnId }, [item]);
+      return !present;
+    },
+    () => deps.sessions.releaseLease(lease),
+  );
+  if (!appended) return;
   const participants = await deps.sessions
     .participantsOf(session.id)
     .catch(swallowAs("surfaces: session participants lookup", []));

@@ -1,21 +1,13 @@
-import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { SessionMailbox } from "../sessions/session-mailbox.ts";
-import type { SessionStore } from "../sessions/session-store.ts";
-import type { RunStore } from "../runs/run-store.ts";
 import { mapBounded } from "../util/async.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
-import type { SwarmBoard, SwarmBoardPost } from "./swarm-board.ts";
+import type { StrandedSwarmPost, SwarmBoard, SwarmBoardPost, SwarmNoticeContext } from "./swarm-board.ts";
 
 const NOTICE_CHARS = 2_000;
 const NOTIFY_CONCURRENCY = 8;
 const SWEEP_PAGE = 200;
 export const NOTIFY_GRACE_MS = 60_000;
-
-export interface SwarmNoticeContext {
-  actor: OrchestratorInput["actor"];
-  audience: OrchestratorInput["conversation"]["audience"];
-}
 
 export interface SwarmNoticeDeps {
   board: Pick<SwarmBoard, "subscribers" | "markNotified">;
@@ -61,29 +53,10 @@ export interface SwarmNoticeSweep {
 }
 
 export function createSwarmNoticeSweep(
-  deps: SwarmNoticeDeps & {
-    board: Pick<SwarmBoard, "stranded">;
-    sessions: Pick<SessionStore, "get">;
-    runs: Pick<RunStore, "latestForThread">;
-  },
+  deps: SwarmNoticeDeps & { board: Pick<SwarmBoard, "stranded"> },
 ): SwarmNoticeSweep {
-  async function authorContext(post: SwarmBoardPost): Promise<SwarmNoticeContext | null> {
-    const author = await deps.sessions.get(post.authorId);
-    if (!author) return null;
-    const latest = await deps.runs.latestForThread(author.threadRef, { excludePrivateMessages: true });
-    const context = latest?.request ?? author.spawnMeta;
-    return context ? { actor: context.actor, audience: context.conversation.audience } : null;
-  }
-  async function redeliver(post: SwarmBoardPost): Promise<number> {
-    const ctx = await authorContext(post);
-    if (!ctx) {
-      console.error(
-        `[swarm] post ${post.id} on board ${post.swarmId} has no author context left to notify from — dropping its notices`,
-      );
-      await deps.board.markNotified(post.swarmId, post.id);
-      return 0;
-    }
-    const notified = await notifySubscribers(deps, ctx, post);
+  async function redeliver(post: StrandedSwarmPost): Promise<number> {
+    const notified = await notifySubscribers(deps, post.notice, post);
     console.error(`[swarm] post ${post.id} on board ${post.swarmId} still owed ${notified} notice(s) — delivered them`);
     return notified;
   }

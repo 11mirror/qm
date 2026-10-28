@@ -43,8 +43,7 @@ export function createJobComputerSweep(deps: {
           await retire(computer.error ? "errored" : "already retired");
           continue;
         }
-        const jobs = async () =>
-          (await deps.processes.listByScope(computer.ownerScopeId)).filter((job) => job.sandboxId === computer.id);
+        const jobs = () => deps.processes.listBySandbox(computer.ownerScopeId, computer.id);
         let current = await jobs();
         if (!current.some(live)) idleSince.set(computer.id, idleSince.get(computer.id) ?? now);
         if (!current.length && now - idleSince.get(computer.id)! < STARTUP_GRACE_MS) continue;

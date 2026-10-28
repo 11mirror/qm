@@ -426,10 +426,8 @@ function harness(client: Record<string, unknown>) {
   const queued = new Map<string, QueuedPost>();
   const outbound = createOutbound({
     retries: {
-      get: async (k: string) => queued.get(k),
+      get: async (k: string) => queued.get(k) ?? null,
       put: async (k: string, v: QueuedPost) => void queued.set(k, v),
-      delete: async (k: string) => void queued.delete(k),
-      entries: async () => [...queued.entries()],
     } as never,
   });
   outbound.register(

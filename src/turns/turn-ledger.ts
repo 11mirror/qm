@@ -30,7 +30,6 @@ const TURN_TASK = "turn";
 export const TURN_READY_CHANNEL = "qm_turn_ready";
 export const TURN_CANCEL_CHANNEL = "qm_turn_cancel";
 export const TURN_YIELD_CHANNEL = "qm_turn_yield";
-const TURN_MAX_ATTEMPTS = 10;
 const TURN_CLAIM_TIMEOUT_SEC = 60;
 export const TURN_EXTEND_INTERVAL_MS = 20_000;
 const CANCEL_WRAP_UP_GRACE_SEC = 30;
@@ -98,7 +97,7 @@ type TurnClaim = { claimed: boolean; run: null } | { claimed: true; run: Run; te
 
 export interface TurnLedger {
   claim(queue: TurnQueue, token: string, workerId: string): Promise<TurnClaim>;
-  admit(input: EnqueueInput & { priority: RunPriority }): Promise<EnqueueResult>;
+  admit(input: EnqueueInput & { priority: RunPriority; maxAttempts: number }): Promise<EnqueueResult>;
   extend(run: Run, token: string): Promise<ExtendOutcome>;
   handBack(
     run: Run,
@@ -108,7 +107,6 @@ export interface TurnLedger {
   finish(run: Run, token: string, outcome: TurnOutcome): Promise<boolean>;
   fenceHeld(turnId: string, token: string, client?: PoolClient): Promise<boolean>;
   cancel(turnId: string): Promise<"withdrawn" | "cancelled" | "signalled" | null>;
-  /** Cancels the turn only if it has not started, checked under the thread's lock. */
   withdraw(turnId: string, opts?: { unstartedOnly?: boolean }): Promise<boolean>;
   cancelTree(threadRefs: readonly string[]): Promise<number>;
   repairCandidates(limit?: number): Promise<RepairCandidate[]>;
@@ -156,7 +154,6 @@ const POINTER_KEY = "tenant_id = qm_tenant_id() AND thread_ref = $1";
 interface LedgerContext {
   db: PgPool;
   tx<T>(fn: (client: PoolClient) => Promise<T>): Promise<T>;
-  /** Re-reads an ended turn and tells the run store's terminal listeners. */
   settle(id: string): Promise<Run | null>;
 }
 
@@ -191,7 +188,7 @@ async function start(client: PoolClient, run: Run): Promise<void> {
   const params: TurnTaskParams = { tenantId: String(tenant.rows[0]!.id), turnId: run.id };
   const spawned = await spawnTask(client, queue, TURN_TASK, params, {
     idempotencyKey: run.id,
-    maxAttempts: TURN_MAX_ATTEMPTS,
+    maxAttempts: null,
   });
   await client.query(`UPDATE runs SET status = 'pending', absurd_task_id = $2 WHERE id = $1`, [run.id, spawned.taskId]);
   await point(client, run.sessionId, run.id);
@@ -352,10 +349,9 @@ async function terminal(
 function admission(ctx: LedgerContext): Pick<TurnLedger, "admit" | "claim" | "mustYield"> {
   const { db, tx } = ctx;
   return {
-    async admit({ sessionId, request, dedupKey, maxAttempts = 3, priority }) {
+    async admit({ sessionId, request, dedupKey, maxAttempts, priority }) {
       return tx(async (client) => {
         const active = await lockPointer(client, sessionId);
-        // The key's holder can release it between the conflict and the lookup, so look and insert until one lands.
         let inserted: Record<string, unknown> | undefined;
         while (!inserted) {
           if (dedupKey) {

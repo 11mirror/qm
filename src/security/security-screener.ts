@@ -2,7 +2,7 @@ import { readCappedText } from "../util/response-body.ts";
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
 import { MAX_SCREEN_CHARS, type SecurityScreenVerdict } from "./security-screen.ts";
-import { swallow } from "../util/errors.ts";
+import { httpFailure } from "../util/errors.ts";
 import { fetchWithRetry } from "../util/async.ts";
 
 export type SecurityScreenHook = "user_input" | "tool_response";
@@ -14,10 +14,6 @@ export interface SecurityScreenClassification {
   outcome?: string;
 }
 
-/**
- * Run one screening with an explicit flagger configuration, outside any turn. Used by the Auto
- * flagger test run to replay past screenings through a candidate rubric.
- */
 export type SecurityScreenProbe = (input: {
   payload: string;
   modelId: string;
@@ -97,10 +93,6 @@ async function classifyChunks<T>(
   }
   if (signal.aborted) throw signal.reason;
   return results;
-}
-
-async function cancelResponseBody(response: Response): Promise<void> {
-  await response.body?.cancel().catch((error) => swallow("security screen response cancel", error));
 }
 
 async function responseText(response: Response): Promise<string> {
@@ -203,10 +195,7 @@ export function createSecurityScreenProxy(opts: {
             "refused",
             { signal: chunkSignal, timeoutMs: opts.timeoutMs, baseDelayMs: SECURITY_SCREEN_RETRY_BASE_MS },
           );
-          if (!response.ok) {
-            await cancelResponseBody(response);
-            throw new Error(`Security screen proxy returned HTTP ${response.status}`);
-          }
+          if (!response.ok) throw new Error(`Security screen proxy returned ${await httpFailure(response)}`);
           return classification(await responseText(response), opts.provider);
         },
         signal,

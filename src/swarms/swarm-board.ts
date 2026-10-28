@@ -1,4 +1,6 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { jsonbStringify } from "../util/text.ts";
+import type { Principal } from "../types.ts";
 
 export interface SwarmBoardPost {
   id: string;
@@ -10,6 +12,13 @@ export interface SwarmBoardPost {
   body: string;
   createdAt: number;
 }
+
+export interface SwarmNoticeContext {
+  actor: Principal;
+  audience: Principal[];
+}
+
+export type StrandedSwarmPost = SwarmBoardPost & { notice: SwarmNoticeContext };
 
 interface SwarmBoardChannel {
   name: string;
@@ -34,8 +43,8 @@ export interface SwarmBoard {
   search(swarmId: string, query: string, page: SwarmBoardPage): Promise<SwarmBoardPost[]>;
   thread(swarmId: string, rootId: string, after: number | undefined, limit: number): Promise<SwarmBoardPost[]>;
   post(swarmId: string, id: string): Promise<SwarmBoardPost | null>;
-  insert(post: SwarmBoardPost): Promise<void>;
-  stranded(after: { createdAt: number; id: string }, before: number, limit: number): Promise<SwarmBoardPost[]>;
+  insert(post: SwarmBoardPost, notice: SwarmNoticeContext): Promise<void>;
+  stranded(after: { createdAt: number; id: string }, before: number, limit: number): Promise<StrandedSwarmPost[]>;
   markNotified(swarmId: string, id: string): Promise<void>;
   subscribe(swarmId: string, memberId: string, channel: string): Promise<void>;
   unsubscribe(swarmId: string, memberId: string, channel: string): Promise<boolean>;
@@ -85,6 +94,13 @@ export function createPostgresSwarmBoard(connectionString: string): SwarmBoard {
       statements: [
         "ALTER TABLE swarm_board_posts ADD COLUMN IF NOT EXISTS notify_pending BOOLEAN NOT NULL DEFAULT false",
         "CREATE INDEX IF NOT EXISTS idx_swarm_board_posts_notify ON swarm_board_posts(swarm_id, created_at) WHERE notify_pending",
+      ],
+    },
+    {
+      id: "swarm-board/0003-notice-context",
+      statements: [
+        "ALTER TABLE swarm_board_posts ADD COLUMN IF NOT EXISTS notice_actor JSONB, ADD COLUMN IF NOT EXISTS notice_audience JSONB",
+        "UPDATE swarm_board_posts SET notify_pending = false WHERE notify_pending AND notice_actor IS NULL",
       ],
     },
   ]);
@@ -172,20 +188,35 @@ export function createPostgresSwarmBoard(connectionString: string): SwarmBoard {
       ]);
       return rows[0] ? toPost(rows[0]) : null;
     },
-    async insert(post) {
+    async insert(post, notice) {
       await pg.q(
-        `INSERT INTO swarm_board_posts(${POST_COLUMNS}, notify_pending) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true)`,
-        [post.id, post.swarmId, post.channel, post.threadId, post.authorId, post.authorName, post.body, post.createdAt],
+        `INSERT INTO swarm_board_posts(${POST_COLUMNS}, notify_pending, notice_actor, notice_audience)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, $9::jsonb, $10::jsonb)`,
+        [
+          post.id,
+          post.swarmId,
+          post.channel,
+          post.threadId,
+          post.authorId,
+          post.authorName,
+          post.body,
+          post.createdAt,
+          jsonbStringify(notice.actor),
+          jsonbStringify(notice.audience),
+        ],
       );
     },
     async stranded(after, before, limit) {
       const rows = await pg.q(
-        `SELECT ${POST_COLUMNS} FROM swarm_board_posts
-          WHERE notify_pending AND created_at < $1 AND (created_at > $2 OR (created_at = $2 AND id > $3))
+        `SELECT ${POST_COLUMNS}, notice_actor, notice_audience FROM swarm_board_posts
+          WHERE notify_pending AND notice_actor IS NOT NULL AND created_at < $1 AND (created_at > $2 OR (created_at = $2 AND id > $3))
           ORDER BY created_at, id LIMIT $4`,
         [before, after.createdAt, after.id, limit],
       );
-      return rows.map(toPost);
+      return rows.map((row) => ({
+        ...toPost(row),
+        notice: { actor: row.notice_actor as Principal, audience: row.notice_audience as Principal[] },
+      }));
     },
     async markNotified(swarmId, id) {
       await pg.q("UPDATE swarm_board_posts SET notify_pending = false WHERE swarm_id = $1 AND id = $2", [swarmId, id]);

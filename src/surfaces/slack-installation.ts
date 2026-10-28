@@ -290,11 +290,13 @@ async function readSlackSocketAppId(url: string): Promise<string> {
         if (frame.type !== "hello") return;
         const appId = frame.connection_info?.app_id;
         finish(appId ? null : new Error("Slack Socket Mode hello returned no app_id"), appId);
-      } catch {
-        finish(new Error("Slack Socket Mode returned an invalid hello frame"));
+      } catch (error) {
+        finish(new Error("Slack Socket Mode returned an invalid hello frame", { cause: error }));
       }
     });
-    socket.addEventListener("error", () => finish(new Error("Slack Socket Mode validation failed")));
+    socket.addEventListener("error", (event) =>
+      finish(new Error("Slack Socket Mode validation failed", { cause: (event as { error?: unknown }).error ?? event })),
+    );
     socket.addEventListener("close", () => finish(new Error("Slack Socket Mode closed before validation")));
   });
 }

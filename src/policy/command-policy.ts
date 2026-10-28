@@ -67,10 +67,93 @@ function forcePush(invocation: Invocation): string | undefined {
     ?.join(" ");
 }
 
+type SqlToken = { word: string } | { quoted: true } | { mark: string };
+
+const isSqlWordChar = (ch: string): boolean => /[\p{L}\p{N}_$]/u.test(ch);
+
+function quotedEnd(sql: string, start: number, quote: string, backslashEscapes: boolean): number {
+  let i = start + 1;
+  while (i < sql.length) {
+    const ch = sql.charAt(i);
+    if (backslashEscapes && ch === "\\") i += 2;
+    else if (ch !== quote) i += 1;
+    else if (sql.charAt(i + 1) === quote) i += 2;
+    else return i + 1;
+  }
+  return sql.length;
+}
+
+function blockCommentEnd(sql: string, start: number): number {
+  let depth = 0;
+  let i = start;
+  while (i < sql.length) {
+    if (sql.startsWith("/*", i)) {
+      depth += 1;
+      i += 2;
+    } else if (sql.startsWith("*/", i)) {
+      depth -= 1;
+      i += 2;
+      if (depth === 0) return i;
+    } else i += 1;
+  }
+  return sql.length;
+}
+
+function dollarTag(sql: string, start: number): string | undefined {
+  let i = start + 1;
+  while (i < sql.length && isSqlWordChar(sql.charAt(i)) && sql.charAt(i) !== "$") i += 1;
+  return sql.charAt(i) === "$" && !/\p{N}/u.test(sql.charAt(start + 1)) ? sql.slice(start, i + 1) : undefined;
+}
+
+function sqlTokens(sql: string): SqlToken[] {
+  const tokens: SqlToken[] = [];
+  let i = 0;
+  while (i < sql.length) {
+    const ch = sql.charAt(i);
+    const tag = ch === "$" ? dollarTag(sql, i) : undefined;
+    if (sql.startsWith("--", i)) {
+      const eol = sql.indexOf("\n", i);
+      i = eol < 0 ? sql.length : eol;
+    } else if (sql.startsWith("/*", i)) i = blockCommentEnd(sql, i);
+    else if (tag) {
+      const close = sql.indexOf(tag, i + tag.length);
+      const end = close < 0 ? sql.length : close;
+      for (const token of sqlTokens(sql.slice(i + tag.length, end))) tokens.push(token);
+      i = close < 0 ? sql.length : close + tag.length;
+    } else if (ch === "'" || ch === '"' || ch === "`") {
+      i = quotedEnd(sql, i, ch, false);
+      tokens.push({ quoted: true });
+    } else if (isSqlWordChar(ch)) {
+      let end = i + 1;
+      while (end < sql.length && isSqlWordChar(sql.charAt(end))) end += 1;
+      const word = sql.slice(i, end).toLowerCase();
+      if (word === "e" && sql.charAt(end) === "'") {
+        i = quotedEnd(sql, end, "'", true);
+        tokens.push({ quoted: true });
+      } else {
+        tokens.push({ word });
+        i = end;
+      }
+    } else {
+      if (!/\s/u.test(ch)) tokens.push({ mark: ch });
+      i += 1;
+    }
+  }
+  return tokens;
+}
+
 function destructiveSql(code: string): string | undefined {
-  const tokens = code.toLowerCase().split(/\W+/);
-  const at = tokens.findIndex((token, i) => (token === "drop" || token === "truncate") && tokens[i + 1] === "table");
-  return at < 0 ? undefined : `${tokens[at]} table`;
+  const tokens = sqlTokens(code);
+  const word = (at: number) => {
+    const token = tokens[at];
+    return token && "word" in token ? token.word : undefined;
+  };
+  for (let at = 0; at < tokens.length; at++) {
+    if (word(at) === "drop" && word(at + 1) === "table") return "drop table";
+    const operand = tokens[at + 1];
+    if (word(at) === "truncate" && operand && !("mark" in operand && operand.mark === "(")) return "truncate";
+  }
+  return undefined;
 }
 
 function mkfs(invocation: Invocation): string | undefined {

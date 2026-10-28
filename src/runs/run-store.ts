@@ -1,4 +1,4 @@
-import type { RunSignal, RunSignalStore } from "./run-signal-store.ts";
+import type { RunSignal } from "./run-signal-store.ts";
 import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { isPersonAuthored } from "../core/turn-origin.ts";
@@ -7,7 +7,6 @@ import { traceCarrier } from "../../plugins/chassis/src/error-reporting.ts";
 type RunStatus = "queued" | "pending" | "running" | "done" | "failed";
 
 export type RunPriority = 0 | 1 | 2;
-/** Crons treat a fire this old as stale, and a turn waiter gives up after it. */
 export const RUN_MAX_AGE_MS = 24 * 60 * 60_000;
 export const MAX_PREEMPTIONS = 3;
 
@@ -121,7 +120,7 @@ export interface RunStore {
   inFlightForThreads(sessionIds: readonly string[]): Promise<Run[]>;
 
   withdraw(runId: string, opts?: { unstartedOnly?: boolean }): Promise<boolean>;
-  steerQueued(queuedRunId: string, targetRunId: string, signal: RunSignal, signals: RunSignalStore): Promise<boolean>;
+  steerQueued(queuedRunId: string, targetRunId: string, signal: RunSignal): Promise<boolean>;
 
   editPendingText(runId: string, text: string, expectedText: string): Promise<boolean>;
 

@@ -16,8 +16,7 @@ const post = (key: string, type = "slack"): OutboundPost => ({
   idempotencyKey: key,
 });
 
-const queued = async (retries: QueuedPosts, key: string) =>
-  (await retries.entries()).find(([id]) => id === key)?.[1] ?? null;
+const queued = (retries: QueuedPosts, key: string) => retries.get(key);
 
 function rig() {
   const url = testDatabaseUrl();
@@ -42,7 +41,7 @@ test("a transient surface failure is queued, counted as sent once, and goes out 
   r.fail(new Error("Slack is unreachable"));
   assert.deepEqual(await r.outbound.send(post("k1")), { queued: true });
   assert.deepEqual(await r.outbound.send(post("k1")), {}, "a repeat of the key is not queued twice");
-  assert.equal((await r.retries.entries()).length, 1);
+  assert.ok(await queued(r.retries, "k1"));
   r.fail(new Error("Slack is still unreachable"));
   assert.equal(await r.outbound.retryQueued(), 0);
   assert.equal((await queued(r.retries, "k1"))?.lastError, "Slack is still unreachable", "kept with its latest error");
@@ -71,7 +70,8 @@ test("permanent refusals and web transcript failures throw instead of queueing",
   await assert.rejects(r.outbound.send(post("k2")), /channel_not_found/);
   r.fail(new Error("database unavailable"));
   await assert.rejects(r.outbound.send(post("k3", "web")), /database unavailable/);
-  assert.equal((await r.retries.entries()).length, 0);
+  assert.equal(await queued(r.retries, "k2"), null);
+  assert.equal(await queued(r.retries, "k3"), null);
   r.fail(null);
   await r.outbound.send(post("k2"));
   assert.deepEqual(r.sent, ["k2"], "a refused key was not remembered, so a later send can still go out");
@@ -86,8 +86,29 @@ test("a queued post that turns permanent or ages out is dropped", async () => {
   const k5 = (await queued(r.retries, "k5"))!;
   await r.retries.put("k5", { ...k5, firstFailedAt: k5.firstFailedAt - 7 * 60 * 60_000 });
   assert.equal(await r.outbound.retryQueued(), 0);
-  assert.equal((await r.retries.entries()).length, 0);
+  assert.equal(await queued(r.retries, "k4"), null);
+  assert.equal(await queued(r.retries, "k5"), null);
   assert.deepEqual(r.sent, []);
+});
+
+test("concurrent retry passes send a queued post once", async () => {
+  const url = testDatabaseUrl();
+  const retries = createQueuedPosts(url);
+  const queuedOnly = createOutbound({ retries });
+  await queuedOnly.send(post("k8"));
+  const sent: string[] = [];
+  const passes = [0, 1].map(() => {
+    const outbound = createOutbound({ retries: createQueuedPosts(url) });
+    outbound.register(["slack"], async (p) => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      sent.push(p.idempotencyKey);
+    });
+    return outbound;
+  });
+  const counts = await Promise.all(passes.map((outbound) => outbound.retryQueued()));
+  assert.equal(counts[0]! + counts[1]!, 1);
+  assert.deepEqual(sent, ["k8"]);
+  assert.equal(await queued(retries, "k8"), null);
 });
 
 const THREAD = "web:alice@example.com:conv-1";
