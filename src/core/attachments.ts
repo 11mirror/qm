@@ -195,7 +195,7 @@ export function inboundIssueList(opts: {
   return issues;
 }
 
-export function sharedManifest(handles: readonly GrantedHandle[], budgetTokens: number): string {
+export function sharedFilesSystemSection(handles: readonly GrantedHandle[], budgetTokens: number): string {
   const seen = new Set<string>();
   const lines: string[] = [];
   for (const h of handles) {
@@ -208,13 +208,7 @@ export function sharedManifest(handles: readonly GrantedHandle[], budgetTokens: 
   const { kept, omitted } = linesWithinTokenBudget(lines.sort(), budgetTokens);
   if (omitted > 0) kept.push(`…and ${omitted} more (read shared/<name> to fetch)`);
   const noun = total === 1 ? "file" : "files";
-  return `${total} ${noun} shared with you — read a path below to fetch that file on demand:\n${kept.join("\n")}`;
-}
-
-export function sharedFilesSystemSection(handles: readonly GrantedHandle[], budgetTokens: number): string {
-  const body = sharedManifest(handles, budgetTokens);
-  if (!body) return "";
-  return `## Files shared with you\n${body}`;
+  return `## Files shared with you\n${total} ${noun} shared with you — read a path below to fetch that file on demand:\n${kept.join("\n")}`;
 }
 
 export function environmentNote(text: string): string {
