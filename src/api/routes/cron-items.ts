@@ -9,6 +9,7 @@ import { isObj, refuse } from "./shared.ts";
 import { type ApiCtx, ok, reply, type Route, type RouteResult, withActor } from "./route.ts";
 import { canAdministerCron } from "../control-service.ts";
 import { unattendedGrantRefusal } from "../../cron/authority.ts";
+import { validateUserSchedule } from "../../cron/schedule.ts";
 import { scopeId, parseScopeId } from "../../types.ts";
 import { isResolved, isLedgerState, ledgerItemView, ledgerState, sortLedgerItems } from "../../inbox/view.ts";
 import { inboxItemId, type IngestEntryInput, type InboxEventSink, type InboxLedger } from "../../inbox/ledger.ts";
@@ -583,6 +584,7 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<RouteResult> {
       : INBOX_SYNC_DEFAULT_EVERY_MS;
   const enable = body.enabled !== false;
   try {
+    validateUserSchedule({ everyMs });
     const existing = await inboxCrons(appCrons(ctx), owner);
     const requested = typeof body.cronId === "string" ? body.cronId : null;
     const sources = INBOX_SOURCES.filter(

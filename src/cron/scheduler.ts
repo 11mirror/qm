@@ -113,7 +113,7 @@ export function flattenFireNote(text: string): string {
 function fireNoteLine(note: CronFireNote | undefined): string[] {
   if (!note || !Number.isFinite(note.at)) return [];
   const text = flattenFireNote(note.text);
-  if (!text) return [];
+  if (!text || echoesCronContextMarkers(text)) return [];
   return [
     note.by
       ? `Note left for this fire by ${note.by} (${utcMinute(note.at)}): ${text}`
@@ -462,10 +462,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const tick = async (nowArg?: number): Promise<void> => {
     const t = nowArg ?? now();
     await withWork(async () => {
-      const due = (await deps.crons.list())
-        .map((cron) => (cron.enabled && !cron.archived ? nextJob(cron) : undefined))
-        .filter((job): job is CronFireJob => job !== undefined && job.scheduledAt <= t);
-      await Promise.all(due.map((job) => fireJob(job, t).catch(reportFailureAs("scheduler: fire", undefined))));
+      for (const cron of await deps.crons.list()) {
+        const job = cron.enabled && !cron.archived ? nextJob(cron) : undefined;
+        if (job && job.scheduledAt <= t) await fireJob(job, t).catch(reportFailureAs("scheduler: fire", undefined));
+      }
     });
   };
 

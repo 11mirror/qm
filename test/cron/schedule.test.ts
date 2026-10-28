@@ -13,8 +13,8 @@ test("accepts elapsed-time intervals of a day or longer", () => {
   }
 });
 
-test("accepts a sub-minute recurring interval", () => {
-  assert.doesNotThrow(() => validateUserSchedule({ everyMs: 1_000 }));
+test("rejects recurring schedules faster than once a minute", () => {
+  assert.throws(() => validateUserSchedule({ everyMs: 59_999 }), /at least 60000ms/);
 });
 
 test("allows a sub-day polling interval", () => {
