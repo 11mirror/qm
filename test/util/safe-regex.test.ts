@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { compileSafeRegex } from "../../src/util/safe-regex.ts";
 
 test("compileSafeRegex rejects repetition nested at any group depth", () => {
-  for (const pattern of ["(a+)+", "((a+))+", "(?:(a+)b)+", "((a|b))*", "(((a*)))+"]) {
+  for (const pattern of ["(a+)+", "((a+))+", "(?:(a+)b)+", "((a|b))*", "(((a*)))+", "(a|a)?", "(a+)?"]) {
     assert.throws(() => compileSafeRegex(pattern), /nested or ambiguous repetition/, pattern);
   }
 });

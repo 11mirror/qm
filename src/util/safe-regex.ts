@@ -5,11 +5,11 @@ export function compileSafeRegex(pattern: string, flags = ""): RegExp {
     throw new Error(`pattern must be 1-${MAX_PATTERN_CHARS} characters`);
   if (/\\[1-9]|\\k<|\(\?[=!<]/.test(pattern)) throw new Error("backreferences and lookarounds are not supported");
 
-  const groups: Array<{ quantified: boolean; alternation: boolean }> = [];
+  const groups: Array<{ quantified: boolean; alternation: boolean; nested: boolean }> = [];
   let escaped = false;
   let inClass = false;
   let previousQuantifier = false;
-  let closed: { quantified: boolean; alternation: boolean } | null = null;
+  let closed: { quantified: boolean; alternation: boolean; nested: boolean } | null = null;
   for (let i = 0; i < pattern.length; i++) {
     const ch = pattern[i]!;
     if (escaped) {
@@ -34,7 +34,7 @@ export function compileSafeRegex(pattern: string, flags = ""): RegExp {
     }
     if (inClass) continue;
     if (ch === "(") {
-      groups.push({ quantified: false, alternation: false });
+      groups.push({ quantified: false, alternation: false, nested: false });
       previousQuantifier = false;
       closed = null;
       continue;
@@ -46,18 +46,18 @@ export function compileSafeRegex(pattern: string, flags = ""): RegExp {
       continue;
     }
     if (ch === ")") {
-      closed = groups.pop() ?? { quantified: false, alternation: false };
+      closed = groups.pop() ?? { quantified: false, alternation: false, nested: false };
       const parent = groups.at(-1);
-      if (parent) {
-        parent.quantified ||= closed.quantified;
-        parent.alternation ||= closed.alternation;
-      }
+      if (parent) parent.nested ||= closed.quantified || closed.alternation || closed.nested;
       previousQuantifier = false;
       continue;
     }
     const quantifier = ch === "*" || ch === "+" || (ch === "?" && pattern[i - 1] !== "(") || ch === "{";
     if (quantifier) {
-      if (previousQuantifier || (closed && ch !== "?" && (closed.quantified || closed.alternation))) {
+      if (
+        previousQuantifier ||
+        (closed && (closed.quantified || closed.alternation || (ch !== "?" && closed.nested)))
+      ) {
         throw new Error("nested or ambiguous repetition is not supported");
       }
       if (groups.length) groups[groups.length - 1]!.quantified = true;
