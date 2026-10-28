@@ -1,14 +1,10 @@
 import { AsyncResource } from "node:async_hooks";
-import { createPgPool, type Rows, tenantCols } from "../persistence/pg-pool.ts";
+import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
 import { jsonbStringify } from "../util/text.ts";
 import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
 import type { RunSignal, RunSignalStore } from "./run-signal-store.ts";
 
 const CHANNEL = "run_signals";
-
-function toSignals(rows: Rows): RunSignal[] {
-  return rows.sort((a, b) => Number(a.id) - Number(b.id)).map((r) => r.payload as RunSignal);
-}
 
 export function createPostgresRunSignalStore(connectionString: string): RunSignalStore {
   const pg = createPgPool(connectionString, []);
@@ -68,7 +64,7 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
         "SELECT id, payload FROM run_signals WHERE run_id=$1 AND consumed_at IS NULL ORDER BY id",
         [runId],
       );
-      return rows.map((row) => ({ id: String(row.id), signal: toSignals([row])[0]! }));
+      return rows.map((row) => ({ id: String(row.id), signal: row.payload as RunSignal }));
     },
     async acknowledge(runId, id) {
       await q("UPDATE run_signals SET consumed_at=$3 WHERE run_id=$1 AND id=$2 AND consumed_at IS NULL", [
@@ -77,16 +73,6 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
         Date.now(),
       ]);
     },
-    async takePending(runId) {
-      const { rows } = await q(
-        `UPDATE run_signals SET consumed_at=$2
-         WHERE run_id=$1 AND consumed_at IS NULL
-         RETURNING id, payload`,
-        [runId, Date.now()],
-      );
-      return toSignals(rows);
-    },
-
     async pendingRunIds() {
       const { rows } = await q(`SELECT DISTINCT run_id FROM run_signals WHERE consumed_at IS NULL`);
       return rows.map((r) => r.run_id as string);

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { ClientToolResult, TurnRequest } from "../types.ts";
 import { reportFailureAs, swallowAs } from "../util/errors.ts";
@@ -23,76 +22,11 @@ export interface RunSignalStore {
   hasDedupeKey(dedupeKey: string): Promise<boolean>;
   pending(runId: string): Promise<Array<{ id: string; signal: RunSignal }>>;
   acknowledge(runId: string, id: string): Promise<void>;
-  takePending(runId: string): Promise<RunSignal[]>;
   steerAuthors(runId: string): Promise<string[]>;
   pendingRunIds(): Promise<string[]>;
   prune(olderThanMs: number): Promise<void>;
   onSignal(runId: string, cb: () => void): () => void;
   close?(): Promise<void>;
-}
-
-export function createMemoryRunSignalStore(): RunSignalStore {
-  const pending = new Map<string, RunSignal[]>();
-  const receipts = new WeakMap<RunSignal, string>();
-  const authors = new Map<string, Array<{ at: number; author: string }>>();
-  const listeners = new Map<string, Set<() => void>>();
-  const dedupeKeys = new Set<string>();
-  return {
-    async send(runId, signal) {
-      if (signal.dedupeKey) {
-        if (dedupeKeys.has(signal.dedupeKey)) return false;
-        dedupeKeys.add(signal.dedupeKey);
-      }
-      const list = pending.get(runId) ?? [];
-      signal = { ...signal };
-      receipts.set(signal, randomUUID());
-      list.push(signal);
-      pending.set(runId, list);
-      const author = signal.kind === "steer" ? signal.request?.actor?.externalId : undefined;
-      if (author) authors.set(runId, [...(authors.get(runId) ?? []), { at: Date.now(), author }]);
-      for (const cb of listeners.get(runId) ?? []) cb();
-      return true;
-    },
-    async hasDedupeKey(dedupeKey) {
-      return dedupeKeys.has(dedupeKey);
-    },
-    async steerAuthors(runId) {
-      return [...new Set((authors.get(runId) ?? []).map((a) => a.author))];
-    },
-    async pending(runId) {
-      return (pending.get(runId) ?? []).map((signal) => ({ id: receipts.get(signal)!, signal }));
-    },
-    async acknowledge(runId, id) {
-      const remaining = (pending.get(runId) ?? []).filter((signal) => receipts.get(signal) !== id);
-      if (remaining.length) pending.set(runId, remaining);
-      else pending.delete(runId);
-    },
-    async takePending(runId) {
-      const list = pending.get(runId) ?? [];
-      pending.delete(runId);
-      return list;
-    },
-    async pendingRunIds() {
-      return [...pending.keys()];
-    },
-    async prune(olderThanMs) {
-      const cutoff = Date.now() - olderThanMs;
-      for (const [runId, list] of authors) {
-        const kept = list.filter((a) => a.at >= cutoff);
-        if (kept.length) authors.set(runId, kept);
-        else authors.delete(runId);
-      }
-    },
-    onSignal(runId, cb) {
-      const set = listeners.get(runId) ?? new Set();
-      set.add(cb);
-      listeners.set(runId, set);
-      return () => {
-        set.delete(cb);
-        if (set.size === 0) listeners.delete(runId);
-      };
-    },
-  };
 }
 
 export function waitForClientResult(
@@ -162,7 +96,7 @@ export function startSignalPoll(
   signals: RunSignalStore,
   runId: string,
   handlers: SignalPollHandlers,
-  opts?: { intervalMs?: number; onError?: (e: unknown) => void; drainOnStop?: boolean },
+  opts?: { intervalMs?: number; onError?: (e: unknown) => void },
 ): () => Promise<void> {
   const declined = new Set<string>();
   const onError = opts?.onError ?? reportFailureAs("run signals: poll", undefined, `run=${runId}`);
@@ -170,8 +104,8 @@ export function startSignalPoll(
   let redrain = false;
   let accepting = true;
   let inFlight: Promise<void> = Promise.resolve();
-  const drain = (forced = false): void => {
-    if (!accepting && !forced) return;
+  const drain = (): void => {
+    if (!accepting) return;
     if (draining) {
       redrain = true;
       return;
@@ -220,7 +154,6 @@ export function startSignalPoll(
     accepting = false;
     clearInterval(timer);
     unsubscribe();
-    if (opts?.drainOnStop) drain(true);
     for (;;) {
       const current = inFlight;
       await current;

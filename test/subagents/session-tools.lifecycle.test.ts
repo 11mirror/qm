@@ -8,6 +8,7 @@ import { scopeId } from "../../src/types.ts";
 import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
 import { claimTurn, completeTurn, finishTurn } from "../support/turns.ts";
 import { actor, scope, conversation, rig, freshSession, closeRigStores } from "../support/subagent-rig.ts";
+import { takePending } from "../support/memory-run-signal-store.ts";
 
 after(closeRigStores);
 
@@ -135,7 +136,7 @@ test("write queues separately from a running child and interrupts explicitly", a
   const steered = await syscalls.write({ followup: true, target: opened.sessionId, text: "focus on the canary" });
   assert.ok(steered.ok);
   assert.equal(steered.delivered, "queued_turn");
-  const pending = await r.signals.takePending(queued.id);
+  const pending = await takePending(r.signals, queued.id);
   assert.equal(pending.length, 0);
   const followup = (await r.runs.inFlightForThread(child.threadRef)).find((run) => run.id !== queued.id)!;
   assert.equal(followup.request.origin.kind, "automation");
@@ -144,7 +145,7 @@ test("write queues separately from a running child and interrupts explicitly", a
   const interrupted = await syscalls.write({ target: opened.sessionId, interrupt: true });
   assert.ok(interrupted.ok);
   assert.equal(interrupted.delivered, "interrupted");
-  assert.equal((await r.signals.takePending(queued.id))[0]!.kind, "abort");
+  assert.equal((await takePending(r.signals, queued.id))[0]!.kind, "abort");
 
   await finishTurn(claimed, { status: "ok", reply: "done" });
   const retask = await syscalls.write({ followup: true, target: "watch_deploy", text: "check it again" });
@@ -504,7 +505,7 @@ test("ordinary-session messages queue privately without steering an externally d
   const result = await r.syscallsFor(r.room).write({ target: target.id, text: "an intermediate update" });
   assert.ok(result.ok);
   assert.equal(result.delivered, "queued_message");
-  assert.deepEqual(await r.signals.takePending(run.id), []);
+  assert.deepEqual(await takePending(r.signals, run.id), []);
   assert.equal((await r.runs.inFlightForThread(target.threadRef)).length, 1);
   const [mail] = await r.mailbox.pending(target.id);
   assert.match(mail!.text, /an intermediate update/);
@@ -528,7 +529,7 @@ test("read-only callers cannot steer writable children and preserve the floor wh
   });
   const refused = await api.write({ followup: true, target: child.id, text: "change things" });
   assert.ok(refused.ok);
-  assert.deepEqual(await r.signals.takePending(run!.id), []);
+  assert.deepEqual(await takePending(r.signals, run!.id), []);
   await finishTurn(claimed!, { status: "ok", reply: "finished" });
   const queued = await api.write({ followup: true, target: child.id, text: "inspect only" });
   assert.ok(queued.ok);
@@ -548,7 +549,7 @@ test("writes revalidate access even while a target is running", async () => {
     authorize: async (session) => session.id !== child.id,
   }).forTurn({ session: r.room, scopeId: scope, request: { actor, conversation } });
   assert.equal((await api.write({ target: child.id, text: "hello" })).ok, false);
-  assert.deepEqual(await r.signals.takePending(run!.id), []);
+  assert.deepEqual(await takePending(r.signals, run!.id), []);
 });
 
 test("completion cannot expand the finished run's audience and retries after its return delay", async (t) => {

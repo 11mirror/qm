@@ -8,12 +8,13 @@ import { forModelContext } from "../../src/harness/context-compaction.ts";
 import type { ToolContext } from "../../src/tools/primitives.ts";
 import { storedItem, type Item, type NewItem } from "../../src/sessions/items.ts";
 import type { ScopeId } from "../../src/types.ts";
-import { createMemoryRunSignalStore, type RunSignalStore } from "../../src/runs/run-signal-store.ts";
+import { type RunSignalStore } from "../../src/runs/run-signal-store.ts";
 import { createMemoryDurableByteStore } from "../../src/files/durable-byte-store.ts";
 import { artifactImageLoader, ELIDED_IMAGE_TEXT, restoreReplayImages } from "../../src/harness/replay-images.ts";
 import { createPostgresToolOutputStore, type ToolOutputStore } from "../../src/sessions/tool-output.ts";
 import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
+import { createMemoryRunSignalStore } from "../support/memory-run-signal-store.ts";
 
 type Body = { messages?: unknown[]; input?: unknown[] };
 type Reply = Array<Record<string, unknown>>;

@@ -18,6 +18,7 @@ import {
   delegatedHumanRig,
   closeRigStores,
 } from "../support/subagent-rig.ts";
+import { takePending } from "../support/memory-run-signal-store.ts";
 
 after(closeRigStores);
 
@@ -43,7 +44,7 @@ test("private session replies stay read-only, queue behind running work, and do 
   const sent = await privateCaller.write({ target: child.id, text: "Here is the answer" });
   assert.ok(sent.ok);
   assert.equal(sent.delivered, "queued_message");
-  assert.equal((await r.signals.takePending(initial.id)).length, 0);
+  assert.equal((await takePending(r.signals, initial.id)).length, 0);
   assert.equal((await r.runs.inFlightForThread(child.threadRef)).length, 1);
   assert.equal((await r.mailbox.pending(child.id)).length, 1);
   assert.equal((await privateCaller.write({ target: child.id, text: "wake", followup: true })).ok, false);

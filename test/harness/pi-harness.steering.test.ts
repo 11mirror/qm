@@ -5,11 +5,11 @@ import { createPiHarness } from "../../src/harness/pi-harness.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../../src/harness/harness.ts";
 import { promptEnvelopeBody } from "../../src/sessions/session-store.ts";
 import { storedItem, type Item, type NewItem } from "../../src/sessions/items.ts";
-import { createMemoryRunSignalStore } from "../../src/runs/run-signal-store.ts";
 import type { ScopeId } from "../../src/types.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
 import { sse, textReplyEvents } from "../support/anthropic-sse.ts";
+import { takePending, createMemoryRunSignalStore } from "../support/memory-run-signal-store.ts";
 
 type Sink = {
   entries: Item[];
@@ -123,7 +123,7 @@ for (const variant of ["text", "images", "documents", "finished during preparati
       const result = await harness.turns.runTurn(turn);
       if (finishDuringPreparation) {
         assert.equal(result.reply, "first step");
-        const pending = await signals.takePending("run-order");
+        const pending = await takePending(signals, "run-order");
         assert.equal(pending.length, 1);
         assert.equal(pending[0]?.text, "actually, do it differently");
         return;
@@ -145,7 +145,7 @@ for (const variant of ["text", "images", "documents", "finished during preparati
         );
       assert.equal(steeredEntry.body.ts, "1712.001", "the steer entry is stamped with its arrival ts");
       assert.match(steeredEntry.text ?? "", /actually, do it differently/);
-      assert.deepEqual(await signals.takePending("run-order"), [], "consumed steer is acknowledged");
+      assert.deepEqual(await takePending(signals, "run-order"), [], "consumed steer is acknowledged");
       assert.equal(calls, 2);
       assert.deepEqual(
         requestMessages[1]!.map((message) => message.role),
