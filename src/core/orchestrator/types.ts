@@ -192,7 +192,6 @@ export interface OrchestratorDeps {
   brokeredTools?: readonly BrokeredLayerTool[];
   deploymentLayer?: DeploymentLayerRuntime;
   surfaceContext?: SurfaceContextPuller;
-  surfaceSearch?: SurfaceSearchStore;
   surfaceCache?: SurfaceCache;
   surfaceLabel?: (surface: string) => string | undefined;
   channelPolicy?: ChannelPolicyStore;
@@ -201,22 +200,6 @@ export interface OrchestratorDeps {
 export interface SurfaceContextPuller {
   pull(source: string, query: SurfaceContextQuery): Promise<SurfaceContextResult | null>;
   searchLive?(source: string, query: SurfaceContextQuery): Promise<SurfaceContextResult | null>;
-}
-
-interface SurfaceSearchStore {
-  search(query: SurfaceSearchQuery): Promise<SurfaceSearchStoreHit[]>;
-}
-interface SurfaceSearchQuery {
-  surface: string;
-  container: string;
-  query: string;
-  limit: number;
-}
-interface SurfaceSearchStoreHit {
-  ref?: string;
-  author?: string;
-  when?: string;
-  snippet: string;
 }
 
 export interface Orchestrator {
