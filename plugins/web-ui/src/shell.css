@@ -2856,8 +2856,6 @@ qm-markdown .tok-in {
   padding-left: 10px;
   border-left: 2px solid var(--border);
   color: var(--muted-foreground);
-  text-decoration: line-through;
-  text-decoration-color: color-mix(in srgb, var(--muted-foreground) 45%, transparent);
   font-size: max(min(12px, calc(var(--chat-font-size) - 1px)), calc((var(--chat-font-size) - 1px) * var(--text-scale)));
   line-height: 1.55;
 }
