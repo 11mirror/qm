@@ -368,12 +368,19 @@ function surfaceCoverage(turn: SurfaceTurn): () => Promise<string | undefined> {
 
 const TEXT_SNIFF_BYTES = 8000;
 
-async function readTextPage(stream: Readable, offset: number): Promise<string | null> {
-  const wanted = offset + SURFACE_FILE_PAGE_CHARS;
+async function readTextPage(
+  stream: Readable,
+  offset: number,
+): Promise<{ content: string; nextOffset?: number } | null> {
   const decoder = new TextDecoder();
   const head: Buffer[] = [];
   let headBytes = 0;
-  let text = "";
+  let seen = 0;
+  let kept = "";
+  const keep = (piece: string) => {
+    if (seen + piece.length > offset) kept += piece.slice(Math.max(0, offset - seen));
+    seen += piece.length;
+  };
   for await (const chunk of stream as AsyncIterable<Buffer>) {
     if (headBytes < TEXT_SNIFF_BYTES) {
       head.push(chunk);
@@ -383,14 +390,17 @@ async function readTextPage(stream: Readable, offset: number): Promise<string | 
         return null;
       }
     }
-    text += decoder.decode(chunk, { stream: true });
-    if (text.length > wanted) {
+    keep(decoder.decode(chunk, { stream: true }));
+    if (kept.length > SURFACE_FILE_PAGE_CHARS) {
       stream.destroy();
-      return text;
+      return { content: kept.slice(0, SURFACE_FILE_PAGE_CHARS), nextOffset: offset + SURFACE_FILE_PAGE_CHARS };
     }
   }
   if (headBytes < TEXT_SNIFF_BYTES && !headLooksLikeText(Buffer.concat(head))) return null;
-  return text + decoder.decode();
+  keep(decoder.decode());
+  return kept.length > SURFACE_FILE_PAGE_CHARS
+    ? { content: kept.slice(0, SURFACE_FILE_PAGE_CHARS), nextOffset: offset + SURFACE_FILE_PAGE_CHARS }
+    : { content: kept };
 }
 
 function readingTools(
@@ -499,16 +509,9 @@ function readingTools(
         return { ok: false, message: errMessage(e) };
       }
       if (!blob) return { ok: false, message: "I can't find that file — it may have expired." };
-      const page = await readTextPage(blob.stream, offset);
+      const page = await readTextPage(blob.stream, Math.max(0, offset));
       if (page === null) return { ok: true, sizeBytes: blob.sizeBytes, contentType: "application/octet-stream" };
-      const start = Math.max(0, Math.min(offset, page.length));
-      const end = Math.min(page.length, start + SURFACE_FILE_PAGE_CHARS);
-      return {
-        ok: true,
-        content: page.slice(start, end),
-        sizeBytes: blob.sizeBytes,
-        ...(end < page.length ? { nextOffset: end } : {}),
-      };
+      return { ok: true, ...page, sizeBytes: blob.sizeBytes };
     },
   };
 }

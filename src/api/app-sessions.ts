@@ -10,7 +10,8 @@ import { supportsProcessSessions } from "../sandbox/sandbox.ts";
 import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import { cronIsActive, cronTiedTo } from "../cron/cron-store.ts";
 import { randomUUID } from "node:crypto";
-import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../core/attachments.ts";
+import { MAX_ATTACHMENT_BYTES, safeAttachmentName } from "../core/attachments.ts";
+import { mimeFromName } from "../core/document-kinds.ts";
 
 import { type App, type AppDeps, toFileItem, type SessionSearchHit } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";

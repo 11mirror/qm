@@ -105,9 +105,12 @@ export async function summarizeApproval(
 ): Promise<string | undefined> {
   if (!deps.harness.models.summarizeApproval) return undefined;
   try {
+    const timeoutMs = deps.approvalSummaryTimeoutMs ?? CONFIG_DEFAULTS.approvalSummaryTimeoutMs;
     const summary = await Promise.race([
       deps.harness.models.summarizeApproval(command, reason, purpose),
-      sleep(deps.approvalSummaryTimeoutMs ?? CONFIG_DEFAULTS.approvalSummaryTimeoutMs).then(() => undefined),
+      sleep(timeoutMs).then(() => {
+        throw new Error(`the approval summary took longer than ${timeoutMs} ms`);
+      }),
     ]);
     return summary?.trim() || undefined;
   } catch (e) {

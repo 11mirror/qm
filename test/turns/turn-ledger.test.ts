@@ -329,7 +329,7 @@ test("the runner retries a failed turn within QM's error budget and then records
   assert.equal(await pointer(thread), null);
 });
 
-test("a turn whose result cannot be saved records a bare failure instead of retrying forever", { skip }, async () => {
+test("a turn whose result the database rejects records a bare failure", { skip }, async () => {
   const thread = `web:alice:${randomUUID()}`;
   const admitted = await admit(thread);
   const orchestrator = {
@@ -343,7 +343,8 @@ test("a turn whose result cannot be saved records a bare failure instead of retr
     async finish(run, token, outcome) {
       if (outcome.result.reply !== "unsaveable") return ledger.finish(run, token, outcome);
       rejected += 1;
-      throw new Error("unsupported Unicode escape sequence");
+      if (rejected < 3) throw new Error("connection terminated unexpectedly");
+      throw Object.assign(new Error("unsupported Unicode escape sequence"), { code: "22P05" });
     },
   };
   const runner = createTurnRunner({ ledger: rejecting, orchestrator, queues: TURN_QUEUES, slots: 1, pollMs: 50 });
@@ -354,7 +355,7 @@ test("a turn whose result cannot be saved records a bare failure instead of retr
     timeoutMs: 20_000,
   });
   await runner.stopClaims();
-  assert.equal(rejected, 5);
+  assert.equal(rejected, 3);
   assert.match(run?.result?.reason ?? "", /could not be saved/);
   assert.equal(await pointer(thread), null);
 });

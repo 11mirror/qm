@@ -5,7 +5,12 @@ import { test } from "node:test";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { documentBlocks, nativeDocumentFormat, withDocumentInputs } from "../../src/harness/document-inputs.ts";
-import { documentTokenCharges, estimateDocumentTokens, isDocumentAttachment } from "../../src/core/document-kinds.ts";
+import {
+  documentTokenCharges,
+  estimateDocumentTokens,
+  isDocumentAttachment,
+  mimeFromName,
+} from "../../src/core/document-kinds.ts";
 import {
   documentFallbackText,
   documentText,
@@ -14,7 +19,6 @@ import {
   type DocumentInput,
 } from "../../src/core/document-inputs.ts";
 import { guardOutputBudget, sanitizeLlmPayload, trimPayloadToByteBudget } from "../../src/harness/pi-payload.ts";
-import { mimeFromName } from "../../src/core/attachments.ts";
 import type { AttachmentMeta } from "../../src/types.ts";
 import { storedItem, type NewItem } from "../../src/sessions/items.ts";
 import type { FileArtifact, FileArtifactStore } from "../../src/files/file-artifact-store.ts";

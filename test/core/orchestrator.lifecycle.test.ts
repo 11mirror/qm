@@ -154,13 +154,15 @@ test("a HiLO approval falls back to the static reason when the summarizer throws
 });
 
 test("a HiLO approval summarizer that hangs past the deadline falls back without delaying the approval", async () => {
-  const { app } = freshApp({ approvalSummaryTimeoutMs: 50 });
+  const { app, errors } = freshApp({ approvalSummaryTimeoutMs: 50 });
   assert.equal((await app.turn(dm("hello", { conversation: { kind: "dm", threadRef: "dm:U1:warm" } }))).status, "ok");
   const started = Date.now();
   const first = await app.turn(dm("!run rm -rf build !summary-hang"));
   assert.equal(first.status, "pending_approval");
   assert.equal(first.pendingApprovals![0]!.summary, undefined, "the hung summary is abandoned at the deadline");
   assert.ok(Date.now() - started < 2_000, "the approval is abandoned at the (configured) deadline, not the 6s default");
+  const recorded = (await errors.list()).find((e) => e.code === "summary_failed");
+  assert.match(recorded?.message ?? "", /longer than 50 ms/);
 });
 
 test("denying a pending approval keeps the turn working without the command", async () => {
