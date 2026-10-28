@@ -3202,6 +3202,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const releaseHeld = () => {
           if (heldRunId) deps.turnStream!.release(heldRunId);
         };
+        const flushHeld = () => {
+          if (!heldRunId) return;
+          deps.turnStream!.release(heldRunId);
+          deps.turnStream!.hold(heldRunId);
+        };
         const conversationGuidance = deps.config?.getSoul(scopeId) ?? undefined;
         const replyCheck =
           replyCheckMode && deps.decide
@@ -3255,7 +3260,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const silentResume = continueTurn && !continuation && !snapshot.text && !recall.text;
           let recordedRecall = false;
           const emit: HarnessTurnInput["emit"] = async (incoming) => {
-            if (incoming.type === "tool_call") releaseHeld();
+            if (incoming.type === "tool_call") flushHeld();
             const entry = replyCheck ? await replyCheck.review(incoming) : incoming;
             turnProgress++;
             const stored = (() => {
@@ -3673,7 +3678,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 deps.turnStream.publishReasoning(input.runId, step, index, chunk);
             },
             onToolCallStart: (name: string) => {
-              releaseHeld();
+              flushHeld();
               if (!earlyTaskAck || name === surfaceName) return;
               if (input.surfaceTools) publishFirstAck(false);
               else if (input.runId) deps.turnStream?.noteToolCall(input.runId);
@@ -3764,7 +3769,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
           await mirrored;
           const revisionPrompt = replyCheck?.takeRevision();
-          if (revisionPrompt && !segment.stopped && !segment.pausedOnApproval && !turnAbort.signal.aborted) {
+          if (
+            revisionPrompt &&
+            !segment.stopped &&
+            !segment.pausedOnApproval &&
+            !segment.pendingApprovals?.length &&
+            !turnAbort.signal.aborted
+          ) {
             return runHarnessTurn(revisionPrompt, inbound.images.length ? { images: inbound.images } : {}, {
               history: filterHistory(forModelContext((await historyWindow()).entries)),
             });

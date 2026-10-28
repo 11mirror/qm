@@ -130,6 +130,7 @@ test("narration before a tool call still streams while the final reply is held",
   });
 
   assert.equal(run?.partial?.startsWith("Looking that up now."), true);
+  assert.equal(run?.partial?.split("All clear").length, 2);
   assert.equal(entries.filter((e) => e.type === "assistant").length, 1);
   assert.ok((run?.result?.reply ?? "").includes(REVISE_MESSAGE));
 });
