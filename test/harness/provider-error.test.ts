@@ -111,11 +111,12 @@ test("over-window prompts classify as context_too_long from structured signals",
   assert.equal(providerTurnError(failedWith({ status: 413, type: "request_too_large" })).code, "context_too_long");
   const anthropic400 = failedWith({ status: 400, type: "invalid_request_error" });
   assert.equal(
-    providerTurnError(anthropic400, { contextWindow: 200_000, lastInputTokens: 195_000 }).code,
+    providerTurnError({ ...anthropic400, errorMessage: "prompt is too long: 213462 tokens > 200000 maximum" }).code,
     "context_too_long",
   );
   assert.equal(
-    providerTurnError(anthropic400, { contextWindow: 200_000, lastInputTokens: 20_000 }).code,
+    providerTurnError({ ...anthropic400, errorMessage: "messages.1.content: tool_use ids must be unique" }).code,
     "bad_request",
+    "an unrelated invalid request on a nearly full window is not an overflow",
   );
 });

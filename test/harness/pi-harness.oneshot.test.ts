@@ -112,7 +112,7 @@ test("Pi title generation surfaces provider failures to its caller", async (t) =
   await assert.rejects(harness.models.generateTitle!("User:\nInvestigate the deploy"));
 });
 
-test("Pi title generation rejects a reply-shaped answer with the rule that fired and the rejected text", async (t) => {
+test("Pi title generation rejects a plain-text answer with the rule that fired and the rejected text", async (t) => {
   const server = createServer((request, response) => {
     request.resume();
     request.on("end", () => {
@@ -171,12 +171,12 @@ test("Pi title generation rejects a reply-shaped answer with the rule that fired
 
   await assert.rejects(harness.models.generateTitle!("User:\nInvestigate the deploy"), {
     name: "TitleRejected",
-    rule: "reply_opener",
-    message: 'reply_opener: "Sorry, I can\'t summarize that"',
+    rule: "no_title",
+    message: 'no_title: "Sorry, I can\'t summarize that"',
   });
 });
 
-test("Pi title generation accepts the prompted NONE sentinel without reporting a failure", async (t) => {
+test("Pi title generation accepts an answer that leaves the title out without reporting a failure", async (t) => {
   const server = createServer((request, response) => {
     request.resume();
     request.on("end", () => {
@@ -195,12 +195,16 @@ test("Pi title generation accepts the prompted NONE sentinel without reporting a
             usage: { input_tokens: 1, output_tokens: 0 },
           },
         },
-        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: " NONE\n" } },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "tool_use", id: "toolu_title", name: "answer", input: {} },
+        },
+        { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "{}" } },
         { type: "content_block_stop", index: 0 },
         {
           type: "message_delta",
-          delta: { stop_reason: "end_turn", stop_sequence: null },
+          delta: { stop_reason: "tool_use", stop_sequence: null },
           usage: { output_tokens: 1 },
         },
         { type: "message_stop" },

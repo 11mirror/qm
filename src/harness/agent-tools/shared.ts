@@ -1,4 +1,3 @@
-// Schema helpers, result cutting and list/cron formatting shared by the agent tool families.
 
 import { Type } from "typebox";
 import type { PublishAudienceDescriptor } from "../../tools/primitives.ts";

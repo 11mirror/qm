@@ -1,4 +1,3 @@
-// The read, write, install_canvas, publish and skill tools: workspace files, apps and skills.
 
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -22,7 +21,6 @@ export function workspaceTools(kit: ToolKit) {
   return { discoverSkills, skill, read, installCanvas, write, publish };
 }
 
-/** The skills list/search and read actions. */
 function skillTools(kit: ToolKit) {
   const { ref, recordCall, recordResult } = kit;
   const discoverSkills = (search: boolean) =>
@@ -38,7 +36,7 @@ function skillTools(kit: ToolKit) {
           : {}),
         source: optionalString("A carried source from the sharing context; omit for current scope and org."),
         offset: Type.Optional(Type.Integer({ minimum: 0 })),
-        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+        limit: Type.Optional(Type.Integer({ minimum: 1 })),
       }),
       async execute(callId, params) {
         if (!ref.current) return text("[error] no active tool context");
@@ -67,10 +65,9 @@ function skillTools(kit: ToolKit) {
       path: optionalString("Relative file to return instead of SKILL.md."),
       sandbox_id: optionalString("Sandbox to sync into; omit for the default."),
     }),
-    async execute(callId, params) {
+    async execute(callId, p) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
-      const p = params as { name: string; path?: string; sandbox_id?: string; source?: string };
       await recordCall(callId, {
         tool: "skills",
         action: "read",
@@ -113,7 +110,6 @@ function skillTools(kit: ToolKit) {
   return { discoverSkills, skill };
 }
 
-/** The files read, install_canvas and write actions. */
 function fileTools(kit: ToolKit) {
   const { ref, recordCall, recordResult, recordText, recordFail } = kit;
   const read = defineTool({
@@ -219,7 +215,6 @@ function fileTools(kit: ToolKit) {
   return { read, installCanvas, write };
 }
 
-/** The apps publish action. */
 function publishTool(kit: ToolKit) {
   const { ref, recordCall, recordText, recordFail } = kit;
   const publish = defineTool({

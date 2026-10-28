@@ -269,7 +269,7 @@ function sandboxTool(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeof e
         }
         const verdictLine =
           verdict === "wedged"
-            ? " — WEDGED: a machine exists but its shell is not answering; the platform's health reporting goes stale in exactly this state, so trust the shell probe over any healthy/running claim and restart the computer; if it is still wedged after a restart or two, create a fresh sandbox, set it as the default, and retry there"
+            ? " — wedged: a machine exists but its shell did not answer the probe, so its machine state may be stale"
             : "";
         return recordText(
           callId,
@@ -464,11 +464,7 @@ function backgroundParams() {
     instructions: optionalString("watch: note replayed to you on each wake."),
     monitor_id: optionalString("unwatch: the monitor id watch returned."),
     wait_seconds: Type.Optional(
-      Type.Integer({
-        minimum: 0,
-        maximum: 60,
-        description: "poll: block up to this long for output or exit (default 0).",
-      }),
+      Type.Integer({ minimum: 0, description: "poll: block up to this long for output or exit (default 0)." }),
     ),
     max_bytes: Type.Optional(Type.Integer({ minimum: 1, description: "poll: cap bytes this read (default 65536)." })),
     signal: Type.Optional(

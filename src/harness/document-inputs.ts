@@ -1,5 +1,6 @@
 import { resolveGatewayModel } from "../model/gateway-models.ts";
 import { countTokens } from "../util/tokens.ts";
+import { errMessage } from "../util/errors.ts";
 import {
   fitDocumentText,
   type DocumentTextBudget,
@@ -82,8 +83,12 @@ export async function documentBlocks(
               data: fitText(await documentText(document, signal)),
             },
           });
-        } catch {
-          blocks.push({ type: "text", text: fitText(await documentFallbackText(document, signal)) });
+        } catch (error) {
+          signal?.throwIfAborted();
+          blocks.push({
+            type: "text",
+            text: `Document ${JSON.stringify(document.name)} could not be read as text: ${errMessage(error)}. Do not summarize it from another file or imply that you read it.`,
+          });
         }
       } else {
         blocks.push({

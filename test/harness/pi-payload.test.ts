@@ -218,6 +218,13 @@ test("sanitizeLlmPayload captures the prompt envelope and drops the message arra
   });
 });
 
+test("sanitizeLlmPayload records why a payload could not be captured", () => {
+  const { envelope, truncated } = sanitizeLlmPayload({ model: "m", system: [{ type: "text", text: "x" }], size: 1n });
+  assert.equal(truncated, true);
+  assert.equal((envelope as { note: string }).note, "payload not capturable");
+  assert.match((envelope as { error: string }).error, /BigInt/);
+});
+
 const imageBlock = (data: string) => ({ type: "image", source: { type: "base64", media_type: "image/png", data } });
 
 test("trimPayloadToByteBudget returns the payload untouched when it fits", () => {

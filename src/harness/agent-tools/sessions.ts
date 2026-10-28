@@ -1,4 +1,3 @@
-// The sessions, subagents and swarm tools: other conversations and delegated work.
 
 import { surfaceHas } from "../../surfaces/surface.ts";
 import { defineTool } from "@earendil-works/pi-coding-agent";
@@ -14,7 +13,6 @@ export function conversationTools(kit: ToolKit) {
   return { subagentTool, swarmTool, sessionTool };
 }
 
-/** The subagents tool: open, brief, message and read background workers. */
 function subagentToolFor(kit: ToolKit) {
   const { opts, delegateWork } = kit;
   const sidebarSessions = surfaceHas(opts?.surfaceName, "sidebar");
@@ -66,27 +64,10 @@ function subagentParams() {
   });
 }
 
-/** Runs one subagents-tool action: open, follow up, message, read or wait. */
-async function runSubagentAction(kit: ToolKit, callId: string, params: Static<ReturnType<typeof subagentParams>>) {
+async function runSubagentAction(kit: ToolKit, callId: string, p: Static<ReturnType<typeof subagentParams>>) {
   const { ref, delegateWork, recordCall, recordCoreAuthoredResult, recordText, recordFail } = kit;
   const tc = ref.current;
   const syscalls = tc?.sessionSyscalls;
-  const p = params as {
-    action: "open" | "read" | "send_message" | "followup_task" | "wait";
-    timeoutMs?: number;
-    requestId?: string;
-    thinkingLevel?: string;
-    fastMode?: boolean;
-    task?: string;
-    name?: string;
-    noComputer?: boolean;
-    model?: string;
-    target?: string;
-    text?: string;
-    interrupt?: boolean;
-    limit?: number;
-    maxChars?: number;
-  };
   await recordCall(callId, {
     tool: "subagents",
     action: p.action,
@@ -198,7 +179,6 @@ async function runSubagentAction(kit: ToolKit, callId: string, params: Static<Re
   );
 }
 
-/** The swarm tool. */
 function swarmToolFor(kit: ToolKit) {
   const { ref, recordCall, recordText, recordFail } = kit;
   const swarmTool = defineTool({
@@ -266,7 +246,6 @@ function swarmToolFor(kit: ToolKit) {
   return { swarmTool };
 }
 
-/** The sessions tool: search, list, read, message, start or fork sidebar conversations. */
 function sessionToolFor(kit: ToolKit) {
   const { ref, recordCall, recordText, recordFail } = kit;
   const sessionTool = defineTool({
@@ -295,18 +274,8 @@ function sessionToolFor(kit: ToolKit) {
       offset: optionalInteger("list: page offset from the previous footer."),
       maxChars: optionalInteger("read: transcript characters to show, newest first (default 4000)."),
     }),
-    async execute(callId, params) {
+    async execute(callId, p) {
       const syscalls = ref.current?.sessionSyscalls;
-      const p = params as {
-        action: "search" | "list" | "read" | "send_message" | "new" | "fork";
-        query?: string;
-        target?: string;
-        text?: string;
-        title?: string;
-        limit?: number;
-        offset?: number;
-        maxChars?: number;
-      };
       await recordCall(callId, {
         tool: "sessions",
         action: p.action,

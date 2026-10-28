@@ -7,7 +7,6 @@ import {
   planColdStartSeed,
   reconstructMessagesFromHistory,
   renderOverheard,
-  replayPreamble,
   seedPriorTurns,
   selectOverheardToImport,
 } from "../../src/harness/replay.ts";
@@ -43,29 +42,6 @@ function assertValidWire(msgs: ReturnType<typeof reconstructMessagesFromHistory>
   }
   assert.equal(open.size, 0, "every tool_use has a matching tool_result");
 }
-
-test("replayPreamble renders user and assistant entries", () => {
-  const out = replayPreamble([entry("UserMessage", "send me a pirate flag"), entry("AgentMessage", "done!")]);
-  assert.match(out, /User: send me a pirate flag/);
-  assert.match(out, /Assistant: done!/);
-});
-
-test("replayPreamble is empty when there is nothing to replay", () => {
-  assert.equal(replayPreamble([]), "");
-});
-
-test("replayPreamble EXCLUDES thinking from cold-start context (signature is stored but never replayed)", () => {
-  const thinking = item(
-    { kind: "Reasoning", text: "secret chain of thought", body: { thinkingSignature: "OPAQUE-SIG-BYTES" } },
-    1,
-    0,
-  );
-  const out = replayPreamble([entry("UserMessage", "hi"), thinking, entry("AgentMessage", "hello")]);
-  assert.match(out, /User: hi/);
-  assert.match(out, /Assistant: hello/);
-  assert.doesNotMatch(out, /secret chain of thought/);
-  assert.doesNotMatch(out, /OPAQUE-SIG-BYTES/);
-});
 
 test("reconstructMessagesFromHistory rebuilds a faithful tool round — a fact in a tool result survives", () => {
   const history: Item[] = [
@@ -249,8 +225,6 @@ test("planColdStartSeed prefers the faithful rebuild; priorTurns only bootstraps
   assert.equal(planColdStartSeed(oneMsg, true), "structured");
   assert.equal(planColdStartSeed(oneMsg, false), "structured");
   assert.equal(planColdStartSeed([], true), "priorTurns");
-  assert.equal(planColdStartSeed(null, true), "priorTurns");
-  assert.equal(planColdStartSeed(null, false), "preamble");
   assert.equal(planColdStartSeed([], false), "none");
 });
 
@@ -438,12 +412,6 @@ test("reconstructMessagesFromHistory skips an empty overheard marker (no blank l
   const texts = msgs.flatMap((m) => m.content.map((c) => (c.type === "text" ? c.text : "")));
   assert.ok(texts.some((t) => /hi/.test(t)));
   assert.ok(!texts.some((t) => /overheard/.test(t)));
-});
-
-test("replayPreamble renders an overheard entry distinctly from a normal user line", () => {
-  const out = replayPreamble([overheardEntry("1", "Bob", "saw this go by"), entry("UserMessage", "thanks")]);
-  assert.match(out, /Overheard \(Bob\): saw this go by/);
-  assert.match(out, /User: thanks/);
 });
 
 test("a bytes-only surface call (legacy post / reach) replays with stand-in text, never {action,bytes}", () => {

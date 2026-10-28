@@ -455,10 +455,14 @@ test("ack emoji keeps working on a non-Anthropic base model when an Anthropic ke
           usage: { input_tokens: 1, output_tokens: 0 },
         },
       },
-      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: '{"emoji":"eyes"}' } },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "toolu_ack", name: "answer", input: {} },
+      },
+      { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"emoji":"eyes"}' } },
       { type: "content_block_stop", index: 0 },
-      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } },
+      { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 5 } },
       { type: "message_stop" },
     ];
     return new Response(events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""), {
@@ -632,7 +636,7 @@ function textStream(text: string, stopReason = "end_turn"): Response {
 }
 
 test("a refused goal round falls back to another model and the goal keeps going", async () => {
-  const harness = createPiHarness({ apiKey: "sk-test" });
+  const harness = createPiHarness({ apiKey: "sk-test", resolveFallbackRuntime: () => ({ modelId: "claude-sonnet-5" }) });
   const controller = new AbortController();
   const entries: Item[] = [];
   const realFetch = globalThis.fetch;
@@ -686,7 +690,7 @@ test("each governor checkpoint sees only the work since the last checkpoint, not
 });
 
 test("a goal never falls back to a model that already refused in the same turn", async () => {
-  const harness = createPiHarness({ apiKey: "sk-test" });
+  const harness = createPiHarness({ apiKey: "sk-test", resolveFallbackRuntime: () => ({ modelId: "claude-sonnet-5" }) });
   const controller = new AbortController();
   const entries: Item[] = [];
   const realFetch = globalThis.fetch;
