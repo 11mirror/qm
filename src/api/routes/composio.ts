@@ -1,4 +1,4 @@
-import { capabilityRunActive } from "../../runs/capability-run.ts";
+import { activeCapabilityRun } from "../../runs/capability-run.ts";
 import { slackReply } from "./slack-reply.ts";
 import { isBackendCredential } from "../../credentials/keychain.ts";
 import { livePersonCapability } from "../artifact-share.ts";
@@ -33,7 +33,7 @@ export function composioUserIds(principal: string): string[] {
 
 export async function activeRun(ctx: ApiCtx): Promise<boolean> {
   const cap = ctx.capability;
-  if (!cap || (await capabilityRunActive(ctx.deps.runs, cap))) return true;
+  if (!cap || (await activeCapabilityRun(ctx.deps.runs, cap))) return true;
   sendJson(ctx.res, 403, {
     error: "inactive_run",
     message: "Connected app access requires this run's current capability.",
