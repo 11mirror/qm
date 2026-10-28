@@ -334,6 +334,17 @@ test("turn_end rules revise with a message and refuse a runtime switch", () => {
     ),
     /turn_end must be one of keep, revise/,
   );
+  const fallsBackToRevise = parse({
+    ...injection(),
+    id: "style",
+    hook: "turn_end",
+    onError: "revise",
+    options: {
+      keep: { description: "follows the instructions", action: "keep" },
+      revise: { description: "breaks one", action: "revise", message: "Drop the table." },
+    },
+  });
+  assert.ok("error" in fallsBackToRevise);
 });
 
 test("most_confident hook points follow the likeliest enforced verdict and errored rules fall back to onError", async () => {
@@ -472,7 +483,7 @@ test("observe-only rules do not hold up the turn and are still audited", async (
   );
 });
 
-test("an oversized reply is cut at its tail, keeping the instructions it is judged against and saying so", async () => {
+test("a long pasted message never pushes the draft out of what the reply check judges", async () => {
   const seen: string[] = [];
   const backend: DecisionBackend = {
     async choose({ questions, state }) {
@@ -483,14 +494,12 @@ test("an oversized reply is cut at its tail, keeping the instructions it is judg
   const state = turnEndState({
     scopeLabel: "personal:U1",
     guidance: "Never use an em dash.",
-    input: "summarise it",
-    reply: "word ".repeat(5_000),
-    attempt: 1,
-    attempts: 2,
+    input: "pasted text ".repeat(2_000) + "summarise it",
+    reply: "A short summary.",
   });
   await runHook([injection()], "tool_response", state, backend, new AbortController().signal);
   assert.ok(seen[0]!.includes("Never use an em dash."));
-  assert.ok(seen[0]!.includes("summarise it"));
+  assert.ok(seen[0]!.includes("A short summary."));
   assert.ok(seen[0]!.length <= 8_000);
 });
 
@@ -526,6 +535,21 @@ test("with several enforcing reply rules, any one asking for a rewrite wins over
   );
   assert.equal(decisive?.action, "revise");
   assert.equal(decisive?.message, "fix no-dashes");
+
+  const allRevise: DecisionBackend = {
+    async choose({ questions }) {
+      return Object.fromEntries(Object.keys(questions).map((k) => [k, { keep: 0.1, revise: 0.9 }]));
+    },
+  };
+  const both = await runHook(
+    [style("no-tables"), style("no-dashes")],
+    "turn_end",
+    "s",
+    allRevise,
+    new AbortController().signal,
+  );
+  assert.ok(both.decisive?.message?.includes("fix no-tables"));
+  assert.ok(both.decisive?.message?.includes("fix no-dashes"));
 });
 
 test("a hook point reports enforce when any active rule enforces, observe when only observing rules exist", async () => {

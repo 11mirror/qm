@@ -229,3 +229,32 @@ test("once a final answer is sent back, the run stops reading as responding whil
   assert.ok(phases.includes("final_answer"));
   assert.equal(phases.at(-1), undefined);
 });
+
+test("when the reply rules cannot be read, the turn still answers, unchecked", async () => {
+  const built = buildApp(testConfig({ workers: 1 }), {
+    decisions: {
+      ...decisionStore([]),
+      rules: async (hook) => {
+        if (hook === "turn_end") throw new Error("rules store down");
+        return [];
+      },
+    },
+  });
+  built.runtime.start();
+  try {
+    const queued = await built.app.turn({
+      surface: "web",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "reply-check-store-down" },
+      text: "summarise the options",
+      idempotencyKey: "reply-check-store-down",
+      async: true,
+    });
+    await built.runs.waitFor(queued.runId!, 10_000);
+    const run = await built.app.getRun(queued.runId!);
+    assert.equal(run?.status, "done");
+    assert.ok(run?.result?.reply);
+  } finally {
+    await built.runtime.stop();
+  }
+});

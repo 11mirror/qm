@@ -44,8 +44,6 @@ export function turnEndState(turn: {
   guidance?: string;
   input: string;
   reply: string;
-  attempt: number;
-  attempts: number;
 }): string {
   const guidance = turn.guidance?.trim();
   return [
@@ -57,11 +55,11 @@ export function turnEndState(turn: {
       ? `Standing instructions this conversation's replies must follow:\n${guidance}`
       : "This conversation has no standing instructions of its own.",
     "",
+    "Draft reply, written but not yet delivered:",
+    turn.reply.trim(),
+    "",
     "Latest message:",
     turn.input.trim(),
-    "",
-    `Draft reply, written but not yet delivered (revision attempt ${turn.attempt} of ${turn.attempts}):`,
-    turn.reply.trim(),
   ].join("\n");
 }
 

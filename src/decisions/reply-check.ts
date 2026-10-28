@@ -46,8 +46,6 @@ export function createReplyCheck(opts: {
             ...(opts.guidance ? { guidance: opts.guidance } : {}),
             input: opts.input,
             reply: text,
-            attempt: revisions + 1,
-            attempts: REPLY_REVISIONS,
           }),
           opts.turn,
         )

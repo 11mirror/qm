@@ -181,6 +181,8 @@ export function parseDecisionRule(
   if (count < 2 || count > MAX_OPTIONS) return { error: `${r.id}: needs 2 to ${MAX_OPTIONS} options` };
   if (typeof r.onError !== "string" || !Object.hasOwn(options, r.onError))
     return { error: `${r.id}: onError must name one of its options` };
+  if (options[r.onError]!.action === "revise")
+    return { error: `${r.id}: onError must not revise, or a classifier outage would rewrite every reply` };
   const m = (r.model ?? {}) as Record<string, unknown>;
   if (typeof m.provider !== "string" || !providers.some((p) => p.id === m.provider))
     return { error: `${r.id}: model.provider must name a configured decision provider` };
@@ -333,5 +335,12 @@ export async function runHook(
     if (result.mode !== "enforce") continue;
     if (!decisive || weight(result) > weight(decisive)) decisive = result;
   }
-  return { ...(decisive ? { decisive } : {}), results };
+  if (!decisive) return { results };
+  if (confident) return { decisive, results };
+  const messages = [
+    ...new Set(
+      results.filter((r) => r.mode === "enforce" && r.action === decisive!.action && r.message).map((r) => r.message!),
+    ),
+  ];
+  return { decisive: { ...decisive, ...(messages.length ? { message: messages.join("\n") } : {}) }, results };
 }

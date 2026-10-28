@@ -3195,9 +3195,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
           if (error) throw new NonRetryableTurnError(error);
         }
-        const replyCheckMode = await deps.decide
-          ?.mode("turn_end")
-          .catch(reportFailureAs("orchestrator: reply check rules", undefined));
+        const replyCheckMode = session.spawnMeta
+          ? undefined
+          : await deps.decide?.mode("turn_end").catch(reportFailureAs("orchestrator: reply check rules", undefined));
         const heldRunId =
           replyCheckMode === "enforce" && !input.surfaceTools && deps.turnStream ? input.runId : undefined;
         if (heldRunId) deps.turnStream!.hold(heldRunId);
