@@ -1,7 +1,7 @@
 import type { TurnCtx } from "./turn-context.ts";
 import type { Session } from "../../types.ts";
 import { type TurnResult } from "../../types.ts";
-import { estimateCostUsd } from "../../ratelimit/budget.ts";
+import { modelCallRecorder } from "./turn-helpers.ts";
 import type { HarnessDetectResult } from "../../harness/harness.ts";
 import { createTranscriptSource } from "../../sessions/transcript-source.ts";
 import { findTrailingPartialTurn, turnAtSeq } from "../turn-resume.ts";
@@ -36,9 +36,6 @@ export function replayRecordedAnswer(
     scopeLabel: scopeId,
     detail: `attempt ${input.attempt}; replaying the answer the previous attempt recorded at seq ${recordedAnswer.seq}`,
   });
-  console.error(
-    `[orchestrator] turn.already_answered attempt=${input.attempt} run=${input.runId} thread=${conversation.threadRef} answerSeq=${recordedAnswer.seq}`,
-  );
   return recordedAnswer.text.trim()
     ? {
         status: "ok",
@@ -81,9 +78,7 @@ export async function detectAmbientDecline(
         systemPrompt: resolution.systemPrompt,
         ...(input.gatewayContext?.reactionGuidance ? { reactionGuidance: input.gatewayContext.reactionGuidance } : {}),
         history: detectHistory,
-        recordModelCall: (rec) => {
-          void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
-        },
+        recordModelCall: modelCallRecorder(deps, actor.id),
       })
       .catch((e: unknown): HarnessDetectResult => {
         deps.errors?.record(
@@ -108,10 +103,6 @@ export async function detectAmbientDecline(
         scopeLabel: scopeId,
         ...(decision.reason ? { detail: decision.reason } : {}),
       });
-      console.error(
-        `[orchestrator] turn.${reactions ? "react" : "silent"} (detection ${reactions ? `acknowledged emoji=${reactions.join(",")}` : "declined"}) thread=${conversation.threadRef}` +
-          (decision.reason ? ` reason=${JSON.stringify(decision.reason)}` : ""),
-      );
       return reactions
         ? { status: "react", sessionId: session.id, reactions }
         : { status: "silent", sessionId: session.id };

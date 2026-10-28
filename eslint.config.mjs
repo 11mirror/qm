@@ -96,7 +96,7 @@ export default tseslint.config(
   },
   {
     files: ["src/**/*.ts"],
-    ignores: ["src/config.ts", "src/index.ts", "src/egress-authz-main.ts", "src/tenant-import-main.ts"],
+    ignores: ["src/config.ts", "src/index.ts", "src/egress-authz-main.ts"],
     rules: {
       "no-restricted-syntax": [
         "error",
@@ -142,13 +142,7 @@ export default tseslint.config(
     },
   },
   {
-    files: [
-      "plugins/**/*.ts",
-      "src/config.ts",
-      "src/index.ts",
-      "src/egress-authz-main.ts",
-      "src/tenant-import-main.ts",
-    ],
+    files: ["plugins/**/*.ts", "src/config.ts", "src/index.ts", "src/egress-authz-main.ts"],
     rules: {
       "no-restricted-syntax": ["error", RAW_ERROR_TO_CONSOLE],
     },

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { PiReplayMessage } from "../../src/harness/replay.ts";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
@@ -8,12 +9,13 @@ import { forModelContext } from "../../src/harness/context-compaction.ts";
 import type { ToolContext } from "../../src/tools/primitives.ts";
 import { storedItem, type Item, type NewItem } from "../../src/sessions/items.ts";
 import type { ScopeId } from "../../src/types.ts";
-import { createMemoryRunSignalStore, type RunSignalStore } from "../../src/runs/run-signal-store.ts";
+import { type RunSignalStore } from "../../src/runs/run-signal-store.ts";
 import { createMemoryDurableByteStore } from "../../src/files/durable-byte-store.ts";
 import { artifactImageLoader, ELIDED_IMAGE_TEXT, restoreReplayImages } from "../../src/harness/replay-images.ts";
 import { createPostgresToolOutputStore, type ToolOutputStore } from "../../src/sessions/tool-output.ts";
 import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
+import { createMemoryRunSignalStore } from "../support/memory-run-signal-store.ts";
 
 type Body = { messages?: unknown[]; input?: unknown[] };
 type Reply = Array<Record<string, unknown>>;
@@ -111,7 +113,10 @@ async function runTurn(
   signals?: RunSignalStore,
   onHistory?: () => Promise<void>,
 ) {
-  const harness = createPiHarness({ apiKey: "sk-test", ...(signals ? { signals } : {}) });
+  const harness = createPiHarness({
+    resolveProviderKeys: async () => ({ anthropic: "sk-test" }),
+    ...(signals ? { signals } : {}),
+  });
   const emitted: Item[] = [];
   const bodies: Body[] = [];
   let seq = (history.at(-1)?.seq ?? 0) + 1;
@@ -219,6 +224,27 @@ test("a turn on a later day is prompted under that day's marker and replays it b
     const after = withoutCacheControl(later.bodies[0]!.messages) as unknown[];
     assert.equal(JSON.stringify(after.slice(0, before.length)), JSON.stringify(before));
     assert.equal(userTexts(later.bodies[0]!).at(-1), "thanks");
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("day markers follow the turn's timezone in the live prompt and in replay", async () => {
+  const reply = (text: string) => () => anthropicSse([{ type: "text", text }], "end_turn");
+  const userTexts = (body: Body) =>
+    (body.messages as Array<{ role: string; content: Array<{ type: string; text?: string }> }>)
+      .filter((m) => m.role === "user")
+      .map((m) => m.content.find((b) => b.type === "text")?.text);
+  const tokyo = { timezone: "Asia/Tokyo" };
+  mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-10-16T17:00:00Z") });
+  try {
+    const first = await runTurn("the deadline is Saturday", [], [reply("Noted.")], tokyo);
+    mock.timers.setTime(Date.parse("2026-10-19T18:00:00Z"));
+    const second = await runTurn("has it passed?", forModelContext(first.emitted), [reply("Yes.")], tokyo);
+    assert.deepEqual(userTexts(second.bodies[0]!), [
+      "── Saturday, October 17, 2026 ──\nthe deadline is Saturday",
+      "── Tuesday, October 20, 2026 ──\nhas it passed?",
+    ]);
   } finally {
     mock.timers.reset();
   }
@@ -472,7 +498,29 @@ test("a replayed image is read from the file store once, not on every turn", asy
   const load = artifactImageLoader(files, () => true);
   const first = await load({ artifactId: "art-once", mimeType: "image/png" });
   const second = await load({ artifactId: "art-once", mimeType: "image/png" });
-  assert.deepEqual([first, second, opens], [{ data: PNG_A }, { data: PNG_A }, 1]);
+  assert.deepEqual(
+    [first, second, opens],
+    [{ data: PNG_A, mimeType: "image/png" }, { data: PNG_A, mimeType: "image/png" }, 1],
+  );
+});
+
+test("a replayed image downscaled into another format loads with the format the model saw", async () => {
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  await files.put({
+    id: "art-webp",
+    ownerScopeId: "personal:tester" as never,
+    createdBy: "tester",
+    name: "wide.webp",
+    path: "wide.webp",
+    mimetype: "image/webp",
+    data: readFileSync(new URL("../../desktop/assets/becalmed-off-halfway-rock.webp", import.meta.url)),
+    direction: "in",
+    createdAt: 1,
+  });
+  const loaded = await artifactImageLoader(files, () => true)({ artifactId: "art-webp", mimeType: "image/png" });
+  assert.ok(loaded && loaded !== "over-budget");
+  assert.equal(loaded.mimeType, "image/png");
+  assert.equal(Buffer.from(loaded.data, "base64").subarray(1, 4).toString("ascii"), "PNG");
 });
 
 test("replayed images are restored newest first until the request byte budget is spent, then elided", async () => {
@@ -482,7 +530,7 @@ test("replayed images are restored newest first until the request byte budget is
     { role: "assistant", content: [{ type: "text", text: "ok" }] },
     { role: "user", content: [{ type: "text", text: "b" }, image("new")] },
   ] as unknown as PiReplayMessage[];
-  const load = async () => ({ data: "x".repeat(100) });
+  const load = async () => ({ data: "x".repeat(100), mimeType: "image/png" });
   const restored = await restoreReplayImages(messages, load, 150);
   const blocks = (i: number) => (restored[i] as { content: Array<{ type: string; text?: string }> }).content;
   assert.equal(blocks(2)[1]!.type, "image", "the newest image fits the budget");

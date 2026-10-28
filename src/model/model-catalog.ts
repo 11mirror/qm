@@ -1,4 +1,5 @@
 import { errMessage } from "../util/errors.ts";
+import { asRecord } from "../util/objects.ts";
 import { readCappedText } from "../util/response-body.ts";
 import { gatewayModelCatalog, gatewayModelsVersion } from "./gateway-models.ts";
 import { modelSupported, registerOpenRouterCatalogModel, resolveModel, selectableBaseModels } from "./pi-models.ts";
@@ -36,8 +37,20 @@ export function builtInModelCatalog(): ModelCatalogEntry[] {
       ? [{ ...model, provider: provider as string }]
       : [];
   });
-  const known = new Set(builtIns.map((model) => model.id));
-  return [...builtIns, ...[...customModelCatalog(), ...gatewayModelCatalog()].filter((model) => !known.has(model.id))];
+  return appendUnknown(builtIns, [...customModelCatalog(), ...gatewayModelCatalog()]);
+}
+
+function appendUnknown(models: ModelCatalogEntry[], extras: readonly ModelCatalogEntry[]): ModelCatalogEntry[] {
+  const known = new Set(models.map((model) => model.id));
+  return [...models, ...extras.filter((model) => !known.has(model.id))];
+}
+
+function settle(entry: CacheEntry, ttlMs: number): ModelCatalogEntry[] {
+  entry.models = appendUnknown(builtInModelCatalog(), entry.dynamic ?? []);
+  entry.expiresAt = Date.now() + ttlMs;
+  entry.customVersion = customProvidersVersion();
+  entry.gatewayVersion = gatewayModelsVersion();
+  return entry.models;
 }
 
 async function boundedJson(response: Response): Promise<unknown> {
@@ -54,27 +67,14 @@ function finiteNumber(value: unknown): number | undefined {
 }
 
 function parseOpenRouterModel(candidate: unknown): ModelCatalogEntry | undefined {
-  if (!candidate || typeof candidate !== "object") return undefined;
-  const raw = candidate as Record<string, unknown>;
-  const id = raw.id;
-  const name = raw.name;
-  const supportedParameters = raw.supported_parameters;
+  const raw = asRecord(candidate);
+  if (!raw) return undefined;
+  const { id, name, supported_parameters: supportedParameters } = raw;
   const contextWindow = finiteNumber(raw.context_length);
-  const topProvider = raw.top_provider;
-  const maxTokens =
-    topProvider && typeof topProvider === "object"
-      ? finiteNumber((topProvider as Record<string, unknown>).max_completion_tokens)
-      : undefined;
-  const pricing = raw.pricing;
-  const promptPrice =
-    pricing && typeof pricing === "object" ? finiteNumber((pricing as Record<string, unknown>).prompt) : undefined;
-  const completionPrice =
-    pricing && typeof pricing === "object" ? finiteNumber((pricing as Record<string, unknown>).completion) : undefined;
-  const architecture = raw.architecture;
-  const inputModalities =
-    architecture && typeof architecture === "object"
-      ? (architecture as Record<string, unknown>).input_modalities
-      : undefined;
+  const maxTokens = finiteNumber(asRecord(raw.top_provider)?.max_completion_tokens);
+  const promptPrice = finiteNumber(asRecord(raw.pricing)?.prompt);
+  const completionPrice = finiteNumber(asRecord(raw.pricing)?.completion);
+  const inputModalities = asRecord(raw.architecture)?.input_modalities;
   if (
     typeof id !== "string" ||
     id.length > 200 ||
@@ -131,12 +131,6 @@ async function fetchOpenRouterModels(fetcher: typeof fetch): Promise<ModelCatalo
   });
 }
 
-function withBuiltIns(dynamic: readonly ModelCatalogEntry[] = []): ModelCatalogEntry[] {
-  const models = builtInModelCatalog();
-  const known = new Set(models.map((model) => model.id));
-  return [...models, ...dynamic.filter((model) => !known.has(model.id))];
-}
-
 export async function selectableModelCatalog(fetcher: typeof fetch = fetch): Promise<ModelCatalogEntry[]> {
   const now = Date.now();
   const existing = catalogCache().get(fetcher);
@@ -152,18 +146,11 @@ export async function selectableModelCatalog(fetcher: typeof fetch = fetch): Pro
   entry.inFlight = fetchOpenRouterModels(fetcher)
     .then((dynamic) => {
       entry.dynamic = dynamic;
-      return CACHE_TTL_MS;
+      return settle(entry, CACHE_TTL_MS);
     })
     .catch((error: unknown) => {
       console.warn(`[model] OpenRouter catalog fetch failed; using cached and built-in models: ${errMessage(error)}`);
-      return FAILURE_TTL_MS;
-    })
-    .then((ttlMs) => {
-      entry.models = withBuiltIns(entry.dynamic);
-      entry.expiresAt = Date.now() + ttlMs;
-      entry.customVersion = customProvidersVersion();
-      entry.gatewayVersion = gatewayModelsVersion();
-      return entry.models;
+      return settle(entry, FAILURE_TTL_MS);
     })
     .finally(() => {
       delete entry.inFlight;
@@ -183,7 +170,7 @@ export function cachedModelCatalog(fetcher: typeof fetch = fetch): {
   void selectableModelCatalog(fetcher);
   const entry = catalogCache().get(fetcher);
   return {
-    models: withBuiltIns(entry?.dynamic),
+    models: appendUnknown(builtInModelCatalog(), entry?.dynamic ?? []),
     refreshing: !!entry?.inFlight,
   };
 }

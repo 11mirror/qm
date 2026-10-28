@@ -13,7 +13,8 @@ import { createSkillBundleStore } from "../skills/skill-bundle-store.ts";
 import { createFeatureFlagStore } from "../feature-flags.ts";
 import { createPostgresTeamStore } from "../teams/teams.ts";
 import { tenant } from "../tenant.ts";
-import { type SessionStore, LLM_CAPTURE_RETENTION_MS } from "../sessions/session-store.ts";
+import type { SessionStore } from "../sessions/session-store.ts";
+import { LLM_CAPTURE_RETENTION_MS } from "../sessions/postgres-llm-capture.ts";
 import { createPostgresSessionStore } from "../sessions/postgres-session-store.ts";
 import { createAdminGrantStore } from "../admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "../admin/postgres-admin-grant-store.ts";
@@ -48,7 +49,6 @@ export function buildStores(deps: StoresInputs) {
     ...(config.databasePoolMax !== undefined ? { queryMax: config.databasePoolMax } : {}),
     ...(config.databaseDirectPoolMax !== undefined ? { sessionMax: config.databaseDirectPoolMax } : {}),
     tenancy: config.multitenant,
-    ...(config.tenantSecretsKey ? { tenantSecretsKey: config.tenantSecretsKey } : {}),
   });
   configurePgCaTrust({
     ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),

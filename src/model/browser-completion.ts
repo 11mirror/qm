@@ -1,3 +1,4 @@
+import { asRecord } from "../util/objects.ts";
 import { Type } from "typebox";
 import { modelGatewayRequest, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 import type { Context, ImageContent, TextContent } from "@earendil-works/pi-ai";
@@ -11,10 +12,6 @@ import {
 } from "./pi-models.ts";
 import type { resolveBrowserModel } from "./browser-model.ts";
 import type { UserModelCredentialStore } from "./user-model-credential-store.ts";
-
-function object(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
-}
 
 const SCREENSHOT_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 
@@ -33,7 +30,6 @@ function inlineImage(url: unknown): ImageContent {
   }
   return { type: "image", mimeType, data };
 }
-
 export class BrowserCompletionError extends Error {
   readonly status: number;
   constructor(message: string, status = 400) {
@@ -61,34 +57,28 @@ export async function nativeBrowserCompletion(
   const { selection, body } = input;
   const routing = selection.routing;
   let model = selection.model ? resolveModel(selection.model) : undefined;
+  const subscribed = selection.account === "company" && input.companySubscriptionProvider === model?.provider;
+  if (subscribed && model?.provider === "openai") model = resolveModel(codexSubscriptionModelId(selection.model!));
   if ((!routing && selection.account !== "company") || !model)
     throw new BrowserCompletionError("Selected browser model is unavailable", 409);
-  if (selection.account === "company" && input.companySubscriptionProvider === model.provider) {
-    if (model.provider === "anthropic")
-      throw new BrowserCompletionError("Claude subscription access does not support browser inference", 422);
-    if (model.provider === "openai") {
-      model = resolveModel(codexSubscriptionModelId(selection.model!));
-      if (!model) throw new BrowserCompletionError("Selected browser model is unavailable", 409);
-    }
-  }
-  if (routing?.kind === "oauth" && routing.provider !== "openai")
+  if ((subscribed && model.provider === "anthropic") || (routing?.kind === "oauth" && routing.provider !== "openai"))
     throw new BrowserCompletionError("Claude subscription access does not support browser inference", 422);
   if (body.tools || body.tool_choice || body.parallel_tool_calls || !Array.isArray(body.messages))
     throw new BrowserCompletionError("Unsupported browser completion request");
   const context: Context = { messages: [] };
   const systems: string[] = [];
   for (const raw of body.messages) {
-    const message = object(raw);
+    const message = asRecord(raw);
     if (!message || !["system", "developer", "user", "assistant"].includes(String(message.role)))
       throw new BrowserCompletionError("Unsupported browser message");
     const content: (TextContent | ImageContent)[] = [];
     const parts = typeof message.content === "string" ? [{ type: "text", text: message.content }] : message.content;
     if (!Array.isArray(parts)) throw new BrowserCompletionError("Invalid browser message content");
     for (const rawPart of parts) {
-      const part = object(rawPart);
+      const part = asRecord(rawPart);
       if (part?.type === "text" && typeof part.text === "string") content.push({ type: "text", text: part.text });
       else if (part?.type === "image_url" && message.role === "user") {
-        content.push(inlineImage(object(part.image_url)?.url));
+        content.push(inlineImage(asRecord(part.image_url)?.url));
       } else throw new BrowserCompletionError("Unsupported browser message content");
     }
     const text = content
@@ -109,8 +99,8 @@ export async function nativeBrowserCompletion(
         timestamp: Date.now(),
       });
   }
-  const format = object(body.response_format);
-  const schema = object(object(format?.json_schema)?.schema);
+  const format = asRecord(body.response_format);
+  const schema = asRecord(asRecord(format?.json_schema)?.schema);
   if (format && (format.type !== "json_schema" || !schema))
     throw new BrowserCompletionError("Browser responses require a JSON schema");
   if (schema) {
@@ -135,13 +125,13 @@ export async function nativeBrowserCompletion(
     if (!key && !gatewayRequest) throw new BrowserCompletionError("Company model credentials are unavailable", 503);
     keys = key ? { [model.provider]: key } : {};
   } else {
-    if (!routing) throw new BrowserCompletionError("Selected browser model is unavailable", 409);
+    const personal = routing!;
     const auth =
-      routing.kind === "apikey"
-        ? routing.apiKey
+      personal.kind === "apikey"
+        ? personal.apiKey
         : (await input.credentials?.derivedOAuth(input.actorId, "openai"))?.accessToken;
     if (!auth) throw new BrowserCompletionError("Reconnect your selected AI account in Settings", 409);
-    keys = { [routing.kind === "apikey" ? routing.provider : CODEX_SUBSCRIPTION_PROVIDER]: auth };
+    keys = { [personal.kind === "apikey" ? personal.provider : CODEX_SUBSCRIPTION_PROVIDER]: auth };
   }
   const runtime = await runtimeFactory(keys, gateway);
   const modelApi = model.api;
@@ -151,7 +141,7 @@ export async function nativeBrowserCompletion(
     maxRetries: 0,
     onPayload: schema
       ? (raw) => {
-          const payload = object(raw);
+          const payload = asRecord(raw);
           if (!payload) throw new BrowserCompletionError("Invalid model request");
           let toolChoice: object = { type: "function", name: "browser_result" };
           if (modelApi === "anthropic-messages") toolChoice = { type: "tool", name: "browser_result" };

@@ -3,7 +3,6 @@ import type { Principal, Resolution, ScopeId, Session } from "../../types.ts";
 import { personalScope } from "../../types.ts";
 import { intersectEgressPolicies } from "../../resolution/egress-policy.ts";
 import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
-import type { GapPhase } from "../../sessions/session-store.ts";
 import { type SandboxHandle, supportsProcessSessions, SandboxProvisionCleanupError } from "../../sandbox/sandbox.ts";
 import {
   accessConversationSandbox,
@@ -46,7 +45,6 @@ export interface TurnSandboxContext {
   egressTokenForPolicy?: (policy: Resolution["egress"]) => Promise<string | undefined>;
   openResourceAccess?: boolean;
   visibleSkillsForTurn: (sources?: readonly string[]) => Promise<SkillResolution[]>;
-  emitGapWork: (phase: GapPhase, start: number, end: number) => void;
 }
 
 export function createTurnSandboxes(ctx: TurnSandboxContext) {
@@ -102,10 +100,9 @@ function createTurnSandboxState(ctx: TurnSandboxContext) {
       handle: SandboxHandle | null;
       pending: SandboxHandle | null;
       used: boolean;
-      provisionMs?: number;
     },
     turnKey,
-    scratch: disposableBox(base, "scratch", turnKey, connectorEnv),
+    scratch: scratchBox(base, turnKey, connectorEnv),
     resourceHandles: new Map<string, SandboxHandle>(),
     resourcePolicy: new Map<string, string>(),
     resourcePendingHandles: new Map<string, SandboxHandle>(),
@@ -117,7 +114,7 @@ function createTurnSandboxState(ctx: TurnSandboxContext) {
   };
 }
 
-function disposableBox(t: SandboxBase, kind: "scratch", key: string, env?: Record<string, string>) {
+function scratchBox(t: SandboxBase, key: string, env?: Record<string, string>) {
   const { deps, input, actor, session, resolution, scopeId, memoryScopeId, egressTokenForTurn, onSandboxStatus } = t;
   const state: {
     handle: SandboxHandle | null;
@@ -135,7 +132,7 @@ function disposableBox(t: SandboxBase, kind: "scratch", key: string, env?: Recor
     deps.auditLog?.record({
       at: Date.now(),
       principalId: actor.id,
-      action: `sandbox.${kind}.${action}`,
+      action: `sandbox.scratch.${action}`,
       resource: key,
       scopeLabel: scopeId,
       detail: JSON.stringify({
@@ -195,7 +192,7 @@ function disposableBox(t: SandboxBase, kind: "scratch", key: string, env?: Recor
         cleanupMs: Date.now() - cleanupStart,
         error: errMessage(error),
       });
-      reportSandboxError(t, `${kind}_destroy_failed`, error);
+      reportSandboxError(t, "scratch_destroy_failed", error);
       throw error;
     }
     state.handle = null;
@@ -229,9 +226,9 @@ async function releaseHold(t: TurnSandboxState, handle: SandboxHandle): Promise<
 }
 
 function provision(t: TurnSandboxState, eager = false): Promise<SandboxHandle> {
-  const { emitGapWork, box } = t;
+  const { box } = t;
   if (!eager) box.used = true;
-  t.provisionInFlight ??= doProvision(t, eager ? () => {} : emitGapWork, eager).catch((err: unknown) => {
+  t.provisionInFlight ??= doProvision(t, eager).catch((err: unknown) => {
     t.provisionInFlight = null;
     recordProvisionFailure(t, err, eager);
     throw err;
@@ -252,11 +249,7 @@ function recordProvisionFailure(t: TurnSandboxState, error: unknown, eager: bool
   reportSandboxError(t, "provision_failed", error);
 }
 
-async function doProvision(
-  t: TurnSandboxState,
-  emit: TurnSandboxContext["emitGapWork"],
-  eager: boolean,
-): Promise<SandboxHandle> {
+async function doProvision(t: TurnSandboxState, eager: boolean): Promise<SandboxHandle> {
   const {
     deps,
     input,
@@ -284,8 +277,7 @@ async function doProvision(
   });
   box.pending = handle;
   await holdResource(t, handle);
-  emit("provision", provisionStart, Date.now());
-  box.provisionMs = Date.now() - provisionStart;
+  const provisionMs = Date.now() - provisionStart;
   deps.auditLog?.record({
     at: Date.now(),
     principalId: actor.id,
@@ -297,27 +289,17 @@ async function doProvision(
       sessionId: session.id,
       backend: handle.backend,
       sandboxId: handle.id,
-      provisionMs: box.provisionMs,
+      provisionMs,
       coldStart: handle.coldStart,
       eager,
     }),
   });
-  const dirCleanupStart = Date.now();
   await prepareTurnFiles(t, handle);
-  emit("dir_cleanup", dirCleanupStart, Date.now());
-  if (deps.processes && supportsProcessSessions(deps.sandbox)) {
-    const procReconcileStart = Date.now();
+  const { sandbox, processes, keychain } = deps;
+  if (processes && supportsProcessSessions(sandbox)) {
     try {
-      await reconcileProcesses(deps.sandbox, handle, deps.processes, memoryScopeId, (exited, processId) =>
-        finishProcessCredentials(
-          {
-            sandbox: deps.sandbox,
-            processes: deps.processes!,
-            ...(deps.keychain ? { keychain: deps.keychain } : {}),
-          },
-          exited,
-          processId,
-        ),
+      await reconcileProcesses(sandbox, handle, processes, memoryScopeId, (exited, processId) =>
+        finishProcessCredentials({ sandbox, processes, keychain }, exited, processId),
       );
     } catch (err) {
       deps.errors?.record(
@@ -330,8 +312,6 @@ async function doProvision(
         },
         err,
       );
-    } finally {
-      emit("proc_reconcile", procReconcileStart, Date.now());
     }
   }
   box.handle = handle;
@@ -344,10 +324,9 @@ function skillsRoot(t: TurnSandboxState, r: SkillResolution) {
 }
 
 async function materializeSkillTree(t: TurnSandboxState, handle: SandboxHandle, r: SkillResolution): Promise<void> {
-  const { deps, session, scopeId, emitGapWork, laidTrees } = t;
+  const { deps, session, scopeId, laidTrees } = t;
   const treeKey = `${handle.resourceId ?? handle.id}:${skillDir(skillsRoot(t, r), r)}`;
   if (laidTrees.has(treeKey)) return;
-  const start = Date.now();
   try {
     const bundles = deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [r]) : [];
     await laySkillTree(deps.sandbox, handle, skillsRoot(t, r), r, bundles);
@@ -364,8 +343,6 @@ async function materializeSkillTree(t: TurnSandboxState, handle: SandboxHandle, 
       err,
     );
     throw err;
-  } finally {
-    emitGapWork("skills_materialize", start, Date.now());
   }
 }
 
@@ -648,8 +625,9 @@ async function reclaimBox(t: TurnSandboxState): Promise<void> {
         .catch((error: unknown) => reportSandboxError(t, "reach_teardown_failed", error));
     }),
   );
-  const disposableFailures = (await Promise.allSettled([scratch.release()])).flatMap((r) =>
-    r.status === "rejected" ? [r.reason as unknown] : [],
+  const scratchFailure = await scratch.release().then(
+    () => undefined,
+    (error: unknown) => ({ error }),
   );
   await Promise.allSettled(resourcePending.values());
   const released = new Set<string>();
@@ -681,7 +659,7 @@ async function reclaimBox(t: TurnSandboxState): Promise<void> {
   box.handle = null;
   box.pending = null;
   if (!handle) {
-    if (disposableFailures.length) throw disposableFailures[0];
+    if (scratchFailure) throw scratchFailure.error;
     return;
   }
   await clearTurnFiles(t, handle);
@@ -690,5 +668,5 @@ async function reclaimBox(t: TurnSandboxState): Promise<void> {
     ...(keepWarm ? { keepWarm: true } : {}),
     ...(box.used ? {} : { homeUnchanged: true }),
   });
-  if (disposableFailures.length) throw disposableFailures[0];
+  if (scratchFailure) throw scratchFailure.error;
 }

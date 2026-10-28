@@ -8,7 +8,7 @@ import { createServer } from "../../src/api/server.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "../../src/auth/broker-sessions.ts";
 import { mintPortalIdentity } from "../../src/auth/portal-identity.ts";
 import type { ReplayDedupe } from "../../src/auth/replay-dedupe.ts";
-import { signRequest } from "../../src/auth/source-auth.ts";
+import { signRequest } from "../../plugins/chassis/src/source-auth-sign.ts";
 import type { BuiltApp } from "../../src/wiring.ts";
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";

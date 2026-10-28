@@ -16,7 +16,7 @@ const DOCUMENT_EXTENSIONS = new Set(
 export const OFFICE_FALLBACK_EXTENSIONS = new Set("pdf docx pptx xlsx odt odp ods rtf".split(" "));
 const extension = (name: string): string => name.split(".").at(-1)!.toLowerCase();
 
-const MIME_BY_EXT: Record<string, string> = {
+const MIME_BY_EXTENSION: Record<string, string> = {
   txt: "text/plain",
   md: "text/markdown",
   csv: "text/csv",
@@ -54,20 +54,19 @@ const MIME_BY_EXT: Record<string, string> = {
 
 export function mimeFromName(name: string): string {
   const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
-  return MIME_BY_EXT[ext] ?? "application/octet-stream";
+  return MIME_BY_EXTENSION[ext] ?? "application/octet-stream";
 }
 
-const EXTENSION_BY_MIME: Record<string, string> = Object.fromEntries([
-  ...Object.entries(MIME_BY_EXT).map(([ext, mime]) => [mime, ext]),
+const EXTENSION_BY_MIME = new Map([
+  ...Object.entries(MIME_BY_EXTENSION).map(([ext, mime]) => [mime, ext] as const),
   ["text/rtf", "rtf"],
   ["application/javascript", "js"],
 ]);
-
 export function documentExtension(file: { name: string; mimeType?: string; mimetype?: string }): string {
   const ext = extension(file.name);
   if (TEXT_EXTENSIONS.has(ext) || DOCUMENT_EXTENSIONS.has(ext)) return ext;
   const mime = (file.mimeType ?? file.mimetype ?? "").split(";")[0]!.trim().toLowerCase();
-  return EXTENSION_BY_MIME[mime] ?? (mime.startsWith("text/") ? "txt" : ext);
+  return EXTENSION_BY_MIME.get(mime) ?? (mime.startsWith("text/") ? "txt" : ext);
 }
 
 export function isDocumentAttachment(file: { name: string; mimetype?: string }): boolean {
@@ -82,12 +81,7 @@ export function isTextDocument(file: { name: string; mimeType?: string; mimetype
 
 const DOCUMENT_BYTES_PER_TOKEN = 4;
 
-export function estimateDocumentTokens(file: {
-  name: string;
-  mimeType?: string;
-  mimetype?: string;
-  sizeBytes: number;
-}): number {
+export function estimateDocumentTokens(file: { sizeBytes: number }): number {
   const bytes = Number.isFinite(file.sizeBytes) && file.sizeBytes > 0 ? file.sizeBytes : 0;
   return Math.ceil(bytes / DOCUMENT_BYTES_PER_TOKEN);
 }

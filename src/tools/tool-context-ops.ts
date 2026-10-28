@@ -35,12 +35,11 @@ export function executeOp(
   {
     writableScopeId,
     provisionForCommand,
-    timed,
     once,
     selectCredentials,
     stageCredentials,
   }: Pick<ReturnType<typeof sandboxAccess>, "writableScopeId" | "provisionForCommand"> &
-    Pick<ReturnType<typeof callLedger>, "timed" | "once"> &
+    Pick<ReturnType<typeof callLedger>, "once"> &
     Pick<ReturnType<typeof credentialStaging>, "selectCredentials" | "stageCredentials">,
 ) {
   return {
@@ -113,38 +112,35 @@ export function executeOp(
             scopeLabel: reached.scopeId,
           });
         }
-        const executed = timed("exec", async () => {
-          execOpts?.signal?.throwIfAborted();
-          const { commandEnv, secretValues, fileExecution } = await stageCredentials(
-            requested,
-            handle,
-            "command",
-            execOpts?.signal,
-          );
-          const r = await withCleanup(
-            async (): Promise<ExecResult> => {
-              const commandHandle = Object.keys(commandEnv).length
-                ? { ...handle, env: { ...handle.env, ...commandEnv } }
-                : handle;
-              const secretEnv = executionSecretEnv(commandHandle.env, secretValues);
-              const mask = createExactSecretValueMasker(Object.values(secretEnv));
-              try {
-                const result = await deps.sandbox.run(commandHandle, command, opts);
-                return { ...result, stdout: mask(result.stdout), stderr: mask(result.stderr) };
-              } catch (error) {
-                const message = errMessage(error);
-                const masked = mask(message);
-                if (masked !== message) throw new MaskedExecutionError(error, mask, masked);
-                throw error;
-              }
-            },
-            async () => {
-              await fileExecution?.finish();
-            },
-          );
-          return { ...r, ...(reached ? { reached } : {}), ...(scratchReroute ? { scratchReroute } : {}) };
-        });
-        return executed;
+        execOpts?.signal?.throwIfAborted();
+        const { commandEnv, secretValues, fileExecution } = await stageCredentials(
+          requested,
+          handle,
+          "command",
+          execOpts?.signal,
+        );
+        const r = await withCleanup(
+          async (): Promise<ExecResult> => {
+            const commandHandle = Object.keys(commandEnv).length
+              ? { ...handle, env: { ...handle.env, ...commandEnv } }
+              : handle;
+            const secretEnv = executionSecretEnv(commandHandle.env, secretValues);
+            const mask = createExactSecretValueMasker(Object.values(secretEnv));
+            try {
+              const result = await deps.sandbox.run(commandHandle, command, opts);
+              return { ...result, stdout: mask(result.stdout), stderr: mask(result.stderr) };
+            } catch (error) {
+              const message = errMessage(error);
+              const masked = mask(message);
+              if (masked !== message) throw new MaskedExecutionError(error, mask, masked);
+              throw error;
+            }
+          },
+          async () => {
+            await fileExecution?.finish();
+          },
+        );
+        return { ...r, ...(reached ? { reached } : {}), ...(scratchReroute ? { scratchReroute } : {}) };
       });
     },
   } satisfies Partial<ToolContext>;
@@ -158,13 +154,12 @@ export function fileOps(
     fallbackMounts,
     persistExclude,
     machine,
-    timed,
     once,
   }: Pick<
     ReturnType<typeof sandboxAccess>,
     "writableScopeId" | "memory" | "fallbackMounts" | "persistExclude" | "machine"
   > &
-    Pick<ReturnType<typeof callLedger>, "timed" | "once">,
+    Pick<ReturnType<typeof callLedger>, "once">,
 ) {
   return {
     async read(path: string, signal?: AbortSignal, sandboxId?: string): Promise<ReadResult> {
@@ -214,15 +209,13 @@ export function fileOps(
       const mounts = crossScope ? fallbackMounts.filter((mount) => mount.mountPath === "global") : fallbackMounts;
       const rel = path.startsWith("/") ? workspacePathOf(handle.rootDir, path) : path;
       if (rel === null) return { content: null, sourceScopeId: null, outsideWorkspace: true };
-      return timed("file_op", async () => {
-        const direct = await withAbort(() => deps.sandbox.readFile(handle, rel), signal);
-        if (direct !== null) return { content: direct, sourceScopeId: resource?.ownerScopeId ?? writableScopeId };
-        for (const mount of mounts) {
-          const v = await withAbort(() => deps.sandbox.readFile(handle, join(mount.mountPath, rel)), signal);
-          if (v !== null) return { content: v, sourceScopeId: mount.scopeId };
-        }
-        return { content: null, sourceScopeId: null };
-      });
+      const direct = await withAbort(() => deps.sandbox.readFile(handle, rel), signal);
+      if (direct !== null) return { content: direct, sourceScopeId: resource?.ownerScopeId ?? writableScopeId };
+      for (const mount of mounts) {
+        const v = await withAbort(() => deps.sandbox.readFile(handle, join(mount.mountPath, rel)), signal);
+        if (v !== null) return { content: v, sourceScopeId: mount.scopeId };
+      }
+      return { content: null, sourceScopeId: null };
     },
     async listSkills(query = "", offset = 0, limit = 50, source?: string) {
       const available = (await deps.listSkills?.(source)) ?? [];
@@ -269,13 +262,11 @@ export function fileOps(
         throw new Error(
           `${path} is not in the computer's workspace; only workspace files can be written, so name it relative to the workspace`,
         );
-      await once(() =>
-        timed("file_op", async () => {
-          await deps.sandbox.writeFile(handle, rel, data);
-          if (ownerScopeId && !isUnderAnyDir(rel, persistExclude))
-            await deps.workspace.write(ownerScopeId, durableRef(rel), data);
-        }),
-      );
+      await once(async () => {
+        await deps.sandbox.writeFile(handle, rel, data);
+        if (ownerScopeId && !isUnderAnyDir(rel, persistExclude))
+          await deps.workspace.write(ownerScopeId, durableRef(rel), data);
+      });
     },
   } satisfies Partial<ToolContext>;
 }
@@ -377,26 +368,23 @@ export function memoryAndHistoryOps(
     writableScopeId,
     memory,
     runId,
-    timed,
     once,
   }: Pick<ReturnType<typeof sandboxAccess>, "writableScopeId" | "memory"> &
-    Pick<ReturnType<typeof callLedger>, "runId" | "timed" | "once">,
+    Pick<ReturnType<typeof callLedger>, "runId" | "once">,
 ) {
   return {
     async memorySearch(q: string, limit?: number, scope?: ScopeId): Promise<string[] | null> {
-      if (deps.context) return timed("recall", () => deps.context!.searchMemory(q, limit, scope));
+      if (deps.context) return deps.context.searchMemory(q, limit, scope);
       if (!memory) return null;
-      return timed("recall", () =>
-        searchNotebooks(memory!, deps.memoryAccess?.read ?? [], q, limit, scope, deps.createdBy),
-      );
+      return searchNotebooks(memory, deps.memoryAccess?.read ?? [], q, limit, scope, deps.createdBy);
     },
     async memoryRead(scope?: ScopeId): Promise<string | null> {
       const target = scope ?? deps.memoryAccess?.write ?? deps.memoryScopeId;
       if (!memory || !target || !canReadNotebook(deps.memoryAccess ?? { read: [] }, target)) return null;
-      const body = await timed("recall", async () => {
-        if (deps.context && deps.memoryAccess?.read.includes(target)) return deps.context.readMemory(target);
-        return readNotebook(memory!, target);
-      });
+      const body =
+        deps.context && deps.memoryAccess?.read.includes(target)
+          ? await deps.context.readMemory(target)
+          : await readNotebook(memory, target);
       if (body === null) return null;
       return scope !== undefined ? `### ${target}\n${body}` : body;
     },
@@ -404,38 +392,32 @@ export function memoryAndHistoryOps(
       const write = deps.memoryAccess?.write;
       if (!memory || !write) return null;
       return once(() =>
-        timed("memory_write", () =>
-          memory!.capture(write, facts, Date.now(), deps.createdBy, {
-            ...deps.memoryCaptureMetadata?.(),
-            mode: "explicit",
-            actorId: deps.createdBy,
-            conversationScopeId: writableScopeId ?? write,
-          }),
-        ),
+        memory.capture(write, facts, Date.now(), deps.createdBy, {
+          ...deps.memoryCaptureMetadata?.(),
+          mode: "explicit",
+          actorId: deps.createdBy,
+          conversationScopeId: writableScopeId ?? write,
+        }),
       );
     },
     async memoryEdit(edits: MemoryEdit[]): Promise<true | null> {
       const write = deps.memoryAccess?.write;
       if (!memory?.edit || !write) return null;
-      return once(() =>
-        timed("memory_write", async () => {
-          await memory!.edit!(write, edits, deps.createdBy, {
-            ...deps.memoryCaptureMetadata?.(),
-            conversationScopeId: writableScopeId ?? write,
-          });
-          return true as const;
-        }),
-      );
+      return once(async () => {
+        await memory!.edit!(write, edits, deps.createdBy, {
+          ...deps.memoryCaptureMetadata?.(),
+          conversationScopeId: writableScopeId ?? write,
+        });
+        return true as const;
+      });
     },
     async memoryDelete(ids: string[]): Promise<true | null> {
       const write = deps.memoryAccess?.write;
       if (!memory?.delete || !write) return null;
-      return once(() =>
-        timed("memory_write", async () => {
-          await memory!.delete!(write, ids, deps.createdBy);
-          return true as const;
-        }),
-      );
+      return once(async () => {
+        await memory!.delete!(write, ids, deps.createdBy);
+        return true as const;
+      });
     },
     ...(deps.humanTurn ? { humanTurn: true } : {}),
     ...(deps.sessionSyscalls ? { sessionSyscalls: deps.sessionSyscalls } : {}),

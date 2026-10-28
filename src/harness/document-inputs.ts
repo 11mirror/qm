@@ -3,7 +3,6 @@ import { countTokens } from "../util/tokens.ts";
 import { errMessage } from "../util/errors.ts";
 import {
   fitDocumentText,
-  type DocumentTextBudget,
   documentFallbackText,
   documentText,
   nativeDocumentIsReadable,
@@ -26,7 +25,7 @@ export interface DocumentModel {
 export function nativeDocumentFormat(
   model: DocumentModel,
   document: DocumentInput,
-): "responses" | "anthropic" | "chat" | "google" | undefined {
+): "responses" | "anthropic" | "chat" | undefined {
   const gatewayCapability =
     model.provider === "qm:gateway" ? resolveGatewayModel(model.id ?? "")?.documentInput : undefined;
   const pdf = documentExtension(document) === "pdf";
@@ -43,18 +42,17 @@ export function nativeDocumentFormat(
     if (model.provider === "openai" || gatewayCapability) return "chat";
     if (model.provider === "openrouter" && /^(anthropic|google|openai)\//.test(model.id ?? "")) return "chat";
   }
-  if (["google-generative-ai", "google-vertex"].includes(model.api ?? "") && pdf && vision) return "google";
   return undefined;
 }
 
 export async function documentBlocks(
   documents: readonly DocumentInput[],
   model: DocumentModel,
-  maxTextTokens: number | DocumentTextBudget = Number.POSITIVE_INFINITY,
+  maxTextTokens = Number.POSITIVE_INFINITY,
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>[]> {
   const blocks: Record<string, unknown>[] = [];
-  const budget = typeof maxTextTokens === "number" ? { remainingTokens: maxTextTokens } : maxTextTokens;
+  const budget = { remainingTokens: maxTextTokens };
   const fitText = (text: string): string => fitDocumentText(text, budget);
   for (const document of documents) {
     const candidate = nativeDocumentFormat(model, document);
@@ -100,14 +98,9 @@ export async function documentBlocks(
     } else if (format === "chat") {
       blocks.push({ type: "text", text: notice });
       blocks.push({ type: "file", file: { filename, file_data: `data:${mimeType};base64,${document.dataBase64}` } });
-    } else if (format === "google") {
-      blocks.push({ text: notice });
-      blocks.push({ inlineData: { mimeType: "application/pdf", data: document.dataBase64 } });
     } else {
       const text = fitText(await documentFallbackText(document, signal));
-      const type = model.api?.includes("responses") ? "input_text" : "text";
-      const bareText = model.api?.startsWith("google-") || model.api === "bedrock-converse-stream";
-      blocks.push(bareText ? { text } : { type, text });
+      blocks.push({ type: model.api?.includes("responses") ? "input_text" : "text", text });
     }
   }
   return blocks;
@@ -122,25 +115,14 @@ export async function withDocumentInputs(
 ): Promise<unknown> {
   if (!documents.length || !payload || typeof payload !== "object") return payload;
   const p = payload as Record<string, unknown>;
-  if (model.api === "pi-messages" && p.context && typeof p.context === "object") {
-    return {
-      ...p,
-      context: await withDocumentInputs(p.context, { ...model, api: "fallback" }, documents, signal, stubText),
-    };
-  }
-  const google = model.api?.startsWith("google-");
-  let listKey = "messages";
-  if (google) listKey = "contents";
-  else if (model.api?.includes("responses")) listKey = "input";
+  const listKey = model.api?.includes("responses") ? "input" : "messages";
   if (!Array.isArray(p[listKey])) throw new Error("Document input is not supported by this request shape");
   const items = [...(p[listKey] as Record<string, unknown>[])];
   const index = items.findLastIndex((item) => item.role === "user");
   if (index < 0) throw new Error("Document input requires a user message");
   const item = items[index]!;
-  const key = google ? "parts" : "content";
-  const content = item[key];
+  const content = item.content;
   const textType = listKey === "input" ? "input_text" : "text";
-  const bareText = google || model.api === "bedrock-converse-stream";
   const promptTokens = countTokens(
     JSON.stringify(payload, (key, value) => (["data", "image_url", "file_data"].includes(key) ? "" : value)),
   );
@@ -151,17 +133,13 @@ export async function withDocumentInputs(
   const blocks =
     stubText === undefined
       ? await documentBlocks(documents, model, remainingTokens, signal)
-      : [bareText ? { text: stubText } : { type: textType, text: stubText }];
+      : [{ type: textType, text: stubText }];
   let original: unknown[] = [];
   if (Array.isArray(content)) original = content;
   else if (typeof content === "string") original = [{ type: textType, text: content }];
   items[index] = {
     ...item,
-    [key]: [
-      ...original,
-      bareText ? { text: ATTACHMENTS_NOTICE } : { type: textType, text: ATTACHMENTS_NOTICE },
-      ...blocks,
-    ],
+    content: [...original, { type: textType, text: ATTACHMENTS_NOTICE }, ...blocks],
   };
   const nativeRouter =
     stubText === undefined &&

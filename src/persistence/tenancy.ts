@@ -1,14 +1,8 @@
-import type { Pool, PoolClient } from "pg";
-import {
-  openTenantSecret,
-  sealTenantSecrets,
-  settingsFromEnv,
-  TENANT_TEXT_SETTINGS,
-} from "../../plugins/chassis/src/tenant-settings.ts";
+import type { Pool } from "pg";
 
 export const TENANT_BYPASS_OPTION = "-c qm.tenant_bypass=on";
 
-export const TENANCY_EXCLUDED_TABLES = ["qm_tenant", "tenants", "qm_schema_migrations"];
+const TENANCY_EXCLUDED_TABLES = ["qm_tenant", "tenants", "qm_schema_migrations"];
 
 const EXCLUDED = TENANCY_EXCLUDED_TABLES.map((t) => `'${t}'`).join(", ");
 
@@ -187,37 +181,7 @@ END
 $qm_tenantize$`,
 ];
 
-type ServiceBags = Record<string, Record<string, string>>;
-
-async function foldTenantEnvBags(client: PoolClient, key: Buffer | undefined): Promise<void> {
-  const settingColumns = TENANT_TEXT_SETTINGS.map(([, column]) => column).join(", ");
-  await client.query("SET LOCAL bytea_output = 'hex'");
-  const { rows } = await client.query<{ id: string; slug: string; env: ServiceBags | null; sealed: string | null }>(
-    `SELECT id::text AS id, slug, to_jsonb(t) -> 'env' AS env, to_jsonb(t) ->> 'secret_env' AS sealed FROM tenants t
-     WHERE num_nonnulls(secrets, ${settingColumns}) = 0 AND NOT oidc_admin`,
-  );
-  for (const row of rows.filter((r) => r.sealed || Object.keys(r.env ?? {}).length)) {
-    const secretEnv = row.sealed
-      ? (openTenantSecret(Buffer.from(row.sealed.slice(2), "hex"), key, row.slug) as ServiceBags)
-      : {};
-    const flat: Record<string, string> = {};
-    for (const bags of [row.env ?? {}, secretEnv]) {
-      for (const service of ["web-ui", "portal", "core"]) Object.assign(flat, bags[service] ?? {});
-    }
-    const settings = settingsFromEnv(flat);
-    const sealed = sealTenantSecrets(settings.secrets, key);
-    if (!sealed && !settings.oidcAdmin && TENANT_TEXT_SETTINGS.every(([field]) => !settings[field])) continue;
-    await client.query(
-      `UPDATE tenants SET oidc_admin = $2, secrets = $3,
-         ${TENANT_TEXT_SETTINGS.map(([, column], i) => `${column} = $${i + 4}`).join(", ")}
-       WHERE id = $1`,
-      [row.id, settings.oidcAdmin, sealed, ...TENANT_TEXT_SETTINGS.map(([field]) => settings[field] ?? null)],
-    );
-    console.log(`[qm] tenant ${row.slug}: settings filled from its env bags`);
-  }
-}
-
-export async function applyTenancy(pool: Pool, tenantSecretsKey?: Buffer): Promise<void> {
+export async function applyTenancy(pool: Pool): Promise<void> {
   const client = await pool.connect();
   let broken: Error | undefined;
   const discardOnFailure = (e: unknown) => {
@@ -228,7 +192,6 @@ export async function applyTenancy(pool: Pool, tenantSecretsKey?: Buffer): Promi
     try {
       await client.query("BEGIN");
       for (const statement of TENANCY_FUNCTIONS) await client.query(statement);
-      await foldTenantEnvBags(client, tenantSecretsKey);
       await client.query("SELECT qm_tenantize()");
       await client.query("COMMIT");
     } catch (error) {

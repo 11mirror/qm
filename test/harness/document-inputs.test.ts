@@ -147,16 +147,6 @@ test("OpenRouter uses native PDF processing without silently selecting an OCR se
   assert.equal(payload.messages[0]!.content.at(-1)!.type, "file");
 });
 
-test("Google document parts preserve PDFs and use text for office files", async () => {
-  const payload = (await withDocumentInputs(
-    { contents: [{ role: "user", parts: [{ text: "Summarize" }] }] },
-    { api: "google-generative-ai", input: ["image"] },
-    [await fixture("pdf"), await fixture("docx")],
-  )) as { contents: { parts: Record<string, unknown>[] }[] };
-  assert.ok(payload.contents[0]!.parts.some((part) => part.inlineData));
-  assert.match(String(payload.contents[0]!.parts.at(-1)!.text), /QUARTZ-731/);
-});
-
 test("invalid binary documents and empty scans never masquerade as read documents", async () => {
   const document = await fixture("pdf");
   document.dataBase64 = Buffer.from("not a PDF").toString("base64");
@@ -172,7 +162,6 @@ test("request byte budgets replace all native document wire formats with explici
       { api: "openai-completions", provider: "openai", input: ["image"] },
       { messages: [{ role: "user", content: [] }] },
     ],
-    [{ api: "google-generative-ai", input: ["image"] }, { contents: [{ role: "user", parts: [] }] }],
   ] as const) {
     const encoded = await withDocumentInputs(payload, model, [await fixture("pdf")]);
     const trimmed = trimPayloadToByteBudget(encoded, 1000);
@@ -263,7 +252,6 @@ test("steered reuploads already in the turn do not consume another document slot
     },
     0,
     undefined,
-    0,
     initial.documents,
   );
   assert.deepEqual(steered, { documents: [], notices: [], tokens: 0 });
@@ -343,16 +331,7 @@ test("a large text attachment is charged only what is left of the document budge
   meta.name = "big.csv";
   meta.mimetype = "text/csv";
   assert.equal(estimateDocumentTokens(artifact), Math.ceil(csv.length / 4));
-  const loaded = await loadDocumentInputs(
-    store,
-    [meta],
-    () => true,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    30_000,
-  );
+  const loaded = await loadDocumentInputs(store, [meta], () => true, undefined, undefined, undefined, 30_000);
   assert.equal(loaded.documents.length, 1, "the document is inlined, not reduced to a stub");
   assert.deepEqual(loaded.notices, []);
   const payload = await withDocumentInputs(
@@ -362,23 +341,6 @@ test("a large text attachment is charged only what is left of the document budge
   );
   const rendered = JSON.stringify(payload);
   assert.match(rendered, /0,vvvv/);
-});
-
-test("Pi proxy and Bedrock fallback use their actual provider request shapes", async () => {
-  const documents = [await fixture("txt")];
-  const proxy = await withDocumentInputs(
-    { context: { messages: [{ role: "user", content: "Summarize" }] } },
-    { api: "pi-messages" },
-    documents,
-  );
-  assert.match(JSON.stringify(proxy), /QUARTZ-731/);
-  const bedrock = (await withDocumentInputs(
-    { messages: [{ role: "user", content: [{ text: "Summarize" }] }] },
-    { api: "bedrock-converse-stream" },
-    documents,
-  )) as { messages: { content: Record<string, unknown>[] }[] };
-  assert.equal(bedrock.messages[0]!.content.at(-1)!.type, undefined);
-  assert.match(String(bedrock.messages[0]!.content.at(-1)!.text), /QUARTZ-731/);
 });
 
 test("one failed historical document does not prevent loading another document", async () => {
@@ -456,12 +418,7 @@ test("encrypted PDFs do not expose content through text fallback", async () => {
   assert.doesNotMatch(text, /QUARTZ-731/);
 });
 
-for (const model of [
-  openai,
-  anthropic,
-  { api: "google-generative-ai", provider: "google", input: ["text", "image"] },
-  { api: "openai-completions", provider: "openai", input: ["text", "image"] },
-]) {
+for (const model of [openai, anthropic, { api: "openai-completions", provider: "openai", input: ["text", "image"] }]) {
   test(`${model.api} isolates invalid documents while retaining scanned native PDFs`, async () => {
     const documents = await Promise.all(
       ["scanned", "malformed", "encrypted"].map(async (name) => ({
@@ -550,7 +507,7 @@ test("text documents split the token budget fairly, so one large file does not s
         direction: "in",
       }) as AttachmentMeta,
   );
-  const loaded = await loadDocumentInputs(store, metas, () => true, undefined, undefined, undefined, undefined, 30_000);
+  const loaded = await loadDocumentInputs(store, metas, () => true, undefined, undefined, undefined, 30_000);
   assert.deepEqual(
     loaded.documents.map((document) => document.name),
     ["big.txt", "small.txt"],

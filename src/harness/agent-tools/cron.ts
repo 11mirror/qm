@@ -4,22 +4,8 @@ import { CRON_FIRE_NOTE_MAX_CHARS, UNATTENDED_ADMIN_GRANTS } from "../../api/con
 import { utcMinute } from "../../util/time.ts";
 import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
 import { type ToolKit } from "./kit.ts";
-import {
-  CRON_ID_ACTIONS,
-  fmtCronCreated,
-  fmtCronLine,
-  fmtCronRunLine,
-  listOrder,
-  optionalBoolean,
-  optionalInteger,
-  optionalString,
-  pageOf,
-  previewText,
-  previewTrims,
-  SENDER_WEBHOOK_SCHEMES,
-  text,
-  WEBHOOK_ACTION_PREVIEW_CHARS,
-} from "./shared.ts";
+import { fmtCandidates, optionalBoolean, optionalInteger, optionalString, pageOf, text } from "./shared.ts";
+import type { CronFireLogEntry } from "../../types.ts";
 
 type ToolContext = NonNullable<ToolKit["ref"]["current"]>;
 
@@ -173,10 +159,8 @@ async function runCronAction(kit: ToolKit, callId: string, params: Static<Return
         r.runs.length === r.total
           ? ""
           : `\n(showing ${r.runs.length} of ${r.total}; omit limit for all retained entries)`;
-      const noteLine =
-        r.cron.lastFireNote && Number.isFinite(r.cron.lastFireNote.at)
-          ? `\n(shift-change note (${utcMinute(r.cron.lastFireNote.at)}${r.cron.lastFireNote.by ? `, by ${r.cron.lastFireNote.by}` : ""}): ${r.cron.lastFireNote.text})`
-          : "";
+      const shift = fmtShiftNote(r.cron.lastFireNote);
+      const noteLine = shift ? `\n(${shift})` : "";
       return recordResult(
         callId,
         { tool: "cron", id, count: r.runs.length, total: r.total },
@@ -187,16 +171,10 @@ async function runCronAction(kit: ToolKit, callId: string, params: Static<Return
     }
     case "patch": {
       const r = await tc.cronPatch(id, {
-        ...(params.runtime !== undefined ? { runtime: params.runtime } : {}),
-        ...(params.title !== undefined ? { title: params.title } : {}),
-        ...(params.task !== undefined ? { action: params.task } : {}),
-        ...(params.text !== undefined ? { text: params.text } : {}),
+        ...cronFields(params),
         ...(params.schedule !== undefined ? { schedule: params.schedule } : {}),
         ...(params.enabled !== undefined ? { enabled: params.enabled } : {}),
         ...(params.archived !== undefined ? { archived: params.archived } : {}),
-        ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
-        ...(params.session !== undefined ? { session: params.session } : {}),
-        ...(params.unattendedGrants !== undefined ? { unattendedGrants: params.unattendedGrants } : {}),
       });
       if (!r.ok) return refused(callId, "cron", r);
       return recordText(callId, { tool: "cron", id }, `Updated cron ${fmtCronLine(r.cron)}`);
@@ -272,6 +250,18 @@ async function cronListAction(
   );
 }
 
+function cronFields(params: Static<ReturnType<typeof cronParams>>) {
+  return {
+    ...(params.runtime !== undefined ? { runtime: params.runtime } : {}),
+    ...(params.title !== undefined ? { title: params.title } : {}),
+    ...(params.task !== undefined ? { action: params.task } : {}),
+    ...(params.text !== undefined ? { text: params.text } : {}),
+    ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
+    ...(params.session !== undefined ? { session: params.session } : {}),
+    ...(params.unattendedGrants !== undefined ? { unattendedGrants: params.unattendedGrants } : {}),
+  };
+}
+
 async function cronCreateAction(
   kit: ToolKit,
   tc: ToolContext,
@@ -287,23 +277,14 @@ async function cronCreateAction(
   }
   const r = await tc.cronCreate({
     schedule: params.schedule,
-    ...(params.runtime !== undefined ? { runtime: params.runtime } : {}),
-    ...(params.title !== undefined ? { title: params.title } : {}),
-    ...(params.task !== undefined ? { action: params.task } : {}),
-    ...(params.text !== undefined ? { text: params.text } : {}),
+    ...cronFields(params),
     ...(params.recipient !== undefined ? { recipient: params.recipient } : {}),
     ...(params.channel !== undefined ? { channel: params.channel } : {}),
-    ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
-    ...(params.session !== undefined ? { session: params.session } : {}),
-    ...(params.unattendedGrants !== undefined ? { unattendedGrants: params.unattendedGrants } : {}),
     ...(params.inbox === true ? { inbox: true } : {}),
   });
   if (isUnavailable(r)) return unavailable(callId, "cron");
   if (!r.ok) {
-    const cand = r.candidates?.length
-      ? `\nCandidates: ${r.candidates.map((c) => `${c.label} (${c.id})`).join(", ")}`
-      : "";
-    return fail(r.code, `${r.message}${cand}`);
+    return fail(r.code, `${r.message}${fmtCandidates(r.candidates)}`);
   }
   return recordText(
     callId,
@@ -381,7 +362,7 @@ function webhookTool(kit: ToolKit) {
           });
           if (!r.ok) return refused(callId, "webhook", r);
 
-          const secretLine = `\nSecret (shown once — store it): ${r.secret}`;
+          const secretLine = r.secret ? `\nSecret (shown once — store it): ${r.secret}` : "";
           return recordText(
             callId,
             { tool: "webhook", id: r.webhook.id, url: r.url, secretShown: !!r.secret },
@@ -417,11 +398,11 @@ function webhookTool(kit: ToolKit) {
         }
         case "update": {
           const id = typeof params.id === "string" && params.id ? params.id : null;
-          const task = typeof params.task === "string" ? params.task : "";
-          if (!id)
+          const task = params.task?.trim() ? params.task : null;
+          if (!id || !task)
             return recordFail(
               callId,
-              { tool: "webhook", error: "id required" },
+              { tool: "webhook", error: "id and task required" },
               "[error] webhook update requires `id` and the new `task`.",
             );
           const r = await tc.webhookUpdate(id, task);
@@ -436,4 +417,115 @@ function webhookTool(kit: ToolKit) {
     },
   });
   return { webhook };
+}
+
+function fmtCronSchedule(c: {
+  schedule: { cron?: string; timezone?: string; everyMs?: number; firstFireAt?: number };
+}): string {
+  const s = c.schedule;
+  if (s.cron) return `${s.cron}${s.timezone ? ` (${s.timezone})` : ""}`;
+  if (s.everyMs != null) return `every ${Math.max(1, Math.round(s.everyMs / 60_000))}m`;
+  if (s.firstFireAt != null) return `once at ${new Date(s.firstFireAt).toISOString()}`;
+  return "no schedule";
+}
+
+interface CronLike {
+  runtime?: import("../harness.ts").RuntimeChoice | null;
+  id: string;
+  title?: string;
+  enabled: boolean;
+  archived?: boolean;
+  schedule: { cron?: string; timezone?: string; everyMs?: number; firstFireAt?: number };
+  action?: string;
+  message?: string;
+  nextFireAt?: number;
+  destination?: { type: string; target: string };
+  lastFireNote?: { text: string; at: number; by?: string };
+  unattendedGrants?: string[];
+}
+
+const CRON_ID_ACTIONS = new Set(["get", "runs", "patch", "delete", "disable", "run", "note"]);
+const SENDER_WEBHOOK_SCHEMES = WEBHOOK_SCHEMES.filter(
+  (scheme) => scheme !== "hmac-sha256" && scheme !== "google-pubsub",
+);
+const LIST_TASK_PREVIEW_CHARS = 200;
+const WEBHOOK_ACTION_PREVIEW_CHARS = 2000;
+
+const flatText = (s: string): string => s.replace(/[\s\u0085]+/g, " ").trim();
+
+function previewText(s: string, max = LIST_TASK_PREVIEW_CHARS): string {
+  const f = flatText(s);
+  if (f.length <= max) return f;
+  let cut = f.slice(0, max);
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return `${cut.trimEnd()}…`;
+}
+
+const previewTrims = (s: string | undefined): boolean =>
+  s !== undefined && flatText(s).length > LIST_TASK_PREVIEW_CHARS;
+
+function listOrder(
+  a: { id: string; enabled: boolean; archived?: boolean; createdAt: number },
+  b: { id: string; enabled: boolean; archived?: boolean; createdAt: number },
+): number {
+  const rank = (c: { enabled: boolean; archived?: boolean }): number => {
+    if (c.archived) return 2;
+    if (c.enabled) return 0;
+    return 1;
+  };
+  return rank(a) - rank(b) || b.createdAt - a.createdAt || a.id.localeCompare(b.id);
+}
+
+function fmtShiftNote(note: CronLike["lastFireNote"]): string | null {
+  if (!note || !Number.isFinite(note.at)) return null;
+  return `shift-change note (${utcMinute(note.at)}${note.by ? `, by ${note.by}` : ""}): ${note.text}`;
+}
+
+function fmtCronLine(c: CronLike, preview = false): string {
+  const body = c.action || c.message;
+  let shown: string | undefined;
+  if (body) shown = preview ? previewText(body) : body;
+  const what = shown ? `${c.action ? "task" : "text"}: ${shown}` : "";
+  let state = " [paused]";
+  if (c.archived) state = " [archived]";
+  else if (c.enabled) state = "";
+  const dest = c.destination ? ` → ${c.destination.type}:${c.destination.target}` : "";
+  const next = c.nextFireAt ? ` (next ${new Date(c.nextFireAt).toISOString()})` : "";
+  const shift = preview ? null : fmtShiftNote(c.lastFireNote);
+  const note = shift ? `\n    ${shift}` : "";
+  const runtime = c.runtime
+    ? `\n    runtime: ${c.runtime.modelId}${c.runtime.effortLevel ? ` (${c.runtime.effortLevel})` : ""}`
+    : "";
+  const grants = c.unattendedGrants?.length ? `\n    unattended grants: ${c.unattendedGrants.join(", ")}` : "";
+  return `${c.id}${c.title ? ` "${c.title}"` : ""} — ${fmtCronSchedule(c)}${dest}${state}${next}${what ? `\n    ${what}` : ""}${runtime}${grants}${note}`;
+}
+
+function fmtCronCreated(r: {
+  cron: CronLike;
+  recipient?: { displayName: string };
+  channel?: { name: string };
+}): string {
+  let to = "";
+  if (r.recipient) to = `\nAddressed to ${r.recipient.displayName} (DM).`;
+  else if (r.channel) to = `\nAddressed to #${r.channel.name}.`;
+  return `Created cron ${fmtCronLine(r.cron)}${to}`;
+}
+
+function fmtCronRunLine(entry: CronFireLogEntry): string {
+  let lifecycle: string | null = null;
+  if (entry.status === "running") {
+    lifecycle = `in flight for ${Math.max(0, Math.round((Date.now() - entry.firedAt) / 60_000))}m`;
+  } else if (entry.endedAt !== undefined) {
+    lifecycle = `took ${Math.max(0, Math.round((entry.endedAt - entry.firedAt) / 1000))}s`;
+  }
+  const bits = [
+    new Date(entry.firedAt).toISOString(),
+    `status=${entry.status ?? "unknown"}`,
+    lifecycle,
+    `fireKey=${entry.fireKey}`,
+    entry.note ? `note=${entry.note}` : null,
+    entry.reply ? `reply=${entry.reply}` : null,
+  ].filter((bit): bit is string => bit !== null);
+  return `- ${bits.join("; ")}`;
 }

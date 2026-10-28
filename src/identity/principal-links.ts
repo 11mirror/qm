@@ -31,10 +31,8 @@ export interface PrincipalLinkService extends PrincipalLinkResolver {
   list(): Promise<PrincipalLink[]>;
   link(input: PrincipalLinkInput): Promise<PrincipalLink>;
   unlink(principalId: string): Promise<PrincipalLink | null>;
-  refresh(force?: boolean): Promise<void>;
+  refresh(): Promise<void>;
 }
-
-const REFRESH_TTL_MS = 10_000;
 
 const PRINCIPAL_LINKS: TableSpec = {
   table: "principal_links",
@@ -53,7 +51,6 @@ export function createPrincipalLinkService(databaseUrl: string, lock: AdvisoryLo
   const state = perTenant(() => ({
     byAlias: new Map<string, PrincipalLink>(),
     byCanonical: new Map<string, PrincipalLink[]>(),
-    refreshedAt: 0,
     refreshP: null as Promise<void> | null,
   }));
 
@@ -70,17 +67,12 @@ export function createPrincipalLinkService(databaseUrl: string, lock: AdvisoryLo
     }
   }
 
-  async function refresh(force = false): Promise<void> {
+  async function refresh(): Promise<void> {
     const s = state();
-    if (s.refreshP && !force) return s.refreshP;
     while (s.refreshP) await s.refreshP;
-    if (!force && Date.now() - s.refreshedAt < REFRESH_TTL_MS) return Promise.resolve();
     s.refreshP = table
       .all()
       .then(index)
-      .then(() => {
-        s.refreshedAt = Date.now();
-      })
       .finally(() => {
         s.refreshP = null;
       });
@@ -96,7 +88,7 @@ export function createPrincipalLinkService(databaseUrl: string, lock: AdvisoryLo
     },
     refresh,
     async list() {
-      await refresh(true);
+      await refresh();
       return [...state().byAlias.values()].sort(
         (a, b) => a.createdAt - b.createdAt || a.principalId.localeCompare(b.principalId),
       );
@@ -113,7 +105,7 @@ export function createPrincipalLinkService(databaseUrl: string, lock: AdvisoryLo
         const aliasKey = foldPrincipalId(principalId);
         const canonicalKey = foldPrincipalId(canonicalId);
         if (aliasKey === canonicalKey) throw new PrincipalLinkError(400, "a principal cannot be linked to itself");
-        await refresh(true);
+        await refresh();
         const { byAlias, byCanonical } = state();
         const existing = byAlias.get(aliasKey);
         if (existing) {
@@ -139,7 +131,7 @@ export function createPrincipalLinkService(databaseUrl: string, lock: AdvisoryLo
           createdAt: Date.now(),
         };
         const stored = await table.insertOrGet(aliasKey, link);
-        await refresh(true);
+        await refresh();
         if (foldPrincipalId(stored.canonicalId) !== canonicalKey)
           throw new PrincipalLinkError(409, `${principalId} is already linked to ${stored.canonicalId}`);
         return stored;
@@ -148,7 +140,7 @@ export function createPrincipalLinkService(databaseUrl: string, lock: AdvisoryLo
     async unlink(principalId) {
       return lock.withLock("principal-links", async () => {
         const row = await table.take(foldPrincipalId(principalId));
-        await refresh(true);
+        await refresh();
         return row;
       });
     },

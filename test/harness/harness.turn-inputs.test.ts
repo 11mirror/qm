@@ -1,5 +1,4 @@
 import type { Harness, HarnessTurnInput } from "../../src/harness/harness.ts";
-import { createMemoryBlobTransferStore } from "../../src/persistence/blob-transfer.ts";
 import type { SecurityScreener } from "../../src/security/security-screener.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -11,6 +10,7 @@ import { createSkillStore } from "../../src/skills/skill-store.ts";
 import { scopeId, type TurnRequest } from "../../src/types.ts";
 import { testDatabaseUrl, testAdvisoryLock } from "../support/test-database.ts";
 import { actor, fakeSandbox, readSandbox, buildOrchestrator, dm, slackDm } from "../support/system-prompt.ts";
+import { createMemoryBlobTransferStore } from "../support/in-process-stores.ts";
 
 test("Open uses the exact skill snapshot that passed screening despite an in-flight source update", async () => {
   const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), databaseUrl: testDatabaseUrl() });

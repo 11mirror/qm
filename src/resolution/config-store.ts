@@ -109,9 +109,7 @@ export interface ScopedConfigStore {
   instructionsVersion(id: ScopeId): number;
   instructionsHistory(id: ScopeId): PersistedInstructionsRevision[];
   captureInstructionsSnapshot(id: ScopeId): Promise<InstructionsSnapshot>;
-  restoreInstructionsSnapshot(id: ScopeId, snapshot: InstructionsSnapshot): Promise<boolean>;
   restoreInstructionsCacheSnapshot(id: ScopeId, snapshot: InstructionsSnapshot): void;
-  getApprovalGrantModes(id: ScopeId): ApprovalGrantModes;
   getApprovalGrantModesDurable(id: ScopeId): Promise<ApprovalGrantModes>;
   setApprovalGrantModes(id: ScopeId, modes: ApprovalGrantModes): Promise<void>;
   onChannelHeaderPinChanged(listener: (id: ScopeId) => void): void;
@@ -220,6 +218,8 @@ export const SCOPE_SETTINGS: { [K in ScopeSettingName]: ScopeSettingSpec<ScopeSe
   autoFlagger: { table: "autoFlaggerConfigs", target: "org", orgOnly: true },
 };
 
+const ORG_ONLY_TABLES = new Set<string>(Object.values(SCOPE_SETTINGS).flatMap((s) => (s.orgOnly ? [s.table] : [])));
+
 type Queue = ReturnType<typeof createKeyedQueue<string>>;
 
 function notifier(label: string) {
@@ -245,8 +245,8 @@ function scopeSetting<R extends { scopeId: ScopeId }, T>(
   rows: TypedTable<R>,
   read: (row: R) => T,
   toRow: (id: ScopeId, value: T) => R,
-  orgOnly = false,
 ) {
+  const orgOnly = ORG_ONLY_TABLES.has(name);
   const cache = new Map<ScopeId, T>();
   const load = (id: ScopeId, row: R | null) => (row ? cache.set(id, read(row)) : cache.delete(id));
   const refresh = async (id: ScopeId) => {
@@ -279,7 +279,6 @@ function createScopeSettings(org: ScopeId, tables: ConfigTables<ConfigRecords>, 
   const field = <N extends SettingTable | "approvalGrantModes", K extends Exclude<keyof ConfigRecords[N], "scopeId">>(
     name: N,
     key: K,
-    orgOnly = false,
   ) =>
     scopeSetting(
       org,
@@ -288,7 +287,6 @@ function createScopeSettings(org: ScopeId, tables: ConfigTables<ConfigRecords>, 
       tables[name] as TypedTable<ConfigRecords[N]>,
       (row) => row[key],
       (id, value: ConfigRecords[N][K]) => ({ scopeId: id, [key]: value }) as ConfigRecords[N],
-      orgOnly,
     );
   return {
     commandPolicies: field("commandPolicies", "policy"),
@@ -297,9 +295,9 @@ function createScopeSettings(org: ScopeId, tables: ConfigTables<ConfigRecords>, 
     unfulfilledInsights: field("unfulfilledInsights", "on"),
     externalSlackParticipants: field("externalSlackParticipants", "on"),
     channelHeaderPin: field("channelHeaderPin", "on"),
-    orgAmbient: field("orgAmbient", "on", true),
-    interactiveFastMode: field("interactiveFastMode", "on", true),
-    individualModelAuth: field("individualModelAuth", "on", true),
+    orgAmbient: field("orgAmbient", "on"),
+    interactiveFastMode: field("interactiveFastMode", "on"),
+    individualModelAuth: field("individualModelAuth", "on"),
     webuiModels: field("webuiModels", "ids"),
     ackEmoji: field("ackEmoji", "names"),
     branding: field("branding", "branding"),
@@ -312,7 +310,6 @@ function createScopeSettings(org: ScopeId, tables: ConfigTables<ConfigRecords>, 
       tables.autoFlaggerConfigs,
       ({ modelId, rubric }): AutoFlaggerConfig => ({ modelId, rubric }),
       (id, config) => ({ scopeId: id, ...config }),
-      true,
     ),
   } satisfies Record<SettingTable | "approvalGrantModes", unknown>;
 }
@@ -358,11 +355,6 @@ function settingsApi(org: ScopeId, settings: ReturnType<typeof createScopeSettin
       const { normalize } = SCOPE_SETTINGS[name];
       await access(name).set(id, value !== null && normalize ? normalize(value as never) : value);
       if (name === "channelHeaderPin") headerPin.note(id);
-    },
-    getApprovalGrantModes(id: ScopeId) {
-      const orgModes = settings.approvalGrantModes.get(org) ?? DEFAULT_APPROVAL_GRANT_MODES;
-      if (id === org) return { ...orgModes };
-      return composeApprovalGrantModes(orgModes, settings.approvalGrantModes.get(id));
     },
     async getApprovalGrantModesDurable(id: ScopeId) {
       const orgModes = (await settings.approvalGrantModes.durable(org)) ?? DEFAULT_APPROVAL_GRANT_MODES;

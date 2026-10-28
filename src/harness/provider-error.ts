@@ -3,9 +3,6 @@ import { ProviderTurnError, TRANSIENT_ERROR_CODES, type ProviderErrorCode } from
 
 const AUTH_TYPES = new Set(["authentication_error", "permission_error", "invalid_api_key"]);
 const TRANSIENT_TYPES = new Set(["overloaded_error", "api_error", "timeout_error"]);
-const CONTEXT_CODES = new Set(["context_length_exceeded"]);
-const QUOTA_CODES = new Set(["insufficient_quota"]);
-const NOT_FOUND_CODES = new Set(["model_not_found"]);
 const RETRYABLE_CODES = new Set<ProviderErrorCode>([...TRANSIENT_ERROR_CODES, "unknown"]);
 
 type ProviderFailure = Pick<AssistantMessage, "providerError" | "rawStopReason" | "errorMessage"> | AssistantMessage;
@@ -16,11 +13,11 @@ function providerErrorCode(failed: ProviderFailure): ProviderErrorCode {
   if (type === "model_unavailable") return "model_unavailable";
   if (type === "request_too_large" || status === 413) return "context_too_long";
   if ("usage" in failed && isContextOverflow(failed)) return "context_too_long";
-  if (type === "budget_exceeded" || (code && QUOTA_CODES.has(code))) return "model_budget";
-  if (code && CONTEXT_CODES.has(code)) return "context_too_long";
+  if (type === "budget_exceeded" || code === "insufficient_quota") return "model_budget";
+  if (code === "context_length_exceeded") return "context_too_long";
   if ((type && AUTH_TYPES.has(type)) || status === 401 || status === 403) return "auth";
   if (type === "rate_limit_error" || status === 429) return "rate_limit";
-  if (type === "not_found_error" || (code && NOT_FOUND_CODES.has(code)) || status === 404) return "not_found";
+  if (type === "not_found_error" || code === "model_not_found" || status === 404) return "not_found";
   if ((type && TRANSIENT_TYPES.has(type)) || status === 408 || status === 409 || (status ?? 0) >= 500)
     return "transient";
   if (type === "invalid_request_error" || status === 400 || status === 422) return "bad_request";

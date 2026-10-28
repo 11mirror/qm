@@ -11,7 +11,6 @@ import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { createPgPool, migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
-import { mergeTenantQueues } from "./turns/absurd-schema.ts";
 import { hostOfUrl, setEdgeTenants } from "../plugins/chassis/src/tenant-hosts.ts";
 import { tagErrorDeployment } from "../plugins/chassis/src/error-reporting.ts";
 import { homeHosts, homeTenantSettings } from "../plugins/chassis/src/tenant-settings.ts";
@@ -25,7 +24,8 @@ import {
   watchActiveTenants,
 } from "./tenants/directory.ts";
 import { tenantConfig } from "./tenants/tenant-config.ts";
-import { assertRowSecurityEnforced, tenantSecretsKey } from "./tenants/registry.ts";
+import { assertRowSecurityEnforced } from "./tenants/registry.ts";
+import { tenantSecretsKey } from "../plugins/chassis/src/tenant-settings.ts";
 
 export interface BootedApp {
   config: Config;
@@ -44,7 +44,6 @@ export async function bootApp(
 
   const built = buildApp(config, { env });
   await migrateRegisteredPgSchemas(config.databaseUrl);
-  if (config.databaseUrl) await mergeTenantQueues(config.databaseUrl);
   const publishEdge = config.multitenant ? edgeTenantFeed(env) : undefined;
   if (publishEdge) {
     await useRegistryTenants(config, env, async () => {
@@ -158,12 +157,11 @@ async function useRegistryTenants(config: Config, env: NodeJS.ProcessEnv, prepar
   tagErrorDeployment(() =>
     isHomeTenant(tenant()) ? undefined : (tenantConfig(config).sentryDeployment ?? tenant().orgId),
   );
-  const secretsKey = tenantSecretsKey(env);
   useTenantDirectory(
     createTenantDirectory({
       databaseUrl,
       pool,
-      secretsKey,
+      secretsKey: tenantSecretsKey(env),
       home: tenant(),
       homeHosts: [config.publicUrl, config.apiBaseUrl, config.publicWebUrl]
         .map(hostOfUrl)

@@ -6,13 +6,11 @@ import { type ToolKit } from "./kit.ts";
 import { optionalInteger, optionalString, text } from "./shared.ts";
 
 export function memoryTools(kit: ToolKit) {
-  const { memory } = memoryTool(kit);
-  const { history } = historyTool(kit);
-  return { memory, history };
+  return { memory: memoryTool(kit), history: historyTool(kit) };
 }
 
 function memoryTool(kit: ToolKit) {
-  const memory = defineTool({
+  return defineTool({
     name: "memory",
     label: "memory",
     description:
@@ -26,7 +24,6 @@ function memoryTool(kit: ToolKit) {
     parameters: memoryParams(),
     execute: (callId, params) => runMemoryAction(kit, callId, params),
   });
-  return { memory };
 }
 
 function memoryParams() {
@@ -61,26 +58,19 @@ async function runMemoryAction(kit: ToolKit, callId: string, params: Static<Retu
   const tc = ref.current;
   if (!tc) return text("[error] no active tool context");
   const action = params.action;
-  await recordCall(callId, {
-    tool: "memory",
-    action,
-    ...(params.scope !== undefined ? { scope: params.scope } : {}),
-    ...(params.query !== undefined ? { query: params.query } : {}),
-    ...(params.limit !== undefined ? { limit: params.limit } : {}),
-    ...(params.facts !== undefined ? { facts: params.facts } : {}),
-    ...(params.ids !== undefined ? { ids: params.ids } : {}),
-  });
+  await recordCall(callId, { tool: "memory", ...params });
   const fail = (error: string) => recordFail(callId, { tool: "memory", action, error }, `[error] ${error}`);
   const unavailable = () =>
     recordFail(callId, { tool: "memory", action, unavailable: true }, "[memory isn't available in this conversation]");
-  if (params.scope !== undefined && action !== "search" && action !== "read") {
+  const writes = action !== "search" && action !== "read";
+  if (params.scope !== undefined && writes) {
     return recordFail(
       callId,
       { tool: "memory", action, error: "scope is read-only" },
       "[error] scope is only allowed for memory search/read; writes stay in this conversation.",
     );
   }
-  if (opts?.readOnly && action !== "search" && action !== "read") {
+  if (opts?.readOnly && writes) {
     return recordFail(
       callId,
       { tool: "memory", action, readOnly: true },
@@ -150,7 +140,7 @@ async function runMemoryAction(kit: ToolKit, callId: string, params: Static<Retu
 
 function historyTool(kit: ToolKit) {
   const { ref, recordCall, recordText, recordFail } = kit;
-  const history = defineTool({
+  return defineTool({
     name: "history",
     label: "history",
     description:
@@ -203,5 +193,4 @@ function historyTool(kit: ToolKit) {
       );
     },
   });
-  return { history };
 }

@@ -13,7 +13,7 @@ import {
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
-import { createNoopAdvisoryLock } from "../../src/persistence/advisory-lock.ts";
+import { createNoopAdvisoryLock } from "../support/in-process-stores.ts";
 
 const projectStore = (opts: { id: () => string; now?: () => number }) =>
   createProjectStore(testDatabaseUrl(), { advisoryLock: createNoopAdvisoryLock(), ...opts });

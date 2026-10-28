@@ -1,6 +1,13 @@
 import { surfaceHas } from "../surfaces/surface.ts";
 import { swallowAs } from "../util/errors.ts";
-import { type PendingApprovalRecord, sourceDestination, type TurnRequest, turnSource } from "../types.ts";
+import {
+  type CommandApprovalGrant,
+  type PendingApprovalRecord,
+  sourceDestination,
+  type TurnRequest,
+  turnSource,
+} from "../types.ts";
+import { rosterIds, samePerson } from "../directory/person.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import {
   cols,
@@ -108,15 +115,44 @@ export function createApprovalStore(
       idempotencyKey: approvalDeliveryKey(id, record),
     });
   }
+  const deliverQuietly = (id: string, record: PendingApprovalRecord): Promise<void> =>
+    deliver(id, record).catch(swallowAs("approvals: post approval request (the sweep retries)", undefined));
   return {
     ...backing,
     async put(id: string, record: PendingApprovalRecord): Promise<void> {
       await backing.put(id, record);
-      await deliver(id, record).catch(swallowAs("approvals: post approval request (the sweep retries)", undefined));
+      await deliverQuietly(id, record);
     },
     async deliverPending(): Promise<void> {
-      for (const [id, record] of await backing.entries())
-        await deliver(id, record).catch(swallowAs("approvals: post approval request (the sweep retries)", undefined));
+      for (const [id, record] of await backing.entries()) await deliverQuietly(id, record);
     },
   };
 }
+
+const APPROVAL_GRANTS: TableSpec = {
+  table: "approval_grants",
+  key: "id",
+  columns: cols(`actorId text!, command text!, scope text!, createdAt bigint!, sessionId text, approvalKey text`),
+};
+
+const APPROVAL_GRANTS_MIGRATION = mapToTableMigration("core/approval-grants/0001-typed", APPROVAL_GRANTS, {
+  statements: [`CREATE INDEX IF NOT EXISTS approval_grants_actor ON approval_grants (lower(btrim(actor_id)))`],
+});
+
+export function createApprovalGrants(databaseUrl: string) {
+  const pg = createPgPool(databaseUrl, [APPROVAL_GRANTS_MIGRATION]);
+  const { put, codec } = typedTable<CommandApprovalGrant>(pg, APPROVAL_GRANTS);
+  return {
+    put,
+    async forActor(actorId: string): Promise<CommandApprovalGrant[]> {
+      const keys = [...new Set(rosterIds(actorId).map((id) => id.toLowerCase()))];
+      const rows = await pg.q(
+        `SELECT ${codec.columns} FROM approval_grants WHERE lower(btrim(actor_id)) = ANY($1::text[]) ORDER BY id`,
+        [keys],
+      );
+      return codec.rows(rows).filter((grant) => samePerson(grant.actorId, actorId));
+    },
+  };
+}
+
+export type ApprovalGrants = ReturnType<typeof createApprovalGrants>;

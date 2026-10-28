@@ -3,8 +3,8 @@ import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { type PgPool, type PoolClient, withPgTransaction, tenantCols } from "../persistence/pg-pool.ts";
 import type { GoalRecord } from "../harness/goal.ts";
 import type { GetItemsOptions, Lease, SessionStore } from "./session-store.ts";
-import { userMessagePreview, DuplicateCallError } from "./session-store.ts";
-import { TENANT, tsOf, userTurn, withinParticipantWindow } from "./postgres-session-sql.ts";
+import { DuplicateCallError } from "./session-store.ts";
+import { nextSeq, TENANT, tsOf, userTurn, withinParticipantWindow } from "./postgres-session-sql.ts";
 import { rowToGoal, rowToItem, ITEM_FIELDS, ITEM_FROM } from "./postgres-session-rows.ts";
 import { ITEM_COLUMNS, isOverheard, isUserMessage, storedItem, type Item, type NewItem } from "./items.ts";
 
@@ -18,6 +18,11 @@ export interface SessionStoreCtx {
 const LAST_ACTIVITY_DEBOUNCE_MS = 60_000;
 const FIRST_PREVIEW_LEN = 160;
 const LAST_PREVIEW_LEN = 100;
+
+function userMessagePreview(text: string | null | undefined, maxLen = 160): string {
+  const oneLine = (text ?? "").replace(/\s+/g, " ").trim();
+  return oneLine.length > maxLen ? oneLine.slice(0, maxLen - 1) + "…" : oneLine;
+}
 
 const storedPreview = (text: string | null, maxLen: number): string => pgTextSafe(userMessagePreview(text, maxLen));
 
@@ -92,12 +97,7 @@ export const insertItems = async (
   turnId?: string,
 ): Promise<Item[]> => {
   if (!newItems.length) return [];
-  const max = await client.query(
-    `SELECT GREATEST(
-         COALESCE((SELECT MAX(seq) FROM items WHERE tenant_id = ${TENANT} AND session_id = $1), -1) + 1,
-         COALESCE((SELECT messages FROM sessions WHERE id = $1), 0)) AS n`,
-    [sessionId],
-  );
+  const max = await client.query(`SELECT ${nextSeq("$1")} AS n`, [sessionId]);
   const startSeq = Number(max.rows[0]!.n);
   const createdAt = now();
   const full = newItems.map(
@@ -267,23 +267,18 @@ export function sessionItemMethods(ctx: SessionStoreCtx) {
     },
 
     async getContextWindow(sessionId) {
-      const [meta, summary] = await Promise.all([
-        q(`SELECT count(*)::int AS total FROM items i WHERE i.tenant_id = ${TENANT} AND i.session_id = $1`, [
-          sessionId,
-        ]),
-        q(
-          `SELECT through_seq AS through FROM items
-            WHERE tenant_id = ${TENANT} AND session_id = $1 AND kind = 'ContextCompaction'
-              AND through_seq IS NOT NULL AND text IS NOT NULL ORDER BY seq DESC LIMIT 1`,
-          [sessionId],
-        ),
-      ]);
+      const summary = await q(
+        `SELECT through_seq AS through FROM items
+          WHERE tenant_id = ${TENANT} AND session_id = $1 AND kind = 'ContextCompaction'
+            AND through_seq IS NOT NULL AND text IS NOT NULL ORDER BY seq DESC LIMIT 1`,
+        [sessionId],
+      );
       const sinceSeq = summary[0]?.through == null ? 0 : Number(summary[0].through) + 1;
       const rows = await q(
         `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM} WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= $2 ORDER BY i.seq`,
         [sessionId, sinceSeq],
       );
-      return { items: rows.map(rowToItem), totalItems: Number(meta[0]?.total ?? 0) };
+      return { items: rows.map(rowToItem) };
     },
 
     async getItem(sessionId, seq): Promise<Item | undefined> {

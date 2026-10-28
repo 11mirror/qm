@@ -27,7 +27,7 @@ export interface TenantSettings {
 
 type Env = Record<string, string | undefined>;
 
-export const TENANT_SECRET_NAMES = [
+const TENANT_SECRET_NAMES = [
   "oidcClientSecret",
   "modelGatewayApiKey",
   "slackServiceToken",
@@ -65,14 +65,14 @@ export function tenantSecretsKey(env: Env): Buffer | undefined {
   return key;
 }
 
-export function sealTenantSecret(value: unknown, key: Buffer): Buffer {
+function sealTenantSecret(value: unknown, key: Buffer): Buffer {
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
   const body = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()]);
   return Buffer.concat([Buffer.from([1]), iv, cipher.getAuthTag(), body]);
 }
 
-export function openTenantSecret(sealed: Buffer, key: Buffer | undefined, slug: string): unknown {
+function openTenantSecret(sealed: Buffer, key: Buffer | undefined, slug: string): unknown {
   if (!key) throw new Error(`tenant ${slug} has secrets but QM_TENANT_SECRETS_KEY is unset`);
   if (sealed[0] !== 1) throw new Error(`tenant ${slug}: unknown secrets format`);
   const decipher = createDecipheriv("aes-256-gcm", key, sealed.subarray(1, 13));
@@ -126,7 +126,7 @@ function trustedClientId(raw: string | undefined): string | undefined {
 
 export type TenantEnvSettings = Omit<TenantSettings, "id" | "slug" | "orgId" | "hosts" | "status">;
 
-export function settingsFromEnv(env: Env): TenantEnvSettings {
+function settingsFromEnv(env: Env): TenantEnvSettings {
   const clientId = trustedClientId(env.PORTAL_TRUSTED_OIDC);
   return withoutUndefined({
     appsDomain: text(env.PORTAL_APPS_DOMAIN) ?? text(env.DEPLOY_APPS_DOMAIN),

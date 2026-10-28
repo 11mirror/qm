@@ -11,7 +11,7 @@ import { errMessage, swallowAs } from "../../util/errors.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { headSlice } from "../../util/text.ts";
 import type { OrchestratorDeps } from "./types.ts";
-import { estimateCostUsd } from "../../ratelimit/budget.ts";
+import { modelCallRecorder } from "./turn-helpers.ts";
 
 type ScreenStatus = "allow" | "would_block" | "error";
 type Screened = Pick<SecurityScreenClassification, "verdict"> & Partial<SecurityScreenClassification>;
@@ -114,31 +114,22 @@ export function createSecurityObserver(deps: OrchestratorDeps): SecurityObserver
             }
           : {}),
         signal,
-        recordModelCall: (rec) => {
-          void deps.budget
-            ?.record(actorId, estimateCostUsd(rec.inputTokens))
-            .catch(swallowAs("budget: record screen spend", undefined));
-        },
+        recordModelCall: modelCallRecorder(deps, actorId),
       });
       return verdict ? { verdict } : undefined;
     };
 
     const attempt = async (): Promise<{ requestId: string; result: Screened | undefined; error?: string }> => {
       const requestId = context.requestId ?? randomUUID();
-      const abort = new AbortController();
-      const timer = setTimeout(() => abort.abort(), timeoutMs);
-      timer.unref();
+      const signal = AbortSignal.timeout(timeoutMs);
       const timedOut = new Promise<undefined>((resolve) =>
-        abort.signal.addEventListener("abort", () => resolve(undefined), { once: true }),
+        signal.addEventListener("abort", () => resolve(undefined), { once: true }),
       );
       try {
-        const result = await Promise.race([screenOnce(requestId, abort.signal), timedOut]);
-        return { requestId, result, ...(result ? {} : { error: abort.signal.aborted ? "timeout" : "no verdict" }) };
+        const result = await Promise.race([screenOnce(requestId, signal), timedOut]);
+        return { requestId, result, ...(result ? {} : { error: signal.aborted ? "timeout" : "no verdict" }) };
       } catch (error) {
         return { requestId, result: undefined, error: errMessage(error) };
-      } finally {
-        clearTimeout(timer);
-        abort.abort();
       }
     };
     const { requestId, result, error } = await attempt();

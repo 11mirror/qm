@@ -173,7 +173,6 @@ async function exerciseWindow(store: SessionStore, threadRef: string) {
   const { session, freshSummarySeq } = await seed(store, threadRef);
   const window = await store.getContextWindow(session.id);
 
-  assert.equal(window.totalItems, 7, "full count preserved for guards");
   assert.deepEqual(
     window.items.map((e) => e.seq),
     [freshSummarySeq, freshSummarySeq + 1, freshSummarySeq + 2],
@@ -189,10 +188,10 @@ async function exerciseWindow(store: SessionStore, threadRef: string) {
 
   const untouched = await store.getOrCreateByThread(`${threadRef}-empty`, "channel", scopeId("channel", "C1"));
   const empty = await store.getContextWindow(untouched.id);
-  assert.deepEqual(empty, { items: [], totalItems: 0 });
+  assert.deepEqual(empty, { items: [] });
 }
 
-test("session store: context window slices at the latest summary and keeps guards whole-history", async () => {
+test("session store: context window slices at the latest summary", async () => {
   await exerciseWindow(createPostgresSessionStore(testDatabaseUrl()), "ch:C1:mem");
 });
 
@@ -205,7 +204,6 @@ test("session store: sessions without a summary return the full history", async 
   await store.append(lease!, { kind: "AgentMessage", text: "b" });
   const window = await store.getContextWindow(s.id);
   assert.equal(window.items.length, 2);
-  assert.equal(window.totalItems, 2);
 });
 
 test(
@@ -227,7 +225,6 @@ test(
     });
     const window = await store.getContextWindow(s.id);
     assert.equal(window.items.length, 3, "decoys fall back to the full history, never a wrong slice");
-    assert.equal(window.totalItems, 3);
   },
 );
 

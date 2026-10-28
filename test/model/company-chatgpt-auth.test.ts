@@ -20,7 +20,6 @@ function serialLock(): AdvisoryLock {
     withLock,
     withSharedLock: withLock,
     tryWithLock: withLock,
-    tryWithLocks: (_keys, fn) => fn(),
   };
 }
 

@@ -45,7 +45,6 @@ export async function loadDocumentInputs(
   authorize: (artifact: FileArtifact) => boolean | Promise<boolean>,
   maxBytes = MAX_DOCUMENT_BYTES,
   signal?: AbortSignal,
-  maxDocuments = Number.POSITIVE_INFINITY,
   existingDocuments: readonly DocumentInput[] = [],
   maxTokens = Number.POSITIVE_INFINITY,
 ): Promise<{ documents: DocumentInput[]; notices: string[]; tokens: number }> {
@@ -90,7 +89,6 @@ export async function loadDocumentInputs(
       const tokens = charges[index]!;
       if (
         artifact.sizeBytes > remaining ||
-        documents.length >= maxDocuments ||
         usedTokens + tokens > maxTokens ||
         (estimateDocumentTokens(artifact) > 0 && tokens === 0)
       ) {
@@ -102,15 +100,7 @@ export async function loadDocumentInputs(
         notices.push(`${artifact.name}: document content is unavailable.`);
         continue;
       }
-      if (
-        opened.artifact.sha256 !== artifact.sha256 ||
-        opened.sizeBytes !== artifact.sizeBytes ||
-        opened.artifact.mimetype !== artifact.mimetype ||
-        opened.artifact.ownerScopeId !== artifact.ownerScopeId ||
-        opened.artifact.sizeBytes !== artifact.sizeBytes ||
-        !opened.artifact.enabled ||
-        !(await authorize(opened.artifact))
-      ) {
+      if (!opened.artifact.enabled || !(await authorize(opened.artifact))) {
         opened.stream.destroy();
         notices.push(`${artifact.name}: document changed while being loaded; content withheld.`);
         continue;

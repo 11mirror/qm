@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemorySessionStateBus, type SessionStateEvent } from "../../src/runs/session-state-bus.ts";
+import type { SessionStateEvent } from "../../src/runs/session-state-bus.ts";
+import { createMemoryEventBus } from "../../src/util/event-bus.ts";
 import { createPostgresSessionStateBus } from "../../src/runs/postgres-session-state-bus.ts";
 import { createPgPool } from "../../src/persistence/pg-pool.ts";
 
@@ -8,7 +9,7 @@ const PG = process.env.DATABASE_URL;
 const pgSkip = PG ? false : "set DATABASE_URL to run the Postgres session-state bus test";
 
 test("memory bus: subscribers receive emitted events", () => {
-  const bus = createMemorySessionStateBus();
+  const bus = createMemoryEventBus<SessionStateEvent>("session-state");
   const got: SessionStateEvent[] = [];
   const off = bus.subscribe((e) => got.push(e));
   bus.emit({ threadRef: "web:u:a", sessionId: "s1", state: "working", at: 111 });
@@ -23,7 +24,7 @@ test("memory bus: subscribers receive emitted events", () => {
 });
 
 test("memory bus: a throwing subscriber does not break the others", () => {
-  const bus = createMemorySessionStateBus();
+  const bus = createMemoryEventBus<SessionStateEvent>("session-state");
   const got: string[] = [];
   bus.subscribe(() => {
     throw new Error("boom");

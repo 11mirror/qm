@@ -6,6 +6,7 @@ import { eventually, settle } from "../support/settle.ts";
 import { claimTurn, finishTurn, completeTurn } from "../support/turns.ts";
 import { freshApp, actor, mention, dm, web, spawnedWorker } from "../support/turn-requests.ts";
 import type { TurnRequest } from "../../src/types.ts";
+import { takePending } from "../support/memory-run-signal-store.ts";
 
 test("web is excluded from core-side steering: a mid-turn message forks a SECOND run, never a signal", async () => {
   const built = freshApp();
@@ -15,7 +16,7 @@ test("web is excluded from core-side steering: a mid-turn message forks a SECOND
 
   assert.notEqual(second.runId, first.runId!, "web must fork its own run, not attach to the live one");
   assert.equal(
-    (await built.signals.takePending(first.runId!)).length,
+    (await takePending(built.signals, first.runId!)).length,
     0,
     "core must send no steer signal for web — its composer owns that decision",
   );
@@ -146,7 +147,11 @@ test("orphan replay: a steer unconsumed at run completion replays as a fresh tur
     text.includes("why did you do it wrong?"),
     `the replayed turn carries the steered message (got: ${text.slice(0, 120)})`,
   );
-  assert.equal((await built.signals.takePending(liveRunId)).length, 0, "the orphaned signal was consumed by the drain");
+  assert.equal(
+    (await takePending(built.signals, liveRunId)).length,
+    0,
+    "the orphaned signal was consumed by the drain",
+  );
 });
 
 test("orphan replay: a stale abort is drained; a request-less steer replays on the run's own request", async () => {
@@ -160,7 +165,7 @@ test("orphan replay: a stale abort is drained; a request-less steer replays on t
   await built.signals.send(liveRunId, { kind: "steer", text: "manual web steer" });
 
   await built.app.replayOrphanedRunSignals(liveRunId);
-  assert.equal((await built.signals.takePending(liveRunId)).length, 0, "drained");
+  assert.equal((await takePending(built.signals, liveRunId)).length, 0, "drained");
   const runs = (await built.runs.list()).filter((r) => r.sessionId === threadRef);
   assert.equal(runs.length, 2, "the abort is dropped; the steer text becomes a fresh turn, never lost");
   const fresh = runs.find((r) => r.id !== liveRunId);
@@ -197,7 +202,7 @@ test("signalRun: a steer already terminal at send is refused up front", async ()
   const refused = await built.app.signalRun(liveRunId, { kind: "steer", text: "too late" });
   assert.equal(refused.accepted, false);
   assert.equal(refused.reason, "terminal");
-  assert.equal((await built.signals.takePending(liveRunId)).length, 0, "nothing left rotting in the queue");
+  assert.equal((await takePending(built.signals, liveRunId)).length, 0, "nothing left rotting in the queue");
 });
 
 function completeOnSend(built: ReturnType<typeof freshApp>, sanitize = false): void {
@@ -221,7 +226,7 @@ test("signalRun: a steer whose run goes terminal mid-send is REFUSED, never a fa
   const raced = await built.app.signalRun(liveRunId, { kind: "steer", text: "did this make it?" });
   assert.equal(raced.accepted, false, "a signal that raced the run's completion must not report success");
   assert.equal(raced.reason, "terminal");
-  assert.equal((await built.signals.takePending(liveRunId)).length, 0, "nothing left rotting in the queue");
+  assert.equal((await takePending(built.signals, liveRunId)).length, 0, "nothing left rotting in the queue");
 });
 
 for (const sanitize of [false, true])
@@ -249,7 +254,7 @@ for (const sanitize of [false, true])
       `the fresh run carries the raced message (got: ${text.slice(0, 120)})`,
     );
     assert.equal(
-      (await built.signals.takePending(liveRunId)).length,
+      (await takePending(built.signals, liveRunId)).length,
       0,
       "the raced signal was consumed by the inline drain",
     );
@@ -401,7 +406,7 @@ test("a redelivered message that folded into a live run as a steer is injected o
     const replay = await built.app.turn(slackTurn("also this", "t2"));
     assert.equal((steer as { steered?: boolean }).steered, true);
     assert.equal(replay.status, "silent", "the replay is recognized as already folded and injects nothing");
-    const pending = await built.signals.takePending(runId);
+    const pending = await takePending(built.signals, runId);
     assert.equal(pending.filter((s) => s.kind === "steer" && s.text?.includes("also this")).length, 1);
   } finally {
     await built.runtime.stop();
@@ -417,7 +422,7 @@ test("a redelivery that arrives while the first delivery's run is live joins tha
     assert.ok(claimed);
     const again = await built.app.turn(slackTurn("hello", "t1"));
     assert.equal(again.status, "silent");
-    assert.equal((await built.signals.takePending(runId)).length, 0, "the agent is not fed its own prompt as a steer");
+    assert.equal((await takePending(built.signals, runId)).length, 0, "the agent is not fed its own prompt as a steer");
   } finally {
     await built.runtime.stop();
   }
@@ -471,7 +476,7 @@ test("a redelivery that slips past the lookup still cannot steer the run it belo
     built.runs.getByDedupKey = async (key) => (misses-- > 0 ? null : real(key));
     const again = await built.app.turn(slackTurn("hello", "t1"));
     assert.equal(again.status, "silent");
-    assert.equal((await built.signals.takePending(runId)).length, 0);
+    assert.equal((await takePending(built.signals, runId)).length, 0);
   } finally {
     await built.runtime.stop();
   }
@@ -535,7 +540,7 @@ test("top-level messages stay at top level while another thread is active", asyn
     const followup = await b.app.turn(message(undefined, "Can't you tell?"));
     assert.equal(followup.runId, run.id);
     assert.equal(followup.steered, true);
-    assert.equal((await b.signals.takePending(b.root.id)).length, 0);
+    assert.equal((await takePending(b.signals, b.root.id)).length, 0);
   } finally {
     await b.runtime.stop();
   }
@@ -548,8 +553,8 @@ test("explicit threads steer only their own active conversation", async () => {
     const update = await b.app.turn(message("10.1", "Are you there?"));
     assert.equal(update.runId, b.root.id);
     assert.equal(update.steered, true);
-    assert.equal((await b.signals.takePending(other.runId!)).length, 0);
-    const [signal] = await b.signals.takePending(b.root.id);
+    assert.equal((await takePending(b.signals, other.runId!)).length, 0);
+    const [signal] = await takePending(b.signals, b.root.id);
     assert.equal(signal?.request?.deliveryTarget, "D1:10.1");
   } finally {
     await b.runtime.stop();
@@ -573,7 +578,7 @@ test("changing model accounts queues in the same Slack thread without steering t
     assert.equal(queued.sessionId, b.root.sessionId);
     assert.equal(queued.request.deliveryTarget, "D1:10.1");
     assert.equal(queued.request.modelAccount, "company");
-    assert.deepEqual(await b.signals.takePending(old.id), []);
+    assert.deepEqual(await takePending(b.signals, old.id), []);
   } finally {
     await b.runtime.stop();
   }

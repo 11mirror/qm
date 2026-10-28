@@ -17,6 +17,7 @@ import type { Harness } from "../../src/harness/harness.ts";
 import type { Sandbox } from "../../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../../src/types.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
+import { inlineJobs } from "../support/inline-jobs.ts";
 import { createPostgresAuditLog } from "../../src/admin/postgres-audit-log.ts";
 import { createPostgresErrorLog } from "../../src/admin/postgres-error-log.ts";
 import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-artifact-store.ts";
@@ -55,6 +56,7 @@ test("an ambient message whose reply detection fails stays silent and leaves the
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "rdf-")));
   const orch = createOrchestrator({
     ...singleProcessDeps(),
+    jobs: inlineJobs(),
     identity: createIdentityService(databaseUrl),
     resolution: createResolutionService(config, acl),
     sessions: createPostgresSessionStore(databaseUrl),

@@ -16,14 +16,18 @@ import { resolveModel } from "../model/pi-models.ts";
 
 export type AssistantTextSession = Pick<AgentSession, "getLastAssistantText" | "messages">;
 
-export function piFailedAssistant(session: AssistantTextSession): AssistantMessage | undefined {
-  const lastAssistant = [...session.messages].reverse().find((m) => m.role === "assistant") as
+export function lastAssistantSince(messages: readonly unknown[], since = 0): AssistantMessage | undefined {
+  return messages.slice(since).findLast((m) => (m as { role?: string }).role === "assistant") as
     AssistantMessage | undefined;
+}
+
+export function piFailedAssistant(session: AssistantTextSession, since = 0): AssistantMessage | undefined {
+  const lastAssistant = lastAssistantSince(session.messages, since);
   return lastAssistant?.stopReason === "error" ? lastAssistant : undefined;
 }
 
-function piAssistantFailure(session: AssistantTextSession): ProviderTurnError | null {
-  const failed = piFailedAssistant(session);
+function piAssistantFailure(session: AssistantTextSession, since = 0): ProviderTurnError | null {
+  const failed = piFailedAssistant(session, since);
   return failed ? providerTurnError(failed) : null;
 }
 
@@ -58,24 +62,18 @@ export function piLastAssistantTextOrThrow(session: AssistantTextSession): strin
   return session.getLastAssistantText();
 }
 
-function messagesSince(session: AssistantTextSession, messagesBefore?: number): AssistantTextSession {
-  return messagesBefore === undefined
-    ? session
-    : ({ messages: session.messages.slice(messagesBefore) } as AssistantTextSession);
-}
-
 export function piRoundFailed(session: AssistantTextSession, messagesBefore: number): boolean {
-  return !!piFailedAssistant(messagesSince(session, messagesBefore));
+  return !!piFailedAssistant(session, messagesBefore);
 }
 
 export function piTurnError(session: AssistantTextSession, thrown: unknown, messagesBefore?: number): Error {
-  const detailed = piAssistantFailure(messagesSince(session, messagesBefore));
+  const detailed = piAssistantFailure(session, messagesBefore);
   if (detailed) return detailed;
   return thrown instanceof Error ? thrown : new Error(String(thrown));
 }
 
 export function providerRefusalError(session: AssistantTextSession, messagesBefore?: number): string | null {
-  const err = piAssistantFailure(messagesSince(session, messagesBefore));
+  const err = piAssistantFailure(session, messagesBefore);
   return err && FALLBACK_CODES.has(err.code) ? err.message : null;
 }
 
@@ -177,9 +175,7 @@ export function createTurnRecovery(o: {
   };
   const retryWithoutDocuments = async (): Promise<boolean> => {
     if (!documentRejection || documentRetried || stopped() || turn.cancel?.aborted) return false;
-    const lastAssistant = session.messages
-      .slice(messagesBefore)
-      .findLast((m) => (m as { role?: string }).role === "assistant") as AssistantMessage | undefined;
+    const lastAssistant = lastAssistantSince(session.messages, messagesBefore);
     if (lastAssistant && lastAssistant.stopReason !== "error") return false;
     const capMs = raceCapMs();
     if (noRoomForRound(turnWallClockMs, capMs)) return false;

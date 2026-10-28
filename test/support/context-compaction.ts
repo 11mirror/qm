@@ -22,6 +22,7 @@ import type { Item, ItemKind, NewItem } from "../../src/sessions/items.ts";
 import type { Sandbox } from "../../src/sandbox/sandbox.ts";
 import { scopeId, type Conversation, type Principal } from "../../src/types.ts";
 import { singleProcessDeps } from "./single-process.ts";
+import { inlineJobs } from "./inline-jobs.ts";
 import { createPostgresAuditLog } from "../../src/admin/postgres-audit-log.ts";
 import { createPostgresErrorLog } from "../../src/admin/postgres-error-log.ts";
 import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-artifact-store.ts";
@@ -95,6 +96,7 @@ export function buildOrchestrator(harness: Harness, maxContextTokens?: number, d
   });
   const orch = createOrchestrator({
     ...singleProcessDeps(),
+    jobs: inlineJobs(),
     config,
     identity: createIdentityService(testDatabaseUrl()),
     resolution: createResolutionService(config, acl),

@@ -43,7 +43,7 @@ import type { Run, RunDeliveryState, RunStore } from "../runs/run-store.ts";
 import type { GoalView, ReasoningBlock, TurnStream } from "../runs/turn-stream.ts";
 import type { SessionStateBus, SessionStateEvent } from "../runs/session-state-bus.ts";
 import type { LedgerEventBus, OwnedLedgerEvent } from "../inbox/events.ts";
-import type { RunActivityEntry, RunActivityStore } from "../runs/run-activity-store.ts";
+import type { RunActivityEntry, RunActivityStore } from "../runs/postgres-run-activity-store.ts";
 import type { RunSignal, RunSignalStore } from "../runs/run-signal-store.ts";
 import type { ModelCredentialStore } from "../model/model-credential-store.ts";
 import type { UserModelCredentialStore } from "../model/user-model-credential-store.ts";
@@ -310,6 +310,18 @@ export interface App {
     reasoning?: ReasoningBlock[];
     startedAt: number | null;
     finishedAt: number | null;
+  } | null>;
+  runProgress(
+    runId: string,
+    opts?: { goal?: boolean },
+  ): Promise<{
+    status: Run["status"];
+    attempt: number;
+    result: TurnResult | null;
+    goal?: GoalView;
+    replying?: boolean;
+    firstBlock?: string;
+    surfacePosted?: boolean;
   } | null>;
   getRunToolItems(runId: string, viewer?: string, afterSeq?: number): Promise<Item[]>;
   stopConversation(threadRef: string, viewer?: string): Promise<boolean>;

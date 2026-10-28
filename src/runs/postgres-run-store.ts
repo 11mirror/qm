@@ -130,11 +130,11 @@ function runReads(
     if (!threadRefs.length) return new Map();
     const { rows } = await q(
       `SELECT latest.* FROM unnest($1::text[]) AS threads(id)
-         CROSS JOIN LATERAL (
-           SELECT * FROM runs WHERE session_id = threads.id
-           AND (NOT $2::boolean OR COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true')
-           ORDER BY created_at DESC, seq DESC LIMIT 1
-         ) latest`,
+       CROSS JOIN LATERAL (
+         SELECT * FROM runs WHERE session_id = threads.id
+         AND (NOT $2::boolean OR COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true')
+         ORDER BY created_at DESC, seq DESC LIMIT 1
+       ) latest`,
       [[...new Set(threadRefs)], Boolean(opts?.excludePrivateMessages)],
     );
     return new Map(
@@ -145,13 +145,13 @@ function runReads(
     );
   };
   return {
+    latestForThreads,
+    latestForThread: async (threadRef, opts) => (await latestForThreads([threadRef], opts)).get(threadRef) ?? null,
     async getByDedupKey(dedupKey) {
       const { rows } = await q(`SELECT * FROM runs WHERE idempotency_key = $1`, [dedupKey]);
       return rows[0] ? rowToRun(rows[0]) : null;
     },
 
-    latestForThreads,
-    latestForThread: async (threadRef, opts) => (await latestForThreads([threadRef], opts)).get(threadRef) ?? null,
     async pendingReturns(limit = 100, afterId = "") {
       const { rows } = await q(
         `SELECT * FROM (
@@ -179,14 +179,8 @@ function runReads(
       );
       return rows.map(rowToRun);
     },
-    async activeForThread(sessionId: string): Promise<Run | null> {
-      const { rows } = await q(
-        "SELECT * FROM runs WHERE session_id = $1 AND status IN ('queued','pending','running') ORDER BY (status = 'running') DESC, (status = 'queued') ASC, created_at ASC, seq ASC LIMIT 1",
-        [sessionId],
-      );
-      return rows[0] ? rowToRun(rows[0]) : null;
-    },
-
+    activeForThread: async (sessionId: string): Promise<Run | null> =>
+      (await inFlightForThreads([sessionId]))[0] ?? null,
     inFlightForThread: (sessionId: string): Promise<Run[]> => inFlightForThreads([sessionId]),
     inFlightForThreads,
 
@@ -249,16 +243,10 @@ export function createPostgresRunStore(connectionString: string): PostgresRuntim
     },
 
     async setDeliveryState(runId: string, leaseToken: string | null, state: RunDeliveryState): Promise<boolean> {
-      const { rowCount } =
-        leaseToken === null
-          ? await q(
-              "UPDATE runs SET delivery_state=(COALESCE(delivery_state, '{}')::jsonb || $1::jsonb)::text WHERE id=$2",
-              [JSON.stringify(state), runId],
-            )
-          : await q(
-              "UPDATE runs SET delivery_state=(COALESCE(delivery_state, '{}')::jsonb || $1::jsonb)::text WHERE id=$2 AND lease_token=$3",
-              [JSON.stringify(state), runId, leaseToken],
-            );
+      const { rowCount } = await q(
+        "UPDATE runs SET delivery_state=(COALESCE(delivery_state, '{}')::jsonb || $1::jsonb)::text WHERE id=$2 AND ($3::text IS NULL OR lease_token=$3)",
+        [JSON.stringify(state), runId, leaseToken],
+      );
       return rowCount > 0;
     },
 

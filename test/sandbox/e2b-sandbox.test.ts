@@ -1,7 +1,6 @@
 import { SandboxProvisionCleanupError } from "../../src/sandbox/sandbox.ts";
 import { pollProcess } from "../../src/sandbox/process-poll.ts";
 import type { SandboxBodies } from "../../src/sandbox/sandbox-bodies.ts";
-import { createNoopAdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import { test, afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -11,12 +10,12 @@ import { createE2bSandbox, type StoredE2bSandbox, E2B_BODIES } from "../../src/s
 import { sandboxScopeName } from "../../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
 import { supportsBlobStaging, supportsProcessSessions } from "../../src/sandbox/sandbox.ts";
-import { createMemoryBlobTransferStore } from "../../src/persistence/blob-transfer.ts";
 import { scopeId } from "../../src/types.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../../src/auth/capability-token.ts";
 import { installFakeE2b, type FakeE2b } from "../support/fake-e2b.ts";
 import type { Sandbox } from "../../src/sandbox/sandbox.ts";
 import { testAdvisoryLock, testSandboxBodies } from "../support/test-database.ts";
+import { createMemoryBlobTransferStore, createNoopAdvisoryLock } from "../support/in-process-stores.ts";
 
 let fake: FakeE2b;
 let sandbox: Sandbox;

@@ -106,11 +106,7 @@ for (const name of ["context-pull-cross-channel", "channel-reach"]) {
   });
 }
 
-for (const [name, tool] of [
-  ["execute-turn", "execute"],
-  ["perf-budget", "execute"],
-  ["perf-budget", "sandbox"],
-]) {
+for (const [name, tool] of [["execute-turn", "execute"]]) {
   test(`${name} waits past an acknowledgment for successful ${tool} output`, async (t) => {
     t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 100_000 });
     const { scenario, qa, ctx } = context(name!);
@@ -149,7 +145,7 @@ for (const [name, tool] of [
       }),
       getSessionLlm: async () => {
         assert.ok(Date.now() >= 130_000, "metrics must be read after the turn finishes");
-        return { requests: [{ stepGapMs: 1, gapPhases: {} }] };
+        return { requests: [] };
       },
     } as never;
     let settled = false;
@@ -169,22 +165,3 @@ for (const [name, tool] of [
     await result;
   });
 }
-
-test("performance check rejects failed execution before evaluating timing", async () => {
-  const { scenario, ctx } = context("perf-budget");
-  ctx.freshChannel = async () =>
-    ({ id: "CHANNEL", mention: async () => "1", waitForBotReply: async () => ({}) }) as never;
-  ctx.env.core = {
-    findSessionByThread: async () => ({
-      id: "session",
-      items: [
-        storedItem(
-          { kind: "ToolResult", tool: "execute", callId: "c1", isError: true },
-          { sessionId: "session", seq: 1, createdAt: 1 },
-        ),
-      ],
-    }),
-    getSessionLlm: async () => ({ requests: [{ stepGapMs: 1, gapPhases: {} }] }),
-  } as never;
-  await assert.rejects(scenario.run(ctx), /successful.*execut/);
-});

@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSlackHistoryReader } from "../../src/slack/history.ts";
 import { createSlackCoreClient, type SlackCoreClient } from "../../src/api/slack-core-client.ts";
-import { createTurnStream } from "../../src/runs/turn-stream.ts";
 import type { BotIdentity } from "../../src/slack/directory.ts";
 import { registerSlackEvents } from "../../src/slack/events.ts";
 import { createDeduper } from "../../src/slack/message-gating.ts";
@@ -144,7 +143,6 @@ test("the history gap note lands in the conversation's own scope memory", async 
         return facts.length;
       },
     },
-    turnStream: createTurnStream(),
     runs: { onTerminal() {} },
   } as any);
   await client.noteSurfaceHistoryGap!("C1", "gap");

@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { NoDefaultSandboxError } from "../../src/sandbox/sandbox-routing.ts";
 import type { GrantedHandle, IncomingAttachment, TurnRequest } from "../../src/types.ts";
 import { storedItem, type NewItem } from "../../src/sessions/items.ts";
-import { createMemoryBlobTransferStore, type BlobTransferStore } from "../../src/persistence/blob-transfer.ts";
+import { type BlobTransferStore } from "../../src/persistence/blob-transfer.ts";
 import {
   environmentNote,
   inboundIssueList,
@@ -16,13 +16,13 @@ import {
   safeAttachmentName,
   senderNote,
   sharedFilesSystemSection,
-  sharedManifest,
   turnFileId,
 } from "../../src/core/attachments.ts";
 import { mimeFromName } from "../../src/core/document-kinds.ts";
 import { fakeSandbox } from "../support/attachment-sandbox.ts";
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
+import { createMemoryBlobTransferStore } from "../support/in-process-stores.ts";
 
 test("turn file ids are stable within one attempt and fenced across retries", () => {
   assert.equal(turnFileId("run-1", 1, 123), turnFileId("run-1", 1, 123));
@@ -106,21 +106,21 @@ test("inboundManifest leaves a file unattributed when its author is unknown (mix
   assert.match(m, /^- inbox\/b\.txt \(text\/plain, 3 bytes\)$/m);
 });
 
-test("sharedManifest lists shared/<name> handles, flags writable, dedups, and reads nothing", () => {
+test("the shared files section lists shared/<name> handles, flags writable, dedups, and reads nothing", () => {
   const handles: GrantedHandle[] = [
     { handlePath: "shared/report.txt", ownerScopeId: "personal:U2", fileId: "1".repeat(32), permission: "read" },
     { handlePath: "shared/budget.xlsx", ownerScopeId: "personal:U3", fileId: "2".repeat(32), permission: "write" },
     { handlePath: "shared/report.txt", ownerScopeId: "personal:U4", fileId: "1".repeat(32), permission: "read" },
   ];
-  const m = sharedManifest(handles, 1_000);
+  const m = sharedFilesSystemSection(handles, 1_000);
   assert.match(m, /shared\/report\.txt/);
   assert.match(m, /shared\/budget\.xlsx \(writable\)/);
   assert.doesNotMatch(m, /report\.txt \(writable\)/);
   assert.equal((m.match(/shared\/report\.txt/g) ?? []).length, 1, "deduped by handlePath");
-  assert.equal(sharedManifest([], 1_000), "");
+  assert.equal(sharedFilesSystemSection([], 1_000), "");
 });
 
-test("sharedManifest lists what fits the token budget, then counts the rest with the fetch hint", () => {
+test("the shared files section lists what fits the token budget, then counts the rest with the fetch hint", () => {
   const total = 600;
   const handles: GrantedHandle[] = Array.from({ length: total }, (_, i) => ({
     handlePath: `shared/file-${i}.txt`,
@@ -129,19 +129,19 @@ test("sharedManifest lists what fits the token budget, then counts the rest with
     permission: "read" as const,
   }));
   const budget = 400;
-  const m = sharedManifest(handles, budget);
+  const m = sharedFilesSystemSection(handles, budget);
   const listed = m.split("\n").filter((line) => line.startsWith("- "));
   assert.ok(listed.length > 10 && listed.length < total, `budget keeps a prefix, got ${listed.length}`);
   assert.ok(listed.reduce((n, line) => n + countTokens(line), 0) <= budget);
   assert.match(m, new RegExp(`…and ${total - listed.length} more \\(read shared/<name> to fetch\\)`));
-  assert.match(m, new RegExp(`^${total} files shared with you`));
+  assert.match(m, new RegExp(`^${total} files shared with you`, "m"));
   const sortedPaths = handles.map((h) => h.handlePath).sort();
   assert.deepEqual(
     listed,
     sortedPaths.slice(0, listed.length).map((path) => `- ${path}`),
   );
-  assert.equal(sharedManifest(handles.toReversed(), budget), m);
-  const everything = sharedManifest(handles, 1_000_000);
+  assert.equal(sharedFilesSystemSection(handles.toReversed(), budget), m);
+  const everything = sharedFilesSystemSection(handles, 1_000_000);
   assert.equal((everything.match(/^- shared\//gm) ?? []).length, total);
   assert.doesNotMatch(everything, /…and \d+ more/);
 });

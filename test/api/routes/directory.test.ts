@@ -6,7 +6,7 @@ import { signedRequestHeaders } from "../../../plugins/chassis/src/source-auth-s
 import { createServer } from "../../../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../../src/auth/capability-token.ts";
 import { createPostgresReplayDedupe } from "../../../src/auth/replay-dedupe.ts";
-import { signRequest } from "../../../src/auth/source-auth.ts";
+import { signRequest } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { scopeId } from "../../../src/types.ts";
 import type { BuiltApp } from "../../../src/wiring.ts";
 import { CoreClient } from "../../live-slack/core.ts";

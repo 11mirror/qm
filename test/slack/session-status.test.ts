@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createNoopLeaderLease } from "../../src/persistence/leader-lease.ts";
 import { createFeatureFlagStore } from "../../src/feature-flags.ts";
 import { createSlackSessionStatus, type SlackSessionStatusState } from "../../src/slack/session-status.ts";
 import { createSlackCoreClient, type SlackCoreClientDeps } from "../../src/api/slack-core-client.ts";
-import { createTurnStream } from "../../src/runs/turn-stream.ts";
 import type { ProcessRecord } from "../../src/processes/process-registry.ts";
 import type { Session, Monitor } from "../../src/types.ts";
 import { isTerminal, type Run } from "../../src/runs/run-store.ts";
@@ -13,6 +11,7 @@ import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { createSessionStatusStore } from "../../src/slack/session-status.ts";
 import { SESSION_STATUS_MIGRATION } from "../../src/slack/session-status.ts";
 import { typedTable } from "../../src/persistence/typed-table.ts";
+import { createNoopLeaderLease } from "../support/in-process-stores.ts";
 
 function deferred() {
   let resolve!: () => void;
@@ -344,25 +343,24 @@ for (const method of ["chat.postMessage", "chat.update"]) {
   });
 }
 
-test("core engagement is signaled once for local or durable replies, never quiet ambient turns", async () => {
-  for (const mode of ["quiet", "local", "remote"]) {
-    const stream = createTurnStream();
+test("core engagement is signaled once for durable replies, never quiet ambient turns", async () => {
+  for (const mode of ["quiet", "replying"]) {
     let polls = 0,
       engaged = 0;
     const core = createSlackCoreClient({
-      runs: {
-        onTerminal() {},
-        get: async () => {
-          if (++polls === 1 && mode === "local") stream.begin("r1");
+      runs: { onTerminal() {} },
+      app: {
+        subscribeRun: () => () => {},
+        runProgress: async () => {
+          polls++;
           return {
-            id: "r1",
             status: polls < 3 ? "running" : "done",
-            deliveryState: mode === "remote" ? { replying: true } : null,
+            attempt: 1,
+            result: polls < 3 ? null : { status: "silent" },
+            ...(mode === "replying" ? { replying: true } : {}),
           };
         },
       },
-      turnStream: stream,
-      app: { getRun: async () => ({ result: { status: "silent" } }) },
     } as unknown as SlackCoreClientDeps);
     await core.waitRun("r1", {
       onReplying: () => {
@@ -370,6 +368,53 @@ test("core engagement is signaled once for local or durable replies, never quiet
       },
     });
     assert.equal(engaged, mode === "quiet" ? 0 : 1);
-    stream.end("r1");
   }
+});
+
+function waitClient(views: Array<Record<string, unknown>>) {
+  let i = 0;
+  const view = async () => views[Math.min(i++, views.length - 1)];
+  return createSlackCoreClient({
+    runs: { onTerminal() {} },
+    app: { subscribeRun: () => () => {}, runProgress: view, getRun: view },
+  } as unknown as SlackCoreClientDeps);
+}
+
+test("a first block first seen on the finished run is still posted as the ack", async () => {
+  const acked: string[] = [];
+  const result = await waitClient([
+    { status: "done", attempt: 1, firstBlock: "On it…", result: { status: "ok", reply: "Found it." } },
+  ]).waitRun("r1", { onFirstBlock: (text) => acked.push(text) });
+  assert.deepEqual(acked, ["On it…"]);
+  assert.equal(result?.reply, "Found it.");
+});
+
+test("a first block nobody posted goes back into the reply", async () => {
+  const done = { status: "done", attempt: 1, firstBlock: "On it…", result: { status: "ok", reply: "Found it." } };
+  assert.equal((await waitClient([done]).waitRun("r1"))?.reply, "On it…\n\nFound it.");
+  const acked: string[] = [];
+  const retried = await waitClient([
+    { status: "running", attempt: 1, firstBlock: "Looking.", result: null },
+    { status: "done", attempt: 2, firstBlock: "Retrying.", result: { status: "ok", reply: "Found it." } },
+  ]).waitRun("r1", { onFirstBlock: (text) => acked.push(text) });
+  assert.deepEqual(acked, ["Looking."]);
+  assert.equal(retried?.reply, "Retrying.\n\nFound it.");
+});
+
+test("waiting reads the goal only when a goal hook listens", async () => {
+  const asked: boolean[] = [];
+  const core = createSlackCoreClient({
+    runs: { onTerminal() {} },
+    app: {
+      subscribeRun: () => () => {},
+      runProgress: async (_runId: string, opts?: { goal?: boolean }) => {
+        asked.push(opts?.goal === true);
+        return { status: "done", attempt: 1, result: { status: "silent" } };
+      },
+    },
+  } as unknown as SlackCoreClientDeps);
+  await core.waitRun("r1");
+  const goals: unknown[] = [];
+  await core.waitRun("r2", { onGoal: (goal) => void goals.push(goal) });
+  assert.deepEqual(asked, [false, true]);
 });

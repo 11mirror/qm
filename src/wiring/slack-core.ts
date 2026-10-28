@@ -43,7 +43,7 @@ export function buildSlackCore(deps: SlackCoreInputs) {
   const { outbound, slackSurface } = deps.outbound;
   const { memory } = deps.memory;
   const { surfaceCache, ackEmojiPicks } = deps.orchestrator;
-  const { processes, runs, turnStream } = deps.runs;
+  const { processes, runs } = deps.runs;
   const { config } = deps;
   const { fallback, harness } = deps.harness;
   const { blobTransfer, errors } = deps.files;
@@ -83,7 +83,6 @@ export function buildSlackCore(deps: SlackCoreInputs) {
     slack: slackSurface.slack,
     errors,
     runs,
-    turnStream,
     ackPicks: ackEmojiPicks,
     ackModelId: () => auxiliaryModelForProvider("anthropic"),
     brandingDefault: () => tenantConfig(config).brandingDefault,

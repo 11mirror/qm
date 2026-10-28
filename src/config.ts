@@ -7,7 +7,7 @@ import type { ExternalSlackPolicies } from "./resolution/external-slack.ts";
 import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";
 import { SANDBOX_BACKEND_NAMES, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
 import { existsSync, readdirSync } from "node:fs";
-import { homeTenantSettings, tenantSecretsKey, type TenantSettings } from "../plugins/chassis/src/tenant-settings.ts";
+import { homeTenantSettings, type TenantSettings } from "../plugins/chassis/src/tenant-settings.ts";
 import { MODEL_PROVIDERS, parseProviderBaseUrl, type ModelGatewayTransportConfig } from "./model/provider-endpoints.ts";
 import { join, resolve } from "node:path";
 import { RUN_MAX_AGE_MS } from "./runs/run-store.ts";
@@ -43,7 +43,7 @@ import {
   type Env,
 } from "./config-env.ts";
 
-interface TenantConfig {
+export interface TenantPart {
   orgId: string;
   brandingDefault?: OrgBranding;
   brokerCredentials?: DeploymentBrokerCredential[];
@@ -70,7 +70,6 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   suggestedActivitiesContext?: string;
   production: boolean;
   multitenant: boolean;
-  tenantSecretsKey?: Buffer;
   port: number;
   publicPort?: number;
   dataDir: string;
@@ -140,7 +139,7 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   awsDeploy: ReturnType<typeof awsDeployEnv>;
 }
 
-export type Config = DeploymentConfig & TenantConfig;
+export type Config = DeploymentConfig & TenantPart;
 
 export function configuredModel(config: Config): string | undefined {
   if (
@@ -530,7 +529,6 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     suggestedActivitiesEnabled: e.SUGGESTED_ACTIVITIES_ENABLED ?? true,
     production: e.NODE_ENV === "production",
     multitenant: e.QM_MULTITENANT === "1",
-    ...defined({ tenantSecretsKey: tenantSecretsKey(env) }),
     port: e.PORT ?? CONFIG_DEFAULTS.port,
     dataDir,
     sandboxBackend,
@@ -562,7 +560,7 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
   };
 }
 
-function loadTenantConfig(env: Env): TenantConfig {
+function loadTenantConfig(env: Env): TenantPart {
   const publicApiUrl = env.PUBLIC_API_URL?.replace(/\/+$/, "");
   const publicWebUrl = env.PUBLIC_WEB_URL?.replace(/\/+$/, "");
   const publicUrl = publicWebUrl || publicApiUrl;

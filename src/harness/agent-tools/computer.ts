@@ -8,69 +8,68 @@ import { computerVerdict } from "../../sandbox/sandbox.ts";
 import { MaskedExecutionError } from "../../security/secret-masking.ts";
 import { CommandDenied, NeedsApproval } from "../../tools/primitives.ts";
 import { errMessage } from "../../util/errors.ts";
+import { SANDBOX_CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
+import { BACKGROUND_JOB_TTL_MAX_MS, BACKGROUND_JOB_TTL_MS } from "../../connectors/background-exec-broker.ts";
 import { type ToolKit } from "./kit.ts";
 import type { TurnHalt } from "../turn-tool-state.ts";
-import {
-  FILE_SEND_GUIDANCE,
-  PRESSURE_WARN_FULL60,
-  fmtStatus,
-  optionalBoolean,
-  optionalString,
-  text,
-} from "./shared.ts";
+import { optionalBoolean, optionalString, text } from "./shared.ts";
+
+export const EXEC_TIMEOUT_DEFAULT_MS = 120_000;
+export const EXEC_TIMEOUT_MAX_MS = 300_000;
+const EXEC_TIMEOUT_SEC = EXEC_TIMEOUT_DEFAULT_MS / 1000;
+const EXEC_CEILING_SEC = EXEC_TIMEOUT_MAX_MS / 1000;
+const BG_TTL_SEC = Math.round(BACKGROUND_JOB_TTL_MS / 1000);
+const BG_TTL_MAX_SEC = Math.round(BACKGROUND_JOB_TTL_MAX_MS / 1000);
+const BG_TTL_MIN = Math.round(BG_TTL_SEC / 60);
+const BG_TTL_MAX_MIN = Math.round(BG_TTL_MAX_SEC / 60);
+const CAPABILITY_EXPIRY = `Those turn tokens expire ${SANDBOX_CAPABILITY_TTL_MS / 3_600_000} hours after the launching turn started (then they 401), so publish checkpoints to Files before that and keep the file ID.`;
 
 export function computerTools(kit: ToolKit, halt: Pick<TurnHalt, "pauseForApproval">) {
-  const { EXECUTE_TIMEOUT_GUIDANCE, executeBaseParams, blockOnApproval } = executeShared(kit, halt);
-  const { runExecute, invalidExecute } = executeRunner(kit, { blockOnApproval });
-  const { sandboxManagement } = sandboxTool(kit, { blockOnApproval });
-  const { execute } = executeTool(kit, {
-    EXECUTE_TIMEOUT_GUIDANCE,
-    runExecute,
-    invalidExecute,
-    executeBaseParams,
-    blockOnApproval,
-  });
-  const { background } = backgroundTool(kit, { blockOnApproval });
-  const { validateSandboxTool } = sandboxValidation(kit);
-  return { execute, sandboxManagement, background, validateSandboxTool };
+  const core = executeCore(kit, halt);
+  return {
+    execute: executeTool(kit, core),
+    sandboxManagement: sandboxTool(kit, core),
+    background: backgroundTool(kit, core),
+    validateSandboxTool: sandboxValidation(kit),
+  };
 }
 
-function executeShared(kit: ToolKit, halt: Pick<TurnHalt, "pauseForApproval">) {
-  const { execTimeoutSec, execCeilingSec, bgTtlSec, bgTtlMaxSec, recordResult } = kit;
-  const EXECUTE_TIMEOUT_GUIDANCE =
-    "Commands may run under POSIX sh; wrap bash-only syntax in bash -c. " +
-    `Timeout default ${execTimeoutSec}s, max ${execCeilingSec}s: raise \`timeout_seconds\` for builds/installs/tests, lower it for quick commands. ` +
-    "For anything longer, and for servers, use background:true (never a shell ampersand) and the background tool. " +
-    "On hangs or unexplained transport errors use sandbox status/restart; if that fails twice, create a fresh sandbox, set it default, and recover work from git or Files.";
+const EXECUTE_TIMEOUT_GUIDANCE =
+  "Commands may run under POSIX sh; wrap bash-only syntax in bash -c. " +
+  `Timeout default ${EXEC_TIMEOUT_SEC}s, max ${EXEC_CEILING_SEC}s: raise \`timeout_seconds\` for builds/installs/tests, lower it for quick commands. ` +
+  "For anything longer, and for servers, use background:true (never a shell ampersand) and the background tool. " +
+  "On hangs or unexplained transport errors use sandbox status/restart; if that fails twice, create a fresh sandbox, set it default, and recover work from git or Files.";
 
-  const executeBaseParams = {
-    command: Type.String({ description: "The shell command to run." }),
-    background: optionalBoolean("Run detached and return a process_id for the background tool. Scoped only."),
-    sandbox_id: Type.Optional(
-      Type.String({
-        minLength: 1,
-        description: "Exact sandbox ID; omit to use this scope's default.",
-      }),
-    ),
-    purpose: Type.String({
-      description:
-        "Intent label, at most 4 words, describing the purpose not the code; shown in activity and approval requests.",
+const EXECUTE_BASE_PARAMS = {
+  command: Type.String({ description: "The shell command to run." }),
+  background: optionalBoolean("Run detached and return a process_id for the background tool. Scoped only."),
+  sandbox_id: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description: "Exact sandbox ID; omit to use this scope's default.",
     }),
-    timeout_seconds: Type.Optional(
-      Type.Integer({
-        minimum: 1,
-        description: `Seconds until kill (exit 124); default ${execTimeoutSec}, max ${execCeilingSec}. With background:true, the job lifetime (default ${bgTtlSec}, max ${bgTtlMaxSec}).`,
-      }),
-    ),
+  ),
+  purpose: Type.String({
+    description:
+      "Intent label, at most 4 words, describing the purpose not the code; shown in activity and approval requests.",
+  }),
+  timeout_seconds: Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      description: `Seconds until kill (exit 124); default ${EXEC_TIMEOUT_SEC}, max ${EXEC_CEILING_SEC}. With background:true, the job lifetime (default ${BG_TTL_SEC}, max ${BG_TTL_MAX_SEC}).`,
+    }),
+  ),
 
-    credentials: Type.Optional(
-      Type.Array(Type.String(), {
-        description:
-          "Exact authorized credential handles to materialize for this command only (for a background job, until it exits). Newly granted handles are accepted. In a shared conversation, credentials other than brokered org services run on this turn's scratch computer instead, even with sandbox_id (no shared workspace files: fetch scripts from Files or git in the command); a background job naming them gets its own computer that nothing else can reach.",
-      }),
-    ),
-  };
+  credentials: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        "Exact authorized credential handles to materialize for this command only (for a background job, until it exits). Newly granted handles are accepted. In a shared conversation, credentials other than brokered org services run on this turn's scratch computer instead, even with sandbox_id (no shared workspace files: fetch scripts from Files or git in the command); a background job naming them gets its own computer that nothing else can reach.",
+    }),
+  ),
+};
 
+function executeCore(kit: ToolKit, halt: Pick<TurnHalt, "pauseForApproval">) {
+  const { ref, log, recordCall, recordResult, recordFail } = kit;
   const blockOnApproval = (
     callId: string,
     e: NeedsApproval,
@@ -94,19 +93,25 @@ function executeShared(kit: ToolKit, halt: Pick<TurnHalt, "pauseForApproval">) {
       true,
     );
   };
-  return { EXECUTE_TIMEOUT_GUIDANCE, executeBaseParams, blockOnApproval };
-}
 
-function executeRunner(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeof executeShared>, "blockOnApproval">) {
-  const { ref, log, recordCall, recordResult, recordFail } = kit;
+  const policyRefusal = (
+    callId: string,
+    e: unknown,
+    purpose: string | undefined,
+    tool: string,
+    extra: Record<string, unknown> = {},
+  ) => {
+    if (e instanceof NeedsApproval) return blockOnApproval(callId, e, purpose, tool, extra);
+    if (e instanceof CommandDenied)
+      return recordFail(callId, { tool, ...extra, denied: true, reason: e.message }, `[denied by policy] ${e.message}`);
+    return null;
+  };
+
   const runExecute = async (
     callId: string,
     params: {
       command: string;
-      sandbox_id?: string | null;
-      backend?: string;
-      name?: string;
-      to?: string;
+      sandbox_id?: string;
       timeout_seconds?: number;
       purpose?: string;
       credentials?: string[];
@@ -129,7 +134,6 @@ function executeRunner(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeof
       ...(params.sandbox_id !== undefined ? { sandbox_id: params.sandbox_id } : {}),
     });
     try {
-      if (params.sandbox_id === null) throw new Error("a command requires a sandbox ID; null only clears the default");
       const execOpts = {
         ...(params.sandbox_id !== undefined ? { sandboxId: params.sandbox_id } : {}),
         ...(params.timeout_seconds !== undefined ? { timeoutSeconds: params.timeout_seconds } : {}),
@@ -166,14 +170,8 @@ function executeRunner(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeof
       if (e instanceof MaskedExecutionError) {
         return recordFail(callId, { tool: "execute", ...scopeNote }, e.message);
       }
-      if (e instanceof NeedsApproval) return blockOnApproval(callId, e, params.purpose);
-      if (e instanceof CommandDenied) {
-        return recordFail(
-          callId,
-          { tool: "execute", denied: true, reason: e.message },
-          `[denied by policy] ${e.message}`,
-        );
-      }
+      const refused = policyRefusal(callId, e, params.purpose, "execute");
+      if (refused) return refused;
       await log("ToolResult", {
         tool: "execute",
         ...scopeNote,
@@ -184,13 +182,12 @@ function executeRunner(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeof
       throw e;
     }
   };
-
-  const invalidExecute = (callId: string, summary: Record<string, unknown>, message: string) =>
-    recordFail(callId, summary, message);
-  return { runExecute, invalidExecute };
+  return { blockOnApproval, policyRefusal, runExecute };
 }
 
-function sandboxTool(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeof executeShared>, "blockOnApproval">) {
+type ExecuteCore = ReturnType<typeof executeCore>;
+
+function sandboxTool(kit: ToolKit, { blockOnApproval }: ExecuteCore) {
   const { ref, recordCall, recordText, recordFail } = kit;
   const sandboxActions = Object.keys(SANDBOX_TOOL_ARGS.sandbox!);
   const sandboxManagement = defineTool({
@@ -285,20 +282,10 @@ function sandboxTool(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeof e
       }
     },
   });
-  return { sandboxManagement };
+  return sandboxManagement;
 }
 
-function executeTool(
-  kit: ToolKit,
-  {
-    EXECUTE_TIMEOUT_GUIDANCE,
-    runExecute,
-    invalidExecute,
-    executeBaseParams,
-    blockOnApproval,
-  }: Pick<ReturnType<typeof executeShared>, "EXECUTE_TIMEOUT_GUIDANCE" | "executeBaseParams" | "blockOnApproval"> &
-    Pick<ReturnType<typeof executeRunner>, "runExecute" | "invalidExecute">,
-) {
+function executeTool(kit: ToolKit, { runExecute, policyRefusal }: ExecuteCore) {
   const { ref, reachExec, recordCall, recordResult, recordFail } = kit;
   const scopedLine =
     '- "scoped" (default): this conversation\'s sandbox: its workspace files and $AGENT_API_* tokens; saved credentials only via `credentials`. Working state survives only within provider recovery limits: push code to git, save artifacts to Files.\n';
@@ -326,7 +313,7 @@ function executeTool(
     params: {
       command: string;
       timeout_seconds?: number;
-      purpose?: string;
+      purpose: string;
       scope?: string;
       credentials?: string[];
     },
@@ -350,7 +337,7 @@ function executeTool(
     label: "execute",
     description: reachExec ? reachDescription : scopeDescription,
     parameters: Type.Object({
-      ...executeBaseParams,
+      ...EXECUTE_BASE_PARAMS,
       scope: reachExec
         ? Type.Optional(Type.String({ description: reachScopeDescription }))
         : Type.Optional(
@@ -366,25 +353,13 @@ function executeTool(
     const tc = ref.current;
     if (!tc) return text("[error] no active tool context");
     await recordCall(callId, { ...params, tool: "execute", background: true });
-    if ((params.scope ?? "scoped").trim().toLowerCase() !== "scoped" || params.sandbox_id === null)
-      return invalidExecute(
+    if ((params.scope ?? "scoped").trim().toLowerCase() !== "scoped")
+      return recordFail(
         callId,
         { tool: "execute", background: true },
         '[error] background jobs require scope:"scoped" with durable storage; use sandbox_id to select their computer.',
       );
     try {
-      if (!params.command)
-        return recordFail(
-          callId,
-          { tool: "execute", background: true, error: "start requires command" },
-          "[error] execute background:true requires `command`.",
-        );
-      if (!params.purpose?.trim())
-        return recordFail(
-          callId,
-          { tool: "execute", background: true, error: "start requires purpose" },
-          "[error] execute background:true requires `purpose`: a short description of the job, about 5 words.",
-        );
       const r = await tc.backgroundStart(params.command, {
         purpose: params.purpose,
         ...(params.timeout_seconds ? { ttlSeconds: params.timeout_seconds } : {}),
@@ -408,21 +383,15 @@ function executeTool(
         { screenAs: { provenance: "external" } },
       );
     } catch (e) {
-      if (e instanceof NeedsApproval) return blockOnApproval(callId, e, params.purpose);
-      if (e instanceof CommandDenied)
-        return recordFail(
-          callId,
-          { tool: "execute", background: true, denied: true, reason: e.message },
-          `[denied by policy] ${e.message}`,
-        );
+      const refused = policyRefusal(callId, e, params.purpose, "execute", { background: true });
+      if (refused) return refused;
       throw e;
     }
   };
-  return { execute };
+  return execute;
 }
 
-function backgroundTool(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeof executeShared>, "blockOnApproval">) {
-  const { execCeilingSec, bgTtlMin, bgTtlMaxMin, capabilityExpiry } = kit;
+function backgroundTool(kit: ToolKit, { policyRefusal }: ExecuteCore) {
   const background = defineTool({
     name: "background",
     label: "background",
@@ -430,13 +399,13 @@ function backgroundTool(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeo
       "Manage a job started with execute background:true; it keeps running across turns. " +
       "poll: new output and running/exited state (pass the last cursor as since_cursor; ~64KB per read). send_input: write to stdin. stop: terminate it. list: your jobs. " +
       "watch: wake this conversation as a new turn on new output (optionally only lines matching `pattern`) and once on exit, to keep the user posted on long work; pass since_cursor and `instructions` for your future self. unwatch: disarm by monitor_id. " +
-      `Jobs stop after a hard TTL (default ${bgTtlMin} min, max ${bgTtlMaxMin}); anything that finishes within ${execCeilingSec}s should just use execute. ` +
-      `The job has the same environment as foreground execute ($AGENT_API_URL, $AGENT_API_TOKEN, $AGENT_CREDENTIAL_TOKEN). ${capabilityExpiry} It cannot deliver files; attach them from a live turn.\n` +
+      `Jobs stop after a hard TTL (default ${BG_TTL_MIN} min, max ${BG_TTL_MAX_MIN}); anything that finishes within ${EXEC_CEILING_SEC}s should just use execute. ` +
+      `The job has the same environment as foreground execute ($AGENT_API_URL, $AGENT_API_TOKEN, $AGENT_CREDENTIAL_TOKEN). ${CAPABILITY_EXPIRY} It cannot deliver files; attach them from a live turn.\n` +
       "INTERACTIVE LOGINS (`gh auth login` etc., anything printing a URL/code then waiting) must run with background:true: relay the URL/code to the user, then watch or poll until exit; answer prompts with send_input; never run one in the foreground or stop it mid-flight. Read and follow the `interactive-login` skill first.",
     parameters: backgroundParams(),
-    execute: (callId, params) => runBackgroundAction(kit, blockOnApproval, callId, params),
+    execute: (callId, params) => runBackgroundAction(kit, policyRefusal, callId, params),
   });
-  return { background };
+  return background;
 }
 
 function backgroundParams() {
@@ -478,7 +447,7 @@ function backgroundParams() {
 
 async function runBackgroundAction(
   kit: ToolKit,
-  blockOnApproval: ReturnType<typeof executeShared>["blockOnApproval"],
+  policyRefusal: ExecuteCore["policyRefusal"],
   callId: string,
   params: Static<ReturnType<typeof backgroundParams>>,
 ) {
@@ -519,60 +488,45 @@ async function runBackgroundAction(
         );
       }
       case "watch": {
-        try {
-          const r = await tc.backgroundWatch(pid, {
-            ...(params.instructions !== undefined ? { instructions: params.instructions } : {}),
-            ...(params.pattern !== undefined ? { pattern: params.pattern } : {}),
-            ...(params.since_cursor !== undefined ? { sinceCursor: params.since_cursor } : {}),
-          });
-          if ("completed" in r) {
-            const status = `${r.registryStatus}${r.exitCode !== undefined ? ` (code ${r.exitCode})` : ""}`;
-            const result = r.outputTail
-              ? `job already ${status} — no watch armed; here is the tail of its output:\n${r.outputTail}`
-              : `job already ${status} — no watch armed; it produced no output.`;
-            return recordResult(
-              callId,
-              { tool: "background", action: params.action, ...r },
-              { ...text(result), details: r },
-              false,
-              { screenAs: { provenance: "external", source: "finished job output" } },
-            );
-          }
-          const trigger = params.pattern ? `new output matching /${params.pattern}/` : "new output";
+        const r = await tc.backgroundWatch(pid, {
+          ...(params.instructions !== undefined ? { instructions: params.instructions } : {}),
+          ...(params.pattern !== undefined ? { pattern: params.pattern } : {}),
+          ...(params.since_cursor !== undefined ? { sinceCursor: params.since_cursor } : {}),
+        });
+        if ("completed" in r) {
+          const status = `${r.registryStatus}${r.exitCode !== undefined ? ` (code ${r.exitCode})` : ""}`;
+          const result = r.outputTail
+            ? `job already ${status} — no watch armed; here is the tail of its output:\n${r.outputTail}`
+            : `job already ${status} — no watch armed; it produced no output.`;
           return recordResult(
             callId,
             { tool: "background", action: params.action, ...r },
-            {
-              ...text(
-                `${r.reattached ? "already watching" : "watching"} ${r.processId} (monitor ${r.monitorId}) — ` +
-                  `${trigger} and the job's exit will wake you in this conversation (watch expires ${new Date(r.expiresAt).toISOString()}).`,
-              ),
-              details: r,
-            },
+            { ...text(result), details: r },
+            false,
+            { screenAs: { provenance: "external", source: "finished job output" } },
           );
-        } catch (e) {
-          if (e instanceof NeedsApproval || e instanceof CommandDenied) throw e;
-          const msg = errMessage(e);
-          return recordFail(callId, { tool: "background", action: params.action, error: msg }, `[watch failed] ${msg}`);
         }
+        const trigger = params.pattern ? `new output matching /${params.pattern}/` : "new output";
+        return recordResult(
+          callId,
+          { tool: "background", action: params.action, ...r },
+          {
+            ...text(
+              `${r.reattached ? "already watching" : "watching"} ${r.processId} (monitor ${r.monitorId}) — ` +
+                `${trigger} and the job's exit will wake you in this conversation (watch expires ${new Date(r.expiresAt).toISOString()}).`,
+            ),
+            details: r,
+          },
+        );
       }
       case "unwatch": {
-        try {
-          const r = await tc.backgroundUnwatch(params.monitor_id!);
-          return recordResult(
-            callId,
-            { tool: "background", action: params.action, ...r },
-            text(r.removed ? `unwatched ${r.monitorId}` : `[no such watch: ${r.monitorId}]`),
-            !r.removed,
-          );
-        } catch (e) {
-          const msg = errMessage(e);
-          return recordFail(
-            callId,
-            { tool: "background", action: params.action, error: msg },
-            `[unwatch failed] ${msg}`,
-          );
-        }
+        const r = await tc.backgroundUnwatch(params.monitor_id!);
+        return recordResult(
+          callId,
+          { tool: "background", action: params.action, ...r },
+          text(r.removed ? `unwatched ${r.monitorId}` : `[no such watch: ${r.monitorId}]`),
+          !r.removed,
+        );
       }
       case "send_input": {
         const r = await tc.backgroundWrite(pid, params.data!);
@@ -604,16 +558,15 @@ async function runBackgroundAction(
       }
     }
   } catch (e) {
-    if (e instanceof NeedsApproval)
-      return blockOnApproval(callId, e, params.purpose, "background", { action: params.action });
-    if (e instanceof CommandDenied) {
-      return recordFail(
-        callId,
-        { tool: "background", action: params.action, denied: true, reason: e.message },
-        `[denied by policy] ${e.message}`,
-      );
-    }
-    throw e;
+    const refused = policyRefusal(callId, e, params.purpose, "background", { action: params.action });
+    if (refused) return refused;
+    if (params.action !== "watch" && params.action !== "unwatch") throw e;
+    const msg = errMessage(e);
+    return recordFail(
+      callId,
+      { tool: "background", action: params.action, error: msg },
+      `[${params.action} failed] ${msg}`,
+    );
   }
 }
 
@@ -659,7 +612,7 @@ function sandboxValidation(kit: ToolKit) {
       },
     };
   };
-  return { validateSandboxTool };
+  return validateSandboxTool;
 }
 
 const SANDBOX_TOOL_ARGS: Record<
@@ -684,3 +637,12 @@ const SANDBOX_TOOL_ARGS: Record<
     unwatch: { required: ["monitor_id"], fields: [] },
   },
 };
+
+const PRESSURE_WARN_FULL60 = 50;
+
+function fmtStatus(s: { state: "running" } | { state: "exited"; code: number }): string {
+  return s.state === "exited" ? `exited ${s.code}` : "running";
+}
+
+const FILE_SEND_GUIDANCE =
+  "execute, files, skills and apps use the default sandbox when sandbox_id is omitted. Send files with the surface `post` action's `files` if present, else `attach` (workspace paths or {file_id}); background jobs cannot deliver files. ";

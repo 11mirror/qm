@@ -1,25 +1,47 @@
-import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
+import { deflateSync } from "node:zlib";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import {
   downscaleVisionImage,
   MAX_VISION_IMAGE_DIMENSION,
   sniffImageDimensions,
-  type ImageDownscaleDeps,
 } from "../../src/core/image-downscale.ts";
 
-interface SpawnCall {
-  command: string;
-  args: string[];
+function crc32(bytes: Buffer): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
+  }
+  return (crc ^ 0xffffffff) >>> 0;
 }
 
-type FakeChild = EventEmitter & {
-  stdin: PassThrough;
-  stdout: PassThrough;
-  stderr: PassThrough;
-};
+function pngChunk(type: string, data: Buffer): Buffer {
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length);
+  const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body));
+  return Buffer.concat([length, body, crc]);
+}
+
+function encodedPng(width: number, height: number): Buffer {
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;
+  header[9] = 2;
+  const rows = Buffer.alloc((width * 3 + 1) * height);
+  for (let y = 0; y < height; y++)
+    for (let x = 0; x < width; x++)
+      rows.fill((x ^ y) & 0xff, y * (width * 3 + 1) + 1 + x * 3, y * (width * 3 + 1) + 4 + x * 3);
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk("IHDR", header),
+    pngChunk("IDAT", deflateSync(rows)),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
 
 function png(width: number, height: number): Buffer {
   const bytes = Buffer.alloc(24);
@@ -64,34 +86,6 @@ function webp(width: number, height: number): Buffer {
   return bytes;
 }
 
-function fakeChild(): FakeChild {
-  const child = new EventEmitter() as FakeChild;
-  child.stdin = new PassThrough();
-  child.stdout = new PassThrough();
-  child.stderr = new PassThrough();
-  return child;
-}
-
-function depsFromHandlers(
-  handlers: Array<(child: FakeChild, call: SpawnCall) => void>,
-  warnings: string[] = [],
-  calls: SpawnCall[] = [],
-): ImageDownscaleDeps {
-  return {
-    spawn(command, args) {
-      const child = fakeChild();
-      const call = { command, args };
-      calls.push(call);
-      const handler = handlers.shift();
-      process.nextTick(() => handler?.(child, call));
-      return child as unknown as ChildProcessWithoutNullStreams;
-    },
-    warn(message) {
-      warnings.push(message);
-    },
-  };
-}
-
 test("sniffImageDimensions reads PNG, JPEG, GIF, and WebP headers", () => {
   assert.deepEqual(sniffImageDimensions(png(640, 480)), { width: 640, height: 480, format: "png" });
   assert.deepEqual(sniffImageDimensions(jpeg(800, 600)), { width: 800, height: 600, format: "jpeg" });
@@ -99,80 +93,26 @@ test("sniffImageDimensions reads PNG, JPEG, GIF, and WebP headers", () => {
   assert.deepEqual(sniffImageDimensions(webp(1024, 768)), { width: 1024, height: 768, format: "webp" });
 });
 
-test("downscaleVisionImage leaves small images untouched without spawning a converter", async () => {
+test("downscaleVisionImage leaves small images untouched", async () => {
   const small = png(MAX_VISION_IMAGE_DIMENSION, 900);
-  let spawned = false;
-  const result = await downscaleVisionImage(small, "image/png", {
-    spawn() {
-      spawned = true;
-      return fakeChild() as unknown as ChildProcessWithoutNullStreams;
-    },
-    warn() {
-      assert.fail("small images should not warn");
-    },
-  });
-  assert.equal(result, small);
-  assert.equal(spawned, false);
+  const result = await downscaleVisionImage(small, "image/png");
+  assert.equal(result.bytes, small);
+  assert.equal(result.mimeType, "image/png");
 });
 
-test("downscaleVisionImage uses a converter for oversized images", async () => {
-  const output = png(1200, 900);
-  const calls: SpawnCall[] = [];
-  const deps = depsFromHandlers(
-    [
-      (child) => {
-        child.stdout.end(output);
-        child.emit("close", 0);
-      },
-    ],
-    [],
-    calls,
-  );
-  const result = await downscaleVisionImage(png(2400, 1800), "image/png", deps);
-  assert.deepEqual(Buffer.from(result), output);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0]!.command, "magick");
-  assert.ok(calls[0]!.args.includes(`${MAX_VISION_IMAGE_DIMENSION}x${MAX_VISION_IMAGE_DIMENSION}>`));
-  assert.ok(calls[0]!.args.includes("png:-"));
+test("downscaleVisionImage shrinks an oversized image to fit the vision limit", async () => {
+  const result = await downscaleVisionImage(encodedPng(2400, 1800), "image/png");
+  const dimensions = sniffImageDimensions(result.bytes);
+  assert.ok(dimensions);
+  assert.equal(Math.max(dimensions.width, dimensions.height), MAX_VISION_IMAGE_DIMENSION);
+  assert.equal(result.mimeType, `image/${dimensions.format}`);
 });
 
-test("downscaleVisionImage falls back to original bytes when no converter is available", async () => {
-  const original = png(3000, 2000);
-  const warnings: string[] = [];
-  const calls: SpawnCall[] = [];
-  const missing = (child: FakeChild) => {
-    const err = new Error("missing") as NodeJS.ErrnoException;
-    err.code = "ENOENT";
-    child.emit("error", err);
-  };
-  const deps = depsFromHandlers([missing, missing, missing], warnings, calls);
-  const result = await downscaleVisionImage(original, "image/png", deps);
-  assert.equal(result, original);
-  assert.deepEqual(
-    calls.map((c) => c.command),
-    ["magick", "convert", "ffmpeg"],
-  );
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0]!, /no image converter was found on PATH/);
-});
-
-test("downscaleVisionImage reports each converter's exit code and stderr when conversion fails", async () => {
-  const original = png(3000, 2000);
-  const warnings: string[] = [];
-  const failing = (child: FakeChild) => {
-    child.stderr.write("unsupported colorspace");
-    setImmediate(() => child.emit("close", 1));
-  };
-  const missing = (child: FakeChild) => {
-    const err = new Error("missing") as NodeJS.ErrnoException;
-    err.code = "ENOENT";
-    child.emit("error", err);
-  };
-  const deps = depsFromHandlers([failing, missing, missing], warnings, []);
-  const result = await downscaleVisionImage(original, "image/png", deps);
-  assert.equal(result, original);
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0]!, /magick exited with code 1: unsupported colorspace/);
+test("downscaleVisionImage returns the original bytes when the image cannot be decoded", async () => {
+  const unreadable = png(3000, 2000);
+  const result = await downscaleVisionImage(unreadable, "image/png");
+  assert.equal(result.bytes, unreadable);
+  assert.equal(result.mimeType, "image/png");
 });
 
 test("sniffing a large image with many segments takes linear time", () => {

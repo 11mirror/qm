@@ -4,7 +4,6 @@ import type { buildCredentialCatalog } from "./credential-catalog.ts";
 import type { Session } from "../../types.ts";
 import { currentExternalSlackRun } from "../../resolution/external-slack.ts";
 import { resolveTurnContext } from "../../resolution/turn-context.ts";
-import type { GapPhase } from "../../sessions/session-store.ts";
 import { renderComputerBlock, renderSandboxProfiles } from "../environment-facts.ts";
 import { createTurnSandboxes } from "./sandboxes.ts";
 
@@ -15,21 +14,10 @@ export function openTurnSandboxes(
     framed: Awaited<ReturnType<typeof frameTurnPrompt>>;
     catalog: Awaited<ReturnType<typeof buildCredentialCatalog>>;
     session: Session;
-    emitGapWork: (phase: GapPhase, start: number, end: number) => void;
   },
 ) {
-  const {
-    deps,
-    input,
-    actor,
-    conversation,
-    external,
-    liveAuthorTurn,
-    scopeId,
-    resolution,
-    isCurrentSharedScopeMember,
-  } = ctx;
-  const { session, emitGapWork } = turn;
+  const { deps, input, actor, conversation, external, liveAuthorTurn, scopeId, resolution } = ctx;
+  const { session } = turn;
   const { memoryScopeId } = turn.context;
   const { turnContextBlocks, scopeProfile, visibleSkillsForTurn, transferId, turnSessionDir, turnFilesDir } =
     turn.framed;
@@ -63,12 +51,13 @@ export function openTurnSandboxes(
   }
 
   const sandboxes = createTurnSandboxes({
-    deps: { ...deps, sandboxResources: turnSandboxResources, isCurrentSharedScopeMember },
-    input,
-    actor,
+    ...ctx,
+    deps: {
+      ...deps,
+      sandboxResources: turnSandboxResources,
+      isCurrentSharedScopeMember: ctx.isCurrentSharedScopeMember,
+    },
     session,
-    resolution,
-    scopeId,
     memoryScopeId,
     transferId,
     turnSessionDir,
@@ -78,7 +67,6 @@ export function openTurnSandboxes(
     egressTokenForPolicy,
     openResourceAccess: !external && (liveAuthorTurn || openAutomationKeychain),
     visibleSkillsForTurn,
-    emitGapWork,
   });
   return { turnSandboxResources, sandboxes };
 }

@@ -30,17 +30,23 @@ import { buildModelRuntime, complete, completeStructured, type StructuredAnswer 
 import type { PiModelAccess } from "./pi-model-access.ts";
 import type { HarnessSecurityScreenInput } from "./harness.ts";
 import type { SecurityScreenVerdict } from "../security/security-screen.ts";
-async function keyedOneShot(
+async function keyed(access: PiModelAccess, modelId: string) {
+  const model = access.model(modelId);
+  const providerKeys = await access.providerKeys();
+  return access.keyFor(providerKeys, model) ? { model, providerKeys } : null;
+}
+
+export async function piOneShot(
   access: PiModelAccess,
   modelId: string,
   systemPrompt: string,
   prompt: string,
   extra?: { signal?: AbortSignal; thinkingLevel?: ModelThinkingLevel },
-): Promise<string | undefined | null> {
-  const model = access.model(modelId);
-  const providerKeys = await access.providerKeys();
-  if (!access.keyFor(providerKeys, model)) return null;
-  return complete(model, providerKeys, systemPrompt, prompt, { modelGateway: access.gateway, ...extra });
+): Promise<string | undefined> {
+  const k = await keyed(access, modelId);
+  return k
+    ? complete(k.model, k.providerKeys, systemPrompt, prompt, { modelGateway: access.gateway, ...extra })
+    : undefined;
 }
 
 export async function piShouldRespond(
@@ -49,9 +55,8 @@ export async function piShouldRespond(
   detect: HarnessDetectInput,
 ): Promise<HarnessDetectResult> {
   const modelId = detectModelId();
-  const model = access.model(modelId);
-  const providerKeys = await access.providerKeys();
-  if (!access.keyFor(providerKeys, model)) return { respond: true };
+  const k = await keyed(access, modelId);
+  if (!k) return { respond: true };
   const detectSystemPrompt = buildDetectionPrompt(detect.reactionGuidance);
   const prompt = renderDetectPrompt(detect);
   detect.recordModelCall({
@@ -59,7 +64,7 @@ export async function piShouldRespond(
     inputTokens: countTokens(detectSystemPrompt) + countTokens(prompt),
     entryCount: detect.history.length,
   });
-  const answer = await completeStructured(model, providerKeys, detectSystemPrompt, prompt, DetectAnswer, {
+  const answer = await completeStructured(k.model, k.providerKeys, detectSystemPrompt, prompt, DetectAnswer, {
     modelGateway: access.gateway,
   });
   return answer ? detectResult(answer, Boolean(detect.reactionGuidance?.trim())) : { respond: false };
@@ -113,29 +118,6 @@ export function piContextTokenBudget(primaryModelId: () => string, model?: strin
   return contextTokenBudgetForModel(id);
 }
 
-export async function piOneShot(
-  access: PiModelAccess,
-  modelId: () => string,
-  systemPrompt: string,
-  prompt: string,
-): Promise<string | undefined> {
-  return (await keyedOneShot(access, modelId(), systemPrompt, prompt)) ?? undefined;
-}
-
-export async function piJudge(
-  access: PiModelAccess,
-  judgeModelId: () => string,
-  systemPrompt: string,
-  prompt: string,
-  signal?: AbortSignal,
-): Promise<string | undefined> {
-  const out = await keyedOneShot(access, judgeModelId(), systemPrompt, prompt, {
-    signal,
-    thinkingLevel: "low",
-  });
-  return out ?? undefined;
-}
-
 export async function piScreenSecurity(
   access: PiModelAccess,
   detectModelId: () => string,
@@ -150,10 +132,9 @@ export async function piScreenSecurity(
 ): Promise<SecurityScreenVerdict | undefined> {
   try {
     const modelId = configuredScreenModel ?? detectModelId();
-    const model = access.model(modelId);
-    const providerKeys = await access.providerKeys();
-    if (!access.keyFor(providerKeys, model)) return undefined;
-    recordModelCall({
+    const k = await keyed(access, modelId);
+    if (!k) return undefined;
+    recordModelCall?.({
       model: modelId,
       inputTokens: countTokens(systemPrompt) + countTokens(payload),
       entryCount: 1,
@@ -166,7 +147,7 @@ export async function piScreenSecurity(
       truncated: false,
     });
     return parseSecurityScreenVerdict(
-      await complete(model, providerKeys, systemPrompt, payload, {
+      await complete(k.model, k.providerKeys, systemPrompt, payload, {
         signal,
         modelGateway: access.gateway,
       }),
@@ -186,11 +167,10 @@ export async function piPickAckEmoji(
   const ackModelId = auxiliaryModelForProvider("anthropic");
   if (!ackModelId) return undefined;
   try {
-    const model = access.model(ackModelId);
-    const providerKeys = await access.providerKeys();
-    if (!access.keyFor(providerKeys, model)) return undefined;
+    const k = await keyed(access, ackModelId);
+    if (!k) return undefined;
     const prompt = `Candidates: ${candidates.join(", ")}\n\nMessage: ${text}`;
-    const answer = await completeStructured(model, providerKeys, ACK_EMOJI_PROMPT, prompt, AckEmojiAnswer, {
+    const answer = await completeStructured(k.model, k.providerKeys, ACK_EMOJI_PROMPT, prompt, AckEmojiAnswer, {
       modelGateway: access.gateway,
       thinkingLevel: "off",
       maxTokens: 64,
@@ -210,11 +190,11 @@ async function keyedStructured<T extends TSchema>(
   systemPrompt: string,
   prompt: string,
   schema: T,
-): Promise<StructuredAnswer<T> | undefined | null> {
-  const model = access.model(modelId);
-  const providerKeys = await access.providerKeys();
-  if (!access.keyFor(providerKeys, model)) return null;
-  return completeStructured(model, providerKeys, systemPrompt, prompt, schema, { modelGateway: access.gateway });
+): Promise<StructuredAnswer<T> | undefined> {
+  const k = await keyed(access, modelId);
+  return k
+    ? completeStructured(k.model, k.providerKeys, systemPrompt, prompt, schema, { modelGateway: access.gateway })
+    : undefined;
 }
 
 export async function piGenerateTitle(

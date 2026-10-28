@@ -5,7 +5,6 @@ import { deliveryCandidatesFor } from "../../src/core/orchestrator/turn-helpers.
 import { createSessionMailbox } from "../../src/sessions/session-mailbox.ts";
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryRunSignalStore } from "../../src/runs/run-signal-store.ts";
 import { createSessionSyscalls } from "../../src/subagents/session-tools.ts";
 import { deliverSubagentMail } from "../../src/subagents/mail.ts";
 import { delegatedAuthorizationOrigin } from "../../src/subagents/delegation.ts";
@@ -26,6 +25,7 @@ import {
   delegatedHumanRig,
   closeRigStores,
 } from "../support/subagent-rig.ts";
+import { createMemoryRunSignalStore } from "../support/memory-run-signal-store.ts";
 
 after(closeRigStores);
 
@@ -326,7 +326,7 @@ for (const surface of ["slack", "web"] as const) {
     test(`${surface}: ${nested ? "nested child" : "child"} results stay internal while files and parent replies deliver once`, async () => {
       const r = await rig();
       const outbound = recordingOutbound();
-      wireRunResultPosts(r.runs, outbound, { graceMs: 0 });
+      wireRunResultPosts(r.runs, outbound, { sessions: r.sessions, postsImmediately: () => true });
       const request: OrchestratorInput = {
         surface,
         actor,

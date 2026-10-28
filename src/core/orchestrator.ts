@@ -9,12 +9,12 @@ import { LRUCache } from "lru-cache";
 import { perTenant } from "../tenant.ts";
 import type { Orchestrator, OrchestratorDeps } from "./orchestrator/types.ts";
 import { createSessionTitles } from "./session-title.ts";
-import { renderTitleTranscript, visibleTitleItemText } from "./orchestrator/turn-helpers.ts";
+import { renderTitleTranscript, visibleTitleItemText } from "./session-title.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
 import { createSecurityObserver } from "./orchestrator/security-screen.ts";
 import { handleTurn, type OrchestratorInstance } from "./orchestrator/handle-turn.ts";
 
-export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
+export { egressClaimAllowingControlPlane } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
 
 const MIN_SESSION_LEASE_TTL_MS = 15_000;
@@ -32,7 +32,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const memoryPolicy = deps.memoryPolicy ?? DEFAULT_MEMORY_POLICY;
   const memoryStrategy =
     deps.memoryStrategy ?? createPerTurnStrategy({ harness: deps.harness.models, memory: deps.memory });
-  const blobTransfer = deps.blobTransfer;
 
   const REACH_ROSTER_TTL_MS = 5 * 60_000;
   const reachRosterCache = perTenant(
@@ -83,7 +82,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     transcripts,
     memoryPolicy,
     memoryStrategy,
-    blobTransfer,
     reachableChannelsFor,
     directoryIndexFor,
     compaction,

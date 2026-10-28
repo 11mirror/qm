@@ -1,21 +1,9 @@
 import { test } from "node:test";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
-import { seedRawMessagesIntoSession, toPiMessage } from "../../src/harness/pi-turn-session.ts";
+import { seedRawMessagesIntoSession } from "../../src/harness/pi-turn-session.ts";
 import { reconstructMessagesFromHistory } from "../../src/harness/replay.ts";
 import { storedItem, type NewItem } from "../../src/sessions/items.ts";
-
-test("toPiMessage gives assistant seeds a usage block so Pi's pre-prompt compaction check can't crash", () => {
-  const user = toPiMessage({ role: "user", text: "ship it" }) as Record<string, unknown>;
-  assert.equal("usage" in user, false, "user seeds carry no usage (Pi UserMessage has none)");
-
-  const asst = toPiMessage({ role: "assistant", text: "done" }) as {
-    stopReason?: string;
-    usage?: { totalTokens: number };
-  };
-  assert.equal(asst.stopReason, "stop");
-  assert.ok(asst.usage, "assistant seed has a usage block");
-  assert.equal(asst.usage!.totalTokens, 0);
-});
 
 test("seedRawMessagesIntoSession pushes the reconstructed tool round (incl. toolResult) onto the live array + persists", () => {
   const liveMessages: unknown[] = [];
@@ -31,7 +19,7 @@ test("seedRawMessagesIntoSession pushes the reconstructed tool round (incl. tool
     at({ kind: "ToolResult", tool: "execute", callId: "c1", text: "user: a / pass: b", isError: false }, 3),
     at({ kind: "AgentMessage", text: "done" }, 4),
   ];
-  seedRawMessagesIntoSession(stubSession, reconstructMessagesFromHistory(history));
+  seedRawMessagesIntoSession(stubSession as unknown as AgentSession, reconstructMessagesFromHistory(history));
 
   assert.deepEqual(
     (liveMessages as Array<{ role: string }>).map((m) => m.role),
@@ -41,9 +29,4 @@ test("seedRawMessagesIntoSession pushes the reconstructed tool round (incl. tool
   const toolResult = liveMessages[2] as { role: string; toolCallId: string; content: Array<{ text: string }> };
   assert.equal(toolResult.toolCallId, "c1");
   assert.match(toolResult.content[0]!.text, /pass: b/);
-});
-
-test("seedRawMessagesIntoSession is a no-op for empty input and degrades gracefully without Pi internals", () => {
-  seedRawMessagesIntoSession({ agent: { state: { messages: [] } } }, []);
-  assert.doesNotThrow(() => seedRawMessagesIntoSession({}, reconstructMessagesFromHistory([])));
 });

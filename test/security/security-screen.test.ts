@@ -136,7 +136,7 @@ test("approval grant modes default to all-on and compose tighten-only", async ()
   const store = testConfigStore({ databaseUrl });
 
   assert.deepEqual(await store.getApprovalGrantModesDurable(org), { session: true, always: true });
-  assert.deepEqual(store.getApprovalGrantModes(channel), { session: true, always: true });
+  assert.deepEqual(await store.getApprovalGrantModesDurable(channel), { session: true, always: true });
 
   await store.setApprovalGrantModes(org, { session: true, always: false });
   assert.deepEqual(
@@ -160,7 +160,7 @@ test("approval grant modes default to all-on and compose tighten-only", async ()
   const restarted = testConfigStore({ databaseUrl });
   await restarted.hydrate?.();
   assert.deepEqual(
-    restarted.getApprovalGrantModes(channel),
+    await restarted.getApprovalGrantModesDurable(channel),
     { session: false, always: false },
     "modes survive a restart",
   );

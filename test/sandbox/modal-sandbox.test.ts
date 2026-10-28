@@ -1,6 +1,5 @@
 import { pollProcess } from "../../src/sandbox/process-poll.ts";
 import type { SandboxBodies } from "../../src/sandbox/sandbox-bodies.ts";
-import { createNoopAdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import { test, after, beforeEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -19,6 +18,7 @@ import { installFakeModal, type FakeModal } from "../support/fake-modal.ts";
 import { MODAL_CHECKPOINT_RETENTION_MS, type ModalClient } from "../../src/sandbox/modal-client.ts";
 import type { Sandbox } from "../../src/sandbox/sandbox.ts";
 import { testAdvisoryLock, testDatabaseUrl, testSandboxBodies } from "../support/test-database.ts";
+import { createNoopAdvisoryLock } from "../support/in-process-stores.ts";
 
 let fake: FakeModal;
 let sandbox: Sandbox;

@@ -5,7 +5,7 @@ import { createAclStore } from "../../src/acl/acl-store.ts";
 import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts";
 import { encodeRef, skillRef, parseRef } from "../../src/acl/resource-ref.ts";
 import type { Config } from "../../src/config.ts";
-import { filterConnectorSkills } from "../../src/core/orchestrator.ts";
+import { filterConnectorSkills } from "../../src/core/orchestrator/turn-helpers.ts";
 import { principalEntitledToScope } from "../../src/resolution/context-filter.ts";
 import {
   createSkillStore,

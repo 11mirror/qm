@@ -533,6 +533,7 @@ test("external native tool ceiling cannot delegate, switch sandboxes, read confi
         return Promise.resolve("ok");
       },
     }),
+    () => Promise.reject(new Error("no private access to that sandbox")),
   );
   await tools.execute("printf safe");
   assert.equal(runs, 1);

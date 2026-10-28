@@ -1,14 +1,10 @@
 import type { Readable } from "node:stream";
+import { buffer } from "node:stream/consumers";
 import { basename } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AttachmentMeta, GrantedHandle, IncomingAttachment, OutgoingAttachment, ScopeId } from "../types.ts";
 import { hasParentPathSegment, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
-import {
-  MAX_BLOB_BYTES,
-  BlobTooLargeError,
-  collectBlob,
-  type BlobTransferStore,
-} from "../persistence/blob-transfer.ts";
+import { MAX_BLOB_BYTES, BlobTooLargeError, type BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { fileArtifactId, type FileArtifactStore, type FileDirection } from "../files/file-artifact-store.ts";
 import { swallowAs } from "../util/errors.ts";
 import { linesWithinTokenBudget } from "../util/tokens.ts";
@@ -190,7 +186,7 @@ export function inboundIssueList(opts: {
   return issues;
 }
 
-export function sharedManifest(handles: readonly GrantedHandle[], budgetTokens: number): string {
+export function sharedFilesSystemSection(handles: readonly GrantedHandle[], budgetTokens: number): string {
   const seen = new Set<string>();
   const lines: string[] = [];
   for (const h of handles) {
@@ -203,13 +199,7 @@ export function sharedManifest(handles: readonly GrantedHandle[], budgetTokens: 
   const { kept, omitted } = linesWithinTokenBudget(lines.sort(), budgetTokens);
   if (omitted > 0) kept.push(`…and ${omitted} more (read shared/<name> to fetch)`);
   const noun = total === 1 ? "file" : "files";
-  return `${total} ${noun} shared with you — read a path below to fetch that file on demand:\n${kept.join("\n")}`;
-}
-
-export function sharedFilesSystemSection(handles: readonly GrantedHandle[], budgetTokens: number): string {
-  const body = sharedManifest(handles, budgetTokens);
-  if (!body) return "";
-  return `## Files shared with you\n${body}`;
+  return `## Files shared with you\n${total} ${noun} shared with you — read a path below to fetch that file on demand:\n${kept.join("\n")}`;
 }
 
 export function environmentNote(text: string): string {
@@ -253,7 +243,7 @@ export async function materializeInbound(
       unavailable.push(safeAttachmentName(a.name));
       continue;
     }
-    const bytes = await collectBlob(blob.stream);
+    const bytes = await buffer(blob.stream);
     const name = uniqueName(safeAttachmentName(a.name), usedNames);
     usedNames.add(name);
     const mimetype = baseMime(a.mimetype || mimeFromName(name));
@@ -280,13 +270,13 @@ export async function materializeInbound(
       ...(a.sourceId ? { sourceId: a.sourceId } : {}),
       ...(registered ? { artifactId: registered.id } : {}),
     });
-    const imageBytes =
+    const image =
       VISION_MIME_TYPES.has(mimetype) && bytes.length > 0 ? await downscaleVisionImage(bytes, mimetype) : undefined;
-    if (imageBytes && imageBytes.length <= MAX_VISION_IMAGE_BYTES) {
+    if (image && image.bytes.length <= MAX_VISION_IMAGE_BYTES) {
       images.push({
         name,
-        mimeType: mimetype,
-        dataBase64: Buffer.from(imageBytes).toString("base64"),
+        mimeType: image.mimeType,
+        dataBase64: Buffer.from(image.bytes).toString("base64"),
         ...(registered ? { artifactId: registered.id } : {}),
       });
     }
@@ -389,7 +379,7 @@ export async function collectNamedOutbound(
       const sizeBytes = stored?.sizeBytes ?? bytes!.length;
       if (sizeBytes === 0) empty.push(label);
       if (sizeBytes > MAX_ATTACHMENT_BYTES) oversized.push(label);
-      else if (totalBytes + sizeBytes > MAX_REPLY_ATTACHMENT_BYTES) overTotal.push(label);
+      else if (totalBytes + sizeBytes > MAX_ATTACHMENT_BYTES) overTotal.push(label);
       if (doomed()) {
         stored?.stream.destroy();
         continue;
@@ -439,11 +429,5 @@ export async function discardOutbound(
 ): Promise<void> {
   await transfer.delete(attachment.blobId).catch(swallowAs("attachments: discard blob delete", undefined));
   if (!register || !attachment.artifactId || !created?.has(attachment.artifactId)) return;
-  await register.store.delete(attachment.artifactId).catch((e) => {
-    try {
-      register.onError(e);
-    } catch (err) {
-      swallowAs("attachments: discard onError", undefined)(err);
-    }
-  });
+  await register.store.delete(attachment.artifactId).catch((e: unknown) => register.onError(e));
 }

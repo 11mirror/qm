@@ -6,41 +6,60 @@ import type { BegunTurn, HeldLease, ReadyTurn, TurnFrame } from "./handle-turn.t
 import type { SecurityObserver } from "./security-screen.ts";
 import type { Outbound } from "../../surfaces/outbound.ts";
 import type { Session } from "../../types.ts";
+import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 import { markFirstToken } from "../../../plugins/chassis/src/error-reporting.ts";
 import { memoryRecallDelta } from "../../memory/recall-delta.ts";
 import { loadDocumentInputs } from "../document-inputs.ts";
-import { goalView } from "../../runs/turn-stream.ts";
 import { type GoalRecord, openGoal } from "../../harness/goal.ts";
 import { type Destination, type TurnRuntime } from "../../types.ts";
 import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
-import { reachPost } from "../../reach/reach.ts";
-import type { GapPhase } from "../../sessions/session-store.ts";
-import { isUserMessage, type Item, type NewItem } from "../../sessions/items.ts";
+import { postCounted } from "./surface-tools.ts";
+import { isUserMessage, stepMessage, type Item, type NewItem } from "../../sessions/items.ts";
 import { environmentDelta } from "../environment-facts.ts";
-import { estimateCostUsd } from "../../ratelimit/budget.ts";
-import type { GapWork, HarnessTurnInput, RuntimeChoice } from "../../harness/harness.ts";
+import type { HarnessTurnInput, RuntimeChoice } from "../../harness/harness.ts";
 import { forModelContext } from "../../harness/context-compaction.ts";
 import { securityScreenChunks, toolLabelOf, type ToolResultScreenInput } from "../../security/security-screen.ts";
 import { artifactImageLoader } from "../../harness/replay-images.ts";
-import {
-  environmentNote,
-  inboundIssuesNote,
-  inboundIssueList,
-  inboundManifest,
-  materializeInbound,
-  safeAttachmentName,
-} from "../attachments.ts";
+import { environmentNote, inboundIssuesNote } from "../attachments.ts";
 import { runtimeSwitchNote } from "../turn-resume.ts";
 import { reportFailure, swallowAs } from "../../util/errors.ts";
 import { absoluteAppLinks } from "../../util/markdown.ts";
 import { NonRetryableTurnError } from "../turn-error.ts";
 import { randomUUID } from "node:crypto";
-import { stripAckPrefix } from "./turn-helpers.ts";
+import { modelCallRecorder, stripAckPrefix } from "./turn-helpers.ts";
+import { documentBytes, stageAttachments } from "./turn-input.ts";
 import { createCompaction } from "./compaction.ts";
 import { createTurnSandboxes } from "./sandboxes.ts";
 import { isWebInboxThreadRef } from "../../sessions/thread-ref.ts";
 
 const ADDRESSED_NUDGE_MD = loadProtocolFile("turn-addressed-nudge");
+
+const ACTIVITY_KINDS = new Set<Item["kind"]>([
+  "ToolCall",
+  "ToolResult",
+  "Elicitation",
+  "ElicitationResponse",
+  "SteeringMessage",
+]);
+
+export async function mirrorRunActivity(
+  deps: OrchestratorDeps,
+  input: OrchestratorInput,
+  appended: Item,
+): Promise<void> {
+  if (!input.runId || !deps.runActivity) return;
+  const append = (item: Item) =>
+    deps.runActivity!.append(input.runId!, { item }).catch(swallowAs("orchestrator: run-activity append", undefined));
+  if (ACTIVITY_KINDS.has(appended.kind) || (appended.kind === "AgentMessage" && appended.variant === "narration")) {
+    await append(appended);
+  } else if (appended.kind === "Reasoning") {
+    const id = stepMessage(appended)?.id;
+    const step = typeof id === "string" && appended.step !== null ? { id, index: appended.step } : undefined;
+    if (appended.body.redacted !== true && appended.text?.trim())
+      await append({ ...appended, body: step ? { wire: { message: { id: step.id } } } : {} });
+    if (step) deps.turnStream?.settleReasoning(input.runId, step.id, step.index);
+  }
+}
 
 export interface TurnRunState {
   toolCalls: number;
@@ -50,17 +69,10 @@ export interface TurnRunState {
   runtimeHandoffs: number;
   contextRecovered: boolean;
   remainingDocumentBytes: number;
-  remainingDocumentCount: number;
   remainingDocumentTokens: number;
   turnStart: number;
   emittedEntries: Item[];
   tailOwnsReclaim: boolean;
-  gap: GapWorkFeed;
-}
-
-export interface GapWorkFeed {
-  listener?: (work: GapWork) => void;
-  emit: (phase: GapPhase, start: number, end: number) => void;
 }
 
 export interface SegmentTurn {
@@ -74,11 +86,6 @@ export interface SegmentTurn {
   approvalLedger: ApprovalLedger;
   provision: ReturnType<typeof createTurnSandboxes>["provision"];
   observeSecurityData: SecurityObserver;
-}
-
-function createHarnessSegment(ctx: TurnCtx, turn: SegmentTurn) {
-  return (harnessInput: string, extras: Parameters<typeof runHarnessSegment>[3], continuation?: { history: Item[] }) =>
-    runHarnessSegment(ctx, turn, harnessInput, extras, continuation);
 }
 
 type Prepared = ReadyTurn["prepared"];
@@ -117,7 +124,6 @@ async function runHarnessSegment(
   const sessionGoal = openGoal(storedGoal);
   const saveGoal = async (goal: GoalRecord): Promise<void> => {
     await deps.sessions.setGoal(lease, goal);
-    if (input.runId) deps.turnStream?.noteGoal(input.runId, goalView(goal));
   };
   const turnResult = await deps.harness.turns.runTurn({
     session,
@@ -198,75 +204,69 @@ function createSegmentEmit(
   { recall, snapshot, environment }: ReturnType<typeof segmentEnvironment>,
   continuation: { history: Item[] } | undefined,
 ): HarnessTurnInput["emit"] {
-  const { deps, input, actor, humanInput, coreReceivedAt, withManagedRosterVersion, mirrorRunActivity } = ctx;
+  const { deps, input, actor, humanInput, coreReceivedAt, withManagedRosterVersion } = ctx;
   const { surfaceName } = turn.framed;
   const { spine } = turn.ready.turnTools;
   const { partial } = turn.ready.prepared;
   const { publishFirstAck, syntheticPrompt } = turn.ready;
   const { lease, run } = turn;
   const { emittedEntries } = run;
-  const emitGapWork = run.gap.emit;
   let recordedRecall = false;
   const emit: HarnessTurnInput["emit"] = async (entry) => {
-    const persistStart = Date.now();
-    try {
-      const stored = ((): NewItem => {
-        if (
-          (entry.kind === "AgentMessage" && !entry.variant) ||
-          entry.kind === "Elicitation" ||
-          ((entry.kind === "ToolResult" || entry.kind === "ToolCall") && entry.body?.blocked === "needs_approval")
-        ) {
-          const body = { ...entry.body };
-          if (typeof body.workStartedAt !== "number") body.workStartedAt = input.runStartedAt ?? coreReceivedAt;
-          if (typeof body.workFinishedAt !== "number") body.workFinishedAt = Date.now();
-          return { ...entry, body };
-        }
-        if (entry.kind !== "UserMessage" && entry.kind !== "SteeringMessage") return entry;
-        const body: Record<string, unknown> = { ...entry.body };
-        const steered = entry.kind === "SteeringMessage";
-        const overheard = body.overheard === true;
-        const turnStart = !steered && !overheard;
-        if (!recordedRecall && turnStart) {
-          recordedRecall = true;
-          body.environmentSnapshot = snapshot.record;
-          if (environment) body.environment = environment;
-          if (recall.text) body.memoryRecall = recall.record;
-        }
-        delete body.speakerId;
-        if (humanInput && !syntheticPrompt && !continuation && turnStart) body.speakerId = actor.id;
-        if (actor.displayName?.trim() && typeof body.name !== "string") body.name = actor.displayName.trim();
-        if (input.displayText?.trim() && entry.text === input.text && typeof body.display !== "string")
-          body.display = input.displayText;
-        if ((partial || continuation) && turnStart) body.resumeNote = true;
-        return entry.kind === "UserMessage"
-          ? { ...entry, body, ...((syntheticPrompt || continuation) && { hidden: true }) }
-          : { ...entry, body };
-      })();
-      const appended = await withManagedRosterVersion(() => deps.sessions.append(lease, stored));
-      emittedEntries.push(appended);
-      if (isUserMessage(appended) && spine.turnUserEntrySeq === undefined) {
-        spine.turnUserEntrySeq = appended.seq;
-        if (input.runId && deps.runs)
-          await deps.runs
-            .noteTurnUserSeq(input.runId, appended.seq)
-            .catch(swallowAs("orchestrator: record turn boundary", false));
+    const stored = ((): NewItem => {
+      if (
+        (entry.kind === "AgentMessage" && !entry.variant) ||
+        entry.kind === "Elicitation" ||
+        ((entry.kind === "ToolResult" || entry.kind === "ToolCall") && entry.body?.blocked === "needs_approval")
+      ) {
+        const body = { ...entry.body };
+        if (typeof body.workStartedAt !== "number") body.workStartedAt = input.runStartedAt ?? coreReceivedAt;
+        if (typeof body.workFinishedAt !== "number") body.workFinishedAt = Date.now();
+        return { ...entry, body };
       }
-      if (isUserMessage(appended)) run.failureUserItem = undefined;
-      if (appended.kind === "ToolCall") {
-        run.toolCalls += 1;
-        if (run.toolCalls === 1 && input.runId) {
-          if (!input.surfaceTools) {
-            deps.turnStream?.noteToolCall(input.runId);
-          } else {
-            publishFirstAck(appended.tool === surfaceName && appended.body.action === "post");
-          }
-        }
+      if (entry.kind !== "UserMessage" && entry.kind !== "SteeringMessage") return entry;
+      const body: Record<string, unknown> = { ...entry.body };
+      const steered = entry.kind === "SteeringMessage";
+      const overheard = body.overheard === true;
+      const turnStart = !steered && !overheard;
+      if (!recordedRecall && turnStart) {
+        recordedRecall = true;
+        body.environmentSnapshot = snapshot.record;
+        if (environment) body.environment = environment;
+        if (recall.text) body.memoryRecall = recall.record;
       }
-      await mirrorRunActivity(appended);
-      return appended;
-    } finally {
-      emitGapWork("persist", persistStart, Date.now());
+      delete body.speakerId;
+      if (humanInput && !syntheticPrompt && !continuation && turnStart) body.speakerId = actor.id;
+      if (actor.displayName?.trim() && typeof body.name !== "string") body.name = actor.displayName.trim();
+      if (input.displayText?.trim() && entry.text === input.text && typeof body.display !== "string")
+        body.display = input.displayText;
+      if ((partial || continuation) && turnStart) body.resumeNote = true;
+      return entry.kind === "UserMessage"
+        ? { ...entry, body, ...((syntheticPrompt || continuation) && { hidden: true }) }
+        : { ...entry, body };
+    })();
+    const appended = await withManagedRosterVersion(() => deps.sessions.append(lease, stored));
+    emittedEntries.push(appended);
+    if (isUserMessage(appended) && spine.turnUserEntrySeq === undefined) {
+      spine.turnUserEntrySeq = appended.seq;
+      if (input.runId && deps.runs)
+        await deps.runs
+          .noteTurnUserSeq(input.runId, appended.seq)
+          .catch(swallowAs("orchestrator: record turn boundary", false));
     }
+    if (isUserMessage(appended)) run.failureUserItem = undefined;
+    if (appended.kind === "ToolCall") {
+      run.toolCalls += 1;
+      if (run.toolCalls === 1 && input.runId) {
+        if (!input.surfaceTools) {
+          deps.turnStream?.noteToolCall(input.runId);
+        } else {
+          publishFirstAck(appended.tool === surfaceName && appended.body.action === "post");
+        }
+      }
+    }
+    await mirrorRunActivity(deps, input, appended);
+    return appended;
   };
   return emit;
 }
@@ -276,8 +276,7 @@ function createPrepareSteer(
   turn: Pick<SegmentTurn, "frame" | "ready" | "session" | "held" | "run" | "provision" | "observeSecurityData">,
   initialDocuments: HarnessTurnInput["documents"],
 ): NonNullable<HarnessTurnInput["prepareSteer"]> {
-  const { deps, input, actor, conversation, scopeId, strictReadOnly } = ctx;
-  const { blobTransfer } = deps;
+  const { deps, input, actor, conversation, scopeId } = ctx;
   const { screenTrace } = turn.frame;
   const { turnInboxDir } = turn.frame.framed;
   const { fileRegistration, mayReadArtifact } = turn.ready.turnTools;
@@ -306,61 +305,39 @@ function createPrepareSteer(
       text = `${text}\n\n${refreshedInbox}`;
     }
     if (!request?.attachments?.length) return { text, author };
-    const seed = `${fileRegistration.seed}:steer:${randomUUID()}`;
     const inboxDir = `${turnInboxDir}/${randomUUID()}`;
-    const received = strictReadOnly
-      ? { metas: [], images: [], unavailable: [] }
-      : await materializeInbound(
-          deps.sandbox,
-          provision,
-          request.attachments,
-          blobTransfer,
-          { ...fileRegistration, seed },
-          inboxDir,
-          ({ content, name, mimetype }) =>
-            void observeSecurityData(JSON.stringify({ name, mimetype, content }), actor.id, scopeId, {
-              ...screenTrace,
-              sessionId: session.id,
-              hook: "tool_response",
-              surface: "inbound_file",
-              origin: input.origin.kind,
-            }),
-        );
+    const { inbound, manifest, issues } = await stageAttachments(ctx, {
+      attachments: request.attachments,
+      provision,
+      registration: { ...fileRegistration, seed: `${fileRegistration.seed}:steer:${randomUUID()}` },
+      inboxDir,
+      surfaceNotes: [],
+      observe: ({ content, name, mimetype }) =>
+        void observeSecurityData(JSON.stringify({ name, mimetype, content }), actor.id, scopeId, {
+          ...screenTrace,
+          sessionId: session.id,
+          hook: "tool_response",
+          surface: "inbound_file",
+          origin: input.origin.kind,
+        }),
+    });
     const steeredDocuments = await loadDocumentInputs(
       deps.files,
-      received.metas,
+      inbound.metas,
       mayReadArtifact,
       run.remainingDocumentBytes,
       turnAbort.signal,
-      run.remainingDocumentCount,
       initialDocuments,
       run.remainingDocumentTokens,
     );
     observeDocuments(steeredDocuments, text);
-    run.remainingDocumentBytes -= steeredDocuments.documents.reduce(
-      (sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"),
-      0,
-    );
-    run.remainingDocumentCount -= steeredDocuments.documents.length;
+    run.remainingDocumentBytes -= documentBytes(steeredDocuments.documents);
     run.remainingDocumentTokens -= steeredDocuments.tokens;
     documentInputs.documents.push(...steeredDocuments.documents);
-    const issues = inboundIssueList({
-      ...received,
-      surfaceNotes: strictReadOnly
-        ? request.attachments.map((a) => `${safeAttachmentName(a.name)} — unavailable in read-only mode`)
-        : [],
-    });
     return {
-      text: [
-        text,
-        inboundManifest(received.metas, inboxDir, received.unstaged),
-        ...steeredDocuments.notices,
-        inboundIssuesNote(issues),
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-      attachments: received.metas,
-      images: received.images,
+      text: [text, manifest, ...steeredDocuments.notices, inboundIssuesNote(issues)].filter(Boolean).join("\n\n"),
+      attachments: inbound.metas,
+      images: inbound.images,
       documents: steeredDocuments.documents,
       author,
     };
@@ -431,7 +408,7 @@ function segmentCallbacks(
   const { spineFirst, earlyTaskAck } = turn.ready.turnTools;
   const { publishFirstAck } = turn.ready;
   const { session, run, observeSecurityData } = turn;
-  const { emittedEntries, gap: gapWork } = run;
+  const { emittedEntries } = run;
   return {
     observeToolResult: ({ tool, result, unscreenable, provenance, source }: ToolResultScreenInput) => {
       if (provenance !== "external" || unscreenable) return;
@@ -484,12 +461,7 @@ function segmentCallbacks(
         }
       }
     },
-    onGapWork: (cb) => {
-      gapWork.listener = cb;
-    },
-    recordModelCall: (rec) => {
-      void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
-    },
+    recordModelCall: modelCallRecorder(deps, actor.id),
     recordLlmRequest: async (rec, signal) => {
       try {
         await deps.sessions.recordLlmRequest(session.id, { ...rec, scopeLabel: scopeId }, signal);
@@ -508,15 +480,19 @@ export async function runSegments(
   const { deps, input, actor, withManagedRosterVersion, resolution, scopeId, filterHistory, strictReadOnly } = ctx;
   const { defaultDestination } = turn.frame.framed;
   const { surfaceToolDeps, spine, spineFirst, postKeys, postProvenance } = turn.ready.turnTools;
-  const { inbound, importedOverheard, priorTurns, baseText, turnInput, isPollFire } = turn.ready.prepared;
+  const { inbound, importedOverheard, baseText, isPollFire } = turn.ready.prepared;
+  const { priorTurns } = input;
   const { effectiveTurnWallClockMs, adoptRuntime, runtimeState } = turn.selected;
   const { session, run } = turn;
   const { lease, turnAbort } = turn.held;
   const { historyWindow } = turn.begun;
   const { turnStart } = run;
-  const runHarnessSegment = createHarnessSegment(ctx, turn);
-  const runHarnessTurn = async (...args: Parameters<typeof runHarnessSegment>) => {
-    let segment = await runHarnessSegment(...args);
+  const runHarnessTurn = async (
+    harnessInput: string,
+    extras: Parameters<typeof runHarnessSegment>[3],
+    continuation?: { history: Item[] },
+  ) => {
+    let segment = await runHarnessSegment(ctx, turn, harnessInput, extras, continuation);
     while (segment.runtimeHandoff && !segment.stopped && !turnAbort.signal.aborted) {
       run.runtimeHandoffs += 1;
       if (effectiveTurnWallClockMs && Date.now() - turnStart >= effectiveTurnWallClockMs)
@@ -542,6 +518,8 @@ export async function runSegments(
       run.contextRecovered ||= recovery;
       turnAbort.signal.throwIfAborted();
       segment = await runHarnessSegment(
+        ctx,
+        turn,
         runtimeSwitchNote("choice" in segment.runtimeHandoff ? segment.runtimeHandoff.choice : undefined) +
           (recovery && !resumedHistory.some((entry) => entry.seq === spine.turnUserEntrySeq)
             ? `\nCurrent request:\n${baseText}`
@@ -555,13 +533,9 @@ export async function runSegments(
       ...(segment.reply ? { reply: absoluteAppLinks(segment.reply, deps.publicWebUrl) } : {}),
     };
   };
-  const postToDefault = async (outbound: Outbound, destination: Destination, text: string): Promise<void> => {
-    const key = postKeys.key(destination, postKeys.take());
-    await reachPost({ outbound, destination, text, idempotencyKey: key, provenance: postProvenance(key) });
-    spine.surfaceOutboundCount += 1;
-    if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
-  };
-  let result = await runHarnessTurn(turnInput, {
+  const postToDefault = (outbound: Outbound, destination: Destination, text: string) =>
+    postCounted({ deps, input, postKeys, postProvenance, spine }, outbound, destination, text, postKeys.take());
+  let result = await runHarnessTurn(baseText, {
     ...(priorTurns?.length ? { priorTurns } : {}),
     ...(importedOverheard.length ? { overheard: importedOverheard } : {}),
     ...(inbound.metas.length ? { attachments: inbound.metas } : {}),

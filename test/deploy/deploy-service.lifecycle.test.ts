@@ -289,7 +289,6 @@ function spyLock(): { lock: AdvisoryLock; keys: string[] } {
     withLock,
     withSharedLock: withLock,
     tryWithLock: withLock,
-    tryWithLocks: (_keys, fn) => fn(),
   };
   return { lock, keys };
 }

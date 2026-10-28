@@ -1,6 +1,5 @@
 import { createSessionMailbox, type SessionMailbox } from "../../src/sessions/session-mailbox.ts";
 import assert from "node:assert/strict";
-import { createMemoryRunSignalStore } from "../../src/runs/run-signal-store.ts";
 import { createSessionSyscalls } from "../../src/subagents/session-tools.ts";
 import { scopeId, type Conversation, type Principal, type ScopeId, type Session } from "../../src/types.ts";
 import type { SessionStore } from "../../src/sessions/session-store.ts";
@@ -10,6 +9,7 @@ import { createPostgresSessionStore } from "../../src/sessions/postgres-session-
 import type { AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import { testAdvisoryLock, testDatabaseUrl } from "./test-database.ts";
 import { testRunStore, type TestRunStore } from "./turns.ts";
+import { createMemoryRunSignalStore } from "./memory-run-signal-store.ts";
 
 export const actor: Principal = { id: "U1", type: "internal", displayName: "Alex" };
 export const scope: ScopeId = scopeId("personal", "U1");

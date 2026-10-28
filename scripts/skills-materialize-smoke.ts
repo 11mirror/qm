@@ -9,7 +9,7 @@ import { loadConfig } from "../src/config.ts";
 import { materializeSkillTree } from "../src/skills/materialize.ts";
 import { computeBundleHash, type SkillBundle } from "../src/skills/skill-bundle-store.ts";
 import type { SkillFile, SkillResolution } from "../src/skills/skill-store.ts";
-import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createNoopAdvisoryLock } from "../test/support/in-process-stores.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");

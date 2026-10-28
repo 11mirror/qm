@@ -1,23 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPgPool } from "../../src/persistence/pg-pool.ts";
-import { createPostgresAdvisoryLock, createNoopAdvisoryLock } from "../../src/persistence/advisory-lock.ts";
-import { testAdvisoryLock } from "../support/test-database.ts";
+import { createPostgresAdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 
 const URL = process.env.DATABASE_URL!;
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-
-test("no-op mutex: withLock runs fn and returns its value (single-instance dev/test path)", async () => {
-  const lock = createNoopAdvisoryLock();
-  let ran = 0;
-  const out = await lock.withLock("deploy:any", async () => {
-    ran++;
-    return 42;
-  });
-  assert.equal(out, 42, "returns fn's result");
-  assert.equal(ran, 1, "ran fn exactly once");
-});
 
 test("pg mutex: the SAME key serializes — the two fns never overlap (one finishes before the other starts)", async () => {
   const pgA = createPgPool(URL);
@@ -279,41 +267,6 @@ test("pg contended polling releases connections for unrelated keys", { timeout: 
     await pool.end();
     await pg.close();
   }
-});
-
-test("pg multi-key locks reuse one session for nested held keys and release the set", async () => {
-  const pg = createPgPool(URL);
-  const other = createPgPool(URL);
-  const lock = createPostgresAdvisoryLock(pg);
-  const contender = createPostgresAdvisoryLock(other);
-  try {
-    const result = await lock.tryWithLocks!(["inbox:one", "inbox:two"], async () => {
-      assert.equal(await contender.tryWithLock!("inbox:two", async () => "unexpected"), null);
-      return lock.withLock("inbox:one", async () => lock.withLock("inbox:two", async () => 42));
-    });
-    assert.equal(result, 42);
-    assert.equal(await contender.tryWithLocks!(["inbox:one", "inbox:two"], async () => true), true);
-  } finally {
-    await pg.close();
-    await other.close();
-  }
-});
-
-test("multi-key locks retain unawaited nested work until it finishes", async () => {
-  const lock = testAdvisoryLock();
-  const entered = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  const outer = lock.tryWithLocks!(["nested"], async () => {
-    void lock.withLock("nested", async () => {
-      entered.resolve();
-      await release.promise;
-    });
-  });
-  await entered.promise;
-  assert.equal(await lock.tryWithLock!("nested", async () => true), null);
-  release.resolve();
-  await outer;
-  assert.equal(await lock.tryWithLock!("nested", async () => true), true);
 });
 
 test("pg mutex: when fn throws and unlock also fails, both errors surface and the connection is destroyed", async () => {

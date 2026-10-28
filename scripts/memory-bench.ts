@@ -35,7 +35,17 @@ const conversations = readdirSync(fixtureDir)
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
 
-const harness = createPiHarness({ ...piHarnessConfigOptions(loadConfig()), tempDirPrefix: "membench" });
+const config = loadConfig();
+const harness = createPiHarness({
+  ...piHarnessConfigOptions(config),
+  ...(config.modelGateway ? { modelGateway: config.modelGateway } : {}),
+  resolveProviderKeys: async () => ({
+    ...(config.anthropicApiKey ? { anthropic: config.anthropicApiKey } : {}),
+    ...(config.openaiApiKey ? { openai: config.openaiApiKey } : {}),
+    ...(config.openrouterApiKey ? { openrouter: config.openrouterApiKey } : {}),
+  }),
+  tempDirPrefix: "membench",
+});
 if (!harness.models.oneShot) {
   console.error("harness has no oneShot — cannot judge");
   process.exit(1);

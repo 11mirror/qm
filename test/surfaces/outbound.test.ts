@@ -4,7 +4,8 @@ import { createOutbound, type OutboundPost, createWebSurface } from "../../src/s
 import { createIdempotencyStore } from "../../src/idempotency/idempotency-store.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
 import { createQueuedPosts, type QueuedPosts } from "../../src/surfaces/queued-posts.ts";
-import { createMemorySessionStateBus, type SessionStateEvent } from "../../src/runs/session-state-bus.ts";
+import type { SessionStateEvent } from "../../src/runs/session-state-bus.ts";
+import { createMemoryEventBus } from "../../src/util/event-bus.ts";
 import { createTranscriptSource } from "../../src/sessions/transcript-source.ts";
 import type { SessionStore } from "../../src/sessions/session-store.ts";
 import type { DeliveryProvenance, Destination, ScopeId } from "../../src/types.ts";
@@ -132,7 +133,7 @@ async function webSession(sessions: SessionStore, threadRef = THREAD) {
 
 function wired(leaseWaitMs?: number) {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const bus = createMemorySessionStateBus();
+  const bus = createMemoryEventBus<SessionStateEvent>("session-state");
   const states: SessionStateEvent[] = [];
   bus.subscribe((event) => void states.push(event));
   const outbound = createOutbound({ idempotency: createIdempotencyStore(testDatabaseUrl()) });

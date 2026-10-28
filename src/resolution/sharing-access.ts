@@ -32,20 +32,18 @@ export async function sharingSourcesForTurn(input: SharingSourcesInput): Promise
     !input.isCurrentSharedScopeMember
   )
     return [];
-  const targetKind = parseScopeId(input.targetScope).kind;
-  const personal = personalScope(input.actor.id);
-  if (targetKind === "channel" || targetKind === "group") {
-    return (await input.isCurrentSharedScopeMember(input.actor.id, input.targetScope)) ? [personal] : [];
-  }
+  const { actor, targetScope, isCurrentSharedScopeMember } = input;
+  const targetKind = parseScopeId(targetScope).kind;
+  if (await isOpenScopeMember({ actorId: actor.id, scope: targetScope, isCurrentSharedScopeMember }))
+    return [personalScope(actor.id)];
   if (targetKind !== "personal") return [];
-  const isMember = input.isCurrentSharedScopeMember;
-  const rooms = (await input.sessions.participantScopes(input.actor.id))
+  const rooms = (await input.sessions.participantScopes(actor.id))
     .filter((scope) => {
       const kind = parseScopeId(scope.scopeId).kind;
       return kind === "channel" || kind === "group";
     })
     .sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0));
-  const current = await Promise.all(rooms.map((room) => isMember(input.actor.id, room.scopeId)));
+  const current = await Promise.all(rooms.map((room) => isCurrentSharedScopeMember(actor.id, room.scopeId)));
   return rooms.filter((_room, i) => current[i]).map((room) => room.scopeId);
 }
 

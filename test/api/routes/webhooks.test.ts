@@ -12,7 +12,7 @@ import {
   type CapabilityClaims,
 } from "../../../src/auth/capability-token.ts";
 import { createPostgresReplayDedupe } from "../../../src/auth/replay-dedupe.ts";
-import { signRequest } from "../../../src/auth/source-auth.ts";
+import { signRequest } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { buildApp } from "../../support/build-app.ts";
 import { settle, runNowSettled } from "../../support/settle.ts";
 import { testConfig } from "../../support/test-config.ts";

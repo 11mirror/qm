@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { scopeId } from "../../../src/types.ts";
 import { completeTurn } from "../../support/turns.ts";
 import { serveSignalRoute, request, asUser, steererRequest } from "../../support/turn-signal-route.ts";
+import { takePending } from "../../support/memory-run-signal-store.ts";
 
 const { built, runTurns, webBase } = await serveSignalRoute({ web: true });
 
@@ -57,7 +58,7 @@ test("web proxy: a steer carries a server-built ts and TurnRequest for the signe
   );
   assert.equal(steer.status, 200);
 
-  const [signal] = await built.signals.takePending(submit.runId!);
+  const [signal] = await takePending(built.signals, submit.runId!);
   assert.ok(signal);
   assert.equal(signal.text, "louder");
   assert.ok(
@@ -94,11 +95,11 @@ test("web proxy: inbox steering cannot omit or disguise its context to bypass ro
         });
         assert.equal(response.status, 400);
         assert.equal(((await response.json()) as { reason?: string }).reason, "conversation_mismatch");
-        assert.deepEqual(await built.signals.takePending(run.id), []);
+        assert.deepEqual(await takePending(built.signals, run.id), []);
       }
       const response = await steer({ kind: "steer", text: "Prioritize these", threadRef });
       assert.equal(response.status, enabled ? 200 : 403);
-      const signals = await built.signals.takePending(run.id);
+      const signals = await takePending(built.signals, run.id);
       assert.equal(signals.length, enabled ? 1 : 0);
       if (enabled) {
         assert.equal(signals[0]?.request?.conversation.threadRef, threadRef);
@@ -134,7 +135,7 @@ test("web proxy: shared scopes cannot disguise an alias-owned inbox thread", asy
         }),
       );
       assert.equal(response.status, 403);
-      assert.deepEqual(await built.signals.takePending(run.id), []);
+      assert.deepEqual(await takePending(built.signals, run.id), []);
     }
   }
 });
@@ -153,7 +154,7 @@ test("web proxy: a steer claiming another user's thread is refused", async () =>
   );
   assert.equal(steer.status, 400);
   assert.equal(((await steer.json()) as { reason?: string }).reason, "conversation_mismatch");
-  assert.deepEqual(await built.signals.takePending(submit.runId!), []);
+  assert.deepEqual(await takePending(built.signals, submit.runId!), []);
 });
 
 test("web proxy: Project roster revisions revoke pending run status, signals, and events", async () => {
@@ -366,7 +367,7 @@ test("web steering atomically transfers file-only queues and deduplicates retrie
     assert.equal(response.status, 200, await response.text());
   }
   assert.equal(await built.runs.get(queuedRunId), null);
-  const signals = await built.signals.takePending(runId);
+  const signals = await takePending(built.signals, runId);
   assert.equal(signals.length, 1);
   assert.deepEqual(signals[0]?.request?.attachments, attachments);
 });

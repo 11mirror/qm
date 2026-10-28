@@ -25,11 +25,11 @@ import { recordingOutbound } from "../support/recording-outbound.ts";
 import { createFeatureFlagStore, type FeatureName } from "../../src/feature-flags.ts";
 import { createSessionMailbox } from "../../src/sessions/session-mailbox.ts";
 import { createSessionSyscalls } from "../../src/subagents/session-tools.ts";
-import { createMemoryRunSignalStore } from "../../src/runs/run-signal-store.ts";
 import { scopeId, type Principal, type Session } from "../../src/types.ts";
 import type { Sandbox } from "../../src/sandbox/sandbox.ts";
 import type { Run } from "../../src/runs/run-store.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
+import { inlineJobs } from "../support/inline-jobs.ts";
 import type { McpToolService } from "../../src/mcp/mcp-tool-service.ts";
 import { createPostgresAuditLog } from "../../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-artifact-store.ts";
@@ -38,6 +38,7 @@ import { createPostgresRateLimiter } from "../../src/ratelimit/postgres-rate-lim
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts";
 import { testRunStore } from "../support/turns.ts";
+import { createMemoryRunSignalStore } from "../support/memory-run-signal-store.ts";
 
 const active: RuntimeChoice = { modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
 const claims: CapabilityClaims = {
@@ -391,6 +392,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
   await config.setSetting("interactiveFastMode", true);
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
+    jobs: inlineJobs(),
     config,
     runtime: createRuntimeService(
       { config, baseModelDefault: "claude-opus-5" },

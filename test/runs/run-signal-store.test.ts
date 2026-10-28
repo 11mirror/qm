@@ -1,16 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  createMemoryRunSignalStore,
-  startSignalPoll,
-  waitForClientResult,
-  type RunSignal,
-} from "../../src/runs/run-signal-store.ts";
+import { startSignalPoll, waitForClientResult, type RunSignal } from "../../src/runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "../../src/runs/postgres-run-signal-store.ts";
 import { settle } from "../support/settle.ts";
 import { randomUUID } from "node:crypto";
 import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
 import { completeTurn, testRunStore } from "../support/turns.ts";
+import { takePending, createMemoryRunSignalStore } from "../support/memory-run-signal-store.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the pg run-signal tests";
@@ -21,13 +17,13 @@ test("memory store: send appends, takePending drains in order and consumes", asy
   await store.send("r1", { kind: "steer", text: "a" });
   await store.send("r1", { kind: "abort" });
   await store.send("other", { kind: "abort" });
-  const taken = await store.takePending("r1");
+  const taken = await takePending(store, "r1");
   assert.deepEqual(
     taken.map((s) => s.kind),
     ["steer", "abort"],
   );
-  assert.deepEqual(await store.takePending("r1"), [], "consumed — second take is empty");
-  assert.equal((await store.takePending("other")).length, 1, "other run unaffected");
+  assert.deepEqual(await takePending(store, "r1"), [], "consumed — second take is empty");
+  assert.equal((await takePending(store, "other")).length, 1, "other run unaffected");
 });
 
 test("memory store: pending retains steers until acknowledged and leaves aborts for terminal drain", async () => {
@@ -47,7 +43,7 @@ test("memory store: pending retains steers until acknowledged and leaves aborts 
     "steers are consumed exactly once; the abort is never consumed by a live drain",
   );
   assert.deepEqual(
-    (await store.takePending("r1")).map((s) => s.kind),
+    (await takePending(store, "r1")).map((s) => s.kind),
     ["abort"],
     "the terminal drain is what consumes the abort",
   );
@@ -82,7 +78,7 @@ test("startSignalPoll: a user stop outlives a lease-losing poller, is honored by
   await settle(() => reclaimerAborts >= 1);
   await reclaimer();
   assert.deepEqual(
-    (await store.takePending("r1")).map((s) => s.kind),
+    (await takePending(store, "r1")).map((s) => s.kind),
     ["abort"],
     "terminal completion consumes the stop",
   );
@@ -123,7 +119,7 @@ test("startSignalPoll: repeated stops in one drain collapse to one onAbort; the 
   } finally {
     await stop();
   }
-  await store.takePending("r1");
+  await takePending(store, "r1");
   assert.deepEqual(await store.pendingRunIds(), []);
 });
 
@@ -149,7 +145,7 @@ test("startSignalPoll: a stop whose delivery throws is retried on the next drain
     await stop();
   }
   assert.deepEqual(
-    (await store.takePending("r1")).map((s) => s.kind),
+    (await takePending(store, "r1")).map((s) => s.kind),
     ["abort"],
     "the stop stayed pending through the failed delivery",
   );
@@ -293,7 +289,7 @@ test("startSignalPoll: stop consumes nothing more — an undrained signal stays 
   await stopped;
   assert.deepEqual(seen, ["first"], "nothing consumed after stop");
   assert.deepEqual(
-    (await store.takePending("r1")).map((s) => s.text),
+    (await takePending(store, "r1")).map((s) => s.text),
     ["second"],
     "the undrained signal is still pending",
   );
@@ -310,7 +306,7 @@ test("pg store: NOTIFY doorbell reaches a listener on a different connection", {
     await sender.send(runId, { kind: "steer", text: "hello" });
     await settle(() => rings >= 1);
     off();
-    const taken = await receiver.takePending(runId);
+    const taken = await takePending(receiver, runId);
     assert.deepEqual(taken, [{ kind: "steer", text: "hello" }], "the durable row is still the truth");
   } finally {
     await sender.close?.();
@@ -339,7 +335,7 @@ test("pg store: pending retains steers until acknowledged and leaves aborts for 
     );
     assert.ok((await store.pendingRunIds()).includes(runId));
     assert.deepEqual(
-      (await store.takePending(runId)).map((s) => s.kind),
+      (await takePending(store, runId)).map((s) => s.kind),
       ["abort"],
       "the terminal drain is what consumes the abort",
     );
@@ -360,7 +356,7 @@ test("memory store: a signal round-trips ts and request intact", async () => {
     origin: { kind: "human" as const },
   };
   await store.send("r1", { kind: "steer", text: "why did you do it wrong?", ts: "1.2", request });
-  const [taken] = await store.takePending("r1");
+  const [taken] = await takePending(store, "r1");
   assert.equal(taken!.ts, "1.2");
   assert.deepEqual(taken!.request, request);
 });
@@ -377,7 +373,7 @@ test("pg store: a signal round-trips ts and request intact", { skip }, async () 
   };
   try {
     await store.send(runId, { kind: "steer", text: "why did you do it wrong?", ts: "1784151699.674169", request });
-    const [taken] = await store.takePending(runId);
+    const [taken] = await takePending(store, runId);
     assert.equal(taken!.ts, "1784151699.674169", "ts survives the pg round-trip (the inert-#1196 bug)");
     assert.deepEqual(taken!.request, request, "the stored surface request survives for orphan replay");
   } finally {
@@ -390,7 +386,7 @@ test("memory store: pendingRunIds lists runs with unconsumed signals; prune is a
   await store.send("r1", { kind: "steer", text: "a" });
   await store.send("r2", { kind: "abort" });
   assert.deepEqual((await store.pendingRunIds()).sort(), ["r1", "r2"]);
-  await store.takePending("r1");
+  await takePending(store, "r1");
   assert.deepEqual(await store.pendingRunIds(), ["r2"]);
   await store.prune(0);
   assert.deepEqual(await store.pendingRunIds(), ["r2"], "prune never touches unconsumed signals");
@@ -405,12 +401,12 @@ test("pg store: pendingRunIds lists unconsumed runs; prune deletes only old cons
     await store.send(b, { kind: "steer", text: "y" });
     const pending = await store.pendingRunIds();
     assert.ok(pending.includes(a) && pending.includes(b));
-    await store.takePending(a);
+    await takePending(store, a);
     await store.prune(0);
     const after = await store.pendingRunIds();
     assert.ok(!after.includes(a), "consumed and pruned");
     assert.ok(after.includes(b), "unconsumed survives any prune");
-    assert.equal((await store.takePending(b)).length, 1, "the surviving signal is intact");
+    assert.equal((await takePending(store, b)).length, 1, "the surviving signal is intact");
   } finally {
     await store.close?.();
   }
@@ -421,7 +417,7 @@ test("memory store: a signal carrying a dedupe key is stored once, and the secon
   assert.equal(await store.send("r1", { kind: "steer", text: "go", dedupeKey: "slack:B:C1:1.0:steer" }), true);
   assert.equal(await store.send("r1", { kind: "steer", text: "go", dedupeKey: "slack:B:C1:1.0:steer" }), false);
   assert.equal(await store.send("r1", { kind: "steer", text: "again" }), true, "keyless signals never dedupe");
-  assert.equal((await store.takePending("r1")).length, 2);
+  assert.equal((await takePending(store, "r1")).length, 2);
 });
 
 test("pg store: a dedupe key collapses a redelivered steer to one row", { skip }, async () => {
@@ -430,7 +426,7 @@ test("pg store: a dedupe key collapses a redelivered steer to one row", { skip }
   try {
     assert.equal(await store.send("r-dedupe", { kind: "steer", text: "go", dedupeKey: key }), true);
     assert.equal(await store.send("r-dedupe", { kind: "steer", text: "go", dedupeKey: key }), false);
-    assert.equal((await store.takePending("r-dedupe")).length, 1);
+    assert.equal((await takePending(store, "r-dedupe")).length, 1);
   } finally {
     await store.close?.();
   }
@@ -524,7 +520,7 @@ test("failed preparation preserves the entire pending batch for retry", async ()
   await settle(() => failed);
   await stop();
   assert.deepEqual(
-    (await store.takePending("prepare-failure")).map((s) => s.text),
+    (await takePending(store, "prepare-failure")).map((s) => s.text),
     ["first", "second"],
   );
 });
@@ -549,7 +545,7 @@ test("a declined late steer stays durable for terminal replay without spinning",
   await sleep(35);
   await stop();
   assert.equal(attempts, 1);
-  assert.equal((await store.takePending("late-steer"))[0]?.text, "late");
+  assert.equal((await takePending(store, "late-steer"))[0]?.text, "late");
 });
 
 test("failed attachment preparation does not block Stop", async () => {
@@ -684,7 +680,7 @@ test("memory store: a client_result round-trips callId and result intact", async
   const store = createMemoryRunSignalStore();
   const result = { content: "ok", structured: { ids: ["a"] }, isError: false };
   await store.send("r1", { kind: "client_result", callId: "c1", result, dedupeKey: "client:r1:c1" });
-  const [taken] = await store.takePending("r1");
+  const [taken] = await takePending(store, "r1");
   assert.equal(taken!.kind, "client_result");
   assert.equal(taken!.callId, "c1");
   assert.deepEqual(taken!.result, result);
@@ -770,7 +766,7 @@ test("queued steering transfers files once or leaves the original queue intact",
     ]);
     assert.equal(moved.filter(Boolean).length, 1);
     assert.equal(await runs.get(queued.id), null);
-    const pending = await signals.takePending(target.id);
+    const pending = await takePending(signals, target.id);
     assert.equal(pending.length, 1);
     assert.deepEqual(pending[0]?.request?.attachments, attachments);
     const { run: edited } = await runs.enqueue({ sessionId, request: { ...request, attachments } });

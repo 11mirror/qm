@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { resizeImage } from "@earendil-works/pi-coding-agent";
 
 export const MAX_VISION_IMAGE_DIMENSION = 1568;
 
@@ -8,26 +8,10 @@ export interface ImageDimensions {
   format: "png" | "jpeg" | "gif" | "webp";
 }
 
-export interface ImageDownscaleDeps {
-  spawn: (
-    command: string,
-    args: string[],
-    options: { stdio: ["pipe", "pipe", "pipe"] },
-  ) => ChildProcessWithoutNullStreams;
-  warn: (message: string) => void;
+export interface VisionImage {
+  bytes: Uint8Array;
+  mimeType: string;
 }
-
-const DEFAULT_DEPS: ImageDownscaleDeps = {
-  spawn,
-  warn: (message) => console.warn(message),
-};
-
-const FORMAT_BY_MIME = new Map<string, ImageDimensions["format"]>([
-  ["image/png", "png"],
-  ["image/jpeg", "jpeg"],
-  ["image/gif", "gif"],
-  ["image/webp", "webp"],
-]);
 
 const JPEG_SOF_MARKERS = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
 
@@ -125,107 +109,17 @@ export function sniffImageDimensions(input: Uint8Array): ImageDimensions | undef
   return pngDimensions(bytes) ?? jpegDimensions(bytes) ?? gifDimensions(bytes) ?? webpDimensions(bytes);
 }
 
-function imageMagickArgs(format: ImageDimensions["format"]): string[] {
-  return ["-", "-resize", `${MAX_VISION_IMAGE_DIMENSION}x${MAX_VISION_IMAGE_DIMENSION}>`, `${format}:-`];
-}
-
-function ffmpegArgs(format: ImageDimensions["format"]): string[] {
-  const codec = format === "jpeg" ? "mjpeg" : format;
-  return [
-    "-hide_banner",
-    "-loglevel",
-    "error",
-    "-i",
-    "pipe:0",
-    "-vf",
-    `scale='if(gt(iw,ih),min(${MAX_VISION_IMAGE_DIMENSION},iw),-2)':'if(gt(iw,ih),-2,min(${MAX_VISION_IMAGE_DIMENSION},ih))'`,
-    "-frames:v",
-    "1",
-    "-f",
-    "image2pipe",
-    "-vcodec",
-    codec,
-    "pipe:1",
-  ];
-}
-
-type ConverterResult = { missing: true } | { missing: false; output: Uint8Array } | { missing: false; failure: string };
-
-async function runConverter(
-  bytes: Uint8Array,
-  command: string,
-  args: string[],
-  deps: ImageDownscaleDeps,
-): Promise<ConverterResult> {
-  return await new Promise((resolve) => {
-    let settled = false;
-    const finish = (result: ConverterResult) => {
-      if (settled) return;
-      settled = true;
-      resolve(result);
-    };
-    const failed = (err: NodeJS.ErrnoException) =>
-      finish(err.code === "ENOENT" ? { missing: true } : { missing: false, failure: `${command}: ${err.message}` });
-    let child: ChildProcessWithoutNullStreams;
-    try {
-      child = deps.spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
-    } catch (err) {
-      failed(err as NodeJS.ErrnoException);
-      return;
-    }
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.stdin.on("error", () => {});
-    child.on("error", failed);
-    child.on("close", (code) => {
-      if (code === 0) finish({ missing: false, output: Buffer.concat(stdout) });
-      else
-        finish({
-          missing: false,
-          failure: `${command} exited with code ${code}: ${Buffer.concat(stderr).toString("utf8").trim()}`,
-        });
-    });
-    child.stdin.end(Buffer.from(bytes));
+export async function downscaleVisionImage(bytes: Uint8Array, mimeType: string): Promise<VisionImage> {
+  const dimensions = sniffImageDimensions(bytes);
+  if (
+    !dimensions ||
+    (dimensions.width <= MAX_VISION_IMAGE_DIMENSION && dimensions.height <= MAX_VISION_IMAGE_DIMENSION)
+  )
+    return { bytes, mimeType };
+  const resized = await resizeImage(bytes, mimeType, {
+    maxWidth: MAX_VISION_IMAGE_DIMENSION,
+    maxHeight: MAX_VISION_IMAGE_DIMENSION,
   });
-}
-
-function outputIsUsable(bytes: Uint8Array): boolean {
-  const dimensions = sniffImageDimensions(bytes);
-  return (
-    bytes.length > 0 &&
-    (!dimensions || (dimensions.width <= MAX_VISION_IMAGE_DIMENSION && dimensions.height <= MAX_VISION_IMAGE_DIMENSION))
-  );
-}
-
-export async function downscaleVisionImage(
-  bytes: Uint8Array,
-  mimeType: string,
-  deps: ImageDownscaleDeps = DEFAULT_DEPS,
-): Promise<Uint8Array> {
-  const expectedFormat = FORMAT_BY_MIME.get(mimeType);
-  if (!expectedFormat) return bytes;
-  const dimensions = sniffImageDimensions(bytes);
-  if (!dimensions) return bytes;
-  if (dimensions.width <= MAX_VISION_IMAGE_DIMENSION && dimensions.height <= MAX_VISION_IMAGE_DIMENSION) return bytes;
-  const attempts: Array<[string, string[]]> = [
-    ["magick", imageMagickArgs(expectedFormat)],
-    ["convert", imageMagickArgs(expectedFormat)],
-    ["ffmpeg", ffmpegArgs(expectedFormat)],
-  ];
-  const failures: string[] = [];
-  for (const [command, args] of attempts) {
-    const result = await runConverter(bytes, command, args, deps);
-    if (result.missing) continue;
-    if ("failure" in result) failures.push(result.failure);
-    else if (outputIsUsable(result.output)) return result.output;
-    else failures.push(`${command} produced an image that is still oversized or unreadable`);
-  }
-  deps.warn(
-    failures.length
-      ? `attachments: oversized image was not downscaled because image conversion failed: ${failures.join("; ")}`
-      : "attachments: oversized image was not downscaled because no image converter was found on PATH",
-  );
-  return bytes;
+  if (!resized) return { bytes, mimeType };
+  return { bytes: Buffer.from(resized.data, "base64"), mimeType: resized.mimeType };
 }

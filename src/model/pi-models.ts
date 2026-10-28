@@ -74,8 +74,7 @@ interface ModelEntry {
   fastMode: boolean;
   label?: string;
   buttonLabel?: string;
-  webui: boolean;
-  base: boolean;
+  selectable: boolean;
   auxiliary?: boolean;
   request?: { model: string; service_tier: "ultrafast" };
   clone?: {
@@ -110,8 +109,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     id: "claude-opus-5-5",
     name: "Claude Opus 5.5",
     fastMode: true,
-    webui: true,
-    base: true,
+    selectable: true,
     clone: {
       template: "claude-opus-4-8",
       thinkingLevelMap: { off: null },
@@ -127,8 +125,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     id: "claude-fable-5-1",
     name: "Claude Fable 5.1",
     fastMode: false,
-    webui: true,
-    base: true,
+    selectable: true,
     clone: {
       template: "claude-fable-5",
       input: 10,
@@ -139,13 +136,12 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       maxTokens: 128_000,
     },
   },
-  { id: "claude-fable-5", name: "Claude Fable 5", fastMode: false, webui: true, base: true },
+  { id: "claude-fable-5", name: "Claude Fable 5", fastMode: false, selectable: true },
   {
     id: "claude-opus-5",
     name: "Claude Opus 5",
     fastMode: true,
-    webui: true,
-    base: true,
+    selectable: true,
     clone: {
       template: "claude-opus-4-8",
       input: 5,
@@ -155,13 +151,12 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       maxTokens: 128_000,
     },
   },
-  { id: "claude-opus-4-8", name: "Claude Opus 4.8", fastMode: true, webui: true, base: true },
+  { id: "claude-opus-4-8", name: "Claude Opus 4.8", fastMode: true, selectable: true },
   {
     id: "claude-sonnet-5-5",
     name: "Claude Sonnet 5.5",
     fastMode: false,
-    webui: true,
-    base: true,
+    selectable: true,
     clone: {
       template: "claude-opus-4-8",
       thinkingLevelMap: { off: null },
@@ -173,13 +168,12 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       maxTokens: 128_000,
     },
   },
-  { id: "claude-sonnet-5", name: "Claude Sonnet 5", fastMode: false, webui: true, base: true },
+  { id: "claude-sonnet-5", name: "Claude Sonnet 5", fastMode: false, selectable: true },
   {
     id: "claude-haiku-5-5",
     name: "Claude Haiku 5.5",
     fastMode: false,
-    webui: true,
-    base: true,
+    selectable: true,
     auxiliary: true,
     clone: {
       template: "claude-opus-4-8",
@@ -192,14 +186,13 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       tiers: [{ inputTokensAbove: 100_000, input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.625 }],
     },
   },
-  { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", fastMode: false, webui: true, base: true },
+  { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", fastMode: false, selectable: true },
   {
     id: "gpt-5.6-sol",
     buttonLabel: "5.6 Sol",
     name: "GPT-5.6 Sol",
     fastMode: true,
-    webui: true,
-    base: true,
+    selectable: true,
     clone: {
       ...GPT_56_CLONE,
       input: 4,
@@ -213,8 +206,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     buttonLabel: "5.6 Terra",
     name: "GPT-5.6 Terra",
     fastMode: true,
-    webui: true,
-    base: true,
+    selectable: true,
     clone: {
       ...GPT_56_CLONE,
       input: 2,
@@ -228,8 +220,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     buttonLabel: "5.6 Luna",
     name: "GPT-5.6 Luna",
     fastMode: true,
-    webui: true,
-    base: true,
+    selectable: true,
     auxiliary: true,
     clone: {
       ...GPT_56_CLONE,
@@ -244,8 +235,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     buttonLabel: "Astra",
     name: "GPT-6 Astra",
     fastMode: true,
-    webui: true,
-    base: true,
+    selectable: true,
     clone: {
       ...GPT_56_CLONE,
       thinkingLevelMap: { ...GPT_56_CLONE.thinkingLevelMap, off: null },
@@ -261,8 +251,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     buttonLabel: "Astra Ultrafast",
     name: "GPT-6 Astra · Ultrafast (6× cost)",
     fastMode: false,
-    webui: true,
-    base: true,
+    selectable: true,
     request: { model: "gpt-6-astra", service_tier: "ultrafast" },
     clone: {
       ...GPT_56_CLONE,
@@ -279,8 +268,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     buttonLabel: "6.1 Sol",
     name: "GPT-6.1 Sol",
     fastMode: true,
-    webui: true,
-    base: true,
+    selectable: true,
     clone: {
       ...GPT_56_CLONE,
       thinkingLevelMap: { off: null, minimal: null, max: "max" },
@@ -296,8 +284,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     buttonLabel: "6.1 Sol Ultrafast",
     name: "GPT-6.1 Sol · Ultrafast (6× cost)",
     fastMode: false,
-    webui: true,
-    base: true,
+    selectable: true,
     request: { model: "gpt-6.1-sol", service_tier: "ultrafast" },
     clone: {
       ...GPT_56_CLONE,
@@ -314,8 +301,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     buttonLabel: "6.1 Terra",
     name: "GPT-6.1 Terra",
     fastMode: true,
-    webui: true,
-    base: true,
+    selectable: true,
     clone: {
       ...GPT_56_CLONE,
       input: 1,
@@ -330,8 +316,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     buttonLabel: "6 Sol",
     name: "GPT-6 Sol",
     fastMode: true,
-    webui: true,
-    base: true,
+    selectable: true,
     clone: {
       ...GPT_56_CLONE,
       input: 2,
@@ -345,8 +330,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     buttonLabel: "6 Luna",
     name: "GPT-6 Luna",
     fastMode: true,
-    webui: true,
-    base: true,
+    selectable: true,
     clone: {
       ...GPT_56_CLONE,
       input: 0.1,
@@ -355,9 +339,9 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       tiers: [{ inputTokensAbove: 272_000, input: 0.2, output: 0.75, cacheRead: 0.02, cacheWrite: 0.25 }],
     },
   },
-  { id: "openrouter/auto", name: "OpenRouter Auto", fastMode: false, webui: true, base: true },
-  { id: "claude-opus-4-7", name: "Claude Opus 4.7", fastMode: false, webui: false, base: false },
-  { id: "claude-opus-4-6", name: "Claude Opus 4.6", fastMode: false, webui: false, base: false },
+  { id: "openrouter/auto", name: "OpenRouter Auto", fastMode: false, selectable: true },
+  { id: "claude-opus-4-7", name: "Claude Opus 4.7", fastMode: false, selectable: false },
+  { id: "claude-opus-4-6", name: "Claude Opus 4.6", fastMode: false, selectable: false },
 ];
 
 export function modelUnavailableReason(id: string): string | undefined {
@@ -381,7 +365,7 @@ export function selectableBaseModels(includeAliased = false): ReadonlyArray<{ id
 }
 
 export function defaultWebuiModelIds(): readonly string[] {
-  return [...DEFAULT_WEBUI_MODEL_IDS, ...gatewayModelCatalog(true).map((m) => m.id)];
+  return [...SELECTABLE_BASE_MODELS.map((m) => m.id), ...gatewayModelCatalog(true).map((m) => m.id)];
 }
 
 export function fastModeModelIds(): readonly string[] {
@@ -395,17 +379,14 @@ export function modelDisplayName(id: string): string {
   return REGISTRY_BY_ID.get(id)?.name ?? OPENROUTER_CATALOG_MODELS.get(id)?.name ?? id;
 }
 
-export const DEFAULT_WEBUI_MODEL_IDS: readonly string[] = MODEL_REGISTRY.filter((m) => m.webui).map((m) => m.id);
-
-export const SELECTABLE_BASE_MODELS: ReadonlyArray<{ id: string; name: string }> = MODEL_REGISTRY.filter(
-  (m) => m.base,
+const SELECTABLE_BASE_MODELS: ReadonlyArray<{ id: string; name: string }> = MODEL_REGISTRY.filter(
+  (m) => m.selectable,
 ).map((m) => ({ id: m.id, name: m.name }));
 
 function builtinModel(id: string): PiModel | undefined {
   for (const provider of MODEL_PROVIDERS) {
     const m = getModel(provider, id);
-    if (!m) continue;
-    return m;
+    if (m) return m;
   }
   return undefined;
 }
@@ -501,7 +482,7 @@ function resolveBuiltinModel(id: string): PiModel | undefined {
   return builtinModel(id);
 }
 
-function resolveBaseModel(id: string): PiModel | undefined {
+export function resolveModel(id: string): PiModel | undefined {
   if (isGatewayModelId(id)) return resolveGatewayModel(id);
   const builtin = resolveBuiltinModel(id);
   if (builtin) return builtin;
@@ -519,10 +500,6 @@ function customPiModel(custom: CustomRuntimeModel): PiModel {
     compat: { forceAdaptiveThinking: true },
     ...(known.thinkingLevelMap ? { thinkingLevelMap: known.thinkingLevelMap } : {}),
   };
-}
-
-export function resolveModel(id: string): PiModel | undefined {
-  return resolveBaseModel(id);
 }
 
 export function auxiliaryModelForProvider(provider: string): string | undefined {
@@ -555,7 +532,7 @@ export function modelSupported(id: string | undefined): boolean {
   if (id && modelRequestOverrides(id)) return true;
   if (id && isGatewayModelId(id)) return Boolean(resolveGatewayModel(id));
   if (!id) return false;
-  if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id)) return true;
+  if (isCustomModelId(id)) return true;
   return Boolean(resolveModel(id));
 }
 
@@ -581,7 +558,7 @@ export function modelServiceable(id: string, providers: ModelProviderAvailabilit
   if (isGatewayModelId(id)) return Boolean(resolveGatewayModel(id) && providers.modelIds?.has(id));
   const provider = resolveModel(id)?.provider;
   if (!provider) return false;
-  if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id)) return true;
+  if (isCustomModelId(id)) return true;
   if (providers.modelIds?.has(id)) return true;
   if (provider === "openai")
     return (

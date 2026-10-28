@@ -15,7 +15,7 @@ import { createOutbound, type OutboundPost } from "../src/surfaces/outbound.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { loadConfig } from "../src/config.ts";
-import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createNoopAdvisoryLock } from "../test/support/in-process-stores.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");

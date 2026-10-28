@@ -18,16 +18,14 @@ import { supportsProcessSessions } from "../../sandbox/sandbox.ts";
 import { createBackgroundBroker } from "../../connectors/background-exec-broker.ts";
 import { createMonitorBroker, readBackgroundOutputTail } from "../../monitors/monitor-broker.ts";
 import { finishProcessCredentials } from "../../credentials/execute-files.ts";
-import type { GapWork } from "../../harness/harness.ts";
 import { forSearchView } from "../../harness/context-compaction.ts";
 import { createToolContext } from "../../tools/tool-context.ts";
-import { type CommandCredential } from "../../tools/primitives.ts";
 import type { FileArtifact } from "../../files/file-artifact-store.ts";
 import { principalEntitledToScope } from "../../resolution/context-filter.ts";
 import { openSessionItem, searchSessionItems } from "../../sessions/history-search.ts";
 import { defaultPublishAudience } from "../../resolution/publish-audience.ts";
 import { type ArtifactRegistration } from "../attachments.ts";
-import { errMessage, swallow, swallowAs } from "../../util/errors.ts";
+import { errMessage, swallowAs } from "../../util/errors.ts";
 import { randomUUID } from "node:crypto";
 import type { OrchestratorDeps } from "./types.ts";
 import { turnPostKeys } from "./turn-helpers.ts";
@@ -43,7 +41,6 @@ export interface TurnToolsInput {
   sandboxes: ReturnType<typeof createTurnSandboxes>;
   approvalLedger: ApprovalLedger;
   turnSandboxResources: OrchestratorDeps["sandboxResources"];
-  gapWork: { listener?: (work: GapWork) => void };
   turnAbort: AbortController;
   captureDependencies: () => MemoryProvenance[];
 }
@@ -154,26 +151,18 @@ function createProcessBrokers(ctx: TurnCtx, turn: TurnToolsInput) {
   const { memoryScopeId } = turn.context;
   const { defaultDestination } = turn.framed;
   const { provision, provisionJobSandbox } = turn.sandboxes;
+  const { sandbox, processes, keychain } = deps;
   const backgroundBroker =
-    deps.processes && supportsProcessSessions(deps.sandbox)
+    processes && supportsProcessSessions(sandbox)
       ? createBackgroundBroker({
-          sandbox: deps.sandbox,
-          registry: deps.processes,
+          sandbox,
+          registry: processes,
           provisionSandbox: provisionJobSandbox,
-          onExit: (handle, processId) =>
-            finishProcessCredentials(
-              {
-                sandbox: deps.sandbox,
-                processes: deps.processes!,
-                ...(deps.keychain ? { keychain: deps.keychain } : {}),
-              },
-              handle,
-              processId,
-            ),
+          onExit: (handle, processId) => finishProcessCredentials({ sandbox, processes, keychain }, handle, processId),
           scopeId: memoryScopeId,
           sessionRef: conversation.threadRef,
-          ...(deps.backgroundJobTtlMs !== undefined ? { ttlMs: deps.backgroundJobTtlMs } : {}),
-          ...(deps.backgroundJobTtlMaxMs !== undefined ? { ttlMaxMs: deps.backgroundJobTtlMaxMs } : {}),
+          ttlMs: deps.backgroundJobTtlMs,
+          ttlMaxMs: deps.backgroundJobTtlMaxMs,
         })
       : undefined;
 
@@ -196,10 +185,10 @@ function createProcessBrokers(ctx: TurnCtx, turn: TurnToolsInput) {
     : undefined;
 
   const monitorBroker =
-    deps.monitors && deps.processes && supportsProcessSessions(deps.sandbox)
+    deps.monitors && processes && supportsProcessSessions(sandbox)
       ? createMonitorBroker({
           store: deps.monitors,
-          registry: deps.processes,
+          registry: processes,
           readOutputTail: readOutputTail ?? (async () => ({ outputTail: "" })),
           scopeId: memoryScopeId,
           owner: actor.id,
@@ -288,41 +277,6 @@ function artifactReadCheck(ctx: TurnCtx): (artifact: FileArtifact, fresh?: boole
   return mayReadArtifact;
 }
 
-function commandCredentialResolver(catalog: TurnToolsInput["catalog"]) {
-  const {
-    commandCredentials,
-    credentialBroker,
-    registerKeychainCredentials,
-    registerConnectorCredentials,
-    registerServiceCredentials,
-    placeCredential,
-  } = catalog;
-  return async (handles: Parameters<typeof credentialBroker>[0]) => {
-    const refreshed = new Map<string, CommandCredential>();
-    const identities = new Map<string, string>();
-    const add: Parameters<typeof registerKeychainCredentials>[0] = (
-      credential,
-      _description,
-      identity = credential.handle,
-    ) => {
-      const prior = identities.get(credential.handle);
-      if (prior !== undefined) {
-        if (prior !== identity) throw new Error(`credential handle collision: ${credential.handle}`);
-        return;
-      }
-      identities.set(credential.handle, identity);
-      refreshed.set(credential.handle, placeCredential(credential));
-    };
-    const broker = credentialBroker(handles);
-    await registerKeychainCredentials(add, broker);
-    await registerConnectorCredentials(add, broker);
-    await registerServiceCredentials(add, broker);
-    for (const credential of commandCredentials.filter((candidate) => candidate.handle.startsWith("broker_")))
-      add(credential, "");
-    return [...refreshed.values()];
-  };
-}
-
 function sessionHistoryTools(ctx: TurnCtx, session: Session) {
   const { deps, filterHistory } = ctx;
   const historyView = async () => filterHistory(forSearchView(await deps.sessions.getItems(session.id)));
@@ -350,7 +304,7 @@ function createTurnToolContext(
   const { strictReadOnly, reachAvailable } = ctx;
   const { commandPolicy } = resolution;
   const layerCommandRules = [...(deps.deploymentLayer?.commandRules ?? [])];
-  const { session, context, turnSandboxResources, gapWork, turnAbort, captureDependencies } = turn;
+  const { session, context, turnSandboxResources, turnAbort, captureDependencies } = turn;
   const { memoryScopeId, memoryAccess } = turn.context;
   const { sessionSyscalls, visibleSkillsForTurn } = turn.framed;
   const { connectorEnv, commandCredentials, actorIsOrgAdmin, controlClaims } = turn.catalog;
@@ -409,10 +363,9 @@ function createTurnToolContext(
     auditLog: deps.auditLog,
     createdBy: actor.id,
     commandCredentials,
-    resolveCommandCredentials: commandCredentialResolver(turn.catalog),
-    ...(deps.publicWebUrl ? { publicWebUrl: deps.publicWebUrl } : {}),
+    resolveCommandCredentials: turn.catalog.resolveCommandCredentials,
+    publicWebUrl: deps.publicWebUrl,
     publishContext: publishContextFor(conversation),
-    ...(deps.config ? { config: deps.config } : {}),
     ...(deps.control && controlClaims ? { control: deps.control, controlClaims } : {}),
     ...(deps.apiBaseUrl && connectorEnv.AGENT_API_TOKEN
       ? {
@@ -423,9 +376,10 @@ function createTurnToolContext(
           },
         }
       : {}),
-    ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
+    webhookPublicUrl: deps.webhookPublicUrl,
     ...(humanInput && !external ? { humanTurn: true } : {}),
-    ...(deps.toolOutput ? { toolOutput: deps.toolOutput, sessionId: session.id } : {}),
+    toolOutput: deps.toolOutput,
+    sessionId: session.id,
     ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
     ...(sessionSyscalls
       ? {
@@ -454,21 +408,14 @@ function createTurnToolContext(
         }
       : {}),
     sessionHistory: sessionHistoryTools(ctx, session),
-    ...(deps.execTimeoutMs !== undefined ? { execTimeoutMs: deps.execTimeoutMs } : {}),
-    ...(deps.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: deps.execTimeoutCeilingMs } : {}),
-    ...(deps.ledger ? { ledger: deps.ledger } : {}),
-    ...(deps.signals ? { signals: deps.signals } : {}),
+    execTimeoutMs: deps.execTimeoutMs,
+    execTimeoutCeilingMs: deps.execTimeoutCeilingMs,
+    ledger: deps.ledger,
+    signals: deps.signals,
     ...(input.runId ? { runId: input.runId } : {}),
     attempt: input.attempt ?? 1,
     ...(backgroundBroker ? { backgroundBroker } : {}),
     ...(monitorBroker ? { monitorBroker } : {}),
-    onGapWork: (work) => {
-      try {
-        gapWork.listener?.(work);
-      } catch (e) {
-        swallow("gap-work forward", e);
-      }
-    },
   });
 }
 

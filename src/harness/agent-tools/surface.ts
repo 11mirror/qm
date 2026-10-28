@@ -4,28 +4,19 @@ import { Type, type Static } from "typebox";
 import { type OutboundFile } from "../../core/attachments.ts";
 import { type ToolKit } from "./kit.ts";
 import type { TurnHalt } from "../turn-tool-state.ts";
-import {
-  optionalBoolean,
-  optionalString,
-  outboundFilesSchema,
-  outboundSandboxSchema,
-  SURFACE_ACTIONS,
-  text,
-} from "./shared.ts";
+import { optionalBoolean, optionalString, text } from "./shared.ts";
 
 type ToolContext = NonNullable<ToolKit["ref"]["current"]>;
 
 export function replyTools(kit: ToolKit, halt: Pick<TurnHalt, "setSilent">) {
-  const { surface } = surfaceTool(kit);
-  const { attach, finishSilently } = attachAndFinishTools(kit, halt);
-  return { surface, attach, finishSilently };
+  return { surface: surfaceTool(kit), ...attachAndFinishTools(kit, halt) };
 }
 
 function surfaceTool(kit: ToolKit) {
   const { opts } = kit;
   const surfaceName = opts?.surfaceName ?? "slack";
   const surfaceLabel = surfaceProfile(surfaceName).label ?? surfaceName;
-  const surface = defineTool({
+  return defineTool({
     name: surfaceName,
     label: surfaceName,
     description:
@@ -36,7 +27,6 @@ function surfaceTool(kit: ToolKit) {
     parameters: surfaceParams(surfaceName),
     execute: (callId, params) => runSurfaceAction(kit, surfaceName, callId, params),
   });
-  return { surface };
 }
 
 function surfaceParams(surfaceName: string) {
@@ -114,6 +104,8 @@ function surfaceParams(surfaceName: string) {
   });
 }
 
+type Rejected = (summary: Record<string, unknown>, body: string) => ReturnType<ToolKit["recordFail"]>;
+
 async function runSurfaceAction(
   kit: ToolKit,
   surfaceName: string,
@@ -123,9 +115,12 @@ async function runSurfaceAction(
   const { ref, recordCall, recordResult, recordText, recordFail } = kit;
   const tc = ref.current;
   if (!tc) return text("[error] no active tool context");
+  const rejected: Rejected = async (summary, body) => {
+    await recordCall(callId, { tool: surfaceName, action: params.action });
+    return recordFail(callId, summary, body);
+  };
   const missing = (field: string) =>
-    recordFail(
-      callId,
+    rejected(
       { tool: surfaceName, action: params.action, error: `missing_${field}` },
       `[error] the "${params.action}" action requires \`${field}\`.`,
     );
@@ -150,8 +145,7 @@ async function runSurfaceAction(
     case "post": {
       if (params.text === undefined) return missing("text");
       if (params.channel !== undefined || params.recipient !== undefined || params.participants !== undefined) {
-        return recordFail(
-          callId,
+        return rejected(
           { tool: surfaceName, action: "post", error: "post_cannot_address" },
           '[not sent] `post` only replies in this conversation. To send to another channel, a teammate DM, or a group, use `action: "reach"` with `channel`/`recipient`/`participants`.',
         );
@@ -181,7 +175,7 @@ async function runSurfaceAction(
       );
     }
     case "reach": {
-      return surfaceReach(kit, tc, callId, params, surfaceName, missing);
+      return surfaceReach(kit, tc, callId, params, surfaceName, missing, rejected);
     }
     case "react": {
       if (params.ts === undefined) return missing("ts");
@@ -236,8 +230,7 @@ async function runSurfaceAction(
       return surfaceReadFile(kit, tc, callId, params, surfaceName, missing, couldnt);
     }
     default:
-      return recordFail(
-        callId,
+      return rejected(
         { tool: surfaceName, error: "unknown_action" },
         `[error] unknown action "${(params as { action?: string }).action}" — valid actions: ${SURFACE_ACTIONS.join(", ")}.`,
       );
@@ -431,8 +424,9 @@ async function surfaceReach(
   params: Static<ReturnType<typeof surfaceParams>>,
   surfaceName: string,
   missing: (field: string) => ReturnType<ToolKit["recordFail"]>,
+  rejected: Rejected,
 ) {
-  const { recordCall, recordResult, recordFail } = kit;
+  const { recordCall, recordResult } = kit;
   if (params.text === undefined) return missing("text");
   const selectors = [
     params.channel !== undefined,
@@ -440,8 +434,7 @@ async function surfaceReach(
     params.participants !== undefined,
   ].filter(Boolean).length;
   if (selectors !== 1) {
-    return recordFail(
-      callId,
+    return rejected(
       { tool: surfaceName, action: "reach", error: "reach_target" },
       "[not sent] `reach` needs exactly one destination: a `channel`, a `recipient` (teammate DM), or `participants` (group DM).",
     );
@@ -532,3 +525,29 @@ function attachAndFinishTools(kit: ToolKit, halt: Pick<TurnHalt, "setSilent">) {
   });
   return { attach, finishSilently };
 }
+
+const SURFACE_ACTIONS = [
+  "post",
+  "reach",
+  "react",
+  "edit",
+  "delete",
+  "read_thread",
+  "whats_new",
+  "search",
+  "read_members",
+  "read_file",
+] as const;
+const outboundFilesSchema = Type.Array(
+  Type.Union([
+    Type.String({ minLength: 1 }),
+    Type.Object({ file_id: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
+  ]),
+  { description: 'Workspace paths or {file_id: "stored Files ID"} objects.' },
+);
+const outboundSandboxSchema = Type.Optional(
+  Type.String({
+    minLength: 1,
+    description: "Sandbox for workspace paths.",
+  }),
+);

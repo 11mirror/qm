@@ -85,19 +85,15 @@ async function pick<T>(
   if (exact.length > 1) return { kind: "ambiguous", items: exact.slice(0, MAX_CANDIDATES).map(map) };
 
   const esc = likeEscape(qn);
-  let pool2 = await q(
-    `SELECT ${cols} ${from} AND ${labelLcCol} LIKE $2 ESCAPE '\\' ORDER BY ${labelLcCol}, ${idCol} LIMIT ${MAX_CANDIDATES + 1}`,
-    [tenant().orgId, `${esc}%`],
-  );
-  if (!pool2.length) {
-    pool2 = await q(
+  for (const pattern of [`${esc}%`, `%${esc}%`]) {
+    const rows = await q(
       `SELECT ${cols} ${from} AND ${labelLcCol} LIKE $2 ESCAPE '\\' ORDER BY ${labelLcCol}, ${idCol} LIMIT ${MAX_CANDIDATES + 1}`,
-      [tenant().orgId, `%${esc}%`],
+      [tenant().orgId, pattern],
     );
+    if (rows.length === 1) return { kind: "one", item: map(rows[0]!) };
+    if (rows.length > 1) return { kind: "ambiguous", items: rows.slice(0, MAX_CANDIDATES).map(map) };
   }
-  if (!pool2.length) return { kind: "none" };
-  if (pool2.length === 1) return { kind: "one", item: map(pool2[0]!) };
-  return { kind: "ambiguous", items: pool2.slice(0, MAX_CANDIDATES).map(map) };
+  return { kind: "none" };
 }
 
 async function swapIfChanged(

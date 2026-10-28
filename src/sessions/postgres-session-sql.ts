@@ -18,3 +18,7 @@ export const userTurn = (col: string): string =>
 
 export const withinParticipantWindow = (entry: string, participant: string): string =>
   `(${entry}.seq >= ${participant}.valid_from_seq AND (${participant}.valid_to_seq IS NULL OR ${entry}.seq < ${participant}.valid_to_seq))`;
+
+export const nextSeq = (sessionId: string): string =>
+  `GREATEST(COALESCE((SELECT MAX(seq) FROM items WHERE tenant_id = ${TENANT} AND session_id = ${sessionId}), -1) + 1,
+            COALESCE((SELECT messages FROM sessions WHERE id = ${sessionId}), 0))`;

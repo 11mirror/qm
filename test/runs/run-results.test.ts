@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { recordingOutbound } from "../support/recording-outbound.ts";
 import { createOutbound } from "../../src/surfaces/outbound.ts";
-import { runResultPost, wireRunResultPosts } from "../../src/runs/run-results.ts";
+import { runResultPost, wireRunResultPosts, type TurnFailureSessions } from "../../src/runs/run-results.ts";
 import type { Run } from "../../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
 import type { Principal, TurnResult } from "../../src/types.ts";
@@ -12,6 +12,7 @@ import { testDatabaseUrl, testQuery } from "../support/test-database.ts";
 import { claimTurn, completeTurn, finishTurn, testRunStore } from "../support/turns.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
+const noSessions = { getByThread: async () => null } as unknown as TurnFailureSessions;
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 const turn = (text: string, deliveryTarget?: string): OrchestratorInput => ({
   surface: "slack",
@@ -236,7 +237,7 @@ test("wired stores: a completed turn is posted unless the live path already post
   const { runs, ledger, close } = testRunStore();
   t.after(close);
   const outbound = recordingOutbound();
-  wireRunResultPosts(runs, outbound, { graceMs: 0 });
+  wireRunResultPosts(runs, outbound, { sessions: noSessions, postsImmediately: () => true });
 
   const crashed = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
   const c1 = (await claimTurn(ledger, crashed.id))!;
@@ -272,7 +273,7 @@ test("a live turn handler that still owns the run defers the post, and the sweep
     if (live) return { deferred: true };
     posted.push(post.idempotencyKey);
   });
-  const recovery = wireRunResultPosts(runs, outbound, { graceMs: 0 });
+  const recovery = wireRunResultPosts(runs, outbound, { sessions: noSessions, postsImmediately: () => true });
   const r = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
   await completeTurn(ledger, r.id, { status: "ok", reply: "x" });
   await settle();
@@ -289,7 +290,7 @@ test("sweep posts the reply of a terminal run nobody posted", async (t) => {
   const outbound = recordingOutbound();
   const bypassed = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
   await completeTurn(ledger, bypassed.id, { status: "ok", reply: "lost on the way out" });
-  const recovery = wireRunResultPosts(runs, outbound, { graceMs: 0 });
+  const recovery = wireRunResultPosts(runs, outbound, { sessions: noSessions, postsImmediately: () => true });
   assert.deepEqual(await outbound.pending("slack"), [], "wired after the fact: nothing posted");
 
   assert.equal(await recovery.sweep(Date.now()), 0, "runs finished inside the grace window are not swept yet");
@@ -312,7 +313,7 @@ test("sweep marks a permanently undeliverable reply done instead of retrying it 
   });
   const r = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
   await completeTurn(ledger, r.id, { status: "ok", reply: "x" });
-  const recovery = wireRunResultPosts(runs, outbound, { graceMs: 0 });
+  const recovery = wireRunResultPosts(runs, outbound, { sessions: noSessions, postsImmediately: () => true });
   assert.equal(await recovery.sweep(Date.now() + 120_000), 0);
   assert.equal(await recovery.sweep(Date.now() + 120_000), 0);
   assert.equal(attempts, 1);
@@ -328,7 +329,7 @@ test("sweep recovers a reply owed by a run that finished long ago", async (t) =>
   await testQuery(databaseUrl, `UPDATE runs SET finished_at = ${weekAgo} WHERE id = '${stale.id}'`);
   const quiet = (await runs.enqueue({ sessionId: "sB", request: turn("b") })).run;
   await completeTurn(ledger, quiet.id, { status: "ok", reply: "nowhere to post" });
-  const recovery = wireRunResultPosts(runs, outbound, { graceMs: 0 });
+  const recovery = wireRunResultPosts(runs, outbound, { sessions: noSessions, postsImmediately: () => true });
   assert.equal(await recovery.sweep(Date.now() + 120_000), 1);
   assert.deepEqual(
     (await outbound.pending("slack")).map((d) => [d.idempotencyKey, d.text]),
@@ -350,7 +351,7 @@ test("sweep pages through terminal runs by (finishedAt, id) without skipping tie
     finished.add(`run:${run.id}`);
   }
   const swept = recordingOutbound();
-  const sweptRecovery = wireRunResultPosts(runs, swept, { graceMs: 0 });
+  const sweptRecovery = wireRunResultPosts(runs, swept, { sessions: noSessions, postsImmediately: () => true });
   assert.equal(await sweptRecovery.sweep(Date.now() + 120_000), 205);
   assert.deepEqual(new Set((await swept.pending("slack")).map((d) => d.idempotencyKey)), finished);
   assert.equal(await sweptRecovery.sweep(Date.now() + 120_000), 0);
@@ -360,7 +361,7 @@ test("wired stores: a parked run posts a failure note", async (t) => {
   const { runs, ledger, close } = testRunStore();
   t.after(close);
   const outbound = recordingOutbound();
-  wireRunResultPosts(runs, outbound, { graceMs: 0 });
+  wireRunResultPosts(runs, outbound, { sessions: noSessions, postsImmediately: () => true });
 
   const parked = (await runs.enqueue({ sessionId: "sP", request: turn("p", "C9:171.001"), maxAttempts: 1 })).run;
   await finishTurn(
@@ -457,7 +458,7 @@ test("wired stores: a parked Slack run gets both the durable session entry and t
   const { runs, ledger, close } = testRunStore();
   t.after(close);
   const outbound = recordingOutbound();
-  wireRunResultPosts(runs, outbound, { sessions, graceMs: 0 });
+  wireRunResultPosts(runs, outbound, { sessions, postsImmediately: () => true });
 
   const parked = (await runs.enqueue({ sessionId: "slack:D1", request: turn("p", "D1:171.001"), maxAttempts: 1 })).run;
   await finishTurn(
@@ -486,7 +487,7 @@ test("onTerminal: a failed run is not settled while its session is busy, so the 
   const { runs, ledger, close } = testRunStore();
   t.after(close);
   const outbound = recordingOutbound();
-  const recovery = wireRunResultPosts(runs, outbound, { sessions, graceMs: 0 });
+  const recovery = wireRunResultPosts(runs, outbound, { sessions, postsImmediately: () => true });
   const { lease } = await sessions.acquireLease(session.id, "turn");
   const parked = (await runs.enqueue({ sessionId: "slack:D1", request: turn("p", "D1:171.001"), maxAttempts: 1 })).run;
   await finishTurn(
@@ -519,7 +520,7 @@ test("sweep: a failed run whose process died before recording its failure gets t
     "failed",
   );
   const outbound = recordingOutbound();
-  const recovery = wireRunResultPosts(runs, outbound, { sessions, graceMs: 0 });
+  const recovery = wireRunResultPosts(runs, outbound, { sessions, postsImmediately: () => true });
   assert.equal((await sessions.getItems(session.id)).length, 0, "wired after the fact: nothing recorded");
 
   assert.equal(await recovery.sweep(Date.now() + 120_000), 2, "the entry and the Slack note were both recovered");
@@ -543,7 +544,7 @@ test("sweep: a busy session leaves the failed run unsettled so a later sweep rec
     "failed",
   );
   const outbound = recordingOutbound();
-  const recovery = wireRunResultPosts(runs, outbound, { sessions, graceMs: 0 });
+  const recovery = wireRunResultPosts(runs, outbound, { sessions, postsImmediately: () => true });
   const { lease } = await sessions.acquireLease(session.id, "turn");
 
   assert.equal(await recovery.sweep(Date.now() + 120_000), 0);

@@ -19,7 +19,6 @@ interface PgPoolingConfig {
   queryMax?: number;
   sessionMax?: number;
   tenancy?: boolean;
-  tenantSecretsKey?: Buffer;
 }
 
 let poolingConfig: PgPoolingConfig = {};
@@ -84,19 +83,17 @@ export function configurePgPooling(config: PgPoolingConfig): void {
     }
   }
   poolingConfig = { ...config };
-  if (config.tenancy !== undefined) configurePgTenancy(config.tenancy, config.tenantSecretsKey);
+  if (config.tenancy !== undefined) configurePgTenancy(config.tenancy);
 }
 
 let tenancyEnabled = false;
-let tenantSecretsKey: Buffer | undefined;
 
 export function pgTenancyEnabled(): boolean {
   return tenancyEnabled;
 }
 
-export function configurePgTenancy(enabled: boolean, secretsKey?: Buffer): void {
+export function configurePgTenancy(enabled: boolean): void {
   tenancyEnabled = enabled;
-  tenantSecretsKey = secretsKey;
 }
 
 export function tenantCols(cols: string): string {
@@ -111,15 +108,18 @@ const tenantized = new Set<string>();
 
 const settledMigrations = new Map<string, Set<string>>();
 
-function markSettled(connectionString: string, migrations: readonly PgMigration[]): void {
+async function applyAndSettle(
+  pool: Pool,
+  connectionString: string,
+  migrations: readonly PgMigration[],
+  retenantize = false,
+): Promise<void> {
+  const applied = await applyPgMigrations(pool, migrations);
   let settled = settledMigrations.get(connectionString);
   if (!settled) settledMigrations.set(connectionString, (settled = new Set()));
   for (const migration of migrations) settled.add(migration.id);
-}
-
-async function applyTenancyIfEnabled(pool: Pool, connectionString: string, changed: boolean): Promise<void> {
-  if (!tenancyEnabled || (!changed && tenantized.has(connectionString))) return;
-  await applyTenancy(pool, tenantSecretsKey);
+  if (!tenancyEnabled || (!retenantize && applied === 0 && tenantized.has(connectionString))) return;
+  await applyTenancy(pool);
   tenantized.add(connectionString);
 }
 
@@ -281,10 +281,7 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
       const pg = (await import("pg")).default;
       const pool = guardedPool(new pg.Pool({ ...pgConnectionOptions(databaseUrl), options: TENANT_BYPASS_OPTION }));
       try {
-        const migrations = registeredPgMigrations(databaseUrl);
-        await applyPgMigrations(pool, migrations);
-        markSettled(databaseUrl, migrations);
-        await applyTenancyIfEnabled(pool, databaseUrl, true);
+        await applyAndSettle(pool, databaseUrl, registeredPgMigrations(databaseUrl), true);
       } finally {
         await pool.end();
       }
@@ -292,18 +289,9 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
   }
 }
 
-export function createPgPool(connectionString: string): PgPool;
-export function createPgPool(connectionString: string, migrationId: string, statements: readonly string[]): PgPool;
-export function createPgPool(connectionString: string, definitions: readonly PgMigrationDefinition[]): PgPool;
-export function createPgPool(
-  connectionString: string,
-  idOrDefinitions?: string | readonly PgMigrationDefinition[],
-  statements: readonly string[] = [],
-): PgPool {
-  const migrates = idOrDefinitions !== undefined;
-  const definitions =
-    typeof idOrDefinitions === "string" ? [{ id: idOrDefinitions, statements }] : (idOrDefinitions ?? []);
-  const migrations = definitions.flatMap(pgMigrationsFrom);
+export function createPgPool(connectionString: string, definitions?: readonly PgMigrationDefinition[]): PgPool {
+  const migrates = definitions !== undefined;
+  const migrations = (definitions ?? []).flatMap(pgMigrationsFrom);
   for (const migration of migrations) registerPgMigration(connectionString, migration);
   let readyP: Promise<void> | null = null;
   let sessionPoolP: Promise<Pool> | null = null;
@@ -327,9 +315,7 @@ export function createPgPool(
       const settled = settledMigrations.get(connectionString);
       const current = settled && migrations.every((migration) => settled.has(migration.id));
       if (current && (!tenancyEnabled || tenantized.has(connectionString))) return;
-      const applied = await applyPgMigrations(instance, migrations);
-      markSettled(connectionString, migrations);
-      await applyTenancyIfEnabled(instance, connectionString, applied > 0);
+      await applyAndSettle(instance, connectionString, migrations);
     });
   }
   async function ready(): Promise<void> {
@@ -374,11 +360,7 @@ export function createPgPool(
     for (const migration of migrations) registerPgMigration(connectionString, migration);
     if (closed) throw new Error("Postgres store is closed");
     await ready();
-    await withMigrationPool(async (instance) => {
-      const applied = await applyPgMigrations(instance, migrations);
-      markSettled(connectionString, migrations);
-      await applyTenancyIfEnabled(instance, connectionString, applied > 0);
-    });
+    await withMigrationPool((instance) => applyAndSettle(instance, connectionString, migrations));
   }
   function registerMigration(definition: PgMigrationDefinition): void {
     for (const migration of pgMigrationsFrom(definition)) registerPgMigration(connectionString, migration);

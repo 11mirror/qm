@@ -450,6 +450,7 @@ test("a project session names its linked Slack home channel; unlinked projects g
     membership: async () => true,
     members: async () => [actor.id],
     version: async () => "1",
+    name: async () => "Proj",
     withVersion: async <T>(_ref: string, _version: string | undefined, fn: () => Promise<T>) => fn(),
     slackChannel: async (ref: string) =>
       ref === "web-project-linked" ? { channelId: "C-ENG", channelName: "eng" } : undefined,

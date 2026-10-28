@@ -40,14 +40,11 @@ function runTurnInput(
 ): OrchestratorInput {
   return {
     ...run.request,
-    origin: run.request.origin,
     runId: run.id,
     attempt: run.attempts,
     ...(run.lastStop ? { resumeCause: run.lastStop } : {}),
     runLeaseToken: opts.token,
-    turnFenceToken: opts.token,
     finalAttempt: errorParks(run, opts.maxClaims),
-    background: true,
     cancel: opts.cancel,
     shutdown: opts.shutdown,
     ...(run.startedAt !== null ? { runStartedAt: run.startedAt } : {}),
@@ -94,14 +91,11 @@ export interface TurnRunnerDeps {
   orchestrator: Orchestrator;
   queues: readonly TurnQueue[];
   slots: number;
-  capacity?: () => number;
   ready?: EventBus<string>;
   cancels?: EventBus<string>;
   yields?: EventBus<string>;
   canClaim?: () => boolean;
   errors?: ErrorLog;
-  processId?: string;
-  extendIntervalMs?: number;
   pollMs?: number;
   retryDelayMs?: (priorErrors: number) => number;
   maxClaims?: number;
@@ -163,20 +157,11 @@ async function yieldHeld(deps: TurnRunnerDeps, held: HeldTurn, reason: "capacity
   console.log(`[turns] parked turn=${held.run.id} reason=${reason} outcome=${outcome}`);
 }
 
-async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
-  const extendMs = deps.extendIntervalMs ?? TURN_EXTEND_INTERVAL_MS;
-  const { run, token, cancel, shutdown } = held;
-  const { trace: _trace, ...request } = run.request;
+function keepClaim(deps: TurnRunnerDeps, held: HeldTurn): { stop: () => void; lost: () => boolean } {
+  const { run, token, cancel } = held;
   let lost = false;
   let misses = 0;
   let extendFailures = 0;
-  let cancelTimer: ReturnType<typeof setTimeout> | undefined;
-  held.onCancel = () => {
-    if (held.cancelled) return;
-    held.cancelled = true;
-    cancelTimer = setTimeout(() => cancel.abort(), CANCEL_GRACE_MS);
-    cancelTimer.unref?.();
-  };
   const beat = setInterval(() => {
     void deps.ledger
       .extend(run, token)
@@ -208,8 +193,22 @@ async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
           reportFailure(`turns: claim extension keeps failing for turn ${run.id}`, error);
         else swallow(`turns: extend failed for turn ${run.id} (transient)`, error);
       });
-  }, extendMs);
+  }, TURN_EXTEND_INTERVAL_MS);
   beat.unref?.();
+  return { stop: () => clearInterval(beat), lost: () => lost };
+}
+
+async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
+  const { run, token, cancel, shutdown } = held;
+  const { trace: _trace, ...request } = run.request;
+  let cancelTimer: ReturnType<typeof setTimeout> | undefined;
+  held.onCancel = () => {
+    if (held.cancelled) return;
+    held.cancelled = true;
+    cancelTimer = setTimeout(() => cancel.abort(), CANCEL_GRACE_MS);
+    cancelTimer.unref?.();
+  };
+  const claim = keepClaim(deps, held);
   const finishBare = async (error: unknown): Promise<void> => {
     reportFailure(`turns: the result of turn ${run.id} cannot be saved; recording a bare failure instead`, error);
     const bare: TurnOutcome = {
@@ -218,13 +217,13 @@ async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
       result: { status: "failed", sessionId: run.sessionId, reason: UNSAVED_RESULT_REASON },
     };
     await deps.ledger.finish(run, token, bare).catch((fallback: unknown) => {
-      clearInterval(beat);
+      claim.stop();
       reportFailure(`turns: recording a bare failure failed for turn ${run.id}; letting its claim expire`, fallback);
     });
   };
   const finishWith = async (outcome: TurnOutcome): Promise<void> => {
     const giveUpAt = Date.now() + FINISH_OUTAGE_WINDOW_MS;
-    for (let attempt = 1; !shutdown.signal.aborted && !lost; attempt++) {
+    for (let attempt = 1; !shutdown.signal.aborted && !claim.lost(); attempt++) {
       try {
         if (!(await deps.ledger.finish(run, token, outcome)))
           console.warn(`[turns] turn ${run.id} ended after losing its claim; its result was not recorded`);
@@ -236,13 +235,13 @@ async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
       }
     }
     console.warn(
-      `[turns] turn ${run.id} ended after ${lost ? "losing its claim" : "shutdown"}; its result was not recorded`,
+      `[turns] turn ${run.id} ended after ${claim.lost() ? "losing its claim" : "shutdown"}; its result was not recorded`,
     );
   };
   let ended: { kind: "result"; result: TurnResult } | { kind: "error"; err: unknown };
   try {
     if (run.priority === 2 && (await deps.ledger.mustYield(run))) {
-      clearInterval(beat);
+      claim.stop();
       await yieldHeld(deps, held, "person");
       return;
     }
@@ -261,9 +260,9 @@ async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
     ended = { kind: "error", err };
   }
   try {
-    if (shutdown.signal.aborted || lost) {
+    if (shutdown.signal.aborted || claim.lost()) {
       if (ended.kind === "error")
-        swallow(`turns: turn ${run.id} ended after ${lost ? "losing its claim" : "handback"}`, ended.err);
+        swallow(`turns: turn ${run.id} ended after ${claim.lost() ? "losing its claim" : "handback"}`, ended.err);
       return;
     }
     held.yielding = true;
@@ -300,7 +299,7 @@ async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
     )
       console.warn(`[turns] turn ${run.id} could not be requeued after an error; its claim was already gone`);
   } finally {
-    clearInterval(beat);
+    claim.stop();
     clearTimeout(cancelTimer);
   }
 }
@@ -337,11 +336,10 @@ async function handBackAll(deps: TurnRunnerDeps, held: readonly HeldTurn[]): Pro
 }
 
 export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
-  const processId = deps.processId ?? `h-${randomUUID().slice(0, 8)}`;
+  const processId = `h-${randomUUID().slice(0, 8)}`;
   const pollMs = deps.pollMs ?? FALLBACK_POLL_MS;
   const inFlight = new Map<string, HeldTurn>();
   const overcommit = Math.max(1, Math.floor(deps.slots / 4));
-  const capacity = (): number => Math.min(deps.slots, deps.capacity?.() ?? deps.slots);
   const mayClaim = (): boolean => !stopped && (!deps.canClaim || deps.canClaim());
 
   let stopped = true;
@@ -407,9 +405,8 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
       try {
         for (const queue of deps.queues) {
           while (mayClaim()) {
-            const limit = capacity();
             const people = queue === "turns_people";
-            if (inFlight.size >= limit + (people ? overcommit : 0)) break;
+            if (inFlight.size >= deps.slots + (people ? overcommit : 0)) break;
             const token = `${processId}:${randomUUID()}`;
             const claim = await deps.ledger.claim(queue, token, processId);
             if (!claim.claimed) break;
@@ -420,7 +417,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
               break;
             }
             launch(run, token, tenant);
-            if (people && inFlight.size > limit) parkForCapacity(deps, inFlight);
+            if (people && inFlight.size > deps.slots) parkForCapacity(deps, inFlight);
           }
         }
         failures = 0;

@@ -1,18 +1,8 @@
 import type { SessionOrigin } from "./thread-ref.ts";
-import { createHash } from "node:crypto";
 import type { ScopeId, Session, SessionType, SpawnMeta } from "../types.ts";
 import { isUserMessage, type Item, type ItemKind, type NewItem } from "./items.ts";
 import { sleep } from "../util/async.ts";
 import type { GoalRecord } from "../harness/goal.ts";
-
-export const LLM_CAPTURE_RETENTION_MS = 30 * 24 * 60 * 60_000;
-
-export function promptEnvelopeBody(envelope: unknown): { hash: string; body: string } | null {
-  if (envelope == null) return null;
-  const body: string | undefined = JSON.stringify(envelope);
-  if (body === undefined) return null;
-  return { hash: createHash("sha256").update(body).digest("hex"), body };
-}
 
 export function contextSummary(item: Item): { throughSeq: number; text: string } | null {
   return item.kind === "ContextCompaction" && item.throughSeq !== null && item.text !== null
@@ -26,7 +16,6 @@ export function contextSummaryItem(throughSeq: number, text: string): NewItem<"C
 
 interface ContextWindow {
   items: Item[];
-  totalItems: number;
 }
 
 export interface Lease {
@@ -172,43 +161,6 @@ export interface LlmTransportMeta {
   gateway?: Record<string, string>;
 }
 
-export type GapPhase =
-  | "provision"
-  | "creds"
-  | "dir_cleanup"
-  | "proc_reconcile"
-  | "auth_probe"
-  | "skills_materialize"
-  | "recall"
-  | "memory_write"
-  | "file_op"
-  | "exec"
-  | "model_dispatch"
-  | "dispatch_glue"
-  | "loop_reentry"
-  | "context_assemble"
-  | "glue_other"
-  | "tool_body"
-  | "pre_tool"
-  | "in_tool_untagged"
-  | "post_tool"
-  | "tool_ledger"
-  | "persist"
-  | "stream_open";
-
-export interface GapWork {
-  phase: GapPhase;
-  start: number;
-  end: number;
-  tool?: string;
-}
-
-export type GapPhases = Partial<Record<GapPhase, number>> & {
-  residual?: number;
-} & {
-  [key: `tool_body.${string}`]: number | undefined;
-};
-
 export interface LlmRequestRecord {
   id: string;
   sessionId: string;
@@ -222,9 +174,6 @@ export interface LlmRequestRecord {
   truncated: boolean;
   ttftMs: number | null;
   durationMs: number | null;
-  stepGapMs: number | null;
-  toolWallMs: number[] | null;
-  gapPhases: GapPhases | null;
   usage: LlmCallUsage | null;
   transport: LlmTransportMeta | null;
 }
@@ -247,9 +196,6 @@ export interface NewLlmRequest {
   truncated?: boolean;
   ttftMs?: number | null;
   durationMs?: number | null;
-  stepGapMs?: number | null;
-  toolWallMs?: number[] | null;
-  gapPhases?: GapPhases | null;
   usage?: LlmCallUsage | null;
   transport?: LlmTransportMeta | null;
 }
@@ -345,11 +291,6 @@ export interface SessionSummary {
   createdAt: number;
   firstMessage: string;
   lastMessage: string;
-}
-
-export function userMessagePreview(text: string | null | undefined, maxLen = 160): string {
-  const oneLine = (text ?? "").replace(/\s+/g, " ").trim();
-  return oneLine.length > maxLen ? oneLine.slice(0, maxLen - 1) + "…" : oneLine;
 }
 
 export const TOOL_TEXT_PREVIEW_CHARS = 2_000;

@@ -20,6 +20,7 @@ import type { ConnectorTokenStore } from "../../../src/credentials/keychain.ts";
 import type { SkillStore } from "../../../src/skills/skill-store.ts";
 import { scopeId, type Conversation, type Principal } from "../../../src/types.ts";
 import { singleProcessDeps } from "../../support/single-process.ts";
+import { inlineJobs } from "../../support/inline-jobs.ts";
 import { createPostgresAuditLog } from "../../../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../../../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../../../src/memory/postgres-memory-service.ts";
@@ -108,6 +109,7 @@ async function buildOrchestrator(
 
   return createOrchestrator({
     ...singleProcessDeps(),
+    jobs: inlineJobs(),
     identity: createIdentityService(databaseUrl),
     sessionSyscalls: opts.sessionSyscalls,
     featureFlags: opts.featureFlags,

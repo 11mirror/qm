@@ -11,16 +11,25 @@ import type {
   TurnRequest,
   TurnRuntime,
 } from "../types.ts";
-import type { GapPhases, GapWork, LlmCallUsage, LlmTransportMeta } from "../sessions/session-store.ts";
+import type { LlmCallUsage, LlmTransportMeta } from "../sessions/session-store.ts";
 import type { Item, NewItem } from "../sessions/items.ts";
-export type { GapWork } from "../sessions/session-store.ts";
 import type { OverheardEntryPayload } from "./replay.ts";
 import type { GoalRecord } from "./goal.ts";
-import type { GrindMeter } from "./grind.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import type { ProviderKeys } from "./pi-model-runtime.ts";
 import type { ToolContext } from "../tools/primitives.ts";
 import type { SecurityScreenVerdict, ToolResultScreenInput } from "../security/security-screen.ts";
+
+export interface PendingApproval {
+  command: string;
+  reason: string;
+  kind?: "approval";
+  matched?: string;
+  purpose?: string;
+  approvalKey?: string;
+  summary?: string;
+  grantModes?: { session: boolean; always: boolean };
+}
 
 export interface RuntimeChoice {
   modelId: string;
@@ -38,7 +47,6 @@ export function promptEnvelopeWithoutHistory(payload: unknown): unknown {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
   const envelope: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(payload)) {
-    if (key === "contents") continue;
     if (key === "messages" || key === "input") {
       if (Array.isArray(value)) {
         const instructions = value.filter(
@@ -51,7 +59,7 @@ export function promptEnvelopeWithoutHistory(payload: unknown): unknown {
         if (instructions.length) envelope[key] = instructions;
       }
     } else {
-      envelope[key] = key === "context" ? promptEnvelopeWithoutHistory(value) : value;
+      envelope[key] = value;
     }
   }
   return envelope;
@@ -66,9 +74,6 @@ export interface HarnessLlmRequestRecord {
   transport?: LlmTransportMeta | null;
   ttftMs?: number | null;
   durationMs?: number | null;
-  stepGapMs?: number | null;
-  toolWallMs?: number[] | null;
-  gapPhases?: GapPhases | null;
   usage?: LlmCallUsage | null;
 }
 
@@ -77,7 +82,7 @@ export interface HarnessSecurityScreenInput {
   modelId?: string;
   systemPrompt?: string;
   signal: AbortSignal;
-  recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
+  recordModelCall?(rec: { model: string; inputTokens: number; entryCount: number }): void;
   recordLlmRequest?(rec: HarnessLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
 }
 
@@ -123,7 +128,6 @@ export interface HarnessTurnInput {
   systemPrompt: string;
   history: Item[];
   goal?: GoalRecord | null;
-  goalMeter?: GrindMeter;
   saveGoal?(goal: GoalRecord): Promise<void>;
   tools: ToolContext;
   mcpTools?: McpToolDescriptor[];
@@ -137,7 +141,6 @@ export interface HarnessTurnInput {
   onRuntime?(runtime: TurnRuntime): void;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
   recordLlmRequest?(rec: HarnessLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
-  onGapWork?(sink: (work: GapWork) => void): void;
   onDelta?(chunk: string): void;
   onReasoningDelta?(step: string, index: number, chunk: string): void;
   onTextBlockStart?(phase?: "commentary" | "final_answer"): void | Promise<void>;
@@ -151,15 +154,7 @@ export interface HarnessTurnResult {
   reply: string;
   silent?: boolean;
   stopped?: true;
-  pendingApprovals?: Array<{
-    command: string;
-    reason: string;
-    kind?: "approval";
-    matched?: string;
-    purpose?: string;
-    approvalKey?: string;
-    grantModes?: { session: boolean; always: boolean };
-  }>;
+  pendingApprovals?: PendingApproval[];
   pausedOnApproval?: boolean;
   modelCalls?: number;
   cacheUsage?: { cacheRead: number; cacheWrite: number; uncachedInput: number };

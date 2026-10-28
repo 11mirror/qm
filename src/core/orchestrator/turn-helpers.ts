@@ -1,6 +1,5 @@
 import {
   type CandidateDestination,
-  type CommandApprovalGrant,
   type Destination,
   type EgressPolicy,
   type Principal,
@@ -9,45 +8,19 @@ import {
   type ActorAssertion,
   turnSource,
 } from "../../types.ts";
-import { isOverheard, isReply, isUserMessage, type Item } from "../../sessions/items.ts";
-import { forModelContext } from "../../harness/context-compaction.ts";
 import type { SkillBundle, SkillBundleStore } from "../../skills/skill-bundle-store.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
 import { hostMatches } from "../../resolution/egress-policy.ts";
-import { swallow } from "../../util/errors.ts";
+import { swallow, swallowAs } from "../../util/errors.ts";
+import { estimateCostUsd } from "../../ratelimit/budget.ts";
 import { hashId } from "../../util/crypto.ts";
-import type { OrchestratorInput } from "./types.ts";
-
-export function isScreenableTextAttachment(mimetype: string): boolean {
-  const mime = mimetype.split(";", 1)[0]!.trim().toLowerCase();
-  return (
-    mime.startsWith("text/") ||
-    [
-      "application/json",
-      "application/xml",
-      "application/javascript",
-      "application/yaml",
-      "application/x-yaml",
-    ].includes(mime)
-  );
-}
+import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
 export function stripAckPrefix(text: string, ack: string | undefined): string {
   if (!text || !ack) return text;
   const lead = text.trimStart();
   if (!lead.startsWith(ack)) return text;
   return lead.slice(ack.length).trimStart();
-}
-
-export function headLooksLikeText(head: Buffer): boolean {
-  if (head.length === 0) return true;
-  if (head.includes(0)) return false;
-  let suspicious = 0;
-  for (const ch of head.toString("utf8")) {
-    const c = ch.codePointAt(0)!;
-    if (c === 0xfffd || (c < 0x20 && c !== 0x09 && c !== 0x0a && c !== 0x0d)) suspicious++;
-  }
-  return suspicious / head.length < 0.1;
 }
 
 const CONNECTOR_CAPABILITY = "connector:";
@@ -95,35 +68,6 @@ export function egressClaimAllowingControlPlane(egress: EgressPolicy, apiBaseUrl
   };
 }
 
-export function stripTurnBoilerplate(text: string): string {
-  const kept = text
-    .split("\n\n")
-    .filter((p) => !/^\s*\[/.test(p))
-    .join("\n\n")
-    .trim();
-  return kept || text.trim();
-}
-
-export function visibleTitleItemText(item: Item): string | undefined {
-  const value = isUserMessage(item) && typeof item.body.display === "string" ? item.body.display : item.text;
-  return typeof value === "string" ? value.trim() || undefined : undefined;
-}
-
-export function renderTitleTranscript(entries: Item[]): string {
-  const lines: string[] = [];
-  for (const e of forModelContext([...entries])) {
-    const user = isUserMessage(e);
-    if (!user && !isReply(e)) continue;
-    if (isOverheard(e)) continue;
-    const raw = visibleTitleItemText(e);
-    if (!raw) continue;
-    const text = user ? stripTurnBoilerplate(raw) : raw;
-    if (!text) continue;
-    lines.push(`${user ? "User" : "Assistant"}:\n${text}`);
-  }
-  return lines.join("\n\n");
-}
-
 function principalAssertion(p: Principal): ActorAssertion {
   return {
     externalId: p.id,
@@ -146,10 +90,8 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     attempt: _attempt,
     resumeCause: _resumeCause,
     runLeaseToken: _runLeaseToken,
-    turnFenceToken: _turnFenceToken,
     runStartedAt: _runStartedAt,
     finalAttempt: _finalAttempt,
-    background: _background,
     cancel: _cancel,
     shutdown: _shutdown,
     sessionParticipantIds: _sessionParticipantIds,
@@ -181,30 +123,8 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
   };
 }
 
-export function approvalGrantId(
-  grant: Pick<CommandApprovalGrant, "actorId" | "command" | "scope" | "sessionId" | "approvalKey">,
-): string {
-  return hashId([grant.actorId, grant.scope, grant.sessionId ?? "*", grant.approvalKey ?? grant.command], 24);
-}
-
 function candidateKey(target: string, audienceScopeId: ScopeId): string {
   return hashId([target, audienceScopeId]);
-}
-
-const SURFACE_ENQUEUE_ACTIONS = new Set(["post", "reach", "react", "edit", "delete"]);
-
-export function completedSurfaceEnqueues(entries: readonly Item[], sinceSeq: number, surfaceTool: string): number {
-  const later = entries.filter((e) => e.seq > sinceSeq);
-  const answered = new Set(
-    later.flatMap((e) => (e.kind === "ToolResult" && e.body.interrupted !== true ? [e.callId] : [])),
-  );
-  return later.filter(
-    (e) =>
-      e.kind === "ToolCall" &&
-      e.tool === surfaceTool &&
-      SURFACE_ENQUEUE_ACTIONS.has(String(e.body.action)) &&
-      answered.has(e.callId),
-  ).length;
 }
 
 export interface TurnPostKeys {
@@ -222,12 +142,6 @@ export function turnPostKeys(turnKey: string): TurnPostKeys {
     take: () => next++,
     key: (destination, seq) => `post:${turnKey}:${destination.type}:${destination.target}:${seq}`,
   };
-}
-
-export function replaceThreadSegment(target: string, threadTs: string): string {
-  const i = target.lastIndexOf(":");
-  const channel = i < 0 ? target : target.slice(0, i);
-  return `${channel}:${threadTs}`;
 }
 
 export function deliveryCandidatesFor(
@@ -250,4 +164,15 @@ export function deliveryCandidatesFor(
   }
   const defaultKey = candidates.find((c) => c.target === deliveryTarget)?.key ?? candidates[0]?.key;
   return { candidates, ...(defaultKey ? { defaultKey } : {}) };
+}
+
+export function modelCallRecorder(
+  deps: Pick<OrchestratorDeps, "budget">,
+  actorId: string,
+): (rec: { inputTokens: number }) => void {
+  return (rec) => {
+    void deps.budget
+      ?.record(actorId, estimateCostUsd(rec.inputTokens))
+      .catch(swallowAs("budget: record model spend", undefined));
+  };
 }

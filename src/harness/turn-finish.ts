@@ -9,9 +9,22 @@ import { sumCacheUsage, type PerCallStat } from "./call-telemetry.ts";
 import { bankGoalTurn } from "./goal.ts";
 import { recordStoppedTurn } from "./harness-shared.ts";
 import { textFromContent } from "./pi-payload.ts";
-import { piLastAssistantTextOrThrow } from "./turn-recovery.ts";
+import { lastAssistantSince, piLastAssistantTextOrThrow } from "./turn-recovery.ts";
 
-export async function finishTurn(o: {
+export async function finishTurn({
+  turn,
+  session,
+  goal,
+  halt,
+  calls,
+  steps,
+  grindMeter,
+  stop,
+  callStats,
+  messagesBefore,
+  recoveryDead,
+  settled,
+}: {
   turn: HarnessTurnInput;
   session: AgentSession;
   goal: Pick<TurnGoal, "current" | "set">;
@@ -25,26 +38,6 @@ export async function finishTurn(o: {
   recoveryDead: boolean;
   settled: () => Promise<void>;
 }): Promise<HarnessTurnResult> {
-  const {
-    turn,
-    session,
-    goal,
-    halt,
-    calls,
-    steps,
-    grindMeter,
-    stop,
-    callStats,
-    messagesBefore,
-    recoveryDead,
-    settled,
-  } = o;
-  const freshAssistantStopReason = (): string | undefined => {
-    const fresh = session.messages.slice(messagesBefore);
-    const last = [...fresh].reverse().find((m) => (m as { role?: string }).role === "assistant") as
-      { stopReason?: string } | undefined;
-    return last?.stopReason;
-  };
   const settleGoal = async (pause = false): Promise<void> => {
     const g = goal.current();
     if (!g) return;
@@ -56,6 +49,10 @@ export async function finishTurn(o: {
     await turn.saveGoal?.(g);
     if (g.status === "complete") goal.set(null);
   };
+  const cacheUsage = () => {
+    const usage = sumCacheUsage(callStats);
+    return usage ? { cacheUsage: usage } : {};
+  };
   const handoff = halt.handoff();
   if (handoff && !stop.userAborted && !turn.cancel?.aborted) {
     steps.flush();
@@ -65,16 +62,15 @@ export async function finishTurn(o: {
       reply: "",
       runtimeHandoff: halt.handoff(),
       modelCalls: calls.count(),
-      cacheUsage: sumCacheUsage(callStats) ?? undefined,
+      ...cacheUsage(),
     };
   }
-  const freshStopReason = freshAssistantStopReason();
+  const lastFresh = lastAssistantSince(session.messages, messagesBefore);
+  const freshStopReason = lastFresh?.stopReason;
   const cancelStoppedCleanly =
     turn.cancel?.aborted === true && (freshStopReason === "aborted" || freshStopReason === undefined);
   if (stop.userAborted || cancelStoppedCleanly) {
-    const freshMessages = session.messages.slice(messagesBefore);
-    const lastFreshAssistant = [...freshMessages].reverse().find((m) => (m as { role?: string }).role === "assistant");
-    const partial = lastFreshAssistant ? textFromContent((lastFreshAssistant as { content?: unknown }).content) : "";
+    const partial = lastFresh ? textFromContent(lastFresh.content) : "";
     const reply = partial.trim() ? partial : "(stopped)";
     await settleGoal(stop.userAborted);
     await recordStoppedTurn(
@@ -83,13 +79,7 @@ export async function finishTurn(o: {
       stop.userAborted ? stop.abortReason : "because the run was cancelled",
       steps.closing(reply),
     );
-    const cacheUsage = sumCacheUsage(callStats);
-    const base = {
-      reply,
-      stopped: true as const,
-      modelCalls: calls.count(),
-    };
-    return cacheUsage ? { ...base, cacheUsage } : base;
+    return { reply, stopped: true as const, modelCalls: calls.count(), ...cacheUsage() };
   }
 
   await settleGoal();
@@ -103,17 +93,12 @@ export async function finishTurn(o: {
     body: closing?.body ?? {},
   });
   const pendingApprovals = halt.approvals();
-  const modelCalls = calls.count();
-  const cacheUsage = sumCacheUsage(callStats);
-  const silent = halt.silent() ? { silent: true as const } : {};
-  const base = pendingApprovals.length
-    ? {
-        reply,
-        pendingApprovals,
-        ...(halt.pausedOnApproval() ? { pausedOnApproval: true as const } : {}),
-        modelCalls,
-        ...silent,
-      }
-    : { reply, modelCalls, ...silent };
-  return cacheUsage ? { ...base, cacheUsage } : base;
+  return {
+    reply,
+    ...(pendingApprovals.length ? { pendingApprovals } : {}),
+    ...(pendingApprovals.length && halt.pausedOnApproval() ? { pausedOnApproval: true as const } : {}),
+    modelCalls: calls.count(),
+    ...(halt.silent() ? { silent: true as const } : {}),
+    ...cacheUsage(),
+  };
 }

@@ -9,7 +9,7 @@ import type {
   SessionDescendant,
   SessionStore,
 } from "./session-store.ts";
-import { TENANT } from "./postgres-session-sql.ts";
+import { nextSeq, TENANT } from "./postgres-session-sql.ts";
 import { rowToParticipantSession, LIST_COLUMNS, USER_ACTIVITY } from "./postgres-session-rows.ts";
 import { lockSession, type SessionStoreCtx } from "./postgres-session-items.ts";
 import { msOf, AGENT_REPLY_ITEM } from "./items.ts";
@@ -142,12 +142,7 @@ export function sessionParticipantMethods(ctx: SessionStoreCtx) {
     async addParticipant(sessionId, principalId, title, opts): Promise<void> {
       const includeHistory = opts?.includeHistory === true;
       await q(
-        `WITH boundary AS (
-           SELECT CASE WHEN $5 THEN 0
-                       ELSE GREATEST(COALESCE(MAX(seq) + 1, 0),
-                                     COALESCE((SELECT messages FROM sessions WHERE id = $1), 0)) END AS seq
-             FROM items WHERE tenant_id = ${TENANT} AND session_id = $1
-         )
+        `WITH boundary AS (SELECT CASE WHEN $5 THEN 0 ELSE ${nextSeq("$1")} END AS seq)
          INSERT INTO participants(session_id, principal_id, valid_from, valid_to, valid_from_seq, valid_to_seq, title)
          SELECT $1,$2,$3,NULL,boundary.seq,NULL,$4 FROM boundary
          ON CONFLICT (${tenantCols("session_id, principal_id")}) DO UPDATE
@@ -171,7 +166,7 @@ export function sessionParticipantMethods(ctx: SessionStoreCtx) {
 
     async removeParticipant(sessionId, principalId): Promise<void> {
       await q(
-        `UPDATE participants SET valid_to = $3, valid_to_seq = (SELECT COALESCE(MAX(seq) + 1, 0) FROM items WHERE tenant_id = ${TENANT} AND session_id = $1) WHERE session_id = $1 AND principal_id = $2 AND valid_to IS NULL`,
+        `UPDATE participants SET valid_to = $3, valid_to_seq = ${nextSeq("$1")} WHERE session_id = $1 AND principal_id = $2 AND valid_to IS NULL`,
         [sessionId, principalId, now()],
       );
     },

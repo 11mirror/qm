@@ -26,7 +26,7 @@ import { settle } from "../support/settle.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
 
 test("createPgPool is lazy: building it neither connects nor throws (no DB needed)", async () => {
-  const pg = createPgPool("postgres://does-not-exist:0/none", "test/lazy/0001", ["SELECT 1"]);
+  const pg = createPgPool("postgres://does-not-exist:0/none", [{ id: "test/lazy/0001", statements: ["SELECT 1"] }]);
   await assert.doesNotReject(pg.close());
 });
 
@@ -46,7 +46,7 @@ test("importing pg-pool does NOT pull `pg` into the runtime import graph (zero-d
     import { register } from "node:module";
     register(${JSON.stringify(loader)});
     const { createPgPool } = await import(${JSON.stringify(poolUrl)});
-    const p = createPgPool("postgres://x/y", "test/invalid/0001", ["SELECT 1"]);
+    const p = createPgPool("postgres://x/y", [{ id: "test/invalid/0001", statements: ["SELECT 1"] }]);
     await p.close();
     console.log("OK");
   `;
@@ -373,8 +373,8 @@ async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>)
 
 test("slow lazy migrations queue with dynamic and bulk migrations before pool acquisition", async () => {
   await withDatabase(async (url, admin) => {
-    const slow = createPgPool(url, "startup/0001", ["SELECT pg_sleep(11)"]);
-    const next = createPgPool(url, "startup/0002", ["CREATE TABLE startup_result(value INT)"]);
+    const slow = createPgPool(url, [{ id: "startup/0001", statements: ["SELECT pg_sleep(11)"] }]);
+    const next = createPgPool(url, [{ id: "startup/0002", statements: ["CREATE TABLE startup_result(value INT)"] }]);
     try {
       const first = slow.q("SELECT 1");
       const second = next.q("SELECT 2");
@@ -431,7 +431,9 @@ test("concurrent cold and repeat migration entrypoints exit and reject checksum 
 });
 
 test("pg pool: a failed init is retried with a fresh attempt (rejection not cached)", async () => {
-  const pg = createPgPool("postgres://127.0.0.1:9/nope", "test/retry/unreachable/0001", ["SELECT 1"]);
+  const pg = createPgPool("postgres://127.0.0.1:9/nope", [
+    { id: "test/retry/unreachable/0001", statements: ["SELECT 1"] },
+  ]);
   const first = await pg.q("SELECT 1").catch((e: unknown) => e);
   const second = await pg.q("SELECT 1").catch((e: unknown) => e);
   assert.ok(first instanceof Error);
@@ -441,7 +443,7 @@ test("pg pool: a failed init is retried with a fresh attempt (rejection not cach
 });
 
 test("pg pool: an idle-client 'error' is logged, not fatal", async () => {
-  const pg = createPgPool(testDatabaseUrl(), "test/retry/live/0001", ["SELECT 1"]);
+  const pg = createPgPool(testDatabaseUrl(), [{ id: "test/retry/live/0001", statements: ["SELECT 1"] }]);
   const pool = await pg.pool();
   assert.doesNotThrow(() => pool.emit("error", new Error("backend died")));
   assert.deepEqual((await pg.query("SELECT 1 AS one")).rows, [{ one: 1 }], "pool keeps serving queries");
@@ -449,7 +451,7 @@ test("pg pool: an idle-client 'error' is logged, not fatal", async () => {
 });
 
 test("pg pool: a timeoutMs query gives the connection back usable, not poisoned", async () => {
-  const pg = createPgPool(testDatabaseUrl(), "test/retry/timeout/0001", ["SELECT 1"]);
+  const pg = createPgPool(testDatabaseUrl(), [{ id: "test/retry/timeout/0001", statements: ["SELECT 1"] }]);
   await assert.rejects(
     () => pg.q("SELECT pg_sleep(5)", [], { timeoutMs: 150 }),
     /statement timeout/i,

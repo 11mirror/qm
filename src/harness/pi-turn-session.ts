@@ -11,18 +11,18 @@ import { swallow } from "../util/errors.ts";
 import type { TurnHalt, TurnToolState } from "./turn-tool-state.ts";
 import type { ModelCallLog } from "./model-call-log.ts";
 import type { TurnRequestSettings } from "./turn-request.ts";
-import { textAssistant, type PiReplayMessage, type SeededMessage } from "./replay.ts";
+import { type PiReplayMessage } from "./replay.ts";
 import { documentsDroppedNote } from "./turn-recovery.ts";
 import { gatewayAttemptHeaders } from "./call-telemetry.ts";
 import { withDocumentInputs, type DocumentModel } from "./document-inputs.ts";
 import { SessionManager, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { type Api, type Model } from "@earendil-works/pi-ai";
+import { type Api, type Message, type Model } from "@earendil-works/pi-ai";
 import type { ConversationTurn } from "../types.ts";
 import { type Item } from "../sessions/items.ts";
 import { modelGatewayRequest } from "../model/provider-endpoints.ts";
 import { type HarnessTurnInput } from "./harness.ts";
 import { createAgentTools, pauseStampAfterToolCall } from "./agent-tools.ts";
-import { planColdStartSeed, reconstructMessagesFromHistory, seedPriorTurns } from "./replay.ts";
+import { priorTurnsMessages, reconstructMessagesFromHistory } from "./replay.ts";
 import { restoreReplayImages, type ReplayImageLoader } from "./replay-images.ts";
 import { countTokens } from "../util/tokens.ts";
 import {
@@ -56,13 +56,9 @@ type PiResponseHook = (
   response: { status: number; headers: Record<string, string> },
   model: unknown,
 ) => void | Promise<void>;
-type PiTransformContextHook = (messages: unknown, signal?: unknown) => unknown | Promise<unknown>;
-type PiPrepareNextTurnHook = (signal?: unknown) => unknown | Promise<unknown>;
 export interface PiAgentWithPayloadHook {
   onPayload?: PiPayloadHook;
   onResponse?: PiResponseHook;
-  transformContext?: PiTransformContextHook;
-  prepareNextTurn?: PiPrepareNextTurnHook;
   afterToolCall?: (
     info: unknown,
     signal?: unknown,
@@ -81,31 +77,10 @@ export function continueAssistantTurn(session: AgentSession): Promise<void> {
   return (session as unknown as { _runAgentPrompt(messages: readonly unknown[]): Promise<void> })._runAgentPrompt([]);
 }
 
-interface PiSeedTarget {
-  agent?: { state?: { messages?: unknown[] } };
-  sessionManager?: { appendMessage?: (message: unknown) => unknown };
-}
-
-export function toPiMessage(m: SeededMessage): PiReplayMessage {
-  return m.role === "assistant"
-    ? textAssistant([{ type: "text", text: m.text }], Date.now())
-    : { role: "user", content: [{ type: "text", text: m.text }], timestamp: Date.now() };
-}
-
-export function seedRawMessagesIntoSession(session: unknown, messages: readonly PiReplayMessage[]): void {
-  if (!messages.length) return;
-  const target = session as PiSeedTarget;
-  const liveMessages = target.agent?.state?.messages;
-  const appendMessage = target.sessionManager?.appendMessage?.bind(target.sessionManager);
+export function seedRawMessagesIntoSession(session: AgentSession, messages: readonly PiReplayMessage[]): void {
   for (const message of messages) {
-    if (Array.isArray(liveMessages)) liveMessages.push(message);
-    if (appendMessage) {
-      try {
-        appendMessage(message);
-      } catch (e) {
-        swallow("pi: replay message append", e);
-      }
-    }
+    session.agent.state.messages.push(message as Message);
+    session.sessionManager.appendMessage(message as Message);
   }
 }
 
@@ -186,10 +161,6 @@ export function createTurnTools(
   return createAgentTools(state, {
     reachExec: opts?.reachExec,
     controlTools: opts?.controlTools,
-    execTimeoutMs: opts?.execTimeoutMs,
-    execTimeoutCeilingMs: opts?.execTimeoutCeilingMs,
-    backgroundJobTtlMs: opts?.backgroundJobTtlMs,
-    backgroundJobTtlMaxMs: opts?.backgroundJobTtlMaxMs,
     sessionTools: Boolean(turn.tools.sessionSyscalls),
     delegateWork: turn.delegateWork === true,
     mcpTools: turn.mcpTools,
@@ -205,11 +176,11 @@ export interface TurnSessionInput {
   sessionId: string;
   systemPrompt: string;
   history: Item[];
+  timeZone: string | undefined;
   priorTurns: ConversationTurn[] | undefined;
   providerKeys: () => Promise<ProviderKeys>;
   modelGateway: ModelGatewayTransportConfig | undefined;
   tempDirPrefix: string;
-  captureRequests: boolean;
   calls: ModelCallLog;
   request: TurnRequestSettings;
   halt: Pick<TurnHalt, "stopsTools">;
@@ -223,11 +194,11 @@ export async function createTurnSession({
   sessionId,
   systemPrompt,
   history,
+  timeZone,
   priorTurns,
   providerKeys,
   modelGateway,
   tempDirPrefix,
-  captureRequests,
   calls,
   request,
   halt,
@@ -235,8 +206,7 @@ export async function createTurnSession({
   tools,
   loadImage,
 }: TurnSessionInput): Promise<TurnSession> {
-  const reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
-  const seedPlan = planColdStartSeed(reconstructed, !!priorTurns?.length);
+  const reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history, timeZone), loadImage);
 
   const modelRuntime = await buildModelRuntime(await providerKeys(), modelGateway, "long");
   const { session, dirs } = await openAgentSession(tempDirPrefix, systemPrompt, {
@@ -246,58 +216,44 @@ export async function createTurnSession({
     sessionManager: SessionManager.inMemory(undefined, { id: sessionId }),
   });
 
-  if (seedPlan === "structured") seedRawMessagesIntoSession(session, reconstructed);
-  else if (seedPlan === "priorTurns")
-    seedRawMessagesIntoSession(session, seedPriorTurns(priorTurns!, []).map(toPiMessage));
+  seedRawMessagesIntoSession(session, reconstructed.length ? reconstructed : priorTurnsMessages(priorTurns ?? []));
 
-  const agent = (session as unknown as { agent?: PiAgentWithPayloadHook }).agent;
-  if (agent) {
-    const prior = agent.onPayload;
-    agent.onPayload = async (payload, model) => {
-      calls.dispatched();
-      applyFastSpeed(payload, request.fast(), (model as { api?: string } | undefined)?.api);
-      applyReasoningMode(payload, model as Model<Api>, request.effortLevel());
-      const result = prior ? await prior(payload, model) : payload;
-      const capturedPayload = captureRequests ? sanitizeLlmPayload(result ?? payload, model) : undefined;
-      let finalPayload = await withDocumentInputs(
-        result ?? payload,
-        model as DocumentModel,
-        request.documents() ?? [],
-        abortSignal(),
-        request.documentsStubbed() ? documentsDroppedNote(request.documents() ?? []) : undefined,
+  const agent = session.agent as unknown as PiAgentWithPayloadHook;
+  const prior = agent.onPayload;
+  agent.onPayload = async (payload, model) => {
+    calls.dispatched();
+    applyFastSpeed(payload, request.fast(), (model as { api?: string } | undefined)?.api);
+    applyReasoningMode(payload, model as Model<Api>, request.effortLevel());
+    const result = prior ? await prior(payload, model) : payload;
+    const capturedPayload = sanitizeLlmPayload(result ?? payload, model);
+    let finalPayload = await withDocumentInputs(
+      result ?? payload,
+      model as DocumentModel,
+      request.documents() ?? [],
+      abortSignal(),
+      request.documentsStubbed() ? documentsDroppedNote(request.documents() ?? []) : undefined,
+    );
+    const guarded = guardOutputBudget(finalPayload, model);
+    if (guarded.kind === "raised") {
+      console.error(
+        `[pi] output-budget guard raised output cap ${guarded.from} -> ${guarded.to} (estimated prompt ${guarded.estimatedPromptTokens} tokens) session=${sessionId}`,
       );
-      const guarded = guardOutputBudget(finalPayload, model);
-      if (guarded.kind === "raised") {
-        console.error(
-          `[pi] output-budget guard raised output cap ${guarded.from} -> ${guarded.to} (estimated prompt ${guarded.estimatedPromptTokens} tokens) session=${sessionId}`,
-        );
-      }
-      try {
-        const gateway = modelGatewayRequest(modelGateway, model as Model<Api>);
-        finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? GATEWAY_REQUEST_MAX_BYTES : undefined);
-      } catch (e) {
-        swallow("pi: request byte budget", e);
-      }
-      if (captureRequests) calls.capture(capturedPayload!);
-      return finalPayload;
-    };
-    const priorResponse = agent.onResponse;
-    agent.onResponse = async (response, model) => {
-      calls.responded(() => gatewayAttemptHeaders(response.headers));
-      if (priorResponse) await priorResponse(response, model);
-    };
-    const priorTransform = agent.transformContext;
-    agent.transformContext = async (messages, signal) => {
-      calls.markTransformContext();
-      return priorTransform ? await priorTransform(messages, signal) : messages;
-    };
-    agent.afterToolCall = pauseStampAfterToolCall(halt, agent.afterToolCall);
-    const priorPrepare = agent.prepareNextTurn;
-    agent.prepareNextTurn = async (signal) => {
-      calls.markPrepareNextTurn();
-      return priorPrepare ? await priorPrepare(signal) : undefined;
-    };
-  }
+    }
+    try {
+      const gateway = modelGatewayRequest(modelGateway, model as Model<Api>);
+      finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? GATEWAY_REQUEST_MAX_BYTES : undefined);
+    } catch (e) {
+      swallow("pi: request byte budget", e);
+    }
+    calls.capture(capturedPayload);
+    return finalPayload;
+  };
+  const priorResponse = agent.onResponse;
+  agent.onResponse = async (response, model) => {
+    calls.responded(() => gatewayAttemptHeaders(response.headers));
+    if (priorResponse) await priorResponse(response, model);
+  };
+  agent.afterToolCall = pauseStampAfterToolCall(halt, agent.afterToolCall);
 
   return {
     agentSession: session,

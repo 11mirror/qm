@@ -6,7 +6,6 @@ export type PublishAudienceKind = "org" | "members" | "owner";
 export interface PublishAudience {
   kind: PublishAudienceKind;
   grantees: ScopeId[];
-  memberCount?: number;
   incomplete?: boolean;
   reason?: string;
 }
@@ -47,22 +46,14 @@ export function defaultPublishAudience(a: DefaultPublishAudienceArgs): PublishAu
       reason: "owner-only (couldn't enumerate the channel's members to auto-share — share manually)",
     };
   }
-  const grantees: ScopeId[] = [];
-  const seen = new Set<string>();
-  for (const m of a.members) {
-    if (m.type !== "internal") continue;
-    if (m.id === a.ownerId) continue;
-    if (seen.has(m.id)) continue;
-    seen.add(m.id);
-    grantees.push(scopeId("personal", m.id));
-  }
+  const ids = new Set(a.members.filter((m) => m.type === "internal" && m.id !== a.ownerId).map((m) => m.id));
+  const grantees = [...ids].map((id) => scopeId("personal", id));
   if (grantees.length === 0) {
     return { kind: "owner", grantees: [], reason: "owner-only (no other current members)" };
   }
   return {
     kind: "members",
     grantees,
-    memberCount: grantees.length,
     reason: `${grantees.length} channel member${grantees.length === 1 ? "" : "s"}`,
   };
 }

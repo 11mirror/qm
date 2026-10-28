@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { startLeaseKeepalive } from "../../../src/core/orchestrator/lease-keepalive.ts";
+import { startLeaseKeepalive } from "../../../src/core/orchestrator/turn-lease.ts";
 import { wallClockTurnFailure } from "../../../src/harness/pi-turn-clock.ts";
 import type { Lease } from "../../../src/sessions/session-store.ts";
 import { settle } from "../../support/settle.ts";
@@ -20,6 +20,7 @@ test("a transient renew failure does not kill the keepalive", async () => {
     lease,
     10,
     () => false,
+    () => {},
   );
   await settle(() => calls >= 3);
   stop();

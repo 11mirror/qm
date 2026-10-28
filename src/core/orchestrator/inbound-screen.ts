@@ -1,10 +1,9 @@
 import { securityScreenPayloads } from "../../security/security-screen.ts";
-import { collectBlob } from "../../persistence/blob-transfer.ts";
+import { buffer } from "node:stream/consumers";
 import { isVisionAttachment, safeAttachmentName, senderNote } from "../attachments.ts";
 import { renderOverheard, selectOverheardToImport, type OverheardEntryPayload } from "../../harness/replay.ts";
 import { swallowAs } from "../../util/errors.ts";
 import type { OrchestratorDeps } from "./types.ts";
-import { isScreenableTextAttachment } from "./turn-helpers.ts";
 
 import type { TurnCtx } from "./turn-context.ts";
 import type { SecurityObserver } from "./security-screen.ts";
@@ -12,6 +11,20 @@ import type { SecurityObserver } from "./security-screen.ts";
 export interface ScreenTrace {
   readonly thread: string;
   readonly runId?: string;
+}
+
+function isScreenableTextAttachment(mimetype: string): boolean {
+  const mime = mimetype.split(";", 1)[0]!.trim().toLowerCase();
+  return (
+    mime.startsWith("text/") ||
+    [
+      "application/json",
+      "application/xml",
+      "application/javascript",
+      "application/yaml",
+      "application/x-yaml",
+    ].includes(mime)
+  );
 }
 
 export function observeInboundTurn(
@@ -49,7 +62,7 @@ export function observeInboundTurn(
         .open(attachment.blobId)
         .catch(swallowAs("attachment screening: open blob", null));
       if (!opened) continue;
-      const data = await collectBlob(opened.stream).catch(swallowAs("attachment screening: read blob", null));
+      const data = await buffer(opened.stream).catch(swallowAs("attachment screening: read blob", null));
       if (!data || data.includes(0)) continue;
       attachmentPromptData.push({
         source: `attachment:${safeAttachmentName(attachment.name)}`,

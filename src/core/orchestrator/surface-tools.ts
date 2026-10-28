@@ -23,7 +23,6 @@ import { type SandboxHandle } from "../../sandbox/sandbox.ts";
 import type {
   SurfaceToolDeps,
   SurfacePostResult,
-  PostedFileMeta,
   SurfaceReactInput,
   SurfaceEditInput,
   SurfaceDeleteInput,
@@ -40,8 +39,9 @@ import {
 import { parseBotLedger, type BotPolicy, type ChannelPolicy } from "../../surface-cache/channel-policy-store.ts";
 import { isoFromTs } from "../../util/message-tag.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
-import { headLooksLikeText, replaceThreadSegment, type TurnPostKeys } from "./turn-helpers.ts";
+import { type TurnPostKeys } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./types.ts";
+import { fileMetas, unattachable } from "./attach-tool.ts";
 import { parseDeliveryTarget } from "../../slack/delivery.ts";
 import { RECENT_THREAD_LIMIT } from "../../slack/conversation-view.ts";
 import { parseFileRef } from "../../surfaces/refs.ts";
@@ -51,6 +51,23 @@ const SURFACE_SEARCH_DEFAULT = 10;
 const SURFACE_FILE_PAGE_CHARS = 20_000;
 const SLACK_CONVERSATIONS_HISTORY_TIER3_PER_MINUTE = 50;
 const HISTORY_PAGES_PER_CALL = SLACK_CONVERSATIONS_HISTORY_TIER3_PER_MINUTE / 5;
+
+function headLooksLikeText(head: Buffer): boolean {
+  if (head.length === 0) return true;
+  if (head.includes(0)) return false;
+  let suspicious = 0;
+  for (const ch of head.toString("utf8")) {
+    const c = ch.codePointAt(0)!;
+    if (c === 0xfffd || (c < 0x20 && c !== 0x09 && c !== 0x0a && c !== 0x0d)) suspicious++;
+  }
+  return suspicious / head.length < 0.1;
+}
+
+function replaceThreadSegment(target: string, threadTs: string): string {
+  const i = target.lastIndexOf(":");
+  const channel = i < 0 ? target : target.slice(0, i);
+  return `${channel}:${threadTs}`;
+}
 
 interface PulledPages {
   messages: unknown[];
@@ -114,13 +131,25 @@ export interface SurfaceToolsContext {
   signal: AbortSignal;
 }
 
-function postedFileMetas(attachments: readonly OutgoingAttachment[]): PostedFileMeta[] {
-  return attachments.map((a) => ({
-    name: a.name,
-    mimetype: a.mimetype,
-    sizeBytes: a.sizeBytes,
-    ...(a.artifactId ? { artifactId: a.artifactId } : {}),
-  }));
+export async function postCounted(
+  turn: Pick<SurfaceToolsContext, "deps" | "input" | "postKeys" | "postProvenance" | "spine">,
+  outbound: NonNullable<OrchestratorDeps["outbound"]>,
+  destination: Destination,
+  text: string,
+  seq: number,
+  attachments?: OutgoingAttachment[],
+): Promise<void> {
+  const idempotencyKey = turn.postKeys.key(destination, seq);
+  await reachPost({
+    outbound,
+    destination,
+    text,
+    ...(attachments?.length ? { attachments } : {}),
+    idempotencyKey,
+    provenance: turn.postProvenance(idempotencyKey),
+  });
+  turn.spine.surfaceOutboundCount += 1;
+  if (turn.input.runId) turn.deps.turnStream?.markSurfacePosted(turn.input.runId);
 }
 
 type SurfaceTurn = SurfaceToolsContext & {
@@ -154,20 +183,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
 }
 
 function destinationTools(turn: SurfaceTurn) {
-  const {
-    deps,
-    input,
-    actor,
-    conversation,
-    blobTransfer,
-    fileRegistration,
-    provision,
-    postProvenance,
-    postKeys,
-    spine,
-    outbound,
-    here: currentDestination,
-  } = turn;
+  const { deps, actor, conversation, blobTransfer, fileRegistration, provision, outbound } = turn;
+  const currentDestination = turn.here;
   const resolveDestination = async (
     target?: {
       channel?: string;
@@ -226,17 +243,7 @@ function destinationTools(turn: SurfaceTurn) {
     attachments?: OutgoingAttachment[],
   ): Promise<SurfacePostResult> => {
     try {
-      const idempotencyKey = postKeys.key(destination, seq);
-      await reachPost({
-        outbound,
-        destination,
-        text: postText,
-        ...(attachments?.length ? { attachments } : {}),
-        idempotencyKey,
-        provenance: postProvenance(idempotencyKey),
-      });
-      spine.surfaceOutboundCount += 1;
-      if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
+      await postCounted(turn, outbound, destination, postText, seq, attachments);
       return { ok: true };
     } catch (e) {
       return { ok: false, message: errMessage(e) };
@@ -258,12 +265,7 @@ function destinationTools(turn: SurfaceTurn) {
       [],
       turn.openStored,
     );
-    const bad = [
-      ...r.missing.map((p) => `${p} (not found)`),
-      ...r.empty.map((p) => `${p} (empty)`),
-      ...r.oversized.map((p) => `${p} (too large)`),
-      ...r.overTotal.map((p) => `${p} (too large alongside the files already attached)`),
-    ];
+    const bad = unattachable(r);
     if (bad.length)
       return { ok: false, message: `couldn't attach: ${bad.join(", ")} — nothing was sent; fix the path(s) and retry` };
     return { ok: true, attachments: r.attachments };
@@ -300,7 +302,7 @@ function postingTools(turn: SurfaceTurn): Pick<SurfaceToolDeps, "post" | "reach"
         ...(editRef ? { editRef } : {}),
       };
       const sent = await enqueue(projectedDestination, postText, seq, f.attachments);
-      return sent.ok && f.attachments?.length ? { ...sent, attachments: postedFileMetas(f.attachments) } : sent;
+      return sent.ok && f.attachments?.length ? { ...sent, attachments: fileMetas(f.attachments) } : sent;
     },
     reach: async (postText, target, files, sandboxId) => {
       const seq = postKeys.take();
@@ -318,7 +320,7 @@ function postingTools(turn: SurfaceTurn): Pick<SurfaceToolDeps, "post" | "reach"
       if (!d.ok) return { ok: false, message: d.message };
       const r0 = await enqueue(d.destination, postText, seq, f.attachments);
       if (!r0.ok) return r0;
-      const r = f.attachments?.length ? { ...r0, attachments: postedFileMetas(f.attachments) } : r0;
+      const r = f.attachments?.length ? { ...r0, attachments: fileMetas(f.attachments) } : r0;
       let label = `a group DM (${target.participants?.length ?? 0} people)`;
       if (target.channel !== undefined) label = `#${bareChannelName(target.channel)}`;
       else if (target.recipient !== undefined) label = `a DM to ${target.recipient}`;
@@ -591,17 +593,8 @@ function searchTool(
           message: "Search covers stored Slack events only; older or missed messages may be absent.",
         });
       }
-      if (opts?.source === "mirror" && !deps.surfaceSearch) {
+      if (opts?.source === "mirror") {
         return { ok: false, message: "Stored Slack message search is unavailable; no live search was performed." };
-      }
-      if (deps.surfaceSearch) {
-        const hits = await deps.surfaceSearch.search({
-          surface: input.surface ?? "unknown",
-          container,
-          query: q,
-          limit,
-        });
-        return withCoverage({ ok: true, hits, source: "cache" });
       }
       if (!deps.surfaceContext) return { ok: false, message: "search isn't available from this turn" };
       if (!dest.target) return { ok: false, message: "this conversation has nothing to search" };

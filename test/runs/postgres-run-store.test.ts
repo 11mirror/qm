@@ -7,6 +7,7 @@ import { claimTurn, finishTurn, testRunStore, type ClaimedTurn } from "../suppor
 import type { Principal, TurnRequest } from "../../src/types.ts";
 import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
 import pg from "pg";
+import { takePending } from "../support/memory-run-signal-store.ts";
 
 const dbUrl = process.env.DATABASE_URL!;
 const actor: Principal = { id: "internal:U1", type: "internal" };
@@ -58,7 +59,7 @@ test("pg run store: Unicode stays jsonb-safe through enqueue, edit and both stee
       true,
     );
     assert.equal(await runs.get(first.id), null);
-    const queued = await signals.takePending(privateRun.id);
+    const queued = await takePending(signals, privateRun.id);
     assert.equal(queued[0]?.text, `edit ${safe}`);
     assert.equal(queued[0]?.request?.text, `edit ${safe}`);
     assert.equal(
@@ -69,7 +70,7 @@ test("pg run store: Unicode stays jsonb-safe through enqueue, edit and both stee
       }),
       true,
     );
-    const direct = await signals.takePending(privateRun.id);
+    const direct = await takePending(signals, privateRun.id);
     assert.equal(direct[0]?.text, safe);
     assert.equal(direct[0]?.request?.text, safe);
   } finally {

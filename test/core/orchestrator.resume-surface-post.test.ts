@@ -19,6 +19,7 @@ import type { Outbound } from "../../src/surfaces/outbound.ts";
 import type { Sandbox } from "../../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../../src/types.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
+import { inlineJobs } from "../support/inline-jobs.ts";
 import { createPostgresAuditLog } from "../../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
@@ -73,6 +74,7 @@ function buildOrchestrator(
   });
   return createOrchestrator({
     ...singleProcessDeps(),
+    jobs: inlineJobs(),
     identity: createIdentityService(databaseUrl),
     resolution: createResolutionService(config, acl),
     sessions,

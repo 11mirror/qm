@@ -143,6 +143,14 @@ import spec that still sets `sandboxNamePrefix`, `modalAppName`, `modalEnvironme
 `modalSnapshotBucket` or `awsSandboxBucket` is rejected as an unknown field. Sandboxes a
 tenant created under its old prefix are not reused.
 
+## Tenant env bags are no longer read
+
+A tenant's settings live in typed columns of the `tenants` table. The release that
+introduced those columns copied each tenant's `env` and `secret_env` bags into them on
+boot. That copy is gone. If your deployment serves several tenants and has never booted
+a release with typed tenant settings, boot one first so the bags are copied, then
+upgrade. A tenant that still has only env bags starts with empty settings.
+
 ## Typed tables: unknown JSON keys stop the upgrade
 
 Many stores used to keep each record as one JSON document in a `json` column. On first
@@ -202,6 +210,18 @@ investigate.
    fix them all before restarting.
 
 Do not edit `qm_schema_migrations` to skip a conversion.
+
+## Per-tenant turn queues are no longer merged at boot
+
+The release that moved every tenant onto one shared set of Absurd queues also moved, on
+each boot, the tasks left in per-tenant queues (named like `turns_people_t1a2b3c4d5e6f`)
+into the shared queues and dropped them. That boot step is gone. If your deployment has
+never booted a release with shared queues, boot that release once before this one. To
+check, this query must return no rows:
+
+```sql
+SELECT queue_name FROM absurd.queues WHERE queue_name ~ '_t[0-9a-f]{12}$';
+```
 
 ## Upgrading from older releases
 
