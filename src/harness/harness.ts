@@ -15,7 +15,6 @@ import type { LlmCallUsage, LlmTransportMeta } from "../sessions/session-store.t
 import type { Item, NewItem } from "../sessions/items.ts";
 import type { OverheardEntryPayload } from "./replay.ts";
 import type { GoalRecord } from "./goal.ts";
-import type { GrindMeter } from "./grind.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import type { ProviderKeys } from "./pi-model-runtime.ts";
 import type { ToolContext } from "../tools/primitives.ts";
@@ -118,7 +117,6 @@ export interface HarnessTurnInput {
   systemPrompt: string;
   history: Item[];
   goal?: GoalRecord | null;
-  goalMeter?: GrindMeter;
   saveGoal?(goal: GoalRecord): Promise<void>;
   tools: ToolContext;
   mcpTools?: McpToolDescriptor[];
