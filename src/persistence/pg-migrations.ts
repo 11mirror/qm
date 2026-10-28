@@ -14,6 +14,7 @@ export interface PgMigrationDefinition {
   acceptedChecksums?: readonly string[];
   before?: readonly PgMigrationDefinition[];
   contract?: PgMigrationDefinition;
+  transform?: { version: string; run: (client: PoolClient) => Promise<void> };
 }
 
 export interface PgMigration extends PgMigrationDefinition {
@@ -57,12 +58,15 @@ export function definePgMigration(
 }
 
 export function pgMigrationFrom(definition: PgMigrationDefinition): PgMigration {
-  return definePgMigration(
+  const result = definePgMigration(
     definition.id,
-    definition.statements,
+    definition.transform
+      ? [...definition.statements, `SELECT ${JSON.stringify(definition.transform.version).replaceAll('"', "'")}`]
+      : definition.statements,
     definition.expectedChecksum,
     definition.acceptedChecksums,
   );
+  return { ...result, ...(definition.transform ? { transform: definition.transform } : {}) };
 }
 
 const SCHEMA_LOCK_POLL_MS = 50;
@@ -110,6 +114,7 @@ async function applyInTransaction(
   try {
     for (const statement of statements) await client.query(statement);
     if (record) {
+      await record.transform?.run(client);
       await client.query(`INSERT INTO ${PG_MIGRATIONS_TABLE}(id, checksum) VALUES ($1, $2)`, [
         record.id,
         record.checksum,

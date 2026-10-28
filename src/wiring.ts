@@ -1,3 +1,5 @@
+import { secretConversionMigration } from "./credentials/secret-conversion.ts";
+import { tenantSecretsKey } from "../plugins/chassis/src/tenant-settings.ts";
 import { type TeamStore } from "./teams/teams.ts";
 import { type DecisionStore } from "./decisions/store.ts";
 import { type KeychainApprovals } from "./credentials/keychain-approval.ts";
@@ -313,6 +315,13 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
   const deploy = buildDeploy({ config, stores, files, sandbox, outbound, runs, deploymentLayer, credentials });
   const crons = buildCrons({ late, config, overrides, runs, stores, outbound });
   registerUpgradeMigrations({ stores });
+  stores.pgPool.registerMigration(
+    secretConversionMigration({
+      connector: connectorSecretKey,
+      signing: config.signingSecret,
+      tenantSecretsKey: tenantSecretsKey(overrides.env ?? {}),
+    }),
+  );
   const orchestrator = buildOrchestrator({
     late,
     config,
