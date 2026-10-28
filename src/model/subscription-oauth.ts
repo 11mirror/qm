@@ -1,11 +1,13 @@
 import { codeChallengeS256, generateCodeVerifier, oauthFailure } from "../connectors/oauth.ts";
 import { chatgptAccountIdFromToken, tokenExpiry } from "./chatgpt-auth-file.ts";
+import { sleep } from "../util/async.ts";
 import type { UserOAuthTokens } from "./user-model-credential-store.ts";
 
 const CHATGPT_ISSUER = "https://auth.openai.com";
 const CHATGPT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const CHATGPT_SCOPE = "openid profile email offline_access";
 const CHATGPT_DEVICE_CODE_LIFETIME_MS = 15 * 60_000;
+const DEVICE_CODE_SLOW_DOWN_MS = 5_000;
 
 const CLAUDE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const CLAUDE_AUTHORIZE = "https://claude.ai/oauth/authorize";
@@ -95,7 +97,11 @@ export async function pollChatGPTDeviceLogin(
   if (!res.ok) {
     const error = body?.error;
     const code = error && typeof error === "object" ? (error as { code?: unknown }).code : error;
-    if (code === "deviceauth_authorization_pending" || code === "slow_down") return "pending";
+    if (code === "slow_down") {
+      await sleep(DEVICE_CODE_SLOW_DOWN_MS);
+      return "pending";
+    }
+    if (code === "deviceauth_authorization_pending") return "pending";
     throw await oauthFailure("chatgpt device login", { status: res.status, json: async () => body });
   }
   if (typeof body?.authorization_code !== "string" || typeof body.code_verifier !== "string")

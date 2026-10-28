@@ -8,7 +8,7 @@ function accessToken(accountId: string): string {
 }
 
 function fakeAuthServer(t: TestContext, opts: { userCodeStatus?: number } = {}) {
-  let decision: "pending" | "approved" | "denied" = "pending";
+  let decision: "pending" | "slow" | "approved" | "denied" = "pending";
   const calls: Array<{ url: string; body: string }> = [];
   const json = (status: number, value: unknown) =>
     new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
@@ -23,6 +23,7 @@ function fakeAuthServer(t: TestContext, opts: { userCodeStatus?: number } = {}) 
       if (decision === "approved")
         return json(200, { authorization_code: "code-1", code_challenge: "c", code_verifier: "verifier-1" });
       if (decision === "denied") return json(400, { error: { code: "access_denied", message: "denied by user" } });
+      if (decision === "slow") return json(400, { error: "slow_down" });
       return json(400, { error: { code: "deviceauth_authorization_pending" } });
     }
     if (url.endsWith("/oauth/token"))
@@ -32,6 +33,7 @@ function fakeAuthServer(t: TestContext, opts: { userCodeStatus?: number } = {}) 
   return {
     approve: () => (decision = "approved"),
     deny: () => (decision = "denied"),
+    slow: () => (decision = "slow"),
     calls,
   };
 }
@@ -68,4 +70,19 @@ test("device login: a denied login surfaces the provider error", async (t) => {
 test("device login: a provider failure before the prompt rejects start", async (t) => {
   fakeAuthServer(t, { userCodeStatus: 500 });
   await assert.rejects(() => startChatGPTDeviceLogin(), /device code request failed \(500\)/);
+});
+
+test("device login: slow_down holds the poll reply back so the browser's next poll comes later", async (t) => {
+  const server = fakeAuthServer(t);
+  const prompt = await startChatGPTDeviceLogin();
+  server.slow();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let settled = false;
+  const poll = pollChatGPTDeviceLogin(prompt.deviceAuthId, prompt.userCode).finally(() => (settled = true));
+  await new Promise((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(4_999);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  t.mock.timers.tick(1);
+  assert.equal(await poll, "pending");
 });
