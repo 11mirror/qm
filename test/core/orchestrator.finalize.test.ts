@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -144,7 +145,7 @@ test("background: the run finishes as soon as the reply is ready; backup/teardow
   const g = gatedSandbox();
   const { orch, sessions } = buildOrchestrator(g.sandbox);
 
-  const result = await orch.handleTurn({ ...dm("dm:U1:t1", "!run echo hi"), runId: "r1", background: true });
+  const result = await orch.handleTurn({ ...dm("dm:U1:t1", "!run echo hi"), runId: randomUUID(), background: true });
   assert.equal(result.status, "ok");
   assert.equal(g.provisioned, 1, "the turn provisioned a box");
 
@@ -170,7 +171,7 @@ test("background: title persistence finishes before the run while teardown stays
   const result = await orch.handleTurn({
     ...dm("dm:U1:title-background", "!run echo hi"),
     displayText: "Simulate four-way title outage from the visible message",
-    runId: "title-background",
+    runId: randomUUID(),
     background: true,
   });
 
@@ -192,7 +193,7 @@ test("spine-routed titles use visible text instead of the internal wake envelope
       '<wake reason="addressed">Simulate four-way title outage from the internal envelope</wake>',
     ),
     displayText: "Simulate four-way title outage from the visible message",
-    runId: "title-spine",
+    runId: randomUUID(),
     background: true,
   });
 
@@ -210,14 +211,14 @@ test("background: a turn that never used its eagerly provisioned box returns bef
   const g = gatedSandbox();
   const { orch } = buildOrchestrator(g.sandbox, undefined, createMockHarness());
 
-  const first = await orch.handleTurn({ ...dm("dm:U1:t4", "!run echo hi"), runId: "r4", background: true });
+  const first = await orch.handleTurn({ ...dm("dm:U1:t4", "!run echo hi"), runId: randomUUID(), background: true });
   assert.equal(first.status, "ok");
   for (let i = 0; i < 2000 && g.teardownStarted === 0; i++) await tick();
   g.release();
   for (let i = 0; i < 2000 && g.teardownFinished === 0; i++) await tick();
   assert.equal(g.provisioned, 1);
 
-  const second = await orch.handleTurn({ ...dm("dm:U1:t4", "just chatting"), runId: "r5", background: true });
+  const second = await orch.handleTurn({ ...dm("dm:U1:t4", "just chatting"), runId: randomUUID(), background: true });
   assert.equal(second.status, "ok");
   assert.equal(g.provisioned, 2, "the session had used tools before, so the box was provisioned eagerly");
   assert.equal(g.teardownFinished, 1, "the reply returned without waiting for the unused box's teardown");
@@ -235,13 +236,13 @@ test("background: a turn paused on approval returns its card before the eagerly 
   const g = gatedSandbox();
   const { orch, sessions } = buildOrchestrator(g.sandbox, undefined, createMockHarness());
 
-  const first = await orch.handleTurn({ ...dm("dm:U1:t7", "!run echo hi"), runId: "r7", background: true });
+  const first = await orch.handleTurn({ ...dm("dm:U1:t7", "!run echo hi"), runId: randomUUID(), background: true });
   assert.equal(first.status, "ok");
   for (let i = 0; i < 200 && g.teardownStarted === 0; i++) await tick();
   g.release();
   for (let i = 0; i < 200 && g.teardownFinished === 0; i++) await tick();
 
-  const turn = orch.handleTurn({ ...dm("dm:U1:t7", "!finish-silent-paused"), runId: "r8", background: true });
+  const turn = orch.handleTurn({ ...dm("dm:U1:t7", "!finish-silent-paused"), runId: randomUUID(), background: true });
   const paused = await Promise.race([turn, new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_000))]);
   assert.ok(paused, "the paused turn returned while the teardown was still gated");
   assert.equal(paused.status, "pending_approval");
@@ -277,7 +278,7 @@ test("background: the message edit catch-up still runs before the lease is relea
     ...dm("ch:C1:t1", "!run echo hi"),
     surface: "slack",
     conversation: { kind: "channel", threadRef: "ch:C1:t1", audience: [actor] } as Conversation,
-    runId: "r6",
+    runId: randomUUID(),
     background: true,
   });
   assert.equal(result.status, "ok");
@@ -337,7 +338,7 @@ test("background: an error in the detached tail still reclaims the box (no machi
   };
   const { orch } = buildOrchestrator(sandbox, throwingErrors, harness);
 
-  const result = await orch.handleTurn({ ...dm("dm:U1:t3", "!run echo hi"), runId: "r3", background: true });
+  const result = await orch.handleTurn({ ...dm("dm:U1:t3", "!run echo hi"), runId: randomUUID(), background: true });
   assert.equal(result.status, "ok");
 
   for (let i = 0; i < 2000 && teardowns === 0; i++) await tick();
@@ -348,7 +349,7 @@ test("blocking path: the turn does NOT return until the tail (teardown) complete
   const g = gatedSandbox();
   const { orch } = buildOrchestrator(g.sandbox);
 
-  const p = orch.handleTurn({ ...dm("dm:U1:t2", "!run echo hi"), runId: "r2" });
+  const p = orch.handleTurn({ ...dm("dm:U1:t2", "!run echo hi"), runId: randomUUID() });
   let done = false;
   void p.then(() => {
     done = true;

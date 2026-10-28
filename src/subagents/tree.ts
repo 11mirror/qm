@@ -6,6 +6,7 @@ import type { SessionStore } from "../sessions/session-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 
 export const SUBAGENT_TREE_RUN_CAP = 50;
+const TREE_LOCK_ATTEMPTS = 5;
 
 async function sessionAncestors(sessions: Pick<SessionStore, "get">, session: Session): Promise<Session[]> {
   const ancestors: Session[] = [];
@@ -34,7 +35,16 @@ export async function withSessionTreeLock<T>(
   session: Session,
   fn: () => Promise<T>,
 ): Promise<T> {
-  return lock.withLock(sessionTreeAdmissionKey(await sessionTreeRoot(sessions, session)), fn);
+  let root = await sessionTreeRoot(sessions, session);
+  for (let attempt = 1; ; attempt++) {
+    const expected = root;
+    const locked = await lock.withLock(sessionTreeAdmissionKey(expected), async () => {
+      root = await sessionTreeRoot(sessions, (await sessions.get(session.id)) ?? session);
+      return root.id === expected.id ? { value: await fn() } : null;
+    });
+    if (locked) return locked.value;
+    if (attempt >= TREE_LOCK_ATTEMPTS) throw new Error(`session ${session.id} kept moving between trees`);
+  }
 }
 
 export async function stoppableAncestors(sessions: Pick<SessionStore, "get">, session: Session): Promise<Session[]> {

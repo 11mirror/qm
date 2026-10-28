@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
 import { completeTurn } from "../support/turns.ts";
+import { sessionTreeAdmissionKey, withSessionTreeLock } from "../../src/subagents/tree.ts";
 
 test("detaching a subagent session requires current channel membership", async () => {
   const built = buildApp(testConfig());
@@ -136,4 +137,31 @@ test("ordinary sessions are not subject to the subagent tree queue limit", async
     });
   }
   assert.equal((await built.runs.inFlightForThread(session.threadRef)).length, 11);
+});
+
+test("the tree lock follows a session that moves to another tree while waiting for the lock", async () => {
+  const built = buildApp(testConfig());
+  const first = await built.sessions.getOrCreateByThread("web:U1:tree-first", "dm", "personal:U1");
+  const second = await built.sessions.getOrCreateByThread("web:U1:tree-second", "dm", "personal:U1");
+  const child = await built.sessions.getOrCreateByThread("web:U1:tree-child", "dm", "personal:U1");
+  await built.sessions.setParentSession(child.id, first.id);
+  const keys: string[] = [];
+  const lock = {
+    async withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+      keys.push(key);
+      if (keys.length === 1) await built.sessions.setParentSession(child.id, second.id);
+      return fn();
+    },
+  };
+  let runs = 0;
+  const stale = (await built.sessions.get(child.id))!;
+  assert.equal(
+    await withSessionTreeLock(lock, built.sessions, stale, async () => {
+      runs += 1;
+      return "admitted";
+    }),
+    "admitted",
+  );
+  assert.equal(runs, 1);
+  assert.deepEqual(keys, [sessionTreeAdmissionKey(first), sessionTreeAdmissionKey(second)]);
 });

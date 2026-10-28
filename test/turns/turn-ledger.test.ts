@@ -329,6 +329,36 @@ test("the runner retries a failed turn within QM's error budget and then records
   assert.equal(await pointer(thread), null);
 });
 
+test("a turn whose result cannot be saved records a bare failure instead of retrying forever", { skip }, async () => {
+  const thread = `web:alice:${randomUUID()}`;
+  const admitted = await admit(thread);
+  const orchestrator = {
+    async handleTurn(): Promise<TurnResult> {
+      return { status: "ok", sessionId: thread, reply: "unsaveable" };
+    },
+  } as unknown as Orchestrator;
+  let rejected = 0;
+  const rejecting: TurnLedger = {
+    ...ledger,
+    async finish(run, token, outcome) {
+      if (outcome.result.reply !== "unsaveable") return ledger.finish(run, token, outcome);
+      rejected += 1;
+      throw new Error("unsupported Unicode escape sequence");
+    },
+  };
+  const runner = createTurnRunner({ ledger: rejecting, orchestrator, queues: TURN_QUEUES, slots: 1, pollMs: 50 });
+  runner.start();
+  const run = await eventually(() => runStore.runs.get(admitted.run.id), {
+    until: (found) => found?.status === "failed",
+    label: "the unsaveable turn ended",
+    timeoutMs: 20_000,
+  });
+  await runner.stopClaims();
+  assert.equal(rejected, 5);
+  assert.match(run?.result?.reason ?? "", /could not be saved/);
+  assert.equal(await pointer(thread), null);
+});
+
 test("a claim handed straight back before the turn starts does not count as an attempt", { skip }, async () => {
   const thread = `web:alice:${randomUUID()}`;
   const admitted = await admit(thread);

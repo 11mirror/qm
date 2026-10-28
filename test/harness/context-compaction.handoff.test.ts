@@ -1,4 +1,5 @@
 import { withResolvedRuntime, resolveRuntimeChoiceDurable } from "../../src/harness/runtime-choice.ts";
+import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMockHarness } from "../support/mock-harness.ts";
@@ -10,6 +11,7 @@ test("runtime handoff continues once with saved results under the original run a
   const base = createMockHarness();
   const seen: import("../../src/harness/harness.ts").HarnessTurnInput[] = [];
   const choice = { modelId: "gpt-6-astra", effortLevel: "high", fastMode: false };
+  const runId = randomUUID();
   const harness: Harness = {
     ...base,
     turns: {
@@ -29,7 +31,7 @@ test("runtime handoff continues once with saved results under the original run a
           return { reply: "must not be delivered", runtimeHandoff: { choice, lifetime: "task" }, modelCalls: 1 };
         }
         assert.deepEqual(input.runtime, choice);
-        assert.equal(input.runId, "runtime-run");
+        assert.equal(input.runId, runId);
         assert.ok(input.history.some((e) => e.kind === "ToolResult"));
         assert.ok(input.turnWallClockMs! < seen[0]!.turnWallClockMs!);
         await input.emit({ kind: "AgentMessage", text: "continued" });
@@ -38,7 +40,7 @@ test("runtime handoff continues once with saved results under the original run a
     },
   };
   const { orch, sessions } = buildOrchestrator(harness, undefined, 60000);
-  await orch.handleTurn({ ...turn("switch then finish"), runId: "runtime-run", surfaceTools: false });
+  await orch.handleTurn({ ...turn("switch then finish"), runId, surfaceTools: false });
   assert.equal(seen.length, 2);
   const session = await sessions.getByThread(conv.threadRef);
   const entries = await sessions.getItems(session!.id);
@@ -140,7 +142,7 @@ test("only a cron automation receives task-runtime authority and each fire start
       ...turn(surface),
       surface,
       origin: { kind: "automation" },
-      runId: surface + "-run",
+      runId: randomUUID(),
       surfaceTools: false,
     });
   }
@@ -148,14 +150,14 @@ test("only a cron automation receives task-runtime authority and each fire start
     ...turn("ambient"),
     surface: "cron",
     origin: { kind: "ambient" },
-    runId: "ambient-run",
+    runId: randomUUID(),
     surfaceTools: false,
   });
   await orch.handleTurn({
     ...turn("next fire"),
     surface: "cron",
     origin: { kind: "automation" },
-    runId: "next-cron-run",
+    runId: randomUUID(),
     surfaceTools: false,
   });
   assert.deepEqual(
@@ -201,7 +203,7 @@ test("cron dispatch uses purpose defaults while task handoffs and later fires st
     effortLevel: "high",
   });
   await built.config.setPurposeRuntime("cron", category);
-  for (const runId of ["first-fire", "later-fire"]) {
+  for (const runId of [randomUUID(), randomUUID()]) {
     const result = await built.orch.handleTurn({
       ...turn("cron"),
       surface: "cron",

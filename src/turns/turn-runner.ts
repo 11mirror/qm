@@ -27,6 +27,8 @@ const FALLBACK_POLL_MS = 1_000;
 const HANDBACK_SETTLE_MS = 2_000;
 const FINISH_RETRY_MAX_MS = 5_000;
 const FINISH_RETRY_MS = 500;
+const FINISH_MAX_ATTEMPTS = 5;
+const UNSAVED_RESULT_REASON = "This turn finished but its result could not be saved.";
 const FAILURE_REPORT_CONSECUTIVE = 5;
 const CLAIM_FAIL_REPORT_CONSECUTIVE = 20;
 const LEASE_LOST_CONSECUTIVE = 3;
@@ -193,6 +195,18 @@ async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
       });
   }, extendMs);
   beat.unref?.();
+  const finishBare = async (error: unknown): Promise<void> => {
+    reportFailure(`turns: turn end keeps failing for turn ${run.id}; recording a bare failure instead`, error);
+    const bare: TurnOutcome = {
+      status: "failed",
+      countsAsError: true,
+      result: { status: "failed", sessionId: run.sessionId, reason: UNSAVED_RESULT_REASON },
+    };
+    await deps.ledger.finish(run, token, bare).catch((fallback: unknown) => {
+      clearInterval(beat);
+      reportFailure(`turns: recording a bare failure failed for turn ${run.id}; letting its claim expire`, fallback);
+    });
+  };
   const finishWith = async (outcome: TurnOutcome): Promise<void> => {
     for (let attempt = 1; !shutdown.signal.aborted && !lost; attempt++) {
       try {
@@ -200,9 +214,8 @@ async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
           console.warn(`[turns] turn ${run.id} ended after losing its claim; its result was not recorded`);
         return;
       } catch (error) {
-        if (attempt % FAILURE_REPORT_CONSECUTIVE === 0)
-          reportFailure(`turns: turn end keeps failing for turn ${run.id} (attempt ${attempt})`, error);
-        else swallow(`turns: turn end failed for turn ${run.id} (retrying)`, error);
+        if (attempt >= FINISH_MAX_ATTEMPTS) return finishBare(error);
+        swallow(`turns: turn end failed for turn ${run.id} (retrying)`, error);
         await sleep(Math.min(FINISH_RETRY_MS * attempt, FINISH_RETRY_MAX_MS));
       }
     }
