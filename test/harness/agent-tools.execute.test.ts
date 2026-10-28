@@ -579,3 +579,19 @@ test("a queued runtime change cannot mutate after cancellation while draining to
   assert.equal(selected, false);
   assert.equal(state.halt.handoff(), undefined);
 });
+
+test("background watch and unwatch report their own failures; other actions rethrow", async () => {
+  const boom = async () => {
+    throw new Error("boom");
+  };
+  const tc = {
+    ...fakeToolContext(),
+    backgroundWatch: boom,
+    backgroundUnwatch: boom,
+    backgroundPoll: boom,
+  } as ToolContext;
+  const [background] = createAgentTools(createTurnToolState({ current: tc })).filter((t) => t.name === "background");
+  assert.equal(textOut(await call(background, { action: "watch", process_id: "p1" })), "[watch failed] boom");
+  assert.equal(textOut(await call(background, { action: "unwatch", monitor_id: "m1" })), "[unwatch failed] boom");
+  await assert.rejects(call(background, { action: "poll", process_id: "p1" }), /boom/);
+});
