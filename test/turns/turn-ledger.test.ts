@@ -681,3 +681,42 @@ test("turns admit, fence and finish once the contract phase drops runs.engine", 
   assert.equal(await ledger.finish(run, token, { status: "done", result: ok(run) }), true);
   assert.equal((await runStore.runs.get(run.id))?.status, "done");
 });
+
+test(
+  "a stale attempt ending does not drop the attempt that reclaimed its run in the same process",
+  { skip },
+  async () => {
+    const thread = `web:alice:${randomUUID()}`;
+    const admitted = await admit(thread);
+    const started: OrchestratorInput[] = [];
+    const releases: Array<() => void> = [];
+    const orchestrator = {
+      async handleTurn(input: OrchestratorInput): Promise<TurnResult> {
+        started.push(input);
+        await new Promise<void>((resolve) => releases.push(resolve));
+        return { status: "ok", sessionId: thread, reply: `attempt ${started.length}` };
+      },
+    } as unknown as Orchestrator;
+    const runner = createTurnRunner({ ledger, orchestrator, queues: TURN_QUEUES, slots: 2, pollMs: 50 });
+    runner.start();
+    try {
+      await eventually(() => started.length, { until: (n) => n === 1 });
+      const claimed = await runStore.runs.get(admitted.run.id);
+      await admin.query(
+        "UPDATE absurd.r_turns_people SET claim_expires_at = absurd.current_time() - interval '1 second' WHERE run_id = $1",
+        [claimed!.absurdRunId],
+      );
+      await eventually(() => started.length, { until: (n) => n === 2 });
+      releases[0]!();
+      await sleep(100);
+      assert.deepEqual(
+        runner.held().map((run) => run.id),
+        [admitted.run.id],
+        "the reclaiming attempt is still held",
+      );
+    } finally {
+      for (const release of releases) release();
+      await runner.stopClaims();
+    }
+  },
+);

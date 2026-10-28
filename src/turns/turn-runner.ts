@@ -388,7 +388,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     void withTenant(tenant, () => runTurn(deps, held))
       .catch((error: unknown) => swallow(`turns: turn ${run.id} crashed`, error))
       .finally(() => {
-        inFlight.delete(run.id);
+        if (inFlight.get(run.id) === held) inFlight.delete(run.id);
         settle();
         notify();
       });
