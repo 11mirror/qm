@@ -38,19 +38,23 @@ function decisionStore(rules: readonly DecisionRule[]): DecisionStore {
   };
 }
 
-async function runTurn(options: { mode: DecisionRule["mode"]; threadRef: string; text?: string }) {
+function appWithVerdicts(mode: DecisionRule["mode"], verdicts: readonly ("keep" | "revise")[]) {
   const states: string[] = [];
-  let asked = 0;
   const built = buildApp(testConfig({ workers: 1 }), {
-    decisions: decisionStore([houseStyle(options.mode)]),
+    decisions: decisionStore([houseStyle(mode)]),
     decisionBackend: {
       choose: async ({ state }) => {
+        const verdict = verdicts[states.length] ?? "keep";
         states.push(state);
-        asked += 1;
-        return { "house-style": asked === 1 ? { keep: 0.05, revise: 0.95 } : { keep: 0.97, revise: 0.03 } };
+        return { "house-style": verdict === "revise" ? { keep: 0.05, revise: 0.95 } : { keep: 0.97, revise: 0.03 } };
       },
     },
   });
+  return { built, states };
+}
+
+async function runTurn(options: { mode: DecisionRule["mode"]; threadRef: string; text?: string }) {
+  const { built, states } = appWithVerdicts(options.mode, ["revise"]);
   await built.config.setSoul(scopeId("personal", "U1"), GUIDANCE);
   built.runtime.start();
   try {
@@ -68,7 +72,7 @@ async function runTurn(options: { mode: DecisionRule["mode"]; threadRef: string;
     const run = await built.app.getRun(runId);
     const session = await built.sessions.getByThread(options.threadRef);
     const entries = await built.sessions.getEntries(session!.id);
-    return { states, asked, run, entries };
+    return { states, asked: states.length, run, entries };
   } finally {
     await built.runtime.stop();
   }
@@ -121,4 +125,33 @@ test("narration before a tool call still streams while the final reply is held",
   assert.equal(run?.partial?.startsWith("Looking that up now."), true);
   assert.equal(entries.filter((e) => e.type === "assistant").length, 1);
   assert.match(run?.result?.reply ?? "", /Write the reply again/);
+});
+
+test("a reply the addressed-turn nudge falls back to is checked before it is posted", async () => {
+  const { built, states } = appWithVerdicts("enforce", ["keep", "revise"]);
+  built.runtime.start();
+  try {
+    const actor = { externalId: "U1" };
+    await built.app.turn({
+      surface: "slack",
+      actor,
+      conversation: { kind: "channel", threadRef: "ch:C-check:1.1", channelRef: "C-check", audience: [actor] },
+      deliveryTarget: "slack:C-check:1.1",
+      text: "!shedmute",
+      liveActor: true,
+      async: true,
+    });
+    const deadline = Date.now() + 10_000;
+    let posted: { text: string }[] = [];
+    while (Date.now() < deadline && !posted.length) {
+      posted = (await built.deliveries.pending("slack")) as { text: string }[];
+      if (!posted.length) await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.equal(states.length, 3);
+    assert.equal(posted.length, 1);
+    assert.match(posted[0]!.text, /Write the reply again/);
+    assert.equal(posted[0]!.text.startsWith("worklog: did the thing but never posted"), false);
+  } finally {
+    await built.runtime.stop();
+  }
 });

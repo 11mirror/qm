@@ -3765,7 +3765,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           return turnResult;
         };
         let runtimeHandoffs = restoredRuntime ? 1 : 0;
-        const runHarnessTurn = async (...args: Parameters<typeof runHarnessSegment>) => {
+        const runHarnessTurn = async (
+          ...args: Parameters<typeof runHarnessSegment>
+        ): Promise<Awaited<ReturnType<typeof runHarnessSegment>>> => {
           let segment = await runHarnessSegment(...args);
           while (segment.runtimeHandoff && !segment.stopped && !turnAbort.signal.aborted) {
             if (++runtimeHandoffs > 8) throw new NonRetryableTurnError("Too many runtime changes in one task");
@@ -3809,6 +3811,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             );
           }
           await mirrored;
+          const note = revisionNote;
+          revisionNote = undefined;
+          if (note && !segment.stopped && !turnAbort.signal.aborted) {
+            console.error(`[decisions] reply revision ${revisions} session=${session.id}`);
+            return runHarnessTurn(
+              `[system] Your draft reply was held back, not delivered. ${note} Write the reply again.`,
+              inbound.images.length ? { images: inbound.images } : {},
+              { history: filterHistory(forModelContext((await historyWindow()).entries)) },
+            );
+          }
           return {
             ...segment,
             ...(segment.reply ? { reply: absoluteAppLinks(segment.reply, deps.publicWebUrl) } : {}),
@@ -3820,16 +3832,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(inbound.metas.length ? { attachments: inbound.metas } : {}),
           ...(inbound.images.length ? { images: inbound.images } : {}),
         });
-        while (revisionNote && !result.stopped && !input.cancel?.aborted) {
-          const note = revisionNote;
-          revisionNote = undefined;
-          console.error(`[decisions] reply revision ${revisions} session=${session.id}`);
-          result = await runHarnessTurn(
-            `[system] Your draft reply was held back, not delivered. ${note} Write the reply again.`,
-            inbound.images.length ? { images: inbound.images } : {},
-            { history: filterHistory(forModelContext((await historyWindow()).entries)) },
-          );
-        }
         replyChecks.deliver();
         if (
           input.addressed &&
