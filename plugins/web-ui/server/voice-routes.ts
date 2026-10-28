@@ -23,7 +23,7 @@ const TRANSCRIBE_TIMEOUT_MS = 600_000;
 const LIVE_SESSION_TIMEOUT_MS = 25_000;
 const MAX_RETRY_AFTER_S = 3600;
 const MAX_BRIEFING_CHARS = 16_000;
-const MAX_OFFER_BYTES = 262_144;
+const MAX_OFFER_BYTES = 131_072;
 const REJECTED_STATUSES = new Set([400, 401, 403, 404, 422]);
 
 const SPOOL_DIR = join(tmpdir(), "qm-dictation");

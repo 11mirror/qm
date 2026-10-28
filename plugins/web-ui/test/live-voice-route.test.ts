@@ -116,8 +116,15 @@ test("voice relays only a sanitized SDP result and never a provider key", async 
     body: JSON.stringify({ sdp: "v=0\r\no=offer", briefing }),
   });
   assert.equal(response.status, 201);
-  assert.equal(instructions.length, 1);
+  const blank = await fetch(`${base}/api/voice/sessions`, {
+    method: "POST",
+    headers: identity(),
+    body: JSON.stringify({ sdp: "v=0\r\no=offer", briefing: "  \n " }),
+  });
+  assert.equal(blank.status, 201);
+  assert.equal(instructions.length, 2);
   assert.ok(instructions[0]!.endsWith(`<startup_context>\n${briefing}\n</startup_context>`));
+  assert.ok(!instructions[1]!.endsWith("</startup_context>"));
   assert.deepEqual(await response.json(), {
     session: { id: "live_route" },
     transport: { type: "webrtc", sdp: "v=0\r\no=answer" },

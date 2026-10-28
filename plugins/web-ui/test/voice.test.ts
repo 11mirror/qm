@@ -54,7 +54,7 @@ test("session creation keeps credentials and authoritative configuration on serv
     assert.equal(body.session.model, "gpt-live-1");
     assert.equal(body.session.store, false);
     assert.deepEqual(body.session.delegation, { type: "client", acknowledgement_delay_ms: 800 });
-    assert.equal(body.session.instructions.includes("<startup_context>"), false);
+    assert.equal(body.session.instructions.endsWith("</startup_context>"), false);
     assert.equal(body.transport.sdp, "v=0\r\no=offer");
     assert.equal(String(init?.body).includes("private-user"), false);
     return Response.json({
@@ -75,10 +75,12 @@ test("a startup briefing is appended to the live instructions", async (t) => {
   });
   await createLiveVoice("v=0", caller);
   await createLiveVoice("v=0", caller, "Open work: the quarterly report draft.");
+  await createLiveVoice("v=0", caller, "");
   assert.equal(
     sessions[1]!.instructions,
     `${sessions[0]!.instructions}\n\n<startup_context>\nOpen work: the quarterly report draft.\n</startup_context>`,
   );
+  assert.equal(sessions[2]!.instructions, sessions[0]!.instructions);
 });
 
 test("provider failures keep diagnostic evidence for error reporting", async (t) => {
