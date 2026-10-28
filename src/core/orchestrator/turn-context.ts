@@ -5,6 +5,7 @@ import { desktopComputerTool } from "../../../plugins/chassis/src/desktop-comput
 import { withLiveTurnMembership } from "../../resolution/scope-membership.ts";
 import { desktopClientForTurn } from "../turn-origin.ts";
 import type { Item } from "../../sessions/items.ts";
+import { seqWithinTenure, type ParticipantWindow } from "../../sessions/session-store.ts";
 import type {
   ApprovalGrantModes,
   CommandApprovalGrant,
@@ -53,12 +54,16 @@ export async function resolveTurnScope(deps: OrchestratorDeps, admitted: Admitte
     scopeId,
     verified: liveAuthorTurn && conversation.kind !== "dm",
   });
-  let participantHistorySeqs: Set<number> | undefined;
-  let participantHistoryMaxSeq = -1;
+  let participantWindows: ParticipantWindow[] | undefined;
+  const visibleToParticipants = (seq: number, windows: ParticipantWindow[]): boolean =>
+    input.sessionParticipantIds!.every((id) =>
+      windows.some((window) => window.principalId === id && seqWithinTenure(seq, window)),
+    );
   const filterHistory = (entries: Item[]): Item[] => {
     if (!conversation.audience.length) return [];
-    if (!participantHistorySeqs) return entries;
-    return entries.filter((entry) => entry.seq > participantHistoryMaxSeq || participantHistorySeqs!.has(entry.seq));
+    const windows = participantWindows;
+    if (!windows) return entries;
+    return entries.filter((entry) => visibleToParticipants(entry.seq, windows));
   };
   const reconcileSessionParticipants = async (sessionId: string): Promise<void> => {
     const participantIds = input.sessionParticipantIds;
@@ -71,12 +76,7 @@ export async function resolveTurnScope(deps: OrchestratorDeps, admitted: Admitte
         .map((principalId) => deps.sessions.removeParticipant(sessionId, principalId)),
     );
     await Promise.all(participantIds.map((principalId) => deps.sessions.addParticipant(sessionId, principalId)));
-    participantHistoryMaxSeq = await deps.sessions.latestItemSeq(sessionId);
-    participantHistorySeqs = new Set(
-      (await deps.sessions.visibleItems(sessionId, participantIds, { beforeSeq: participantHistoryMaxSeq + 1 })).map(
-        (entry) => entry.seq,
-      ),
-    );
+    participantWindows = await deps.sessions.participantWindowsOf(sessionId);
   };
   return {
     ...admitted,
