@@ -223,9 +223,12 @@ async function tenantizeQueues(client: import("pg").PoolClient): Promise<void> {
   for (const { relname } of rows.filter(({ relname }) => relname.startsWith("e_"))) {
     const queue = relname.slice(2);
     const unknown = await client.query(`SELECT 1 FROM absurd.${relname} e
-      WHERE EXISTS (SELECT 1 FROM absurd.t_${queue} t WHERE t.tenant_id <> qm_tenant_id())
+      WHERE (SELECT count(DISTINCT owner) FROM (
+        SELECT w.tenant_id AS owner FROM absurd.w_${queue} w WHERE w.event_name = e.event_name
+        UNION SELECT t.tenant_id FROM absurd.t_${queue} t WHERE t.params->>'turnId' = e.payload->>'turnId'
+      ) owners) > 1 OR (EXISTS (SELECT 1 FROM absurd.t_${queue} t WHERE t.tenant_id <> qm_tenant_id())
         AND NOT EXISTS (SELECT 1 FROM absurd.w_${queue} w WHERE w.event_name = e.event_name)
-        AND NOT EXISTS (SELECT 1 FROM absurd.t_${queue} t WHERE t.params->>'turnId' = e.payload->>'turnId') LIMIT 1`);
+        AND NOT EXISTS (SELECT 1 FROM absurd.t_${queue} t WHERE t.params->>'turnId' = e.payload->>'turnId')) LIMIT 1`);
     if (unknown.rowCount)
       throw new Error(`Queue event ownership is missing in ${relname}; repair queue state before migrating`);
   }
