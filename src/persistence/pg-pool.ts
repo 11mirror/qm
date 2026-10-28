@@ -328,10 +328,12 @@ export function createPgPool(connectionString: string, definitions?: readonly Pg
   }
   async function pool(): Promise<Pool> {
     await ready();
+    if (closed) throw new Error("Postgres store is closed");
     return (queryPoolP ??= retainPool(queryUrl, "query"));
   }
   async function sessionPool(): Promise<Pool> {
     await ready();
+    if (closed) throw new Error("Postgres store is closed");
     return (sessionPoolP ??= retainPool(connectionString, "session"));
   }
   async function query(
