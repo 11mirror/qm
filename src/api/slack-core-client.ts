@@ -282,6 +282,15 @@ function surfaceDataMethods(deps: SlackCoreClientDeps) {
   } satisfies Partial<SlackCoreClient>;
 }
 
+function withUnackedBlock(
+  result: TurnResult | null,
+  firstBlock: string | undefined,
+  acked: string | undefined,
+): TurnResult | null {
+  if (!result || result.status !== "ok" || !firstBlock?.trim() || firstBlock === acked) return result;
+  return { ...result, reply: [firstBlock.trim(), result.reply?.trim()].filter(Boolean).join("\n\n") };
+}
+
 function runMethods(deps: SlackCoreClientDeps, terminalWaiters: Map<string, Set<() => void>>) {
   return {
     async privateContinuationSource(runId) {
@@ -299,11 +308,17 @@ function runMethods(deps: SlackCoreClientDeps, terminalWaiters: Map<string, Set<
     submitTurn: (body) => deps.app.turn({ ...body, surface: "slack" }),
 
     async waitRun(runId, hooks = {}) {
-      const signaled = new Set<"replying" | "firstBlock" | "surface">();
-      const once = (signal: "replying" | "firstBlock" | "surface", fire: () => void): void => {
+      const signaled = new Set<"replying" | "surface">();
+      const once = (signal: "replying" | "surface", fire: () => void): void => {
         if (signaled.has(signal)) return;
         signaled.add(signal);
         fire();
+      };
+      let ackedBlock: string | undefined;
+      const ackFirstBlock = (firstBlock: string | undefined): void => {
+        if (!firstBlock?.trim() || ackedBlock !== undefined || !hooks.onFirstBlock) return;
+        ackedBlock = firstBlock;
+        hooks.onFirstBlock(firstBlock);
       };
       const waiters = terminalWaiters.get(runId) ?? new Set();
       terminalWaiters.set(runId, waiters);
@@ -313,6 +328,7 @@ function runMethods(deps: SlackCoreClientDeps, terminalWaiters: Map<string, Set<
       let lastProgressAt = Date.now();
       let lastMark = "";
       let goalSnapshot = "";
+      let goalReadAt = -Infinity;
       const emitGoal = async (goal: GoalView | undefined): Promise<void> => {
         if (!hooks.onGoal || !goal) return;
         const next = JSON.stringify(goal);
@@ -322,9 +338,11 @@ function runMethods(deps: SlackCoreClientDeps, terminalWaiters: Map<string, Set<
       };
       try {
         for (;;) {
+          const withGoal = !!hooks.onGoal && Date.now() - goalReadAt >= RUN_FALLBACK_POLL_MS;
           let view;
           try {
-            view = await deps.app.getRun(runId);
+            view = await deps.app.runProgress(runId, { goal: withGoal });
+            if (withGoal) goalReadAt = Date.now();
           } catch (err) {
             if (Date.now() - lastProgressAt >= RUN_STALL_BUDGET_MS) throw err;
             view = undefined;
@@ -333,13 +351,18 @@ function runMethods(deps: SlackCoreClientDeps, terminalWaiters: Map<string, Set<
             if (!view) throw new Error(`run ${runId} not found`);
             if (view.surfacePosted) once("surface", () => hooks.onSurfacePosted?.());
             if (isTerminal(view.status)) {
-              await emitGoal(view.goal).catch(swallowAs("slack-core-client: terminal goal refresh", undefined));
-              return (view.result as TurnResult | null | undefined) ?? null;
+              ackFirstBlock(view.firstBlock);
+              const final = withGoal || !hooks.onGoal ? view : await deps.app.runProgress(runId, { goal: true });
+              await emitGoal(final?.goal).catch(swallowAs("slack-core-client: terminal goal refresh", undefined));
+              return withUnackedBlock(
+                (view.result as TurnResult | null | undefined) ?? null,
+                view.firstBlock,
+                ackedBlock,
+              );
             }
             if (view.replying) once("replying", () => hooks.onReplying?.());
             await emitGoal(view.goal).catch(swallowAs("slack-core-client: goal refresh", undefined));
-            const firstBlock = view.firstBlock;
-            if (firstBlock?.trim()) once("firstBlock", () => hooks.onFirstBlock?.(firstBlock));
+            ackFirstBlock(view.firstBlock);
             const mark = `${view.status}:${view.attempt}`;
             if (mark !== lastMark) {
               lastMark = mark;

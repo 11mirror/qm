@@ -1,5 +1,5 @@
 import { surfaceHas } from "../surfaces/surface.ts";
-import { isTerminal, isUnstarted } from "../runs/run-store.ts";
+import { isTerminal, isUnstarted, type Run } from "../runs/run-store.ts";
 import { stopSessionTree, withSessionTreeLock } from "../subagents/tree.ts";
 import type { TurnRequest, TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
@@ -8,7 +8,7 @@ import type { SessionStateEvent } from "../runs/session-state-bus.ts";
 import { samePerson } from "../directory/person.ts";
 import { swallowAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
-import { runGoal } from "../runs/turn-stream.ts";
+import { runGoal, type GoalView } from "../runs/turn-stream.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
@@ -172,6 +172,11 @@ function sessionStateMethods(deps: AppDeps, h: AppHelpers) {
   } satisfies Partial<App>;
 }
 
+async function goalForRun(deps: AppDeps, run: Run): Promise<GoalView | null> {
+  const session = await deps.sessions.getByThread(run.sessionId);
+  return session ? runGoal((await deps.sessions.goals([session.id])).get(session.id), run) : null;
+}
+
 function runViewMethods(deps: AppDeps, h: AppHelpers) {
   return {
     async getRun(runId, viewer) {
@@ -182,8 +187,7 @@ function runViewMethods(deps: AppDeps, h: AppHelpers) {
       const delivery = run.deliveryState ?? {};
       const runtime = delivery.runtime ?? run.result?.runtime;
       const alive = run.status === "running";
-      const session = await deps.sessions.getByThread(run.sessionId);
-      const goal = session ? runGoal((await deps.sessions.goals([session.id])).get(session.id), run) : null;
+      const goal = await goalForRun(deps, run);
       const activity = await deps.runActivity?.list(runId);
       const reasoning = deps.turnStream?.reasoning(runId) ?? [];
       const stale = run.status === "pending" && run.attempts > 0;
@@ -228,6 +232,22 @@ function runViewMethods(deps: AppDeps, h: AppHelpers) {
         ...(delivery.replyDone ? { replyComplete: true } : {}),
         ...(activity && activity.length ? { activity } : {}),
         ...(reasoning.length ? { reasoning } : {}),
+      };
+    },
+
+    async runProgress(runId, opts) {
+      const run = await deps.runs.get(runId);
+      if (!run) return null;
+      const delivery = run.deliveryState ?? {};
+      const goal = opts?.goal ? await goalForRun(deps, run) : null;
+      return {
+        status: run.status,
+        attempt: run.attempts,
+        result: run.result ? await h.withAdminLink(run.result) : run.result,
+        ...(goal ? { goal } : {}),
+        ...(delivery.replying ? { replying: true } : {}),
+        ...(delivery.firstBlock ? { firstBlock: delivery.firstBlock } : {}),
+        ...(delivery.surfacePosted ? { surfacePosted: true } : {}),
       };
     },
 

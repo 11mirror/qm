@@ -311,6 +311,18 @@ export interface App {
     startedAt: number | null;
     finishedAt: number | null;
   } | null>;
+  runProgress(
+    runId: string,
+    opts?: { goal?: boolean },
+  ): Promise<{
+    status: Run["status"];
+    attempt: number;
+    result: TurnResult | null;
+    goal?: GoalView;
+    replying?: boolean;
+    firstBlock?: string;
+    surfacePosted?: boolean;
+  } | null>;
   getRunToolItems(runId: string, viewer?: string, afterSeq?: number): Promise<Item[]>;
   stopConversation(threadRef: string, viewer?: string): Promise<boolean>;
   activeRunForThread(

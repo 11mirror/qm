@@ -178,7 +178,7 @@ test("waitRun signals replying only once the run has passed detection and begun 
     runs: { onTerminal() {} },
     app: {
       subscribeRun: () => () => {},
-      getRun: async () => {
+      runProgress: async () => {
         polls++;
         return {
           status: polls >= 4 ? "done" : "running",

@@ -351,7 +351,7 @@ test("core engagement is signaled once for durable replies, never quiet ambient 
       runs: { onTerminal() {} },
       app: {
         subscribeRun: () => () => {},
-        getRun: async () => {
+        runProgress: async () => {
           polls++;
           return {
             status: polls < 3 ? "running" : "done",
@@ -369,4 +369,52 @@ test("core engagement is signaled once for durable replies, never quiet ambient 
     });
     assert.equal(engaged, mode === "quiet" ? 0 : 1);
   }
+});
+
+function waitClient(views: Array<Record<string, unknown>>) {
+  let i = 0;
+  const view = async () => views[Math.min(i++, views.length - 1)];
+  return createSlackCoreClient({
+    runs: { onTerminal() {} },
+    app: { subscribeRun: () => () => {}, runProgress: view, getRun: view },
+  } as unknown as SlackCoreClientDeps);
+}
+
+test("a first block first seen on the finished run is still posted as the ack", async () => {
+  const acked: string[] = [];
+  const result = await waitClient([
+    { status: "done", attempt: 1, firstBlock: "On it…", result: { status: "ok", reply: "Found it." } },
+  ]).waitRun("r1", { onFirstBlock: (text) => acked.push(text) });
+  assert.deepEqual(acked, ["On it…"]);
+  assert.equal(result?.reply, "Found it.");
+});
+
+test("a first block nobody posted goes back into the reply", async () => {
+  const done = { status: "done", attempt: 1, firstBlock: "On it…", result: { status: "ok", reply: "Found it." } };
+  assert.equal((await waitClient([done]).waitRun("r1"))?.reply, "On it…\n\nFound it.");
+  const acked: string[] = [];
+  const retried = await waitClient([
+    { status: "running", attempt: 1, firstBlock: "Looking.", result: null },
+    { status: "done", attempt: 2, firstBlock: "Retrying.", result: { status: "ok", reply: "Found it." } },
+  ]).waitRun("r1", { onFirstBlock: (text) => acked.push(text) });
+  assert.deepEqual(acked, ["Looking."]);
+  assert.equal(retried?.reply, "Retrying.\n\nFound it.");
+});
+
+test("waiting reads the goal only when a goal hook listens", async () => {
+  const asked: boolean[] = [];
+  const core = createSlackCoreClient({
+    runs: { onTerminal() {} },
+    app: {
+      subscribeRun: () => () => {},
+      runProgress: async (_runId: string, opts?: { goal?: boolean }) => {
+        asked.push(opts?.goal === true);
+        return { status: "done", attempt: 1, result: { status: "silent" } };
+      },
+    },
+  } as unknown as SlackCoreClientDeps);
+  await core.waitRun("r1");
+  const goals: unknown[] = [];
+  await core.waitRun("r2", { onGoal: (goal) => void goals.push(goal) });
+  assert.deepEqual(asked, [false, true]);
 });
