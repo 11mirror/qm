@@ -11,7 +11,7 @@ import {
   type DecisionProvider,
 } from "../src/decisions/decisions.ts";
 import { createDecisionBackend } from "../src/decisions/providers.ts";
-import { createDecisionHooks, turnStartState } from "../src/decisions/hooks.ts";
+import { createDecisionHooks, turnEndState, turnStartState } from "../src/decisions/hooks.ts";
 
 const PROVIDERS: DecisionProvider[] = [{ id: "gw", protocol: "chat-completions" }];
 const MODELS = new Set(["m-deep"]);
@@ -470,6 +470,28 @@ test("observe-only rules do not hold up the turn and are still audited", async (
       ["shadow", "use_runtime"],
     ],
   );
+});
+
+test("an oversized reply is cut at its tail, keeping the instructions it is judged against and saying so", async () => {
+  const seen: string[] = [];
+  const backend: DecisionBackend = {
+    async choose({ questions, state }) {
+      seen.push(state);
+      return Object.fromEntries(Object.keys(questions).map((k) => [k, { yes: 0.1, no: 0.9 }]));
+    },
+  };
+  const state = turnEndState({
+    scopeLabel: "personal:U1",
+    guidance: "Never use an em dash.",
+    input: "summarise it",
+    reply: "word ".repeat(5_000),
+    attempt: 1,
+    attempts: 2,
+  });
+  await runHook([injection()], "tool_response", state, backend, new AbortController().signal);
+  assert.ok(seen[0]!.includes("Never use an em dash."));
+  assert.ok(seen[0]!.includes("summarise it"));
+  assert.match(seen[0]!, /\[cut: state exceeded MAX_STATE_CHARS \(8000\); \d+ more characters omitted\]$/);
 });
 
 test("a hook point reports enforce when any active rule enforces, observe when only observing rules exist", async () => {

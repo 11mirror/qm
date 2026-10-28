@@ -83,6 +83,12 @@ const MAX_TEXT_CHARS = 500;
 const MAX_STATE_CHARS = 8_000;
 const MAX_RULE_TEXT_CHARS = 16_000;
 
+function capState(state: string): string {
+  if (state.length <= MAX_STATE_CHARS) return state;
+  const marker = `\n[cut: state exceeded MAX_STATE_CHARS (${MAX_STATE_CHARS}); ${state.length - MAX_STATE_CHARS} more characters omitted]`;
+  return state.slice(0, MAX_STATE_CHARS - marker.length) + marker;
+}
+
 export function parseDecisionProvider(raw: unknown): { provider: DecisionProvider } | { error: string } {
   const r = (raw ?? {}) as Record<string, unknown>;
   if (typeof r.id !== "string" || !ID.test(r.id)) return { error: `provider id must match ${ID}` };
@@ -278,7 +284,7 @@ async function runGroup(
           },
         ]),
       ),
-      state: state.slice(0, MAX_STATE_CHARS).toWellFormed(),
+      state: capState(state).toWellFormed(),
       model: rules[0]!.model,
       signal,
     });

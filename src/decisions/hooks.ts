@@ -52,17 +52,16 @@ export function turnEndState(turn: {
     "Turn context:",
     `- surface: ${turn.surfaceName ?? "unknown"}`,
     `- scope: ${turn.scopeLabel.split(":")[0]}`,
-    `- revision attempt: ${turn.attempt} of ${turn.attempts}`,
-    "",
-    "Draft reply, written but not yet delivered:",
-    turn.reply.trim(),
-    "",
-    "Latest message:",
-    turn.input.trim(),
     "",
     guidance
       ? `Standing instructions this conversation's replies must follow:\n${guidance}`
       : "This conversation has no standing instructions of its own.",
+    "",
+    "Latest message:",
+    turn.input.trim(),
+    "",
+    `Draft reply, written but not yet delivered (revision attempt ${turn.attempt} of ${turn.attempts}):`,
+    turn.reply.trim(),
   ].join("\n");
 }
 

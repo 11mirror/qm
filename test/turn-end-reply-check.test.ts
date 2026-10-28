@@ -108,12 +108,11 @@ test("an enforcing turn_end rule holds the draft back and delivers the rewrite",
   assert.ok(reply.includes(`The held-back draft:\n${FIRST_DRAFT}`));
   assert.equal((narration[0]!.payload as { demoted?: boolean }).demoted, true);
 
-  assert.match(states[0]!, /Draft reply, written but not yet delivered:/);
+  assert.match(states[0]!, /Draft reply, written but not yet delivered \(revision attempt 1 of 2\):/);
   assert.ok(states[0]!.includes(FIRST_DRAFT));
-  assert.match(states[0]!, /revision attempt: 1 of 2/);
   assert.ok(states[0]!.includes(GUIDANCE));
   assert.match(states[0]!, /Standing instructions this conversation's replies must follow:/);
-  assert.match(states[1]!, /revision attempt: 2 of 2/);
+  assert.match(states[1]!, /revision attempt 2 of 2/);
 });
 
 test("an observing turn_end rule classifies without changing the reply", async () => {

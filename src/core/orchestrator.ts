@@ -52,10 +52,10 @@ import { reachEnqueue } from "../reach/reach.ts";
 import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../directory/directory-store.ts";
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
-import type { NewEntry, Lease, LeaseAttempt } from "../sessions/session-store.ts";
+import type { Lease, LeaseAttempt } from "../sessions/session-store.ts";
 import { SESSION_BUSY_FIRE_TEXT, SESSION_BUSY_USER_TEXT } from "./failure-copy.ts";
 import { CONFIG_DEFAULTS } from "../config.ts";
-import { acquireLeaseWithin, isOverheardEntry } from "../sessions/session-store.ts";
+import { acquireLeaseWithin, isApprovalEntry, isOverheardEntry } from "../sessions/session-store.ts";
 import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
 import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
@@ -157,7 +157,7 @@ import {
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { headSlice, jsonbSafeStringify } from "../util/text.ts";
-import { turnEndState } from "../decisions/hooks.ts";
+import { createReplyCheck } from "../decisions/reply-check.ts";
 import { absoluteAppLinks } from "../util/markdown.ts";
 import {
   isModelBudget,
@@ -235,16 +235,6 @@ const MODE_CONVERSATION_MD = loadProtocolFile("mode-conversation");
 const MODE_AUTONOMOUS_MD = loadProtocolFile("mode-autonomous");
 const MODE_FALLBACK_MD = loadProtocolFile("mode-fallback");
 
-const REPLY_REVISIONS = 2;
-
-function isApprovalEntry(entry: NewEntry): boolean {
-  return (
-    entry.type === "approval_request" ||
-    ((entry.type === "tool_result" || entry.type === "tool_call") &&
-      isObj(entry.payload) &&
-      entry.payload.blocked === "needs_approval")
-  );
-}
 const FIRST_BLOCK_CAPTURE_MAX_CHARS = 20_000;
 
 const DETECT_HISTORY_TAIL = 400;
@@ -3213,44 +3203,26 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (heldRunId) deps.turnStream!.release(heldRunId);
         };
         const conversationGuidance = deps.config?.getSoul(scopeId) ?? undefined;
-        let revision: { note: string; draft: string } | undefined;
-        let revisions = 0;
-        let awaitingApproval = false;
-        const reviewReply = async (entry: NewEntry): Promise<NewEntry> => {
-          if (entry.type === "tool_call") releaseHeld();
-          if (isApprovalEntry(entry)) awaitingApproval = true;
-          if (entry.type !== "assistant" || !replyCheckMode || revisions >= REPLY_REVISIONS) return entry;
-          if (awaitingApproval || spine.surfaceOutboundCount > 0 || turnAbort.signal.aborted) return entry;
-          const payload = isObj(entry.payload) ? entry.payload : {};
-          const text = typeof payload.text === "string" ? payload.text : "";
-          if (!text.trim() || payload.stopped === true) return entry;
-          const verdict = await deps
-            .decide!.run(
-              "turn_end",
-              turnEndState({
+        const replyCheck =
+          replyCheckMode && deps.decide
+            ? createReplyCheck({
+                decide: deps.decide,
                 ...(input.surface ? { surfaceName: input.surface } : {}),
-                scopeLabel: scopeId,
                 ...(conversationGuidance ? { guidance: conversationGuidance } : {}),
                 input: baseText,
-                reply: text,
-                attempt: revisions + 1,
-                attempts: REPLY_REVISIONS,
-              }),
-              {
-                actorId: actor.id,
-                scopeLabel: scopeId,
-                sessionId: session.id,
-                ...(input.runId ? { runId: input.runId } : {}),
-                cancel: turnAbort.signal,
-              },
-            )
-            .catch(swallowAs("orchestrator: reply check", undefined));
-          if (verdict?.action !== "revise" || !verdict.message || turnAbort.signal.aborted) return entry;
-          revisions += 1;
-          revision = { note: verdict.message, draft: text };
-          if (heldRunId) deps.turnStream!.discard(heldRunId);
-          return { ...entry, type: "text", payload: { ...payload, demoted: true } };
-        };
+                turn: {
+                  actorId: actor.id,
+                  scopeLabel: scopeId,
+                  sessionId: session.id,
+                  ...(input.runId ? { runId: input.runId } : {}),
+                  cancel: turnAbort.signal,
+                },
+                posted: () => spine.surfaceOutboundCount > 0,
+                onRevise: () => {
+                  if (heldRunId) deps.turnStream!.discard(heldRunId);
+                },
+              })
+            : undefined;
         const runHarnessSegment = async (
           harnessInput: string,
           extras: {
@@ -3283,7 +3255,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const silentResume = continueTurn && !continuation && !snapshot.text && !recall.text;
           let recordedRecall = false;
           const emit: HarnessTurnInput["emit"] = async (incoming) => {
-            const entry = await reviewReply(incoming);
+            if (incoming.type === "tool_call") releaseHeld();
+            const entry = replyCheck ? await replyCheck.review(incoming) : incoming;
             turnProgress++;
             const stored = (() => {
               if (entry.type === "assistant" || isApprovalEntry(entry)) {
@@ -3790,15 +3763,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             );
           }
           await mirrored;
-          const held = revision;
-          revision = undefined;
-          if (held && !segment.stopped && !segment.pausedOnApproval && !turnAbort.signal.aborted) {
-            console.error(`[decisions] reply revision ${revisions} session=${session.id}`);
-            return runHarnessTurn(
-              `[system] Your draft reply was held back, not delivered. ${held.note}\n\nThe held-back draft:\n${held.draft}\n\nWrite the reply again.`,
-              inbound.images.length ? { images: inbound.images } : {},
-              { history: filterHistory(forModelContext((await historyWindow()).entries)) },
-            );
+          const revisionPrompt = replyCheck?.takeRevision();
+          if (revisionPrompt && !segment.stopped && !segment.pausedOnApproval && !turnAbort.signal.aborted) {
+            return runHarnessTurn(revisionPrompt, inbound.images.length ? { images: inbound.images } : {}, {
+              history: filterHistory(forModelContext((await historyWindow()).entries)),
+            });
           }
           return {
             ...segment,
