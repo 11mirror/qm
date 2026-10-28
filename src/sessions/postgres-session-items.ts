@@ -72,20 +72,16 @@ export const withLease = async <T>(
   fn: (client: PoolClient) => Promise<T>,
 ): Promise<T> =>
   withPgTransaction(await ctx.pool(), async (client) => {
-    await lockSession(client, lease.sessionId);
-    const held = await client.query("SELECT token, expires_at FROM session_leases WHERE session_id = $1 FOR UPDATE", [
-      lease.sessionId,
-    ]);
-    if (held.rows[0]?.token !== lease.token || Number(held.rows[0]!.expires_at) <= ctx.now())
-      throw new Error(invalidMsg);
+    const at = ctx.now();
+    const held = await client.query(
+      "UPDATE session_leases SET expires_at = $3 WHERE session_id = $1 AND token = $2 AND expires_at > $4",
+      [lease.sessionId, lease.token, at + ctx.leaseTtlMs, at],
+    );
+    if (!held.rowCount) throw new Error(invalidMsg);
     if (lease.fenceToken) {
       if (!(await turnFenceHeld(client, lease.turnId ?? "", lease.fenceToken)))
         throw new Error(`${invalidMsg}: the turn no longer holds its claim`);
     }
-    await client.query("UPDATE session_leases SET expires_at = $2 WHERE session_id = $1", [
-      lease.sessionId,
-      ctx.now() + ctx.leaseTtlMs,
-    ]);
     return fn(client);
   });
 
@@ -124,11 +120,35 @@ export const insertItems = async (
   const lastUser = userTurns[userTurns.length - 1];
   await client
     .query(
-      `INSERT INTO items(tenant_id, session_id, seq, ${ITEM_COLUMNS.map(([column]) => column).join(",")}, created_at)
-       SELECT ${TENANT}, $1, i.seq, ${ITEM_COLUMNS.map(([column, key]) => (column === "blob_sha" ? `decode(i."${key}", 'hex')` : `i."${key}"`)).join(",")}, ${tsOf("$3::bigint")}
-       FROM jsonb_to_recordset($2::jsonb) AS i(seq bigint, ${ITEM_COLUMNS.map(([, key, type]) => `"${key}" ${type}`).join(",")})
-       ORDER BY i.seq`,
-      [sessionId, jsonbStringify(full), createdAt],
+      `WITH inserted AS (INSERT INTO items(tenant_id, session_id, seq, ${ITEM_COLUMNS.map(([column]) => column).join(",")}, created_at)
+       SELECT ${TENANT}, $1, i.seq, ${ITEM_COLUMNS.map(([column, key]) => (column === "blob_sha" ? `decode(i."${key}", 'hex')` : `i."${key}"`)).join(",")}, ${tsOf("$2::bigint")}
+       FROM jsonb_to_recordset($9::jsonb) AS i(seq bigint, ${ITEM_COLUMNS.map(([, key, type]) => `"${key}" ${type}`).join(",")})
+       ORDER BY i.seq)
+         UPDATE sessions
+          SET last_activity = CASE WHEN last_activity >= $2::bigint - ${LAST_ACTIVITY_DEBOUNCE_MS}
+                                   THEN last_activity
+                                   ELSE GREATEST(COALESCE(last_activity, 0), $2::bigint) END,
+              messages = $3,
+              turns = CASE WHEN turns IS NULL OR messages IS DISTINCT FROM $5
+                           THEN (SELECT COUNT(*) FROM items t WHERE t.tenant_id = ${TENANT} AND t.session_id = $1 AND ${userTurn("t")}) + $4
+                           ELSE turns + $4 END,
+              first_user_preview = CASE WHEN first_user_preview IS NULL AND turns = 0 AND messages = $5
+                                        THEN $6 ELSE first_user_preview END,
+              last_user_preview = COALESCE($7, last_user_preview),
+              last_user_activity = CASE WHEN $8::boolean THEN GREATEST(COALESCE(last_user_activity, 0), $2::bigint)
+                                        ELSE last_user_activity END
+        WHERE id = $1`,
+      [
+        sessionId,
+        createdAt,
+        startSeq + full.length,
+        userTurns.length,
+        startSeq,
+        firstUser ? storedPreview(firstUser.text, FIRST_PREVIEW_LEN) : null,
+        lastUser ? storedPreview(lastUser.text, LAST_PREVIEW_LEN) : null,
+        full.some(isUserMessage),
+        jsonbStringify(full),
+      ],
     )
     .catch((err: unknown) => {
       const e = err as { code?: unknown; constraint?: unknown };
@@ -139,32 +159,7 @@ export const insertItems = async (
         { cause: err },
       );
     });
-  await client.query(
-    `UPDATE sessions
-          SET last_activity = CASE WHEN last_activity >= $2::bigint - ${LAST_ACTIVITY_DEBOUNCE_MS}
-                                   THEN last_activity
-                                   ELSE GREATEST(COALESCE(last_activity, 0), $2::bigint) END,
-              messages = $3,
-              turns = CASE WHEN turns IS NULL OR messages IS DISTINCT FROM $5
-                           THEN (SELECT COUNT(*) FROM items t WHERE t.tenant_id = ${TENANT} AND t.session_id = $1 AND ${userTurn("t")})
-                           ELSE turns + $4 END,
-              first_user_preview = CASE WHEN first_user_preview IS NULL AND turns = 0 AND messages = $5
-                                        THEN $6 ELSE first_user_preview END,
-              last_user_preview = COALESCE($7, last_user_preview),
-              last_user_activity = CASE WHEN $8::boolean THEN GREATEST(COALESCE(last_user_activity, 0), $2::bigint)
-                                        ELSE last_user_activity END
-        WHERE id = $1`,
-    [
-      sessionId,
-      createdAt,
-      startSeq + full.length,
-      userTurns.length,
-      startSeq,
-      firstUser ? storedPreview(firstUser.text, FIRST_PREVIEW_LEN) : null,
-      lastUser ? storedPreview(lastUser.text, LAST_PREVIEW_LEN) : null,
-      full.some(isUserMessage),
-    ],
-  );
+
   return full;
 };
 

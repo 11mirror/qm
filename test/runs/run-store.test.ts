@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
 import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
 import type { Principal } from "../../src/types.ts";
 import { claimTurn, finishTurn, testRunStore, type TestRunStore } from "../support/turns.ts";
@@ -248,28 +247,6 @@ test("onTerminal fires once per terminal transition, not for a retried attempt",
     assert.equal(await finishTurn(second, { status: "failed", reason: "twice" }, "failed"), false);
     assert.deepEqual(seen, [`${ok.id}:done`, `${retried.id}:failed`], "the failure fires once");
   }));
-
-test("tool ledger caches a side effect's output per (runId, attempt, callIndex)", async () => {
-  const { databaseUrl, close } = testRunStore();
-  const { ledger, close: closeLedger } = createPostgresRunStore(databaseUrl);
-  try {
-    assert.equal((await ledger.begin("run1", 1, 0)).cached, false);
-    await ledger.record("run1", 1, 0, JSON.stringify({ cmd: "attempt-1" }));
-    const again = await ledger.begin("run1", 1, 0);
-    assert.equal(again.cached, true);
-    assert.deepEqual(JSON.parse(again.output ?? "null"), { cmd: "attempt-1" });
-    assert.equal((await ledger.begin("run1", 1, 1)).cached, false);
-    assert.equal((await ledger.begin("run1", 2, 0)).cached, false, "attempt 2 call 0 must not read attempt 1 call 0");
-    await ledger.record("run1", 2, 0, JSON.stringify({ cmd: "attempt-2" }));
-    const replay = await ledger.begin("run1", 2, 0);
-    assert.equal(replay.cached, true, "same-attempt replay dedupes");
-    assert.deepEqual(JSON.parse(replay.output ?? "null"), { cmd: "attempt-2" });
-    assert.deepEqual(JSON.parse((await ledger.begin("run1", 1, 0)).output ?? "null"), { cmd: "attempt-1" });
-  } finally {
-    await closeLedger();
-    await close();
-  }
-});
 
 test("noteTurnUserSeq records the turn boundary once and never overwrites it", () =>
   withStore(async ({ runs, ledger }) => {

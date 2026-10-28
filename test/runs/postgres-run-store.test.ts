@@ -239,38 +239,6 @@ test("pg run store: withdraw and claim cannot both win the same unstarted run", 
   }
 });
 
-test("pg run store startup does not lock an already-migrated tool ledger", async () => {
-  const baseline = createPostgresRunStore(dbUrl);
-  await baseline.runs.activeSessionIds();
-  const pg = (await import("pg")).default;
-  const reader = new pg.Client({ connectionString: dbUrl });
-  await reader.connect();
-  const reboot = createPostgresRunStore(dbUrl);
-  let initialization: Promise<unknown> | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await reader.query("BEGIN");
-    await reader.query("SELECT output FROM tool_calls LIMIT 1");
-    const runId = `boot-ledger-${randomUUID()}`;
-    initialization = (async () => {
-      await reboot.runs.activeSessionIds();
-      await reboot.ledger.record(runId, 1, 0, "kept");
-      assert.deepEqual(await baseline.ledger.begin(runId, 1, 0), { cached: true, output: "kept" });
-    })();
-    await Promise.race([
-      initialization,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("run-store startup blocked on a ledger reader")), 5_000);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-    await reader.query("ROLLBACK");
-    await initialization?.catch(() => {});
-    await Promise.all([reader.end(), baseline.close(), reboot.close()]);
-  }
-});
-
 test("pg run store indexes newest active run by session", async () => {
   const { close } = createPostgresRunStore(dbUrl);
   const pg = (await import("pg")).default;

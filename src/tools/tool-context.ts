@@ -19,7 +19,6 @@ import type {
 } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { SessionSyscalls } from "../subagents/session-tools.ts";
-import { type ToolLedger } from "../runs/tool-ledger.ts";
 import { type RunSignalStore } from "../runs/run-signal-store.ts";
 import type { BackgroundExecBroker } from "../connectors/background-exec-broker.ts";
 import type { MonitorBroker } from "../monitors/monitor-broker.ts";
@@ -49,7 +48,7 @@ import {
   COMMAND_PATH_PROBE_TIMEOUT_MS,
 } from "./tool-context-ops.ts";
 import { backgroundOps, controlOps, surfaceOps } from "./tool-context-calls.ts";
-import { sandboxAccess, callLedger, credentialStaging } from "./tool-context-env.ts";
+import { sandboxAccess, controlAccess, credentialStaging } from "./tool-context-env.ts";
 
 export interface ToolContextDeps {
   desktopClientId?: string;
@@ -111,10 +110,8 @@ export interface ToolContextDeps {
   };
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
-  ledger?: ToolLedger;
   signals?: RunSignalStore;
   runId?: string;
-  attempt?: number;
   backgroundBroker?: BackgroundExecBroker;
   monitorBroker?: MonitorBroker;
   control?: ControlService;
@@ -139,20 +136,20 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     provisionForCommand,
     authorizeExecution,
   } = sandboxAccess(deps);
-  const { runId, once, controlOp, surfaceOp } = callLedger(deps);
+  const { controlOp, surfaceOp } = controlAccess(deps);
+  const { runId } = deps;
   const { selectCredentials, stageCredentials } = credentialStaging(deps, { writableScopeId });
   return {
     ...contextBasics(deps, { writableScopeId, accessSandbox }),
     ...computerOps(deps, { writableScopeId, accessSandbox }),
-    ...executeOp(deps, { writableScopeId, provisionForCommand, once, selectCredentials, stageCredentials }),
-    ...fileOps(deps, { writableScopeId, memory, fallbackMounts, persistExclude, machine, once }),
-    ...publishOps(deps, { writableScopeId, accessSandbox, machine, once }),
-    ...memoryAndHistoryOps(deps, { writableScopeId, memory, runId, once }),
+    ...executeOp(deps, { writableScopeId, provisionForCommand, selectCredentials, stageCredentials }),
+    ...fileOps(deps, { writableScopeId, memory, fallbackMounts, persistExclude, machine }),
+    ...publishOps(deps, { writableScopeId, accessSandbox, machine }),
+    ...memoryAndHistoryOps(deps, { writableScopeId, memory, runId }),
     ...backgroundOps(deps, {
       writableScopeId,
       provisionForCommand,
       authorizeExecution,
-      once,
       selectCredentials,
       stageCredentials,
     }),

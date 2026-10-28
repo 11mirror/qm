@@ -237,7 +237,7 @@ function orchestratorDepsTail(deps: OrchestratorInputs & { layerBrokerFor: Sessi
   const { memoryStrategy } = deps.memory;
   const { skillsReady, resolveClient, keychain, serviceCreds } = deps.credentials;
   const { errors, blobTransfer } = deps.files;
-  const { ledger, turnStream, runActivity, runs, credentialUsage, processes } = deps.runs;
+  const { turnStream, runActivity, runs, credentialUsage, processes } = deps.runs;
   const { runSignals, orgBaseModelId, fallback } = deps.harness;
   const { outbound, recentDmPosts } = deps.outbound;
   const { approvals, monitors, crons, webhooks } = deps.crons;
@@ -250,7 +250,6 @@ function orchestratorDepsTail(deps: OrchestratorInputs & { layerBrokerFor: Sessi
     skillsReady,
     advisoryLock,
     errors,
-    ledger,
     signals: runSignals,
     turnStream,
     runActivity,

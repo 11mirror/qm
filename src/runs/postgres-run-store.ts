@@ -5,13 +5,11 @@ import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import type { Run, RunDeliveryState, RunPriority, RunStop, RunStore } from "./run-store.ts";
 import { isTerminal } from "./run-store.ts";
-import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
 
 export type RunRows = Omit<RunStore, "enqueue" | "withdraw" | "cancelTurn" | "cancelTree" | "leaseHeld">;
 
 export interface PostgresRuntime {
   runs: RunRows;
-  ledger: ToolLedger;
   close(): Promise<void>;
 }
 
@@ -201,25 +199,6 @@ function runReads(
   };
 }
 
-function createToolLedger(q: Query): ToolLedger {
-  return {
-    async begin(runId, attempt, callIndex): Promise<LedgerBegin> {
-      const { rows } = await q("SELECT output FROM tool_calls WHERE run_id=$1 AND attempt=$2 AND call_index=$3", [
-        runId,
-        attempt,
-        callIndex,
-      ]);
-      return rows[0] ? { cached: true, output: rows[0].output as string } : { cached: false };
-    },
-    async record(runId, attempt, callIndex, output): Promise<void> {
-      await q(
-        "INSERT INTO tool_calls(run_id, attempt, call_index, output, created_at) VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",
-        [runId, attempt, callIndex, output, Date.now()],
-      );
-    },
-  };
-}
-
 export function createPostgresRunStore(connectionString: string): PostgresRuntime {
   const { query: q, close: closePool } = createPgPool(connectionString, RUN_STORE_MIGRATIONS);
 
@@ -296,5 +275,5 @@ export function createPostgresRunStore(connectionString: string): PostgresRuntim
     close: () => closePool(),
   };
 
-  return { runs, ledger: createToolLedger(q), close: () => runs.close!() };
+  return { runs, close: () => runs.close!() };
 }

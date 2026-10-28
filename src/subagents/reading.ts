@@ -90,8 +90,9 @@ export async function receiveMessages(
   do {
     binding.request.cancel?.throwIfAborted();
     if (signal?.aborted) return [];
-    const caller = await currentCaller();
     const messages = await deps.mailbox.pending(binding.session.id);
+    if (!messages.length && !timeoutMs) return [];
+    const caller = await currentCaller();
     const visible: SessionMessage[] = [];
     for (const message of messages) {
       const sender = await deps.sessions.getForParticipant(message.senderId, caller.actor.id);

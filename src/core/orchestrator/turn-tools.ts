@@ -407,10 +407,8 @@ function createTurnToolContext(
     sessionHistory: sessionHistoryTools(ctx, session),
     execTimeoutMs: deps.execTimeoutMs,
     execTimeoutCeilingMs: deps.execTimeoutCeilingMs,
-    ledger: deps.ledger,
     signals: deps.signals,
     ...(input.runId ? { runId: input.runId } : {}),
-    attempt: input.attempt ?? 1,
     ...(backgroundBroker ? { backgroundBroker } : {}),
     ...(monitorBroker ? { monitorBroker } : {}),
   });

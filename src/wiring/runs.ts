@@ -93,7 +93,6 @@ export function buildRuns(deps: RunsInputs) {
   };
   const productAnalytics = createProductAnalytics(() => tenant().orgId, config.productAnalytics);
   runs.onTerminal((run) => void productAnalytics.responseFinished(run));
-  const ledger = runStore.ledger;
   every("turns:pointer-repair", 60_000, () => sweepTurns({ ledger: turnLedger, sessions, errors }), {
     immediate: true,
     due: hasRows("session_turn_pointers", "w.active_turn_id IS NOT NULL"),
@@ -118,7 +117,6 @@ export function buildRuns(deps: RunsInputs) {
     productAnalytics,
     ledgerEventBus,
     maxAttempts,
-    ledger,
     blockingApprovalSessions,
     turnLedger,
     turnStream,

@@ -216,6 +216,9 @@ async function beginTurn(o: OrchestratorInstance, ctx: TurnCtx, turn: TurnState)
     memoryView,
     captureDependencies,
     historyWindow,
+    invalidateHistory: () => {
+      historyAppended = true;
+    },
     systemPrompt: finished.systemPrompt,
     rosterMembers: finished.rosterMembers,
     scopeAsks: finished.scopeAsks,
@@ -310,6 +313,7 @@ async function executeTurn(
     observeSecurityData,
   };
   run.runtimeHandoffs = selected.restoredRuntime ? 1 : 0;
+  begun.invalidateHistory();
   const result = await runSegments(ctx, segmentTurn, o.compaction.compactRecent);
 
   const { settled, completed } = await settleTurn(ctx, {
@@ -385,6 +389,7 @@ function newTurnRunState(dispatch: DispatchTrace): TurnRunState {
     turnStart: 0,
     emittedEntries: [],
     tailOwnsReclaim: false,
+    mirrored: Promise.resolve(),
   };
 }
 

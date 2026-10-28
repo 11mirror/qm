@@ -12,7 +12,12 @@ import { withCleanup } from "../util/errors.ts";
 import type { SandboxHandle } from "../sandbox/sandbox.ts";
 import { type ToolContext, CONTROL_UNAVAILABLE } from "./primitives.ts";
 import { type ToolContextDeps } from "./tool-context.ts";
-import { scratchOnlyHandles, type sandboxAccess, type callLedger, type credentialStaging } from "./tool-context-env.ts";
+import {
+  scratchOnlyHandles,
+  type sandboxAccess,
+  type controlAccess,
+  type credentialStaging,
+} from "./tool-context-env.ts";
 
 export function backgroundOps(
   deps: ToolContextDeps,
@@ -20,11 +25,10 @@ export function backgroundOps(
     writableScopeId,
     provisionForCommand,
     authorizeExecution,
-    once,
+
     selectCredentials,
     stageCredentials,
   }: Pick<ReturnType<typeof sandboxAccess>, "writableScopeId" | "provisionForCommand" | "authorizeExecution"> &
-    Pick<ReturnType<typeof callLedger>, "once"> &
     Pick<ReturnType<typeof credentialStaging>, "selectCredentials" | "stageCredentials">,
 ) {
   return {
@@ -49,36 +53,33 @@ export function backgroundOps(
           deps.provision(),
         );
       }
-      return once(
-        async () => {
-          const staged = requested.length ? await stageCredentials(requested, handle, "background") : undefined;
-          const release = async () => {
-            await staged?.fileExecution?.finish();
+      {
+        const staged = requested.length ? await stageCredentials(requested, handle, "background") : undefined;
+        const release = async () => {
+          await staged?.fileExecution?.finish();
+        };
+        let credentials: BackgroundCredentials | undefined;
+        try {
+          credentials = staged && {
+            env: staged.commandEnv,
+            secrets: Object.values(executionSecretEnv(staged.commandEnv, staged.secretValues)),
+            ...(staged.fileExecution
+              ? { files: processCredentialFiles(staged.fileExecution.plan, staged.fileCredentials) }
+              : {}),
+            release,
           };
-          let credentials: BackgroundCredentials | undefined;
-          try {
-            credentials = staged && {
-              env: staged.commandEnv,
-              secrets: Object.values(executionSecretEnv(staged.commandEnv, staged.secretValues)),
-              ...(staged.fileExecution
-                ? { files: processCredentialFiles(staged.fileExecution.plan, staged.fileCredentials) }
-                : {}),
-              release,
-            };
-          } catch (error) {
-            return withCleanup(() => Promise.reject(error), release);
-          }
-          const started = await deps.backgroundBroker!.start(
-            handle,
-            command,
-            opts.purpose,
-            opts?.ttlSeconds ? opts.ttlSeconds * 1000 : undefined,
-            credentials,
-          );
-          return scratchOnly ? { ...started, jobComputer: true } : started;
-        },
-        () => true,
-      );
+        } catch (error) {
+          return withCleanup(() => Promise.reject(error), release);
+        }
+        const started = await deps.backgroundBroker!.start(
+          handle,
+          command,
+          opts.purpose,
+          opts?.ttlSeconds ? opts.ttlSeconds * 1000 : undefined,
+          credentials,
+        );
+        return scratchOnly ? { ...started, jobComputer: true } : started;
+      }
     },
     async backgroundPoll(
       processId: string,
@@ -86,33 +87,23 @@ export function backgroundOps(
     ): Promise<BackgroundPollResult> {
       if (!deps.backgroundBroker) throw new Error(BACKGROUND_UNAVAILABLE_MESSAGE);
       const handle = (await deps.backgroundBroker.handleFor?.(processId)) ?? (await deps.provision());
-      return once(
-        () =>
-          deps.backgroundBroker!.poll(handle, processId, {
-            ...(opts?.sinceCursor !== undefined ? { sinceCursor: opts.sinceCursor } : {}),
-            ...(opts?.maxBytes !== undefined ? { maxBytes: opts.maxBytes } : {}),
-            ...(opts?.waitSeconds !== undefined ? { waitMs: opts.waitSeconds * 1000 } : {}),
-          }),
-        (r) => r.status.state === "exited",
-      );
+      return deps.backgroundBroker!.poll(handle, processId, {
+        ...(opts?.sinceCursor !== undefined ? { sinceCursor: opts.sinceCursor } : {}),
+        ...(opts?.maxBytes !== undefined ? { maxBytes: opts.maxBytes } : {}),
+        ...(opts?.waitSeconds !== undefined ? { waitMs: opts.waitSeconds * 1000 } : {}),
+      });
     },
     async backgroundStop(processId: string, signal?: string): Promise<BackgroundStopResult> {
       if (!deps.backgroundBroker) throw new Error(BACKGROUND_UNAVAILABLE_MESSAGE);
       const handle = (await deps.backgroundBroker.handleFor?.(processId)) ?? (await deps.provision());
-      return once(
-        () => deps.backgroundBroker!.stop(handle, processId, signal),
-        () => true,
-      );
+      return deps.backgroundBroker!.stop(handle, processId, signal);
     },
     async backgroundWrite(processId: string, data: string): Promise<BackgroundWriteResult> {
       if (!deps.backgroundBroker) throw new Error(BACKGROUND_UNAVAILABLE_MESSAGE);
       const handle = (await deps.backgroundBroker.handleFor?.(processId)) ?? (await deps.provision());
       if (handle.resourceId && (await deps.sandboxResources?.get(handle.resourceId))?.jobOnly)
         throw new Error("a background job that uses private credentials does not accept input");
-      return once(
-        () => deps.backgroundBroker!.write(handle, processId, data),
-        () => true,
-      );
+      return deps.backgroundBroker!.write(handle, processId, data);
     },
     async backgroundList(): Promise<BackgroundJobSummary[]> {
       if (!deps.backgroundBroker) return [];
@@ -120,116 +111,47 @@ export function backgroundOps(
     },
     async backgroundWatch(processId, opts) {
       if (!deps.monitorBroker) throw new Error(WATCH_UNAVAILABLE_MESSAGE);
-      return once(
-        () => deps.monitorBroker!.watch(processId, opts),
-        () => true,
-      );
+      return deps.monitorBroker!.watch(processId, opts);
     },
     async backgroundUnwatch(monitorId) {
       if (!deps.monitorBroker) throw new Error(WATCH_UNAVAILABLE_MESSAGE);
-      return once(
-        () => deps.monitorBroker!.unwatch(monitorId),
-        () => true,
-      );
+      return deps.monitorBroker!.unwatch(monitorId);
     },
   } satisfies Partial<ToolContext>;
 }
 
-export function controlOps(deps: ToolContextDeps, { controlOp }: Pick<ReturnType<typeof callLedger>, "controlOp">) {
+export function controlOps(deps: ToolContextDeps, { controlOp }: Pick<ReturnType<typeof controlAccess>, "controlOp">) {
   return {
-    cronCreate: (req) =>
-      controlOp(
-        (c, cl) => c.createCron(req, cl),
-        (r) => r.ok,
-      ),
+    cronCreate: (req) => controlOp((c, cl) => c.createCron(req, cl)),
     cronList: () => controlOp((c, cl) => c.listCrons(cl)),
     cronGet: (id) => controlOp((c, cl) => c.getCron(id, cl)),
     cronRuns: (id, req) => controlOp((c, cl) => c.getCronRuns(id, req ?? {}, cl)),
-    cronPatch: (id, req) =>
-      controlOp(
-        (c, cl) => c.patchCron(id, req, cl),
-        (r) => r.ok,
-      ),
-    cronNote: (id, note) =>
-      controlOp(
-        (c, cl) => c.noteCron(id, note, cl),
-        (r) => r.ok,
-      ),
-    cronDelete: (id) =>
-      controlOp(
-        (c, cl) => c.deleteCron(id, cl),
-        (r) => r.ok,
-      ),
-    cronSetEnabled: (id, enabled) =>
-      controlOp(
-        (c, cl) => c.setCronEnabled(id, enabled, cl),
-        (r) => r.ok,
-      ),
-    cronRun: (id) =>
-      controlOp(
-        (c, cl) => c.runCron(id, cl),
-        (r) => r.ok,
-      ),
-    webhookCreate: (req) =>
-      controlOp(
-        (c, cl) => c.createWebhook(req, cl, deps.webhookPublicUrl),
-        (r) => r.ok,
-      ),
+    cronPatch: (id, req) => controlOp((c, cl) => c.patchCron(id, req, cl)),
+    cronNote: (id, note) => controlOp((c, cl) => c.noteCron(id, note, cl)),
+    cronDelete: (id) => controlOp((c, cl) => c.deleteCron(id, cl)),
+    cronSetEnabled: (id, enabled) => controlOp((c, cl) => c.setCronEnabled(id, enabled, cl)),
+    cronRun: (id) => controlOp((c, cl) => c.runCron(id, cl)),
+    webhookCreate: (req) => controlOp((c, cl) => c.createWebhook(req, cl, deps.webhookPublicUrl)),
     webhookList: () => controlOp((c, cl) => c.listWebhooks(cl)),
-    webhookDisable: (id) =>
-      controlOp(
-        (c, cl) => c.disableWebhook(id, cl),
-        (r) => r.ok,
-      ),
-    webhookUpdate: (id, action) =>
-      controlOp(
-        (c, cl) => c.updateWebhook(id, { action }, cl),
-        (r) => r.ok,
-      ),
+    webhookDisable: (id) => controlOp((c, cl) => c.disableWebhook(id, cl)),
+    webhookUpdate: (id, action) => controlOp((c, cl) => c.updateWebhook(id, { action }, cl)),
     instructionsRead() {
       if (!deps.control || !deps.controlClaims) return CONTROL_UNAVAILABLE;
       return deps.control.readInstructions(deps.controlClaims);
     },
     instructionsWrite: (content, expectedVersion) =>
-      controlOp(
-        async (c, cl) => c.writeInstructions(content, cl, expectedVersion),
-        (r) => r.ok,
-      ),
-    shareArtifact: (req) =>
-      controlOp(
-        (c, cl) => c.shareArtifact(req, cl),
-        (r) => r.ok,
-      ),
+      controlOp(async (c, cl) => c.writeInstructions(content, cl, expectedVersion)),
+    shareArtifact: (req) => controlOp((c, cl) => c.shareArtifact(req, cl)),
   } satisfies Partial<ToolContext>;
 }
 
-export function surfaceOps(deps: ToolContextDeps, { surfaceOp }: Pick<ReturnType<typeof callLedger>, "surfaceOp">) {
+export function surfaceOps(deps: ToolContextDeps, { surfaceOp }: Pick<ReturnType<typeof controlAccess>, "surfaceOp">) {
   return {
-    post: (text, opts, files, sandboxId) =>
-      surfaceOp(
-        (s) => s.post(text, opts, files, sandboxId),
-        (r) => r.ok,
-      ),
-    reach: (text, target, files, sandboxId) =>
-      surfaceOp(
-        (s) => s.reach(text, target, files, sandboxId),
-        (r) => r.ok,
-      ),
-    react: (input) =>
-      surfaceOp(
-        (s) => s.react(input),
-        (r) => r.ok,
-      ),
-    edit: (input) =>
-      surfaceOp(
-        (s) => s.edit(input),
-        (r) => r.ok,
-      ),
-    delete: (input) =>
-      surfaceOp(
-        (s) => s.delete(input),
-        (r) => r.ok,
-      ),
+    post: (text, opts, files, sandboxId) => surfaceOp((s) => s.post(text, opts, files, sandboxId)),
+    reach: (text, target, files, sandboxId) => surfaceOp((s) => s.reach(text, target, files, sandboxId)),
+    react: (input) => surfaceOp((s) => s.react(input)),
+    edit: (input) => surfaceOp((s) => s.edit(input)),
+    delete: (input) => surfaceOp((s) => s.delete(input)),
     readThread: (opts) => surfaceOp((s) => s.readThread(opts)),
     whatsNew: (opts) => surfaceOp((s) => s.whatsNew(opts)),
     search: (query, opts) => surfaceOp((s) => s.search(query, opts)),

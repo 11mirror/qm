@@ -28,18 +28,17 @@ import {
   type ToolContext,
 } from "./primitives.ts";
 import { type ToolContextDeps } from "./tool-context.ts";
-import { scratchOnlyHandles, type sandboxAccess, type callLedger, type credentialStaging } from "./tool-context-env.ts";
+import { scratchOnlyHandles, type sandboxAccess, type credentialStaging } from "./tool-context-env.ts";
 
 export function executeOp(
   deps: ToolContextDeps,
   {
     writableScopeId,
     provisionForCommand,
-    once,
+
     selectCredentials,
     stageCredentials,
   }: Pick<ReturnType<typeof sandboxAccess>, "writableScopeId" | "provisionForCommand"> &
-    Pick<ReturnType<typeof callLedger>, "once"> &
     Pick<ReturnType<typeof credentialStaging>, "selectCredentials" | "stageCredentials">,
 ) {
   return {
@@ -54,7 +53,7 @@ export function executeOp(
         credentials?: string[];
       },
     ): Promise<ExecResult & { reached?: ReachedProvenance; scratchReroute?: boolean }> {
-      return once(async () => {
+      {
         const scratch = execOpts?.scratch === true;
         const requestedCredentials = execOpts?.credentials ?? [];
         if (requestedCredentials.length && (execOpts?.reachTarget !== undefined || !writableScopeId)) {
@@ -141,7 +140,7 @@ export function executeOp(
           },
         );
         return { ...r, ...(reached ? { reached } : {}), ...(scratchReroute ? { scratchReroute } : {}) };
-      });
+      }
     },
   } satisfies Partial<ToolContext>;
 }
@@ -154,12 +153,10 @@ export function fileOps(
     fallbackMounts,
     persistExclude,
     machine,
-    once,
   }: Pick<
     ReturnType<typeof sandboxAccess>,
     "writableScopeId" | "memory" | "fallbackMounts" | "persistExclude" | "machine"
-  > &
-    Pick<ReturnType<typeof callLedger>, "once">,
+  >,
 ) {
   return {
     async read(path: string, signal?: AbortSignal, sandboxId?: string): Promise<ReadResult> {
@@ -262,11 +259,11 @@ export function fileOps(
         throw new Error(
           `${path} is not in the computer's workspace; only workspace files can be written, so name it relative to the workspace`,
         );
-      await once(async () => {
+      {
         await deps.sandbox.writeFile(handle, rel, data);
         if (ownerScopeId && !isUnderAnyDir(rel, persistExclude))
           await deps.workspace.write(ownerScopeId, durableRef(rel), data);
-      });
+      }
     },
   } satisfies Partial<ToolContext>;
 }
@@ -277,9 +274,7 @@ export function publishOps(
     writableScopeId,
     accessSandbox,
     machine,
-    once,
-  }: Pick<ReturnType<typeof sandboxAccess>, "writableScopeId" | "accessSandbox" | "machine"> &
-    Pick<ReturnType<typeof callLedger>, "once">,
+  }: Pick<ReturnType<typeof sandboxAccess>, "writableScopeId" | "accessSandbox" | "machine">,
 ) {
   return {
     async publish(input: PublishInput): Promise<PublishResult> {
@@ -318,7 +313,7 @@ export function publishOps(
           )
         : {};
 
-      return once(async () => {
+      {
         const d = await deps.deploy.deployOrUpdate({
           ownerScopeId: owner,
           createdBy: deps.createdBy,
@@ -353,7 +348,7 @@ export function publishOps(
           ...(d.embedAncestors?.length ? { embedAncestors: d.embedAncestors } : {}),
           ...(d.public ? { public: true } : {}),
         };
-      });
+      }
     },
     async setDeploymentPublic(id: string, isPublic: boolean) {
       const d = await deps.deploy.setDeploymentPublic(id, isPublic, { createdBy: deps.createdBy });
@@ -368,9 +363,7 @@ export function memoryAndHistoryOps(
     writableScopeId,
     memory,
     runId,
-    once,
-  }: Pick<ReturnType<typeof sandboxAccess>, "writableScopeId" | "memory"> &
-    Pick<ReturnType<typeof callLedger>, "runId" | "once">,
+  }: Pick<ReturnType<typeof sandboxAccess>, "writableScopeId" | "memory"> & Pick<ToolContextDeps, "runId">,
 ) {
   return {
     async memorySearch(q: string, limit?: number, scope?: ScopeId): Promise<string[] | null> {
@@ -391,33 +384,31 @@ export function memoryAndHistoryOps(
     async memoryAdd(facts: string[]): Promise<number | null> {
       const write = deps.memoryAccess?.write;
       if (!memory || !write) return null;
-      return once(() =>
-        memory.capture(write, facts, Date.now(), deps.createdBy, {
-          ...deps.memoryCaptureMetadata?.(),
-          mode: "explicit",
-          actorId: deps.createdBy,
-          conversationScopeId: writableScopeId ?? write,
-        }),
-      );
+      return memory.capture(write, facts, Date.now(), deps.createdBy, {
+        ...deps.memoryCaptureMetadata?.(),
+        mode: "explicit",
+        actorId: deps.createdBy,
+        conversationScopeId: writableScopeId ?? write,
+      });
     },
     async memoryEdit(edits: MemoryEdit[]): Promise<true | null> {
       const write = deps.memoryAccess?.write;
       if (!memory?.edit || !write) return null;
-      return once(async () => {
+      {
         await memory!.edit!(write, edits, deps.createdBy, {
           ...deps.memoryCaptureMetadata?.(),
           conversationScopeId: writableScopeId ?? write,
         });
         return true as const;
-      });
+      }
     },
     async memoryDelete(ids: string[]): Promise<true | null> {
       const write = deps.memoryAccess?.write;
       if (!memory?.delete || !write) return null;
-      return once(async () => {
+      {
         await memory!.delete!(write, ids, deps.createdBy);
         return true as const;
-      });
+      }
     },
     ...(deps.humanTurn ? { humanTurn: true } : {}),
     ...(deps.sessionSyscalls ? { sessionSyscalls: deps.sessionSyscalls } : {}),

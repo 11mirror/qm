@@ -23,7 +23,7 @@ import { securityScreenChunks, toolLabelOf, type ToolResultScreenInput } from ".
 import { artifactImageLoader } from "../../harness/replay-images.ts";
 import { environmentNote, inboundIssuesNote } from "../attachments.ts";
 import { runtimeSwitchNote } from "../turn-resume.ts";
-import { reportFailure, swallowAs } from "../../util/errors.ts";
+import { reportFailure, swallowAs, withCleanup } from "../../util/errors.ts";
 import { absoluteAppLinks } from "../../util/markdown.ts";
 import { NonRetryableTurnError } from "../turn-error.ts";
 import { randomUUID } from "node:crypto";
@@ -63,6 +63,7 @@ export async function mirrorRunActivity(
 }
 
 export interface TurnRunState {
+  mirrored: Promise<void>;
   toolCalls: number;
   failureUserItem?: NewItem<"UserMessage">;
   dispatch: DispatchTrace;
@@ -134,51 +135,55 @@ async function runHarnessSegment(
   const saveGoal = async (goal: GoalRecord): Promise<void> => {
     await deps.sessions.setGoal(lease, goal);
   };
-  const turnResult = await deps.harness.turns.runTurn({
-    session,
-    loadImage: artifactImageLoader(deps.files, mayReadArtifact),
-    ...(turnTimezone ? { timezone: turnTimezone } : {}),
-    prepareSteer: createPrepareSteer(ctx, turn, initialDocuments),
-    ...segmentRuntimeOptions(ctx, turn.selected, run),
-    ...(input.runId ? { runId: input.runId } : {}),
-    cancel: turnAbort.signal,
-    ...(silentResume ? { continueTurn: true, resumeUserSeq: partial!.userSeq } : {}),
-    ...(input.shutdown ? { shutdown: input.shutdown } : {}),
-    input: continueTurn && !continuation && !silentResume ? "" : harnessInput,
-    ...(!partial && messageTs ? { triggerTs: messageTs } : {}),
-    ...(!partial && entryTs ? { entryTs } : {}),
-    ...(environment ? { environment } : {}),
-    ...(extras.priorTurns?.length ? { priorTurns: extras.priorTurns } : {}),
-    ...(extras.overheard?.length ? { overheard: extras.overheard } : {}),
-    ...(extras.attachments?.length ? { attachments: extras.attachments } : {}),
-    ...(extras.images?.length ? { images: extras.images } : {}),
-    documents: initialDocuments,
-    ...(Object.keys(runtimeState.requestedRuntime).length ? { runtime: runtimeState.requestedRuntime } : {}),
-    ...(strictReadOnly ? { readOnly: true } : {}),
-    surfaceName,
-    delegateWork,
-    ...((session.clientTools ?? input.clientTools)?.length
-      ? { clientTools: session.clientTools ?? input.clientTools }
-      : {}),
-    ...(input.surfaceTools && surfaceToolDeps ? { surfaceTools: true } : {}),
-    ...(isPollFire ? { pollFire: true } : {}),
-    turnWallClockMs:
-      effectiveTurnWallClockMs > 0
-        ? Math.max(1, effectiveTurnWallClockMs - (Date.now() - turnStart))
-        : effectiveTurnWallClockMs,
-    toolApprovalGate: consumeApproval,
-    systemPrompt: connectorNote ? `${systemPrompt}\n\n${connectorNote}` : systemPrompt,
-    history: continuation?.history ?? history,
-    tools,
-    ...(mcpTools ? { mcpTools } : {}),
-    ...(resumePlan?.kind === "retry" && !continuation ? { resumeToolCall: resumePlan.call } : {}),
-    emit,
-    goal: sessionGoal,
-    saveGoal,
-    scopeLabel: scopeId,
-    orgScopeId: resolution.orgScopeId,
-    ...segmentCallbacks(ctx, turn),
-  });
+  const turnResult = await withCleanup(
+    () =>
+      deps.harness.turns.runTurn({
+        session,
+        loadImage: artifactImageLoader(deps.files, mayReadArtifact),
+        ...(turnTimezone ? { timezone: turnTimezone } : {}),
+        prepareSteer: createPrepareSteer(ctx, turn, initialDocuments),
+        ...segmentRuntimeOptions(ctx, turn.selected, run),
+        ...(input.runId ? { runId: input.runId } : {}),
+        cancel: turnAbort.signal,
+        ...(silentResume ? { continueTurn: true, resumeUserSeq: partial!.userSeq } : {}),
+        ...(input.shutdown ? { shutdown: input.shutdown } : {}),
+        input: continueTurn && !continuation && !silentResume ? "" : harnessInput,
+        ...(!partial && messageTs ? { triggerTs: messageTs } : {}),
+        ...(!partial && entryTs ? { entryTs } : {}),
+        ...(environment ? { environment } : {}),
+        ...(extras.priorTurns?.length ? { priorTurns: extras.priorTurns } : {}),
+        ...(extras.overheard?.length ? { overheard: extras.overheard } : {}),
+        ...(extras.attachments?.length ? { attachments: extras.attachments } : {}),
+        ...(extras.images?.length ? { images: extras.images } : {}),
+        documents: initialDocuments,
+        ...(Object.keys(runtimeState.requestedRuntime).length ? { runtime: runtimeState.requestedRuntime } : {}),
+        ...(strictReadOnly ? { readOnly: true } : {}),
+        surfaceName,
+        delegateWork,
+        ...((session.clientTools ?? input.clientTools)?.length
+          ? { clientTools: session.clientTools ?? input.clientTools }
+          : {}),
+        ...(input.surfaceTools && surfaceToolDeps ? { surfaceTools: true } : {}),
+        ...(isPollFire ? { pollFire: true } : {}),
+        turnWallClockMs:
+          effectiveTurnWallClockMs > 0
+            ? Math.max(1, effectiveTurnWallClockMs - (Date.now() - turnStart))
+            : effectiveTurnWallClockMs,
+        toolApprovalGate: consumeApproval,
+        systemPrompt: connectorNote ? `${systemPrompt}\n\n${connectorNote}` : systemPrompt,
+        history: continuation?.history ?? history,
+        tools,
+        ...(mcpTools ? { mcpTools } : {}),
+        ...(resumePlan?.kind === "retry" && !continuation ? { resumeToolCall: resumePlan.call } : {}),
+        emit,
+        goal: sessionGoal,
+        saveGoal,
+        scopeLabel: scopeId,
+        orgScopeId: resolution.orgScopeId,
+        ...segmentCallbacks(ctx, turn),
+      }),
+    () => run.mirrored,
+  );
   return turnResult;
 }
 
@@ -282,7 +287,9 @@ function createSegmentEmit(
         }
       }
     }
-    await mirrorRunActivity(deps, input, appended);
+    run.mirrored = run.mirrored
+      .then(() => mirrorRunActivity(deps, input, appended))
+      .catch(swallowAs("orchestrator: run-activity mirror", undefined));
     return appended;
   };
   return emit;
@@ -467,14 +474,19 @@ function segmentCallbacks(
             ? deps.turnStream.startOffset(input.runId) + (deps.turnStream.snapshot(input.runId) ?? "").length
             : undefined;
         if (input.runId && deps.runActivity) {
-          const started = deps.runActivity.append(input.runId, {
-            marker: "text_start",
-            seq: emittedEntries.at(-1)?.seq ?? 0,
-            createdAt: Date.now(),
-            ...(phase ? { phase } : {}),
-            ...(streamOffset !== undefined ? { streamOffset } : {}),
-          });
-          await (phase ? started : started.catch(swallowAs("orchestrator: text-start activity", undefined)));
+          const runId = input.runId;
+          const activity = deps.runActivity;
+          const started = run.mirrored.then(() =>
+            activity.append(runId, {
+              marker: "text_start",
+              seq: emittedEntries.at(-1)?.seq ?? 0,
+              createdAt: Date.now(),
+              ...(phase ? { phase } : {}),
+              ...(streamOffset !== undefined ? { streamOffset } : {}),
+            }),
+          );
+          run.mirrored = started.then(() => undefined).catch(swallowAs("orchestrator: text-start activity", undefined));
+          await (phase ? started : run.mirrored);
         }
       }
     },

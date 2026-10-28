@@ -143,40 +143,18 @@ export function sandboxAccess(deps: ToolContextDeps) {
   };
 }
 
-export function callLedger(deps: ToolContextDeps) {
-  const ledger = deps.ledger;
-  const runId = deps.runId;
-  const attempt = deps.attempt ?? 1;
-  let callIndex = -1;
-
-  async function once<T>(produce: () => Promise<T>, shouldCache: (r: T) => boolean = () => true): Promise<T> {
-    const index = ++callIndex;
-    if (runId === undefined || !ledger) return produce();
-    const prior = await ledger.begin(runId, attempt, index);
-    if (prior.cached) return JSON.parse(prior.output ?? "null") as T;
-    const result = await produce();
-    if (shouldCache(result)) await ledger.record(runId, attempt, index, JSON.stringify(result ?? null));
-    return result;
-  }
-
+export function controlAccess(deps: ToolContextDeps) {
   function controlOp<R>(
     run: (control: ControlService, claims: CapabilityClaims) => Promise<R>,
-    cache?: (r: R) => boolean,
   ): Promise<R | ControlUnavailable> {
     if (!deps.control || !deps.controlClaims) return Promise.resolve(CONTROL_UNAVAILABLE);
-    const call = () => run(deps.control!, deps.controlClaims!);
-    return cache ? once(call, cache) : call();
+    return run(deps.control, deps.controlClaims);
   }
-
-  function surfaceOp<R>(
-    run: (surface: SurfaceToolDeps) => Promise<R>,
-    cache?: (r: R) => boolean,
-  ): Promise<R | { ok: false; message: string }> {
+  function surfaceOp<R>(run: (surface: SurfaceToolDeps) => Promise<R>): Promise<R | { ok: false; message: string }> {
     if (!deps.surface) return Promise.resolve({ ok: false, message: SURFACE_UNAVAILABLE_MESSAGE });
-    const call = () => run(deps.surface!);
-    return cache ? once(call, cache) : call();
+    return run(deps.surface);
   }
-  return { runId, once, controlOp, surfaceOp };
+  return { controlOp, surfaceOp };
 }
 
 export function credentialStaging(
