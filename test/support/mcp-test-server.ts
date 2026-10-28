@@ -60,7 +60,7 @@ export async function startMcpTestServer(
     authorizationServer?: string;
     call?: (name: string, args: Record<string, unknown>, authorization?: string) => CallToolResult;
     description?: string;
-    instructions?: string;
+    instructions?: string | ((actor: string | undefined) => string | undefined);
   } = {},
 ): Promise<McpTestServer> {
   const tools = opts.tools ?? DEFAULT_TOOLS;
@@ -70,10 +70,11 @@ export async function startMcpTestServer(
   const requests: McpRequest[] = [];
   const tokenRequests: string[] = [];
 
-  function mcpServer(): Server {
+  function mcpServer(actor: string | undefined): Server {
+    const instructions = typeof opts.instructions === "function" ? opts.instructions(actor) : opts.instructions;
     const server = new Server(
       { name: "qm-test", version: "1.0.0", ...(opts.description ? { description: opts.description } : {}) },
-      { capabilities: { tools: {} }, ...(opts.instructions ? { instructions: opts.instructions } : {}) },
+      { capabilities: { tools: {} }, ...(instructions ? { instructions } : {}) },
     );
     server.setRequestHandler(ListToolsRequestSchema, (req) => {
       const start = Number(req.params?.cursor ?? 0);
@@ -125,12 +126,13 @@ export async function startMcpTestServer(
     if (path.startsWith("/.well-known/")) return json(res, 404, { error: "not_found" });
     const parsed = body ? (JSON.parse(body) as { method?: string }) : undefined;
     const authorization = req.headers.authorization;
+    const actor = typeof req.headers["x-qm-actor"] === "string" ? req.headers["x-qm-actor"] : undefined;
     requests.push({
       method: req.method ?? "",
       path,
       ...(parsed?.method ? { rpc: parsed.method } : {}),
       ...(authorization ? { authorization } : {}),
-      ...(typeof req.headers["x-qm-actor"] === "string" ? { actor: req.headers["x-qm-actor"] } : {}),
+      ...(actor ? { actor } : {}),
       ...(typeof req.headers["x-qm-approval"] === "string" ? { approval: req.headers["x-qm-approval"] } : {}),
     });
     if (!authorized(authorization)) {
@@ -153,7 +155,7 @@ export async function startMcpTestServer(
     transport.onclose = () => {
       if (transport.sessionId) sessions.delete(transport.sessionId);
     };
-    await mcpServer().connect(transport);
+    await mcpServer(actor).connect(transport);
     await transport.handleRequest(req, res, parsed);
   }
 
