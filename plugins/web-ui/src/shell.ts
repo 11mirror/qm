@@ -1,3 +1,4 @@
+import { clearTranscriptCache } from "./transcript-cache";
 import { loadMessageTranscript, messageLinkSeq } from "./message-link.ts";
 import { initializeBrowserErrors, stopBrowserErrors } from "./browser-errors";
 import { initializeAnalytics, capturePageview, stopAnalytics } from "./product-analytics";
@@ -237,6 +238,7 @@ export async function signOut(): Promise<void> {
 }
 
 export function renderAuthGate(gate: AuthGate): void {
+  clearTranscriptCache();
   stopAnalytics();
   stopBrowserErrors();
   shellMounted = false;

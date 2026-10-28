@@ -1,3 +1,5 @@
+import { storeTranscript } from "./transcript-cache";
+import type { CoreSession, TranscriptPage } from "./core-bridge";
 import { type MessageFields } from "./message-rows";
 import { Agent, type AgentMessage } from "@earendil-works/pi-agent-core";
 import {
@@ -51,7 +53,9 @@ export function onDelivery(c: ChatCore, threadRef: string): void {
   if (ro && threadRef === ro.threadRef) {
     void fetchTranscript(ro.id, ro.anchorSeq !== null ? { sinceSeq: ro.anchorSeq } : { tailTurns: TAIL_TURNS })
       .then((page) => {
-        if (c.readOnlyView?.id === ro.id) mountReadOnlyPage(c, c.readOnlyView.session, page);
+        if (c.readOnlyView?.id !== ro.id) return;
+        storeTranscript(ro.id, page);
+        mountReadOnlyPage(c, ro.session, page);
       })
       .catch((error: unknown) => reportHandledError("web:transcript_refresh", error));
     return;
@@ -251,10 +255,61 @@ async function replaceTranscriptFromItems(c: ChatCore, agent: Agent): Promise<vo
     c.approvalsEpoch++;
     c.state.earlierCount = currentEarlierCount(c.state.forkSession ?? {}, page.earlierItems ?? 0);
     c.state.transcriptAnchorSeq = pageAnchor(page);
+    if (anchor === null) storeTranscript(sessionId, page);
   } catch (error) {
     reportHandledError("web:transcript_refresh", error);
   }
   drawActiveChat(c, agent);
+}
+
+export function transcriptAnchor(c: ChatCore): number | null {
+  return c.readOnlyView ? c.readOnlyView.anchorSeq : c.state.transcriptAnchorSeq;
+}
+
+export function applyTranscript(
+  c: ChatCore,
+  s: CoreSession,
+  page: TranscriptPage,
+  approvals: Promise<{ approvals: PendingApproval[] } | null> | null,
+  mountedAnchor: number | null,
+): Promise<void> {
+  if (c.state.sessionId !== s.id || c.state.loadingEarlier || transcriptAnchor(c) !== mountedAnchor)
+    return Promise.resolve();
+  if (c.readOnlyView?.id === s.id) {
+    mountReadOnlyPage(c, s, page);
+    return Promise.resolve();
+  }
+  const agent = c.state.agent;
+  if (!agent || agent.state.isStreaming) return Promise.resolve();
+  const generation = ++c.transcriptRefreshGeneration;
+  const original = agent.state.messages;
+  const isCurrent = () =>
+    generation === c.transcriptRefreshGeneration &&
+    s.id === c.state.sessionId &&
+    agent === c.state.agent &&
+    !agent.state.isStreaming &&
+    agent.state.messages === original;
+  const refresh = (async () => {
+    const fork = c.state.forkSession ?? {};
+    const split = inheritedTranscript(fork, page.items ?? []);
+    const messages = toMessages(split.current);
+    if (approvals) {
+      await syncPendingApprovals(c, agent, messages, approvals, isCurrent);
+      if (!isCurrent()) return;
+    }
+    c.state.pins = page.pins ?? [];
+    c.state.goal = page.goal ?? null;
+    if (page.runtime) c.state.turnRuntime = page.runtime;
+    const inherited = inheritedRefreshItems(fork, page.items ?? [], c.state.inheritedLoaded);
+    if (inherited) c.state.inheritedMessages = toMessages(inherited);
+    agent.state.messages = messages;
+    c.approvalsEpoch++;
+    c.state.earlierCount = currentEarlierCount(fork, page.earlierItems ?? 0);
+    c.state.transcriptAnchorSeq = pageAnchor(page);
+    drawActiveChat(c, agent);
+  })();
+  c.transcriptRefresh = refresh;
+  return refresh;
 }
 
 export function observeLiveWork(c: ChatCore, agent: Agent): (work: WorkBlock) => void {

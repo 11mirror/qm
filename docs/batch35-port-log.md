@@ -27,3 +27,9 @@ Adapted to `live-work.ts` and split chat draw/mount modules, typed items and wra
 Visible English changes (old → new, #2740): live `Working for {time}` → latest tool's existing activity/purpose label with elapsed time; step-less standalone `Thinking` → the same `Thinking` in the message; a current posting step → `Posting message`; an agent/session step → its existing session label and target. Existing finished, stopped and approval text remains unchanged.
 
 Checks: web-ui typecheck, changed-file eslint and two targeted browser behavior tests pass. Full suite and live smoke pending.
+
+## #2272 client transcript cache
+
+Adapted to typed item pages and the split chat refresh/mount architecture. LRU holds 40 transcript pages in browser memory; revisits mount immediately and reconcile in the background, with generation, active-agent, stream and pagination-anchor guards. Auth gates and session reset clear the cache. Read-only and continuable sessions share one mount helper. Existing StyleUp `pageAnchor` and read-only page mounting replace duplicate helpers from main. Cache timing metadata is deferred to the #2270 trace port because the baseline does not yet have session-switch timing. No persisted data or settings. No visible English changes.
+
+Checks: web-ui typecheck, changed-file eslint and all eight cache tests pass (capacity, change detection, instant revisit, unchanged view, approval refresh, read-only refresh, failure eviction, signout).

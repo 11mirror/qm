@@ -110,6 +110,14 @@ export interface ChatSurface {
   approvalSummaryView(a: PendingApproval, expanded?: boolean): TemplateResult;
   notePendingSessionOnSend(): void;
   onDelivery(threadRef: string): void;
+  applyTranscript(
+    s: CoreSession,
+    page: import("./core-bridge").TranscriptPage,
+    approvals: Promise<{ approvals: PendingApproval[] } | null> | null,
+    mountedAnchor: number | null,
+  ): Promise<void>;
+  mountReadOnlyPage(s: CoreSession, page: import("./core-bridge").TranscriptPage): void;
+  transcriptAnchor(): number | null;
   resumeIfIdle(): void;
   redraw(): void;
   dispose(): void;

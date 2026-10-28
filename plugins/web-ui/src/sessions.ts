@@ -1,3 +1,6 @@
+import { reportHandledError } from "./browser-errors";
+import { cachedTranscript, clearTranscriptCache, dropTranscript, storeTranscript } from "./transcript-cache";
+import { mountTranscript, reconcileCachedTranscript } from "./session-transcript";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { ChevronDown, ChevronRight, Pin } from "lucide";
@@ -14,7 +17,6 @@ import {
   type CoreProject,
   type CoreSession,
 } from "./core-bridge";
-import { currentEarlierCount, inheritedTranscript, itemsToMessages } from "./transcript-messages";
 import {
   activityOf,
   automationRunLabel,
@@ -38,7 +40,6 @@ import { sheenLabel } from "./ui";
 import { icon } from "./icons";
 import { contextsState, ensureContexts, personalScopeId } from "./contexts";
 import { groupDmLabel, groupDmText } from "./group-dm-label";
-import { transcriptModel } from "./model-options";
 import { quietly } from "./shell-state";
 import { appState, renderSidebarTop, syncDocumentTitle, syncUrlFromState } from "./shell";
 import { closeSidebarOnNarrowView } from "./shell-sidebar";
@@ -113,6 +114,7 @@ const freshPaging = () => ({
 let paging = freshPaging();
 
 export function resetSessionsState(): void {
+  clearTranscriptCache();
   resetSessionPatches();
   Object.assign(sessionsState, freshSessionsState());
   listCurrent = false;
@@ -663,6 +665,19 @@ export async function openSessionInto(
   refreshSessionsOnOpen();
   void loadSessionNeighbors(s);
 
+  const cached = transcriptPrefetch ? undefined : cachedTranscript(s.id);
+  if (cached) {
+    if (!isLiveConversation(conv)) return;
+    if (tracked) sessionsState.openingKey = null;
+    conv.mountLoadingPane();
+    const approvals = s.canContinue === true ? fetchSessionApprovals(s.id) : null;
+    mountTranscript(conv, s, cached, approvals);
+    renderList();
+    void reconcileCachedTranscript(conv, s, cached, approvals, conv.transcriptAnchor()).catch((error: unknown) =>
+      reportHandledError("web:transcript_reconcile", error),
+    );
+    return;
+  }
   const opening = s.id;
   if (tracked) {
     sessionsState.openingKey = opening;
@@ -688,25 +703,13 @@ export async function openSessionInto(
   }
 
   if (!transcriptRes) {
+    dropTranscript(s.id);
     conv.mountLoadError(() => void openSessionInto(conv, s, undefined, undefined, tracked));
     renderList();
     return;
   }
 
-  const split = inheritedTranscript(s, transcriptRes.items ?? []);
-  const messages = itemsToMessages(split.current, transcriptModel());
-  const inheritedMessages = itemsToMessages(split.inherited, transcriptModel());
-  const earlier = currentEarlierCount(s, transcriptRes.earlierItems ?? 0);
-  const anchorSeq = transcriptRes.items?.[0]?.seq ?? null;
-  if (continuable) {
-    conv.mountContinuable(s.threadRef, s.id, s.scopeId, messages, s.channelName ?? null, s, inheritedMessages);
-    conv.setTranscriptWindow(anchorSeq, earlier, (transcriptRes.earlierItems ?? 0) > 0);
-    if (approvals) conv.attachApprovalsWhenLoaded(s.id, approvals);
-  } else {
-    conv.mountReadOnly(s, messages, earlier, anchorSeq, inheritedMessages);
-  }
-  conv.setPins(transcriptRes.pins ?? []);
-  conv.setGoal(transcriptRes.goal ?? null);
-  conv.setTurnRuntime(transcriptRes.runtime ?? null);
+  storeTranscript(s.id, transcriptRes);
+  mountTranscript(conv, s, transcriptRes, approvals);
   renderList();
 }
