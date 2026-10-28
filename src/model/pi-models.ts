@@ -6,6 +6,7 @@ import {
   resolveGatewayModel,
 } from "./gateway-models.ts";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
+import { MODEL_PROVIDERS } from "./provider-endpoints.ts";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { EmbeddingModel } from "./embedding-model.ts";
 import { type CustomRuntimeModel, isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
@@ -59,7 +60,6 @@ export function thinkingLevelsFor(modelId?: string): readonly string[] {
     return true;
   });
 }
-export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
 export type ModelProvider = (typeof MODEL_PROVIDERS)[number];
 
 export function isModelProvider(value: unknown): value is ModelProvider {

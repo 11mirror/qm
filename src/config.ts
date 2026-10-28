@@ -8,7 +8,7 @@ import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";
 import { SANDBOX_BACKEND_NAMES, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
 import { existsSync, readdirSync } from "node:fs";
 import { homeTenantSettings, tenantSecretsKey, type TenantSettings } from "../plugins/chassis/src/tenant-settings.ts";
-import { parseProviderBaseUrl, type ModelGatewayTransportConfig } from "./model/provider-endpoints.ts";
+import { MODEL_PROVIDERS, parseProviderBaseUrl, type ModelGatewayTransportConfig } from "./model/provider-endpoints.ts";
 import { join, resolve } from "node:path";
 import { RUN_MAX_AGE_MS } from "./runs/run-store.ts";
 import { DEFAULT_MEMORY_POLICY, type MemoryCaptureMode, type MemoryRecallMode } from "./memory/policy.ts";
@@ -19,7 +19,6 @@ import { DEFAULT_CAPTURE_QUIET_MS } from "./memory/strategies/per-turn.ts";
 import { slackPluginConfigFromEnv, slackAccountConfigsFromEnv, type SlackPluginConfig } from "./slack/config.ts";
 import {
   DEFAULT_CODEX_MODEL_ID,
-  MODEL_PROVIDERS,
   defaultModelForProvider,
   isModelProvider,
   onlyProvider,

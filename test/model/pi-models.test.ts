@@ -14,7 +14,6 @@ import {
   onlyProvider,
   resolveModel,
   getRequiredModel,
-  MODEL_PROVIDERS,
   SELECTABLE_BASE_MODELS,
   contextTokenBudgetForModel,
   codexProviderModelId,
@@ -27,6 +26,7 @@ import {
   safeModelMetadata,
   serviceableModelIds,
 } from "../../src/model/pi-models.ts";
+import { MODEL_PROVIDERS } from "../../src/model/provider-endpoints.ts";
 import { buildApp, serverDeps } from "../../src/wiring.ts";
 import { stopAtEnd } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";

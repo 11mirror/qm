@@ -1,4 +1,4 @@
-import { parseProviderBaseUrl, PROVIDER_IDS } from "./provider-endpoints.ts";
+import { MODEL_PROVIDERS, parseProviderBaseUrl } from "./provider-endpoints.ts";
 import { perTenant } from "../tenant.ts";
 
 export const CUSTOM_PROVIDER_PROTOCOLS = ["openai", "openai-responses", "anthropic"] as const;
@@ -23,7 +23,7 @@ export interface CustomProviderSpec {
 }
 
 const SLUG_RE = /^[a-z][a-z0-9-]{1,31}$/;
-const RESERVED = new Set<string>(PROVIDER_IDS);
+const RESERVED = new Set<string>(MODEL_PROVIDERS);
 
 export function validateCustomProviderSpec(spec: CustomProviderSpec): void {
   if (!SLUG_RE.test(spec.id)) {

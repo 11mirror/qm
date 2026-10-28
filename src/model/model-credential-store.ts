@@ -2,7 +2,8 @@ import { tenantSecretKey } from "../credentials/tenant-secret-key.ts";
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
-import { MODEL_PROVIDERS, type ModelProvider, type ModelProviderAvailability } from "./pi-models.ts";
+import { type ModelProvider, type ModelProviderAvailability } from "./pi-models.ts";
+import { MODEL_PROVIDERS } from "./provider-endpoints.ts";
 
 export { isModelProvider, type ModelProvider } from "./pi-models.ts";
 
