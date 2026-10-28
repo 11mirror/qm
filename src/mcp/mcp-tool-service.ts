@@ -6,7 +6,7 @@ import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
-import { perTenant, tenant, withTenant, type Tenant } from "../tenant.ts";
+import { perTenant } from "../tenant.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
 const CATALOG_TTL_MS = 60_000;
@@ -162,7 +162,7 @@ interface McpToolServiceOptions {
 }
 
 interface McpToolState {
-  tenant: Tenant;
+  checkedAt: number;
   snapshot: McpToolDescriptor[];
   perUserServers: Map<string, McpServer>;
   callers: McpCallers;
@@ -382,10 +382,19 @@ export function createMcpToolService(opts: McpToolServiceOptions): McpToolServic
   const refreshInBackground = (): void => {
     if (!closed) void refresh().catch(reportFailureAs("mcp: refresh tools", undefined));
   };
-  const state = perTenant<McpToolState>(() => {
+  const refreshMs = opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS;
+  const tenantState = perTenant<McpToolState>(() => {
     queueMicrotask(refreshInBackground);
-    return { tenant: tenant(), snapshot: [], perUserServers: new Map(), callers: createMcpCallers(opts, now) };
+    return { checkedAt: now(), snapshot: [], perUserServers: new Map(), callers: createMcpCallers(opts, now) };
   });
+  const state = (): McpToolState => {
+    const s = tenantState();
+    if (now() - s.checkedAt >= refreshMs) {
+      s.checkedAt = now();
+      refreshInBackground();
+    }
+    return s;
+  };
 
   async function connected(server: McpServer, principalId: string | undefined): Promise<boolean> {
     if (!principalId || !server.credentialHost || !opts.userTokens) return false;
@@ -409,10 +418,6 @@ export function createMcpToolService(opts: McpToolServiceOptions): McpToolServic
   }
 
   const unsubscribe = opts.servers.onChange(refreshInBackground);
-  const timer = setInterval(() => {
-    for (const s of state.all()) withTenant(s.tenant, refreshInBackground);
-  }, opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS);
-  timer.unref?.();
   state();
 
   return {
@@ -429,7 +434,6 @@ export function createMcpToolService(opts: McpToolServiceOptions): McpToolServic
     },
     close() {
       closed = true;
-      clearInterval(timer);
       unsubscribe();
     },
   };

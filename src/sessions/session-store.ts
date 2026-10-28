@@ -112,7 +112,6 @@ export type SessionOriginFilter = SessionOrigin | "other_background";
 interface ListLlmRequestsOptions {
   turnSeqs?: number[];
   orphans?: boolean;
-  omitRequest?: boolean;
 }
 
 export interface SessionPage {
@@ -169,22 +168,10 @@ export interface LlmRequestRecord {
   model: string;
   scopeLabel: ScopeId;
   createdAt: number;
-  promptHash: string | null;
-  promptEnvelope?: unknown;
-  truncated: boolean;
   ttftMs: number | null;
   durationMs: number | null;
   usage: LlmCallUsage | null;
   transport: LlmTransportMeta | null;
-}
-
-export interface ScreenSample {
-  id: string;
-  sessionId: string;
-  scopeLabel: ScopeId;
-  createdAt: number;
-  model: string;
-  payload: string;
 }
 
 export interface NewLlmRequest {
@@ -192,8 +179,6 @@ export interface NewLlmRequest {
   step: number;
   model: string;
   scopeLabel: ScopeId;
-  promptEnvelope?: unknown;
-  truncated?: boolean;
   ttftMs?: number | null;
   durationMs?: number | null;
   usage?: LlmCallUsage | null;
@@ -428,8 +413,6 @@ export interface SessionStore {
 
   recordLlmRequest(sessionId: string, rec: NewLlmRequest, signal?: AbortSignal): Promise<LlmRequestRecord>;
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
-  listScreenSamples(limit: number): Promise<ScreenSample[]>;
-  purgeLlmCaptures(cutoff: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
 
   addParticipant(sessionId: string, principalId: string, title?: string, opts?: AddParticipantOptions): Promise<void>;
   removeParticipant(sessionId: string, principalId: string): Promise<void>;

@@ -47,7 +47,7 @@ export function assembleBuiltApp(deps: BuiltAppInputs): BuiltApp {
 function builtAppHead(deps: BuiltAppInputs) {
   const { app, sweepAsks, inbox } = deps.apiApp;
   const { pgPool, sessions, configStore, slackInstallation, skills, skillBundles, jobs } = deps.stores;
-  const { screenSecurity, surfaceCache, skillFetcher } = deps.orchestrator;
+  const { surfaceCache, skillFetcher } = deps.orchestrator;
   const { deploymentLayer, deploymentLayerStore, brokeredTools, auditLog } = deps.deploymentLayer;
   const {
     startOnce,
@@ -60,15 +60,8 @@ function builtAppHead(deps: BuiltAppInputs) {
     mcpToolService,
   } = deps.credentials;
   const { runs, turnLedger, sessionStateBus, ledgerEventBus } = deps.runs;
-  const {
-    runSignals,
-    gatewayTransport,
-    resolveBrowserCompanyKeys,
-    modelCredentials,
-    refreshModels,
-    customProviders,
-    refreshCustomProviders,
-  } = deps.harness;
+  const { runSignals, gatewayTransport, resolveBrowserCompanyKeys, modelCredentials, refreshModels, customProviders } =
+    deps.harness;
   const { runtime } = deps.background;
   const { budget, mcpServers, acl } = deps.files;
   const { scheduler } = deps.scheduler;
@@ -78,7 +71,6 @@ function builtAppHead(deps: BuiltAppInputs) {
     checkReadiness: async (signal) => {
       await pgPool.q("SELECT 1", [], { signal });
     },
-    ...(screenSecurity ? { screenSecurity } : {}),
     deploymentLayer,
     deploymentLayerStore,
     brokeredTools,
@@ -105,7 +97,6 @@ function builtAppHead(deps: BuiltAppInputs) {
     userModelCredentials,
     refreshModels,
     customProviders,
-    refreshCustomProviders,
     mcpServers,
     mcpToolService,
     acl,

@@ -106,12 +106,25 @@ function toRuntimeModel(provider: CustomProviderSpec, m: CustomModelSpec): Custo
 }
 
 let registryChanges = 0;
+let invalidations = 0;
 const registryState = perTenant(() => ({
   registry: new Map<string, CustomRuntimeModel>(),
   providers: [] as CustomProviderSpec[],
   version: 0,
+  loaded: -1,
 }));
 
+export function invalidateCustomProviders(): void {
+  invalidations++;
+}
+
+export async function loadCustomProviders(read: () => Promise<CustomProviderSpec[]>): Promise<void> {
+  const state = registryState();
+  if (state.loaded === invalidations) return;
+  const at = invalidations;
+  setCustomProviders(await read());
+  state.loaded = at;
+}
 export function setCustomProviders(specs: CustomProviderSpec[]): void {
   const state = registryState();
   const snapshot = JSON.stringify(specs);

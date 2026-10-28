@@ -26,10 +26,11 @@ import { selectableModelCatalog } from "../model/model-catalog.ts";
 import { withResolvedRuntime, resolveRuntimeChoiceDurable } from "../harness/runtime-choice.ts";
 import { createGatewayCatalog } from "../model/gateway-catalog.ts";
 import { createModelCredentialStore, type ModelCredentialStore } from "../model/model-credential-store.ts";
-import { createCustomProviderStore } from "../model/custom-provider-store.ts";
-import { setCustomProviders } from "../model/custom-providers.ts";
+import { createCustomProviderStore, type CustomProviderStore } from "../model/custom-provider-store.ts";
+import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
+import { invalidateCustomProviders, loadCustomProviders } from "../model/custom-providers.ts";
 import { type MemoryEmbedder, createMemoryEmbedder } from "../model/embeddings.ts";
-import { reportFailure } from "../util/errors.ts";
+import { reportFailure, reportFailureAs } from "../util/errors.ts";
 import { type CompanyChatGPTAuth, keychainCompanyChatGPTAuth } from "../model/company-chatgpt-auth.ts";
 import type { ProviderKeys } from "../harness/pi-model-runtime.ts";
 import { keychainHarnessAuthEnv } from "../credentials/harness-auth-env.ts";
@@ -52,7 +53,7 @@ export function buildHarness(deps: HarnessInputs) {
     resolvePiProviderKeys,
     refreshModels,
     customProviders,
-    refreshCustomProviders,
+    customProvidersChanged,
     resolveBrowserCompanyKeys,
   } = buildModelKeys(deps, mc);
 
@@ -145,7 +146,7 @@ export function buildHarness(deps: HarnessInputs) {
   if (config.securityScreenProxy) {
     delete harness.models.screenSecurity;
   }
-  every("run-signals:prune", 60 * 60_000, () => runSignals.prune(7 * 24 * 60 * 60_000));
+  every("run-signals:prune", 60 * 60_000, () => runSignals.prune(7 * 24 * 60 * 60_000), { shared: true });
   return {
     harness,
     runSignals,
@@ -159,7 +160,7 @@ export function buildHarness(deps: HarnessInputs) {
     resolveMemoryEmbedder,
     refreshModels,
     customProviders,
-    refreshCustomProviders,
+    customProvidersChanged,
     resolveBrowserCompanyKeys,
   };
 }
@@ -220,19 +221,32 @@ function buildModelKeys(deps: HarnessInputs, mc: ReturnType<typeof buildModelCre
       await refreshModels();
       return fn();
     });
-  const customProviders = createCustomProviderStore({
+  const stored = createCustomProviderStore({
     write: writeModelRegistry,
     databaseUrl,
     keyMaterial: () => tenantConfig(config).connectorSecretKey ?? connectorSecretKey,
   });
-  const refreshCustomProviders = async () => {
-    const enabled = await customProviders.enabled();
-    setCustomProviders(enabled);
-    return enabled;
+  const customProvidersChanged = createPostgresNotifyBus<null>(databaseUrl, "custom_providers", "custom providers");
+  const invalidate = () => invalidateCustomProviders();
+  customProvidersChanged.subscribe(invalidate, { onResync: invalidate });
+  const refreshCustomProviders = () => loadCustomProviders(() => stored.enabled());
+  const changed = async () => {
+    invalidate();
+    customProvidersChanged.emit(null);
+    await refreshCustomProviders();
+  };
+  const afterChange = <T>(result: T): Promise<T> =>
+    changed()
+      .catch(reportFailureAs("custom providers: reload after change", undefined))
+      .then(() => result);
+  const customProviders: CustomProviderStore = {
+    ...stored,
+    upsert: (spec, apiKey, updatedBy) => stored.upsert(spec, apiKey, updatedBy).then(afterChange),
+    delete: (id, updatedBy) => stored.delete(id, updatedBy).then(afterChange),
   };
   const refreshModels = async () => {
     await gatewayCatalog?.refresh();
-    return refreshCustomProviders();
+    await refreshCustomProviders();
   };
   const resolveMemoryEmbedder = async (id: string): Promise<MemoryEmbedder> => {
     const model = resolveEmbeddingModel(id);
@@ -241,11 +255,12 @@ function buildModelKeys(deps: HarnessInputs, mc: ReturnType<typeof buildModelCre
     return createMemoryEmbedder(model, key, gatewayTransport, overrides.modelCredentialFetch);
   };
   const resolveModelProviderKeys = async () => {
-    const [enabledCustom, anthropic, openai, openrouter] = await Promise.all([
-      refreshModels(),
+    await refreshModels();
+    const [anthropic, openai, openrouter, enabledCustom] = await Promise.all([
       modelCredentials.resolve("anthropic"),
       modelCredentials.resolve("openai"),
       modelCredentials.resolve("openrouter"),
+      customProviders.enabled(),
     ]);
     const customKeys = Object.fromEntries(
       (
@@ -310,7 +325,7 @@ function buildModelKeys(deps: HarnessInputs, mc: ReturnType<typeof buildModelCre
     resolvePiProviderKeys,
     refreshModels,
     customProviders,
-    refreshCustomProviders,
+    customProvidersChanged,
     resolveBrowserCompanyKeys,
   };
 }

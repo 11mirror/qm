@@ -1,6 +1,5 @@
 import { readCappedText } from "../util/response-body.ts";
 import { randomUUID } from "node:crypto";
-import type { ScopeId } from "../types.ts";
 import { MAX_SCREEN_CHARS, type SecurityScreenVerdict } from "./security-screen.ts";
 import { httpFailure } from "../util/errors.ts";
 import { fetchWithRetry } from "../util/async.ts";
@@ -13,15 +12,6 @@ export interface SecurityScreenClassification {
   threshold: number;
   outcome?: string;
 }
-
-export type SecurityScreenProbe = (input: {
-  payload: string;
-  modelId: string;
-  systemPrompt: string;
-  actorId: string;
-  scopeLabel: ScopeId;
-  signal: AbortSignal;
-}) => Promise<SecurityScreenVerdict | undefined>;
 
 export interface SecurityScreener {
   readonly provider: string;

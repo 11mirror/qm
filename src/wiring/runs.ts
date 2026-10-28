@@ -1,4 +1,5 @@
 import type { StoresModule } from "./stores.ts";
+import { hasRows } from "../jobs/job-worker.ts";
 import type { FilesModule } from "./files.ts";
 import type { SandboxModule } from "./sandbox.ts";
 import { tenant } from "../tenant.ts";
@@ -95,6 +96,7 @@ export function buildRuns(deps: RunsInputs) {
   const ledger = runStore.ledger;
   every("turns:pointer-repair", 60_000, () => sweepTurns({ ledger: turnLedger, sessions, errors }), {
     immediate: true,
+    due: hasRows("session_turn_pointers", "w.active_turn_id IS NOT NULL"),
   });
   every("turns:cleanup", 60 * 60_000, () => turnLedger.cleanup(), { shared: true });
   const {
@@ -176,7 +178,7 @@ function buildRunStreams(deps: RunsInputs, runs: RunStore) {
   });
   runs.onTerminal((run) => refreshRunStream(run.id));
   const activityStore = createPostgresRunActivityStore(databaseUrl);
-  every("runs:activity-prune", 60_000, () => activityStore.prune());
+  every("runs:activity-prune", 60_000, () => activityStore.prune(), { due: hasRows("run_activity") });
   const runActivity: RunActivityStore = {
     ...activityStore,
     async append(runId, entry) {

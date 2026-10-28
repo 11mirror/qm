@@ -33,7 +33,6 @@ import type { AuditLog } from "./audit/audit-log.ts";
 import { type AppPageViewLog } from "./deploy/page-views.ts";
 import type { RateLimiter } from "./ratelimit/rate-limiter.ts";
 import { type BudgetTracker } from "./ratelimit/budget.ts";
-import type { SecurityScreenProbe } from "./security/security-screener.ts";
 import { type CronStore } from "./cron/cron-store.ts";
 import { type LedgerEventBus } from "./inbox/events.ts";
 import { createInboxSourceRefresh } from "./inbox/source-refresh.ts";
@@ -193,7 +192,6 @@ export interface BuiltApp {
   backgroundOwnership?: BackgroundOwnershipControl;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
-  screenSecurity?: SecurityScreenProbe;
   deploymentLayer: DeploymentLayerRuntime;
   brokeredTools: readonly BrokeredLayerTool[];
   deploymentLayerStore: DeploymentLayerStore;
@@ -218,7 +216,6 @@ export interface BuiltApp {
   userModelCredentials: UserModelCredentialStore;
   refreshModels: () => Promise<unknown>;
   customProviders: CustomProviderStore;
-  refreshCustomProviders: () => Promise<unknown>;
   mcpServers: McpServerStore;
   mcpToolService: McpToolService;
   acl: AclStore;
@@ -442,14 +439,12 @@ export function serverDeps(
       replayDedupe: built.replayDedupe,
       brokerSessions: built.brokerSessions,
       config: built.config,
-      ...(built.screenSecurity ? { screenSecurity: built.screenSecurity } : {}),
       ...(deploymentModel ? { baseModelDefault: deploymentModel } : {}),
       providerKeys: providerKeysPresent(config),
       modelCredentials: built.modelCredentials,
       userModelCredentials: built.userModelCredentials,
       refreshModels: built.refreshModels,
       customProviders: built.customProviders,
-      refreshCustomProviders: built.refreshCustomProviders,
       mcpServers: built.mcpServers,
       mcpToolService: built.mcpToolService,
       ...(subscriptionAuth ? { companySubscriptionAuth: subscriptionAuth } : {}),

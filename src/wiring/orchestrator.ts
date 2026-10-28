@@ -1,4 +1,5 @@
 import type { StoresModule } from "./stores.ts";
+import { hasRows } from "../jobs/job-worker.ts";
 import type { OutboundModule } from "./outbound.ts";
 import type { DeploymentLayerModule } from "./deployment-layer.ts";
 import type { RunsModule } from "./runs.ts";
@@ -36,14 +37,11 @@ import { adminSessionUrl } from "../util/admin-links.ts";
 import { wireRunResultPosts } from "../runs/run-results.ts";
 import { createGitFetcher, resolvePackAuth } from "../skills/pack-fetcher.ts";
 import { nonDeploymentCredential } from "../credentials/deployment-credentials.ts";
-import { swallowAs } from "../util/errors.ts";
 import {
   type AmbientJudgmentStore,
   createPostgresAmbientJudgmentStore,
 } from "../surface-cache/ambient-judgment-store.ts";
 import { type AckEmojiPickStore, createPostgresAckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
-import type { SecurityScreenProbe } from "../security/security-screener.ts";
-import { estimateCostUsd } from "../ratelimit/budget.ts";
 
 type OrchestratorInputs = Pick<Head, "late" | "config" | "overrides"> & {
   stores: StoresModule;
@@ -125,7 +123,7 @@ export function buildOrchestrator(deps: OrchestratorInputs) {
     },
   };
   const orchestrator = createOrchestrator(orchestratorDeps);
-  const { skillFetcher, screenSecurity, ambientJudgments, ackEmojiPicks, providerKeys } = buildAppServices(deps);
+  const { skillFetcher, ambientJudgments, ackEmojiPicks, providerKeys } = buildAppServices(deps);
   return {
     orchestrator,
     surfaceCache,
@@ -135,7 +133,6 @@ export function buildOrchestrator(deps: OrchestratorInputs) {
     sessionMailbox,
     prepareSessionRequest,
     skillFetcher,
-    screenSecurity,
     ambientJudgments,
     ackEmojiPicks,
     providerKeys,
@@ -341,7 +338,9 @@ function buildSessionSyscalls(deps: OrchestratorInputs) {
   const sessionMailbox = createSessionMailbox(databaseUrl);
   const swarmBoard = createPostgresSwarmBoard(databaseUrl);
   const swarmNotices = createSwarmNoticeSweep({ board: swarmBoard, mailbox: sessionMailbox });
-  every("swarm-notice-sweep", 60_000, () => swarmNotices.sweep());
+  every("swarm-notice-sweep", 60_000, () => swarmNotices.sweep(), {
+    due: hasRows("swarm_board_posts", "w.notify_pending"),
+  });
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
     board: swarmBoard,
@@ -383,8 +382,7 @@ function buildAppServices(deps: OrchestratorInputs) {
   const { outbound, chatSurfaces } = deps.outbound;
   const { sessions, databaseUrl, every } = deps.stores;
   const { serviceCreds, keychain } = deps.credentials;
-  const { directProviderAvailability, harness } = deps.harness;
-  const { budget } = deps.files;
+  const { directProviderAvailability } = deps.harness;
 
   const uuidId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const runResultRecovery = wireRunResultPosts(runs, outbound, {
@@ -415,24 +413,14 @@ function buildAppServices(deps: OrchestratorInputs) {
   const ambientJudgments: AmbientJudgmentStore = createPostgresAmbientJudgmentStore(databaseUrl);
   const ackEmojiPicks: AckEmojiPickStore = createPostgresAckEmojiPickStore(databaseUrl);
   const providerKeys = directProviderAvailability;
-  const screenSecurity: SecurityScreenProbe | undefined = harness.models.screenSecurity
-    ? ({ payload, modelId, systemPrompt, actorId, signal }) =>
-        harness.models.screenSecurity!({
-          payload,
-          modelId,
-          systemPrompt,
-          signal,
-          recordModelCall: (rec) => {
-            void budget
-              ?.record(actorId, estimateCostUsd(rec.inputTokens))
-              .catch(swallowAs("budget: record screen spend", undefined));
-          },
-        })
-    : undefined;
-  every("run-result-sweep", 60_000, () => runResultRecovery.sweep());
+  every("run-result-sweep", 60_000, () => runResultRecovery.sweep(), {
+    due: hasRows(
+      "runs",
+      "w.status IN ('done','failed') AND (w.delivery_state IS NULL OR NOT (w.delivery_state::jsonb ? 'settledAt'))",
+    ),
+  });
   return {
     skillFetcher,
-    screenSecurity,
     ambientJudgments,
     ackEmojiPicks,
     providerKeys,

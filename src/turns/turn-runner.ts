@@ -19,7 +19,8 @@ import {
   type RunStop,
 } from "../runs/run-store.ts";
 import type { TurnQueue } from "./absurd-schema.ts";
-import { withoutTenant, withTenant, type Tenant } from "../tenant.ts";
+import { holdTenant, withoutTenant, withTenant, type Tenant } from "../tenant.ts";
+import { pgTenancyEnabled } from "../persistence/pg-pool.ts";
 import { TURN_EXTEND_INTERVAL_MS, type TurnLedger, type TurnOutcome } from "./turn-ledger.ts";
 
 const CANCEL_GRACE_MS = 10_000;
@@ -31,6 +32,7 @@ const FINISH_OUTAGE_WINDOW_MS = 120_000;
 const UNSAVED_RESULT_REASON = "This turn finished but its result could not be saved.";
 const FAILURE_REPORT_CONSECUTIVE = 5;
 const CLAIM_FAIL_REPORT_CONSECUTIVE = 20;
+const TENANT_BUSY_DEFER_MS = 10_000;
 const LEASE_LOST_CONSECUTIVE = 3;
 export const RUN_MAX_CLAIMS = 8;
 
@@ -335,6 +337,13 @@ async function handBackAll(deps: TurnRunnerDeps, held: readonly HeldTurn[]): Pro
   await Promise.race([Promise.all(held.map((turn) => turn.done)), sleep(HANDBACK_SETTLE_MS, { unref: true })]);
 }
 
+function tenantBusy(inFlight: ReadonlyMap<string, HeldTurn>, slots: number, queue: TurnQueue, t: Tenant): boolean {
+  if (queue === "turns_people" || !pgTenancyEnabled()) return false;
+  let held = 0;
+  for (const turn of inFlight.values()) if (turn.run.absurdQueue !== "turns_people" && turn.tenant.id === t.id) held++;
+  return held >= Math.max(1, Math.floor(slots / 2));
+}
+
 export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
   const processId = `h-${randomUUID().slice(0, 8)}`;
   const pollMs = deps.pollMs ?? FALLBACK_POLL_MS;
@@ -384,11 +393,13 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
       },
     };
     inFlight.set(run.id, held);
+    const release = holdTenant(tenant);
     console.log(`[turns] claimed process=${processId} turn=${run.id} thread=${run.sessionId} attempt=${run.attempts}`);
     void withTenant(tenant, () => runTurn(deps, held))
       .catch((error: unknown) => swallow(`turns: turn ${run.id} crashed`, error))
       .finally(() => {
         if (inFlight.get(run.id) === held) inFlight.delete(run.id);
+        release();
         settle();
         notify();
       });
@@ -404,6 +415,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
       }
       try {
         for (const queue of deps.queues) {
+          let deferred = 0;
           while (mayClaim()) {
             const people = queue === "turns_people";
             if (inFlight.size >= deps.slots + (people ? overcommit : 0)) break;
@@ -415,6 +427,12 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
             if (!mayClaim()) {
               await withTenant(tenant, () => deps.ledger.handBack(run, token, { unstarted: true }));
               break;
+            }
+            if (tenantBusy(inFlight, deps.slots, queue, tenant)) {
+              const later = { unstarted: true, delayMs: TENANT_BUSY_DEFER_MS };
+              await withTenant(tenant, () => deps.ledger.handBack(run, token, later));
+              if (++deferred >= deps.slots) break;
+              continue;
             }
             launch(run, token, tenant);
             if (people && inFlight.size > deps.slots) parkForCapacity(deps, inFlight);

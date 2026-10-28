@@ -17,12 +17,11 @@ export interface ReloadableSlackConfig<Config> {
 export function createSlackRuntimeReconciler<Config>(opts: {
   load: () => Promise<ReloadableSlackConfig<Config> | null>;
   startPlugin: (config: Config) => Promise<{ stop(): Promise<void> }>;
-  intervalMs?: number;
   startPaused?: boolean;
   onError?: (error: unknown) => void;
 }) {
   let active: { plugin: { stop(): Promise<void> }; version: string; config: Config } | null = null;
-  let timer: NodeJS.Timeout | null = null;
+  let started = false;
   let inFlight: Promise<void> | null = null;
   let stopping: Promise<void> | null = null;
   let stopped = opts.startPaused ?? false;
@@ -86,18 +85,17 @@ export function createSlackRuntimeReconciler<Config>(opts: {
 
   return {
     start() {
-      if (timer || stopping || (stopped && (active || pendingCleanup))) return;
+      if (started || stopping || (stopped && (active || pendingCleanup))) return;
+      started = true;
       stopped = false;
       tick();
-      timer = setInterval(tick, opts.intervalMs ?? 5_000);
-      timer.unref();
     },
+    ready: () => active !== null,
     reconcile: run,
     stop(): Promise<void> {
       if (stopping) return stopping;
       stopped = true;
-      if (timer) clearInterval(timer);
-      timer = null;
+      started = false;
       stopping = (async () => {
         await inFlight?.catch(() => {});
         if (pendingCleanup) {
