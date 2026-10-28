@@ -21,6 +21,10 @@ export interface TurnStream {
   replying(runId: string): boolean;
   publish(runId: string, delta: string): void;
   publishBlockStart(runId: string): void;
+  hold(runId: string): void;
+  release(runId: string): void;
+  discard(runId: string): void;
+  endOffset(runId: string): number;
   publishReasoning(runId: string, step: string, index: number, delta: string): void;
   settleReasoning(runId: string, step: string, index: number): void;
   reasoning(runId: string): ReasoningBlock[];
@@ -57,6 +61,7 @@ interface Entry {
   surfacePosted: boolean;
   replying: boolean;
   replyDone: boolean;
+  held: (string | null)[] | null;
   timer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -88,6 +93,7 @@ function makeEntry(partial: Partial<Entry> = {}): Entry {
     surfacePosted: false,
     replying: true,
     replyDone: false,
+    held: null,
     timer: null,
     ...partial,
   };
@@ -117,7 +123,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
     opts.onDelta?.(runId, delta, offset, entry.totalChars - entry.text.length);
   };
 
-  return {
+  const stream: TurnStream = {
     begin(runId) {
       const entry = runs.get(runId);
       if (entry) {
@@ -141,6 +147,10 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
         clearTimeout(entry.timer);
         entry.timer = null;
       }
+      if (entry.held) {
+        entry.held.push(delta);
+        return;
+      }
       if (entry.firstBlockOpen && entry.firstBlock.length < FIRST_BLOCK_MAX_CHARS)
         entry.firstBlock = (entry.firstBlock + delta).slice(0, FIRST_BLOCK_MAX_CHARS);
       append(runId, entry, delta);
@@ -149,9 +159,46 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
     publishBlockStart(runId) {
       const entry = runs.get(runId);
       if (!entry) return;
+      if (entry.held) {
+        entry.held.push(null);
+        return;
+      }
       if (entry.firstBlock) entry.firstBlockOpen = false;
       if (!entry.text || entry.text.endsWith(BLOCK_JOIN)) return;
       append(runId, entry, BLOCK_JOIN);
+    },
+
+    hold(runId) {
+      ensure(runId).held ??= [];
+    },
+
+    release(runId) {
+      const entry = runs.get(runId);
+      const held = entry?.held;
+      if (!entry || !held) return;
+      entry.held = null;
+      for (const piece of held) {
+        if (piece === null) stream.publishBlockStart(runId);
+        else stream.publish(runId, piece);
+      }
+    },
+
+    discard(runId) {
+      const entry = runs.get(runId);
+      if (entry?.held) entry.held = [];
+    },
+
+    endOffset(runId) {
+      const entry = runs.get(runId);
+      if (!entry) return 0;
+      let offset = entry.totalChars;
+      let tail = entry.text.slice(-BLOCK_JOIN.length);
+      for (const piece of entry.held ?? []) {
+        const next = piece ?? (tail && !tail.endsWith(BLOCK_JOIN) ? BLOCK_JOIN : "");
+        offset += next.length;
+        tail = (tail + next).slice(-BLOCK_JOIN.length);
+      }
+      return offset;
     },
 
     publishReasoning(runId, step, index, delta) {
@@ -264,6 +311,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       };
     },
   };
+  return stream;
 }
 
 export function goalView(goal: GoalRecord): GoalView {

@@ -53,8 +53,18 @@ function appWithVerdicts(mode: DecisionRule["mode"], verdicts: readonly ("keep" 
   return { built, states };
 }
 
-async function runTurn(options: { mode: DecisionRule["mode"]; threadRef: string; text?: string }) {
-  const { built, states } = appWithVerdicts(options.mode, ["revise"]);
+const until = async (done: () => boolean | Promise<boolean>, ms = 5_000) => {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline && !(await done())) await new Promise((r) => setTimeout(r, 25));
+};
+
+async function runTurn(options: {
+  mode: DecisionRule["mode"];
+  threadRef: string;
+  text?: string;
+  verdicts?: readonly ("keep" | "revise")[];
+}) {
+  const { built, states } = appWithVerdicts(options.mode, options.verdicts ?? ["revise"]);
   await built.config.setSoul(scopeId("personal", "U1"), GUIDANCE);
   built.runtime.start();
   try {
@@ -94,8 +104,9 @@ test("an enforcing turn_end rule holds the draft back and delivers the rewrite",
   const narration = entries.filter((e) => e.type === "text" && draftText(e).startsWith(FIRST_DRAFT));
   assert.equal(narration.length, 1);
 
-  assert.equal(run?.partial?.includes(FIRST_DRAFT), false);
-  assert.equal(run?.partial?.includes(REVISE_MESSAGE), true);
+  assert.equal(run?.partial?.trim(), reply.trim());
+  assert.ok(reply.includes(`The held-back draft:\n${FIRST_DRAFT}`));
+  assert.equal((narration[0]!.payload as { demoted?: boolean }).demoted, true);
 
   assert.match(states[0]!, /Draft reply, written but not yet delivered:/);
   assert.ok(states[0]!.includes(FIRST_DRAFT));
@@ -106,9 +117,9 @@ test("an enforcing turn_end rule holds the draft back and delivers the rewrite",
 });
 
 test("an observing turn_end rule classifies without changing the reply", async () => {
-  const { states, asked, run, entries } = await runTurn({ mode: "observe", threadRef: "reply-check-observe" });
+  const { states, run, entries } = await runTurn({ mode: "observe", threadRef: "reply-check-observe" });
 
-  assert.equal(asked, 1);
+  await until(() => states.length === 1);
   assert.equal(states.length, 1);
   assert.equal(run?.result?.reply?.startsWith(FIRST_DRAFT), true);
   assert.equal(entries.filter((e) => e.type === "assistant").length, 1);
@@ -151,6 +162,62 @@ test("a reply the addressed-turn nudge falls back to is checked before it is pos
     assert.equal(posted.length, 1);
     assert.match(posted[0]!.text, /Write the reply again/);
     assert.equal(posted[0]!.text.startsWith("worklog: did the thing but never posted"), false);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("a classifier that always says revise gets two rewrites, then the third draft is delivered", async () => {
+  const { states, run, entries } = await runTurn({
+    mode: "enforce",
+    threadRef: "reply-check-cap",
+    verdicts: ["revise", "revise", "revise", "revise"],
+  });
+
+  assert.equal(states.length, 2);
+  assert.equal(entries.filter((e) => e.type === "assistant").length, 1);
+  assert.equal(entries.filter((e) => e.type === "text" && (e.payload as { demoted?: boolean }).demoted).length, 2);
+  assert.equal(run?.status, "done");
+});
+
+test("a reply that comes with an approval request is not held back, so the approval survives", async () => {
+  const { states, run } = await runTurn({
+    mode: "enforce",
+    threadRef: "reply-check-approval",
+    text: "!paused-approval git push --force origin main",
+  });
+
+  assert.equal(states.length, 0);
+  assert.match(run?.result?.reply ?? "", /about to run it/);
+  assert.equal(run?.result?.pendingApprovals?.length, 1);
+});
+
+test("once the agent has posted through the surface tool, its leftover text is not sent back for a rewrite", async () => {
+  const { built, states } = appWithVerdicts("enforce", ["revise"]);
+  built.runtime.start();
+  try {
+    const actor = { externalId: "U1" };
+    await built.app.turn({
+      surface: "slack",
+      actor,
+      conversation: { kind: "channel", threadRef: "ch:C-posted:2.1", channelRef: "C-posted", audience: [actor] },
+      deliveryTarget: "slack:C-posted:2.1",
+      text: "!post hello team",
+      liveActor: true,
+      async: true,
+    });
+    let posted: { text: string }[] = [];
+    await until(async () => {
+      posted = (await built.deliveries.pending("slack")) as { text: string }[];
+      return posted.length > 0;
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    posted = (await built.deliveries.pending("slack")) as { text: string }[];
+    assert.deepEqual(
+      posted.map((d) => d.text),
+      ["hello team"],
+    );
+    assert.equal(states.length, 0);
   } finally {
     await built.runtime.stop();
   }

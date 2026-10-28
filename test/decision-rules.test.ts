@@ -11,7 +11,7 @@ import {
   type DecisionProvider,
 } from "../src/decisions/decisions.ts";
 import { createDecisionBackend } from "../src/decisions/providers.ts";
-import { turnStartState } from "../src/decisions/hooks.ts";
+import { createDecisionHooks, turnStartState } from "../src/decisions/hooks.ts";
 
 const PROVIDERS: DecisionProvider[] = [{ id: "gw", protocol: "chat-completions" }];
 const MODELS = new Set(["m-deep"]);
@@ -470,6 +470,16 @@ test("observe-only rules do not hold up the turn and are still audited", async (
       ["shadow", "use_runtime"],
     ],
   );
+});
+
+test("a hook point reports enforce when any active rule enforces, observe when only observing rules exist", async () => {
+  const hooks = (rules: DecisionRule[]) =>
+    createDecisionHooks({ rules: async () => rules } as never, fixed({}), { record: () => {} } as never);
+  const style = (mode: DecisionRule["mode"], id = "style") =>
+    ({ ...injection(), id, hook: "turn_end", mode, onError: "keep" }) as unknown as DecisionRule;
+  assert.equal(await hooks([]).mode("turn_end"), undefined);
+  assert.equal(await hooks([style("observe")]).mode("turn_end"), "observe");
+  assert.equal(await hooks([style("observe"), style("enforce", "strict")]).mode("turn_end"), "enforce");
 });
 
 test("turn_start rules see the turn's context alongside the message", () => {

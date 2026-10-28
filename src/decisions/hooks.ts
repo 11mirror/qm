@@ -75,7 +75,7 @@ export interface DecisionTurn {
 }
 
 export interface DecisionHooks {
-  active(hook: DecisionHook): Promise<boolean>;
+  mode(hook: DecisionHook): Promise<"enforce" | "observe" | undefined>;
   run(hook: DecisionHook, state: string, turn: DecisionTurn): Promise<DecisionResult | undefined>;
 }
 
@@ -107,7 +107,12 @@ export function createDecisionHooks(
   };
   const rulesFor = async (hook: DecisionHook) => (await store?.rules(hook)) ?? [];
   return {
-    active: async (hook) => (await rulesFor(hook)).length > 0,
+    mode: async (hook) => {
+      const modes = new Set((await rulesFor(hook)).map((rule) => rule.mode));
+      if (modes.has("enforce")) return "enforce";
+      if (modes.has("observe")) return "observe";
+      return undefined;
+    },
     run: async (hook, state, turn) => {
       const rules = await rulesFor(hook);
       const enforced = new Set(rules.filter((rule) => rule.mode === "enforce").map(classifierKey));
