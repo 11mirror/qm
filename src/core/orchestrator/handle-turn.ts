@@ -36,7 +36,6 @@ export interface OrchestratorInstance {
   transcripts: ReturnType<typeof createTranscriptSource>;
   memoryPolicy: MemoryPolicy;
   memoryStrategy: MemoryStrategy;
-  blobTransfer: OrchestratorDeps["blobTransfer"];
   reachableChannelsFor: (directory: DirectoryStore, principalId: string) => Promise<DirectoryChannel[]>;
   directoryIndexFor: (directory: DirectoryStore) => Promise<Map<string, DirectoryMember>>;
   compaction: CompactionContext;
@@ -140,8 +139,8 @@ export async function handleTurn(o: OrchestratorInstance, requested: Orchestrato
 }
 
 async function frameTurn(o: OrchestratorInstance, ctx: TurnCtx) {
-  const { deps, memoryPolicy, memoryStrategy, blobTransfer, observeSecurityData } = o;
-  const screenTrace = observeInboundTurn(ctx, { observeSecurityData, blobTransfer });
+  const { deps, memoryPolicy, memoryStrategy, observeSecurityData } = o;
+  const screenTrace = observeInboundTurn(ctx, { observeSecurityData, blobTransfer: deps.blobTransfer });
   const mcpToolsReady = !ctx.external && deps.mcp ? deps.mcp.toolDefsFor(ctx.actor.id) : undefined;
   const context = await resolveTurnWorkspace(ctx, memoryPolicy);
   ctx.resolution.grantedHandles = context.listFiles();

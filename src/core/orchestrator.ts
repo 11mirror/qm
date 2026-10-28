@@ -32,7 +32,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const memoryPolicy = deps.memoryPolicy ?? DEFAULT_MEMORY_POLICY;
   const memoryStrategy =
     deps.memoryStrategy ?? createPerTurnStrategy({ harness: deps.harness.models, memory: deps.memory });
-  const blobTransfer = deps.blobTransfer;
 
   const REACH_ROSTER_TTL_MS = 5 * 60_000;
   const reachRosterCache = perTenant(
@@ -83,7 +82,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     transcripts,
     memoryPolicy,
     memoryStrategy,
-    blobTransfer,
     reachableChannelsFor,
     directoryIndexFor,
     compaction,
