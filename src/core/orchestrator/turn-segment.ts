@@ -544,7 +544,7 @@ export async function runSegments(
       turnAbort.signal.throwIfAborted();
       segment = await runHarnessSegment(
         runtimeSwitchNote("choice" in segment.runtimeHandoff ? segment.runtimeHandoff.choice : undefined) +
-          (recovery && !resumedHistory.some((entry) => isUserMessage(entry) && !!entry.text?.startsWith(baseText))
+          (recovery && !resumedHistory.some((entry) => entry.seq === spine.turnUserEntrySeq)
             ? `\nCurrent request:\n${baseText}`
             : ""),
         inbound.images.length ? { images: inbound.images } : {},

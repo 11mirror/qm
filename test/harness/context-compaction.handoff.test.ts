@@ -357,3 +357,28 @@ test("retry recovery supplies an excluded request without rerunning its complete
   assert.equal(result.reply, "resumed");
   assert.equal(mainCalls, 1);
 });
+
+test("context recovery restates the request only when its own stored message is gone", async () => {
+  const base = createMockHarness();
+  const seen: import("../../src/harness/harness.ts").HarnessTurnInput[] = [];
+  const harness: Harness = {
+    ...base,
+    turns: {
+      ...base.turns,
+      runTurn: async (input) => {
+        seen.push(input);
+        if (seen.length === 1) {
+          await input.emit({ kind: "UserMessage", text: `From the web app:\n${input.input}` });
+          return { reply: "", runtimeHandoff: { context: "recent" }, modelCalls: 1 };
+        }
+        await input.emit({ kind: "AgentMessage", text: "recovered" });
+        return { reply: "recovered", modelCalls: 1 };
+      },
+    },
+  };
+  const { orch } = buildOrchestrator(harness, undefined, 60000);
+  await orch.handleTurn({ ...turn("summarize the launch notes"), surfaceTools: false });
+  assert.equal(seen.length, 2);
+  assert.ok(seen[1]!.history.some((e) => e.kind === "UserMessage"));
+  assert.doesNotMatch(seen[1]!.input, /Current request/);
+});
