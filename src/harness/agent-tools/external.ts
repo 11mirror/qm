@@ -76,12 +76,11 @@ export function externalTools(kit: ToolKit) {
             callId,
             { tool: d.name, client: true },
             {
-              ...text(outcome.content || "[empty result]"),
               content: [
-                ...text(outcome.content || "[empty result]").content,
+                { type: "text" as const, text: outcome.content || "[empty result]" },
                 ...(outcome.images ?? []).map((image) => ({ type: "image" as const, ...image })),
               ],
-              ...(outcome.structured === undefined ? {} : { details: { structured: outcome.structured } }),
+              details: outcome.structured === undefined ? {} : { structured: outcome.structured },
             },
             "client page",
             undefined,
