@@ -23,7 +23,6 @@ import { type SandboxHandle } from "../../sandbox/sandbox.ts";
 import type {
   SurfaceToolDeps,
   SurfacePostResult,
-  PostedFileMeta,
   SurfaceReactInput,
   SurfaceEditInput,
   SurfaceDeleteInput,
@@ -42,6 +41,7 @@ import { isoFromTs } from "../../util/message-tag.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { headLooksLikeText, replaceThreadSegment, type TurnPostKeys } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./types.ts";
+import { fileMetas, unattachable } from "./attach-tool.ts";
 import { parseDeliveryTarget } from "../../slack/delivery.ts";
 import { RECENT_THREAD_LIMIT } from "../../slack/conversation-view.ts";
 import { parseFileRef } from "../../surfaces/refs.ts";
@@ -112,15 +112,6 @@ export interface SurfaceToolsContext {
   postKeys: TurnPostKeys;
   spine: SpineState;
   signal: AbortSignal;
-}
-
-function postedFileMetas(attachments: readonly OutgoingAttachment[]): PostedFileMeta[] {
-  return attachments.map((a) => ({
-    name: a.name,
-    mimetype: a.mimetype,
-    sizeBytes: a.sizeBytes,
-    ...(a.artifactId ? { artifactId: a.artifactId } : {}),
-  }));
 }
 
 type SurfaceTurn = SurfaceToolsContext & {
@@ -258,12 +249,7 @@ function destinationTools(turn: SurfaceTurn) {
       [],
       turn.openStored,
     );
-    const bad = [
-      ...r.missing.map((p) => `${p} (not found)`),
-      ...r.empty.map((p) => `${p} (empty)`),
-      ...r.oversized.map((p) => `${p} (too large)`),
-      ...r.overTotal.map((p) => `${p} (too large alongside the files already attached)`),
-    ];
+    const bad = unattachable(r);
     if (bad.length)
       return { ok: false, message: `couldn't attach: ${bad.join(", ")} — nothing was sent; fix the path(s) and retry` };
     return { ok: true, attachments: r.attachments };
@@ -300,7 +286,7 @@ function postingTools(turn: SurfaceTurn): Pick<SurfaceToolDeps, "post" | "reach"
         ...(editRef ? { editRef } : {}),
       };
       const sent = await enqueue(projectedDestination, postText, seq, f.attachments);
-      return sent.ok && f.attachments?.length ? { ...sent, attachments: postedFileMetas(f.attachments) } : sent;
+      return sent.ok && f.attachments?.length ? { ...sent, attachments: fileMetas(f.attachments) } : sent;
     },
     reach: async (postText, target, files, sandboxId) => {
       const seq = postKeys.take();
@@ -318,7 +304,7 @@ function postingTools(turn: SurfaceTurn): Pick<SurfaceToolDeps, "post" | "reach"
       if (!d.ok) return { ok: false, message: d.message };
       const r0 = await enqueue(d.destination, postText, seq, f.attachments);
       if (!r0.ok) return r0;
-      const r = f.attachments?.length ? { ...r0, attachments: postedFileMetas(f.attachments) } : r0;
+      const r = f.attachments?.length ? { ...r0, attachments: fileMetas(f.attachments) } : r0;
       let label = `a group DM (${target.participants?.length ?? 0} people)`;
       if (target.channel !== undefined) label = `#${bareChannelName(target.channel)}`;
       else if (target.recipient !== undefined) label = `a DM to ${target.recipient}`;

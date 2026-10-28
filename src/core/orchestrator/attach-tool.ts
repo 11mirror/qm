@@ -1,7 +1,7 @@
 import type { OutgoingAttachment } from "../../types.ts";
 import { type Sandbox, type SandboxHandle } from "../../sandbox/sandbox.ts";
 import type { BlobTransferStore } from "../../persistence/blob-transfer.ts";
-import type { AttachFiles, AttachResult } from "../../tools/primitives.ts";
+import type { AttachFiles, AttachResult, PostedFileMeta } from "../../tools/primitives.ts";
 import {
   collectNamedOutbound,
   parseOutboundFiles,
@@ -27,6 +27,24 @@ export interface StagedAttachments {
 interface StagedEntry {
   attachment: OutgoingAttachment;
   created: ReadonlySet<string>;
+}
+
+export function unattachable(r: Record<"missing" | "empty" | "oversized" | "overTotal", string[]>): string[] {
+  return [
+    ...r.missing.map((p) => `${p} (not found)`),
+    ...r.empty.map((p) => `${p} (empty)`),
+    ...r.oversized.map((p) => `${p} (too large)`),
+    ...r.overTotal.map((p) => `${p} (too large alongside the files already attached)`),
+  ];
+}
+
+export function fileMetas(attachments: readonly OutgoingAttachment[]): PostedFileMeta[] {
+  return attachments.map((a) => ({
+    name: a.name,
+    mimetype: a.mimetype,
+    sizeBytes: a.sizeBytes,
+    ...(a.artifactId ? { artifactId: a.artifactId } : {}),
+  }));
 }
 
 export function createAttachStaging(ctx: AttachToolsContext): StagedAttachments {
@@ -59,12 +77,7 @@ export function createAttachStaging(ctx: AttachToolsContext): StagedAttachments 
       ctx.openStored,
       kept.reduce((sum, attachment) => sum + attachment.sizeBytes, 0),
     );
-    const bad = [
-      ...r.missing.map((p) => `${p} (not found)`),
-      ...r.empty.map((p) => `${p} (empty)`),
-      ...r.oversized.map((p) => `${p} (too large)`),
-      ...r.overTotal.map((p) => `${p} (too large alongside the files already attached)`),
-    ];
+    const bad = unattachable(r);
     if (bad.length)
       return {
         ok: false,
@@ -88,12 +101,7 @@ export function createAttachStaging(ctx: AttachToolsContext): StagedAttachments 
     }
     return {
       ok: true,
-      files: r.attachments.map((a) => ({
-        name: a.name,
-        mimetype: a.mimetype,
-        sizeBytes: a.sizeBytes,
-        ...(a.artifactId ? { artifactId: a.artifactId } : {}),
-      })),
+      files: fileMetas(r.attachments),
       staged: staged.size,
     };
   };
