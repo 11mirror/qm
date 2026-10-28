@@ -145,7 +145,7 @@ for (const [name, tool] of [["execute-turn", "execute"]]) {
       }),
       getSessionLlm: async () => {
         assert.ok(Date.now() >= 130_000, "metrics must be read after the turn finishes");
-        return { requests: [{ stepGapMs: 1, gapPhases: {} }] };
+        return { requests: [] };
       },
     } as never;
     let settled = false;

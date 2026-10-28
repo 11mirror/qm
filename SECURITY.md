@@ -191,8 +191,6 @@ these, not through them.
 - **Portal sessions have residual risk.** A signed portal session defaults to eight
   hours and renews on use. Logout clears the browser cookie but cannot revoke an
   already copied session token before its expiration.
-- **Some model-provider paths bypass the intended gateway.** The ambient Slack judge's
-  model call does not yet use the ModelGateway.
 - **Some governance and data-loss controls are absent.** Standing-instruction edits
   are not uniformly bounded by an org floor or human approval, governance changes are
   not uniformly versioned or revertible, provider-side token revocation and an org
