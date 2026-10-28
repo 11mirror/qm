@@ -242,3 +242,23 @@ test("a credential replaced during a refresh is kept instead of the refreshed on
   assert.equal(await auth.accessToken(), (replacement.tokens as Record<string, unknown>).access_token);
   assert.equal(state.saves.length, 0);
 });
+
+test("a credential deleted during a refresh is not recreated", async () => {
+  const state = keychainState(authJson("acct", STALE_EXP, "refresh-1"));
+  const auth = keychainCompanyChatGPTAuth({
+    keychain: fakeKeychain(state),
+    lock: serialLock(),
+    credentialId: "cred-1",
+    now: () => NOW,
+    refresh: async () => {
+      state.meta = { ...state.meta, id: "deleted" };
+      return {
+        accessToken: accessToken("acct", FRESH_EXP, "refreshed"),
+        idToken: idToken("acct"),
+        refreshToken: "refresh-2",
+      };
+    },
+  });
+  assert.equal(await auth.accessToken(), undefined);
+  assert.equal(state.saves.length, 0);
+});

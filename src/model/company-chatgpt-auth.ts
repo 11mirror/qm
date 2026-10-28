@@ -71,7 +71,7 @@ function refreshingAuth(
         const next = rotated(locked.auth, await refresh(refreshToken));
         if (!next) return locked.auth;
         const latest = await read();
-        if (latest && authTokens(latest.auth)?.refresh !== refreshToken) return latest.auth;
+        if (!latest || authTokens(latest.auth)?.refresh !== refreshToken) return latest?.auth ?? null;
         await locked.write(next);
         return next;
       });
