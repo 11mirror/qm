@@ -116,7 +116,43 @@ test("send_message to an idle session wakes it; to a busy one it waits for the t
   const [wake] = await mailWakes(r, child);
   assert.match(wake!.request.text, /now go/);
   assert.equal(wake!.request.actor.id, actor.id);
+  assert.equal((await delegatedAuthorizationOrigin(wake!.request, r))?.kind, "human");
   await completeTurn(r.ledger, root.id, { status: "silent" });
+});
+
+test("mail from outside the session's tree wakes it with the authority of its own latest turn, minus the desktop", async () => {
+  const r = await rig();
+  const root = await r.runs.enqueue({
+    sessionId: r.room.threadRef,
+    request: {
+      actor,
+      conversation,
+      surface: "slack",
+      origin: { kind: "human" },
+      addressed: true,
+      text: "work",
+      desktopClientId: "6f1c2a52-6a1e-4c55-9d7e-0c1c8f6b2d10",
+    },
+  });
+  await completeTurn(r.ledger, root.run.id, { status: "silent" });
+  const peer = await r.sessions.getOrCreateByThread("web:peer-1", "dm", scope, undefined, "web");
+  await r.sessions.addParticipant(peer.id, actor.id);
+  const peerRun = await r.runs.enqueue({
+    sessionId: peer.threadRef,
+    request: {
+      actor,
+      conversation: { ...conversation, threadRef: peer.threadRef },
+      surface: "web",
+      origin: { kind: "human" },
+      text: "ping the room",
+    },
+  });
+  assert.ok((await apiFor(r, peer, peerRun.run).write({ target: r.room.id, text: "from a peer" })).ok);
+  const [wake] = await mailWakes(r, r.room);
+  assert.equal(wake!.request.delegatingRunId, root.run.id);
+  assert.equal(wake!.request.sessionSenderId, r.room.id);
+  assert.equal((await delegatedAuthorizationOrigin(wake!.request, r))?.kind, "human");
+  assert.equal(wake!.request.desktopClientId, undefined);
 });
 
 test("mail that arrived while a core was down wakes its idle recipient on the next sweep", async () => {

@@ -64,14 +64,6 @@ export function renderMailWake(messages: readonly SessionMessage[], at = new Dat
 
 export const mailWakeKey = (messageIds: readonly string[]): string => `mail-wake:${hashId(messageIds, 32)}`;
 
-async function trustedSenders(deps: MailWakeDeps, sessionId: string, mail: SessionMessage[]): Promise<boolean> {
-  for (const message of mail) {
-    if (message.senderId === sessionId) continue;
-    if ((await deps.sessions.get(message.senderId))?.parentSessionId !== sessionId) return false;
-  }
-  return true;
-}
-
 async function baseRequest(deps: MailWakeDeps, base: Run, sessionId: string): Promise<OrchestratorInput> {
   const request: OrchestratorInput = { ...base.request };
   for (const key of UNINHERITED_REQUEST_KEYS) delete request[key];
@@ -90,13 +82,12 @@ async function wakeFor(deps: MailWakeDeps, session: Session, pending: SessionMes
   const mail = await visibleMail(deps, session.scopeId, prepared, mine, WAKE_BATCH_MAX);
   if (!mail.length || !mail.some((message) => !message.quiet)) return false;
   const text = renderMailWake(mail);
-  const trusted = await trustedSenders(deps, session.id, mail);
   await deps.runs.enqueue({
     sessionId: session.threadRef,
     dedupKey: mailWakeKey(mail.map((message) => message.id)),
     request: {
       ...prepared,
-      ...(trusted ? { delegatingRunId: base.id } : {}),
+      delegatingRunId: base.id,
       origin: sessionTurnOrigin(prepared.origin, text),
       text,
       displayText: "New internal messages",
