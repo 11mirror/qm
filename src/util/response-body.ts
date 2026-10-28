@@ -1,4 +1,4 @@
-import { swallowAs } from "./errors.ts";
+import { swallowAs } from "../../plugins/chassis/src/errors.ts";
 
 export async function readCappedText(
   response: Response,
@@ -31,13 +31,26 @@ export async function readCappedText(
   return Buffer.concat(chunks, total).toString("utf8");
 }
 
-export async function readTextPrefix(response: Response, maxChars: number): Promise<string> {
+export async function readTextPrefix(response: Response, maxChars: number, signal?: AbortSignal): Promise<string> {
   if (!response.body) return "";
+  const reader = response.body.getReader();
+  const stop = () => void reader.cancel(signal?.reason).catch(swallowAs("response prefix: cancel body", undefined));
+  signal?.addEventListener("abort", stop, { once: true });
+  if (signal?.aborted) stop();
   const decoder = new TextDecoder();
   let text = "";
-  for await (const chunk of response.body) {
-    text += decoder.decode(chunk, { stream: true });
-    if (text.length >= maxChars) return text.slice(0, maxChars);
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return text + decoder.decode();
+      text += decoder.decode(value, { stream: true });
+      if (text.length >= maxChars) {
+        stop();
+        return text.slice(0, maxChars);
+      }
+    }
+  } finally {
+    signal?.removeEventListener("abort", stop);
+    reader.releaseLock();
   }
-  return text + decoder.decode();
 }

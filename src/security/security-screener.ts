@@ -195,7 +195,8 @@ export function createSecurityScreenProxy(opts: {
             "refused",
             { signal: chunkSignal, timeoutMs: opts.timeoutMs, baseDelayMs: SECURITY_SCREEN_RETRY_BASE_MS },
           );
-          if (!response.ok) throw new Error(`Security screen proxy returned ${await httpFailure(response)}`);
+          if (!response.ok)
+            throw new Error(`Security screen proxy returned ${await httpFailure(response, undefined, chunkSignal)}`);
           return classification(await responseText(response), opts.provider);
         },
         signal,
