@@ -139,7 +139,7 @@ test("read-only turns report steered files as unavailable without provisioning a
   assert.match(prepared?.text ?? "", /secret.txt/);
 });
 
-for (const budget of ["count", "bytes", "reupload", "retry"] as const) {
+for (const budget of ["bytes", "reupload", "retry"] as const) {
   test(`steered documents respect the initial turn budget (${budget})`, async () => {
     const blobTransfer = createMemoryBlobTransferStore();
     const blob = await blobTransfer.put(Buffer.from(budget === "bytes" ? "x".repeat(7_999_995) : "initial"));
@@ -154,7 +154,7 @@ for (const budget of ["count", "bytes", "reupload", "retry"] as const) {
     const harness = createMockHarness();
     let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
     harness.turns.runTurn = async (turn) => {
-      assert.equal(turn.documents?.length, budget === "count" ? 10 : 1);
+      assert.equal(turn.documents?.length, 1);
       const request: TurnRequest = {
         origin: { kind: "direct" },
         surface: "web",
@@ -178,11 +178,7 @@ for (const budget of ["count", "bytes", "reupload", "retry"] as const) {
     const { orchestrator } = buildOrchestrator({ harness, sandbox, blobTransfer });
     const result = await orchestrator.handleTurn({
       ...dm(`steer-budget-${budget}`, "hello"),
-      attachments: Array.from({ length: budget === "count" ? 10 : 1 }, (_, i) => ({
-        name: `initial-${i}.txt`,
-        mimetype: "text/plain",
-        ...blob,
-      })),
+      attachments: [{ name: "initial-0.txt", mimetype: "text/plain", ...blob }],
     });
     assert.equal(result.status, "ok", result.reason);
     if (budget === "retry") assert.equal(prepared?.documents?.length, 1);

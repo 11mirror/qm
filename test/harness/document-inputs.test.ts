@@ -156,7 +156,7 @@ test("Google document parts preserve PDFs and use text for office files", async 
 test("invalid binary documents and empty scans never masquerade as read documents", async () => {
   const document = await fixture("pdf");
   document.dataBase64 = Buffer.from("not a PDF").toString("base64");
-  assert.match(await documentFallbackText(document), /could not be included/);
+  assert.match(await documentFallbackText(document), /could not be read: /);
   assert.match(await documentFallbackText(await fixture("doc")), /Do not summarize it from another file/);
 });
 
@@ -448,7 +448,7 @@ test("encrypted PDFs do not expose content through text fallback", async () => {
     "base64",
   );
   const text = await documentFallbackText({ name: "encrypted.pdf", mimeType: "application/pdf", dataBase64 });
-  assert.match(text, /could not be included/);
+  assert.match(text, /could not be read: /);
   assert.doesNotMatch(text, /QUARTZ-731/);
 });
 
@@ -478,7 +478,7 @@ for (const model of [
         assert.ok(!blocks.includes(document.dataBase64));
         assert.ok(blocks.includes(document.name));
       }
-      assert.equal((blocks.match(/could not be included/g) ?? []).length, 2);
+      assert.equal((blocks.match(/could not be read: /g) ?? []).length, 2);
     }
   });
 }

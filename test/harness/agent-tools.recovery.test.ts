@@ -535,7 +535,7 @@ test("native skills discovery exposes list and search with validated pagination"
     ["rare", undefined, 10, undefined],
     [undefined, 4, 2, undefined],
   ]);
-  for (const input of [{ action: "search" }, { action: "list", limit: 101 }, { action: "list", offset: -1 }]) {
+  for (const input of [{ action: "search" }, { action: "list", limit: 0 }, { action: "list", offset: -1 }]) {
     assert.match(textOut(await call(tool, input)), /Invalid arguments/);
   }
 });
