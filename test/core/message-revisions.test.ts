@@ -261,7 +261,7 @@ test("while a turn holds the lease the ingest-time marker is skipped, and the tu
     sessions,
     surfaceCache: cache,
     lease: lease!,
-    session: { id: session.id, scopeId: SCOPE, threadRef: session.threadRef },
+    session: { id: session.id, threadRef: session.threadRef },
     anchorAt,
     fallbackSince: 0,
   });
@@ -279,7 +279,7 @@ test("while a turn holds the lease the ingest-time marker is skipped, and the tu
     sessions,
     surfaceCache: cache,
     lease: lease!,
-    session: { id: session.id, scopeId: SCOPE, threadRef: session.threadRef },
+    session: { id: session.id, threadRef: session.threadRef },
     anchorAt,
     fallbackSince: 0,
   });
