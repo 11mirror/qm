@@ -1,6 +1,10 @@
 import type { ModelProvider } from "../../model/pi-models.ts";
-import { completeClaudeLogin, startClaudeLogin } from "../../model/subscription-oauth.ts";
-import { createCodexDeviceLogin } from "../../model/codex-device-login.ts";
+import {
+  completeClaudeLogin,
+  pollChatGPTDeviceLogin,
+  startChatGPTDeviceLogin,
+  startClaudeLogin,
+} from "../../model/subscription-oauth.ts";
 import { errMessage } from "../../util/errors.ts";
 import { fail } from "../http.ts";
 import { validateProviderApiKey } from "./admin/model-providers.ts";
@@ -93,11 +97,9 @@ const putApiKey = withStore(async (ctx, principal, store) => {
   return ok({ ok: true });
 });
 
-const codexDeviceLogin = createCodexDeviceLogin();
-
 const chatgptStart = signedIn(async () => {
   try {
-    return ok(await codexDeviceLogin.start());
+    return ok(await startChatGPTDeviceLogin());
   } catch (e) {
     return reply(502, { error: "oauth_start_failed", message: errMessage(e) });
   }
@@ -105,9 +107,10 @@ const chatgptStart = signedIn(async () => {
 
 const chatgptPoll = withStore(async (ctx, principal, store) => {
   const deviceAuthId = bodyString(ctx, "deviceAuthId");
-  if (!deviceAuthId) throw fail(400, "bad_request");
+  const userCode = bodyString(ctx, "userCode");
+  if (!deviceAuthId || !userCode) throw fail(400, "bad_request");
   try {
-    const result = await codexDeviceLogin.poll(deviceAuthId);
+    const result = await pollChatGPTDeviceLogin(deviceAuthId, userCode);
     if (result === "pending") return ok({ status: "pending" });
     await store.setOAuth(principal, "openai", result);
     auditAuth(ctx, principal, "oauth", "openai");
