@@ -9,6 +9,7 @@ export function compileSafeRegex(pattern: string, flags = ""): RegExp {
   let escaped = false;
   let inClass = false;
   let previousQuantifier = false;
+  let ambiguousOptionals = 0;
   let closed: { quantified: boolean; alternation: boolean; nested: boolean } | null = null;
   for (let i = 0; i < pattern.length; i++) {
     const ch = pattern[i]!;
@@ -54,8 +55,10 @@ export function compileSafeRegex(pattern: string, flags = ""): RegExp {
     }
     const quantifier = ch === "*" || ch === "+" || (ch === "?" && pattern[i - 1] !== "(") || ch === "{";
     if (quantifier) {
+      if (closed?.nested && ch === "?") ambiguousOptionals++;
       if (
         previousQuantifier ||
+        ambiguousOptionals > 1 ||
         (closed && (closed.quantified || closed.alternation || (ch !== "?" && closed.nested)))
       ) {
         throw new Error("nested or ambiguous repetition is not supported");
