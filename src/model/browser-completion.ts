@@ -162,7 +162,10 @@ export async function nativeBrowserCompletion(
       : undefined,
   });
   if (result.stopReason === "error" || result.stopReason === "aborted" || result.stopReason === "length")
-    throw new BrowserCompletionError("Selected AI account could not complete the browser request", 502);
+    throw new BrowserCompletionError(
+      `Selected AI account could not complete the browser request (${result.stopReason}${result.errorMessage ? `: ${result.errorMessage}` : ""})`,
+      502,
+    );
   const structured = result.content.find((part) => part.type === "toolCall" && part.name === "browser_result");
   if (schema && !structured)
     throw new BrowserCompletionError("Selected AI account did not return a structured browser result", 502);

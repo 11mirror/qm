@@ -224,6 +224,25 @@ test("company ChatGPT subscription auth uses the native subscription transport w
   });
   assert.equal(result.choices[0]?.message.content, "done");
   await assert.rejects(
+    nativeBrowserCompletion(input, async () => ({
+      completeSimple: async (model) => ({
+        role: "assistant",
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: zeroUsage(),
+        timestamp: Date.now(),
+        stopReason: "error",
+        errorMessage: "usage limit reached",
+        content: [],
+      }),
+    })),
+    (error: unknown) =>
+      error instanceof BrowserCompletionError &&
+      error.status === 502 &&
+      error.message.endsWith("(error: usage limit reached)"),
+  );
+  await assert.rejects(
     nativeBrowserCompletion({ ...input, companyProviderKeys: { openai: "must-not-fallback" } }),
     (error: unknown) => error instanceof BrowserCompletionError && error.status === 503,
   );
