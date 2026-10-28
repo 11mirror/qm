@@ -77,6 +77,7 @@ const DEFAULT_MAX_CHARS = 200_000;
 const DEFAULT_GRACE_MS = 30_000;
 const FIRST_BLOCK_MAX_CHARS = 20_000;
 const BLOCK_JOIN = "\n\n";
+const blockJoin = (written: string): string => (written && !written.endsWith(BLOCK_JOIN) ? BLOCK_JOIN : "");
 export const REASONING_MAX_BLOCKS = 8;
 const REASONING_MAX_CHARS = 20_000;
 
@@ -129,6 +130,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       if (entry) {
         entry.replying = true;
         entry.reasoning = [];
+        entry.held = null;
         if (entry.timer) clearTimeout(entry.timer);
         entry.timer = null;
       } else runs.set(runId, makeEntry());
@@ -164,8 +166,8 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
         return;
       }
       if (entry.firstBlock) entry.firstBlockOpen = false;
-      if (!entry.text || entry.text.endsWith(BLOCK_JOIN)) return;
-      append(runId, entry, BLOCK_JOIN);
+      const join = blockJoin(entry.text);
+      if (join) append(runId, entry, join);
     },
 
     hold(runId) {
@@ -194,7 +196,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       let offset = entry.totalChars;
       let tail = entry.text.slice(-BLOCK_JOIN.length);
       for (const piece of entry.held ?? []) {
-        const next = piece ?? (tail && !tail.endsWith(BLOCK_JOIN) ? BLOCK_JOIN : "");
+        const next = piece ?? blockJoin(tail);
         offset += next.length;
         tail = (tail + next).slice(-BLOCK_JOIN.length);
       }

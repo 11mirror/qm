@@ -236,6 +236,15 @@ const MODE_AUTONOMOUS_MD = loadProtocolFile("mode-autonomous");
 const MODE_FALLBACK_MD = loadProtocolFile("mode-fallback");
 
 const REPLY_REVISIONS = 2;
+
+function isApprovalEntry(entry: NewEntry): boolean {
+  return (
+    entry.type === "approval_request" ||
+    ((entry.type === "tool_result" || entry.type === "tool_call") &&
+      isObj(entry.payload) &&
+      entry.payload.blocked === "needs_approval")
+  );
+}
 const FIRST_BLOCK_CAPTURE_MAX_CHARS = 20_000;
 
 const DETECT_HISTORY_TAIL = 400;
@@ -3208,10 +3217,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         let revisions = 0;
         let awaitingApproval = false;
         const reviewReply = async (entry: NewEntry): Promise<NewEntry> => {
-          if (entry.type === "tool_call") {
-            releaseHeld();
-            if (isObj(entry.payload) && entry.payload.blocked === "needs_approval") awaitingApproval = true;
-          }
+          if (entry.type === "tool_call") releaseHeld();
+          if (isApprovalEntry(entry)) awaitingApproval = true;
           if (entry.type !== "assistant" || !replyCheckMode || revisions >= REPLY_REVISIONS) return entry;
           if (awaitingApproval || spine.surfaceOutboundCount > 0 || turnAbort.signal.aborted) return entry;
           const payload = isObj(entry.payload) ? entry.payload : {};
@@ -3279,13 +3286,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const entry = await reviewReply(incoming);
             turnProgress++;
             const stored = (() => {
-              if (
-                entry.type === "assistant" ||
-                entry.type === "approval_request" ||
-                ((entry.type === "tool_result" || entry.type === "tool_call") &&
-                  isObj(entry.payload) &&
-                  entry.payload.blocked === "needs_approval")
-              ) {
+              if (entry.type === "assistant" || isApprovalEntry(entry)) {
                 const payload = isObj(entry.payload) ? { ...entry.payload } : {};
                 if (typeof payload.workStartedAt !== "number")
                   payload.workStartedAt = input.runStartedAt ?? coreReceivedAt;

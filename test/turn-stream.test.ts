@@ -503,3 +503,13 @@ test("held text stays out of the stream until released, keeps its block boundari
   s.publish("r1", " more");
   assert.equal(s.snapshot("r1"), "Checking.\n\ndraft two more");
 });
+
+test("a new attempt on the same run starts unheld, dropping text a failed attempt held back", () => {
+  const s = createTurnStream();
+  s.begin("r1");
+  s.hold("r1");
+  s.publish("r1", "dead attempt");
+  s.begin("r1");
+  s.publish("r1", "live");
+  assert.equal(s.snapshot("r1"), "live");
+});
