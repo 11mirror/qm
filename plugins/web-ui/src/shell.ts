@@ -13,7 +13,6 @@ import {
   Clock,
   Files,
   Folder,
-  House,
   Inbox as InboxGlyph,
   KeyRound,
   LayoutGrid,
@@ -50,6 +49,8 @@ import {
 import { seedRuntimeConfig } from "./runtime-config-store";
 import { errMessage, swallow, swallowAs } from "../../chassis/src/errors";
 import { brandMark, brandName } from "./ui";
+import { desktopHistoryNav } from "./desktop-history";
+import { beginNavigation, cancelNavigation, endNavigation, navigationInFlight } from "./url-history";
 import { icon } from "./icons";
 import { PHONE_MAX_WIDTH, trackVisualViewport } from "./viewport";
 import { markConnectorConnected } from "./chat";
@@ -63,6 +64,7 @@ import {
   drawCanvas,
   endPaneDrag,
   exitSplitIfActive,
+  focusedPaneConversation,
   fetchRemoteSplit,
   focusedPaneSession,
   loadPersistedSplit,
@@ -86,6 +88,7 @@ import {
   revealSessionSurface,
   startNewChatInLastScope,
   startNewChat,
+  openNewChat,
 } from "./sessions";
 import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
 import { renderLoopsPage, resetActiveLoop } from "./loops";
@@ -157,7 +160,8 @@ export const ADMIN_BASE = (() => {
 })();
 export const ADMIN_HOME_URL = `${ADMIN_BASE}/`;
 
-export function syncUrlFromState(sessionOverride?: string | null): void {
+export function syncUrlFromState(sessionOverride?: string | null, historyMode: "push" | "replace" = "replace"): void {
+  if (navigationInFlight()) return;
   const chatState = mainConversation().state;
   const fromState =
     sessionOverride !== undefined ? sessionOverride : (chatState.sessionId ?? chatState.rememberedSessionId);
@@ -166,7 +170,33 @@ export function syncUrlFromState(sessionOverride?: string | null): void {
   const linked = parseDeepLink(UI_BASE, location.pathname, location.search);
   const seq = messageLinkSeq(location.search);
   if (appState.currentView === "chats" && linked.session === sessionId && seq !== null) next += `?seq=${seq}`;
-  if (`${location.pathname}${location.search}` !== next) history.replaceState(null, "", next);
+  if (`${location.pathname}${location.search}` === next) return;
+  if (historyMode === "push") history.pushState(null, "", next);
+  else history.replaceState(null, "", next);
+}
+
+function openViewAt(view: View, item: string | null, historyMode: "push" | "replace"): void {
+  if (view === "deploys" && item) openDeployById(item);
+  if (view === "crons" && item) openCronById(item);
+  if (view === "webhooks" && item) openWebhookById(item);
+  if (view === "skills" && item) openSkillById(item);
+  switchView(view, historyMode);
+  if (view === "inbox") routeInboxHistory(item);
+}
+
+async function restoreChatsEntry(sessionId: string | null): Promise<void> {
+  if (!sessionId) {
+    if (appState.currentView !== "chats") switchView("chats", "replace");
+    if (splitState.active ? singlePaneSessionId() : mainConversation().state.sessionId) openNewChat(null, null);
+    return;
+  }
+  const conversation = focusedPaneConversation() ?? mainConversation();
+  if (appState.currentView === "chats" && conversation.state.sessionId === sessionId) return;
+  const session =
+    sessionsState.list.find((s) => s.id === sessionId) ??
+    (await fetchSessionRow({ id: sessionId }).catch(swallowAs("web-ui: restore history entry", null)));
+  if (session) await showLinkedSession(session);
+  else showConversationError(false);
 }
 
 const appEl = document.getElementById("app");
@@ -232,7 +262,6 @@ const ICON = {
   loops: Repeat,
   memory: Brain,
   skills: Box,
-  home: House,
   browse: LayoutGrid,
 };
 
@@ -500,6 +529,7 @@ export function mountShell(): void {
         >
           <div class="brand">
             <div class="brand-lockup">${brandMark()}<span class="brand-name">${brandName()}</span></div>
+            ${desktopHistoryNav()}
             <button
               class="icon-btn sidebar-toggle sidebar-collapse-toggle"
               type="button"
@@ -636,7 +666,6 @@ export function renderSidebarTop(): void {
   render(
     html`
       <nav class="nav quick-nav" @click=${onNavClick}>
-        ${navRow("chats", ICON.home, "Home")}
         ${can("inbox") ? html`${inboxNavRow()} ${navRow("calendar", ICON.calendar, "Calendar")}` : nothing}
         ${actionRow(Search, "Search", () => {
           hideTooltip();
@@ -691,7 +720,16 @@ function onNavClick(e: Event): void {
   closeSidebarOnNarrowView();
 }
 
-export function switchView(v: View): void {
+export function switchView(v: View, historyMode: "push" | "replace" = "push"): void {
+  const navigation = historyMode === "push" ? beginNavigation() : null;
+  try {
+    showView(v);
+  } finally {
+    if (navigation && endNavigation(navigation)) syncUrlFromState(undefined, "push");
+  }
+}
+
+function showView(v: View): void {
   if (!canView(v)) v = "chats";
   closeSidebarOnNarrowView();
   if (appState.currentView === v) {
@@ -978,14 +1016,20 @@ export function replacePanePreservingFocus(host: HTMLElement): void {
 }
 
 window.addEventListener("popstate", () => {
+  if (!appState.me) return;
+  cancelNavigation();
   const routed = ["crons", "webhooks", "inbox", "skills"];
-  if (!routed.includes(appState.currentView)) return;
-  const { view, item } = parseDeepLink(UI_BASE, location.pathname, location.search);
-  if (view !== appState.currentView) return;
-  if (view === "crons") routeCronsHistory(item);
-  else if (view === "webhooks") routeWebhooksHistory(item);
-  else if (view === "skills") routeSkillsHistory(item);
-  else routeInboxHistory(item);
+  const { view: linkedView, session, item } = parseDeepLink(UI_BASE, location.pathname, location.search);
+  const view = isView(linkedView) ? linkedView : "chats";
+  if (view === appState.currentView && routed.includes(view)) {
+    if (view === "crons") routeCronsHistory(item);
+    else if (view === "webhooks") routeWebhooksHistory(item);
+    else if (view === "skills") routeSkillsHistory(item);
+    else routeInboxHistory(item);
+    return;
+  }
+  if (view !== "chats") openViewAt(view, item, "replace");
+  else void restoreChatsEntry(session);
 });
 
 window.addEventListener("focus", () => {
@@ -1027,13 +1071,13 @@ export async function bootSafely(): Promise<void> {
 
 async function showLinkedSession(
   linked: CoreSession,
-  transcript: Promise<TranscriptPage | null>,
-  seq: number | null,
+  transcript?: Promise<TranscriptPage | null>,
+  seq: number | null = null,
   approvals?: Promise<{ approvals: PendingApproval[] } | null>,
 ): Promise<void> {
   if (!sessionsState.list.some((s) => s.id === linked.id)) sessionsState.list = [linked, ...sessionsState.list];
   revealSessionSurface(linked);
-  await openSession(linked, transcript, approvals);
+  await openSession(linked, transcript, approvals, "replace");
   if (seq !== null)
     requestAnimationFrame(() => {
       for (const conversation of allConversations())
@@ -1173,7 +1217,7 @@ export async function boot(): Promise<void> {
     if (match) {
       exitSplitIfActive();
       revealSessionSurface(match);
-      await openSession(match);
+      await openSession(match, undefined, undefined, "replace");
     } else {
       showConversationError(transcriptUnavailable);
     }
@@ -1191,12 +1235,7 @@ export async function boot(): Promise<void> {
         params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
       if (scope) contextsState.selected = scope;
     }
-    if (wanted === "deploys" && wantedItem) openDeployById(wantedItem);
-    if (wanted === "crons" && wantedItem) openCronById(wantedItem);
-    if (wanted === "webhooks" && wantedItem) openWebhookById(wantedItem);
-    if (wanted === "skills" && wantedItem) openSkillById(wantedItem);
-    switchView(wanted as View);
-    if (wanted === "inbox") routeInboxHistory(wantedItem);
+    openViewAt(wanted as View, wantedItem, "push");
     return;
   }
 
@@ -1227,7 +1266,7 @@ export async function boot(): Promise<void> {
   if (connectedProvider && sessionsState.list.length) {
     const recent = [...sessionsState.list].sort((a, b) => activityOf(b) - activityOf(a))[0]!;
     exitSplitIfActive();
-    await openSession(recent);
+    await openSession(recent, undefined, undefined, "replace");
   } else if (!(restoreLast && mountRestoredCanvas()) && !mainConversation().state.threadRef) {
     mainConversation().newChat();
   }

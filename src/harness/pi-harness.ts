@@ -98,6 +98,7 @@ import {
   type HarnessCompactInput,
   type HarnessDetectInput,
   type HarnessDetectResult,
+  type HarnessLlmRequestRecord,
   type HarnessTurnInput,
   type HarnessTurnResult,
 } from "./harness.ts";
@@ -1166,6 +1167,7 @@ export async function oneShot(
     modelGateway?: ModelGatewayTransportConfig;
     purpose?: ModelRequestPurpose;
     thinkingLevel?: LegacyThinkingLevel;
+    recordLlmRequest?: (rec: HarnessLlmRequestRecord) => void | Promise<void>;
   },
 ): Promise<string | undefined> {
   const modelRuntime = await buildModelRuntime(keys, opts?.modelGateway, opts?.purpose);
@@ -1192,8 +1194,16 @@ export async function oneShot(
       void session.abort().catch(() => undefined);
     };
     opts?.signal?.addEventListener("abort", onAbort, { once: true });
+    let recorded: Promise<void> = Promise.resolve();
+    let step = 0;
     const unsubscribe = session.agent.subscribe((event) => {
       if (event.type === "agent_start" && opts?.signal?.aborted) session.agent.abort();
+      if (event.type === "message_end" && event.message.role === "assistant" && opts?.recordLlmRequest) {
+        const record = opts.recordLlmRequest;
+        const call = event.message;
+        const at = step++;
+        recorded = recorded.then(() => recordOneShotCall(record, call, at, model));
+      }
     });
     try {
       await session.prompt(prompt);
@@ -1202,10 +1212,30 @@ export async function oneShot(
     } finally {
       unsubscribe();
       opts?.signal?.removeEventListener("abort", onAbort);
+      await recorded;
     }
     return piLastAssistantTextOrThrow(session);
   } finally {
     removeIsolatedDirs({ agentDir, ephemeralCwd });
+  }
+}
+
+async function recordOneShotCall(
+  record: (rec: HarnessLlmRequestRecord) => void | Promise<void>,
+  call: AssistantMessage,
+  step: number,
+  model: Model<Api>,
+): Promise<void> {
+  try {
+    await record({
+      turnSeq: null,
+      step,
+      model: model.id,
+      truncated: false,
+      usage: piUsageToCallUsage(call.usage, model, false),
+    });
+  } catch (e) {
+    swallow("pi: one-shot request record", e);
   }
 }
 
@@ -2265,6 +2295,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           (await oneShot("pi-detect", model, providerKeys, detectSystemPrompt, prompt, {
             modelGateway,
             purpose: "detect",
+            ...(detect.recordLlmRequest ? { recordLlmRequest: detect.recordLlmRequest } : {}),
           })) ?? ""
         ).trim();
         return parseDetectVerdict(out, Boolean(detect.reactionGuidance?.trim()));

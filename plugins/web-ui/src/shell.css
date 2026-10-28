@@ -266,6 +266,31 @@ body.resizing-sidebar {
   letter-spacing: 0;
   line-height: 1;
 }
+.history-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: auto;
+}
+.history-btn {
+  width: 28px;
+  height: 28px;
+}
+.history-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  background: transparent;
+}
+.layout.sidebar-closed .history-nav {
+  margin-right: 0;
+  gap: 0;
+}
+.layout.sidebar-closed .history-btn {
+  width: 24px;
+}
+html:not([data-qm-desktop="darwin"]) .layout.sidebar-closed .history-nav {
+  display: none;
+}
 .brand-lockup {
   min-width: 0;
   display: flex;
@@ -2700,6 +2725,7 @@ qm-markdown .tok-in {
 }
 .work-head {
   display: flex;
+  font-variant-numeric: tabular-nums;
   align-items: center;
   gap: 6px;
   font-size: max(min(12px, var(--chat-font-size)), calc(var(--chat-font-size) * var(--text-scale)));
@@ -2738,9 +2764,12 @@ qm-markdown .tok-in {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.work-thinking > .work-head .work-step,
+.work-working > .work-head .work-step {
   animation: work-step-in 420ms ease-out both;
 }
-.work-head .work-step-out {
+.work-head .work-step.work-step-out {
   position: absolute;
   inset: 0 auto 0 0;
   animation: work-step-out 420ms ease-out both;
@@ -2763,7 +2792,8 @@ qm-markdown .tok-in {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .work-head .work-step {
+  .work-thinking > .work-head .work-step,
+  .work-working > .work-head .work-step {
     animation: none;
   }
   .work-head .work-step-out {

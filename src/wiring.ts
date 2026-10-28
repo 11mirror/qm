@@ -681,7 +681,7 @@ export function buildApp(
   });
   void configStore.hydrate?.().catch(reportFailureAs("startup: hydrate configuration", undefined));
   const skills: SkillStore = createSkillStore({
-    backing: artifactMap<Skill>("skills"),
+    backing: artifactMap<Skill>("skills", ["scopeId"]),
     advisoryLock,
     ...(config.skillSigningSecret ? { signingSecret: config.skillSigningSecret } : {}),
   });
@@ -1535,7 +1535,6 @@ export function buildApp(
     return selectableModelCatalog(overrides.modelCredentialFetch);
   };
   const harness = createHarnessRouter(adapters, adapters.get(fallbackHarness)!, async (input, routedBy) => {
-    await refreshModels();
     const resolve = (requested: typeof input.runtime) =>
       resolveRuntimeChoiceDurable(
         configStore,
@@ -1949,7 +1948,7 @@ export function buildApp(
   const environments = config.databaseUrl
     ? createPostgresEnvironmentStore(config.databaseUrl)
     : createMemoryEnvironmentStore();
-  const monitors = createMonitorStore(artifactMap<Monitor>("monitors"));
+  const monitors = createMonitorStore(artifactMap<Monitor>("monitors", ["ownerScopeId"]));
   const loopStore = createLoopStore(artifactMap<Loop>("loops"));
   const loopItemsMap = artifactMap<LoopItem>("loop_items", ["loopId"]);
   const loopOwnerCache = new Map<string, string>();
@@ -1976,7 +1975,7 @@ export function buildApp(
   const loopGrants = createShipGrantStore(artifactMap<ShipGrant>("loop_ship_grants"));
   const cronChanged: { notify?: (id: string) => void } = {};
   const cronFires = config.databaseUrl ? createPostgresCronFireStore(config.databaseUrl) : createMemoryCronFireStore();
-  const cronsBase = createCronStore(artifactMap<Cron>("crons"), {
+  const cronsBase = createCronStore(artifactMap<Cron>("crons", ["ownerScopeId"]), {
     staleRunningMs: config.runMaxAgeMs,
     fires: cronFires,
   });
@@ -2034,7 +2033,10 @@ export function buildApp(
       `UPDATE crons c SET json = jsonb_set(c.json, '{enabled}', 'true') FROM suggested_activity_profiles p WHERE p.json ->> 'cronId' = c.id AND (p.json ->> 'autoPaused')::boolean`,
     ],
   });
-  const webhooks = createWebhookStore(artifactMap<Webhook>("webhooks"), artifactMap<WebhookHistory>("webhook_history"));
+  const webhooks = createWebhookStore(
+    artifactMap<Webhook>("webhooks", ["ownerScopeId"]),
+    artifactMap<WebhookHistory>("webhook_history"),
+  );
   pgArtifactMap?.pool.registerMigration({
     id: "durable-map/webhooks/0002-disable-rows-orphaned-by-webhook-removal",
     legacyId: "durable-map/webhooks/0002-disable-rows-orphaned-by-webhook-removal",
@@ -2213,7 +2215,7 @@ export function buildApp(
     serviceCreds,
     deliveries,
     approvals,
-    approvalGrants: artifactMap<CommandApprovalGrant>("approval_grants"),
+    approvalGrants: artifactMap<CommandApprovalGrant>("approval_grants", ["actorId"]),
     ...(processes ? { processes } : {}),
     monitors,
     crons,

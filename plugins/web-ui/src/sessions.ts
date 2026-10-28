@@ -100,6 +100,7 @@ import {
 import { groupDmLabel, groupDmText } from "./group-dm-label";
 import { transcriptModel } from "./model-options";
 import { appState, closeSidebarOnNarrowView, renderSidebarTop, syncDocumentTitle, syncUrlFromState } from "./shell";
+import { beginNavigation, endNavigation } from "./url-history";
 import { allConversations, isLiveConversation, mainConversation } from "./conversations";
 import type { Conversation } from "./conv-types";
 import {
@@ -532,6 +533,15 @@ export function startNewChat(
   threadRef?: string,
 ): Conversation | null {
   closeSidebarOnNarrowView();
+  const navigation = beginNavigation();
+  try {
+    return openNewChat(scopeId, name, threadRef);
+  } finally {
+    if (endNavigation(navigation)) syncUrlFromState(undefined, "push");
+  }
+}
+
+export function openNewChat(scopeId: string | null, name: string | null, threadRef?: string): Conversation | null {
   if (scopeId) sessionsState.collapsedProjectScopes.delete(scopeId);
   const pane = startNewChatInCanvas(scopeId ?? undefined, threadRef);
   if (pane) return pane;
@@ -1889,9 +1899,23 @@ export async function openSession(
   s: CoreSession,
   entriesPrefetch?: Promise<TranscriptPage | null>,
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
+  historyMode: "push" | "replace" = "push",
 ): Promise<void> {
   if (pendingForkThreads.has(s.threadRef)) return;
   if (keptUnreadId !== s.id) keptUnreadId = null;
+  const navigation = historyMode === "push" ? beginNavigation() : null;
+  try {
+    await showSession(s, entriesPrefetch, approvalsPrefetch);
+  } finally {
+    if (navigation && endNavigation(navigation)) syncUrlFromState(undefined, "push");
+  }
+}
+
+async function showSession(
+  s: CoreSession,
+  entriesPrefetch?: Promise<TranscriptPage | null>,
+  approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
+): Promise<void> {
   if (appState.currentView !== "chats") {
     appState.currentView = "chats";
     appState.viewRenderSeq++;
