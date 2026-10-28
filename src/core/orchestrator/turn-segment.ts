@@ -75,11 +75,6 @@ export interface SegmentTurn {
   observeSecurityData: SecurityObserver;
 }
 
-function createHarnessSegment(ctx: TurnCtx, turn: SegmentTurn) {
-  return (harnessInput: string, extras: Parameters<typeof runHarnessSegment>[3], continuation?: { history: Item[] }) =>
-    runHarnessSegment(ctx, turn, harnessInput, extras, continuation);
-}
-
 type Prepared = ReadyTurn["prepared"];
 
 async function runHarnessSegment(
@@ -513,9 +508,12 @@ export async function runSegments(
   const { lease, turnAbort } = turn.held;
   const { historyWindow } = turn.begun;
   const { turnStart } = run;
-  const runHarnessSegment = createHarnessSegment(ctx, turn);
-  const runHarnessTurn = async (...args: Parameters<typeof runHarnessSegment>) => {
-    let segment = await runHarnessSegment(...args);
+  const runHarnessTurn = async (
+    harnessInput: string,
+    extras: Parameters<typeof runHarnessSegment>[3],
+    continuation?: { history: Item[] },
+  ) => {
+    let segment = await runHarnessSegment(ctx, turn, harnessInput, extras, continuation);
     while (segment.runtimeHandoff && !segment.stopped && !turnAbort.signal.aborted) {
       run.runtimeHandoffs += 1;
       if (effectiveTurnWallClockMs && Date.now() - turnStart >= effectiveTurnWallClockMs)
@@ -541,6 +539,8 @@ export async function runSegments(
       run.contextRecovered ||= recovery;
       turnAbort.signal.throwIfAborted();
       segment = await runHarnessSegment(
+        ctx,
+        turn,
         runtimeSwitchNote("choice" in segment.runtimeHandoff ? segment.runtimeHandoff.choice : undefined) +
           (recovery && !resumedHistory.some((entry) => isUserMessage(entry) && !!entry.text?.startsWith(baseText))
             ? `\nCurrent request:\n${baseText}`
