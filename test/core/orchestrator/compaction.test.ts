@@ -8,7 +8,7 @@ import { reconstructMessagesFromHistory } from "../../../src/harness/replay.ts";
 import { countTokens } from "../../../src/util/tokens.ts";
 import type { NewItem } from "../../../src/sessions/items.ts";
 import { createPostgresSessionStore } from "../../../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl } from "../../support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "../../support/test-database.ts";
 import { inlineJobs } from "../../support/inline-jobs.ts";
 import { createJobWorker } from "../../../src/jobs/job-worker.ts";
 import { createGoalRecord } from "../../../src/harness/goal.ts";
@@ -255,6 +255,7 @@ test("background compaction cannot revive an older goal over one closed while it
       turns: {},
     },
     jobs: inlineJobs(),
+    advisoryLock: testAdvisoryLock(),
   } as unknown as OrchestratorDeps);
   compaction.scheduleBackgroundCompaction({
     sessionId: session.id,
@@ -294,8 +295,8 @@ test("background compaction scheduled by a process that dies before running it s
       sessions,
       maxContextTokens: 400,
       harness: { models: { compactHistory }, turns: {} },
-      modelGateway: { recordCall() {} },
       jobs,
+      advisoryLock: testAdvisoryLock(),
     } as unknown as OrchestratorDeps);
     return { jobs, compaction };
   };
@@ -318,4 +319,54 @@ test("background compaction scheduled by a process that dies before running it s
   } finally {
     await next.jobs.stop();
   }
+});
+
+test("two background compactions for one session make one summarizer call", async () => {
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const session = await sessions.getOrCreateByThread("double-bill", "dm", scope);
+  const { lease } = await sessions.acquireLease(session.id);
+  assert.ok(lease);
+  for (let i = 0; i < 10; i++) {
+    await sessions.append(lease, { kind: "UserMessage", text: `message ${i} `.repeat(100) });
+  }
+  await sessions.releaseLease(lease);
+  const started = Promise.withResolvers<void>();
+  const second = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<string>();
+  let calls = 0;
+  const handlers = new Map<string, (params: unknown) => Promise<unknown>>();
+  const runs: Promise<unknown>[] = [];
+  const compaction = createCompaction({
+    sessions,
+    maxContextTokens: 400,
+    harness: {
+      models: {
+        compactHistory: async () => {
+          if (++calls === 1) started.resolve();
+          else second.resolve();
+          return finish.promise;
+        },
+      },
+      turns: {},
+    },
+    jobs: {
+      handle: (name: string, run: (params: unknown) => Promise<unknown>) => handlers.set(name, run),
+      spawn: async (name: string, params: unknown) => {
+        runs.push(handlers.get(name)!(structuredClone(params)));
+      },
+    },
+    advisoryLock: testAdvisoryLock(),
+  } as unknown as OrchestratorDeps);
+  const job = { sessionId: session.id, scopeId: scope, orgScopeId: "org:test", actorId: "test" };
+  compaction.scheduleBackgroundCompaction({ ...job, afterSeq: 8 });
+  await started.promise;
+  compaction.scheduleBackgroundCompaction({ ...job, afterSeq: 9 });
+  await Promise.race([runs[1], second.promise]);
+  finish.resolve("Earlier work.");
+  await Promise.all(runs);
+  compaction.scheduleBackgroundCompaction({ ...job, afterSeq: 10 });
+  await Promise.all(runs);
+  assert.equal(calls, 1);
+  const summaries = (await sessions.getItems(session.id)).filter((item) => item.kind === "ContextCompaction");
+  assert.equal(summaries.length, 1);
 });

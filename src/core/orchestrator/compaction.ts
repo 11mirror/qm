@@ -248,6 +248,14 @@ function recordBackgroundFailure(deps: OrchestratorDeps, job: BackgroundCompacti
 }
 
 async function runBackgroundCompaction(deps: OrchestratorDeps, job: BackgroundCompaction): Promise<void> {
+  try {
+    await deps.advisoryLock.tryWithLock(`compaction:${job.sessionId}`, () => compactInBackground(deps, job));
+  } catch (e) {
+    recordBackgroundFailure(deps, job, e);
+  }
+}
+
+async function compactInBackground(deps: OrchestratorDeps, job: BackgroundCompaction): Promise<void> {
   let lease: Lease | null = null;
   try {
     const session = await deps.sessions.get(job.sessionId);
@@ -272,8 +280,6 @@ async function runBackgroundCompaction(deps: OrchestratorDeps, job: BackgroundCo
     if (!since.some((entry) => !!contextSummary(entry))) {
       await writeCompaction(deps, { session, lease, summarized });
     }
-  } catch (e) {
-    recordBackgroundFailure(deps, job, e);
   } finally {
     if (lease) await deps.sessions.releaseLease(lease);
   }
