@@ -38,7 +38,7 @@ const group = (id = "vendor/new-model", extra: object = {}) => ({
   supported_openai_params: ["tools", "max_completion_tokens"],
   ...extra,
 });
-function fixture(models = [group()], aliases = {}, directProviders: ReadonlySet<string> = new Set()) {
+function fixture(models = [group()], aliases = {}, direct: { openai?: boolean; anthropic?: boolean } = {}) {
   let clock = 0;
   let status = 200;
   let metadata = models;
@@ -48,7 +48,12 @@ function fixture(models = [group()], aliases = {}, directProviders: ReadonlySet<
     calls.push({ url: String(url), options });
     return Response.json({ data: String(url).endsWith("/models") ? listing : metadata }, { status });
   };
-  const catalog = createGatewayCatalog({ ...config, models: aliases }, fetcher, () => clock, directProviders);
+  const catalog = createGatewayCatalog(
+    { ...config, models: aliases },
+    fetcher,
+    () => clock,
+    async () => direct,
+  );
   return {
     catalog,
     calls,
@@ -348,7 +353,12 @@ test("derived gateway routes defer to explicit mappings, direct keys and protoco
   await explicit.catalog.refresh();
   assert.equal(explicit.catalog.transport.models["gpt-6.1-terra"], "router/gpt-6.1-terra");
 
-  const direct = fixture([group("openai/gpt-6.1-terra", { providers: ["openai"] })], {}, new Set(["openai"]));
+  const keys: { openai?: boolean } = {};
+  const direct = fixture([group("openai/gpt-6.1-terra", { providers: ["openai"] })], {}, keys);
+  await direct.catalog.refresh();
+  assert.equal(direct.catalog.transport.models["gpt-6.1-terra"], "openai/gpt-6.1-terra");
+  keys.openai = true;
+  direct.tick();
   await direct.catalog.refresh();
   assert.equal(direct.catalog.transport.models["gpt-6.1-terra"], undefined);
   assert.equal(modelGatewayRequest(direct.catalog.transport, resolveModel("gpt-6.1-terra")!), undefined);

@@ -595,12 +595,10 @@ export function registerOpenRouterCatalogModel(definition: OpenRouterCatalogMode
   return model;
 }
 
-export function nativeGatewayRoutes(): Array<{ id: string; provider: string; target: string }> {
+export function nativeGatewayRoutes(): Array<{ id: string; provider: string; upstream: string }> {
   return MODEL_REGISTRY.flatMap(({ id, request }) => {
     const provider = resolveBaseModel(id)?.provider;
-    return provider === "openai" || provider === "anthropic"
-      ? [{ id, provider, target: `${provider}/${request?.model ?? id}` }]
-      : [];
+    return provider ? [{ id, provider: String(provider), upstream: request?.model ?? id }] : [];
   });
 }
 
