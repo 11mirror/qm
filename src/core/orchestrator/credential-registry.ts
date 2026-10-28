@@ -284,7 +284,7 @@ async function aclGrantedServiceCredSlugs(c: CatalogState): Promise<Set<string>>
   );
 }
 
-export async function grantedServiceCredSlugs(
+async function grantedServiceCredSlugs(
   c: CatalogState,
   records: readonly PublicServiceCredential[],
 ): Promise<Set<string>> {

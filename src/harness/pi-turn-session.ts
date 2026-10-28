@@ -247,7 +247,8 @@ export async function createTurnSession({
   });
 
   if (seedPlan === "structured") seedRawMessagesIntoSession(session, reconstructed);
-  else if (seedPlan === "priorTurns") seedRawMessagesIntoSession(session, seedPriorTurns(priorTurns!, []).map(toPiMessage));
+  else if (seedPlan === "priorTurns")
+    seedRawMessagesIntoSession(session, seedPriorTurns(priorTurns!, []).map(toPiMessage));
 
   const agent = (session as unknown as { agent?: PiAgentWithPayloadHook }).agent;
   if (agent) {

@@ -38,7 +38,10 @@ export function createQueuedPosts(databaseUrl: string) {
           const outcome = await handle(key, queued);
           if ("settled" in outcome) await client.query(`DELETE FROM queued_posts WHERE id = $1`, [key]);
           else if ("failed" in outcome)
-            await client.query(`UPDATE queued_posts SET last_error = $2 WHERE id = $1`, [key, pgTextSafe(outcome.failed)]);
+            await client.query(`UPDATE queued_posts SET last_error = $2 WHERE id = $1`, [
+              key,
+              pgTextSafe(outcome.failed),
+            ]);
           return [queued.firstFailedAt, key] as [number, string];
         });
         if (!claimed) return;

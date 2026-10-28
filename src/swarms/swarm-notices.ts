@@ -7,7 +7,7 @@ import type { StrandedSwarmPost, SwarmBoard, SwarmBoardPost, SwarmNoticeContext 
 const NOTICE_CHARS = 2_000;
 const NOTIFY_CONCURRENCY = 8;
 const SWEEP_PAGE = 200;
-export const NOTIFY_GRACE_MS = 60_000;
+const NOTIFY_GRACE_MS = 60_000;
 
 export interface SwarmNoticeDeps {
   board: Pick<SwarmBoard, "subscribers" | "markNotified">;

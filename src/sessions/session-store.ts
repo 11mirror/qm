@@ -108,7 +108,6 @@ export interface SessionPin extends NewSessionPin {
   createdAt: number;
 }
 
-
 export interface GetItemsOptions {
   transcript?: boolean;
   turnId?: string;

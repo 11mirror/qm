@@ -505,7 +505,10 @@ export function seedPriorTurns(
 
 export type ColdStartSeedPlan = "structured" | "priorTurns" | "none";
 
-export function planColdStartSeed(reconstructed: readonly PiReplayMessage[], hasPriorTurns: boolean): ColdStartSeedPlan {
+export function planColdStartSeed(
+  reconstructed: readonly PiReplayMessage[],
+  hasPriorTurns: boolean,
+): ColdStartSeedPlan {
   if (reconstructed.length) return "structured";
   if (hasPriorTurns) return "priorTurns";
   return "none";

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { fireSettled } from "../support/settle.ts";
 import {
   createSuggestedActivityProfileStore,
   createSuggestedActivityService,
@@ -68,7 +69,7 @@ function fixture() {
       notifyChanged: (id: string) => scheduler.notifyChanged(id),
       runNow: async (id: string) => {
         const result = await scheduler.runNow(id);
-        if (result.started) settled.push(result.settled);
+        if (result.started) settled.push(fireSettled(crons, id, result.fireKey));
         return result;
       },
     },

@@ -1,7 +1,6 @@
 import { isContextOverflow, type AssistantMessage } from "@earendil-works/pi-ai";
 import { ProviderTurnError, TRANSIENT_ERROR_CODES, type ProviderErrorCode } from "../core/turn-error.ts";
 
-
 const AUTH_TYPES = new Set(["authentication_error", "permission_error", "invalid_api_key"]);
 const TRANSIENT_TYPES = new Set(["overloaded_error", "api_error", "timeout_error"]);
 const CONTEXT_CODES = new Set(["context_length_exceeded"]);

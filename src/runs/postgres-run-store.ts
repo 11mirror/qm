@@ -305,14 +305,7 @@ export function createPostgresRunStore(connectionString: string): PostgresRuntim
            INSERT INTO run_signals(run_id,kind,payload,created_at,dedupe_key)
            SELECT $2,$3,$4,$5,$6 FROM moved RETURNING id
          ) SELECT pg_notify('run_signals',$2) FROM sent`,
-        [
-          queuedRunId,
-          targetRunId,
-          signal.kind,
-          jsonbStringify(signal),
-          Date.now(),
-          signal.dedupeKey ?? null,
-        ],
+        [queuedRunId, targetRunId, signal.kind, jsonbStringify(signal), Date.now(), signal.dedupeKey ?? null],
       );
       return rows.length > 0;
     },

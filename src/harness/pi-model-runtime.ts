@@ -265,7 +265,7 @@ export async function complete(
   return (message && messageText(message)) || undefined;
 }
 
-export const STRUCTURED_ANSWER_TOOL = "answer";
+const STRUCTURED_ANSWER_TOOL = "answer";
 
 export type StructuredAnswer<T extends TSchema> = { ok: true; value: Static<T> } | { ok: false; text: string };
 

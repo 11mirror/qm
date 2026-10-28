@@ -130,7 +130,27 @@ const CRONS_INBOX_SCAN_MIGRATION = {
   statements: ["ALTER TABLE crons ADD COLUMN IF NOT EXISTS inbox_scanned_through bigint"],
 };
 
-const CRONS_MIGRATIONS = [CRONS_RETIRED_KEYS, CRONS_MIGRATION, CRONS_INBOX_SCAN_MIGRATION, ownerIndexMigration("crons")];
+const CRONS_MIGRATIONS = [
+  CRONS_RETIRED_KEYS,
+  CRONS_MIGRATION,
+  CRONS_INBOX_SCAN_MIGRATION,
+  ownerIndexMigration("crons"),
+];
+
+function cronContentId(input: CreateCronInput, title: string | undefined): string {
+  return hashId([
+    contentPart(input.owner),
+    contentPart(input.ownerScopeId),
+    contentPart(input.schedule),
+    contentPart(input.action),
+    contentPart(input.message),
+    contentPart(input.destination),
+    contentPart(input.unattendedGrants),
+    contentPart(title),
+    ...(input.inbox !== undefined ? [contentPart(input.inbox)] : []),
+    ...(input.runtime ? [contentPart(input.runtime)] : []),
+  ]);
+}
 
 export function createCronStore(
   databaseUrl: string,
@@ -150,18 +170,7 @@ export function createCronStore(
       const now = Date.now();
       const title = normalizeTitle(input.title);
       const { schedule, nextFireAt } = normalizeSchedule(input.schedule, now);
-      const contentId = hashId([
-        contentPart(input.owner),
-        contentPart(input.ownerScopeId),
-        contentPart(input.schedule),
-        contentPart(input.action),
-        contentPart(input.message),
-        contentPart(input.destination),
-        contentPart(input.unattendedGrants),
-        contentPart(title),
-        ...(input.inbox !== undefined ? [contentPart(input.inbox)] : []),
-        ...(input.runtime ? [contentPart(input.runtime)] : []),
-      ]);
+      const contentId = cronContentId(input, title);
       return table.insertOrGet(contentId, {
         ...buildTriggerBase(input, contentId, now),
         enabled: input.enabled !== false,

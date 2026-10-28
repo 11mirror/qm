@@ -297,7 +297,11 @@ function buildModelKeys(deps: HarnessInputs, mc: ReturnType<typeof buildModelCre
   const resolvePiProviderKeys = async (): Promise<ProviderKeys> =>
     Object.assign(
       {},
-      ...(await Promise.all([resolveCompanyClaudeKeys(), resolveModelProviderKeys(), resolveCompanySubscriptionKeys()])),
+      ...(await Promise.all([
+        resolveCompanyClaudeKeys(),
+        resolveModelProviderKeys(),
+        resolveCompanySubscriptionKeys(),
+      ])),
     );
   const resolveBrowserCompanyKeys = async (includeSubscription = true): Promise<ProviderKeys> =>
     includeSubscription ? resolvePiProviderKeys() : resolveModelProviderKeys();

@@ -86,7 +86,6 @@ test("large channel turns compress every sandbox token", async () => {
     const verified = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
     assert.equal(verified?.members?.length, 120);
   }
-
 });
 
 test("live bot attestation reaches control, OAuth, and egress capabilities", async () => {

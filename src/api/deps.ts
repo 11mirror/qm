@@ -128,9 +128,9 @@ export interface ServerDeps {
   mcpServers?: McpServerStore;
   mcpToolService?: McpToolService;
   modelCredentialFetch?: typeof fetch;
-  refreshModels?: () => Promise<void>;
+  refreshModels?: () => Promise<unknown>;
   customProviders?: CustomProviderStore;
-  refreshCustomProviders?: () => Promise<void>;
+  refreshCustomProviders?: () => Promise<unknown>;
   brandingDefault?: OrgBranding;
   companySubscriptionAuth?: ModelProvider;
   admin?: AdminService;

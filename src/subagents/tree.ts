@@ -106,9 +106,7 @@ export async function stopSessionTree(
   const tree = (await treeSessions(deps.sessions, root)).filter((session) => session.scopeId === root.scopeId);
   const threadRefs = tree.map((session) => session.threadRef);
   const inFlight = await deps.runs.inFlightForThreads(threadRefs);
-  await Promise.all(
-    inFlight.map((run) => deps.signals.send(run.id, { kind: "abort", ...(reason ? { reason } : {}) })),
-  );
+  await Promise.all(inFlight.map((run) => deps.signals.send(run.id, { kind: "abort", ...(reason ? { reason } : {}) })));
   await deps.runs.cancelTree(threadRefs);
   return inFlight.length > 0;
 }

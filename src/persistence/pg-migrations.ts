@@ -75,7 +75,9 @@ async function planSchemaBaseline(client: PoolClient, ledger: ReadonlyMap<string
   const recorded = ledger.get(id);
   if (recorded !== undefined) {
     if (recorded !== checksum) {
-      throw new Error(`pg-migrations: schema baseline ${id} checksum mismatch (database=${recorded}, source=${checksum})`);
+      throw new Error(
+        `pg-migrations: schema baseline ${id} checksum mismatch (database=${recorded}, source=${checksum})`,
+      );
     }
     return "recorded";
   }

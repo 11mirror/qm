@@ -357,7 +357,7 @@ function printfPass(format: string, values: readonly string[], from: number): { 
       continue;
     }
     const raw = take();
-    let value: string = conversion === "b" ? decodeAnsiC(raw) : conversion === "c" ? raw.charAt(0) : raw;
+    let value = conversionValue(conversion, raw);
     if (precision.value !== undefined && "sbq".includes(conversion)) value = value.slice(0, precision.value);
     const separated = (width.value ?? 0) > value.length ? " " : "";
     text += leftAligned ? value + separated : separated + value;
@@ -374,6 +374,12 @@ function printfOutput(format: string, values: readonly string[]): { output: stri
     next = pass.next;
   }
   return { output, consumed: next };
+}
+
+function conversionValue(conversion: string, raw: string): string {
+  if (conversion === "b") return decodeAnsiC(raw);
+  if (conversion === "c") return raw.charAt(0);
+  return raw;
 }
 
 export function decodeAnsiC(value: string): string {

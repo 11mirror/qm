@@ -64,11 +64,7 @@ function sessionViewMethods(k: SessionKit) {
         return false;
       if (!(await h.sessionForViewer(sessionId, principalId))) return false;
       const window = await tenureOf(k, sessionId, principalId);
-      return (
-        !!window &&
-        seqWithinTenure(visibility.minSeq, window) &&
-        seqWithinTenure(visibility.maxSeq, window)
-      );
+      return !!window && seqWithinTenure(visibility.minSeq, window) && seqWithinTenure(visibility.maxSeq, window);
     },
 
     async getSessionForViewer(sessionId, principalId, window) {

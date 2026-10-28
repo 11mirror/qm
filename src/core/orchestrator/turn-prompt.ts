@@ -28,11 +28,7 @@ import { swallow, swallowAs } from "../../util/errors.ts";
 import { personKey, samePerson } from "../../directory/person.ts";
 import { hashId } from "../../util/crypto.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
-import {
-  deliveryCandidatesFor,
-  filterConnectorSkills,
-  loadActiveBundles,
-} from "./turn-helpers.ts";
+import { deliveryCandidatesFor, filterConnectorSkills, loadActiveBundles } from "./turn-helpers.ts";
 import {
   currentTimeBlock,
   deliveryMenu,

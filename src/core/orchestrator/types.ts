@@ -99,7 +99,7 @@ export interface OrchestratorInput extends Omit<
 
 export interface OrchestratorDeps {
   externalSlackPolicies?: ExternalSlackPolicies;
-  refreshModels?: () => Promise<void>;
+  refreshModels?: () => Promise<unknown>;
   identity: IdentityService;
   resolution: ResolutionService;
   config?: ScopedConfigStore;

@@ -6,14 +6,7 @@ import type { GetItemsOptions, Lease, SessionStore } from "./session-store.ts";
 import { userMessagePreview, DuplicateCallError } from "./session-store.ts";
 import { TENANT, tsOf, userTurn, withinParticipantWindow } from "./postgres-session-sql.ts";
 import { rowToGoal, rowToItem, ITEM_FIELDS, ITEM_FROM } from "./postgres-session-rows.ts";
-import {
-  ITEM_COLUMNS,
-  isOverheard,
-  isUserMessage,
-  storedItem,
-  type Item,
-  type NewItem,
-} from "./items.ts";
+import { ITEM_COLUMNS, isOverheard, isUserMessage, storedItem, type Item, type NewItem } from "./items.ts";
 
 export interface SessionStoreCtx {
   q: PgPool["q"];

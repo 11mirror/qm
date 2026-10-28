@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { runNowSettled } from "../support/settle.ts";
 import { createMemoryTidyProfileStore, createMemoryTidyService, withMemoryTidy } from "../../src/memory/tidy.ts";
 import type { MemoryService } from "../../src/memory/memory-service.ts";
 import { createCronStore } from "../../src/cron/cron-store.ts";
@@ -151,9 +152,7 @@ test("a failed tidy does not count, and run-now always runs", async () => {
 
   await f.crons.recordFire(id, { fireKey: "k2", threadRef: "t2", firedAt: 7, endedAt: 8, status: "ok" });
   assert.ok(await f.service.skipFire(await f.cronOf(alice)));
-  const result = await f.scheduler.runNow(id);
-  assert.ok(result.started);
-  await result.settled;
+  await runNowSettled(f.scheduler, f.crons, id);
   assert.equal(f.calls.length, 1);
 });
 

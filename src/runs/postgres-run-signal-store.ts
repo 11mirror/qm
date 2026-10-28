@@ -45,13 +45,7 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
            RETURNING id
          )
          SELECT pg_notify('${CHANNEL}', $1) FROM ins`,
-        [
-          runId,
-          signal.kind,
-          jsonbStringify(signal),
-          Date.now(),
-          signal.dedupeKey ?? null,
-        ],
+        [runId, signal.kind, jsonbStringify(signal), Date.now(), signal.dedupeKey ?? null],
       );
       return rows.length > 0;
     },
@@ -62,10 +56,7 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
     },
 
     async steerAuthors(runId) {
-      const { rows } = await q(
-        `SELECT payload FROM run_signals WHERE run_id=$1 AND kind='steer'`,
-        [runId],
-      );
+      const { rows } = await q(`SELECT payload FROM run_signals WHERE run_id=$1 AND kind='steer'`, [runId]);
       const ids = rows
         .map((r) => (r.payload as RunSignal).request?.actor?.externalId)
         .filter((id): id is string => typeof id === "string" && id !== "");

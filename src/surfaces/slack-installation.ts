@@ -295,7 +295,9 @@ async function readSlackSocketAppId(url: string): Promise<string> {
       }
     });
     socket.addEventListener("error", (event) =>
-      finish(new Error("Slack Socket Mode validation failed", { cause: (event as { error?: unknown }).error ?? event })),
+      finish(
+        new Error("Slack Socket Mode validation failed", { cause: (event as { error?: unknown }).error ?? event }),
+      ),
     );
     socket.addEventListener("close", () => finish(new Error("Slack Socket Mode closed before validation")));
   });

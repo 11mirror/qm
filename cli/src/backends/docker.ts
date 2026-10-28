@@ -86,20 +86,25 @@ function localAgentSource(): Buffer {
   return readFileSync(templateUrl("aws/microvm-agent/agent.mjs"));
 }
 
-function ensureLocalSandboxImage(config: QmConfig): string {
-  const image = localSandboxImage(config);
-  if (config.sandbox?.image) return image;
-  const base = sandboxBaseRef();
+function localSandboxImageBase(image: string): string | undefined {
   try {
-    const labeled = capture("docker", [
+    return capture("docker", [
       "image",
       "inspect",
       "-f",
       '{{index .Config.Labels "qm.local-sandbox-base"}}',
       image,
     ]).trim();
-    if (labeled === base) return image;
-  } catch {}
+  } catch {
+    return undefined;
+  }
+}
+
+function ensureLocalSandboxImage(config: QmConfig): string {
+  const image = localSandboxImage(config);
+  if (config.sandbox?.image) return image;
+  const base = sandboxBaseRef();
+  if (localSandboxImageBase(image) === base) return image;
   const dir = mkdtempSync(join(tmpdir(), "qm-local-sandbox-"));
   try {
     writeFileSync(join(dir, "agent.mjs"), localAgentSource());

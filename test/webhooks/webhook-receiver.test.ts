@@ -49,8 +49,7 @@ function inlineJobs(failed: unknown[]): Pick<JobWorker, "handle" | "spawn"> {
       if (keys.has(key)) return;
       keys.add(key);
       inFlight++;
-      void handlers
-        .get(name)!(params)
+      void handlers.get(name)!(params)
         .catch((e: unknown) => void failed.push(e))
         .finally(() => inFlight--);
     },

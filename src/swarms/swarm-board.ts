@@ -86,24 +86,26 @@ const BOARD_TABLES = [
       )`,
 ];
 
+const BOARD_MIGRATIONS = [
+  { id: "swarm-board/0001", statements: BOARD_TABLES },
+  {
+    id: "swarm-board/0002",
+    statements: [
+      "ALTER TABLE swarm_board_posts ADD COLUMN IF NOT EXISTS notify_pending BOOLEAN NOT NULL DEFAULT false",
+      "CREATE INDEX IF NOT EXISTS idx_swarm_board_posts_notify ON swarm_board_posts(swarm_id, created_at) WHERE notify_pending",
+    ],
+  },
+  {
+    id: "swarm-board/0003-notice-context",
+    statements: [
+      "ALTER TABLE swarm_board_posts ADD COLUMN IF NOT EXISTS notice_actor JSONB, ADD COLUMN IF NOT EXISTS notice_audience JSONB",
+      "UPDATE swarm_board_posts SET notify_pending = false WHERE notify_pending AND notice_actor IS NULL",
+    ],
+  },
+];
+
 export function createPostgresSwarmBoard(connectionString: string): SwarmBoard {
-  const pg = createPgPool(connectionString, [
-    { id: "swarm-board/0001", statements: BOARD_TABLES },
-    {
-      id: "swarm-board/0002",
-      statements: [
-        "ALTER TABLE swarm_board_posts ADD COLUMN IF NOT EXISTS notify_pending BOOLEAN NOT NULL DEFAULT false",
-        "CREATE INDEX IF NOT EXISTS idx_swarm_board_posts_notify ON swarm_board_posts(swarm_id, created_at) WHERE notify_pending",
-      ],
-    },
-    {
-      id: "swarm-board/0003-notice-context",
-      statements: [
-        "ALTER TABLE swarm_board_posts ADD COLUMN IF NOT EXISTS notice_actor JSONB, ADD COLUMN IF NOT EXISTS notice_audience JSONB",
-        "UPDATE swarm_board_posts SET notify_pending = false WHERE notify_pending AND notice_actor IS NULL",
-      ],
-    },
-  ]);
+  const pg = createPgPool(connectionString, BOARD_MIGRATIONS);
   return {
     async ensure(swarmId, createdBy, now) {
       await pg.q(

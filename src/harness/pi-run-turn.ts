@@ -438,6 +438,16 @@ function firstPrompt(
   return continueTurn ? continueAssistantTurn(session) : session.prompt(modelPrompt, images ? { images } : undefined);
 }
 
+function trackGoalWork(goal: TurnGoal, session: AgentSession, from: number): void {
+  let goalWorkFrom = from;
+  goal.setRecentWork(
+    () => piGoalWork(session.messages.slice(goalWorkFrom)),
+    () => {
+      goalWorkFrom = session.messages.length;
+    },
+  );
+}
+
 export async function runPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInput): Promise<HarnessTurnResult> {
   const { access, signals } = opts;
   const opened = await openPiTurn(opts, dispatched);
@@ -468,13 +478,7 @@ export async function runPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInpu
     const unsubscribe = session.subscribe(telemetry.onSessionEvent(steps, grindMeter));
     let wallClock!: TurnWallClockOutcome;
     const messagesBefore = session.messages.length;
-    let goalWorkFrom = messagesBefore;
-    goal.setRecentWork(
-      () => piGoalWork(session.messages.slice(goalWorkFrom)),
-      () => {
-        goalWorkFrom = session.messages.length;
-      },
-    );
+    trackGoalWork(goal, session, messagesBefore);
     const stop: TurnStop = { userAborted: false };
     let recoveryDead = false;
     state.bindAbort(toolAbort.signal);

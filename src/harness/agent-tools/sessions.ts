@@ -1,4 +1,3 @@
-
 import { surfaceHas } from "../../surfaces/surface.ts";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";

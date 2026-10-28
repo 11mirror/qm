@@ -359,7 +359,13 @@ test("materializeInbound keeps uploads registered when the scope has no default 
   const { sandbox, files } = fakeSandbox();
   const transfer = createMemoryBlobTransferStore();
   const put = async () => ({ created: true });
-  const register = { seed: "s", onError: () => {}, ownerScopeId: "channel:C1", createdBy: "U1", store: { put } } as never;
+  const register = {
+    seed: "s",
+    onError: () => {},
+    ownerScopeId: "channel:C1",
+    createdBy: "U1",
+    store: { put },
+  } as never;
   const noComputer = () => Promise.reject(new NoDefaultSandboxError());
   const got = await materializeInbound(
     sandbox,
@@ -384,7 +390,13 @@ test("materializeInbound drops an unstaged upload it could not register, and ret
   const put = async () => {
     throw new Error("store down");
   };
-  const register = { seed: "s", onError: () => {}, ownerScopeId: "channel:C1", createdBy: "U1", store: { put } } as never;
+  const register = {
+    seed: "s",
+    onError: () => {},
+    ownerScopeId: "channel:C1",
+    createdBy: "U1",
+    store: { put },
+  } as never;
   const got = await materializeInbound(
     sandbox,
     () => Promise.reject(new NoDefaultSandboxError()),

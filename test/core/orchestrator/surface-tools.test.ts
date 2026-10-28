@@ -209,7 +209,8 @@ test("surface post returns the sent attachments' metadata (so surfaces can rende
       store: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
       ownerScopeId: scopeId("personal", "U1"),
       createdBy: "U1",
-      seed: "run-post", onError: () => {},
+      seed: "run-post",
+      onError: () => {},
     },
     postProvenance() {
       return {};
@@ -287,7 +288,8 @@ test("workspace staging selects the requested sandbox and never falls back on re
       store: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
       ownerScopeId: "personal:U1",
       createdBy: "U1",
-      seed: "selector", onError: () => {},
+      seed: "selector",
+      onError: () => {},
     },
   });
   await staging.attach(["report.txt"], "one");

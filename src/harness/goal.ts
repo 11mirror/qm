@@ -453,7 +453,7 @@ export async function enforceGoal<T>(opts: {
         applyGovernorVerdict(opts.goal, verdict.verdict === "complete" ? { ...verdict, verdict: "continue" } : verdict);
     }
     rounds++;
-    if (opts.goal.status === "paused") note = goalGovernorPausePrompt(opts.goal);
+    if ((opts.goal as GoalRecord).status === "paused") note = goalGovernorPausePrompt(opts.goal);
     else if (capSpent) note = goalCapPrompt(opts.goal);
     else note = goalContinuationPrompt(opts.goal, opts.meter);
     if (capSpent) capNoticeSent = true;

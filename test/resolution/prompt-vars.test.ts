@@ -24,6 +24,9 @@ test("applyPromptVars inserts values literally without rereading template syntax
 test("applyPromptVars rejects unknown variables, stray braces and unbalanced blocks", () => {
   assert.throws(() => applyPromptVars("{{missing}}", {}), /unresolved template token near "\{\{missing\}\}"/);
   assert.throws(() => applyPromptVars("a {{ b", {}), /unresolved template token/);
-  assert.throws(() => applyPromptVars("{{#if a}}open", { a: true }), /unresolved template token near "\{\{#if a\}\}open"/);
+  assert.throws(
+    () => applyPromptVars("{{#if a}}open", { a: true }),
+    /unresolved template token near "\{\{#if a\}\}open"/,
+  );
   assert.throws(() => applyPromptVars("close{{/if}}", {}), /unresolved template token near "\{\{\/if\}\}"/);
 });

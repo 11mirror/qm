@@ -1,6 +1,7 @@
 import "../support/auto-fake-sprites.ts";
 import { test, mock, type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { runNowSettled } from "../support/settle.ts";
 import type { AddressInfo } from "node:net";
 import { randomUUID } from "node:crypto";
 import { createMockHarness } from "../support/mock-harness.ts";
@@ -217,8 +218,7 @@ test("HTTP Open shared cron isolates synthetic owner credential and revokes reso
     "owner secret is not resident on the shared computer",
   );
   await b.roster(["bob"]);
-  const result = await b.scheduler.runNow(id);
-  if (result.started) await result.settled;
+  await runNowSettled(b.scheduler, b.crons, id);
   assert.equal(
     (await b.posts.pending("slack")).filter((d) => d.text.includes("owner-credential-present")).length,
     1,

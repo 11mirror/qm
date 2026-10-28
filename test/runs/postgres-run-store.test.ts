@@ -49,16 +49,12 @@ test("pg run store: Unicode stays jsonb-safe through enqueue, edit and both stee
     assert.equal(await runs.editPendingText(first.id, "stale", unsafe), false);
     assert.equal((await runs.get(first.id))?.request.displayText, `edit ${safe}`);
     assert.equal(
-      await runs.steerQueued(
-        first.id,
-        privateRun.id,
-        {
-          kind: "steer",
-          text: `edit ${unsafe}`,
-          request: { ...inbound, text: `edit ${unsafe}` },
-          dedupeKey: `${thread}-queued`,
-        },
-      ),
+      await runs.steerQueued(first.id, privateRun.id, {
+        kind: "steer",
+        text: `edit ${unsafe}`,
+        request: { ...inbound, text: `edit ${unsafe}` },
+        dedupeKey: `${thread}-queued`,
+      }),
       true,
     );
     assert.equal(await runs.get(first.id), null);

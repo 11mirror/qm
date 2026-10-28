@@ -7,14 +7,11 @@ export async function fireSettled(
   fireKey: string,
   timeoutMs?: number,
 ): Promise<void> {
-  await eventually(
-    async () => (await crons.listFires(cronId)).runs.find((run) => run.fireKey === fireKey)?.status,
-    {
-      until: (status) => status !== undefined && status !== "running",
-      label: `fire ${fireKey}`,
-      ...(timeoutMs ? { timeoutMs } : {}),
-    },
-  );
+  await eventually(async () => (await crons.listFires(cronId)).runs.find((run) => run.fireKey === fireKey)?.status, {
+    until: (status) => status !== undefined && status !== "running",
+    label: `fire ${fireKey}`,
+    ...(timeoutMs ? { timeoutMs } : {}),
+  });
 }
 
 export async function runNowSettled(

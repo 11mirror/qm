@@ -65,7 +65,7 @@ test("a large channel's capability passes HTTP parsing and retains admin authori
     const rejected = await fetch(url, { headers: { "x-agent-capability": legacy } });
     assert.equal(rejected.status, 431);
     await rejected.text();
-    const token = await mintCapabilityToken(claims, SECRET, true);
+    const token = await mintCapabilityToken(claims, SECRET);
     await s.built.memory.capture(ORG, ["seed"], 0);
     const response = await fetch(url, {
       method: "PATCH",
@@ -80,7 +80,7 @@ test("a large channel's capability passes HTTP parsing and retains admin authori
     const denied = await fetch(url, {
       method: "PATCH",
       headers: {
-        "x-agent-capability": await mintCapabilityToken({ ...claims, actorId: "U1" }, SECRET, true),
+        "x-agent-capability": await mintCapabilityToken({ ...claims, actorId: "U1" }, SECRET),
         "content-type": "application/json",
       },
       body: JSON.stringify({ facts: [{ id: "1", text: "unauthorized overwrite" }] }),

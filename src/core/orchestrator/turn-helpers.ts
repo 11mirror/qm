@@ -18,7 +18,6 @@ import { swallow } from "../../util/errors.ts";
 import { hashId } from "../../util/crypto.ts";
 import type { OrchestratorInput } from "./types.ts";
 
-
 export function isScreenableTextAttachment(mimetype: string): boolean {
   const mime = mimetype.split(";", 1)[0]!.trim().toLowerCase();
   return (

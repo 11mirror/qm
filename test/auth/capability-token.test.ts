@@ -42,9 +42,7 @@ test("large room capabilities fit an 8 KiB header without losing authorization c
   const value = { orgId: "default-org", ...c };
   const legacy = await mintSignedPayload(value, SECRET);
   assert.ok(Buffer.byteLength(legacy) > 16 * 1024);
-  assert.equal(await mintCapabilityToken(c, SECRET), legacy);
-  assert.equal(await mintCapabilityToken(c, SECRET, false), legacy);
-  const token = await mintCapabilityToken(c, SECRET, true);
+  const token = await mintCapabilityToken(c, SECRET);
   assert.ok(Buffer.byteLength(`x-agent-capability: ${token}\r\n`) < 8 * 1024);
   assert.deepEqual(await verifyCapabilityToken(token, SECRET), value);
   assert.deepEqual(await verifyCapabilityToken(legacy, SECRET), value);

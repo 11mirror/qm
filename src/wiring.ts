@@ -218,9 +218,9 @@ export interface BuiltApp {
   modelGateway: ModelGateway;
   modelCredentials: ModelCredentialStore;
   userModelCredentials: UserModelCredentialStore;
-  refreshModels: () => Promise<void>;
+  refreshModels: () => Promise<unknown>;
   customProviders: CustomProviderStore;
-  refreshCustomProviders: () => Promise<void>;
+  refreshCustomProviders: () => Promise<unknown>;
   mcpServers: McpServerStore;
   mcpToolService: McpToolService;
   acl: AclStore;

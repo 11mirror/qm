@@ -16,7 +16,7 @@ export function countTokens(text: string): number {
   return sample.length === text.length ? n : Math.ceil((n * text.length) / sample.length);
 }
 
-export function cutMiddleToChars(text: string, keepChars: number, notice: (cutChars: number) => string): string {
+function cutMiddleToChars(text: string, keepChars: number, notice: (cutChars: number) => string): string {
   if (text.length <= keepChars) return text;
   const head = Math.ceil(keepChars / 2);
   return headSlice(text, head) + notice(text.length - keepChars) + tailSlice(text, keepChars - head);

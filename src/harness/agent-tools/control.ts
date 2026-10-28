@@ -1,4 +1,3 @@
-
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type TSchema, Type } from "typebox";
 import { Check } from "typebox/value";

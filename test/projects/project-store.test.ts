@@ -189,12 +189,11 @@ test("managed groups override Slack membership and historical sessions grant no 
       channelMember: async (_channelId: string, principalId: string) => principalId === "owner",
       groupMember: async (_groupId: string, principalId: string) => principalId === "outsider",
       channelPrivacy: async (channelId: string) => channelId !== "public-channel",
-      conversationMembers: async (kind: "channel" | "group", id: string) =>
-        kind === "group" && id === "slack-group"
-          ? [{ principalId: "outsider", type: "internal" }]
-          : kind === "channel" && id === "private-channel"
-            ? [{ principalId: "owner", type: "internal" }]
-            : undefined,
+      conversationMembers: async (kind: "channel" | "group", id: string) => {
+        if (kind === "group" && id === "slack-group") return [{ principalId: "outsider", type: "internal" }];
+        if (kind === "channel" && id === "private-channel") return [{ principalId: "owner", type: "internal" }];
+        return undefined;
+      },
       channelMembership: async (channelId: string, principalId: string) =>
         channelId === "private-channel" ? principalId === "owner" : undefined,
       groupMembership: async (groupId: string, principalId: string) =>
