@@ -30,7 +30,6 @@ export function artifactImageLoader(
       !artifact ||
       !(await authorize(artifact)) ||
       !isVisionAttachment(artifact) ||
-      artifact.mimetype !== ref.mimeType ||
       artifact.sizeBytes <= 0 ||
       !artifact.sha256
     )

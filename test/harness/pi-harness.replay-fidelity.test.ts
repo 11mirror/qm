@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { PiReplayMessage } from "../../src/harness/replay.ts";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
@@ -476,6 +477,25 @@ test("a replayed image is read from the file store once, not on every turn", asy
     [first, second, opens],
     [{ data: PNG_A, mimeType: "image/png" }, { data: PNG_A, mimeType: "image/png" }, 1],
   );
+});
+
+test("a replayed image downscaled into another format loads with the format the model saw", async () => {
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  await files.put({
+    id: "art-webp",
+    ownerScopeId: "personal:tester" as never,
+    createdBy: "tester",
+    name: "wide.webp",
+    path: "wide.webp",
+    mimetype: "image/webp",
+    data: readFileSync(new URL("../../desktop/assets/becalmed-off-halfway-rock.webp", import.meta.url)),
+    direction: "in",
+    createdAt: 1,
+  });
+  const loaded = await artifactImageLoader(files, () => true)({ artifactId: "art-webp", mimeType: "image/png" });
+  assert.ok(loaded && loaded !== "over-budget");
+  assert.equal(loaded.mimeType, "image/png");
+  assert.equal(Buffer.from(loaded.data, "base64").subarray(1, 4).toString("ascii"), "PNG");
 });
 
 test("replayed images are restored newest first until the request byte budget is spent, then elided", async () => {
