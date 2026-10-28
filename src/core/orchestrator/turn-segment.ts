@@ -50,7 +50,6 @@ export interface TurnRunState {
   runtimeHandoffs: number;
   contextRecovered: boolean;
   remainingDocumentBytes: number;
-  remainingDocumentCount: number;
   remainingDocumentTokens: number;
   turnStart: number;
   emittedEntries: Item[];
@@ -332,7 +331,6 @@ function createPrepareSteer(
       mayReadArtifact,
       run.remainingDocumentBytes,
       turnAbort.signal,
-      run.remainingDocumentCount,
       initialDocuments,
       run.remainingDocumentTokens,
     );
@@ -341,7 +339,6 @@ function createPrepareSteer(
       (sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"),
       0,
     );
-    run.remainingDocumentCount -= steeredDocuments.documents.length;
     run.remainingDocumentTokens -= steeredDocuments.tokens;
     documentInputs.documents.push(...steeredDocuments.documents);
     const issues = inboundIssueList({

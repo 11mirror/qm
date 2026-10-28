@@ -259,7 +259,6 @@ test("steered reuploads already in the turn do not consume another document slot
     },
     0,
     undefined,
-    0,
     initial.documents,
   );
   assert.deepEqual(steered, { documents: [], notices: [], tokens: 0 });
@@ -339,16 +338,7 @@ test("a large text attachment is charged only what is left of the document budge
   meta.name = "big.csv";
   meta.mimetype = "text/csv";
   assert.equal(estimateDocumentTokens(artifact), Math.ceil(csv.length / 4));
-  const loaded = await loadDocumentInputs(
-    store,
-    [meta],
-    () => true,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    30_000,
-  );
+  const loaded = await loadDocumentInputs(store, [meta], () => true, undefined, undefined, undefined, 30_000);
   assert.equal(loaded.documents.length, 1, "the document is inlined, not reduced to a stub");
   assert.deepEqual(loaded.notices, []);
   const payload = await withDocumentInputs(
@@ -546,7 +536,7 @@ test("text documents split the token budget fairly, so one large file does not s
         direction: "in",
       }) as AttachmentMeta,
   );
-  const loaded = await loadDocumentInputs(store, metas, () => true, undefined, undefined, undefined, undefined, 30_000);
+  const loaded = await loadDocumentInputs(store, metas, () => true, undefined, undefined, undefined, 30_000);
   assert.deepEqual(
     loaded.documents.map((document) => document.name),
     ["big.txt", "small.txt"],

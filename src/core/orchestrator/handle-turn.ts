@@ -290,7 +290,6 @@ async function readyTurn(
   });
   run.contextRecovered = prepared.contextRecovered;
   run.remainingDocumentBytes = prepared.remainingDocumentBytes;
-  run.remainingDocumentCount = prepared.remainingDocumentCount;
   run.remainingDocumentTokens = prepared.remainingDocumentTokens;
   const { approvalReplay, resume, isPollFire, partial } = prepared;
   const publishFirstAck = firstAckPublisher(ctx, {
@@ -437,7 +436,6 @@ function newTurnRunState(): TurnRunState {
     runtimeHandoffs: 0,
     contextRecovered: false,
     remainingDocumentBytes: 0,
-    remainingDocumentCount: 0,
     remainingDocumentTokens: 0,
     turnStart: 0,
     emittedEntries: [],

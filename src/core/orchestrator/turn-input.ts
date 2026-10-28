@@ -78,7 +78,7 @@ export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
     inbound,
     visibleHistory,
   );
-  const { remainingDocumentBytes, remainingDocumentCount, remainingDocumentTokens } = remaining;
+  const { remainingDocumentBytes, remainingDocumentTokens } = remaining;
   const turnEnvironmentContents = await composeTurnEnvironment(ctx, turn, visibleHistory, history, manifest);
   const baseText = input.proactiveOpener && !input.text.trim() ? PROACTIVE_OPENER_PROMPT : input.text;
   const pausedTurnUserEntry = input.approval
@@ -104,7 +104,6 @@ export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
   return {
     contextRecovered,
     remainingDocumentBytes,
-    remainingDocumentCount,
     remainingDocumentTokens,
     inbound,
     inboundIssues,
@@ -256,7 +255,6 @@ async function loadTurnDocuments(
         undefined,
         turnAbort.signal,
         undefined,
-        undefined,
         documentBudget,
       );
   const observeDocuments = (inputs: Awaited<ReturnType<typeof loadDocumentInputs>>, requestText: string) =>
@@ -272,7 +270,6 @@ async function loadTurnDocuments(
     contextRecovered,
     observeDocuments,
     remainingDocumentBytes,
-    remainingDocumentCount: Number.POSITIVE_INFINITY,
     remainingDocumentTokens,
   };
 }
