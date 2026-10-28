@@ -25,9 +25,13 @@ src/acl
 src/policy
 src/auth
 src/security
-src/api/credential-broker.ts
-src/api/credential-http-broker.ts
-src/api/routes/auth-broker.ts
 src/subagents
 src/swarms
 src/resolution
+src/api
+src/sandbox
+src/slack
+src/credentials
+src/model
+src/boot.ts
+src/config-env.ts
