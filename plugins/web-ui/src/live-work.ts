@@ -1,6 +1,7 @@
 import { createLiveStepLine, currentStep, preStepWork } from "./live-step";
 import { TOOL_META, UNKNOWN_TOOL } from "./tool-rows";
 import { toolCategory } from "./timeline";
+import { liveWorkDuration } from "./live-work-duration";
 import { approvalMarker } from "./tool-rows";
 import { liveWorkSummary, timelineKey, usedToolsSuffix, workLabel } from "./work-summary";
 import { activityGroupSummary, activityGroups, thinkingPresentation } from "./activity-presentation";
@@ -133,7 +134,7 @@ class LiveWork {
       if (step) label = step.label;
       if (stopping && last) label = "Stop requested";
       if (stopped && last) label = `You stopped after ${goalElapsedLabel(0, workSeconds(work) * 1000)}`;
-      const elapsed = step && workSeconds(work) > 0 ? goalElapsedLabel(0, workSeconds(work) * 1000) : "";
+      const elapsed = step ? liveWorkDuration(work) : "";
       if (last) this.liveStepLine.track(step);
       if (
         timeline.length === 1 &&
@@ -256,11 +257,8 @@ class LiveWork {
   readonly preStepHead = (work: WorkBlock): TemplateResult => {
     const step = { icon: Brain, label: "Thinking" };
     this.liveStepLine.track(step);
-    const secs = workSeconds(work);
     return html`<details class="work work-fold work-${work.status} work-prestep">
-      <summary class="work-head">
-        ${this.liveStepLine.line(step, step.label, true, secs > 0 ? goalElapsedLabel(0, secs * 1000) : "")}
-      </summary>
+      <summary class="work-head">${this.liveStepLine.line(step, step.label, true, liveWorkDuration(work))}</summary>
     </details>`;
   };
 

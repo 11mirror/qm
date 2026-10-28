@@ -1,3 +1,4 @@
+import type { DirectiveResult } from "lit/directive.js";
 import { html, nothing, type TemplateResult } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
@@ -55,7 +56,7 @@ export function currentStep(
 export interface LiveStepLine {
   track(step: LiveStep | null): void;
   reset(): void;
-  line(step: LiveStep | null, label: string, animating: boolean, elapsed: string): TemplateResult;
+  line(step: LiveStep | null, label: string, animating: boolean, elapsed: string | DirectiveResult): TemplateResult;
 }
 
 export function createLiveStepLine(redraw: () => void): LiveStepLine {
@@ -113,7 +114,12 @@ export function createLiveStepLine(redraw: () => void): LiveStepLine {
     });
   };
 
-  function line(step: LiveStep | null, label: string, animating: boolean, elapsed: string): TemplateResult {
+  function line(
+    step: LiveStep | null,
+    label: string,
+    animating: boolean,
+    elapsed: string | DirectiveResult,
+  ): TemplateResult {
     return html`<span class="work-step-slot"
         >${
           step && fadingStep

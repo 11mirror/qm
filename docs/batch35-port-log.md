@@ -41,3 +41,7 @@ Adapted the viewport's preceding-block traversal to its existing class and place
 ## #2702 agent Slack echoes
 
 Adapted to typed UserMessage/Retraction items and split transcript/draw modules. Agent echoes are excluded from bubbles and fork boundaries but close preceding unfinished work. Human overheard messages remain visible. Agent revision notes carry `byAgent` in the in-memory view only. No persistence/settings changes. English: `{person or The user} deleted their message` → `{assistant brand} deleted its message` for an agent revision; likewise `edited their message` → `edited its message`. Web-ui typecheck and three targeted tests pass.
+
+## #2742 centisecond timers
+
+Adapted to split live-work and work-summary modules and typed activity timestamps. Uses a disconnected-aware animation-frame directive, throttled to 50ms, rather than adding an interval loop. Old chat DOM is explicitly released on replacement/disposal so directives disconnect. No persisted data/settings. English: elapsed `{whole seconds}s` or minute labels → `{seconds with two decimal places}s`, with minute prefix when needed; `Working/Worked/Posting message for ...` retains its prefix and uses that precision. Two duration tests and the chat replacement/disposal behavior test pass; web-ui typecheck passes.

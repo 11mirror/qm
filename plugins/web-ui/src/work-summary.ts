@@ -51,20 +51,20 @@ function activeToolSummary(row: ToolRowModel, work: WorkBlock): { icon: IconNode
   if (posting) {
     return {
       icon: MessageSquare,
-      label: secs > 0 ? `Posting message for ${secs}s` : "Posting message",
+      label: workedLabel("Posting message", secs),
       detail: firstLine(posting, 60),
     };
   }
   return {
     icon: meta.icon,
-    label: secs > 0 ? `${meta.active} for ${secs}s` : meta.active,
+    label: workedLabel(meta.active, secs),
     detail: toolDetail(tool, call, result),
   };
 }
 
 function elapsedSeconds(startedAt: number | null | undefined): number {
   if (typeof startedAt !== "number" || startedAt <= 0) return 0;
-  return Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+  return Math.max(0, (Date.now() - startedAt) / 1000);
 }
 
 export function usedToolsSuffix(work: WorkBlock): string {

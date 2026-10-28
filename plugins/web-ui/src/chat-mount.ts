@@ -168,6 +168,7 @@ function preserveOutgoingWorkingDot(c: ChatCore, nextThreadRef: string | null): 
 }
 
 function detachActiveAgent(c: ChatCore): void {
+  if (c.state.host) render(nothing, c.state.host);
   if (!c.state.agent) return;
   detachedAgents.add(c.state.agent);
   c.state.agent.abort();

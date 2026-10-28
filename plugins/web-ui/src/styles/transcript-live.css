@@ -224,6 +224,7 @@
 .work-head .work-elapsed {
   color: color-mix(in srgb, var(--muted-foreground) 70%, transparent);
   font-variant-numeric: tabular-nums;
+  margin-left: auto;
 }
 .work-prestep > .work-head {
   cursor: default;
