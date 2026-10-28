@@ -53,9 +53,17 @@ function runTurnInput(
   };
 }
 
-function rejectsData(error: unknown): boolean {
+const TRANSIENT_SQL_CLASSES = new Set(["08", "40", "53", "57"]);
+
+function unsaveable(error: unknown): boolean {
+  if (error instanceof TypeError || error instanceof RangeError) return true;
   const code = (error as { code?: unknown } | null)?.code;
-  return typeof code === "string" && (code.startsWith("22") || code.startsWith("54"));
+  return (
+    typeof code === "string" &&
+    code.length === 5 &&
+    !code.startsWith("E") &&
+    !TRANSIENT_SQL_CLASSES.has(code.slice(0, 2))
+  );
 }
 
 function recordTurnError(errors: ErrorLog | undefined, run: Run, err: unknown): void {
@@ -200,7 +208,7 @@ async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
   }, extendMs);
   beat.unref?.();
   const finishBare = async (error: unknown): Promise<void> => {
-    reportFailure(`turns: the database rejected the result of turn ${run.id}; recording a bare failure instead`, error);
+    reportFailure(`turns: the result of turn ${run.id} cannot be saved; recording a bare failure instead`, error);
     const bare: TurnOutcome = {
       status: "failed",
       countsAsError: true,
@@ -218,9 +226,7 @@ async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
           console.warn(`[turns] turn ${run.id} ended after losing its claim; its result was not recorded`);
         return;
       } catch (error) {
-        if (rejectsData(error)) return finishBare(error);
-        clearInterval(beat);
-        lost = !(await deps.ledger.fenceHeld(run.id, token).catch(() => true));
+        if (unsaveable(error)) return finishBare(error);
         swallow(`turns: turn end failed for turn ${run.id} (retrying while the claim lasts)`, error);
         await sleep(Math.min(FINISH_RETRY_MS * attempt, FINISH_RETRY_MAX_MS));
       }
