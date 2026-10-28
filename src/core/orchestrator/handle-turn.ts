@@ -329,7 +329,7 @@ async function releaseTurn(o: OrchestratorInstance, ctx: TurnCtx, turn: TurnStat
   const { deps } = o;
   const { input, actor, resolution, scopeId } = ctx;
   const { session, held, run } = turn;
-  if (input.runId) deps.turnStream?.end(input.runId);
+  if (input.runId) deps.turnStream?.end(input.runId, input.runLeaseToken);
   held.stopLeaseKeepalive();
   if (!run.tailOwnsReclaim) await turn.sandboxes.sandboxes.reclaimBox();
   if (!held.leaseState.released) {

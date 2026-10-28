@@ -153,7 +153,7 @@ export async function settleTurn(
     pendingApprovals: result.pendingApprovals ?? [],
     terminatedOnApproval: result.pausedOnApproval === true,
   });
-  if (input.runId && !outcome.paused && reply.trim()) deps.turnStream?.markReplyDone(input.runId);
+  if (input.runId && !outcome.paused && reply.trim()) deps.turnStream?.markReplyDone(input.runId, input.runLeaseToken);
   if (!outcome.paused && !cancelStopped) await captureTurnMemory(ctx, turn, reply);
   const sourceUserSeq = partial?.userSeq ?? emittedEntries.find(isUserMessage)?.seq;
   const sourceAssistantEntrySeq = emittedEntries.findLast(isReply)?.seq;

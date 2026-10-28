@@ -259,7 +259,7 @@ function createSegmentEmit(
       run.toolCalls += 1;
       if (run.toolCalls === 1 && input.runId) {
         if (!input.surfaceTools) {
-          deps.turnStream?.noteToolCall(input.runId);
+          deps.turnStream?.noteToolCall(input.runId, input.runLeaseToken);
         } else {
           publishFirstAck(appended.tool === surfaceName && appended.body.action === "post");
         }
@@ -370,7 +370,7 @@ function segmentRuntimeOptions(
         ? { ...reported, change: { agent: runtimeState.agentSwitch } }
         : reported;
       run.turnRuntime = runtime;
-      if (input.runId) deps.turnStream?.noteRuntime(input.runId, runtime);
+      if (input.runId) deps.turnStream?.noteRuntime(input.runId, runtime, input.runLeaseToken);
     },
     ...(runtimePurpose ? { runtimePurpose } : {}),
     ...(deps.runtime && input.runId
@@ -439,7 +439,7 @@ function segmentCallbacks(
     onToolCallStart: (name: string) => {
       if (!earlyTaskAck || name === surfaceName) return;
       if (input.surfaceTools) publishFirstAck(false);
-      else if (input.runId) deps.turnStream?.noteToolCall(input.runId);
+      else if (input.runId) deps.turnStream?.noteToolCall(input.runId, input.runLeaseToken);
     },
     onTextBlockStart: async (phase) => {
       if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publishBlockStart(input.runId);

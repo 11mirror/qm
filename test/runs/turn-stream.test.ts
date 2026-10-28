@@ -460,14 +460,14 @@ test("the first block counts as harvested only once it is saved under the attemp
   });
   s.begin("r1", "lease-1");
   s.publish("r1", "On it.");
-  s.noteToolCall("r1");
+  s.noteToolCall("r1", "lease-1");
   assert.equal(await s.savedFirstBlock("r1"), undefined, "a refused write leaves the block in the reply");
   accept = true;
   s.begin("r1", "lease-2");
   assert.equal(s.firstBlock("r1"), null, "a new attempt starts without the old first block");
   s.publish("r1", "Retrying.");
-  s.noteToolCall("r1");
-  s.markReplyDone("r1");
+  s.noteToolCall("r1", "lease-2");
+  s.markReplyDone("r1", "lease-2");
   assert.equal(await s.savedFirstBlock("r1"), "Retrying.");
   await flush();
   assert.deepEqual(leases, ["lease-1", "lease-2", "lease-2"]);
@@ -483,6 +483,37 @@ test("a failed first-block write is not harvested", async () => {
   });
   s.begin("r1", "lease-1");
   s.publish("r1", "On it.");
-  s.noteToolCall("r1");
+  s.noteToolCall("r1", "lease-1");
   assert.equal(await s.savedFirstBlock("r1"), undefined);
+});
+
+test("a superseded attempt neither evicts nor writes for the attempt that reclaimed its run", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const writes: Array<[string | null, RunDeliveryState]> = [];
+  const s = createTurnStream({
+    runs: {
+      async setDeliveryState(_runId, lease, state) {
+        writes.push([lease, state]);
+        return true;
+      },
+    },
+  });
+  s.begin("r1", "lease-1");
+  s.begin("r1", "lease-2");
+  s.publish("r1", "Retrying.");
+  s.end("r1", "lease-1");
+  s.markSurfacePosted("r1", "lease-1");
+  s.markReplyDone("r1", "lease-1");
+  t.mock.timers.tick(30_000);
+  assert.equal(s.snapshot("r1"), "Retrying.", "the stale end did not schedule eviction");
+  s.noteToolCall("r1", "lease-2");
+  s.markSurfacePosted("r1", "lease-2");
+  s.end("r1", "lease-2");
+  t.mock.timers.tick(30_000);
+  s.markReplyDone("r1", "lease-2");
+  await flush();
+  assert.deepEqual(writes, [
+    ["lease-2", { firstBlock: "Retrying." }],
+    ["lease-2", { surfacePosted: true }],
+  ]);
 });

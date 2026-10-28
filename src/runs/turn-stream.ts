@@ -25,15 +25,15 @@ export interface TurnStream {
   publishReasoning(runId: string, step: string, index: number, delta: string): void;
   settleReasoning(runId: string, step: string, index: number): void;
   reasoning(runId: string): ReasoningBlock[];
-  noteToolCall(runId: string): void;
-  noteRuntime(runId: string, runtime: TurnRuntime): void;
+  noteToolCall(runId: string, leaseToken?: string): void;
+  noteRuntime(runId: string, runtime: TurnRuntime, leaseToken?: string): void;
   firstBlock(runId: string): { text: string; closed: boolean } | null;
   savedFirstBlock(runId: string): Promise<string | undefined>;
-  markSurfacePosted(runId: string): void;
+  markSurfacePosted(runId: string, leaseToken?: string): void;
   snapshot(runId: string): string | null;
   startOffset(runId: string): number;
-  markReplyDone(runId: string): void;
-  end(runId: string): void;
+  markReplyDone(runId: string, leaseToken?: string): void;
+  end(runId: string, leaseToken?: string): void;
 }
 
 interface Entry {
@@ -84,6 +84,12 @@ function ensure(runs: Map<string, Entry>, runId: string): Entry {
   return entry;
 }
 
+function owned(runs: Map<string, Entry>, runId: string, leaseToken: string | undefined): Entry | undefined {
+  const entry = runs.get(runId);
+  if (entry) return entry.leaseToken === (leaseToken ?? null) ? entry : undefined;
+  return leaseToken ? undefined : ensure(runs, runId);
+}
+
 function append(opts: TurnStreamOptions, runId: string, entry: Entry, delta: string): void {
   const offset = entry.totalChars;
   entry.totalChars += delta.length;
@@ -92,9 +98,9 @@ function append(opts: TurnStreamOptions, runId: string, entry: Entry, delta: str
   opts.onDelta?.(runId, delta, offset, entry.totalChars - entry.text.length);
 }
 
-function persister(opts: TurnStreamOptions, runs: Map<string, Entry>) {
-  return (runId: string, state: RunDeliveryState): Promise<boolean> =>
-    opts.runs.setDeliveryState(runId, runs.get(runId)?.leaseToken ?? null, state).then(
+function persister(opts: TurnStreamOptions) {
+  return (runId: string, entry: Entry, state: RunDeliveryState): Promise<boolean> =>
+    opts.runs.setDeliveryState(runId, entry.leaseToken, state).then(
       (saved) => {
         opts.onChange?.(runId);
         return saved;
@@ -104,7 +110,7 @@ function persister(opts: TurnStreamOptions, runs: Map<string, Entry>) {
 }
 
 function streamWriteMethods(opts: TurnStreamOptions, runs: Map<string, Entry>) {
-  const persist = persister(opts, runs);
+  const persist = persister(opts);
   return {
     begin(runId, leaseToken) {
       const prior = runs.get(runId);
@@ -159,21 +165,22 @@ function streamWriteMethods(opts: TurnStreamOptions, runs: Map<string, Entry>) {
       return (runs.get(runId)?.reasoning ?? []).map((b) => ({ ...b }));
     },
 
-    noteToolCall(runId) {
-      const entry = ensure(runs, runId);
-      if (!entry.firstBlockOpen) return;
+    noteToolCall(runId, leaseToken) {
+      const entry = owned(runs, runId, leaseToken);
+      if (!entry?.firstBlockOpen) return;
       entry.firstBlockOpen = false;
       entry.firstBlockClosed = entry.firstBlock.trim().length > 0;
-      if (entry.firstBlockClosed) entry.firstBlockSaved = persist(runId, { firstBlock: entry.firstBlock });
+      if (entry.firstBlockClosed) entry.firstBlockSaved = persist(runId, entry, { firstBlock: entry.firstBlock });
     },
   } satisfies Partial<TurnStream>;
 }
 
 function streamStateMethods(opts: TurnStreamOptions, runs: Map<string, Entry>) {
-  const persist = persister(opts, runs);
+  const persist = persister(opts);
   return {
-    noteRuntime(runId, runtime) {
-      void persist(runId, { runtime });
+    noteRuntime(runId, runtime, leaseToken) {
+      const entry = owned(runs, runId, leaseToken);
+      if (entry) void persist(runId, entry, { runtime });
     },
 
     firstBlock(runId) {
@@ -188,11 +195,11 @@ function streamStateMethods(opts: TurnStreamOptions, runs: Map<string, Entry>) {
       return entry.firstBlock.trim() || undefined;
     },
 
-    markSurfacePosted(runId) {
-      const entry = ensure(runs, runId);
-      if (entry.surfacePosted) return;
+    markSurfacePosted(runId, leaseToken) {
+      const entry = owned(runs, runId, leaseToken);
+      if (!entry || entry.surfacePosted) return;
       entry.surfacePosted = true;
-      void persist(runId, { surfacePosted: true });
+      void persist(runId, entry, { surfacePosted: true });
     },
 
     snapshot(runId) {
@@ -205,14 +212,14 @@ function streamStateMethods(opts: TurnStreamOptions, runs: Map<string, Entry>) {
       return entry ? entry.totalChars - entry.text.length : 0;
     },
 
-    markReplyDone(runId) {
-      void persist(runId, { replyDone: true });
+    markReplyDone(runId, leaseToken) {
+      const entry = owned(runs, runId, leaseToken);
+      if (entry) void persist(runId, entry, { replyDone: true });
     },
 
-    end(runId) {
+    end(runId, leaseToken) {
       const entry = runs.get(runId);
-      if (!entry) return;
-      if (entry.timer) return;
+      if (!entry || entry.leaseToken !== (leaseToken ?? null) || entry.timer) return;
       const timer = setTimeout(() => runs.delete(runId), GRACE_MS);
       timer.unref?.();
       entry.timer = timer;

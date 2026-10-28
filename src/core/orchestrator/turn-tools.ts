@@ -449,7 +449,7 @@ export function firstAckPublisher(
     })
       .then(() => {
         spineFirst.ackText = ack;
-        deps.turnStream?.markSurfacePosted(runId);
+        deps.turnStream?.markSurfacePosted(runId, input.runLeaseToken);
       })
       .catch(swallowAs("orchestrator: first-block ack", undefined));
   };

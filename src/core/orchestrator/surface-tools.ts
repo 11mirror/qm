@@ -149,7 +149,7 @@ export async function postCounted(
     provenance: turn.postProvenance(idempotencyKey),
   });
   turn.spine.surfaceOutboundCount += 1;
-  if (turn.input.runId) turn.deps.turnStream?.markSurfacePosted(turn.input.runId);
+  if (turn.input.runId) turn.deps.turnStream?.markSurfacePosted(turn.input.runId, turn.input.runLeaseToken);
 }
 
 type SurfaceTurn = SurfaceToolsContext & {
