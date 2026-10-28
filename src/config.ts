@@ -74,6 +74,7 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   publicPort?: number;
   dataDir: string;
   databaseUrl?: string;
+  databaseMigrationUrl?: string;
   databaseCaCert?: string;
   databaseCaCertFile?: string;
   databasePoolUrl?: string;
@@ -491,6 +492,7 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
       publicPort: e.PUBLIC_PORT,
       productAnalytics: e.POSTHOG_API_KEY ? { apiKey: e.POSTHOG_API_KEY, host: e.POSTHOG_HOST?.trim() } : undefined,
       databaseUrl: e.DATABASE_URL,
+      databaseMigrationUrl: e.DATABASE_MIGRATION_URL,
       databasePoolUrl: e.DATABASE_POOL_URL,
       databasePoolCaCert: e.DATABASE_POOL_CA_CERT,
       databasePoolMax: e.DATABASE_POOL_MAX,

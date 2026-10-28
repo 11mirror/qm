@@ -17,8 +17,8 @@ import { WorkAdmissionClosed } from "../util/admitted-work.ts";
 import { reportFailure } from "../util/errors.ts";
 import { mapBounded, sleep } from "../util/async.ts";
 import { pgPoolMax, pgTenancyEnabled, tenantLockKey } from "../persistence/pg-pool.ts";
-import { holdTenant, tenant, withEveryTenant, withoutTenant, withTenant, type Tenant } from "../tenant.ts";
-import { retiredTenantReason, taskTenant } from "../tenants/directory.ts";
+import { holdTenant, tenant, withTenant, type Tenant } from "../tenant.ts";
+import { activeTenants, retiredTenantReason, taskTenant } from "../tenants/directory.ts";
 
 export type JobDisposition = "done" | "release" | number;
 
@@ -142,22 +142,21 @@ function tenantTicker(job: string, fn: () => unknown, track: (work: Promise<void
 
 async function dueTenants(db: AbsurdDb, job: string, due: string): Promise<Tenant[]> {
   if (!pgTenancyEnabled()) return [tenant()];
-  const rows = await withEveryTenant(async () =>
-    (await db.pool()).query(
-      `SELECT t.id::text AS id FROM (SELECT id FROM qm_tenant UNION SELECT id FROM tenants WHERE status = 'active') t
-        WHERE ${due}`,
-    ),
-  ).catch((e: unknown) => {
-    if ((e as { code?: string }).code === UNDEFINED_TABLE) return { rows: [] };
-    throw e;
-  });
-  const owners = await mapBounded(rows.rows as Array<{ id: string }>, claimBudget(), ({ id }) =>
-    taskTenant(id, true).catch((e: unknown) => {
-      reportFailure(`jobs: ${job} tenant`, e, `tenant=${id}`);
-      return undefined;
+  const owners = await activeTenants();
+  const dueOwners = await mapBounded(owners, claimBudget(), (owner) =>
+    withTenant(owner, async () => {
+      const rows = await (
+        await db.pool()
+      )
+        .query(`SELECT t.id FROM (SELECT qm_tenant_id() AS id) t WHERE ${due}`)
+        .catch((e: unknown) => {
+          if ((e as { code?: string }).code === UNDEFINED_TABLE) return { rows: [] };
+          throw e;
+        });
+      return rows.rows.length ? owner : undefined;
     }),
   );
-  return owners.filter((owner): owner is Tenant => typeof owner === "object");
+  return dueOwners.filter((owner): owner is Tenant => owner !== undefined);
 }
 
 export function createJobWorker(databaseUrl: string): JobWorker {
@@ -188,16 +187,22 @@ export function createJobWorker(databaseUrl: string): JobWorker {
       let claimed = 0;
       if (free > 0) {
         try {
-          for (const task of await claimTasks(await db.pool(), JOB_QUEUE, worker, CLAIM_TIMEOUT_SEC, free)) {
-            claimed++;
-            const work = runJob(db, handlers, task);
-            active.add(work);
-            mine.add(work);
-            void work.finally(() => {
-              active.delete(work);
-              mine.delete(work);
-              wake.resolve();
-            });
+          for (const owner of await activeTenants()) {
+            if (mine.size >= limit) break;
+            const tasks = await withTenant(owner, async () =>
+              claimTasks(await db.pool(), JOB_QUEUE, worker, CLAIM_TIMEOUT_SEC, limit - mine.size),
+            );
+            for (const task of tasks) {
+              claimed++;
+              const work = withTenant(owner, () => runJob(db, handlers, task));
+              active.add(work);
+              mine.add(work);
+              void work.finally(() => {
+                active.delete(work);
+                mine.delete(work);
+                wake.resolve();
+              });
+            }
           }
         } catch (e) {
           lastErrorAt = Date.now();
@@ -260,7 +265,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
       const tick = tenantTicker(job, fn, track);
       handlers.set(job, {
         run: async (params) => {
-          if ("shared" in opts) await runRecurring(job, () => withEveryTenant(fn));
+          if ("shared" in opts) await tick(await activeTenants(), everyMs);
           else {
             const owners = await dueTenants(db, job, opts.due).catch((e: unknown) => {
               reportFailure(`jobs: ${job} tenants`, e);
@@ -276,10 +281,10 @@ export function createJobWorker(databaseUrl: string): JobWorker {
     },
     async start() {
       if (started) return;
-      const pool = await db.pool();
-      await pool.query("SELECT 1").catch(noteError);
+      const home = tenant();
+      await withTenant(home, async () => (await db.pool()).query("SELECT 1")).catch(noteError);
       const start = `${worker}:${++starts}`;
-      await withoutTenant(async () => {
+      await withTenant(home, async () => {
         for (const { job, immediate } of recurring) {
           const created = await spawnKeyed(job, null, job, null);
           if (immediate && !created) await spawnKeyed(job, { once: true }, `${job}:start:${start}`, 1);
@@ -287,7 +292,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
       });
       started = true;
       lastErrorAt = 0;
-      loop = withoutTenant(() => poll());
+      loop = withTenant(home, () => poll());
     },
     healthy() {
       return started && Date.now() - lastErrorAt >= UNHEALTHY_AFTER_ERROR_MS;

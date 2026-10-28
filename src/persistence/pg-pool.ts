@@ -5,7 +5,7 @@ import { createKeyedQueue } from "../util/async.ts";
 import { errMessage } from "../util/errors.ts";
 import { applyPgMigrations, type PgMigration, type PgMigrationDefinition } from "./pg-migrations.ts";
 import { pgMigrationOrder, pgMigrationsFrom } from "./contract-migrations.ts";
-import { applyTenancy, TENANT_BYPASS_OPTION } from "./tenancy.ts";
+import { applyTenancy, prepareTenancy } from "./tenancy.ts";
 import { rollbackOrReport, runPgQuery } from "./pg-query.ts";
 
 export type { Pool, PoolClient };
@@ -14,6 +14,7 @@ export type Rows = Record<string, unknown>[];
 
 interface PgPoolingConfig {
   databaseUrl?: string;
+  migrationUrl?: string;
   poolUrl?: string;
   caCert?: string;
   queryMax?: number;
@@ -23,16 +24,11 @@ interface PgPoolingConfig {
 
 let poolingConfig: PgPoolingConfig = {};
 
-let tenantSource: () => string | undefined = () => undefined;
-let everyTenantSource: () => boolean = () => false;
+let tenantSource: () => string | null | undefined = () => undefined;
+const homeTenantIds = new Map<string, string>();
 
-export function configurePgTenantSource(source: () => string | undefined, everyTenant: () => boolean): void {
+export function configurePgTenantSource(source: () => string | null | undefined): void {
   tenantSource = source;
-  everyTenantSource = everyTenant;
-}
-
-export function pgTenantId(): string | undefined {
-  return tenantSource();
 }
 
 export function tenantLockKey(key: string): string {
@@ -44,27 +40,24 @@ const TENANT_GUC = Symbol("qm.tenant_id");
 
 type TenantTracked = PoolClient & { [TENANT_GUC]?: string };
 
-function tenantScopedPool(pool: Pool): Pool {
+function tenantScopedPool(pool: Pool, connectionString: string): Pool {
   const connect = pool.connect.bind(pool) as () => Promise<PoolClient>;
   const scoped = (
     callback?: (err: Error | undefined, client?: PoolClient, done?: (release?: unknown) => void) => void,
   ) => {
-    const every = tenancyEnabled && everyTenantSource();
-    const id = tenancyEnabled && !every ? (tenantSource() ?? "") : "";
-    const want = every ? "*" : id;
-    const ready = connect().then(async (raw) => {
-      const client = raw as TenantTracked;
-      if ((client[TENANT_GUC] ?? "") !== want) {
+    const source = tenantSource();
+    const id = source === null ? homeTenantIds.get(connectionString) : source;
+    const ready = Promise.resolve().then(async () => {
+      if (tenancyEnabled && !id) throw new Error("Postgres query requires an explicit tenant context");
+      const client = (await connect()) as TenantTracked;
+      if (tenancyEnabled && client[TENANT_GUC] !== id) {
         try {
-          await client.query(
-            "SELECT set_config('qm.tenant_id', $1, false), set_config('qm.tenant_bypass', $2, false)",
-            [id, every ? "on" : ""],
-          );
+          await client.query("SELECT set_config('qm.tenant_id', $1, false)", [id]);
         } catch (error) {
           client.release(error instanceof Error ? error : new Error(String(error)));
           throw error;
         }
-        client[TENANT_GUC] = want;
+        client[TENANT_GUC] = id;
       }
       return client as PoolClient;
     });
@@ -121,6 +114,7 @@ async function applyAndSettle(
   migrations: readonly PgMigration[],
   retenantize = false,
 ): Promise<void> {
+  if (tenancyEnabled) homeTenantIds.set(connectionString, await prepareTenancy(pool));
   const applied = await applyPgMigrations(pool, migrations);
   let settled = settledMigrations.get(connectionString);
   if (!settled) settledMigrations.set(connectionString, (settled = new Set()));
@@ -151,16 +145,27 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
   const max = kind === "migration" ? 1 : pgPoolMax(kind);
   if (!Number.isInteger(max) || max < 1) throw new Error(`${setting} must be a positive integer`);
   const connection = pgConnectionOptions(
-    connectionString,
+    kind === "migration" ? migrationDatabaseUrl(connectionString) : connectionString,
     kind === "query" && connectionString === poolingConfig.poolUrl ? poolingConfig.caCert : undefined,
   );
   const poolOptions = { ...connection, max, connectionTimeoutMillis: 10_000, allowExitOnIdle: true };
   const pool =
     kind === "migration"
-      ? guardedPool(new pg.Pool({ ...poolOptions, options: TENANT_BYPASS_OPTION }))
-      : tenantScopedPool(guardedPool(new pg.Pool(poolOptions)));
+      ? guardedPool(new pg.Pool(poolOptions))
+      : tenantScopedPool(guardedPool(new pg.Pool(poolOptions)), connectionString);
+  if (connectionString === poolingConfig.poolUrl && poolingConfig.databaseUrl)
+    homeTenantIds.set(connectionString, homeTenantIds.get(poolingConfig.databaseUrl)!);
   sharedPools.set(key, { pool, users: 1 });
   return pool;
+}
+
+function migrationDatabaseUrl(connectionString: string): string {
+  if (!tenancyEnabled) return connectionString;
+  if (!poolingConfig.migrationUrl) throw new Error("Multitenant migrations require DATABASE_MIGRATION_URL");
+  const migration = new URL(poolingConfig.migrationUrl);
+  const application = new URL(connectionString);
+  migration.pathname = application.pathname;
+  return migration.toString();
 }
 
 function guardedPool(pool: Pool): Pool {
@@ -286,7 +291,7 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
     if (!registered?.size) continue;
     await migrationQueue(databaseUrl, async () => {
       const pg = (await import("pg")).default;
-      const pool = guardedPool(new pg.Pool({ ...pgConnectionOptions(databaseUrl), options: TENANT_BYPASS_OPTION }));
+      const pool = guardedPool(new pg.Pool(pgConnectionOptions(migrationDatabaseUrl(databaseUrl))));
       try {
         await applyAndSettle(pool, databaseUrl, registeredPgMigrations(databaseUrl), true);
       } finally {

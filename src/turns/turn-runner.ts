@@ -1,3 +1,4 @@
+import { activeTenants } from "../tenants/directory.ts";
 import { randomUUID } from "node:crypto";
 import type { ErrorLog } from "../admin/error-log.ts";
 import type { Orchestrator, OrchestratorInput } from "../core/orchestrator.ts";
@@ -19,7 +20,7 @@ import {
   type RunStop,
 } from "../runs/run-store.ts";
 import type { TurnQueue } from "./absurd-schema.ts";
-import { holdTenant, withoutTenant, withTenant, type Tenant } from "../tenant.ts";
+import { holdTenant, tenant, withTenant, type Tenant } from "../tenant.ts";
 import { pgTenancyEnabled } from "../persistence/pg-pool.ts";
 import { TURN_EXTEND_INTERVAL_MS, type TurnLedger, type TurnOutcome } from "./turn-ledger.ts";
 
@@ -420,7 +421,11 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
             const people = queue === "turns_people";
             if (inFlight.size >= deps.slots + (people ? overcommit : 0)) break;
             const token = `${processId}:${randomUUID()}`;
-            const claim = await deps.ledger.claim(queue, token, processId);
+            let claim: Awaited<ReturnType<typeof deps.ledger.claim>> = { claimed: false, run: null };
+            for (const owner of await activeTenants()) {
+              claim = await withTenant(owner, () => deps.ledger.claim(queue, token, processId));
+              if (claim.claimed) break;
+            }
             if (!claim.claimed) break;
             if (!claim.run) continue;
             const { run, tenant } = claim;
@@ -460,7 +465,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
   return {
     start() {
       if (loopDone) return;
-      withoutTenant(() => {
+      withTenant(tenant(), () => {
         stopped = false;
         if (deps.ready) unsubscribe.push(deps.ready.subscribe(notify, { onResync: notify }));
         if (deps.cancels)

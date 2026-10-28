@@ -41,6 +41,14 @@ export async function bootApp(
   serve: (server: Server, config: Config) => Promise<void>,
 ): Promise<BootedApp> {
   const config = loadConfig(env);
+  return withTenant(tenant(), () => bootConfiguredApp(config, env, serve));
+}
+
+async function bootConfiguredApp(
+  config: Config,
+  env: NodeJS.ProcessEnv,
+  serve: (server: Server, config: Config) => Promise<void>,
+): Promise<BootedApp> {
   const slackIngress = config.backgroundWorkEnabled && !config.backgroundDeploymentId;
 
   const built = buildApp(config, { env });

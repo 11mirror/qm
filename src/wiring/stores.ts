@@ -43,6 +43,7 @@ export function buildStores(deps: StoresInputs) {
   const { databaseUrl, config, connectorSecretKey, admittedWork } = deps;
   configurePgPooling({
     databaseUrl,
+    migrationUrl: config.databaseMigrationUrl,
     ...(config.databasePoolUrl && !config.multitenant ? { poolUrl: config.databasePoolUrl } : {}),
     ...(config.databasePoolCaCert ? { caCert: config.databasePoolCaCert } : {}),
     ...(config.databasePoolMax !== undefined ? { queryMax: config.databasePoolMax } : {}),

@@ -1,7 +1,5 @@
 import type { Pool } from "pg";
 
-export const TENANT_BYPASS_OPTION = "-c qm.tenant_bypass=on";
-
 const TENANCY_EXCLUDED_TABLES = ["qm_tenant", "tenants", "qm_schema_migrations"];
 
 const EXCLUDED = TENANCY_EXCLUDED_TABLES.map((t) => `'${t}'`).join(", ");
@@ -32,12 +30,13 @@ const TENANCY_FUNCTIONS: readonly string[] = [
    AS $qm_tenants_changed$ BEGIN PERFORM pg_notify('qm_tenants', TG_OP); RETURN NULL; END $qm_tenants_changed$`,
   `CREATE OR REPLACE TRIGGER tenants_changed AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON tenants
    FOR EACH STATEMENT EXECUTE FUNCTION qm_tenants_changed()`,
-  `CREATE OR REPLACE FUNCTION qm_tenant_id() RETURNS uuid LANGUAGE sql STABLE PARALLEL SAFE
+  `CREATE OR REPLACE FUNCTION qm_tenant_id() RETURNS uuid LANGUAGE plpgsql STABLE PARALLEL SAFE
    AS $qm_tenant_id$
-     SELECT COALESCE(NULLIF(current_setting('qm.tenant_id', true), '')::uuid, (SELECT id FROM qm_tenant))
-   $qm_tenant_id$`,
-  `CREATE OR REPLACE FUNCTION qm_tenant_bypass() RETURNS boolean LANGUAGE sql STABLE PARALLEL SAFE
-   AS $qm_tenant_bypass$ SELECT COALESCE(current_setting('qm.tenant_bypass', true), '') = 'on' $qm_tenant_bypass$`,
+   DECLARE id text := NULLIF(current_setting('qm.tenant_id', true), '');
+   BEGIN
+     IF id IS NULL THEN RAISE EXCEPTION 'Postgres query requires an explicit tenant context'; END IF;
+     RETURN id::uuid;
+   END $qm_tenant_id$`,
   `CREATE OR REPLACE FUNCTION qm_tenant_columns(rel oid, attnums smallint[]) RETURNS text LANGUAGE sql STABLE
    AS $qm_tenant_columns$
      SELECT string_agg(quote_ident(a.attname), ', ' ORDER BY k.ord)
@@ -165,21 +164,56 @@ BEGIN
     SELECT c.oid, c.relname FROM pg_class c
     WHERE c.relnamespace = current_schema()::regnamespace AND c.relkind = 'r'
       AND c.relname NOT IN (${EXCLUDED}) AND c.relname NOT LIKE 'pg\\_%'
-      AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity
-           OR NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid AND p.polname = 'qm_tenant_isolation'))
   LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t.relname);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t.relname);
-    IF NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = t.oid AND p.polname = 'qm_tenant_isolation') THEN
-      EXECUTE format('CREATE POLICY qm_tenant_isolation ON %I USING (tenant_id = qm_tenant_id() OR qm_tenant_bypass()) '
-        'WITH CHECK (tenant_id = qm_tenant_id() OR qm_tenant_bypass())', t.relname);
-    END IF;
+    EXECUTE format('DROP POLICY IF EXISTS qm_tenant_isolation ON %I', t.relname);
+    EXECUTE format('CREATE POLICY qm_tenant_isolation ON %I USING (tenant_id = qm_tenant_id()) '
+      'WITH CHECK (tenant_id = qm_tenant_id())', t.relname);
     changed := changed + 1;
   END LOOP;
   RETURN changed;
 END
 $qm_tenantize$`,
 ];
+
+async function tenantizeQueues(client: import("pg").PoolClient): Promise<void> {
+  const { rows } = await client.query(`SELECT relname FROM pg_class
+    WHERE relnamespace = 'absurd'::regnamespace AND relkind = 'r' AND relname <> 'queues'
+      AND NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = pg_class.oid AND attname = 'tenant_id')`);
+  for (const { relname } of rows) {
+    if (!/^[trcewi]_[a-z_]+$/.test(relname)) throw new Error(`Unexpected queue table ${relname}`);
+    await client.query(`ALTER TABLE absurd.${relname} ADD COLUMN tenant_id uuid NOT NULL DEFAULT qm_tenant_id()`);
+  }
+  for (const { relname } of rows.filter(({ relname }) => relname.startsWith("t_")))
+    await client.query(
+      `UPDATE absurd.${relname} SET tenant_id = COALESCE((headers->>'tenantId')::uuid, qm_tenant_id())`,
+    );
+  for (const { relname } of rows.filter(({ relname }) => /^[rcw]_/.test(relname)))
+    await client.query(`UPDATE absurd.${relname} q SET tenant_id = t.tenant_id
+      FROM absurd.t_${relname.slice(2)} t WHERE t.task_id = q.task_id`);
+  for (const { relname } of rows.filter(({ relname }) => relname.startsWith("e_")))
+    await client.query(`UPDATE absurd.${relname} e SET tenant_id = w.tenant_id
+      FROM absurd.w_${relname.slice(2)} w WHERE w.event_name = e.event_name`);
+  const tables = await client.query(`SELECT relname FROM pg_class
+    WHERE relnamespace = 'absurd'::regnamespace AND relkind = 'r' AND relname <> 'queues'`);
+  for (const { relname } of tables.rows) {
+    if (!/^[trcewi]_[a-z_]+$/.test(relname)) throw new Error(`Unexpected queue table ${relname}`);
+    await client.query(`ALTER TABLE absurd.${relname} ENABLE ROW LEVEL SECURITY`);
+    await client.query(`ALTER TABLE absurd.${relname} FORCE ROW LEVEL SECURITY`);
+    await client.query(`DROP POLICY IF EXISTS qm_tenant_isolation ON absurd.${relname}`);
+    await client.query(`CREATE POLICY qm_tenant_isolation ON absurd.${relname}
+      USING (tenant_id = qm_tenant_id()) WITH CHECK (tenant_id = qm_tenant_id())`);
+  }
+}
+
+export async function prepareTenancy(pool: Pool): Promise<string> {
+  for (const statement of TENANCY_FUNCTIONS.slice(0, 3)) await pool.query(statement);
+  const { rows } = await pool.query("SELECT id::text AS id FROM qm_tenant");
+  const id = String(rows[0].id);
+  await pool.query("SELECT set_config('qm.tenant_id', $1, false)", [id]);
+  return id;
+}
 
 export async function applyTenancy(pool: Pool): Promise<void> {
   const client = await pool.connect();
@@ -191,8 +225,12 @@ export async function applyTenancy(pool: Pool): Promise<void> {
     await client.query("SELECT pg_advisory_lock(hashtext('qm:tenantize'))");
     try {
       await client.query("BEGIN");
+      for (const statement of TENANCY_FUNCTIONS.slice(0, 3)) await client.query(statement);
+      await client.query("SELECT set_config('qm.tenant_id', (SELECT id::text FROM qm_tenant), false)");
       for (const statement of TENANCY_FUNCTIONS) await client.query(statement);
       await client.query("SELECT qm_tenantize()");
+      if ((await client.query("SELECT to_regnamespace('absurd') IS NOT NULL AS present")).rows[0].present)
+        await tenantizeQueues(client);
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK").catch(discardOnFailure);

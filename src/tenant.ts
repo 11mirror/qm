@@ -13,12 +13,11 @@ export interface Tenant {
 }
 
 const current = new AsyncLocalStorage<Tenant>();
-const everyTenant = new AsyncLocalStorage<boolean>();
 
-configurePgTenantSource(
-  () => current.getStore()?.id,
-  () => everyTenant.getStore() === true,
-);
+configurePgTenantSource(() => {
+  const scoped = current.getStore();
+  return scoped ? (scoped.id ?? null) : undefined;
+});
 
 export function tenantFor(orgId: string, id?: string, slug?: string): Tenant {
   return { orgId, orgScope: scopeId("org", orgId), ...(id ? { id } : {}), ...(slug ? { slug } : {}) };
@@ -39,11 +38,7 @@ export function scopedTenant(): Tenant | undefined {
 }
 
 export function withTenant<T>(t: Tenant, fn: () => T): T {
-  return everyTenant.run(false, () => current.run(t, fn));
-}
-
-export function withEveryTenant<T>(fn: () => T): T {
-  return everyTenant.run(true, () => current.exit(fn));
+  return current.run(t, fn);
 }
 
 export function withoutTenant<T>(fn: () => T): T {

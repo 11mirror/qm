@@ -109,7 +109,9 @@ export function createTenantDirectory(opts: DirectoryOptions) {
   const { isReady, ready } = tenantPreparation(opts.prepare, now);
 
   async function load(): Promise<Snapshot> {
-    const [homeId, records] = await Promise.all([homeTenantId(opts.pool), listTenants(opts.pool, opts.secretsKey)]);
+    const [homeId, records] = await withTenant(opts.home, () =>
+      Promise.all([homeTenantId(opts.pool), listTenants(opts.pool, opts.secretsKey)]),
+    );
     registerTenantSettings(records.filter((rec) => rec.id !== homeId));
     const homeRecord = records.find((rec) => rec.id === homeId);
     const others = servable(records, homeId, opts).map((rec) => ({
@@ -198,7 +200,8 @@ export function createTenantDirectory(opts: DirectoryOptions) {
       const found = id === undefined ? opts.home : ((await snapshot()).byId.get(id) ?? (await fresher()).byId.get(id));
       if (!found) {
         if (id === undefined) return undefined;
-        return (await opts.pool.q("SELECT 1 FROM tenants WHERE id = $1::uuid", [id])).length > 0
+        return (await withTenant(opts.home, () => opts.pool.q("SELECT 1 FROM tenants WHERE id = $1::uuid", [id])))
+          .length > 0
           ? undefined
           : "retired";
       }
