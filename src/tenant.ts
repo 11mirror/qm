@@ -81,20 +81,27 @@ const cached = new Map<
 >();
 let sweptAt = 0;
 
+function drop(key: string): void {
+  const entry = cached.get(key);
+  if (!entry) return;
+  cached.delete(key);
+  for (const [slot, state] of entry.slots)
+    if (slot.dispose)
+      void Promise.resolve()
+        .then(() => withTenant(entry.tenant, () => slot.dispose!(state as never)))
+        .catch(reportFailureAs("tenant cache: dispose", undefined, `tenant=${key}`));
+}
+
+export function evictTenant(t: Tenant): void {
+  drop(t.id ?? t.orgId);
+}
+
 function cachedEntry(t: Tenant) {
   const key = t.id ?? t.orgId;
   const now = Date.now();
   if (now - sweptAt >= SWEEP_MS) {
     sweptAt = now;
-    for (const [id, entry] of cached)
-      if (entry.evictable && entry.holds === 0 && now - entry.at >= IDLE_MS) {
-        cached.delete(id);
-        for (const [slot, state] of entry.slots)
-          if (slot.dispose)
-            void Promise.resolve()
-              .then(() => withTenant(entry.tenant, () => slot.dispose!(state as never)))
-              .catch(reportFailureAs("tenant cache: dispose", undefined, `tenant=${id}`));
-      }
+    for (const [id, entry] of cached) if (entry.evictable && entry.holds === 0 && now - entry.at >= IDLE_MS) drop(id);
   }
   let entry = cached.get(key);
   if (!entry)

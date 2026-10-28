@@ -15,7 +15,7 @@ import { mergeTenantQueues } from "./turns/absurd-schema.ts";
 import { hostOfUrl, setEdgeTenants } from "../plugins/chassis/src/tenant-hosts.ts";
 import { tagErrorDeployment } from "../plugins/chassis/src/error-reporting.ts";
 import { homeHosts, homeTenantSettings } from "../plugins/chassis/src/tenant-settings.ts";
-import { perTenant, tenant, tenantSettings, withTenant, type Tenant } from "./tenant.ts";
+import { evictTenant, perTenant, tenant, tenantSettings, withoutTenant, withTenant, type Tenant } from "./tenant.ts";
 import {
   activeTenants,
   createTenantDirectory,
@@ -98,6 +98,7 @@ export async function bootApp(
     },
     async stop() {
       await backgroundController?.stop();
+      await slack.close();
       await built.runtime.stop();
     },
     releaseInFlightRuns: () => built.runtime.releaseInFlightRuns(),
@@ -132,7 +133,7 @@ function warnAboutUnreachableFeatures(config: Config): void {
   }
 }
 
-type SlackRuntime = ReturnType<typeof createSlackRuntimeReconciler>;
+type SlackRuntime = Omit<ReturnType<typeof createSlackRuntimeReconciler>, "ready">;
 
 export function edgeTenantFeed(env: NodeJS.ProcessEnv): (active: Tenant[]) => void {
   const home = homeTenantSettings(env, tenant());
@@ -185,10 +186,10 @@ const SHARED_SLACK_ENV = [
 interface TenantSlackEntry {
   tenant: Tenant;
   managed?: ManagedSlack;
-  runtime: SlackRuntime;
+  runtime: ReturnType<typeof createSlackRuntimeReconciler>;
 }
 
-function createTenantSlack(opts: {
+export function createTenantSlack(opts: {
   env: NodeJS.ProcessEnv;
   config: Config;
   built: ReturnType<typeof buildApp>;
@@ -196,7 +197,8 @@ function createTenantSlack(opts: {
   running: boolean;
 }) {
   const { env, config, built, slackConfig } = opts;
-  const live = new Set<TenantSlackEntry>();
+  const live = new Map<string, TenantSlackEntry>();
+  const keyOf = (t: Tenant) => t.id ?? "";
   let running = opts.running;
 
   function slackEnvOf(t: Tenant): NodeJS.ProcessEnv {
@@ -238,11 +240,10 @@ function createTenantSlack(opts: {
             ? () => withTenant(t, () => entry.runtime.reconcile())
             : undefined,
       });
-      let warm: Promise<void> | undefined;
       entry.managed = {
         ...managed,
         async handle(req, res, value) {
-          if (running) await (warm ??= entry.runtime.reconcile().catch(() => {}));
+          if (running && !entry.runtime.ready()) await entry.runtime.reconcile().catch(() => {});
           return managed.handle(req, res, value);
         },
       };
@@ -257,23 +258,33 @@ function createTenantSlack(opts: {
         }),
       onError: reportFailureAs("slack plugin reconciliation", undefined, `tenant=${t.slug ?? "home"}`),
     });
-    live.add(entry);
+    live.set(keyOf(t), entry);
     if (running) entry.runtime.start();
     return entry;
   }
 
   const ensure = perTenant(create, (entry) => {
-    live.delete(entry);
+    if (live.get(keyOf(entry.tenant)) === entry) live.delete(keyOf(entry.tenant));
     return entry.runtime.stop();
   });
 
   const all = (fn: (entry: TenantSlackEntry) => Promise<void>) =>
-    Promise.all([...live].map((entry) => withTenant(entry.tenant, () => fn(entry)))).then(() => {});
+    Promise.all([...live.values()].map((entry) => withTenant(entry.tenant, () => fn(entry)))).then(() => {});
+
+  const unsubscribe = withoutTenant(() =>
+    built.slackInstallation.onChange(() => {
+      const entry = live.get(keyOf(tenant()));
+      if (running && entry)
+        void entry.runtime
+          .reconcile()
+          .catch(reportFailureAs("slack plugin reconciliation", undefined, `tenant=${entry.tenant.slug ?? "home"}`));
+    }),
+  );
 
   const runtimes: SlackRuntime = {
     start() {
       running = true;
-      for (const entry of live) withTenant(entry.tenant, () => entry.runtime.start());
+      for (const entry of live.values()) withTenant(entry.tenant, () => entry.runtime.start());
     },
     reconcile: () => all((entry) => entry.runtime.reconcile()),
     stop() {
@@ -281,19 +292,17 @@ function createTenantSlack(opts: {
       return all((entry) => entry.runtime.stop());
     },
   };
-
-  const sync = (active: Tenant[]) => {
-    const keep = new Set(active.map((t) => t.id ?? ""));
-    for (const entry of live) {
-      if (keep.has(entry.tenant.id ?? "")) continue;
-      live.delete(entry);
-      void withTenant(entry.tenant, () => entry.runtime.stop()).catch(
-        reportFailureAs("slack plugin stop", undefined, `tenant=${entry.tenant.slug ?? entry.tenant.id}`),
-      );
-    }
+  const close = () => {
+    unsubscribe();
+    return built.slackInstallation.close();
   };
 
-  return { ensure, sync, managed: () => ensure().managed, runtimes };
+  const sync = (active: Tenant[]) => {
+    const keep = new Set(active.map(keyOf));
+    for (const [key, entry] of live) if (!keep.has(key)) evictTenant(entry.tenant);
+  };
+
+  return { ensure, sync, close, managed: () => ensure().managed, runtimes };
 }
 
 function startBackgroundOwnership(
