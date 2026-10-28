@@ -1,6 +1,8 @@
 import { isIP } from "node:net";
 import type { EgressPolicy } from "../types.ts";
 
+const RFC_1123_HOST_NAME = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
+
 function normalizeHost(host: string): string {
   const s = host
     .trim()
@@ -28,17 +30,13 @@ export function parseEgressPolicy(input: unknown): { policy: EgressPolicy } | { 
       if (typeof item !== "string") return { error: `${name} must contain only host names` };
       const candidate = item.trim();
       if (!candidate) continue;
-      if (/\s|\*|:\/\/|[/?#@]/.test(candidate))
+      if (/\s|\*|:\/\/|[/\\?#@]/.test(candidate))
         return { error: `${candidate} is not a host name; omit schemes, wildcards, ports, paths, and credentials` };
       const normalized = normalizeHost(candidate);
       const ipLiteral = isIP(normalized) !== 0;
       if (!ipLiteral && candidate.includes(":"))
         return { error: `${candidate} includes a port; enter a host name only` };
-      if (
-        !normalized ||
-        (!ipLiteral &&
-          !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(normalized))
-      ) {
+      if (!normalized || (!ipLiteral && !RFC_1123_HOST_NAME.test(normalized))) {
         return { error: `${candidate} is not a valid host name` };
       }
       if (seen.has(normalized)) return { error: `${name} contains duplicate host ${normalized}` };

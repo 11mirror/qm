@@ -76,3 +76,12 @@ test("parseEgressPolicy accepts IP literals and rejects colon-bearing names that
     });
   }
 });
+
+test("parseEgressPolicy rejects backslashes that URL parsing would read as a path", () => {
+  assert.deepEqual(parseEgressPolicy({ allowedHosts: ["evil.test\\example.com"], deniedHosts: [] }), {
+    error: "evil.test\\example.com is not a host name; omit schemes, wildcards, ports, paths, and credentials",
+  });
+  assert.deepEqual(parseEgressPolicy({ allowedHosts: ["a_b.example"], deniedHosts: [] }), {
+    error: "a_b.example is not a valid host name",
+  });
+});
