@@ -225,7 +225,7 @@ function storedBlock(body: Record<string, unknown>): Record<string, unknown> {
   return rest;
 }
 
-export function textAssistant(content: AssistantMessage["content"], timestamp: number): AssistantMessage {
+function textAssistant(content: AssistantMessage["content"], timestamp: number): AssistantMessage {
   return {
     role: "assistant",
     content,
