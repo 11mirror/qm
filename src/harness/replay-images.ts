@@ -12,10 +12,13 @@ const UNAVAILABLE_IMAGE_TEXT = "[image could not be loaded for replay]";
 export const ELIDED_IMAGE_TEXT =
   "[image removed: this conversation's images no longer fit the model's request-size limit; ask for it to be re-shared if needed]";
 
-type LoadedImage = { data: string };
+type LoadedImage = { data: string; mimeType: string };
 export type ReplayImageLoader = (ref: Required<ReplayImageRef>) => Promise<LoadedImage | "over-budget" | null>;
 
-const visionBytes = new LRUCache<string, string>({ maxSize: 64_000_000, sizeCalculation: (data) => data.length });
+const visionBytes = new LRUCache<string, LoadedImage>({
+  maxSize: 64_000_000,
+  sizeCalculation: (image) => image.data.length,
+});
 
 export function artifactImageLoader(
   files: FileArtifactStore,
@@ -34,7 +37,7 @@ export function artifactImageLoader(
       return null;
     const key = `${artifact.id}:${artifact.sha256}`;
     const cached = visionBytes.get(key);
-    if (cached !== undefined) return { data: cached };
+    if (cached !== undefined) return cached;
     const opened = await files.open(ref.artifactId);
     if (!opened) return null;
     if (opened.sizeBytes !== artifact.sizeBytes || opened.artifact.sha256 !== artifact.sha256) {
@@ -44,10 +47,10 @@ export function artifactImageLoader(
     const bytes = await collectBytes(opened.stream, { maxBytes: artifact.sizeBytes });
     if (bytes.sha256 !== artifact.sha256) return null;
     const scaled = await downscaleVisionImage(bytes.data, artifact.mimetype);
-    if (scaled.length > MAX_VISION_IMAGE_BYTES) return "over-budget";
-    const data = Buffer.from(scaled).toString("base64");
-    visionBytes.set(key, data);
-    return { data };
+    if (scaled.bytes.length > MAX_VISION_IMAGE_BYTES) return "over-budget";
+    const image = { data: Buffer.from(scaled.bytes).toString("base64"), mimeType: scaled.mimeType };
+    visionBytes.set(key, image);
+    return image;
   };
 }
 
@@ -87,7 +90,7 @@ export async function restoreReplayImages(
       else if (!loaded) restored.set(block, { type: "text", text: UNAVAILABLE_IMAGE_TEXT });
       else {
         remainingBytes -= loaded.data.length;
-        restored.set(block, { type: "image", data: loaded.data, mimeType });
+        restored.set(block, { type: "image", data: loaded.data, mimeType: loaded.mimeType });
       }
     }
   }

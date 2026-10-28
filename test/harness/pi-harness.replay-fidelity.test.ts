@@ -472,7 +472,10 @@ test("a replayed image is read from the file store once, not on every turn", asy
   const load = artifactImageLoader(files, () => true);
   const first = await load({ artifactId: "art-once", mimeType: "image/png" });
   const second = await load({ artifactId: "art-once", mimeType: "image/png" });
-  assert.deepEqual([first, second, opens], [{ data: PNG_A }, { data: PNG_A }, 1]);
+  assert.deepEqual(
+    [first, second, opens],
+    [{ data: PNG_A, mimeType: "image/png" }, { data: PNG_A, mimeType: "image/png" }, 1],
+  );
 });
 
 test("replayed images are restored newest first until the request byte budget is spent, then elided", async () => {
@@ -482,7 +485,7 @@ test("replayed images are restored newest first until the request byte budget is
     { role: "assistant", content: [{ type: "text", text: "ok" }] },
     { role: "user", content: [{ type: "text", text: "b" }, image("new")] },
   ] as unknown as PiReplayMessage[];
-  const load = async () => ({ data: "x".repeat(100) });
+  const load = async () => ({ data: "x".repeat(100), mimeType: "image/png" });
   const restored = await restoreReplayImages(messages, load, 150);
   const blocks = (i: number) => (restored[i] as { content: Array<{ type: string; text?: string }> }).content;
   assert.equal(blocks(2)[1]!.type, "image", "the newest image fits the budget");

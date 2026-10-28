@@ -321,13 +321,13 @@ export async function materializeInbound(
       ...(a.sourceId ? { sourceId: a.sourceId } : {}),
       ...(registered ? { artifactId: registered.id } : {}),
     });
-    const imageBytes =
+    const image =
       VISION_MIME_TYPES.has(mimetype) && bytes.length > 0 ? await downscaleVisionImage(bytes, mimetype) : undefined;
-    if (imageBytes && imageBytes.length <= MAX_VISION_IMAGE_BYTES) {
+    if (image && image.bytes.length <= MAX_VISION_IMAGE_BYTES) {
       images.push({
         name,
-        mimeType: mimetype,
-        dataBase64: Buffer.from(imageBytes).toString("base64"),
+        mimeType: image.mimeType,
+        dataBase64: Buffer.from(image.bytes).toString("base64"),
         ...(registered ? { artifactId: registered.id } : {}),
       });
     }
