@@ -73,7 +73,7 @@ test("pg participant presence checks seek into the visible history window", asyn
     const windows = [
       { fromSeq: 4000, toSeq: null, visible: [] },
       { fromSeq: 0, toSeq: 1, visible: [0] },
-      { fromSeq: 3998, toSeq: 4000, visible: [3998] },
+      { fromSeq: 3998, toSeq: 3999, visible: [3998] },
       { fromSeq: 1, toSeq: 2, visible: [1] },
       { fromSeq: 2, toSeq: 2, visible: [] },
     ];

@@ -1,3 +1,4 @@
+import { DROP_CHANNEL_POLICY_ORDERS } from "../persistence/contract-migrations.ts";
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
 import { tenant } from "../tenant.ts";
 
@@ -70,7 +71,7 @@ export interface ChannelPolicyStore {
 const HISTORY_DEFAULT_LIMIT = 50;
 
 export function createPostgresChannelPolicyStore(connectionString: string): ChannelPolicyStore {
-  const { q, close } = createPgPool(connectionString);
+  const { q, close } = createPgPool(connectionString, [DROP_CHANNEL_POLICY_ORDERS]);
   const row = (r: Record<string, unknown>): ChannelPolicy => ({
     container: r.container as string,
     bots: (r.bots as Record<string, BotPolicy>) ?? {},

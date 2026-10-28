@@ -89,7 +89,9 @@ BEGIN
            retry_strategy, max_attempts, cancellation, enqueue_at, first_started_at, state, attempts,
            last_attempt_run, completed_payload, cancelled_at,
            CASE WHEN $2 THEN idempotency_key ELSE ''tenant:'' || $1 || '':'' || idempotency_key END
-         FROM absurd.%2$I WHERE $2 OR ($1 IS NOT NULL AND task_name NOT LIKE ''every:%%'')
+         FROM absurd.%2$I
+         WHERE ($2 AND COALESCE(params->>''tenantId'', $1) IS NOT NULL)
+            OR ($1 IS NOT NULL AND task_name NOT LIKE ''every:%%'')
          RETURNING 1)
        SELECT count(*) FROM moved', 't_' || base, 't_' || q.queue_name)
       INTO moved USING owner, base <> 'jobs';

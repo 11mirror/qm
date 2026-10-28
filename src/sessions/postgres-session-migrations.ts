@@ -123,25 +123,6 @@ export const SESSION_STORE_MIGRATIONS: PgMigrationDefinition[] = [
     ],
   },
   {
-    id: "sessions/store/0050-restore-spend-json-indexes",
-    statements: [
-      `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_llm_requests_spend
-             ON session_llm_requests(created_at,
-               ((spend_usage_json(usage_json) ->> 'costUsd')::double precision),
-               ((spend_usage_json(usage_json) ->> 'input')::bigint),
-               ((spend_usage_json(usage_json) ->> 'output')::bigint),
-               ((spend_usage_json(usage_json) ->> 'cacheRead')::bigint),
-               ((spend_usage_json(usage_json) ->> 'cacheWrite')::bigint))
-             INCLUDE (session_id, model, usage_json)
-             WHERE usage_json IS NOT NULL AND (spend_usage_json(usage_json) IS NOT NULL
-             AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`,
-      `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_llm_requests_spend_wide
-             ON session_llm_requests(created_at)
-             WHERE usage_json IS NOT NULL AND NOT (spend_usage_json(usage_json) IS NOT NULL
-             AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`,
-    ],
-  },
-  {
     id: "sessions/store/0051-participant-seq-bounds",
     statements: [
       `SET LOCAL lock_timeout = '3s'`,
@@ -163,15 +144,37 @@ export const SESSION_STORE_MIGRATIONS: PgMigrationDefinition[] = [
     statements: [
       `SET LOCAL lock_timeout = '3s'`,
       `DO $items_call_id_from_body$
+           DECLARE
+             moved bigint;
            BEGIN
-             IF EXISTS (SELECT 1 FROM items WHERE call_id IS NULL AND kind IN ('ToolCall', 'ToolResult')
-                         AND jsonb_typeof(body -> 'callId') = 'string' AND body ->> 'callId' <> '') THEN
-               ALTER TABLE items DISABLE TRIGGER items_append_only;
-               UPDATE items SET call_id = body ->> 'callId', body = body - 'callId'
-                WHERE call_id IS NULL AND kind IN ('ToolCall', 'ToolResult')
-                  AND jsonb_typeof(body -> 'callId') = 'string' AND body ->> 'callId' <> '';
-               ALTER TABLE items ENABLE TRIGGER items_append_only;
+             IF NOT EXISTS (SELECT 1 FROM items WHERE call_id IS NULL AND kind IN ('ToolCall', 'ToolResult')
+                             AND jsonb_typeof(body -> 'callId') = 'string' AND body ->> 'callId' <> '') THEN
+               RETURN;
              END IF;
+             ALTER TABLE items DISABLE TRIGGER items_append_only;
+             CREATE TEMP TABLE items_call_id_moves ON COMMIT DROP AS
+               SELECT row_number() OVER (ORDER BY c.tenant_id, c.session_id, c.seq) AS n,
+                      c.tenant_id, c.session_id, c.seq
+                 FROM (SELECT DISTINCT ON (tenant_id, session_id, kind, body ->> 'callId') tenant_id, session_id, seq,
+                              kind, body ->> 'callId' AS call_id
+                         FROM items
+                        WHERE call_id IS NULL AND kind IN ('ToolCall', 'ToolResult')
+                          AND jsonb_typeof(body -> 'callId') = 'string' AND body ->> 'callId' <> ''
+                        ORDER BY tenant_id, session_id, kind, body ->> 'callId', seq) c
+                WHERE NOT EXISTS (SELECT 1 FROM items o
+                                   WHERE o.tenant_id = c.tenant_id AND o.session_id = c.session_id
+                                     AND o.kind = c.kind AND md5(o.call_id) = md5(c.call_id));
+             CREATE INDEX ON items_call_id_moves(n);
+             moved := 0;
+             LOOP
+               UPDATE items i SET call_id = i.body ->> 'callId', body = i.body - 'callId'
+                 FROM items_call_id_moves m
+                WHERE m.n > moved AND m.n <= moved + 5000
+                  AND i.tenant_id = m.tenant_id AND i.session_id = m.session_id AND i.seq = m.seq;
+               EXIT WHEN NOT FOUND;
+               moved := moved + 5000;
+             END LOOP;
+             ALTER TABLE items ENABLE TRIGGER items_append_only;
            END
            $items_call_id_from_body$`,
     ],
