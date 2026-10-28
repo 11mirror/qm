@@ -153,26 +153,18 @@ function createProcessBrokers(ctx: TurnCtx, turn: TurnToolsInput) {
   const { memoryScopeId } = turn.context;
   const { defaultDestination } = turn.framed;
   const { provision, provisionJobSandbox } = turn.sandboxes;
+  const { sandbox, processes, keychain } = deps;
   const backgroundBroker =
-    deps.processes && supportsProcessSessions(deps.sandbox)
+    processes && supportsProcessSessions(sandbox)
       ? createBackgroundBroker({
-          sandbox: deps.sandbox,
-          registry: deps.processes,
+          sandbox,
+          registry: processes,
           provisionSandbox: provisionJobSandbox,
-          onExit: (handle, processId) =>
-            finishProcessCredentials(
-              {
-                sandbox: deps.sandbox,
-                processes: deps.processes!,
-                ...(deps.keychain ? { keychain: deps.keychain } : {}),
-              },
-              handle,
-              processId,
-            ),
+          onExit: (handle, processId) => finishProcessCredentials({ sandbox, processes, keychain }, handle, processId),
           scopeId: memoryScopeId,
           sessionRef: conversation.threadRef,
-          ...(deps.backgroundJobTtlMs !== undefined ? { ttlMs: deps.backgroundJobTtlMs } : {}),
-          ...(deps.backgroundJobTtlMaxMs !== undefined ? { ttlMaxMs: deps.backgroundJobTtlMaxMs } : {}),
+          ttlMs: deps.backgroundJobTtlMs,
+          ttlMaxMs: deps.backgroundJobTtlMaxMs,
         })
       : undefined;
 
@@ -195,10 +187,10 @@ function createProcessBrokers(ctx: TurnCtx, turn: TurnToolsInput) {
     : undefined;
 
   const monitorBroker =
-    deps.monitors && deps.processes && supportsProcessSessions(deps.sandbox)
+    deps.monitors && processes && supportsProcessSessions(sandbox)
       ? createMonitorBroker({
           store: deps.monitors,
-          registry: deps.processes,
+          registry: processes,
           readOutputTail: readOutputTail ?? (async () => ({ outputTail: "" })),
           scopeId: memoryScopeId,
           owner: actor.id,
@@ -374,9 +366,8 @@ function createTurnToolContext(
     createdBy: actor.id,
     commandCredentials,
     resolveCommandCredentials: turn.catalog.resolveCommandCredentials,
-    ...(deps.publicWebUrl ? { publicWebUrl: deps.publicWebUrl } : {}),
+    publicWebUrl: deps.publicWebUrl,
     publishContext: publishContextFor(conversation),
-    ...(deps.config ? { config: deps.config } : {}),
     ...(deps.control && controlClaims ? { control: deps.control, controlClaims } : {}),
     ...(deps.apiBaseUrl && connectorEnv.AGENT_API_TOKEN
       ? {
@@ -387,9 +378,10 @@ function createTurnToolContext(
           },
         }
       : {}),
-    ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
+    webhookPublicUrl: deps.webhookPublicUrl,
     ...(humanInput && !external ? { humanTurn: true } : {}),
-    ...(deps.toolOutput ? { toolOutput: deps.toolOutput, sessionId: session.id } : {}),
+    toolOutput: deps.toolOutput,
+    sessionId: session.id,
     ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
     ...(sessionSyscalls
       ? {
@@ -418,10 +410,10 @@ function createTurnToolContext(
         }
       : {}),
     sessionHistory: sessionHistoryTools(ctx, session),
-    ...(deps.execTimeoutMs !== undefined ? { execTimeoutMs: deps.execTimeoutMs } : {}),
-    ...(deps.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: deps.execTimeoutCeilingMs } : {}),
-    ...(deps.ledger ? { ledger: deps.ledger } : {}),
-    ...(deps.signals ? { signals: deps.signals } : {}),
+    execTimeoutMs: deps.execTimeoutMs,
+    execTimeoutCeilingMs: deps.execTimeoutCeilingMs,
+    ledger: deps.ledger,
+    signals: deps.signals,
     ...(input.runId ? { runId: input.runId } : {}),
     attempt: input.attempt ?? 1,
     ...(backgroundBroker ? { backgroundBroker } : {}),
