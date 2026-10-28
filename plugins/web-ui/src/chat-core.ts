@@ -1,3 +1,4 @@
+import { createSideChatController } from "./side-chat";
 import type { Agent, AgentMessage } from "@earendil-works/pi-agent-core";
 import { createChatState } from "./chat-state";
 import { createAssistantContent } from "./assistant-content";
@@ -36,6 +37,7 @@ function chatCoreState(ctx: ConvCtx, dependencies: ChatDependencies) {
   const transcriptViewport = createTranscriptViewport({ pinPrompt: () => !ctx.inbox && pinLatestPrompt() });
   return {
     ctx,
+    sideChats: createSideChatController(ctx),
     runSlot,
     transcriptViewport,
     stopPrefsWatch: onChatPrefsChange(() => transcriptViewport.refresh()),

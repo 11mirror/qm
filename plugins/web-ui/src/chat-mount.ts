@@ -91,6 +91,7 @@ export function notePendingSessionOnSend(c: ChatCore): void {
 }
 
 export function teardownActiveChat(c: ChatCore): void {
+  c.sideChats.dispose();
   c.transcriptViewport.dispose();
   c.transcriptRefreshGeneration++;
   c.readOnlyView = null;

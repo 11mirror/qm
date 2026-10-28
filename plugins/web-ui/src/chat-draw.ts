@@ -103,13 +103,15 @@ export function drawActiveChat(c: ChatCore, agent = c.state.agent, opts: { force
     c.connectionReturnMessageCount ??= currentMessages.length;
     if (c.connectionReturnMessageCount !== currentMessages.length) c.preserveConnectionScroll = false;
   }
+  c.sideChats.sync();
   const messages = c.state.inheritedExpanded ? [...c.state.inheritedMessages, ...currentMessages] : currentMessages;
   c.prepareMessageRows(messages);
   const isNewUser = sessionsState.list.filter((s) => s.id).length === 0;
   const editingApp = appEditSlug(c.state.threadRef, appState.me?.user);
   const inheritedOffset = c.state.inheritedExpanded ? c.state.inheritedMessages.length : 0;
-  const messageContent = messages.map((m, i) =>
-    settledChatMessage(c, m, i - inheritedOffset, agent.state.isStreaming && m === agent.state.streamingMessage),
+  const messageContent = messages.map(
+    (m, i) =>
+      html`${settledChatMessage(c, m, i - inheritedOffset, agent.state.isStreaming && m === agent.state.streamingMessage)}${c.sideChats.markers(messageEntrySeqs(m))}`,
   );
   const tier = c.ctx.density();
   const glanceTier = tier === "card" || tier === "strip" ? tier : null;
@@ -167,31 +169,43 @@ export function drawActiveChat(c: ChatCore, agent = c.state.agent, opts: { force
     });
   } else {
     content = html`
-      <div
-        class="custom-chat-shell ${editingApp ? "app-edit-chat" : ""} ${c.ctx.pane ? "in-pane" : ""} ${c.ctx.composer.state.dragging ? "dragging" : ""} ${
+      <div class="side-chat-layout" @keydown=${c.sideChats.onKeydown}>
+        <div
+          class="custom-chat-shell ${editingApp ? "app-edit-chat" : ""} ${c.ctx.pane ? "in-pane" : ""} ${c.ctx.composer.state.dragging ? "dragging" : ""} ${
           emptyChat && !glanceTier && !editingApp ? "empty-chat" : ""
         }"
-        @dragenter=${(e: DragEvent) => c.ctx.composer.onDragEnter(e)}
-        @dragover=${(e: DragEvent) => c.ctx.composer.onDragOver(e)}
-        @dragleave=${(e: DragEvent) => c.ctx.composer.onDragLeave(e)}
-        @drop=${(e: DragEvent) => void c.ctx.composer.onDrop(e, agent)}
-      >
-        ${dropOverlay} ${uiCanvasPanel(c.ctx)} ${glanceTier || c.ctx.pane || editingApp ? nothing : sessionTopbar(c)}
-        ${glanceTier ? paneGlance(c, agent, messages, glanceTier) : nothing}
-        <section class="chat-scroll" tabindex="0" aria-label="Conversation">
-          ${pinnedStrip(c.state.pins, c.state.pinsExpanded, (e: Event) => togglePins(c, e))}
-          <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
-            ${inheritedHeader(c)} ${c.state.earlierCount > 0 ? earlierNotice(c) : nothing} ${messageContent}
-            ${c.waitingSteerRows(agent)} ${glanceTier ? nothing : c.liveWorkStatus(agent)}
-            ${emptyChat && !isNewUser && !editingApp ? html`<h1 class="chat-cta">${chatCta(c)}</h1>` : nothing}
-            ${c.ctx.pane ? suggestions : nothing}
-            ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
+          @dragenter=${(e: DragEvent) => c.ctx.composer.onDragEnter(e)}
+          @dragover=${(e: DragEvent) => c.ctx.composer.onDragOver(e)}
+          @dragleave=${(e: DragEvent) => c.ctx.composer.onDragLeave(e)}
+          @drop=${(e: DragEvent) => void c.ctx.composer.onDrop(e, agent)}
+        >
+          ${dropOverlay} ${uiCanvasPanel(c.ctx)} ${glanceTier || c.ctx.pane || editingApp ? nothing : sessionTopbar(c)}
+          ${glanceTier ? paneGlance(c, agent, messages, glanceTier) : nothing}
+          <section
+            class="chat-scroll"
+            tabindex="0"
+            aria-label="Conversation"
+            @mouseup=${c.sideChats.select}
+            @mousemove=${c.sideChats.hover}
+            @mouseleave=${c.sideChats.leave}
+            @keyup=${c.sideChats.select}
+            @scroll=${c.sideChats.onScroll}
+          >
+            ${pinnedStrip(c.state.pins, c.state.pinsExpanded, (e: Event) => togglePins(c, e))}
+            <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
+              ${inheritedHeader(c)} ${c.state.earlierCount > 0 ? earlierNotice(c) : nothing} ${messageContent}
+              ${c.waitingSteerRows(agent)} ${glanceTier ? nothing : c.liveWorkStatus(agent)}
+              ${emptyChat && !isNewUser && !editingApp ? html`<h1 class="chat-cta">${chatCta(c)}</h1>` : nothing}
+              ${c.ctx.pane ? suggestions : nothing}
+              ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
+            </div>
+          </section>
+          <div class="chat-bottom-dock">
+            ${goalStrip(c, agent)} ${c.ctx.composer.queuedStrip(agent)} ${c.subagentStrip()}
+            ${c.backgroundActivityStrip()} ${c.ctx.composer.composerForm(agent)} ${c.ctx.pane ? nothing : suggestions}
           </div>
-        </section>
-        <div class="chat-bottom-dock">
-          ${goalStrip(c, agent)} ${c.ctx.composer.queuedStrip(agent)} ${c.subagentStrip()}
-          ${c.backgroundActivityStrip()} ${c.ctx.composer.composerForm(agent)} ${c.ctx.pane ? nothing : suggestions}
         </div>
+        ${c.sideChats.view()}
       </div>
     `;
   }
@@ -330,6 +344,7 @@ export function earlierNotice(c: ChatCore, load: () => Promise<void> = () => loa
 }
 
 export function inheritedHeader(c: ChatCore): TemplateResult | typeof nothing {
+  if (c.ctx.container()?.closest(".side-chat-panel")) return nothing;
   const origin = c.state.forkSession
     ? forkOriginDetails(c.state.forkSession, c.state.inheritedLoaded ? c.state.inheritedMessages.length : 0)
     : null;

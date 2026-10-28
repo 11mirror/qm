@@ -301,6 +301,8 @@ export const workspaceRoutes: readonly WebRoute[] = [
     query: (c) => copyParams(c, ["limit", "before", "status", "surface", "scope", "q"], undefined, true, 500),
   }),
   relayRoute("GET", "/api/sessions/row", { query: (c) => copyParams(c, ["id", "threadRef"], undefined, true) }),
+  relayRoute("GET", "/api/sessions/:id/side-chats", { who: "principalId" }),
+  relayRoute("POST", "/api/sessions/:id/expand", { principal: true }),
   relayRoute("GET", "/api/sessions/:id/children", { who: "principalId" }),
   relayRoute("GET", "/api/contexts", { who: "principalId" }),
   relayRoute("GET", "/api/contexts/:scope/ambient-policy", {
@@ -463,7 +465,7 @@ export const workspaceRoutes: readonly WebRoute[] = [
   relayRoute("POST", "/api/sessions/:id/fork", {
     principal: true,
     read: "json",
-    shape: (p) => (typeof p.upToSeq === "number" ? { upToSeq: p.upToSeq } : {}),
+    shape: (p) => ({ upToSeq: p.upToSeq, sideChat: p.sideChat }),
   }),
   relayRoute("GET", "/api/sessions/:id/approvals", { who: "viewer" }),
   relayRoute("GET", "/api/sessions/:id/background/:pid/output", {

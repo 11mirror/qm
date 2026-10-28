@@ -1,3 +1,5 @@
+import { SideChatAnchorError } from "./app-types.ts";
+import { isSideChatAnchor } from "../sessions/side-chat.ts";
 import { composeInstructions } from "../resolution/resolution-service.ts";
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
@@ -87,6 +89,11 @@ export function sessionLifecycleMethods(k: SessionKit) {
         }
         const upToSeq = opts?.upToSeq;
         const copied = upToSeq === undefined ? visible : visible.filter((entry) => entry.seq <= upToSeq);
+        if (
+          opts?.sideChat &&
+          (!isSideChatAnchor(opts.sideChat) || !copied.some((entry) => entry.seq === opts.sideChat!.entrySeq))
+        )
+          throw new SideChatAnchorError();
         const threadRef = `web:${principalId}:${randomUUID()}`;
         const forked = await deps.sessions.getOrCreateByThread(
           threadRef,
@@ -114,6 +121,7 @@ export function sessionLifecycleMethods(k: SessionKit) {
           await deps.sessions.updateForkProvenance(forked.id, {
             forkedFrom: { sessionId, title: source.title ?? null },
             forkBoundarySeq,
+            ...(opts?.sideChat ? { sideChat: { ...opts.sideChat, expanded: false } } : {}),
           });
         }
         const sourceTitle = source.title?.trim();

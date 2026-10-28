@@ -80,10 +80,31 @@ function sessionRecordMethods(ctx: SessionStoreCtx) {
       await q("UPDATE sessions SET title = $2 WHERE id = $1", [sessionId, title]);
     },
 
+    async sideChatsOf(sessionId) {
+      const rows = await q(
+        "SELECT * FROM sessions WHERE forked_from_session_id = $1 AND side_chat IS NOT NULL ORDER BY created_at",
+        [sessionId],
+      );
+      return rows.map(rowToSession);
+    },
+
+    async expandSideChat(sessionId) {
+      await q(
+        "UPDATE sessions SET side_chat = jsonb_set(side_chat, '{expanded}', 'true') WHERE id = $1 AND side_chat IS NOT NULL",
+        [sessionId],
+      );
+    },
+
     async updateForkProvenance(sessionId, provenance): Promise<void> {
       await q(
-        "UPDATE sessions SET forked_from_session_id = $2, forked_from_title = $3, fork_boundary_seq = $4 WHERE id = $1",
-        [sessionId, provenance.forkedFrom.sessionId, provenance.forkedFrom.title ?? null, provenance.forkBoundarySeq],
+        "UPDATE sessions SET forked_from_session_id = $2, forked_from_title = $3, fork_boundary_seq = $4, side_chat = $5 WHERE id = $1",
+        [
+          sessionId,
+          provenance.forkedFrom.sessionId,
+          provenance.forkedFrom.title ?? null,
+          provenance.forkBoundarySeq,
+          provenance.sideChat ? JSON.stringify(provenance.sideChat) : null,
+        ],
       );
     },
 

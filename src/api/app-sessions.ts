@@ -294,6 +294,25 @@ function sessionListMethods(k: SessionKit) {
   } satisfies Partial<App>;
 }
 
+function sessionSideChatMethods(k: SessionKit) {
+  const { deps, h } = k;
+  return {
+    async sideChats(principalId, sessionId) {
+      if (!(await h.sessionForViewer(sessionId, principalId))) return null;
+      const rows = await deps.sessions.sideChatsOf(sessionId);
+      const visible = await h.viewableRows(principalId, rows);
+      return decorateSessions(k, principalId, visible);
+    },
+
+    async expandSideChat(principalId, sessionId) {
+      const session = await h.sessionForViewer(sessionId, principalId);
+      if (!session?.sideChat || !(await h.mayWriteSession(principalId, session))) return null;
+      await deps.sessions.expandSideChat(sessionId);
+      return h.sessionForViewer(sessionId, principalId);
+    },
+  } satisfies Partial<App>;
+}
+
 function sessionActivityMethods(k: SessionKit) {
   const { deps, h } = k;
   return {
@@ -376,6 +395,7 @@ export function createSessionMethods(deps: AppDeps, h: AppHelpers) {
   return {
     ...sessionViewMethods(k),
     ...sessionListMethods(k),
+    ...sessionSideChatMethods(k),
     ...sessionActivityMethods(k),
     ...projectMethods(k),
     ...scopeMethods(k),

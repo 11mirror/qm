@@ -191,4 +191,11 @@ export const SESSION_STORE_MIGRATIONS: PgMigrationDefinition[] = [
       statements: ["SET LOCAL lock_timeout = '3s'", "DROP INDEX IF EXISTS session_llm_requests_spend_unparsed"],
     },
   },
+  {
+    id: "sessions/store/0054-side-chats",
+    statements: [
+      `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS side_chat JSONB`,
+      `CREATE INDEX IF NOT EXISTS sessions_side_chat_origin ON sessions (forked_from_session_id) WHERE side_chat IS NOT NULL`,
+    ],
+  },
 ];

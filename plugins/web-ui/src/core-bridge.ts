@@ -61,6 +61,7 @@ export interface CoreSession {
   goal?: { objective: string; activeMs: number; runningSince?: number; floor?: Record<string, number> };
   forkedFrom?: { sessionId: string; title?: string | null };
   forkBoundarySeq?: number;
+  sideChat?: { entrySeq: number; quote: string; occurrence: number; expanded: boolean };
   parentSessionId?: string;
   surface?: string;
   subagents?: { running: number; waiting: number };
@@ -194,10 +195,14 @@ export async function updateSession(
   });
 }
 
-export async function forkSession(id: string, upToSeq?: number): Promise<{ session: CoreSession; items: Item[] }> {
+export async function forkSession(
+  id: string,
+  upToSeq?: number,
+  sideChat?: { entrySeq: number; quote: string; occurrence: number },
+): Promise<{ session: CoreSession; items: Item[] }> {
   return api<{ session: CoreSession; items: Item[] }>(sessionPath(id, "/fork"), {
     method: "POST",
-    body: JSON.stringify(upToSeq !== undefined ? { upToSeq } : {}),
+    body: JSON.stringify({ upToSeq, sideChat }),
   });
 }
 

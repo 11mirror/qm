@@ -71,6 +71,7 @@ const participantPage = async (
   const where: string[] = [
     "p.principal_id = $1",
     "s.parent_session_id IS NULL",
+    "(s.side_chat IS NULL OR s.side_chat->>'expanded' = 'true')",
     `(s.surface IS NULL OR s.surface NOT IN ${AUTOMATION_SURFACES})`,
     HAS_CONTENT,
   ];

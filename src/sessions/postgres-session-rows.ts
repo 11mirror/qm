@@ -31,6 +31,7 @@ export function rowToSession(r: Record<string, unknown>): Session {
     ...(r.client_tools ? { clientTools: r.client_tools as Session["clientTools"] } : {}),
     createdAt: Number(r.created_at),
     ...(r.title != null ? { title: r.title as string } : {}),
+    ...(r.side_chat ? { sideChat: r.side_chat as Session["sideChat"] } : {}),
     ...(r.channel_name != null ? { channelName: r.channel_name as string } : {}),
     ...(r.forked_from_session_id != null && r.fork_boundary_seq != null
       ? {
@@ -84,5 +85,5 @@ export function rowToItem(r: Record<string, unknown>): Item {
 export const ITEM_FIELDS = `i.session_id AS "sessionId", i.seq, ${ITEM_COLUMNS.map(([column, key]) => `${column === "blob_sha" ? "encode(i.blob_sha, 'hex')" : `i.${column}`} AS "${key}"`).join(",")}, ${msOf("i.created_at")} AS "createdAt"`;
 export const ITEM_FROM = "items i";
 export const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.created_at, s.title, s.channel_name,
-  s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id`;
+  s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.side_chat`;
 export const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";

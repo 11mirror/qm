@@ -71,6 +71,7 @@ export interface ComposerSubmission {
 }
 
 export interface ComposerOptions {
+  includeSideChatExcerpt?: () => boolean;
   prepareSubmit?: () => (text: string, options: ComposerSubmission) => Promise<void>;
   placeholder?: string;
   preferenceKey?: string;
@@ -446,8 +447,19 @@ export class Composer implements ComposerSurface {
     if (!this.composerCanSend()) return;
     if (this.state.pasteView) this.paste.closePasteView(agent);
     if (agent.state.isStreaming) return this.queue.queueDraft(agent);
-    const text = this.state.draft.trim();
-    if (!text && this.state.attachments.length === 0) return;
+    const draft = this.state.draft.trim();
+    if (!draft && this.state.attachments.length === 0) return;
+    const sideChat = this.ctx.chat.state.forkSession?.sideChat;
+    const text =
+      sideChat?.quote &&
+      !sideChat.expanded &&
+      !agent.state.messages.length &&
+      (this.options.includeSideChatExcerpt?.() ?? true)
+        ? `${sideChat.quote
+            .split("\n")
+            .map((line) => `> ${line}`)
+            .join("\n")}\n\n${draft}`
+        : draft;
     const submit = this.options.prepareSubmit?.();
     if (submit) {
       const selected = this.currentModelOption()!;
@@ -466,7 +478,7 @@ export class Composer implements ComposerSurface {
         if (skipped.length) throw new Error(skipped.map((file) => file.note).join(" "));
         await submit(text, { ...selection, ...(uploaded.length ? { attachments: uploaded } : {}) });
       } catch (error) {
-        this.queue.restoreStagedOnFailure(text, attachments, errMessage(error, "Could not send message."));
+        this.queue.restoreStagedOnFailure(draft, attachments, errMessage(error, "Could not send message."));
         this.persistDraft();
       } finally {
         this.submitting = false;
@@ -490,7 +502,7 @@ export class Composer implements ComposerSurface {
       if (this.ctx.chat.state.normalStreamFn) agent.streamFn = this.ctx.chat.state.normalStreamFn;
       this.ctx.chat.scrollToBottom();
       await agent.prompt(userSendMessage(text, attachments.length ? attachments : undefined));
-      this.restoreFailedSend(agent, sentFromThread, text, attachments);
+      this.restoreFailedSend(agent, sentFromThread, draft, attachments);
     } catch (err) {
       this.abandonPendingSend();
       this.state.error = errMessage(err, "Could not send message.");

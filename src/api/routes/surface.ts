@@ -1,3 +1,5 @@
+import { isSideChatAnchor } from "../../sessions/side-chat.ts";
+import { SideChatAnchorError } from "../app-types.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
 import type { PendingApproval, ScopeId, Session } from "../../types.ts";
@@ -77,8 +79,20 @@ const forkSession = withBodyPrincipal(async (ctx, principalId) => {
   const upToSeq = bodyField(ctx, "upToSeq");
   if (upToSeq !== undefined && (typeof upToSeq !== "number" || !Number.isInteger(upToSeq) || upToSeq < 0))
     throw badRequest("upToSeq must be a non-negative integer");
-  const options = upToSeq !== undefined ? { upToSeq: upToSeq as number } : undefined;
-  return found(await ctx.app.forkSession(ctx.params.id!, principalId, options));
+  const sideChat = bodyField(ctx, "sideChat");
+  if (sideChat !== undefined && !isSideChatAnchor(sideChat))
+    throw badRequest("sideChat needs entrySeq, quote, and occurrence");
+  try {
+    return found(
+      await ctx.app.forkSession(ctx.params.id!, principalId, {
+        upToSeq: upToSeq as number | undefined,
+        ...(sideChat ? { sideChat } : {}),
+      }),
+    );
+  } catch (error) {
+    if (error instanceof SideChatAnchorError) throw badRequest(error.message);
+    throw error;
+  }
 });
 
 function agentConversation(session: Session) {
@@ -377,6 +391,14 @@ function parseSessionCursor(raw: string | null): { activity: number; id: string 
   return dot > 0 && Number.isSafeInteger(activity) && id ? { activity, id } : null;
 }
 
+const listSideChats = withQuery("principalId", async ({ app, params }, principalId) => {
+  const sessions = await app.sideChats(principalId, params.id!);
+  return found(sessions && { sessions });
+});
+const expandSideChat = withBodyPrincipal(async ({ app, params }, principalId) => {
+  const session = await app.expandSideChat(principalId, params.id!);
+  return found(session && { session });
+});
 const listSessionChildren = withQuery("principalId", async ({ app, params }, principalId) => {
   const children = await app.sessionChildren(principalId, params.id!);
   return found(children && { sessions: children });
@@ -477,6 +499,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/instructions", actor: "body.actorId", auth: "either", handle: postInstructions },
   ...withActor("body.principalId", [
     { method: "POST", path: "/v1/sessions/:id/title", auth: "source", handle: regenerateSessionTitle },
+    { method: "POST", path: "/v1/sessions/:id/expand", auth: "source", handle: expandSideChat },
     { method: "POST", path: "/v1/sessions/:id/fork", auth: "source", handle: forkSession },
     { method: "POST", path: "/v1/sessions/:id/detach", auth: "source", handle: detachSession },
     { method: "POST", path: "/v1/sessions/:id/goal/cancel", auth: "source", handle: cancelSessionGoal },
@@ -494,6 +517,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "GET", path: "/v1/sessions/search", auth: "source", handle: searchSessions },
     { method: "GET", path: "/v1/sessions", auth: "source", handle: listSessions },
     { method: "GET", path: "/v1/sessions/row", auth: "source", handle: getSessionRow },
+    { method: "GET", path: "/v1/sessions/:id/side-chats", auth: "source", handle: listSideChats },
     { method: "GET", path: "/v1/sessions/:id/children", auth: "source", handle: listSessionChildren },
     { method: "GET", path: "/v1/contexts", auth: "source", handle: listContexts },
     { method: "GET", path: "/v1/scope-resources", auth: "source", handle: listScopeResources },

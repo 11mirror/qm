@@ -362,6 +362,8 @@ export interface App {
   unpinConversationItem(threadRef: string, pinId: string): Promise<boolean | null>;
   listSessions(principalId: string): Promise<Session[]>;
   listSessionPage(principalId: string, query: SessionPageQuery): Promise<SessionPageResult>;
+  sideChats(principalId: string, sessionId: string): Promise<Session[] | null>;
+  expandSideChat(principalId: string, sessionId: string): Promise<Session | null>;
   sessionChildren(principalId: string, sessionId: string): Promise<Session[] | null>;
   sessionRow(principalId: string, ref: { id?: string; threadRef?: string }): Promise<Session | null>;
   searchResources(
@@ -405,7 +407,7 @@ export interface App {
   forkSession(
     sessionId: string,
     principalId: string,
-    opts?: { upToSeq?: number },
+    opts?: { upToSeq?: number; sideChat?: { entrySeq: number; quote: string; occurrence: number } },
   ): Promise<{ session: Session; items: Item[] } | null>;
   listFilesForViewer(principalId: string, opts?: ListOwnedOptions, inScope?: ScopeId): Promise<FileListPage>;
   uploadFileForViewer(
@@ -764,4 +766,11 @@ interface SessionPageResult {
   pinned?: Session[];
   next: { activity: number; id: string } | null;
   hasArchived?: boolean;
+}
+
+export class SideChatAnchorError extends Error {
+  constructor() {
+    super("sideChat needs a nonempty quote and an entrySeq inside the forked range");
+    this.name = "SideChatAnchorError";
+  }
 }
