@@ -69,6 +69,15 @@ export async function admitTurn(
     return {
       refused: { status: "refused", reason: "Slack workspace access changed; start a fresh request in Slack." },
     };
+  if (!deps.identity.isInternal(requested.actor)) {
+    return {
+      refused: {
+        status: "refused",
+        refusalKind: "internal_only",
+        reason: "internal-only: non-internal principals cannot interact",
+      },
+    };
+  }
   const external = requested.externalSlack !== undefined;
   const externalServices = new Set(requested.externalSlack?.serviceCredentials ?? []);
   const serviceAllowed = (slug: string): boolean =>
@@ -106,15 +115,6 @@ export async function admitTurn(
   const coreReceivedAt = Date.now();
   const turnTimezone = isValidCapabilityTimezone(input.timezone) ? input.timezone : undefined;
 
-  if (!deps.identity.isInternal(actor)) {
-    return {
-      refused: {
-        status: "refused",
-        refusalKind: "internal_only",
-        reason: "internal-only: non-internal principals cannot interact",
-      },
-    };
-  }
   const delegatedSession = isSubagentThreadRef(conversation.threadRef)
     ? await deps.sessions.getByThread(conversation.threadRef)
     : null;
