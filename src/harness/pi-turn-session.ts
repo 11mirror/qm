@@ -11,7 +11,7 @@ import { swallow } from "../util/errors.ts";
 import type { TurnHalt, TurnToolState } from "./turn-tool-state.ts";
 import type { ModelCallLog } from "./model-call-log.ts";
 import type { TurnRequestSettings } from "./turn-request.ts";
-import { textAssistant, type PiReplayMessage, type SeededMessage } from "./replay.ts";
+import { type PiReplayMessage } from "./replay.ts";
 import { documentsDroppedNote } from "./turn-recovery.ts";
 import { gatewayAttemptHeaders } from "./call-telemetry.ts";
 import { withDocumentInputs, type DocumentModel } from "./document-inputs.ts";
@@ -22,7 +22,7 @@ import { type Item } from "../sessions/items.ts";
 import { modelGatewayRequest } from "../model/provider-endpoints.ts";
 import { type HarnessTurnInput } from "./harness.ts";
 import { createAgentTools, pauseStampAfterToolCall } from "./agent-tools.ts";
-import { planColdStartSeed, reconstructMessagesFromHistory, seedPriorTurns } from "./replay.ts";
+import { priorTurnsMessages, reconstructMessagesFromHistory } from "./replay.ts";
 import { restoreReplayImages, type ReplayImageLoader } from "./replay-images.ts";
 import { countTokens } from "../util/tokens.ts";
 import {
@@ -84,12 +84,6 @@ export function continueAssistantTurn(session: AgentSession): Promise<void> {
 interface PiSeedTarget {
   agent?: { state?: { messages?: unknown[] } };
   sessionManager?: { appendMessage?: (message: unknown) => unknown };
-}
-
-export function toPiMessage(m: SeededMessage): PiReplayMessage {
-  return m.role === "assistant"
-    ? textAssistant([{ type: "text", text: m.text }], Date.now())
-    : { role: "user", content: [{ type: "text", text: m.text }], timestamp: Date.now() };
 }
 
 export function seedRawMessagesIntoSession(session: unknown, messages: readonly PiReplayMessage[]): void {
@@ -238,7 +232,6 @@ export async function createTurnSession({
   loadImage,
 }: TurnSessionInput): Promise<TurnSession> {
   const reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history, timeZone), loadImage);
-  const seedPlan = planColdStartSeed(reconstructed, !!priorTurns?.length);
 
   const modelRuntime = await buildModelRuntime(await providerKeys(), modelGateway, "long");
   const { session, dirs } = await openAgentSession(tempDirPrefix, systemPrompt, {
@@ -248,9 +241,7 @@ export async function createTurnSession({
     sessionManager: SessionManager.inMemory(undefined, { id: sessionId }),
   });
 
-  if (seedPlan === "structured") seedRawMessagesIntoSession(session, reconstructed);
-  else if (seedPlan === "priorTurns")
-    seedRawMessagesIntoSession(session, seedPriorTurns(priorTurns!, []).map(toPiMessage));
+  seedRawMessagesIntoSession(session, reconstructed.length ? reconstructed : priorTurnsMessages(priorTurns ?? []));
 
   const agent = (session as unknown as { agent?: PiAgentWithPayloadHook }).agent;
   if (agent) {

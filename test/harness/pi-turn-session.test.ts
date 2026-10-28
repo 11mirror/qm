@@ -1,21 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { seedRawMessagesIntoSession, toPiMessage } from "../../src/harness/pi-turn-session.ts";
+import { seedRawMessagesIntoSession } from "../../src/harness/pi-turn-session.ts";
 import { reconstructMessagesFromHistory } from "../../src/harness/replay.ts";
 import { storedItem, type NewItem } from "../../src/sessions/items.ts";
-
-test("toPiMessage gives assistant seeds a usage block so Pi's pre-prompt compaction check can't crash", () => {
-  const user = toPiMessage({ role: "user", text: "ship it" }) as Record<string, unknown>;
-  assert.equal("usage" in user, false, "user seeds carry no usage (Pi UserMessage has none)");
-
-  const asst = toPiMessage({ role: "assistant", text: "done" }) as {
-    stopReason?: string;
-    usage?: { totalTokens: number };
-  };
-  assert.equal(asst.stopReason, "stop");
-  assert.ok(asst.usage, "assistant seed has a usage block");
-  assert.equal(asst.usage!.totalTokens, 0);
-});
 
 test("seedRawMessagesIntoSession pushes the reconstructed tool round (incl. toolResult) onto the live array + persists", () => {
   const liveMessages: unknown[] = [];

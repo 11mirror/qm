@@ -4,10 +4,9 @@ import {
   AGENT_OPENED_TEXT,
   INTERRUPTED_TOOL_RESULT,
   recordedMessageTimestamps,
-  planColdStartSeed,
   reconstructMessagesFromHistory,
   renderOverheard,
-  seedPriorTurns,
+  priorTurnsMessages,
   selectOverheardToImport,
 } from "../../src/harness/replay.ts";
 import type { ConversationTurn, OverheardMessage } from "../../src/types.ts";
@@ -210,75 +209,34 @@ test("reconstructMessagesFromHistory is empty for empty history (fresh session â
   assert.deepEqual(reconstructMessagesFromHistory([]), []);
 });
 
-test("planColdStartSeed prefers the faithful rebuild; priorTurns only bootstraps an empty durable log", () => {
-  const oneMsg = [{ role: "user" as const, content: [{ type: "text" as const, text: "hi" }], timestamp: 0 }];
-  assert.equal(planColdStartSeed(oneMsg, true), "structured");
-  assert.equal(planColdStartSeed(oneMsg, false), "structured");
-  assert.equal(planColdStartSeed([], true), "priorTurns");
-  assert.equal(planColdStartSeed([], false), "none");
-});
+function seeded(turns: ConversationTurn[]): Array<{ role: string; text: string }> {
+  return priorTurnsMessages(turns).map((m) => ({
+    role: m.role,
+    text: (m.content as Array<{ text: string }>).map((c) => c.text).join(""),
+  }));
+}
 
-test("seedPriorTurns renders thread history as author-attributed <message> tags (own = from agent)", () => {
-  const turns: ConversationTurn[] = [
+test("priorTurnsMessages renders thread history as one user message of author-attributed <message> tags", () => {
+  const out = seeded([
     { role: "user", name: "alice", text: "[~abc] can you deploy?" },
     { role: "assistant", text: "on it" },
-  ];
-  const seeded = seedPriorTurns(turns);
-  assert.equal(seeded.length, 1);
-  assert.equal(seeded[0]!.role, "user");
-  assert.match(seeded[0]!.text, /<message from="human" author="alice">\[~abc\] can you deploy\?<\/message>/);
-  assert.match(seeded[0]!.text, /<message from="agent">on it<\/message>/);
-});
-
-test("seedPriorTurns DEDUPS a turn already present in the session's in-session history", () => {
-  const turns: ConversationTurn[] = [
-    { role: "user", name: "alice", text: "first message" },
-    { role: "assistant", text: "my reply" },
-    { role: "user", name: "alice", text: "second message" },
-  ];
-  const seeded = seedPriorTurns(turns, ["my   reply"]);
-  assert.equal(seeded.length, 1);
-  assert.equal(seeded[0]!.role, "user");
-  assert.match(seeded[0]!.text, /<message from="human" author="alice">first message<\/message>/);
-  assert.match(seeded[0]!.text, /<message from="human" author="alice">second message<\/message>/);
-  assert.doesNotMatch(seeded[0]!.text, /my reply/);
-});
-
-test("seedPriorTurns RECONCILES identity: a named assistant turn (cron/other-instance) is NEVER seeded as assistant", () => {
-  const turns: ConversationTurn[] = [
-    { role: "user", name: "alice", text: "did the nightly run finish?" },
     { role: "assistant", name: "agent (cron)", text: "nightly backup complete" },
-  ];
-  const seeded = seedPriorTurns(turns);
-  assert.ok(!seeded.some((m) => m.role === "assistant"), "the cron post is never claimed as an assistant turn");
-  assert.equal(seeded.length, 1);
-  assert.equal(seeded[0]!.role, "user");
-  assert.match(seeded[0]!.text, /<message from="human" author="alice">did the nightly run finish\?<\/message>/);
-  assert.match(seeded[0]!.text, /<message from="agent" via="agent \(cron\)">nightly backup complete<\/message>/);
-});
-
-test("seedPriorTurns renders a lone named assistant turn as a from=agent <message> with via (never assistant)", () => {
-  const seeded = seedPriorTurns([{ role: "assistant", name: "agent (cron)", text: "deploy shipped v4" }]);
-  assert.deepEqual(seeded, [
-    { role: "user", text: '<message from="agent" via="agent (cron)">deploy shipped v4</message>' },
+  ]);
+  assert.deepEqual(out, [
+    {
+      role: "user",
+      text: [
+        '<message from="human" author="alice">[~abc] can you deploy?</message>',
+        '<message from="agent">on it</message>',
+        '<message from="agent" via="agent (cron)">nightly backup complete</message>',
+      ].join("\n"),
+    },
   ]);
 });
 
-test("seedPriorTurns re-merges after a downgrade so alternation holds (no two consecutive user turns)", () => {
-  const turns: ConversationTurn[] = [
-    { role: "user", name: "alice", text: "status?" },
-    { role: "assistant", name: "agent (cron)", text: "deploy shipped" },
-  ];
-  const seeded = seedPriorTurns(turns);
-  assert.equal(seeded.length, 1);
-  assert.equal(seeded[0]!.role, "user");
-  assert.match(seeded[0]!.text, /status\?/);
-  assert.match(seeded[0]!.text, /<message from="agent" via="agent \(cron\)">deploy shipped<\/message>/);
-});
-
-test("seedPriorTurns skips empty turns and returns [] for an empty input", () => {
-  assert.deepEqual(seedPriorTurns([]), []);
-  assert.deepEqual(seedPriorTurns([{ role: "user", name: "x", text: "   " }]), []);
+test("priorTurnsMessages skips empty turns and returns [] for an empty input", () => {
+  assert.deepEqual(seeded([]), []);
+  assert.deepEqual(seeded([{ role: "user", name: "x", text: "   " }]), []);
 });
 
 function triggerEntry(ts: string, text: string): Item {

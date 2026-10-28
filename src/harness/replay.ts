@@ -62,11 +62,6 @@ function stoppedToolCalls(
 
 export { INTERRUPTED_TOOL_RESULT };
 
-export interface SeededMessage {
-  role: "user" | "assistant";
-  text: string;
-}
-
 export interface OverheardEntryPayload {
   overheard: true;
   sourceRole?: "agent";
@@ -472,42 +467,15 @@ export function reconstructMessagesFromHistory(history: readonly Item[], timeZon
   return out;
 }
 
-function normalizeForDedup(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
-}
-
-export function seedPriorTurns(
-  turns: readonly ConversationTurn[],
-  existingTexts: readonly string[] = [],
-): SeededMessage[] {
-  const seen = new Set(existingTexts.map(normalizeForDedup).filter(Boolean));
-  const reconciled: SeededMessage[] = [];
-  for (const t of turns) {
+export function priorTurnsMessages(turns: readonly ConversationTurn[]): PiReplayMessage[] {
+  const tags = turns.flatMap((t) => {
     const text = String(t.text ?? "").trim();
-    if (!text) continue;
-    if (seen.has(normalizeForDedup(text))) continue;
-    const tag =
-      t.role === "assistant"
-        ? messageTag({ from: "agent", ...(t.name ? { via: t.name } : {}) }, text)
-        : messageTag({ from: "human", ...(t.name ? { author: t.name } : {}) }, text);
-    reconciled.push({ role: "user", text: tag });
-  }
-  const merged: SeededMessage[] = [];
-  for (const m of reconciled) {
-    const prev = merged[merged.length - 1];
-    if (prev && prev.role === m.role) prev.text = `${prev.text}\n${m.text}`;
-    else merged.push({ role: m.role, text: m.text });
-  }
-  return merged;
-}
-
-export type ColdStartSeedPlan = "structured" | "priorTurns" | "none";
-
-export function planColdStartSeed(
-  reconstructed: readonly PiReplayMessage[],
-  hasPriorTurns: boolean,
-): ColdStartSeedPlan {
-  if (reconstructed.length) return "structured";
-  if (hasPriorTurns) return "priorTurns";
-  return "none";
+    if (!text) return [];
+    return t.role === "assistant"
+      ? messageTag({ from: "agent", ...(t.name ? { via: t.name } : {}) }, text)
+      : messageTag({ from: "human", ...(t.name ? { author: t.name } : {}) }, text);
+  });
+  return tags.length
+    ? [{ role: "user", content: [{ type: "text", text: tags.join("\n") }], timestamp: Date.now() }]
+    : [];
 }
