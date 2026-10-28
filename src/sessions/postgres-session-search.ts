@@ -7,7 +7,7 @@ import type { Session } from "../types.ts";
 import { tsPrefixQuery } from "./item-search.ts";
 import { TENANT, withinParticipantWindow } from "./postgres-session-sql.ts";
 import { rowToItem, rowToParticipantSession, ITEM_FIELDS, ITEM_FROM } from "./postgres-session-rows.ts";
-import { lockSession, transcriptItemPredicate, type SessionStoreCtx } from "./postgres-session-items.ts";
+import { itemPage, lockSession, transcriptItemPredicate, type SessionStoreCtx } from "./postgres-session-items.ts";
 import { participantSessionsSql } from "./postgres-session-participants.ts";
 import { type Item, msOf, SEARCHABLE_ITEM, searchTypeExpr, USER_KINDS } from "./items.ts";
 
@@ -59,22 +59,13 @@ export function sessionPinAndSearchMethods(ctx: SessionStoreCtx) {
       const ids = [...new Set([principals].flat())];
       if (!ids.length) return [];
       const params: unknown[] = [sessionId, ids, opts?.sinceSeq ?? 0];
-      let sql = `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM}
+      const sql = `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM}
           WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= $3
             AND (SELECT count(*) FROM participants p
                   WHERE p.session_id = i.session_id AND p.principal_id = ANY($2::text[])
                     AND ${withinParticipantWindow("i", "p")}
                     ${opts?.transcript ? `AND ${transcriptItemPredicate("i", "p")}` : ""}) = cardinality($2::text[])`;
-      if (opts?.beforeSeq !== undefined) {
-        params.push(opts.beforeSeq);
-        sql += ` AND i.seq < $${params.length}`;
-      }
-      sql += " ORDER BY i.seq DESC";
-      if (opts?.limit !== undefined) {
-        params.push(opts.limit);
-        sql += ` LIMIT $${params.length}`;
-      }
-      return (await q(sql, params)).map(rowToItem).reverse();
+      return (await q(sql + itemPage(opts, params), params)).map(rowToItem).reverse();
     },
 
     async searchSessionTitles(principalId, query, limit = 20): Promise<Session[]> {

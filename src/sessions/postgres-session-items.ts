@@ -21,6 +21,28 @@ const LAST_PREVIEW_LEN = 100;
 
 const storedPreview = (text: string | null, maxLen: number): string => pgTextSafe(userMessagePreview(text, maxLen));
 
+export function itemPage(opts: GetItemsOptions | undefined, params: unknown[]): string {
+  let sql = "";
+  if (opts?.beforeSeq !== undefined) {
+    params.push(opts.beforeSeq);
+    sql += ` AND i.seq < $${params.length}`;
+  }
+  if (opts?.turnId !== undefined) {
+    params.push(opts.turnId);
+    sql += ` AND i.turn_id = $${params.length}::uuid`;
+  }
+  if (opts?.kinds !== undefined) {
+    params.push([...opts.kinds]);
+    sql += ` AND i.kind = ANY($${params.length}::item_kind[])`;
+  }
+  sql += " ORDER BY i.seq DESC";
+  if (opts?.limit !== undefined) {
+    params.push(opts.limit);
+    sql += ` LIMIT $${params.length}`;
+  }
+  return sql;
+}
+
 export function transcriptItemPredicate(alias: string, participant?: string): string {
   const receipt = (item: string): string => `COALESCE(${item}.body @> '{"slackReplyReceipt":true}'::jsonb, false)`;
   return `NOT (
@@ -241,24 +263,7 @@ export function sessionItemMethods(ctx: SessionStoreCtx) {
       const params: unknown[] = [sessionId, opts?.sinceSeq ?? 0];
       let sql = `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM} WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= $2`;
       if (opts?.transcript) sql += ` AND ${transcriptItemPredicate("i")}`;
-      if (opts?.beforeSeq !== undefined) {
-        params.push(opts.beforeSeq);
-        sql += ` AND i.seq < $${params.length}`;
-      }
-      if (opts?.turnId !== undefined) {
-        params.push(opts.turnId);
-        sql += ` AND i.turn_id = $${params.length}::uuid`;
-      }
-      if (opts?.kinds !== undefined) {
-        params.push([...opts.kinds]);
-        sql += ` AND i.kind = ANY($${params.length}::item_kind[])`;
-      }
-      sql += " ORDER BY i.seq DESC";
-      if (opts?.limit !== undefined) {
-        params.push(opts.limit);
-        sql += ` LIMIT $${params.length}`;
-      }
-      return (await q(sql, params)).map(rowToItem).reverse();
+      return (await q(sql + itemPage(opts, params), params)).map(rowToItem).reverse();
     },
 
     async getContextWindow(sessionId) {

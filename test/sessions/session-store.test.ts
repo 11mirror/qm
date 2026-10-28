@@ -49,6 +49,11 @@ test("attributedTurns applies each window's [validFrom,validTo) and excludes ove
     "intersection of both windows",
   );
   assert.deepEqual(await store.visibleItems(s.id, ["U1", "nobody"]), [], "a non-participant sees nothing");
+  assert.deepEqual(
+    (await store.visibleItems(s.id, "U1", { kinds: ["AgentMessage"] })).map((i) => i.kind),
+    [],
+    "kind filters apply to visible items",
+  );
 
   const rows = await store.attributedTurns();
   const u1 = rows.filter((r) => r.principalId === "U1" && r.sessionId === s.id);
