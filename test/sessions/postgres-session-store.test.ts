@@ -80,6 +80,10 @@ test("pg items keep turn, author and time in typed columns", async () => {
       /malformed turn id/,
     );
     await store.releaseLease(lease);
+    assert.deepEqual(
+      (await store.getItems(session.id, { kinds: ["UserMessage", "SteeringMessage"] })).map((item) => item.text),
+      ["hi", "also"],
+    );
 
     const rows = (
       await raw.query(

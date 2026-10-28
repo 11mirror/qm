@@ -101,6 +101,8 @@ function revisionToRecord(entries: readonly Item[], source: MessageRevisionSourc
   return { action: "edited", ts: source.ts, text, ...named };
 }
 
+const REVISION_KINDS = { kinds: ["UserMessage", "SteeringMessage", "Retraction"] } as const;
+
 async function recordRevision(
   sessions: Pick<SessionStore, "append">,
   lease: Lease,
@@ -120,11 +122,11 @@ async function recordWhenIdle(
   session: RevisionSession,
   source: MessageRevisionSource,
 ): Promise<void> {
-  if (!revisionToRecord(await sessions.getItems(session.id), source)) return;
+  if (!revisionToRecord(await sessions.getItems(session.id, REVISION_KINDS), source)) return;
   const { lease } = await sessions.acquireLease(session.id, "append");
   if (!lease) return;
   try {
-    await recordRevision(sessions, lease, session, await sessions.getItems(session.id), source);
+    await recordRevision(sessions, lease, session, await sessions.getItems(session.id, REVISION_KINDS), source);
   } finally {
     await sessions.releaseLease(lease);
   }
@@ -167,7 +169,7 @@ export async function reconcileMessageRevisions(opts: {
   const ref = parseSlackThreadRef(opts.session.threadRef);
   if (!ref) return 0;
   const since = Math.max(1, Math.min(opts.anchorAt ?? opts.fallbackSince, slackTsToMs(opts.triggerTs) ?? Infinity));
-  const entries = await opts.sessions.getItems(opts.session.id);
+  const entries = await opts.sessions.getItems(opts.session.id, REVISION_KINDS);
   const ts = [
     ...new Set(
       entries

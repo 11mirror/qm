@@ -249,6 +249,10 @@ export function sessionItemMethods(ctx: SessionStoreCtx) {
         params.push(opts.turnId);
         sql += ` AND i.turn_id = $${params.length}::uuid`;
       }
+      if (opts?.kinds !== undefined) {
+        params.push([...opts.kinds]);
+        sql += ` AND i.kind = ANY($${params.length}::item_kind[])`;
+      }
       sql += " ORDER BY i.seq DESC";
       if (opts?.limit !== undefined) {
         params.push(opts.limit);

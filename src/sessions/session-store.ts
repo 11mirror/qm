@@ -1,7 +1,7 @@
 import type { SessionOrigin } from "./thread-ref.ts";
 import { createHash } from "node:crypto";
 import type { ScopeId, Session, SessionType, SpawnMeta } from "../types.ts";
-import { isUserMessage, type Item, type NewItem } from "./items.ts";
+import { isUserMessage, type Item, type ItemKind, type NewItem } from "./items.ts";
 import { sleep } from "../util/async.ts";
 import type { GoalRecord } from "../harness/goal.ts";
 
@@ -111,6 +111,7 @@ export interface SessionPin extends NewSessionPin {
 export interface GetItemsOptions {
   transcript?: boolean;
   turnId?: string;
+  kinds?: readonly ItemKind[];
   sinceSeq?: number;
   beforeSeq?: number;
   limit?: number;
