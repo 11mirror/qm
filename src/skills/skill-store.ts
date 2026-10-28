@@ -171,16 +171,11 @@ export function visibleSkillRows<T extends SkillSummary>(
 
 export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
   const skills = opts.backing ?? createMemoryMap<Skill>();
-  const inScopes = async (scopes: readonly ScopeId[]): Promise<Skill[]> => {
+  const inScopes = async (scopes: readonly ScopeId[], manifest?: readonly (keyof SkillManifest)[]) => {
     const wanted = new Set<string>(scopes);
-    const rows = await skills.select({ where: { field: "scopeId", anyOfFold: [...wanted] } });
-    return rows.filter((skill) => wanted.has(skill.scopeId));
-  };
-  const listingsIn = async (scopes: readonly ScopeId[]): Promise<SkillListing[]> => {
-    const wanted = new Set<string>(scopes);
-    const rows: SkillListing[] = await skills.select({
+    const rows = await skills.select({
       where: { field: "scopeId", anyOfFold: [...wanted] },
-      pickNested: { manifest: ["name", "description"] },
+      ...(manifest ? { pickNested: { manifest } } : {}),
     });
     return rows.filter((skill) => wanted.has(skill.scopeId));
   };
@@ -302,7 +297,10 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
     },
 
     async visibleFor(orderedScopes, granted) {
-      const all = await listingsIn([...orderedScopes, ...(granted ?? []).map((ref) => ref.ownerScopeId)]);
+      const all: SkillListing[] = await inScopes(
+        [...orderedScopes, ...(granted ?? []).map((ref) => ref.ownerScopeId)],
+        ["name", "description"],
+      );
       return visibleSkillRows(all, orderedScopes, granted);
     },
 

@@ -296,8 +296,8 @@ export function createPostgresMap<T>(
       sql += ` LIMIT $${params.length}`;
     }
     const rows = await pg.q(
-      `SELECT id, ${projection} - $1::text[] AS json
-       FROM (SELECT id, json || '{}'::jsonb AS json FROM (${sql}) AS page OFFSET 0) AS loaded ORDER BY id`,
+      `WITH loaded AS MATERIALIZED (SELECT id, json || '{}'::jsonb AS json FROM (${sql}) AS page)
+       SELECT id, ${projection} - $1::text[] AS json FROM loaded ORDER BY id`,
       params,
     );
     return rows.map((row) => [row.id as string, row.json as Omit<T, K>]);
