@@ -62,6 +62,8 @@ export function renderMailWake(messages: readonly SessionMessage[], at = new Dat
   ].join("\n");
 }
 
+export const mailWakeKey = (messageIds: readonly string[]): string => `mail-wake:${hashId(messageIds, 32)}`;
+
 async function trustedSenders(deps: MailWakeDeps, sessionId: string, mail: SessionMessage[]): Promise<boolean> {
   for (const message of mail) {
     if (message.senderId === sessionId) continue;
@@ -91,10 +93,7 @@ async function wakeFor(deps: MailWakeDeps, session: Session, pending: SessionMes
   const trusted = await trustedSenders(deps, session.id, mail);
   await deps.runs.enqueue({
     sessionId: session.threadRef,
-    dedupKey: `mail-wake:${hashId(
-      mail.map((message) => message.id),
-      32,
-    )}`,
+    dedupKey: mailWakeKey(mail.map((message) => message.id)),
     request: {
       ...prepared,
       ...(trusted ? { delegatingRunId: base.id } : {}),

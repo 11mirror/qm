@@ -1,3 +1,4 @@
+import { mailWakeKey } from "../../src/subagents/mail-wake.ts";
 import { wireRunResultPosts, runResultPost } from "../../src/runs/run-results.ts";
 import { recordingOutbound } from "../support/recording-outbound.ts";
 import { createControlService } from "../../src/api/control-service.ts";
@@ -67,7 +68,7 @@ for (const addressed of [true, false]) {
     await completeTurn(r.ledger, r.run.id, { status: "ok", reply: "verified result" });
     const result = (await r.runs.get(r.run.id))!;
     await deliverSubagentMail({ ...r }, result);
-    const wake = (await r.runs.getByDedupKey(`mail-wake:subagent-mail-${r.run.id}`))!;
+    const wake = (await r.runs.getByDedupKey(mailWakeKey([`subagent-mail-${r.run.id}`])))!;
     assert.ok(wake);
     for (const [key, value] of Object.entries(inherited)) {
       if (key === "surfaceTools") continue;

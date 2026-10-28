@@ -1,3 +1,4 @@
+import { mailWakeKey } from "../../src/subagents/mail-wake.ts";
 import "../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -134,7 +135,7 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
   const first = await finished(() => built.runs.latestForThread(child.threadRef));
   assert.equal(first.request.origin.kind, "human");
   assert.deepEqual(await userEntry(first), { hidden: false, display: "Summarize the repo" });
-  const wake = await finished(() => built.runs.getByDedupKey(`mail-wake:subagent-mail-${first.id}`));
+  const wake = await finished(() => built.runs.getByDedupKey(mailWakeKey([`subagent-mail-${first.id}`])));
   assert.equal((await userEntry(wake)).hidden, true);
   assert.equal(wake.request.origin.kind, "human");
 

@@ -51,7 +51,11 @@ function exits(computer: ReturnType<typeof fakeComputer>, watched: string[] = []
   const processes = createPostgresProcessRegistry(testDatabaseUrl());
   const mailed: SessionMessage[] = [];
   const finished: string[] = [];
-  const base = { id: "run-1", sessionId: "", request: { actor, conversation, origin: { kind: "human" } } } as unknown as Run;
+  const base = {
+    id: "run-1",
+    sessionId: "",
+    request: { actor, conversation, origin: { kind: "human" } },
+  } as unknown as Run;
   const jobExits = createJobExits({
     processes,
     monitors: { enabled: async () => watched.map((processId) => ({ processId }) as Monitor) },
@@ -103,7 +107,7 @@ test("the exit sweep mails the owning session of each ended job once and leaves 
   assert.equal((await processes.get(done))?.status, "exited");
   assert.equal((await processes.get(watched))?.status, "exited");
   assert.equal((await processes.get(running))?.status, "running");
-  assert.equal(computer.teardowns(), 1);
+  assert.equal(computer.teardowns(), 2, "each sweep releases the computer it opened");
   assert.ok(finished.includes(done));
 });
 

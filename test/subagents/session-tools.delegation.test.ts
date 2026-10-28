@@ -1,3 +1,4 @@
+import { mailWakeKey } from "../../src/subagents/mail-wake.ts";
 import { jsonbStringify } from "../../src/util/text.ts";
 import { createSessionMailbox, type SessionMessage } from "../../src/sessions/session-mailbox.ts";
 import { after, test } from "node:test";
@@ -95,7 +96,10 @@ test("opens and writes queue on their own session tree's admission lock", async 
   await r.sessions.addParticipant(other.id, actor.id);
   assert.ok((await r.syscallsFor(other).open({ task: "elsewhere" })).ok);
   const tree = `session-tree-admission:${r.room.id}`;
-  assert.deepEqual(keys, [tree, tree, tree, `session-tree-admission:${other.id}`]);
+  assert.deepEqual(
+    keys.filter((key) => key.startsWith("session-tree-admission:")),
+    [tree, tree, tree, `session-tree-admission:${other.id}`],
+  );
 });
 
 test("retrying an unqueued child preserves detachment and uses its current tree capacity", async (t) => {
@@ -125,7 +129,7 @@ test("retrying an unqueued child preserves detachment and uses its current tree 
   assert.equal((await r.sessions.get(child.id))?.parentSessionId ?? null, null);
 });
 
-test("siblings and children send durable deduplicated messages without new turns", async () => {
+test("siblings and children send durable deduplicated messages that wake an idle recipient", async () => {
   const r = await rig();
   const parent = r.syscallsFor(r.room);
   const one = await parent.open({ task: "one", name: "one" });
@@ -150,8 +154,9 @@ test("siblings and children send durable deduplicated messages without new turns
   });
   await completeTurn(r.ledger, run.id, { status: "ok", reply: "ready" });
   assert.equal((await sender.write({ target: "parent", text: "progress" })).ok, true);
-  assert.equal((await parent.receive!()).length, 1);
-  assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 0);
+  assert.deepEqual(await parent.receive!(), [], "the wake carries the message");
+  const [wake] = await r.runs.inFlightForThread(r.room.threadRef);
+  assert.match(wake!.request.text, /progress/);
 });
 
 test("follow-up retries recover the accepted run before checking full capacity", async (t) => {
@@ -397,7 +402,7 @@ async function webChildRig() {
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   await completeTurn(r.ledger, queued.id, { status: "ok", reply: "done" });
   const deliver = async () => deliverSubagentMail(r, (await r.runs.get(queued.id))!);
-  return { ...r, room, webConversation, api, deliver, wakeKey: `mail-wake:subagent-mail-${queued.id}` };
+  return { ...r, room, webConversation, api, deliver, wakeKey: mailWakeKey([`subagent-mail-${queued.id}`]) };
 }
 
 test("a finished child wakes an idle web parent once, carrying its result", async () => {
@@ -525,7 +530,7 @@ test("a later participant cannot change a completion's actor, rollout, destinati
     await completeTurn(r.ledger, pending.id, { status: "silent" });
   }
   await deliverSubagentMail(r, (await r.runs.get(queued.id))!);
-  const wake = await r.runs.getByDedupKey(`mail-wake:subagent-mail-${queued.id}`);
+  const wake = await r.runs.getByDedupKey(mailWakeKey([`subagent-mail-${queued.id}`]));
   assert.ok(wake);
   assert.equal(wake.request.actor.id, actor.id);
   assert.equal(wake.request.deliveryTarget, "slack:C1:task");
@@ -541,7 +546,7 @@ for (const surface of ["slack", "web"] as const) {
       await completeTurn(r.ledger, pending.id, { status: "silent" });
     }
     await deliverSubagentMail({ ...r }, (await r.runs.get(r.run.id))!);
-    const wake = (await r.runs.getByDedupKey(`mail-wake:subagent-mail-${r.run.id}`))!;
+    const wake = (await r.runs.getByDedupKey(mailWakeKey([`subagent-mail-${r.run.id}`])))!;
     assert.ok(wake);
     assert.equal(wake.request.origin.kind, "human");
     assert.equal(wake.request.addressed, true);
