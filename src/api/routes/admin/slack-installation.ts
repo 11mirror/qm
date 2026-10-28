@@ -31,10 +31,7 @@ export async function getSlackInstallation(ctx: ApiCtx): Promise<RouteResult> {
   authz.audit("slack-installation.read", "slack-installation");
   const environment = environmentSlack(ctx).state;
   const branding = await resolveBranding(ctx.deps.config, scope, ctx.deps.brandingDefault);
-  const createUrl = slackBotManifestCreationUrl(
-    branding.selfLabel,
-    isHomeTenant(tenant()) ? undefined : ctx.deps.publicUrl,
-  );
+  const createUrl = slackBotManifestCreationUrl(branding.selfLabel);
   const status = await ctx.deps.slackInstallation.status();
   const fromEnvironment = () => ok({ configured: true, managed: false, source: "environment", createUrl });
   if (ctx.deps.managedSlack) {
@@ -90,8 +87,14 @@ export async function putSlackInstallation(ctx: ApiCtx): Promise<RouteResult> {
       appToken,
       ctx.deps.slackWebClient,
       ctx.deps.slackInstallationSocketAppId,
+      !isHomeTenant(tenant()),
     );
-    const status = await ctx.deps.slackInstallation.set({ botToken, appToken, ...workspace, updatedBy: actor.id });
+    const status = await ctx.deps.slackInstallation.set({
+      botToken,
+      ...(appToken ? { appToken } : {}),
+      ...workspace,
+      updatedBy: actor.id,
+    });
     authz.audit("slack-installation.update", "slack-installation");
     return ok({ ...status, source: "admin" });
   } catch (error) {

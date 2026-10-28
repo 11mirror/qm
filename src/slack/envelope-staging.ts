@@ -40,6 +40,9 @@ export function createStagedEnvelopes(databaseUrl: string) {
   return {
     stage: insert,
     delete: remove,
+    async pending(): Promise<boolean> {
+      return (await pg.q(`SELECT 1 FROM slack_staged_envelopes LIMIT 1`)).length > 0;
+    },
     async deleteReceivedBefore(at: number): Promise<void> {
       await pg.q(`DELETE FROM slack_staged_envelopes WHERE received_at < $1`, [at]);
     },

@@ -67,3 +67,18 @@ test("Slack validation resolves the app id through bots.info and checks it again
     /belong to different Slack apps/,
   );
 });
+
+test("an HTTP-events tenant installs with only a bot token and never opens a socket", async (t) => {
+  const called: string[] = [];
+  const client = await slackApi(t, (method) => {
+    called.push(method);
+    return { body: JSON.stringify({ ok: true, app_id: "A1", team_id: "T1", team: "Acme" }) };
+  });
+  const noSocket = async (): Promise<string> => assert.fail("no socket for an HTTP-events tenant");
+  assert.deepEqual(await validateSlackInstallation(botToken, "", client, noSocket, true), {
+    teamId: "T1",
+    teamName: "Acme",
+  });
+  assert.deepEqual(called, ["auth.test"]);
+  await assert.rejects(validateSlackInstallation(botToken, "", client), /App token must start with xapp-/);
+});

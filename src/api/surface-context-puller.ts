@@ -46,11 +46,13 @@ export function createSurfaceContextPuller(
     waitMs?: number;
     pollMs?: number;
     searchToken?: (source: string, viewer: string | undefined) => Promise<string | null>;
+    prepare?: (source: string) => Promise<void>;
   } = {},
 ): SurfaceContextPuller {
   const waitMs = opts.waitMs ?? FULFILL_WAIT_MS;
   const pollMs = opts.pollMs ?? FULFILL_POLL_MS;
   const parkAndWait = async (source: string, query: SurfaceContextQuery): Promise<SurfaceContextResult | null> => {
+    await opts.prepare?.(source);
     const request = await app.createContextRequest(source, query);
     const outcome = await awaitContextOutcome(app, request.id, { waitMs, pollMs });
     if (outcome.status === "done") return outcome.result;

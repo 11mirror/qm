@@ -304,12 +304,13 @@ export async function validateSlackInstallation(
   appToken: string,
   clientFactory?: SlackWebClientFactory,
   readSocketAppId: SlackSocketAppIdReader = readSlackSocketAppId,
+  httpEvents = false,
 ): Promise<{ teamId?: string; teamName?: string }> {
   if (!botToken.startsWith("xoxb-"))
     throw new Error(
       "Bot token must start with xoxb-. Copy the Bot User OAuth Token from OAuth & Permissions after installing the app.",
     );
-  if (!appToken.startsWith("xapp-"))
+  if ((appToken || !httpEvents) && !appToken.startsWith("xapp-"))
     throw new Error(
       "App token must start with xapp-. Generate an App-Level Token in Basic Information with connections:write.",
     );
@@ -361,13 +362,15 @@ export async function validateSlackInstallation(
     botAppId = bot.bot?.app_id;
   }
   if (!botAppId) throw new Error("Slack bot identity returned no app_id");
-  const connection = await call("apps.connections.open", appToken);
-  if (!connection.url) throw new Error("apps.connections.open returned no WebSocket URL");
-  const socketAppId = await readSocketAppId(connection.url);
-  if (socketAppId !== botAppId)
-    throw new Error(
-      "The bot token and app token belong to different Slack apps. Copy both tokens from the same app; your existing connection has not changed.",
-    );
+  if (appToken) {
+    const connection = await call("apps.connections.open", appToken);
+    if (!connection.url) throw new Error("apps.connections.open returned no WebSocket URL");
+    const socketAppId = await readSocketAppId(connection.url);
+    if (socketAppId !== botAppId)
+      throw new Error(
+        "The bot token and app token belong to different Slack apps. Copy both tokens from the same app; your existing connection has not changed.",
+      );
+  }
   return {
     ...(auth.team_id ? { teamId: auth.team_id } : {}),
     ...(auth.team ? { teamName: auth.team } : {}),

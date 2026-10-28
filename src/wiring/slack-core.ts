@@ -63,6 +63,7 @@ export function buildSlackCore(deps: SlackCoreInputs) {
     resume: (ask, grant) => askResolution(ask, grant),
   });
   const slackHandledEvents = createHandledEvents(databaseUrl);
+  const stagedEnvelopes = createStagedEnvelopes(databaseUrl);
   const slackCore = createSlackCoreClient({
     identity,
     memory,
@@ -75,7 +76,7 @@ export function buildSlackCore(deps: SlackCoreInputs) {
     inboxEvent: (event) => inboxRealtime.onConversationEvent(event),
     app,
     leaderLease,
-    stagedEnvelopes: createStagedEnvelopes(databaseUrl),
+    stagedEnvelopes,
     handledEvents: slackHandledEvents,
     config: configStore,
     runtimeFallback: fallback,
@@ -89,7 +90,10 @@ export function buildSlackCore(deps: SlackCoreInputs) {
     brandingDefault: () => tenantConfig(config).brandingDefault,
     ...(harness.models.pickAckEmoji ? { pickAckEmoji: (t, c) => harness.models.pickAckEmoji!(t, c) } : {}),
   });
-  every("slack:envelope-replay", 60_000, () => slackCore.upkeep.run("replayEnvelopes"));
+  every("slack:envelope-replay", 60_000, async () => {
+    if (await stagedEnvelopes.pending()) await slackSurface.slack.ready();
+    await slackCore.upkeep.run("replayEnvelopes");
+  });
   every("slack:session-status", 60_000, () => slackCore.upkeep.run("reconcileStatus"));
   every("slack:task-acks", 60_000, () => slackCore.upkeep.run("reconcileTaskAcks"));
   every("slack:emoji-catalog", 6 * 60 * 60_000, () => slackCore.upkeep.run("publishEmojiCatalog"));

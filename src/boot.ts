@@ -7,7 +7,7 @@ import { loadConfig, type Config } from "./config.ts";
 import { buildApp, serverDeps } from "./wiring.ts";
 import { createServer } from "./api/server.ts";
 import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
-import { errMessage, reportFailureAs } from "./util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { createPgPool, migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
@@ -185,10 +185,13 @@ const SHARED_SLACK_ENV = [
   "DEV_INTROSPECTION",
 ];
 
+const DEMAND_RETRY_MS = 30_000;
+
 interface TenantSlackEntry {
   tenant: Tenant;
   managed?: ManagedSlack;
   runtime: SlackRuntime;
+  failedAt?: number;
 }
 
 function createTenantSlack(opts: {
@@ -265,9 +268,22 @@ function createTenantSlack(opts: {
     return entry;
   }
 
+  async function ready(): Promise<void> {
+    if (!running || !onDemand(tenant())) return;
+    const entry = ensure();
+    if (Date.now() - (entry.failedAt ?? Number.NEGATIVE_INFINITY) < DEMAND_RETRY_MS) return;
+    try {
+      await entry.runtime.reconcile();
+      entry.failedAt = undefined;
+    } catch (error) {
+      entry.failedAt = Date.now();
+      reportFailure(`slack plugin start: tenant=${entry.tenant.slug ?? entry.tenant.id}`, error);
+    }
+  }
+
   built.slackCore.slack.onDemand({
     signingSecret: (account) => (onDemand(tenant()) && !account ? tenantConfig(config).slackSigningSecret : undefined),
-    ready: () => (running && onDemand(tenant()) ? ensure().runtime.reconcile() : Promise.resolve()),
+    ready,
   });
 
   const all = (fn: (entry: TenantSlackEntry) => Promise<void>) =>

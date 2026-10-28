@@ -71,3 +71,20 @@ test("surface-context puller times out (returns null) when the surface never ans
   assert.equal(out, null);
   assert.equal(app.deleted.length, 1, "a timed-out request is still cleaned up");
 });
+
+test("the puller readies the request's surface before parking a request for it", async () => {
+  const app = fakeApp(() => ({ status: "done", result: { messages: [] } }));
+  const order: string[] = [];
+  const created = app.createContextRequest.bind(app);
+  app.createContextRequest = async (source, query) => {
+    order.push(`create:${source}`);
+    return created(source, query);
+  };
+  const puller = createSurfaceContextPuller(app, {
+    pollMs: 1,
+    waitMs: 200,
+    prepare: async (source) => void order.push(`prepare:${source}`),
+  });
+  await puller.pull("slack", { conversationTarget: "slack:C1:1.1", count: 50 });
+  assert.deepEqual(order, ["prepare:slack", "create:slack"]);
+});

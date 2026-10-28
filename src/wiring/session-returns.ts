@@ -28,7 +28,7 @@ export function buildSessionReturns(deps: SessionReturnsInputs) {
   const { app } = deps.apiApp;
   const { sessions, advisoryLock, featureFlags, every } = deps.stores;
   const { sessionMailbox, prepareSessionRequest, orchestratorDeps } = deps.orchestrator;
-  const { outbound } = deps.outbound;
+  const { outbound, slackSurface } = deps.outbound;
   const { runSignals } = deps.harness;
   const { keychain } = deps.credentials;
 
@@ -103,6 +103,7 @@ export function buildSessionReturns(deps: SessionReturnsInputs) {
           (await keychain.connectorAccessToken("slack.com", viewer)) ??
           keychain.connectorAccessToken("slack.com", viewer, "company"))
         : null,
+    prepare: (source) => (source === "slack" ? slackSurface.slack.ready() : Promise.resolve()),
   });
   every("session-return-sweep", 1_000, sweepSessionReturns);
 }
