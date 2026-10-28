@@ -292,18 +292,9 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
   }
 }
 
-export function createPgPool(connectionString: string): PgPool;
-export function createPgPool(connectionString: string, migrationId: string, statements: readonly string[]): PgPool;
-export function createPgPool(connectionString: string, definitions: readonly PgMigrationDefinition[]): PgPool;
-export function createPgPool(
-  connectionString: string,
-  idOrDefinitions?: string | readonly PgMigrationDefinition[],
-  statements: readonly string[] = [],
-): PgPool {
-  const migrates = idOrDefinitions !== undefined;
-  const definitions =
-    typeof idOrDefinitions === "string" ? [{ id: idOrDefinitions, statements }] : (idOrDefinitions ?? []);
-  const migrations = definitions.flatMap(pgMigrationsFrom);
+export function createPgPool(connectionString: string, definitions?: readonly PgMigrationDefinition[]): PgPool {
+  const migrates = definitions !== undefined;
+  const migrations = (definitions ?? []).flatMap(pgMigrationsFrom);
   for (const migration of migrations) registerPgMigration(connectionString, migration);
   let readyP: Promise<void> | null = null;
   let sessionPoolP: Promise<Pool> | null = null;
