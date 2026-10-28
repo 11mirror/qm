@@ -37,6 +37,18 @@ const TENANCY_FUNCTIONS: readonly string[] = [
      IF id IS NULL THEN RAISE EXCEPTION 'Postgres query requires an explicit tenant context'; END IF;
      RETURN id::uuid;
    END $qm_tenant_id$`,
+  `CREATE OR REPLACE FUNCTION qm_tenants_with_rows(tables regclass[]) RETURNS TABLE(id uuid)
+   LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $tenants_with_rows$
+   DECLARE rel regclass;
+   BEGIN
+     FOREACH rel IN ARRAY tables LOOP
+       IF NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid
+         WHERE c.oid = rel AND c.relnamespace = 'public'::regnamespace AND c.relkind = 'r'
+           AND c.relrowsecurity AND a.attname = 'tenant_id' AND a.atttypid = 'uuid'::regtype AND NOT a.attisdropped)
+       THEN RAISE EXCEPTION 'Not a tenant table'; END IF;
+       RETURN QUERY EXECUTE format('SELECT DISTINCT tenant_id FROM %s', rel);
+     END LOOP;
+   END $tenants_with_rows$`,
   `CREATE OR REPLACE FUNCTION qm_tenant_columns(rel oid, attnums smallint[]) RETURNS text LANGUAGE sql STABLE
    AS $qm_tenant_columns$
      SELECT string_agg(quote_ident(a.attname), ', ' ORDER BY k.ord)
@@ -164,6 +176,10 @@ BEGIN
     SELECT c.oid, c.relname FROM pg_class c
     WHERE c.relnamespace = current_schema()::regnamespace AND c.relkind = 'r'
       AND c.relname NOT IN (${EXCLUDED}) AND c.relname NOT LIKE 'pg\\_%'
+      AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity OR NOT EXISTS (
+        SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid AND p.polname = 'qm_tenant_isolation'
+          AND pg_get_expr(p.polqual, p.polrelid) = '(tenant_id = qm_tenant_id())'
+          AND pg_get_expr(p.polwithcheck, p.polrelid) = '(tenant_id = qm_tenant_id())'))
   LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t.relname);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t.relname);
@@ -182,7 +198,7 @@ async function tenantizeQueues(client: import("pg").PoolClient): Promise<void> {
     WHERE relnamespace = 'absurd'::regnamespace AND relkind = 'r' AND relname <> 'queues'
       AND NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = pg_class.oid AND attname = 'tenant_id')`);
   for (const { relname } of rows) {
-    if (!/^[trcewi]_[a-z_]+$/.test(relname)) throw new Error(`Unexpected queue table ${relname}`);
+    if (!/^[trcewi]_[a-z0-9_]+$/.test(relname)) throw new Error(`Unexpected queue table ${relname}`);
     await client.query(`ALTER TABLE absurd.${relname} ADD COLUMN tenant_id uuid NOT NULL DEFAULT qm_tenant_id()`);
   }
   for (const { relname } of rows.filter(({ relname }) => relname.startsWith("t_")))
@@ -208,9 +224,13 @@ async function tenantizeQueues(client: import("pg").PoolClient): Promise<void> {
         WHERE state IN (''pending'', ''running'', ''sleeping'') ORDER BY tenant_id', 't_' || queue);
     END $queue_tenants$`);
   const tables = await client.query(`SELECT relname FROM pg_class
-    WHERE relnamespace = 'absurd'::regnamespace AND relkind = 'r' AND relname <> 'queues'`);
+    WHERE relnamespace = 'absurd'::regnamespace AND relkind = 'r' AND relname <> 'queues'
+      AND (NOT relrowsecurity OR NOT relforcerowsecurity OR NOT EXISTS (
+        SELECT 1 FROM pg_policy p WHERE p.polrelid = pg_class.oid AND p.polname = 'qm_tenant_isolation'
+          AND pg_get_expr(p.polqual, p.polrelid) = '(tenant_id = qm_tenant_id())'
+          AND pg_get_expr(p.polwithcheck, p.polrelid) = '(tenant_id = qm_tenant_id())'))`);
   for (const { relname } of tables.rows) {
-    if (!/^[trcewi]_[a-z_]+$/.test(relname)) throw new Error(`Unexpected queue table ${relname}`);
+    if (!/^[trcewi]_[a-z0-9_]+$/.test(relname)) throw new Error(`Unexpected queue table ${relname}`);
     await client.query(`CREATE INDEX IF NOT EXISTS ${relname}_tenant ON absurd.${relname}(tenant_id)`);
     await client.query(`ALTER TABLE absurd.${relname} ENABLE ROW LEVEL SECURITY`);
     await client.query(`ALTER TABLE absurd.${relname} FORCE ROW LEVEL SECURITY`);
@@ -249,6 +269,7 @@ export async function applyTenancy(pool: Pool): Promise<void> {
       await client.query("SELECT qm_tenantize()");
       if ((await client.query("SELECT to_regnamespace('absurd') IS NOT NULL AS present")).rows[0].present)
         await tenantizeQueues(client);
+      await client.query("DROP FUNCTION IF EXISTS qm_tenant_bypass()");
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK").catch(discardOnFailure);

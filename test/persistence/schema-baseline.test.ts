@@ -1,4 +1,4 @@
-import { test, after } from "node:test";
+import { test, after } from "../support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -113,7 +113,7 @@ async function dropTenantQueues(url: string): Promise<void> {
 async function migrate(url: string, multitenant: boolean): Promise<void> {
   const { runtime } = buildApp({
     anthropicApiKey: "test-anthropic-key",
-    ...testConfig({ databaseUrl: url, multitenant }),
+    ...testConfig({ databaseUrl: url, databaseMigrationUrl: url, multitenant }),
   });
   try {
     await migrateRegisteredPgSchemas(url);

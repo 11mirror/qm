@@ -25,10 +25,18 @@ export type JobDisposition = "done" | "release" | number;
 
 export type JobHandler = (params: unknown) => Promise<JobDisposition>;
 
-export type EveryOptions = { immediate?: boolean } & ({ shared: true } | { due: string });
+type TenantWork = { sql: string; tables: string[]; home?: true };
+export type EveryOptions = { immediate?: boolean } & ({ shared: true } | { due: string | TenantWork });
 
-export const hasRows = (table: string, where = "true"): string =>
-  `EXISTS (SELECT 1 FROM ${table} w WHERE w.tenant_id = t.id AND (${where}))`;
+export const hasRows = (table: string, where = "true"): TenantWork => ({
+  sql: `EXISTS (SELECT 1 FROM ${table} w WHERE w.tenant_id = t.id AND (${where}))`,
+  tables: [table],
+});
+
+export const anyRows = (...work: TenantWork[]): TenantWork => ({
+  sql: work.map(({ sql }) => sql).join(" OR "),
+  tables: work.flatMap(({ tables }) => tables),
+});
 
 export interface JobWorker {
   handle(name: string, handler: JobHandler, opts?: { concurrency?: number }): void;
@@ -141,15 +149,33 @@ function tenantTicker(job: string, fn: () => unknown, track: (work: Promise<void
   };
 }
 
-async function dueTenants(db: AbsurdDb, job: string, due: string): Promise<Tenant[]> {
+async function dueTenants(db: AbsurdDb, job: string, due: string | TenantWork): Promise<Tenant[]> {
   if (!pgTenancyEnabled()) return [tenant()];
-  const owners = await activeTenants();
+  const active = await activeTenants();
+  const tables = typeof due === "string" ? [] : due.tables;
+  const sql = typeof due === "string" ? due : due.sql;
+  const candidates = tables.length
+    ? await withTenant(homeTenant(), async () =>
+        (await db.pool())
+          .query(
+            "SELECT CASE WHEN id = (SELECT id FROM qm_tenant) THEN NULL ELSE id::text END AS id FROM qm_tenants_with_rows($1::regclass[])",
+            [tables],
+          )
+          .catch((error: unknown) => {
+            if ((error as { code?: string }).code === UNDEFINED_TABLE) return { rows: [] };
+            throw error;
+          }),
+      )
+    : undefined;
+  const ids = new Set(candidates?.rows.map((row) => row.id));
+  if (typeof due !== "string" && due.home) ids.add(null);
+  const owners = candidates ? active.filter((owner) => ids.has(owner.id ?? null)) : active;
   const dueOwners = await mapBounded(owners, claimBudget(), (owner) =>
     withTenant(owner, async () => {
       const rows = await (
         await db.pool()
       )
-        .query(`SELECT t.id FROM (SELECT qm_tenant_id() AS id) t WHERE ${due}`)
+        .query(`SELECT t.id FROM (SELECT qm_tenant_id() AS id) t WHERE ${sql}`)
         .catch((e: unknown) => {
           if ((e as { code?: string }).code === UNDEFINED_TABLE) return { rows: [] };
           throw e;
@@ -157,7 +183,16 @@ async function dueTenants(db: AbsurdDb, job: string, due: string): Promise<Tenan
       return rows.rows.length ? owner : undefined;
     }),
   );
-  return dueOwners.filter((owner): owner is Tenant => owner !== undefined);
+  const ready = await mapBounded(
+    dueOwners.filter((owner): owner is Tenant => owner !== undefined),
+    claimBudget(),
+    (owner) =>
+      taskTenant(owner.id, true).catch((error: unknown) => {
+        reportFailure(`jobs: ${job} tenant`, error, `tenant=${owner.id ?? "home"}`);
+        return undefined;
+      }),
+  );
+  return ready.filter((owner): owner is Tenant => typeof owner === "object");
 }
 
 async function cleanupJobs(db: AbsurdDb): Promise<void> {

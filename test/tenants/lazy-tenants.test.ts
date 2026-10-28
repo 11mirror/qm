@@ -1,5 +1,6 @@
+import { configureTestTenancy } from "../support/tenant-test.ts";
 import "../support/auto-fake-sprites.ts";
-import { after, before, test } from "node:test";
+import { after, before, test } from "../support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";
@@ -39,6 +40,8 @@ let baseline = 0;
 const prepared: string[] = [];
 let queries = 0;
 let dueQueries = 0;
+let routingQueries = 0;
+const dueOwners: Array<string | undefined> = [];
 const query = pg.Client.prototype.query;
 
 before(async () => {
@@ -55,7 +58,13 @@ before(async () => {
   url.password = password;
   url.pathname = `/${DB}`;
   databaseUrl = url.toString();
-  const config = testConfig({ databaseUrl, multitenant: true, dataDir: mkdtempSync(join(tmpdir(), "lazy-")) });
+  await configureTestTenancy(databaseUrl);
+  const config = testConfig({
+    databaseUrl,
+    databaseMigrationUrl: URL_ADMIN,
+    multitenant: true,
+    dataDir: mkdtempSync(join(tmpdir(), "lazy-")),
+  });
   built = stopAtEnd(buildApp({ anthropicApiKey: "test-anthropic-key", ...config }, { harness: createMockHarness() }));
   await migrateRegisteredPgSchemas(databaseUrl);
   rls = createPgPool(databaseUrl);
@@ -82,8 +91,11 @@ before(async () => {
   pg.Client.prototype.query = function (this: pg.Client, ...args: unknown[]) {
     queries++;
     const text = args[0] as string | { text?: string };
-    if (String(typeof text === "string" ? text : text?.text).includes("FROM tenants WHERE status = 'active') t"))
+    if (String(typeof text === "string" ? text : text?.text).includes("qm_tenants_with_rows")) routingQueries++;
+    if (String(typeof text === "string" ? text : text?.text).includes("FROM (SELECT qm_tenant_id() AS id) t WHERE")) {
       dueQueries++;
+      dueOwners.push(tenant().id);
+    }
     return (query as (...a: unknown[]) => unknown).apply(this, args);
   } as typeof query;
 });
@@ -105,23 +117,20 @@ test("loading 2,000 tenants prepares none of them and caches nothing for them", 
   assert.equal(cachedTenantCount(), baseline);
 });
 
-test(
-  "every periodic job ticks with one query across all 2,000 tenants and runs nothing for idle ones",
-  { skip },
-  async () => {
-    const before = { queries, dueQueries };
-    await built.jobs.start();
-    await new Promise((resolve) => setTimeout(resolve, 4_000));
-    await built.jobs.stopClaims();
-    const ticks = dueQueries - before.dueQueries;
-    assert.ok(ticks >= 10, `the periodic jobs ticked (${ticks} due queries)`);
-    assert.ok(queries - before.queries < TENANTS, `${queries - before.queries} queries stays far below one per tenant`);
-    assert.deepEqual(prepared, []);
-    assert.equal(cachedTenantCount(), baseline);
-  },
-);
+test("due jobs shortlist idle tenants while shared sweeps explicitly visit all 2,000 tenants", { skip }, async () => {
+  const before = { queries, dueQueries, routingQueries };
+  await built.jobs.start();
+  await new Promise((resolve) => setTimeout(resolve, 4_000));
+  await built.jobs.stop();
+  const ticks = routingQueries - before.routingQueries;
+  assert.ok(ticks >= 10, `the periodic jobs ticked (${ticks} due queries)`);
+  assert.ok(queries - before.queries < TENANTS * 20, `${queries - before.queries} queries is bounded by shared sweeps`);
+  assert.equal(dueQueries - before.dueQueries, 1);
+  assert.deepEqual(prepared, []);
+  assert.equal(cachedTenantCount(), baseline + TENANTS);
+});
 
-test("a periodic job runs only in tenants with work, and only those tenants grow the cache", { skip }, async () => {
+test("a due job prepares only the tenants with work after shared sweeps", { skip }, async () => {
   const busy = (await directory.active()).filter((t) => t.id).slice(0, 3);
   const pool = createPgPool(databaseUrl);
   for (const t of busy)
@@ -130,7 +139,7 @@ test("a periodic job runs only in tenants with work, and only those tenants grow
   const jobs = createJobWorker(databaseUrl);
   const visited: Array<string | undefined> = [];
   jobs.every("lazy-probe", 60_000, () => visited.push(tenant().id), { due: hasRows("web_ui_state") });
-  const before = { queries, dueQueries };
+  const before = { queries, dueQueries, routingQueries, cached: cachedTenantCount() };
   await jobs.start();
   try {
     await settle(() => visited.length === busy.length);
@@ -138,13 +147,13 @@ test("a periodic job runs only in tenants with work, and only those tenants grow
     await jobs.stop();
   }
   assert.deepEqual(visited.toSorted(), busy.map((t: Tenant) => t.id).toSorted());
-  assert.equal(dueQueries - before.dueQueries, 1);
-  assert.ok(queries - before.queries < 300, `${queries - before.queries} queries for one tick`);
+  assert.equal(dueQueries - before.dueQueries, busy.length);
+  assert.equal(routingQueries - before.routingQueries, 1);
   assert.deepEqual(prepared.toSorted(), busy.map((t) => t.id!).toSorted());
-  assert.equal(cachedTenantCount(), baseline + busy.length);
+  assert.equal(cachedTenantCount(), before.cached);
   const touched = (await directory.active()).filter((t) => t.id)[10]!;
   assert.equal((await directory.byHost(`${touched.slug}.example.test`))?.id, touched.id);
-  assert.equal(cachedTenantCount(), baseline + busy.length + 1);
+  assert.equal(cachedTenantCount(), before.cached);
 });
 
 test("an idle tenant's cached state is dropped and disposed in its tenant, while a held tenant keeps its own", (t) => {

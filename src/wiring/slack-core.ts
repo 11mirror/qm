@@ -89,7 +89,14 @@ export function buildSlackCore(deps: SlackCoreInputs) {
     brandingDefault: () => tenantConfig(config).brandingDefault,
     ...(harness.models.pickAckEmoji ? { pickAckEmoji: (t, c) => harness.models.pickAckEmoji!(t, c) } : {}),
   });
-  const slack = { due: `t.id = (SELECT id FROM qm_tenant) OR ${hasRows("slack_installation")}` };
+  const installationRows = hasRows("slack_installation");
+  const slack = {
+    due: {
+      ...installationRows,
+      home: true as const,
+      sql: `t.id = (SELECT id FROM qm_tenant) OR ${installationRows.sql}`,
+    },
+  };
   every("slack:envelope-replay", 60_000, () => slackCore.upkeep.run("replayEnvelopes"), slack);
   every("slack:session-status", 60_000, () => slackCore.upkeep.run("reconcileStatus"), slack);
   every("slack:task-acks", 60_000, () => slackCore.upkeep.run("reconcileTaskAcks"), slack);

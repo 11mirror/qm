@@ -7,6 +7,87 @@ procedure: pinning, migrations, qualification and rollback.
 Before you start, take a database recovery point and keep the previous image and
 deployment configuration available.
 
+## Multitenant database roles and explicit tenant context
+
+Multitenant core now requires two database logins. `DATABASE_URL` (and
+`DATABASE_POOL_URL`, when used) must use a `NOSUPERUSER NOBYPASSRLS` application
+role. `DATABASE_MIGRATION_URL` must use a separate `BYPASSRLS` migration role on
+the same server and database. It is a database credential, not a bypass switch.
+The migration login is used for schema initialization and migrations, not request
+queries, task handlers, or maintenance sweeps. Do not grant the application role
+membership in the migration role, or ownership of tenant-private tables/functions.
+
+Before upgrading, stop all old core processes, take a database snapshot, and
+provision the roles using an administrator connection. The example names below
+must be adapted to the deployment's existing application role and database. Set
+passwords through the deployment's secret-management tooling, not this example.
+
+```sql
+CREATE ROLE qm_migrator LOGIN BYPASSRLS NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+ALTER ROLE qm_app NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+REVOKE qm_migrator FROM qm_app;
+REASSIGN OWNED BY qm_app TO qm_migrator;
+GRANT CONNECT ON DATABASE qm TO qm_app;
+GRANT USAGE ON SCHEMA public TO qm_app;
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM qm_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO qm_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO qm_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE qm_migrator GRANT USAGE ON SCHEMAS TO qm_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE qm_migrator GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO qm_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE qm_migrator GRANT USAGE, SELECT ON SEQUENCES TO qm_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE qm_migrator IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO qm_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE qm_migrator IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO qm_app;
+```
+
+If the `absurd` schema already exists, also run:
+
+```sql
+GRANT USAGE ON SCHEMA absurd TO qm_app;
+REVOKE ALL ON ALL TABLES IN SCHEMA absurd FROM qm_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA absurd TO qm_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA absurd TO qm_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE qm_migrator IN SCHEMA absurd GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO qm_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE qm_migrator IN SCHEMA absurd GRANT USAGE, SELECT ON SEQUENCES TO qm_app;
+```
+
+For a fresh database, make the migration role its owner and preinstall any
+extensions that require an administrator. For an upgrade, verify all existing
+application objects are owned by the migration role before restarting. A role
+that owns a table can alter its RLS policy; `FORCE ROW LEVEL SECURITY` alone is
+not sufficient to separate schema authority from application queries.
+
+Start the new core with the two URLs. Startup replaces the home-tenant fallback
+with a database error and replaces every public-table isolation policy, including
+policies installed by previous versions. It also adds RLS to Absurd queue tables.
+Existing task ownership comes from task headers; related runs, checkpoints, and
+waits inherit that ownership. Events are attributed through waits and turn IDs.
+Historical home tasks without headers are assigned explicitly during migration.
+Do not import cross-tenant queue data without ownership metadata.
+
+`qm_queue_tenants(queue)` is a privileged application-callable queue
+routing function. Its owner is the migration role, its search path is fixed, and
+its input is restricted to the four core queues. It returns only distinct tenant
+UUIDs with nonterminal work, never task payloads. `qm_tenants_with_rows(regclass[])`
+likewise returns only candidate tenant UUIDs from RLS-protected public tables, not
+private columns. Due predicates carry their candidate tables explicitly; exact
+predicates are evaluated inside each candidate tenant's RLS context. Workers then claim, heartbeat,
+run, and settle work through ordinary connections scoped to that tenant. This
+also lets retired tenants' work be abandoned and suspended tenants' work wait.
+Do not grant the application role `TRUNCATE` or `TRIGGER` privileges: RLS does not
+protect a table-wide truncate, and application-created triggers must not execute
+as the migration role. Shared maintenance now runs separately inside each active tenant, never with RLS
+disabled. Host routing continues to use the non-RLS `tenants` registry.
+
+An application query with no explicit tenant scope now fails with
+`Postgres query requires an explicit tenant context`. Home work must explicitly
+use the home tenant; omitting a tenant no longer selects it. Global notification
+subscriptions keep tenant-aware routing, but their LISTEN connection explicitly
+uses the home tenant. There is no application bypass setting or wrapper.
+
+Qualification must cover ordinary requests, cross-tenant jobs and turns, tenant
+retirement/suspension, and per-tenant shared sweeps. Rollback requires restoring
+the pre-upgrade database snapshot and previous deployment configuration.
+
 ## Retired environment variables are ignored
 
 qm reads a fixed set of environment variables and ignores everything else. A retired

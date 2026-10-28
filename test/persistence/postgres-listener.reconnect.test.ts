@@ -39,6 +39,15 @@ mock.module("../../src/persistence/pg-pool.ts", {
     },
   },
 });
+mock.module("../../src/tenant.ts", {
+  namedExports: {
+    homeTenant: () => ({ orgId: "home", orgScope: "org:home" }),
+    withTenant: (owner: { orgId: string }, fn: () => unknown) => {
+      assert.equal(owner.orgId, "home");
+      return fn();
+    },
+  },
+});
 const { subscribePostgresChannel } = await import("../../src/persistence/postgres-listener.ts");
 
 test("reconnect repeats LISTEN when the old client disconnects before its query continuation", async () => {

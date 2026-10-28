@@ -107,6 +107,11 @@ export async function queueTenants(db: AbsurdDb, queue: AbsurdQueue): Promise<Te
   return rows.map((row) => (row.id === null ? home : tenantFor(String(row.id), String(row.id))));
 }
 
+function claimedTenant(id: unknown): string | undefined {
+  if (pgTenancyEnabled()) return tenant().id;
+  return id === null ? undefined : String(id);
+}
+
 export async function claimTasks(
   db: AbsurdDb,
   queue: AbsurdQueue,
@@ -125,7 +130,7 @@ export async function claimTasks(
     taskId: String(row.task_id),
     attempt: Number(row.attempt),
     taskName: String(row.task_name),
-    tenantId: pgTenancyEnabled() ? tenant().id : row.tenant_id === null ? undefined : String(row.tenant_id),
+    tenantId: claimedTenant(row.tenant_id),
     params: row.params,
     maxAttempts: row.max_attempts === null ? null : Number(row.max_attempts),
     wakeEvent: row.wake_event === null ? null : String(row.wake_event),

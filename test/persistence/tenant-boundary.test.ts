@@ -113,6 +113,8 @@ test("application query and session connections cannot use the removed bypass to
         assert.deepEqual((await session.query("SELECT params->>'secret' AS secret FROM absurd.t_jobs")).rows, [
           { secret: owner.orgId },
         ]);
+        await assert.rejects(session.query("TRUNCATE boundary_rows"), /permission denied/);
+        await assert.rejects(session.query("ALTER TABLE boundary_rows DISABLE ROW LEVEL SECURITY"), /must be owner/);
         await assert.rejects(
           session.query("SET row_security = off; SELECT * FROM boundary_rows"),
           /row-level security/,

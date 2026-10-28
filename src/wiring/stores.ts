@@ -34,7 +34,7 @@ import { createPostgresDecisionStore } from "../decisions/store.ts";
 import { createConnectorStatusCache } from "../credentials/connector-status.ts";
 import { createSlackInstallationStore } from "../surfaces/slack-installation.ts";
 import { mkdirSync } from "node:fs";
-import { createJobWorker, hasRows, type EveryOptions } from "../jobs/job-worker.ts";
+import { createJobWorker, anyRows, hasRows, type EveryOptions } from "../jobs/job-worker.ts";
 import { tenantConfig } from "../tenants/tenant-config.ts";
 
 type StoresInputs = Pick<Head, "databaseUrl" | "config" | "connectorSecretKey" | "admittedWork">;
@@ -109,10 +109,10 @@ export function buildStores(deps: StoresInputs) {
     jobs.every(name, everyMs, () => admittedWork.run(fn), opts);
   every("spend:refresh", 60_000, () => sessions.refreshSpendRollup(), {
     immediate: true,
-    due: `${hasRows("session_spend_dirty")} OR ${hasRows(
-      "session_llm_requests",
-      "w.usage_json IS NOT NULL AND w.spend_cost_usd IS NULL",
-    )}`,
+    due: anyRows(
+      hasRows("session_spend_dirty"),
+      hasRows("session_llm_requests", "w.usage_json IS NOT NULL AND w.spend_cost_usd IS NULL"),
+    ),
   });
   return {
     managesArtifactHome,

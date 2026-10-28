@@ -26,13 +26,17 @@ export async function configureTestTenancy(applicationUrl: string): Promise<void
   try {
     await client.query(`CREATE SCHEMA IF NOT EXISTS absurd`);
     await client.query(`GRANT USAGE ON SCHEMA absurd TO ${role}`);
-    await client.query(`ALTER DEFAULT PRIVILEGES GRANT ALL ON TABLES TO ${role}`);
-    await client.query(`ALTER DEFAULT PRIVILEGES GRANT ALL ON SEQUENCES TO ${role}`);
+    await client.query(`ALTER DEFAULT PRIVILEGES GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${role}`);
+    await client.query(`ALTER DEFAULT PRIVILEGES GRANT USAGE, SELECT ON SEQUENCES TO ${role}`);
     await client.query(`ALTER DEFAULT PRIVILEGES GRANT USAGE ON SCHEMAS TO ${role}`);
-    await client.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO ${role}`);
-    await client.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO ${role}`);
-    await client.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA absurd GRANT ALL ON TABLES TO ${role}`);
-    await client.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA absurd GRANT ALL ON SEQUENCES TO ${role}`);
+    await client.query(
+      `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${role}`,
+    );
+    await client.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO ${role}`);
+    await client.query(
+      `ALTER DEFAULT PRIVILEGES IN SCHEMA absurd GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${role}`,
+    );
+    await client.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA absurd GRANT USAGE, SELECT ON SEQUENCES TO ${role}`);
   } finally {
     await client.end();
   }
