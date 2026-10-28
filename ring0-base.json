@@ -1,0 +1,878 @@
+{
+  "count": 96,
+  "rings": {
+    "ring-0": {
+      "total": 96,
+      "medium": 90,
+      "low": 1,
+      "high": 5
+    }
+  },
+  "dropped": 0,
+  "findings": [
+    {
+      "ring": "ring-0",
+      "path": "src/acl/acl-store.ts",
+      "line": 165,
+      "lens": "Performance",
+      "severity": "medium",
+      "title": "Query grants by scope and resource kind instead of loading and filtering the entire tenant ACL in handlesFor, handlesForAudience, grantsOfKind, and sharedOfKindForAudience.",
+      "anchor": "return handles((await persist.all()).filter((g) => isFileGrant(g) && set.has(g.granteeScopeId)));"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/config-env.ts",
+      "line": 70,
+      "lens": "Config-matrix expansion",
+      "severity": "medium",
+      "title": "Consolidate the six sandbox-provider configuration paths rather than maintaining independent provider-specific credentials, templates, images, and deployment settings.",
+      "anchor": "export function sandboxProvidersEnv(env: Env) {"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/auth/capability-token.ts",
+      "line": 103,
+      "lens": "Arbitrary limits",
+      "severity": "low",
+      "title": "Remove the undocumented 64-character timezone cap and let Intl.DateTimeFormat determine whether the timezone is supported.",
+      "anchor": "if (timezone.length === 0 || timezone.length > 64 || timezone.trim() !== timezone) return false;"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/core/attachments.ts",
+      "line": 79,
+      "lens": "Hand-rolling",
+      "severity": "medium",
+      "title": "Replace the hand-maintained extension-to-MIME registry with a maintained MIME lookup library.",
+      "anchor": "const MIME_BY_EXT: Record<string, string> = {"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/core/approval-store.ts",
+      "line": 118,
+      "lens": "Performance",
+      "severity": "medium",
+      "title": "Page pending approvals and deliver with bounded concurrency instead of loading every record and awaiting independent deliveries serially.",
+      "anchor": "for (const [id, record] of await backing.entries())"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/core/document-kinds.ts",
+      "line": 3,
+      "lens": "Arbitrary limits",
+      "severity": "medium",
+      "title": "The fixed 18 MB request cap and derived document cap have no cited provider constraint or measured resource justification.",
+      "anchor": "export const MAX_LLM_REQUEST_BYTES = 18_000_000;"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/core/image-downscale.ts",
+      "line": 123,
+      "lens": "Hand-rolling",
+      "severity": "medium",
+      "title": "Use a maintained image library for metadata detection instead of maintaining custom PNG, JPEG, GIF, and WebP binary parsers.",
+      "anchor": "export function sniffImageDimensions(input: Uint8Array): ImageDimensions | undefined {"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/core/image-downscale.ts",
+      "line": 212,
+      "lens": "Overengineering",
+      "severity": "medium",
+      "title": "Replace the three-command image-conversion fallback ladder with one supported image-processing dependency to eliminate PATH-dependent execution modes.",
+      "anchor": "const attempts: Array<[string, string[]]> = ["
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/core/message-revisions.ts",
+      "line": 127,
+      "lens": "Performance",
+      "severity": "medium",
+      "title": "Revision ingestion loads and scans the full session twice per event; batch revisions by session or query the affected messages directly.",
+      "anchor": "await recordRevision(sessions, lease, session, await sessions.getItems(session.id), source);"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/core/orchestrator/approvals.ts",
+      "line": 110,
+      "lens": "Discarded error evidence",
+      "severity": "medium",
+      "title": "Record approval-summary timeouts rather than silently returning undefined and losing the evidence that summarization failed.",
+      "anchor": "sleep(deps.approvalSummaryTimeoutMs ?? CONFIG_DEFAULTS.approvalSummaryTimeoutMs).then(() => undefined),"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/core/orchestrator/handle-turn.ts",
+      "line": 397,
+      "lens": "Non-durability",
+      "severity": "medium",
+      "title": "Persist background tail work so a deploy after lease release cannot abandon sandbox reclamation and title generation.",
+      "anchor": "void tail().catch(swallowAs(\"orchestrator: background tail\", undefined));"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/core/orchestrator/sandboxes.ts",
+      "line": 612,
+      "lens": "Performance",
+      "severity": "medium",
+      "title": "Move shared skill-tree garbage collection out of sandbox provisioning instead of resolving all visible skills and scanning the tree on every turn.",
+      "anchor": "await Promise.all([pruneSkills(t, handle), clearStaleTurnFiles(t, handle)]);"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/core/orchestrator/surface-tools.ts",
+      "line": 53,
+      "lens": "Arbitrary limits",
+      "severity": "medium",
+      "title": "A per-minute Slack quota does not justify a ten-page per-call cutoff that leaves history searches and activity counts incomplete.",
+      "anchor": "const HISTORY_PAGES_PER_CALL = SLACK_CONVERSATIONS_HISTORY_TIER3_PER_MINUTE / 5;"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/core/orchestrator/surface-tools.ts",
+      "line": 386,
+      "lens": "Performance",
+      "severity": "medium",
+      "title": "File pagination rereads and retains the entire preceding text on every page instead of discarding the prefix while streaming.",
+      "anchor": "text += decoder.decode(chunk, { stream: true });"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/core/orchestrator/turn-context.ts",
+      "line": 76,
+      "lens": "Performance",
+      "severity": "medium",
+      "title": "Participant reconciliation loads the entire visible transcript merely to collect sequence IDs instead of checking visibility for the history actually being consumed.",
+      "anchor": "(await deps.sessions.visibleItems(sessionId, participantIds, { beforeSeq: participantHistoryMaxSeq + 1 })).map("
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/core/orchestrator/turn-helpers.ts",
+      "line": 101,
+      "lens": "Regex",
+      "severity": "medium",
+      "title": "Use structured message fields to exclude boilerplate rather than deleting every paragraph beginning with a bracket, including legitimate user content.",
+      "anchor": ".filter((p) => !/^\\s*\\[/.test(p))"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/core/orchestrator/turn-input.ts",
+      "line": 330,
+      "lens": "Token performance",
+      "severity": "medium",
+      "title": "Replace the per-turn native-skills inventory with on-demand discovery through the existing skills list/search tools.",
+      "anchor": "turnContextBlocks[\"Skills\"] = skillsIndex(nativeSkills, [scopeId, resolution.orgScopeId], usedSkills);"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/core/orchestrator/turn-prompt.ts",
+      "line": 330,
+      "lens": "Token performance",
+      "severity": "medium",
+      "title": "Fetch scheduled-work inventories when relevant instead of injecting standing obligations into every turn.",
+      "anchor": "await addStandingObligations(ctx, turnContextBlocks, inventoryBudget);"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/core/orchestrator/turn-prompt.ts",
+      "line": 179,
+      "lens": "Token performance",
+      "severity": "medium",
+      "title": "Keep shared-file discovery on demand instead of including a shared-file inventory in every turn's context.",
+      "anchor": "const sharedFilesBlock = sharedFilesSystemSection(resolution.grantedHandles, inventoryBudget);"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/core/orchestrator/turn-tools.ts",
+      "line": 328,
+      "lens": "Performance",
+      "severity": "medium",
+      "title": "Search loads and transforms the entire session history on every call before applying its limit; move filtering and bounded retrieval into the transcript store.",
+      "anchor": "const historyView = async () => filterHistory(forSearchView(await deps.sessions.getItems(session.id)));"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/core/orchestrator/turn-segment.ts",
+      "line": 547,
+      "lens": "Band-aid fixes",
+      "severity": "medium",
+      "title": "Determine whether the current request survived compaction by its persisted turn or item identity, not a text-prefix heuristic that can match another request.",
+      "anchor": "(recovery && !resumedHistory.some((entry) => isUserMessage(entry) && !!entry.text?.startsWith(baseText))"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/core/orchestrator/turn-segment.ts",
+      "line": 587,
+      "lens": "Band-aid fixes",
+      "severity": "medium",
+      "title": "An extra model turn and second fallback conceal missing delivery ownership; make addressed-turn completion own final delivery instead of prompting the model to repair it.",
+      "anchor": "result = await runHarnessTurn(ADDRESSED_NUDGE_MD, inbound.images.length ? { images: inbound.images } : {}, {"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/directory/directory-store.ts",
+      "line": 81,
+      "lens": "Arbitrary limits",
+      "severity": "medium",
+      "title": "Directory resolution silently drops ambiguous matches beyond ten candidates; return all matches or paginate with an explicit truncation indicator.",
+      "anchor": "export const MAX_CANDIDATES = 10;"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/directory/postgres-directory-store.ts",
+      "line": 436,
+      "lens": "Duplication",
+      "severity": "medium",
+      "title": "Use one canonical group-snapshot hash representation; upsertGroup omits the group and roster markers that replaceGroups hashes.",
+      "anchor": "[tenant().orgId, hashRoster(all.rows.map((r) => `${r.group_id}|${r.principal_id}`)), Date.now()],"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/directory/postgres-directory-store.ts",
+      "line": 428,
+      "lens": "Performance",
+      "severity": "medium",
+      "title": "Invalidate the snapshot hash instead of reading and hashing every group membership under the organization-wide lock on each group upsert.",
+      "anchor": "const all = await client.query(\"SELECT group_id, principal_id FROM directory_group_members WHERE org_id = $1\", ["
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/harness/agent-tools/computer.ts",
+      "line": 665,
+      "lens": "Duplication",
+      "severity": "medium",
+      "title": "Express action-specific argument requirements in the tool schemas instead of maintaining a second validation specification in SANDBOX_TOOL_ARGS.",
+      "anchor": "const SANDBOX_TOOL_ARGS: Record<"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/harness/agent-tools/cron.ts",
+      "line": 247,
+      "lens": "Performance",
+      "severity": "medium",
+      "title": "Pass pagination and ordering to the list API instead of fetching and sorting every owned and visible cron before returning one page.",
+      "anchor": "const r = await tc.cronList();"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/harness/agent-tools/cron.ts",
+      "line": 392,
+      "lens": "Performance",
+      "severity": "medium",
+      "title": "Paginate webhooks at the list API instead of fetching and sorting the entire inventory for each page.",
+      "anchor": "const r = await tc.webhookList();"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/harness/agent-tools/kit.ts",
+      "line": 17,
+      "lens": "Arbitrary limits",
+      "severity": "medium",
+      "title": "Remove the five-minute execution ceiling unless it is backed by a documented provider constraint or measured resource bound.",
+      "anchor": "export const EXEC_TIMEOUT_MAX_MS = 300_000;"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/harness/agent-tools/sessions.ts",
+      "line": 299,
+      "lens": "Performance",
+      "severity": "medium",
+      "title": "Pass pagination into the session-list syscall instead of loading every session before slicing a page in memory.",
+      "anchor": "const result = await syscalls.list();"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/harness/agent-tools/goal.ts",
+      "line": 37,
+      "lens": "Performance",
+      "severity": "medium",
+      "title": "Read independent goal-evidence files concurrently rather than making completion wait for their cumulative read latency.",
+      "anchor": "for (const path of paths ?? []) {"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/harness/document-inputs.ts",
+      "line": 44,
+      "lens": "Regex",
+      "severity": "medium",
+      "title": "Determine native document support from model capabilities rather than regex-matching provider prefixes in model IDs.",
+      "anchor": "if (model.provider === \"openrouter\" && /^(anthropic|google|openai)\\//.test(model.id ?? \"\")) return \"chat\";"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/harness/goal.ts",
+      "line": 458,
+      "lens": "Token performance",
+      "severity": "medium",
+      "title": "Avoid resending the full completion audit and goal-policy boilerplate on every continuation; retain stable instructions once and send only current goal state.",
+      "anchor": "else note = goalContinuationPrompt(opts.goal, opts.meter);"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/harness/pi-aux-prompts.ts",
+      "line": 203,
+      "lens": "Arbitrary limits",
+      "severity": "medium",
+      "title": "Remove the undocumented 60-character title cap, which truncates distinguishing names and identifiers without a demonstrated UI constraint.",
+      "anchor": "const MAX_TITLE_CHARS = 60;"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/harness/pi-aux-prompts.ts",
+      "line": 113,
+      "lens": "Arbitrary limits",
+      "severity": "medium",
+      "title": "Fit relevant assistant replies to the detection model's token budget instead of silently discarding everything before the last four replies.",
+      "anchor": ".slice(-4)"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/harness/pi-payload.ts",
+      "line": 224,
+      "lens": "Band-aid fixes",
+      "severity": "medium",
+      "title": "Fix output-budget sizing at its owner instead of rewriting small output limits to the entire estimated available window, overriding intentional caller budgets.",
+      "anchor": "p[capKey] = to;"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/harness/pi-run-turn.ts",
+      "line": 518,
+      "lens": "Arbitrary limits",
+      "severity": "medium",
+      "title": "Let goal continuations use the remaining wall-clock budget instead of declaring an abort whenever fewer than an arbitrary 30 seconds remain.",
+      "anchor": "if (turnWallClockMs > 0 && rawRemainingCapMs() < EMPTY_ENDING_MIN_BUDGET_MS) return \"aborted\";"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/harness/pi-run-turn.ts",
+      "line": 563,
+      "lens": "Discarded error evidence",
+      "severity": "medium",
+      "title": "Preserve the original turn failure when signal release or telemetry draining fails in the finally block, and ensure subsequent cleanup still runs.",
+      "anchor": "await releaseSignals();"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/harness/replay.ts",
+      "line": 212,
+      "lens": "Historylessness",
+      "severity": "medium",
+      "title": "Migrate stored user prompts to one canonical shape instead of retaining both prompt and goalNote/text/environment replay paths.",
+      "anchor": "if (typeof payload.prompt === \"string\") return payload.prompt;"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/harness/replay.ts",
+      "line": 312,
+      "lens": "Historylessness",
+      "severity": "medium",
+      "title": "Migrate inline tool-call results into ToolResult items and remove the competing legacy result source.",
+      "anchor": "const recorded = recordedCall?.body.result;"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/harness/runtime-choice.ts",
+      "line": 57,
+      "lens": "Duplication",
+      "severity": "medium",
+      "title": "Consolidate runtime validation because purpose-specific choices reject unsupported effort levels while the separate normalizer silently removes most of them.",
+      "anchor": "if (choice.effortLevel !== undefined && !thinkingLevelsFor(choice.modelId).includes(choice.effortLevel))"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/harness/runtime-choice.ts",
+      "line": 50,
+      "lens": "Config-matrix expansion",
+      "severity": "medium",
+      "title": "Purpose-specific runtimes add another precedence layer over organization, scope, request, fallback, and cron-specific runtime defaults.",
+      "anchor": "const purposeRuntime = purpose ? config.getPurposeRuntime?.(purpose) : undefined;"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/harness/runtime-control.ts",
+      "line": 62,
+      "lens": "Duplication",
+      "severity": "medium",
+      "title": "Share the validation, availability, authorization, cancellation, and persistence tail between inherit and set rather than maintaining parallel implementations.",
+      "anchor": "const authError = await authorizeChoice?.(choice);"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/model/codex-device-login.ts",
+      "line": 33,
+      "lens": "Non-durability",
+      "severity": "high",
+      "title": "Persist device-login state and outcomes so deployments and polling on another instance do not invalidate an outstanding login.",
+      "anchor": "const pending = new Map<string, PendingLogin>();"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/model/company-chatgpt-auth.ts",
+      "line": 54,
+      "lens": "Non-durability",
+      "severity": "high",
+      "title": "Coordinate refresh-token rotation across instances because process-local deduplication and a non-atomic reread cannot prevent concurrent refreshes or competing credential writes.",
+      "anchor": "const inFlight = perTenant(() => ({ refreshing: null as Promise<JsonObject | null> | null }));"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/model/browser-completion.ts",
+      "line": 153,
+      "lens": "Discarded error evidence",
+      "severity": "medium",
+      "title": "Preserve the model failure details and stop reason instead of replacing errors, cancellations, and output exhaustion with the same generic response.",
+      "anchor": "throw new BrowserCompletionError(\"Selected AI account could not complete the browser request\", 502);"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/model/company-chatgpt-auth.ts",
+      "line": 100,
+      "lens": "Discarded error evidence",
+      "severity": "medium",
+      "title": "Record malformed authentication-file failures with their file path instead of silently treating corrupt credentials as absent.",
+      "anchor": "continue;"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/model/browser-completion.ts",
+      "line": 76,
+      "lens": "Regex",
+      "severity": "medium",
+      "title": "Use a data-URL parser and explicit image validation instead of maintaining a regular expression for MIME types and base64 syntax.",
+      "anchor": "? /^data:(image\\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=\\r\\n]+)$/.exec(url)"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/model/custom-providers.ts",
+      "line": 42,
+      "lens": "Arbitrary limits",
+      "severity": "medium",
+      "title": "Remove the undocumented provider/model count and string-length caps that reject otherwise valid custom catalogs.",
+      "anchor": "if (spec.models.length > 200) throw new Error(\"at most 200 models per provider\");"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/model/embeddings.ts",
+      "line": 16,
+      "lens": "Arbitrary limits",
+      "severity": "medium",
+      "title": "Remove the undocumented embedding-dimension ceiling or tie it to an actual storage or provider constraint.",
+      "anchor": "value.length > 16384 ||"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/model/gateway-catalog.ts",
+      "line": 124,
+      "lens": "Arbitrary limits",
+      "severity": "medium",
+      "title": "Do not reject an entire gateway catalog solely because it exceeds an undocumented 1,000-model limit.",
+      "anchor": "if (!Array.isArray(data) || data.length > MAX_MODELS) throw new Error(\"Invalid gateway catalog\");"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/model/gateway-catalog.ts",
+      "line": 196,
+      "lens": "Discarded error evidence",
+      "severity": "medium",
+      "title": "Log initial discovery failures even when configured aliases exist instead of silently swallowing the error.",
+      "anchor": "if (discovered || Object.keys(config.models).length === 0) {"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/model/model-catalog.ts",
+      "line": 129,
+      "lens": "Arbitrary limits",
+      "severity": "medium",
+      "title": "Stop silently dropping OpenRouter models after the first 1,000 entries.",
+      "anchor": "return body.data.slice(0, MAX_CATALOG_MODELS).flatMap((candidate) => {"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/model/model-catalog.ts",
+      "line": 162,
+      "lens": "Duplication",
+      "severity": "medium",
+      "title": "Consolidate the built-in and dynamic catalog merge repeated in the success, failure, and cached-read paths.",
+      "anchor": "entry.models = [...models, ...(entry.dynamic ?? []).filter((model) => !known.has(model.id))];"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/model/model-gateway.ts",
+      "line": 20,
+      "lens": "Non-durability",
+      "severity": "high",
+      "title": "Persist model-call audit records instead of keeping a bounded process-local history that disappears on restart and differs across instances.",
+      "anchor": "const records: ModelCallRecord[] = [];"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/model/user-model-credential-store.ts",
+      "line": 36,
+      "lens": "Duplication",
+      "severity": "medium",
+      "title": "Consolidate the provider lists in these files; this copy already omits OpenRouter, so connections() cannot report OpenRouter API keys accepted by setApiKey().",
+      "anchor": "const PROVIDERS: ModelProvider[] = [\"anthropic\", \"openai\"];"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/model/pi-models.ts",
+      "line": 539,
+      "lens": "Arbitrary limits",
+      "severity": "medium",
+      "title": "Remove the unexplained 150,000-token context cap or tie it to a documented constraint rather than silently restricting larger model windows.",
+      "anchor": "const CONTEXT_BUDGET_CAP_TOKENS = 150_000;"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/model/user-model-credential-store.ts",
+      "line": 92,
+      "lens": "Performance",
+      "severity": "medium",
+      "title": "Build the connection inventory from metadata in one pass instead of serially listing all credentials and reading API-key secrets merely to report their presence.",
+      "anchor": "const cred = (await oauthCredential(userId, provider)) ?? (await apiKeyCredential(userId, provider));"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/persistence/s3.ts",
+      "line": 47,
+      "lens": "Hand-rolling",
+      "severity": "medium",
+      "title": "Use the AWS SDK's managed Upload integration instead of maintaining multipart creation, part tracking, completion, and abort plumbing.",
+      "anchor": "export async function s3MultipartUpload("
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/persistence/blob-transfer.ts",
+      "line": 198,
+      "lens": "Performance",
+      "severity": "medium",
+      "title": "Avoid repeatedly copying the entire remaining input chunk for each multipart boundary, which makes large chunks incur quadratic copying.",
+      "anchor": "const all = Buffer.concat(pending, bytes);"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/persistence/leader-lease.ts",
+      "line": 18,
+      "lens": "Arbitrary limits",
+      "severity": "medium",
+      "title": "Remove the unexplained 15-second lease-acquisition deadline or tie it to an explicit caller cancellation or operational constraint.",
+      "anchor": "while (Date.now() - started < 15_000) {"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/persistence/tenancy.ts",
+      "line": 231,
+      "lens": "Historylessness",
+      "severity": "medium",
+      "title": "Move legacy tenant env-bag conversion into a one-time migration instead of retaining compatibility conversion on every startup.",
+      "anchor": "await foldTenantEnvBags(client, tenantSecretsKey);"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/persistence/typed-table.ts",
+      "line": 138,
+      "lens": "Historylessness",
+      "severity": "medium",
+      "title": "Convert JSON maps in one migration and cut over rather than maintaining both old and typed write shapes through synchronization triggers.",
+      "anchor": "`CREATE TRIGGER ${table}_sync BEFORE INSERT OR UPDATE ON ${table} FOR EACH ROW EXECUTE FUNCTION ${table}_sync()`,"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/persistence/typed-table.ts",
+      "line": 122,
+      "lens": "Duplication",
+      "severity": "medium",
+      "title": "The bidirectional synchronization trigger makes JSON and typed columns competing representations of the same record.",
+      "anchor": "IF TG_OP = 'INSERT' AND NEW.json IS NOT NULL OR TG_OP = 'UPDATE' AND NEW.json IS DISTINCT FROM OLD.json THEN"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/resolution/config-instructions.ts",
+      "line": 155,
+      "lens": "Historylessness",
+      "severity": "medium",
+      "title": "Migrate separate instruction revisions once instead of lazily converting legacy history during ordinary scope refreshes.",
+      "anchor": "current && current.history === undefined"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/resolution/config-instructions.ts",
+      "line": 33,
+      "lens": "Duplication",
+      "severity": "medium",
+      "title": "Embedded history and separate revision rows remain competing sources of truth with different precedence during hydration and updates.",
+      "anchor": "const history = mergeHistory(current.history, current.history === undefined ? separate : []);"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/resolution/config-store.ts",
+      "line": 59,
+      "lens": "Config-matrix expansion",
+      "severity": "medium",
+      "title": "Separate cron, subagent, and fallback runtimes multiply model-selection settings alongside organization and scope selections.",
+      "anchor": "export type RuntimePurpose = \"cron\" | \"subagent\" | \"fallback\";"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/resolution/config-tables.ts",
+      "line": 44,
+      "lens": "Config-matrix expansion",
+      "severity": "medium",
+      "title": "Consolidate the overlapping base, cron, subagent, and fallback runtime settings instead of maintaining separate runtime configuration paths.",
+      "anchor": "`embeddingModelId text, modelId text, cronRuntime jsonb, subagentRuntime jsonb,"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/resolution/egress-policy.ts",
+      "line": 40,
+      "lens": "Regex",
+      "severity": "medium",
+      "title": "Replace the bespoke hostname-validation regex with maintained hostname validation rather than owning DNS syntax in the egress policy parser.",
+      "anchor": "!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(normalized))"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/resolution/prompt-vars.ts",
+      "line": 6,
+      "lens": "Hand-rolling",
+      "severity": "medium",
+      "title": "Use a maintained template renderer with strict variable handling instead of implementing tokenization, nested conditionals, and malformed-template detection locally.",
+      "anchor": "const TEMPLATE_TOKEN = /\\{\\{(?:#if (\\w+)|(\\/if)|(\\w+))\\}\\}/g;"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/resolution/resolution-service.ts",
+      "line": 28,
+      "lens": "Token performance",
+      "severity": "medium",
+      "title": "Avoid resending organization instructions embedded in conversation instructions, since this exact-match check only eliminates wholly identical blocks.",
+      "anchor": "if (scopeInstructions?.trim() && scopeInstructions.trim() !== orgInstructions?.trim()) {"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/resolution/scope-membership.ts",
+      "line": 89,
+      "lens": "Duplication",
+      "severity": "medium",
+      "title": "Consolidate shared-scope membership lookup with currentSharedScopeMember so read and write checks do not independently implement identity resolution and directory-provider selection.",
+      "anchor": "async function memberOfSharedScope("
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/resolution/external-slack.ts",
+      "line": 73,
+      "lens": "Duplication",
+      "severity": "medium",
+      "title": "Reuse the capability-run validation owner rather than duplicating its attempt, session, actor, and lease checks in external Slack authorization.",
+      "anchor": "!(await deps.runs!.leaseHeld(run, claims.runLeaseToken)) ||"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/runs/postgres-run-store.ts",
+      "line": 153,
+      "lens": "Duplication",
+      "severity": "medium",
+      "title": "Implement latestForThread through latestForThreads so private-message filtering and latest-run ordering have one source of truth.",
+      "anchor": "async latestForThread(threadRef, opts) {"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/sessions/postgres-llm-capture.ts",
+      "line": 117,
+      "lens": "Performance",
+      "severity": "medium",
+      "title": "Paginate LLM request reads instead of loading every request and its full prompt envelope for a session by default.",
+      "anchor": "`SELECT ${cols} FROM ${from} WHERE ${conds.join(\" AND \")} ORDER BY r.created_at ASC, r.step ASC`,"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/sessions/postgres-session-admin.ts",
+      "line": 33,
+      "lens": "Performance",
+      "severity": "medium",
+      "title": "Paginate scope session listings rather than fetching and sorting the scope's entire session history.",
+      "anchor": "const rows = await q(\"SELECT * FROM sessions WHERE scope_id = $1 ORDER BY created_at DESC, id DESC\", [scope]);"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/sessions/postgres-session-admin.ts",
+      "line": 137,
+      "lens": "Performance",
+      "severity": "medium",
+      "title": "Scope or paginate participant-window reads instead of materializing the entire participants table.",
+      "anchor": "\"SELECT session_id, principal_id, valid_from, valid_to, valid_from_seq, valid_to_seq FROM participants\","
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/sessions/postgres-session-migrations.ts",
+      "line": 96,
+      "lens": "Historylessness",
+      "severity": "medium",
+      "title": "Replace the persistent trigger's pre-tenant schema compatibility branch with a tenant-aware trigger once migration completes.",
+      "anchor": "IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'attributed_turns_dirty'::regclass"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/sessions/postgres-session-participants.ts",
+      "line": 39,
+      "lens": "Performance",
+      "severity": "medium",
+      "title": "Remove the unbounded participant-list path, which runs correlated item queries for every matching session, and use the existing paginated API.",
+      "anchor": "const limit = opts ? Math.max(0, Math.floor(opts.limit)) : undefined;"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/sessions/postgres-session-reports.ts",
+      "line": 104,
+      "lens": "Performance",
+      "severity": "medium",
+      "title": "Bound attributed-turn reporting by a requested range or pagination instead of loading the entire historical attribution table into memory.",
+      "anchor": "const rows = await q(\"SELECT principal_id, session_id, day, turns, first_at, last_at FROM attributed_turns\");"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/sessions/postgres-session-reports.ts",
+      "line": 61,
+      "lens": "Historylessness",
+      "severity": "medium",
+      "title": "Backfill spend columns in a migration and remove the runtime backfill and dual-read fallback to usage JSON.",
+      "anchor": "LEFT JOIN LATERAL (SELECT llm_spend_usage(r.usage_json) AS usage"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/sessions/session-store.ts",
+      "line": 354,
+      "lens": "Arbitrary limits",
+      "severity": "medium",
+      "title": "Replace the unexplained per-string transcript cap with bounded retrieval that preserves access to complete tool arguments and results.",
+      "anchor": "export const ITEM_STRING_BUDGET = 2_000;"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/sessions/thread-ref.ts",
+      "line": 20,
+      "lens": "Historylessness",
+      "severity": "medium",
+      "title": "Consolidate the agent-prefixed and unprefixed thread-reference formats instead of maintaining separate parsing and validation rules.",
+      "anchor": "const [origin = \"\", id, ...rest] = (agent ? ref.slice(AGENT_PREFIX.length) : ref).split(\":\");"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/sessions/tool-output.ts",
+      "line": 151,
+      "lens": "Duplication",
+      "severity": "medium",
+      "title": "Use one retention policy for blob expiry, read-time expiry, and the user-facing retention notice instead of independently hard-coding thirty days.",
+      "anchor": "`SELECT b.storage_key, i.created_at <= now() - interval '30 days' AS expired"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/turns/turn-runner.ts",
+      "line": 217,
+      "lens": "Arbitrary limits",
+      "severity": "high",
+      "title": "Five persistence failures arbitrarily replace the completed turn's actual outcome with a generic failure instead of preserving it through a transient database outage.",
+      "anchor": "if (attempt >= FINISH_MAX_ATTEMPTS) return finishBare(error);"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/types.ts",
+      "line": 191,
+      "lens": "Historylessness",
+      "severity": "medium",
+      "title": "Migrate destinations to the canonical source fields instead of retaining Slack-specific aliases and fallback reads.",
+      "anchor": "const account = destination.account ?? destination.slackAccountId;"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/types.ts",
+      "line": 517,
+      "lens": "Historylessness",
+      "severity": "medium",
+      "title": "Migrate callers and stored requests to TurnSource rather than supporting both source and slackSource indefinitely.",
+      "anchor": "export function turnSource(request: { source?: TurnSource; slackSource?: SlackIdSource }): TurnSource | undefined {"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/util/markdown.ts",
+      "line": 1,
+      "lens": "Regex",
+      "severity": "medium",
+      "title": "Rewrite application links through parsed Markdown nodes rather than a regex that cannot distinguish escaped links or handle nested link syntax.",
+      "anchor": "const APP_LINK = /\\[([^[\\]\\n]+)\\]\\((\\/d\\/[^\\s)[]+)\\)/g;"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/util/markdown.ts",
+      "line": 20,
+      "lens": "Hand-rolling",
+      "severity": "medium",
+      "title": "Use a maintained Markdown parser for code regions instead of maintaining separate fence and code-span parsers with incomplete Markdown semantics.",
+      "anchor": "function fencedCodeBlocks(text: string): FencedCodeBlock[] {"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/util/safe-regex.ts",
+      "line": 8,
+      "lens": "Hand-rolling",
+      "severity": "high",
+      "title": "Replace the homemade regex safety checker with a bounded-time engine because nested groups such as ((a+))+ bypass its repetition checks.",
+      "anchor": "const groups: Array<{ quantified: boolean; alternation: boolean }> = [];"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/util/async.ts",
+      "line": 73,
+      "lens": "Arbitrary limits",
+      "severity": "medium",
+      "title": "Honor the server's Retry-After delay rather than clamping it to an invented ceiling and retrying prematurely.",
+      "anchor": "const RETRY_AFTER_CAP_MS = 30_000;"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/util/errors.ts",
+      "line": 23,
+      "lens": "Discarded error evidence",
+      "severity": "medium",
+      "title": "Preserve response-body read failures in HTTP diagnostics instead of silently replacing their evidence with an empty string.",
+      "anchor": "const body = await readTextPrefix(res, bodyChars, signal).catch(() => \"\");"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/util/errors.ts",
+      "line": 41,
+      "lens": "Arbitrary limits",
+      "severity": "medium",
+      "title": "Do not silently reduce command-failure evidence to 300-character tails without identifying the truncation or preserving the full diagnostics.",
+      "anchor": "const FAILURE_OUTPUT_CHARS = 300;"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/util/product-analytics.ts",
+      "line": 24,
+      "lens": "Arbitrary limits",
+      "severity": "medium",
+      "title": "Replace the unexplained concurrency cutoff with explicit bounded buffering or observable dropping so bursts do not silently lose analytics events.",
+      "anchor": "if (!apiKey || !company || !principal || inFlight >= 16) return;"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/util/text.ts",
+      "line": 15,
+      "lens": "Duplication",
+      "severity": "medium",
+      "title": "Consolidate the two JSONB serializers so callers do not get different handling of null characters, lone surrogates, and object keys.",
+      "anchor": "export function jsonbSafeStringify(value: unknown): string {"
+    },
+    {
+      "ring": "ring-0",
+      "path": "src/util/tokens.ts",
+      "line": 7,
+      "lens": "Arbitrary limits",
+      "severity": "medium",
+      "title": "Remove the arbitrary prefix-sampling cap from token-budget enforcement because extrapolating from the prefix can underestimate the remaining text and exceed the budget.",
+      "anchor": "const SAMPLE_CAP_CHARS = 64_000;"
+    }
+  ]
+}
