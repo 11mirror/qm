@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
+import { sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 import { SCHEMA_BASELINE, schemaBaselineChain, type ChainMigration } from "./schema-baseline.ts";
 import { rollbackOrReport } from "./pg-query.ts";
@@ -64,8 +65,16 @@ export function pgMigrationFrom(definition: PgMigrationDefinition): PgMigration 
   );
 }
 
+const SCHEMA_LOCK_POLL_MS = 50;
+
 async function lockSchema(client: PoolClient, name: string): Promise<void> {
-  await withoutStatementTimeout(client, () => client.query("SELECT pg_advisory_lock(hashtext($1))", [name]));
+  for (;;) {
+    const result = await client.query<{ locked: boolean }>("SELECT pg_try_advisory_lock(hashtext($1)) AS locked", [
+      name,
+    ]);
+    if (result.rows[0]?.locked) return;
+    await sleep(SCHEMA_LOCK_POLL_MS);
+  }
 }
 
 type BaselinePlan = "recorded" | "apply" | "adopt" | "upgrade";

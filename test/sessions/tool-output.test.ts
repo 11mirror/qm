@@ -76,6 +76,8 @@ test("tool-output paths name one call by its digest", () => {
   assert.equal(parkedOutputKey("notes/tool-output/a"), null);
 });
 
+const PARKED_PATH = `tool-output/md5/${"ab".repeat(16)}`;
+
 function readBack(parked: Awaited<ReturnType<ToolOutputStore["read"]>>) {
   const written: Array<[string, string]> = [];
   const tc = createToolContext({
@@ -101,15 +103,18 @@ function readBack(parked: Awaited<ReturnType<ToolOutputStore["read"]>>) {
 test("reading a parked tool output copies the full text onto the computer for execute to slice", async () => {
   const full = Array.from({ length: 30_000 }, (_, i) => `row ${i + 1}`).join("\n");
   const { tc, written } = readBack({ text: full });
-  const read = await tc.read("tool-output/toolu_1");
-  assert.deepEqual(written, [["tool-output/toolu_1", full]]);
-  assert.match(String(read.content), /copied the full output \(\d+ chars\) to tool-output\/toolu_1 on the computer/);
+  const read = await tc.read(PARKED_PATH);
+  assert.deepEqual(written, [[PARKED_PATH, full]]);
+  assert.match(
+    String(read.content),
+    /copied the full output \(\d+ chars\) to tool-output\/md5\/[0-9a-f]{32} on the computer/,
+  );
   assert.ok(String(read.content).length < 300);
 });
 
 test("an expired parked output says so and writes nothing", async () => {
   const { tc, written } = readBack({ expired: true });
-  const read = await tc.read("tool-output/toolu_1");
+  const read = await tc.read(PARKED_PATH);
   assert.deepEqual(written, []);
   assert.match(String(read.content), /expired after 30 days/);
 });

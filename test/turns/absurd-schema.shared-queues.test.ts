@@ -86,6 +86,8 @@ test(
     const cron = await spawn(`jobs${suffix(BETA)}`, "cron:fire", { cronId: "c1" }, "cron:c1:2");
     await spawn(`jobs${suffix(BETA)}`, "every:cron:repair", null, "every:cron:repair");
     await spawn(`jobs${suffix(GONE)}`, "cron:fire", { cronId: "c9" }, "cron:c9:3");
+    const gone = await spawn(`turns_people${suffix(GONE)}`, "turn", { tenantId: GONE, turnId: "gone-1" }, "gone-1");
+    await spawn(`turns_people${suffix(GONE)}`, "turn", { turnId: "gone-2" }, "gone-2");
 
     await Promise.all([pool.query(MERGE_TENANT_QUEUES), pool.query(MERGE_TENANT_QUEUES)]);
 
@@ -104,6 +106,7 @@ test(
       claimed_by: null,
     });
     assert.deepEqual((await task("turns_people", pending.task_id))?.headers, { tenantId: ACME });
+    assert.deepEqual((await task("turns_people", gone.task_id))?.headers, { tenantId: GONE });
     assert.deepEqual(
       { ...(await task("turns_people", running.task_id)), params: undefined },
       {
@@ -145,7 +148,11 @@ test(
     );
 
     await mergeTenantQueues(URL!);
-    assert.equal((await pool.query("SELECT count(*)::int AS n FROM absurd.t_turns_people")).rows[0]?.n, 3);
+    const turns = await pool.query("SELECT idempotency_key FROM absurd.t_turns_people ORDER BY idempotency_key");
+    assert.deepEqual(
+      turns.rows.map((row) => row.idempotency_key),
+      ["acme-1", "beta-1", "gone-1", "home-1"],
+    );
 
     await pool.query("SELECT absurd.create_queue($1, 'unpartitioned')", [`turns_people${suffix(ACME)}`]);
     const late = await spawn(

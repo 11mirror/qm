@@ -1,5 +1,14 @@
 import { pgMigrationFrom, type PgMigration, type PgMigrationDefinition } from "./pg-migrations.ts";
 
+export const DROP_CHANNEL_POLICY_ORDERS: PgMigrationDefinition = {
+  id: "contract/0006-drop-channel-policy-orders",
+  statements: [
+    "SET LOCAL lock_timeout = '3s'",
+    "ALTER TABLE channel_policy DROP COLUMN IF EXISTS orders",
+    "ALTER TABLE channel_policy_history DROP COLUMN IF EXISTS orders",
+  ],
+};
+
 export const CONTRACT_MIGRATIONS: readonly PgMigrationDefinition[] = [
   { id: "contract/0001-drop-deliveries", statements: ["DROP TABLE IF EXISTS deliveries"] },
   { id: "contract/0002-drop-model-registry", statements: ["DROP TABLE IF EXISTS model_registry"] },
@@ -13,14 +22,7 @@ export const CONTRACT_MIGRATIONS: readonly PgMigrationDefinition[] = [
       "DROP INDEX IF EXISTS session_llm_requests_spend_wide",
     ],
   },
-  {
-    id: "contract/0006-drop-channel-policy-orders",
-    statements: [
-      "SET LOCAL lock_timeout = '3s'",
-      "ALTER TABLE channel_policy DROP COLUMN IF EXISTS orders",
-      "ALTER TABLE channel_policy_history DROP COLUMN IF EXISTS orders",
-    ],
-  },
+  DROP_CHANNEL_POLICY_ORDERS,
   {
     id: "contract/0007-drop-durable-map-versions",
     statements: ["DROP FUNCTION IF EXISTS qm_durable_map_bump() CASCADE", "DROP TABLE IF EXISTS durable_map_versions"],
