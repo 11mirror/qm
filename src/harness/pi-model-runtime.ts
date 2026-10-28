@@ -39,7 +39,6 @@ import {
   resolveCustomModel,
 } from "../model/custom-providers.ts";
 import {
-  GatewayModelUnavailableError,
   ModelUnavailableError,
   modelGatewayRequest,
   type ModelGatewayTransportConfig,
@@ -187,7 +186,7 @@ export async function buildModelRuntime(
       options: wireModelId(routed, model, async () => {
         await modelGateway?.refresh?.();
         const current = modelGatewayRequest(modelGateway, model);
-        if (!current) throw new GatewayModelUnavailableError(model.id);
+        if (!current) throw new ModelUnavailableError(model.id, "Gateway model");
         return current.target;
       }),
     };

@@ -40,13 +40,6 @@ export class ModelUnavailableError extends Error {
   }
 }
 
-export class GatewayModelUnavailableError extends ModelUnavailableError {
-  constructor(modelId: string) {
-    super(modelId, "Gateway model");
-    this.name = "GatewayModelUnavailableError";
-  }
-}
-
 export function modelGatewayRequest<T extends { id: string; baseUrl: string; api?: string; compat?: object }>(
   config: ModelGatewayTransportConfig | undefined,
   model: T,
@@ -54,7 +47,7 @@ export function modelGatewayRequest<T extends { id: string; baseUrl: string; api
   const target = config?.models[model.id];
   if (!target || !config) {
     if (isGatewayModelId(model.id) || config?.reservedModelIds?.has(model.id))
-      throw new GatewayModelUnavailableError(model.id);
+      throw new ModelUnavailableError(model.id, "Gateway model");
     return undefined;
   }
   return {
