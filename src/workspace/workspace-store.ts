@@ -18,7 +18,7 @@ const missing = (error: unknown): boolean =>
 
 const LIST_SCAN_FACTOR = 8;
 
-function safeJoin(baseDir: string, relPath: string): string {
+export function safeJoin(baseDir: string, relPath: string): string {
   const target = resolve(baseDir, relPath);
   const rel = relative(baseDir, target);
   if (rel.startsWith("..") || isAbsolute(rel)) {
