@@ -344,7 +344,7 @@ for (const carried of [false, true]) {
       sandbox: {} as Sandbox,
       provision: noComputer,
       blobTransfer: transfer,
-      fileRegistration: { store: files, ownerScopeId: grantee, createdBy: "U2", seed: "send" },
+      fileRegistration: { store: files, ownerScopeId: grantee, createdBy: "U2", seed: "send", onError: () => {} },
       openStored: async (id) => {
         if (!handles.some((handle) => handle.fileId === id)) return null;
         const file = await files.get(id);
@@ -485,7 +485,7 @@ function registration(
     ownerScopeId: scopeId("personal", initiator),
     createdBy: initiator,
     createdInScope: kind === "channel" ? scopeId("channel", "C1") : scopeId("personal", initiator),
-    seed: "run-1",
+    seed: "run-1", onError: () => {},
     ...(grantees.length
       ? {
           onRegistered: async ({ ownerScopeId, id }) => {
@@ -579,7 +579,7 @@ function fileStorePopulationMemSandbox(seed: Record<string, Uint8Array | string>
 }
 
 function reg(store: FileArtifactStore, over: Partial<ArtifactRegistration> = {}): ArtifactRegistration {
-  return { store, ownerScopeId: owner, createdBy: "U1", createdInScope: owner, seed: "run-1", ...over };
+  return { store, ownerScopeId: owner, createdBy: "U1", createdInScope: owner, seed: "run-1", onError: () => {}, ...over };
 }
 
 async function fileStorePopulationDrain(store: FileArtifactStore, id: string): Promise<Buffer> {

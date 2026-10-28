@@ -131,7 +131,6 @@ export interface OrchestratorDeps {
   harness: Harness;
   signingSecret?: string;
   capabilitySecret?: string;
-  capabilityTokenCompression?: boolean;
   apiBaseUrl?: string;
   sandboxModels?: boolean;
   publicWebUrl?: string;

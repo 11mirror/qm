@@ -70,7 +70,6 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   suggestedActivitiesEnabled?: boolean;
   suggestedActivitiesContext?: string;
   production: boolean;
-  /** QM_MULTITENANT=1: one process serves every registered tenant from one database with row-level tenancy. */
   multitenant: boolean;
   tenantSecretsKey?: Buffer;
   port: number;
@@ -86,9 +85,7 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   sandboxBackend: SandboxBackendName;
   deployProvider: "docker" | "aws" | "porter" | "e2b";
   modelId?: string;
-  /** Keychain credential id holding the Codex ChatGPT OAuth auth.json (production path). */
   codexAuthCredential?: string;
-  /** Keychain credential id holding a Claude Code subscription token (production path). */
   claudeAuthCredential?: string;
   detectModelId?: string;
   titleModelId?: string;
@@ -112,7 +109,6 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   buildSha?: string;
   signingSecret?: string;
   capabilitySecret?: string;
-  capabilityTokenCompression?: boolean;
   portalIdentitySecret?: string;
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
@@ -232,7 +228,6 @@ export function enabledSandboxBackends(config: Config): Array<Config["sandboxBac
   return [...enabled];
 }
 
-/** "a, b, or c" */
 const orList = (names: readonly string[]): string => `${names.slice(0, -1).join(", ")}, or ${names.at(-1)}`;
 
 function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACKEND"): Config["sandboxBackend"] {
@@ -273,14 +268,11 @@ export function modelGatewayFromEnv(env: Env): ModelGatewayTransportConfig | und
 
 function defaultPluginSkillDirs(): string[] {
   const root = resolve("./plugins");
-  try {
-    return readdirSync(root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => join(root, entry.name, "skills"))
-      .filter((dir) => existsSync(dir));
-  } catch {
-    return [];
-  }
+  if (!existsSync(root)) return [];
+  return readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => join(root, entry.name, "skills"))
+    .filter((dir) => existsSync(dir));
 }
 
 function modelProviderEnvStrict(env: Env): ModelProvider | undefined {
@@ -299,10 +291,6 @@ function modelProviderEnvStrict(env: Env): ModelProvider | undefined {
   return declared;
 }
 
-/**
- * Source requests, capability tokens, portal identity and connector keys each sign with their own secret, so a
- * surface holding one cannot forge another. Whenever source signing or portal identity is on, all three are required.
- */
 function assertDistinctSecrets(secrets: {
   signing?: string;
   capability?: string;
@@ -487,7 +475,6 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     CORE_SIGNING_SECRET: str,
     CAPABILITY_SECRET: str,
     PORTAL_IDENTITY_SECRET: str,
-    CAPABILITY_TOKEN_COMPRESSION: flag,
     REQUIRE_SIGNED_PORTAL_IDENTITY: raw,
     CONNECTOR_SECRET_KEY: str,
     DEPLOYMENT_LAYER: str,
@@ -562,7 +549,6 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     turnLeaseWaitMs: CONFIG_DEFAULTS.turnLeaseWaitMs,
     securityScreenTimeoutMs: CONFIG_DEFAULTS.securityScreenTimeoutMs,
     backgroundWorkEnabled: backgroundWorkEnabled(env),
-    capabilityTokenCompression: e.CAPABILITY_TOKEN_COMPRESSION ?? false,
     requireSignedPortalIdentity: e.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
     layerEnv: { ...env },
     deployGitDir: join(dataDir, "deploy-git"),

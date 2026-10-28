@@ -196,7 +196,7 @@ test("materializeInbound records the surface file id so a later turn can tell th
   assert.equal(metas[0]?.sourceId, "F123");
 });
 
-test("withoutAlreadyIngested drops images this context already holds and keeps everything else", () => {
+test("withoutAlreadyIngested drops images this context already holds, whatever their source size, and keeps everything else", () => {
   const entry = (item: NewItem) => storedItem(item, { sessionId: "s", seq: 1, createdAt: 0 });
   const entries = [
     entry({
@@ -225,7 +225,6 @@ test("withoutAlreadyIngested drops images this context already holds and keeps e
     anonymous,
     outbound,
     pdf,
-    huge,
   ]);
   assert.deepEqual(withoutAlreadyIngested([seen], []), [seen]);
 });
@@ -360,7 +359,7 @@ test("materializeInbound keeps uploads registered when the scope has no default 
   const { sandbox, files } = fakeSandbox();
   const transfer = createMemoryBlobTransferStore();
   const put = async () => ({ created: true });
-  const register = { seed: "s", ownerScopeId: "channel:C1", createdBy: "U1", store: { put } } as never;
+  const register = { seed: "s", onError: () => {}, ownerScopeId: "channel:C1", createdBy: "U1", store: { put } } as never;
   const noComputer = () => Promise.reject(new NoDefaultSandboxError());
   const got = await materializeInbound(
     sandbox,
@@ -373,7 +372,9 @@ test("materializeInbound keeps uploads registered when the scope has no default 
   assert.equal(got.metas.length, 1);
   assert.ok(got.unstaged?.has("a b.txt"));
   const manifest = inboundManifest(got.metas, "inbox", got.unstaged);
-  assert.match(manifest, new RegExp(`/v1/files/${got.metas[0]!.artifactId}/content`));
+  assert.match(manifest, new RegExp(`saved as file ${got.metas[0]!.artifactId}`));
+  assert.match(manifest, /not yet on a computer/);
+  assert.match(manifest, /\/v1\/files\/<file id>\/content/);
   assert.doesNotMatch(manifest, /available in/);
 });
 
@@ -383,7 +384,7 @@ test("materializeInbound drops an unstaged upload it could not register, and ret
   const put = async () => {
     throw new Error("store down");
   };
-  const register = { seed: "s", ownerScopeId: "channel:C1", createdBy: "U1", store: { put } } as never;
+  const register = { seed: "s", onError: () => {}, ownerScopeId: "channel:C1", createdBy: "U1", store: { put } } as never;
   const got = await materializeInbound(
     sandbox,
     () => Promise.reject(new NoDefaultSandboxError()),

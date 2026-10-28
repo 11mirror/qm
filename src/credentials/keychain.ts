@@ -6,6 +6,7 @@ import { hashId } from "../util/crypto.ts";
 import { shq } from "../util/shell.ts";
 import { homeRelativePath } from "./paths.ts";
 import { connectorTokenNote } from "./connector-token.ts";
+import { bareChannelName } from "../util/text.ts";
 
 export const COMPOSIO_ENV_KEY = "COMPOSIO_API_KEY";
 
@@ -343,7 +344,7 @@ interface ConnectorMeta {
 }
 
 export interface ConnectorTokenStore {
-  listConnectorsByOwners?(ownerIds: string[]): Promise<Map<string, ConnectorMeta[]>>;
+  listConnectorsByOwners(ownerIds: string[]): Promise<Map<string, ConnectorMeta[]>>;
   setConnectorToken(host: string, principalId: string, token: OAuthToken, accountType?: string): Promise<void>;
   deleteConnectorToken(host: string, principalId: string, accountType?: string): Promise<void>;
   connectorTokenStatus(host: string, principalId: string, accountType?: string): Promise<OAuthTokenStatus>;
@@ -466,7 +467,6 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   listAllMetadata(): Promise<KeychainCredentialMeta[]>;
   listByOwner(ownerId: string): Promise<KeychainCredentialMeta[]>;
   listByOwners(ownerIds: string[]): Promise<Map<string, KeychainCredentialMeta[]>>;
-  listConnectorsByOwners(ownerIds: string[]): Promise<Map<string, ConnectorMeta[]>>;
   getCredential(id: string): Promise<KeychainCredentialMeta | null>;
   /** Decrypt an env credential the caller OWNS — no grant machinery, never someone else's. */
   readOwnSecret(ownerId: string, credentialId: string): Promise<string | null>;
@@ -569,7 +569,7 @@ export function renderAskNotice(
   const { ask, credential } = input;
   const who = input.requesterName ? `${input.requesterName} (${ask.requesterId})` : ask.requesterId;
   let where: string;
-  if (input.channelName) where = `**#${input.channelName.replace(/^#/, "")}**`;
+  if (input.channelName) where = `**#${bareChannelName(input.channelName)}**`;
   else if (input.scopeName) where = `**${input.scopeName}**`;
   else if (ask.requesterScopeId.startsWith("group:")) where = "a group conversation";
   else if (ask.requesterScopeId.startsWith("channel:")) where = "a Slack channel";

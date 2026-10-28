@@ -18,7 +18,6 @@ import { swallow } from "../../util/errors.ts";
 import { hashId } from "../../util/crypto.ts";
 import type { OrchestratorInput } from "./types.ts";
 
-export const MAX_AUTO_ATTACHMENT_SCREEN_BYTES = 12_000;
 
 export function isScreenableTextAttachment(mimetype: string): boolean {
   const mime = mimetype.split(";", 1)[0]!.trim().toLowerCase();

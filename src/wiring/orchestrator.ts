@@ -214,7 +214,6 @@ function orchestratorDepsHead(
     ...(securityScreener ? { securityScreener } : {}),
     backgroundJobTtlMs: BACKGROUND_JOB_TTL_MS,
     backgroundJobTtlMaxMs: BACKGROUND_JOB_TTL_MAX_MS,
-    capabilityTokenCompression: config.capabilityTokenCompression,
     ...(gatewayTransport ? { sandboxModels: true } : {}),
     ...(config.resendApiKey && config.emailFrom
       ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }

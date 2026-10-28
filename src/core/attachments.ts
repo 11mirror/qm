@@ -126,7 +126,7 @@ export interface ArtifactRegistration {
   createdInScope?: ScopeId;
   seed: string;
   onRegistered?: (a: { id: string; path: string; ownerScopeId: ScopeId; direction: FileDirection }) => Promise<void>;
-  onError?: (e: unknown) => void;
+  onError: (e: unknown) => void;
 }
 
 async function registerArtifact(
@@ -158,7 +158,7 @@ async function registerArtifact(
     await reg.onRegistered?.(registered);
     return registered;
   } catch (e) {
-    reg.onError?.(e);
+    reg.onError(e);
     return undefined;
   }
 }
@@ -191,7 +191,7 @@ export function withoutAlreadyIngested(
 }
 
 function shownToModel(meta: AttachmentMeta): boolean {
-  return isVisionAttachment(meta) && meta.sizeBytes > 0 && meta.sizeBytes <= MAX_VISION_IMAGE_BYTES;
+  return isVisionAttachment(meta) && meta.sizeBytes > 0;
 }
 
 export function inboundManifest(metas: AttachmentMeta[], inboxDir = INBOX_DIR, unstaged?: Set<string>): string {
@@ -200,9 +200,7 @@ export function inboundManifest(metas: AttachmentMeta[], inboxDir = INBOX_DIR, u
     .map(
       (m) =>
         `- ${inboxDir}/${m.name} (${m.mimetype}, ${m.sizeBytes} bytes)${m.author ? ` — shared by ${m.author}` : ""}${
-          unstaged?.has(m.name)
-            ? ` — saved as file ${m.artifactId}, not yet on a computer (no default sandbox); send it directly with {file_id: "${m.artifactId}"}; if you need it on disk, choose a sandbox_id for execute and download ${fileContentRequest(m.artifactId!)} to a path you choose`
-            : ""
+          unstaged?.has(m.name) ? ` — saved as file ${m.artifactId}` : ""
         }`,
     )
     .join("\n");
@@ -211,7 +209,10 @@ export function inboundManifest(metas: AttachmentMeta[], inboxDir = INBOX_DIR, u
   const lead = metas.some((m) => m.author)
     ? `${metas.length} ${noun} shared in this conversation, ${where}:`
     : `The user shared ${metas.length} ${noun}, ${where}:`;
-  return `${lead}\n${list}`;
+  const unstagedNote = unstaged?.size
+    ? `\nFiles saved as a file id are not yet on a computer (no default sandbox): send one directly with {file_id: "<file id>"}; if you need it on disk, choose a sandbox_id for execute and download ${fileContentRequest("<file id>")} to a path you choose.`
+    : "";
+  return `${lead}\n${list}${unstagedNote}`;
 }
 
 export function inboundIssuesNote(issues: readonly string[]): string {
@@ -320,8 +321,9 @@ export async function materializeInbound(
       ...(a.sourceId ? { sourceId: a.sourceId } : {}),
       ...(registered ? { artifactId: registered.id } : {}),
     });
-    if (VISION_MIME_TYPES.has(mimetype) && bytes.length > 0 && bytes.length <= MAX_VISION_IMAGE_BYTES) {
-      const imageBytes = await downscaleVisionImage(bytes, mimetype);
+    const imageBytes =
+      VISION_MIME_TYPES.has(mimetype) && bytes.length > 0 ? await downscaleVisionImage(bytes, mimetype) : undefined;
+    if (imageBytes && imageBytes.length <= MAX_VISION_IMAGE_BYTES) {
       images.push({
         name,
         mimeType: mimetype,
@@ -480,7 +482,7 @@ export async function discardOutbound(
   if (!register || !attachment.artifactId || !created?.has(attachment.artifactId)) return;
   await register.store.delete(attachment.artifactId).catch((e) => {
     try {
-      register.onError?.(e);
+      register.onError(e);
     } catch (err) {
       swallowAs("attachments: discard onError", undefined)(err);
     }

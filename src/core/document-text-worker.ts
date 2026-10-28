@@ -1,5 +1,6 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { OfficeParser } from "officeparser";
+import { errMessage } from "../util/errors.ts";
 
 try {
   const ast = await OfficeParser.parseOffice(Buffer.from(workerData.dataBase64, "base64"), {
@@ -9,6 +10,6 @@ try {
   });
   const result = await ast.to("text");
   parentPort?.postMessage({ text: String(result.value) });
-} catch {
-  parentPort?.postMessage({ error: "Document text could not be extracted." });
+} catch (error) {
+  parentPort?.postMessage({ error: errMessage(error) });
 }

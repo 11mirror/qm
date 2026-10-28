@@ -58,12 +58,14 @@ export async function buildTurnTools(ctx: TurnCtx, turn: TurnToolsInput) {
 
   const spine: SpineState = {
     surfaceOutboundCount: 0,
-    crossConversationPosts: 0,
     turnUserEntrySeq: undefined,
   };
   const turnKey = input.runId ?? randomUUID();
   const postKeys = turnPostKeys(turnKey);
-  const spineFirst: { block: string; open: boolean; ackText?: string } = { block: "", open: true };
+  const spineFirst: { block: string; open: boolean; ackText?: string; ackDelivery?: Promise<void> } = {
+    block: "",
+    open: true,
+  };
   const fileRegistration = createFileRegistration(ctx, session);
   const postProvenance = (deliveryKey: string): DeliveryProvenance =>
     turnPostProvenance({
@@ -489,17 +491,19 @@ export function firstAckPublisher(
     spineFirst.open = false;
     const ack = spineFirst.block.trim();
     if (deliberatePost || !ack || !defaultDestination || !deps.outbound) return;
-    spineFirst.ackText = ack;
     const runId = input.runId;
     const ackKey = `ack:${turnKey}`;
-    void reachPost({
+    spineFirst.ackDelivery = reachPost({
       outbound: deps.outbound,
       destination: defaultDestination,
       text: ack,
       idempotencyKey: ackKey,
       provenance: postProvenance(ackKey),
     })
-      .then(() => deps.turnStream?.markSurfacePosted(runId))
+      .then(() => {
+        spineFirst.ackText = ack;
+        deps.turnStream?.markSurfacePosted(runId);
+      })
       .catch(swallowAs("orchestrator: first-block ack", undefined));
   };
 }

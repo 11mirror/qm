@@ -6,7 +6,6 @@ import { resolveBrowserModel } from "../../model/browser-model.ts";
 import { type Destination } from "../../types.ts";
 import { personalScope } from "../../types.ts";
 import { resolveTurnContext } from "../../resolution/turn-context.ts";
-import { type PublicServiceCredential } from "../../credentials/keychain.ts";
 import {
   mintCapabilityToken,
   CAPABILITY_TTL_MS,
@@ -27,7 +26,7 @@ import {
   addCredentialToCatalog,
   createCatalogState,
   credentialBroker,
-  grantedServiceCredSlugs,
+  serviceCredentialInventory,
   placeCredential,
   registerBrokeredTools,
   registerConnectorCredentials,
@@ -46,7 +45,7 @@ interface CatalogTurn {
 }
 
 export async function buildCredentialCatalog(ctx: TurnCtx, turn: CatalogTurn) {
-  const { deps, input, actor, conversation, external, serviceAllowed, allInternal, liveAuthorTurn } = ctx;
+  const { deps, input, actor, conversation, external, allInternal, liveAuthorTurn } = ctx;
   const { resolution, scopeId, strictReadOnly } = ctx;
   const { sharingSources } = turn;
   const openSpeakerKeychain =
@@ -76,14 +75,8 @@ export async function buildCredentialCatalog(ctx: TurnCtx, turn: CatalogTurn) {
   const catalogBroker = credentialBroker(c, []);
   await registerKeychainCredentials(c, addCredential, catalogBroker);
   await registerConnectorCredentials(c, addCredential, catalogBroker);
-  let serviceCredRecords: PublicServiceCredential[] = [];
-  let grantedCredSlugs = new Set<string>();
-  if (!strictReadOnly && deps.serviceCreds) {
-    serviceCredRecords = (await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)).filter((record) =>
-      serviceAllowed(record.slug),
-    );
-    if (serviceCredRecords.length > 0) grantedCredSlugs = await grantedServiceCredSlugs(c, serviceCredRecords);
-  }
+  const serviceInventory = await serviceCredentialInventory(c);
+  const { records: serviceCredRecords, granted: grantedCredSlugs } = serviceInventory;
   if (!strictReadOnly && allInternal && deps.serviceCreds) {
     const browseSteps = deps.config?.setting("browseMaxSteps", tenant().orgScope);
     if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
@@ -106,7 +99,7 @@ export async function buildCredentialCatalog(ctx: TurnCtx, turn: CatalogTurn) {
   const { actorIsOrgAdmin, controlClaims, sandboxModelGateway } = await mintControlTokens(c, turn, browserSelection);
   const egressTokenForPolicy = (egress: EgressPolicy) => mintEgressToken(c, egress);
   const egressTokenForTurn = await egressTokenForPolicy(resolution.egress);
-  await registerServiceCredentials(c, addCredential, catalogBroker);
+  await registerServiceCredentials(c, addCredential, catalogBroker, serviceInventory);
   registerBrokeredTools(c, addCredential);
   return {
     openSpeakerKeychain,
@@ -182,7 +175,6 @@ async function mintControlTokens(
     connectorEnv.AGENT_API_TOKEN = await mintCapabilityToken(
       controlClaims,
       deps.capabilitySecret ?? deps.signingSecret,
-      deps.capabilityTokenCompression,
     );
     if (browserSelection) {
       connectorEnv.BROWSE_LAB_BASE_URL = `${deps.apiBaseUrl}/v1/browser-model`;
@@ -210,7 +202,6 @@ async function mintControlTokens(
           exp: sandboxTokenExpiry,
         },
         deps.capabilitySecret ?? deps.signingSecret,
-        deps.capabilityTokenCompression,
       );
       sandboxModelGateway = true;
     }
@@ -221,7 +212,6 @@ async function mintControlTokens(
         exp: sandboxTokenExpiry,
       },
       deps.capabilitySecret ?? deps.signingSecret,
-      deps.capabilityTokenCompression,
     );
   }
   return { actorIsOrgAdmin, controlClaims, sandboxModelGateway };
@@ -239,6 +229,5 @@ async function mintEgressToken(c: CatalogState, egress: EgressPolicy): Promise<s
       exp: sandboxTokenExpiry,
     },
     egressSecret,
-    deps.capabilityTokenCompression,
   );
 }

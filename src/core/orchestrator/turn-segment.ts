@@ -38,8 +38,8 @@ import { randomUUID } from "node:crypto";
 import { stripAckPrefix } from "./turn-helpers.ts";
 import { createCompaction } from "./compaction.ts";
 import { createTurnSandboxes } from "./sandboxes.ts";
+import { isWebInboxThreadRef } from "../../sessions/thread-ref.ts";
 
-const FIRST_BLOCK_CAPTURE_MAX_CHARS = 20_000;
 const ADDRESSED_NUDGE_MD = loadProtocolFile("turn-addressed-nudge");
 
 export interface TurnRunState {
@@ -289,7 +289,7 @@ function createPrepareSteer(
     const refreshedInbox =
       surfaceHas(input.surface, "sidebar") &&
       conversation.kind === "dm" &&
-      /^web:.+:inbox$/.test(conversation.threadRef) &&
+      isWebInboxThreadRef(conversation.threadRef) &&
       request?.conversation.threadRef === conversation.threadRef
         ? request.conversationHeader?.trim()
         : undefined;
@@ -453,8 +453,7 @@ function segmentCallbacks(
         markFirstToken();
       }
       if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publish(input.runId, chunk);
-      if (input.surfaceTools && spineFirst.open && spineFirst.block.length < FIRST_BLOCK_CAPTURE_MAX_CHARS)
-        spineFirst.block += chunk;
+      if (input.surfaceTools && spineFirst.open) spineFirst.block += chunk;
     },
     onReasoningDelta: (step: string, index: number, chunk: string) => {
       if (input.runId && deps.turnStream && !input.surfaceTools)
@@ -520,7 +519,7 @@ export async function runSegments(
   const runHarnessTurn = async (...args: Parameters<typeof runHarnessSegment>) => {
     let segment = await runHarnessSegment(...args);
     while (segment.runtimeHandoff && !segment.stopped && !turnAbort.signal.aborted) {
-      if (++run.runtimeHandoffs > 8) throw new NonRetryableTurnError("Too many runtime changes in one task");
+      run.runtimeHandoffs += 1;
       if (effectiveTurnWallClockMs && Date.now() - turnStart >= effectiveTurnWallClockMs)
         throw new NonRetryableTurnError("The task reached its wall-clock limit during runtime handoff");
       const recovery = "context" in segment.runtimeHandoff;
@@ -579,14 +578,10 @@ export async function runSegments(
     !result.silent &&
     !result.stopped
   ) {
+    await spineFirst.ackDelivery;
     const primaryReply = stripAckPrefix(result.reply ?? "", spineFirst.ackText).trim();
-    if (primaryReply && defaultDestination && deps.outbound) {
-      try {
-        await postToDefault(deps.outbound, defaultDestination, primaryReply);
-      } catch (e) {
-        reportFailure("orchestrator: direct reply delivery", e, `session=${session.id}`);
-      }
-    }
+    if (primaryReply && defaultDestination && deps.outbound)
+      await postToDefault(deps.outbound, defaultDestination, primaryReply);
     if (spine.surfaceOutboundCount === 0 && (!isPollFire || primaryReply)) {
       const nudgeHistory = filterHistory(forModelContext((await historyWindow()).items));
       result = await runHarnessTurn(ADDRESSED_NUDGE_MD, inbound.images.length ? { images: inbound.images } : {}, {
@@ -595,11 +590,7 @@ export async function runSegments(
       if (spine.surfaceOutboundCount === 0 && !result.silent && !result.stopped) {
         const fallback = stripAckPrefix(result.reply ?? "", spineFirst.ackText).trim();
         if (fallback && defaultDestination && deps.outbound) {
-          try {
-            await postToDefault(deps.outbound, defaultDestination, fallback);
-          } catch (e) {
-            reportFailure("orchestrator: shed-reply fallback delivery", e, `session=${session.id}`);
-          }
+          await postToDefault(deps.outbound, defaultDestination, fallback);
         } else {
           console.error(`[orchestrator] addressed turn ended silent after nudge session=${session.id}`);
         }

@@ -4,7 +4,7 @@ import { isVisionAttachment, safeAttachmentName, senderNote } from "../attachmen
 import { renderOverheard, selectOverheardToImport, type OverheardEntryPayload } from "../../harness/replay.ts";
 import { swallowAs } from "../../util/errors.ts";
 import type { OrchestratorDeps } from "./types.ts";
-import { MAX_AUTO_ATTACHMENT_SCREEN_BYTES, isScreenableTextAttachment } from "./turn-helpers.ts";
+import { isScreenableTextAttachment } from "./turn-helpers.ts";
 
 import type { TurnCtx } from "./turn-context.ts";
 import type { SecurityObserver } from "./security-screen.ts";
@@ -44,18 +44,13 @@ export function observeInboundTurn(
           author: attachment.author,
         }),
       });
-      if (
-        isVisionAttachment(attachment) ||
-        !isScreenableTextAttachment(attachment.mimetype) ||
-        attachment.sizeBytes > MAX_AUTO_ATTACHMENT_SCREEN_BYTES
-      )
-        continue;
+      if (isVisionAttachment(attachment) || !isScreenableTextAttachment(attachment.mimetype)) continue;
       const opened = await blobTransfer
         .open(attachment.blobId)
         .catch(swallowAs("attachment screening: open blob", null));
-      if (!opened || opened.sizeBytes > MAX_AUTO_ATTACHMENT_SCREEN_BYTES) continue;
+      if (!opened) continue;
       const data = await collectBlob(opened.stream).catch(swallowAs("attachment screening: read blob", null));
-      if (!data || data.length > MAX_AUTO_ATTACHMENT_SCREEN_BYTES || data.includes(0)) continue;
+      if (!data || data.includes(0)) continue;
       attachmentPromptData.push({
         source: `attachment:${safeAttachmentName(attachment.name)}`,
         content: data.toString("utf8"),

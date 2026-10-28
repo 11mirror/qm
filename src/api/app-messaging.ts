@@ -37,6 +37,7 @@ import { type App, type AppDeps, type ReachNowResult, CONTEXT_REQUEST_EXPIRY_MS 
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
 import { tenant } from "../tenant.ts";
+import { bareChannelName } from "../util/text.ts";
 
 export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: string) {
   const viewerKeys = personKeys(await deps.directory.get(principalId).catch(() => null), principalId);
@@ -328,7 +329,7 @@ function directoryMethods(deps: AppDeps, h: AppHelpers) {
       deps.publicWebUrl ? adminCronHistoryUrl(deps.publicWebUrl, cron.ownerScopeId, cron.id) : undefined,
     async channelName(channelId) {
       const chan = (await deps.directory.listChannels()).find((c) => c.channelId === channelId);
-      return chan ? `#${chan.name.replace(/^#/, "")}` : undefined;
+      return chan ? `#${bareChannelName(chan.name)}` : undefined;
     },
   } satisfies Partial<App>;
 }

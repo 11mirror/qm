@@ -81,7 +81,6 @@ export async function sessionCapability(ctx: ApiCtx): Promise<RouteResult> {
   const token = await mintCapabilityToken(
     { actorId: actor.p, scopeId: makeScopeId("personal", actor.p), exp: Date.now() + CAPABILITY_TTL_MS },
     secret,
-    deps.capabilityTokenCompression,
   );
   return ok({ token });
 }

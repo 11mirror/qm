@@ -154,7 +154,6 @@ export function buildDeploy(deps: DeployInputs) {
                   exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
                 },
                 capabilitySecret ?? signingSecret!,
-                config.capabilityTokenCompression,
               );
             }
             return env;

@@ -440,7 +440,6 @@ export function serverDeps(
           }
         : {}),
       ...(config.spendExportToken ? { spendExportToken: config.spendExportToken } : {}),
-      capabilityTokenCompression: config.capabilityTokenCompression,
       ...(config.requireSignedPortalIdentity ? { requireSignedPortalIdentity: true } : {}),
       replayDedupe: built.replayDedupe,
       brokerSessions: built.brokerSessions,

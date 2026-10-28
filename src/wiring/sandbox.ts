@@ -67,7 +67,6 @@ export function buildSandbox(deps: SandboxInputs) {
           exp: Date.now() + CAPABILITY_TTL_MS,
         },
         secret,
-        config.capabilityTokenCompression,
       );
       return { egressToken };
     },

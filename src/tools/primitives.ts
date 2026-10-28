@@ -365,7 +365,6 @@ interface SurfaceFileResult {
   ok: boolean;
   content?: string;
   nextOffset?: number;
-  totalChars?: number;
   name?: string;
   sizeBytes?: number;
   contentType?: string;

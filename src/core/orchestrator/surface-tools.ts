@@ -1,3 +1,4 @@
+import type { Readable } from "node:stream";
 import { isSessionTurn } from "../turn-origin.ts";
 import type {
   Conversation,
@@ -28,7 +29,7 @@ import type {
   SurfaceDeleteInput,
   SurfaceSearchResult,
 } from "../../tools/primitives.ts";
-import { collectBlob, MAX_BLOB_BYTES, type BlobTransferStore } from "../../persistence/blob-transfer.ts";
+import { isBlobId, type BlobTransferStore } from "../../persistence/blob-transfer.ts";
 import {
   collectNamedOutbound,
   parseOutboundFiles,
@@ -44,10 +45,10 @@ import type { OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "
 import { parseDeliveryTarget } from "../../slack/delivery.ts";
 import { RECENT_THREAD_LIMIT } from "../../slack/conversation-view.ts";
 import { parseFileRef } from "../../surfaces/refs.ts";
+import { bareChannelName } from "../../util/text.ts";
 
 const SURFACE_SEARCH_DEFAULT = 10;
 const SURFACE_FILE_PAGE_CHARS = 20_000;
-const REACH_POSTS_PER_TURN = 5;
 const SLACK_CONVERSATIONS_HISTORY_TIER3_PER_MINUTE = 50;
 const HISTORY_PAGES_PER_CALL = SLACK_CONVERSATIONS_HISTORY_TIER3_PER_MINUTE / 5;
 
@@ -91,7 +92,6 @@ async function pullPages(
 
 export interface SpineState {
   surfaceOutboundCount: number;
-  crossConversationPosts: number;
   turnUserEntrySeq: number | undefined;
 }
 
@@ -186,7 +186,7 @@ function destinationTools(turn: SurfaceTurn) {
       target.channel !== undefined &&
       conversation.channelRef &&
       (target.channel === conversation.channelRef ||
-        target.channel.replace(/^#/, "").toLowerCase() === conversation.channelName?.toLowerCase())
+        bareChannelName(target.channel).toLowerCase() === conversation.channelName?.toLowerCase())
     ) {
       return { ok: true, destination: { ...currentDestination, target: conversation.channelRef } };
     }
@@ -277,7 +277,7 @@ const targetOf = (input: { channel?: string; participants?: readonly string[] })
 });
 
 function postingTools(turn: SurfaceTurn): Pick<SurfaceToolDeps, "post" | "reach" | "react" | "edit" | "delete"> {
-  const { deps, input, conversation, postKeys, spine, here: currentDestination } = turn;
+  const { deps, input, conversation, postKeys, here: currentDestination } = turn;
   const { resolveDestination, enqueue, resolveFiles } = destinationTools(turn);
   let editRefConsumed = false;
   return {
@@ -304,11 +304,6 @@ function postingTools(turn: SurfaceTurn): Pick<SurfaceToolDeps, "post" | "reach"
     },
     reach: async (postText, target, files, sandboxId) => {
       const seq = postKeys.take();
-      if (spine.crossConversationPosts >= REACH_POSTS_PER_TURN)
-        return {
-          ok: false,
-          message: `outbound limit reached for this turn (${REACH_POSTS_PER_TURN} posts to other conversations)`,
-        };
       const selectors = [
         target.channel !== undefined,
         target.recipient !== undefined,
@@ -324,9 +319,8 @@ function postingTools(turn: SurfaceTurn): Pick<SurfaceToolDeps, "post" | "reach"
       const r0 = await enqueue(d.destination, postText, seq, f.attachments);
       if (!r0.ok) return r0;
       const r = f.attachments?.length ? { ...r0, attachments: postedFileMetas(f.attachments) } : r0;
-      spine.crossConversationPosts += 1;
       let label = `a group DM (${target.participants?.length ?? 0} people)`;
-      if (target.channel !== undefined) label = `#${target.channel.replace(/^#/, "")}`;
+      if (target.channel !== undefined) label = `#${bareChannelName(target.channel)}`;
       else if (target.recipient !== undefined) label = `a DM to ${target.recipient}`;
       return { ...r, matched: label };
     },
@@ -372,13 +366,40 @@ function surfaceCoverage(turn: SurfaceTurn): () => Promise<string | undefined> {
   return coverageForTurn;
 }
 
+const TEXT_SNIFF_BYTES = 8000;
+
+async function readTextPage(stream: Readable, offset: number): Promise<string | null> {
+  const wanted = offset + SURFACE_FILE_PAGE_CHARS;
+  const decoder = new TextDecoder();
+  const head: Buffer[] = [];
+  let headBytes = 0;
+  let text = "";
+  for await (const chunk of stream as AsyncIterable<Buffer>) {
+    if (headBytes < TEXT_SNIFF_BYTES) {
+      head.push(chunk);
+      headBytes += chunk.length;
+      if (headBytes >= TEXT_SNIFF_BYTES && !headLooksLikeText(Buffer.concat(head).subarray(0, TEXT_SNIFF_BYTES))) {
+        stream.destroy();
+        return null;
+      }
+    }
+    text += decoder.decode(chunk, { stream: true });
+    if (text.length > wanted) {
+      stream.destroy();
+      return text;
+    }
+  }
+  if (headBytes < TEXT_SNIFF_BYTES && !headLooksLikeText(Buffer.concat(head))) return null;
+  return text + decoder.decode();
+}
+
 function readingTools(
   turn: SurfaceTurn,
   coverageForTurn: () => Promise<string | undefined>,
 ): Pick<SurfaceToolDeps, "readThread" | "whatsNew" | "readMembers" | "readFile"> {
   const { deps, input, actor, conversation, blobTransfer, here: currentDestination, rateLimitRecipient, signal } = turn;
   const stagedFileId = async (ref: string): Promise<{ id: string } | { message: string }> => {
-    if (/^[0-9a-f]{32}$/.test(ref)) return { id: ref };
+    if (isBlobId(ref)) return { id: ref };
     const fileRef = parseFileRef(ref);
     if (!fileRef)
       return {
@@ -478,24 +499,15 @@ function readingTools(
         return { ok: false, message: errMessage(e) };
       }
       if (!blob) return { ok: false, message: "I can't find that file — it may have expired." };
-      if (blob.sizeBytes > MAX_BLOB_BYTES) {
-        blob.stream.destroy();
-        return {
-          ok: false,
-          message: `that file is ${blob.sizeBytes} bytes — too large to read inline (limit ${MAX_BLOB_BYTES}).`,
-        };
-      }
-      const bytes = await collectBlob(blob.stream);
-      if (!headLooksLikeText(bytes.subarray(0, 8000)))
-        return { ok: true, sizeBytes: blob.sizeBytes, contentType: "application/octet-stream" };
-      const decoded = bytes.toString("utf8");
-      const start = Math.max(0, Math.min(offset, decoded.length));
-      const end = Math.min(decoded.length, start + SURFACE_FILE_PAGE_CHARS);
+      const page = await readTextPage(blob.stream, offset);
+      if (page === null) return { ok: true, sizeBytes: blob.sizeBytes, contentType: "application/octet-stream" };
+      const start = Math.max(0, Math.min(offset, page.length));
+      const end = Math.min(page.length, start + SURFACE_FILE_PAGE_CHARS);
       return {
         ok: true,
-        content: decoded.slice(start, end),
+        content: page.slice(start, end),
         sizeBytes: blob.sizeBytes,
-        ...(end < decoded.length ? { nextOffset: end, totalChars: decoded.length } : {}),
+        ...(end < page.length ? { nextOffset: end } : {}),
       };
     },
   };

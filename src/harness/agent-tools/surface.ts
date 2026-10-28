@@ -311,7 +311,7 @@ async function surfaceReadFile(
       },
       text(
         r.nextOffset !== undefined
-          ? `${r.content}\n[showing up to character ${r.nextOffset} of ${r.totalChars} — read_file again with offset ${r.nextOffset} for more]`
+          ? `${r.content}\n[showing up to character ${r.nextOffset} — read_file again with offset ${r.nextOffset} for more]`
           : r.content,
       ),
       "surface file",

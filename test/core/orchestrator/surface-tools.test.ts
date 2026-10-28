@@ -101,7 +101,7 @@ test("surface post rejects traversal before provisioning or staging any attachme
       },
     },
     postKeys: turnPostKeys("run-test"),
-    spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+    spine: { surfaceOutboundCount: 0 },
     signal: new AbortController().signal,
   } as unknown as SurfaceToolsContext);
   const r = await tools!.post("hello", undefined, ["report.pdf", "../.ssh/id_ed25519"]);
@@ -127,7 +127,7 @@ test("surface channel settings preserve and reset the stored ambient reply polic
       return {};
     },
     postKeys: turnPostKeys("run-test"),
-    spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+    spine: { surfaceOutboundCount: 0 },
     signal: new AbortController().signal,
   } as unknown as SurfaceToolsContext)!;
 
@@ -166,6 +166,7 @@ test("collectNamedOutbound: a doomed call's rollback never deletes an artifact a
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     seed: "run-1",
+    onError: () => {},
   };
   const sandbox = fakeSandbox({ "reports/first.md": bytes("delivered earlier"), "reports/kept.md": bytes("good") });
   const ok = await collectNamedOutbound(sandbox, handle, ["reports/first.md"], transfer, register);
@@ -208,13 +209,13 @@ test("surface post returns the sent attachments' metadata (so surfaces can rende
       store: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
       ownerScopeId: scopeId("personal", "U1"),
       createdBy: "U1",
-      seed: "run-post",
+      seed: "run-post", onError: () => {},
     },
     postProvenance() {
       return {};
     },
     postKeys: turnPostKeys("run-test"),
-    spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+    spine: { surfaceOutboundCount: 0 },
     signal: new AbortController().signal,
   } as unknown as SurfaceToolsContext)!;
   const r = await tools.post("Here they are", undefined, ["qm-brand/cover.png"]);
@@ -248,7 +249,7 @@ test("stored files retain metadata and need no sandbox, including replacement an
       throw new Error("no default sandbox");
     },
     blobTransfer: transfer,
-    fileRegistration: { store, ownerScopeId: "personal:U1", createdBy: "U1", seed: "new" },
+    fileRegistration: { store, ownerScopeId: "personal:U1", createdBy: "U1", seed: "new", onError: () => {} },
     openStored: async (id) => {
       const opened = await store.open(id);
       return opened ? { ...opened.artifact, stream: opened.stream } : null;
@@ -286,7 +287,7 @@ test("workspace staging selects the requested sandbox and never falls back on re
       store: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
       ownerScopeId: "personal:U1",
       createdBy: "U1",
-      seed: "selector",
+      seed: "selector", onError: () => {},
     },
   });
   await staging.attach(["report.txt"], "one");
@@ -336,7 +337,7 @@ test("a stored stream failure rolls back earlier workspace staging", async () =>
       handle,
       ["report.txt", { file_id: "broken" }],
       transfer,
-      { store, ownerScopeId: "personal:U1", createdBy: "U1", seed: "rollback" },
+      { store, ownerScopeId: "personal:U1", createdBy: "U1", seed: "rollback", onError: () => {} },
       [],
       async () => ({
         name: "broken.txt",
@@ -362,7 +363,7 @@ test("replacing a path preserves its artifact when staged again by ID", async ()
     sandbox: fakeSandbox({ "report.txt": bytes("report") }),
     provision: async () => handle,
     blobTransfer: createMemoryBlobTransferStore(),
-    fileRegistration: { store, ownerScopeId: "personal:U1", createdBy: "U1", seed: "reference" },
+    fileRegistration: { store, ownerScopeId: "personal:U1", createdBy: "U1", seed: "reference", onError: () => {} },
     openStored: async (id) => {
       const opened = await store.open(id);
       return opened ? { ...opened.artifact, stream: opened.stream } : null;
@@ -428,7 +429,7 @@ function pagedSurface(
       return {};
     },
     postKeys: turnPostKeys("run-test"),
-    spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+    spine: { surfaceOutboundCount: 0 },
     signal: abort.signal,
   } as unknown as SurfaceToolsContext)!;
   return { tools, pulls };

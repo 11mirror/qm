@@ -3,6 +3,7 @@ import { DEFAULT_CRON_TIMEZONE } from "../../cron/schedule.ts";
 import type { CandidateDestination, Cron, Monitor, Webhook } from "../../types.ts";
 import type { DirectoryChannel, DirectoryMember } from "../../directory/directory-store.ts";
 import { linesWithinTokenBudget } from "../../util/tokens.ts";
+import { bareChannelName } from "../../util/text.ts";
 
 const INVENTORY_CONTEXT_FRACTION = 0.02;
 
@@ -28,7 +29,7 @@ export function deliveryMenu(candidates: CandidateDestination[], defaultKey: str
 }
 
 export function renderProjectHomeChannel(channelName: string): string {
-  const name = channelName.replace(/^#/, "");
+  const name = bareChannelName(channelName);
   return [
     "## Project home channel",
     `This project is linked to the Slack channel #${name} — that channel is where the project's people follow the work.`,

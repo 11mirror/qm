@@ -130,7 +130,7 @@ export async function resolveTurnWorkspace(ctx: TurnCtx, memoryPolicy: MemoryPol
   const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
   const rwLayer = resolution.layers.find((l) => l.mode === "rw");
   if (rwLayer && environmentId !== rwLayer.scopeId) rwLayer.scopeId = environmentId;
-  for (const layer of resolution.layers) await deps.workspace.ensureScope(layer.scopeId);
+  await Promise.all(resolution.layers.map((layer) => deps.workspace.ensureScope(layer.scopeId)));
 
   return resolveTurnContext({
     external,

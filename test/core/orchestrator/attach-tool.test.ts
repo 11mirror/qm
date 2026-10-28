@@ -15,7 +15,7 @@ function attachStaging(sandbox: Sandbox, handle: SandboxHandle, blobTransfer: Bl
     sandbox,
     provision: async () => handle,
     blobTransfer,
-    fileRegistration: { store: null as never, ownerScopeId: "personal:U1", createdBy: "U1", seed: "run-1" },
+    fileRegistration: { store: null as never, ownerScopeId: "personal:U1", createdBy: "U1", seed: "run-1", onError: () => {} },
   });
 }
 
