@@ -1,5 +1,5 @@
 import { securityScreenPayloads } from "../../security/security-screen.ts";
-import { collectBlob } from "../../persistence/blob-transfer.ts";
+import { buffer } from "node:stream/consumers";
 import { isVisionAttachment, safeAttachmentName, senderNote } from "../attachments.ts";
 import { renderOverheard, selectOverheardToImport, type OverheardEntryPayload } from "../../harness/replay.ts";
 import { swallowAs } from "../../util/errors.ts";
@@ -49,7 +49,7 @@ export function observeInboundTurn(
         .open(attachment.blobId)
         .catch(swallowAs("attachment screening: open blob", null));
       if (!opened) continue;
-      const data = await collectBlob(opened.stream).catch(swallowAs("attachment screening: read blob", null));
+      const data = await buffer(opened.stream).catch(swallowAs("attachment screening: read blob", null));
       if (!data || data.includes(0)) continue;
       attachmentPromptData.push({
         source: `attachment:${safeAttachmentName(attachment.name)}`,

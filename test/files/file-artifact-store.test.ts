@@ -1,3 +1,4 @@
+import { buffer } from "node:stream/consumers";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
@@ -18,7 +19,7 @@ import {
 import { fileArtifactId, type PutFileInput, type FileArtifactStore } from "../../src/files/file-artifact-store.ts";
 import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-artifact-store.ts";
 import { createIdentityService } from "../../src/identity/identity-service.ts";
-import { collectBlob } from "../../src/persistence/blob-transfer.ts";
+import {} from "../../src/persistence/blob-transfer.ts";
 import { principalEntitledToScope } from "../../src/resolution/context-filter.ts";
 import { defaultPublishAudience } from "../../src/resolution/publish-audience.ts";
 import { carriedFileHandles } from "../../src/resolution/sharing-access.ts";
@@ -355,7 +356,7 @@ for (const carried of [false, true]) {
     });
     assert.equal((await staging.attach([{ file_id: image.id }])).ok, true);
     const sent = await transfer.open(staging.staged()[0]!.blobId);
-    assert.deepEqual(await collectBlob(sent!.stream), Buffer.from(JPEG));
+    assert.deepEqual(await buffer(sent!.stream), Buffer.from(JPEG));
   });
 }
 

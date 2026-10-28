@@ -1,3 +1,4 @@
+import { buffer } from "node:stream/consumers";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
@@ -20,7 +21,6 @@ import {
 import {
   BlobHashMismatchError,
   BlobTooLargeError,
-  collectBlob,
   createLocalBlobTransferStore,
   createS3BlobTransferStore,
   S3_PART_BYTES,
@@ -135,14 +135,14 @@ for (const [label, store, _dir] of stores()) {
     const opened = await store.open(info.blobId);
     assert.ok(opened);
     assert.equal(opened.sizeBytes, data.length);
-    assert.equal((await collectBlob(opened.stream)).toString("utf8"), "hello, world");
+    assert.equal((await buffer(opened.stream)).toString("utf8"), "hello, world");
   });
 
   test(`${label}: put a STREAM (multi-chunk) reassembles in order`, async () => {
     const chunks = ["alpha", "-", "beta", "-", "gamma"].map((s) => Buffer.from(s));
     const info = await store.put(Readable.from(chunks));
     const opened = await store.open(info.blobId);
-    assert.equal((await collectBlob(opened!.stream)).toString("utf8"), "alpha-beta-gamma");
+    assert.equal((await buffer(opened!.stream)).toString("utf8"), "alpha-beta-gamma");
   });
 
   test(`${label}: maxBytes trips BlobTooLargeError mid-stream`, async () => {
@@ -325,7 +325,7 @@ test("s3: parts are carved to exactly one part regardless of how the source chun
   );
   assert.ok(f.partSizes.at(-1)! <= S3_PART_BYTES, "the remainder is the last part");
   const opened = await store.open(info.blobId);
-  assert.ok(Buffer.from(await collectBlob(opened!.stream)).equals(body), "reassembles in order");
+  assert.ok(Buffer.from(await buffer(opened!.stream)).equals(body), "reassembles in order");
 });
 
 test("s3: a body of EXACTLY one part stays a single PutObject (no multipart upload opened)", async () => {
@@ -334,7 +334,7 @@ test("s3: a body of EXACTLY one part stays a single PutObject (no multipart uplo
   const info = await store.put(Buffer.alloc(S3_PART_BYTES, 0x65));
   assert.equal(f.partSizes.length, 0, "exactly one part is still one part — no Create/Upload/Complete");
   const opened = await store.open(info.blobId);
-  assert.equal((await collectBlob(opened!.stream)).length, S3_PART_BYTES);
+  assert.equal((await buffer(opened!.stream)).length, S3_PART_BYTES);
 });
 
 test("s3: a body that fits in one part never opens a multipart upload", async () => {

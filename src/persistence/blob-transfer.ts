@@ -100,12 +100,6 @@ function meteredChunks(
   return { chunks, sizeBytes: () => sizeBytes, sha256: () => hash.digest("hex") };
 }
 
-export async function collectBlob(stream: Readable): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks);
-}
-
 export function createLocalBlobTransferStore(dir: string): BlobTransferStore {
   let ensured: Promise<unknown> | null = null;
   const ensureDir = (): Promise<unknown> => (ensured ??= mkdir(dir, { recursive: true }));
