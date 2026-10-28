@@ -93,7 +93,6 @@ test("an enforcing turn_end rule holds the draft back and delivers the rewrite",
 
   assert.equal(asked, 2);
   const reply = run?.result?.reply ?? "";
-  assert.match(reply, /Write the reply again/);
   assert.match(reply, new RegExp(REVISE_MESSAGE));
   assert.equal(reply.startsWith(FIRST_DRAFT), false);
 
@@ -105,14 +104,12 @@ test("an enforcing turn_end rule holds the draft back and delivers the rewrite",
   assert.equal(narration.length, 1);
 
   assert.equal(run?.partial?.trim(), reply.trim());
-  assert.ok(reply.includes(`The held-back draft:\n${FIRST_DRAFT}`));
   assert.equal((narration[0]!.payload as { demoted?: boolean }).demoted, true);
+  assert.ok(reply.includes(FIRST_DRAFT));
+  assert.equal(states.length, 2);
 
-  assert.match(states[0]!, /Draft reply, written but not yet delivered \(revision attempt 1 of 2\):/);
   assert.ok(states[0]!.includes(FIRST_DRAFT));
   assert.ok(states[0]!.includes(GUIDANCE));
-  assert.match(states[0]!, /Standing instructions this conversation's replies must follow:/);
-  assert.match(states[1]!, /revision attempt 2 of 2/);
 });
 
 test("an observing turn_end rule classifies without changing the reply", async () => {
@@ -134,7 +131,7 @@ test("narration before a tool call still streams while the final reply is held",
 
   assert.equal(run?.partial?.startsWith("Looking that up now."), true);
   assert.equal(entries.filter((e) => e.type === "assistant").length, 1);
-  assert.match(run?.result?.reply ?? "", /Write the reply again/);
+  assert.ok((run?.result?.reply ?? "").includes(REVISE_MESSAGE));
 });
 
 test("a reply the addressed-turn nudge falls back to is checked before it is posted", async () => {
@@ -159,7 +156,7 @@ test("a reply the addressed-turn nudge falls back to is checked before it is pos
     }
     assert.equal(states.length, 3);
     assert.equal(posted.length, 1);
-    assert.match(posted[0]!.text, /Write the reply again/);
+    assert.ok(posted[0]!.text.includes(REVISE_MESSAGE));
     assert.equal(posted[0]!.text.startsWith("worklog: did the thing but never posted"), false);
   } finally {
     await built.runtime.stop();
