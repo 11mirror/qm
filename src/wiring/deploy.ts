@@ -77,6 +77,7 @@ export function buildDeploy(deps: DeployInputs) {
     porter: () =>
       createPorterDeployProvider({
         ...config.porterDeploy,
+        ...(config.sandbox.namePrefix ? { namePrefix: config.sandbox.namePrefix } : {}),
         advisoryLock,
         store: createDeployBodyStore(databaseUrl, PORTER_DEPLOY_BODIES_MIGRATION),
         onError: sandboxOnError,
