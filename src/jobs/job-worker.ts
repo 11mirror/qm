@@ -17,7 +17,7 @@ import { WorkAdmissionClosed } from "../util/admitted-work.ts";
 import { reportFailure } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { pgPoolMax, tenantLockKey } from "../persistence/pg-pool.ts";
-import { withoutTenant, withTenant } from "../tenant.ts";
+import { type Tenant, withoutTenant, withTenant } from "../tenant.ts";
 import { activeTenants, retiredTenantReason, taskTenant } from "../tenants/directory.ts";
 
 export type JobDisposition = "done" | "release" | number;
@@ -50,7 +50,7 @@ const CLAIM_EXTEND_MS = 30_000;
 const DONE_RETENTION_SEC = 7 * 24 * 60 * 60;
 const CLEANUP_BATCH = 1000;
 
-const claimBudget = () => pgPoolMax("query");
+const claimBudget = () => Math.max(1, Math.floor(pgPoolMax("query") / 2));
 const clampConcurrency = (n: number) => Math.min(claimBudget(), Math.max(1, Math.trunc(n)));
 
 function serializeStart(worker: JobWorker): JobWorker {
@@ -122,6 +122,24 @@ async function runRecurring(job: string, fn: () => unknown, context?: string): P
   }
 }
 
+function tenantTicker(job: string, fn: () => unknown, track: (work: Promise<void>) => void) {
+  const inFlight = new Set<string>();
+  return async (owners: Tenant[], budgetMs: number): Promise<void> => {
+    const runs = owners
+      .filter((owner) => !inFlight.has(owner.id ?? ""))
+      .map((owner) => {
+        const key = owner.id ?? "";
+        inFlight.add(key);
+        const work = runRecurring(job, () => withTenant(owner, fn), `tenant=${owner.slug ?? "home"}`).finally(() =>
+          inFlight.delete(key),
+        );
+        track(work);
+        return work;
+      });
+    await Promise.race([Promise.all(runs), sleep(budgetMs, { unref: true })]);
+  };
+}
+
 export function createJobWorker(databaseUrl: string): JobWorker {
   const db = registerAbsurdSchema(databaseUrl);
   const worker = `jobs:${randomUUID()}`;
@@ -133,6 +151,10 @@ export function createJobWorker(databaseUrl: string): JobWorker {
   let loop: Promise<void> | null = null;
   let wake = Promise.withResolvers<void>();
   const active = new Set<Promise<void>>();
+  const track = (work: Promise<void>) => {
+    active.add(work);
+    void work.finally(() => active.delete(work));
+  };
   const noteError = (e: unknown): never => {
     lastErrorAt = Date.now();
     throw e;
@@ -213,6 +235,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
     every(name, everyMs, fn, opts = {}) {
       const job = `every:${name}`;
       recurring.push({ job, immediate: opts.immediate ?? false });
+      const tick = tenantTicker(job, fn, track);
       handlers.set(job, {
         run: async (params) => {
           if (opts.shared) await runRecurring(job, () => withoutTenant(fn));
@@ -221,9 +244,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
               reportFailure(`jobs: ${job} tenants`, e);
               return [];
             });
-            await Promise.all(
-              owners.map((owner) => runRecurring(job, () => withTenant(owner, fn), `tenant=${owner.slug ?? "home"}`)),
-            );
+            await tick(owners, everyMs);
           }
           return (params as { once?: boolean } | null)?.once ? "done" : Date.now() + everyMs;
         },

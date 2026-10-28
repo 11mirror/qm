@@ -57,7 +57,7 @@ test(
   { skip, timeout: 120_000 },
   async () => {
     const calls: TurnRequest[] = [];
-    const fires = createPostgresCronFireStore(testDatabaseUrl());
+    const fires = createPostgresCronFireStore(URL!);
     const a = instance(calls, 12_000, fires);
     const b = instance(calls, 12_000, fires);
     await a.jobs.start();
@@ -88,7 +88,7 @@ test(
   { skip, timeout: 120_000 },
   async () => {
     const calls: TurnRequest[] = [];
-    const fireStore = createPostgresCronFireStore(testDatabaseUrl());
+    const fireStore = createPostgresCronFireStore(URL!);
     const a = instance(calls, 0, fireStore);
     const b = instance(calls, 0, fireStore);
     await a.jobs.start();
@@ -124,7 +124,7 @@ test(
   { skip, timeout: 120_000 },
   async () => {
     const calls: TurnRequest[] = [];
-    const fires = createPostgresCronFireStore(testDatabaseUrl());
+    const fires = createPostgresCronFireStore(URL!);
     const dying = instance(calls, 0, fires);
     const cron = await dying.crons.create({
       schedule: { everyMs: 60 * 60_000 },
@@ -164,7 +164,7 @@ test(
   { skip, timeout: 120_000 },
   async () => {
     const calls: TurnRequest[] = [];
-    const fires = createPostgresCronFireStore(testDatabaseUrl());
+    const fires = createPostgresCronFireStore(URL!);
     const a = instance(calls, 0, fires);
     const b = instance(calls, 0, fires);
     const cron = await a.crons.create({

@@ -9,6 +9,7 @@ import { testDatabaseUrl } from "../support/test-database.ts";
 import { automationOrigin } from "../support/turn-origin.ts";
 import { describe, it } from "node:test";
 import { createCurrentScopeMembers } from "../../src/resolution/scope-membership.ts";
+import type { DirectoryMember } from "../../src/directory/directory-store.ts";
 
 const toChannel: Destination = { type: "slack", target: "C1:169.7", audienceScopeId: scopeId("channel", "C1") };
 
@@ -359,6 +360,8 @@ function unknownChannelDirectory() {
     channelPrivacy: async (): Promise<boolean | undefined> => undefined,
     list: async () => [{ principalId: OWNER, displayName: "Pete" }],
     get: async () => null,
+    conversationMembers: async (_kind: "channel" | "group", _id: string): Promise<DirectoryMember[] | undefined> =>
+      undefined,
   };
 }
 
@@ -440,20 +443,20 @@ describe("runTrigger home-scope gate for group homes", () => {
     assert.match(out.note ?? "", /missing from the directory snapshot/);
   });
 
-  it("a group the snapshot affirmatively knows, excluding the actor, skips as lost membership", async () => {
+  it("a group whose known roster excludes the cron owner skips as the owner having left", async () => {
     let ranTurn = false;
     const dir = {
       ...unknownChannelDirectory(),
       groupMember: async (_g: string, pid: string) => pid === "kim@example.com",
-      list: async () => [
-        { principalId: OWNER, displayName: "Pete" },
-        { principalId: "kim@example.com", displayName: "Kim" },
+      conversationMembers: async (): Promise<DirectoryMember[] | undefined> => [
+        { principalId: "kim@example.com", displayName: "Kim", type: "internal" },
       ],
     };
     const d = runTriggerHomeScopeDeps(dir, { onRun: () => (ranTurn = true) });
     const out = await runTrigger(d, groupSpec("kicked"));
     assert.equal(ranTurn, false, "an affirmative group roster skips");
-    assert.match(out.note ?? "", /no longer a member/);
+    assert.equal(out.ownerLeft, true);
+    assert.match(out.note ?? "", /owner left this conversation/);
   });
 
   it("without currentScopeMembers wired, an affirmative tri-state non-membership skips", async () => {

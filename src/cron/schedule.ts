@@ -4,6 +4,7 @@ import { isObj } from "../util/objects.ts";
 
 export const DEFAULT_CRON_TIMEZONE = "America/Los_Angeles";
 
+const MIN_RECURRING_CRON_MS = 60_000;
 const PAST_FIRE_GRACE_MS = 5 * 60_000;
 
 export interface NormalizedSchedule {
@@ -115,6 +116,9 @@ export function normalizeSchedule(
 }
 
 export function validateUserSchedule(schedule: CronSchedule, now: number = Date.now()): void {
+  if (schedule.everyMs !== undefined && schedule.everyMs < MIN_RECURRING_CRON_MS) {
+    throw new Error(`schedule.everyMs must be at least ${MIN_RECURRING_CRON_MS}ms`);
+  }
   if (schedule.firstFireAt !== undefined && schedule.firstFireAt < now - PAST_FIRE_GRACE_MS) {
     throw new Error(
       `schedule.firstFireAt (${schedule.firstFireAt}) is in the past — it is now ` +
