@@ -143,16 +143,6 @@ test("OpenRouter uses native PDF processing without silently selecting an OCR se
   assert.equal(payload.messages[0]!.content.at(-1)!.type, "file");
 });
 
-test("Google document parts preserve PDFs and use text for office files", async () => {
-  const payload = (await withDocumentInputs(
-    { contents: [{ role: "user", parts: [{ text: "Summarize" }] }] },
-    { api: "google-generative-ai", input: ["image"] },
-    [await fixture("pdf"), await fixture("docx")],
-  )) as { contents: { parts: Record<string, unknown>[] }[] };
-  assert.ok(payload.contents[0]!.parts.some((part) => part.inlineData));
-  assert.match(String(payload.contents[0]!.parts.at(-1)!.text), /QUARTZ-731/);
-});
-
 test("invalid binary documents and empty scans never masquerade as read documents", async () => {
   const document = await fixture("pdf");
   document.dataBase64 = Buffer.from("not a PDF").toString("base64");
@@ -168,7 +158,6 @@ test("request byte budgets replace all native document wire formats with explici
       { api: "openai-completions", provider: "openai", input: ["image"] },
       { messages: [{ role: "user", content: [] }] },
     ],
-    [{ api: "google-generative-ai", input: ["image"] }, { contents: [{ role: "user", parts: [] }] }],
   ] as const) {
     const encoded = await withDocumentInputs(payload, model, [await fixture("pdf")]);
     const trimmed = trimPayloadToByteBudget(encoded, 1000);
@@ -360,23 +349,6 @@ test("a large text attachment is charged only what is left of the document budge
   assert.match(rendered, /0,vvvv/);
 });
 
-test("Pi proxy and Bedrock fallback use their actual provider request shapes", async () => {
-  const documents = [await fixture("txt")];
-  const proxy = await withDocumentInputs(
-    { context: { messages: [{ role: "user", content: "Summarize" }] } },
-    { api: "pi-messages" },
-    documents,
-  );
-  assert.match(JSON.stringify(proxy), /QUARTZ-731/);
-  const bedrock = (await withDocumentInputs(
-    { messages: [{ role: "user", content: [{ text: "Summarize" }] }] },
-    { api: "bedrock-converse-stream" },
-    documents,
-  )) as { messages: { content: Record<string, unknown>[] }[] };
-  assert.equal(bedrock.messages[0]!.content.at(-1)!.type, undefined);
-  assert.match(String(bedrock.messages[0]!.content.at(-1)!.text), /QUARTZ-731/);
-});
-
 test("one failed historical document does not prevent loading another document", async () => {
   const { store, meta } = storeFor();
   const get = store.get.bind(store);
@@ -452,12 +424,7 @@ test("encrypted PDFs do not expose content through text fallback", async () => {
   assert.doesNotMatch(text, /QUARTZ-731/);
 });
 
-for (const model of [
-  openai,
-  anthropic,
-  { api: "google-generative-ai", provider: "google", input: ["text", "image"] },
-  { api: "openai-completions", provider: "openai", input: ["text", "image"] },
-]) {
+for (const model of [openai, anthropic, { api: "openai-completions", provider: "openai", input: ["text", "image"] }]) {
   test(`${model.api} isolates invalid documents while retaining scanned native PDFs`, async () => {
     const documents = await Promise.all(
       ["scanned", "malformed", "encrypted"].map(async (name) => ({

@@ -38,7 +38,6 @@ export function promptEnvelopeWithoutHistory(payload: unknown): unknown {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
   const envelope: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(payload)) {
-    if (key === "contents") continue;
     if (key === "messages" || key === "input") {
       if (Array.isArray(value)) {
         const instructions = value.filter(
@@ -51,7 +50,7 @@ export function promptEnvelopeWithoutHistory(payload: unknown): unknown {
         if (instructions.length) envelope[key] = instructions;
       }
     } else {
-      envelope[key] = key === "context" ? promptEnvelopeWithoutHistory(value) : value;
+      envelope[key] = value;
     }
   }
   return envelope;
