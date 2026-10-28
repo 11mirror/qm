@@ -18,7 +18,7 @@ import {
 import { fileArtifactId, type PutFileInput, type FileArtifactStore } from "../../src/files/file-artifact-store.ts";
 import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-artifact-store.ts";
 import { createIdentityService } from "../../src/identity/identity-service.ts";
-import { createMemoryBlobTransferStore, collectBlob } from "../../src/persistence/blob-transfer.ts";
+import { collectBlob } from "../../src/persistence/blob-transfer.ts";
 import { principalEntitledToScope } from "../../src/resolution/context-filter.ts";
 import { defaultPublishAudience } from "../../src/resolution/publish-audience.ts";
 import { carriedFileHandles } from "../../src/resolution/sharing-access.ts";
@@ -28,6 +28,7 @@ import { scopeId, type Principal } from "../../src/types.ts";
 import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
 import { assertDocumentListing, assertSharedRecordIdentity } from "../support/file-document-listing.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
+import { createMemoryBlobTransferStore } from "../support/in-process-stores.ts";
 
 const owner = scopeId("channel", "C1");
 const other = scopeId("personal", "U9");

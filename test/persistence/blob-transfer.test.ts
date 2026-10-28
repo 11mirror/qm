@@ -22,7 +22,6 @@ import {
   BlobTooLargeError,
   collectBlob,
   createLocalBlobTransferStore,
-  createMemoryBlobTransferStore,
   createS3BlobTransferStore,
   S3_PART_BYTES,
   type BlobTransferStore,
@@ -123,7 +122,6 @@ const stores = (): Array<[string, BlobTransferStore, string | null]> => {
   const dir = localDir();
   return [
     ["local-fs", createLocalBlobTransferStore(dir), dir],
-    ["memory", createMemoryBlobTransferStore(), null],
     ["s3", createS3BlobTransferStore({ bucket: "b", _client: fakeS3().client }), null],
   ];
 };
@@ -299,9 +297,8 @@ test("s3 ensureExpiry preserves unrelated rules and replaces only its own (idemp
   assert.deepEqual((ours[0] as { Expiration?: unknown }).Expiration, { Days: 2 }, "our rule updated to the new age");
 });
 
-test("local + memory stores do not implement ensureExpiry (they stay on the in-process sweep)", () => {
+test("the local store does not implement ensureExpiry (it stays on the in-process sweep)", () => {
   assert.equal(createLocalBlobTransferStore(localDir()).ensureExpiry, undefined);
-  assert.equal(createMemoryBlobTransferStore().ensureExpiry, undefined);
 });
 
 test("s3: parts are carved to exactly one part regardless of how the source chunks it", async () => {

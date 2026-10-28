@@ -6,8 +6,6 @@ export interface LeaderLease {
   hold<T>(key: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
 }
 
-const NEVER = new Promise<void>(() => {});
-
 export async function holdUntilDone(
   lease: LeaderLease,
   key: string,
@@ -27,14 +25,6 @@ export async function holdUntilDone(
     await sleep(50);
   }
   throw new Error(timeoutMessage);
-}
-
-export function createNoopLeaderLease(): LeaderLease {
-  return {
-    async hold<T>(_key: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
-      return fn(NEVER);
-    },
-  };
 }
 
 export function createPostgresLeaderLease(pg: PgPool): LeaderLease {

@@ -1,14 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Sandbox, SandboxHandle } from "../../../src/sandbox/sandbox.ts";
-import {
-  createMemoryBlobTransferStore,
-  collectBlob,
-  type BlobTransferStore,
-} from "../../../src/persistence/blob-transfer.ts";
+import { collectBlob, type BlobTransferStore } from "../../../src/persistence/blob-transfer.ts";
 import { MAX_REPLY_ATTACHMENT_BYTES, MAX_ATTACHMENT_BYTES } from "../../../src/core/attachments.ts";
 import { createAttachStaging } from "../../../src/core/orchestrator/attach-tool.ts";
 import { fakeSandbox } from "../../support/attachment-sandbox.ts";
+import { createMemoryBlobTransferStore } from "../../support/in-process-stores.ts";
 
 function attachStaging(sandbox: Sandbox, handle: SandboxHandle, blobTransfer: BlobTransferStore) {
   return createAttachStaging({

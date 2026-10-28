@@ -16,7 +16,7 @@ import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.t
 import { loadConfig } from "../src/config.ts";
 import { sleep } from "../src/util/async.ts";
 import { scopeId } from "../src/types.ts";
-import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createNoopAdvisoryLock } from "../test/support/in-process-stores.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
