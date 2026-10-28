@@ -81,8 +81,6 @@ export function mimeFromName(name: string): string {
   return MIME_BY_EXTENSION[ext] ?? "application/octet-stream";
 }
 
-export const MAX_REPLY_ATTACHMENT_BYTES = MAX_ATTACHMENT_BYTES;
-
 export interface ArtifactRegistration {
   store: FileArtifactStore;
   ownerScopeId: ScopeId;
@@ -388,7 +386,7 @@ export async function collectNamedOutbound(
       const sizeBytes = stored?.sizeBytes ?? bytes!.length;
       if (sizeBytes === 0) empty.push(label);
       if (sizeBytes > MAX_ATTACHMENT_BYTES) oversized.push(label);
-      else if (totalBytes + sizeBytes > MAX_REPLY_ATTACHMENT_BYTES) overTotal.push(label);
+      else if (totalBytes + sizeBytes > MAX_ATTACHMENT_BYTES) overTotal.push(label);
       if (doomed()) {
         stored?.stream.destroy();
         continue;
@@ -438,11 +436,5 @@ export async function discardOutbound(
 ): Promise<void> {
   await transfer.delete(attachment.blobId).catch(swallowAs("attachments: discard blob delete", undefined));
   if (!register || !attachment.artifactId || !created?.has(attachment.artifactId)) return;
-  await register.store.delete(attachment.artifactId).catch((e) => {
-    try {
-      register.onError(e);
-    } catch (err) {
-      swallowAs("attachments: discard onError", undefined)(err);
-    }
-  });
+  await register.store.delete(attachment.artifactId).catch((e: unknown) => register.onError(e));
 }

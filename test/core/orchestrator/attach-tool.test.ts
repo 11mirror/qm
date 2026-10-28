@@ -6,7 +6,7 @@ import {
   collectBlob,
   type BlobTransferStore,
 } from "../../../src/persistence/blob-transfer.ts";
-import { MAX_REPLY_ATTACHMENT_BYTES, MAX_ATTACHMENT_BYTES } from "../../../src/core/attachments.ts";
+import { MAX_ATTACHMENT_BYTES } from "../../../src/core/attachments.ts";
 import { createAttachStaging } from "../../../src/core/orchestrator/attach-tool.ts";
 import { fakeSandbox } from "../../support/attachment-sandbox.ts";
 
@@ -98,7 +98,7 @@ test("a reply's files are bounded by their total bytes, counting what is already
   files.set("b.bin", new Uint8Array(Buffer.from("bb")));
   files.set("c.bin", new Uint8Array(Buffer.from("c")));
   const memory = createMemoryBlobTransferStore();
-  const nearlyFull = MAX_REPLY_ATTACHMENT_BYTES - 1;
+  const nearlyFull = MAX_ATTACHMENT_BYTES - 1;
   let inflate = true;
   const transfer: BlobTransferStore = {
     ...memory,
