@@ -8,6 +8,7 @@ import {
   reportFailure,
   swallow,
   swallowAs,
+  execFailure,
   httpFailure,
   withRequestId,
 } from "../../src/util/errors.ts";
@@ -155,6 +156,15 @@ test("httpFailure names the status, a clipped body, and the provider request id"
   const text = await httpFailure(res);
   assert.match(text, /^http 502 x{200} \[request id req-7\]$/);
   assert.equal(await httpFailure(new Response("plain", { status: 429 })), "http 429 plain");
+  const broken = new Response(
+    new ReadableStream({
+      pull(controller) {
+        controller.error(new Error("connection reset"));
+      },
+    }),
+    { status: 503 },
+  );
+  assert.equal(await httpFailure(broken), "http 503 (body unreadable: connection reset)");
   assert.equal(
     withRequestId("lambda -> 429: throttled", new Headers({ "x-amzn-requestid": "aws-1" })),
     "lambda -> 429: throttled [request id aws-1]",
@@ -225,4 +235,13 @@ test("error fields redact credentials in nested keys, raw request headers and ur
   assert.match(detail, /code=slack_webapi_request_error/);
   assert.match(detail, /"Accept":"application\/json"/);
   assert.match(detail, /connect ECONNREFUSED/);
+});
+
+test("execFailure keeps the tail of long output and marks the cut", () => {
+  const error = execFailure("build", { stdout: "", stderr: `${"a".repeat(500)}END`, code: 2 });
+  assert.equal(error.message, `build failed (exit 2); stderr: …${"a".repeat(297)}END`);
+  assert.equal(
+    execFailure("run", { stdout: " ok\n", stderr: "", code: 124 }).message,
+    "run failed (exit 124, timed out); stdout: ok",
+  );
 });
