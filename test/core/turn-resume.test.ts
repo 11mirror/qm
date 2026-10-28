@@ -31,6 +31,7 @@ import type { ToolContext } from "../../src/tools/primitives.ts";
 import { scopeId, type Conversation, type Principal } from "../../src/types.ts";
 import type { Sandbox } from "../../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
+import { inlineJobs } from "../support/inline-jobs.ts";
 import { createPostgresAuditLog } from "../../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
@@ -604,6 +605,7 @@ function buildScenario() {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "tool-call-resume-")));
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
+    jobs: inlineJobs(),
     identity: createIdentityService(testDatabaseUrl()),
     resolution: createResolutionService(testConfigStore(), acl),
     sessions,

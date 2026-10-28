@@ -4,7 +4,6 @@ import { isVisionAttachment, safeAttachmentName, senderNote } from "../attachmen
 import { renderOverheard, selectOverheardToImport, type OverheardEntryPayload } from "../../harness/replay.ts";
 import { swallowAs } from "../../util/errors.ts";
 import type { OrchestratorDeps } from "./types.ts";
-import { isScreenableTextAttachment } from "./turn-helpers.ts";
 
 import type { TurnCtx } from "./turn-context.ts";
 import type { SecurityObserver } from "./security-screen.ts";
@@ -12,6 +11,20 @@ import type { SecurityObserver } from "./security-screen.ts";
 export interface ScreenTrace {
   readonly thread: string;
   readonly runId?: string;
+}
+
+function isScreenableTextAttachment(mimetype: string): boolean {
+  const mime = mimetype.split(";", 1)[0]!.trim().toLowerCase();
+  return (
+    mime.startsWith("text/") ||
+    [
+      "application/json",
+      "application/xml",
+      "application/javascript",
+      "application/yaml",
+      "application/x-yaml",
+    ].includes(mime)
+  );
 }
 
 export function observeInboundTurn(

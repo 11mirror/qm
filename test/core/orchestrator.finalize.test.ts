@@ -20,6 +20,7 @@ import type { ErrorLog } from "../../src/admin/error-log.ts";
 import type { SurfaceCache } from "../../src/surface-cache/types.ts";
 import type { Conversation, Principal } from "../../src/types.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
+import { inlineJobs } from "../support/inline-jobs.ts";
 import { createPostgresAuditLog } from "../../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
@@ -122,6 +123,7 @@ function buildOrchestrator(
   });
   const orch = createOrchestrator({
     ...singleProcessDeps(),
+    jobs: inlineJobs(),
     identity: createIdentityService(databaseUrl),
     resolution: createResolutionService(config, acl),
     sessions,

@@ -6,7 +6,6 @@ import { isSubagentThreadRef } from "../../sessions/thread-ref.ts";
 import { createCanWriteScope, rosterAdmits } from "../../resolution/scope-membership.ts";
 import { isValidCapabilityTimezone } from "../../auth/capability-token.ts";
 import { isSessionTurn } from "../turn-origin.ts";
-import { stepMessage, type Item } from "../../sessions/items.ts";
 import { scopeId as toScopeId, type ScopeId, type TurnResult } from "../../types.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { tenant } from "../../tenant.ts";
@@ -22,14 +21,6 @@ export function rosterChangedRefusal(sessionId?: string): TurnResult {
     reason: "project membership changed; retry from the current project",
   };
 }
-
-const ACTIVITY_KINDS = new Set<Item["kind"]>([
-  "ToolCall",
-  "ToolResult",
-  "Elicitation",
-  "ElicitationResponse",
-  "SteeringMessage",
-]);
 
 export interface AdmittedTurn {
   input: OrchestratorInput;
@@ -52,7 +43,6 @@ export interface AdmittedTurn {
   turnTimezone: string | undefined;
   delegatedSession: Session | null;
   withManagedRosterVersion: <T>(fn: () => Promise<T>) => Promise<T>;
-  mirrorRunActivity: (appended: Item) => Promise<void>;
 }
 
 export async function admitTurn(
@@ -69,6 +59,15 @@ export async function admitTurn(
     return {
       refused: { status: "refused", reason: "Slack workspace access changed; start a fresh request in Slack." },
     };
+  if (!deps.identity.isInternal(requested.actor)) {
+    return {
+      refused: {
+        status: "refused",
+        refusalKind: "internal_only",
+        reason: "internal-only: non-internal principals cannot interact",
+      },
+    };
+  }
   const external = requested.externalSlack !== undefined;
   const externalServices = new Set(requested.externalSlack?.serviceCredentials ?? []);
   const serviceAllowed = (slug: string): boolean =>
@@ -106,15 +105,6 @@ export async function admitTurn(
   const coreReceivedAt = Date.now();
   const turnTimezone = isValidCapabilityTimezone(input.timezone) ? input.timezone : undefined;
 
-  if (!deps.identity.isInternal(actor)) {
-    return {
-      refused: {
-        status: "refused",
-        refusalKind: "internal_only",
-        reason: "internal-only: non-internal principals cannot interact",
-      },
-    };
-  }
   const delegatedSession = isSubagentThreadRef(conversation.threadRef)
     ? await deps.sessions.getByThread(conversation.threadRef)
     : null;
@@ -150,7 +140,6 @@ export async function admitTurn(
       turnTimezone,
       delegatedSession,
       withManagedRosterVersion: (fn) => withManagedRosterVersion(deps, input, managedGroupRef, fn),
-      mirrorRunActivity: (appended) => mirrorRunActivity(deps, input, appended),
     },
   };
 }
@@ -212,21 +201,6 @@ async function withManagedRosterVersion<T>(
   const result = await deps.managedGroups!.withVersion(managedGroupRef, input.scopeVersion, fn);
   if (result === undefined) throw new ProjectRosterChanged();
   return result;
-}
-
-async function mirrorRunActivity(deps: OrchestratorDeps, input: OrchestratorInput, appended: Item): Promise<void> {
-  if (!input.runId || !deps.runActivity) return;
-  const append = (item: Item) =>
-    deps.runActivity!.append(input.runId!, { item }).catch(swallowAs("orchestrator: run-activity append", undefined));
-  if (ACTIVITY_KINDS.has(appended.kind) || (appended.kind === "AgentMessage" && appended.variant === "narration")) {
-    await append(appended);
-  } else if (appended.kind === "Reasoning") {
-    const id = stepMessage(appended)?.id;
-    const step = typeof id === "string" && appended.step !== null ? { id, index: appended.step } : undefined;
-    if (appended.body.redacted !== true && appended.text?.trim())
-      await append({ ...appended, body: step ? { wire: { message: { id: step.id } } } : {} });
-    if (step) deps.turnStream?.settleReasoning(input.runId, step.id, step.index);
-  }
 }
 
 async function turnLimitRefusal(

@@ -16,17 +16,7 @@ export function openTurnSandboxes(
     session: Session;
   },
 ) {
-  const {
-    deps,
-    input,
-    actor,
-    conversation,
-    external,
-    liveAuthorTurn,
-    scopeId,
-    resolution,
-    isCurrentSharedScopeMember,
-  } = ctx;
+  const { deps, input, actor, conversation, external, liveAuthorTurn, scopeId, resolution } = ctx;
   const { session } = turn;
   const { memoryScopeId } = turn.context;
   const { turnContextBlocks, scopeProfile, visibleSkillsForTurn, transferId, turnSessionDir, turnFilesDir } =
@@ -61,12 +51,13 @@ export function openTurnSandboxes(
   }
 
   const sandboxes = createTurnSandboxes({
-    deps: { ...deps, sandboxResources: turnSandboxResources, isCurrentSharedScopeMember },
-    input,
-    actor,
+    ...ctx,
+    deps: {
+      ...deps,
+      sandboxResources: turnSandboxResources,
+      isCurrentSharedScopeMember: ctx.isCurrentSharedScopeMember,
+    },
     session,
-    resolution,
-    scopeId,
     memoryScopeId,
     transferId,
     turnSessionDir,

@@ -5,8 +5,38 @@ import type { SessionStore } from "../sessions/session-store.ts";
 import type { ScopeId } from "../types.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { headSlice } from "../util/text.ts";
-import { stripTurnBoilerplate } from "./orchestrator/turn-helpers.ts";
+import { isOverheard, isReply, isUserMessage, type Item } from "../sessions/items.ts";
+import { forModelContext } from "../harness/context-compaction.ts";
 import { TitleRejected } from "./turn-error.ts";
+
+export function stripTurnBoilerplate(text: string): string {
+  const kept = text
+    .split("\n\n")
+    .filter((p) => !/^\s*\[/.test(p))
+    .join("\n\n")
+    .trim();
+  return kept || text.trim();
+}
+
+export function visibleTitleItemText(item: Item): string | undefined {
+  const value = isUserMessage(item) && typeof item.body.display === "string" ? item.body.display : item.text;
+  return typeof value === "string" ? value.trim() || undefined : undefined;
+}
+
+export function renderTitleTranscript(entries: Item[]): string {
+  const lines: string[] = [];
+  for (const e of forModelContext([...entries])) {
+    const user = isUserMessage(e);
+    if (!user && !isReply(e)) continue;
+    if (isOverheard(e)) continue;
+    const raw = visibleTitleItemText(e);
+    if (!raw) continue;
+    const text = user ? stripTurnBoilerplate(raw) : raw;
+    if (!text) continue;
+    lines.push(`${user ? "User" : "Assistant"}:\n${text}`);
+  }
+  return lines.join("\n\n");
+}
 
 function fallbackSessionTitle(text: string): string | undefined {
   const clean = stripTurnBoilerplate(text).replace(/\s+/g, " ").trim();

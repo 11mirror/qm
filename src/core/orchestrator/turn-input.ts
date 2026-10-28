@@ -5,7 +5,7 @@ import type { ScreenTrace } from "./inbound-screen.ts";
 import type { frameTurnPrompt } from "./turn-prompt.ts";
 import type { buildTurnTools } from "./turn-tools.ts";
 import type { SecurityObserver } from "./security-screen.ts";
-import type { Session } from "../../types.ts";
+import type { IncomingAttachment, Session } from "../../types.ts";
 import { memoryRecallQuery } from "../../memory/semantic-recall.ts";
 import { documentText, historicalDocumentMetas, loadDocumentInputs } from "../document-inputs.ts";
 import { MAX_DOCUMENT_BYTES, documentTokenCharges, isDocumentAttachment } from "../document-kinds.ts";
@@ -20,6 +20,7 @@ import { skillsIndex } from "../../skills/materialize.ts";
 import { PROACTIVE_OPENER_PROMPT } from "../../onboarding/onboarding.ts";
 import { createTranscriptSource } from "../../sessions/transcript-source.ts";
 import {
+  type ArtifactRegistration,
   environmentNote,
   inboundIssuesNote,
   inboundIssueList,
@@ -40,7 +41,6 @@ import {
 import { swallow, swallowAs } from "../../util/errors.ts";
 import { mapBounded } from "../../util/async.ts";
 import type { OrchestratorDeps } from "./types.ts";
-import { completedSurfaceEnqueues } from "./turn-helpers.ts";
 import { createCompaction } from "./compaction.ts";
 import { createTurnSandboxes } from "./sandboxes.ts";
 
@@ -70,7 +70,6 @@ export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
   const { spine } = turn.turnTools;
   const { inbound, manifest, inboundIssues } = await stageInbound(ctx, turn);
   const importedOverheard = await importOverheard(ctx, turn);
-  const priorTurns = input.priorTurns;
   const { visibleHistory, recalled, partial, resumePlan, resume } = await loadTurnHistory(ctx, turn);
   const { history, documentInputs, contextRecovered, observeDocuments, ...remaining } = await loadTurnDocuments(
     ctx,
@@ -78,15 +77,14 @@ export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
     inbound,
     visibleHistory,
   );
-  const { remainingDocumentBytes, remainingDocumentCount, remainingDocumentTokens } = remaining;
+  const { remainingDocumentBytes, remainingDocumentTokens } = remaining;
   const turnEnvironmentContents = await composeTurnEnvironment(ctx, turn, visibleHistory, history, manifest);
   const baseText = input.proactiveOpener && !input.text.trim() ? PROACTIVE_OPENER_PROMPT : input.text;
   const pausedTurnUserEntry = input.approval
     ? [...visibleHistory].reverse().find((e) => isUserMessage(e) && !isOverheard(e) && e.body?.approvalDenial !== true)
     : undefined;
   const approvalReplay = !!pausedTurnUserEntry && (pausedTurnUserEntry.text ?? "").trim() === input.text.trim();
-  if (partial) await noteResume(ctx, turn, partial, resume, resumePlan!);
-  const turnInput = baseText;
+  if (partial) await noteResume(ctx, turn, partial, resume);
   const continueTurn = !!partial && history.some((entry) => entry.seq === partial.userSeq);
   if (partial) spine.turnUserEntrySeq = partial.userSeq;
   const isPollFire = automatedTurn && !!input.surface && isWakeTrigger(input.surface);
@@ -104,12 +102,10 @@ export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
   return {
     contextRecovered,
     remainingDocumentBytes,
-    remainingDocumentCount,
     remainingDocumentTokens,
     inbound,
     inboundIssues,
     importedOverheard,
-    priorTurns,
     recalled,
     partial,
     resumePlan,
@@ -120,57 +116,79 @@ export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
     baseText,
     approvalReplay,
     resume,
-    turnInput,
     continueTurn,
     isPollFire,
   };
 }
 
 async function stageInbound(ctx: TurnCtx, turn: TurnInputArgs) {
-  const { deps, input, actor, scopeId, strictReadOnly } = ctx;
-  const { blobTransfer } = deps;
+  const { deps, input, actor, scopeId } = ctx;
   const { screenTrace, session, provision, observeSecurityData } = turn;
-  const { turnInboxDir } = turn.framed;
-  const { fileRegistration } = turn.turnTools;
   if (input.attachments?.some((attachment) => attachment.sourceId)) {
     input.attachments = withoutAlreadyIngested(
       input.attachments,
       (await deps.sessions.getContextWindow(session.id)).items,
     );
   }
+  const { inbound, manifest, issues } = await stageAttachments(ctx, {
+    attachments: input.attachments ?? [],
+    provision,
+    registration: turn.turnTools.fileRegistration,
+    inboxDir: turn.framed.turnInboxDir,
+    surfaceNotes: input.inboundNotes ?? [],
+    observe: ({ content }) =>
+      void observeSecurityData(content, actor.id, scopeId, {
+        ...screenTrace,
+        sessionId: session.id,
+        hook: "tool_response",
+        request: input.text,
+        surface: "inbound_file",
+        origin: input.origin.kind,
+      }),
+  });
+  return { inbound, manifest, inboundIssues: issues };
+}
+
+export async function stageAttachments(
+  ctx: TurnCtx,
+  stage: {
+    attachments: IncomingAttachment[];
+    provision: TurnInputArgs["provision"];
+    registration: ArtifactRegistration;
+    inboxDir: string;
+    surfaceNotes: readonly string[];
+    observe: (file: { content: string; name: string; mimetype: string }) => void;
+  },
+) {
+  const { deps, strictReadOnly } = ctx;
+  const { attachments, inboxDir } = stage;
   const inbound =
-    input.attachments?.length && !strictReadOnly
+    attachments.length && !strictReadOnly
       ? await materializeInbound(
           deps.sandbox,
-          provision,
-          input.attachments,
-          blobTransfer,
-          fileRegistration,
-          turnInboxDir,
-          ({ content }) =>
-            void observeSecurityData(content, actor.id, scopeId, {
-              ...screenTrace,
-              sessionId: session.id,
-              hook: "tool_response",
-              request: input.text,
-              surface: "inbound_file",
-              origin: input.origin.kind,
-            }),
+          stage.provision,
+          attachments,
+          deps.blobTransfer,
+          stage.registration,
+          inboxDir,
+          stage.observe,
         )
       : { metas: [], images: [], unavailable: [] };
-  const manifest = inboundManifest(inbound.metas, turnInboxDir, inbound.unstaged);
-  const inboundIssues = inboundIssueList({
-    unavailable: inbound.unavailable,
-    surfaceNotes: [
-      ...(input.inboundNotes ?? []),
-      ...(strictReadOnly
-        ? (input.attachments ?? []).map(
-            (attachment) => `${safeAttachmentName(attachment.name)} — unavailable in read-only mode`,
-          )
-        : []),
-    ],
-  });
-  return { inbound, manifest, inboundIssues };
+  const readOnlyNotes = strictReadOnly
+    ? attachments.map((attachment) => `${safeAttachmentName(attachment.name)} — unavailable in read-only mode`)
+    : [];
+  return {
+    inbound,
+    manifest: inboundManifest(inbound.metas, inboxDir, inbound.unstaged),
+    issues: inboundIssueList({
+      unavailable: inbound.unavailable,
+      surfaceNotes: [...stage.surfaceNotes, ...readOnlyNotes],
+    }),
+  };
+}
+
+export function documentBytes(documents: readonly { dataBase64: string }[]): number {
+  return documents.reduce((sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"), 0);
 }
 
 async function importOverheard(ctx: TurnCtx, turn: TurnInputArgs): Promise<OverheardEntryPayload[]> {
@@ -256,15 +274,12 @@ async function loadTurnDocuments(
         undefined,
         turnAbort.signal,
         undefined,
-        undefined,
         documentBudget,
       );
   const observeDocuments = (inputs: Awaited<ReturnType<typeof loadDocumentInputs>>, requestText: string) =>
     observeTurnDocuments(ctx, turn, inputs, requestText);
   observeDocuments(documentInputs, input.text);
-  const remainingDocumentBytes =
-    MAX_DOCUMENT_BYTES -
-    documentInputs.documents.reduce((sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"), 0);
+  const remainingDocumentBytes = MAX_DOCUMENT_BYTES - documentBytes(documentInputs.documents);
   const remainingDocumentTokens = documentBudget - documentInputs.tokens;
   return {
     history,
@@ -272,7 +287,6 @@ async function loadTurnDocuments(
     contextRecovered,
     observeDocuments,
     remainingDocumentBytes,
-    remainingDocumentCount: Number.POSITIVE_INFINITY,
     remainingDocumentTokens,
   };
 }
@@ -338,7 +352,6 @@ async function noteResume(
   turn: TurnInputArgs,
   partial: NonNullable<Awaited<ReturnType<typeof loadTurnHistory>>["partial"]>,
   resume: Awaited<ReturnType<typeof loadTurnHistory>>["resume"],
-  resumePlan: NonNullable<Awaited<ReturnType<typeof loadTurnHistory>>["resumePlan"]>,
 ): Promise<void> {
   const { deps, input, actor, conversation, scopeId, filterHistory } = ctx;
   const { session } = turn;
@@ -361,9 +374,6 @@ async function noteResume(
       ? `attempt ${input.attempt}; resuming partial turn at seq ${partial.userSeq} (${partial.workEntries} recorded entries)`
       : `attempt ${input.attempt}; re-running turn at seq ${partial.userSeq} (no recorded work to resume)`,
   });
-  console.error(
-    `[orchestrator] turn.resume attempt=${input.attempt} thread=${conversation.threadRef} userSeq=${partial.userSeq} workEntries=${partial.workEntries} strategy=${resumePlan.kind}`,
-  );
 }
 
 export function turnFailureUserItem(
@@ -385,4 +395,20 @@ export function turnFailureUserItem(
         },
       }
     : undefined;
+}
+
+const SURFACE_ENQUEUE_ACTIONS = new Set(["post", "reach", "react", "edit", "delete"]);
+
+export function completedSurfaceEnqueues(entries: readonly Item[], sinceSeq: number, surfaceTool: string): number {
+  const later = entries.filter((e) => e.seq > sinceSeq);
+  const answered = new Set(
+    later.flatMap((e) => (e.kind === "ToolResult" && e.body.interrupted !== true ? [e.callId] : [])),
+  );
+  return later.filter(
+    (e) =>
+      e.kind === "ToolCall" &&
+      e.tool === surfaceTool &&
+      SURFACE_ENQUEUE_ACTIONS.has(String(e.body.action)) &&
+      answered.has(e.callId),
+  ).length;
 }

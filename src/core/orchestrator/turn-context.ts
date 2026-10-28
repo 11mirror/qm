@@ -11,7 +11,6 @@ import type {
   Resolution,
   ScopeId,
   Session,
-  SessionType,
   TurnRequest,
 } from "../../types.ts";
 import { loadActorGrants } from "./approvals.ts";
@@ -23,6 +22,7 @@ export interface TurnCtx extends AdmittedTurn {
   deps: OrchestratorDeps;
   resolution: Resolution;
   scopeId: ScopeId;
+  environmentId: string;
   actorGrants: () => Promise<CommandApprovalGrant[]>;
   approvalOwner: (sessionId: string) => {
     sessionId: string;
@@ -40,14 +40,19 @@ export interface TurnCtx extends AdmittedTurn {
 
 export async function resolveTurnScope(deps: OrchestratorDeps, admitted: AdmittedTurn): Promise<TurnCtx> {
   const { input, actor, conversation, external, liveAuthorTurn, delegatedSession } = admitted;
-  const resolution = await deps.resolution.resolve(conversation, actor, external);
+  const scopeId = deps.resolution.scopeFor(conversation, actor);
+  const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
+  const resolved = await deps.resolution.resolve(conversation, actor, external);
+  const resolution: Resolution = {
+    ...resolved,
+    layers: resolved.layers.map((layer) => (layer.mode === "rw" ? { ...layer, scopeId: environmentId } : layer)),
+  };
   const actorGrants = loadActorGrants(deps.approvalGrants, actor.id);
   const approvalOwner = (sessionId: string) => ({
     sessionId,
     request: replayableRequest(input),
     adminGrantModes: resolution.approvalGrantModes,
   });
-  const scopeId = deps.resolution.scopeFor(conversation, actor);
   const isCurrentSharedScopeMember = withLiveTurnMembership(deps.isCurrentSharedScopeMember, {
     actorId: actor.id,
     scopeId,
@@ -83,6 +88,7 @@ export async function resolveTurnScope(deps: OrchestratorDeps, admitted: Admitte
     deps,
     resolution,
     scopeId,
+    environmentId,
     actorGrants,
     approvalOwner,
     isCurrentSharedScopeMember,
@@ -98,12 +104,9 @@ export async function resolveTurnScope(deps: OrchestratorDeps, admitted: Admitte
 
 export async function openTurnSession(ctx: TurnCtx): Promise<Session> {
   const { deps, conversation, input, actor, scopeId } = ctx;
-  let type: SessionType = "channel";
-  if (conversation.kind === "dm") type = "dm";
-  else if (conversation.kind === "group") type = "group";
   const session = await deps.sessions.getOrCreateByThread(
     conversation.threadRef,
-    type,
+    conversation.kind,
     scopeId,
     conversation.channelName,
     input.surface,
@@ -127,9 +130,6 @@ export async function resolveTurnWorkspace(ctx: TurnCtx, memoryPolicy: MemoryPol
     isCurrentSharedScopeMember,
     useMemory,
   } = ctx;
-  const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
-  const rwLayer = resolution.layers.find((l) => l.mode === "rw");
-  if (rwLayer && environmentId !== rwLayer.scopeId) rwLayer.scopeId = environmentId;
   await Promise.all(resolution.layers.map((layer) => deps.workspace.ensureScope(layer.scopeId)));
 
   return resolveTurnContext({
@@ -151,6 +151,6 @@ export async function resolveTurnWorkspace(ctx: TurnCtx, memoryPolicy: MemoryPol
     skills: deps.skills,
     auditLog: deps.auditLog,
     directory: deps.directory,
-    projects: deps.projects,
+    projects: deps.managedGroups,
   });
 }

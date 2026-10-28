@@ -1,6 +1,4 @@
 import { surfaceHas } from "../../surfaces/surface.ts";
-import type { OutgoingAttachment } from "../../types.ts";
-import type { TurnOutcome } from "../turn-outcome.ts";
 import type { MemoryStrategy } from "../../memory/strategy.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
 import { ProjectRosterChanged, rosterChangedRefusal } from "./admit.ts";
@@ -28,85 +26,6 @@ import { stripAckPrefix } from "./turn-helpers.ts";
 import { type SpineState } from "./surface-tools.ts";
 import { createAttachStaging } from "./attach-tool.ts";
 
-export async function settleTurnResult(
-  ctx: TurnCtx,
-  turn: {
-    session: Session;
-    hasSurfaceToolDeps: boolean;
-    isPollFire: boolean;
-    emittedEntries: Item[];
-    result: HarnessTurnResult;
-    stagedAttachments: OutgoingAttachment[];
-    reply: string;
-    cancelStopped: boolean;
-    outcome: TurnOutcome;
-    turnCompleted: boolean;
-    turnUserSeq: number | undefined;
-  },
-): Promise<TurnResult> {
-  const { deps, input, withManagedRosterVersion, approvalOwner, strictReadOnly } = ctx;
-  const {
-    session,
-    hasSurfaceToolDeps,
-    isPollFire,
-    emittedEntries,
-    result,
-    stagedAttachments,
-    reply,
-    cancelStopped,
-    outcome,
-    turnCompleted,
-    turnUserSeq,
-  } = turn;
-  const pending = deps.approvals;
-  let finalResult: TurnResult;
-  const sourceUserSeq = turnUserSeq;
-  const sourceAssistantEntrySeq = emittedEntries.findLast(isReply)?.seq;
-  if (cancelStopped && !result.pendingApprovals?.length) {
-    finalResult = { status: "silent", sessionId: session.id, stopped: true };
-  } else if (isPollFire && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
-    finalResult = { status: "silent", sessionId: session.id };
-  } else if (result.pendingApprovals?.length) {
-    const turnApprovals: Array<
-      NonNullable<HarnessTurnResult["pendingApprovals"]>[number] & {
-        summary?: string;
-        summaryDetail?: string;
-        grantModes?: { session: boolean; always: boolean };
-      }
-    > = [...(result.pendingApprovals ?? [])];
-    const requests: ApprovalRequest[] = [];
-    for (const pa of turnApprovals)
-      requests.push(await approvalRequest(ctx, session.id, pa, approvalBlocksInput(pa.kind, outcome)));
-    const approvals = await withManagedRosterVersion(() => parkApprovals(pending, approvalOwner(session.id), requests));
-    finalResult = turnCompleted
-      ? {
-          status: "ok",
-          sessionId: session.id,
-          reply,
-          pendingApprovals: approvals,
-          ...(stagedAttachments.length ? { attachments: stagedAttachments } : {}),
-          ...(sourceUserSeq !== undefined ? { sourceUserSeq } : {}),
-          ...(sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq } : {}),
-        }
-      : { status: "pending_approval", sessionId: session.id, pendingApprovals: approvals };
-  } else if (isPollFire && !stagedAttachments.length && !reply.trim()) {
-    finalResult = { status: "silent", sessionId: session.id };
-  } else if (input.surfaceTools && hasSurfaceToolDeps && !strictReadOnly) {
-    finalResult = { status: "silent", sessionId: session.id, ...(result.stopped ? { stopped: true } : {}) };
-  } else {
-    finalResult = {
-      status: "ok",
-      sessionId: session.id,
-      reply,
-      ...(result.stopped ? { stopped: true } : {}),
-      ...(stagedAttachments.length ? { attachments: stagedAttachments } : {}),
-      ...(sourceUserSeq !== undefined ? { sourceUserSeq } : {}),
-      ...(sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq } : {}),
-    };
-  }
-  return finalResult;
-}
-
 type ApprovalAsk = Omit<ApprovalRequest, "requestId" | "blocksInput">;
 
 async function approvalRequest(
@@ -131,7 +50,6 @@ export async function mapTurnFailure(
 ): Promise<TurnResult> {
   const { deps, input, withManagedRosterVersion, approvalOwner, scopeId } = ctx;
   const { session, lease, failureUserItem } = turn;
-  const pending = deps.approvals;
   if (err instanceof ProjectRosterChanged) {
     return rosterChangedRefusal(session.id);
   }
@@ -151,7 +69,7 @@ export async function mapTurnFailure(
     );
     try {
       const pendingApprovals = await withManagedRosterVersion(() =>
-        parkApprovals(pending, approvalOwner(session.id), [request]),
+        parkApprovals(deps.approvals, approvalOwner(session.id), [request]),
       );
       return { status: "pending_approval", sessionId: session.id, pendingApprovals };
     } catch (writeErr) {
@@ -202,7 +120,7 @@ export async function mapTurnFailure(
   throw err;
 }
 
-export async function concludeTurn(
+export async function settleTurn(
   ctx: TurnCtx,
   turn: {
     session: Session;
@@ -216,23 +134,13 @@ export async function concludeTurn(
     captureDependencies: () => MemoryProvenance[];
     memoryStrategy: MemoryStrategy;
     memoryPolicy: MemoryPolicy;
+    hasSurfaceToolDeps: boolean;
+    isPollFire: boolean;
   },
-) {
-  const { deps, input, actor, automatedTurn, scopeId, useMemory } = ctx;
-  const {
-    session,
-    result,
-    attachStaging,
-    spine,
-    partial,
-    turnInput,
-    emittedEntries,
-    memoryScopeId,
-    captureDependencies,
-    memoryStrategy,
-    memoryPolicy,
-  } = turn;
-  const stagedAttachments = attachStaging.staged();
+): Promise<{ settled: TurnResult; completed: boolean }> {
+  const { deps, input, withManagedRosterVersion, approvalOwner, strictReadOnly } = ctx;
+  const { session, result, partial, emittedEntries, hasSurfaceToolDeps, isPollFire } = turn;
+  const stagedAttachments = turn.attachStaging.staged();
   const harvestedAck = (() => {
     if (!surfaceHas(input.surface, "earlyAck") || input.surfaceTools || !input.runId) return undefined;
     const fb = deps.turnStream?.firstBlock(input.runId);
@@ -241,43 +149,88 @@ export async function concludeTurn(
   })();
   const reply = stripAckPrefix(result.reply ?? "", harvestedAck);
   const cancelStopped = input.cancel?.aborted === true && result.stopped === true;
-
   const outcome = deriveTurnOutcome({
-    ...(reply !== undefined ? { reply } : {}),
+    reply,
     attachments: stagedAttachments.length,
     pendingApprovals: result.pendingApprovals ?? [],
     terminatedOnApproval: result.pausedOnApproval === true,
   });
-  const turnCompleted = outcome.completed;
-  const pausing = outcome.paused;
-  if (input.runId && !pausing && reply && reply.trim()) deps.turnStream?.markReplyDone(input.runId);
-  const turnUserSeq = partial?.userSeq ?? emittedEntries.find(isUserMessage)?.seq;
-  const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
-  if (!pausing && !cancelStopped && useMemory && memoryPolicy.capture !== "off" && onTurnEnd) {
-    try {
-      await onTurnEnd({
-        scopeId: memoryScopeId,
-        conversationScopeId: scopeId,
-        inheritedFacts: captureDependencies(),
-        input: turnInput,
-        reply,
-        actorId: actor.id,
-        ...(automatedTurn ? { autonomous: true } : {}),
-        sessionId: session.id,
-        idempotencyKey: input.runId ?? `${session.id}:${spine.turnUserEntrySeq ?? "turn"}`,
-      });
-    } catch (e) {
-      deps.errors?.record(
-        {
-          category: "memory",
-          code: "capture_failed",
-          message: errMessage(e),
-          scopeLabel: scopeId,
-          sessionId: session.id,
-        },
-        e,
-      );
-    }
+  if (input.runId && !outcome.paused && reply.trim()) deps.turnStream?.markReplyDone(input.runId);
+  if (!outcome.paused && !cancelStopped) await captureTurnMemory(ctx, turn, reply);
+  const sourceUserSeq = partial?.userSeq ?? emittedEntries.find(isUserMessage)?.seq;
+  const sourceAssistantEntrySeq = emittedEntries.findLast(isReply)?.seq;
+  const ok = (): TurnResult => ({
+    status: "ok",
+    sessionId: session.id,
+    reply,
+    ...(stagedAttachments.length ? { attachments: stagedAttachments } : {}),
+    ...(sourceUserSeq !== undefined ? { sourceUserSeq } : {}),
+    ...(sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq } : {}),
+  });
+  const settle = (settled: TurnResult) => ({ settled, completed: outcome.completed });
+  if (cancelStopped && !result.pendingApprovals?.length)
+    return settle({ status: "silent", sessionId: session.id, stopped: true });
+  if (isPollFire && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true)
+    return settle({ status: "silent", sessionId: session.id });
+  if (result.pendingApprovals?.length) {
+    const requests: ApprovalRequest[] = [];
+    for (const pa of result.pendingApprovals)
+      requests.push(await approvalRequest(ctx, session.id, pa, approvalBlocksInput(pa.kind, outcome)));
+    const pendingApprovals = await withManagedRosterVersion(() =>
+      parkApprovals(deps.approvals, approvalOwner(session.id), requests),
+    );
+    return settle(
+      outcome.completed
+        ? { ...ok(), pendingApprovals }
+        : { status: "pending_approval", sessionId: session.id, pendingApprovals },
+    );
   }
-  return { stagedAttachments, reply, cancelStopped, outcome, turnCompleted, pausing, turnUserSeq };
+  if (isPollFire && !stagedAttachments.length && !reply.trim())
+    return settle({ status: "silent", sessionId: session.id });
+  if (input.surfaceTools && hasSurfaceToolDeps && !strictReadOnly)
+    return settle({ status: "silent", sessionId: session.id, ...(result.stopped ? { stopped: true } : {}) });
+  return settle({ ...ok(), ...(result.stopped ? { stopped: true } : {}) });
+}
+
+async function captureTurnMemory(
+  ctx: TurnCtx,
+  turn: {
+    session: Session;
+    spine: SpineState;
+    turnInput: string;
+    memoryScopeId: ScopeId;
+    captureDependencies: () => MemoryProvenance[];
+    memoryStrategy: MemoryStrategy;
+    memoryPolicy: MemoryPolicy;
+  },
+  reply: string,
+): Promise<void> {
+  const { deps, input, actor, automatedTurn, scopeId, useMemory } = ctx;
+  const { session, memoryStrategy } = turn;
+  const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
+  if (!useMemory || turn.memoryPolicy.capture === "off" || !onTurnEnd) return;
+  try {
+    await onTurnEnd({
+      scopeId: turn.memoryScopeId,
+      conversationScopeId: scopeId,
+      inheritedFacts: turn.captureDependencies(),
+      input: turn.turnInput,
+      reply,
+      actorId: actor.id,
+      ...(automatedTurn ? { autonomous: true } : {}),
+      sessionId: session.id,
+      idempotencyKey: input.runId ?? `${session.id}:${turn.spine.turnUserEntrySeq ?? "turn"}`,
+    });
+  } catch (e) {
+    deps.errors?.record(
+      {
+        category: "memory",
+        code: "capture_failed",
+        message: errMessage(e),
+        scopeLabel: scopeId,
+        sessionId: session.id,
+      },
+      e,
+    );
+  }
 }

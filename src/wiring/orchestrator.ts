@@ -12,7 +12,7 @@ import type { CronsModule } from "./crons.ts";
 import { tenantConfig } from "../tenants/tenant-config.ts";
 import { tenant } from "../tenant.ts";
 import type { Head } from "./late.ts";
-import { createApprovalGrants } from "../core/orchestrator/approvals.ts";
+import { createApprovalGrants } from "../core/approval-store.ts";
 import { type SurfaceCache, createPostgresSurfaceCache } from "../surface-cache/surface-cache.ts";
 import { type ChannelPolicyStore, createPostgresChannelPolicyStore } from "../surface-cache/channel-policy-store.ts";
 import { type OrchestratorDeps, createOrchestrator } from "../core/orchestrator.ts";
@@ -155,7 +155,7 @@ function orchestratorDepsHead(
   const { auditLog } = deps.deploymentLayer;
   const { sessionStateBus } = deps.runs;
   const { refreshModels, harness, gatewayTransport } = deps.harness;
-  const { identity, configStore, sessions, admin } = deps.stores;
+  const { identity, configStore, sessions, admin, jobs } = deps.stores;
   const { resolution, workspace, files, toolOutput, rateLimiter, budget, acl } = deps.files;
   const { userModelCredentials, connectorTokens, modelGateway, mcpToolService } = deps.credentials;
   const { sandbox, sandboxResources } = deps.sandbox;
@@ -189,6 +189,7 @@ function orchestratorDepsHead(
     defaultTurnWallClockMs: config.turnWallClockMs,
     userModelCredentials,
     sessions,
+    jobs,
     workspace,
     files,
     toolOutput,
@@ -279,7 +280,6 @@ function orchestratorDepsTail(deps: OrchestratorInputs & { layerBrokerFor: Sessi
     isCurrentSharedScopeMember,
     currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
     managedGroups: projects,
-    projects,
     ...(config.reachExecEnabled ? { reachExec: true } : {}),
     environments,
     brokeredTools,

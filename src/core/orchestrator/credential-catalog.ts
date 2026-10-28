@@ -1,7 +1,5 @@
 import { surfaceHas } from "../../surfaces/surface.ts";
 import type { Session } from "../../types.ts";
-import { resolveEnvironmentId } from "../../environments/environment-store.ts";
-import type { CommandCredential } from "../../tools/primitives.ts";
 import { resolveBrowserModel } from "../../model/browser-model.ts";
 import { type Destination } from "../../types.ts";
 import { personalScope } from "../../types.ts";
@@ -23,15 +21,9 @@ import type { EgressPolicy } from "../../types.ts";
 import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
 import { tenant } from "../../tenant.ts";
 import {
-  addCredentialToCatalog,
+  collectCredentials,
   createCatalogState,
-  credentialBroker,
   serviceCredentialInventory,
-  placeCredential,
-  registerBrokeredTools,
-  registerConnectorCredentials,
-  registerKeychainCredentials,
-  registerServiceCredentials,
   type CatalogState,
 } from "./credential-registry.ts";
 import type { TurnCtx } from "./turn-context.ts";
@@ -46,7 +38,7 @@ interface CatalogTurn {
 
 export async function buildCredentialCatalog(ctx: TurnCtx, turn: CatalogTurn) {
   const { deps, input, actor, conversation, external, allInternal, liveAuthorTurn } = ctx;
-  const { resolution, scopeId, strictReadOnly } = ctx;
+  const { resolution, scopeId, environmentId, strictReadOnly } = ctx;
   const { sharingSources } = turn;
   const openSpeakerKeychain =
     liveAuthorTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
@@ -61,7 +53,6 @@ export async function buildCredentialCatalog(ctx: TurnCtx, turn: CatalogTurn) {
       scope: scopeId,
       isCurrentSharedScopeMember: deps.isCurrentSharedScopeMember,
     }));
-  const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
   const sharedScope =
     !external &&
     (scopeId !== personalScope(actor.id) ||
@@ -71,10 +62,6 @@ export async function buildCredentialCatalog(ctx: TurnCtx, turn: CatalogTurn) {
       ));
   const c = createCatalogState(ctx, strictReadOnly, openSpeakerKeychain, openAutomationKeychain, sharedScope);
   const { connectorEnv } = c;
-  const addCredential = addCredentialToCatalog.bind(null, c);
-  const catalogBroker = credentialBroker(c, []);
-  await registerKeychainCredentials(c, addCredential, catalogBroker);
-  await registerConnectorCredentials(c, addCredential, catalogBroker);
   const serviceInventory = await serviceCredentialInventory(c);
   const { records: serviceCredRecords, granted: grantedCredSlugs } = serviceInventory;
   if (!strictReadOnly && allInternal && deps.serviceCreds) {
@@ -99,17 +86,13 @@ export async function buildCredentialCatalog(ctx: TurnCtx, turn: CatalogTurn) {
   const { actorIsOrgAdmin, controlClaims, sandboxModelGateway } = await mintControlTokens(c, turn, browserSelection);
   const egressTokenForPolicy = (egress: EgressPolicy) => mintEgressToken(c, egress);
   const egressTokenForTurn = await egressTokenForPolicy(resolution.egress);
-  await registerServiceCredentials(c, addCredential, catalogBroker, serviceInventory);
-  registerBrokeredTools(c, addCredential);
+  const collected = await collectCredentials(c, [], serviceInventory);
   return {
     openSpeakerKeychain,
-    placeCredential: (credential: CommandCredential) => placeCredential(c, credential),
     connectorEnv,
-    commandCredentials: c.commandCredentials,
-    credentialDescriptions: c.credentialDescriptions,
-    credentialBroker: credentialBroker.bind(null, c),
-    registerKeychainCredentials: registerKeychainCredentials.bind(null, c),
-    registerConnectorCredentials: registerConnectorCredentials.bind(null, c),
+    commandCredentials: collected.credentials,
+    credentialDescriptions: collected.descriptions,
+    resolveCommandCredentials: async (handles: readonly string[]) => (await collectCredentials(c, handles)).credentials,
     serviceCredRecords,
     grantedCredSlugs,
     actorIsOrgAdmin,
@@ -117,7 +100,6 @@ export async function buildCredentialCatalog(ctx: TurnCtx, turn: CatalogTurn) {
     scopeAttestation: c.scopeAttestation,
     egressTokenForPolicy,
     egressTokenForTurn,
-    registerServiceCredentials: registerServiceCredentials.bind(null, c),
     openAutomationKeychain,
     sandboxModelGateway,
   };
@@ -130,12 +112,12 @@ async function mintControlTokens(
 ) {
   const { deps, input, actor, conversation, external, allInternal, liveTurn, liveAuthorTurn, automatedTurn } = c;
   const { turnTimezone, strictReadOnly, connectorEnv, scopeAttestation, sandboxTokenExpiry } = c;
-  const { ownCredentialsAllowed } = c;
+  const { ownCredentialsAllowed, capabilitySecret } = c;
   const { delivery, defaultDestination: destination, session } = turn;
   let actorIsOrgAdmin = false;
   let sandboxModelGateway = false;
   let controlClaims: CapabilityClaims | undefined;
-  if (!strictReadOnly && deps.signingSecret && deps.apiBaseUrl) {
+  if (!strictReadOnly && deps.signingSecret && capabilitySecret && deps.apiBaseUrl) {
     connectorEnv.AGENT_API_URL = deps.apiBaseUrl;
     if (deps.admin && liveAuthorTurn) {
       const status = await deps.admin
@@ -172,10 +154,7 @@ async function mintControlTokens(
       threadRef: conversation.threadRef,
       ...(turnSurface ? { surface: turnSurface } : {}),
     };
-    connectorEnv.AGENT_API_TOKEN = await mintCapabilityToken(
-      controlClaims,
-      deps.capabilitySecret ?? deps.signingSecret,
-    );
+    connectorEnv.AGENT_API_TOKEN = await mintCapabilityToken(controlClaims, capabilitySecret);
     if (browserSelection) {
       connectorEnv.BROWSE_LAB_BASE_URL = `${deps.apiBaseUrl}/v1/browser-model`;
       connectorEnv.BROWSE_LAB_MODEL_TOKEN = await mintCapabilityToken(
@@ -186,7 +165,7 @@ async function mintControlTokens(
           browserAccount: browserSelection.account,
           exp: Date.now() + CAPABILITY_TTL_MS,
         },
-        deps.capabilitySecret ?? deps.signingSecret,
+        capabilitySecret,
       );
     }
     if (deps.sandboxModels && allInternal && input.runId && input.runLeaseToken) {
@@ -201,7 +180,7 @@ async function mintControlTokens(
           threadRef: conversation.threadRef,
           exp: sandboxTokenExpiry,
         },
-        deps.capabilitySecret ?? deps.signingSecret,
+        capabilitySecret,
       );
       sandboxModelGateway = true;
     }
@@ -211,16 +190,15 @@ async function mintControlTokens(
         aud: OAUTH_CONSENT_AUD,
         exp: sandboxTokenExpiry,
       },
-      deps.capabilitySecret ?? deps.signingSecret,
+      capabilitySecret,
     );
   }
   return { actorIsOrgAdmin, controlClaims, sandboxModelGateway };
 }
 
 async function mintEgressToken(c: CatalogState, egress: EgressPolicy): Promise<string | undefined> {
-  const { deps, strictReadOnly, scopeAttestation, sandboxTokenExpiry } = c;
-  const egressSecret = deps.capabilitySecret ?? deps.signingSecret;
-  if (strictReadOnly || !egressSecret) return undefined;
+  const { deps, strictReadOnly, scopeAttestation, sandboxTokenExpiry, capabilitySecret } = c;
+  if (strictReadOnly || !capabilitySecret) return undefined;
   return mintCapabilityToken(
     {
       ...scopeAttestation,
@@ -228,6 +206,6 @@ async function mintEgressToken(c: CatalogState, egress: EgressPolicy): Promise<s
       egress: egressClaimAllowingControlPlane(egress, deps.apiBaseUrl ?? ""),
       exp: sandboxTokenExpiry,
     },
-    egressSecret,
+    capabilitySecret,
   );
 }

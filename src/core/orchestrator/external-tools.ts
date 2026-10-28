@@ -1,6 +1,6 @@
 import type { ToolContext } from "../../tools/primitives.ts";
 
-export function externalTools(tools: ToolContext, authorizeSandbox?: (id: string) => Promise<unknown>): ToolContext {
+export function externalTools(tools: ToolContext, authorizeSandbox: (id: string) => Promise<unknown>): ToolContext {
   const denied = (): never => {
     throw new Error(
       "This operation requires private access. Continue in the requesting person's DM with [[continue-private: task]].",
@@ -13,19 +13,13 @@ export function externalTools(tools: ToolContext, authorizeSandbox?: (id: string
       if (property === "execute")
         return async (command: string, opts?: Parameters<ToolContext["execute"]>[1]) => {
           if (opts?.scratch || opts?.reachTarget) return denied();
-          if (opts?.sandboxId) {
-            if (!authorizeSandbox) return denied();
-            await authorizeSandbox(opts.sandboxId);
-          }
+          if (opts?.sandboxId) await authorizeSandbox(opts.sandboxId);
           return target.execute(command, opts);
         };
       if (property === "sandboxResources" && target.sandboxResources)
         return async (...args: Parameters<NonNullable<ToolContext["sandboxResources"]>>) => {
           const id = args[1]?.sandboxId;
-          if (id) {
-            if (!authorizeSandbox) return denied();
-            await authorizeSandbox(id);
-          }
+          if (id) await authorizeSandbox(id);
           return target.sandboxResources!(...args);
         };
       if (property === "computerStatus")

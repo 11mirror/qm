@@ -45,6 +45,7 @@ import type { ControlService } from "../../api/control-service.ts";
 import type { Harness } from "../../harness/harness.ts";
 import type { AdminService } from "../../admin/admin-service.ts";
 import type { ErrorLog } from "../../admin/error-log.ts";
+import type { JobWorker } from "../../jobs/job-worker.ts";
 import type { ToolLedger } from "../../runs/tool-ledger.ts";
 import type { RunSignalStore } from "../../runs/run-signal-store.ts";
 import type { TurnStream } from "../../runs/turn-stream.ts";
@@ -54,8 +55,7 @@ import type { MemoryService } from "../../memory/memory-service.ts";
 import type { McpToolService } from "../../mcp/mcp-tool-service.ts";
 import type { MemoryStrategy } from "../../memory/strategy.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
-import type { ApprovalRecords } from "../approval-store.ts";
-import type { ApprovalGrants } from "./approvals.ts";
+import type { ApprovalGrants, ApprovalRecords } from "../approval-store.ts";
 import type { BlobTransferStore } from "../../persistence/blob-transfer.ts";
 import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { SkillStore } from "../../skills/skill-store.ts";
@@ -106,6 +106,7 @@ export interface OrchestratorDeps {
   brandingDefault?: OrgBranding;
   resolveBaseModelId?: () => string | undefined;
   sessions: SessionStore;
+  jobs: Pick<JobWorker, "handle" | "spawn">;
   sessionStateBus?: SessionStateBus;
   sessionSyscalls?: SessionSyscallsFactory;
   workspace: WorkspaceStore;
@@ -180,17 +181,16 @@ export interface OrchestratorDeps {
   outbound?: Outbound;
   recentDmPosts?: RecentDmPosts;
   directory?: DirectoryStore;
-  projects?: Pick<ProjectStore, "recognizes" | "name">;
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   currentScopeMembers?: import("../../resolution/scope-membership.ts").CurrentScopeMembers;
-  managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;
+  managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel"> &
+    Pick<ProjectStore, "name">;
   reachExec?: boolean;
   environments?: EnvironmentStore;
   layerBrokerFor?: (tool: BrokeredLayerTool) => AwsRoleBroker | undefined;
   brokeredTools?: readonly BrokeredLayerTool[];
   deploymentLayer?: DeploymentLayerRuntime;
   surfaceContext?: SurfaceContextPuller;
-  surfaceSearch?: SurfaceSearchStore;
   surfaceCache?: SurfaceCache;
   surfaceLabel?: (surface: string) => string | undefined;
   channelPolicy?: ChannelPolicyStore;
@@ -199,22 +199,6 @@ export interface OrchestratorDeps {
 export interface SurfaceContextPuller {
   pull(source: string, query: SurfaceContextQuery): Promise<SurfaceContextResult | null>;
   searchLive?(source: string, query: SurfaceContextQuery): Promise<SurfaceContextResult | null>;
-}
-
-interface SurfaceSearchStore {
-  search(query: SurfaceSearchQuery): Promise<SurfaceSearchStoreHit[]>;
-}
-interface SurfaceSearchQuery {
-  surface: string;
-  container: string;
-  query: string;
-  limit: number;
-}
-interface SurfaceSearchStoreHit {
-  ref?: string;
-  author?: string;
-  when?: string;
-  snippet: string;
 }
 
 export interface Orchestrator {

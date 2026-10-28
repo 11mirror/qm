@@ -86,13 +86,14 @@ export async function frameTurnPrompt(ctx: TurnCtx, turn: FrameTurnArgs) {
   const orgName = branding.orgName ?? "this organization";
   const rawHandle = cleanBrandingLabel(input.gatewayContext?.botHandle?.replace(/^@/, ""));
   const botHandle = rawHandle && rawHandle.toLowerCase() !== botName.toLowerCase() ? rawHandle : undefined;
-  let modeName = "mode-fallback";
-  if (input.surfaceTools) modeName = "mode-autonomous";
-  else if (!automatedTurn && !(sessionTurn && input.envelopeWrapped) && (conversation.kind === "dm" || isWeb))
-    modeName = "mode-conversation";
+  const conversationMode =
+    !input.surfaceTools &&
+    !automatedTurn &&
+    !(sessionTurn && input.envelopeWrapped) &&
+    (conversation.kind === "dm" || isWeb);
   let frameMd = MODE_FALLBACK_MD;
-  if (modeName === "mode-autonomous") frameMd = MODE_AUTONOMOUS_MD;
-  else if (modeName === "mode-conversation") frameMd = MODE_CONVERSATION_MD;
+  if (input.surfaceTools) frameMd = MODE_AUTONOMOUS_MD;
+  else if (conversationMode) frameMd = MODE_CONVERSATION_MD;
   const frameVars: PromptVars = {
     botName,
     surfaceTool,
@@ -103,7 +104,7 @@ export async function frameTurnPrompt(ctx: TurnCtx, turn: FrameTurnArgs) {
     web: profile.promptFlavor === "web",
     slack: profile.promptFlavor === "slack",
   };
-  if (modeName === "mode-conversation") {
+  if (conversationMode) {
     frameVars.userName = cleanBrandingLabel(actor.displayName) ?? "there";
     frameVars.userEmail = actor.id.includes("@") ? actor.id : undefined;
   }
@@ -113,7 +114,7 @@ export async function frameTurnPrompt(ctx: TurnCtx, turn: FrameTurnArgs) {
   const delegateWork = requiresDelegation(input, delegationEnabled);
   let modeFrame = applyPromptVars(frameMd, frameVars);
   if (delegateWork) modeFrame += `\n\n${DELEGATE_WORK_MD}`;
-  if (modeName === "mode-conversation" && input.proactiveOpener) {
+  if (conversationMode && input.proactiveOpener) {
     modeFrame += `\n${PROACTIVE_OPENER_MD}`;
   }
   const sharedCore = applyPromptVars(SHARED_CORE_MD, {
@@ -202,6 +203,7 @@ export async function frameTurnPrompt(ctx: TurnCtx, turn: FrameTurnArgs) {
     timeBlock,
     memoryHeading,
     onboardingBlock,
+    inventoryBudget,
   };
 }
 
@@ -245,6 +247,14 @@ async function listVisibleSkills(
   for (const entry of allowed) {
     const skill = entry.skill;
     if (!skill || !current.sharingSources.includes(skill.scopeId)) continue;
+    deps.auditLog.record({
+      at: Date.now(),
+      principalId: actor.id,
+      action: "sharing.cross_context_read",
+      resource: `skill:${skill.id}`,
+      scopeLabel: scopeId,
+      detail: JSON.stringify({ actor: actor.id, source: skill.scopeId, target: scopeId }),
+    });
     const snapshot = structuredClone(entry);
     void (async () => {
       const bundles = deps.skillBundles
@@ -264,17 +274,6 @@ async function listVisibleSkills(
           origin: input.origin.kind,
         });
     })().catch(swallowAs("orchestrator: observed skill screen", undefined));
-  }
-  for (const entry of allowed) {
-    if (!entry.skill || !current.sharingSources.includes(entry.skill.scopeId)) continue;
-    deps.auditLog.record({
-      at: Date.now(),
-      principalId: actor.id,
-      action: "sharing.cross_context_read",
-      resource: `skill:${entry.skill.id}`,
-      scopeLabel: scopeId,
-      detail: JSON.stringify({ actor: actor.id, source: entry.skill.scopeId, target: scopeId }),
-    });
   }
   return allowed;
 }
@@ -297,7 +296,7 @@ export async function finishSystemPrompt(
   ctx: TurnCtx,
   framed: Pick<
     Awaited<ReturnType<typeof frameTurnPrompt>>,
-    "systemPrompt" | "turnContextBlocks" | "configuredProviders" | "timeBlock" | "onboardingBlock"
+    "systemPrompt" | "turnContextBlocks" | "configuredProviders" | "timeBlock" | "onboardingBlock" | "inventoryBudget"
   >,
   catalog: {
     openSpeakerKeychain: boolean;
@@ -311,9 +310,8 @@ export async function finishSystemPrompt(
     directoryIndexFor: (directory: DirectoryStore) => Promise<Map<string, DirectoryMember>>;
   },
 ): Promise<{ systemPrompt: string; volatileContext: string }> {
-  const { deps, input, actor, conversation, external, automatedTurn, strictReadOnly, reachAvailable, scopeId } = ctx;
-  const inventoryBudget = inventoryTokenBudget(tokenBudgetFor(deps, scopeId, input.model));
-  const { turnContextBlocks, configuredProviders, timeBlock, onboardingBlock } = framed;
+  const { deps, input, actor, conversation, external, automatedTurn, strictReadOnly, reachAvailable } = ctx;
+  const { turnContextBlocks, configuredProviders, timeBlock, onboardingBlock, inventoryBudget } = framed;
   const { openSpeakerKeychain, credentialDescriptions, serviceCredRecords, grantedCredSlugs, actorIsOrgAdmin } =
     catalog;
   const { reachableChannelsFor, directoryIndexFor } = directoryViews;
@@ -349,11 +347,7 @@ export async function finishSystemPrompt(
   if (!strictReadOnly && deps.resolveConnectorClient && conversation.kind === "dm")
     await addConnectedApps(ctx, turnContextBlocks, configuredProviders);
   systemPrompt += `\n\n${USER_REPLY_RULES_MD.trim()}`;
-  const stableSystemBytes = systemPrompt.length;
-  if (timeBlock) systemPrompt += `\n\n${timeBlock}`;
-  if (onboardingBlock) systemPrompt += `\n\n${onboardingBlock}`;
-  const volatileContext = systemPrompt.slice(stableSystemBytes).trim();
-  systemPrompt = systemPrompt.slice(0, stableSystemBytes);
+  const volatileContext = [timeBlock, onboardingBlock].filter(Boolean).join("\n\n").trim();
   return { systemPrompt, volatileContext };
 }
 
@@ -390,6 +384,11 @@ async function addStandingObligations(
     "## Already scheduled here\nScheduled-work status is unavailable; check the live inventories before scheduling.";
 }
 
+function conversationMembers(actor: TurnCtx["actor"], conversation: TurnCtx["conversation"]) {
+  const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
+  return [...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]), ...audienceMembers];
+}
+
 async function addConversationRoster(
   { deps, actor, conversation }: TurnCtx,
   turnContextBlocks: Record<string, string>,
@@ -397,11 +396,7 @@ async function addConversationRoster(
   budgetTokens: number,
 ): Promise<void> {
   const rosterBlock = await (async () => {
-    const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
-    const participants = [
-      ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
-      ...audienceMembers,
-    ];
+    const participants = conversationMembers(actor, conversation);
     const index = await directoryIndexFor(deps.directory!);
     const seen = new Set<string>();
     const resolved: DirectoryMember[] = [];
@@ -427,15 +422,17 @@ async function addKeychainManifest(
   openSpeakerKeychain: boolean,
   credentialDescriptions: NonNullable<KeychainManifestInput["execution"]>,
 ): Promise<void> {
-  const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
-  const members = [...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]), ...audienceMembers].map(
-    (p) => ({ id: p.id, ...(p.displayName ? { displayName: p.displayName } : {}) }),
-  );
+  const members = conversationMembers(actor, conversation).map((p) => ({
+    id: p.id,
+    ...(p.displayName ? { displayName: p.displayName } : {}),
+  }));
+  const memberIds = members.map((m) => m.id);
+  const keychain = external ? undefined : deps.keychain;
   const [entriesByOwner, connectorsByOwner, scopeGrants, scopeAsks] = await Promise.all([
-    !external ? (deps.keychain?.listByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
-    !external ? (deps.keychain?.listConnectorsByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
-    !external ? (deps.keychain?.grantsForScope(scopeId) ?? []) : [],
-    !external ? (deps.keychain?.listAsks({ requesterScopeId: scopeId }) ?? []) : [],
+    keychain?.listByOwners(memberIds) ?? new Map(),
+    keychain?.listConnectorsByOwners(memberIds) ?? new Map(),
+    keychain?.grantsForScope(scopeId) ?? [],
+    keychain?.listAsks({ requesterScopeId: scopeId }) ?? [],
   ]);
   const keychainBlock = renderKeychainManifest({
     scopeId,

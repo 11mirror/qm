@@ -11,24 +11,24 @@ import { openTurnSession, resolveTurnScope, resolveTurnWorkspace, type TurnCtx }
 import { observeInboundTurn } from "./inbound-screen.ts";
 import { buildCredentialCatalog } from "./credential-catalog.ts";
 import { frameTurnPrompt } from "./turn-prompt.ts";
-import { concludeTurn, mapTurnFailure, settleTurnResult } from "./settle.ts";
+import { mapTurnFailure, settleTurn } from "./settle.ts";
 import { detectAmbientDecline, findRecordedTurn, replayRecordedAnswer } from "./turn-replay.ts";
 import { openTurnSandboxes } from "./turn-sandboxes.ts";
 import { finishSystemPrompt } from "./turn-prompt.ts";
 import { buildTurnTools, firstAckPublisher } from "./turn-tools.ts";
 import { prepareTurnInput, turnFailureUserItem } from "./turn-input.ts";
 import { selectTurnRuntime } from "./turn-runtime.ts";
-import { runSegments, type SegmentTurn, type TurnRunState } from "./turn-segment.ts";
+import { mirrorRunActivity, runSegments, type SegmentTurn, type TurnRunState } from "./turn-segment.ts";
 import { consumeApprovalDecision, loadApprovalLedger, type ApprovalLedger } from "./approvals.ts";
 import { createSessionTitles } from "../session-title.ts";
+import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
 import type { MemoryStrategy } from "../../memory/strategy.ts";
 import type { CompactionContext } from "./compaction.ts";
 import type { SecurityObserver } from "./security-screen.ts";
 import type { RecordedTurn } from "../turn-resume.ts";
 
-const MODEL_ACCESS_BLOCK =
-  "## Model access\nAn OpenAI-compatible model gateway is at `$MODEL_GATEWAY_URL` in the sandbox; authenticate with `Authorization: Bearer $MODEL_GATEWAY_TOKEN`. `GET $MODEL_GATEWAY_URL/v1/models` lists the usable models. The token is bound to this turn and expires with it; never send it anywhere but the gateway.";
+const MODEL_ACCESS_BLOCK = loadProtocolFile("turn-model-access");
 
 export interface OrchestratorInstance {
   deps: OrchestratorDeps;
@@ -46,9 +46,18 @@ export type TurnFrame = Awaited<ReturnType<typeof frameTurn>>;
 export type HeldLease = Exclude<Awaited<ReturnType<typeof holdTurnLease>>, { refused: TurnResult }>;
 export type BegunTurn = Extract<Awaited<ReturnType<typeof beginTurn>>, { done: false }>;
 export type ReadyTurn = Awaited<ReturnType<typeof readyTurn>>;
-type SessionTitling = ReturnType<typeof sessionTitling>;
-type Catalog = Awaited<ReturnType<typeof buildCredentialCatalog>>;
-type Sandboxes = ReturnType<typeof openTurnSandboxes>;
+
+interface TurnState {
+  frame: TurnFrame;
+  session: Session;
+  catalog: Awaited<ReturnType<typeof buildCredentialCatalog>>;
+  approvalLedger: ApprovalLedger;
+  recordedTurn: RecordedTurn | null;
+  titling: ReturnType<typeof sessionTitling>;
+  held: HeldLease;
+  run: TurnRunState;
+  sandboxes: ReturnType<typeof openTurnSandboxes>;
+}
 
 export async function handleTurn(o: OrchestratorInstance, requested: OrchestratorInput): Promise<TurnResult> {
   const { deps } = o;
@@ -86,53 +95,31 @@ export async function handleTurn(o: OrchestratorInstance, requested: Orchestrato
   const held = await holdTurnLease(ctx, session);
   if ("refused" in held) return held.refused;
   if (!ctx.ambientTurn) titling.assignSessionTitle();
+  const turn: TurnState = {
+    frame,
+    session,
+    catalog,
+    approvalLedger,
+    recordedTurn,
+    titling,
+    held,
+    run,
+    sandboxes: turnSandboxes,
+  };
   let failure: unknown;
   try {
-    const begun = await beginTurn(o, ctx, {
-      frame,
-      session,
-      catalog,
-      approvalLedger,
-      recordedTurn,
-      titling,
-      held,
-      run,
-    });
+    const begun = await beginTurn(o, ctx, turn);
     if (begun.done) return begun.result;
-    const ready = await readyTurn(o, ctx, {
-      frame,
-      session,
-      catalog,
-      approvalLedger,
-      recordedTurn,
-      titling,
-      held,
-      run,
-      sandboxes: turnSandboxes,
-      begun,
-    });
-    return await executeTurn(o, ctx, {
-      frame,
-      session,
-      catalog,
-      approvalLedger,
-      titling,
-      held,
-      run,
-      sandboxes: turnSandboxes,
-      begun,
-      ready,
-    });
+    const ready = await readyTurn(o, ctx, turn, begun);
+    return await executeTurn(o, ctx, turn, begun, ready);
   } catch (err) {
     failure = err;
     return await mapTurnFailure(ctx, { session, lease: held.lease, failureUserItem: run.failureUserItem }, err);
   } finally {
-    await releaseTurn(o, ctx, { session, held, run, reclaimBox: turnSandboxes.sandboxes.reclaimBox }).catch(
-      (releaseError: unknown) => {
-        if (failure === undefined) throw releaseError;
-        throw new AggregateError([failure, releaseError], errMessage(failure), { cause: failure });
-      },
-    );
+    await releaseTurn(o, ctx, turn).catch((releaseError: unknown) => {
+      if (failure === undefined) throw releaseError;
+      throw new AggregateError([failure, releaseError], errMessage(failure), { cause: failure });
+    });
   }
 }
 
@@ -146,22 +133,9 @@ async function frameTurn(o: OrchestratorInstance, ctx: TurnCtx) {
   return { screenTrace, mcpToolsReady, context, framed };
 }
 
-async function beginTurn(
-  o: OrchestratorInstance,
-  ctx: TurnCtx,
-  turn: {
-    frame: TurnFrame;
-    session: Session;
-    catalog: Catalog;
-    approvalLedger: ApprovalLedger;
-    recordedTurn: RecordedTurn | null;
-    titling: SessionTitling;
-    held: HeldLease;
-    run: TurnRunState;
-  },
-) {
+async function beginTurn(o: OrchestratorInstance, ctx: TurnCtx, turn: TurnState) {
   const { deps, transcripts } = o;
-  const { input, actor, scopeId, resolution, withManagedRosterVersion, mirrorRunActivity } = ctx;
+  const { input, actor, scopeId, resolution, withManagedRosterVersion } = ctx;
   const { frame, session, run } = turn;
   await withManagedRosterVersion(async () => {
     await ctx.reconcileSessionParticipants(session.id);
@@ -196,7 +170,7 @@ async function beginTurn(
       resolution,
       ledger: turn.approvalLedger,
       withRosterVersion: withManagedRosterVersion,
-      mirror: mirrorRunActivity,
+      mirror: (appended) => mirrorRunActivity(deps, input, appended),
     });
     if (decided.kind === "settled") return { done: true as const, result: decided.result };
     approvalNote = decided.approvalNote;
@@ -224,26 +198,11 @@ async function beginTurn(
   };
 }
 
-async function readyTurn(
-  o: OrchestratorInstance,
-  ctx: TurnCtx,
-  turn: {
-    frame: TurnFrame;
-    session: Session;
-    catalog: Catalog;
-    approvalLedger: ApprovalLedger;
-    recordedTurn: RecordedTurn | null;
-    titling: SessionTitling;
-    held: HeldLease;
-    run: TurnRunState;
-    sandboxes: Sandboxes;
-    begun: BegunTurn;
-  },
-) {
+async function readyTurn(o: OrchestratorInstance, ctx: TurnCtx, turn: TurnState, begun: BegunTurn) {
   const { deps, transcripts, observeSecurityData } = o;
   const { compactContextIfNeeded, documentTokenBudget } = o.compaction;
   const { input } = ctx;
-  const { frame, session, held, run, begun } = turn;
+  const { frame, session, held, run } = turn;
   const { screenTrace, context, framed } = frame;
   const { sandboxes, turnSandboxResources } = turn.sandboxes;
   if (input.runId) {
@@ -286,7 +245,6 @@ async function readyTurn(
   });
   run.contextRecovered = prepared.contextRecovered;
   run.remainingDocumentBytes = prepared.remainingDocumentBytes;
-  run.remainingDocumentCount = prepared.remainingDocumentCount;
   run.remainingDocumentTokens = prepared.remainingDocumentTokens;
   const { approvalReplay, resume, isPollFire, partial } = prepared;
   const publishFirstAck = firstAckPublisher(ctx, {
@@ -303,64 +261,50 @@ async function readyTurn(
 async function executeTurn(
   o: OrchestratorInstance,
   ctx: TurnCtx,
-  turn: {
-    frame: TurnFrame;
-    session: Session;
-    catalog: Catalog;
-    approvalLedger: ApprovalLedger;
-    titling: SessionTitling;
-    held: HeldLease;
-    run: TurnRunState;
-    sandboxes: Sandboxes;
-    begun: BegunTurn;
-    ready: ReadyTurn;
-  },
+  turn: TurnState,
+  begun: BegunTurn,
+  ready: ReadyTurn,
 ): Promise<TurnResult> {
   const { deps, memoryPolicy, memoryStrategy, observeSecurityData, titles } = o;
   const { scopeId } = ctx;
-  const { frame, session, held, run, begun, ready, titling } = turn;
+  const { frame, session, held, run, titling } = turn;
   const { spine, surfaceToolDeps, attachStaging } = ready.turnTools;
-  const { inboundIssues, partial, turnInput, isPollFire } = ready.prepared;
+  const { inboundIssues, partial, baseText, isPollFire } = ready.prepared;
   const { sandboxes } = turn.sandboxes;
   run.turnStart = Date.now();
   run.failureUserItem = ready.syntheticPrompt ? undefined : turnFailureUserItem(ctx, inboundIssues);
   const { controlClaims, scopeAttestation } = turn.catalog;
   const selected = await selectTurnRuntime(ctx, { session, controlClaims, scopeAttestation });
   const segmentTurn: SegmentTurn = {
-    frame,
-    session,
-    held,
-    run,
+    ...turn,
     begun,
     ready,
     selected,
-    approvalLedger: turn.approvalLedger,
     provision: sandboxes.provision,
     observeSecurityData,
   };
   run.runtimeHandoffs = selected.restoredRuntime ? 1 : 0;
   const result = await runSegments(ctx, segmentTurn, o.compaction.compactRecent);
 
-  const { stagedAttachments, reply, cancelStopped, outcome, turnCompleted, pausing, turnUserSeq } = await concludeTurn(
-    ctx,
-    {
-      session,
-      result,
-      attachStaging,
-      spine,
-      partial,
-      turnInput,
-      emittedEntries: run.emittedEntries,
-      memoryScopeId: frame.context.memoryScopeId,
-      captureDependencies: begun.captureDependencies,
-      memoryStrategy,
-      memoryPolicy,
-    },
-  );
+  const { settled, completed } = await settleTurn(ctx, {
+    session,
+    result,
+    attachStaging,
+    spine,
+    partial,
+    turnInput: baseText,
+    emittedEntries: run.emittedEntries,
+    memoryScopeId: frame.context.memoryScopeId,
+    captureDependencies: begun.captureDependencies,
+    memoryStrategy,
+    memoryPolicy,
+    hasSurfaceToolDeps: Boolean(surfaceToolDeps),
+    isPollFire,
+  });
 
   const tail = (): Promise<void> =>
     withCleanup(async () => {
-      if (!pausing && turnCompleted && !session.title && !titling.title.write) {
+      if (completed && !session.title && !titling.title.write) {
         await titles.generateAndStore(
           session.id,
           scopeId,
@@ -369,20 +313,7 @@ async function executeTurn(
       }
     }, sandboxes.reclaimBox);
 
-  let finalResult = await settleTurnResult(ctx, {
-    session,
-    hasSurfaceToolDeps: Boolean(surfaceToolDeps),
-    isPollFire,
-    emittedEntries: run.emittedEntries,
-    result,
-    stagedAttachments,
-    reply,
-    cancelStopped,
-    outcome,
-    turnCompleted,
-    turnUserSeq,
-  });
-  if (run.turnRuntime) finalResult = { ...finalResult, runtime: run.turnRuntime };
+  const finalResult = run.turnRuntime ? { ...settled, runtime: run.turnRuntime } : settled;
   await titling.title.write;
 
   run.tailOwnsReclaim = true;
@@ -394,24 +325,22 @@ async function executeTurn(
   return finalResult;
 }
 
-async function releaseTurn(
-  o: OrchestratorInstance,
-  ctx: TurnCtx,
-  turn: { session: Session; held: HeldLease; run: TurnRunState; reclaimBox: () => Promise<void> },
-): Promise<void> {
+async function releaseTurn(o: OrchestratorInstance, ctx: TurnCtx, turn: TurnState): Promise<void> {
   const { deps } = o;
   const { input, actor, resolution, scopeId } = ctx;
   const { session, held, run } = turn;
   if (input.runId) deps.turnStream?.end(input.runId);
   held.stopLeaseKeepalive();
-  if (!run.tailOwnsReclaim) await turn.reclaimBox();
+  if (!run.tailOwnsReclaim) await turn.sandboxes.sandboxes.reclaimBox();
   if (!held.leaseState.released) {
     await held.catchUpMessageRevisions();
     await deps.sessions.releaseLease(held.lease);
   }
-  if (!run.contextRecovered && !held.turnAbort.signal.aborted)
+  const afterSeq = run.emittedEntries.at(-1)?.seq;
+  if (!run.contextRecovered && !held.turnAbort.signal.aborted && afterSeq !== undefined)
     o.compaction.scheduleBackgroundCompaction({
       sessionId: session.id,
+      afterSeq,
       scopeId,
       orgScopeId: resolution.orgScopeId,
       actorId: actor.id,
@@ -426,7 +355,6 @@ function newTurnRunState(): TurnRunState {
     runtimeHandoffs: 0,
     contextRecovered: false,
     remainingDocumentBytes: 0,
-    remainingDocumentCount: 0,
     remainingDocumentTokens: 0,
     turnStart: 0,
     emittedEntries: [],

@@ -100,10 +100,9 @@ function createTurnSandboxState(ctx: TurnSandboxContext) {
       handle: SandboxHandle | null;
       pending: SandboxHandle | null;
       used: boolean;
-      provisionMs?: number;
     },
     turnKey,
-    scratch: disposableBox(base, "scratch", turnKey, connectorEnv),
+    scratch: scratchBox(base, turnKey, connectorEnv),
     resourceHandles: new Map<string, SandboxHandle>(),
     resourcePolicy: new Map<string, string>(),
     resourcePendingHandles: new Map<string, SandboxHandle>(),
@@ -115,7 +114,7 @@ function createTurnSandboxState(ctx: TurnSandboxContext) {
   };
 }
 
-function disposableBox(t: SandboxBase, kind: "scratch", key: string, env?: Record<string, string>) {
+function scratchBox(t: SandboxBase, key: string, env?: Record<string, string>) {
   const { deps, input, actor, session, resolution, scopeId, memoryScopeId, egressTokenForTurn, onSandboxStatus } = t;
   const state: {
     handle: SandboxHandle | null;
@@ -133,7 +132,7 @@ function disposableBox(t: SandboxBase, kind: "scratch", key: string, env?: Recor
     deps.auditLog?.record({
       at: Date.now(),
       principalId: actor.id,
-      action: `sandbox.${kind}.${action}`,
+      action: `sandbox.scratch.${action}`,
       resource: key,
       scopeLabel: scopeId,
       detail: JSON.stringify({
@@ -193,7 +192,7 @@ function disposableBox(t: SandboxBase, kind: "scratch", key: string, env?: Recor
         cleanupMs: Date.now() - cleanupStart,
         error: errMessage(error),
       });
-      reportSandboxError(t, `${kind}_destroy_failed`, error);
+      reportSandboxError(t, "scratch_destroy_failed", error);
       throw error;
     }
     state.handle = null;
@@ -278,7 +277,7 @@ async function doProvision(t: TurnSandboxState, eager: boolean): Promise<Sandbox
   });
   box.pending = handle;
   await holdResource(t, handle);
-  box.provisionMs = Date.now() - provisionStart;
+  const provisionMs = Date.now() - provisionStart;
   deps.auditLog?.record({
     at: Date.now(),
     principalId: actor.id,
@@ -290,24 +289,17 @@ async function doProvision(t: TurnSandboxState, eager: boolean): Promise<Sandbox
       sessionId: session.id,
       backend: handle.backend,
       sandboxId: handle.id,
-      provisionMs: box.provisionMs,
+      provisionMs,
       coldStart: handle.coldStart,
       eager,
     }),
   });
   await prepareTurnFiles(t, handle);
-  if (deps.processes && supportsProcessSessions(deps.sandbox)) {
+  const { sandbox, processes, keychain } = deps;
+  if (processes && supportsProcessSessions(sandbox)) {
     try {
-      await reconcileProcesses(deps.sandbox, handle, deps.processes, memoryScopeId, (exited, processId) =>
-        finishProcessCredentials(
-          {
-            sandbox: deps.sandbox,
-            processes: deps.processes!,
-            ...(deps.keychain ? { keychain: deps.keychain } : {}),
-          },
-          exited,
-          processId,
-        ),
+      await reconcileProcesses(sandbox, handle, processes, memoryScopeId, (exited, processId) =>
+        finishProcessCredentials({ sandbox, processes, keychain }, exited, processId),
       );
     } catch (err) {
       deps.errors?.record(
@@ -633,8 +625,9 @@ async function reclaimBox(t: TurnSandboxState): Promise<void> {
         .catch((error: unknown) => reportSandboxError(t, "reach_teardown_failed", error));
     }),
   );
-  const disposableFailures = (await Promise.allSettled([scratch.release()])).flatMap((r) =>
-    r.status === "rejected" ? [r.reason as unknown] : [],
+  const scratchFailure = await scratch.release().then(
+    () => undefined,
+    (error: unknown) => ({ error }),
   );
   await Promise.allSettled(resourcePending.values());
   const released = new Set<string>();
@@ -666,7 +659,7 @@ async function reclaimBox(t: TurnSandboxState): Promise<void> {
   box.handle = null;
   box.pending = null;
   if (!handle) {
-    if (disposableFailures.length) throw disposableFailures[0];
+    if (scratchFailure) throw scratchFailure.error;
     return;
   }
   await clearTurnFiles(t, handle);
@@ -675,5 +668,5 @@ async function reclaimBox(t: TurnSandboxState): Promise<void> {
     ...(keepWarm ? { keepWarm: true } : {}),
     ...(box.used ? {} : { homeUnchanged: true }),
   });
-  if (disposableFailures.length) throw disposableFailures[0];
+  if (scratchFailure) throw scratchFailure.error;
 }

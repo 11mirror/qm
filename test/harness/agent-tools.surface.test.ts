@@ -243,6 +243,34 @@ test("a missing required field for an action returns a crisp error, not a throw"
   assert.match(noQuery.content[0]!.text, /the "search" action requires `query`/);
 });
 
+test("a rejected surface action records its call before the error result", async () => {
+  for (const params of [
+    { action: "post" },
+    { action: "post", text: "hi", channel: "eng" },
+    { action: "reach", text: "hi" },
+    { action: "search" },
+    { action: "frobnicate" },
+  ]) {
+    const emitted: Emitted[] = [];
+    const slack = surfaceTool({
+      current: fakeToolContext(),
+      emit: (e) => {
+        emitted.push(emittedItem(e));
+      },
+      scopeLabel: "channel:C1",
+    });
+    await call(slack, params);
+    assert.deepEqual(
+      emitted.map((e) => [e.kind, e.callId, e.fields.isError]),
+      [
+        ["ToolCall", "t", undefined],
+        ["ToolResult", "t", true],
+      ],
+      JSON.stringify(params),
+    );
+  }
+});
+
 test("each action dispatches to exactly its matching tool-context method", async () => {
   const calls: Array<[string, unknown[]]> = [];
   const spy =
