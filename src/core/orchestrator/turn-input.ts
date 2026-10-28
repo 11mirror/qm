@@ -130,7 +130,7 @@ export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
 
 async function stageInbound(ctx: TurnCtx, turn: TurnInputArgs) {
   const { input, actor, scopeId } = ctx;
-  const { screenTrace, provision, observeSecurityData } = turn;
+  const { screenTrace, session, provision, observeSecurityData } = turn;
   if (input.attachments?.some((attachment) => attachment.sourceId)) {
     input.attachments = withoutAlreadyIngested(input.attachments, (await turn.historyWindow()).items);
   }
