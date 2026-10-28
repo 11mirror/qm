@@ -1,16 +1,12 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { PublishInput } from "../../tools/primitives.ts";
+import type { PublishAudienceDescriptor, PublishInput } from "../../tools/primitives.ts";
 import { errMessage } from "../../util/errors.ts";
 import { type ToolKit } from "./kit.ts";
 import { optionalBoolean, optionalInteger, optionalString, outsideWorkspace, sandboxSelector, text } from "./shared.ts";
-import type { PublishAudienceDescriptor } from "../../tools/primitives.ts";
 
 export function workspaceTools(kit: ToolKit) {
-  const { discoverSkills, skill } = skillTools(kit);
-  const { read, installCanvas, write } = fileTools(kit);
-  const { publish } = publishTool(kit);
-  return { discoverSkills, skill, read, installCanvas, write, publish };
+  return { ...skillTools(kit), ...fileTools(kit), publish: publishTool(kit) };
 }
 
 function skillTools(kit: ToolKit) {
@@ -209,7 +205,7 @@ function fileTools(kit: ToolKit) {
 
 function publishTool(kit: ToolKit) {
   const { ref, recordCall, recordText, recordFail } = kit;
-  const publish = defineTool({
+  return defineTool({
     name: "publish",
     label: "publish",
     description:
@@ -280,7 +276,6 @@ function publishTool(kit: ToolKit) {
       }
     },
   });
-  return { publish };
 }
 
 function describePublishAudience(a: PublishAudienceDescriptor | undefined): string {

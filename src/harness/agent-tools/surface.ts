@@ -9,16 +9,14 @@ import { optionalBoolean, optionalString, text } from "./shared.ts";
 type ToolContext = NonNullable<ToolKit["ref"]["current"]>;
 
 export function replyTools(kit: ToolKit, halt: Pick<TurnHalt, "setSilent">) {
-  const { surface } = surfaceTool(kit);
-  const { attach, finishSilently } = attachAndFinishTools(kit, halt);
-  return { surface, attach, finishSilently };
+  return { surface: surfaceTool(kit), ...attachAndFinishTools(kit, halt) };
 }
 
 function surfaceTool(kit: ToolKit) {
   const { opts } = kit;
   const surfaceName = opts?.surfaceName ?? "slack";
   const surfaceLabel = surfaceProfile(surfaceName).label ?? surfaceName;
-  const surface = defineTool({
+  return defineTool({
     name: surfaceName,
     label: surfaceName,
     description:
@@ -29,7 +27,6 @@ function surfaceTool(kit: ToolKit) {
     parameters: surfaceParams(surfaceName),
     execute: (callId, params) => runSurfaceAction(kit, surfaceName, callId, params),
   });
-  return { surface };
 }
 
 function surfaceParams(surfaceName: string) {
