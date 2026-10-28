@@ -165,12 +165,6 @@ function rowToLlmRequest(r: Record<string, unknown>): LlmRequestRecord {
     promptHash: r.prompt_hash == null ? null : (r.prompt_hash as string),
     ...(r.prompt_body != null ? { promptEnvelope: JSON.parse(r.prompt_body as string) } : {}),
     truncated: Boolean(r.truncated),
-    ttftMs: r.ttft_ms == null ? null : Number(r.ttft_ms),
-    durationMs: r.duration_ms == null ? null : Number(r.duration_ms),
-    stepGapMs: r.step_gap_ms == null ? null : Number(r.step_gap_ms),
-    toolWallMs: r.tool_wall_json != null ? (JSON.parse(r.tool_wall_json as string) as number[]) : null,
-    gapPhases:
-      r.gap_phases_json != null ? (JSON.parse(r.gap_phases_json as string) as LlmRequestRecord["gapPhases"]) : null,
     usage: r.usage_json != null ? (JSON.parse(r.usage_json as string) as LlmRequestRecord["usage"]) : null,
     transport:
       r.transport_json != null ? (JSON.parse(r.transport_json as string) as LlmRequestRecord["transport"]) : null,
@@ -1487,16 +1481,11 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         promptHash: envelope?.hash ?? null,
         ...(rec.promptEnvelope !== undefined ? { promptEnvelope: rec.promptEnvelope } : {}),
         truncated: rec.truncated ?? false,
-        ttftMs: rec.ttftMs ?? null,
-        durationMs: rec.durationMs ?? null,
-        stepGapMs: rec.stepGapMs ?? null,
-        toolWallMs: rec.toolWallMs ?? null,
-        gapPhases: rec.gapPhases ?? null,
         usage: rec.usage ?? null,
         transport: rec.transport ?? null,
       };
       await q(
-        "INSERT INTO session_llm_requests(id, session_id, turn_seq, step, model, scope_label, prompt_hash, truncated, created_at, ttft_ms, duration_ms, step_gap_ms, tool_wall_json, usage_json, transport_json, gap_phases_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)",
+        "INSERT INTO session_llm_requests(id, session_id, turn_seq, step, model, scope_label, prompt_hash, truncated, created_at, usage_json, transport_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
         [
           full.id,
           full.sessionId,
@@ -1507,13 +1496,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           full.promptHash,
           full.truncated,
           full.createdAt,
-          full.ttftMs,
-          full.durationMs,
-          full.stepGapMs,
-          full.toolWallMs ? JSON.stringify(full.toolWallMs) : null,
           full.usage ? JSON.stringify(full.usage) : null,
           full.transport ? JSON.stringify(full.transport) : null,
-          full.gapPhases ? JSON.stringify(full.gapPhases) : null,
         ],
         { signal },
       );
@@ -1522,7 +1506,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async listLlmRequests(sessionId, opts): Promise<LlmRequestRecord[]> {
       const cols = opts?.omitRequest
-        ? "r.id, r.session_id, r.turn_seq, r.step, r.model, r.scope_label, r.created_at, r.truncated, r.prompt_hash, r.ttft_ms, r.duration_ms, r.step_gap_ms, r.tool_wall_json, r.usage_json, r.transport_json, r.gap_phases_json"
+        ? "r.id, r.session_id, r.turn_seq, r.step, r.model, r.scope_label, r.created_at, r.truncated, r.prompt_hash, r.usage_json, r.transport_json"
         : "r.*, e.body AS prompt_body";
       const from = opts?.omitRequest
         ? "session_llm_requests r"

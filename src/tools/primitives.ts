@@ -39,7 +39,6 @@ import { parseScopeId, scopeId } from "../types.ts";
 import { type PublishAudienceKind } from "../resolution/publish-audience.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { BotPolicy } from "../surface-cache/channel-policy-store.ts";
-import type { GapPhase, GapWork } from "../sessions/session-store.ts";
 import type { SessionSyscalls } from "../sessions/session-syscalls.ts";
 import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
 import { createNullLedger, type ToolLedger } from "../runs/tool-ledger.ts";
@@ -541,7 +540,6 @@ export interface ToolContextDeps {
   attempt?: number;
   backgroundBroker?: BackgroundExecBroker;
   monitorBroker?: MonitorBroker;
-  onGapWork?: (work: GapWork) => void;
   control?: ControlService;
   controlClaims?: CapabilityClaims;
   webhookPublicUrl?: string;
@@ -652,27 +650,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   const attempt = deps.attempt ?? 1;
   let callIndex = -1;
 
-  async function timed<T>(phase: GapPhase, op: () => Promise<T>): Promise<T> {
-    const start = Date.now();
-    try {
-      return await op();
-    } finally {
-      try {
-        deps.onGapWork?.({ phase, start, end: Date.now() });
-      } catch (error) {
-        void error;
-      }
-    }
-  }
-
   async function once<T>(produce: () => Promise<T>, shouldCache: (r: T) => boolean = () => true): Promise<T> {
     const index = ++callIndex;
     if (runId === undefined) return produce();
-    const prior = await timed("tool_ledger", () => ledger.begin(runId, attempt, index));
+    const prior = await ledger.begin(runId, attempt, index);
     if (prior.cached) return JSON.parse(prior.output ?? "null") as T;
     const result = await produce();
-    if (shouldCache(result))
-      await timed("tool_ledger", () => ledger.record(runId, attempt, index, JSON.stringify(result ?? null)));
+    if (shouldCache(result)) await ledger.record(runId, attempt, index, JSON.stringify(result ?? null));
     return result;
   }
 
@@ -933,38 +917,35 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             scopeLabel: reached.scopeId,
           });
         }
-        const executed = timed("exec", async () => {
-          execOpts?.signal?.throwIfAborted();
-          const { commandEnv, secretValues, fileExecution } = await stageCredentials(
-            requested,
-            handle,
-            "command",
-            execOpts?.signal,
-          );
-          const r = await withCleanup(
-            async (): Promise<ExecResult> => {
-              const commandHandle = Object.keys(commandEnv).length
-                ? { ...handle, env: { ...handle.env, ...commandEnv } }
-                : handle;
-              const secretEnv = executionSecretEnv(commandHandle.env, secretValues);
-              const mask = createExactSecretValueMasker(Object.values(secretEnv));
-              try {
-                const result = await deps.sandbox.run(commandHandle, command, opts);
-                return { ...result, stdout: mask(result.stdout), stderr: mask(result.stderr) };
-              } catch (error) {
-                const message = errMessage(error);
-                const masked = mask(message);
-                if (masked !== message) throw new MaskedExecutionError(error, mask, masked);
-                throw error;
-              }
-            },
-            async () => {
-              await fileExecution?.finish();
-            },
-          );
-          return { ...r, ...(reached ? { reached } : {}), ...(scratchReroute ? { scratchReroute } : {}) };
-        });
-        return executed;
+        execOpts?.signal?.throwIfAborted();
+        const { commandEnv, secretValues, fileExecution } = await stageCredentials(
+          requested,
+          handle,
+          "command",
+          execOpts?.signal,
+        );
+        const r = await withCleanup(
+          async (): Promise<ExecResult> => {
+            const commandHandle = Object.keys(commandEnv).length
+              ? { ...handle, env: { ...handle.env, ...commandEnv } }
+              : handle;
+            const secretEnv = executionSecretEnv(commandHandle.env, secretValues);
+            const mask = createExactSecretValueMasker(Object.values(secretEnv));
+            try {
+              const result = await deps.sandbox.run(commandHandle, command, opts);
+              return { ...result, stdout: mask(result.stdout), stderr: mask(result.stderr) };
+            } catch (error) {
+              const message = errMessage(error);
+              const masked = mask(message);
+              if (masked !== message) throw new MaskedExecutionError(error, mask, masked);
+              throw error;
+            }
+          },
+          async () => {
+            await fileExecution?.finish();
+          },
+        );
+        return { ...r, ...(reached ? { reached } : {}), ...(scratchReroute ? { scratchReroute } : {}) };
       });
     },
 
@@ -1019,15 +1000,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const mounts = crossScope ? fallbackMounts.filter((mount) => mount.mountPath === "global") : fallbackMounts;
       const rel = path.startsWith("/") ? workspacePathOf(handle.rootDir, path) : path;
       if (rel === null) return { content: null, sourceScopeId: null, outsideWorkspace: true };
-      return timed("file_op", async () => {
-        const direct = await withAbort(() => deps.sandbox.readFile(handle, rel), signal);
-        if (direct !== null) return { content: direct, sourceScopeId: resource?.ownerScopeId ?? writableScopeId };
-        for (const mount of mounts) {
-          const v = await withAbort(() => deps.sandbox.readFile(handle, join(mount.mountPath, rel)), signal);
-          if (v !== null) return { content: v, sourceScopeId: mount.scopeId };
-        }
-        return { content: null, sourceScopeId: null };
-      });
+      const direct = await withAbort(() => deps.sandbox.readFile(handle, rel), signal);
+      if (direct !== null) return { content: direct, sourceScopeId: resource?.ownerScopeId ?? writableScopeId };
+      for (const mount of mounts) {
+        const v = await withAbort(() => deps.sandbox.readFile(handle, join(mount.mountPath, rel)), signal);
+        if (v !== null) return { content: v, sourceScopeId: mount.scopeId };
+      }
+      return { content: null, sourceScopeId: null };
     },
 
     async createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact> {
@@ -1088,13 +1067,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         throw new Error(
           `${path} is not in the computer's workspace; only workspace files can be written, so name it relative to the workspace`,
         );
-      await once(() =>
-        timed("file_op", async () => {
-          await deps.sandbox.writeFile(handle, rel, data);
-          if (ownerScopeId && !isUnderAnyDir(rel, persistExclude))
-            await deps.workspace.write(ownerScopeId, durableRef(rel), data);
-        }),
-      );
+      await once(async () => {
+        await deps.sandbox.writeFile(handle, rel, data);
+        if (ownerScopeId && !isUnderAnyDir(rel, persistExclude))
+          await deps.workspace.write(ownerScopeId, durableRef(rel), data);
+      });
     },
 
     async publish(input: PublishInput): Promise<PublishResult> {
@@ -1177,20 +1154,18 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     async memorySearch(q: string, limit?: number, scope?: ScopeId): Promise<string[] | null> {
-      if (deps.context) return timed("recall", () => deps.context!.searchMemory(q, limit, scope));
+      if (deps.context) return deps.context.searchMemory(q, limit, scope);
       if (!memory) return null;
-      return timed("recall", () =>
-        searchNotebooks(memory!, deps.memoryAccess?.read ?? [], q, limit, scope, deps.createdBy),
-      );
+      return searchNotebooks(memory, deps.memoryAccess?.read ?? [], q, limit, scope, deps.createdBy);
     },
 
     async memoryRead(scope?: ScopeId): Promise<string | null> {
       const target = scope ?? deps.memoryAccess?.write ?? deps.memoryScopeId;
       if (!memory || !target || !canReadNotebook(deps.memoryAccess ?? { read: [] }, target)) return null;
-      const body = await timed("recall", async () => {
-        if (deps.context && deps.memoryAccess?.read.includes(target)) return deps.context.readMemory(target);
-        return readNotebook(memory!, target);
-      });
+      const body =
+        deps.context && deps.memoryAccess?.read.includes(target)
+          ? await deps.context.readMemory(target)
+          : await readNotebook(memory, target);
       if (body === null) return null;
       return scope !== undefined ? `### ${target}\n${body}` : body;
     },
@@ -1199,40 +1174,34 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const write = deps.memoryAccess?.write;
       if (!memory || !write) return null;
       return once(() =>
-        timed("memory_write", () =>
-          memory!.capture(write, facts, Date.now(), deps.createdBy, {
-            ...deps.memoryCaptureMetadata?.(),
-            mode: "explicit",
-            actorId: deps.createdBy,
-            conversationScopeId: writableScopeId ?? write,
-          }),
-        ),
+        memory.capture(write, facts, Date.now(), deps.createdBy, {
+          ...deps.memoryCaptureMetadata?.(),
+          mode: "explicit",
+          actorId: deps.createdBy,
+          conversationScopeId: writableScopeId ?? write,
+        }),
       );
     },
 
     async memoryEdit(edits: MemoryEdit[]): Promise<true | null> {
       const write = deps.memoryAccess?.write;
       if (!memory?.edit || !write) return null;
-      return once(() =>
-        timed("memory_write", async () => {
-          await memory!.edit!(write, edits, deps.createdBy, {
-            ...deps.memoryCaptureMetadata?.(),
-            conversationScopeId: writableScopeId ?? write,
-          });
-          return true as const;
-        }),
-      );
+      return once(async () => {
+        await memory.edit!(write, edits, deps.createdBy, {
+          ...deps.memoryCaptureMetadata?.(),
+          conversationScopeId: writableScopeId ?? write,
+        });
+        return true as const;
+      });
     },
 
     async memoryDelete(ids: string[]): Promise<true | null> {
       const write = deps.memoryAccess?.write;
       if (!memory?.delete || !write) return null;
-      return once(() =>
-        timed("memory_write", async () => {
-          await memory!.delete!(write, ids, deps.createdBy);
-          return true as const;
-        }),
-      );
+      return once(async () => {
+        await memory.delete!(write, ids, deps.createdBy);
+        return true as const;
+      });
     },
 
     ...(deps.humanTurn ? { humanTurn: true } : {}),

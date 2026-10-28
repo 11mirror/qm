@@ -387,11 +387,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         createdAt: now(),
         promptHash: envelope?.hash ?? null,
         truncated: rec.truncated ?? false,
-        ttftMs: rec.ttftMs ?? null,
-        durationMs: rec.durationMs ?? null,
-        stepGapMs: rec.stepGapMs ?? null,
-        toolWallMs: rec.toolWallMs ?? null,
-        gapPhases: rec.gapPhases ?? null,
         usage: rec.usage ?? null,
         transport: rec.transport ?? null,
       };
