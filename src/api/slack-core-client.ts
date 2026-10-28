@@ -308,7 +308,7 @@ function runMethods(deps: SlackCoreClientDeps, terminalWaiters: Map<string, Set<
       const waiters = terminalWaiters.get(runId) ?? new Set();
       terminalWaiters.set(runId, waiters);
       const unsubscribe = deps.app.subscribeRun(runId, (event) => {
-        if (event.kind === "refresh") for (const wake of [...waiters]) wake();
+        if (event.kind === "refresh") for (const wake of waiters) wake();
       });
       let lastProgressAt = Date.now();
       let lastMark = "";

@@ -9,7 +9,7 @@ import { isOverheard, isReply, isUserMessage, type Item } from "../sessions/item
 import { forModelContext } from "../harness/context-compaction.ts";
 import { TitleRejected } from "./turn-error.ts";
 
-export function stripTurnBoilerplate(text: string): string {
+function stripTurnBoilerplate(text: string): string {
   const kept = text
     .split("\n\n")
     .filter((p) => !/^\s*\[/.test(p))
