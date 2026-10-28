@@ -240,6 +240,25 @@ test("conversation coordinator mailbox checks never block on children", async ()
   assert.ok(waits.every((timeout) => timeout === 0));
 });
 
+test("an empty wait says nothing arrived and points at ending the turn", async () => {
+  const pending = [{ id: "m1", text: "child done" }];
+  const tc = fakeToolContext();
+  tc.sessionSyscalls = {
+    receive: async () => [...pending] as never,
+    open: async () => ({ ok: false, message: "unused" }),
+    write: async () => ({ ok: false, message: "unused" }),
+    read: async () => ({ ok: false, message: "unused" }),
+  };
+  const session = createAgentTools({ current: tc }).find((tool) => tool.name === "subagents")!;
+  const arrived = (await call(session, { action: "wait", timeoutMs: 1 })) as { content: { text: string }[] };
+  assert.match(
+    arrived.content.map((part) => part.text).join("\n"),
+    /^Messages arrived; they follow\.[\s\S]*child done/,
+  );
+  pending.length = 0;
+  assert.match(textOut(await call(session, { action: "wait", timeoutMs: 1 })), /^Nothing arrived\..*end this turn/);
+});
+
 test("resource catalog exposes one home per operation and leaves MCP tools intact", async () => {
   const tools = createAgentTools(
     { current: fakeToolContext() },
