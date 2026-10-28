@@ -6,7 +6,6 @@ import { GATEWAY_MODEL_PREFIX, GATEWAY_PROVIDER, setGatewayModels, type GatewayM
 import { selectableBaseModels } from "./pi-models.ts";
 
 const MAX_BYTES = 2 * 1024 * 1024;
-const MAX_MODELS = 1_000;
 const TTL_MS = 5 * 60_000;
 const RETRY_MS = 30_000;
 const STALE_MS = 15 * 60_000;
@@ -121,7 +120,7 @@ async function readCatalog(
   const body = await readCappedText(response, MAX_BYTES, tooLarge);
   if (body === undefined) throw tooLarge();
   const data = record(JSON.parse(body))?.data;
-  if (!Array.isArray(data) || data.length > MAX_MODELS) throw new Error("Invalid gateway catalog");
+  if (!Array.isArray(data)) throw new Error("Invalid gateway catalog");
   return data;
 }
 

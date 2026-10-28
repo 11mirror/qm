@@ -197,7 +197,6 @@ test("a transient discovery blip keeps last known routes; a prolonged outage hid
 test("malformed and oversized catalogs cannot grant access", async () => {
   for (const response of [
     Response.json({ nope: [] }),
-    Response.json({ data: Array(1001).fill({ id: "m" }) }),
     new Response("x".repeat(2 * 1024 * 1024 + 1)),
     new Response("{}", { headers: { "content-length": "99999999" } }),
   ]) {
