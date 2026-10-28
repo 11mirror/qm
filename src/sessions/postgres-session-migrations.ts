@@ -188,7 +188,7 @@ export const SESSION_STORE_MIGRATIONS: PgMigrationDefinition[] = [
     ],
     contract: {
       id: "contract/sessions/store/0053-llm-request-spend-backfill",
-      statements: ["DROP INDEX IF EXISTS session_llm_requests_spend_unparsed"],
+      statements: ["SET LOCAL lock_timeout = '3s'", "DROP INDEX IF EXISTS session_llm_requests_spend_unparsed"],
     },
   },
 ];
