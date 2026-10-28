@@ -56,13 +56,5 @@ export async function resolveBranding(
         .settingDurable("branding", orgScope)
         .catch(swallowAs<OrgBranding | null>("branding: durable read", null))
     : null;
-  return (
-    sanitizeBranding({
-      accent: stored?.accent ?? dflt?.accent,
-      mark: stored?.mark ?? dflt?.mark,
-      markUrl: stored?.markUrl ?? dflt?.markUrl,
-      selfLabel: stored?.selfLabel ?? dflt?.selfLabel,
-      orgName: stored?.orgName ?? dflt?.orgName,
-    }) ?? {}
-  );
+  return sanitizeBranding({ ...dflt, ...stored }) ?? {};
 }
