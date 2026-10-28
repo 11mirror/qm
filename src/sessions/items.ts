@@ -1,10 +1,23 @@
 import { z } from "zod";
-import type { ItemKind, WAKE_CAUSES } from "./items-schema.ts";
 import { isObj } from "../util/objects.ts";
 
-export type { ItemKind } from "./items-schema.ts";
+export type ItemKind =
+  | "UserMessage"
+  | "SteeringMessage"
+  | "AgentMessage"
+  | "Reasoning"
+  | "ToolCall"
+  | "ToolResult"
+  | "Elicitation"
+  | "ElicitationResponse"
+  | "Wake"
+  | "Error"
+  | "ContextCompaction"
+  | "Retraction"
+  | "Stop"
+  | "RuntimeChange";
 
-type WakeCause = (typeof WAKE_CAUSES)[number];
+type WakeCause = "cron" | "webhook" | "child_done" | "system";
 
 type AgentMessageVariant = "narration" | "files_delivered";
 
