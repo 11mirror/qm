@@ -47,10 +47,7 @@ export async function bootApp(
   if (config.databaseUrl) await mergeTenantQueues(config.databaseUrl);
   const publishEdge = config.multitenant ? edgeTenantFeed(env) : undefined;
   if (publishEdge) {
-    await useRegistryTenants(config, env, async () => {
-      await built.start();
-      await built.refreshCustomProviders();
-    });
+    await useRegistryTenants(config, env, built.start);
     watchActiveTenants(publishEdge);
   }
   const slackConfig = slackPluginConfigFromEnv(env);
@@ -63,7 +60,6 @@ export async function bootApp(
   );
 
   await built.start();
-  await built.refreshCustomProviders();
   built.runtime.start();
 
   publishEdge?.(await activeTenants());

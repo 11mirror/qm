@@ -1,4 +1,5 @@
 import type { StoresModule } from "./stores.ts";
+import { hasRows } from "../jobs/job-worker.ts";
 import type { Head } from "./late.ts";
 import { tenantConfig } from "../tenants/tenant-config.ts";
 import { perTenant } from "../tenant.ts";
@@ -78,8 +79,16 @@ export function buildFiles(deps: FilesInputs) {
     pool: pgPool,
     bytesFor: (prefix) => byteStore(prefix, prefix),
   });
-  if (fileUploads) every("file-uploads", 60_000, () => fileUploads.sweep(), { immediate: true });
-  every("blob-transfer", 30 * 60_000, () => blobTransfer.sweep(6 * 60 * 60_000));
+  if (fileUploads)
+    every("file-uploads", 60_000, () => fileUploads.sweep(), { immediate: true, due: hasRows("file_uploads") });
+  every(
+    "blob-transfer",
+    30 * 60_000,
+    () => blobTransfer.sweep(6 * 60 * 60_000),
+    config.s3Bucket
+      ? { due: hasRows("runs", "w.created_at > extract(epoch FROM now()) * 1000 - 12 * 3600 * 1000") }
+      : { shared: true },
+  );
   return {
     toolOutput,
     errors,

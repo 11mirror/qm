@@ -1,4 +1,5 @@
 import type { StoresModule } from "./stores.ts";
+import { hasRows } from "../jobs/job-worker.ts";
 import type { HarnessModule } from "./harness.ts";
 import type { FilesModule } from "./files.ts";
 import type { Head } from "./late.ts";
@@ -39,8 +40,15 @@ export function buildMemory(deps: MemoryInputs) {
     onCaptureError: (e, scope) =>
       errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
   });
-  every("memory-vector-index", 30_000, () => semanticMemory.index(), { immediate: true });
-  every("memory:capture-sweep", 60_000, () => memoryStrategy.sweep());
+  every("memory-vector-index", 30_000, () => semanticMemory.index(), {
+    immediate: true,
+    due: hasRows(
+      "memory_facts",
+      `w.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM memory_fact_vectors v WHERE v.tenant_id = w.tenant_id
+         AND v.scope_id = w.scope_id AND v.fact_id = w.id AND v.fact_hash = w.text_hash)`,
+    ),
+  });
+  every("memory:capture-sweep", 60_000, () => memoryStrategy.sweep(), { due: hasRows("memory_capture_pending") });
   return { memory, memoryStrategy, baseMemory, semanticMemory };
 }
 

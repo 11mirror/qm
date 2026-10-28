@@ -9,7 +9,6 @@ import { homeTenantId, listTenants, type TenantRecord } from "./registry.ts";
 
 const FRESH_MS = 60_000;
 const MISS_RELOAD_MS = 1_000;
-const PREPARE_RETRY_MS = 30_000;
 
 export type HomeHosts = Omit<HostRoute<Tenant>, "target">;
 
@@ -17,7 +16,7 @@ export interface TenantDirectory {
   byHost(host: string | undefined): Promise<Tenant | undefined>;
   homeHosts(): HomeHosts;
   active(): Promise<Tenant[]>;
-  exists(id: string): Promise<boolean>;
+  owner(id: string | undefined): Promise<Tenant | "retired" | undefined>;
   watch(listener: (active: Tenant[]) => void): void;
   close(): Promise<void>;
 }
@@ -27,6 +26,8 @@ interface Snapshot {
   home: HomeHosts;
   routes: HostRoute<Tenant>[];
   tenants: Tenant[];
+  homeId: string;
+  byId: Map<string, Tenant>;
 }
 
 interface DirectoryOptions {
@@ -71,43 +72,14 @@ export function createTenantDirectory(opts: DirectoryOptions): TenantDirectory {
   const now = opts.now ?? Date.now;
   let current: Snapshot | undefined;
   let loading: Promise<Snapshot> | null = null;
-  const preparing = new Map<string, Promise<void>>();
-  const prepared = new Set<string>();
-  const failed = new Map<string, number>();
   const listeners: Array<(active: Tenant[]) => void> = [];
 
-  const isReady = (t: Tenant) => !opts.prepare || t.id === undefined || prepared.has(t.id);
-  const readyTenants = () => (current?.tenants ?? [opts.home]).filter(isReady);
   const notify = () => {
-    const active = readyTenants();
+    const active = current?.tenants ?? [opts.home];
     for (const listener of listeners) listener(active);
   };
 
-  function ready(t: Tenant): Promise<void> {
-    const id = t.id;
-    if (id === undefined || !opts.prepare || prepared.has(id)) return Promise.resolve();
-    const failedAt = failed.get(id);
-    if (failedAt !== undefined && now() - failedAt >= PREPARE_RETRY_MS) {
-      failed.delete(id);
-      preparing.delete(id);
-    }
-    let pending = preparing.get(id);
-    if (!pending) {
-      pending = withTenant(t, opts.prepare);
-      preparing.set(id, pending);
-      pending.then(
-        () => {
-          prepared.add(id);
-          notify();
-        },
-        (error: unknown) => {
-          failed.set(id, now());
-          reportFailure(`tenant ${t.slug ?? id}: preparation failed`, error);
-        },
-      );
-    }
-    return pending;
-  }
+  const ready = (t: Tenant): Promise<void> => (opts.prepare ? withTenant(t, opts.prepare) : Promise.resolve());
 
   async function load(): Promise<Snapshot> {
     const [homeId, records] = await Promise.all([homeTenantId(opts.pool), listTenants(opts.pool, opts.secretsKey)]);
@@ -128,6 +100,8 @@ export function createTenantDirectory(opts: DirectoryOptions): TenantDirectory {
       home,
       routes: [{ ...home, target: opts.home }, ...routes],
       tenants: [opts.home, ...others.map(({ t }) => t)],
+      homeId,
+      byId: new Map([[homeId, opts.home], ...others.map(({ rec, t }) => [rec.id, t] as const)]),
     };
   }
 
@@ -147,7 +121,6 @@ export function createTenantDirectory(opts: DirectoryOptions): TenantDirectory {
     return (loading ??= load()
       .then((next) => {
         current = next;
-        for (const t of next.tenants) void ready(t).catch(() => {});
         notify();
         return next;
       })
@@ -192,11 +165,23 @@ export function createTenantDirectory(opts: DirectoryOptions): TenantDirectory {
       return current?.home ?? homeHostsOf([]);
     },
     async active() {
-      await snapshot();
-      return readyTenants();
+      return (await snapshot()).tenants;
     },
-    async exists(id) {
-      return (await opts.pool.q("SELECT 1 FROM tenants WHERE id = $1::uuid", [id])).length > 0;
+    async owner(id) {
+      const found = id === undefined ? opts.home : ((await snapshot()).byId.get(id) ?? (await fresher()).byId.get(id));
+      if (!found) {
+        if (id === undefined) return undefined;
+        return (await opts.pool.q("SELECT 1 FROM tenants WHERE id = $1::uuid", [id])).length > 0
+          ? undefined
+          : "retired";
+      }
+      try {
+        await ready(found);
+        return found;
+      } catch (error) {
+        reportFailure(`tenant ${found.slug ?? id}: preparation failed`, error);
+        return undefined;
+      }
     },
     watch(listener) {
       listeners.push(listener);
@@ -244,9 +229,8 @@ export function isHomeTenant(t: Tenant): boolean {
 }
 
 export async function taskTenant(id: string | undefined): Promise<Tenant | "retired" | undefined> {
-  const owner = (await activeTenants()).find((t) => t.id === id);
-  if (owner || id === undefined || !directory || (await directory.exists(id))) return owner;
-  return "retired";
+  if (directory) return directory.owner(id);
+  return id === undefined ? tenant() : undefined;
 }
 
 export function retiredTenantReason(id: string | undefined): string {
