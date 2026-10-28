@@ -326,7 +326,7 @@ for (const surface of ["slack", "web"] as const) {
     test(`${surface}: ${nested ? "nested child" : "child"} results stay internal while files and parent replies deliver once`, async () => {
       const r = await rig();
       const outbound = recordingOutbound();
-      wireRunResultPosts(r.runs, outbound, { graceMs: 0 });
+      wireRunResultPosts(r.runs, outbound, { sessions: r.sessions, postsImmediately: () => true });
       const request: OrchestratorInput = {
         surface,
         actor,
