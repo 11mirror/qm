@@ -39,9 +39,13 @@ export function authTokens(auth: JsonObject): { access: string; refresh: string;
   };
 }
 
+export function chatgptAccountIdFromTokens(idToken: string | undefined, accessToken: string): string | undefined {
+  return chatgptAccountIdFromToken(idToken) ?? chatgptAccountIdFromToken(accessToken);
+}
+
 export function authAccountId(auth: JsonObject): string | undefined {
   const tokens = authTokens(auth);
-  return tokens ? (chatgptAccountIdFromToken(tokens.id) ?? chatgptAccountIdFromToken(tokens.access)) : undefined;
+  return tokens ? chatgptAccountIdFromTokens(tokens.id, tokens.access) : undefined;
 }
 
 export function accessExpiresAt(auth: JsonObject): number | undefined {
