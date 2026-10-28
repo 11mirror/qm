@@ -1,4 +1,4 @@
-import { parkedOutputKey } from "../sessions/tool-output.ts";
+import { parkedOutputKey, TOOL_OUTPUT_RETENTION_DAYS } from "../sessions/tool-output.ts";
 import { rankedSkills } from "../skills/materialize.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withAbort } from "../util/async.ts";
@@ -197,7 +197,7 @@ export function fileOps(
         const parked = await withAbort(() => deps.toolOutput!.read(deps.sessionId!, parkedKey), signal);
         if (parked && "expired" in parked)
           return {
-            content: `[the full output in ${path} expired after 30 days; only the cut shown in the transcript remains]`,
+            content: `[the full output in ${path} expired after ${TOOL_OUTPUT_RETENTION_DAYS} days; only the cut shown in the transcript remains]`,
             sourceScopeId: writableScopeId,
           };
         if (parked) {
