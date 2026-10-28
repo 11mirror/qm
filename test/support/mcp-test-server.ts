@@ -25,6 +25,7 @@ export interface McpTestServer {
   url: string;
   requests: McpRequest[];
   tokenRequests: string[];
+  unavailable: boolean;
   openSessions(): number;
   dropSessions(): Promise<void>;
   revokeTokens(): void;
@@ -135,6 +136,7 @@ export async function startMcpTestServer(
       ...(actor ? { actor } : {}),
       ...(typeof req.headers["x-qm-approval"] === "string" ? { approval: req.headers["x-qm-approval"] } : {}),
     });
+    if (result.unavailable) return json(res, 503, { error: "unavailable" });
     if (!authorized(authorization)) {
       return json(res, 401, { error: "unauthorized" }, { "www-authenticate": 'Bearer error="invalid_token"' });
     }
@@ -179,12 +181,14 @@ export async function startMcpTestServer(
     await new Promise<void>((resolve) => http.close(() => resolve()));
   });
 
-  return {
+  const result: McpTestServer = {
     url,
     requests,
     tokenRequests,
+    unavailable: false,
     openSessions: () => sessions.size,
     dropSessions,
     revokeTokens: () => tokens.clear(),
   };
+  return result;
 }

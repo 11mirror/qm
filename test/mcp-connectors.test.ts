@@ -271,9 +271,14 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
 const ACME_INSTRUCTIONS =
   "Acme: search and run Acme tools.\n\nSkills (Acme playbooks): when a request matches one, read it with the read_skill tool before acting, then follow it.\n- party-setup: Party setup procedure. Use when setting up a casual social event.";
 
-async function catalogService(t: Parameters<typeof startMcpTestServer>[0], mcpUrl: string, id = "acme") {
+async function catalogService(
+  t: Parameters<typeof startMcpTestServer>[0],
+  mcpUrl: string,
+  id = "acme",
+  now?: () => number,
+) {
   const store = createMcpServerStore(createMemoryMap<McpServer>());
-  const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
+  const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000, ...(now ? { now } : {}) });
   t.after(async () => service.close());
   await store.put(server({ id, name: "Acme", url: mcpUrl, catalog: true, attestActor: true }));
   await service.refresh();
@@ -299,17 +304,30 @@ test("a catalog server's instructions reach each person through its tool descrip
 
 test("a catalog's last-known instructions serve the turn while a stale listing refreshes behind it", async (t) => {
   let version = 1;
+  let clock = 1_000;
   const mcp = await startMcpTestServer(t, { instructions: () => `Version ${version}.` });
-  const service = await catalogService(t, mcp.url);
+  const service = await catalogService(t, mcp.url, "acme", () => clock);
+  const listings = () => mcp.requests.filter((r) => r.rpc === "initialize").length;
   const describe = async () => (await service.toolDefsFor("alice@example.com"))[0]!.description;
   const first = await describe();
   assert.ok(first.endsWith("Version 1."));
   version = 2;
   await service.refresh();
-  const listings = mcp.requests.filter((r) => r.rpc === "tools/list").length;
+  assert.equal(await describe(), first, "a fresh value is served without listing again");
+  assert.equal(listings(), 1);
+  clock += 10 * 60_000;
   assert.equal(await describe(), first, "the stale value is served without waiting");
-  await settle(async () => mcp.requests.filter((r) => r.rpc === "tools/list").length === listings + 1);
+  await settle(async () => listings() === 2);
   await settle(async () => (await describe()).endsWith("Version 2."));
+  assert.ok((await describe()).endsWith("Version 2."));
+  assert.equal(listings(), 2);
+  clock += 10 * 60_000;
+  await service.refresh();
+  mcp.unavailable = true;
+  assert.ok((await describe()).endsWith("Version 2."), "a failed refresh keeps the last-known text");
+  await settle(async () => listings() === 3);
+  assert.ok((await describe()).endsWith("Version 2."), "a failure is not retried on the next turn");
+  assert.equal(listings(), 3);
 });
 
 test("a catalog whose listing is slow or empty leaves the description untouched", async (t) => {
@@ -324,6 +342,9 @@ test("a catalog whose listing is slow or empty leaves the description untouched"
   const started = Date.now();
   assert.deepEqual(await slow.toolDefsFor("alice@example.com"), slow.toolDefs());
   assert.ok(Date.now() - started < 5_000);
+  const again = Date.now();
+  assert.deepEqual(await slow.toolDefsFor("alice@example.com"), slow.toolDefs());
+  assert.ok(Date.now() - again < 500, "a timed-out listing is not awaited again on the next turn");
   const mcp = await startMcpTestServer(t);
   const quiet = await catalogService(t, mcp.url, "quiet");
   assert.deepEqual(await quiet.toolDefsFor("alice@example.com"), quiet.toolDefs());

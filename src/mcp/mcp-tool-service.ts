@@ -22,6 +22,7 @@ const CATALOG_CACHE_MAX = 1_000;
 const CATALOG_MAX_TOOLS = 5_000;
 const CATALOG_SEARCH_LIMIT = 50;
 const CATALOG_INSTRUCTIONS_WAIT_MS = 1_500;
+const CATALOG_INSTRUCTIONS_TTL_MS = REFRESH_INTERVAL_MS;
 const CATALOG_DESCRIPTION_MAX_CHARS = 8_000;
 const CATALOG_OPERATIONS = ["search", "describe", "invoke"];
 const DROPPED_OPTIONAL_PARAMS = ["intent", "locale"];
@@ -199,7 +200,7 @@ export function createMcpToolService(opts: {
   let perUserServers = new Map<string, McpServer>();
   let catalogServers = new Map<string, McpServer>();
   const catalogs = new LRUCache<string, Promise<CatalogListing>>({ max: CATALOG_CACHE_MAX, ttl: CATALOG_TTL_MS });
-  const catalogInstructionsKnown = new LRUCache<string, string>({ max: CATALOG_CACHE_MAX });
+  const catalogInstructionsKnown = new LRUCache<string, { text: string; at: number }>({ max: CATALOG_CACHE_MAX });
 
   function signInMessage(server: McpServer): string {
     const url = opts.signInUrl?.(server.id);
@@ -261,8 +262,8 @@ export function createMcpToolService(opts: {
     const listing = callerClient(server, principalId)
       .then((client) => client.listTools({ headers: headersFor(server, principalId), maxTools: CATALOG_MAX_TOOLS }))
       .then((listed) => {
-        const instructions = listed.instructions ?? "";
-        catalogInstructionsKnown.set(key, instructions);
+        const instructions = (listed.instructions ?? "").slice(0, CATALOG_DESCRIPTION_MAX_CHARS);
+        catalogInstructionsKnown.set(key, { text: instructions, at: now() });
         return { tools: listed.tools, instructions };
       });
     catalogs.set(key, listing);
@@ -278,15 +279,21 @@ export function createMcpToolService(opts: {
 
   async function catalogInstructions(server: McpServer, principalId: string | undefined): Promise<string> {
     if (perPerson(server) && !principalId) return "";
-    const known = catalogInstructionsKnown.get(catalogKey(server, principalId));
+    const key = catalogKey(server, principalId);
+    const known = catalogInstructionsKnown.get(key);
+    if (known && now() - known.at < CATALOG_INSTRUCTIONS_TTL_MS) return known.text;
     const listing = catalogListing(server, principalId);
     listing.catch((e: unknown) => {
+      catalogInstructionsKnown.set(key, { text: known?.text ?? "", at: now() });
       if (!(e instanceof SignInRequired)) swallow("mcp: catalog instructions", e);
     });
-    if (known !== undefined) return known;
+    if (known) return known.text;
     return withTimeout(() => listing, CATALOG_INSTRUCTIONS_WAIT_MS, `${server.id} catalog listing`)
       .then((listed) => listed.instructions)
-      .catch(() => "");
+      .catch(() => {
+        catalogInstructionsKnown.set(key, { text: "", at: now() });
+        return "";
+      });
   }
 
   async function catalogEntry(server: McpServer, principalId: string | undefined, name: unknown): Promise<RemoteTool> {
