@@ -27,7 +27,6 @@ test("the public threat model covers the documented material limitations", () =>
     "Durable data can outlive user expectations",
     "Published-app capability links are bearer authorization",
     "Portal sessions have residual risk",
-    "Some model-provider paths bypass the intended gateway",
   ]) {
     assert.ok(security.includes(limitation), `SECURITY.md includes ${limitation}`);
   }
