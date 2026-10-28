@@ -56,7 +56,6 @@ const PRINCIPAL_REWRITES: readonly Rewrite[] = [
   principal("skills", "created_by"),
   scope("skill_packs", "target_scope_id"),
   principal("skill_packs", "created_by"),
-  principal("slack_accounts", "principal_id", UNIQUE),
   principal("browser_sessions", "principal_id", UNIQUE),
   principal("environments", "owner_actor_id"),
   scope("environment_attachments", "scope_id", UNIQUE),
