@@ -20,6 +20,17 @@ import type { ProviderKeys } from "./pi-model-runtime.ts";
 import type { ToolContext } from "../tools/primitives.ts";
 import type { SecurityScreenVerdict, ToolResultScreenInput } from "../security/security-screen.ts";
 
+export interface PendingApproval {
+  command: string;
+  reason: string;
+  kind?: "approval";
+  matched?: string;
+  purpose?: string;
+  approvalKey?: string;
+  summary?: string;
+  grantModes?: { session: boolean; always: boolean };
+}
+
 export interface RuntimeChoice {
   modelId: string;
   effortLevel?: string;
@@ -143,15 +154,7 @@ export interface HarnessTurnResult {
   reply: string;
   silent?: boolean;
   stopped?: true;
-  pendingApprovals?: Array<{
-    command: string;
-    reason: string;
-    kind?: "approval";
-    matched?: string;
-    purpose?: string;
-    approvalKey?: string;
-    grantModes?: { session: boolean; always: boolean };
-  }>;
+  pendingApprovals?: PendingApproval[];
   pausedOnApproval?: boolean;
   modelCalls?: number;
   cacheUsage?: { cacheRead: number; cacheWrite: number; uncachedInput: number };

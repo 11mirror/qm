@@ -5,17 +5,7 @@ import type { ScopeId } from "../types.ts";
 import type { GoalGovernor, GoalRecord } from "./goal.ts";
 import type { GrindMeter } from "./grind.ts";
 import type { HarnessHandoff } from "./runtime-types.ts";
-
-interface PendingApproval {
-  command: string;
-  reason: string;
-  kind?: "approval";
-  matched?: string;
-  purpose?: string;
-  approvalKey?: string;
-  summary?: string;
-  grantModes?: { session: boolean; always: boolean };
-}
+import type { PendingApproval } from "./harness.ts";
 
 type Emit = (item: NewItem) => void | Promise<unknown>;
 
