@@ -381,7 +381,7 @@ function webhookTool(kit: ToolKit) {
           });
           if (!r.ok) return refused(callId, "webhook", r);
 
-          const secretLine = `\nSecret (shown once — store it): ${r.secret}`;
+          const secretLine = r.secret ? `\nSecret (shown once — store it): ${r.secret}` : "";
           return recordText(
             callId,
             { tool: "webhook", id: r.webhook.id, url: r.url, secretShown: !!r.secret },
@@ -417,11 +417,11 @@ function webhookTool(kit: ToolKit) {
         }
         case "update": {
           const id = typeof params.id === "string" && params.id ? params.id : null;
-          const task = typeof params.task === "string" ? params.task : "";
-          if (!id)
+          const task = params.task?.trim() ? params.task : null;
+          if (!id || !task)
             return recordFail(
               callId,
-              { tool: "webhook", error: "id required" },
+              { tool: "webhook", error: "id and task required" },
               "[error] webhook update requires `id` and the new `task`.",
             );
           const r = await tc.webhookUpdate(id, task);
