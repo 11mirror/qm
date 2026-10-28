@@ -200,15 +200,18 @@ test("the Postgres map select projects and filters inside SQL, never fetching th
   assert.equal(reads.length, 1);
   assert.match(
     reads[0]!.sql,
-    /^SELECT id, json - \$1::text\[\] AS json FROM select_probe WHERE id IN \(\s+SELECT id FROM select_probe WHERE lower\(json->>'owner'\) = ANY\(\$2::text\[\]\)\s+UNION\s+SELECT id FROM select_probe WHERE json->>'owner' ~ '\[\^\\x01-\\x7f\]'\) ORDER BY id$/,
+    /^SELECT id, json - \$1::text\[\] AS json\s+FROM \(SELECT id, json \|\| '\{\}'::jsonb AS json FROM \(SELECT id, json FROM select_probe WHERE id IN \(\s+SELECT id FROM select_probe WHERE lower\(json->>'owner'\) = ANY\(\$2::text\[\]\)\s+UNION\s+SELECT id FROM select_probe WHERE json->>'owner' ~ '\[\^\\x01-\\x7f\]'\) ORDER BY id\) AS page OFFSET 0\) AS loaded ORDER BY id$/,
   );
   assert.deepEqual(reads[0]!.params, [["secretEnc"], ["u1", "alice@x.com"]]);
 
   await map.select({});
-  assert.match(reads[1]!.sql, /^SELECT id, json - \$1::text\[\] AS json FROM select_probe ORDER BY id$/);
+  assert.match(
+    reads[1]!.sql,
+    /FROM \(SELECT id, json FROM select_probe ORDER BY id\) AS page OFFSET 0\) AS loaded ORDER BY id$/,
+  );
   assert.deepEqual(reads[1]!.params, [[]]);
   await map.select({ where: { field: "owner", anyOfFold: ["U1"] }, limit: 16, afterId: "previous" });
-  assert.match(reads[2]!.sql, /\) AND id > \$3 ORDER BY id LIMIT \$4$/);
+  assert.match(reads[2]!.sql, /\) AND id > \$3 ORDER BY id LIMIT \$4\) AS page OFFSET 0\) AS loaded ORDER BY id$/);
   assert.deepEqual(reads[2]!.params, [[], ["u1"], "previous", 16]);
 });
 
