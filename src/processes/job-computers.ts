@@ -14,6 +14,7 @@ export function createJobComputerSweep(deps: {
   sandbox: ProcessSandbox;
   processes: ProcessRegistry;
   finish: (handle: SandboxHandle, processId: string) => Promise<void>;
+  ended?: (handle: SandboxHandle, rec: ProcessRecord, code: number | undefined) => Promise<void>;
   onError: (error: unknown, scopeId: string) => void;
   now?: () => number;
 }): () => Promise<void> {
@@ -56,7 +57,14 @@ export function createJobComputerSweep(deps: {
             sandboxId: computer.id,
           });
           try {
-            await reconcileProcesses(deps.sandbox, handle, deps.processes, computer.ownerScopeId, deps.finish);
+            await reconcileProcesses(
+              deps.sandbox,
+              handle,
+              deps.processes,
+              computer.ownerScopeId,
+              deps.finish,
+              deps.ended,
+            );
           } finally {
             await deps.sandbox
               .teardown(handle, { keepWarm: true })

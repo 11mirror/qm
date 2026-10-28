@@ -1,4 +1,5 @@
 import type { ProcessRecord, ProcessRegistry } from "./process-registry.ts";
+import { reconcileProcesses } from "./reconcile.ts";
 import type { MonitorStore } from "../monitors/monitor-store.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import type { SessionMailbox } from "../sessions/session-mailbox.ts";
@@ -17,7 +18,7 @@ export type JobEnding = { kind: "exited"; code: number; tail: string } | { kind:
 
 export interface JobExitMailDeps {
   sessions: Pick<SessionStore, "getByThread">;
-  runs: Pick<RunStore, "latestForThread">;
+  runs: Pick<RunStore, "latestForThread" | "get">;
   mailbox: Pick<SessionMailbox, "send">;
 }
 
@@ -48,7 +49,11 @@ export function renderJobExit(rec: ProcessRecord, ending: JobEnding): string {
 export async function mailJobExit(deps: JobExitMailDeps, rec: ProcessRecord, ending: JobEnding): Promise<void> {
   if (rec.kind !== "background" || !rec.sessionRef) return;
   const session = await deps.sessions.getByThread(rec.sessionRef);
-  const base = await deps.runs.latestForThread(rec.sessionRef, { excludePrivateMessages: true });
+  const started = rec.runId ? await deps.runs.get(rec.runId) : null;
+  const base =
+    started?.sessionId === rec.sessionRef
+      ? started
+      : await deps.runs.latestForThread(rec.sessionRef, { excludePrivateMessages: true });
   if (!session || !base) return;
   const origin = base.request.origin;
   if (
@@ -69,63 +74,54 @@ export async function mailJobExit(deps: JobExitMailDeps, rec: ProcessRecord, end
   });
 }
 
-export interface JobExitSweepDeps {
-  processes: ProcessRegistry;
-  monitors: Pick<MonitorStore, "enabled">;
-  sandbox: Sandbox;
-  notify(rec: ProcessRecord, ending: JobEnding): Promise<void>;
-  onExit?(handle: SandboxHandle, processId: string): Promise<void>;
-}
-
 async function readTail(sandbox: ProcessSandbox, handle: SandboxHandle, processId: string): Promise<string> {
   const end = await sandbox.readProcess(handle, processId, { sinceCursor: END_CURSOR, maxBytes: 1, waitMs: 0 });
   const from = Math.max(0, end.cursor - TAIL_BYTES);
   return (await sandbox.readProcess(handle, processId, { sinceCursor: from, maxBytes: TAIL_BYTES, waitMs: 0 })).chunks;
 }
 
-async function sweepComputer(
-  deps: JobExitSweepDeps,
-  sandbox: ProcessSandbox,
-  sandboxId: string,
-  jobs: ProcessRecord[],
-): Promise<void> {
-  const handle = await sandbox.provision([{ scopeId: jobs[0]!.scopeId, mode: "rw", mountPath: "" }], { sandboxId });
-  try {
-    const states = new Map((await sandbox.listProcesses(handle)).map((job) => [job.processId, job.status]));
-    for (const rec of jobs) {
-      const state = states.get(rec.processId);
-      if (state?.state === "running") continue;
-      if ((await deps.processes.get(rec.processId))?.status !== "running") continue;
-      const ending: JobEnding = state
-        ? { kind: "exited", code: state.code, tail: await readTail(sandbox, handle, rec.processId) }
-        : { kind: "lost" };
-      await deps.notify(rec, ending);
-      await deps.processes.markStatus(rec.processId, "exited");
-      if (state)
-        await deps
-          .onExit?.(handle, rec.processId)
-          .catch(reportFailureAs("job exit: credential writeback", undefined, rec.processId));
-    }
-  } finally {
-    await sandbox.teardown(handle, { keepWarm: true }).catch(reportFailureAs("job exit: teardown", undefined));
-  }
+export interface JobExitDeps extends JobExitMailDeps {
+  processes: ProcessRegistry;
+  monitors: Pick<MonitorStore, "enabled">;
+  sandbox: Sandbox;
+  finish(handle: SandboxHandle, processId: string): Promise<void>;
 }
 
-export function createJobExitSweep(deps: JobExitSweepDeps): { tick(): Promise<void> } {
-  return {
-    async tick() {
-      if (!supportsProcessSessions(deps.sandbox)) return;
-      const sandbox = deps.sandbox;
-      const watched = new Set((await deps.monitors.enabled()).map((monitor) => monitor.processId));
-      const byComputer = new Map<string, ProcessRecord[]>();
-      for (const rec of await deps.processes.listLive()) {
-        if (rec.kind !== "background" || !rec.sessionRef || !rec.sandboxId || watched.has(rec.processId)) continue;
-        byComputer.set(rec.sandboxId, [...(byComputer.get(rec.sandboxId) ?? []), rec]);
-      }
-      for (const [sandboxId, jobs] of byComputer)
-        await sweepComputer(deps, sandbox, sandboxId, jobs).catch((error: unknown) =>
-          swallow(`job exit: sweep computer ${sandboxId}`, error),
-        );
-    },
+export function createJobExits(deps: JobExitDeps) {
+  const notify = async (rec: ProcessRecord, ending: () => Promise<JobEnding>): Promise<void> => {
+    if (rec.kind !== "background" || !rec.sessionRef) return;
+    if ((await deps.monitors.enabled()).some((monitor) => monitor.processId === rec.processId)) return;
+    await mailJobExit(deps, rec, await ending()).catch(reportFailureAs("job exit: mail", undefined, rec.processId));
   };
+  const ended = (handle: SandboxHandle, rec: ProcessRecord, code: number | undefined): Promise<void> =>
+    notify(rec, async () =>
+      code === undefined || !supportsProcessSessions(deps.sandbox)
+        ? { kind: "lost" }
+        : { kind: "exited", code, tail: await readTail(deps.sandbox, handle, rec.processId).catch(() => "") },
+    );
+  async function sweep(): Promise<void> {
+    if (!supportsProcessSessions(deps.sandbox)) return;
+    const sandbox = deps.sandbox;
+    const computers = new Map<string, ProcessRecord>();
+    for (const rec of await deps.processes.listLive())
+      if (rec.kind === "background" && rec.sessionRef && rec.sandboxId)
+        computers.set(`${rec.sandboxId}\n${rec.scopeId}`, rec);
+    for (const rec of computers.values()) {
+      try {
+        const handle = await sandbox.provision([{ scopeId: rec.scopeId, mode: "rw", mountPath: "" }], {
+          sandboxId: rec.sandboxId!,
+        });
+        try {
+          await reconcileProcesses(sandbox, handle, deps.processes, rec.scopeId, deps.finish, ended);
+        } finally {
+          await sandbox.teardown(handle, { keepWarm: true }).catch(reportFailureAs("job exit: teardown", undefined));
+        }
+      } catch (error) {
+        swallow(`job exit: sweep computer ${rec.sandboxId}`, error);
+      }
+    }
+  }
+  return { ended, expired: (rec: ProcessRecord) => notify(rec, async () => ({ kind: "expired" })), sweep };
 }
+
+export type JobExits = ReturnType<typeof createJobExits>;

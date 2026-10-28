@@ -2,8 +2,8 @@ import type { Head } from "./late.ts";
 import { type SandboxHandle, supportsProcessSessions } from "../sandbox/sandbox.ts";
 import { finishProcessCredentials } from "../credentials/execute-files.ts";
 import { type MonitorPoller, createMonitorPoller } from "../monitors/monitor-poller.ts";
-import { createJobExitSweep, mailJobExit, type JobEnding } from "../processes/job-exit-mail.ts";
-import type { ProcessRecord } from "../processes/process-registry.ts";
+import { createJobExits } from "../processes/job-exit-mail.ts";
+import type { OrchestratorModule } from "./orchestrator.ts";
 import type { RunsModule } from "./runs.ts";
 import type { SessionSyscallsModule } from "./session-syscalls.ts";
 import { createWebhookReceiver } from "../webhooks/webhook-receiver.ts";
@@ -29,10 +29,11 @@ export function buildReceivers(
     ApiAppModule &
     SchedulerModule &
     RunsModule &
-    SessionSyscallsModule,
+    SessionSyscallsModule &
+    OrchestratorModule,
 ) {
   const { sandbox, processes, keychain, admittedWork, monitors, triggerDeps, webhooks, jobs } = w;
-  const { sessions, runs, sessionMailbox } = w;
+  const { sessions, runs, sessionMailbox, orchestratorDeps } = w;
 
   const finishCredentials = (handle: SandboxHandle, processId: string) =>
     finishProcessCredentials({ sandbox, processes: processes!, keychain }, handle, processId);
@@ -52,13 +53,19 @@ export function buildReceivers(
     ...triggerDeps,
     jobs,
   });
-  const notifyJobExit = (rec: ProcessRecord, ending: JobEnding) =>
-    mailJobExit({ sessions, runs, mailbox: sessionMailbox }, rec, ending);
-  const jobExitSweep =
-    processes && supportsProcessSessions(sandbox)
-      ? createJobExitSweep({ processes, monitors, sandbox, notify: notifyJobExit, onExit: finishCredentials })
-      : null;
-  return { finishCredentials, monitorPoller, webhookReceiver, jobExitSweep, notifyJobExit };
+  const jobExits = processes
+    ? createJobExits({
+        sessions,
+        runs,
+        mailbox: sessionMailbox,
+        processes,
+        monitors,
+        sandbox,
+        finish: finishCredentials,
+      })
+    : null;
+  if (jobExits) orchestratorDeps.jobEnded = jobExits.ended;
+  return { finishCredentials, monitorPoller, webhookReceiver, jobExits };
 }
 
 export type ReceiversModule = ReturnType<typeof buildReceivers>;

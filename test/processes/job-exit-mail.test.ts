@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createJobExitSweep, renderJobExit, type JobEnding } from "../../src/processes/job-exit-mail.ts";
-import { createPostgresProcessRegistry, type ProcessRecord } from "../../src/processes/process-registry.ts";
+import { createJobExits, renderJobExit } from "../../src/processes/job-exit-mail.ts";
+import { createPostgresProcessRegistry, type ProcessRegistry } from "../../src/processes/process-registry.ts";
+import type { Run } from "../../src/runs/run-store.ts";
+import type { SessionMessage } from "../../src/sessions/session-mailbox.ts";
 import type { ProcessSandbox, ProcessSession, ProcessState, SandboxHandle } from "../../src/sandbox/sandbox.ts";
-import type { Monitor } from "../../src/types.ts";
+import type { Monitor, Session } from "../../src/types.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
+import { actor, conversation } from "../support/subagent-rig.ts";
 
 const handle: SandboxHandle = { id: "vm", rootDir: "/workspace", homeDir: "/root" };
 
@@ -17,7 +20,7 @@ function fakeComputer() {
   };
   const sandbox: ProcessSandbox = {
     profile: { backend: "fake", writablePersistence: "resident_disk", processSessions: true },
-    provision: async () => handle,
+    provision: async (_mounts, opts) => ({ ...handle, ...(opts?.sandboxId ? { resourceId: opts.sandboxId } : {}) }),
     run: unsupported,
     readFile: unsupported,
     writeFile: unsupported,
@@ -44,89 +47,77 @@ function fakeComputer() {
   return { sandbox, jobs, teardowns: () => teardowns };
 }
 
-test("the exit sweep wakes the session of each finished job once and leaves running and watched jobs alone", async () => {
+function exits(computer: ReturnType<typeof fakeComputer>, watched: string[] = []) {
   const processes = createPostgresProcessRegistry(testDatabaseUrl());
+  const mailed: SessionMessage[] = [];
+  const finished: string[] = [];
+  const base = { id: "run-1", sessionId: "", request: { actor, conversation, origin: { kind: "human" } } } as unknown as Run;
+  const jobExits = createJobExits({
+    processes,
+    monitors: { enabled: async () => watched.map((processId) => ({ processId }) as Monitor) },
+    sandbox: computer.sandbox,
+    sessions: { getByThread: async (threadRef) => ({ id: `session:${threadRef}` }) as Session },
+    runs: { get: async () => null, latestForThread: async (threadRef) => ({ ...base, sessionId: threadRef }) },
+    mailbox: {
+      send: async (message) => {
+        mailed.push(message);
+      },
+    },
+    finish: async (_handle, processId) => {
+      finished.push(processId);
+    },
+  });
+  return { processes, mailed, finished, jobExits };
+}
+
+const register = (processes: ProcessRegistry, processId: string, sandboxId: string, sessionRef?: string) =>
+  processes.register({
+    processId,
+    scopeId: "personal:U1",
+    sandboxId,
+    kind: "background",
+    command: "bg: npm test",
+    purpose: "run the suite",
+    ttlMs: 60_000,
+    ...(sessionRef ? { sessionRef } : {}),
+  });
+
+test("the exit sweep mails the owning session of each ended job once and leaves running and watched jobs alone", async () => {
   const computer = fakeComputer();
+  const [done, running, watched, lost] = [1, 2, 3, 4].map(() => randomUUID()) as [string, string, string, string];
+  const { processes, mailed, finished, jobExits } = exits(computer, [watched]);
   const sandboxId = `sandbox-${randomUUID()}`;
-  const [done, running, watched, lost, detached] = [1, 2, 3, 4, 5].map(() => randomUUID()) as [
-    string,
-    string,
-    string,
-    string,
-    string,
-  ];
-  for (const processId of [done, running, watched, lost, detached])
-    await processes.register({
-      processId,
-      scopeId: "personal:U1",
-      sandboxId,
-      kind: "background",
-      command: "bg: npm test",
-      purpose: "run the suite",
-      ttlMs: 60_000,
-      ...(processId === detached ? {} : { sessionRef: "agent:main:subagent:abc" }),
-    });
+  for (const processId of [done, running, watched, lost])
+    await register(processes, processId, sandboxId, "agent:main:subagent:abc");
   computer.jobs.set(done, { output: `${"x".repeat(5_000)}\n3 passing\n`, status: { state: "exited", code: 0 } });
   computer.jobs.set(running, { output: "", status: { state: "running" } });
   computer.jobs.set(watched, { output: "", status: { state: "exited", code: 2 } });
-  computer.jobs.set(detached, { output: "", status: { state: "exited", code: 0 } });
-  const woken: Array<{ rec: ProcessRecord; ending: JobEnding }> = [];
-  const exits: string[] = [];
-  const sweep = createJobExitSweep({
-    processes,
-    monitors: { enabled: async () => [{ processId: watched } as Monitor] },
-    sandbox: computer.sandbox,
-    notify: async (rec, ending) => {
-      woken.push({ rec, ending });
-    },
-    onExit: async (_h, processId) => {
-      exits.push(processId);
-    },
-  });
-  await sweep.tick();
-  await sweep.tick();
-  assert.deepEqual(woken.map((w) => w.rec.processId).sort(), [done, lost].sort());
-  const finished = woken.find((w) => w.rec.processId === done)!.ending;
-  assert.equal(finished.kind, "exited");
-  assert.ok(finished.kind === "exited" && finished.code === 0 && finished.tail.endsWith("3 passing\n"));
-  assert.ok(finished.kind === "exited" && finished.tail.length === 4_096);
-  assert.equal(woken.find((w) => w.rec.processId === lost)!.ending.kind, "lost");
-  assert.deepEqual(exits, [done]);
+  await jobExits.sweep();
+  await jobExits.sweep();
+  assert.deepEqual(mailed.map((message) => message.id).sort(), [`job-exit-${done}`, `job-exit-${lost}`].sort());
+  const doneMail = mailed.find((message) => message.id === `job-exit-${done}`)!;
+  assert.equal(doneMail.recipientId, "session:agent:main:subagent:abc");
+  assert.match(doneMail.text, /exited with code 0/);
+  assert.match(doneMail.text, /3 passing/);
+  assert.match(mailed.find((message) => message.id === `job-exit-${lost}`)!.text, /no longer on its computer/);
   assert.equal((await processes.get(done))?.status, "exited");
+  assert.equal((await processes.get(watched))?.status, "exited");
   assert.equal((await processes.get(running))?.status, "running");
-  assert.equal((await processes.get(watched))?.status, "running");
-  assert.equal(computer.teardowns(), 2);
+  assert.equal(computer.teardowns(), 1);
+  assert.ok(finished.includes(done));
 });
 
-test("a failed wake leaves the job running so the next sweep retries it", async () => {
-  const processes = createPostgresProcessRegistry(testDatabaseUrl());
+test("an expired job notifies unless it is watched", async () => {
   const computer = fakeComputer();
-  const processId = randomUUID();
-  await processes.register({
-    processId,
-    scopeId: "personal:U1",
-    sandboxId: `sandbox-${processId}`,
-    kind: "background",
-    command: "bg: npm test",
-    ttlMs: 60_000,
-    sessionRef: "web:session:1",
-  });
-  computer.jobs.set(processId, { output: "ok\n", status: { state: "exited", code: 0 } });
-  let attempts = 0;
-  const sweep = createJobExitSweep({
-    processes,
-    monitors: { enabled: async () => [] },
-    sandbox: computer.sandbox,
-    notify: async () => {
-      attempts++;
-      if (attempts === 1) throw new Error("database blip");
-    },
-  });
-  await sweep.tick();
-  assert.equal((await processes.get(processId))?.status, "running");
-  await sweep.tick();
-  assert.equal(attempts, 2);
-  assert.equal((await processes.get(processId))?.status, "exited");
+  const { processes, mailed, jobExits } = exits(computer, ["watched"]);
+  const rec = await register(processes, randomUUID(), "sandbox-x", "web:session:1");
+  await jobExits.expired(rec);
+  await jobExits.expired({ ...rec, processId: "watched" });
+  assert.deepEqual(
+    mailed.map((message) => message.id),
+    [`job-exit-${rec.processId}`],
+  );
+  assert.match(mailed[0]!.text, /reached its time limit/);
 });
 
 test("the exit notice names the job, its ending and the end of its output as data", () => {

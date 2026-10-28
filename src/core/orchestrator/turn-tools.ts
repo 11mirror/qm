@@ -176,6 +176,7 @@ function createProcessBrokers(ctx: TurnCtx, turn: TurnToolsInput) {
             ),
           scopeId: memoryScopeId,
           sessionRef: conversation.threadRef,
+          ...(ctx.input.runId ? { runId: ctx.input.runId } : {}),
           ...(deps.backgroundJobTtlMs !== undefined ? { ttlMs: deps.backgroundJobTtlMs } : {}),
           ...(deps.backgroundJobTtlMaxMs !== undefined ? { ttlMaxMs: deps.backgroundJobTtlMaxMs } : {}),
         })

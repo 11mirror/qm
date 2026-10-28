@@ -1,5 +1,5 @@
 import type { ProcessSandbox, SandboxHandle } from "../sandbox/sandbox.ts";
-import type { ProcessRegistry } from "./process-registry.ts";
+import type { ProcessRecord, ProcessRegistry } from "./process-registry.ts";
 
 export async function reconcileProcesses(
   sandbox: ProcessSandbox,
@@ -7,6 +7,7 @@ export async function reconcileProcesses(
   registry: ProcessRegistry,
   scopeId: string,
   onExit?: (handle: SandboxHandle, processId: string) => Promise<void>,
+  onEnded?: (handle: SandboxHandle, rec: ProcessRecord, code: number | undefined) => Promise<void>,
 ): Promise<void> {
   const records = (await registry.listByScope(scopeId)).filter((r) => r.sandboxId === handle.resourceId);
   const running = records.filter((r) => r.status === "running");
@@ -18,6 +19,7 @@ export async function reconcileProcesses(
       if (!backend || backend.status.state === "exited") {
         await registry.markStatus(rec.processId, "exited");
         finished.push(rec.processId);
+        await onEnded?.(handle, rec, backend?.status.state === "exited" ? backend.status.code : undefined);
       }
     }
   }

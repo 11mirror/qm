@@ -26,8 +26,8 @@ import type { SessionSyscallsFactory } from "../../subagents/session-tools.ts";
 import type { Outbound } from "../../surfaces/outbound.ts";
 import type { RecentDmPosts } from "../../surfaces/recent-dm-posts.ts";
 import type { WorkspaceStore } from "../../workspace/workspace-store.ts";
-import type { Sandbox } from "../../sandbox/sandbox.ts";
-import type { ProcessRegistry } from "../../processes/process-registry.ts";
+import type { Sandbox, SandboxHandle } from "../../sandbox/sandbox.ts";
+import type { ProcessRecord, ProcessRegistry } from "../../processes/process-registry.ts";
 import type { MonitorStore } from "../../monitors/monitor-store.ts";
 import type { CronStore } from "../../cron/cron-store.ts";
 import type { WebhookStore } from "../../webhooks/webhook-store.ts";
@@ -157,6 +157,7 @@ export interface OrchestratorDeps {
   runs?: RunStore;
   blobTransfer: BlobTransferStore;
   processes?: ProcessRegistry;
+  jobEnded?: (handle: SandboxHandle, rec: ProcessRecord, code: number | undefined) => Promise<void>;
   monitors?: MonitorStore;
   crons?: CronStore;
   webhooks?: WebhookStore;

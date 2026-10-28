@@ -12,47 +12,51 @@ export interface SessionMessage {
   audience: OrchestratorInput["conversation"]["audience"];
   createdAt: number;
   consumed?: boolean;
+  quiet?: boolean;
 }
 
-const SESSION_MAILBOX: TableSpec = {
+const MAILBOX_COLUMNS = `recipientId text!, senderId text!, actor jsonb!, text text!, sourceEntrySeq bigint,
+    audience jsonb!, createdAt bigint!, consumed boolean`;
+
+const SESSION_MAILBOX_V1: TableSpec = {
   table: "session_mailbox",
   key: "id",
   keyIsField: true,
-  columns: cols(`recipientId text!, senderId text!, actor jsonb!, text text!, sourceEntrySeq bigint,
-    audience jsonb!, createdAt bigint!, consumed boolean`),
+  columns: cols(MAILBOX_COLUMNS),
 };
 
-const SESSION_MAILBOX_MIGRATION = mapToTableMigration("sessions/mailbox/0001-typed", SESSION_MAILBOX, {
+const SESSION_MAILBOX: TableSpec = { ...SESSION_MAILBOX_V1, columns: cols(`${MAILBOX_COLUMNS}, quiet boolean`) };
+
+const SESSION_MAILBOX_MIGRATION = mapToTableMigration("sessions/mailbox/0001-typed", SESSION_MAILBOX_V1, {
   statements: [`CREATE INDEX IF NOT EXISTS session_mailbox_recipient ON session_mailbox (recipient_id)`],
 });
 
-const SESSION_MAILBOX_UNREAD_MIGRATION = {
-  id: "sessions/mailbox/0002-unread",
+const SESSION_MAILBOX_WAKE_MIGRATION = {
+  id: "sessions/mailbox/0002-wake",
   statements: [
-    `CREATE INDEX IF NOT EXISTS session_mailbox_unread ON session_mailbox (created_at) WHERE consumed IS NOT TRUE`,
+    `ALTER TABLE session_mailbox ADD COLUMN IF NOT EXISTS quiet boolean`,
+    `CREATE INDEX IF NOT EXISTS session_mailbox_unread ON session_mailbox (created_at)
+     WHERE consumed IS NOT TRUE AND quiet IS NOT TRUE`,
   ],
 };
 
-export interface MailDelivery {
-  wake?: boolean;
-}
-
 export function createSessionMailbox(databaseUrl: string) {
-  const pg = createPgPool(databaseUrl, [SESSION_MAILBOX_MIGRATION, SESSION_MAILBOX_UNREAD_MIGRATION]);
+  const pg = createPgPool(databaseUrl, [SESSION_MAILBOX_MIGRATION, SESSION_MAILBOX_WAKE_MIGRATION]);
   const { codec, ...table } = typedTable<SessionMessage>(pg, SESSION_MAILBOX);
   const delivered: Array<(recipientId: string) => Promise<void>> = [];
   return {
     onDelivered(listener: (recipientId: string) => Promise<void>): void {
       delivered.push(listener);
     },
-    async send(message: SessionMessage, delivery: MailDelivery = {}): Promise<void> {
+    async send(message: SessionMessage): Promise<void> {
       await table.insert(message.id, message);
-      if (delivery.wake === false) return;
+      if (message.quiet) return;
       for (const listener of delivered) await listener(message.recipientId);
     },
     async unreadRecipients(sinceMs: number): Promise<string[]> {
       const rows = await pg.q(
-        `SELECT DISTINCT recipient_id FROM session_mailbox WHERE consumed IS NOT TRUE AND created_at >= $1`,
+        `SELECT DISTINCT recipient_id FROM session_mailbox
+         WHERE consumed IS NOT TRUE AND quiet IS NOT TRUE AND created_at >= $1`,
         [sinceMs],
       );
       return rows.map((row) => String(row.recipient_id));

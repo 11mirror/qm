@@ -318,6 +318,7 @@ async function doProvision(
           exited,
           processId,
         ),
+        deps.jobEnded,
       );
     } catch (err) {
       deps.errors?.record(

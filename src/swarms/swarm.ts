@@ -151,6 +151,7 @@ async function notifySubscribers(ctx: SwarmCallContext, post: SwarmBoardPost): P
       text: notice,
       audience: ctx.audience,
       createdAt: post.createdAt,
+      quiet: true,
     }),
   );
   await ctx.board.markNotified(post.swarmId, post.id);

@@ -4,7 +4,9 @@ import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { SessionMailbox, SessionMessage } from "../sessions/session-mailbox.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
-import { reportFailureAs } from "../util/errors.ts";
+import { swallow } from "../util/errors.ts";
+import { hashId } from "../util/crypto.ts";
+import type { Session } from "../types.ts";
 import { visibleMail, type MailReader } from "./reading.ts";
 import { requiresDelegation } from "./delegation.ts";
 
@@ -32,6 +34,7 @@ const UNINHERITED_REQUEST_KEYS = [
   "detectOpener",
   "conversationHeader",
   "wakeCause",
+  "desktopClientId",
 ] as const;
 
 const WAKE_BATCH_MAX = 8;
@@ -41,7 +44,7 @@ export interface MailWakeDeps extends MailReader {
   sessions: MailReader["sessions"] & Pick<SessionStore, "get" | "getByThread">;
   mailbox: Pick<SessionMailbox, "pending" | "acknowledge" | "unreadRecipients">;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "latestForThread">;
-  lock: Pick<AdvisoryLock, "withLock">;
+  lock: Pick<AdvisoryLock, "withLock" | "tryWithLock">;
   maxAttempts: number;
   delegationEnabled?: (actorId: string) => Promise<boolean>;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
@@ -59,60 +62,75 @@ export function renderMailWake(messages: readonly SessionMessage[], at = new Dat
   ].join("\n");
 }
 
-async function wakeRequest(deps: MailWakeDeps, base: Run, sessionId: string, mail: SessionMessage[]) {
-  const text = renderMailWake(mail);
+async function trustedSenders(deps: MailWakeDeps, sessionId: string, mail: SessionMessage[]): Promise<boolean> {
+  for (const message of mail) {
+    if (message.senderId === sessionId) continue;
+    if ((await deps.sessions.get(message.senderId))?.parentSessionId !== sessionId) return false;
+  }
+  return true;
+}
+
+async function baseRequest(deps: MailWakeDeps, base: Run, sessionId: string): Promise<OrchestratorInput> {
   const request: OrchestratorInput = { ...base.request };
   for (const key of UNINHERITED_REQUEST_KEYS) delete request[key];
   const surfaceTools =
     request.surfaceTools === true ||
     requiresDelegation(request, (await deps.delegationEnabled?.(request.actor.id)) === true);
-  return {
-    ...request,
-    ...(surfaceTools ? { surfaceTools } : {}),
-    sessionSenderId: sessionId,
-    delegatingRunId: base.id,
-    origin: sessionTurnOrigin(request.origin, text),
-    text,
-    displayText: "New internal messages",
-    envelopeWrapped: true,
-    wakeCause: "mail" as const,
-  };
+  const inherited = { ...request, ...(surfaceTools ? { surfaceTools } : {}), sessionSenderId: sessionId };
+  return deps.prepareRequest ? deps.prepareRequest(inherited) : inherited;
 }
 
-async function wakeLocked(deps: MailWakeDeps, sessionId: string): Promise<void> {
-  const session = await deps.sessions.get(sessionId);
-  if (!session) return;
-  if ((await deps.runs.inFlightForThread(session.threadRef)).length) return;
-  const pending = await deps.mailbox.pending(session.id);
-  if (!pending.length) return;
-  const actorId = pending[0]!.actor.id;
+async function wakeFor(deps: MailWakeDeps, session: Session, pending: SessionMessage[], actorId: string) {
   const base = await deps.runs.latestForThread(session.threadRef, { excludePrivateMessages: true, actorId });
-  if (!base || base.result?.stopped) return;
-  const sameActor = pending.filter((message) => message.actor.id === actorId);
-  const mail = await visibleMail(deps, session.scopeId, base.request, sameActor, WAKE_BATCH_MAX);
-  if (!mail.length) return;
-  const request = await wakeRequest(deps, base, session.id, mail);
+  if (!base || base.result?.stopped) return false;
+  const prepared = await baseRequest(deps, base, session.id);
+  const mine = pending.filter((message) => message.actor.id === actorId);
+  const mail = await visibleMail(deps, session.scopeId, prepared, mine, WAKE_BATCH_MAX);
+  if (!mail.length || !mail.some((message) => !message.quiet)) return false;
+  const text = renderMailWake(mail);
+  const trusted = await trustedSenders(deps, session.id, mail);
   await deps.runs.enqueue({
     sessionId: session.threadRef,
-    dedupKey: `mail-wake:${mail[0]!.id}`,
-    request: deps.prepareRequest ? await deps.prepareRequest(request) : request,
+    dedupKey: `mail-wake:${hashId(
+      mail.map((message) => message.id),
+      32,
+    )}`,
+    request: {
+      ...prepared,
+      ...(trusted ? { delegatingRunId: base.id } : {}),
+      origin: sessionTurnOrigin(prepared.origin, text),
+      text,
+      displayText: "New internal messages",
+      envelopeWrapped: true,
+      wakeCause: "mail",
+    },
     maxAttempts: deps.maxAttempts,
   });
   await deps.mailbox.acknowledge(
     session.id,
     mail.map((message) => message.id),
   );
+  return true;
+}
+
+async function wakeLocked(deps: MailWakeDeps, sessionId: string): Promise<void> {
+  const session = await deps.sessions.get(sessionId);
+  if (!session || (await deps.runs.inFlightForThread(session.threadRef)).length) return;
+  const pending = await deps.mailbox.pending(session.id);
+  const actors = [...new Set(pending.filter((message) => !message.quiet).map((message) => message.actor.id))];
+  for (const actorId of actors) if (await wakeFor(deps, session, pending, actorId)) return;
 }
 
 export function createMailWaker(deps: MailWakeDeps) {
-  const wake = async (sessionId: string): Promise<void> => {
+  const attempt = async (sessionId: string, lock: "withLock" | "tryWithLock"): Promise<void> => {
     try {
-      if (!(await deps.mailbox.pending(sessionId)).length) return;
-      await deps.lock.withLock(`mail-wake:${sessionId}`, () => wakeLocked(deps, sessionId));
+      if (!(await deps.mailbox.pending(sessionId)).some((message) => !message.quiet)) return;
+      await deps.lock[lock](`mail-wake:${sessionId}`, () => wakeLocked(deps, sessionId));
     } catch (error) {
-      reportFailureAs("session mailbox: wake", undefined, sessionId)(error);
+      swallow(`session mailbox: wake ${sessionId}`, error);
     }
   };
+  const wake = (sessionId: string) => attempt(sessionId, "withLock");
   return {
     wake,
     async wakeThread(threadRef: string): Promise<void> {
@@ -121,7 +139,7 @@ export function createMailWaker(deps: MailWakeDeps) {
     },
     async sweep(): Promise<void> {
       for (const sessionId of await deps.mailbox.unreadRecipients(Date.now() - UNREAD_HORIZON_MS))
-        await wake(sessionId);
+        await attempt(sessionId, "tryWithLock");
     },
   };
 }

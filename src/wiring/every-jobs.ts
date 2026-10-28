@@ -47,7 +47,7 @@ export function registerEveryJobs(
     sweepAsks,
     crons,
     monitorPoller,
-    jobExitSweep,
+    jobExits,
     processReaper,
     fileUploads,
     semanticMemory,
@@ -87,7 +87,7 @@ export function registerEveryJobs(
     if (pruned > 0) console.log(`[scheduler] pruned ${pruned} old cron fire row(s)`);
   });
   if (monitorPoller) every("monitor:poll", MONITOR_POLL_MS, () => monitorPoller.tick());
-  if (jobExitSweep) every("processes:exit-mail", JOB_EXIT_POLL_MS, () => jobExitSweep.tick());
+  if (jobExits) every("processes:exit-mail", JOB_EXIT_POLL_MS, jobExits.sweep);
   if (processReaper) every("processes:reaper", PROCESS_REAPER_INTERVAL_MS, () => processReaper.sweep());
   if (fileUploads) every("file-uploads", 60_000, () => fileUploads.sweep(), { immediate: true });
   every("memory-vector-index", 30_000, () => semanticMemory.index(), { immediate: true });
