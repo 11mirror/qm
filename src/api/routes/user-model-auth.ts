@@ -1,4 +1,4 @@
-import type { ModelProvider } from "../../model/pi-models.ts";
+import { isPersonalModelProvider, type PersonalModelProvider } from "../../model/user-model-credential-store.ts";
 import {
   completeClaudeLogin,
   pollChatGPTDeviceLogin,
@@ -44,7 +44,7 @@ function auditAuth(ctx: ApiCtx, principal: string, action: string, resource: str
   audit(ctx.deps, { principalId: principal, action: `user-model-auth.${action}`, resource, scopeLabel: principal });
 }
 
-function connectProvider(raw: unknown): ModelProvider | null {
+function connectProvider(raw: unknown): PersonalModelProvider | null {
   if (raw === "anthropic" || raw === "claude") return "anthropic";
   if (raw === "openai" || raw === "chatgpt" || raw === "codex") return "openai";
   return null;
@@ -67,7 +67,7 @@ const setAccount = withStore(async (ctx, principal, store) => {
     throw fail(403, "Your organization requires a personal AI account.");
   if (account === "personal" && !(await store.connections(principal)).length)
     throw fail(409, "Connect an AI account first.");
-  if (provider !== undefined && provider !== "anthropic" && provider !== "openai") throw fail(400, "bad_request");
+  if (provider !== undefined && !isPersonalModelProvider(provider)) throw fail(400, "bad_request");
   if (account === "personal" && provider && !(await store.connections(principal)).some((c) => c.provider === provider))
     throw fail(409, "Connect this AI account first.");
   await config.setPersonalModelAuth(principal, account === "personal", provider);

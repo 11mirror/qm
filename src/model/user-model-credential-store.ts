@@ -1,5 +1,11 @@
 import type { DerivedOAuthAuth, Keychain } from "../credentials/keychain.ts";
-import type { ModelProvider } from "./pi-models.ts";
+
+export const PERSONAL_MODEL_PROVIDERS = ["anthropic", "openai"] as const;
+export type PersonalModelProvider = (typeof PERSONAL_MODEL_PROVIDERS)[number];
+
+export function isPersonalModelProvider(value: unknown): value is PersonalModelProvider {
+  return PERSONAL_MODEL_PROVIDERS.some((provider) => provider === value);
+}
 
 type UserCredentialKind = "apikey" | "oauth";
 
@@ -12,7 +18,7 @@ export interface UserOAuthTokens {
 }
 
 export interface UserModelCredential {
-  provider: ModelProvider;
+  provider: PersonalModelProvider;
   kind: UserCredentialKind;
   apiKey?: string;
   oauth?: { accountId?: string; expiresAt?: number; needsReconnect?: boolean };
@@ -20,47 +26,40 @@ export interface UserModelCredential {
 }
 
 interface UserCredentialConnection {
-  provider: ModelProvider;
+  provider: PersonalModelProvider;
   kind: UserCredentialKind;
 }
 
 export interface UserModelCredentialStore {
-  get(userId: string, provider: ModelProvider): Promise<UserModelCredential | null>;
+  get(userId: string, provider: PersonalModelProvider): Promise<UserModelCredential | null>;
   connections(userId: string): Promise<UserCredentialConnection[]>;
-  setApiKey(userId: string, provider: ModelProvider, apiKey: string): Promise<void>;
-  setOAuth(userId: string, provider: ModelProvider, tokens: UserOAuthTokens): Promise<void>;
-  derivedOAuth(userId: string, provider: ModelProvider): Promise<DerivedOAuthAuth | null>;
-  delete(userId: string, provider: ModelProvider): Promise<void>;
+  setApiKey(userId: string, provider: PersonalModelProvider, apiKey: string): Promise<void>;
+  setOAuth(userId: string, provider: PersonalModelProvider, tokens: UserOAuthTokens): Promise<void>;
+  derivedOAuth(userId: string, provider: PersonalModelProvider): Promise<DerivedOAuthAuth | null>;
+  delete(userId: string, provider: PersonalModelProvider): Promise<void>;
 }
 
-const PROVIDERS: ModelProvider[] = ["anthropic", "openai"];
 const ORIGIN = "individual-model-auth";
-const AI_OAUTH_HOSTS: Record<"anthropic" | "openai", string> = {
+const AI_OAUTH_HOSTS: Record<PersonalModelProvider, string> = {
   anthropic: "claude.ai",
   openai: "auth.openai.com",
 };
 const AI_ACCOUNT_TYPE = "individual-model";
 
-function serviceFor(provider: ModelProvider): string {
+function serviceFor(provider: PersonalModelProvider): string {
   return `model-${provider}`;
-}
-
-function oauthHostFor(provider: ModelProvider): string | null {
-  return provider === "anthropic" || provider === "openai" ? AI_OAUTH_HOSTS[provider] : null;
 }
 
 export function createUserModelCredentialStore(input: { keychain: Keychain }): UserModelCredentialStore {
   const { keychain } = input;
 
-  async function findApiKey(userId: string, provider: ModelProvider) {
+  async function findApiKey(userId: string, provider: PersonalModelProvider) {
     const all = await keychain.listByOwner(userId);
     return all.find((c) => c.service === serviceFor(provider) && c.origin === ORIGIN) ?? null;
   }
 
-  async function oauthCredential(userId: string, provider: ModelProvider): Promise<UserModelCredential | null> {
-    const host = oauthHostFor(provider);
-    if (!host) return null;
-    const status = await keychain.connectorTokenStatus(host, userId, AI_ACCOUNT_TYPE);
+  async function oauthCredential(userId: string, provider: PersonalModelProvider): Promise<UserModelCredential | null> {
+    const status = await keychain.connectorTokenStatus(AI_OAUTH_HOSTS[provider], userId, AI_ACCOUNT_TYPE);
     if (!status.connected) return null;
     return {
       provider,
@@ -73,7 +72,10 @@ export function createUserModelCredentialStore(input: { keychain: Keychain }): U
     };
   }
 
-  async function apiKeyCredential(userId: string, provider: ModelProvider): Promise<UserModelCredential | null> {
+  async function apiKeyCredential(
+    userId: string,
+    provider: PersonalModelProvider,
+  ): Promise<UserModelCredential | null> {
     const meta = await findApiKey(userId, provider);
     if (!meta) return null;
     const apiKey = await keychain.readOwnSecret(userId, meta.id);
@@ -88,7 +90,7 @@ export function createUserModelCredentialStore(input: { keychain: Keychain }): U
 
     async connections(userId) {
       const found: UserCredentialConnection[] = [];
-      for (const provider of PROVIDERS) {
+      for (const provider of PERSONAL_MODEL_PROVIDERS) {
         const cred = (await oauthCredential(userId, provider)) ?? (await apiKeyCredential(userId, provider));
         if (cred) found.push({ provider, kind: cred.kind });
       }
@@ -98,17 +100,14 @@ export function createUserModelCredentialStore(input: { keychain: Keychain }): U
     async setApiKey(userId, provider, apiKey) {
       const secret = apiKey.trim();
       if (!secret) throw new Error("API key is required");
-      const host = oauthHostFor(provider);
-      if (host) await keychain.deleteConnectorToken(host, userId, AI_ACCOUNT_TYPE);
+      await keychain.deleteConnectorToken(AI_OAUTH_HOSTS[provider], userId, AI_ACCOUNT_TYPE);
       await keychain.save({ ownerId: userId, service: serviceFor(provider), secret, origin: ORIGIN });
     },
 
     async setOAuth(userId, provider, tokens) {
       if (!tokens.accessToken?.trim()) throw new Error("access token is required");
-      const host = oauthHostFor(provider);
-      if (!host) throw new Error(`no subscription login host for provider ${provider}`);
       await keychain.setConnectorToken(
-        host,
+        AI_OAUTH_HOSTS[provider],
         userId,
         {
           accessToken: tokens.accessToken,
@@ -124,14 +123,11 @@ export function createUserModelCredentialStore(input: { keychain: Keychain }): U
     },
 
     async derivedOAuth(userId, provider) {
-      const host = oauthHostFor(provider);
-      if (!host) return null;
-      return keychain.connectorDerivedAuth(host, userId, AI_ACCOUNT_TYPE);
+      return keychain.connectorDerivedAuth(AI_OAUTH_HOSTS[provider], userId, AI_ACCOUNT_TYPE);
     },
 
     async delete(userId, provider) {
-      const host = oauthHostFor(provider);
-      if (host) await keychain.deleteConnectorToken(host, userId, AI_ACCOUNT_TYPE);
+      await keychain.deleteConnectorToken(AI_OAUTH_HOSTS[provider], userId, AI_ACCOUNT_TYPE);
       const meta = await findApiKey(userId, provider);
       if (meta) await keychain.remove(userId, meta.id);
     },
