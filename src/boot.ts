@@ -1,6 +1,6 @@
 import { createBackgroundController } from "./runs/background-controller.ts";
 import { createManagedSlack, type ManagedSlack } from "./surfaces/slack-managed.ts";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import type { Server } from "node:http";
 import { loadConfig, type Config } from "./config.ts";
@@ -75,8 +75,7 @@ export async function bootApp(
     console.log("[qm] background work disabled; scheduler and runtime loops will not start");
 
   slack.ensure();
-  watchActiveTenants(slack.sync);
-  slack.sync(await activeTenants());
+  watchActiveTenants(slack.forget);
 
   const slackAccountRuntimes = slackAccountConfigsFromEnv(env).map((account) =>
     createSlackRuntimeReconciler({
@@ -203,29 +202,39 @@ function createTenantSlack(opts: {
   const entries = new Map<string, TenantSlackEntry>();
   let running = opts.running;
 
-  function slackEnvOf(t: Tenant): NodeJS.ProcessEnv {
-    if (isHomeTenant(t)) return env;
+  function tenantSlackEnv(signingSecret: string | undefined): NodeJS.ProcessEnv {
     const shared = Object.fromEntries(SHARED_SLACK_ENV.map((name) => [name, env[name]]));
-    return { ...shared, WEB_UI_PUBLIC_URL: tenantConfig(config).publicWebUrl };
+    return { ...shared, WEB_UI_PUBLIC_URL: tenantConfig(config).publicWebUrl, SLACK_SIGNING_SECRET: signingSecret };
   }
 
   async function load(entry: TenantSlackEntry) {
     const status = await built.slackInstallation.status();
     const stored = await built.slackInstallation.get();
     const managed = entry.managed;
+    const home = isHomeTenant(entry.tenant);
     if (stored) {
       if (stored.installId && !managed) return null;
+      const signingSecret = home ? undefined : tenantConfig(config).slackSigningSecret;
       const dynamic = slackPluginConfigFromEnv(
-        { ...slackEnvOf(entry.tenant), SLACK_BOT_TOKEN: stored.botToken, SLACK_APP_TOKEN: stored.appToken },
+        {
+          ...(home ? env : tenantSlackEnv(signingSecret)),
+          SLACK_BOT_TOKEN: stored.botToken,
+          SLACK_APP_TOKEN: home ? stored.appToken : undefined,
+        },
         stored.installId && managed ? (staging) => managed.receiver(stored.installId!, staging) : undefined,
       );
       if (dynamic && stored.installId) dynamic.installationId = stored.installId;
-      return dynamic ? { version: stored.version, config: dynamic } : null;
+      const version = signingSecret
+        ? `${stored.version}:${createHash("sha256").update(signingSecret).digest("hex")}`
+        : stored.version;
+      return dynamic ? { version, config: dynamic } : null;
     }
-    if (status.managed || !isHomeTenant(entry.tenant)) return null;
+    if (status.managed || !home) return null;
     if (slackConfig) return { version: "environment", config: slackConfig };
     return null;
   }
+
+  const onDemand = (t: Tenant) => !isHomeTenant(t);
 
   function ensure(): TenantSlackEntry {
     const t = tenant();
@@ -241,49 +250,62 @@ function createTenantSlack(opts: {
         appId: env.QM_SLACK_APP_ID ?? "",
         store: built.slackInstallation,
         reconcile:
-          opts.running || config.backgroundDeploymentId
-            ? () => withTenant(t, () => entry.runtime.reconcile())
+          onDemand(t) || opts.running || config.backgroundDeploymentId
+            ? () => (running ? withTenant(t, () => entry.runtime.reconcile()) : Promise.resolve())
             : undefined,
       });
     entry.runtime = createSlackRuntimeReconciler({
-      startPaused: Boolean(config.backgroundDeploymentId),
+      startPaused: !onDemand(t) && Boolean(config.backgroundDeploymentId),
       load: () => withTenant(t, () => load(entry)),
       startPlugin: (desired) => withTenant(t, () => startSlackPlugin(desired, built.slackCore)),
       onError: reportFailureAs("slack plugin reconciliation", undefined, `tenant=${t.slug ?? "home"}`),
     });
     entries.set(key, entry);
-    if (running) withTenant(t, () => entry.runtime.start());
+    if (running && !onDemand(t)) withTenant(t, () => entry.runtime.start());
     return entry;
   }
+
+  built.slackCore.slack.onDemand({
+    signingSecret: (account) => (onDemand(tenant()) && !account ? tenantConfig(config).slackSigningSecret : undefined),
+    ready: () => (running && onDemand(tenant()) ? ensure().runtime.reconcile() : Promise.resolve()),
+  });
 
   const all = (fn: (entry: TenantSlackEntry) => Promise<void>) =>
     Promise.all([...entries.values()].map((entry) => withTenant(entry.tenant, () => fn(entry)))).then(() => {});
 
+  const drop = (key: string, entry: TenantSlackEntry) => {
+    entries.delete(key);
+    return withTenant(entry.tenant, () => entry.runtime.stop());
+  };
+
   const runtimes: SlackRuntime = {
     start() {
       running = true;
-      for (const entry of entries.values()) withTenant(entry.tenant, () => entry.runtime.start());
+      for (const entry of entries.values())
+        if (!onDemand(entry.tenant)) withTenant(entry.tenant, () => entry.runtime.start());
     },
     reconcile: () => all((entry) => entry.runtime.reconcile()),
     stop() {
       running = false;
-      return all((entry) => entry.runtime.stop());
+      return Promise.all(
+        [...entries].map(([key, entry]) =>
+          onDemand(entry.tenant) ? drop(key, entry) : withTenant(entry.tenant, () => entry.runtime.stop()),
+        ),
+      ).then(() => {});
     },
   };
 
-  const sync = (active: Tenant[]) => {
+  const forget = (active: Tenant[]) => {
     const keep = new Set(active.map((t) => t.id ?? ""));
-    for (const t of active) withTenant(t, ensure);
     for (const [key, entry] of entries) {
       if (keep.has(key)) continue;
-      entries.delete(key);
-      void withTenant(entry.tenant, () => entry.runtime.stop()).catch(
+      void drop(key, entry).catch(
         reportFailureAs("slack plugin stop", undefined, `tenant=${entry.tenant.slug ?? key}`),
       );
     }
   };
 
-  return { ensure, sync, managed: () => ensure().managed, runtimes };
+  return { ensure, forget, managed: () => ensure().managed, runtimes };
 }
 
 function startBackgroundOwnership(

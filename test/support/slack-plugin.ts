@@ -349,6 +349,9 @@ export class FakeCore implements SlackCoreClient {
     },
     serveEvents: () => () => {},
     events: () => undefined,
+    signingSecret: () => undefined,
+    ready: async () => {},
+    onDemand: () => {},
   };
   async pendingContextRequests(): Promise<[]> {
     return [];

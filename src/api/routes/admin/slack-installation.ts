@@ -31,7 +31,10 @@ export async function getSlackInstallation(ctx: ApiCtx): Promise<RouteResult> {
   authz.audit("slack-installation.read", "slack-installation");
   const environment = environmentSlack(ctx).state;
   const branding = await resolveBranding(ctx.deps.config, scope, ctx.deps.brandingDefault);
-  const createUrl = slackBotManifestCreationUrl(branding.selfLabel);
+  const createUrl = slackBotManifestCreationUrl(
+    branding.selfLabel,
+    isHomeTenant(tenant()) ? undefined : ctx.deps.publicUrl,
+  );
   const status = await ctx.deps.slackInstallation.status();
   const fromEnvironment = () => ok({ configured: true, managed: false, source: "environment", createUrl });
   if (ctx.deps.managedSlack) {

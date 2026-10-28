@@ -113,7 +113,7 @@ function createSlackApp(
       ? createHttpEventsReceiver({
           signingSecret: cfg.signingSecret!,
           staging,
-          serve: (handler) => core.slack.serveEvents(cfg.accountId ?? "", handler),
+          serve: (endpoint) => core.slack.serveEvents(cfg.accountId ?? "", endpoint),
         })
       : createDeferredAckReceiver({
           appToken: APP_TOKEN!,

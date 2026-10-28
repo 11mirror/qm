@@ -37,6 +37,7 @@ export interface TenantConfig extends Inherited {
   modalEnvironment?: string;
   modelGatewayApiKey?: string;
   slackServiceToken?: string;
+  slackSigningSecret?: string;
   sentryDeployment?: string;
 }
 
@@ -89,6 +90,7 @@ function registeredConfig(config: Config, settings: TenantSettings & { id: strin
     modalEnvironment: settings.modalEnvironment ?? config.modalSandbox?.environment,
     modelGatewayApiKey: settings.secrets.modelGatewayApiKey ?? config.modelGateway?.apiKey,
     slackServiceToken: settings.secrets.slackServiceToken,
+    slackSigningSecret: settings.secrets.slackSigningSecret,
     sentryDeployment: settings.sentryDeployment,
   };
   return Object.fromEntries(Object.entries(view).filter(([, value]) => value !== undefined)) as TenantConfig;

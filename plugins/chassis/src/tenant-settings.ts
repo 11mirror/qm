@@ -5,6 +5,7 @@ export interface TenantSecrets {
   oidcClientSecret?: string;
   modelGatewayApiKey?: string;
   slackServiceToken?: string;
+  slackSigningSecret?: string;
   adminGrants?: string;
   connectorSecretKey?: string;
 }
@@ -36,6 +37,7 @@ export const TENANT_SECRET_NAMES = [
   "oidcClientSecret",
   "modelGatewayApiKey",
   "slackServiceToken",
+  "slackSigningSecret",
   "adminGrants",
   "connectorSecretKey",
 ] as const satisfies readonly (keyof TenantSecrets)[];
@@ -151,6 +153,7 @@ export function settingsFromEnv(env: Env): TenantEnvSettings {
       oidcClientSecret: clientId ? env.PORTAL_TRUSTED_OIDC_CLIENT_SECRET : undefined,
       modelGatewayApiKey: env.MODEL_GATEWAY_API_KEY,
       slackServiceToken: env.QM_SLACK_SERVICE_TOKEN,
+      slackSigningSecret: env.SLACK_SIGNING_SECRET,
       adminGrants: env.ADMIN_GRANTS,
       connectorSecretKey: env.CONNECTOR_SECRET_KEY,
     }),

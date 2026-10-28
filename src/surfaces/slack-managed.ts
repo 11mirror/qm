@@ -150,6 +150,8 @@ export function createManagedSlack(opts: {
       ) {
         return sendJson(res, 400, { error: "workspace_mismatch" });
       }
+      if (active?.installId !== input.installId)
+        await opts.reconcile?.().catch(swallowAs("slack-managed: start on demand", undefined));
       const runtime = active;
       if (!runtime || runtime.installId !== input.installId) return sendJson(res, 503, { error: "slack_not_ready" });
       await new Promise<void>((resolve) => {

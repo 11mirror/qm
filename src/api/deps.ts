@@ -1,5 +1,5 @@
 import type { SurfaceRegistry } from "../surfaces/registry.ts";
-import type { SlackEventsHandler } from "../surfaces/slack-surface.ts";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { SlackWebClientFactory } from "../slack/web-client.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { DecisionStore } from "../decisions/store.ts";
@@ -101,7 +101,7 @@ export interface ServerDeps {
   slackWebClient?: SlackWebClientFactory;
   slackInstallationSocketAppId?: SlackSocketAppIdReader;
   slackEnvironmentState?: "absent" | "configured" | "partial";
-  slackEvents?: (account: string) => SlackEventsHandler | undefined;
+  slackEvents?: (account: string, req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   chatSurfaces?: SurfaceRegistry;
   slackEnvBotToken?: string;
   oauthStateSecret?: string;

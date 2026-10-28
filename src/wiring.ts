@@ -28,6 +28,7 @@ import { type SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import type { UiStateStore } from "./surfaces/ui-state.ts";
 import { slackUserClientFactory } from "./inbox/sources/slack.ts";
+import { receiveSlackRequest } from "./slack/http-events.ts";
 import { type AdvisoryLock } from "./persistence/advisory-lock.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { type AppPageViewLog } from "./deploy/page-views.ts";
@@ -458,7 +459,7 @@ export function serverDeps(
       ...(subscriptionAuth ? { companySubscriptionAuth: subscriptionAuth } : {}),
       connectorTokens: built.connectorTokens,
       slackInstallation: built.slackInstallation,
-      slackEvents: built.slackCore.slack.events,
+      slackEvents: (account, req, res) => receiveSlackRequest(built.slackCore.slack, account, req, res),
       chatSurfaces: built.chatSurfaces,
       resolveClient: built.resolveClient,
       consentLinks: built.consentLinks,

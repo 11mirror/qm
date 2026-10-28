@@ -8,25 +8,26 @@ import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
 import { createPostgresReplayDedupe } from "../../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
-import { createHttpEventsReceiver } from "../../src/slack/http-events.ts";
-import type { SlackEventsHandler } from "../../src/surfaces/slack-surface.ts";
+import { createHttpEventsReceiver, receiveSlackRequest } from "../../src/slack/http-events.ts";
+import { createSlackSurface, type SlackNative } from "../../src/surfaces/slack-surface.ts";
+import type { IncomingMessage, ServerResponse } from "node:http";
 
 const SOURCE_SECRET = "source-auth-secret-for-slack-events-tests-01";
 const SLACK_SECRET = "slack-signing-secret-for-events-tests-0001";
 
 const servers: Server[] = [];
-const mounted = new Map<string, SlackEventsHandler>();
-const receiverFor = (account: string, signingSecret = SLACK_SECRET) =>
-  createHttpEventsReceiver({
-    signingSecret,
-    serve: (handler) => {
-      mounted.set(account, handler);
-      return () => void mounted.delete(account);
-    },
-  });
+const surface = createSlackSurface();
+const receiverFor = (account: string, signingSecret = SLACK_SECRET, slack: SlackNative = surface.slack) =>
+  createHttpEventsReceiver({ signingSecret, serve: (endpoint) => slack.serveEvents(account, endpoint) });
 const receiver = receiverFor("");
+const servedBy =
+  (slack: SlackNative) =>
+  (account: string, req: IncomingMessage, res: ServerResponse): Promise<boolean> =>
+    receiveSlackRequest(slack, account, req, res);
 
-async function start(slackEvents?: (account: string) => SlackEventsHandler | undefined): Promise<string> {
+async function start(
+  slackEvents?: (account: string, req: IncomingMessage, res: ServerResponse) => Promise<boolean>,
+): Promise<string> {
   const built = buildApp(testConfig());
   const core = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
@@ -40,7 +41,7 @@ async function start(slackEvents?: (account: string) => SlackEventsHandler | und
 
 let base: string;
 before(async () => {
-  base = await start((account) => mounted.get(account));
+  base = await start(servedBy(surface.slack));
 });
 
 after(async () => {
@@ -98,4 +99,45 @@ test("each Slack account's receiver answers on its own path, and a stopped one i
   const body = JSON.stringify({ type: "url_verification", challenge: "down" });
   assert.equal((await post(base, body, undefined, "/slack/events/workspace-b")).status, 404);
   assert.equal((await post(await start(), body)).status, 404);
+});
+
+test("an on-demand Slack app is started only after the request carries its own signing secret", async () => {
+  const onDemand = createSlackSurface();
+  const secret = "on-demand-signing-secret-for-events-tests-01";
+  const seen: unknown[] = [];
+  let starts = 0;
+  onDemand.slack.onDemand({
+    signingSecret: (account) => (account ? undefined : secret),
+    async ready() {
+      starts++;
+      if (onDemand.slack.events("")) return;
+      const app = {
+        processEvent: async ({ body, ack }: { body: unknown; ack: () => Promise<void> }) => {
+          seen.push(body);
+          await ack();
+        },
+      };
+      const tenantReceiver = receiverFor("", secret, onDemand.slack);
+      tenantReceiver.init?.(app as never);
+      await tenantReceiver.start(0 as never);
+    },
+  });
+  const url = await start(servedBy(onDemand.slack));
+  const event = JSON.stringify({ type: "event_callback", event_id: "Ev1", event: { type: "reaction_added" } });
+  assert.equal((await post(url, event, SLACK_SECRET)).status, 401);
+  const challenge = JSON.stringify({ type: "url_verification", challenge: "tenant-ok" });
+  assert.deepEqual(await (await post(url, challenge, secret)).json(), { challenge: "tenant-ok" });
+  assert.equal(starts, 0);
+  assert.equal((await post(url, event, secret)).status, 200);
+  const action = JSON.stringify({ type: "block_actions", actions: [] });
+  const form = `payload=${encodeURIComponent(action)}`;
+  const clicked = await fetch(`${url}/slack/interactions`, {
+    method: "POST",
+    headers: { ...slackHeaders(form, secret), "content-type": "application/x-www-form-urlencoded" },
+    body: form,
+  });
+  assert.equal(clicked.status, 200);
+  assert.equal(starts, 2);
+  assert.deepEqual(seen, [JSON.parse(event), JSON.parse(action)]);
+  assert.equal((await post(url, event, secret, "/slack/events/other")).status, 404);
 });
