@@ -3202,6 +3202,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
           if (error) throw new NonRetryableTurnError(error);
         }
+        const checkReply = await (async () => {
+          if (!deps.replyCheck) return undefined;
+          const orders =
+            conversation.kind !== "dm" && conversation.channelRef
+              ? ((await deps.channelPolicy?.get(conversation.channelRef))?.orders ?? "")
+              : "";
+          const guidance = [deps.config?.getSoul(scopeId) ?? "", orders].filter((text) => text.trim()).join("\n\n");
+          return deps.replyCheck({
+            guidance,
+            input: baseText,
+            turn: {
+              actorId: actor.id,
+              scopeLabel: scopeId,
+              sessionId: session.id,
+              ...(input.runId ? { runId: input.runId } : {}),
+              cancel: turnAbort.signal,
+            },
+          });
+        })().catch(swallowAs("orchestrator: reply check setup", undefined));
         const runHarnessSegment = async (
           harnessInput: string,
           extras: {
@@ -3642,6 +3661,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             goal: sessionGoal,
             saveGoal,
             ...(goalInbox ? { goalInbox } : {}),
+            ...(checkReply ? { checkReply } : {}),
             scopeLabel: scopeId,
             orgScopeId: resolution.orgScopeId,
             onDelta: (chunk: string) => {

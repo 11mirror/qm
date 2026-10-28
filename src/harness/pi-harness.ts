@@ -133,6 +133,8 @@ import {
 } from "../security/security-posture.ts";
 import { errMessage } from "../util/errors.ts";
 import { createGrindMeter, meterGrindCall } from "./grind.ts";
+import { createReplyHold, replyCheckPrompt } from "./reply-hold.ts";
+import { REPLY_CHECK_RETRIES } from "../decisions/hooks.ts";
 import {
   createFloorCapPolicy,
   bankGoalTurn,
@@ -1901,6 +1903,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           let triggerSeen = continueTurn;
           const toolAbort = new AbortController();
           const pendingSteers: Array<SteerIntake & { prompt: string }> = [];
+          const unrecordedPrompts = new Set<string>();
+          const held = turn.checkReply ? createReplyHold(turn) : undefined;
           let persistError: Error | undefined;
           const persist = (write: () => Promise<unknown>): void => {
             thinkTail = thinkTail.then(async () => {
@@ -1925,6 +1929,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             else if (role === "user") {
               steps.flush();
               const text = textFromContent((message as { content?: unknown }).content);
+              if (unrecordedPrompts.delete(text)) return;
               const steerAt = pendingSteers.findIndex((steer) => steer.prompt === text);
               const steer = steerAt >= 0 ? pendingSteers.splice(steerAt, 1)[0]! : undefined;
               persist(() =>
@@ -1946,6 +1951,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           });
           const unsubscribe = entry.agentSession.subscribe((event) => {
             if (event.type === "message_start" && (event.message as { role?: string }).role === "assistant") {
+              held?.release();
               steps.startStreaming();
               curStart = Date.now();
               curFirst = undefined;
@@ -1957,13 +1963,16 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 swallow("pi: stream-open capture", e);
               }
             } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_start") {
-              turn.onTextBlockStart?.();
+              if (held) held.blockStart();
+              else turn.onTextBlockStart?.();
             } else if (event.type === "message_update" && event.assistantMessageEvent.type === "toolcall_start") {
+              held?.release();
               const block = event.assistantMessageEvent.partial.content[event.assistantMessageEvent.contentIndex];
               if (block?.type === "toolCall") turn.onToolCallStart?.(block.name);
             } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
               if (curFirst === undefined) curFirst = Date.now();
-              turn.onDelta?.(event.assistantMessageEvent.delta);
+              if (held) held.delta(event.assistantMessageEvent.delta);
+              else turn.onDelta?.(event.assistantMessageEvent.delta);
             } else if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") {
               const { contentIndex, delta, partial } = event.assistantMessageEvent;
               const block = partial.content[contentIndex];
@@ -2326,7 +2335,37 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 }
               }
             }
+            const checkable = () =>
+              wallClock === "ok" &&
+              !userAborted &&
+              !turn.cancel?.aborted &&
+              !recoveryDead &&
+              !entry.ref.runtimeHandoff &&
+              !entry.ref.pausedOnApproval &&
+              !entry.ref.pendingApprovals?.length &&
+              !endedOnPurpose(entry.ref) &&
+              !piFailedAssistant(entry.agentSession);
+            for (let round = 0; turn.checkReply && held && checkable(); round++) {
+              const draft = (entry.agentSession.getLastAssistantText() ?? "").trim();
+              if (!draft) break;
+              const note = await turn.checkReply(draft).catch(swallowAs("pi: reply check", undefined));
+              if (!note || round >= REPLY_CHECK_RETRIES) break;
+              if (turnWallClockMs > 0 && rawRemainingCapMs() < EMPTY_ENDING_MIN_BUDGET_MS) break;
+              console.error(`[pi] reply check asked for a rewrite session=${turn.session.id} round=${round + 1}`);
+              held.drop();
+              steps.discard();
+              const prompt = replyCheckPrompt(note);
+              unrecordedPrompts.add(prompt);
+              wallClock = await raceTurnWallClock(entry.agentSession.prompt(prompt), {
+                capMs: raceCapMs(),
+                extendMs: extendCapMs,
+                abort: () => entry.agentSession.abort(),
+              });
+              if (wallClock === "ok") await recoverFailedRound();
+            }
+            held?.release();
           } catch (err) {
+            held?.release();
             if (persistError) throw persistError;
             const cancelAbortRejection =
               turn.cancel?.aborted === true && (err as { name?: string } | null)?.name === "AbortError";
@@ -2413,11 +2452,13 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               await turn.saveGoal?.(g);
               if (g.status === "complete") entry.ref.goal = null;
             }
+            const stoppedClosing = steps.closing(reply);
+            await thinkTail;
             await recordStoppedTurn(
               turn,
               partial,
               userAborted ? abortReason : "because the run was cancelled",
-              steps.closing(reply),
+              stoppedClosing,
             );
             const cacheUsage = sumCacheUsage(callStats);
             const base = {
@@ -2437,9 +2478,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
           // A stall auto-waive stays visible even when the final stop attempt was a silent finish.
           const reply = entry.ref.silentRequested ? "" : closingText;
+          const closing = steps.closing(reply);
+          await thinkTail;
           await turn.emit({
             type: "assistant",
-            payload: { text: reply, ...steps.closing(reply) },
+            payload: { text: reply, ...closing },
             scopeLabel: turn.scopeLabel,
           });
           const pendingApprovals = entry.ref.pendingApprovals ?? [];

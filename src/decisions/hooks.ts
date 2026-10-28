@@ -31,6 +31,44 @@ export function turnStartState(turn: {
   ].join("\n");
 }
 
+const TURN_END_GUIDANCE_CHARS = 3_000;
+const TURN_END_INPUT_CHARS = 1_500;
+const TURN_END_REPLY_CHARS = 3_200;
+export const REPLY_CHECK_RETRIES = 2;
+
+const clip = (text: string, max: number): string =>
+  text.length <= max ? text : `${text.slice(0, max)}\n[truncated ${text.length - max} characters]`;
+
+export function replyFacts(reply: string): string[] {
+  const prose = reply.replace(/```[\s\S]*?```/g, "");
+  const paragraphs = prose.split(/\n\s*\n/).filter((block) => block.trim()).length;
+  const tables = (prose.match(/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/gm) ?? []).length;
+  const emDashes = (reply.match(/\u2014/g) ?? []).length;
+  return [
+    `- paragraphs: ${paragraphs}`,
+    `- markdown tables: ${tables}`,
+    `- em dashes: ${emDashes}`,
+    `- characters: ${reply.length}`,
+  ];
+}
+
+export function turnEndState(turn: { guidance?: string; input: string; reply: string }): string {
+  const guidance = turn.guidance?.trim();
+  return [
+    "Guidance for this conversation:",
+    guidance ? clip(guidance, TURN_END_GUIDANCE_CHARS) : "(none)",
+    "",
+    "Latest message from the user:",
+    clip(turn.input, TURN_END_INPUT_CHARS),
+    "",
+    "Measured in the draft reply:",
+    ...replyFacts(turn.reply),
+    "",
+    "Draft reply:",
+    clip(turn.reply, TURN_END_REPLY_CHARS),
+  ].join("\n");
+}
+
 export interface DecisionTurn {
   actorId?: string;
   scopeLabel: string;
@@ -61,6 +99,26 @@ export function createDecisionHooks(store: DecisionStore | undefined, backend: D
         }),
       });
     return decisive;
+  };
+}
+
+type ReplyCheck = (draft: string) => Promise<string | undefined>;
+export type ReplyCheckFactory = (context: {
+  guidance?: string;
+  input: string;
+  turn: DecisionTurn;
+}) => Promise<ReplyCheck | undefined>;
+
+export function createReplyCheck(
+  store: Pick<DecisionStore, "rules"> | undefined,
+  decide: ReturnType<typeof createDecisionHooks>,
+): ReplyCheckFactory {
+  return async (context) => {
+    if (!(await store?.rules("turn_end"))?.length) return undefined;
+    return async (draft) => {
+      const verdict = await decide("turn_end", turnEndState({ ...context, reply: draft }), context.turn);
+      return verdict?.action === "retry" && verdict.message ? verdict.message : undefined;
+    };
   };
 }
 

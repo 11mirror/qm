@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { AssistantMessage, TextContent, ToolCall, ToolResultMessage } from "@earendil-works/pi-ai";
+import type {
+  AssistantMessage,
+  TextContent,
+  ThinkingContent,
+  ToolCall,
+  ToolResultMessage,
+} from "@earendil-works/pi-ai";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ToolContextRef } from "./agent-tools.ts";
 import type { HarnessTurnInput } from "./harness.ts";
@@ -15,6 +21,7 @@ type RecordedEntry = Parameters<NonNullable<ToolContextRef["emit"]>>[0];
 type TurnEntry = Parameters<HarnessTurnInput["emit"]>[0];
 type Persist = (write: () => Promise<unknown>) => void;
 type Positioned = { index: number; block: TextContent };
+type Thought = { index: number; block: ThinkingContent };
 
 function jsonbKeyOrder(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(jsonbKeyOrder);
@@ -75,12 +82,19 @@ export function createStepRecorder(turn: Pick<HarnessTurnInput, "emit" | "scopeL
   const calls = new Map<string, { step: ReplayStep; block: ToolCall }>();
   const called = new Set<string>();
   const executing = new Map<string, RecordedEntry>();
-  let pending: { step: ReplayStep; parts: Positioned[] } | null = null;
+  let pending: { step: ReplayStep; thoughts: Thought[]; parts: Positioned[] } | null = null;
   let last: ReplayStep | undefined;
   let streamingStep: string | undefined;
   const write = (entry: RecordedEntry) => persist(() => turn.emit(entry as TurnEntry));
+  const writeThoughts = (): void => {
+    if (!pending) return;
+    for (const { index, block } of pending.thoughts)
+      write({ type: "thinking", payload: { ...block, step: { ...pending.step, index } }, scopeLabel: turn.scopeLabel });
+    pending.thoughts = [];
+  };
   const flush = (): void => {
     if (!pending) return;
+    writeThoughts();
     for (const { index, block } of pending.parts)
       write({ type: "text", payload: { ...block, step: { ...pending.step, index } }, scopeLabel: turn.scopeLabel });
     pending = null;
@@ -137,15 +151,16 @@ export function createStepRecorder(turn: Pick<HarnessTurnInput, "emit" | "scopeL
       streamingStep = undefined;
       last = step;
       const parts: Positioned[] = [];
+      const thoughts: Thought[] = [];
       message.content.forEach((block, index) => {
         if (block.type === "thinking") {
           if (!block.redacted && block.thinkingSignature === undefined && !block.thinking.trim()) return;
-          write({ type: "thinking", payload: { ...block, step: { ...step, index } }, scopeLabel: turn.scopeLabel });
+          thoughts.push({ index, block });
         } else if (block.type === "text") {
           if (block.text || block.textSignature !== undefined) parts.push({ index, block });
         } else calls.set(block.id, { step: { ...step, index }, block });
       });
-      pending = { step, parts };
+      pending = { step, thoughts, parts };
       if (message.content.some((block) => block.type === "toolCall")) flush();
     },
     startStreaming(): void {
@@ -159,11 +174,15 @@ export function createStepRecorder(turn: Pick<HarnessTurnInput, "emit" | "scopeL
       recordResult(message.toolCallId, message.content, message.isError);
     },
     flush,
+    discard(): void {
+      pending = null;
+    },
     settleResults(): void {
       for (const entry of executing.values()) write(entry);
       executing.clear();
     },
     closing(reply: string): Record<string, unknown> {
+      writeThoughts();
       const closing = pending;
       pending = null;
       if (!closing) return last ? { step: last } : {};

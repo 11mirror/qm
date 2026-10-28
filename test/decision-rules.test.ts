@@ -456,3 +456,103 @@ test("a turn_start rule only counts as routing the turn when it changes the runt
     { choice: haiku },
   );
 });
+
+const guidanceCheck = (): DecisionRule =>
+  injection({
+    id: "house-style",
+    hook: "turn_end",
+    onError: "ok",
+    options: {
+      ok: { description: "The reply follows the guidance", action: "keep" },
+      table: {
+        description: "The reply has a table the user did not ask for",
+        action: "retry",
+        message: "Drop the table and write it as prose.",
+      },
+    },
+  });
+
+test("turn_end rules accept keep and retry, and a retry option needs a message", () => {
+  assert.ok("rule" in parse(guidanceCheck()));
+  assert.match(
+    err(
+      parse({
+        ...guidanceCheck(),
+        options: { ...guidanceCheck().options, table: { description: "t", action: "retry" } },
+      }),
+    ),
+    /retry needs a message/,
+  );
+  assert.match(
+    err(
+      parse({
+        ...guidanceCheck(),
+        options: { ok: { description: "a", action: "keep" }, no: { description: "b", action: "block" } },
+      }),
+    ),
+    /turn_end must be one of keep, retry/,
+  );
+});
+
+test("turn_end state carries the guidance, the user's message, measured facts and the draft", async () => {
+  const { turnEndState, replyFacts } = await import("../src/decisions/hooks.ts");
+  const reply =
+    "Here you go \u2014 two of them.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n```\nx \u2014 y\n|---|---|\n```\n\nDone.";
+  assert.deepEqual(replyFacts(reply), [
+    "- paragraphs: 3",
+    "- markdown tables: 1",
+    "- em dashes: 2",
+    `- characters: ${reply.length}`,
+  ]);
+  const state = turnEndState({ guidance: "No tables unless asked.", input: "status?", reply });
+  assert.match(state, /Guidance for this conversation:\nNo tables unless asked\./);
+  assert.match(state, /Latest message from the user:\nstatus\?/);
+  assert.match(state, /- markdown tables: 1/);
+  assert.ok(state.endsWith(`Draft reply:\n${reply}`));
+  assert.match(turnEndState({ input: "hi", reply: "hello" }), /Guidance for this conversation:\n\(none\)/);
+  const long = turnEndState({ guidance: "g", input: "i", reply: "x".repeat(10_000) });
+  assert.match(long, /\[truncated 6800 characters\]$/);
+});
+
+test("the reply check is armed only when a turn_end rule is active and returns the retry note", async () => {
+  const { createDecisionHooks, createReplyCheck } = await import("../src/decisions/hooks.ts");
+  const audit = { record: () => {} } as never;
+  const states: string[] = [];
+  const backend = (p: Record<string, number>): DecisionBackend => ({
+    async choose({ questions, state }) {
+      states.push(state);
+      return Object.fromEntries(Object.keys(questions).map((k) => [k, p]));
+    },
+  });
+  const turn = { scopeLabel: "personal:a", sessionId: "s1" };
+  const armed = createReplyCheck(
+    { rules: async () => [guidanceCheck()] },
+    createDecisionHooks({ rules: async () => [guidanceCheck()] } as never, backend({ ok: 0.1, table: 0.9 }), audit),
+  );
+  const check = await armed({ guidance: "No tables.", input: "status?", turn });
+  assert.ok(check);
+  assert.equal(await check("| a |\n|---|"), "Drop the table and write it as prose.");
+  assert.match(states[0]!, /No tables\./);
+  const passing = createReplyCheck(
+    { rules: async () => [guidanceCheck()] },
+    createDecisionHooks({ rules: async () => [guidanceCheck()] } as never, backend({ ok: 0.9, table: 0.1 }), audit),
+  );
+  assert.equal(await (await passing({ input: "x", turn }))!("fine"), undefined);
+  const observing = { ...guidanceCheck(), mode: "observe" as const };
+  const observed = createReplyCheck(
+    { rules: async () => [observing] },
+    createDecisionHooks({ rules: async () => [observing] } as never, backend({ ok: 0.1, table: 0.9 }), audit),
+  );
+  assert.equal(await (await observed({ input: "x", turn }))!("| a |"), undefined);
+  assert.equal(
+    await createReplyCheck(
+      { rules: async () => [] },
+      createDecisionHooks(undefined, backend({}), audit),
+    )({ input: "x", turn }),
+    undefined,
+  );
+  assert.equal(
+    await createReplyCheck(undefined, createDecisionHooks(undefined, backend({}), audit))({ input: "x", turn }),
+    undefined,
+  );
+});

@@ -150,6 +150,7 @@ export interface HarnessTurnInput {
   onReasoningDelta?(step: string, index: number, chunk: string): void;
   onTextBlockStart?(phase?: "commentary" | "final_answer"): void | Promise<void>;
   onToolCallStart?(name: string): void;
+  checkReply?(draft: string): Promise<string | undefined>;
   screenToolResult?(input: ToolResultScreenInput): Promise<ToolResultScreen>;
   governGoal?: import("./goal.ts").GoalGovernor;
 }
