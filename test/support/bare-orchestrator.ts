@@ -8,7 +8,6 @@ import { createResolutionService } from "../../src/resolution/resolution-service
 import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
 import type { MemoryService } from "../../src/memory/memory-service.ts";
 import type { MemoryStrategy } from "../../src/memory/strategy.ts";
-import { createModelGateway } from "../../src/model/model-gateway.ts";
 import { createDeployStore } from "../../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../../src/deploy/deploy-service.ts";
@@ -77,7 +76,6 @@ export function buildBareOrchestrator(
     workspace: createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "bare-orchestrator-"))),
     files: createPostgresFileArtifactStore(databaseUrl, createMemoryDurableByteStore()),
     sandbox: unreachableSandbox(),
-    modelGateway: createModelGateway(),
     auditLog,
     rateLimiter: createPostgresRateLimiter(databaseUrl, { maxPerWindow: 1000, windowMs: 60_000 }),
     harness,

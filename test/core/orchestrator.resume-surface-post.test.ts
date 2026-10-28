@@ -8,7 +8,6 @@ import { createIdentityService } from "../../src/identity/identity-service.ts";
 import { createAclStore } from "../../src/acl/acl-store.ts";
 import { createResolutionService } from "../../src/resolution/resolution-service.ts";
 import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
-import { createModelGateway } from "../../src/model/model-gateway.ts";
 import { createMockHarness } from "../support/mock-harness.ts";
 import { createDeployStore } from "../../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../../src/deploy/docker-deploy-provider.ts";
@@ -80,7 +79,6 @@ function buildOrchestrator(
     workspace,
     files: createPostgresFileArtifactStore(databaseUrl, createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
-    modelGateway: createModelGateway(),
     auditLog,
     rateLimiter: createPostgresRateLimiter(databaseUrl, { maxPerWindow: 1000, windowMs: 60_000 }),
     harness,

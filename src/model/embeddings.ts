@@ -4,6 +4,8 @@ import { modelGatewayRequest, type ModelGatewayTransportConfig } from "./provide
 import { providerTurnError } from "../harness/provider-error.ts";
 import { httpFailure } from "../util/errors.ts";
 
+const PGVECTOR_MAX_DIMENSIONS = 16_000;
+
 export interface MemoryEmbedder {
   id: string;
   embed(texts: string[], signal: AbortSignal): Promise<number[][]>;
@@ -13,7 +15,7 @@ export function unitVector(value: unknown): number[] {
   if (
     !Array.isArray(value) ||
     !value.length ||
-    value.length > 16384 ||
+    value.length > PGVECTOR_MAX_DIMENSIONS ||
     !value.every((v) => typeof v === "number" && Number.isFinite(v))
   ) {
     throw new Error("Invalid memory embedding");

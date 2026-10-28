@@ -31,7 +31,6 @@ async function fixture() {
     sessions,
     harness,
     maxContextTokens: 500,
-    modelGateway: { recordCall() {} },
   } as unknown as OrchestratorDeps);
   const input = {
     session,
@@ -204,7 +203,6 @@ test("compaction leaves the session goal on its row and writes no goal entries",
     sessions,
     maxContextTokens: 400,
     harness: { models: { compactHistory: async () => "Earlier work." }, turns: {} },
-    modelGateway: { recordCall() {} },
   } as unknown as OrchestratorDeps);
   try {
     for (let round = 0; round < 2; round++) {
@@ -252,7 +250,6 @@ test("background compaction cannot revive an older goal over one closed while it
       },
       turns: {},
     },
-    modelGateway: { recordCall() {} },
   } as unknown as OrchestratorDeps);
   compaction.scheduleBackgroundCompaction({
     sessionId: session.id,

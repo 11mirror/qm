@@ -269,7 +269,7 @@ function buildModelKeys(deps: HarnessInputs, mc: ReturnType<typeof buildModelCre
     };
   };
   const companyChatGPTAuth: CompanyChatGPTAuth | undefined = config.codexAuthCredential
-    ? keychainCompanyChatGPTAuth({ keychain, credentialId: config.codexAuthCredential })
+    ? keychainCompanyChatGPTAuth({ keychain, lock: advisoryLock, credentialId: config.codexAuthCredential })
     : undefined;
   const resolveCompanySubscriptionKeys = async (): Promise<ProviderKeys> => {
     if (!companyChatGPTAuth) return {};

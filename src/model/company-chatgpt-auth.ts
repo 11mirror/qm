@@ -1,5 +1,6 @@
 import type { CredentialFile, Keychain, KeychainCredentialMeta } from "../credentials/keychain.ts";
-import { swallow } from "../util/errors.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
+import { reportFailure, swallow } from "../util/errors.ts";
 import {
   accessExpiresAt,
   asObject,
@@ -23,6 +24,7 @@ interface StoredAuth {
 }
 
 interface RefreshDeps {
+  lock: AdvisoryLock;
   refresh?: (refreshToken: string) => Promise<UserOAuthTokens>;
   now?: () => number;
 }
@@ -46,12 +48,12 @@ function rotated(auth: JsonObject, next: UserOAuthTokens): JsonObject | null {
 
 function refreshingAuth(
   description: string,
+  lockKey: string,
   read: () => Promise<StoredAuth | null>,
   deps: RefreshDeps,
 ): CompanyChatGPTAuth {
   const refresh = deps.refresh ?? refreshChatGPTTokens;
   const now = deps.now ?? Date.now;
-  const inFlight = perTenant(() => ({ refreshing: null as Promise<JsonObject | null> | null }));
 
   const fresh = (auth: JsonObject): boolean => {
     const expiresAt = accessExpiresAt(auth);
@@ -60,29 +62,21 @@ function refreshingAuth(
 
   const load = async (): Promise<JsonObject | null> => {
     const current = await read();
-    if (!current) return null;
-    if (fresh(current.auth)) return current.auth;
-    const state = inFlight();
-    state.refreshing ??= (async () => {
-      const locked = await read();
-      if (!locked || fresh(locked.auth)) return locked?.auth ?? null;
-      const replaced = authTokens(locked.auth)?.refresh;
-      const next = replaced ? rotated(locked.auth, await refresh(replaced)) : null;
-      if (!next) return null;
-      const latest = await read();
-      if (!latest || authTokens(latest.auth)?.refresh !== replaced) return latest?.auth ?? null;
-      await latest.write(next);
-      return next;
-    })().finally(() => {
-      state.refreshing = null;
-    });
+    if (!current || fresh(current.auth)) return current?.auth ?? null;
     try {
-      const refreshed = await state.refreshing;
-      if (refreshed) return refreshed;
+      return await deps.lock.withLock(lockKey, async () => {
+        const locked = await read();
+        const refreshToken = locked && authTokens(locked.auth)?.refresh;
+        if (!locked || !refreshToken || fresh(locked.auth)) return locked?.auth ?? null;
+        const next = rotated(locked.auth, await refresh(refreshToken));
+        if (!next) return locked.auth;
+        await locked.write(next);
+        return next;
+      });
     } catch (error) {
       swallow("chatgpt: company oauth refresh", error);
+      return current.auth;
     }
-    return (await read())?.auth ?? current.auth;
   };
 
   return {
@@ -101,8 +95,8 @@ function authFromFiles(files: CredentialFile[]): { path: string; auth: JsonObjec
     try {
       const auth = chatgptAuthFromValue(JSON.parse(Buffer.from(file.contentBase64, "base64").toString("utf8")));
       if (auth) return { path: file.path, auth };
-    } catch {
-      continue;
+    } catch (error) {
+      reportFailure("model: company ChatGPT auth file is not valid JSON", error, file.path);
     }
   }
   return null;
@@ -120,6 +114,7 @@ export function keychainCompanyChatGPTAuth(
   }));
   return refreshingAuth(
     `keychain credential ${deps.credentialId}`,
+    `keychain-refresh:${deps.credentialId}`,
     async () => {
       const meta = await deps.keychain.getCredential(deps.credentialId);
       if (!meta || meta.kind !== "file") return null;

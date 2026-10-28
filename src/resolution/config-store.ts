@@ -1,5 +1,6 @@
 import type { ApprovalGrantModes, CommandPolicy, EgressPolicy, ScopeId } from "../types.ts";
 import { scopeId } from "../types.ts";
+import type { PersonalModelProvider } from "../model/user-model-credential-store.ts";
 import { defaultOrgPolicy } from "../policy/command-policy.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import {
@@ -37,10 +38,10 @@ type InstructionsSnapshot = PersistedInstructions | null;
 type ScopedRow<K extends string, V> = { scopeId: ScopeId } & Record<K, V>;
 type PersistedApprovalGrantModes = ScopedRow<"modes", ApprovalGrantModes>;
 type PersistedEgressPolicy = ScopedRow<"policy", EgressPolicy>;
-export type ModelAccount = "company" | "personal" | "anthropic" | "openai";
+export type ModelAccount = "company" | "personal" | PersonalModelProvider;
 
 interface PersistedModelAccount extends PersistedScopedFlag {
-  provider?: "anthropic" | "openai";
+  provider?: PersonalModelProvider;
 }
 
 type PersistedScopedFlag = ScopedRow<"on", boolean>;
@@ -124,7 +125,7 @@ export interface ScopedConfigStore {
   getRuntimeSelectionDurable(id: ScopeId): Promise<ScopedRuntimeSelection | null>;
   onRuntimeSelectionChanged(listener: (id: ScopeId) => void): void;
   getIndividualModelAuthDurable(principalId?: string): Promise<boolean>;
-  setPersonalModelAuth(principalId: string, on: boolean, provider?: "anthropic" | "openai"): Promise<void>;
+  setPersonalModelAuth(principalId: string, on: boolean, provider?: PersonalModelProvider): Promise<void>;
   getModelAccountDurable(principalId: string): Promise<ModelAccount>;
   setSlackEmojiCatalog(id: ScopeId, emoji: Record<string, string>): Promise<void>;
   getSlackEmojiCatalogDurable(id: ScopeId): Promise<PersistedSlackEmojiCatalog | null>;
@@ -380,7 +381,7 @@ function settingsApi(org: ScopeId, settings: ReturnType<typeof createScopeSettin
       if (row?.on) return row.provider ?? "personal";
       return (await modelAuth.durable(org)) ? "personal" : "company";
     },
-    async setPersonalModelAuth(principalId: string, on: boolean, provider?: "anthropic" | "openai") {
+    async setPersonalModelAuth(principalId: string, on: boolean, provider?: PersonalModelProvider) {
       const id = scopeId("personal", principalId);
       await modelAuth.rows.put(id, { scopeId: id, on, ...(on && provider ? { provider } : {}) });
     },

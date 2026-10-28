@@ -126,7 +126,6 @@ async function summarizeForCompaction(
       history: plan.toSummarize,
       summaryTokenBudget,
       recordModelCall: (rec) => {
-        deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: summaryLabel, ...rec });
         void deps.budget?.record(input.actorId, estimateCostUsd(rec.inputTokens));
       },
     });

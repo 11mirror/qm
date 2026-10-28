@@ -126,37 +126,32 @@ function runReads(
     );
     return rows.map(rowToRun);
   };
+  const latestForThreads: RunRows["latestForThreads"] = async (threadRefs, opts) => {
+    if (!threadRefs.length) return new Map();
+    const { rows } = await q(
+      `SELECT latest.* FROM unnest($1::text[]) AS threads(id)
+         CROSS JOIN LATERAL (
+           SELECT * FROM runs WHERE session_id = threads.id
+           AND (NOT $2::boolean OR COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true')
+           ORDER BY created_at DESC, seq DESC LIMIT 1
+         ) latest`,
+      [[...new Set(threadRefs)], Boolean(opts?.excludePrivateMessages)],
+    );
+    return new Map(
+      rows.map((row) => {
+        const run = rowToRun(row);
+        return [run.sessionId, run];
+      }),
+    );
+  };
   return {
     async getByDedupKey(dedupKey) {
       const { rows } = await q(`SELECT * FROM runs WHERE idempotency_key = $1`, [dedupKey]);
       return rows[0] ? rowToRun(rows[0]) : null;
     },
 
-    async latestForThreads(threadRefs, opts) {
-      if (!threadRefs.length) return new Map();
-      const { rows } = await q(
-        `SELECT latest.* FROM unnest($1::text[]) AS threads(id)
-         CROSS JOIN LATERAL (
-           SELECT * FROM runs WHERE session_id = threads.id
-           AND (NOT $2::boolean OR COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true')
-           ORDER BY created_at DESC, seq DESC LIMIT 1
-         ) latest`,
-        [[...new Set(threadRefs)], Boolean(opts?.excludePrivateMessages)],
-      );
-      return new Map(
-        rows.map((row) => {
-          const run = rowToRun(row);
-          return [run.sessionId, run];
-        }),
-      );
-    },
-    async latestForThread(threadRef, opts) {
-      const { rows } = await q(
-        "SELECT * FROM runs WHERE session_id = $1 AND (NOT $2::boolean OR COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true') ORDER BY created_at DESC, seq DESC LIMIT 1",
-        [threadRef, Boolean(opts?.excludePrivateMessages)],
-      );
-      return rows[0] ? rowToRun(rows[0]) : null;
-    },
+    latestForThreads,
+    latestForThread: async (threadRef, opts) => (await latestForThreads([threadRef], opts)).get(threadRef) ?? null,
     async pendingReturns(limit = 100, afterId = "") {
       const { rows } = await q(
         `SELECT * FROM (

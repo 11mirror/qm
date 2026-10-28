@@ -442,7 +442,10 @@ test("an enforced proxy outage fails open and audits the configured provider", a
   );
   assert.equal(event?.resource, "example-screen");
   assert.equal(JSON.parse(event!.detail!).error, "proxy unavailable");
-  assert.equal(built.modelGateway.audit().filter((rec) => rec.model === "mock-security").length, 0);
+  assert.equal(
+    (await built.auditLog.events()).filter((entry) => entry.action === "security_screen.classify").length,
+    1,
+  );
 });
 
 test("a thread image is ingested into a session once; later turns that re-send it carry no attachment", async () => {
@@ -525,7 +528,7 @@ test("Auto treats a fresh authenticated ambient speaker as the initiating human"
   assert.match(result.reply ?? "", /ambient-ok/);
   assert.equal(provisioning.provisioned, 1);
   assert.equal(
-    built.modelGateway.audit().some((call) => call.model === "mock-security"),
+    (await built.auditLog.events()).some((entry) => entry.action === "security_screen.classify"),
     false,
   );
 });

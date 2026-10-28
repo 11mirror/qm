@@ -4,6 +4,25 @@ import { chatgptAuthFromValue } from "../../src/model/chatgpt-auth-file.ts";
 import { keychainCompanyChatGPTAuth } from "../../src/model/company-chatgpt-auth.ts";
 import type { CredentialFile, Keychain, KeychainCredentialMeta } from "../../src/credentials/keychain.ts";
 import type { UserOAuthTokens } from "../../src/model/user-model-credential-store.ts";
+import type { AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
+
+function serialLock(): AdvisoryLock {
+  const tails = new Map<string, Promise<unknown>>();
+  const withLock = <T>(key: string, fn: () => Promise<T>): Promise<T> => {
+    const run = (tails.get(key) ?? Promise.resolve()).then(fn, fn);
+    tails.set(
+      key,
+      run.catch(() => undefined),
+    );
+    return run;
+  };
+  return {
+    withLock,
+    withSharedLock: withLock,
+    tryWithLock: withLock,
+    tryWithLocks: (_keys, fn) => fn(),
+  };
+}
 
 function jwt(payload: Record<string, unknown>): string {
   const enc = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64url");
@@ -106,6 +125,7 @@ test("keychain auth serves a fresh token without refreshing and caches the decry
   const state = keychainState(authJson("acct", FRESH_EXP));
   const auth = keychainCompanyChatGPTAuth({
     keychain: fakeKeychain(state),
+    lock: serialLock(),
     credentialId: "cred-1",
     now: () => NOW,
     refresh: async () => assert.fail("must not refresh"),
@@ -125,6 +145,7 @@ test("keychain auth refreshes a stale token centrally and persists the rotation 
   const { calls, refresh } = refreshTo("acct");
   const auth = keychainCompanyChatGPTAuth({
     keychain: fakeKeychain(state),
+    lock: serialLock(),
     credentialId: "cred-1",
     now: () => NOW,
     refresh,
@@ -147,6 +168,7 @@ test("keychain auth refuses a refresh that switches ChatGPT accounts", async () 
   const { refresh } = refreshTo("other-acct");
   const auth = keychainCompanyChatGPTAuth({
     keychain: fakeKeychain(state),
+    lock: serialLock(),
     credentialId: "cred-1",
     now: () => NOW,
     refresh,
@@ -157,6 +179,44 @@ test("keychain auth refuses a refresh that switches ChatGPT accounts", async () 
 
 test("keychain auth is unavailable when the credential is missing", async () => {
   const state = keychainState(authJson("acct", FRESH_EXP));
-  const auth = keychainCompanyChatGPTAuth({ keychain: fakeKeychain(state), credentialId: "other", now: () => NOW });
+  const auth = keychainCompanyChatGPTAuth({
+    keychain: fakeKeychain(state),
+    lock: serialLock(),
+    credentialId: "other",
+    now: () => NOW,
+  });
   assert.equal(await auth.accessToken(), undefined);
+});
+
+test("instances sharing a lock rotate the refresh token once between them", async () => {
+  const state = keychainState(authJson("acct", STALE_EXP, "refresh-1"));
+  const { calls, refresh } = refreshTo("acct");
+  const lock = serialLock();
+  const instance = () =>
+    keychainCompanyChatGPTAuth({
+      keychain: fakeKeychain(state),
+      lock,
+      credentialId: "cred-1",
+      now: () => NOW,
+      refresh,
+    });
+  const [a, b] = await Promise.all([instance().accessToken(), instance().accessToken()]);
+  assert.equal(a, accessToken("acct", FRESH_EXP, "refreshed"));
+  assert.equal(b, a);
+  assert.deepEqual(calls, ["refresh-1"]);
+  assert.equal(state.saves.length, 1);
+});
+
+test("a corrupt auth file is reported with its path instead of read as absent", async (t) => {
+  const state = keychainState(authJson("acct", FRESH_EXP));
+  state.files = [{ path: ".codex/auth.json", contentBase64: Buffer.from("{not json").toString("base64") }];
+  const errors = t.mock.method(console, "error", () => undefined);
+  const auth = keychainCompanyChatGPTAuth({
+    keychain: fakeKeychain(state),
+    lock: serialLock(),
+    credentialId: "cred-1",
+    now: () => NOW,
+  });
+  assert.equal(await auth.accessToken(), undefined);
+  assert.match(errors.mock.calls.map((call) => call.arguments.join(" ")).join("\n"), /\.codex\/auth\.json/);
 });

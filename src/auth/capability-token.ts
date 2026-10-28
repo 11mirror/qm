@@ -2,6 +2,7 @@ import { promisify } from "node:util";
 import { deflateRaw, inflateRaw } from "node:zlib";
 import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeId } from "../types.ts";
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
+import type { PersonalModelProvider } from "../model/user-model-credential-store.ts";
 import { tenant } from "../tenant.ts";
 import { isBlobId } from "../persistence/blob-transfer.ts";
 
@@ -39,7 +40,7 @@ export interface CapabilityClaims {
   externalSlack?: true;
   actorId: string;
   browserModel?: string;
-  browserAccount?: "company" | "personal" | "openai" | "anthropic";
+  browserAccount?: "company" | "personal" | PersonalModelProvider;
   aud?: string;
   scopeId: ScopeId;
   scopeVersion?: string;

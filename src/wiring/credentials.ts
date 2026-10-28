@@ -22,7 +22,6 @@ import { type BrowserSessionStore, createBrowserSessionStore } from "../connecto
 import { type ConsentLinkStore, createConsentLinkStore } from "../connectors/consent-link.ts";
 import { type OAuthFlowStore, createOAuthFlowStore } from "../connectors/oauth-flow-store.ts";
 import { type SecretDropStore, createSecretDropStore } from "../credentials/secret-drop.ts";
-import { createModelGateway } from "../model/model-gateway.ts";
 
 type CredentialsInputs = Pick<Head, "overrides" | "config" | "connectorSecretKey"> & {
   stores: StoresModule;
@@ -121,7 +120,6 @@ export function buildCredentials(deps: CredentialsInputs) {
   const consentLinks: ConsentLinkStore = createConsentLinkStore(databaseUrl);
   const oauthFlows: OAuthFlowStore = createOAuthFlowStore(databaseUrl);
   const secretDrops: SecretDropStore = createSecretDropStore(databaseUrl);
-  const modelGateway = createModelGateway();
   const started = perTenant(() => ({
     at: undefined as { ready: Promise<void>; skillsReady: Promise<void> } | undefined,
   }));
@@ -156,7 +154,6 @@ export function buildCredentials(deps: CredentialsInputs) {
     serviceCreds,
     userModelCredentials,
     connectorTokens,
-    modelGateway,
     mcpToolService,
     resolveClient,
     consentLinks,

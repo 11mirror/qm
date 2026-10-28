@@ -1,6 +1,6 @@
 import { isGatewayModelId } from "./gateway-models.ts";
 
-export const PROVIDER_IDS = ["anthropic", "openai", "openrouter"] as const;
+export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
 
 export function gatewayRoot(url: string): string {
   return url.replace(/\/+$/, "").replace(/\/v1$/, "");

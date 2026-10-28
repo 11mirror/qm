@@ -488,7 +488,6 @@ function segmentCallbacks(
       gapWork.listener = cb;
     },
     recordModelCall: (rec) => {
-      deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
       void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
     },
     recordLlmRequest: async (rec, signal) => {

@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { createGatewayCatalog } from "../../src/model/gateway-catalog.ts";
 import { gatewayModelsJson, setGatewayModels } from "../../src/model/gateway-models.ts";
-import { createMemoryEmbedder } from "../../src/model/embeddings.ts";
+import { createMemoryEmbedder, unitVector } from "../../src/model/embeddings.ts";
 import {
   resolveModel,
   resolveEmbeddingModel,
@@ -137,4 +137,9 @@ test("HTTP embedding selection accepts only known embedding models and survives 
   assert.equal((await put({ modelId: "gpt-5.5" })).status, 400);
   assert.equal((await put({ modelId: null })).status, 200);
   assert.equal(await built.config.getEmbeddingModelDurable(), null);
+});
+
+test("unitVector rejects vectors wider than a pgvector column can store", () => {
+  assert.equal(unitVector(Array.from({ length: 16_000 }, () => 1)).length, 16_000);
+  assert.throws(() => unitVector(Array.from({ length: 16_001 }, () => 1)), /Invalid memory embedding/);
 });

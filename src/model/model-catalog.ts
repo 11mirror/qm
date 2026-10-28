@@ -15,7 +15,6 @@ const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models?supported_par
 const OPENROUTER_MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:+-]*$/;
 
 const MAX_CATALOG_BYTES = 2 * 1024 * 1024;
-const MAX_CATALOG_MODELS = 1_000;
 const CACHE_TTL_MS = 5 * 60_000;
 const FAILURE_TTL_MS = 30_000;
 
@@ -126,10 +125,16 @@ async function fetchOpenRouterModels(fetcher: typeof fetch): Promise<ModelCatalo
   if (!response.ok) throw new Error(`OpenRouter catalog returned ${response.status}`);
   const body = (await boundedJson(response)) as { data?: unknown };
   if (!Array.isArray(body.data)) throw new Error("OpenRouter catalog is invalid");
-  return body.data.slice(0, MAX_CATALOG_MODELS).flatMap((candidate) => {
+  return body.data.flatMap((candidate) => {
     const model = parseOpenRouterModel(candidate);
     return model ? [model] : [];
   });
+}
+
+function withBuiltIns(dynamic: readonly ModelCatalogEntry[] = []): ModelCatalogEntry[] {
+  const models = builtInModelCatalog();
+  const known = new Set(models.map((model) => model.id));
+  return [...models, ...dynamic.filter((model) => !known.has(model.id))];
 }
 
 export async function selectableModelCatalog(fetcher: typeof fetch = fetch): Promise<ModelCatalogEntry[]> {
@@ -147,20 +152,15 @@ export async function selectableModelCatalog(fetcher: typeof fetch = fetch): Pro
   entry.inFlight = fetchOpenRouterModels(fetcher)
     .then((dynamic) => {
       entry.dynamic = dynamic;
-      const models = builtInModelCatalog();
-      const known = new Set(models.map((model) => model.id));
-      entry.models = [...models, ...dynamic.filter((model) => !known.has(model.id))];
-      entry.expiresAt = Date.now() + CACHE_TTL_MS;
-      entry.customVersion = customProvidersVersion();
-      entry.gatewayVersion = gatewayModelsVersion();
-      return entry.models;
+      return CACHE_TTL_MS;
     })
     .catch((error: unknown) => {
       console.warn(`[model] OpenRouter catalog fetch failed; using cached and built-in models: ${errMessage(error)}`);
-      const models = builtInModelCatalog();
-      const known = new Set(models.map((model) => model.id));
-      entry.models = [...models, ...(entry.dynamic ?? []).filter((model) => !known.has(model.id))];
-      entry.expiresAt = Date.now() + FAILURE_TTL_MS;
+      return FAILURE_TTL_MS;
+    })
+    .then((ttlMs) => {
+      entry.models = withBuiltIns(entry.dynamic);
+      entry.expiresAt = Date.now() + ttlMs;
       entry.customVersion = customProvidersVersion();
       entry.gatewayVersion = gatewayModelsVersion();
       return entry.models;
@@ -181,11 +181,9 @@ export function cachedModelCatalog(fetcher: typeof fetch = fetch): {
   refreshing: boolean;
 } {
   void selectableModelCatalog(fetcher);
-  const models = builtInModelCatalog();
-  const known = new Set(models.map((model) => model.id));
   const entry = catalogCache().get(fetcher);
   return {
-    models: [...models, ...(entry?.dynamic ?? []).filter((model) => !known.has(model.id))],
+    models: withBuiltIns(entry?.dynamic),
     refreshing: !!entry?.inFlight,
   };
 }
