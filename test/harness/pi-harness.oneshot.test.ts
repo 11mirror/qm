@@ -36,13 +36,6 @@ test("piHarnessConfigOptions maps every Config knob the harness consumes, field 
     defaultModelId: "model-base",
     detectModelId: "model-detect",
     titleModelId: "model-title",
-    apiKey: "sk-test",
-    modelGateway: {
-      url: "http://gateway.internal:8080",
-      apiKey: "gateway-key",
-      apiKeyHeader: "api-key",
-      models: { "claude-opus-5": "router/opus" },
-    },
     reachExec: true,
     controlTools: true,
     turnWallClockMs: 111_000,

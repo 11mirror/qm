@@ -56,7 +56,7 @@ for (const variant of ["text", "images", "documents", "finished during preparati
   const finishDuringPreparation = variant === "finished during preparation";
   test(`steered input lands in consumption order, including steered ${variant}`, async () => {
     const signals = createMemoryRunSignalStore();
-    const harness = createPiHarness({ apiKey: "sk-test", signals });
+    const harness = createPiHarness({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }), signals });
     const sink: Sink = { entries: [] };
     const documentBase64 = (await readFile(new URL("../fixtures/documents/sample.pdf", import.meta.url))).toString(
       "base64",
@@ -159,7 +159,7 @@ for (const variant of ["text", "images", "documents", "finished during preparati
 }
 
 test("a lease lost mid-turn fails the turn instead of degrading silently", async () => {
-  const harness = createPiHarness({ apiKey: "sk-test" });
+  const harness = createPiHarness({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const store = createPostgresSessionStore(testDatabaseUrl());
   const session = await store.getOrCreateByThread("dm:lease-lost", "dm", "personal:tester" as ScopeId);
@@ -196,7 +196,7 @@ test("completed Pi attach results retain openable files in viewer history", asyn
     { name: "phone.png", mimetype: "image/png", sizeBytes: 456, artifactId: "phone" },
     { name: "preview.html", mimetype: "text/html", sizeBytes: 789, artifactId: "preview" },
   ];
-  const harness = createPiHarness({ apiKey: "sk-test" });
+  const harness = createPiHarness({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const realFetch = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = (async () => {
@@ -251,7 +251,7 @@ for (const route of ["gateway", "direct", "personal"] as const) {
   test(`native document byte budget respects ${route} routing`, async () => {
     const modelId = "claude-opus-5";
     const harness = createPiHarness({
-      apiKey: "sk-test",
+      resolveProviderKeys: async () => ({ anthropic: "sk-test" }),
       defaultModelId: modelId,
       ...(route !== "direct"
         ? {
@@ -297,7 +297,7 @@ for (const route of ["gateway", "direct", "personal"] as const) {
 }
 
 test("native document bytes reach the provider on every step without entering session entries", async () => {
-  const harness = createPiHarness({ apiKey: "sk-test" });
+  const harness = createPiHarness({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const realFetch = globalThis.fetch;
   const requests: Array<Record<string, unknown>> = [];
@@ -326,7 +326,10 @@ test("native document bytes reach the provider on every step without entering se
 });
 
 test("Pi Responses captures exclude history and document text without changing requests or entries", async () => {
-  const harness = createPiHarness({ openaiApiKey: "sk-test", defaultModelId: "gpt-5.6-sol" });
+  const harness = createPiHarness({
+    resolveProviderKeys: async () => ({ openai: "sk-test" }),
+    defaultModelId: "gpt-5.6-sol",
+  });
   const sink: Sink = { entries: [] };
   const captures: HarnessLlmRequestRecord[] = [];
   const realFetch = globalThis.fetch;
@@ -386,7 +389,7 @@ test("Pi Responses captures exclude history and document text without changing r
 for (const stopBeforeIntake of [false, true]) {
   test(`steering during a tool ${stopBeforeIntake ? "survives Stop without fabricated intake" : "lands after its result in live and stored order"}`, async () => {
     const signals = createMemoryRunSignalStore();
-    const harness = createPiHarness({ apiKey: "sk-test", signals });
+    const harness = createPiHarness({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }), signals });
     const store = createPostgresSessionStore(testDatabaseUrl());
     const session = await store.getOrCreateByThread("web:steer-tool", "dm", "personal:tester" as ScopeId);
     const lease = (await store.acquireLease(session.id, "turn")).lease!;
@@ -469,7 +472,7 @@ test("a consumed steer is recorded when its acknowledgement fails", async () => 
   signals.acknowledge = async () => {
     throw new Error("signal store unavailable");
   };
-  const harness = createPiHarness({ apiKey: "sk-test", signals });
+  const harness = createPiHarness({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }), signals });
   const sink: Sink = { entries: [] };
   const realFetch = globalThis.fetch;
   let calls = 0;
@@ -517,7 +520,7 @@ test("a consumed steer is recorded when its acknowledgement fails", async () => 
 
 for (const abort of ["shutdown", "stop"] as const) {
   test(`a Pi tool result recorded after ${abort === "shutdown" ? "shutdown is marked interrupted and leaves its call open" : "a user Stop stays a real answer"}`, async () => {
-    const harness = createPiHarness({ apiKey: "sk-test" });
+    const harness = createPiHarness({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
     const store = createPostgresSessionStore(testDatabaseUrl());
     const session = await store.getOrCreateByThread(`web:${abort}-tool`, "dm", "personal:tester" as ScopeId);
     const lease = (await store.acquireLease(session.id, "turn")).lease!;
@@ -590,7 +593,7 @@ for (const abort of ["shutdown", "stop"] as const) {
 }
 
 test("a request rejected as too long retries once without its inline documents instead of failing the turn", async () => {
-  const harness = createPiHarness({ apiKey: "sk-test" });
+  const harness = createPiHarness({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const realFetch = globalThis.fetch;
   const requests: string[] = [];
