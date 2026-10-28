@@ -51,7 +51,7 @@ const EXECUTE_BASE_PARAMS = {
   ),
   purpose: Type.String({
     description:
-      "Intent label, at most 4 words, describing the purpose not the code; shown in activity and approval requests.",
+      'Intent label, at most 4 words, starting with an -ing verb (e.g. "Checking disk space"), describing the purpose not the code; shown in activity and approval requests.',
   }),
   timeout_seconds: Type.Optional(
     Type.Integer({
