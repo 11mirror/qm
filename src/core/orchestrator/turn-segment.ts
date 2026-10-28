@@ -9,7 +9,6 @@ import type { Session } from "../../types.ts";
 import { markFirstToken } from "../../../plugins/chassis/src/error-reporting.ts";
 import { memoryRecallDelta } from "../../memory/recall-delta.ts";
 import { loadDocumentInputs } from "../document-inputs.ts";
-import { goalView } from "../../runs/turn-stream.ts";
 import { type GoalRecord, openGoal } from "../../harness/goal.ts";
 import { type Destination, type TurnRuntime } from "../../types.ts";
 import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
@@ -117,7 +116,6 @@ async function runHarnessSegment(
   const sessionGoal = openGoal(storedGoal);
   const saveGoal = async (goal: GoalRecord): Promise<void> => {
     await deps.sessions.setGoal(lease, goal);
-    if (input.runId) deps.turnStream?.noteGoal(input.runId, goalView(goal));
   };
   const turnResult = await deps.harness.turns.runTurn({
     session,

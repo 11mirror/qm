@@ -1,5 +1,5 @@
 import type { RunSignal } from "./run-signal-store.ts";
-import type { TurnResult } from "../types.ts";
+import type { TurnResult, TurnRuntime } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { isPersonAuthored } from "../core/turn-origin.ts";
 import { traceCarrier } from "../../plugins/chassis/src/error-reporting.ts";
@@ -27,6 +27,10 @@ export interface RunDeliveryState {
   editRef?: string;
   postedAt?: number;
   settledAt?: number;
+  runtime?: TurnRuntime;
+  firstBlock?: string;
+  surfacePosted?: boolean;
+  replyDone?: boolean;
 }
 
 export type RunStop =

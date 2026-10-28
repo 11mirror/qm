@@ -5,7 +5,7 @@ import * as mockHarness from "../support/mock-harness.ts";
 import { testConfig } from "../support/test-config.ts";
 import type { TurnRequest } from "../../src/types.ts";
 import type { HarnessTurnInput } from "../../src/harness/harness.ts";
-import { settle } from "../support/settle.ts";
+import { eventually, settle } from "../support/settle.ts";
 import { settledRun } from "../support/turns.ts";
 
 let exercise: (turn: HarnessTurnInput) => Promise<void>;
@@ -65,7 +65,9 @@ for (const scenario of [
       };
       const queued = await built.app.turn(request);
       await ready;
-      const run = await built.app.getRun(queued.runId!);
+      const run = scenario.enabled
+        ? await eventually(() => built.app.getRun(queued.runId!), { until: (view) => view?.firstBlock })
+        : await built.app.getRun(queued.runId!);
       if (scenario.enabled) assert.equal(run?.firstBlock, "Building the website now.");
       assert.equal(run?.firstBlockClosed === true, scenario.enabled);
       release();

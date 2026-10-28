@@ -38,7 +38,7 @@ import { MAX_BLOB_BYTES } from "../persistence/blob-transfer.ts";
 import type { SlackNative } from "../surfaces/slack-surface.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import { isTerminal } from "../runs/run-store.ts";
-import type { GoalView, TurnStream } from "../runs/turn-stream.ts";
+import type { GoalView } from "../runs/turn-stream.ts";
 import { reportFailure, swallowAs } from "../util/errors.ts";
 import { resolveRuntimeChoiceDurable } from "../harness/runtime-choice.ts";
 import type { RuntimeChoice } from "../harness/harness.ts";
@@ -158,7 +158,6 @@ export interface SlackCoreClientDeps {
   slack: SlackNative;
   errors?: ErrorLog;
   runs: RunStore;
-  turnStream: TurnStream;
   pickAckEmoji?(text: string, candidates: readonly string[]): Promise<string | undefined>;
   ackPicks?: AckEmojiPickStore;
   ackModelId?: () => string | undefined;
@@ -306,27 +305,16 @@ function runMethods(deps: SlackCoreClientDeps, terminalWaiters: Map<string, Set<
         signaled.add(signal);
         fire();
       };
-      const signalReplying = (durable = false): void => {
-        if (!signaled.has("replying") && (durable || deps.turnStream.replying(runId)))
-          once("replying", () => hooks.onReplying?.());
-      };
-      const signalFirstBlock = (text: string): void => {
-        if (text.trim()) once("firstBlock", () => hooks.onFirstBlock?.(text));
-      };
-      const signalSurface = (): void => once("surface", () => hooks.onSurfacePosted?.());
       const waiters = terminalWaiters.get(runId) ?? new Set();
       terminalWaiters.set(runId, waiters);
-      const unsubscribe = deps.turnStream.subscribe(runId, {
-        onFirstBlock: signalFirstBlock,
-        onSurfacePosted: signalSurface,
+      const unsubscribe = deps.app.subscribeRun(runId, (event) => {
+        if (event.kind === "refresh") for (const wake of [...waiters]) wake();
       });
       let lastProgressAt = Date.now();
       let lastMark = "";
       let goalSnapshot = "";
-      const emitGoal = async (): Promise<void> => {
-        if (!hooks.onGoal) return;
-        const goal = deps.turnStream.goal(runId);
-        if (!goal) return;
+      const emitGoal = async (goal: GoalView | undefined): Promise<void> => {
+        if (!hooks.onGoal || !goal) return;
         const next = JSON.stringify(goal);
         if (next === goalSnapshot) return;
         goalSnapshot = next;
@@ -334,27 +322,25 @@ function runMethods(deps: SlackCoreClientDeps, terminalWaiters: Map<string, Set<
       };
       try {
         for (;;) {
-          let run;
+          let view;
           try {
-            run = await deps.runs.get(runId);
+            view = await deps.app.getRun(runId);
           } catch (err) {
             if (Date.now() - lastProgressAt >= RUN_STALL_BUDGET_MS) throw err;
-            run = undefined;
+            view = undefined;
           }
-          if (run !== undefined) {
-            if (!run) throw new Error(`run ${runId} not found`);
-            if (deps.turnStream.surfacePosted(runId)) signalSurface();
-            if (isTerminal(run.status)) {
-              const view = await deps.app.getRun(runId);
-              await emitGoal().catch(swallowAs("slack-core-client: terminal goal refresh", undefined));
-              if (view?.surfacePosted) signalSurface();
-              return (view?.result as TurnResult | null | undefined) ?? null;
+          if (view !== undefined) {
+            if (!view) throw new Error(`run ${runId} not found`);
+            if (view.surfacePosted) once("surface", () => hooks.onSurfacePosted?.());
+            if (isTerminal(view.status)) {
+              await emitGoal(view.goal).catch(swallowAs("slack-core-client: terminal goal refresh", undefined));
+              return (view.result as TurnResult | null | undefined) ?? null;
             }
-            signalReplying(run.deliveryState?.replying === true);
-            await emitGoal().catch(swallowAs("slack-core-client: goal refresh", undefined));
-            const fb = deps.turnStream.firstBlock(runId);
-            if (fb?.closed) signalFirstBlock(fb.text);
-            const mark = `${run.status}:${run.attempts}`;
+            if (view.replying) once("replying", () => hooks.onReplying?.());
+            await emitGoal(view.goal).catch(swallowAs("slack-core-client: goal refresh", undefined));
+            const firstBlock = view.firstBlock;
+            if (firstBlock?.trim()) once("firstBlock", () => hooks.onFirstBlock?.(firstBlock));
+            const mark = `${view.status}:${view.attempt}`;
             if (mark !== lastMark) {
               lastMark = mark;
               lastProgressAt = Date.now();

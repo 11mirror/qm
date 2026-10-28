@@ -3,15 +3,29 @@ import "../support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { createTurnStream, goalView } from "../../src/runs/turn-stream.ts";
+import { createTurnStream, goalView, runGoal } from "../../src/runs/turn-stream.ts";
+import type { RunDeliveryState } from "../../src/runs/run-store.ts";
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
 import { settledRun } from "../support/turns.ts";
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+function recording() {
+  const writes: Array<[string, RunDeliveryState]> = [];
+  const stream = createTurnStream({
+    runs: {
+      async setDeliveryState(runId, _lease, state) {
+        writes.push([runId, state]);
+        return true;
+      },
+    },
+  });
+  return { stream, writes };
+}
+
+const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
 test("accumulates deltas per run and isolates runs", () => {
-  const s = createTurnStream();
+  const { stream: s } = recording();
   assert.equal(s.snapshot("r1"), null, "unknown run has no partial");
   s.publish("r1", "Hel");
   s.publish("r1", "lo");
@@ -21,7 +35,7 @@ test("accumulates deltas per run and isolates runs", () => {
 });
 
 test("ignores empty deltas", () => {
-  const s = createTurnStream();
+  const { stream: s } = recording();
   s.publish("r1", "");
   assert.equal(s.snapshot("r1"), null);
   s.publish("r1", "x");
@@ -30,7 +44,7 @@ test("ignores empty deltas", () => {
 });
 
 test("publishBlockStart() joins text blocks with a paragraph break, never leads or doubles", () => {
-  const s = createTurnStream();
+  const { stream: s } = recording();
   s.publishBlockStart("r1");
   assert.equal(s.snapshot("r1"), null, "a boundary before any text is a no-op");
   s.publish("r1", "First block.");
@@ -44,65 +58,90 @@ test("publishBlockStart() joins text blocks with a paragraph break, never leads 
   assert.equal(s.snapshot("r1"), "First block.\n\nSecond block.\n\nThird.", "no double break after trailing one");
 });
 
-test("begin() marks a run replying BEFORE any token, without producing a partial", () => {
-  const s = createTurnStream();
-  assert.equal(s.replying("r1"), false, "unknown run is not replying");
+test("begin() is idempotent, text-free and never clobbers buffered text", () => {
+  const { stream: s } = recording();
   s.begin("r1");
-  assert.equal(s.replying("r1"), true, "begin() commits to a reply");
   assert.equal(s.snapshot("r1"), null, "no partial yet — begin() is text-free");
-  s.publish("r1", "Hi");
-  assert.equal(s.replying("r1"), true);
-  assert.equal(s.snapshot("r1"), "Hi", "the deferred text streams into the same entry");
-});
-
-test("a streamed delta implies replying even without an explicit begin()", () => {
-  const s = createTurnStream();
-  s.publish("r1", "Hello");
-  assert.equal(s.replying("r1"), true, "a delta means the agent is replying");
-});
-
-test("begin() is idempotent and never clobbers buffered text", () => {
-  const s = createTurnStream();
   s.publish("r1", "Hello");
   s.begin("r1");
   assert.equal(s.snapshot("r1"), "Hello");
-  assert.equal(s.replying("r1"), true);
 });
 
-test("caps a run's buffer at maxChars", () => {
-  const s = createTurnStream({ maxChars: 5 });
-  s.publish("r1", "abc");
-  s.publish("r1", "defghij");
-  assert.equal(s.snapshot("r1"), "ij", "buffer retains the newest text past the cap");
-  assert.equal(s.startOffset("r1"), 8);
+test("caps a run's buffer, keeping the newest half", () => {
+  const { stream: s } = recording();
+  s.publish("r1", "a".repeat(150_000));
+  s.publish("r1", "b".repeat(60_000));
+  assert.equal(
+    s.snapshot("r1"),
+    "a".repeat(40_000) + "b".repeat(60_000),
+    "buffer retains the newest text past the cap",
+  );
+  assert.equal(s.startOffset("r1"), 110_000);
 });
 
-test("end() evicts a finished run's buffer after the grace period", async () => {
-  const s = createTurnStream({ graceMs: 20 });
+test("end() evicts a finished run's buffer after the grace period", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { stream: s } = recording();
   s.publish("r1", "done reply");
   s.end("r1");
   assert.equal(s.snapshot("r1"), "done reply", "buffer survives during grace so a final poll catches up");
-  await sleep(40);
+  t.mock.timers.tick(30_000);
   assert.equal(s.snapshot("r1"), null, "buffer evicted after grace");
 });
 
-test("a late delta after end() cancels eviction and keeps streaming", async () => {
-  const s = createTurnStream({ graceMs: 20 });
+test("a late delta after end() cancels eviction and keeps streaming", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { stream: s } = recording();
   s.publish("r1", "a");
   s.end("r1");
   s.publish("r1", "b");
-  await sleep(40);
+  t.mock.timers.tick(30_000);
   assert.equal(s.snapshot("r1"), "ab", "eviction was cancelled by the late delta");
 });
 
-test("markReplyDone flags the reply as final independently of the run lifecycle", () => {
-  const s = createTurnStream();
-  assert.equal(s.isReplyDone("r1"), false, "unknown run: reply not done");
-  s.publish("r1", "the answer");
-  assert.equal(s.isReplyDone("r1"), false, "streaming text alone doesn't mark the reply final");
+test("reply, runtime, surface and closed first block are written to the run's delivery state", async () => {
+  const { stream: s, writes } = recording();
+  s.publish("r1", "On it.");
+  s.noteToolCall("r1");
+  s.markSurfacePosted("r1");
+  s.markSurfacePosted("r1");
+  const runtime = { modelId: "m", harness: "pi" } as never;
+  s.noteRuntime("r1", runtime);
   s.markReplyDone("r1");
-  assert.equal(s.isReplyDone("r1"), true, "explicitly marked final");
-  assert.equal(s.snapshot("r1"), "the answer", "the buffered reply is still readable");
+  await flush();
+  assert.deepEqual(writes, [
+    ["r1", { firstBlock: "On it." }],
+    ["r1", { surfacePosted: true }],
+    ["r1", { runtime }],
+    ["r1", { replyDone: true }],
+  ]);
+});
+
+test("getRun reads reply, runtime, surface and first block from the run row, not this process's stream", async () => {
+  const built = buildApp(testConfig({ workers: 0 }));
+  const ack = await built.app.turn({
+    origin: { kind: "direct" },
+    surface: "test",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: "t-durable" },
+    text: "hello",
+    async: true,
+  });
+  const runtime = { modelId: "m" } as never;
+  await built.runs.setDeliveryState(ack.runId!, null, {
+    replying: true,
+    runtime,
+    firstBlock: "On it.",
+    surfacePosted: true,
+    replyDone: true,
+  });
+  const run = await built.app.getRun(ack.runId!);
+  assert.equal(run?.replying, true);
+  assert.equal(run?.replyComplete, true);
+  assert.deepEqual(run?.runtime, runtime);
+  assert.equal(run?.firstBlock, "On it.");
+  assert.equal(run?.firstBlockClosed, true);
+  assert.equal(run?.surfacePosted, true);
 });
 
 test("a queued run surfaces replyComplete via getRun once the reply is final", async () => {
@@ -183,7 +222,7 @@ test("a queued run exposes the agent's in-flight reply via getRun().partial", as
 });
 
 test("first block: captured until noteToolCall closes it; later text never leaks in", () => {
-  const s = createTurnStream();
+  const { stream: s } = recording();
   assert.equal(s.firstBlock("r1"), null, "unknown run has no first block");
   s.publish("r1", "On it — ");
   s.publish("r1", "checking the logs.");
@@ -204,7 +243,7 @@ test("first block: captured until noteToolCall closes it; later text never leaks
 });
 
 test("first block: a second text block before any tool call disqualifies the harvest", () => {
-  const s = createTurnStream();
+  const { stream: s } = recording();
   s.publish("r1", "First thought.");
   s.publishBlockStart("r1");
   s.publish("r1", "Second thought.");
@@ -217,19 +256,11 @@ test("first block: a second text block before any tool call disqualifies the har
 });
 
 test("first block: a turn that goes straight to tools has none", () => {
-  const s = createTurnStream();
+  const { stream: s } = recording();
   s.noteToolCall("r1");
   s.publishBlockStart("r1");
   s.publish("r1", "The answer.");
   assert.equal(s.firstBlock("r1"), null, "no text before the tool call → nothing to harvest");
-});
-
-test("surfacePosted: false until marked, then sticky for the run", () => {
-  const s = createTurnStream();
-  assert.equal(s.surfacePosted("r1"), false);
-  s.markSurfacePosted("r1");
-  assert.equal(s.surfacePosted("r1"), true);
-  assert.equal(s.surfacePosted("r2"), false, "isolated per run");
 });
 
 test("a DM turn's opening text block rides getRun as firstBlock/firstBlockClosed", async () => {
@@ -324,40 +355,17 @@ test("a non-slack surface never strips the first block from the reply", async ()
   }
 });
 
-test("subscribe leaks nothing for a run this instance is not executing", () => {
-  const stream = createTurnStream();
-  let posted = false;
-  const unsubscribe = stream.subscribe("other-instance-run", { onSurfacePosted: () => (posted = true) });
-  assert.equal(stream.replying("other-instance-run"), false, "only begin() may assert that a turn is under way here");
-  unsubscribe();
-  assert.equal(stream.replying("other-instance-run"), false);
-  stream.subscribe("local-run", { onSurfacePosted: () => (posted = true) });
-  stream.begin("local-run");
-  stream.markSurfacePosted("local-run");
-  assert.equal(posted, true, "listeners still fire for a run this instance executes");
-});
-
-test("a stale double-unsubscribe cannot evict a newer subscriber's listener set", () => {
-  const stream = createTurnStream();
-  const unsubscribe = stream.subscribe("r1", { onSurfacePosted: () => {} });
-  unsubscribe();
-  let posted = false;
-  stream.subscribe("r1", { onSurfacePosted: () => (posted = true) });
-  unsubscribe();
-  stream.begin("r1");
-  stream.markSurfacePosted("r1");
-  assert.equal(posted, true, "the newer subscriber must still hear events after a stale unsubscribe fires twice");
-});
-
-test("turn-stream: noteGoal/goal snapshots", () => {
-  const stream = createTurnStream();
-  stream.begin("r1");
-  assert.equal(stream.goal("r1"), null);
-  const goal = { objective: "ship it", status: "active" as const, createdAt: 1, updatedAt: 1 };
-  stream.noteGoal("r1", goal);
-  assert.deepEqual(stream.goal("r1"), goal);
-  stream.noteGoal("r1", { ...goal, status: "complete" });
-  assert.equal(stream.goal("r1")?.status, "complete");
+test("runGoal shows a goal changed during the run or still open, never one from after it", () => {
+  const goal = { objective: "ship it", status: "active" as const, tokensUsed: 0, createdAt: 5, updatedAt: 5 };
+  const run = { startedAt: 10, finishedAt: 20 };
+  assert.equal(runGoal(undefined, run), null);
+  assert.equal(runGoal(goal, { startedAt: null, finishedAt: null }), null, "an unstarted run has no goal");
+  assert.equal(runGoal(goal, run)?.objective, "ship it", "an open goal carried into the run");
+  assert.equal(runGoal({ ...goal, status: "complete", updatedAt: 15 }, run)?.status, "complete");
+  assert.equal(runGoal({ ...goal, status: "complete", updatedAt: 8 }, run), null, "closed before the run");
+  assert.equal(runGoal({ ...goal, status: "complete", updatedAt: 25 }, run), null, "closed after the run");
+  assert.equal(runGoal({ ...goal, createdAt: 25, updatedAt: 25 }, run), null, "opened after the run");
+  assert.ok(runGoal({ ...goal, createdAt: 25, updatedAt: 25 }, { startedAt: 10, finishedAt: null }));
 });
 
 test("goalView renders a goal record's status and floor", () => {
@@ -408,6 +416,7 @@ test("monitor wakes persist engagement after the reply gate", async () => {
 test("reasoning streams per block beside the reply text, whole, and settles when persisted", () => {
   const published: Array<{ step: string; index: number; text: string; offset: number }> = [];
   const s = createTurnStream({
+    runs: { setDeliveryState: async () => true },
     onReasoning: (_runId, block, text, offset) => published.push({ ...block, text, offset }),
   });
   s.publishReasoning("r1", "step-a", 0, "**Plan**");

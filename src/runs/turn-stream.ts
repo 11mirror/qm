@@ -1,5 +1,7 @@
-import type { GoalRecord } from "../harness/goal.ts";
+import { goalIsOpen, type GoalRecord } from "../harness/goal.ts";
 import type { TurnRuntime } from "../types.ts";
+import type { Run, RunDeliveryState, RunStore } from "./run-store.ts";
+import { swallowAs } from "../util/errors.ts";
 
 export interface GoalView {
   objective: string;
@@ -18,79 +20,55 @@ export interface ReasoningBlock {
 
 export interface TurnStream {
   begin(runId: string): void;
-  replying(runId: string): boolean;
   publish(runId: string, delta: string): void;
   publishBlockStart(runId: string): void;
   publishReasoning(runId: string, step: string, index: number, delta: string): void;
   settleReasoning(runId: string, step: string, index: number): void;
   reasoning(runId: string): ReasoningBlock[];
   noteToolCall(runId: string): void;
-  noteGoal(runId: string, goal: GoalView): void;
-  goal(runId: string): GoalView | null;
   noteRuntime(runId: string, runtime: TurnRuntime): void;
-  runtime(runId: string): TurnRuntime | null;
   firstBlock(runId: string): { text: string; closed: boolean } | null;
   markSurfacePosted(runId: string): void;
-  surfacePosted(runId: string): boolean;
   snapshot(runId: string): string | null;
   startOffset(runId: string): number;
   markReplyDone(runId: string): void;
-  isReplyDone(runId: string): boolean;
   end(runId: string): void;
-  subscribe(runId: string, listener: TurnStreamListener): () => void;
-}
-
-interface TurnStreamListener {
-  onFirstBlock?(text: string): void;
-  onSurfacePosted?(): void;
 }
 
 interface Entry {
   text: string;
   totalChars: number;
-  goal: GoalView | null;
-  runtime: TurnRuntime | null;
   firstBlock: string;
   firstBlockOpen: boolean;
   firstBlockClosed: boolean;
   reasoning: ReasoningBlock[];
   surfacePosted: boolean;
-  replying: boolean;
-  replyDone: boolean;
   timer: ReturnType<typeof setTimeout> | null;
 }
 
 export interface TurnStreamOptions {
-  maxChars?: number;
-  graceMs?: number;
+  runs: Pick<RunStore, "setDeliveryState">;
   onDelta?(runId: string, text: string, offset: number, startOffset: number): void;
   onReasoning?(runId: string, block: Omit<ReasoningBlock, "text">, text: string, offset: number): void;
   onChange?(runId: string): void;
 }
 
-const DEFAULT_MAX_CHARS = 200_000;
-const DEFAULT_GRACE_MS = 30_000;
+const MAX_CHARS = 200_000;
+const GRACE_MS = 30_000;
 const BLOCK_JOIN = "\n\n";
 
-function makeEntry(partial: Partial<Entry> = {}): Entry {
+function makeEntry(): Entry {
   return {
     text: "",
     totalChars: 0,
-    goal: null,
-    runtime: null,
     firstBlock: "",
     firstBlockOpen: true,
     firstBlockClosed: false,
     reasoning: [],
     surfacePosted: false,
-    replying: true,
-    replyDone: false,
     timer: null,
-    ...partial,
   };
 }
-
-type Listeners = Map<string, Set<TurnStreamListener>>;
 
 function ensure(runs: Map<string, Entry>, runId: string): Entry {
   let entry = runs.get(runId);
@@ -101,21 +79,28 @@ function ensure(runs: Map<string, Entry>, runId: string): Entry {
   return entry;
 }
 
-function append(opts: TurnStreamOptions, maxChars: number, runId: string, entry: Entry, delta: string): void {
+function append(opts: TurnStreamOptions, runId: string, entry: Entry, delta: string): void {
   const offset = entry.totalChars;
   entry.totalChars += delta.length;
   entry.text += delta;
-  if (entry.text.length > maxChars)
-    entry.text = entry.text.slice(-Math.max(BLOCK_JOIN.length, Math.floor(maxChars / 2)));
+  if (entry.text.length > MAX_CHARS) entry.text = entry.text.slice(-Math.floor(MAX_CHARS / 2));
   opts.onDelta?.(runId, delta, offset, entry.totalChars - entry.text.length);
 }
 
-function streamWriteMethods(opts: TurnStreamOptions, maxChars: number, runs: Map<string, Entry>, listeners: Listeners) {
+function persister(opts: TurnStreamOptions) {
+  return (runId: string, state: RunDeliveryState): void => {
+    void opts.runs
+      .setDeliveryState(runId, null, state)
+      .then(() => opts.onChange?.(runId), swallowAs("turn-stream: persist delivery state", undefined));
+  };
+}
+
+function streamWriteMethods(opts: TurnStreamOptions, runs: Map<string, Entry>) {
+  const persist = persister(opts);
   return {
     begin(runId) {
       const entry = runs.get(runId);
       if (entry) {
-        entry.replying = true;
         entry.reasoning = [];
         if (entry.timer) clearTimeout(entry.timer);
         entry.timer = null;
@@ -123,20 +108,15 @@ function streamWriteMethods(opts: TurnStreamOptions, maxChars: number, runs: Map
       opts.onChange?.(runId);
     },
 
-    replying(runId) {
-      return runs.get(runId)?.replying ?? false;
-    },
-
     publish(runId, delta) {
       if (!delta) return;
       const entry = ensure(runs, runId);
-      entry.replying = true;
       if (entry.timer) {
         clearTimeout(entry.timer);
         entry.timer = null;
       }
       if (entry.firstBlockOpen) entry.firstBlock += delta;
-      append(opts, maxChars, runId, entry, delta);
+      append(opts, runId, entry, delta);
     },
 
     publishBlockStart(runId) {
@@ -144,7 +124,7 @@ function streamWriteMethods(opts: TurnStreamOptions, maxChars: number, runs: Map
       if (!entry) return;
       if (entry.firstBlock) entry.firstBlockOpen = false;
       if (!entry.text || entry.text.endsWith(BLOCK_JOIN)) return;
-      append(opts, maxChars, runId, entry, BLOCK_JOIN);
+      append(opts, runId, entry, BLOCK_JOIN);
     },
 
     publishReasoning(runId, step, index, delta) {
@@ -174,30 +154,16 @@ function streamWriteMethods(opts: TurnStreamOptions, maxChars: number, runs: Map
       if (!entry.firstBlockOpen) return;
       entry.firstBlockOpen = false;
       entry.firstBlockClosed = entry.firstBlock.trim().length > 0;
-      if (entry.firstBlockClosed) {
-        for (const l of listeners.get(runId) ?? []) l.onFirstBlock?.(entry.firstBlock);
-      }
+      if (entry.firstBlockClosed) persist(runId, { firstBlock: entry.firstBlock });
     },
   } satisfies Partial<TurnStream>;
 }
 
-function streamStateMethods(opts: TurnStreamOptions, graceMs: number, runs: Map<string, Entry>, listeners: Listeners) {
+function streamStateMethods(opts: TurnStreamOptions, runs: Map<string, Entry>) {
+  const persist = persister(opts);
   return {
-    noteGoal(runId, goal) {
-      ensure(runs, runId).goal = goal;
-    },
-
-    goal(runId) {
-      return runs.get(runId)?.goal ?? null;
-    },
-
     noteRuntime(runId, runtime) {
-      ensure(runs, runId).runtime = runtime;
-      opts.onChange?.(runId);
-    },
-
-    runtime(runId) {
-      return runs.get(runId)?.runtime ?? null;
+      persist(runId, { runtime });
     },
 
     firstBlock(runId) {
@@ -210,11 +176,7 @@ function streamStateMethods(opts: TurnStreamOptions, graceMs: number, runs: Map<
       const entry = ensure(runs, runId);
       if (entry.surfacePosted) return;
       entry.surfacePosted = true;
-      for (const l of listeners.get(runId) ?? []) l.onSurfacePosted?.();
-    },
-
-    surfacePosted(runId) {
-      return runs.get(runId)?.surfacePosted ?? false;
+      persist(runId, { surfacePosted: true });
     },
 
     snapshot(runId) {
@@ -228,49 +190,33 @@ function streamStateMethods(opts: TurnStreamOptions, graceMs: number, runs: Map<
     },
 
     markReplyDone(runId) {
-      const entry = runs.get(runId);
-      if (entry) entry.replyDone = true;
-      else runs.set(runId, makeEntry({ replyDone: true }));
-      opts.onChange?.(runId);
-    },
-
-    isReplyDone(runId) {
-      return runs.get(runId)?.replyDone ?? false;
+      persist(runId, { replyDone: true });
     },
 
     end(runId) {
       const entry = runs.get(runId);
       if (!entry) return;
       if (entry.timer) return;
-      const timer = setTimeout(() => runs.delete(runId), graceMs);
+      const timer = setTimeout(() => runs.delete(runId), GRACE_MS);
       timer.unref?.();
       entry.timer = timer;
-    },
-
-    subscribe(runId, listener) {
-      let set = listeners.get(runId);
-      if (!set) {
-        set = new Set();
-        listeners.set(runId, set);
-      }
-      set.add(listener);
-      return () => {
-        set.delete(listener);
-        if (set.size === 0 && listeners.get(runId) === set) listeners.delete(runId);
-      };
     },
   } satisfies Partial<TurnStream>;
 }
 
-export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
-  const maxChars = Math.max(2, opts.maxChars ?? DEFAULT_MAX_CHARS);
-  const graceMs = opts.graceMs ?? DEFAULT_GRACE_MS;
+export function createTurnStream(opts: TurnStreamOptions): TurnStream {
   const runs = new Map<string, Entry>();
-  const listeners: Listeners = new Map();
   return {
-    ...streamWriteMethods(opts, maxChars, runs, listeners),
-    ...streamStateMethods(opts, graceMs, runs, listeners),
+    ...streamWriteMethods(opts, runs),
+    ...streamStateMethods(opts, runs),
   };
+}
+
+export function runGoal(goal: GoalRecord | undefined, run: Pick<Run, "startedAt" | "finishedAt">): GoalView | null {
+  if (!goal || run.startedAt === null) return null;
+  const end = run.finishedAt ?? Infinity;
+  const changedDuringRun = goal.updatedAt >= run.startedAt && goal.updatedAt <= end;
+  return changedDuringRun || (goalIsOpen(goal) && goal.createdAt <= end) ? goalView(goal) : null;
 }
 
 export function goalView(goal: GoalRecord): GoalView {

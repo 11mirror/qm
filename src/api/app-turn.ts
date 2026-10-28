@@ -8,6 +8,7 @@ import type { SessionStateEvent } from "../runs/session-state-bus.ts";
 import { samePerson } from "../directory/person.ts";
 import { swallowAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
+import { runGoal } from "../runs/turn-stream.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
@@ -178,13 +179,11 @@ function runViewMethods(deps: AppDeps, h: AppHelpers) {
       if (!run) return null;
       if (viewer && !(await h.viewerMayUseRun(run, viewer))) return null;
       const partial = deps.turnStream?.snapshot(runId);
-      const goal = deps.turnStream?.goal(runId);
-      const runtime = deps.turnStream?.runtime(runId) ?? run.result?.runtime;
-      const firstBlock = deps.turnStream?.firstBlock(runId);
-      const surfacePosted = deps.turnStream?.surfacePosted(runId) ?? false;
+      const delivery = run.deliveryState ?? {};
+      const runtime = delivery.runtime ?? run.result?.runtime;
       const alive = run.status === "running";
-      const replying = deps.turnStream?.replying(runId) ?? false;
-      const replyComplete = deps.turnStream?.isReplyDone(runId) ?? false;
+      const session = await deps.sessions.getByThread(run.sessionId);
+      const goal = session ? runGoal((await deps.sessions.goals([session.id])).get(session.id), run) : null;
       const activity = await deps.runActivity?.list(runId);
       const reasoning = deps.turnStream?.reasoning(runId) ?? [];
       const stale = run.status === "pending" && run.attempts > 0;
@@ -221,14 +220,12 @@ function runViewMethods(deps: AppDeps, h: AppHelpers) {
         ...(goal ? { goal } : {}),
         ...(runtime ? { runtime } : {}),
         ...(partial ? { partial, partialStartOffset: deps.turnStream!.startOffset(runId) } : {}),
-        ...(firstBlock
-          ? { firstBlock: firstBlock.text, ...(firstBlock.closed ? { firstBlockClosed: true } : {}) }
-          : {}),
-        ...(surfacePosted ? { surfacePosted: true } : {}),
+        ...(delivery.firstBlock ? { firstBlock: delivery.firstBlock, firstBlockClosed: true } : {}),
+        ...(delivery.surfacePosted ? { surfacePosted: true } : {}),
         ...(alive ? { alive: true } : {}),
         ...(stale ? { stale: true } : {}),
-        ...(replying ? { replying: true } : {}),
-        ...(replyComplete ? { replyComplete: true } : {}),
+        ...(delivery.replying ? { replying: true } : {}),
+        ...(delivery.replyDone ? { replyComplete: true } : {}),
         ...(activity && activity.length ? { activity } : {}),
         ...(reasoning.length ? { reasoning } : {}),
       };

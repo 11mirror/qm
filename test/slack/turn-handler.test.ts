@@ -172,21 +172,22 @@ for (const outcome of [{ status: "silent" }, { status: "react", reactions: ["thu
 
 test("waitRun signals replying only once the run has passed detection and begun its reply", async () => {
   const { createSlackCoreClient } = await import("../../src/api/slack-core-client.ts");
-  const { createTurnStream } = await import("../../src/runs/turn-stream.ts");
-  const turnStream = createTurnStream();
   let polls = 0;
   let replying = 0;
   const client = createSlackCoreClient({
-    turnStream,
-    runs: {
-      onTerminal() {},
-      get: async () => {
+    runs: { onTerminal() {} },
+    app: {
+      subscribeRun: () => () => {},
+      getRun: async () => {
         polls++;
-        if (polls === 2) turnStream.begin("r1");
-        return { id: "r1", status: polls >= 4 ? "done" : "running", attempts: 1 };
+        return {
+          status: polls >= 4 ? "done" : "running",
+          attempt: 1,
+          result: polls >= 4 ? { status: "ok", reply: "done" } : null,
+          ...(polls >= 2 ? { replying: true } : {}),
+        };
       },
     },
-    app: { getRun: async () => ({ result: { status: "ok", reply: "done" } }) },
   } as any);
   await client.waitRun("r1", {
     onReplying: () => {
