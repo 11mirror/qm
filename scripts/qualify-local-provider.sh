@@ -33,11 +33,7 @@ cleanup() {
   docker rm -f "$container" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
-if [ "$(uname -s)" = "Darwin" ]; then
-  socket_group=0
-else
-  socket_group="$(node -e 'console.log(require("node:fs").statSync("/var/run/docker.sock").gid)')"
-fi
+socket_group="$(node --input-type=module -e 'import { containerSocketGid, hostDockerSocket } from "./cli/src/backends/docker.ts"; console.log(containerSocketGid(hostDockerSocket().path, process.argv[1]));' "$core_image")"
 printf 'core=%s\nsource=%s\nlocal=%s\n' "$core_image" "$source_sha" "$local_image"
 docker run --rm --name "$container" --group-add "$socket_group" \
   --add-host host.docker.internal:host-gateway \

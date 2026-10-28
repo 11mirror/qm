@@ -1,19 +1,18 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { hostDockerSocket } from "../src/backends/docker.ts";
 
-test("Docker socket group uses the configured host path without platform-specific commands", () => {
+test("the Docker socket is resolved from DOCKER_HOST without platform-specific commands", () => {
   const prior = process.env.DOCKER_HOST;
   const dir = mkdtempSync(join(tmpdir(), "qm-docker-socket-"));
   const path = join(dir, "docker.sock");
   try {
     writeFileSync(path, "");
     process.env.DOCKER_HOST = `unix://${path}`;
-    const gidInsideContainer = process.platform === "darwin" ? "0" : String(statSync(path).gid);
-    assert.deepEqual(hostDockerSocket(), { path, gid: gidInsideContainer });
+    assert.deepEqual(hostDockerSocket(), { path });
     rmSync(path);
     assert.throws(() => hostDockerSocket(), /cannot read the Docker socket/);
     process.env.DOCKER_HOST = "tcp://localhost:2375";
