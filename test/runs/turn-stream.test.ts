@@ -459,13 +459,13 @@ test("the first block counts as harvested only once it is saved under the attemp
     },
   });
   s.begin("r1", "lease-1");
-  s.publish("r1", "On it.");
+  s.publish("r1", "On it.", "lease-1");
   s.noteToolCall("r1", "lease-1");
   assert.equal(await s.savedFirstBlock("r1"), undefined, "a refused write leaves the block in the reply");
   accept = true;
   s.begin("r1", "lease-2");
   assert.equal(s.firstBlock("r1"), null, "a new attempt starts without the old first block");
-  s.publish("r1", "Retrying.");
+  s.publish("r1", "Retrying.", "lease-2");
   s.noteToolCall("r1", "lease-2");
   s.markReplyDone("r1", "lease-2");
   assert.equal(await s.savedFirstBlock("r1"), "Retrying.");
@@ -482,7 +482,7 @@ test("a failed first-block write is not harvested", async () => {
     },
   });
   s.begin("r1", "lease-1");
-  s.publish("r1", "On it.");
+  s.publish("r1", "On it.", "lease-1");
   s.noteToolCall("r1", "lease-1");
   assert.equal(await s.savedFirstBlock("r1"), undefined);
 });
@@ -500,7 +500,9 @@ test("a superseded attempt neither evicts nor writes for the attempt that reclai
   });
   s.begin("r1", "lease-1");
   s.begin("r1", "lease-2");
-  s.publish("r1", "Retrying.");
+  s.publish("r1", "STALE ", "lease-1");
+  s.publishBlockStart("r1", "lease-1");
+  s.publish("r1", "Retrying.", "lease-2");
   s.end("r1", "lease-1");
   s.markSurfacePosted("r1", "lease-1");
   s.markReplyDone("r1", "lease-1");

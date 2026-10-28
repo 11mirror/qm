@@ -20,10 +20,10 @@ export interface ReasoningBlock {
 
 export interface TurnStream {
   begin(runId: string, leaseToken?: string): void;
-  publish(runId: string, delta: string): void;
-  publishBlockStart(runId: string): void;
-  publishReasoning(runId: string, step: string, index: number, delta: string): void;
-  settleReasoning(runId: string, step: string, index: number): void;
+  publish(runId: string, delta: string, leaseToken?: string): void;
+  publishBlockStart(runId: string, leaseToken?: string): void;
+  publishReasoning(runId: string, step: string, index: number, delta: string, leaseToken?: string): void;
+  settleReasoning(runId: string, step: string, index: number, leaseToken?: string): void;
   reasoning(runId: string): ReasoningBlock[];
   noteToolCall(runId: string, leaseToken?: string): void;
   noteRuntime(runId: string, runtime: TurnRuntime, leaseToken?: string): void;
@@ -84,10 +84,13 @@ function ensure(runs: Map<string, Entry>, runId: string): Entry {
   return entry;
 }
 
-function owned(runs: Map<string, Entry>, runId: string, leaseToken: string | undefined): Entry | undefined {
+function current(runs: Map<string, Entry>, runId: string, leaseToken: string | undefined): Entry | undefined {
   const entry = runs.get(runId);
-  if (entry) return entry.leaseToken === (leaseToken ?? null) ? entry : undefined;
-  return leaseToken ? undefined : ensure(runs, runId);
+  return entry?.leaseToken === (leaseToken ?? null) ? entry : undefined;
+}
+
+function owned(runs: Map<string, Entry>, runId: string, leaseToken: string | undefined): Entry | undefined {
+  return runs.has(runId) || leaseToken ? current(runs, runId, leaseToken) : ensure(runs, runId);
 }
 
 function append(opts: TurnStreamOptions, runId: string, entry: Entry, delta: string): void {
@@ -124,9 +127,9 @@ function streamWriteMethods(opts: TurnStreamOptions, runs: Map<string, Entry>) {
       opts.onChange?.(runId);
     },
 
-    publish(runId, delta) {
-      if (!delta) return;
-      const entry = ensure(runs, runId);
+    publish(runId, delta, leaseToken) {
+      const entry = delta ? owned(runs, runId, leaseToken) : undefined;
+      if (!entry) return;
       if (entry.timer) {
         clearTimeout(entry.timer);
         entry.timer = null;
@@ -135,16 +138,17 @@ function streamWriteMethods(opts: TurnStreamOptions, runs: Map<string, Entry>) {
       append(opts, runId, entry, delta);
     },
 
-    publishBlockStart(runId) {
-      const entry = runs.get(runId);
+    publishBlockStart(runId, leaseToken) {
+      const entry = current(runs, runId, leaseToken);
       if (!entry) return;
       if (entry.firstBlock) entry.firstBlockOpen = false;
       if (!entry.text || entry.text.endsWith(BLOCK_JOIN)) return;
       append(opts, runId, entry, BLOCK_JOIN);
     },
 
-    publishReasoning(runId, step, index, delta) {
-      const entry = ensure(runs, runId);
+    publishReasoning(runId, step, index, delta, leaseToken) {
+      const entry = owned(runs, runId, leaseToken);
+      if (!entry) return;
       let block = entry.reasoning.find((b) => b.step === step && b.index === index);
       if (!block) {
         block = { step, index, text: "" };
@@ -156,8 +160,8 @@ function streamWriteMethods(opts: TurnStreamOptions, runs: Map<string, Entry>) {
       opts.onReasoning?.(runId, { step, index }, delta, offset);
     },
 
-    settleReasoning(runId, step, index) {
-      const entry = runs.get(runId);
+    settleReasoning(runId, step, index, leaseToken) {
+      const entry = current(runs, runId, leaseToken);
       if (entry) entry.reasoning = entry.reasoning.filter((b) => b.step !== step || b.index !== index);
     },
 
@@ -218,8 +222,8 @@ function streamStateMethods(opts: TurnStreamOptions, runs: Map<string, Entry>) {
     },
 
     end(runId, leaseToken) {
-      const entry = runs.get(runId);
-      if (!entry || entry.leaseToken !== (leaseToken ?? null) || entry.timer) return;
+      const entry = current(runs, runId, leaseToken);
+      if (!entry || entry.timer) return;
       const timer = setTimeout(() => runs.delete(runId), GRACE_MS);
       timer.unref?.();
       entry.timer = timer;

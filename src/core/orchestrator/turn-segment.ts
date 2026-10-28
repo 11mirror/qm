@@ -57,7 +57,7 @@ export async function mirrorRunActivity(
     const step = typeof id === "string" && appended.step !== null ? { id, index: appended.step } : undefined;
     if (appended.body.redacted !== true && appended.text?.trim())
       await append({ ...appended, body: step ? { wire: { message: { id: step.id } } } : {} });
-    if (step) deps.turnStream?.settleReasoning(input.runId, step.id, step.index);
+    if (step) deps.turnStream?.settleReasoning(input.runId, step.id, step.index, input.runLeaseToken);
   }
 }
 
@@ -429,12 +429,13 @@ function segmentCallbacks(
         run.firstTokenMarked = true;
         markFirstToken();
       }
-      if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publish(input.runId, chunk);
+      if (input.runId && deps.turnStream && !input.surfaceTools)
+        deps.turnStream.publish(input.runId, chunk, input.runLeaseToken);
       if (input.surfaceTools && spineFirst.open) spineFirst.block += chunk;
     },
     onReasoningDelta: (step: string, index: number, chunk: string) => {
       if (input.runId && deps.turnStream && !input.surfaceTools)
-        deps.turnStream.publishReasoning(input.runId, step, index, chunk);
+        deps.turnStream.publishReasoning(input.runId, step, index, chunk, input.runLeaseToken);
     },
     onToolCallStart: (name: string) => {
       if (!earlyTaskAck || name === surfaceName) return;
@@ -442,7 +443,8 @@ function segmentCallbacks(
       else if (input.runId) deps.turnStream?.noteToolCall(input.runId, input.runLeaseToken);
     },
     onTextBlockStart: async (phase) => {
-      if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publishBlockStart(input.runId);
+      if (input.runId && deps.turnStream && !input.surfaceTools)
+        deps.turnStream.publishBlockStart(input.runId, input.runLeaseToken);
       if (input.surfaceTools && spineFirst.block) spineFirst.open = false;
       if (!input.surfaceTools) {
         const streamOffset =
