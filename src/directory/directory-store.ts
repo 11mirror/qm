@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { PrincipalType } from "../types.ts";
 import { rosterIds, samePerson } from "./person.ts";
 
@@ -46,9 +47,6 @@ export type RecipientResolution =
 export type ChannelResolution =
   { kind: "one"; channel: DirectoryChannel } | { kind: "ambiguous"; candidates: DirectoryChannel[] } | { kind: "none" };
 
-/** One conversation's complete roster, verified live at observedAt. Applied only if newer than both the last
- * full crawl of its kind and any stored observation of the same conversation; never moves the crawl stamp.
- * Channels carry their name and privacy; group DMs ignore both. */
 export interface DirectoryObservation {
   kind: "channel" | "group";
   id: string;
@@ -62,25 +60,42 @@ export type CheckedObservation =
   | { kind: "channel"; id: string; name: string; isPrivate: boolean; memberIds: string[]; observedAt: number }
   | { kind: "group"; id: string; memberIds: string[]; observedAt: number };
 
-const OBSERVATION_KEYS = new Set(["kind", "id", "name", "isPrivate", "memberIds", "observedAt"]);
+const observedRoster = {
+  id: z.string().min(1),
+  memberIds: z.array(z.string().min(1)).min(1),
+  observedAt: z.number().finite(),
+};
+
+const observationSchema = z
+  .discriminatedUnion("kind", [
+    z
+      .object({ kind: z.literal("channel"), ...observedRoster, name: z.string().min(1), isPrivate: z.boolean() })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("group"),
+        ...observedRoster,
+        name: z.string().optional(),
+        isPrivate: z.boolean().optional(),
+      })
+      .strict(),
+  ])
+  .transform((observation): CheckedObservation => {
+    const base = {
+      id: observation.id,
+      memberIds: [...new Set(observation.memberIds)],
+      observedAt: observation.observedAt,
+    };
+    return observation.kind === "channel"
+      ? { kind: "channel", ...base, name: observation.name, isPrivate: observation.isPrivate }
+      : { kind: "group", ...base };
+  });
 
 export function parseDirectoryObservation(value: unknown): CheckedObservation | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const v = value as Record<string, unknown>;
-  if (Object.keys(v).some((key) => !OBSERVATION_KEYS.has(key))) return undefined;
-  if (typeof v.id !== "string" || !v.id || typeof v.observedAt !== "number" || !Number.isFinite(v.observedAt))
-    return undefined;
-  if (!Array.isArray(v.memberIds) || !v.memberIds.length || !v.memberIds.every((id) => typeof id === "string" && id))
-    return undefined;
-  if (!["string", "undefined"].includes(typeof v.name) || !["boolean", "undefined"].includes(typeof v.isPrivate))
-    return undefined;
-  const base = { id: v.id, memberIds: [...new Set(v.memberIds as string[])], observedAt: v.observedAt };
-  if (v.kind === "group") return { kind: "group", ...base };
-  if (v.kind !== "channel" || !v.name || v.isPrivate === undefined) return undefined;
-  return { kind: "channel", ...base, name: v.name as string, isPrivate: v.isPrivate as boolean };
+  const parsed = observationSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
-/** Why an observation must not apply, given its kind's crawl stamp and the conversation's stored observation. */
 export function staleObservation(
   observation: CheckedObservation,
   crawledAt: number | undefined,

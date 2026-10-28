@@ -532,7 +532,6 @@ export interface App {
     groupIds?: string[],
     groupRosterIds?: string[],
   ): Promise<boolean>;
-  /** Applies one live-verified roster; false when malformed or older than what the directory already holds. */
   recordDirectoryObservation(observation: DirectoryObservation): Promise<boolean>;
   setDirectoryWorkspaceUrl(url: string): Promise<void>;
   directoryMeta(): Promise<DirectoryMeta>;
