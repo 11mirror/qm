@@ -1,3 +1,5 @@
+import { askResolutionEvents } from "../../credentials/ask-events.ts";
+import type { KeychainAsk } from "../../credentials/keychain.ts";
 import { availableParallelism } from "node:os";
 import type { TurnCtx } from "./turn-context.ts";
 import { ProjectRosterChanged } from "./admit.ts";
@@ -16,7 +18,6 @@ import { isOverheard, isUserMessage, type Item, type NewItem } from "../../sessi
 import { isWakeTrigger } from "../../triggers/provenance.ts";
 import { forModelContext } from "../../harness/context-compaction.ts";
 import { securityScreenChunks } from "../../security/security-screen.ts";
-import { skillsIndex } from "../../skills/materialize.ts";
 import { PROACTIVE_OPENER_PROMPT } from "../../onboarding/onboarding.ts";
 import { createTranscriptSource } from "../../sessions/transcript-source.ts";
 import {
@@ -56,6 +57,7 @@ interface TurnInputArgs {
   turnAbort: AbortController;
   historyWindow: () => ReturnType<OrchestratorDeps["sessions"]["getContextWindow"]>;
   volatileContext: string;
+  scopeAsks: KeychainAsk[];
   turnTools: Awaited<ReturnType<typeof buildTurnTools>>;
   transcripts: ReturnType<typeof createTranscriptSource>;
   documentTokenBudget: ReturnType<typeof createCompaction>["documentTokenBudget"];
@@ -78,7 +80,7 @@ export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
     visibleHistory,
   );
   const { remainingDocumentBytes, remainingDocumentTokens } = remaining;
-  const turnEnvironmentContents = await composeTurnEnvironment(ctx, turn, visibleHistory, history, manifest);
+  const turnEnvironmentContents = await composeTurnEnvironment(ctx, turn, visibleHistory, manifest);
   const baseText = input.proactiveOpener && !input.text.trim() ? PROACTIVE_OPENER_PROMPT : input.text;
   const pausedTurnUserEntry = input.approval
     ? [...visibleHistory].reverse().find((e) => isUserMessage(e) && !isOverheard(e) && e.body?.approvalDenial !== true)
@@ -321,28 +323,25 @@ async function composeTurnEnvironment(
   ctx: TurnCtx,
   turn: TurnInputArgs,
   visibleHistory: Item[],
-  history: Item[],
   manifest: string,
 ): Promise<string> {
-  const { deps, actor, input, automatedTurn, sessionTurn, resolution, scopeId } = ctx;
+  const { deps, actor, input, automatedTurn, sessionTurn } = ctx;
   const { session, volatileContext } = turn;
-  const { turnContextBlocks, nativeSkills } = turn.framed;
-  const principalDelivered = await recentPrincipalDeliveryNote(
-    deps.recentDmPosts,
-    session.threadRef,
-    visibleHistory.findLast((e) => isUserMessage(e) && !isOverheard(e))?.createdAt,
-  );
-  const sender = !automatedTurn && !sessionTurn && input.text.trim() ? senderNote(actor.displayName) : "";
-  const usedSkills = history.flatMap((entry) =>
-    entry.kind === "ToolCall" &&
-    entry.tool === "skills" &&
-    entry.body.action === "read" &&
-    typeof entry.body.name === "string"
-      ? [entry.body.name]
-      : [],
-  );
-  turnContextBlocks["Skills"] = skillsIndex(nativeSkills, [scopeId, resolution.orgScopeId], usedSkills);
-  return [manifest, principalDelivered, sender, input.conversationHeader?.trim(), volatileContext]
+  const lastUserAt = visibleHistory.findLast((e) => isUserMessage(e) && !isOverheard(e))?.createdAt;
+  const principalDelivered = await recentPrincipalDeliveryNote(deps.recentDmPosts, session.threadRef, lastUserAt);
+  const sender =
+    !automatedTurn && !sessionTurn && ctx.conversation.kind !== "dm" && input.text.trim()
+      ? senderNote(actor.displayName ?? actor.id)
+      : "";
+  const askEvents = deps.keychain
+    ? await askResolutionEvents(
+        turn.scopeAsks,
+        lastUserAt ?? session.createdAt,
+        (ownerId) => ctx.conversation.audience.find((p) => p.id === ownerId)?.displayName ?? ownerId,
+        deps.keychain.getCredential,
+      )
+    : "";
+  return [manifest, principalDelivered, sender, input.conversationHeader?.trim(), volatileContext, askEvents]
     .filter((s) => s && s.trim())
     .join("\n\n");
 }

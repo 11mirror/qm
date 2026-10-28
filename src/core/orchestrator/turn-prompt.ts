@@ -1,3 +1,4 @@
+import { skillsIndex } from "../../skills/materialize.ts";
 import { surfaceProfile, surfaceHas } from "../../surfaces/surface.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../../cron/schedule.ts";
 import { isBackendCredential } from "../../credentials/keychain.ts";
@@ -34,6 +35,7 @@ import {
   deliveryMenu,
   inventoryTokenBudget,
   renderConversationRoster,
+  renderSystemContext,
   renderProjectHomeChannel,
   renderReachRoster,
   renderStandingObligations,
@@ -128,7 +130,6 @@ export async function frameTurnPrompt(ctx: TurnCtx, turn: FrameTurnArgs) {
   let systemPrompt = `${modeFrame}\n\n${resolution.systemPrompt}\n\n${sharedCore}`;
   if (external) systemPrompt += `\n\n${EXTERNAL_SLACK_MD}`;
   const turnContextBlocks: Record<string, string> = {};
-  if (input.privateSessionMessage) systemPrompt += `\n\n${PRIVATE_SESSION_MESSAGE_MD}`;
 
   const scopeProfile = supportsScopeProfile(deps.sandbox)
     ? await deps.sandbox
@@ -158,6 +159,7 @@ export async function frameTurnPrompt(ctx: TurnCtx, turn: FrameTurnArgs) {
   if (otherSkillSources.length)
     systemPrompt += `\n\nAdditional skill sources: ${otherSkillSources.join(", ")}. Use skills list/search with source to discover their authorized skills; read with the same source.`;
   const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders);
+  turnContextBlocks["Skills"] = skillsIndex(nativeSkills, [scopeId, resolution.orgScopeId]);
   const transferId = turnFileId(input.runId, input.attempt);
   const turnSessionDir = `${TURN_FILES_DIR}/${hashId([conversation.threadRef], 24)}`;
   const turnFilesDir = `${turnSessionDir}/${transferId}`;
@@ -309,7 +311,7 @@ export async function finishSystemPrompt(
     reachableChannelsFor: (directory: DirectoryStore, principalId: string) => Promise<DirectoryChannel[]>;
     directoryIndexFor: (directory: DirectoryStore) => Promise<Map<string, DirectoryMember>>;
   },
-): Promise<{ systemPrompt: string; volatileContext: string }> {
+) {
   const { deps, input, actor, conversation, external, automatedTurn, strictReadOnly, reachAvailable } = ctx;
   const { turnContextBlocks, configuredProviders, timeBlock, onboardingBlock, inventoryBudget } = framed;
   const { openSpeakerKeychain, credentialDescriptions, serviceCredRecords, grantedCredSlugs, actorIsOrgAdmin } =
@@ -340,15 +342,23 @@ export async function finishSystemPrompt(
     );
     if (roster) turnContextBlocks["Other computers you can reach"] = roster;
   }
-  if (!external && deps.directory)
-    await addConversationRoster(ctx, turnContextBlocks, directoryIndexFor, inventoryBudget);
-  if (!strictReadOnly && (deps.keychain || credentialDescriptions.length))
-    await addKeychainManifest(ctx, turnContextBlocks, openSpeakerKeychain, credentialDescriptions);
+  const rosterMembers =
+    !external && deps.directory
+      ? await addConversationRoster(ctx, turnContextBlocks, directoryIndexFor, inventoryBudget)
+      : undefined;
+  const scopeAsks =
+    !strictReadOnly && (deps.keychain || credentialDescriptions.length)
+      ? await addKeychainManifest(ctx, turnContextBlocks, openSpeakerKeychain, credentialDescriptions)
+      : [];
   if (!strictReadOnly && deps.resolveConnectorClient && conversation.kind === "dm")
     await addConnectedApps(ctx, turnContextBlocks, configuredProviders);
   systemPrompt += `\n\n${USER_REPLY_RULES_MD.trim()}`;
-  const volatileContext = [timeBlock, onboardingBlock].filter(Boolean).join("\n\n").trim();
-  return { systemPrompt, volatileContext };
+  const volatileContext = [timeBlock, onboardingBlock, input.privateSessionMessage ? PRIVATE_SESSION_MESSAGE_MD : ""]
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+  systemPrompt = [systemPrompt, renderSystemContext(turnContextBlocks)].filter(Boolean).join("\n\n");
+  return { systemPrompt, volatileContext, rosterMembers, scopeAsks };
 }
 
 async function addStandingObligations(
@@ -394,8 +404,8 @@ async function addConversationRoster(
   turnContextBlocks: Record<string, string>,
   directoryIndexFor: (directory: DirectoryStore) => Promise<Map<string, DirectoryMember>>,
   budgetTokens: number,
-): Promise<void> {
-  const rosterBlock = await (async () => {
+) {
+  const resolved = await (async () => {
     const participants = conversationMembers(actor, conversation);
     const index = await directoryIndexFor(deps.directory!);
     const seen = new Set<string>();
@@ -407,13 +417,17 @@ async function addConversationRoster(
       if (m) resolved.push(m);
       else if (p.displayName) resolved.push({ principalId: p.id, displayName: p.displayName, type: "internal" });
     }
-    return renderConversationRoster(
+    return resolved;
+  })().catch(swallowAs("orchestrator: conversation roster", null));
+  const rosterBlock =
+    resolved &&
+    renderConversationRoster(
       resolved,
       budgetTokens,
       resolved.find((m) => samePerson(m.principalId, actor.id))?.principalId,
     );
-  })().catch(swallowAs("orchestrator: conversation roster", null));
   if (rosterBlock) turnContextBlocks["Who’s in this conversation"] = rosterBlock;
+  return resolved ?? undefined;
 }
 
 async function addKeychainManifest(
@@ -421,7 +435,7 @@ async function addKeychainManifest(
   turnContextBlocks: Record<string, string>,
   openSpeakerKeychain: boolean,
   credentialDescriptions: NonNullable<KeychainManifestInput["execution"]>,
-): Promise<void> {
+) {
   const members = conversationMembers(actor, conversation).map((p) => ({
     id: p.id,
     ...(p.displayName ? { displayName: p.displayName } : {}),
@@ -444,9 +458,10 @@ async function addKeychainManifest(
     connectorsByOwner,
     scopeGrants,
     execution: credentialDescriptions,
-    scopeAsks,
+    scopeAsks: scopeAsks.filter((ask) => ask.status === "pending"),
   });
   if (keychainBlock) turnContextBlocks["Credentials"] = keychainBlock;
+  return scopeAsks;
 }
 
 async function addConnectedApps(

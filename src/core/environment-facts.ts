@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { retainedSnapshot } from "../harness/context-snapshot.ts";
 import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
 import type { Item } from "../sessions/items.ts";
@@ -85,38 +84,36 @@ export function renderConnectedAppsBlock(
   return lines.join("\n");
 }
 
-interface EnvironmentSnapshot {
-  hashes: Record<string, string>;
+interface RosterSnapshot {
+  roster: Array<{ id: string; name: string }>;
   sessionId: string;
-  anchorSeq?: number;
 }
 
-export function environmentDelta(
-  blocks: Record<string, string>,
+export function membershipEvent(
+  current: ReadonlyArray<{ principalId: string; displayName: string }> | undefined,
   history: readonly Item[],
   sessionId: string,
-): { text: string; record: EnvironmentSnapshot } {
-  const { previous, anchorSeq } = retainedSnapshot(
-    history,
-    (item) => item.body.environmentSnapshot as EnvironmentSnapshot | undefined,
-  );
-  const current = Object.fromEntries(Object.entries(blocks).filter(([, text]) => text.trim()));
-  const hashes = Object.fromEntries(
-    Object.entries(current).map(([key, text]) => [key, createHash("sha256").update(text).digest("hex")]),
-  );
-  const record = { hashes, sessionId, ...(anchorSeq !== undefined ? { anchorSeq } : {}) };
-  if (!previous) return { text: Object.values(current).join("\n\n"), record };
-  const changed = Object.entries(current).filter(([key]) => previous.hashes[key] !== hashes[key]);
-  const removed = Object.keys(previous.hashes).filter((key) => !(key in current));
+): { text: string; record?: RosterSnapshot } {
+  if (!current) return { text: "" };
+  const roster = current
+    .map((m) => ({ id: m.principalId, name: m.displayName }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  const { previous } = retainedSnapshot(history, (item) => {
+    const snapshot = item.body.environmentSnapshot as Partial<RosterSnapshot> | undefined;
+    return Array.isArray(snapshot?.roster) && typeof snapshot.sessionId === "string"
+      ? (snapshot as RosterSnapshot)
+      : undefined;
+  });
+  const record = { roster, sessionId };
+  if (!previous) return { text: "", record };
+  const joined = roster
+    .filter((m) => !previous.roster.some((old) => old.id === m.id))
+    .map((m) => `${m.name} (${m.id})`);
+  const left = previous.roster.filter((old) => !roster.some((m) => old.id === m.id)).map((m) => m.name);
   return {
-    text:
-      changed.length || removed.length
-        ? [
-            "Environment changes: sections below replace their earlier versions; unlisted sections are unchanged. Inventories are not permission grants; access is checked live.",
-            ...changed.map(([, text]) => text),
-            ...removed.map((key) => `No longer included: ${key}. Do not rely on its earlier inventory.`),
-          ].join("\n\n")
-        : "",
+    text: [joined.length ? `Joined: ${joined.join(", ")}.` : "", left.length ? `Left: ${left.join(", ")}.` : ""]
+      .filter(Boolean)
+      .join(" "),
     record,
   };
 }

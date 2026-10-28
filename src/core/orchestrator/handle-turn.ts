@@ -194,6 +194,8 @@ async function beginTurn(o: OrchestratorInstance, ctx: TurnCtx, turn: TurnState)
     captureDependencies,
     historyWindow,
     systemPrompt: finished.systemPrompt,
+    rosterMembers: finished.rosterMembers,
+    scopeAsks: finished.scopeAsks,
     volatileContext,
   };
 }
@@ -237,6 +239,7 @@ async function readyTurn(o: OrchestratorInstance, ctx: TurnCtx, turn: TurnState,
     turnAbort: held.turnAbort,
     historyWindow: begun.historyWindow,
     volatileContext: begun.volatileContext,
+    scopeAsks: begun.scopeAsks,
     turnTools,
     transcripts,
     documentTokenBudget,

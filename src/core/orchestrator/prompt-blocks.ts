@@ -156,3 +156,29 @@ export function renderSurfaceBriefing(surface: SurfaceBriefing): string {
       : []),
   ].join("\n");
 }
+
+const SYSTEM_CONTEXT_ORDER = [
+  "Where you are",
+  "Project home channel",
+  "Where scheduled tasks post",
+  "Who’s in this conversation",
+  "Other computers you can reach",
+  "Files shared with you",
+  "Already scheduled here",
+  "Credentials",
+  "Connected apps",
+  "Skills",
+];
+
+export function renderSystemContext(blocks: Record<string, string>): string {
+  const ordered = [
+    ...SYSTEM_CONTEXT_ORDER,
+    ...Object.keys(blocks)
+      .filter((key) => !SYSTEM_CONTEXT_ORDER.includes(key))
+      .sort(),
+  ];
+  return ordered
+    .map((key) => blocks[key] ?? "")
+    .filter((block) => block.trim())
+    .join("\n\n");
+}

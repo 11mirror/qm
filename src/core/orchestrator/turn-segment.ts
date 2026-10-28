@@ -16,7 +16,7 @@ import { type Destination, type TurnRuntime } from "../../types.ts";
 import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
 import { postCounted } from "./surface-tools.ts";
 import { isUserMessage, stepMessage, type Item, type NewItem } from "../../sessions/items.ts";
-import { environmentDelta } from "../environment-facts.ts";
+import { membershipEvent } from "../environment-facts.ts";
 import type { HarnessTurnInput, RuntimeChoice } from "../../harness/harness.ts";
 import { forModelContext } from "../../harness/context-compaction.ts";
 import { securityScreenChunks, toolLabelOf, type ToolResultScreenInput } from "../../security/security-screen.ts";
@@ -117,7 +117,13 @@ async function runHarnessSegment(
   const { lease, turnAbort } = held;
   const { turnStart } = run;
   const segmentEnv = segmentEnvironment(
-    { frame, prepared: ready.prepared, memoryView: turn.begun.memoryView, session },
+    {
+      frame,
+      prepared: ready.prepared,
+      memoryView: turn.begun.memoryView,
+      rosterMembers: turn.begun.rosterMembers,
+      session,
+    },
     continuation,
   );
   const { environment, silentResume } = segmentEnv;
@@ -177,15 +183,21 @@ async function runHarnessSegment(
 }
 
 function segmentEnvironment(
-  turn: { frame: TurnFrame; prepared: Prepared; memoryView: BegunTurn["memoryView"]; session: Session },
+  turn: {
+    frame: TurnFrame;
+    prepared: Prepared;
+    memoryView: BegunTurn["memoryView"];
+    rosterMembers: BegunTurn["rosterMembers"];
+    session: Session;
+  },
   continuation: { history: Item[] } | undefined,
 ) {
-  const { turnContextBlocks, memoryHeading } = turn.frame.framed;
+  const { memoryHeading } = turn.frame.framed;
   const { inboundIssues, recalled, history, documentInputs, turnEnvironmentContents, continueTurn } = turn.prepared;
   const { context } = turn.frame;
   const { memoryView, session } = turn;
   const recall = memoryRecallDelta(recalled, continuation?.history ?? history, memoryView.held, context.memoryLabels);
-  const snapshot = environmentDelta(turnContextBlocks, continuation?.history ?? history, session.id);
+  const snapshot = membershipEvent(turn.rosterMembers, continuation?.history ?? history, session.id);
   const turnEnvironment = environmentNote(
     [
       turnEnvironmentContents,
@@ -234,7 +246,7 @@ function createSegmentEmit(
       const turnStart = !steered && !overheard;
       if (!recordedRecall && turnStart) {
         recordedRecall = true;
-        body.environmentSnapshot = snapshot.record;
+        if (snapshot.record) body.environmentSnapshot = snapshot.record;
         if (environment) body.environment = environment;
         if (recall.text) body.memoryRecall = recall.record;
       }

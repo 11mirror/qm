@@ -3,14 +3,12 @@ import assert from "node:assert/strict";
 import {
   renderComputerBlock,
   renderConnectedAppsBlock,
-  environmentDelta,
+  membershipEvent,
   renderSandboxProfiles,
 } from "../../src/core/environment-facts.ts";
 import type { ConnectorStatusRecord } from "../../src/credentials/connector-status.ts";
 import type { AgentComputerSpec } from "../../src/sandbox/sandbox.ts";
 import { currentTimeBlock, renderStandingObligations } from "../../src/core/orchestrator/prompt-blocks.ts";
-import { forModelContext } from "../../src/harness/context-compaction.ts";
-import { reconstructMessagesFromHistory } from "../../src/harness/replay.ts";
 import type { Cron } from "../../src/types.ts";
 import { storedItem, type Item } from "../../src/sessions/items.ts";
 
@@ -143,55 +141,26 @@ test("connected-apps block: names linked per-user MCP sign-ins by label", () => 
   assert.doesNotMatch(mcpOnly, /Google/);
 });
 
-function entry(seq: number, blocks: Record<string, string>, history: Item[]): Item {
-  const snapshot = environmentDelta(blocks, history, "s");
+function rosterEntry(seq: number, roster: Array<{ principalId: string; displayName: string }>, history: Item[]): Item {
+  const snapshot = membershipEvent(roster, history, "s");
   return storedItem(
-    {
-      kind: "UserMessage",
-      text: "hello",
-      body: { environment: snapshot.text, environmentSnapshot: snapshot.record },
-    },
+    { kind: "UserMessage", text: "hello", body: { environment: snapshot.text, environmentSnapshot: snapshot.record } },
     { sessionId: "s", seq, createdAt: seq },
   );
 }
 
-test("snapshots survive serialized replay and emit only changed or removed inventories", () => {
-  const original = { Credentials: "## Credentials\n- a\n- b", Sandboxes: "## Sandboxes\n- box" };
-  const first = entry(1, original, []);
-  const history: Item[] = JSON.parse(JSON.stringify([first]));
-  assert.equal(environmentDelta(original, history, "s").text, "");
-  const changed = { Credentials: "## Credentials\n- b\n- c" };
-  const second = entry(2, changed, history);
-  const text = String(second.body.environment);
-  assert.match(text, /replace their earlier versions/);
-  assert.match(text, /- c/);
-  assert.doesNotMatch(text, /- a|- box/);
-  assert.match(text, /No longer included: Sandboxes/);
-  assert.equal(environmentDelta(changed, [...history, second], "s").text, "");
-  const replay = reconstructMessagesFromHistory([...history, second]);
-  assert.match(JSON.stringify(replay), /No longer included: Sandboxes/);
-});
-
-test("a compacted-away snapshot anchor resets the full baseline even when a later delta remains", () => {
-  const blocks = { Credentials: "## Credentials\n- a", Skills: "## Skills\n- browse" };
-  const first = entry(1, blocks, []);
-  const second = entry(2, { ...blocks, Credentials: "## Credentials\n- b" }, [first]);
-  const retained = forModelContext([second]);
-  const reset = environmentDelta({ ...blocks, Credentials: "## Credentials\n- b" }, retained, "s");
-  assert.match(reset.text, /## Skills/);
-  assert.doesNotMatch(reset.text, /Environment changes/);
-  assert.equal(reset.record.anchorSeq, undefined);
-});
-
-test("unrecorded attempts never advance the baseline; an emitted retry becomes the next baseline", () => {
-  const blocks = { Skills: "## Skills\n- browse" };
-  const first = entry(1, blocks, []);
-  const changed = { Skills: "## Skills\n- search" };
-  const attempt = environmentDelta(changed, [first], "s");
-  assert.equal(environmentDelta(changed, [first], "s").text, attempt.text);
-  const retry = entry(2, changed, [first]);
-  assert.equal(environmentDelta(changed, [first, retry], "s").text, "");
-  assert.match(environmentDelta({}, [first, retry], "s").text, /No longer included: Skills/);
+test("membership emits only join/leave events, not the system inventory", () => {
+  const alice = { principalId: "alice", displayName: "Alice" };
+  const bob = { principalId: "bob", displayName: "Bob" };
+  const first = rosterEntry(1, [alice], []);
+  assert.equal(first.body.environment, "");
+  const history = JSON.parse(JSON.stringify([first])) as Item[];
+  assert.equal(membershipEvent([alice], history, "s").text, "");
+  assert.equal(membershipEvent([bob], history, "s").text, "Joined: Bob (bob). Left: Alice.");
+  assert.equal(membershipEvent(undefined, history, "s").record, undefined);
+  const second = rosterEntry(2, [bob], history);
+  assert.equal(membershipEvent([bob], [...history, second], "s").text, "");
+  assert.equal(membershipEvent([bob], [{ ...first, sessionId: "fork" }], "fork").text, "");
 });
 
 test("local ISO clock follows daylight-saving transitions and non-hour offsets", () => {
@@ -251,18 +220,4 @@ test("live provider profiles represent configured and unknown capabilities witho
   );
   assert.match(inventory["Sandbox provider modal"]!, /node/);
   assert.match(inventory["Sandbox provider sprites"]!, /unknown/);
-});
-
-test("forked entries cannot mistake a resequenced row for the original snapshot anchor", () => {
-  const blocks = { Skills: "## Skills\n- browse" };
-  const original = entry(5, blocks, []);
-  const delta = entry(8, blocks, [original]);
-  const fork = [
-    { ...original, sessionId: "fork", seq: 0 },
-    { ...delta, sessionId: "fork", seq: 1 },
-  ];
-  assert.equal(environmentDelta(blocks, fork, "fork").text, blocks.Skills);
-  assert.equal(environmentDelta(blocks, fork.slice(1), "fork").text, blocks.Skills);
-  assert.doesNotMatch(JSON.stringify(delta.body), /## Skills.*## Skills/);
-  assert.ok(!JSON.stringify(delta.body.environmentSnapshot).includes("browse"));
 });
