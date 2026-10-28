@@ -22,14 +22,14 @@ import { selectTurnRuntime } from "./turn-runtime.ts";
 import { runSegments, type GapWorkFeed, type SegmentTurn, type TurnRunState } from "./turn-segment.ts";
 import { consumeApprovalDecision, loadApprovalLedger, type ApprovalLedger } from "./approvals.ts";
 import { createSessionTitles } from "../session-title.ts";
+import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
 import type { MemoryStrategy } from "../../memory/strategy.ts";
 import type { CompactionContext } from "./compaction.ts";
 import type { SecurityObserver } from "./security-screen.ts";
 import type { RecordedTurn } from "../turn-resume.ts";
 
-const MODEL_ACCESS_BLOCK =
-  "## Model access\nAn OpenAI-compatible model gateway is at `$MODEL_GATEWAY_URL` in the sandbox; authenticate with `Authorization: Bearer $MODEL_GATEWAY_TOKEN`. `GET $MODEL_GATEWAY_URL/v1/models` lists the usable models. The token is bound to this turn and expires with it; never send it anywhere but the gateway.";
+const MODEL_ACCESS_BLOCK = loadProtocolFile("turn-model-access");
 
 export interface OrchestratorInstance {
   deps: OrchestratorDeps;
