@@ -32,12 +32,12 @@ test("context recovery drains in-flight effects, preserves an active goal, and b
       },
     },
     scopeLabel: "personal:U1",
-    goal: createGoalRecord({ objective: "finish verification" }),
     emit: async (entry) => {
       events.push(emittedItem(entry));
     },
   };
   const state = createTurnToolState(ref);
+  state.goal.set(createGoalRecord({ objective: "finish verification" }));
   const goal = structuredClone(state.goal.current());
   const tools = createAgentTools(state);
   const first = call(

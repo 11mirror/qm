@@ -405,7 +405,8 @@ test("finish_silently ends surface turns and replaces stay_silent", async () => 
 });
 
 test("pauseStampAfterToolCall stamps terminate onto sibling results once silence is requested", async () => {
-  const { halt } = createTurnToolState({ current: null, silentRequested: true });
+  const { halt } = createTurnToolState({ current: null });
+  halt.setSilent(true);
   const stamped = await pauseStampAfterToolCall(halt)({});
   assert.equal(stamped?.terminate, true);
   halt.setSilent(false);
