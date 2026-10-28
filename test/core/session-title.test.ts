@@ -193,6 +193,13 @@ test("a per-participant rename overrides the LLM title, and clearing it reveals 
   assert.equal(cleared?.title, llm);
 });
 
+test("a generated title is cut to a sidebar-length label", async () => {
+  const { app } = freshApp();
+  const r = await app.turn(dm(`Investigate ${"x".repeat(80)}`, "web:U1:t-long"));
+  const title = (await app.regenerateTitle(r.sessionId!, "U1"))?.title ?? "";
+  assert.equal(title, `Chat: Investigate ${"x".repeat(41)}…`);
+});
+
 test("regenerateTitle retitles from the visible transcript; a stranger gets null", async () => {
   const { app } = freshApp();
   const r = await app.turn(dm("Investigate the flaky CI job", "web:U1:t3"));

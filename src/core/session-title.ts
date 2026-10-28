@@ -8,11 +8,15 @@ import { headSlice } from "../util/text.ts";
 import { stripTurnBoilerplate } from "./orchestrator/turn-helpers.ts";
 import { TitleRejected } from "./turn-error.ts";
 
-function fallbackSessionTitle(text: string): string | undefined {
-  const clean = stripTurnBoilerplate(text).replace(/\s+/g, " ").trim();
+const SIDEBAR_TITLE_CHARS = 60;
+
+function sidebarLabel(text: string): string | undefined {
+  const clean = text.replace(/\s+/g, " ").trim();
   if (!clean) return undefined;
-  return clean.length > 60 ? `${headSlice(clean, 59).trimEnd()}…` : clean;
+  return clean.length > SIDEBAR_TITLE_CHARS ? `${headSlice(clean, SIDEBAR_TITLE_CHARS - 1).trimEnd()}…` : clean;
 }
+
+const fallbackSessionTitle = (text: string) => sidebarLabel(stripTurnBoilerplate(text));
 
 export function createSessionTitles(deps: {
   sessions: SessionStore;
@@ -43,7 +47,7 @@ export function createSessionTitles(deps: {
         e,
       );
     }
-    title ??= fallbackText ? fallbackSessionTitle(fallbackText) : undefined;
+    title = title ? sidebarLabel(title) : fallbackText ? fallbackSessionTitle(fallbackText) : undefined;
     if (title) {
       if (principalId) await deps.sessions.updateParticipantView(sessionId, principalId, { title });
       else await deps.sessions.updateTitle(sessionId, title);
