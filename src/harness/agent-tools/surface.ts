@@ -114,6 +114,8 @@ function surfaceParams(surfaceName: string) {
   });
 }
 
+type Rejected = (summary: Record<string, unknown>, body: string) => ReturnType<ToolKit["recordFail"]>;
+
 async function runSurfaceAction(
   kit: ToolKit,
   surfaceName: string,
@@ -123,9 +125,12 @@ async function runSurfaceAction(
   const { ref, recordCall, recordResult, recordText, recordFail } = kit;
   const tc = ref.current;
   if (!tc) return text("[error] no active tool context");
+  const rejected: Rejected = async (summary, body) => {
+    await recordCall(callId, { tool: surfaceName, action: params.action });
+    return recordFail(callId, summary, body);
+  };
   const missing = (field: string) =>
-    recordFail(
-      callId,
+    rejected(
       { tool: surfaceName, action: params.action, error: `missing_${field}` },
       `[error] the "${params.action}" action requires \`${field}\`.`,
     );
@@ -150,8 +155,7 @@ async function runSurfaceAction(
     case "post": {
       if (params.text === undefined) return missing("text");
       if (params.channel !== undefined || params.recipient !== undefined || params.participants !== undefined) {
-        return recordFail(
-          callId,
+        return rejected(
           { tool: surfaceName, action: "post", error: "post_cannot_address" },
           '[not sent] `post` only replies in this conversation. To send to another channel, a teammate DM, or a group, use `action: "reach"` with `channel`/`recipient`/`participants`.',
         );
@@ -181,7 +185,7 @@ async function runSurfaceAction(
       );
     }
     case "reach": {
-      return surfaceReach(kit, tc, callId, params, surfaceName, missing);
+      return surfaceReach(kit, tc, callId, params, surfaceName, missing, rejected);
     }
     case "react": {
       if (params.ts === undefined) return missing("ts");
@@ -236,8 +240,7 @@ async function runSurfaceAction(
       return surfaceReadFile(kit, tc, callId, params, surfaceName, missing, couldnt);
     }
     default:
-      return recordFail(
-        callId,
+      return rejected(
         { tool: surfaceName, error: "unknown_action" },
         `[error] unknown action "${(params as { action?: string }).action}" — valid actions: ${SURFACE_ACTIONS.join(", ")}.`,
       );
@@ -431,8 +434,9 @@ async function surfaceReach(
   params: Static<ReturnType<typeof surfaceParams>>,
   surfaceName: string,
   missing: (field: string) => ReturnType<ToolKit["recordFail"]>,
+  rejected: Rejected,
 ) {
-  const { recordCall, recordResult, recordFail } = kit;
+  const { recordCall, recordResult } = kit;
   if (params.text === undefined) return missing("text");
   const selectors = [
     params.channel !== undefined,
@@ -440,8 +444,7 @@ async function surfaceReach(
     params.participants !== undefined,
   ].filter(Boolean).length;
   if (selectors !== 1) {
-    return recordFail(
-      callId,
+    return rejected(
       { tool: surfaceName, action: "reach", error: "reach_target" },
       "[not sent] `reach` needs exactly one destination: a `channel`, a `recipient` (teammate DM), or `participants` (group DM).",
     );
