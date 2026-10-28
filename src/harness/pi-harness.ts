@@ -30,7 +30,6 @@ export interface PiHarnessOptions extends CoreToolOptions {
   modelGateway?: ModelGatewayTransportConfig;
   resolveProviderKeys?: () => Promise<ProviderKeys>;
   tempDirPrefix?: string;
-  captureRequests?: boolean;
   turnWallClockMs?: number;
   signals?: RunSignalStore;
 }
@@ -64,7 +63,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     primaryModelId,
     toolOptions: opts,
     tempDirPrefix: opts?.tempDirPrefix ?? "pi",
-    captureRequests: opts?.captureRequests ?? true,
     turnWallClockMs: opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000,
     signals: opts?.signals,
     resolveFallbackRuntime,

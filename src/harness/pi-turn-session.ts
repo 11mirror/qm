@@ -200,7 +200,6 @@ export interface TurnSessionInput {
   providerKeys: () => Promise<ProviderKeys>;
   modelGateway: ModelGatewayTransportConfig | undefined;
   tempDirPrefix: string;
-  captureRequests: boolean;
   calls: ModelCallLog;
   request: TurnRequestSettings;
   halt: Pick<TurnHalt, "stopsTools">;
@@ -219,7 +218,6 @@ export async function createTurnSession({
   providerKeys,
   modelGateway,
   tempDirPrefix,
-  captureRequests,
   calls,
   request,
   halt,
@@ -247,7 +245,7 @@ export async function createTurnSession({
       applyFastSpeed(payload, request.fast(), (model as { api?: string } | undefined)?.api);
       applyReasoningMode(payload, model as Model<Api>, request.effortLevel());
       const result = prior ? await prior(payload, model) : payload;
-      const capturedPayload = captureRequests ? sanitizeLlmPayload(result ?? payload, model) : undefined;
+      const capturedPayload = sanitizeLlmPayload(result ?? payload, model);
       let finalPayload = await withDocumentInputs(
         result ?? payload,
         model as DocumentModel,
@@ -267,7 +265,7 @@ export async function createTurnSession({
       } catch (e) {
         swallow("pi: request byte budget", e);
       }
-      if (captureRequests) calls.capture(capturedPayload!);
+      calls.capture(capturedPayload);
       return finalPayload;
     };
     const priorResponse = agent.onResponse;

@@ -113,7 +113,6 @@ async function openPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInput): Pr
     providerKeys: async () => turn.providerKeys ?? (await access.providerKeys()),
     modelGateway: turnModelGateway,
     tempDirPrefix: opts.tempDirPrefix,
-    captureRequests: opts.captureRequests,
     calls,
     request,
     halt: state.halt,
@@ -407,7 +406,6 @@ export interface PiTurnOptions {
   primaryModelId: () => string;
   toolOptions: CoreToolOptions | undefined;
   tempDirPrefix: string;
-  captureRequests: boolean;
   turnWallClockMs: number;
   signals: RunSignalStore | undefined;
   resolveFallbackRuntime: () => { modelId: string; effortLevel?: string; fastMode?: boolean } | undefined;

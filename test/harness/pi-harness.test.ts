@@ -34,7 +34,6 @@ function recordFetch(t: TestContext, headers: Headers[] = []): string[] {
 const companyHarness = (keys: Record<string, string>) =>
   createPiHarness({
     defaultModelId: "gpt-5.6-sol",
-    captureRequests: false,
     resolveProviderKeys: async () => keys,
     companyModelId: codexSubscriptionModelId,
   });
@@ -63,7 +62,6 @@ test("without a company subscription a plain OpenAI id stays metered", async (t)
   const urls = recordFetch(t);
   const harness = createPiHarness({
     defaultModelId: "gpt-5.6-sol",
-    captureRequests: false,
     resolveProviderKeys: async () => ({ openai: "sk-metered" }),
   });
   await assert.rejects(async () => harness.models.oneShot?.("system", "hi"), /offline test response/);
@@ -78,7 +76,6 @@ test("a subscription-only deployment's default utility model is served by the Ch
   const config = { ...loadConfig({}), codexAuthCredential: "cred-1" };
   const harness = createPiHarness({
     ...piHarnessConfigOptions(config),
-    captureRequests: false,
     resolveProviderKeys: async () => ({ "openai-codex": subscriptionToken }),
     companyModelId: codexSubscriptionModelId,
   });
@@ -94,7 +91,6 @@ test("a Claude subscription token as Pi's Anthropic key is sent as OAuth bearer 
   const urls = recordFetch(t, headers);
   const harness = createPiHarness({
     defaultModelId: "claude-sonnet-5",
-    captureRequests: false,
     resolveProviderKeys: async () => ({ anthropic: "sk-ant-oat01-company" }),
   });
   await assert.rejects(async () => harness.models.oneShot?.("system", "hi"), /offline test response/);
