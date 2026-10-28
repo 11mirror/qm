@@ -2,6 +2,7 @@ import { test } from "node:test";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
+import { SESSION_STORE_MIGRATIONS } from "../../src/sessions/postgres-session-migrations.ts";
 import { scopeId } from "../../src/types.ts";
 import { assertSpendRollupParity } from "../support/spend-rollup-parity.ts";
 
@@ -318,13 +319,6 @@ test("pg spend columns count legacy, malformed and unusual usage, and follow lat
     await insert("spend-index-fraction", "fraction", JSON.stringify({ ...usage, input: 0.5 }), at - 1);
     await insert("spend-index-overflow", "overflow", JSON.stringify({ ...usage, input: 1e308 }), at - 1);
     await insert("spend-index-deep-history", "deep-history", deeplyNestedUsage, at - 2);
-    // Rows written before the spend columns existed: spend reads parse them until the refresh backfills them.
-    const legacy = () =>
-      raw.query(
-        "UPDATE session_llm_requests SET spend_cost_usd = NULL, spend_input = NULL, spend_output = NULL, spend_cache_read = NULL, spend_cache_write = NULL WHERE session_id IN ($1, 'missing-spend-session')",
-        [session.id],
-      );
-    await legacy();
     const read = async () => (await store.spendRollup(range)).filter((r) => r.scopeId === session.scopeId);
     const before = await read();
     assert.equal(before.length, 3);
@@ -382,14 +376,18 @@ test("pg spend columns count legacy, malformed and unusual usage, and follow lat
       5,
       "malformed usage counts the call instead of failing the report",
     );
-    await legacy();
     const parsedBefore = await store.spendRollup({ from: at - 2, to: at + 1 });
-    await store.refreshSpendRollup();
+    await raw.query(
+      "UPDATE session_llm_requests SET spend_cost_usd = NULL, spend_input = NULL, spend_output = NULL, spend_cache_read = NULL, spend_cache_write = NULL WHERE session_id IN ($1, 'missing-spend-session')",
+      [session.id],
+    );
+    const backfill = SESSION_STORE_MIGRATIONS.find((m) => m.id === "sessions/store/0053-llm-request-spend-backfill")!;
+    for (const statement of backfill.statements) await raw.query(statement);
     const unparsed = await raw.query(
       "SELECT count(*)::int AS n FROM session_llm_requests WHERE session_id IN ($1, 'missing-spend-session') AND usage_json IS NOT NULL AND spend_cost_usd IS NULL",
       [session.id],
     );
-    assert.equal(unparsed.rows[0].n, 0, "the refresh backfills the spend columns");
+    assert.equal(unparsed.rows[0].n, 0, "the migration backfills the spend columns");
     assert.deepEqual(await store.spendRollup({ from: at - 2, to: at + 1 }), parsedBefore);
   } finally {
     await raw.query("DELETE FROM session_llm_requests WHERE session_id IN ($1, 'missing-spend-session')", [session.id]);

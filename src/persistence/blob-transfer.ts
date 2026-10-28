@@ -194,12 +194,12 @@ async function* exactParts(
   for await (const chunk of chunks) {
     pending.push(chunk);
     bytes += chunk.length;
-    while (bytes > size) {
-      const all = Buffer.concat(pending, bytes);
-      yield { body: all.subarray(0, size), last: false };
-      pending = [all.subarray(size)];
-      bytes -= size;
-    }
+    if (bytes <= size) continue;
+    const all = Buffer.concat(pending, bytes);
+    let offset = 0;
+    for (; bytes - offset > size; offset += size) yield { body: all.subarray(offset, offset + size), last: false };
+    pending = [all.subarray(offset)];
+    bytes -= offset;
   }
   if (bytes > 0) yield { body: Buffer.concat(pending, bytes), last: true };
 }

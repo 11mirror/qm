@@ -179,4 +179,16 @@ export const SESSION_STORE_MIGRATIONS: PgMigrationDefinition[] = [
            $items_call_id_from_body$`,
     ],
   },
+  {
+    id: "sessions/store/0053-llm-request-spend-backfill",
+    statements: [
+      `UPDATE session_llm_requests
+          SET ${SPEND_FIELDS.map(([column, key, type]) => `${column} = ${spendValue("llm_spend_usage(usage_json)", key, type)}`).join(", ")}
+        WHERE usage_json IS NOT NULL AND spend_cost_usd IS NULL`,
+    ],
+    contract: {
+      id: "contract/sessions/store/0053-llm-request-spend-backfill",
+      statements: ["DROP INDEX IF EXISTS session_llm_requests_spend_unparsed"],
+    },
+  },
 ];

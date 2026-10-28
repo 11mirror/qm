@@ -10,7 +10,7 @@ import {
   windowedTranscript,
   type Lease,
   type SessionStore,
-  ITEM_STRING_BUDGET,
+  TOOL_TEXT_PREVIEW_CHARS,
 } from "../../src/sessions/session-store.ts";
 import { scopeId } from "../../src/types.ts";
 import type { BuiltApp } from "../../src/wiring.ts";
@@ -346,7 +346,7 @@ test("windowedTranscript: a fat tool payload is previewed, and the entry says so
   const w = windowedTranscript(log, { tailTurns: 1 });
   assert.equal(w.items.length, 4);
   for (const e of w.items.filter((x) => x.kind === "ToolCall" || x.kind === "ToolResult")) {
-    assert.equal((e.body as { output: string }).output.length, ITEM_STRING_BUDGET);
+    assert.equal((e.body as { output: string }).output.length, TOOL_TEXT_PREVIEW_CHARS);
     assert.equal(e.truncated, true);
   }
   assert.equal(w.items[0]!.truncated, undefined, "a small entry is shipped whole and unmarked");
@@ -474,7 +474,7 @@ test("GET /v1/sessions/:id honors tailTurns/sinceSeq and reports earlierItems", 
 
 test("windowedTranscript: an unwindowed read is still whole — fork cutoffs count on it", () => {
   const log = [entry(0, "UserMessage")];
-  for (let seq = 1; seq <= 400; seq++) log.push(fat(seq, "ToolResult", ITEM_STRING_BUDGET * 3));
+  for (let seq = 1; seq <= 400; seq++) log.push(fat(seq, "ToolResult", TOOL_TEXT_PREVIEW_CHARS * 3));
   const all = windowedTranscript(log);
   assert.equal(all.items.length, log.length, "no window asked for, nothing dropped");
   assert.equal(all.earlier, 0);
@@ -501,12 +501,15 @@ test("windowedTranscript: a deeply nested payload cannot smuggle bytes past the 
   }
   const w = windowedTranscript(log, { tailTurns: 1 });
   const shipped = JSON.stringify(w.items).length;
-  assert.ok(shipped < 7 * 2 * ITEM_STRING_BUDGET, `a nested subtree must be charged its real size, shipped ${shipped}`);
+  assert.ok(
+    shipped < 7 * 2 * TOOL_TEXT_PREVIEW_CHARS,
+    `a nested subtree must be charged its real size, shipped ${shipped}`,
+  );
 });
 
 test("windowedTranscript: a sinceSeq re-read is never trimmed — it refreshes what the client already holds", () => {
   const log = [entry(0, "UserMessage")];
-  for (let seq = 1; seq <= 400; seq++) log.push(fat(seq, "ToolResult", ITEM_STRING_BUDGET * 3));
+  for (let seq = 1; seq <= 400; seq++) log.push(fat(seq, "ToolResult", TOOL_TEXT_PREVIEW_CHARS * 3));
   const w = windowedTranscript(log, { sinceSeq: 1 });
   assert.equal(w.items.length, log.length - 1, "a refresh that shrinks the window makes read messages vanish");
   assert.equal(w.earlier, 1);

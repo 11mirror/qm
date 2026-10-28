@@ -351,7 +351,7 @@ export function userMessagePreview(text: string | null | undefined, maxLen = 160
   return oneLine.length > maxLen ? oneLine.slice(0, maxLen - 1) + "…" : oneLine;
 }
 
-export const ITEM_STRING_BUDGET = 2_000;
+export const TOOL_TEXT_PREVIEW_CHARS = 2_000;
 
 export type TranscriptItem = Item & { truncated?: true };
 
@@ -360,17 +360,17 @@ const MODEL_ONLY_FIELDS: Partial<Record<Item["kind"], ReadonlySet<string>>> = {
   SteeringMessage: new Set(["environment", "environmentSnapshot", "memoryRecall"]),
   Reasoning: new Set(["thinkingSignature"]),
 };
-function shortenStrings(value: unknown): { value: unknown; truncated: boolean } {
+function previewStrings(value: unknown): { value: unknown; truncated: boolean } {
   if (typeof value === "string") {
-    return value.length > ITEM_STRING_BUDGET
-      ? { value: value.slice(0, ITEM_STRING_BUDGET), truncated: true }
+    return value.length > TOOL_TEXT_PREVIEW_CHARS
+      ? { value: value.slice(0, TOOL_TEXT_PREVIEW_CHARS), truncated: true }
       : { value, truncated: false };
   }
   if (value === null || typeof value !== "object") return { value, truncated: false };
   let truncated = false;
   if (Array.isArray(value)) {
     const next = value.map((item) => {
-      const walked = shortenStrings(item);
+      const walked = previewStrings(item);
       truncated ||= walked.truncated;
       return walked.value;
     });
@@ -378,7 +378,7 @@ function shortenStrings(value: unknown): { value: unknown; truncated: boolean } 
   }
   const next: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {
-    const walked = shortenStrings(item);
+    const walked = previewStrings(item);
     truncated ||= walked.truncated;
     next[key] = walked.value;
   }
@@ -402,8 +402,8 @@ function projectItem(item: Item): TranscriptItem {
   const modelOnly = MODEL_ONLY_FIELDS[item.kind];
   if (modelOnly) return withoutModelContext(item, modelOnly);
   if ((item.kind !== "ToolCall" && item.kind !== "ToolResult") || postsToTheConversation(item)) return item;
-  const body = shortenStrings(item.body);
-  const text = shortenStrings(item.text);
+  const body = previewStrings(item.body);
+  const text = previewStrings(item.text);
   if (!body.truncated && !text.truncated) return item;
   return { ...item, body: body.value as Record<string, unknown>, text: text.value as string | null, truncated: true };
 }
