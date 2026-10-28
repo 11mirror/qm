@@ -4,7 +4,7 @@ import { type PgPool, type PoolClient, withPgTransaction, tenantCols } from "../
 import type { GoalRecord } from "../harness/goal.ts";
 import type { GetItemsOptions, Lease, SessionStore } from "./session-store.ts";
 import { userMessagePreview, DuplicateCallError } from "./session-store.ts";
-import { TENANT, tsOf, userTurn, withinParticipantWindow } from "./postgres-session-sql.ts";
+import { nextSeq, TENANT, tsOf, userTurn, withinParticipantWindow } from "./postgres-session-sql.ts";
 import { rowToGoal, rowToItem, ITEM_FIELDS, ITEM_FROM } from "./postgres-session-rows.ts";
 import { ITEM_COLUMNS, isOverheard, isUserMessage, storedItem, type Item, type NewItem } from "./items.ts";
 
@@ -70,12 +70,7 @@ export const insertItems = async (
   turnId?: string,
 ): Promise<Item[]> => {
   if (!newItems.length) return [];
-  const max = await client.query(
-    `SELECT GREATEST(
-         COALESCE((SELECT MAX(seq) FROM items WHERE tenant_id = ${TENANT} AND session_id = $1), -1) + 1,
-         COALESCE((SELECT messages FROM sessions WHERE id = $1), 0)) AS n`,
-    [sessionId],
-  );
+  const max = await client.query(`SELECT ${nextSeq("$1")} AS n`, [sessionId]);
   const startSeq = Number(max.rows[0]!.n);
   const createdAt = now();
   const full = newItems.map(

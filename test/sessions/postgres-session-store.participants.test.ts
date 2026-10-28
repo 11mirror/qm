@@ -342,6 +342,23 @@ test("pg late joiners start after any stored sequence gap", async () => {
   ]);
 });
 
+test("pg a participant who leaves after a stored sequence gap keeps a window that starts before it ends", async () => {
+  const store = createPostgresSessionStore(URL);
+  const session = await store.getOrCreateByThread("slack:gap-C2:1", "channel", scopeId("channel", "gap-C2"), "eng");
+  const { lease } = await store.acquireLease(session.id);
+  assert.ok(lease);
+  await store.append(lease, { kind: "UserMessage", text: "before" });
+  await store.releaseLease(lease);
+  const pg = (await import("pg")).default;
+  const pool = new pg.Pool({ connectionString: URL });
+  await pool.query("UPDATE sessions SET messages = messages + 3 WHERE id = $1", [session.id]);
+  await pool.end();
+  await store.addParticipant(session.id, "gap-leaver");
+  await store.removeParticipant(session.id, "gap-leaver");
+  const [window] = await store.participantWindowsOf(session.id);
+  assert.deepEqual([window?.validFromSeq, window?.validToSeq], [4, 4]);
+});
+
 test("pg session pages sort by the person's last message, which appends keep", async () => {
   const s = createPostgresSessionStore(URL);
   const me = `paging-${randomUUID()}`;
