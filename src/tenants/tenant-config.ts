@@ -34,7 +34,6 @@ type Inherited = Pick<
 export interface TenantConfig extends Inherited {
   sandboxNamePrefix?: string;
   modalAppName?: string;
-  modalEnvironment?: string;
   modelGatewayApiKey?: string;
   slackServiceToken?: string;
   sentryDeployment?: string;
@@ -47,7 +46,6 @@ function homeConfig(config: Config, settings: TenantSettings): TenantConfig {
     ...config,
     ...(config.sandbox.namePrefix ? { sandboxNamePrefix: config.sandbox.namePrefix } : {}),
     ...(config.modalSandbox?.appName ? { modalAppName: config.modalSandbox.appName } : {}),
-    ...(config.modalSandbox?.environment ? { modalEnvironment: config.modalSandbox.environment } : {}),
     ...(config.modelGateway?.apiKey ? { modelGatewayApiKey: config.modelGateway.apiKey } : {}),
     ...(settings.secrets.slackServiceToken ? { slackServiceToken: settings.secrets.slackServiceToken } : {}),
     ...(settings.sentryDeployment ? { sentryDeployment: settings.sentryDeployment } : {}),
@@ -84,9 +82,8 @@ function registeredConfig(config: Config, settings: TenantSettings & { id: strin
     capabilitySecret: derived(config.capabilitySecret),
     portalIdentitySecret: derived(config.portalIdentitySecret),
     connectorSecretKey: settings.secrets.connectorSecretKey ?? config.connectorSecretKey,
-    sandboxNamePrefix: settings.sandboxNamePrefix ?? `qm-${settings.slug}`,
+    sandboxNamePrefix: `${config.sandbox.namePrefix ?? "qm"}-${settings.slug}`,
     modalAppName: settings.modalAppName ?? config.modalSandbox?.appName,
-    modalEnvironment: settings.modalEnvironment ?? config.modalSandbox?.environment,
     modelGatewayApiKey: settings.secrets.modelGatewayApiKey ?? config.modelGateway?.apiKey,
     slackServiceToken: settings.secrets.slackServiceToken,
     sentryDeployment: settings.sentryDeployment,

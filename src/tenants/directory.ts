@@ -35,7 +35,6 @@ interface DirectoryOptions {
   home: Tenant;
   homeHosts: readonly string[];
   homeAppsDomain?: string;
-  homeSandboxPrefix: string;
   prepare?: () => Promise<void>;
   now?: () => number;
 }
@@ -44,23 +43,20 @@ const reportedCollisions = new Set<string>();
 
 function servable(records: TenantRecord[], homeId: string, opts: DirectoryOptions): TenantRecord[] {
   const orgs = new Set([opts.home.orgId]);
-  const prefixes = new Set([opts.homeSandboxPrefix]);
   const kept: TenantRecord[] = [];
   for (const rec of records) {
     if (rec.id === homeId || rec.status !== "active") continue;
-    const prefix = rec.sandboxNamePrefix ?? `qm-${rec.slug}`;
-    if (orgs.has(rec.orgId) || prefixes.has(prefix)) {
-      const collision = `${rec.id}:${rec.orgId}:${prefix}`;
+    if (orgs.has(rec.orgId)) {
+      const collision = `${rec.id}:${rec.orgId}`;
       if (reportedCollisions.has(collision)) continue;
       reportedCollisions.add(collision);
       reportFailure(
         `tenant ${rec.slug}: not served`,
-        new Error(`org id ${rec.orgId} or sandbox prefix ${prefix} is already used by another tenant`),
+        new Error(`org id ${rec.orgId} is already used by another tenant`),
       );
       continue;
     }
     orgs.add(rec.orgId);
-    prefixes.add(prefix);
     kept.push(rec);
   }
   return kept;

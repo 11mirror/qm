@@ -30,7 +30,7 @@ import {
   type StoredManagedAgentsSandbox,
 } from "../sandbox/managed-agents-sandbox.ts";
 import { createSdkManagedAgentsClient } from "../sandbox/managed-agents-client.ts";
-import { createSdkModalClient } from "../sandbox/modal-client.ts";
+import { createSdkModalClient, type ModalApp } from "../sandbox/modal-client.ts";
 import { tenantConfig } from "../tenants/tenant-config.ts";
 import { type Config, enabledSandboxBackends } from "../config.ts";
 
@@ -39,6 +39,11 @@ type SandboxInputs = Pick<Head, "config" | "late"> & {
   files: FilesModule;
   deploymentLayer: DeploymentLayerModule;
 };
+
+export function modalApp(config: Config): ModalApp {
+  const environment = config.modalSandbox.environment;
+  return { name: tenantConfig(config).modalAppName ?? "qm", ...(environment ? { environment } : {}) };
+}
 
 export function buildSandbox(deps: SandboxInputs) {
   const { databaseUrl, advisoryLock, canUseSandboxScope } = deps.stores;
@@ -180,10 +185,7 @@ function buildSandboxBackends(deps: SandboxInputs) {
       client: createSdkModalClient({
         tokenId: modal.tokenId,
         tokenSecret: modal.tokenSecret,
-        app: () => {
-          const { modalAppName, modalEnvironment } = tenantConfig(config);
-          return { name: modalAppName ?? "qm", ...(modalEnvironment ? { environment: modalEnvironment } : {}) };
-        },
+        app: () => modalApp(config),
         ...(modal.image ? { image: modal.image } : {}),
         ...(config.sandbox.cpus !== undefined ? { cpus: config.sandbox.cpus } : {}),
         ...(config.sandbox.memoryMb !== undefined ? { memoryMb: config.sandbox.memoryMb } : {}),

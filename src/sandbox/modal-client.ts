@@ -53,7 +53,7 @@ export interface ModalClient {
   listRunning?(tags: Record<string, string>): AsyncIterable<string>;
 }
 
-interface ModalApp {
+export interface ModalApp {
   name: string;
   environment?: string;
 }

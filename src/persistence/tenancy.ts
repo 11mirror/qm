@@ -28,9 +28,7 @@ const TENANCY_FUNCTIONS: readonly string[] = [
   `ALTER TABLE tenants
      ADD COLUMN IF NOT EXISTS apps_domain TEXT,
      ADD COLUMN IF NOT EXISTS s3_bucket TEXT,
-     ADD COLUMN IF NOT EXISTS sandbox_name_prefix TEXT,
      ADD COLUMN IF NOT EXISTS modal_app_name TEXT,
-     ADD COLUMN IF NOT EXISTS modal_environment TEXT,
      ADD COLUMN IF NOT EXISTS modal_snapshot_bucket TEXT,
      ADD COLUMN IF NOT EXISTS aws_sandbox_bucket TEXT,
      ADD COLUMN IF NOT EXISTS sentry_deployment TEXT,
