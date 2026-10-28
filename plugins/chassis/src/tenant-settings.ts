@@ -27,7 +27,7 @@ export interface TenantSettings {
 
 type Env = Record<string, string | undefined>;
 
-export const TENANT_SECRET_NAMES = [
+const TENANT_SECRET_NAMES = [
   "oidcClientSecret",
   "modelGatewayApiKey",
   "slackServiceToken",
