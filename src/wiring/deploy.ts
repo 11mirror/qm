@@ -1,4 +1,4 @@
-import { perTenant, tenantSettings } from "../tenant.ts";
+import { perTenant, tenant, tenantSettings } from "../tenant.ts";
 import { createFlyDeployProvider } from "../deploy/fly-deploy-provider.ts";
 import { flyDeployPorts } from "../deploy/fly-deploy-ports.ts";
 import type { StoresModule } from "./stores.ts";
@@ -189,10 +189,14 @@ function buildFlyDeploy(
 ) {
   const settings = tenantSettings();
   const port = config.flyDeploy.socksProxyPort;
+  const { sharedAppName: deploymentApp, ...deployment } = config.flyDeploy;
+  const sharedAppName = tenant().id ? settings.flySharedAppName : (settings.flySharedAppName ?? deploymentApp);
+  const appPrefix = settings.flyAppPrefix ?? (tenant().id ? "" : deployment.appPrefix);
+  if (!appPrefix && !sharedAppName) throw new Error("Fly tenant requires its own app prefix or shared app name");
   return createFlyDeployProvider({
-    ...config.flyDeploy,
-    appPrefix: settings.flyAppPrefix ?? config.flyDeploy.appPrefix,
-    ...(settings.flySharedAppName ? { sharedAppName: settings.flySharedAppName } : {}),
+    ...deployment,
+    appPrefix,
+    ...(sharedAppName ? { sharedAppName } : {}),
     ...(port ? { privateTransport: { ensure: async () => port } } : {}),
     portStore: flyDeployPorts(databaseUrl),
     ...(onError ? { onError } : {}),

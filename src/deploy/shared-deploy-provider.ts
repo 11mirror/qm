@@ -1,7 +1,7 @@
 import { LRUCache } from "lru-cache";
 import type { ExecResult } from "../sandbox/sandbox.ts";
 import { shq } from "../util/shell.ts";
-import { errMessage, swallow } from "../util/errors.ts";
+import { errMessage, execFailure, swallow } from "../util/errors.ts";
 import { redactSecrets } from "../../plugins/chassis/src/redact-secrets.ts";
 import { createSecretValueMasker } from "../security/secret-masking.ts";
 import type { Deployment } from "./deploy-store.ts";
@@ -206,6 +206,6 @@ export async function startHostedApp(
   const script = [opts.prepare, appLaunch(opts.inner, opts.appPort)].filter(Boolean).join("; ");
   const result = await exec(script, opts.timeoutSec ?? 60);
   const report = appReporter(opts.onError, d, opts.env);
-  if (result.code !== 0) throw report("app_start_failed", `app launch failed (exit ${result.code}): ${result.stderr}`);
+  if (result.code !== 0) throw report("app_start_failed", execFailure("app launch", result).message);
   await waitAppReady(exec, { appPort: opts.appPort, windowSec: opts.windowSec, report });
 }
