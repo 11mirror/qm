@@ -4,10 +4,11 @@ import { harness, SESSION } from "./deep-link-boot-fixture.ts";
 
 const CLIENT_BOOT = 1_700_000_000_000;
 
-async function flush(t: TestContext): Promise<void> {
-  for (let i = 0; i < 20; i++) {
+async function flush(t: TestContext, settled: () => boolean = () => false, rounds = 20): Promise<void> {
+  for (let i = 0; i < rounds; i++) {
     t.mock.timers.tick(0);
     await new Promise((resolve) => setImmediate(resolve));
+    if (settled()) return;
   }
 }
 
@@ -35,8 +36,8 @@ async function timerChanges(t: TestContext, serverLeadMs: number): Promise<Array
     h.releaseSessions();
     await h.boot();
     await h.sessionsReady();
-    await flush(t);
     const head = () => document.querySelector<HTMLElement>("details.work-prestep > summary.work-head");
+    await flush(t, () => /Thinking/.test(head()?.textContent ?? ""), 2000);
     assert.match(head()?.textContent ?? "", /Thinking/);
     const elapsed = () => head()?.querySelector(".work-elapsed")?.textContent?.trim() ?? "";
     const changes: Array<{ at: number; text: string }> = [];

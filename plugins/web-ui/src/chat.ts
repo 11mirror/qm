@@ -218,7 +218,7 @@ import { createForkOriginController, forkOriginView } from "./fork-origin";
 import { base64ToBytes } from "./paste-text";
 import { pageAnchor, storeTranscript } from "./transcript-cache";
 import { tip } from "./tooltip";
-import { goalWorked, workSeconds, workStart, workedLabel } from "./work-duration";
+import { goalWorked, liveSeconds, workSeconds, workStart, workedLabel } from "./work-duration";
 import { decorateTextCodeBlocks } from "./text-code";
 
 import { createTranscriptViewport } from "./transcript-viewport";
@@ -3024,7 +3024,7 @@ export function createChatSurface(
 
   function elapsedSeconds(startedAt: number | null | undefined): number {
     if (typeof startedAt !== "number" || startedAt <= 0) return 0;
-    return Math.max(0, Math.floor((serverNow() - startedAt) / 1000));
+    return liveSeconds(startedAt);
   }
 
   function usedToolsSuffix(work: WorkBlock): string {

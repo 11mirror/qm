@@ -12,6 +12,10 @@ export function workStart(work: WorkBlock): number | null {
   return times.length ? Math.min(...times) : null;
 }
 
+export function liveSeconds(start: number): number {
+  return Math.max(0, Math.floor((serverNow() - start) / 1000));
+}
+
 export function workSeconds(work: WorkBlock): number {
   const start = workStart(work);
   if (start == null) return 0;
@@ -21,7 +25,7 @@ export function workSeconds(work: WorkBlock): number {
   let end = workPausedForApproval(work) ? last!.createdAt : work.finishedAt;
   if (phase?.phase === "final_answer") end = phase.startedAt;
   if (end == null) {
-    if (live) return Math.max(0, Math.floor((serverNow() - start) / 1000));
+    if (live) return liveSeconds(start);
     const times = activityTimes(work);
     end = times.length ? Math.max(...times, start) : start;
   }
