@@ -303,13 +303,13 @@ test("a catalog's last-known instructions serve the turn while a stale listing r
   const service = await catalogService(t, mcp.url);
   const describe = async () => (await service.toolDefsFor("alice@example.com"))[0]!.description;
   const first = await describe();
-  assert.match(first, /Version 1\.$/);
+  assert.ok(first.endsWith("Version 1."));
   version = 2;
   await service.refresh();
   const listings = mcp.requests.filter((r) => r.rpc === "tools/list").length;
   assert.equal(await describe(), first, "the stale value is served without waiting");
   await settle(async () => mcp.requests.filter((r) => r.rpc === "tools/list").length === listings + 1);
-  await settle(async () => /Version 2\.$/.test(await describe()));
+  await settle(async () => (await describe()).endsWith("Version 2."));
 });
 
 test("a catalog whose listing is slow or empty leaves the description untouched", async (t) => {
