@@ -483,24 +483,38 @@ test("observe-only rules do not hold up the turn and are still audited", async (
   );
 });
 
-test("a long pasted message never pushes the draft out of what the reply check judges", async () => {
-  const seen: string[] = [];
-  const backend: DecisionBackend = {
-    async choose({ questions, state }) {
-      seen.push(state);
-      return Object.fromEntries(Object.keys(questions).map((k) => [k, { yes: 0.1, no: 0.9 }]));
-    },
+test("however long one part is, the reply check still sees the instructions, the request and the draft", async () => {
+  const seen = async (parts: { guidance: string; input: string; reply: string }) => {
+    let state = "";
+    const backend: DecisionBackend = {
+      async choose({ questions, state: s }) {
+        state = s;
+        return Object.fromEntries(Object.keys(questions).map((k) => [k, { yes: 0.1, no: 0.9 }]));
+      },
+    };
+    await runHook(
+      [injection()],
+      "tool_response",
+      turnEndState({ scopeLabel: "personal:U1", ...parts }),
+      backend,
+      new AbortController().signal,
+    );
+    assert.ok(state.length <= 8_000);
+    return state;
   };
-  const state = turnEndState({
-    scopeLabel: "personal:U1",
-    guidance: "Never use an em dash.",
-    input: "pasted text ".repeat(2_000) + "summarise it",
-    reply: "A short summary.",
-  });
-  await runHook([injection()], "tool_response", state, backend, new AbortController().signal);
-  assert.ok(seen[0]!.includes("Never use an em dash."));
-  assert.ok(seen[0]!.includes("A short summary."));
-  assert.ok(seen[0]!.length <= 8_000);
+  const guidance = "At most two paragraphs unless I ask for more.";
+  const input = "Write me a detailed 2,000-word report.";
+  const reply = "The report begins here.";
+
+  const longDraft = await seen({ guidance, input, reply: reply + " word".repeat(3_000) + " The report ends here." });
+  assert.ok(longDraft.includes(guidance) && longDraft.includes(input));
+  assert.ok(longDraft.includes("The report begins here.") && longDraft.includes("The report ends here."));
+
+  const longMessage = await seen({ guidance, input: "pasted ".repeat(2_000) + input, reply });
+  assert.ok(longMessage.includes(guidance) && longMessage.includes(reply) && longMessage.includes(input));
+
+  const longInstructions = await seen({ guidance: "rule ".repeat(2_000) + guidance, input, reply });
+  assert.ok(longInstructions.includes(input) && longInstructions.includes(reply));
 });
 
 test("with several enforcing reply rules, any one asking for a rewrite wins over the rest", async () => {
@@ -550,6 +564,40 @@ test("with several enforcing reply rules, any one asking for a rewrite wins over
   );
   assert.ok(both.decisive?.message?.includes("fix no-tables"));
   assert.ok(both.decisive?.message?.includes("fix no-dashes"));
+});
+
+test("only enforcing rules that ask for a rewrite contribute to the rewrite message", async () => {
+  const style = (id: string, mode: DecisionRule["mode"]) =>
+    ({
+      ...injection(),
+      id,
+      mode,
+      hook: "turn_end",
+      onError: "keep",
+      options: {
+        keep: { description: "Follows it", action: "keep", message: `kept ${id}` },
+        revise: { description: "Breaks it", action: "revise", message: `fix ${id}` },
+      },
+    }) as DecisionRule;
+  const verdicts: Record<string, Record<string, number>> = {
+    watched: { keep: 0.1, revise: 0.9 },
+    fine: { keep: 0.9, revise: 0.1 },
+    broken: { keep: 0.1, revise: 0.9 },
+  };
+  const backend: DecisionBackend = {
+    async choose({ questions }) {
+      return Object.fromEntries(Object.keys(questions).map((k) => [k, verdicts[k]!]));
+    },
+  };
+  const { decisive } = await runHook(
+    [style("watched", "observe"), style("fine", "enforce"), style("broken", "enforce")],
+    "turn_end",
+    "s",
+    backend,
+    new AbortController().signal,
+  );
+  assert.equal(decisive?.action, "revise");
+  assert.equal(decisive?.message, "fix broken");
 });
 
 test("a hook point reports enforce when any active rule enforces, observe when only observing rules exist", async () => {

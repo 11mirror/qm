@@ -258,3 +258,30 @@ test("when the reply rules cannot be read, the turn still answers, unchecked", a
     await built.runtime.stop();
   }
 });
+
+test("a subagent's report to its parent agent is not judged against the person's reply rules", async () => {
+  const { built, asked } = (() => {
+    const made = appWithVerdicts("enforce", ["revise", "revise", "revise"]);
+    return { built: made.built, asked: () => made.states.length };
+  })();
+  const personal = scopeId("personal", "U1");
+  await built.config.setSoul(personal, GUIDANCE);
+  const parent = await built.sessions.getOrCreateByThread("dm:U1:reply-check-parent", "dm", personal);
+  const child = await built.sessions.getOrCreateByThread("agent:main:subagent:reply-check", "dm", personal);
+  await built.sessions.setParentSession(child.id, parent.id);
+  await built.sessions.addParticipant(child.id, "U1");
+  await built.sessions.setSpawnMeta(child.id, {
+    surface: "web",
+    actor: { id: "U1", type: "internal" },
+    conversation: { kind: "dm", threadRef: parent.threadRef, audience: [{ id: "U1", type: "internal" }] },
+  });
+  const result = await built.app.turn({
+    surface: "web",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: child.threadRef },
+    text: "report back",
+    triggered: true,
+  } as TurnRequest);
+  assert.equal(result.status, "ok", result.reason);
+  assert.equal(asked(), 0);
+});

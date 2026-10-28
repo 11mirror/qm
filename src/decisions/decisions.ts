@@ -80,7 +80,7 @@ const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const MAX_RULES = 32;
 const MAX_OPTIONS = 8;
 const MAX_TEXT_CHARS = 500;
-const MAX_STATE_CHARS = 8_000;
+export const MAX_STATE_CHARS = 8_000;
 const MAX_RULE_TEXT_CHARS = 16_000;
 
 function capState(state: string): string {

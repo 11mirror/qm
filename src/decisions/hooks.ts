@@ -1,6 +1,7 @@
 import type { AuditLog } from "../audit/audit-log.ts";
 import {
   classifierKey,
+  MAX_STATE_CHARS,
   runHook,
   type DecisionBackend,
   type DecisionHook,
@@ -9,6 +10,7 @@ import {
 } from "./decisions.ts";
 import type { DecisionStore } from "./store.ts";
 import { swallowAs } from "../util/errors.ts";
+import { headSlice, tailSlice } from "../util/text.ts";
 
 const HOOK_TIMEOUT_MS = 5_000;
 
@@ -38,6 +40,33 @@ export function turnStartState(turn: {
   ].join("\n");
 }
 
+function cutMiddle(text: string, room: number): string {
+  if (text.length <= room) return text;
+  const marker = `\n[${text.length - room} characters cut]\n`;
+  const keep = Math.max(0, room - marker.length);
+  return headSlice(text, Math.ceil(keep / 2)) + marker + tailSlice(text, Math.floor(keep / 2));
+}
+
+function fairShares(sizes: readonly number[], budget: number): number[] {
+  const shares = sizes.map(() => 0);
+  let open = sizes.map((_, i) => i);
+  let left = budget;
+  while (open.length) {
+    const share = Math.floor(left / open.length);
+    const fits = open.filter((i) => sizes[i]! <= share);
+    if (!fits.length) {
+      for (const i of open) shares[i] = share;
+      break;
+    }
+    for (const i of fits) {
+      shares[i] = sizes[i]!;
+      left -= sizes[i]!;
+    }
+    open = open.filter((i) => sizes[i]! > share);
+  }
+  return shares;
+}
+
 export function turnEndState(turn: {
   surfaceName?: string;
   scopeLabel: string;
@@ -45,22 +74,30 @@ export function turnEndState(turn: {
   input: string;
   reply: string;
 }): string {
-  const guidance = turn.guidance?.trim();
-  return [
-    "Turn context:",
-    `- surface: ${turn.surfaceName ?? "unknown"}`,
-    `- scope: ${turn.scopeLabel.split(":")[0]}`,
-    "",
-    guidance
-      ? `Standing instructions this conversation's replies must follow:\n${guidance}`
-      : "This conversation has no standing instructions of its own.",
-    "",
-    "Draft reply, written but not yet delivered:",
-    turn.reply.trim(),
-    "",
-    "Latest message:",
-    turn.input.trim(),
-  ].join("\n");
+  const hasGuidance = Boolean(turn.guidance?.trim());
+  const render = (guidance: string, reply: string, input: string) =>
+    [
+      "Turn context:",
+      `- surface: ${turn.surfaceName ?? "unknown"}`,
+      `- scope: ${turn.scopeLabel.split(":")[0]}`,
+      "",
+      hasGuidance
+        ? `Standing instructions this conversation's replies must follow:\n${guidance}`
+        : "This conversation has no standing instructions of its own.",
+      "",
+      "Latest message:",
+      input,
+      "",
+      "Draft reply, written but not yet delivered:",
+      reply,
+    ].join("\n");
+  const sections = [hasGuidance ? turn.guidance!.trim() : "", turn.reply.trim(), turn.input.trim()];
+  const shares = fairShares(
+    sections.map((text) => text.length),
+    MAX_STATE_CHARS - render("", "", "").length,
+  );
+  const [guidance, reply, input] = sections.map((text, i) => cutMiddle(text, shares[i]!));
+  return render(guidance!, reply!, input!);
 }
 
 export interface DecisionTurn {
