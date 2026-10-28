@@ -573,27 +573,29 @@ export async function runSegments(
     !strictReadOnly &&
     input.surfaceTools &&
     surfaceToolDeps &&
+    defaultDestination &&
+    deps.outbound &&
     !input.cancel?.aborted &&
     spine.surfaceOutboundCount === 0 &&
     !result.silent &&
     !result.stopped
   ) {
     await spineFirst.ackDelivery;
-    const primaryReply = stripAckPrefix(result.reply ?? "", spineFirst.ackText).trim();
-    if (primaryReply && defaultDestination && deps.outbound)
-      await postToDefault(deps.outbound, defaultDestination, primaryReply);
-    if (spine.surfaceOutboundCount === 0 && (!isPollFire || primaryReply)) {
+    const outbound = deps.outbound;
+    const deliverReply = async (reply: string | undefined): Promise<void> => {
+      const text = stripAckPrefix(reply ?? "", spineFirst.ackText).trim();
+      if (text) await postToDefault(outbound, defaultDestination, text);
+    };
+    await deliverReply(result.reply);
+    if (spine.surfaceOutboundCount === 0 && !isPollFire) {
       const nudgeHistory = filterHistory(forModelContext((await historyWindow()).items));
       result = await runHarnessTurn(ADDRESSED_NUDGE_MD, inbound.images.length ? { images: inbound.images } : {}, {
         history: nudgeHistory,
       });
       if (spine.surfaceOutboundCount === 0 && !result.silent && !result.stopped) {
-        const fallback = stripAckPrefix(result.reply ?? "", spineFirst.ackText).trim();
-        if (fallback && defaultDestination && deps.outbound) {
-          await postToDefault(deps.outbound, defaultDestination, fallback);
-        } else {
+        await deliverReply(result.reply);
+        if (spine.surfaceOutboundCount === 0)
           console.error(`[orchestrator] addressed turn ended silent after nudge session=${session.id}`);
-        }
       }
     }
   }
