@@ -69,10 +69,12 @@ export interface GrantedSkillRef {
   ownerScopeId: ScopeId;
 }
 
-export interface SkillResolution {
-  screenedBundles?: SkillBundle[];
-  skill: Skill | null;
-  shadowed: Skill[];
+export type SkillListing = Omit<Skill, "manifest"> & { manifest: Pick<SkillManifest, "name" | "description"> };
+
+export interface SkillResolution<S extends SkillListing = SkillListing> {
+  screened?: { skill: Skill; bundles: SkillBundle[] };
+  skill: S | null;
+  shadowed: S[];
 }
 
 export interface SkillStoreOptions {
@@ -94,7 +96,7 @@ export interface SkillStore {
   restore(skill: Skill): Promise<void>;
   delete(id: string): Promise<void>;
   recordUse(id: string, at?: number): Promise<void>;
-  resolve(name: string, orderedScopes: ScopeId[]): Promise<SkillResolution>;
+  resolve(name: string, orderedScopes: ScopeId[]): Promise<SkillResolution<Skill>>;
   visibleFor(orderedScopes: ScopeId[], granted?: readonly GrantedSkillRef[]): Promise<SkillResolution[]>;
   promote(id: string, targetScopeId: ScopeId): Promise<Skill>;
   move(id: string, toScopeId: ScopeId): Promise<Skill>;
@@ -172,6 +174,14 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
   const inScopes = async (scopes: readonly ScopeId[]): Promise<Skill[]> => {
     const wanted = new Set<string>(scopes);
     const rows = await skills.select({ where: { field: "scopeId", anyOfFold: [...wanted] } });
+    return rows.filter((skill) => wanted.has(skill.scopeId));
+  };
+  const listingsIn = async (scopes: readonly ScopeId[]): Promise<SkillListing[]> => {
+    const wanted = new Set<string>(scopes);
+    const rows: SkillListing[] = await skills.select({
+      where: { field: "scopeId", anyOfFold: [...wanted] },
+      pickNested: { manifest: ["name", "description"] },
+    });
     return rows.filter((skill) => wanted.has(skill.scopeId));
   };
   const secret = opts.signingSecret ?? randomUUID();
@@ -292,7 +302,7 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
     },
 
     async visibleFor(orderedScopes, granted) {
-      const all = await inScopes([...orderedScopes, ...(granted ?? []).map((ref) => ref.ownerScopeId)]);
+      const all = await listingsIn([...orderedScopes, ...(granted ?? []).map((ref) => ref.ownerScopeId)]);
       return visibleSkillRows(all, orderedScopes, granted);
     },
 

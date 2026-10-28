@@ -116,7 +116,9 @@ test("a body read avoids sandbox work and a file request materializes that skill
   const { createTurnSandboxes } = await import("../src/core/orchestrator/sandboxes.ts");
   const { SandboxAccessError } = await import("../src/sandbox/sandbox-resources.ts");
   type TurnSandboxContext = import("../src/core/orchestrator/sandboxes.ts").TurnSandboxContext;
-  type SkillResolution = import("../src/skills/skill-store.ts").SkillResolution;
+  type SkillResolution = import("../src/skills/skill-store.ts").SkillResolution<
+    import("../src/skills/skill-store.ts").Skill
+  >;
   const files = new Map<string, string>();
   let provisions = 0;
   const sandboxIds: Array<string | undefined> = [];
@@ -141,7 +143,10 @@ test("a body read avoids sandbox work and a file request materializes that skill
   const handle = { id: "box", rootDir: "/workspace" };
   const turn = createTurnSandboxes({
     deps: {
-      skills: { recordUse: async () => {} },
+      skills: {
+        recordUse: async () => {},
+        get: async (id: string) => visible.find((r) => r.skill?.id === id)?.skill ?? null,
+      },
       sandboxResources: {
         access: async (_actor: string, id: string) => {
           if (id !== "resource-1" && id !== "box") throw new SandboxAccessError("sandbox not found");
@@ -172,6 +177,7 @@ test("a body read avoids sandbox work and a file request materializes that skill
     turnFilesDir: "turn/s/t",
     connectorEnv: {},
     visibleSkillsForTurn: async () => visible,
+    listedSkillsForTurn: async () => visible,
     perf: { credsMs: 0 },
   } as unknown as TurnSandboxContext);
   const bodyOnly = structuredClone(unrelated);
@@ -202,9 +208,12 @@ test("a body read avoids sandbox work and a file request materializes that skill
   await turn.useSkill("source-helper", "SKILL.md", "box");
   assert.equal(files.get(`${root}/source-helper/references/example.txt`), "local edit");
   resolution.skill!.pack = { packId: "pack", commit: "c", upstreamName: "source-helper" };
-  resolution.screenedBundles = [
-    { packId: "pack", commit: "c", hash: "pack-hash", files: [{ path: "lib.txt", content: "PACK_RESOURCE" }] },
-  ];
+  resolution.screened = {
+    skill: resolution.skill!,
+    bundles: [
+      { packId: "pack", commit: "c", hash: "pack-hash", files: [{ path: "lib.txt", content: "PACK_RESOURCE" }] },
+    ],
+  };
   const beforeResource = new Map(files);
   await turn.provisionResource("resource-1");
   assert.deepEqual(files, beforeResource);
