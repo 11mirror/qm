@@ -506,3 +506,38 @@ test("one call reads at most a fifth of Slack's per-minute history budget, then 
   assert.equal(pulls.length, 10);
   assert.match(result.message!, /Counts cover only the newest 2000 messages\./);
 });
+
+test("surface readFile pages a long text file and resumes at each next offset", async () => {
+  const text = Array.from({ length: 50_000 }, (_, i) => String.fromCharCode(97 + (i % 26))).join("");
+  const chunks = Array.from({ length: 50 }, (_, i) => Buffer.from(text.slice(i * 1000, (i + 1) * 1000)));
+  const blobId = "0".repeat(32);
+  const tools = createSurfaceToolDeps({
+    deps: { outbound: {} },
+    input: { surfaceTools: true },
+    defaultDestination: {},
+    strictReadOnly: false,
+    blobTransfer: {
+      async open(id: string) {
+        return id === blobId ? { stream: Readable.from(chunks), sizeBytes: text.length } : null;
+      },
+    },
+    fileRegistration: {},
+    postKeys: turnPostKeys("run-test"),
+    spine: { surfaceOutboundCount: 0 },
+    signal: new AbortController().signal,
+  } as unknown as SurfaceToolsContext)!;
+  let read = "";
+  let offset: number | undefined = 0;
+  const offsets: number[] = [];
+  while (offset !== undefined) {
+    offsets.push(offset);
+    const page = await tools.readFile(blobId, offset);
+    assert.ok(page.ok && "content" in page);
+    read += page.content;
+    offset = page.nextOffset;
+  }
+  assert.equal(read, text);
+  assert.deepEqual(offsets, [0, 20_000, 40_000]);
+  const past = await tools.readFile(blobId, 60_000);
+  assert.deepEqual(past.ok && "content" in past ? [past.content, past.nextOffset] : null, ["", undefined]);
+});
