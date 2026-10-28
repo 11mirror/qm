@@ -53,12 +53,7 @@ export function isTextDocument(file: { name: string; mimeType?: string; mimetype
 
 const DOCUMENT_BYTES_PER_TOKEN = 4;
 
-export function estimateDocumentTokens(file: {
-  name: string;
-  mimeType?: string;
-  mimetype?: string;
-  sizeBytes: number;
-}): number {
+export function estimateDocumentTokens(file: { sizeBytes: number }): number {
   const bytes = Number.isFinite(file.sizeBytes) && file.sizeBytes > 0 ? file.sizeBytes : 0;
   return Math.ceil(bytes / DOCUMENT_BYTES_PER_TOKEN);
 }
