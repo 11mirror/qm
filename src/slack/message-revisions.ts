@@ -1,7 +1,6 @@
-import type { ScopeId } from "../types.ts";
 import { isReply, isUserMessage, messageTs, type Item, type NewItem } from "../sessions/items.ts";
 import type { Lease, SessionStore } from "../sessions/session-store.ts";
-import { parseSlackThreadRef, slackThreadRefCandidates } from "../slack/message-gating.ts";
+import { parseSlackThreadRef, slackThreadRefCandidates } from "./message-gating.ts";
 import type { IngestEvent, SurfaceCache } from "../surface-cache/types.ts";
 import { isoFromTs, xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 
@@ -24,11 +23,6 @@ export type RevisionSessions = Pick<
   SessionStore,
   "append" | "sessionsByThreadRefs" | "acquireLease" | "releaseLease" | "getItems"
 >;
-
-interface RevisionSession {
-  id: string;
-  scopeId: ScopeId;
-}
 
 export function messageRevision(e: Pick<Item, "kind" | "body">): MessageRevisionPayload | null {
   if (e.kind !== "Retraction") return null;
@@ -104,7 +98,6 @@ function revisionToRecord(entries: readonly Item[], source: MessageRevisionSourc
 async function recordRevision(
   sessions: Pick<SessionStore, "append">,
   lease: Lease,
-  session: RevisionSession,
   entries: readonly Item[],
   source: MessageRevisionSource,
 ): Promise<boolean> {
@@ -117,14 +110,14 @@ async function recordRevision(
 
 async function recordWhenIdle(
   sessions: RevisionSessions,
-  session: RevisionSession,
+  session: { id: string },
   source: MessageRevisionSource,
 ): Promise<void> {
   if (!revisionToRecord(await sessions.getItems(session.id), source)) return;
   const { lease } = await sessions.acquireLease(session.id, "append");
   if (!lease) return;
   try {
-    await recordRevision(sessions, lease, session, await sessions.getItems(session.id), source);
+    await recordRevision(sessions, lease, await sessions.getItems(session.id), source);
   } finally {
     await sessions.releaseLease(lease);
   }
@@ -159,7 +152,7 @@ export async function reconcileMessageRevisions(opts: {
   sessions: Pick<SessionStore, "append" | "getItems">;
   surfaceCache: Pick<SurfaceCache, "revisedSince">;
   lease: Lease;
-  session: RevisionSession & { threadRef: string };
+  session: { id: string; threadRef: string };
   anchorAt: number | undefined;
   fallbackSince: number;
   triggerTs?: string;
@@ -183,7 +176,7 @@ export async function reconcileMessageRevisions(opts: {
   if (!revised.length) return 0;
   let recorded = 0;
   for (const row of revised) {
-    if (await recordRevision(opts.sessions, opts.lease, opts.session, entries, row)) recorded++;
+    if (await recordRevision(opts.sessions, opts.lease, entries, row)) recorded++;
   }
   return recorded;
 }

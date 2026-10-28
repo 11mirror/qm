@@ -84,11 +84,9 @@ export interface OrchestratorInput extends Omit<
   attempt?: number;
   resumeCause?: RunStop;
   runLeaseToken?: string;
-  turnFenceToken?: string;
 
   runStartedAt?: number;
   finalAttempt?: boolean;
-  background?: boolean;
   cancel?: AbortSignal;
   shutdown?: AbortSignal;
   sessionParticipantIds?: readonly string[];

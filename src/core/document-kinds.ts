@@ -16,29 +16,53 @@ const DOCUMENT_EXTENSIONS = new Set(
 export const OFFICE_FALLBACK_EXTENSIONS = new Set("pdf docx pptx xlsx odt odp ods rtf".split(" "));
 const extension = (name: string): string => name.split(".").at(-1)!.toLowerCase();
 
-const MIME_EXTENSIONS: Record<string, string> = {
-  "application/pdf": "pdf",
-  "application/msword": "doc",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
-  "application/vnd.ms-excel": "xls",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
-  "application/vnd.ms-powerpoint": "ppt",
-  "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
-  "application/vnd.oasis.opendocument.text": "odt",
-  "application/vnd.oasis.opendocument.spreadsheet": "ods",
-  "application/vnd.oasis.opendocument.presentation": "odp",
-  "application/rtf": "rtf",
-  "text/rtf": "rtf",
-  "application/json": "json",
-  "application/xml": "xml",
-  "application/javascript": "js",
+export const MIME_BY_EXTENSION: Record<string, string> = {
+  txt: "text/plain",
+  md: "text/markdown",
+  csv: "text/csv",
+  json: "application/json",
+  html: "text/html",
+  xml: "application/xml",
+  yaml: "application/yaml",
+  yml: "application/yaml",
+  pdf: "application/pdf",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xls: "application/vnd.ms-excel",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ppt: "application/vnd.ms-powerpoint",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  odt: "application/vnd.oasis.opendocument.text",
+  ods: "application/vnd.oasis.opendocument.spreadsheet",
+  odp: "application/vnd.oasis.opendocument.presentation",
+  rtf: "application/rtf",
+  tsv: "text/tab-separated-values",
+  eml: "message/rfc822",
+  ics: "text/calendar",
+  vcf: "text/vcard",
+  js: "text/javascript",
+  ts: "text/typescript",
+  py: "text/x-python",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  zip: "application/zip",
 };
+
+const EXTENSION_BY_MIME = new Map([
+  ...Object.entries(MIME_BY_EXTENSION).map(([ext, mime]) => [mime, ext] as const),
+  ["text/rtf", "rtf"],
+  ["application/javascript", "js"],
+]);
 
 export function documentExtension(file: { name: string; mimeType?: string; mimetype?: string }): string {
   const ext = extension(file.name);
   if (TEXT_EXTENSIONS.has(ext) || DOCUMENT_EXTENSIONS.has(ext)) return ext;
   const mime = (file.mimeType ?? file.mimetype ?? "").split(";")[0]!.trim().toLowerCase();
-  return MIME_EXTENSIONS[mime] ?? (mime.startsWith("text/") ? "txt" : ext);
+  return EXTENSION_BY_MIME.get(mime) ?? (mime.startsWith("text/") ? "txt" : ext);
 }
 
 export function isDocumentAttachment(file: { name: string; mimetype?: string }): boolean {
@@ -53,12 +77,7 @@ export function isTextDocument(file: { name: string; mimeType?: string; mimetype
 
 const DOCUMENT_BYTES_PER_TOKEN = 4;
 
-export function estimateDocumentTokens(file: {
-  name: string;
-  mimeType?: string;
-  mimetype?: string;
-  sizeBytes: number;
-}): number {
+export function estimateDocumentTokens(file: { sizeBytes: number }): number {
   const bytes = Number.isFinite(file.sizeBytes) && file.sizeBytes > 0 ? file.sizeBytes : 0;
   return Math.ceil(bytes / DOCUMENT_BYTES_PER_TOKEN);
 }

@@ -1,4 +1,5 @@
 import type { GatewayContext } from "../types.ts";
+import { surfaceProfile } from "../surfaces/surface.ts";
 
 export function renderGatewayContext(surface: string | undefined, ctx?: GatewayContext): string {
   const gateway = (surface ?? "").trim();
@@ -18,11 +19,8 @@ export function renderGatewayContext(surface: string | undefined, ctx?: GatewayC
     lines.push("Identifiers for this conversation (use these if you need to act on it directly):");
     for (const [k, v] of details) lines.push(`- ${k}: ${v}`);
   }
-  if (gateway.toLowerCase() === "web") {
-    lines.push(
-      "A cron, reminder, or watch you create here with no explicit destination posts back into this web conversation, and the person sees it here. Leave the destination unset by default; use `recipient` or `channel` only when the person asks for delivery somewhere else.",
-    );
-  }
+  const surfaceNote = surfaceProfile(gateway).whereNote;
+  if (surfaceNote) lines.push(surfaceNote);
   if (instructions) lines.push(instructions);
   return lines.join("\n");
 }

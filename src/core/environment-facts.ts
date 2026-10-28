@@ -11,8 +11,11 @@ export interface WorkspaceLayoutInfo {
 }
 
 export function renderComputerBlock(spec: AgentComputerSpec | undefined, layout: WorkspaceLayoutInfo): string {
-  if (!spec) return "";
-  const lines: string[] = ["## Sandbox environment profile"];
+  return spec ? `## Sandbox environment profile\n${computerProfile(spec, layout)}` : "";
+}
+
+function computerProfile(spec: AgentComputerSpec, layout: WorkspaceLayoutInfo): string {
+  const lines: string[] = [];
 
   const size: string[] = [];
   if (spec.cpus) size.push(`${spec.cpus} vCPU`);
@@ -130,8 +133,7 @@ export function renderSandboxProfiles(
         [
           `## Sandbox provider ${provider.name}`,
           `Available actions: ${provider.actions.toSorted().join(", ")}.`,
-          renderComputerBlock(provider.spec, layout).replace("## Sandbox environment profile\n", "") ||
-            "Environment profile unknown.",
+          provider.spec ? computerProfile(provider.spec, layout) : "Environment profile unknown.",
         ].join("\n"),
       ]),
   );

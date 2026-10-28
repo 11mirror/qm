@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPiHarness } from "../../src/harness/pi-harness.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../../src/harness/harness.ts";
-import { promptEnvelopeBody } from "../../src/sessions/session-store.ts";
+import { promptEnvelopeBody } from "../../src/sessions/postgres-llm-capture.ts";
 import { storedItem, type Item, type NewItem } from "../../src/sessions/items.ts";
 import type { ScopeId } from "../../src/types.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";

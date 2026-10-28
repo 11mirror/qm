@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { countTokens } from "../../../src/util/tokens.ts";
 import { renderComputerBlock } from "../../../src/core/environment-facts.ts";
 import { renderGatewayContext } from "../../../src/core/gateway-context.ts";
-import { sharedManifest } from "../../../src/core/attachments.ts";
+import { sharedFilesSystemSection } from "../../../src/core/attachments.ts";
 import {
   deliveryMenu,
   renderConversationRoster,
@@ -44,7 +44,7 @@ test("prompt inventories keep identical bytes across permutations, including bud
       fileId: id,
       permission: "read",
     })),
-    (items) => sharedManifest(items, BUDGET),
+    (items) => sharedFilesSystemSection(items, BUDGET),
   );
   const base = ids.map((id) => ({
     id,

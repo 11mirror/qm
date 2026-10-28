@@ -58,7 +58,6 @@ const UNINHERITED_REQUEST_KEYS = [
   "runLeaseToken",
   "runStartedAt",
   "finalAttempt",
-  "background",
   "cancel",
   "shutdown",
   "modelAccount",

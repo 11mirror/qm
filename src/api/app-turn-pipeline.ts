@@ -17,10 +17,20 @@ import { rosterAdmits } from "../resolution/scope-membership.ts";
 import { isHalt, routeWake, type Wake } from "../wake/wake.ts";
 import { desktopClientForTurn, isSessionTurn } from "../core/turn-origin.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
-import { turnModelOptions, turnRuntimePurpose, validateWebTurnModelOptions } from "../core/turn-options.ts";
+import { turnModelOptions, turnRuntimePurpose } from "../core/turn-options.ts";
 import { isProjectGroupRef, projectIdFromGroupRef } from "../projects/project-store.ts";
 import { samePerson } from "../directory/person.ts";
-import { defaultModel, modelServiceable, modelUnavailableReason, resolveModel } from "../model/pi-models.ts";
+import {
+  ALL_PROVIDERS_AVAILABLE,
+  defaultModel,
+  defaultWebuiModelIds,
+  modelServiceable,
+  modelUnavailableReason,
+  resolveModel,
+  serviceableModelIds,
+  THINKING_LEVELS,
+  type ModelProviderAvailability,
+} from "../model/pi-models.ts";
 import { selectableCatalog, selectableModelCatalog } from "../model/model-catalog.ts";
 import { resolveRuntimeChoiceDurable } from "../harness/runtime-choice.ts";
 import { swallow } from "../util/errors.ts";
@@ -30,6 +40,23 @@ import { GENERIC_FAILURE_CLAUSE } from "../../plugins/chassis/src/failure-copy.t
 import type { AppDeps } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import { tenant } from "../tenant.ts";
+
+export function validateWebTurnModelOptions(
+  input: { model?: string; thinkingLevel?: string },
+  enabledModels: readonly string[] | null,
+  providers: ModelProviderAvailability = ALL_PROVIDERS_AVAILABLE,
+): string | null {
+  const enabled = enabledModels ?? defaultWebuiModelIds();
+  const allowedModels = serviceableModelIds(enabled, providers);
+  if (input.model && !allowedModels.includes(input.model)) {
+    return resolveModel(input.model) && !modelServiceable(input.model, providers)
+      ? "that model isn't available on this deployment (its provider isn't configured)"
+      : "that model is not enabled for the web UI";
+  }
+  if (input.thinkingLevel && !(THINKING_LEVELS as readonly string[]).includes(input.thinkingLevel))
+    return "unsupported thinking level";
+  return null;
+}
 
 export const USER_STOP = "by user";
 

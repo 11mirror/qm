@@ -1,13 +1,20 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import { tenantCols } from "../persistence/pg-pool.ts";
 import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-screen.ts";
-import { promptEnvelopeBody } from "./session-store.ts";
 import type { LlmRequestRecord, NewLlmRequest, ScreenSample, SessionStore } from "./session-store.ts";
 
+export const LLM_CAPTURE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const LLM_CAPTURE_PURGE_BATCH = 100;
 const ENVELOPE_TOUCH_MS = 24 * 60 * 60_000;
+
+export function promptEnvelopeBody(envelope: unknown): { hash: string; body: string } | null {
+  if (envelope == null) return null;
+  const body: string | undefined = JSON.stringify(envelope);
+  if (body === undefined) return null;
+  return { hash: createHash("sha256").update(body).digest("hex"), body };
+}
 
 function rowToLlmRequest(r: Record<string, unknown>): LlmRequestRecord {
   return {

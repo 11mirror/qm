@@ -9,7 +9,6 @@ import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
 import { applyPgMigrations, pgMigrationFrom } from "../../src/persistence/pg-migrations.ts";
 import { SCHEMA_BASELINE } from "../../src/persistence/schema-baseline.ts";
 import { TENANT_BYPASS_OPTION } from "../../src/persistence/tenancy.ts";
-import { mergeTenantQueues } from "../../src/turns/absurd-schema.ts";
 import { buildApp } from "../../src/wiring.ts";
 import { testConfig } from "../support/test-config.ts";
 import { withClient } from "../support/pg-client.ts";
@@ -106,6 +105,12 @@ async function createDatabase(fixture?: string): Promise<string> {
   return url;
 }
 
+async function dropTenantQueues(url: string): Promise<void> {
+  await withClient(url, (client) =>
+    client.query("SELECT absurd.drop_queue(queue_name) FROM absurd.queues WHERE queue_name ~ '_t[0-9a-f]{12}$'"),
+  );
+}
+
 async function migrate(url: string, multitenant: boolean): Promise<void> {
   const { runtime } = buildApp({
     anthropicApiKey: "test-anthropic-key",
@@ -113,7 +118,7 @@ async function migrate(url: string, multitenant: boolean): Promise<void> {
   });
   try {
     await migrateRegisteredPgSchemas(url);
-    await mergeTenantQueues(url);
+    await dropTenantQueues(url);
   } finally {
     await runtime.stop();
   }

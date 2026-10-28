@@ -203,6 +203,18 @@ investigate.
 
 Do not edit `qm_schema_migrations` to skip a conversion.
 
+## Per-tenant turn queues are no longer merged at boot
+
+The release that moved every tenant onto one shared set of Absurd queues also moved, on
+each boot, the tasks left in per-tenant queues (named like `turns_people_t1a2b3c4d5e6f`)
+into the shared queues and dropped them. That boot step is gone. If your deployment has
+never booted a release with shared queues, boot that release once before this one. To
+check, this query must return no rows:
+
+```sql
+SELECT queue_name FROM absurd.queues WHERE queue_name ~ '_t[0-9a-f]{12}$';
+```
+
 ## Upgrading from older releases
 
 Upgrade one release line at a time, and boot each step before moving on. Startup

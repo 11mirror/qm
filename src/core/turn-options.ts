@@ -1,14 +1,5 @@
 import type { RuntimePurpose } from "../resolution/config-store.ts";
 import type { TurnOrigin } from "../types.ts";
-import {
-  defaultWebuiModelIds,
-  THINKING_LEVELS,
-  serviceableModelIds,
-  modelServiceable,
-  resolveModel,
-  ALL_PROVIDERS_AVAILABLE,
-  type ModelProviderAvailability,
-} from "../model/pi-models.ts";
 
 export const NON_INTERACTIVE_THINKING_LEVEL = "xhigh";
 export const NON_INTERACTIVE_FAST_MODE = false;
@@ -44,21 +35,4 @@ export function turnModelOptions(input: { surface?: string; thinkingLevel?: stri
     ...(thinkingLevel ? { thinkingLevel } : {}),
     ...(typeof fastMode === "boolean" ? { fastMode } : {}),
   };
-}
-
-export function validateWebTurnModelOptions(
-  input: { model?: string; thinkingLevel?: string },
-  enabledModels: readonly string[] | null,
-  providers: ModelProviderAvailability = ALL_PROVIDERS_AVAILABLE,
-): string | null {
-  const enabled = enabledModels ?? defaultWebuiModelIds();
-  const allowedModels = serviceableModelIds(enabled, providers);
-  if (input.model && !allowedModels.includes(input.model)) {
-    return resolveModel(input.model) && !modelServiceable(input.model, providers)
-      ? "that model isn't available on this deployment (its provider isn't configured)"
-      : "that model is not enabled for the web UI";
-  }
-  if (input.thinkingLevel && !(THINKING_LEVELS as readonly string[]).includes(input.thinkingLevel))
-    return "unsupported thinking level";
-  return null;
 }

@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { createInsecureTestServer } from "../../src/api/server.ts";
 import { baseModelProviders, configuredModel, providerKeysPresent } from "../../src/config.ts";
-import { validateWebTurnModelOptions } from "../../src/core/turn-options.ts";
+import { validateWebTurnModelOptions } from "../../src/api/app-turn-pipeline.ts";
 import {
   auxiliaryModelFor,
   auxiliaryModelForProvider,

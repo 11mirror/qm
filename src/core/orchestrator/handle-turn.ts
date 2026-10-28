@@ -36,7 +36,6 @@ export interface OrchestratorInstance {
   transcripts: ReturnType<typeof createTranscriptSource>;
   memoryPolicy: MemoryPolicy;
   memoryStrategy: MemoryStrategy;
-  blobTransfer: OrchestratorDeps["blobTransfer"];
   reachableChannelsFor: (directory: DirectoryStore, principalId: string) => Promise<DirectoryChannel[]>;
   directoryIndexFor: (directory: DirectoryStore) => Promise<Map<string, DirectoryMember>>;
   compaction: CompactionContext;
@@ -140,8 +139,8 @@ export async function handleTurn(o: OrchestratorInstance, requested: Orchestrato
 }
 
 async function frameTurn(o: OrchestratorInstance, ctx: TurnCtx) {
-  const { deps, memoryPolicy, memoryStrategy, blobTransfer, observeSecurityData } = o;
-  const screenTrace = observeInboundTurn(ctx, { observeSecurityData, blobTransfer });
+  const { deps, memoryPolicy, memoryStrategy, observeSecurityData } = o;
+  const screenTrace = observeInboundTurn(ctx, { observeSecurityData, blobTransfer: deps.blobTransfer });
   const mcpToolsReady = !ctx.external && deps.mcp ? deps.mcp.toolDefsFor(ctx.actor.id) : undefined;
   const context = await resolveTurnWorkspace(ctx, memoryPolicy);
   ctx.resolution.grantedHandles = context.listFiles();
@@ -321,7 +320,7 @@ async function executeTurn(
   },
 ): Promise<TurnResult> {
   const { deps, memoryPolicy, memoryStrategy, observeSecurityData, titles } = o;
-  const { input, scopeId } = ctx;
+  const { scopeId } = ctx;
   const { frame, session, held, run, begun, ready, titling } = turn;
   const { spine, surfaceToolDeps, attachStaging } = ready.turnTools;
   const { inboundIssues, partial, turnInput, isPollFire } = ready.prepared;
@@ -389,16 +388,11 @@ async function executeTurn(
   if (run.turnRuntime) finalResult = { ...finalResult, runtime: run.turnRuntime };
   await titling.title.write;
 
-  if (input.background) {
-    run.tailOwnsReclaim = true;
-    await held.catchUpMessageRevisions();
-    await deps.sessions.releaseLease(held.lease);
-    held.leaseState.released = true;
-    void tail().catch(swallowAs("orchestrator: background tail", undefined));
-  } else {
-    await tail();
-    run.tailOwnsReclaim = true;
-  }
+  run.tailOwnsReclaim = true;
+  await held.catchUpMessageRevisions();
+  await deps.sessions.releaseLease(held.lease);
+  held.leaseState.released = true;
+  void tail().catch(swallowAs("orchestrator: background tail", undefined));
   await deps.errors?.flush();
   return finalResult;
 }
