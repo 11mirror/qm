@@ -205,6 +205,7 @@ export interface TurnSessionInput {
   sessionId: string;
   systemPrompt: string;
   history: Item[];
+  timeZone: string | undefined;
   priorTurns: ConversationTurn[] | undefined;
   providerKeys: () => Promise<ProviderKeys>;
   modelGateway: ModelGatewayTransportConfig | undefined;
@@ -223,6 +224,7 @@ export async function createTurnSession({
   sessionId,
   systemPrompt,
   history,
+  timeZone,
   priorTurns,
   providerKeys,
   modelGateway,
@@ -235,7 +237,7 @@ export async function createTurnSession({
   tools,
   loadImage,
 }: TurnSessionInput): Promise<TurnSession> {
-  const reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
+  const reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history, timeZone), loadImage);
   const seedPlan = planColdStartSeed(reconstructed, !!priorTurns?.length);
 
   const modelRuntime = await buildModelRuntime(await providerKeys(), modelGateway, "long");

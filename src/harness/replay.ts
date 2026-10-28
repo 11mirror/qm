@@ -134,23 +134,23 @@ export function selectOverheardToImport(
   return out;
 }
 
-const DAY_MARKER_FORMAT = new Intl.DateTimeFormat("en-US", {
-  weekday: "long",
-  month: "long",
-  day: "numeric",
-  year: "numeric",
-  timeZone: DEFAULT_CRON_TIMEZONE,
-});
-
-function itemDay(e: Item): string {
-  const ov = overheardOf(e);
-  const sent = ov ? Date.parse(isoFromTs(ov.ts)) : Number.NaN;
-  return DAY_MARKER_FORMAT.format(Number.isFinite(sent) ? sent : e.createdAt);
-}
-
-export function dayMarkerPrefix(previous: Item | undefined, e: Item): string {
-  const day = itemDay(e);
-  return previous && itemDay(previous) === day ? "" : `── ${day} ──\n`;
+export function dayMarker(timeZone = DEFAULT_CRON_TIMEZONE): (previous: Item | undefined, e: Item) => string {
+  const format = new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    timeZone,
+  });
+  const itemDay = (e: Item): string => {
+    const ov = overheardOf(e);
+    const sent = ov ? Date.parse(isoFromTs(ov.ts)) : Number.NaN;
+    return format.format(Number.isFinite(sent) ? sent : e.createdAt);
+  };
+  return (previous, e) => {
+    const day = itemDay(e);
+    return previous && itemDay(previous) === day ? "" : `── ${day} ──\n`;
+  };
 }
 
 export function renderOverheard(p: OverheardEntryPayload): string {
@@ -330,10 +330,8 @@ function toolResultMessage(
   };
 }
 
-export function reconstructMessagesFromHistory(
-  history: readonly Item[],
-  opts?: { requireUserStart?: boolean },
-): PiReplayMessage[] {
+export function reconstructMessagesFromHistory(history: readonly Item[], timeZone?: string): PiReplayMessage[] {
+  const dayMarkerPrefix = dayMarker(timeZone);
   const resultByCallId = new Map<string, Item>();
   const callById = new Map<string, Item>();
   for (const e of history) {
@@ -469,7 +467,7 @@ export function reconstructMessagesFromHistory(
       }
     }
   }
-  if (opts?.requireUserStart !== false && out[0] && out[0].role !== "user")
+  if (out[0] && out[0].role !== "user")
     out.unshift({ role: "user", content: [{ type: "text", text: AGENT_OPENED_TEXT }], timestamp: out[0].timestamp });
   return out;
 }

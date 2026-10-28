@@ -224,6 +224,27 @@ test("a turn on a later day is prompted under that day's marker and replays it b
   }
 });
 
+test("day markers follow the turn's timezone in the live prompt and in replay", async () => {
+  const reply = (text: string) => () => anthropicSse([{ type: "text", text }], "end_turn");
+  const userTexts = (body: Body) =>
+    (body.messages as Array<{ role: string; content: Array<{ type: string; text?: string }> }>)
+      .filter((m) => m.role === "user")
+      .map((m) => m.content.find((b) => b.type === "text")?.text);
+  const tokyo = { timezone: "Asia/Tokyo" };
+  mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-10-16T17:00:00Z") });
+  try {
+    const first = await runTurn("the deadline is Saturday", [], [reply("Noted.")], tokyo);
+    mock.timers.setTime(Date.parse("2026-10-19T18:00:00Z"));
+    const second = await runTurn("has it passed?", forModelContext(first.emitted), [reply("Yes.")], tokyo);
+    assert.deepEqual(userTexts(second.bodies[0]!), [
+      "── Saturday, October 17, 2026 ──\nthe deadline is Saturday",
+      "── Tuesday, October 20, 2026 ──\nhas it passed?",
+    ]);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
 test("the next turn's OpenAI Responses request replays the previous turn's reasoning items, messages and calls exactly", async () => {
   const reasoning = (id: string, text: string) => ({
     type: "reasoning",

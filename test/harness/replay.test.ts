@@ -169,16 +169,6 @@ test("reconstructMessagesFromHistory opens with a fixed user frame when the agen
   );
 });
 
-test("transcript replay can start at recorded assistant work without a synthetic user", () => {
-  const messages = reconstructMessagesFromHistory([entry("AgentMessage", "Already worked")], {
-    requireUserStart: false,
-  });
-  assert.deepEqual(
-    messages.map((message) => message.role),
-    ["assistant"],
-  );
-});
-
 test("reconstructMessagesFromHistory coalesces consecutive assistant text entries to keep alternation", () => {
   const history: Item[] = [
     item({ kind: "UserMessage", text: "hi" }, 1),

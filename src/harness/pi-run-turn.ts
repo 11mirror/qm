@@ -18,7 +18,7 @@ import { NonRetryableTurnError, ProviderTurnError } from "../core/turn-error.ts"
 import { asError, swallow, swallowAs } from "../util/errors.ts";
 import { defaultInteractiveThinkingLevel, modelHasPrices } from "../model/pi-models.ts";
 import { type HarnessTurnInput, type HarnessTurnResult } from "./harness.ts";
-import { dayMarkerPrefix, userPromptText } from "./replay.ts";
+import { dayMarker, userPromptText } from "./replay.ts";
 import { estimateHistoryTokens } from "./context-compaction.ts";
 import { createStepRecorder, recordingTools, type StepRecorder } from "./pi-step-recorder.ts";
 import { countTokens } from "../util/tokens.ts";
@@ -108,6 +108,7 @@ async function openPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInput): Pr
     sessionId: turn.session.id,
     systemPrompt: turn.systemPrompt,
     history: turn.history,
+    timeZone: turn.timezone,
     priorTurns: turn.priorTurns,
     providerKeys: async () => turn.providerKeys ?? (await access.providerKeys()),
     modelGateway: turnModelGateway,
@@ -181,7 +182,7 @@ async function preparePiPrompt({
       });
   const modelPrompt =
     (userEntry
-      ? dayMarkerPrefix(
+      ? dayMarker(turn.timezone)(
           turn.history.findLast((e) => isUserMessage(e) && e.seq < userEntry.seq),
           userEntry,
         )
