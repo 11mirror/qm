@@ -1,3 +1,4 @@
+import { cachedArtifactData } from "../files/artifact-data-cache.ts";
 import { addAbortSignal } from "node:stream";
 import { createHash } from "node:crypto";
 import { Worker } from "node:worker_threads";
@@ -69,7 +70,14 @@ export async function loadDocumentInputs(
       if (!meta.artifactId || !isDocumentAttachment(meta) || seen.has(meta.artifactId)) continue;
       seen.add(meta.artifactId);
       const artifact = await files.get(meta.artifactId);
-      if (!artifact || !(await authorize(artifact)) || !artifact.sha256 || !isDocumentAttachment(artifact)) continue;
+      if (
+        !artifact ||
+        !artifact.enabled ||
+        !(await authorize(artifact)) ||
+        !artifact.sha256 ||
+        !isDocumentAttachment(artifact)
+      )
+        continue;
       if (loadedContent.has(JSON.stringify([artifact.sha256, artifact.name, artifact.mimetype]))) continue;
       candidates.push({ meta, artifact });
     } catch (error) {
@@ -95,29 +103,41 @@ export async function loadDocumentInputs(
         notices.push(documentStub({ name: artifact.name, artifactId: artifact.id }));
         continue;
       }
-      const opened = await files.open(meta.artifactId!);
-      if (!opened) {
-        notices.push(`${artifact.name}: document content is unavailable.`);
-        continue;
-      }
-      if (!opened.artifact.enabled || !(await authorize(opened.artifact))) {
-        opened.stream.destroy();
-        notices.push(`${artifact.name}: document changed while being loaded; content withheld.`);
-        continue;
-      }
-      const stream = signal ? addAbortSignal(signal, opened.stream) : opened.stream;
-      const bytes = await collectBytes(stream, { maxBytes: Math.min(remaining, artifact.sizeBytes) });
-      if (bytes.sha256 !== artifact.sha256 || bytes.sizeBytes !== artifact.sizeBytes) {
-        notices.push(`${artifact.name}: document failed integrity verification; content withheld.`);
-        continue;
-      }
-      remaining -= bytes.sizeBytes;
+      const dataBase64 = await cachedArtifactData("document", artifact, async () => {
+        const opened = await files.open(artifact.id);
+        if (!opened) {
+          notices.push(`${artifact.name}: document content is unavailable.`);
+          return undefined;
+        }
+        if (
+          opened.artifact.sha256 !== artifact.sha256 ||
+          opened.artifact.sizeBytes !== artifact.sizeBytes ||
+          opened.sizeBytes !== artifact.sizeBytes ||
+          opened.artifact.mimetype !== artifact.mimetype ||
+          opened.artifact.ownerScopeId !== artifact.ownerScopeId ||
+          !opened.artifact.enabled ||
+          !(await authorize(opened.artifact))
+        ) {
+          opened.stream.destroy();
+          notices.push(`${artifact.name}: document changed while being loaded; content withheld.`);
+          return undefined;
+        }
+        const stream = signal ? addAbortSignal(signal, opened.stream) : opened.stream;
+        const bytes = await collectBytes(stream, { maxBytes: Math.min(remaining, artifact.sizeBytes) });
+        if (bytes.sha256 !== artifact.sha256 || bytes.sizeBytes !== artifact.sizeBytes) {
+          notices.push(`${artifact.name}: document failed integrity verification; content withheld.`);
+          return undefined;
+        }
+        return bytes.data.toString("base64");
+      });
+      if (dataBase64 === undefined) continue;
+      remaining -= artifact.sizeBytes;
       usedTokens += tokens;
       loadedContent.add(contentKey);
       documents.unshift({
         name: artifact.name,
         mimeType: artifact.mimetype,
-        dataBase64: bytes.data.toString("base64"),
+        dataBase64,
         artifactId: artifact.id,
       });
     } catch (error) {

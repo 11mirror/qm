@@ -1,4 +1,4 @@
-import { LRUCache } from "lru-cache";
+import { cachedArtifactData } from "../files/artifact-data-cache.ts";
 import type { FileArtifact, FileArtifactStore } from "../files/file-artifact-store.ts";
 import { isVisionAttachment, MAX_VISION_IMAGE_BYTES } from "../core/attachments.ts";
 import { MAX_LLM_REQUEST_BYTES } from "../core/document-kinds.ts";
@@ -15,11 +15,6 @@ export const ELIDED_IMAGE_TEXT =
 type LoadedImage = { data: string; mimeType: string };
 export type ReplayImageLoader = (ref: Required<ReplayImageRef>) => Promise<LoadedImage | "over-budget" | null>;
 
-const visionBytes = new LRUCache<string, LoadedImage>({
-  maxSize: 64_000_000,
-  sizeCalculation: (image) => image.data.length,
-});
-
 export function artifactImageLoader(
   files: FileArtifactStore,
   authorize: (artifact: FileArtifact) => boolean | Promise<boolean>,
@@ -28,28 +23,38 @@ export function artifactImageLoader(
     const artifact = await files.get(ref.artifactId);
     if (
       !artifact ||
+      !artifact.enabled ||
       !(await authorize(artifact)) ||
       !isVisionAttachment(artifact) ||
       artifact.sizeBytes <= 0 ||
       !artifact.sha256
     )
       return null;
-    const key = `${artifact.id}:${artifact.sha256}`;
-    const cached = visionBytes.get(key);
-    if (cached !== undefined) return cached;
-    const opened = await files.open(ref.artifactId);
-    if (!opened) return null;
-    if (opened.sizeBytes !== artifact.sizeBytes || opened.artifact.sha256 !== artifact.sha256) {
-      opened.stream.destroy();
-      return null;
-    }
-    const bytes = await collectBytes(opened.stream, { maxBytes: artifact.sizeBytes });
-    if (bytes.sha256 !== artifact.sha256) return null;
-    const scaled = await downscaleVisionImage(bytes.data, artifact.mimetype);
-    if (scaled.bytes.length > MAX_VISION_IMAGE_BYTES) return "over-budget";
-    const image = { data: Buffer.from(scaled.bytes).toString("base64"), mimeType: scaled.mimeType };
-    visionBytes.set(key, image);
-    return image;
+    let overBudget = false;
+    const image = await cachedArtifactData("vision", artifact, async () => {
+      const opened = await files.open(ref.artifactId);
+      if (!opened) return undefined;
+      if (
+        opened.sizeBytes !== artifact.sizeBytes ||
+        opened.artifact.sha256 !== artifact.sha256 ||
+        opened.artifact.mimetype !== artifact.mimetype ||
+        opened.artifact.ownerScopeId !== artifact.ownerScopeId ||
+        !opened.artifact.enabled ||
+        !(await authorize(opened.artifact))
+      ) {
+        opened.stream.destroy();
+        return undefined;
+      }
+      const bytes = await collectBytes(opened.stream, { maxBytes: artifact.sizeBytes });
+      if (bytes.sha256 !== artifact.sha256 || bytes.sizeBytes !== artifact.sizeBytes) return undefined;
+      const scaled = await downscaleVisionImage(bytes.data, artifact.mimetype);
+      if (scaled.bytes.length > MAX_VISION_IMAGE_BYTES) {
+        overBudget = true;
+        return undefined;
+      }
+      return { data: Buffer.from(scaled.bytes).toString("base64"), mimeType: scaled.mimeType };
+    });
+    return image ?? (overBudget ? "over-budget" : null);
   };
 }
 

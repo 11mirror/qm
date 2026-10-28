@@ -1,3 +1,4 @@
+import { tenantFor, withTenant } from "../../src/tenant.ts";
 import { countTokens } from "../../src/util/tokens.ts";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -169,9 +170,10 @@ test("request byte budgets replace all native document wire formats with explici
   }
 });
 
+let stores = 0;
 function storeFor(data = Buffer.from("QUARTZ-731")) {
   const artifact = {
-    id: "doc1",
+    id: `doc${++stores}`,
     name: "sample.txt",
     mimetype: "text/plain",
     sizeBytes: data.length,
@@ -513,4 +515,82 @@ test("text documents split the token budget fairly, so one large file does not s
   );
   assert.deepEqual(loaded.notices, []);
   assert.equal(loaded.tokens, 30_000);
+});
+
+test("requests clearly under the byte budget are sent without serializing them", (t) => {
+  const payload = {
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "A".repeat(2_000_000) } },
+          { type: "input_file", file_data: `data:application/pdf;base64,${"B".repeat(500_000)}` },
+          { type: "text", text: "notes ".repeat(20_000) },
+        ],
+      },
+    ],
+  };
+  const stringify = t.mock.method(JSON, "stringify");
+  assert.equal(trimPayloadToByteBudget(payload, 3_400_000), payload);
+  assert.equal(stringify.mock.callCount(), 0);
+});
+
+test("escape-heavy text near the byte budget still sheds inline images", () => {
+  const payload = {
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "\u0001".repeat(10_000) },
+          { type: "toolCall", id: "call", name: "upload", arguments: { file_data: "\u0001".repeat(500_000) } },
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "A".repeat(200_000) } },
+        ],
+      },
+    ],
+  };
+  const trimmed = JSON.stringify(trimPayloadToByteBudget(payload, 1_000_000));
+  assert.doesNotMatch(trimmed, /AAAA/);
+  assert.match(trimmed, /image removed/);
+  assert.match(trimmed, /"upload"/);
+});
+
+test("empty documents restore as empty content on every turn", async () => {
+  const { store, meta } = storeFor(Buffer.alloc(0));
+  for (let turn = 0; turn < 2; turn++) {
+    const result = await loadDocumentInputs(store, [meta], () => true);
+    assert.deepEqual(
+      result.documents.map((document) => document.dataBase64),
+      [""],
+    );
+    assert.deepEqual(result.notices, []);
+  }
+});
+
+test("later turns reuse verified document bytes but still check current access", async () => {
+  const { store, meta, artifact, opens } = storeFor(Buffer.from("SAPPHIRE-204"));
+  const first = await loadDocumentInputs(store, [meta], () => true);
+  const second = await loadDocumentInputs(store, [meta], () => true);
+  assert.equal(opens(), 1);
+  assert.deepEqual(second, first);
+  assert.equal(Buffer.from(second.documents[0]!.dataBase64, "base64").toString(), "SAPPHIRE-204");
+  assert.deepEqual((await loadDocumentInputs(store, [meta], () => false)).documents, []);
+  store.get = async () => null;
+  assert.deepEqual((await loadDocumentInputs(store, [meta], () => true)).documents, []);
+  store.get = async () => ({ ...artifact, name: "renamed.txt" });
+  const renamed = await loadDocumentInputs(store, [meta], () => true);
+  assert.equal(renamed.documents[0]!.name, "renamed.txt");
+  assert.equal(opens(), 1);
+  store.get = async () => ({ ...artifact, sha256: "replaced" });
+  assert.deepEqual((await loadDocumentInputs(store, [meta], () => true)).documents, []);
+  assert.equal(opens(), 2);
+});
+
+test("verified document bytes are isolated by tenant even for identical artifact identities", async () => {
+  const { store, meta, opens } = storeFor();
+  const first = tenantFor("a", "tenant-a");
+  const second = tenantFor("b", "tenant-b");
+  await withTenant(first, () => loadDocumentInputs(store, [meta], () => true));
+  await withTenant(second, () => loadDocumentInputs(store, [meta], () => true));
+  await withTenant(first, () => loadDocumentInputs(store, [meta], () => true));
+  assert.equal(opens(), 2);
 });
