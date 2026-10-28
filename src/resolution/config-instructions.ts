@@ -1,7 +1,5 @@
-import { isDeepStrictEqual } from "node:util";
 import type { ScopeId } from "../types.ts";
 import type { createKeyedQueue } from "../util/async.ts";
-import { withCleanup } from "../util/errors.ts";
 import type { TypedTable } from "../persistence/typed-table.ts";
 import type { PersistedInstructions, PersistedInstructionsRevision, ScopedConfigStore } from "./config-store.ts";
 
@@ -53,7 +51,6 @@ type InstructionsApi = Pick<
   | "instructionsVersion"
   | "instructionsHistory"
   | "captureInstructionsSnapshot"
-  | "restoreInstructionsSnapshot"
   | "restoreInstructionsCacheSnapshot"
 >;
 
@@ -119,21 +116,6 @@ export function createInstructions(
     instructionsVersion: (id) => cache.get(id)?.version ?? 0,
     instructionsHistory: (id) => history.get(id) ?? [],
     captureInstructionsSnapshot: (id) => queue(`instructions:${id}`, () => rows.get(id)),
-    restoreInstructionsSnapshot: (id, snapshot) =>
-      queue(`instructions:${id}`, async () => {
-        let restored: Snapshot = null;
-        await withCleanup(
-          async () => {
-            if (snapshot) await rows.put(id, snapshot);
-            else await rows.delete(id);
-          },
-          async () => {
-            restored = await rows.get(id);
-            load(id, restored);
-          },
-        );
-        return isDeepStrictEqual(restored, snapshot);
-      }),
     restoreInstructionsCacheSnapshot: (id, snapshot) => load(id, snapshot ? structuredClone(snapshot) : null),
   };
   return {

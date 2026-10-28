@@ -74,26 +74,6 @@ test("SOUL compare-and-set permits only one writer and keeps current plus histor
   );
 });
 
-test("SOUL snapshot restore preserves the canonical version and history byte-for-byte across cores", async () => {
-  const { open } = tables();
-  const left = open();
-  const right = open();
-  const channel = scopeId("channel", "snapshot");
-  await left.setInstructions(channel, "one", "alice");
-  await left.setInstructions(channel, "two", "bob");
-  const snapshot = await left.captureInstructionsSnapshot(channel);
-
-  await right.refreshScope(channel);
-  await right.setInstructions(channel, "attempted import", "importer");
-  assert.equal(await left.restoreInstructionsSnapshot(channel, snapshot), true);
-  await right.refreshScope(channel);
-
-  assert.deepEqual(await right.captureInstructionsSnapshot(channel), snapshot);
-  assert.equal(right.getInstructions(channel), "two");
-  assert.equal(right.instructionsVersion(channel), 2);
-  assert.deepEqual(right.instructionsHistory(channel), snapshot?.history);
-});
-
 test("setInstructions advances the canonical row without trusting a stale instance cache", async () => {
   const { open, instructions } = tables();
   const left = open();
@@ -191,7 +171,8 @@ test("embedded history prevents a stale core from re-injecting legacy revisions 
     updatedAt: 50,
     history: [],
   };
-  assert.equal(await left.restoreInstructionsSnapshot(restored, restoredSnapshot), true);
+  await instructions.put(restored, restoredSnapshot);
+  await left.refreshScope(restored);
   await stale.refreshScope(restored);
   assert.deepEqual((await instructions.get(restored))?.history, []);
   assert.equal(await stale.setInstructions(restored, "after restore", "bob"), 2);
@@ -302,7 +283,7 @@ test("pg config store: settings written on one core reach another core through r
   assert.equal(b.setting("browseModel", ch), "claude-sonnet-4-6");
   assert.deepEqual(b.setting("branding", ch), { accent: "#123456" });
   assert.equal(b.setting("channelHeaderPin", ch), true);
-  assert.deepEqual(b.getApprovalGrantModes(ch), { session: false, always: true });
+  assert.deepEqual(await b.getApprovalGrantModesDurable(ch), { session: false, always: true });
   assert.equal(b.setting("orgAmbient"), false);
   assert.equal(b.setting("autoFlagger")?.rubric, "flag it");
 

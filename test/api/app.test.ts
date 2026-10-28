@@ -8,7 +8,7 @@ import { createCronStore } from "../../src/cron/cron-store.ts";
 import { createWebhookStore } from "../../src/webhooks/webhook-store.ts";
 import { createAclStore } from "../../src/acl/acl-store.ts";
 import { createSkillStore } from "../../src/skills/skill-store.ts";
-import type { PersistedInstructions, ScopedConfigStore } from "../../src/resolution/config-store.ts";
+import type { ScopedConfigStore } from "../../src/resolution/config-store.ts";
 import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import type { AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import type { Deployment } from "../../src/deploy/deploy-store.ts";
@@ -290,16 +290,9 @@ test("SOUL: the HTTP route reports a write to someone else's personal SOUL as a 
 
 test("SOUL: failed persistence keeps the pre-write cache", async () => {
   const databaseUrl = testDatabaseUrl();
-  const prior: PersistedInstructions = {
-    scopeId: privScope,
-    content: "durable prior",
-    version: 7,
-    updatedAt: 70,
-    updatedBy: OWNER,
-    history: [{ scopeId: privScope, content: "durable prior", version: 7, updatedAt: 70, updatedBy: OWNER }],
-  };
   const config = testConfigStore({ databaseUrl });
-  await config.restoreInstructionsSnapshot(privScope, prior);
+  const priorVersion = await config.setInstructions(privScope, "durable prior", OWNER);
+  const priorHistory = config.instructionsHistory(privScope);
   await failTableWrites(databaseUrl, "soul_configs");
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
   const out: { status?: number } = {};
@@ -319,9 +312,9 @@ test("SOUL: failed persistence keeps the pre-write cache", async () => {
   } as unknown as ApiCtx);
 
   assert.equal(out.status, 500);
-  assert.equal(config.getInstructions(privScope), prior.content);
-  assert.equal(config.instructionsVersion(privScope), prior.version);
-  assert.deepEqual(config.instructionsHistory(privScope), prior.history);
+  assert.equal(config.getInstructions(privScope), "durable prior");
+  assert.equal(config.instructionsVersion(privScope), priorVersion);
+  assert.deepEqual(config.instructionsHistory(privScope), priorHistory);
 });
 
 test("crons: owner and a private-channel member manage; a public-channel member and a non-member do not", async () => {

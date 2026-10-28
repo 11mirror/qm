@@ -108,9 +108,7 @@ export interface ScopedConfigStore {
   instructionsVersion(id: ScopeId): number;
   instructionsHistory(id: ScopeId): PersistedInstructionsRevision[];
   captureInstructionsSnapshot(id: ScopeId): Promise<InstructionsSnapshot>;
-  restoreInstructionsSnapshot(id: ScopeId, snapshot: InstructionsSnapshot): Promise<boolean>;
   restoreInstructionsCacheSnapshot(id: ScopeId, snapshot: InstructionsSnapshot): void;
-  getApprovalGrantModes(id: ScopeId): ApprovalGrantModes;
   getApprovalGrantModesDurable(id: ScopeId): Promise<ApprovalGrantModes>;
   setApprovalGrantModes(id: ScopeId, modes: ApprovalGrantModes): Promise<void>;
   onChannelHeaderPinChanged(listener: (id: ScopeId) => void): void;
@@ -357,11 +355,6 @@ function settingsApi(org: ScopeId, settings: ReturnType<typeof createScopeSettin
       const { normalize } = SCOPE_SETTINGS[name];
       await access(name).set(id, value !== null && normalize ? normalize(value as never) : value);
       if (name === "channelHeaderPin") headerPin.note(id);
-    },
-    getApprovalGrantModes(id: ScopeId) {
-      const orgModes = settings.approvalGrantModes.get(org) ?? DEFAULT_APPROVAL_GRANT_MODES;
-      if (id === org) return { ...orgModes };
-      return composeApprovalGrantModes(orgModes, settings.approvalGrantModes.get(id));
     },
     async getApprovalGrantModesDurable(id: ScopeId) {
       const orgModes = (await settings.approvalGrantModes.durable(org)) ?? DEFAULT_APPROVAL_GRANT_MODES;
