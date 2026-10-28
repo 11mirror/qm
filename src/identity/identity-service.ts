@@ -177,12 +177,12 @@ export function createIdentityService(
       return state().externals.get(personKey(principalId));
     },
     async putExternalMember(m: ExternalMember): Promise<void> {
-      state().externals.set(personKey(m.email), m);
       await members.put(foldPrincipalId(m.email), m);
+      state().externals.set(personKey(m.email), m);
     },
     async removeExternalMember(principalId: string): Promise<void> {
-      state().externals.delete(personKey(principalId));
       await db.q(`DELETE FROM external_members WHERE id = ANY($1::text[])`, [storeKeys(principalId)]);
+      state().externals.delete(personKey(principalId));
     },
     hydrate(): Promise<void> {
       const s = state();

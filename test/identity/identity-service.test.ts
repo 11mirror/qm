@@ -2,7 +2,7 @@ import "../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { createIdentityService } from "../../src/identity/identity-service.ts";
 import type { ExternalMember } from "../../src/identity/external-members.ts";
-import { testDatabaseUrl } from "../support/test-database.ts";
+import { failTableWrites, testDatabaseUrl } from "../support/test-database.ts";
 import { mock, test } from "node:test";
 import * as identityModule from "../../src/identity/identity-service.ts";
 import * as configModule from "../../src/resolution/config-store.ts";
@@ -212,4 +212,27 @@ test("a deactivation that fails to persist leaves the principal active so a retr
   await assert.rejects(() => svc.deactivate("U-flaky"));
   assert.equal(svc.classify("U-flaky").type, "internal");
   assert.equal(svc.deactivationSource("U-flaky"), undefined);
+});
+
+test("a failed external member write leaves the cached membership unchanged", async () => {
+  const backing = testDatabaseUrl();
+  const svc = createIdentityService(backing);
+  const now = Date.now();
+  const member: ExternalMember = {
+    email: "lee@partner.example",
+    role: "member",
+    expiresAt: now + 60_000,
+    invitedBy: "admin-alice",
+    createdAt: now,
+    updatedAt: now,
+  };
+  await svc.putExternalMember(member);
+  await failTableWrites(backing, "external_members");
+
+  await assert.rejects(svc.putExternalMember({ ...member, expiresAt: now - 1, updatedAt: now + 1 }));
+  assert.equal(svc.externalMember("lee@partner.example")?.expiresAt, now + 60_000);
+  assert.equal(svc.classify("lee@partner.example").type, "internal");
+
+  await assert.rejects(svc.removeExternalMember("lee@partner.example"));
+  assert.equal(svc.externalMember("lee@partner.example")?.email, "lee@partner.example");
 });
