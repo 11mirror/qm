@@ -1,3 +1,4 @@
+import { assertRowSecurityEnforced } from "../../src/tenants/registry.ts";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import pg from "pg";
@@ -132,5 +133,33 @@ test("a missing or forged task header cannot redirect a tenant-scoped claim", as
     assert.equal(task?.tenantId, b.id);
     assert.deepEqual(task?.params, { secret: "b" });
     assert.deepEqual(await pool.q("SELECT id FROM boundary_rows"), [{ id: "b" }]);
+    await spawnTask(
+      await pool.pool(),
+      "jobs",
+      "forged-header",
+      {},
+      { idempotencyKey: `${b.id}:forged`, maxAttempts: 1 },
+    );
+    await pool.q("UPDATE absurd.t_jobs SET headers = jsonb_build_object('tenantId', $1::text)", [a.id]);
+    const [forged] = await claimTasks(await pool.pool(), "jobs", "boundary-worker", 60);
+    assert.equal(forged?.tenantId, b.id);
   });
+});
+
+test("startup rejects an application role with table-wide escape privileges", async () => {
+  await assertRowSecurityEnforced(pool);
+  const migration = new URL(process.env.DATABASE_URL!);
+  migration.pathname = new URL(url).pathname;
+  const admin = new pg.Client({ connectionString: migration.toString() });
+  await admin.connect();
+  try {
+    await admin.query(`GRANT TRUNCATE ON boundary_rows TO ${role}`);
+    await assert.rejects(assertRowSecurityEnforced(pool), /must not have TRUNCATE or TRIGGER/);
+    await admin.query(`REVOKE TRUNCATE ON boundary_rows FROM ${role}`);
+    await admin.query(`GRANT TRIGGER ON boundary_rows TO ${role}`);
+    await assert.rejects(assertRowSecurityEnforced(pool), /must not have TRUNCATE or TRIGGER/);
+    await admin.query(`REVOKE TRIGGER ON boundary_rows FROM ${role}`);
+  } finally {
+    await admin.end();
+  }
 });

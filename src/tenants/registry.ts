@@ -53,10 +53,24 @@ export async function homeTenantId(pool: PgPool): Promise<string> {
 }
 
 export async function assertRowSecurityEnforced(pool: PgPool): Promise<void> {
-  const rows = await pool.q("SELECT rolsuper OR rolbypassrls AS bypass FROM pg_roles WHERE rolname = current_user");
+  const rows = await pool.q(`SELECT rolsuper OR rolbypassrls AS bypass,
+    EXISTS (SELECT 1 FROM pg_database WHERE datname = current_database() AND pg_has_role(current_user, datdba, 'MEMBER')) AS database_owner,
+    EXISTS (SELECT 1 FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid
+      WHERE c.relkind = 'r' AND a.attname = 'tenant_id' AND NOT a.attisdropped
+        AND pg_has_role(current_user, c.relowner, 'MEMBER')) AS table_owner,
+    EXISTS (SELECT 1 FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid
+      WHERE c.relkind = 'r' AND a.attname = 'tenant_id' AND NOT a.attisdropped
+        AND (has_table_privilege(current_user, c.oid, 'TRUNCATE') OR has_table_privilege(current_user, c.oid, 'TRIGGER'))) AS unsafe_privileges
+    FROM pg_roles WHERE rolname = current_user`);
   if (rows[0]?.bypass === true) {
     throw new Error(
       "multitenant: the database login is a superuser or has BYPASSRLS, so row-level security would not separate tenants",
     );
+  }
+  if (rows[0]?.database_owner === true || rows[0]?.table_owner === true) {
+    throw new Error("multitenant: the database login must not own the database or tenant-private tables");
+  }
+  if (rows[0]?.unsafe_privileges === true) {
+    throw new Error("multitenant: the database login must not have TRUNCATE or TRIGGER on tenant-private tables");
   }
 }

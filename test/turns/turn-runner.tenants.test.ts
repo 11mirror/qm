@@ -221,13 +221,26 @@ test(
     const jobs = createJobWorker(appUrl);
     const fired: Array<{ job: string; tenant: string | undefined }> = [];
     jobs.handle("probe", async (params) => {
+      assert.deepEqual(await rls.q("SELECT params->>'name' AS name FROM absurd.t_jobs WHERE task_name = 'probe'"), [
+        { name: String((params as { name: string }).name) },
+      ]);
       fired.push({ job: String((params as { name: string }).name), tenant: tenant().id });
       return "done";
     });
     const visits: Array<string | undefined> = [];
     jobs.every("tenant-visits", 60_000, () => visits.push(tenant().id), { due: "true" });
     const sharedVisits: Array<string | undefined> = [];
-    jobs.every("shared-visits", 60_000, () => sharedVisits.push(scopedTenant()?.id), { shared: true });
+    jobs.every(
+      "shared-visits",
+      60_000,
+      async () => {
+        assert.ok(scopedTenant());
+        const visible = await rls.q("SELECT tenant_id::text AS id FROM absurd.t_jobs WHERE task_name = 'probe'");
+        assert.deepEqual(visible, [{ id: tenant().id }]);
+        sharedVisits.push(scopedTenant()?.id);
+      },
+      { shared: true },
+    );
     await withTenant(acme, () => jobs.spawn("probe", { name: "acme" }, "probe:1"));
     await withTenant(beta, () => jobs.spawn("probe", { name: "beta" }, "probe:1"));
     await jobs.start();

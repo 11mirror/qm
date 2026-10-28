@@ -31,10 +31,13 @@ GRANT CONNECT ON DATABASE qm TO qm_app;
 GRANT USAGE ON SCHEMA public TO qm_app;
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM qm_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO qm_app;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM qm_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO qm_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE qm_migrator GRANT USAGE ON SCHEMAS TO qm_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE qm_migrator REVOKE ALL ON TABLES FROM qm_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE qm_migrator GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO qm_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE qm_migrator GRANT USAGE, SELECT ON SEQUENCES TO qm_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE qm_migrator IN SCHEMA public REVOKE ALL ON TABLES FROM qm_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE qm_migrator IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO qm_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE qm_migrator IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO qm_app;
 ```
@@ -45,7 +48,9 @@ If the `absurd` schema already exists, also run:
 GRANT USAGE ON SCHEMA absurd TO qm_app;
 REVOKE ALL ON ALL TABLES IN SCHEMA absurd FROM qm_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA absurd TO qm_app;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA absurd FROM qm_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA absurd TO qm_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE qm_migrator IN SCHEMA absurd REVOKE ALL ON TABLES FROM qm_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE qm_migrator IN SCHEMA absurd GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO qm_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE qm_migrator IN SCHEMA absurd GRANT USAGE, SELECT ON SEQUENCES TO qm_app;
 ```
@@ -62,7 +67,9 @@ policies installed by previous versions. It also adds RLS to Absurd queue tables
 Existing task ownership comes from task headers; related runs, checkpoints, and
 waits inherit that ownership. Events are attributed through waits and turn IDs.
 Historical home tasks without headers are assigned explicitly during migration.
-Do not import cross-tenant queue data without ownership metadata.
+Do not import cross-tenant queue data without ownership metadata. Migration fails
+rather than assigning orphaned queue rows or unidentifiable events in a mixed-tenant
+queue to the home tenant; repair that queue state before retrying.
 
 `qm_queue_tenants(queue)` is a privileged application-callable queue
 routing function. Its owner is the migration role, its search path is fixed, and

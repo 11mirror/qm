@@ -205,7 +205,7 @@ async function tenantizeQueues(client: import("pg").PoolClient): Promise<void> {
     await client.query(
       `UPDATE absurd.${relname} SET tenant_id = COALESCE((headers->>'tenantId')::uuid, qm_tenant_id())`,
     );
-  for (const { relname } of rows.filter(({ relname }) => /^[rcw]_/.test(relname)))
+  for (const { relname } of rows.filter(({ relname }) => /^[rcwi]_/.test(relname)))
     await client.query(`UPDATE absurd.${relname} q SET tenant_id = t.tenant_id
       FROM absurd.t_${relname.slice(2)} t WHERE t.task_id = q.task_id`);
   for (const { relname } of rows.filter(({ relname }) => relname.startsWith("e_")))
@@ -214,6 +214,21 @@ async function tenantizeQueues(client: import("pg").PoolClient): Promise<void> {
   for (const { relname } of rows.filter(({ relname }) => relname.startsWith("e_")))
     await client.query(`UPDATE absurd.${relname} e SET tenant_id = t.tenant_id
       FROM absurd.t_${relname.slice(2)} t WHERE t.params->>'turnId' = e.payload->>'turnId'`);
+  for (const { relname } of rows.filter(({ relname }) => /^[rcwi]_/.test(relname))) {
+    const unknown = await client.query(`SELECT 1 FROM absurd.${relname} q
+      WHERE NOT EXISTS (SELECT 1 FROM absurd.t_${relname.slice(2)} t WHERE t.task_id = q.task_id) LIMIT 1`);
+    if (unknown.rowCount)
+      throw new Error(`Queue ownership is missing in ${relname}; repair queue state before migrating`);
+  }
+  for (const { relname } of rows.filter(({ relname }) => relname.startsWith("e_"))) {
+    const queue = relname.slice(2);
+    const unknown = await client.query(`SELECT 1 FROM absurd.${relname} e
+      WHERE EXISTS (SELECT 1 FROM absurd.t_${queue} t WHERE t.tenant_id <> qm_tenant_id())
+        AND NOT EXISTS (SELECT 1 FROM absurd.w_${queue} w WHERE w.event_name = e.event_name)
+        AND NOT EXISTS (SELECT 1 FROM absurd.t_${queue} t WHERE t.params->>'turnId' = e.payload->>'turnId') LIMIT 1`);
+    if (unknown.rowCount)
+      throw new Error(`Queue event ownership is missing in ${relname}; repair queue state before migrating`);
+  }
   await client.query(`CREATE OR REPLACE FUNCTION qm_queue_tenants(queue text) RETURNS TABLE(id uuid)
     LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $queue_tenants$
     BEGIN

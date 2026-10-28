@@ -24,7 +24,7 @@ async function provision(): Promise<{ url: string; drop: () => Promise<void> }> 
   const db = `qm_tenancy_${suffix}`;
   const password = randomBytes(12).toString("hex");
   await admin.query(`CREATE ROLE ${role} LOGIN PASSWORD '${password}'`);
-  await admin.query(`CREATE DATABASE ${db} OWNER ${role}`);
+  await admin.query(`CREATE DATABASE ${db}`);
   await admin.end();
   const parsed = new globalThis.URL(URL);
   parsed.username = role;

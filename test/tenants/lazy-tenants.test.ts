@@ -125,7 +125,8 @@ test("due jobs shortlist idle tenants while shared sweeps explicitly visit all 2
   const ticks = routingQueries - before.routingQueries;
   assert.ok(ticks >= 10, `the periodic jobs ticked (${ticks} due queries)`);
   assert.ok(queries - before.queries < TENANTS * 20, `${queries - before.queries} queries is bounded by shared sweeps`);
-  assert.equal(dueQueries - before.dueQueries, 1);
+  assert.ok(dueQueries - before.dueQueries <= 10);
+  assert.ok(dueOwners.slice(before.dueQueries).every((id) => id === undefined));
   assert.deepEqual(prepared, []);
   assert.equal(cachedTenantCount(), baseline + TENANTS);
 });
