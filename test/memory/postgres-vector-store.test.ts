@@ -116,6 +116,7 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
     { modelCredentialFetch: redirectOpenAI(providerUrl) },
   );
   databaseFixture.stop = () => built.runtime.stop();
+  await built.jobs.stop();
   await migrateRegisteredPgSchemas(databaseUrl);
   await built.memory.capture("personal:unconfigured", ["a fact before model configuration"], Date.now());
   await built.memory.recall("personal:unconfigured", { query: "no model configured" });
@@ -227,6 +228,7 @@ pgTest("HTTP Open DM combines room and current memory, then blocks reads after m
     { modelCredentialFetch: redirectOpenAI(providerUrl) },
   );
   databaseFixture.stop = () => built.runtime.stop();
+  await built.jobs.stop();
   await built.config.setEmbeddingModel(EMBEDDING_MODEL);
   const personal = "personal:U1",
     room = "channel:C1",
