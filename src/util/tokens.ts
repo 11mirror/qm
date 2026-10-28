@@ -4,38 +4,16 @@ import { headSlice, tailSlice } from "./text.ts";
 let tokenizer: ReturnType<typeof getTokenizer> | undefined;
 
 const CHUNK_CHARS = 4_000;
-
-function chunkTokens(chunk: string): number {
-  tokenizer ??= getTokenizer();
-  return tokenizer.encode(chunk.normalize("NFKC"), "all").length;
-}
+const SAMPLE_CAP_CHARS = 64_000;
 
 export function countTokens(text: string): number {
+  tokenizer ??= getTokenizer();
+  const sample = text.length > SAMPLE_CAP_CHARS ? text.slice(0, SAMPLE_CAP_CHARS) : text;
   let n = 0;
-  for (let i = 0; i < text.length; i += CHUNK_CHARS) n += chunkTokens(text.slice(i, i + CHUNK_CHARS));
-  return n;
-}
-
-export function headWithinTokens(text: string, maxTokens: number): { head: string; tokens: number } {
-  let used = 0;
-  for (let i = 0; i < text.length; i += CHUNK_CHARS) {
-    const chunk = text.slice(i, i + CHUNK_CHARS);
-    const n = chunkTokens(chunk);
-    if (used + n <= maxTokens) {
-      used += n;
-      continue;
-    }
-    let lo = 0;
-    let hi = chunk.length - 1;
-    while (lo < hi) {
-      const mid = Math.ceil((lo + hi) / 2);
-      if (used + chunkTokens(headSlice(chunk, mid)) <= maxTokens) lo = mid;
-      else hi = mid - 1;
-    }
-    const head = headSlice(text, i + lo);
-    return { head, tokens: countTokens(head) };
+  for (let i = 0; i < sample.length; i += CHUNK_CHARS) {
+    n += tokenizer.encode(sample.slice(i, i + CHUNK_CHARS).normalize("NFKC"), "all").length;
   }
-  return { head: text, tokens: used };
+  return sample.length === text.length ? n : Math.ceil((n * text.length) / sample.length);
 }
 
 function cutMiddleToChars(text: string, keepChars: number, notice: (cutChars: number) => string): string {

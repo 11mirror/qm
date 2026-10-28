@@ -6,7 +6,8 @@ import { isUserMessage, type Item } from "../sessions/items.ts";
 import type { FileArtifact, FileArtifactStore } from "../files/file-artifact-store.ts";
 import { forModelContext } from "../harness/context-compaction.ts";
 import { collectBytes } from "../util/bytes.ts";
-import { headWithinTokens } from "../util/tokens.ts";
+import { headSlice } from "../util/text.ts";
+import { countTokens } from "../util/tokens.ts";
 import { errMessage } from "../util/errors.ts";
 import {
   MAX_DOCUMENT_BYTES,
@@ -202,11 +203,18 @@ export interface DocumentTextBudget {
 }
 
 export function fitDocumentText(text: string, budget: DocumentTextBudget): string {
-  const { head, tokens } = headWithinTokens(text, budget.remainingTokens);
-  if (head.length === text.length) {
-    budget.remainingTokens -= tokens;
+  const whole = countTokens(text);
+  if (whole <= budget.remainingTokens) {
+    budget.remainingTokens -= whole;
     return text;
   }
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (countTokens(headSlice(text, mid)) <= budget.remainingTokens) lo = mid;
+    else hi = mid - 1;
+  }
   budget.remainingTokens = 0;
-  return `${head}\n[Document text omitted or truncated to fit the model context.]`;
+  return `${headSlice(text, lo)}\n[Document text omitted or truncated to fit the model context.]`;
 }
