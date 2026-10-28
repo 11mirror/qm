@@ -115,7 +115,6 @@ export function buildHarness(deps: HarnessInputs) {
     return selectableModelCatalog(overrides.modelCredentialFetch);
   };
   const harness = withResolvedRuntime(pi, async (input, routedBy) => {
-    await refreshModels();
     const resolve = (requested: typeof input.runtime) =>
       resolveRuntimeChoiceDurable(
         configStore,

@@ -1,6 +1,13 @@
 import { tracePhase } from "../../plugins/chassis/src/error-reporting.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import { runHook, type DecisionBackend, type DecisionHook, type DecisionResult } from "./decisions.ts";
+import {
+  classifierKey,
+  runHook,
+  type DecisionBackend,
+  type DecisionHook,
+  type DecisionResult,
+  type DecisionRule,
+} from "./decisions.ts";
 import type { DecisionStore } from "./store.ts";
 import { swallowAs } from "../util/errors.ts";
 
@@ -39,9 +46,8 @@ export interface DecisionTurn {
 }
 
 export function createDecisionHooks(store: DecisionStore | undefined, backend: DecisionBackend, audit: AuditLog) {
-  return async (hook: DecisionHook, state: string, turn: DecisionTurn) => {
-    const rules = (await store?.rules(hook)) ?? [];
-    if (!store || !rules.length) return undefined;
+  const run = async (rules: readonly DecisionRule[], hook: DecisionHook, state: string, turn: DecisionTurn) => {
+    if (!rules.length) return undefined;
     const signal = AbortSignal.any([AbortSignal.timeout(HOOK_TIMEOUT_MS), ...(turn.cancel ? [turn.cancel] : [])]);
     const { decisive, results } = await tracePhase("turn.decision", () => runHook(rules, hook, state, backend, signal));
     for (const result of results)
@@ -60,6 +66,18 @@ export function createDecisionHooks(store: DecisionStore | undefined, backend: D
         }),
       });
     return decisive;
+  };
+  return async (hook: DecisionHook, state: string, turn: DecisionTurn) => {
+    const rules = (await store?.rules(hook)) ?? [];
+    const enforced = new Set(rules.filter((rule) => rule.mode === "enforce").map(classifierKey));
+    const awaited = (rule: DecisionRule) => enforced.has(classifierKey(rule));
+    void run(
+      rules.filter((rule) => !awaited(rule)),
+      hook,
+      state,
+      { ...turn, cancel: undefined },
+    ).catch(swallowAs("decisions: observe-only rules", undefined));
+    return run(rules.filter(awaited), hook, state, turn);
   };
 }
 

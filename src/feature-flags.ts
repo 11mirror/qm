@@ -36,6 +36,7 @@ interface FeatureFlagRecord {
 export interface FeatureFlagStore {
   list(): Promise<FeatureFlagRecord[]>;
   get(featureName: FeatureName): Promise<FeatureFlagRecord | null>;
+  enabledFor(scope: ScopeId): Promise<ReadonlySet<FeatureName>>;
   enabled(featureName: FeatureName, scope: ScopeId): Promise<boolean>;
   setEnabled(featureName: FeatureName, scope: ScopeId, on: boolean, updatedBy: string): Promise<FeatureFlagRecord>;
 }
@@ -53,8 +54,15 @@ export function createFeatureFlagStore(databaseUrl: string, opts: { now?: () => 
   const now = opts.now ?? Date.now;
   const pg = createPgPool(databaseUrl, [FEATURE_FLAGS_MIGRATION]);
   const { codec, ...table } = typedTable<FeatureFlagRecord>(pg, FEATURE_FLAGS);
+  const list = async () => (await table.all()).filter((row) => FEATURE_NAMES.includes(row.featureName));
   return {
-    list: async () => (await table.all()).filter((row) => FEATURE_NAMES.includes(row.featureName)),
+    list,
+    enabledFor: async (scope) =>
+      new Set(
+        (await list())
+          .filter((row) => row.enabledScopes.includes(tenant().orgScope) || row.enabledScopes.includes(scope))
+          .map((row) => row.featureName),
+      ),
     get: table.get,
     async enabled(featureName, scope) {
       const row = await table.get(featureName);

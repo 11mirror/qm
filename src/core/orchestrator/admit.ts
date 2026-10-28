@@ -1,3 +1,4 @@
+import type { FeatureName } from "../../feature-flags.ts";
 import { surfaceHas } from "../../surfaces/surface.ts";
 import { scopeTeamsToTurn } from "../../teams/teams.ts";
 import { externalSlackAdmitted } from "../../resolution/external-slack.ts";
@@ -33,6 +34,7 @@ export interface AdmittedTurn {
   sessionTurn: boolean;
   humanInput: boolean;
   allInternal: boolean;
+  actorFeatures: ReadonlySet<FeatureName>;
   delegationEnabled: boolean;
   authorizationOrigin: OrchestratorInput["origin"];
   liveTurn: boolean;
@@ -87,8 +89,9 @@ export async function admitTurn(
     (conversation.kind === "dm" ||
       (!!conversation.publishMembers?.length && conversation.publishMembers.every((p) => p.type === "internal")));
   const authoredDetection = input.origin.kind === "ambient" && input.origin.live === true && conversation.kind !== "dm";
-  const delegationEnabled =
-    !external && (await deps.featureFlags?.enabled("responsive_spine", `personal:${actor.id}` as ScopeId)) === true;
+  const actorFeatures =
+    (await deps.featureFlags?.enabledFor(`personal:${actor.id}` as ScopeId)) ?? new Set<FeatureName>();
+  const delegationEnabled = !external && actorFeatures.has("responsive_spine");
   const delegatedOrigin =
     !external && deps.runs
       ? await delegatedAuthorizationOrigin(input, { runs: deps.runs, sessions: deps.sessions })
@@ -130,6 +133,7 @@ export async function admitTurn(
       sessionTurn,
       humanInput,
       allInternal,
+      actorFeatures,
       delegationEnabled,
       authorizationOrigin,
       liveTurn,

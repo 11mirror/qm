@@ -8,7 +8,7 @@ import type { MemoryProvenance } from "../../memory/facts.ts";
 import { createAdminCall } from "../../tools/admin.ts";
 import { externalTools } from "./external-tools.ts";
 import { type DeliveryProvenance, type Destination, type ScopeId } from "../../types.ts";
-import { scopeId as toScopeId, personalScope } from "../../types.ts";
+import { scopeId as toScopeId } from "../../types.ts";
 import { desktopClientForTurn } from "../turn-origin.ts";
 import { resolveTurnContext } from "../../resolution/turn-context.ts";
 import { resolveReachableChannel } from "../../resolution/scope-reach.ts";
@@ -118,10 +118,7 @@ export async function buildTurnTools(ctx: TurnCtx, turn: TurnToolsInput) {
       `[orchestrator] trigger delivery has no surface tools (no outbound sender?) — reply would be lost session=${session.id}`,
     );
 
-  const canInstallCanvas =
-    deps.installSharedCanvas &&
-    liveTurn &&
-    (await deps.featureFlags?.enabled("ui_canvas", personalScope(actor.id))) === true;
+  const canInstallCanvas = deps.installSharedCanvas && liveTurn && ctx.actorFeatures.has("ui_canvas");
   const baseTools = await createTurnToolContext(ctx, turn, {
     canInstallCanvas,
     surfaceToolDeps,

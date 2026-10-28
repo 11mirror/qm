@@ -157,11 +157,12 @@ async function beginTurn(o: OrchestratorInstance, ctx: TurnCtx, turn: TurnState)
     await ctx.reconcileSessionParticipants(session.id);
     return true;
   });
-  const memoryWindow = await deps.sessions.getContextWindow(session.id);
-
-  const memoryView = await tracePhase("turn.memory_snapshot", () => frame.context.memorySnapshot(), {
-    counts: (view) => ({ "qm.facts": view.facts.length }),
-  });
+  const [memoryWindow, memoryView] = await Promise.all([
+    deps.sessions.getContextWindow(session.id),
+    tracePhase("turn.memory_snapshot", () => frame.context.memorySnapshot(), {
+      counts: (view) => ({ "qm.facts": view.facts.length }),
+    }),
+  ]);
   const captureDependencies = () => [
     ...memoryView.facts,
     ...(!memoryView.complete ||
@@ -174,7 +175,11 @@ async function beginTurn(o: OrchestratorInstance, ctx: TurnCtx, turn: TurnState)
       ? [UNTRACKED_PROVENANCE]
       : []),
   ];
-  const historyWindow = () => deps.sessions.getContextWindow(session.id);
+  let historyAppended = input.approval !== undefined;
+  const historyWindow = (refresh = false) => {
+    historyAppended ||= refresh;
+    return historyAppended ? deps.sessions.getContextWindow(session.id) : Promise.resolve(memoryWindow);
+  };
   let approvalNote = "";
   if (input.approval) {
     const decided = await consumeApprovalDecision({

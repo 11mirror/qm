@@ -56,7 +56,7 @@ interface TurnInputArgs {
   provision: ReturnType<typeof createTurnSandboxes>["provision"];
   lease: Lease;
   turnAbort: AbortController;
-  historyWindow: () => ReturnType<OrchestratorDeps["sessions"]["getContextWindow"]>;
+  historyWindow: (refresh?: boolean) => ReturnType<OrchestratorDeps["sessions"]["getContextWindow"]>;
   volatileContext: string;
   scopeAsks: KeychainAsk[];
   turnTools: Awaited<ReturnType<typeof buildTurnTools>>;
@@ -73,7 +73,11 @@ export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
   const { spine } = turn.turnTools;
   const { inbound, manifest, inboundIssues } = await stageInbound(ctx, turn);
   const importedOverheard = await importOverheard(ctx, turn);
-  const { visibleHistory, recalled, partial, resumePlan, resume } = await loadTurnHistory(ctx, turn);
+  const { visibleHistory, recalled, partial, resumePlan, resume } = await loadTurnHistory(
+    ctx,
+    turn,
+    importedOverheard.length > 0,
+  );
   const { history, documentInputs, contextRecovered, observeDocuments, ...remaining } = await loadTurnDocuments(
     ctx,
     turn,
@@ -125,13 +129,10 @@ export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
 }
 
 async function stageInbound(ctx: TurnCtx, turn: TurnInputArgs) {
-  const { deps, input, actor, scopeId } = ctx;
-  const { screenTrace, session, provision, observeSecurityData } = turn;
+  const { input, actor, scopeId } = ctx;
+  const { screenTrace, provision, observeSecurityData } = turn;
   if (input.attachments?.some((attachment) => attachment.sourceId)) {
-    input.attachments = withoutAlreadyIngested(
-      input.attachments,
-      (await deps.sessions.getContextWindow(session.id)).items,
-    );
+    input.attachments = withoutAlreadyIngested(input.attachments, (await turn.historyWindow()).items);
   }
   const { inbound, manifest, issues } = await stageAttachments(ctx, {
     attachments: input.attachments ?? [],
@@ -217,10 +218,10 @@ async function importOverheard(ctx: TurnCtx, turn: TurnInputArgs): Promise<Overh
   return importedOverheard;
 }
 
-async function loadTurnHistory(ctx: TurnCtx, turn: TurnInputArgs) {
+async function loadTurnHistory(ctx: TurnCtx, turn: TurnInputArgs, historyAppended: boolean) {
   const { deps, input, filterHistory, withManagedRosterVersion, isRetry } = ctx;
   const { historyWindow, context, memoryView, recordedTurn, lease } = turn;
-  const rawEntries = (await historyWindow()).items;
+  const rawEntries = (await historyWindow(historyAppended)).items;
   let visibleHistory = filterHistory(forModelContext(rawEntries));
   const recalled = await tracePhase("turn.memory_recall", () =>
     context.recallMemory(memoryRecallQuery(input.text, visibleHistory), memoryView.loaded),

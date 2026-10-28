@@ -1,3 +1,4 @@
+import { tenant } from "../src/tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
@@ -52,4 +53,12 @@ test("retired feature records are not offered as configurable flags", async () =
     (await store.list()).map((row) => row.featureName),
     ["inbox_loops"],
   );
+});
+
+test("enabledFor includes the tenant org and personal scopes in a single snapshot", async () => {
+  const store = createFeatureFlagStore(testDatabaseUrl());
+  await store.setEnabled("inbox_loops", tenant().orgScope, true, "admin");
+  await store.setEnabled("ui_canvas", "personal:U1", true, "admin");
+  assert.deepEqual([...(await store.enabledFor("personal:U1"))].sort(), ["inbox_loops", "ui_canvas"]);
+  assert.deepEqual([...(await store.enabledFor("personal:U2"))], ["inbox_loops"]);
 });
