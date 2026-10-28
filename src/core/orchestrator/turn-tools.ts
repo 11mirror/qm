@@ -18,7 +18,6 @@ import { supportsProcessSessions } from "../../sandbox/sandbox.ts";
 import { createBackgroundBroker } from "../../connectors/background-exec-broker.ts";
 import { createMonitorBroker, readBackgroundOutputTail } from "../../monitors/monitor-broker.ts";
 import { finishProcessCredentials } from "../../credentials/execute-files.ts";
-import type { GapWork } from "../../harness/harness.ts";
 import { forSearchView } from "../../harness/context-compaction.ts";
 import { createToolContext } from "../../tools/tool-context.ts";
 import { type CommandCredential } from "../../tools/primitives.ts";
@@ -27,7 +26,7 @@ import { principalEntitledToScope } from "../../resolution/context-filter.ts";
 import { openSessionItem, searchSessionItems } from "../../sessions/history-search.ts";
 import { defaultPublishAudience } from "../../resolution/publish-audience.ts";
 import { type ArtifactRegistration } from "../attachments.ts";
-import { errMessage, swallow, swallowAs } from "../../util/errors.ts";
+import { errMessage, swallowAs } from "../../util/errors.ts";
 import { randomUUID } from "node:crypto";
 import type { OrchestratorDeps } from "./types.ts";
 import { turnPostKeys } from "./turn-helpers.ts";
@@ -43,7 +42,6 @@ export interface TurnToolsInput {
   sandboxes: ReturnType<typeof createTurnSandboxes>;
   approvalLedger: ApprovalLedger;
   turnSandboxResources: OrchestratorDeps["sandboxResources"];
-  gapWork: { listener?: (work: GapWork) => void };
   turnAbort: AbortController;
   captureDependencies: () => MemoryProvenance[];
 }
@@ -350,7 +348,7 @@ function createTurnToolContext(
   const { strictReadOnly, reachAvailable } = ctx;
   const { commandPolicy } = resolution;
   const layerCommandRules = [...(deps.deploymentLayer?.commandRules ?? [])];
-  const { session, context, turnSandboxResources, gapWork, turnAbort, captureDependencies } = turn;
+  const { session, context, turnSandboxResources, turnAbort, captureDependencies } = turn;
   const { memoryScopeId, memoryAccess } = turn.context;
   const { sessionSyscalls, visibleSkillsForTurn } = turn.framed;
   const { connectorEnv, commandCredentials, actorIsOrgAdmin, controlClaims } = turn.catalog;
@@ -462,13 +460,6 @@ function createTurnToolContext(
     attempt: input.attempt ?? 1,
     ...(backgroundBroker ? { backgroundBroker } : {}),
     ...(monitorBroker ? { monitorBroker } : {}),
-    onGapWork: (work) => {
-      try {
-        gapWork.listener?.(work);
-      } catch (e) {
-        swallow("gap-work forward", e);
-      }
-    },
   });
 }
 

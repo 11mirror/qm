@@ -11,9 +11,8 @@ import type {
   TurnRequest,
   TurnRuntime,
 } from "../types.ts";
-import type { GapPhases, GapWork, LlmCallUsage, LlmTransportMeta } from "../sessions/session-store.ts";
+import type { LlmCallUsage, LlmTransportMeta } from "../sessions/session-store.ts";
 import type { Item, NewItem } from "../sessions/items.ts";
-export type { GapWork } from "../sessions/session-store.ts";
 import type { OverheardEntryPayload } from "./replay.ts";
 import type { GoalRecord } from "./goal.ts";
 import type { GrindMeter } from "./grind.ts";
@@ -65,9 +64,6 @@ export interface HarnessLlmRequestRecord {
   transport?: LlmTransportMeta | null;
   ttftMs?: number | null;
   durationMs?: number | null;
-  stepGapMs?: number | null;
-  toolWallMs?: number[] | null;
-  gapPhases?: GapPhases | null;
   usage?: LlmCallUsage | null;
 }
 
@@ -136,7 +132,6 @@ export interface HarnessTurnInput {
   onRuntime?(runtime: TurnRuntime): void;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
   recordLlmRequest?(rec: HarnessLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
-  onGapWork?(sink: (work: GapWork) => void): void;
   onDelta?(chunk: string): void;
   onReasoningDelta?(step: string, index: number, chunk: string): void;
   onTextBlockStart?(phase?: "commentary" | "final_answer"): void | Promise<void>;

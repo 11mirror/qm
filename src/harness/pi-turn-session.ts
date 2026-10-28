@@ -56,13 +56,9 @@ type PiResponseHook = (
   response: { status: number; headers: Record<string, string> },
   model: unknown,
 ) => void | Promise<void>;
-type PiTransformContextHook = (messages: unknown, signal?: unknown) => unknown | Promise<unknown>;
-type PiPrepareNextTurnHook = (signal?: unknown) => unknown | Promise<unknown>;
 export interface PiAgentWithPayloadHook {
   onPayload?: PiPayloadHook;
   onResponse?: PiResponseHook;
-  transformContext?: PiTransformContextHook;
-  prepareNextTurn?: PiPrepareNextTurnHook;
   afterToolCall?: (
     info: unknown,
     signal?: unknown,
@@ -279,17 +275,7 @@ export async function createTurnSession({
       calls.responded(() => gatewayAttemptHeaders(response.headers));
       if (priorResponse) await priorResponse(response, model);
     };
-    const priorTransform = agent.transformContext;
-    agent.transformContext = async (messages, signal) => {
-      calls.markTransformContext();
-      return priorTransform ? await priorTransform(messages, signal) : messages;
-    };
     agent.afterToolCall = pauseStampAfterToolCall(halt, agent.afterToolCall);
-    const priorPrepare = agent.prepareNextTurn;
-    agent.prepareNextTurn = async (signal) => {
-      calls.markPrepareNextTurn();
-      return priorPrepare ? await priorPrepare(signal) : undefined;
-    };
   }
 
   return {

@@ -2,9 +2,8 @@ import { surfaceHas } from "../../surfaces/surface.ts";
 import { UNTRACKED_PROVENANCE } from "../../memory/facts.ts";
 import { type Session, type TurnResult } from "../../types.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../../directory/directory-store.ts";
-import type { GapPhase } from "../../sessions/session-store.ts";
 import { createTranscriptSource } from "../../sessions/transcript-source.ts";
-import { errMessage, swallow, swallowAs, withCleanup } from "../../util/errors.ts";
+import { errMessage, swallowAs, withCleanup } from "../../util/errors.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 import { admitTurn } from "./admit.ts";
 import { holdTurnLease } from "./turn-lease.ts";
@@ -19,7 +18,7 @@ import { finishSystemPrompt } from "./turn-prompt.ts";
 import { buildTurnTools, firstAckPublisher } from "./turn-tools.ts";
 import { prepareTurnInput, turnFailureUserItem } from "./turn-input.ts";
 import { selectTurnRuntime } from "./turn-runtime.ts";
-import { runSegments, type GapWorkFeed, type SegmentTurn, type TurnRunState } from "./turn-segment.ts";
+import { runSegments, type SegmentTurn, type TurnRunState } from "./turn-segment.ts";
 import { consumeApprovalDecision, loadApprovalLedger, type ApprovalLedger } from "./approvals.ts";
 import { createSessionTitles } from "../session-title.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
@@ -84,7 +83,6 @@ export async function handleTurn(o: OrchestratorInstance, requested: Orchestrato
     framed: frame.framed,
     catalog,
     session,
-    emitGapWork: run.gap.emit,
   });
   const held = await holdTurnLease(ctx, session);
   if ("refused" in held) return held.refused;
@@ -266,7 +264,6 @@ async function readyTurn(
     sandboxes,
     approvalLedger: turn.approvalLedger,
     turnSandboxResources,
-    gapWork: run.gap,
     turnAbort: held.turnAbort,
     captureDependencies: begun.captureDependencies,
   });
@@ -440,21 +437,7 @@ function newTurnRunState(): TurnRunState {
     turnStart: 0,
     emittedEntries: [],
     tailOwnsReclaim: false,
-    gap: createGapWork(),
   };
-}
-
-function createGapWork(): GapWorkFeed {
-  const gap: GapWorkFeed = {
-    emit: (phase: GapPhase, start: number, end: number): void => {
-      try {
-        gap.listener?.({ phase, start, end });
-      } catch (e) {
-        swallow("gap-work emit", e);
-      }
-    },
-  };
-  return gap;
 }
 
 function sessionTitling(titles: OrchestratorInstance["titles"], ctx: TurnCtx, session: Session) {

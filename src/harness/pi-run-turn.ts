@@ -145,9 +145,6 @@ async function preparePiPrompt({
   applyTurnEffort(entry.agentSession, request.effortLevel());
 
   const telemetry = createCallTelemetry(turn, entry.agentSession, calls, request.fast, goal.current);
-  const { collectGapWork } = telemetry;
-  turn.onGapWork?.(collectGapWork);
-  state.reportGapWorkTo(collectGapWork);
   const continued = turn.continueTurn ? continuableContext(entry.agentSession.agent.state.messages) : null;
   if (continued) entry.agentSession.agent.state.messages = continued;
   else if (turn.continueTurn)
@@ -570,7 +567,6 @@ export async function runPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInpu
       state.routeEmit(turn.emit);
       await persistence.drain();
       await telemetry.drainCaptured(userEntry?.seq ?? null, effectiveModel);
-      state.reportGapWorkTo(undefined);
       toolAbort.abort();
       state.bindAbort(undefined);
       state.stopObserving();

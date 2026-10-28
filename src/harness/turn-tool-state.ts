@@ -1,4 +1,3 @@
-import type { GapWork } from "../sessions/session-store.ts";
 import type { NewItem } from "../sessions/items.ts";
 import type { ToolResultScreenInput } from "../security/security-screen.ts";
 import type { ToolContext } from "../tools/primitives.ts";
@@ -30,17 +29,8 @@ export interface TurnToolStateInit {
   abortSignal?: AbortSignal;
   observeToolResult?: (input: ToolResultScreenInput) => void;
   toolApprovalGate?: (callKey: string) => boolean;
-  onGapWork?: (work: GapWork) => void;
-  goal?: GoalRecord | null;
   saveGoal?: (goal: GoalRecord) => Promise<void>;
   governGoal?: GoalGovernor;
-  goalMeter?: GrindMeter;
-  goalRound?: number;
-  modelHasPrices?: () => boolean;
-  goalRecentWork?: () => string;
-  runtimeHandoff?: HarnessHandoff;
-  pausedOnApproval?: boolean;
-  silentRequested?: boolean;
 }
 
 export interface ToolRuntime {
@@ -55,7 +45,6 @@ export interface ToolRuntime {
   approves(callKey: string): boolean;
   approvedCall(callId: string): string | undefined;
   holdApproval(callId: string, callKey: string): () => void;
-  reportGapWork(work: GapWork): void;
   runtimeMutationPending(): boolean;
   beginRuntimeMutation(): Promise<void>;
   endRuntimeMutation(): void;
@@ -99,14 +88,13 @@ export interface TurnToolState {
   routeEmit(emit: Emit | undefined): void;
   bindAbort(signal: AbortSignal | undefined): void;
   stopObserving(): void;
-  reportGapWorkTo(sink: ((work: GapWork) => void) | undefined): void;
 }
 
-function createTurnHalt(init: TurnToolStateInit): TurnHalt {
-  let handoff = init.runtimeHandoff;
+function createTurnHalt(): TurnHalt {
+  let handoff: HarnessHandoff | undefined;
   const approvals: PendingApproval[] = [];
-  let paused = init.pausedOnApproval === true;
-  let silent = init.silentRequested === true;
+  let paused = false;
+  let silent = false;
   return {
     handoff: () => handoff,
     handOff: (next) => {
@@ -129,12 +117,12 @@ function createTurnHalt(init: TurnToolStateInit): TurnHalt {
 
 function createTurnGoal(init: TurnToolStateInit): TurnGoal {
   const { saveGoal, governGoal } = init;
-  let goal = init.goal;
+  let goal: GoalRecord | null | undefined;
   let opened = false;
-  let round = init.goalRound ?? 0;
-  let meter = init.goalMeter;
-  let hasPrices = init.modelHasPrices;
-  let recentWork = init.goalRecentWork;
+  let round = 0;
+  let meter: GrindMeter | undefined;
+  let hasPrices: (() => boolean) | undefined;
+  let recentWork: (() => string) | undefined;
   let checkedWork: (() => void) | undefined;
   return {
     current: () => goal,
@@ -175,7 +163,6 @@ export function createTurnToolState(init: TurnToolStateInit): TurnToolState {
   let emit = init.emit;
   let abortSignal = init.abortSignal;
   let observeToolResult = init.observeToolResult;
-  let onGapWork = init.onGapWork;
   const approvedCalls = new Map<string, string>();
   let mutationPending = false;
   const inFlight = new Set<Promise<unknown>>();
@@ -200,7 +187,6 @@ export function createTurnToolState(init: TurnToolStateInit): TurnToolState {
       approvedCalls.set(callId, callKey);
       return () => approvedCalls.delete(callId);
     },
-    reportGapWork: (work) => onGapWork?.(work),
     runtimeMutationPending: () => mutationPending,
     beginRuntimeMutation: async () => {
       mutationPending = true;
@@ -221,7 +207,7 @@ export function createTurnToolState(init: TurnToolStateInit): TurnToolState {
   return {
     tools,
     goal: createTurnGoal(init),
-    halt: createTurnHalt(init),
+    halt: createTurnHalt(),
     routeEmit: (next) => {
       emit = next;
     },
@@ -230,9 +216,6 @@ export function createTurnToolState(init: TurnToolStateInit): TurnToolState {
     },
     stopObserving: () => {
       observeToolResult = undefined;
-    },
-    reportGapWorkTo: (sink) => {
-      onGapWork = sink;
     },
   };
 }
