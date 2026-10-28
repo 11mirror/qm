@@ -1,6 +1,5 @@
 import { surfaceHas } from "../../surfaces/surface.ts";
 import type { Session } from "../../types.ts";
-import { resolveEnvironmentId } from "../../environments/environment-store.ts";
 import { resolveBrowserModel } from "../../model/browser-model.ts";
 import { type Destination } from "../../types.ts";
 import { personalScope } from "../../types.ts";
@@ -39,7 +38,7 @@ interface CatalogTurn {
 
 export async function buildCredentialCatalog(ctx: TurnCtx, turn: CatalogTurn) {
   const { deps, input, actor, conversation, external, allInternal, liveAuthorTurn } = ctx;
-  const { resolution, scopeId, strictReadOnly } = ctx;
+  const { resolution, scopeId, environmentId, strictReadOnly } = ctx;
   const { sharingSources } = turn;
   const openSpeakerKeychain =
     liveAuthorTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
@@ -54,7 +53,6 @@ export async function buildCredentialCatalog(ctx: TurnCtx, turn: CatalogTurn) {
       scope: scopeId,
       isCurrentSharedScopeMember: deps.isCurrentSharedScopeMember,
     }));
-  const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
   const sharedScope =
     !external &&
     (scopeId !== personalScope(actor.id) ||
