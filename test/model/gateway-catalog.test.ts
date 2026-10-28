@@ -1,7 +1,7 @@
 import { nativeDocumentFormat } from "../../src/harness/document-inputs.ts";
 import { runtimeFallback } from "../../src/api/runtime-config.ts";
 import { validateWebTurnModelOptions } from "../../src/core/turn-options.ts";
-import { resolveRuntimeChoice } from "../../src/harness/runtime-choice.ts";
+import { resolveRuntimeChoiceDurable } from "../../src/harness/runtime-choice.ts";
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { createGatewayCatalog } from "../../src/model/gateway-catalog.ts";
@@ -242,10 +242,16 @@ test("removed gateway selections never fall back to a different org or direct mo
   const personal = "personal:alice" as const;
   const fallback = { modelId: "claude-opus-5" };
   await store.setRuntimeSelection(org, { modelId: "gateway/removed" });
-  assert.throws(() => resolveRuntimeChoice(store, org, personal, fallback), /Gateway model is unavailable/);
+  await assert.rejects(
+    () => resolveRuntimeChoiceDurable(store, org, personal, fallback),
+    /Gateway model is unavailable/,
+  );
   await store.setRuntimeSelection(org, fallback);
   await store.setRuntimeSelection(personal, { modelId: "gateway/removed" });
-  assert.throws(() => resolveRuntimeChoice(store, org, personal, fallback), /Gateway model is unavailable/);
+  await assert.rejects(
+    () => resolveRuntimeChoiceDurable(store, org, personal, fallback),
+    /Gateway model is unavailable/,
+  );
 });
 
 test("gateway aliases hide duplicate picker options while preserving saved routes", async () => {
