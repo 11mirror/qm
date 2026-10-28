@@ -77,7 +77,11 @@ test("the default base model follows the providers a deployment can actually bil
     );
   }
   assert.equal(defaultModel(undefined, onlyProvider("openrouter")), "openrouter/auto");
-  assert.equal(defaultModel(undefined, onlyProvider("openai")), "gpt-5.6-sol");
+  assert.equal(defaultModel(undefined, onlyProvider("openai")), "gpt-6.1-sol");
+  assert.equal(
+    defaultModel(undefined, { anthropic: false, openai: false, openrouter: false, codexOAuth: true }),
+    "gpt-6.1-sol",
+  );
 });
 
 test("provider-blind callers and explicit pins keep the shipped default", () => {

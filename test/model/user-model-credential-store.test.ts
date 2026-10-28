@@ -156,12 +156,12 @@ test("routing: anthropic OAuth login -> a claude model", () => {
 test("routing: openai OAuth login -> the Codex subscription provider", () => {
   const r = resolveIndividualAuthRouting(null, oauth("openai"), undefined);
   assert.equal(r?.kind, "oauth");
-  assert.equal(r?.model, "codex/gpt-5.6-sol");
+  assert.equal(r?.model, "codex/gpt-6.1-sol");
 });
 
 test("routing: requested model provider wins when that provider is connected", () => {
   const r = resolveIndividualAuthRouting(oauth("anthropic"), oauth("openai"), "gpt-5.6-sol");
-  assert.equal(r?.model, "codex/gpt-5.6-sol");
+  assert.equal(r?.model, "codex/gpt-6.1-sol");
 });
 
 test("routing: a requested openai model is namespaced to the subscription provider", () => {

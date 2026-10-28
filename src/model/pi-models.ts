@@ -14,7 +14,8 @@ import { type CustomRuntimeModel, isCustomModelId, resolveCustomModel } from "./
 const getModel = getBuiltinModel as unknown as (provider: string, id: string) => Model<Api> | undefined;
 
 export const DEFAULT_AGENT_MODEL_ID = "claude-opus-5";
-export const DEFAULT_CODEX_MODEL_ID = "gpt-5.6-sol";
+export const DEFAULT_CODEX_MODEL_ID = "gpt-6.1-sol";
+const PROVIDER_DEFAULT_MODEL_IDS = [DEFAULT_AGENT_MODEL_ID, DEFAULT_CODEX_MODEL_ID, "openrouter/auto"];
 export const CODEX_SUBSCRIPTION_PROVIDER = "openai-codex";
 const CODEX_SUBSCRIPTION_PREFIX = "codex/";
 
@@ -538,12 +539,15 @@ export function modelSupported(id: string | undefined): boolean {
 
 export function defaultModel(configured?: string, providers?: ModelProviderAvailability): string {
   if (configured && (modelUnavailableReason(configured) || modelSupported(configured))) return configured;
-  const preferred = DEFAULT_AGENT_MODEL_ID;
-  if (!providers || modelServiceable(preferred, providers)) return preferred;
-  const servable = selectableBaseModels(true).find(
-    (model) => modelSupported(model.id) && modelServiceable(model.id, providers),
+  if (!providers) return DEFAULT_AGENT_MODEL_ID;
+  const billable = (id: string) => modelSupported(id) && modelServiceable(id, providers);
+  return (
+    PROVIDER_DEFAULT_MODEL_IDS.find(billable) ??
+    selectableBaseModels(true)
+      .map((model) => model.id)
+      .find(billable) ??
+    DEFAULT_AGENT_MODEL_ID
   );
-  return servable?.id ?? preferred;
 }
 
 export interface ModelProviderAvailability {

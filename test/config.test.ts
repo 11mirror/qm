@@ -553,7 +553,7 @@ test("the spend export token is optional, strong, trimmed and never shared with 
 
 test("a subscription-only company ChatGPT deployment defaults pi to the plain Codex model id", () => {
   const base = loadConfig({});
-  assert.equal(configuredModel({ ...base, codexAuthCredential: "cred-1" }), "gpt-5.6-sol");
+  assert.equal(configuredModel({ ...base, codexAuthCredential: "cred-1" }), "gpt-6.1-sol");
   assert.equal(configuredModel({ ...base, codexAuthCredential: "cred-1", anthropicApiKey: "k" }), undefined);
   assert.equal(configuredModel({ ...base, codexAuthCredential: "cred-1", modelId: "claude-opus-5" }), "claude-opus-5");
   assert.equal(configuredModel(base), undefined);
