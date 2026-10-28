@@ -119,8 +119,8 @@ async function summarizeForCompaction(
 
   input.cancel?.throwIfAborted();
   let text: string;
+  const summaryTokenBudget = compactSummaryTokenBudget(maxContextTokens);
   try {
-    const summaryTokenBudget = compactSummaryTokenBudget(maxContextTokens);
     const raw = await deps.harness.models.compactHistory({
       session: input.session,
       history: plan.toSummarize,
@@ -130,7 +130,7 @@ async function summarizeForCompaction(
         void deps.budget?.record(input.actorId, estimateCostUsd(rec.inputTokens));
       },
     });
-    text = validateCompactSummary(raw);
+    text = validateCompactSummary(raw, summaryTokenBudget);
   } catch (error) {
     input.cancel?.throwIfAborted();
     if (!recoverOnFailure || (error instanceof Error && error.name === "AbortError")) throw error;

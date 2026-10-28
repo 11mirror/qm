@@ -5,6 +5,7 @@ import {
   COMPACT_SOFT_FRACTION,
   validateCompactSummary,
   compactSummaryTokenBudget,
+  compactTranscript,
   estimateHistoryTokens,
   forModelContext,
   overBudgetFraction,
@@ -178,8 +179,8 @@ test("a tool_call at the summarize/keep boundary whose result is KEPT is not sum
   assert.doesNotMatch(contextSummary(summaries[0]!)!.text, /interrupted/, "no false interrupted marker");
 });
 
-test("a genuinely interrupted tool_call (no result anywhere) IS marked interrupted in the summary", async () => {
-  const { harness } = spyHarness();
+test("a genuinely interrupted tool_call (no result anywhere) IS marked interrupted in the summarizer's transcript", async () => {
+  const { harness, compactCalls } = spyHarness();
   const { orch, sessions } = buildOrchestrator(harness, budgetKeepingOnlyNewest("msg 4", "msg 5"));
 
   const sid = await seed(sessions, [
@@ -194,9 +195,12 @@ test("a genuinely interrupted tool_call (no result anywhere) IS marked interrupt
   const res = await orch.handleTurn(turn("!histcount"));
   assert.equal(res.status, "ok");
 
-  const summaries = await summaryEntries(sessions, sid);
-  assert.ok(summaries.length >= 1);
-  assert.match(contextSummary(summaries[0]!)!.text, /interrupted/, "interrupted call must be flagged, not invented");
+  assert.ok((await summaryEntries(sessions, sid)).length >= 1);
+  assert.match(
+    compactTranscript(compactCalls[0]!.history),
+    /interrupted/,
+    "interrupted call must be flagged, not invented",
+  );
 });
 
 const at = (seq: number, item: NewItem): Item => storedItem(item, { sessionId: "s", seq, createdAt: seq });
