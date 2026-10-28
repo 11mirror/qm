@@ -76,14 +76,11 @@ export interface TurnRunnerDeps {
   orchestrator: Orchestrator;
   queues: readonly TurnQueue[];
   slots: number;
-  capacity?: () => number;
   ready?: EventBus<string>;
   cancels?: EventBus<string>;
   yields?: EventBus<string>;
   canClaim?: () => boolean;
   errors?: ErrorLog;
-  processId?: string;
-  extendIntervalMs?: number;
   pollMs?: number;
   retryDelayMs?: (priorErrors: number) => number;
   maxClaims?: number;
@@ -146,7 +143,6 @@ async function yieldHeld(deps: TurnRunnerDeps, held: HeldTurn, reason: "capacity
 }
 
 async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
-  const extendMs = deps.extendIntervalMs ?? TURN_EXTEND_INTERVAL_MS;
   const { run, token, cancel, shutdown } = held;
   const { trace: _trace, ...request } = run.request;
   let lost = false;
@@ -190,7 +186,7 @@ async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
           reportFailure(`turns: claim extension keeps failing for turn ${run.id}`, error);
         else swallow(`turns: extend failed for turn ${run.id} (transient)`, error);
       });
-  }, extendMs);
+  }, TURN_EXTEND_INTERVAL_MS);
   beat.unref?.();
   const finishBare = async (error: unknown): Promise<void> => {
     reportFailure(`turns: turn end keeps failing for turn ${run.id}; recording a bare failure instead`, error);
@@ -318,11 +314,10 @@ async function handBackAll(deps: TurnRunnerDeps, held: readonly HeldTurn[]): Pro
 }
 
 export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
-  const processId = deps.processId ?? `h-${randomUUID().slice(0, 8)}`;
+  const processId = `h-${randomUUID().slice(0, 8)}`;
   const pollMs = deps.pollMs ?? FALLBACK_POLL_MS;
   const inFlight = new Map<string, HeldTurn>();
   const overcommit = Math.max(1, Math.floor(deps.slots / 4));
-  const capacity = (): number => Math.min(deps.slots, deps.capacity?.() ?? deps.slots);
   const mayClaim = (): boolean => !stopped && (!deps.canClaim || deps.canClaim());
 
   let stopped = true;
@@ -388,9 +383,8 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
       try {
         for (const queue of deps.queues) {
           while (mayClaim()) {
-            const limit = capacity();
             const people = queue === "turns_people";
-            if (inFlight.size >= limit + (people ? overcommit : 0)) break;
+            if (inFlight.size >= deps.slots + (people ? overcommit : 0)) break;
             const token = `${processId}:${randomUUID()}`;
             const claim = await deps.ledger.claim(queue, token, processId);
             if (!claim.claimed) break;
@@ -401,7 +395,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
               break;
             }
             launch(run, token, tenant);
-            if (people && inFlight.size > limit) parkForCapacity(deps, inFlight);
+            if (people && inFlight.size > deps.slots) parkForCapacity(deps, inFlight);
           }
         }
         failures = 0;
