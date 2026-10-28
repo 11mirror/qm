@@ -117,18 +117,17 @@ export function createPrincipalLinkService(
         if (!validId(input.principalId) || !validId(input.canonicalId))
           throw new PrincipalLinkError(400, "principalId and canonicalId must be non-empty ids");
         const principalId = input.principalId.trim();
-        const canonicalId = input.canonicalId.trim();
+        const canonicalId = foldPrincipalId(input.canonicalId);
         const aliasKey = foldPrincipalId(principalId);
-        const canonicalKey = foldPrincipalId(canonicalId);
-        if (aliasKey === canonicalKey) throw new PrincipalLinkError(400, "a principal cannot be linked to itself");
+        if (aliasKey === canonicalId) throw new PrincipalLinkError(400, "a principal cannot be linked to itself");
         await refresh();
         const { byAlias, byCanonical } = state();
         const existing = byAlias.get(aliasKey);
         if (existing) {
-          if (foldPrincipalId(existing.canonicalId) === canonicalKey) return existing;
+          if (foldPrincipalId(existing.canonicalId) === canonicalId) return existing;
           throw new PrincipalLinkError(409, `${principalId} is already linked to ${existing.canonicalId}`);
         }
-        const canonicalIsAlias = byAlias.get(canonicalKey);
+        const canonicalIsAlias = byAlias.get(canonicalId);
         if (canonicalIsAlias)
           throw new PrincipalLinkError(
             400,
@@ -149,7 +148,7 @@ export function createPrincipalLinkService(
           return codec.row((await client.query(linkFor, [aliasKey])).rows[0]!);
         });
         await refresh();
-        if (foldPrincipalId(stored.canonicalId) !== canonicalKey)
+        if (foldPrincipalId(stored.canonicalId) !== canonicalId)
           throw new PrincipalLinkError(409, `${principalId} is already linked to ${stored.canonicalId}`);
         await opts.refreshScopes?.([personalScope(principalId), personalScope(canonicalId)]);
         return stored;

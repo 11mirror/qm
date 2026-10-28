@@ -28,14 +28,13 @@ before proxying, and the keychain stores credentials under the canonical owner.
   a linked sign-in cannot become canonical for others.
 - **Linking merges the sign-in's data.** In the same transaction that records
   the link, sessions, memory, crons, files and other records owned by the
-  linked sign-in move to the canonical principal: principal ids, its personal
-  scope and its web thread refs are rewritten. When both principals already
-  hold a row under the same key, the canonical principal's row is kept and the
-  linked sign-in's duplicate is dropped; a web thread ref the canonical
-  principal already uses stays as it was. History (transcript items, audit and
-  usage logs) keeps its original ids. Credentials, keychain grants, admin
+  linked sign-in move to the canonical principal: its principal id and its
+  personal scope are rewritten. When both principals already hold a row under
+  the same key, the canonical principal's row is kept and the linked sign-in's
+  duplicate is dropped. Thread refs and history (transcript items, runs, audit
+  and usage logs) keep their original ids. Credentials, keychain grants, admin
   grants, team and project membership already resolve through the link and are
-  not rewritten.
+  not rewritten. The canonical email is stored lowercased.
 - **Unlinking does not un-merge.** Deleting a link restores two separate
   principals, but merged records stay with the canonical principal, so a wrong
   link is an incident to reconcile, not just a row to delete.

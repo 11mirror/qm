@@ -5,6 +5,7 @@ import { createPostgresSessionStore } from "../../src/sessions/postgres-session-
 import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
 import { createCronStore } from "../../src/cron/cron-store.ts";
 import { createPostgresCronFireStore } from "../../src/cron/fire-store.ts";
+import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { personalScope } from "../../src/types.ts";
 import { testAdvisoryLock, testConfigStore, testDatabaseUrl } from "../support/test-database.ts";
 
@@ -17,6 +18,7 @@ function stores() {
   const databaseUrl = testDatabaseUrl();
   const config = testConfigStore({ databaseUrl });
   return {
+    db: createPgPool(databaseUrl),
     sessions: createPostgresSessionStore(databaseUrl),
     memory: createPostgresMemoryService(databaseUrl),
     crons: createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) }),
@@ -48,7 +50,7 @@ describe("linking a sign-in merges its data into the canonical principal", () =>
       owner: ALIAS,
       createdBy: ALIAS,
       ownerScopeId: ALIAS_SCOPE,
-      destination: { type: "web", target: aliasSession.threadRef },
+      destination: { type: "web", target: aliasSession.threadRef, audienceScopeId: ALIAS_SCOPE },
     });
     await s.config.setInstructions(ALIAS_SCOPE, "alias guidance");
 
@@ -59,8 +61,7 @@ describe("linking a sign-in merges its data into the canonical principal", () =>
     assert.deepEqual(await s.sessions.listByParticipant(ALIAS), []);
     const moved = await s.sessions.get(aliasSession.id);
     assert.equal(moved?.scopeId, CANONICAL_SCOPE);
-    assert.equal(moved?.threadRef, `web:${CANONICAL}:a1`);
-    assert.equal(await s.sessions.getByThread(`web:${ALIAS}:a1`), null);
+    assert.equal((await s.sessions.getByThread(`web:${ALIAS}:a1`))?.id, aliasSession.id);
 
     assert.deepEqual((await s.memory.facts!(CANONICAL_SCOPE)).map((f) => f.text).toSorted(), [
       "Alias fact",
@@ -72,7 +73,11 @@ describe("linking a sign-in merges its data into the canonical principal", () =>
     assert.equal(owned?.id, cron.id);
     assert.equal(owned?.owner, CANONICAL);
     assert.equal(owned?.createdBy, CANONICAL);
-    assert.equal(owned?.destination?.target, `web:${CANONICAL}:a1`);
+    assert.deepEqual(owned?.destination, {
+      type: "web",
+      target: aliasSession.threadRef,
+      audienceScopeId: CANONICAL_SCOPE,
+    });
     assert.deepEqual(await s.crons.byOwner(ALIAS_SCOPE), []);
 
     assert.equal(s.config.getInstructions(CANONICAL_SCOPE), "alias guidance");
@@ -84,10 +89,21 @@ describe("linking a sign-in merges its data into the canonical principal", () =>
     const shared = await s.sessions.getOrCreateByThread("web:shared:room", "dm", "group:room");
     await s.sessions.addParticipant(shared.id, ALIAS, "alias title");
     await s.sessions.addParticipant(shared.id, CANONICAL, "canonical title");
-    const aliasInbox = await personalSession(s, ALIAS, "inbox");
-    const canonicalInbox = await personalSession(s, CANONICAL, "inbox");
     await s.config.setInstructions(ALIAS_SCOPE, "alias guidance");
     await s.config.setInstructions(CANONICAL_SCOPE, "canonical guidance");
+    const tidy = async (scope: string) => {
+      const cron = await s.crons.create({
+        schedule: { cron: "0 3 * * *" },
+        action: "tidy memory",
+        owner: scope === ALIAS_SCOPE ? ALIAS : CANONICAL,
+        createdBy: scope === ALIAS_SCOPE ? ALIAS : CANONICAL,
+        ownerScopeId: scope,
+      });
+      await s.db.q("INSERT INTO memory_tidy_profiles (id, cron_id) VALUES ($1, $2)", [scope, cron.id]);
+      return cron;
+    };
+    await tidy(ALIAS_SCOPE);
+    const canonicalTidy = await tidy(CANONICAL_SCOPE);
 
     await s.links.link({ principalId: ALIAS, canonicalId: CANONICAL, linkedBy: "admin" });
 
@@ -95,13 +111,31 @@ describe("linking a sign-in merges its data into the canonical principal", () =>
     assert.equal((await s.sessions.getForParticipant(shared.id, CANONICAL))?.title, "canonical title");
     assert.equal(s.config.getInstructions(CANONICAL_SCOPE), "canonical guidance");
     assert.equal(await s.config.getInstructionsDurable(ALIAS_SCOPE), null);
-    const inbox = await s.sessions.get(aliasInbox.id);
-    assert.equal(inbox?.threadRef, `web:${ALIAS}:inbox`, "a thread ref the canonical already holds stays put");
-    assert.equal(inbox?.scopeId, CANONICAL_SCOPE);
-    assert.equal((await s.sessions.getByThread(`web:${CANONICAL}:inbox`))?.id, canonicalInbox.id);
     assert.deepEqual(
-      (await s.sessions.listByParticipant(CANONICAL)).map((x) => x.id).toSorted(),
-      [shared.id, aliasInbox.id, canonicalInbox.id].toSorted(),
+      (await s.crons.byOwner(CANONICAL_SCOPE)).map((c) => c.id),
+      [canonicalTidy.id],
+      "the sign-in's managed cron goes with its dropped profile",
+    );
+    assert.deepEqual(await s.db.q("SELECT id, cron_id FROM memory_tidy_profiles"), [
+      { id: CANONICAL_SCOPE, cron_id: canonicalTidy.id },
+    ]);
+  });
+
+  it("merges into the canonical principal however the admin capitalised its email", async () => {
+    const s = stores();
+    const aliasSession = await personalSession(s, ALIAS, "a1");
+    await s.memory.capture(ALIAS_SCOPE, ["Alias fact"], Date.UTC(2026, 0, 1));
+
+    const link = await s.links.link({ principalId: ALIAS, canonicalId: "Jordan@Acme.Test", linkedBy: "admin" });
+
+    assert.equal(link.canonicalId, CANONICAL);
+    assert.deepEqual(
+      (await s.sessions.listByParticipant(CANONICAL)).map((x) => x.id),
+      [aliasSession.id],
+    );
+    assert.deepEqual(
+      (await s.memory.facts!(CANONICAL_SCOPE)).map((f) => f.text),
+      ["Alias fact"],
     );
   });
 

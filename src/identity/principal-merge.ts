@@ -3,51 +3,46 @@ import { CONFIG_TABLES } from "../resolution/config-tables.ts";
 import { foldPrincipalId } from "../directory/person.ts";
 import { personalScope } from "../types.ts";
 
-type RewriteKind = "principal" | "scope" | "thread";
-
 interface Rewrite {
   table: string;
   column: string;
-  kind: RewriteKind;
+  scope: boolean;
   field?: string;
   key?: readonly string[];
+  managedCron?: boolean;
 }
 
-const principal = (table: string, column: string, key?: readonly string[]): Rewrite => ({
+const principal = (table: string, column: string, opts: Partial<Rewrite> = {}): Rewrite => ({
   table,
   column,
-  kind: "principal",
-  ...(key ? { key } : {}),
+  scope: false,
+  ...opts,
 });
-const scope = (table: string, column: string, key?: readonly string[]): Rewrite => ({
+const scope = (table: string, column: string, opts: Partial<Rewrite> = {}): Rewrite => ({
   table,
   column,
-  kind: "scope",
-  ...(key ? { key } : {}),
+  scope: true,
+  ...opts,
 });
-const thread = (table: string, column: string, opts: { field?: string; unique?: boolean } = {}): Rewrite => ({
-  table,
-  column,
-  kind: "thread",
-  ...(opts.field ? { field: opts.field } : {}),
-  ...(opts.unique ? { key: [] } : {}),
-});
+const UNIQUE = { key: [] };
 
 const TRIGGER_TABLES = ["crons", "monitors", "webhooks"];
 
 const PRINCIPAL_REWRITES: readonly Rewrite[] = [
-  principal("participants", "principal_id", ["session_id"]),
+  principal("participants", "principal_id", { key: ["session_id"] }),
   scope("sessions", "scope_id"),
   scope("memory_facts", "scope_id"),
+  scope("memory_fact_vectors", "scope_id", { key: ["model", "fact_id"] }),
   scope("memory_capture_pending", "scope_id"),
   scope("memory_capture_pending", "conversation_scope_id"),
   principal("memory_capture_pending", "actor_id"),
-  scope("memory_tidy_profiles", "id", []),
-  principal("suggested_activity_profiles", "id", []),
+  scope("memory_tidy_profiles", "id", { ...UNIQUE, managedCron: true }),
+  principal("suggested_activity_profiles", "id", { ...UNIQUE, managedCron: true }),
   ...TRIGGER_TABLES.flatMap((table) => [
     principal(table, "owner"),
     scope(table, "owner_scope_id"),
     principal(table, "created_by"),
+    scope(table, "destination", { field: "audienceScopeId" }),
   ]),
   scope("deployments", "owner_scope_id"),
   scope("deployments", "created_in_scope"),
@@ -55,54 +50,38 @@ const PRINCIPAL_REWRITES: readonly Rewrite[] = [
   scope("file_artifacts", "owner_scope_id"),
   scope("file_artifacts", "created_in_scope"),
   principal("file_artifacts", "created_by"),
-  scope("acl_grants", "owner_scope_id", ["path", "grantee_scope_id", "permission"]),
-  scope("acl_grants", "grantee_scope_id", ["owner_scope_id", "path", "permission"]),
+  scope("acl_grants", "owner_scope_id", { key: ["path", "grantee_scope_id", "permission"] }),
+  scope("acl_grants", "grantee_scope_id", { key: ["owner_scope_id", "path", "permission"] }),
   scope("skills", "scope_id"),
   principal("skills", "created_by"),
   scope("skill_packs", "target_scope_id"),
   principal("skill_packs", "created_by"),
-  principal("slack_accounts", "principal_id", []),
-  principal("browser_sessions", "principal_id", []),
+  principal("slack_accounts", "principal_id", UNIQUE),
+  principal("browser_sessions", "principal_id", UNIQUE),
   principal("environments", "owner_actor_id"),
-  scope("environment_attachments", "scope_id", []),
+  scope("environment_attachments", "scope_id", UNIQUE),
   scope("sandbox_resources", "owner_scope_id"),
   principal("sandbox_resources", "created_by"),
-  scope("sandbox_defaults", "scope_id", []),
+  scope("sandbox_defaults", "scope_id", UNIQUE),
   ...Object.values(CONFIG_TABLES)
     .filter((spec) => spec.key === "scopeId")
-    .map((spec) => scope(spec.table, "scope_id", [])),
-  thread("crons", "session_ref"),
-  ...TRIGGER_TABLES.map((table) => thread(table, "destination", { field: "target" })),
-  thread("monitors", "thread_ref"),
-  thread("process_sessions", "session_ref"),
-  thread("session_turn_pointers", "thread_ref", { unique: true }),
-  thread("sessions", "thread_ref", { unique: true }),
+    .map((spec) => scope(spec.table, "scope_id", UNIQUE)),
 ];
-
-function values(kind: RewriteKind, aliasId: string, canonicalId: string): [string, string] {
-  if (kind === "scope") return [personalScope(aliasId), personalScope(canonicalId)];
-  if (kind === "thread") return [`web:${aliasId}:`, `web:${canonicalId}:`];
-  return [aliasId, canonicalId];
-}
 
 function statements(r: Rewrite): string[] {
   const current = r.field ? `moved.${r.column}->>'${r.field}'` : `moved.${r.column}`;
-  const assign = (expr: string) =>
-    r.field ? `${r.column} = jsonb_set(moved.${r.column}, '{${r.field}}', to_jsonb(${expr}))` : `${r.column} = ${expr}`;
-  const update = `UPDATE ${r.table} AS moved SET`;
-  if (r.kind === "thread") {
-    const next = `($2::text || substr(${current}, length($1::text) + 1))`;
-    const free = (table: string, column: string) =>
-      `NOT EXISTS (SELECT 1 FROM ${table} kept WHERE kept.${column} = ${next})`;
-    const open = [free("sessions", "thread_ref"), ...(r.key ? [free(r.table, r.column)] : [])];
-    return [`${update} ${assign(next)} WHERE starts_with(${current}, $1::text) AND ${open.join(" AND ")}`];
-  }
-  const rewrite = `${update} ${assign("$2::text")} WHERE ${current} = $1::text`;
+  const assign = r.field
+    ? `${r.column} = jsonb_set(moved.${r.column}, '{${r.field}}', to_jsonb($2::text))`
+    : `${r.column} = $2::text`;
+  const rewrite = `UPDATE ${r.table} AS moved SET ${assign} WHERE ${current} = $1::text`;
   if (!r.key) return [rewrite];
   const same = r.key.map((k) => ` AND kept.${k} IS NOT DISTINCT FROM moved.${k}`).join("");
+  const duplicate = `moved.${r.column} = $1::text AND EXISTS (SELECT 1 FROM ${r.table} kept WHERE kept.${r.column} = $2::text${same})`;
   return [
-    `DELETE FROM ${r.table} AS moved WHERE moved.${r.column} = $1::text
-       AND EXISTS (SELECT 1 FROM ${r.table} kept WHERE kept.${r.column} = $2::text${same})`,
+    ...(r.managedCron
+      ? [`DELETE FROM crons WHERE id IN (SELECT moved.cron_id FROM ${r.table} moved WHERE ${duplicate})`]
+      : []),
+    `DELETE FROM ${r.table} AS moved WHERE ${duplicate}`,
     rewrite,
   ];
 }
@@ -113,9 +92,13 @@ export async function mergePrincipalData(client: PoolClient, aliasId: string, ca
   );
   const present = new Set(rows.map((row) => row.name));
   const rewrites = PRINCIPAL_REWRITES.filter((r) =>
-    [r.column, ...(r.key ?? [])].every((column) => present.has(`${r.table}.${column}`)),
+    [r.column, ...(r.key ?? []), ...(r.managedCron ? ["cron_id"] : [])].every((column) =>
+      present.has(`${r.table}.${column}`),
+    ),
   );
   for (const spelling of new Set([aliasId, foldPrincipalId(aliasId)]))
-    for (const r of rewrites)
-      for (const sql of statements(r)) await client.query(sql, values(r.kind, spelling, canonicalId));
+    for (const r of rewrites) {
+      const params = r.scope ? [personalScope(spelling), personalScope(canonicalId)] : [spelling, canonicalId];
+      for (const sql of statements(r)) await client.query(sql, params);
+    }
 }
