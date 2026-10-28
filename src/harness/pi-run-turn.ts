@@ -26,7 +26,7 @@ import { createGrindMeter } from "./grind.ts";
 import { createFloorCapPolicy, enforceGoal, goalPausedNote, goalSteeringNote, type GovernorVerdict } from "./goal.ts";
 import {
   type TurnWallClockOutcome,
-  EMPTY_ENDING_MIN_BUDGET_MS,
+  noRoomForRound,
   emptyEndingNote,
   raceTurnWallClock,
   wallClockTurnFailure,
@@ -352,7 +352,7 @@ async function repromptEmptyEnding(o: {
     );
     await drain();
     const capMs = raceCapMs();
-    if (!stop.userAborted && !turn.cancel?.aborted && (turnWallClockMs <= 0 || capMs >= EMPTY_ENDING_MIN_BUDGET_MS)) {
+    if (!stop.userAborted && !turn.cancel?.aborted && !noRoomForRound(turnWallClockMs, capMs)) {
       try {
         const outcome = await race(session.prompt(note), capMs);
         if (outcome !== "ok" && !stop.userAborted) {
@@ -515,7 +515,7 @@ export async function runPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInpu
         resolveFallbackRuntime: opts.resolveFallbackRuntime,
       });
     const promptRound = async (note: string): Promise<TurnWallClockOutcome> => {
-      if (turnWallClockMs > 0 && rawRemainingCapMs() < EMPTY_ENDING_MIN_BUDGET_MS) return "aborted";
+      if (noRoomForRound(turnWallClockMs, rawRemainingCapMs())) return "aborted";
       const outcome = await race(session.prompt(note));
       if (outcome === "ok") await recoverFailedRound();
       return outcome;

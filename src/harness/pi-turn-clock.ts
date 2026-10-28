@@ -5,7 +5,11 @@ export type TurnWallClockOutcome = "ok" | "aborted" | "abandoned";
 
 const TURN_ABORT_GRACE_MS = 30_000;
 
-export const EMPTY_ENDING_MIN_BUDGET_MS = 30_000;
+export const MIN_ROUND_BUDGET_MS = 30_000;
+
+export function noRoomForRound(turnWallClockMs: number, remainingMs: number): boolean {
+  return turnWallClockMs > 0 && remainingMs < MIN_ROUND_BUDGET_MS;
+}
 export const EMPTY_ENDING_NOTE =
   "[system] The turn ended with an empty message. If the work above is unfinished, continue it — without redoing steps that already succeeded; otherwise reply with your answer now.";
 
@@ -27,7 +31,7 @@ export function emptyEndingNote(opts: {
   if (opts.modelCalls === 0) return null;
   if (piFailedAssistant(opts.session)) return null;
   if ((opts.session.getLastAssistantText() ?? "").trim()) return null;
-  if (opts.turnWallClockMs > 0 && opts.turnWallClockMs - opts.elapsedMs < EMPTY_ENDING_MIN_BUDGET_MS) return null;
+  if (noRoomForRound(opts.turnWallClockMs, opts.turnWallClockMs - opts.elapsedMs)) return null;
   return EMPTY_ENDING_NOTE;
 }
 

@@ -5,7 +5,7 @@ import type { TurnHalt } from "./turn-tool-state.ts";
 import type { TurnRequestSettings } from "./turn-request.ts";
 import type { HarnessTurnInput } from "./harness.ts";
 import { applyTurnEffort, wantsFastMode, withRequestHeaders } from "./pi-model-runtime.ts";
-import { EMPTY_ENDING_MIN_BUDGET_MS, type TurnWallClockOutcome } from "./pi-turn-clock.ts";
+import { noRoomForRound, type TurnWallClockOutcome } from "./pi-turn-clock.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import { documentStub } from "../core/document-kinds.ts";
 import { type AgentSession } from "@earendil-works/pi-coding-agent";
@@ -140,7 +140,7 @@ export function createTurnRecovery(o: {
     if (!fallbackId || !fallback || refusedModelIds.has(fallbackId) || refusedModelIds.has(servedModelId(fallbackId)))
       return false;
     const capMs = raceCapMs();
-    if (turnWallClockMs > 0 && capMs < EMPTY_ENDING_MIN_BUDGET_MS) return false;
+    if (noRoomForRound(turnWallClockMs, capMs)) return false;
     console.error(
       `[pi] provider refusal — retrying on fallback model ${fromId} -> ${fallbackId} session=${turn.session.id}: ${refusal}`,
     );
@@ -182,7 +182,7 @@ export function createTurnRecovery(o: {
       .findLast((m) => (m as { role?: string }).role === "assistant") as AssistantMessage | undefined;
     if (lastAssistant && lastAssistant.stopReason !== "error") return false;
     const capMs = raceCapMs();
-    if (turnWallClockMs > 0 && capMs < EMPTY_ENDING_MIN_BUDGET_MS) return false;
+    if (noRoomForRound(turnWallClockMs, capMs)) return false;
     documentRetried = true;
     dropFailedAssistant(session, messagesBefore);
     const outcome = await race(session.prompt(DOCUMENTS_DROPPED_RETRY_NOTE), capMs);

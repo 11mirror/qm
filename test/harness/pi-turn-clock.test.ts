@@ -4,7 +4,7 @@ import {
   raceTurnWallClock,
   emptyEndingNote,
   EMPTY_ENDING_NOTE,
-  EMPTY_ENDING_MIN_BUDGET_MS,
+  MIN_ROUND_BUDGET_MS,
 } from "../../src/harness/pi-turn-clock.ts";
 import { createTurnToolState } from "../../src/harness/turn-tool-state.ts";
 
@@ -197,12 +197,9 @@ test("an error ending must throw upstream, not be nudged", () => {
 });
 
 test("no re-prompt without wall-clock budget left; disabled cap always has budget", () => {
+  assert.equal(emptyEndingNote(base({ turnWallClockMs: 60_000, elapsedMs: 60_000 - MIN_ROUND_BUDGET_MS + 1 })), null);
   assert.equal(
-    emptyEndingNote(base({ turnWallClockMs: 60_000, elapsedMs: 60_000 - EMPTY_ENDING_MIN_BUDGET_MS + 1 })),
-    null,
-  );
-  assert.equal(
-    emptyEndingNote(base({ turnWallClockMs: 60_000, elapsedMs: 60_000 - EMPTY_ENDING_MIN_BUDGET_MS })),
+    emptyEndingNote(base({ turnWallClockMs: 60_000, elapsedMs: 60_000 - MIN_ROUND_BUDGET_MS })),
     EMPTY_ENDING_NOTE,
   );
   assert.equal(emptyEndingNote(base({ turnWallClockMs: 0, elapsedMs: 10_000_000 })), EMPTY_ENDING_NOTE);
