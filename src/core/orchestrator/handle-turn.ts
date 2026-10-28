@@ -19,7 +19,13 @@ import { finishSystemPrompt } from "./turn-prompt.ts";
 import { buildTurnTools, firstAckPublisher } from "./turn-tools.ts";
 import { prepareTurnInput, turnFailureUserItem } from "./turn-input.ts";
 import { selectTurnRuntime } from "./turn-runtime.ts";
-import { runSegments, type GapWorkFeed, type SegmentTurn, type TurnRunState } from "./turn-segment.ts";
+import {
+  mirrorRunActivity,
+  runSegments,
+  type GapWorkFeed,
+  type SegmentTurn,
+  type TurnRunState,
+} from "./turn-segment.ts";
 import { consumeApprovalDecision, loadApprovalLedger, type ApprovalLedger } from "./approvals.ts";
 import { createSessionTitles } from "../session-title.ts";
 import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
@@ -138,7 +144,7 @@ async function frameTurn(o: OrchestratorInstance, ctx: TurnCtx) {
 
 async function beginTurn(o: OrchestratorInstance, ctx: TurnCtx, turn: TurnState) {
   const { deps, transcripts } = o;
-  const { input, actor, scopeId, resolution, withManagedRosterVersion, mirrorRunActivity } = ctx;
+  const { input, actor, scopeId, resolution, withManagedRosterVersion } = ctx;
   const { frame, session, run } = turn;
   await withManagedRosterVersion(async () => {
     await ctx.reconcileSessionParticipants(session.id);
@@ -173,7 +179,7 @@ async function beginTurn(o: OrchestratorInstance, ctx: TurnCtx, turn: TurnState)
       resolution,
       ledger: turn.approvalLedger,
       withRosterVersion: withManagedRosterVersion,
-      mirror: mirrorRunActivity,
+      mirror: (appended) => mirrorRunActivity(deps, input, appended),
     });
     if (decided.kind === "settled") return { done: true as const, result: decided.result };
     approvalNote = decided.approvalNote;

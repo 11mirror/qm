@@ -6,6 +6,7 @@ import type { BegunTurn, HeldLease, ReadyTurn, TurnFrame } from "./handle-turn.t
 import type { SecurityObserver } from "./security-screen.ts";
 import type { Outbound } from "../../surfaces/outbound.ts";
 import type { Session } from "../../types.ts";
+import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 import { markFirstToken } from "../../../plugins/chassis/src/error-reporting.ts";
 import { memoryRecallDelta } from "../../memory/recall-delta.ts";
 import { loadDocumentInputs } from "../document-inputs.ts";
@@ -15,7 +16,7 @@ import { type Destination, type TurnRuntime } from "../../types.ts";
 import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
 import { postCounted } from "./surface-tools.ts";
 import type { GapPhase } from "../../sessions/session-store.ts";
-import { isUserMessage, type Item, type NewItem } from "../../sessions/items.ts";
+import { isUserMessage, stepMessage, type Item, type NewItem } from "../../sessions/items.ts";
 import { environmentDelta } from "../environment-facts.ts";
 import type { GapWork, HarnessTurnInput, RuntimeChoice } from "../../harness/harness.ts";
 import { forModelContext } from "../../harness/context-compaction.ts";
@@ -34,6 +35,33 @@ import { createTurnSandboxes } from "./sandboxes.ts";
 import { isWebInboxThreadRef } from "../../sessions/thread-ref.ts";
 
 const ADDRESSED_NUDGE_MD = loadProtocolFile("turn-addressed-nudge");
+
+const ACTIVITY_KINDS = new Set<Item["kind"]>([
+  "ToolCall",
+  "ToolResult",
+  "Elicitation",
+  "ElicitationResponse",
+  "SteeringMessage",
+]);
+
+export async function mirrorRunActivity(
+  deps: OrchestratorDeps,
+  input: OrchestratorInput,
+  appended: Item,
+): Promise<void> {
+  if (!input.runId || !deps.runActivity) return;
+  const append = (item: Item) =>
+    deps.runActivity!.append(input.runId!, { item }).catch(swallowAs("orchestrator: run-activity append", undefined));
+  if (ACTIVITY_KINDS.has(appended.kind) || (appended.kind === "AgentMessage" && appended.variant === "narration")) {
+    await append(appended);
+  } else if (appended.kind === "Reasoning") {
+    const id = stepMessage(appended)?.id;
+    const step = typeof id === "string" && appended.step !== null ? { id, index: appended.step } : undefined;
+    if (appended.body.redacted !== true && appended.text?.trim())
+      await append({ ...appended, body: step ? { wire: { message: { id: step.id } } } : {} });
+    if (step) deps.turnStream?.settleReasoning(input.runId, step.id, step.index);
+  }
+}
 
 export interface TurnRunState {
   toolCalls: number;
@@ -185,7 +213,7 @@ function createSegmentEmit(
   { recall, snapshot, environment }: ReturnType<typeof segmentEnvironment>,
   continuation: { history: Item[] } | undefined,
 ): HarnessTurnInput["emit"] {
-  const { deps, input, actor, humanInput, coreReceivedAt, withManagedRosterVersion, mirrorRunActivity } = ctx;
+  const { deps, input, actor, humanInput, coreReceivedAt, withManagedRosterVersion } = ctx;
   const { surfaceName } = turn.framed;
   const { spine } = turn.ready.turnTools;
   const { partial } = turn.ready.prepared;
@@ -249,7 +277,7 @@ function createSegmentEmit(
           }
         }
       }
-      await mirrorRunActivity(appended);
+      await mirrorRunActivity(deps, input, appended);
       return appended;
     } finally {
       emitGapWork("persist", persistStart, Date.now());
