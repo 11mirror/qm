@@ -9,7 +9,11 @@ import { createHttpEventsReceiver } from "../src/slack/http-events.ts";
 import { createDeduper, dedupedRun } from "../src/slack/message-gating.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createDirectoryStore } from "../src/directory/directory-store.ts";
+import {
+  createDirectoryStore,
+  parseDirectoryObservation,
+  type DirectoryObservation,
+} from "../src/directory/directory-store.ts";
 import { createDirectory } from "../src/slack/directory.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 
@@ -34,26 +38,12 @@ function fixture(options: { secondary?: boolean; failWrite?: boolean; throwWrite
   const directory = createDirectory({
     core: {
       holdDirectorySync: async () => null,
-      pushDirectory: async (body: Parameters<SlackCoreClient["pushDirectory"]>[0]) => {
+      recordDirectoryObservation: async (observation: DirectoryObservation) => {
         state.writes++;
         if (options.throwWrite) throw new Error("directory transport unavailable");
         if (options.failWrite) return false;
-        if (body.partialGroups)
-          return store.replaceGroups(
-            body.groupMembers!,
-            body.groupsSyncedAt,
-            body.groupIds,
-            body.groupRosterIds,
-            body.partialGroups,
-          );
-        return store.replaceChannels(
-          body.channels!,
-          body.channelMembers,
-          body.channelsSyncedAt,
-          body.channelRosterIds,
-          body.channelRevocations,
-          body.partialChannels,
-        );
+        const checked = parseDirectoryObservation(observation);
+        return !!checked && store.recordObservation(checked);
       },
     } as unknown as SlackCoreClient,
     coreSingleton: !options.secondary,
@@ -97,10 +87,11 @@ test("secondary accounts never publish live channels", async () => {
 });
 
 test("failed persistence propagates to envelope recovery instead of declaring an external audience", async () => {
-  for (const options of [{ failWrite: true }, { throwWrite: true }]) {
-    const { observe } = fixture(options);
-    await assert.rejects(observe(), /not persisted before admission|directory transport unavailable/);
-  }
+  for (const info of [undefined, { name: "mpdm-one-1", is_private: true, is_mpim: true }])
+    for (const options of [{ failWrite: true }, { throwWrite: true }]) {
+      const { observe } = fixture(options);
+      await assert.rejects(observe(info), /not persisted before admission|directory transport unavailable/);
+    }
 });
 
 test("removed speakers and failed member classification do not publish", async () => {
@@ -138,14 +129,6 @@ test("a verified group-DM roster persists before admission without listing it as
   assert.equal(await store.groupMember("C_ONE", "U_TWO"), true);
   assert.equal(await store.groupMember("G_OTHER", "U_ONE"), true);
   assert.equal(await store.channelPrivacy("C_ONE"), undefined);
-});
-
-test("a group DM whose roster cannot be persisted goes to envelope recovery", async () => {
-  const mpim = { name: "mpdm-one-1", is_private: true, is_mpim: true };
-  for (const options of [{ failWrite: true }, { throwWrite: true }]) {
-    const { observe } = fixture(options);
-    await assert.rejects(observe(mpim), /not persisted before admission|directory transport unavailable/);
-  }
 });
 
 test("newer removal rejects an older in-flight live observation", async () => {

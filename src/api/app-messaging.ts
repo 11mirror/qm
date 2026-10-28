@@ -16,7 +16,7 @@ import {
   type ReachResolution,
 } from "../reach/reach.ts";
 import { isVisible } from "../directory/visibility.ts";
-import { pickMatch, type DirectoryMember } from "../directory/directory-store.ts";
+import { parseDirectoryObservation, pickMatch, type DirectoryMember } from "../directory/directory-store.ts";
 import { externalMemberActive } from "../identity/external-members.ts";
 import { hasRevisionEvents, recordMessageRevisions } from "../core/message-revisions.ts";
 import { answerWebContextRequest } from "./web-context.ts";
@@ -102,6 +102,7 @@ export function createMessagingMethods(
   | "upsertDirectory"
   | "upsertChannels"
   | "upsertGroups"
+  | "recordDirectoryObservation"
   | "setDirectoryWorkspaceUrl"
   | "directoryMeta"
   | "channelMember"
@@ -453,20 +454,25 @@ export function createMessagingMethods(
       }
       return true;
     },
-    async upsertChannels(channels, channelMembers, syncedAt, channelRosterIds, revocations, partial) {
+    async upsertChannels(channels, channelMembers, syncedAt, channelRosterIds, revocations) {
       const applied = await deps.directory.replaceChannels(
         channels,
         channelMembers,
         syncedAt,
         channelRosterIds,
         revocations,
-        partial,
       );
       await h.syncLinkedProjectRosters();
       return applied;
     },
-    async upsertGroups(groupMembers, syncedAt, groupIds, groupRosterIds, partial) {
-      return deps.directory.replaceGroups(groupMembers, syncedAt, groupIds, groupRosterIds, partial);
+    async upsertGroups(groupMembers, syncedAt, groupIds, groupRosterIds) {
+      return deps.directory.replaceGroups(groupMembers, syncedAt, groupIds, groupRosterIds);
+    },
+    async recordDirectoryObservation(value) {
+      const observation = parseDirectoryObservation(value);
+      if (!observation || !(await deps.directory.recordObservation(observation))) return false;
+      if (observation.kind === "channel") await h.syncLinkedProjectRosters();
+      return true;
     },
     async setDirectoryWorkspaceUrl(url) {
       await deps.directory.setWorkspaceUrl(url);

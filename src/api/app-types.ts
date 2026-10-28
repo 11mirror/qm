@@ -69,6 +69,7 @@ import type {
   DirectoryStore,
   GroupMembership,
   RecipientResolution,
+  DirectoryObservation,
 } from "../directory/directory-store.ts";
 import type {
   Cron,
@@ -524,15 +525,15 @@ export interface App {
     syncedAt?: number,
     channelRosterIds?: string[],
     revocations?: ChannelMembership[],
-    partial?: boolean,
   ): Promise<boolean>;
   upsertGroups(
     groupMembers: GroupMembership[],
     syncedAt?: number,
     groupIds?: string[],
     groupRosterIds?: string[],
-    partial?: boolean,
   ): Promise<boolean>;
+  /** Applies one live-verified roster; false when malformed or older than what the directory already holds. */
+  recordDirectoryObservation(observation: DirectoryObservation): Promise<boolean>;
   setDirectoryWorkspaceUrl(url: string): Promise<void>;
   directoryMeta(): Promise<DirectoryMeta>;
   resolveRecipient(query: string): Promise<RecipientResolution>;

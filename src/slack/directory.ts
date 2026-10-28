@@ -620,34 +620,18 @@ export function createDirectory(deps: {
       return { audience: [actor, externalMarker()] };
     }
     if (CORE_SINGLETON && !deps.externalAccess && !actor.isBot) {
-      const group = info?.is_mpim === true;
+      const kind = info?.is_mpim === true ? "group" : "channel";
+      const { name, is_private: isPrivate } = info ?? {};
       if (
-        (!group && (!info?.name || typeof info.is_private !== "boolean")) ||
+        (kind === "channel" && (!name || typeof isPrivate !== "boolean")) ||
         info?.is_member === false ||
         observedAt === undefined
       )
         return { audience: [actor, externalMarker()] };
       if (membership.publishMembers) {
-        const principalIds = membership.publishMembers.map((member) => member.externalId);
-        const applied = await core.pushDirectory(
-          group
-            ? {
-                groupIds: [channel],
-                groupMembers: principalIds.map((principalId) => ({ groupId: channel, principalId })),
-                groupRosterIds: [channel],
-                groupsSyncedAt: observedAt,
-                partialGroups: true,
-              }
-            : {
-                channels: [{ channelId: channel, name: info!.name!, isPrivate: info!.is_private }],
-                channelMembers: principalIds.map((principalId) => ({ channelId: channel, principalId })),
-                channelRosterIds: [channel],
-                channelsSyncedAt: observedAt,
-                partialChannels: true,
-              },
-        );
-        if (!applied)
-          throw new Error(`Slack ${group ? "group" : "channel"} membership was not persisted before admission`);
+        const memberIds = membership.publishMembers.map((member) => member.externalId);
+        if (!(await core.recordDirectoryObservation({ kind, id: channel, name, isPrivate, memberIds, observedAt })))
+          throw new Error(`Slack ${kind} membership was not persisted before admission`);
       }
     }
     return membership;

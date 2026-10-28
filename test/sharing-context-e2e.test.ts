@@ -218,77 +218,79 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
   assert.match(await childTurn(read, "refused"), /access is no longer current/);
 });
 
-test("sharing e2e: a new group DM's verified roster carries helpers before any crawl", async (t) => {
-  const b = await fixture(t);
-  await b.featureFlags.setEnabled("persistent_subagents", "personal:U1", true, "test");
-  await b.app.upsertGroups([{ groupId: "G-OLD", principalId: "U1" }], Date.now() - 60_000, ["G-OLD"], ["G-OLD"]);
-  const slack = createDirectory({
-    core: b.slackCore,
-    ids: {
-      ownTeamId: "T_TEST",
-      botUserId: "U_BOT",
-      ownBotId: "B_BOT",
-      botHandle: "bot",
-      ownWorkspaceUrl: "",
-      identityMode: "slack-id",
-    },
-  });
-  const client = {
-    async *paginate() {
-      yield { members: ["U1", "U2", "U_BOT"] };
-    },
-    users: { info: async ({ user }: { user: string }) => ({ user: { id: user, team_id: "T_TEST" } }) },
-  };
-  const observedAt = Date.now();
-  const observe = () =>
-    slack.channelMembership(
-      client,
-      "G-NEW",
-      { externalId: "U1" },
-      "U1",
-      { name: "mpdm-u1--u2-1", is_private: true, is_mpim: true },
-      observedAt,
-    );
-  const verified = await observe();
-  assert.ok(verified.publishMembers);
-  b.runtime.startBackground();
-  const settled = async (find: () => Promise<Awaited<ReturnType<typeof b.runs.get>>>) => {
-    const deadline = Date.now() + 10_000;
-    for (;;) {
-      const run = await find();
-      if (run?.status === "done" || run?.status === "failed") return run;
-      assert.ok(Date.now() < deadline, "run did not finish");
-      await sleep(25);
-    }
-  };
-  const groupTurn = (text: string) =>
-    b.turn(text, true, "U1", {
-      conversation: {
-        kind: "group",
-        channelRef: "G-NEW",
-        threadRef: "G-NEW:helper",
-        audience: verified.audience,
-        publishMembers: verified.publishMembers,
+for (const kind of ["group", "channel"] as const)
+  test(`sharing e2e: a new ${kind === "group" ? "group DM" : "channel"}'s verified roster carries helpers before any crawl`, async (t) => {
+    const id = kind === "group" ? "G-NEW" : "C-NEW";
+    const b = await fixture(t);
+    await b.featureFlags.setEnabled("persistent_subagents", "personal:U1", true, "test");
+    await b.app.upsertGroups([{ groupId: "G-OLD", principalId: "U1" }], Date.now() - 60_000, ["G-OLD"], ["G-OLD"]);
+    const slack = createDirectory({
+      core: b.slackCore,
+      ids: {
+        ownTeamId: "T_TEST",
+        botUserId: "U_BOT",
+        ownBotId: "B_BOT",
+        botHandle: "bot",
+        ownWorkspaceUrl: "",
+        identityMode: "slack-id",
       },
     });
-  const opened = await groupTurn("!open summarize the room");
-  const childId = /^opened (\S+)$/.exec(opened)?.[1];
-  assert.ok(childId, opened);
-  const child = await b.sessions.get(childId);
-  assert.ok(child);
-  const first = await settled(() => b.runs.getByDedupKey(`subagent-open:${child.threadRef}`));
-  assert.equal(first.result?.status, "ok", JSON.stringify(first.result));
-  assert.equal((await settled(() => b.runs.getByDedupKey(`subagent-return:${first.id}`))).result?.status, "ok");
-  assert.equal(await groupTurn("!receive"), `received ${child.id}`);
-  const groupComputer = await b.sandboxResources.create("U1", "group:G-NEW", "sprites", "default");
-  await b.sandboxResources.setDefault("U1", "group:G-NEW", groupComputer.id);
-  const helper = await b.runs.enqueue({
-    sessionId: child.threadRef,
-    request: { ...first.request, text: "!run echo helper-computer" },
+    const client = {
+      async *paginate() {
+        yield { members: ["U1", "U2", "U_BOT"] };
+      },
+      users: { info: async ({ user }: { user: string }) => ({ user: { id: user, team_id: "T_TEST" } }) },
+    };
+    const observedAt = Date.now();
+    const observe = () =>
+      slack.channelMembership(
+        client,
+        id,
+        { externalId: "U1" },
+        "U1",
+        { name: kind === "group" ? "mpdm-u1--u2-1" : "new-room", is_private: true, is_mpim: kind === "group" },
+        observedAt,
+      );
+    const verified = await observe();
+    assert.ok(verified.publishMembers);
+    b.runtime.startBackground();
+    const settled = async (find: () => Promise<Awaited<ReturnType<typeof b.runs.get>>>) => {
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        const run = await find();
+        if (run?.status === "done" || run?.status === "failed") return run;
+        assert.ok(Date.now() < deadline, "run did not finish");
+        await sleep(25);
+      }
+    };
+    const roomTurn = (text: string) =>
+      b.turn(text, true, "U1", {
+        conversation: {
+          kind,
+          channelRef: id,
+          threadRef: `${id}:helper`,
+          audience: verified.audience,
+          publishMembers: verified.publishMembers,
+        },
+      });
+    const opened = await roomTurn("!open summarize the room");
+    const childId = /^opened (\S+)$/.exec(opened)?.[1];
+    assert.ok(childId, opened);
+    const child = await b.sessions.get(childId);
+    assert.ok(child);
+    const first = await settled(() => b.runs.getByDedupKey(`subagent-open:${child.threadRef}`));
+    assert.equal(first.result?.status, "ok", JSON.stringify(first.result));
+    assert.equal((await settled(() => b.runs.getByDedupKey(`subagent-return:${first.id}`))).result?.status, "ok");
+    assert.equal(await roomTurn("!receive"), `received ${child.id}`);
+    const roomComputer = await b.sandboxResources.create("U1", `${kind}:${id}`, "sprites", "default");
+    await b.sandboxResources.setDefault("U1", `${kind}:${id}`, roomComputer.id);
+    const helper = await b.runs.enqueue({
+      sessionId: child.threadRef,
+      request: { ...first.request, text: "!run echo helper-computer" },
+    });
+    const computer = await settled(() => b.runs.get(helper.run.id));
+    assert.equal(computer.result?.reply, "helper-computer", JSON.stringify(computer.result));
   });
-  const computer = await settled(() => b.runs.get(helper.run.id));
-  assert.equal(computer.result?.reply, "helper-computer", JSON.stringify(computer.result));
-});
 
 test("sharing e2e: room file and memory access is revoked on the next DM turn", async (t) => {
   const b = await fixture(t);
