@@ -1,7 +1,7 @@
 import { createPgPool, type PgPool, tenantCols, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { CachedMessage, ContainerState, LiveFallback, IngestEvent, SurfaceCache } from "./types.ts";
 import { tenant } from "../tenant.ts";
-import { jsonbSafeStringify } from "../util/text.ts";
+import { jsonbStringify } from "../util/text.ts";
 
 export type {
   CachedMessage,
@@ -19,7 +19,7 @@ const MAX_READ_LIMIT = 500;
 const DEFAULT_SEARCH_LIMIT = 50;
 
 function normalizeEvent(event: IngestEvent): IngestEvent {
-  return JSON.parse(jsonbSafeStringify(event)) as IngestEvent;
+  return JSON.parse(jsonbStringify(event)) as IngestEvent;
 }
 
 function clampLimit(limit: number | undefined, fallback: number): number {

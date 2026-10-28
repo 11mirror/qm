@@ -1,5 +1,5 @@
 import { turnFenceHeld } from "../turns/turn-fence.ts";
-import { jsonbStringify, jsonbSafeStringify, pgTextSafe } from "../util/text.ts";
+import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { type PgPool, type PoolClient, withPgTransaction, tenantCols } from "../persistence/pg-pool.ts";
 import type { GoalRecord } from "../harness/goal.ts";
 import type { GetItemsOptions, Lease, SessionStore } from "./session-store.ts";
@@ -81,7 +81,7 @@ export const insertItems = async (
   const full = newItems.map(
     (item, index) =>
       JSON.parse(
-        jsonbSafeStringify(storedItem(item, { sessionId, seq: startSeq + index, createdAt, turnId: turnId ?? null })),
+        jsonbStringify(storedItem(item, { sessionId, seq: startSeq + index, createdAt, turnId: turnId ?? null })),
       ) as Item,
   );
   for (const item of full) {

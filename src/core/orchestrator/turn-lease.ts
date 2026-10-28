@@ -8,7 +8,7 @@ import type { Lease, LeaseAttempt } from "../../sessions/session-store.ts";
 import { acquireLeaseWithin } from "../../sessions/session-store.ts";
 import { SESSION_BUSY_FIRE_TEXT, SESSION_BUSY_USER_TEXT } from "../failure-copy.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
-import { jsonbSafeStringify } from "../../util/text.ts";
+import { jsonbStringify } from "../../util/text.ts";
 import type { ScopeId, TurnResult } from "../../types.ts";
 import type { OrchestratorDeps } from "./types.ts";
 
@@ -30,7 +30,7 @@ function recordSessionBusy(
   deps.errors?.record({
     category: "sessions",
     code: "session_busy",
-    message: jsonbSafeStringify({
+    message: jsonbStringify({
       site: busy.site,
       heldBy: busy.attempt.heldBy ?? null,
       ...(busy.attempt.heldSince !== undefined ? { heldForMs: at - busy.attempt.heldSince } : {}),
@@ -72,7 +72,7 @@ async function acquireTurnLeaseOrRefuse(
     deps.errors?.record({
       category: "sessions",
       code: "session_missing",
-      message: jsonbSafeStringify({ site: args.site, runId: args.runId ?? null, surface: args.surface ?? null }),
+      message: jsonbStringify({ site: args.site, runId: args.runId ?? null, surface: args.surface ?? null }),
       scopeLabel: args.scopeId,
       sessionId: args.sessionId,
     });
