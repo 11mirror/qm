@@ -44,14 +44,64 @@ function rotated(auth: JsonObject, next: UserOAuthTokens): JsonObject | null {
   return chatgptAuthFromValue(refreshed) && authAccountId(refreshed) === authAccountId(auth) ? refreshed : null;
 }
 
-function refreshingAuth(
-  description: string,
-  read: () => Promise<StoredAuth | null>,
-  deps: RefreshDeps,
+function authFromFiles(files: CredentialFile[]): { path: string; auth: JsonObject } | null {
+  for (const file of files) {
+    const normalized = file.path.replace(/^\.\//, "");
+    if (!AUTH_FILE_PATHS.includes(normalized) && !normalized.endsWith("/auth.json")) continue;
+    try {
+      const auth = chatgptAuthFromValue(JSON.parse(Buffer.from(file.contentBase64, "base64").toString("utf8")));
+      if (auth) return { path: file.path, auth };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function credentialRevision(meta: KeychainCredentialMeta): string {
+  return `${meta.ownerId}:${meta.fingerprint}:${meta.updatedAt}`;
+}
+
+export function keychainCompanyChatGPTAuth(
+  deps: RefreshDeps & { keychain: Keychain; credentialId: string },
 ): CompanyChatGPTAuth {
   const refresh = deps.refresh ?? refreshChatGPTTokens;
   const now = deps.now ?? Date.now;
-  const inFlight = perTenant(() => ({ refreshing: null as Promise<JsonObject | null> | null }));
+  const cache = perTenant(() => ({
+    cached: undefined as { revision: string; found: { path: string; auth: JsonObject } | null } | undefined,
+    refreshing: null as Promise<JsonObject | null> | null,
+  }));
+
+  const read = async (): Promise<StoredAuth | null> => {
+    const meta = await deps.keychain.getCredential(deps.credentialId);
+    if (!meta || meta.kind !== "file") return null;
+    const revision = credentialRevision(meta);
+    const state = cache();
+    if (state.cached?.revision !== revision) {
+      const bundle = (await deps.keychain.materializeOwnFiles(meta.ownerId)).find(
+        (b) => b.credentialId === deps.credentialId,
+      );
+      state.cached = { revision, found: bundle ? authFromFiles(bundle.files) : null };
+    }
+    const found = state.cached.found;
+    if (!found) return null;
+    return {
+      auth: found.auth,
+      async write(next) {
+        const expiresAt = accessExpiresAt(next);
+        const saved = await deps.keychain.save({
+          ownerId: meta.ownerId,
+          service: meta.service,
+          files: [{ path: found.path, contentBase64: Buffer.from(JSON.stringify(next), "utf8").toString("base64") }],
+          ...(expiresAt !== undefined ? { expiresAt } : {}),
+        });
+        state.cached = {
+          revision: credentialRevision(saved),
+          found: { path: found.path, auth: next },
+        };
+      },
+    };
+  };
 
   const fresh = (auth: JsonObject): boolean => {
     const expiresAt = accessExpiresAt(auth);
@@ -62,7 +112,7 @@ function refreshingAuth(
     const current = await read();
     if (!current) return null;
     if (fresh(current.auth)) return current.auth;
-    const state = inFlight();
+    const state = cache();
     state.refreshing ??= (async () => {
       const locked = await read();
       if (!locked || fresh(locked.auth)) return locked?.auth ?? null;
@@ -86,70 +136,10 @@ function refreshingAuth(
   };
 
   return {
-    description,
+    description: `keychain credential ${deps.credentialId}`,
     async accessToken() {
       const auth = await load();
       return auth ? authTokens(auth)?.access : undefined;
     },
   };
-}
-
-function authFromFiles(files: CredentialFile[]): { path: string; auth: JsonObject } | null {
-  for (const file of files) {
-    const normalized = file.path.replace(/^\.\//, "");
-    if (!AUTH_FILE_PATHS.includes(normalized) && !normalized.endsWith("/auth.json")) continue;
-    try {
-      const auth = chatgptAuthFromValue(JSON.parse(Buffer.from(file.contentBase64, "base64").toString("utf8")));
-      if (auth) return { path: file.path, auth };
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
-function credentialRevision(meta: KeychainCredentialMeta): string {
-  return `${meta.ownerId}:${meta.fingerprint}:${meta.updatedAt}`;
-}
-
-export function keychainCompanyChatGPTAuth(
-  deps: RefreshDeps & { keychain: Keychain; credentialId: string },
-): CompanyChatGPTAuth {
-  const cache = perTenant(() => ({
-    cached: undefined as { revision: string; found: { path: string; auth: JsonObject } | null } | undefined,
-  }));
-  return refreshingAuth(
-    `keychain credential ${deps.credentialId}`,
-    async () => {
-      const meta = await deps.keychain.getCredential(deps.credentialId);
-      if (!meta || meta.kind !== "file") return null;
-      const revision = credentialRevision(meta);
-      const state = cache();
-      if (state.cached?.revision !== revision) {
-        const bundle = (await deps.keychain.materializeOwnFiles(meta.ownerId)).find(
-          (b) => b.credentialId === deps.credentialId,
-        );
-        state.cached = { revision, found: bundle ? authFromFiles(bundle.files) : null };
-      }
-      const found = state.cached.found;
-      if (!found) return null;
-      return {
-        auth: found.auth,
-        async write(next) {
-          const expiresAt = accessExpiresAt(next);
-          const saved = await deps.keychain.save({
-            ownerId: meta.ownerId,
-            service: meta.service,
-            files: [{ path: found.path, contentBase64: Buffer.from(JSON.stringify(next), "utf8").toString("base64") }],
-            ...(expiresAt !== undefined ? { expiresAt } : {}),
-          });
-          state.cached = {
-            revision: credentialRevision(saved),
-            found: { path: found.path, auth: next },
-          };
-        },
-      };
-    },
-    deps,
-  );
 }
