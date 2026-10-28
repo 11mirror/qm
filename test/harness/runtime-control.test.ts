@@ -16,7 +16,6 @@ import { createAclStore } from "../../src/acl/acl-store.ts";
 import { createResolutionService } from "../../src/resolution/resolution-service.ts";
 import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../../src/files/durable-byte-store.ts";
-import { createModelGateway } from "../../src/model/model-gateway.ts";
 import { createAgentTools, type AgentToolsOptions } from "../../src/harness/agent-tools.ts";
 import { createTurnToolState, type TurnToolStateInit } from "../../src/harness/turn-tool-state.ts";
 import { createDeployStore } from "../../src/deploy/deploy-store.ts";
@@ -404,7 +403,6 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: { profile: { backend: "fake", writablePersistence: "resident_disk" } } as Sandbox,
-    modelGateway: createModelGateway(),
     auditLog,
     rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 100, windowMs: 60_000 }),
     harness,

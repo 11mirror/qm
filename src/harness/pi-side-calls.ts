@@ -153,7 +153,7 @@ export async function piScreenSecurity(
     const model = access.model(modelId);
     const providerKeys = await access.providerKeys();
     if (!access.keyFor(providerKeys, model)) return undefined;
-    recordModelCall({
+    recordModelCall?.({
       model: modelId,
       inputTokens: countTokens(systemPrompt) + countTokens(payload),
       entryCount: 1,

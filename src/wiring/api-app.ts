@@ -152,7 +152,7 @@ function appDepsHead(deps: ApiAppInputs) {
   const { orchestrator, skillFetcher } = deps.orchestrator;
   const { runs, maxAttempts, turnStream, runStreamEvents, runActivity } = deps.runs;
   const { runSignals, modelCredentials, refreshModels, customProviders, refreshCustomProviders } = deps.harness;
-  const { modelGateway, userModelCredentials, mcpToolService } = deps.credentials;
+  const { userModelCredentials, mcpToolService } = deps.credentials;
   const { mcpServers, acl } = deps.files;
   const { auditLog } = deps.deploymentLayer;
   const { crons, webhooks } = deps.crons;
@@ -174,7 +174,6 @@ function appDepsHead(deps: ApiAppInputs) {
     runStreamEvents,
     runActivity,
     signals: runSignals,
-    modelGateway,
     modelCredentials,
     userModelCredentials,
     refreshModels,

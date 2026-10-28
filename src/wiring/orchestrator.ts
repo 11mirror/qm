@@ -157,7 +157,7 @@ function orchestratorDepsHead(
   const { refreshModels, harness, gatewayTransport } = deps.harness;
   const { identity, configStore, sessions, admin } = deps.stores;
   const { resolution, workspace, files, toolOutput, rateLimiter, budget, acl } = deps.files;
-  const { userModelCredentials, connectorTokens, modelGateway, mcpToolService } = deps.credentials;
+  const { userModelCredentials, connectorTokens, mcpToolService } = deps.credentials;
   const { sandbox, sandboxResources } = deps.sandbox;
   const { memory } = deps.memory;
   const { deployService } = deps.deploy;
@@ -195,7 +195,6 @@ function orchestratorDepsHead(
     sandbox,
     sandboxResources,
     connectorTokens,
-    modelGateway,
     auditLog,
     rateLimiter,
     budget,
@@ -383,7 +382,7 @@ function buildAppServices(deps: OrchestratorInputs) {
   const { runs } = deps.runs;
   const { outbound, chatSurfaces } = deps.outbound;
   const { sessions, databaseUrl, every } = deps.stores;
-  const { serviceCreds, keychain, modelGateway } = deps.credentials;
+  const { serviceCreds, keychain } = deps.credentials;
   const { directProviderAvailability, harness } = deps.harness;
   const { budget } = deps.files;
 
@@ -417,14 +416,13 @@ function buildAppServices(deps: OrchestratorInputs) {
   const ackEmojiPicks: AckEmojiPickStore = createPostgresAckEmojiPickStore(databaseUrl);
   const providerKeys = directProviderAvailability;
   const screenSecurity: SecurityScreenProbe | undefined = harness.models.screenSecurity
-    ? ({ payload, modelId, systemPrompt, actorId, scopeLabel, signal }) =>
+    ? ({ payload, modelId, systemPrompt, actorId, signal }) =>
         harness.models.screenSecurity!({
           payload,
           modelId,
           systemPrompt,
           signal,
           recordModelCall: (rec) => {
-            modelGateway.recordCall({ at: Date.now(), scopeLabel, ...rec });
             void budget
               ?.record(actorId, estimateCostUsd(rec.inputTokens))
               .catch(swallowAs("budget: record screen spend", undefined));

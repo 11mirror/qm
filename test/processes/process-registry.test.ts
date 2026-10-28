@@ -15,7 +15,6 @@ import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-a
 import { createIdentityService } from "../../src/identity/identity-service.ts";
 import { writableMemoryScope } from "../../src/memory/policy.ts";
 import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
-import { createModelGateway } from "../../src/model/model-gateway.ts";
 import {
   createPostgresProcessRegistry,
   isDeclaredKind,
@@ -350,7 +349,6 @@ function buildOrchestrator(processes: ProcessRegistry, sandbox: Sandbox) {
     workspace,
     files: createPostgresFileArtifactStore(databaseUrl, createMemoryDurableByteStore()),
     sandbox,
-    modelGateway: createModelGateway(),
     auditLog,
     rateLimiter: createPostgresRateLimiter(databaseUrl, { maxPerWindow: 100, windowMs: 60_000 }),
     harness: createMockHarness(),

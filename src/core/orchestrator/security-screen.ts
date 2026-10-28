@@ -113,7 +113,6 @@ export function createSecurityObserver(deps: OrchestratorDeps): SecurityObserver
             }
           : {}),
         signal,
-        recordModelCall: (rec) => deps.modelGateway.recordCall({ at: Date.now(), scopeLabel, ...rec }),
       });
       return verdict ? { verdict } : undefined;
     };
