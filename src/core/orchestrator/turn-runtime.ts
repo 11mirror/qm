@@ -56,15 +56,11 @@ export async function selectTurnRuntime(
   )
     throw new NonRetryableTurnError("Your connected AI account cannot serve this model.");
   const effectiveModel = userModelOverride ?? input.model;
-  if (personalAuth) {
-    console.log(`[individual-auth] user=${actor.id} model=${effectiveModel} auth=${authLabel}`);
-  }
   const requestedRuntime: Partial<RuntimeChoice> = {
     ...(effectiveModel ? { modelId: effectiveModel } : {}),
     ...(input.thinkingLevel ? { effortLevel: input.thinkingLevel } : {}),
     ...(typeof effectiveFastMode === "boolean" ? { fastMode: effectiveFastMode } : {}),
   };
-  const runtimeDefaults = requestedRuntime;
   const runtimeClaims: CapabilityClaims = controlClaims ?? {
     ...scopeAttestation,
     exp: Date.now() + CAPABILITY_TTL_MS,
@@ -96,7 +92,7 @@ export async function selectTurnRuntime(
     effectiveTurnWallClockMs,
     runtimePurpose,
     purposeDefault,
-    runtimeDefaults,
+    runtimeDefaults: requestedRuntime,
     runtimeClaims,
     restoredRuntime,
     checkRuntimeAuth,
@@ -144,19 +140,12 @@ async function loadRuntimeAuth(ctx: TurnCtx, purposeDefault: PurposeDefault, run
       personalAuth = true;
       userProviderKeys = { [routing.provider]: routing.apiKey };
       userModelOverride = routing.model;
-    } else if (routing?.kind === "oauth" && routing.provider === "anthropic" && anthCred?.oauth) {
-      const derived = await userCredStore.derivedOAuth(actor.id, "anthropic");
+    } else if (routing?.kind === "oauth" && (routing.provider === "anthropic" ? anthCred : oaiCred)?.oauth) {
+      const derived = await userCredStore.derivedOAuth(actor.id, routing.provider);
+      const anthropic = routing.provider === "anthropic";
       if (derived) {
-        userProviderKeys = { anthropic: derived.accessToken };
-        authLabel = "claude-oauth-pi";
-        personalAuth = true;
-        userModelOverride = routing.model;
-      }
-    } else if (routing?.kind === "oauth" && routing.provider === "openai" && oaiCred?.oauth) {
-      const derived = await userCredStore.derivedOAuth(actor.id, "openai");
-      if (derived) {
-        userProviderKeys = { [CODEX_SUBSCRIPTION_PROVIDER]: derived.accessToken };
-        authLabel = "codex-oauth-pi";
+        userProviderKeys = { [anthropic ? "anthropic" : CODEX_SUBSCRIPTION_PROVIDER]: derived.accessToken };
+        authLabel = anthropic ? "claude-oauth-pi" : "codex-oauth-pi";
         personalAuth = true;
         userModelOverride = routing.model;
       }
@@ -200,7 +189,9 @@ async function adoptTurnRuntime(
   lifetime: "task" | "scope",
 ): Promise<void> {
   const auth = await servingRuntimeAuth(ctx, purposeDefault, choice).catch((error: unknown) => {
-    throw error instanceof NonRetryableTurnError ? error : new NonRetryableTurnError(errMessage(error));
+    throw error instanceof NonRetryableTurnError
+      ? error
+      : new NonRetryableTurnError(errMessage(error), { cause: error });
   });
   runtimeState.agentSwitch = lifetime;
   Object.assign(runtimeState, auth);

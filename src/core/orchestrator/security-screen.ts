@@ -120,20 +120,15 @@ export function createSecurityObserver(deps: OrchestratorDeps): SecurityObserver
 
     const attempt = async (): Promise<{ requestId: string; result: Screened | undefined; error?: string }> => {
       const requestId = context.requestId ?? randomUUID();
-      const abort = new AbortController();
-      const timer = setTimeout(() => abort.abort(), timeoutMs);
-      timer.unref();
+      const signal = AbortSignal.timeout(timeoutMs);
       const timedOut = new Promise<undefined>((resolve) =>
-        abort.signal.addEventListener("abort", () => resolve(undefined), { once: true }),
+        signal.addEventListener("abort", () => resolve(undefined), { once: true }),
       );
       try {
-        const result = await Promise.race([screenOnce(requestId, abort.signal), timedOut]);
-        return { requestId, result, ...(result ? {} : { error: abort.signal.aborted ? "timeout" : "no verdict" }) };
+        const result = await Promise.race([screenOnce(requestId, signal), timedOut]);
+        return { requestId, result, ...(result ? {} : { error: signal.aborted ? "timeout" : "no verdict" }) };
       } catch (error) {
         return { requestId, result: undefined, error: errMessage(error) };
-      } finally {
-        clearTimeout(timer);
-        abort.abort();
       }
     };
     const { requestId, result, error } = await attempt();
