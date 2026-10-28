@@ -281,6 +281,41 @@ test("webhook create surfaces BOTH the url and the secret verbatim", async () =>
   assert.match(out, /won't fire until the sender is pointed/);
 });
 
+test("webhook create without a secret prints no secret line", async () => {
+  const out = textOut(
+    await call(tool("webhook"), {
+      action: "create",
+      task: "handle it",
+      verification: { scheme: "github", secret: "" },
+    }),
+  );
+  assert.match(out, /Registered webhook wh-1/);
+  assert.doesNotMatch(out, /Secret|undefined/);
+});
+
+test("webhook update without a task is refused before it reaches the store", async () => {
+  const updates: string[] = [];
+  const tc = {
+    ...fakeToolContext(),
+    webhookUpdate: async (_id: string, task: string) => (
+      updates.push(task),
+      { ok: true as const, webhook: {} as never }
+    ),
+  } as ToolContext;
+  for (const task of [undefined, "  "])
+    assert.match(
+      textOut(
+        await call(tool("webhook", tc), { action: "update", id: "wh-1", ...(task === undefined ? {} : { task }) }),
+      ),
+      /\[error\] webhook update requires `id` and the new `task`/,
+    );
+  assert.match(
+    textOut(await call(tool("webhook", tc), { action: "update", id: "wh-1", task: "new" })),
+    /Updated webhook wh-1/,
+  );
+  assert.deepEqual(updates, ["new"]);
+});
+
 test("webhook create requires task + verification; list and disable dispatch", async () => {
   assert.match(
     textOut(await call(tool("webhook"), { action: "create", task: "x" })),

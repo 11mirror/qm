@@ -50,6 +50,7 @@ function tenantApp(t: Tenant, db: PgPool, channel: string) {
   return withTenant(t, () => {
     const bus = createPostgresNotifyBus<RunStreamEvent>(appUrl, channel, `run-stream ${t.orgId}`);
     const stream = createTurnStream({
+      runs: { setDeliveryState: async () => true },
       onDelta: (runId, text, offset, startOffset) => emitRunText(bus, runId, text, offset, startOffset),
       onChange: (runId) => bus.emit({ runId, kind: "refresh" }),
     });

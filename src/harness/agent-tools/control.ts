@@ -7,13 +7,13 @@ import { BOT_MODES } from "../../surface-cache/channel-policy-store.ts";
 import { adminOperations } from "../../tools/admin.ts";
 import { errMessage } from "../../util/errors.ts";
 import { type ToolKit } from "./kit.ts";
-import { optionalBoolean, optionalString, text } from "./shared.ts";
+import { fmtCandidates, optionalBoolean, optionalString, text } from "./shared.ts";
 
 export function controlPlaneTools(kit: ToolKit) {
   const { instructionsTool } = instructionsToolFor(kit);
   const { sharingTool } = sharingTools(kit);
-  const { resourceTool, adminActions, adminPreamble } = resourceTools(kit);
-  return { instructionsTool, sharingTool, resourceTool, adminActions, adminPreamble };
+  const { resourceTool, adminTool } = resourceTools(kit);
+  return { instructionsTool, sharingTool, resourceTool, adminTool };
 }
 
 function instructionsToolFor(kit: ToolKit) {
@@ -220,10 +220,11 @@ function sharingTools(kit: ToolKit) {
         });
         if (isUnavailable(r)) return unavailable(callId, tool);
         if (!r.ok) {
-          const candidates = r.candidates?.length
-            ? `\nCandidates: ${r.candidates.map((c) => `${c.label} (${c.id})`).join(", ")}`
-            : "";
-          return recordFail(callId, { tool, action, error: r.code }, `[error] ${r.message}${candidates}`);
+          return recordFail(
+            callId,
+            { tool, action, error: r.code },
+            `[error] ${r.message}${fmtCandidates(r.candidates)}`,
+          );
         }
         let invitationNote = "";
         if (r.invitation) {
@@ -243,6 +244,9 @@ function sharingTools(kit: ToolKit) {
   }
   return { sharingTool };
 }
+
+const ADMIN_PREAMBLE =
+  "Admin API; authority is rechecked on every call and audited. Private content needs a live admin in a DM or on a turn they started; unattended reads need explicit grants. Admin-role changes, impersonation, identity links and teammate invitations are portal-only. Confirm every mutation, report exactly what changed, and disclose only what this conversation needs. Never put secrets in arguments.\n\n";
 
 function requiredSuffix(operation: ToolDefinition): string {
   const required = ((operation.parameters as { required?: string[] }).required ?? []).filter((key) => key !== "action");
@@ -292,42 +296,44 @@ function resourceTools(kit: ToolKit) {
     });
   }
 
-  const adminActions: Record<string, ToolDefinition> = Object.fromEntries(
-    Object.entries(adminOperations).map(([action, operation]) => [
-      action,
-      defineTool({
-        name: action,
-        label: action,
-        description: operation.description,
-        parameters: operation.parameters,
-        async execute(callId, params) {
-          await recordCall(callId, { tool: "admin", action });
-          try {
-            const result = await ref.current?.admin?.call({ ...params, action }, ref.abortSignal);
-            if (!result) throw new Error("Admin API is not available on this turn");
-            return recordResult(
-              callId,
-              { tool: "admin", action, status: result.status },
-              {
-                ...text(result.status >= 400 ? redactSecrets(JSON.stringify(result)) : JSON.stringify(result)),
-                isError: result.status >= 400,
-              },
-              result.status >= 400,
-            );
-          } catch (error) {
-            return recordResult(
-              callId,
-              { tool: "admin", action, error: redactSecrets(errMessage(error)) },
-              { ...text(redactSecrets(errMessage(error))), isError: true },
-              true,
-            );
-          }
-        },
-      }),
-    ]),
-  );
+  const adminAction = (action: keyof typeof adminOperations): ToolDefinition =>
+    defineTool({
+      name: action,
+      label: action,
+      description: adminOperations[action].description,
+      parameters: adminOperations[action].parameters,
+      async execute(callId, params) {
+        await recordCall(callId, { tool: "admin", action });
+        try {
+          const result = await ref.current?.admin?.call({ ...params, action }, ref.abortSignal);
+          if (!result) throw new Error("Admin API is not available on this turn");
+          return recordResult(
+            callId,
+            { tool: "admin", action, status: result.status },
+            {
+              ...text(result.status >= 400 ? redactSecrets(JSON.stringify(result)) : JSON.stringify(result)),
+              isError: result.status >= 400,
+            },
+            result.status >= 400,
+          );
+        } catch (error) {
+          return recordResult(
+            callId,
+            { tool: "admin", action, error: redactSecrets(errMessage(error)) },
+            { ...text(redactSecrets(errMessage(error))), isError: true },
+            true,
+          );
+        }
+      },
+    });
 
-  const adminPreamble =
-    "Admin API; authority is rechecked on every call and audited. Private content needs a live admin in a DM or on a turn they started; unattended reads need explicit grants. Admin-role changes, impersonation, identity links and teammate invitations are portal-only. Confirm every mutation, report exactly what changed, and disclose only what this conversation needs. Never put secrets in arguments.\n\n";
-  return { resourceTool, adminActions, adminPreamble };
+  function adminTool(actions: readonly string[], operationsAvailable: boolean): ToolDefinition {
+    const tool = resourceTool(
+      "admin",
+      Object.fromEntries(actions.map((action) => [action, adminAction(action as keyof typeof adminOperations)])),
+    );
+    if (operationsAvailable) tool.description = ADMIN_PREAMBLE + tool.description;
+    return tool;
+  }
+  return { resourceTool, adminTool };
 }

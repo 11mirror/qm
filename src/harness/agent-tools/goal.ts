@@ -21,10 +21,11 @@ import type { TurnGoal } from "../turn-tool-state.ts";
 import { outsideWorkspace, sandboxSelector, text } from "./shared.ts";
 
 export function goalTools(kit: ToolKit, turnGoal: TurnGoal) {
-  const { createGoal } = createGoalTool(kit, turnGoal);
-  const { getGoal } = getGoalTool(kit, turnGoal);
-  const { updateGoal } = updateGoalTool(kit, turnGoal);
-  return { createGoal, getGoal, updateGoal };
+  return {
+    createGoal: createGoalTool(kit, turnGoal),
+    getGoal: getGoalTool(kit, turnGoal),
+    updateGoal: updateGoalTool(kit, turnGoal),
+  };
 }
 
 async function goalEvidenceFiles(
@@ -48,7 +49,7 @@ async function goalEvidenceFiles(
 
 function createGoalTool(kit: ToolKit, turnGoal: TurnGoal) {
   const { recordCall, recordCoreAuthoredResult } = kit;
-  const createGoal = defineTool({
+  return defineTool({
     name: "create",
     label: "create",
     description:
@@ -101,12 +102,11 @@ function createGoalTool(kit: ToolKit, turnGoal: TurnGoal) {
       );
     },
   });
-  return { createGoal };
 }
 
 function getGoalTool(kit: ToolKit, turnGoal: TurnGoal) {
   const { recordCall, recordCoreAuthoredResult } = kit;
-  const getGoal = defineTool({
+  return defineTool({
     name: "get",
     label: "get",
     description: "Read this session's goal: objective, status, floor, cap and usage.",
@@ -121,11 +121,10 @@ function getGoalTool(kit: ToolKit, turnGoal: TurnGoal) {
       );
     },
   });
-  return { getGoal };
 }
 
 function updateGoalTool(kit: ToolKit, turnGoal: TurnGoal) {
-  const updateGoal = defineTool({
+  return defineTool({
     name: "update",
     label: "update",
     description:
@@ -134,7 +133,6 @@ function updateGoalTool(kit: ToolKit, turnGoal: TurnGoal) {
     parameters: updateGoalParams(),
     execute: (callId, params) => runUpdateGoal(kit, turnGoal, callId, params),
   });
-  return { updateGoal };
 }
 
 function updateGoalParams() {

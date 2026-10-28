@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { createAgentTools } from "../../src/harness/agent-tools.ts";
 import { createTurnToolState, type TurnToolStateInit } from "../../src/harness/turn-tool-state.ts";
-import { createMemoryRunSignalStore, waitForClientResult } from "../../src/runs/run-signal-store.ts";
+import { waitForClientResult } from "../../src/runs/run-signal-store.ts";
 import type { ToolContext } from "../../src/tools/primitives.ts";
 import type { ClientToolDeclaration } from "../../src/types.ts";
 import { itemFields, type Item, type NewItem } from "../../src/sessions/items.ts";
+import { createMemoryRunSignalStore } from "./memory-run-signal-store.ts";
 
 function fakeToolContextPart1(sink?: {
   lastExecOpts?: Parameters<ToolContext["execute"]>[1];

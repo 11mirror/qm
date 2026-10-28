@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import * as mockHarness from "../support/mock-harness.ts";
 import { testConfig } from "../support/test-config.ts";
 import { settledRun } from "../support/turns.ts";
+import { eventually } from "../support/settle.ts";
 
 let started!: () => void;
 let release!: () => void;
@@ -52,7 +53,8 @@ test("a run reports the runtime its turn runs on while working and after it fini
         origin: { kind: "human" },
       });
       await ready;
-      const live = (await built.app.getRun(queued.runId!))?.runtime;
+      const live = (await eventually(() => built.app.getRun(queued.runId!), { until: (view) => view?.runtime }))
+        ?.runtime;
       assert.ok(live?.modelId);
       if (model) assert.equal(live.modelId, model);
       assert.equal(live.change, undefined);
@@ -83,7 +85,8 @@ test("a runtime the agent switches to mid-turn is reported as its switch", async
       origin: { kind: "human" },
     });
     await ready;
-    const live = (await built.app.getRun(queued.runId!))?.runtime;
+    const live = (await eventually(() => built.app.getRun(queued.runId!), { until: (view) => view?.runtime?.change }))
+      ?.runtime;
     assert.equal(live?.modelId, "claude-haiku-5-5");
     assert.deepEqual(live.change, { agent: "task" });
     release();

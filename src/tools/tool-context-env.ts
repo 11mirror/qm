@@ -5,7 +5,6 @@ import { DROPPED_PROXY_ENV } from "../sandbox/sandbox-env.ts";
 import type { SandboxHandle } from "../sandbox/sandbox.ts";
 import type { GapPhase } from "../sessions/session-store.ts";
 import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
-import { createNullLedger } from "../runs/tool-ledger.ts";
 import { TURN_FILES_DIR } from "../core/attachments.ts";
 import { swallow, withCleanup } from "../util/errors.ts";
 import type { ControlService } from "../api/control-service.ts";
@@ -146,7 +145,7 @@ export function sandboxAccess(deps: ToolContextDeps) {
 }
 
 export function callLedger(deps: ToolContextDeps) {
-  const ledger = deps.ledger ?? createNullLedger();
+  const ledger = deps.ledger;
   const runId = deps.runId;
   const attempt = deps.attempt ?? 1;
   let callIndex = -1;
@@ -166,7 +165,7 @@ export function callLedger(deps: ToolContextDeps) {
 
   async function once<T>(produce: () => Promise<T>, shouldCache: (r: T) => boolean = () => true): Promise<T> {
     const index = ++callIndex;
-    if (runId === undefined) return produce();
+    if (runId === undefined || !ledger) return produce();
     const prior = await timed("tool_ledger", () => ledger.begin(runId, attempt, index));
     if (prior.cached) return JSON.parse(prior.output ?? "null") as T;
     const result = await produce();

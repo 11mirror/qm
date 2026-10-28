@@ -5,6 +5,7 @@ import { settle } from "../support/settle.ts";
 import { quietRuns } from "../support/turns.ts";
 import { setChannelInstructions } from "../support/channel-instructions.ts";
 import { listFull, freshApp, judged } from "../support/ambient-app.ts";
+import { takePending } from "../support/memory-run-signal-store.ts";
 
 test("bot ledger — ignore: an ignored-bot-only delta never wakes the judge and records no row (§3.3)", async () => {
   const built = freshApp();
@@ -419,7 +420,7 @@ test("a second ambient wake while the first worker is LIVE steers into it instea
     { container, ts: "100.2", authorId: "U2", text: "same here, meetup page too", createdAt: 2 },
   ]);
   let signals: any[] = [];
-  await settle(async () => (signals = await built.signals.takePending(live!.id)).length > 0);
+  await settle(async () => (signals = await takePending(built.signals, live!.id)).length > 0);
   assert.equal(signals.length, 1, "the second wake steered the live run");
   assert.equal(signals[0]!.kind, "steer");
   assert.match(signals[0]!.text!, /meetup page too/);

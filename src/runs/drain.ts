@@ -9,7 +9,7 @@ export interface DrainController {
 
 const DRAIN_SWEEP_MS = 10_000;
 
-export function createDrainController(opts: { registry: InstanceRegistry; sweepMs?: number }): DrainController {
+export function createDrainController(opts: { registry: InstanceRegistry }): DrainController {
   let superseded = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   let beating: Promise<void> = Promise.resolve();
@@ -26,7 +26,7 @@ export function createDrainController(opts: { registry: InstanceRegistry; sweepM
   return {
     start() {
       if (timer) return;
-      timer = setInterval(tick, opts.sweepMs ?? DRAIN_SWEEP_MS);
+      timer = setInterval(tick, DRAIN_SWEEP_MS);
       timer.unref();
       tick();
     },

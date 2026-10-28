@@ -31,8 +31,7 @@ import {
 } from "../runs/run-stream-events.ts";
 import type { ContextRequestEvent } from "../api/app-types.ts";
 import { createTurnStream } from "../runs/turn-stream.ts";
-import type { RunActivityStore } from "../runs/run-activity-store.ts";
-import { createPostgresRunActivityStore } from "../runs/postgres-run-activity-store.ts";
+import { createPostgresRunActivityStore, type RunActivityStore } from "../runs/postgres-run-activity-store.ts";
 
 type RunsInputs = Pick<Head, "config" | "late"> & { stores: StoresModule; files: FilesModule; sandbox: SandboxModule };
 
@@ -138,7 +137,7 @@ export type RunsModule = ReturnType<typeof buildRuns>;
 
 function buildRunStreams(deps: RunsInputs, runs: RunStore) {
   const { sandbox } = deps.sandbox;
-  const { databaseUrl } = deps.stores;
+  const { databaseUrl, every } = deps.stores;
   const { late, config } = deps;
 
   const processes = supportsProcessSessions(sandbox) ? createPostgresProcessRegistry(databaseUrl) : undefined;
@@ -156,6 +155,7 @@ function buildRunStreams(deps: RunsInputs, runs: RunStore) {
   );
   const refreshRunStream = (runId: string): void => runStreamEvents.emit({ runId, kind: "refresh" });
   const turnStream = createTurnStream({
+    runs,
     onDelta: (runId, text, offset, startOffset) => emitRunText(runStreamEvents, runId, text, offset, startOffset),
     onReasoning: (runId, block, text, offset) => emitRunReasoning(runStreamEvents, runId, block, text, offset),
     onChange: refreshRunStream,
@@ -175,7 +175,8 @@ function buildRunStreams(deps: RunsInputs, runs: RunStore) {
     });
   });
   runs.onTerminal((run) => refreshRunStream(run.id));
-  const activityStore: RunActivityStore = createPostgresRunActivityStore(databaseUrl);
+  const activityStore = createPostgresRunActivityStore(databaseUrl);
+  every("runs:activity-prune", 60_000, () => activityStore.prune());
   const runActivity: RunActivityStore = {
     ...activityStore,
     async append(runId, entry) {

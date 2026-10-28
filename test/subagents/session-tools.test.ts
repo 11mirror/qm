@@ -6,7 +6,6 @@ import { test } from "node:test";
 import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
 import type { AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import { testRunStore } from "../support/turns.ts";
-import { createMemoryRunSignalStore } from "../../src/runs/run-signal-store.ts";
 import type { Run, RunStore } from "../../src/runs/run-store.ts";
 import { isUserMessage } from "../../src/sessions/items.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
@@ -18,6 +17,7 @@ import { buildApp } from "../support/build-app.ts";
 import { settle } from "../support/settle.ts";
 import { testConfig } from "../support/test-config.ts";
 import { testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";
+import { createMemoryRunSignalStore } from "../support/memory-run-signal-store.ts";
 
 const alice: Principal = { id: "alice@example.com", type: "internal" };
 const bob: Principal = { id: "bob@example.com", type: "internal" };

@@ -8,6 +8,7 @@ import type { OrchestratorInput } from "../../../src/core/orchestrator.ts";
 import type { TurnRequest } from "../../../src/types.ts";
 import { completeTurn } from "../../support/turns.ts";
 import { serveSignalRoute, request, steererRequest } from "../../support/turn-signal-route.ts";
+import { takePending } from "../../support/memory-run-signal-store.ts";
 
 const { built, core, coreSignal } = await serveSignalRoute();
 
@@ -30,7 +31,7 @@ test("core route: a steer's ts and request thread through to the signal store", 
   };
   const r = await coreSignal(run.id, body);
   assert.equal(r.status, 200);
-  const [signal] = await built.signals.takePending(run.id);
+  const [signal] = await takePending(built.signals, run.id);
   assert.ok(signal);
   assert.equal(signal.ts, "1712.001");
   assert.equal(signal.request?.actor.externalId, "internal:U1");
@@ -46,7 +47,7 @@ test("core route: another person's steer is attributed with their display name",
     request: steererRequest("web-eve", "t-foreign", "go right", "Eve Example"),
   });
   assert.equal(r.status, 200);
-  const [signal] = await built.signals.takePending(run.id);
+  const [signal] = await takePending(built.signals, run.id);
   assert.equal(signal?.text, "Eve Example: go right");
   assert.equal(signal?.request?.text, "go right", "the replayable request keeps the steerer's own words");
 });
@@ -64,7 +65,7 @@ test("core route: a malformed request is rejected 400, and privileged fields are
   };
   const r = await coreSignal(run.id, { kind: "steer", text: "x", request: smuggled });
   assert.equal(r.status, 200);
-  const [signal] = await built.signals.takePending(run.id);
+  const [signal] = await takePending(built.signals, run.id);
   assert.ok(signal?.request);
   assert.deepEqual(signal.request.origin, { kind: "automation" });
   assert.equal("spawned" in signal.request, false);
@@ -75,7 +76,7 @@ test("core route: a bare steer without a ts gets one minted so harnesses persist
   const { run } = await built.runs.enqueue({ sessionId: "t-mint", request: request("hi", "t-mint") });
   const r = await coreSignal(run.id, { kind: "steer", text: "keep going" });
   assert.equal(r.status, 200);
-  const [signal] = await built.signals.takePending(run.id);
+  const [signal] = await takePending(built.signals, run.id);
   assert.ok(signal?.ts, "signalRun mints a ts when the caller sends none");
 });
 
@@ -104,7 +105,7 @@ test("signalRun attributes a bare steer from a shared-scope viewer who is not th
   await built.sessions.addParticipant(session.id, "steer-member");
   const outcome = await built.app.signalRun(run.id, { kind: "steer", text: "try harder" }, "steer-member");
   assert.equal(outcome.accepted, true);
-  const [signal] = await built.signals.takePending(run.id);
+  const [signal] = await takePending(built.signals, run.id);
   assert.equal(signal?.text, "Steer Member: try harder");
   assert.ok(signal?.ts);
 });
@@ -118,7 +119,7 @@ test("core route: a request claiming a different conversation than the run's is 
   });
   assert.equal(r.status, 400);
   assert.equal(r.json.reason, "conversation_mismatch");
-  assert.deepEqual(await built.signals.takePending(run.id), []);
+  assert.deepEqual(await takePending(built.signals, run.id), []);
 });
 
 test("core route: a portal identity that does not match the request actor is refused 403", async () => {
@@ -133,7 +134,7 @@ test("core route: a portal identity that does not match the request actor is ref
     { [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: "eve", exp: Date.now() + 60_000 }, CORE_SECRET) },
   );
   assert.equal(r.status, 403);
-  assert.deepEqual(await built.signals.takePending(run.id), []);
+  assert.deepEqual(await takePending(built.signals, run.id), []);
 });
 
 test("an orphaned steer with a request replays as the steerer, not the run's owner", async () => {
@@ -420,7 +421,7 @@ test("core route: a client_result is refused for a run that declared no client t
   const r = await coreSignal(run.id, { kind: "client_result", callId: "c1", result: { content: "x" } });
   assert.equal(r.status, 409);
   assert.deepEqual(r.json, { accepted: false, reason: "no_client_tools" });
-  assert.deepEqual(await built.signals.takePending(run.id), []);
+  assert.deepEqual(await takePending(built.signals, run.id), []);
 });
 
 test("signalRun refuses a client_result from anyone but the run's own actor", async () => {
@@ -431,7 +432,7 @@ test("signalRun refuses a client_result from anyone but the run's own actor", as
     "web-eve",
   );
   assert.deepEqual(outcome, { accepted: false, reason: "not_found" });
-  assert.deepEqual(await built.signals.takePending(run.id), []);
+  assert.deepEqual(await takePending(built.signals, run.id), []);
 });
 
 test("core route: a client_result is accepted once, with a per-call dedupe key", async () => {
@@ -447,7 +448,7 @@ test("core route: a client_result is accepted once, with a per-call dedupe key",
   const second = await coreSignal(run.id, { ...body, result: { content: "late" } });
   assert.equal(second.status, 409);
   assert.deepEqual(second.json, { accepted: false, reason: "duplicate" });
-  const signals = await built.signals.takePending(run.id);
+  const signals = await takePending(built.signals, run.id);
   assert.equal(signals.length, 1);
   assert.equal(signals[0]!.kind, "client_result");
   assert.equal(signals[0]!.callId, "call-1");
@@ -469,7 +470,7 @@ test("core route: malformed client_result signals are rejected 400", async () =>
     const r = await coreSignal(run.id, body);
     assert.equal(r.status, 400, JSON.stringify(body));
   }
-  assert.deepEqual(await built.signals.takePending(run.id), []);
+  assert.deepEqual(await takePending(built.signals, run.id), []);
   const named = await coreSignal(run.id, { kind: "client_result", callId: "c2", result: { content: ["x"] } });
   assert.match(String(named.json.message), /^client_result\.result\.content: /);
 });
@@ -483,7 +484,7 @@ test("core route: a client_result keeps only the declared result fields", async 
     extra: "ignored",
   });
   assert.equal(r.status, 200);
-  const [signal] = await built.signals.takePending(run.id);
+  const [signal] = await takePending(built.signals, run.id);
   assert.deepEqual(signal?.result, { content: "ok" });
 });
 

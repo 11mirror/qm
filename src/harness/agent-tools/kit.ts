@@ -1,5 +1,3 @@
-import { SANDBOX_CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
-import { BACKGROUND_JOB_TTL_MAX_MS, BACKGROUND_JOB_TTL_MS } from "../../connectors/background-exec-broker.ts";
 import { handbackStop } from "../../runs/run-store.ts";
 import { toolResultProvenance, type ToolResultProvenance } from "../../security/security-screen.ts";
 import { cutUnparkedToolOutput, parkIfOverCap } from "../../sessions/tool-output.ts";
@@ -10,95 +8,22 @@ import { reportFailureAs } from "../../util/errors.ts";
 import { isObj } from "../../util/objects.ts";
 import { type AgentToolsOptions } from "../agent-tools.ts";
 import type { ToolRuntime } from "../turn-tool-state.ts";
-import { cutPayloadStrings, isPolicyNotice, text } from "./shared.ts";
+import { text } from "./shared.ts";
 import { type RetryMark } from "./wrappers.ts";
 
-export const EXEC_TIMEOUT_DEFAULT_MS = 120_000;
-export const EXEC_TIMEOUT_MAX_MS = 300_000;
-
 export function createToolKit(ref: ToolRuntime, opts?: AgentToolsOptions) {
-  const {
-    reachExec,
-    controlTools,
-    surfaceTools,
-    delegateWork,
-    execTimeoutSec,
-    execCeilingSec,
-    bgTtlSec,
-    bgTtlMaxSec,
-    bgTtlMin,
-    bgTtlMaxMin,
-    capabilityTtlHours,
-    capabilityExpiry,
-  } = kitSettings(opts);
   const { log } = kitLog(ref);
-  const {
-    retryMarks,
-    recordCall,
-    resultQueue,
-    recordResult,
-    recordCoreAuthoredResult,
-    recordExternalResult,
-    recordText,
-    recordFail,
-  } = kitRecorders(ref, { log });
-  const { unavailable, isUnavailable, refused } = kitReplies({ recordFail });
+  const recorders = kitRecorders(ref, { log });
   return {
     ref,
     opts,
-    reachExec,
-    controlTools,
-    surfaceTools,
-    delegateWork,
-    execTimeoutSec,
-    execCeilingSec,
-    bgTtlSec,
-    bgTtlMaxSec,
-    bgTtlMin,
-    bgTtlMaxMin,
-    capabilityTtlHours,
-    capabilityExpiry,
+    reachExec: !!opts?.reachExec,
+    controlTools: !!opts?.controlTools,
+    surfaceTools: !!opts?.surfaceTools,
+    delegateWork: opts?.delegateWork === true,
     log,
-    retryMarks,
-    recordCall,
-    resultQueue,
-    recordResult,
-    recordCoreAuthoredResult,
-    recordExternalResult,
-    recordText,
-    recordFail,
-    unavailable,
-    isUnavailable,
-    refused,
-  };
-}
-
-function kitSettings(opts?: AgentToolsOptions) {
-  const reachExec = !!opts?.reachExec;
-  const controlTools = !!opts?.controlTools;
-  const surfaceTools = !!opts?.surfaceTools;
-  const delegateWork = opts?.delegateWork === true;
-  const execTimeoutSec = Math.round((opts?.execTimeoutMs ?? EXEC_TIMEOUT_DEFAULT_MS) / 1000);
-  const execCeilingSec = Math.round((opts?.execTimeoutCeilingMs ?? EXEC_TIMEOUT_MAX_MS) / 1000);
-  const bgTtlSec = Math.round((opts?.backgroundJobTtlMs ?? BACKGROUND_JOB_TTL_MS) / 1000);
-  const bgTtlMaxSec = Math.round((opts?.backgroundJobTtlMaxMs ?? BACKGROUND_JOB_TTL_MAX_MS) / 1000);
-  const bgTtlMin = Math.round(bgTtlSec / 60);
-  const bgTtlMaxMin = Math.round(bgTtlMaxSec / 60);
-  const capabilityTtlHours = SANDBOX_CAPABILITY_TTL_MS / 3_600_000;
-  const capabilityExpiry = `Those turn tokens expire ${capabilityTtlHours} hours after the launching turn started (then they 401), so publish checkpoints to Files before that and keep the file ID.`;
-  return {
-    reachExec,
-    controlTools,
-    surfaceTools,
-    delegateWork,
-    execTimeoutSec,
-    execCeilingSec,
-    bgTtlSec,
-    bgTtlMaxSec,
-    bgTtlMin,
-    bgTtlMaxMin,
-    capabilityTtlHours,
-    capabilityExpiry,
+    ...recorders,
+    ...kitReplies(recorders),
   };
 }
 
@@ -162,7 +87,7 @@ function kitRecorders(ref: ToolRuntime, { log }: Pick<ReturnType<typeof kitLog>,
     } = {},
   ): Promise<T> =>
     resultQueue("result", async () => {
-      const originalTool = String(summary.tool ?? "");
+      const tool = String(summary.tool ?? "");
       const toolText = ret.content
         .filter((c) => c.type === "text")
         .map((c) => c.text ?? "")
@@ -188,11 +113,9 @@ function kitRecorders(ref: ToolRuntime, { log }: Pick<ReturnType<typeof kitLog>,
                 .map((c, i) => (i === firstText ? { type: "text", text: result } : c))
                 .filter((c, i) => c.type !== "text" || i === firstText);
       } else for (const text of mail) ret.content.push({ type: "text", text });
-      const persistedSummary = summary;
-      const tool = String(summary.tool ?? "");
       const provenance =
         screenAs?.provenance ??
-        toolResultProvenance(originalTool, typeof summary.action === "string" ? summary.action : undefined);
+        toolResultProvenance(tool, typeof summary.action === "string" ? summary.action : undefined);
       const screenExempt =
         isPolicyNotice(summary) ||
         coreAuthored ||
@@ -222,10 +145,7 @@ function kitRecorders(ref: ToolRuntime, { log }: Pick<ReturnType<typeof kitLog>,
         delivered.push(message.id);
       }
       await log("ToolResult", {
-        ...(cutPayloadStrings(persistedSummary, (s) => cutUnparkedToolOutput(s, inlineTokens)) as Record<
-          string,
-          unknown
-        >),
+        ...(cutPayloadStrings(summary, (s) => cutUnparkedToolOutput(s, inlineTokens)) as Record<string, unknown>),
         callId,
         isError,
         ...(resultTruncated ? { resultTruncated: true } : {}),
@@ -287,3 +207,30 @@ function kitReplies({ recordFail }: Pick<ReturnType<typeof kitRecorders>, "recor
 }
 
 export type ToolKit = ReturnType<typeof createToolKit>;
+
+function isPolicyNotice(summary: Record<string, unknown>): boolean {
+  return summary.blocked !== undefined || summary.denied !== undefined;
+}
+
+function cutPayloadStrings(v: unknown, cut: (text: string) => string): unknown {
+  if (typeof v === "string") return cut(v);
+  if (Array.isArray(v)) {
+    let out: unknown[] | null = null;
+    for (let i = 0; i < v.length; i++) {
+      const c = cutPayloadStrings(v[i], cut);
+      if (c !== v[i]) (out ??= v.slice())[i] = c;
+    }
+    return out ?? v;
+  }
+  if (v && typeof v === "object") {
+    const proto = Object.getPrototypeOf(v);
+    if (proto !== Object.prototype && proto !== null) return v;
+    let out: Record<string, unknown> | null = null;
+    for (const [k, x] of Object.entries(v)) {
+      const c = cutPayloadStrings(x, cut);
+      if (c !== x) (out ??= { ...(v as Record<string, unknown>) })[k] = c;
+    }
+    return out ?? v;
+  }
+  return v;
+}

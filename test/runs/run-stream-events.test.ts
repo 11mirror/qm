@@ -6,11 +6,13 @@ import { createMemoryEventBus } from "../../src/util/event-bus.ts";
 import { MAX_NOTIFY_PAYLOAD_BYTES, createPostgresNotifyBus } from "../../src/persistence/postgres-notify-bus.ts";
 import { randomUUID } from "node:crypto";
 
-test("text publications push exact offsets immediately, including block boundaries and the buffer cap", () => {
+const runs = { setDeliveryState: async () => true };
+
+test("text publications push exact offsets immediately, including block boundaries", async () => {
   const changes: string[] = [];
   const deltas: Array<{ runId: string; text: string; offset: number }> = [];
   const stream = createTurnStream({
-    maxChars: 9,
+    runs,
     onDelta: (runId, text, offset) => deltas.push({ runId, text, offset }),
     onChange: (id) => changes.push(id),
   });
@@ -21,6 +23,7 @@ test("text publications push exact offsets immediately, including block boundari
   stream.publish("run", "world");
   stream.publish("run", "ignored");
   stream.markReplyDone("run");
+  await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(
     deltas.map(({ text, offset }) => [text, offset]),
     [
@@ -51,22 +54,23 @@ test("cross-process text frames stay under Postgres' payload limit and preserve 
 });
 
 test("a boundary near the cap remains complete and later deltas keep absolute offsets", () => {
-  const frames: Array<[string, number, number]> = [];
+  const frames: Array<[number, number, number]> = [];
   const stream = createTurnStream({
-    maxChars: 5,
-    onDelta: (_id, text, offset, start) => frames.push([text, offset, start]),
+    runs,
+    onDelta: (_id, text, offset, start) => frames.push([text.length, offset, start]),
   });
-  stream.publish("r", "abcd");
+  stream.publish("r", "a".repeat(199_996));
   stream.publishBlockStart("r");
   stream.publishBlockStart("r");
   stream.publish("r", "next");
   assert.deepEqual(frames, [
-    ["abcd", 0, 0],
-    ["\n\n", 4, 4],
-    ["next", 6, 8],
+    [199_996, 0, 0],
+    [2, 199_996, 0],
+    [4, 199_998, 100_002],
   ]);
-  assert.equal(stream.snapshot("r"), "xt");
-  assert.equal(stream.startOffset("r"), 8);
+  assert.equal(stream.snapshot("r")?.length, 100_000);
+  assert.ok(stream.snapshot("r")?.endsWith("a\n\nnext"));
+  assert.equal(stream.startOffset("r"), 100_002);
 });
 
 const database = process.env.DATABASE_URL;
@@ -79,6 +83,7 @@ test(
     const worker = createPostgresNotifyBus<RunStreamEvent>(database!, channel, "test-worker");
     const api = createPostgresNotifyBus<RunStreamEvent>(database!, channel, "test-api");
     const stream = createTurnStream({
+      runs,
       onDelta: (runId, text, offset, startOffset) => emitRunText(worker, runId, text, offset, startOffset),
     });
     const runId = randomUUID();

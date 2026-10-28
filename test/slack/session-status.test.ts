@@ -4,7 +4,6 @@ import { createNoopLeaderLease } from "../../src/persistence/leader-lease.ts";
 import { createFeatureFlagStore } from "../../src/feature-flags.ts";
 import { createSlackSessionStatus, type SlackSessionStatusState } from "../../src/slack/session-status.ts";
 import { createSlackCoreClient, type SlackCoreClientDeps } from "../../src/api/slack-core-client.ts";
-import { createTurnStream } from "../../src/runs/turn-stream.ts";
 import type { ProcessRecord } from "../../src/processes/process-registry.ts";
 import type { Session, Monitor } from "../../src/types.ts";
 import { isTerminal, type Run } from "../../src/runs/run-store.ts";
@@ -344,25 +343,24 @@ for (const method of ["chat.postMessage", "chat.update"]) {
   });
 }
 
-test("core engagement is signaled once for local or durable replies, never quiet ambient turns", async () => {
-  for (const mode of ["quiet", "local", "remote"]) {
-    const stream = createTurnStream();
+test("core engagement is signaled once for durable replies, never quiet ambient turns", async () => {
+  for (const mode of ["quiet", "replying"]) {
     let polls = 0,
       engaged = 0;
     const core = createSlackCoreClient({
-      runs: {
-        onTerminal() {},
-        get: async () => {
-          if (++polls === 1 && mode === "local") stream.begin("r1");
+      runs: { onTerminal() {} },
+      app: {
+        subscribeRun: () => () => {},
+        getRun: async () => {
+          polls++;
           return {
-            id: "r1",
             status: polls < 3 ? "running" : "done",
-            deliveryState: mode === "remote" ? { replying: true } : null,
+            attempt: 1,
+            result: polls < 3 ? null : { status: "silent" },
+            ...(mode === "replying" ? { replying: true } : {}),
           };
         },
       },
-      turnStream: stream,
-      app: { getRun: async () => ({ result: { status: "silent" } }) },
     } as unknown as SlackCoreClientDeps);
     await core.waitRun("r1", {
       onReplying: () => {
@@ -370,6 +368,5 @@ test("core engagement is signaled once for local or durable replies, never quiet
       },
     });
     assert.equal(engaged, mode === "quiet" ? 0 : 1);
-    stream.end("r1");
   }
 });

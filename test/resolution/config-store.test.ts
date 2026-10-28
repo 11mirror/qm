@@ -22,6 +22,7 @@ import { stopAtEnd } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
 import { testConfigStore, testDatabaseUrl, failTableWrites } from "../support/test-database.ts";
 import { listenLocal } from "../support/listen-local.ts";
+import { takePending } from "../support/memory-run-signal-store.ts";
 
 function tables() {
   const databaseUrl = testDatabaseUrl();
@@ -510,7 +511,7 @@ test("shared chat messages queue instead of borrowing another person's account",
   assert.notEqual(first.runId, other.runId);
   assert.notEqual(other.steered, true);
   assert.equal((await built.runs.get(other.runId!))?.request.modelAccount, "company");
-  assert.equal((await built.signals.takePending(first.runId!)).length, 0);
+  assert.equal((await takePending(built.signals, first.runId!)).length, 0);
 });
 
 const org = scopeId("org", "default-org");

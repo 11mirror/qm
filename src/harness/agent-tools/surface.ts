@@ -4,28 +4,19 @@ import { Type, type Static } from "typebox";
 import { type OutboundFile } from "../../core/attachments.ts";
 import { type ToolKit } from "./kit.ts";
 import type { TurnHalt } from "../turn-tool-state.ts";
-import {
-  optionalBoolean,
-  optionalString,
-  outboundFilesSchema,
-  outboundSandboxSchema,
-  SURFACE_ACTIONS,
-  text,
-} from "./shared.ts";
+import { optionalBoolean, optionalString, text } from "./shared.ts";
 
 type ToolContext = NonNullable<ToolKit["ref"]["current"]>;
 
 export function replyTools(kit: ToolKit, halt: Pick<TurnHalt, "setSilent">) {
-  const { surface } = surfaceTool(kit);
-  const { attach, finishSilently } = attachAndFinishTools(kit, halt);
-  return { surface, attach, finishSilently };
+  return { surface: surfaceTool(kit), ...attachAndFinishTools(kit, halt) };
 }
 
 function surfaceTool(kit: ToolKit) {
   const { opts } = kit;
   const surfaceName = opts?.surfaceName ?? "slack";
   const surfaceLabel = surfaceProfile(surfaceName).label ?? surfaceName;
-  const surface = defineTool({
+  return defineTool({
     name: surfaceName,
     label: surfaceName,
     description:
@@ -36,7 +27,6 @@ function surfaceTool(kit: ToolKit) {
     parameters: surfaceParams(surfaceName),
     execute: (callId, params) => runSurfaceAction(kit, surfaceName, callId, params),
   });
-  return { surface };
 }
 
 function surfaceParams(surfaceName: string) {
@@ -532,3 +522,29 @@ function attachAndFinishTools(kit: ToolKit, halt: Pick<TurnHalt, "setSilent">) {
   });
   return { attach, finishSilently };
 }
+
+const SURFACE_ACTIONS = [
+  "post",
+  "reach",
+  "react",
+  "edit",
+  "delete",
+  "read_thread",
+  "whats_new",
+  "search",
+  "read_members",
+  "read_file",
+] as const;
+const outboundFilesSchema = Type.Array(
+  Type.Union([
+    Type.String({ minLength: 1 }),
+    Type.Object({ file_id: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
+  ]),
+  { description: 'Workspace paths or {file_id: "stored Files ID"} objects.' },
+);
+const outboundSandboxSchema = Type.Optional(
+  Type.String({
+    minLength: 1,
+    description: "Sandbox for workspace paths.",
+  }),
+);

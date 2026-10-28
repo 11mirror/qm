@@ -43,7 +43,7 @@ import type { Run, RunDeliveryState, RunStore } from "../runs/run-store.ts";
 import type { GoalView, ReasoningBlock, TurnStream } from "../runs/turn-stream.ts";
 import type { SessionStateBus, SessionStateEvent } from "../runs/session-state-bus.ts";
 import type { LedgerEventBus, OwnedLedgerEvent } from "../inbox/events.ts";
-import type { RunActivityEntry, RunActivityStore } from "../runs/run-activity-store.ts";
+import type { RunActivityEntry, RunActivityStore } from "../runs/postgres-run-activity-store.ts";
 import type { RunSignal, RunSignalStore } from "../runs/run-signal-store.ts";
 import type { ModelGateway } from "../model/model-gateway.ts";
 import type { ModelCredentialStore } from "../model/model-credential-store.ts";

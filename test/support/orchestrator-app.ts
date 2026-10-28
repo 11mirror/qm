@@ -2,7 +2,7 @@ import type { Config } from "../../src/config.ts";
 import type { AclStore } from "../../src/acl/acl-store.ts";
 import { encodeRef, serviceCredRef } from "../../src/acl/resource-ref.ts";
 import type { Sandbox } from "../../src/sandbox/sandbox.ts";
-import type { RunActivityEntry } from "../../src/runs/run-activity-store.ts";
+import type { RunActivityEntry } from "../../src/runs/postgres-run-activity-store.ts";
 import type { Item } from "../../src/sessions/items.ts";
 import type { SecurityScreener } from "../../src/security/security-screener.ts";
 import assert from "node:assert/strict";

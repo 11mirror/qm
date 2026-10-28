@@ -31,3 +31,23 @@ test("pg store: activity written by one instance is readable by another, in arri
     await reader.close?.();
   }
 });
+
+test("pg store: prune drops activity older than an hour and keeps fresh entries", { skip }, async () => {
+  const store = createPostgresRunActivityStore(URL!);
+  const stale = `test-run-stale-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const fresh = `test-run-fresh-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  try {
+    await store.append(stale, {
+      marker: "sandbox_status",
+      seq: 1,
+      createdAt: Date.now() - 2 * 60 * 60_000,
+      text: "old",
+    });
+    await store.append(fresh, { marker: "sandbox_status", seq: 1, createdAt: Date.now(), text: "new" });
+    await store.prune();
+    assert.deepEqual(await store.list(stale), []);
+    assert.equal((await store.list(fresh)).length, 1);
+  } finally {
+    await store.close?.();
+  }
+});

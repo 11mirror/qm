@@ -142,13 +142,11 @@ export function wireRunResultPosts(
   runs: Pick<RunStore, "onTerminal" | "unsettledTerminal" | "get" | "setDeliveryState">,
   outbound: Pick<Outbound, "send">,
   opts: {
+    sessions: TurnFailureSessions;
     adminUrlFor?: AdminUrlFor;
-    sessions?: TurnFailureSessions;
-    graceMs?: number;
     postsImmediately?: (surface: string) => boolean;
-  } = {},
+  },
 ): RunResultRecovery {
-  const graceMs = opts.graceMs ?? RUN_RECOVERY_GRACE_MS;
   const owed = (run: Run): OutboundPost | null =>
     run.deliveryState?.postedAt === undefined ? runResultPost(run, opts.adminUrlFor) : null;
   const settled = (run: Run, posted: boolean) => {
@@ -170,11 +168,11 @@ export function wireRunResultPosts(
   };
   runs.onTerminal((run) => {
     void (async () => {
-      const failure = opts.sessions ? await recordRunFailureEntry(opts.sessions, run) : "unneeded";
+      const failure = await recordRunFailureEntry(opts.sessions, run);
       if (failure === "busy" || !owed(run)) return;
       const surface = run.request.surface;
       if (!surfaceHas(surface, "transcript") && !(surface && opts.postsImmediately?.(surface)))
-        await new Promise((resolve) => setTimeout(resolve, graceMs).unref?.());
+        await new Promise((resolve) => setTimeout(resolve, RUN_RECOVERY_GRACE_MS).unref?.());
       const latest = (await runs.get(run.id)) ?? run;
       const post = owed(latest);
       if (post) await postOwed(latest, post);
@@ -190,7 +188,7 @@ export function wireRunResultPosts(
         for (const run of batch) {
           const post = owed(run);
           try {
-            const failure = opts.sessions ? await recordRunFailureEntry(opts.sessions, run, 0) : "unneeded";
+            const failure = await recordRunFailureEntry(opts.sessions, run, 0);
             if (failure === "busy") continue;
             if (failure === "recorded") {
               console.error(`[run-results] failed run ${run.id} had no turn_failure entry — recorded it`);
