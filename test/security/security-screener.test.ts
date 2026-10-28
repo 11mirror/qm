@@ -202,7 +202,7 @@ test("the security screen proxy retries throttled requests within its deadline",
   });
   await assert.rejects(
     backingOff.classify({ payload: "ordinary content", hook: "user_input" }),
-    (error: unknown) => error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name),
+    /Security screen proxy returned http 429/,
   );
   assert.equal(bareCalls, 1);
 });

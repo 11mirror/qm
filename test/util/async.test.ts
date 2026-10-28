@@ -136,10 +136,10 @@ test("withAbort skips an already cancelled operation and preserves the reason", 
   assert.equal(await withAbort(async () => 42), 42);
 });
 
-test("retryAfterMs reads seconds or an HTTP date and caps the wait", () => {
+test("retryAfterMs reads seconds or an HTTP date as given", () => {
   assert.equal(retryAfterMs(new Headers({ "retry-after": "2" })), 2_000);
   assert.equal(retryAfterMs(new Headers({ "retry-after": "0" })), 0);
-  assert.equal(retryAfterMs(new Headers({ "retry-after": "900" })), 30_000);
+  assert.equal(retryAfterMs(new Headers({ "retry-after": "900" })), 900_000);
   const now = Date.parse("2026-09-18T12:00:00Z");
   assert.equal(retryAfterMs(new Headers({ "retry-after": "Fri, 18 Sep 2026 12:00:05 GMT" }), now), 5_000);
   assert.equal(retryAfterMs(new Headers({ "retry-after": "Fri, 18 Sep 2026 11:00:00 GMT" }), now), 0);
@@ -173,6 +173,23 @@ test("fetchWithRetry retries 429 and 5xx on idempotent requests, honoring Retry-
   );
   assert.equal(res.status, 200);
   assert.equal(calls, 4);
+  assert.ok(Date.now() - t0 < 1_000);
+});
+
+test("fetchWithRetry returns a refusal whose Retry-After outlasts the deadline instead of retrying early", async () => {
+  let calls = 0;
+  const t0 = Date.now();
+  const res = await fetchWithRetry(
+    async () => {
+      calls++;
+      return reply(429, { "retry-after": "900" });
+    },
+    "idempotent",
+    { ...fast, timeoutMs: 5_000 },
+  );
+  assert.equal(res.status, 429);
+  assert.equal(await res.text(), "status 429");
+  assert.equal(calls, 1);
   assert.ok(Date.now() - t0 < 1_000);
 });
 
