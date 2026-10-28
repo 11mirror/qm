@@ -30,7 +30,7 @@ import { createCustomProviderStore, type CustomProviderStore } from "../model/cu
 import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
 import { invalidateCustomProviders, loadCustomProviders } from "../model/custom-providers.ts";
 import { type MemoryEmbedder, createMemoryEmbedder } from "../model/embeddings.ts";
-import { reportFailure } from "../util/errors.ts";
+import { reportFailure, reportFailureAs } from "../util/errors.ts";
 import { type CompanyChatGPTAuth, keychainCompanyChatGPTAuth } from "../model/company-chatgpt-auth.ts";
 import type { ProviderKeys } from "../harness/pi-model-runtime.ts";
 import { keychainHarnessAuthEnv } from "../credentials/harness-auth-env.ts";
@@ -235,10 +235,14 @@ function buildModelKeys(deps: HarnessInputs, mc: ReturnType<typeof buildModelCre
     customProvidersChanged.emit(null);
     await refreshCustomProviders();
   };
+  const afterChange = <T>(result: T): Promise<T> =>
+    changed()
+      .catch(reportFailureAs("custom providers: reload after change", undefined))
+      .then(() => result);
   const customProviders: CustomProviderStore = {
     ...stored,
-    upsert: (spec, apiKey, updatedBy) => stored.upsert(spec, apiKey, updatedBy).finally(changed),
-    delete: (id, updatedBy) => stored.delete(id, updatedBy).finally(changed),
+    upsert: (spec, apiKey, updatedBy) => stored.upsert(spec, apiKey, updatedBy).then(afterChange),
+    delete: (id, updatedBy) => stored.delete(id, updatedBy).then(afterChange),
   };
   const refreshModels = async () => {
     await gatewayCatalog?.refresh();

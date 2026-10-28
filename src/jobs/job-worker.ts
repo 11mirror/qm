@@ -133,7 +133,7 @@ async function dueTenants(db: AbsurdDb, job: string, due: string): Promise<Tenan
   if (!pgTenancyEnabled()) return [tenant()];
   const rows = await withEveryTenant(async () =>
     (await db.pool()).query(
-      `SELECT t.id::text AS id FROM (SELECT id FROM qm_tenant UNION ALL SELECT id FROM tenants WHERE status = 'active') t
+      `SELECT t.id::text AS id FROM (SELECT id FROM qm_tenant UNION SELECT id FROM tenants WHERE status = 'active') t
         WHERE ${due}`,
     ),
   ).catch((e: unknown) => {
@@ -141,7 +141,7 @@ async function dueTenants(db: AbsurdDb, job: string, due: string): Promise<Tenan
     throw e;
   });
   const owners = await mapBounded(rows.rows as Array<{ id: string }>, claimBudget(), ({ id }) =>
-    taskTenant(id).catch((e: unknown) => {
+    taskTenant(id, true).catch((e: unknown) => {
       reportFailure(`jobs: ${job} tenant`, e, `tenant=${id}`);
       return undefined;
     }),

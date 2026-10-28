@@ -86,7 +86,7 @@ export function buildFiles(deps: FilesInputs) {
     30 * 60_000,
     () => blobTransfer.sweep(6 * 60 * 60_000),
     config.s3Bucket
-      ? { due: hasRows("runs", "w.created_at > extract(epoch FROM now()) * 1000 - 12 * 3600 * 1000") }
+      ? { due: hasRows("runs", "w.created_at > extract(epoch FROM now()) * 1000 - 48 * 3600 * 1000") }
       : { shared: true },
   );
   return {

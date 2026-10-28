@@ -278,7 +278,7 @@ test("a tenant reusing another tenant's org id is not served", async () => {
   assert.deepEqual(await seen("/v1/x", "acme.example.test"), { id: ACME, org: "acme" });
 });
 
-test("a tenant whose preparation fails is unavailable while every other tenant is served, and its next use retries", async () => {
+test("a tenant whose preparation fails is unavailable while every other tenant is served, and is retried later", async () => {
   let attempts = 0;
   const failing = createTenantDirectory({
     databaseUrl: appUrl,
@@ -295,6 +295,8 @@ test("a tenant whose preparation fails is unavailable while every other tenant i
   try {
     await assert.rejects(failing.byHost("acme.example.test"), /hydrate failed/);
     assert.equal((await failing.byHost("gamma.example.test"))?.id, GAMMA);
+    await assert.rejects(failing.byHost("acme.example.test"), /preparation failed recently/);
+    clock += 30_000;
     assert.equal((await failing.byHost("acme.example.test"))?.id, ACME);
     assert.equal(attempts, 2);
   } finally {

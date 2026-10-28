@@ -42,11 +42,17 @@ export function buildMemory(deps: MemoryInputs) {
   });
   every("memory-vector-index", 30_000, () => semanticMemory.index(), {
     immediate: true,
-    due: hasRows(
+    due: `${hasRows(
       "memory_facts",
       `w.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM memory_fact_vectors v WHERE v.tenant_id = w.tenant_id
          AND v.scope_id = w.scope_id AND v.fact_id = w.id AND v.fact_hash = w.text_hash)`,
-    ),
+    )} OR ${hasRows(
+      "memory_fact_vectors",
+      `w.model <> (SELECT b.embedding_model_id FROM base_model_configs b
+         WHERE b.tenant_id = w.tenant_id AND b.embedding_model_id IS NOT NULL LIMIT 1)
+       OR NOT EXISTS (SELECT 1 FROM memory_facts f WHERE f.tenant_id = w.tenant_id AND f.scope_id = w.scope_id
+         AND f.id = w.fact_id AND f.deleted_at IS NULL)`,
+    )}`,
   });
   every("memory:capture-sweep", 60_000, () => memoryStrategy.sweep(), { due: hasRows("memory_capture_pending") });
   return { memory, memoryStrategy, baseMemory, semanticMemory };

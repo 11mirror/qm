@@ -15,12 +15,13 @@ import { mergeTenantQueues } from "./turns/absurd-schema.ts";
 import { hostOfUrl, setEdgeTenants } from "../plugins/chassis/src/tenant-hosts.ts";
 import { tagErrorDeployment } from "../plugins/chassis/src/error-reporting.ts";
 import { homeHosts, homeTenantSettings } from "../plugins/chassis/src/tenant-settings.ts";
-import { tenant, tenantSettings, withTenant, type Tenant } from "./tenant.ts";
+import { holdTenant, tenant, tenantSettings, withTenant, type Tenant } from "./tenant.ts";
 import {
   activeTenants,
   createTenantDirectory,
   homeTenantHosts,
   isHomeTenant,
+  taskTenant,
   useTenantDirectory,
   watchActiveTenants,
 } from "./tenants/directory.ts";
@@ -186,6 +187,7 @@ interface TenantSlackEntry {
   tenant: Tenant;
   managed?: ManagedSlack;
   runtime: SlackRuntime;
+  held?: () => void;
 }
 
 function createTenantSlack(opts: {
@@ -244,7 +246,12 @@ function createTenantSlack(opts: {
     entry.runtime = createSlackRuntimeReconciler({
       startPaused: Boolean(config.backgroundDeploymentId),
       load: () => withTenant(t, () => load(entry)),
-      startPlugin: (desired) => withTenant(t, () => startSlackPlugin(desired, built.slackCore)),
+      startPlugin: (desired) =>
+        withTenant(t, async () => {
+          entry.held ??= holdTenant(t);
+          await taskTenant(t.id, true);
+          return startSlackPlugin(desired, built.slackCore);
+        }),
       onError: reportFailureAs("slack plugin reconciliation", undefined, `tenant=${t.slug ?? "home"}`),
     });
     entries.set(key, entry);
