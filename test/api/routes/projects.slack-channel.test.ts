@@ -262,7 +262,7 @@ test("Slack-linked project turns use the inherited channel roster", async () => 
     assert.ok(run);
     return { fire, participants: new Set(run.request.sessionParticipantIds) };
   };
-  await runNowSettled(built.scheduler, ownerCron.id);
+  await runNowSettled(built.scheduler, built.crons, ownerCron.id);
   const linkedCron = await cronRoster(ownerCron.id);
   assert.equal(linkedCron.fire.status, "ok");
   assert.deepEqual(linkedCron.participants, new Set(["owner", "chan-pal"]));
@@ -273,11 +273,11 @@ test("Slack-linked project turns use the inherited channel roster", async () => 
   assert.equal((await turn("owner", "web:owner:after-revoke")).status, "ok");
   await assertRoster("web:owner:after-revoke", ["owner"]);
 
-  await runNowSettled(built.scheduler, ownerCron.id);
+  await runNowSettled(built.scheduler, built.crons, ownerCron.id);
   const revokedOwnerCron = await cronRoster(ownerCron.id);
   assert.equal(revokedOwnerCron.fire.status, "ok");
   assert.deepEqual(revokedOwnerCron.participants, new Set(["owner"]));
-  await runNowSettled(built.scheduler, inheritedCron.id);
+  await runNowSettled(built.scheduler, built.crons, inheritedCron.id);
   assert.equal(await built.crons.get(inheritedCron.id), null, "leaving the project deletes the member's cron");
 
   await built.app.upsertChannels(channels, [
@@ -298,10 +298,10 @@ test("Slack-linked project turns use the inherited channel roster", async () => 
   assert.equal((await turn("owner", "web:owner:after-inactive")).status, "ok");
   await assertRoster("web:owner:after-inactive", ["owner"]);
 
-  await runNowSettled(built.scheduler, ownerCron.id);
+  await runNowSettled(built.scheduler, built.crons, ownerCron.id);
   const inactiveOwnerCron = await cronRoster(ownerCron.id);
   assert.equal(inactiveOwnerCron.fire.status, "ok");
   assert.deepEqual(inactiveOwnerCron.participants, new Set(["owner"]));
-  await runNowSettled(built.scheduler, inactiveCron.id);
+  await runNowSettled(built.scheduler, built.crons, inactiveCron.id);
   assert.equal((await built.crons.get(inactiveCron.id))?.enabled, false);
 });

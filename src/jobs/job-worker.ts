@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   abandonTask,
+  type AbsurdDb as AbsurdConnection,
   type ClaimedRun,
   claimTasks,
   cleanup,
@@ -19,10 +20,6 @@ import { pgPoolMax, tenantLockKey } from "../persistence/pg-pool.ts";
 import { withoutTenant, withTenant } from "../tenant.ts";
 import { activeTenants, retiredTenantReason, taskTenant } from "../tenants/directory.ts";
 
-/**
- * What became of a claimed job: `done` finished it; `release` gave it up unfinished (the next
- * spawn with the same key re-arms it); a number sleeps the job until that epoch-ms time.
- */
 export type JobDisposition = "done" | "release" | number;
 
 export type JobHandler = (params: unknown) => Promise<JobDisposition>;
@@ -32,12 +29,9 @@ export interface EveryOptions {
   shared?: boolean;
 }
 
-/** Background jobs on the Absurd `jobs` queue: named handlers, keyed spawns, claimed by background owners. */
 export interface JobWorker {
-  /** Register a handler; `concurrency` caps how many of this job run at once in this process. */
   handle(name: string, handler: JobHandler, opts?: { concurrency?: number }): void;
-  /** Durably queue a job; a key already live is a no-op, a released one is re-armed. */
-  spawn(name: string, params: unknown, key: string): Promise<void>;
+  spawn(name: string, params: unknown, key: string, db?: AbsurdConnection): Promise<void>;
   every(name: string, everyMs: number, fn: () => unknown, opts?: EveryOptions): void;
   start(): Promise<void>;
   healthy(): boolean;
@@ -175,9 +169,14 @@ export function createJobWorker(databaseUrl: string): JobWorker {
     }
   }
 
-  /** Spawn or re-arm the job keyed `key`; true when this created it. */
-  async function spawnKeyed(name: string, params: unknown, key: string, maxAttempts: number | null): Promise<boolean> {
-    const pool = await db.pool();
+  async function spawnKeyed(
+    name: string,
+    params: unknown,
+    key: string,
+    maxAttempts: number | null,
+    conn?: AbsurdConnection,
+  ): Promise<boolean> {
+    const pool = conn ?? (await db.pool());
     const spawned = await spawnTask(pool, JOB_QUEUE, name, params, { idempotencyKey: key, maxAttempts }).catch(
       noteError,
     );
@@ -208,8 +207,8 @@ export function createJobWorker(databaseUrl: string): JobWorker {
         running: 0,
       });
     },
-    async spawn(name, params, key) {
-      await spawnKeyed(name, params, tenantLockKey(key), 1);
+    async spawn(name, params, key, conn) {
+      await spawnKeyed(name, params, tenantLockKey(key), 1, conn);
     },
     every(name, everyMs, fn, opts = {}) {
       const job = `every:${name}`;
@@ -256,7 +255,6 @@ export function createJobWorker(databaseUrl: string): JobWorker {
       while (active.size) await Promise.allSettled([...active]);
     },
   });
-  // Finished and failed jobs (spent cron slots, webhook fires, start-up runs) are dropped after a week.
   jobWorker.every(
     "jobs:cleanup",
     60 * 60_000,

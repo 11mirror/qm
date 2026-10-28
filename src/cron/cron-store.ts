@@ -9,6 +9,7 @@ import {
   typedTable,
 } from "../persistence/typed-table.ts";
 import {
+  type BeginFireOptions,
   type BeginFireResult,
   createPostgresCronFireStore,
   type CronFireRecord,
@@ -68,7 +69,7 @@ export interface CronStore {
   delete(id: string): Promise<void>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
   setDestination(id: string, destination: Destination | undefined): Promise<void>;
-  beginFire(id: string, entry: CronFireLogEntry, opts?: { exclusive?: boolean }): Promise<BeginFireResult>;
+  beginFire(id: string, entry: CronFireLogEntry, opts?: BeginFireOptions): Promise<BeginFireResult>;
   sweepStrandedFires(now: number): Promise<number>;
   pruneFires(now: number): Promise<number>;
   recordFire(id: string, entry: CronFireLogEntry): Promise<void>;
@@ -79,6 +80,8 @@ export interface CronStore {
   defer(id: string, until: number): Promise<void>;
   claimSlot(id: string, scheduledAt: number, at: number): Promise<boolean>;
   unclaimSlot(id: string, scheduledAt: number, at: number, priorLastFiredAt: number | undefined): Promise<void>;
+  inboxScannedThrough(id: string): Promise<number | undefined>;
+  advanceInboxScan(id: string, scannedThrough: number): Promise<void>;
 }
 
 export function cronIsActive(cron: Pick<Cron, "enabled" | "archived" | "schedule" | "lastFiredAt">): boolean {
@@ -122,7 +125,12 @@ export const CRONS_RETIRED_KEYS = retireJsonKeysMigration("triggers/crons/0000-d
   drop: ["adminAuthorization", "deliveryMigration", "initialVerificationRequestedAt", "groupDeliveryTestRequestedAt"],
 });
 
-const CRONS_MIGRATIONS = [CRONS_RETIRED_KEYS, CRONS_MIGRATION, ownerIndexMigration("crons")];
+const CRONS_INBOX_SCAN_MIGRATION = {
+  id: "triggers/crons/0002-inbox-scanned-through",
+  statements: ["ALTER TABLE crons ADD COLUMN IF NOT EXISTS inbox_scanned_through bigint"],
+};
+
+const CRONS_MIGRATIONS = [CRONS_RETIRED_KEYS, CRONS_MIGRATION, CRONS_INBOX_SCAN_MIGRATION, ownerIndexMigration("crons")];
 
 export function createCronStore(
   databaseUrl: string,
@@ -210,7 +218,7 @@ export function createCronStore(
     },
     async beginFire(id, entry, opts) {
       if ((await get(id)) === null) return { begun: false };
-      if (opts?.exclusive) return fires.beginExclusive(id, entry, staleRunningMs);
+      if (opts?.exclusive) return fires.beginExclusive(id, entry, staleRunningMs, opts.enqueue);
       await fires.record(id, entry);
       return { begun: true };
     },
@@ -265,6 +273,16 @@ export function createCronStore(
     },
     async defer(id, until) {
       await q(`UPDATE crons SET defer_until = $2 WHERE id = $1`, [id, until]);
+    },
+    async inboxScannedThrough(id) {
+      const [row] = await q(`SELECT inbox_scanned_through FROM crons WHERE id = $1`, [id]);
+      return row?.inbox_scanned_through == null ? undefined : Number(row.inbox_scanned_through);
+    },
+    async advanceInboxScan(id, scannedThrough) {
+      await q(
+        `UPDATE crons SET inbox_scanned_through = GREATEST(COALESCE(inbox_scanned_through, $2), $2) WHERE id = $1`,
+        [id, scannedThrough],
+      );
     },
   };
 }

@@ -28,7 +28,7 @@ function rig() {
   const outbound = createOutbound({
     idempotency: createIdempotencyStore(url),
     retries,
-    afterSend: (p) => after.push(p.idempotencyKey),
+    afterSend: async (p) => void after.push(p.idempotencyKey),
   });
   outbound.register(["slack", "web"], async (p) => {
     if (failure) throw failure;

@@ -292,7 +292,7 @@ test("a recurring teammate cron stops delivering once the recipient is no longer
     claims("U1"),
   );
   assert.ok(r.ok, JSON.stringify(r));
-  await runNowSettled(built.scheduler, r.cron.id);
+  await runNowSettled(built.scheduler, built.crons, r.cron.id);
   assert.deepEqual(
     (await built.posts.pending("principal")).map((d) => [d.destination.target, d.text]),
     [["U2", "standup notes are due"]],
@@ -301,7 +301,7 @@ test("a recurring teammate cron stops delivering once the recipient is no longer
     { principalId: "U1", displayName: "Alice", type: "internal" },
     { principalId: "U2", displayName: "Bob", type: "guest" },
   ]);
-  await runNowSettled(built.scheduler, r.cron.id);
+  await runNowSettled(built.scheduler, built.crons, r.cron.id);
   assert.equal((await built.posts.pending("principal")).length, 1);
   assert.equal((await built.crons.listFires(r.cron.id)).runs.at(-1)?.status, "refused");
 });

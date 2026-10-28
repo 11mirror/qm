@@ -1,5 +1,3 @@
-// The cron and webhook tools: scheduled and inbound-event work.
-
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { CRON_FIRE_NOTE_MAX_CHARS, UNATTENDED_ADMIN_GRANTS } from "../../api/control-service.ts";
@@ -31,7 +29,6 @@ export function schedulingTools(kit: ToolKit) {
   return { cron, webhook };
 }
 
-/** The cron tool: create, inspect and manage scheduled work. */
 function cronTool(kit: ToolKit) {
   const cron = defineTool({
     name: "cron",
@@ -43,8 +40,8 @@ function cronTool(kit: ToolKit) {
       "never the command or a generic word. Give either `task` (a prompt re-evaluated at each fire, e.g. " +
       '"summarize anything notable in Gmail; if nothing changed, call finish_silently") or `text` (exact words to relay). ' +
       "`schedule`: {cron,timezone} for anything tied to a time of day or calendar (IANA timezone: the user's local " +
-      "one unless they name another; omit for this turn's), {everyMs} for sub-day polling only (first run one " +
-      "interval from now; 24h or more is rejected), or {firstFireAt} (epoch ms, one-shot; Date.now() means now). " +
+      "one unless they name another; omit for this turn's), {everyMs} for elapsed-time intervals where wall-clock " +
+      "time does not matter (first run one interval from now), or {firstFireAt} (epoch ms, one-shot; Date.now() means now). " +
       "Never compute future epochs for calendar times.\n" +
       "DELIVERY: by default a cron posts back to this conversation; keep that for watches and follow-ups on work " +
       "started here, and don't pick a DM just because this is one. Otherwise set `recipient` (a teammate → DM) or " +
@@ -88,7 +85,7 @@ function cronParams() {
         {
           cron: optionalString("5-field cron expression: minute hour day-of-month month day-of-week."),
           timezone: optionalString('IANA timezone, e.g. "America/Los_Angeles".'),
-          everyMs: optionalInteger("Interval in ms for sub-day polling; >= 24h rejected."),
+          everyMs: optionalInteger("Interval in ms between fires, for elapsed-time polling."),
           firstFireAt: optionalInteger("Epoch ms for a one-shot; past times rejected."),
         },
         { description: "create/patch: {cron,timezone} | {everyMs} | {firstFireAt}." },
@@ -143,7 +140,6 @@ function cronParams() {
   });
 }
 
-/** Runs one cron-tool action against the turn's tool context. */
 async function runCronAction(kit: ToolKit, callId: string, params: Static<ReturnType<typeof cronParams>>) {
   const { ref, recordCall, recordResult, recordText, recordFail, refused } = kit;
   const tc = ref.current;
@@ -241,7 +237,6 @@ async function runCronAction(kit: ToolKit, callId: string, params: Static<Return
   }
 }
 
-/** cron list: this scope's crons plus the read-only ones visible here, one page at a time. */
 async function cronListAction(
   kit: ToolKit,
   tc: ToolContext,
@@ -277,7 +272,6 @@ async function cronListAction(
   );
 }
 
-/** cron create: validates the request and schedules the job. */
 async function cronCreateAction(
   kit: ToolKit,
   tc: ToolContext,
@@ -324,7 +318,6 @@ async function cronCreateAction(
   );
 }
 
-/** The webhook tool: create, list, update and disable inbound webhooks. */
 function webhookTool(kit: ToolKit) {
   const { ref, recordCall, recordText, recordFail, refused, unavailable, isUnavailable } = kit;
   const webhook = defineTool({

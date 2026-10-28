@@ -3,6 +3,7 @@ import { type Session } from "../types.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 
 export const SUBAGENT_TREE_RUN_CAP = 50;
 
@@ -23,6 +24,17 @@ async function sessionAncestors(sessions: Pick<SessionStore, "get">, session: Se
 
 export async function sessionTreeRoot(sessions: Pick<SessionStore, "get">, session: Session): Promise<Session> {
   return (await sessionAncestors(sessions, session)).at(-1) ?? session;
+}
+
+export const sessionTreeAdmissionKey = (root: Pick<Session, "id">): string => `session-tree-admission:${root.id}`;
+
+export async function withSessionTreeLock<T>(
+  lock: Pick<AdvisoryLock, "withLock">,
+  sessions: Pick<SessionStore, "get">,
+  session: Session,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return lock.withLock(sessionTreeAdmissionKey(await sessionTreeRoot(sessions, session)), fn);
 }
 
 export async function stoppableAncestors(sessions: Pick<SessionStore, "get">, session: Session): Promise<Session[]> {

@@ -25,7 +25,7 @@ test("scheduler threads stored unattended grants into owner-mode turns", async (
     ownerScopeId: scopeId("personal", "U1"),
     unattendedGrants: ["admin.sessions.read"],
   });
-  await runNowSettled(scheduler, cron.id);
+  await runNowSettled(scheduler, crons, cron.id);
   assert.deepEqual(calls[0]?.unattendedGrants, ["admin.sessions.read"]);
 });
 
@@ -40,7 +40,7 @@ test("a channel cron runs in the channel scope and delivers its real output to t
     ownerScopeId: scopeId("channel", "C1"),
     destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
   });
-  await runNowSettled(scheduler, cron.id);
+  await runNowSettled(scheduler, crons, cron.id);
   assert.equal(calls[0]?.conversation.kind, "channel");
   assert.equal(calls[0]?.conversation.channelRef, "C1");
   const pending = await outbound.pending("slack");
@@ -59,7 +59,7 @@ test("a group-DM cron runs in the group scope and delivers its real output to th
     ownerScopeId: scopeId("group", "G1"),
     destination: { type: "group", target: "G1", audienceScopeId: scopeId("group", "G1") },
   });
-  await runNowSettled(scheduler, cron.id);
+  await runNowSettled(scheduler, crons, cron.id);
   assert.equal(calls[0]?.conversation.kind, "group");
   assert.equal(calls[0]?.conversation.channelRef, "G1");
   const pending = await outbound.pending("group");
@@ -73,10 +73,12 @@ test("a channel cron fire gives the agent the whole people-here roster with real
     principalId: `W${i}`,
     displayName: `Member${i}`,
     type: "internal" as const,
+    slackId: `W${i}`,
   }));
   await directory.replace([
     { principalId: "eve@acme.com", displayName: "Eve", type: "internal", slackId: "U9" },
-    { principalId: "U5", displayName: "Dana", type: "internal" },
+    { principalId: "U5", displayName: "Dana", type: "internal", slackId: "U5" },
+    { principalId: "pat@acme.com", displayName: "Pat", type: "internal" },
     ...crowd,
   ]);
   await directory.replaceChannels(
@@ -84,6 +86,7 @@ test("a channel cron fire gives the agent the whole people-here roster with real
     [
       { channelId: "C1", principalId: "eve@acme.com" },
       { channelId: "C1", principalId: "U5" },
+      { channelId: "C1", principalId: "pat@acme.com" },
       ...crowd.map((m) => ({ channelId: "C1", principalId: m.principalId })),
     ],
   );
@@ -96,13 +99,14 @@ test("a channel cron fire gives the agent the whole people-here roster with real
     ownerScopeId: scopeId("channel", "C1"),
     destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
   });
-  await runNowSettled(scheduler, cron.id);
+  await runNowSettled(scheduler, crons, cron.id);
   const text = calls[0]?.text ?? "";
   assert.match(text, /People here: [^\n]*@Eve \(<@U9>\)/);
   assert.match(text, /People here: [^\n]*@Dana \(<@U5>\)/);
   assert.match(text, /People here: [^\n]*@Member59 \(<@W59>\)/);
   assert.match(text, /@-mention them with their <@…> id/);
   assert.doesNotMatch(text, /<@eve@acme\.com>/);
+  assert.match(text, /People here: [^\n]*@Pat(?! \()/);
 });
 
 test("a DM cron fire carries no mention roster (DMs already notify their owner)", async () => {
@@ -117,7 +121,7 @@ test("a DM cron fire carries no mention roster (DMs already notify their owner)"
     ownerScopeId: scopeId("personal", "U1"),
     destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
   });
-  await runNowSettled(scheduler, cron.id);
+  await runNowSettled(scheduler, crons, cron.id);
   assert.doesNotMatch(calls[0]?.text ?? "", /People here:/);
 });
 
@@ -131,7 +135,7 @@ test("a personal cron runs as a DM and delivers to the owner", async () => {
     ownerScopeId: scopeId("personal", "U1"),
     destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
   });
-  await runNowSettled(scheduler, cron.id);
+  await runNowSettled(scheduler, crons, cron.id);
   assert.equal(calls[0]?.conversation.kind, "dm");
   assert.equal((await outbound.pending("slack"))[0]?.text, "CRON-OUTPUT-XYZ");
 });
@@ -146,7 +150,7 @@ test("output composed at one scope delivers verbatim to a channel the owner may 
     ownerScopeId: scopeId("personal", "U1"),
     destination: { type: "slack", target: "C9", audienceScopeId: scopeId("channel", "C9") },
   });
-  await runNowSettled(scheduler, cron.id);
+  await runNowSettled(scheduler, crons, cron.id);
   assert.equal((await outbound.pending("slack"))[0]?.text, "CRON-OUTPUT-XYZ");
 });
 
@@ -165,7 +169,7 @@ test("a personal cron with a principal destination delivers its real output to t
       onBehalfOf: "U1",
     },
   });
-  await runNowSettled(scheduler, cron.id);
+  await runNowSettled(scheduler, crons, cron.id);
   assert.equal(calls[0]?.conversation.kind, "dm");
   assert.deepEqual(automationOrigin(calls[0])?.destination, {
     type: "principal",
@@ -193,7 +197,7 @@ test("a cron with a literal message delivers it verbatim, without running a turn
       onBehalfOf: "U1",
     },
   });
-  await runNowSettled(scheduler, cron.id);
+  await runNowSettled(scheduler, crons, cron.id);
   assert.equal(calls.length, 0, "a literal message must not re-run a turn (that's the immediate-send confusion)");
   assert.equal((await outbound.pending("principal"))[0]?.text, "standup moved to 4pm");
 });
@@ -207,7 +211,7 @@ test("a destination-less cron runs its action but delivers nothing", async () =>
     createdBy: "U1",
     ownerScopeId: scopeId("personal", "U1"),
   });
-  await runNowSettled(scheduler, cron.id);
+  await runNowSettled(scheduler, crons, cron.id);
   assert.equal(calls.length, 1);
   assert.equal((await outbound.pending("slack")).length, 0);
 });
@@ -222,7 +226,7 @@ test("a one-shot cron is auto-disabled after it fires", async () => {
     ownerScopeId: scopeId("personal", "U1"),
     destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
   });
-  await runNowSettled(scheduler, cron.id);
+  await runNowSettled(scheduler, crons, cron.id);
   assert.equal(calls.length, 1);
   assert.equal((await crons.get(cron.id))?.enabled, false);
 });
@@ -237,7 +241,7 @@ test("a conversation-owned cron keeps running as the conversation, whoever creat
     ownerScopeId: scopeId("channel", "C1"),
   });
   await identity.deactivate("U1");
-  await runNowSettled(scheduler, cron.id);
+  await runNowSettled(scheduler, crons, cron.id);
   assert.equal(calls[0]?.actor.externalId, "system:channel:C1");
   assert.equal((await crons.get(cron.id))?.enabled, true);
 });
@@ -260,7 +264,7 @@ test("a person-owned cron is deleted once its owner has left the conversation", 
     createdBy: "U1",
     ownerScopeId: scopeId("channel", "C1"),
   });
-  await runNowSettled(scheduler, cron.id);
+  await runNowSettled(scheduler, crons, cron.id);
   assert.equal(calls.length, 0);
   assert.equal(await crons.get(cron.id), null);
 });
@@ -276,7 +280,7 @@ test("an owner cron still disables when its owner leaves (unchanged)", async () 
     destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
   });
   await identity.deactivate("U1");
-  await runNowSettled(scheduler, cron.id);
+  await runNowSettled(scheduler, crons, cron.id);
   assert.equal(calls.length, 0);
   assert.equal((await crons.get(cron.id))?.enabled, false);
 });
@@ -321,7 +325,7 @@ test("runNow fires even when the current schedule slot already did (manual re-ru
   });
   await scheduler.tick(2000);
   assert.equal(calls.length, 1);
-  await runNowSettled(scheduler, cron.id);
+  await runNowSettled(scheduler, crons, cron.id);
   assert.equal(calls.length, 2, "a manual run must not be swallowed by the already-fired slot");
 });
 
@@ -334,7 +338,7 @@ test("runNow does not shift the schedule (lastFiredAt untouched, next tick still
     createdBy: "U1",
     ownerScopeId: scopeId("channel", "C1"),
   });
-  await runNowSettled(scheduler, cron.id);
+  await runNowSettled(scheduler, crons, cron.id);
   assert.equal((await crons.get(cron.id))?.lastFiredAt, undefined, "a manual run must not stamp the schedule");
   await scheduler.tick(2000);
   assert.equal(calls.length, 2, "the scheduled fire still happens after a manual run");
@@ -350,10 +354,10 @@ test("a re-enabled one-shot cron can be re-run manually", async () => {
     createdBy: "U1",
     ownerScopeId: scopeId("personal", "U1"),
   });
-  await runNowSettled(scheduler, cron.id);
+  await runNowSettled(scheduler, crons, cron.id);
   assert.equal((await crons.get(cron.id))?.enabled, false);
   await crons.update(cron.id, { enabled: true });
-  await runNowSettled(scheduler, cron.id);
+  await runNowSettled(scheduler, crons, cron.id);
   assert.equal(calls.length, 2, "re-enabling a one-shot lets it be re-run manually");
   assert.equal((await crons.get(cron.id))?.enabled, false);
 });
@@ -369,7 +373,7 @@ test("a cron turn carries its fire key as the run idempotency key (atomic DB-lev
   });
   await scheduler.tick(2000);
   assert.equal(calls[0]?.idempotencyKey, `cron:${cron.id}:1`);
-  await runNowSettled(scheduler, cron.id);
+  await runNowSettled(scheduler, crons, cron.id);
   assert.match(calls[1]?.idempotencyKey ?? "", new RegExp(`^cron:${cron.id}:manual:`));
 });
 
@@ -384,7 +388,7 @@ test("a cron fires into fresh per-fire threads while keeping per-fire idempotenc
   });
   await scheduler.tick(2000);
   await scheduler.tick(3500);
-  await runNowSettled(scheduler, cron.id);
+  await runNowSettled(scheduler, crons, cron.id);
 
   assert.equal(calls.length, 3);
   const threads = calls.map((c) => c.conversation.threadRef);
@@ -483,25 +487,6 @@ test("an idempotency-skipped cron fire does not create fire log history", async 
   assert.equal(calls.length, 0, "duplicate slot does not reach the agent");
   assert.equal((await crons.listFires(cron.id)).total, 0, "duplicate slot does not look like a fire");
   assert.equal(after?.lastFiredAt, 2500, "the due slot is still advanced after durable dedupe");
-});
-
-test("cron fire log omits replies that echo the runtime wrapper", async () => {
-  const { crons, calls, scheduler } = harness(async (req) => ({ status: "ok", reply: `You said: ${req.text}` }));
-  await crons.create({
-    schedule: { everyMs: 1000, firstFireAt: 1 },
-    action: "daily check-in",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("personal", "U1"),
-  });
-
-  await scheduler.tick(2000);
-  await scheduler.tick(3500);
-
-  const { runs: stored } = await crons.listFires((await crons.list())[0]!.id);
-  assert.equal(stored[0]?.reply, "[reply echoed cron runtime context; omitted]");
-  assert.doesNotMatch(calls[1]?.text ?? "", /reply=You said: \[Cron runtime context\]/);
-  assert.doesNotMatch(calls[1]?.text ?? "", /reply=\[reply echoed cron runtime context; omitted\]/);
 });
 
 test("a calendar cron uses the scheduled instant for a missed tick idempotency key", async (t) => {

@@ -1,6 +1,6 @@
 import { surfaceHas } from "../surfaces/surface.ts";
 import { isTerminal, isUnstarted } from "../runs/run-store.ts";
-import { stopSessionTree } from "../subagents/tree.ts";
+import { stopSessionTree, withSessionTreeLock } from "../subagents/tree.ts";
 import type { TurnRequest, TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { desktopClientForTurn, isPersonAuthored } from "../core/turn-origin.ts";
@@ -249,12 +249,12 @@ function runViewMethods(deps: AppDeps, h: AppHelpers) {
     },
 
     async stopConversation(threadRef, viewer) {
-      const stop = async () => {
-        const session = await deps.sessions.getByThread(threadRef);
-        if (!session || !deps.signals || (viewer && !(await h.sessionForViewer(session.id, viewer)))) return false;
-        return stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals: deps.signals }, session, USER_STOP);
-      };
-      return deps.advisoryLock.withLock("session-tree-admission", stop);
+      const session = await deps.sessions.getByThread(threadRef);
+      const signals = deps.signals;
+      if (!session || !signals || (viewer && !(await h.sessionForViewer(session.id, viewer)))) return false;
+      return withSessionTreeLock(deps.advisoryLock, deps.sessions, session, () =>
+        stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals }, session, USER_STOP),
+      );
     },
 
     async activeRunForThread(threadRef, viewer) {

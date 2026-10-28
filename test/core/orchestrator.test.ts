@@ -170,7 +170,7 @@ test("a silent cron source run stays out of normal human chat history", async ()
     destination: { type: "principal", target: "U2", audienceScopeId: scopeId("personal", "U2"), onBehalfOf: "U1" },
   });
 
-  await runNowSettled(built.scheduler, cron.id);
+  await runNowSettled(built.scheduler, built.crons, cron.id);
 
   assert.equal((await built.posts.pending("principal")).length, 0, "finish_silently means no delivery");
   const source = (await built.sessions.listByScope(scopeId("personal", "U1"))).find((s) =>
@@ -214,7 +214,7 @@ test("a cron-delivered digest is noted in the recipient's next DM turn, not writ
     },
   });
 
-  await runNowSettled(built.scheduler, cron.id);
+  await runNowSettled(built.scheduler, built.crons, cron.id);
   const pending = posted;
   assert.equal(pending.length, 1);
   assert.match(pending[0]!.text, /deploy digest ready/);

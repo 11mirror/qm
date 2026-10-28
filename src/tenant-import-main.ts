@@ -11,7 +11,7 @@ const USAGE = `usage: node src/tenant-import-main.ts [source] [staging] [target]
   tenant:   --spec-env <NAME> (JSON {slug, orgId, hosts, ...settings, secrets})
             | --slug <slug> --org-id <id> [--hosts a,b]
   options:  [--tenant-id <uuid>] [--create-staging] [--batch-size <n>]
-            [--replace] [--allow-extra-columns] [--dry-run]`;
+            [--replace] [--dry-run]`;
 
 type TenantSpec = Omit<TenantSettings, "id" | "status">;
 
@@ -107,7 +107,6 @@ const { values } = parseArgs({
     "create-staging": { type: "boolean", default: false },
     "batch-size": { type: "string", default: "500" },
     replace: { type: "boolean", default: false },
-    "allow-extra-columns": { type: "boolean", default: false },
     "dry-run": { type: "boolean", default: false },
     help: { type: "boolean", default: false },
   },
@@ -168,7 +167,6 @@ async function main(): Promise<void> {
     ...(values["tenant-id"] ? { tenantId: values["tenant-id"] } : {}),
     dryRun: values["dry-run"],
     replace: values.replace,
-    allowExtraColumns: values["allow-extra-columns"],
     createStaging: values["create-staging"],
     ...(adminUrl ? { maintenanceUrl: adminUrl } : {}),
     batchSize,

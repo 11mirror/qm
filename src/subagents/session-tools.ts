@@ -1,18 +1,17 @@
 import { errMessage } from "../util/errors.ts";
 import { swarmCall } from "../swarms/swarm.ts";
-import { SUBAGENT_TREE_RUN_CAP } from "./tree.ts";
+import { SUBAGENT_TREE_RUN_CAP, sessionTreeAdmissionKey } from "./tree.ts";
 import { createTurnContext } from "./turn-context.ts";
 import { openSubagent, writeSession } from "./admission.ts";
 import { acknowledgeMessages, readSession, receiveMessages } from "./reading.ts";
 import { listSessions, searchSessions, startSession } from "./conversations.ts";
-import type { Session } from "../types.ts";
 import type { SessionSyscallDeps, SessionSyscalls, SessionSyscallsFactory } from "./types.ts";
 
 export type { SessionSyscallDeps, SessionSyscalls, SessionSyscallsFactory } from "./types.ts";
 
 export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscallsFactory {
   const lock = deps.advisoryLock;
-  const admissionKey = (root: Session) => `session-tree-admission:${root.id}`;
+  const admissionKey = sessionTreeAdmissionKey;
   const cap = deps.treeRunCap ?? SUBAGENT_TREE_RUN_CAP;
 
   return {

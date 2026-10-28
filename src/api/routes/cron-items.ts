@@ -33,6 +33,7 @@ export interface InboxServiceDeps {
   items: InboxLedger;
   chat?: InboxChat;
   record: InboxEventSink;
+  scans: Pick<CronStore, "inboxScannedThrough" | "advanceInboxScan">;
   lock?: AdvisoryLock;
 }
 
@@ -180,7 +181,12 @@ async function listItems(ctx: ApiCtx): Promise<RouteResult> {
     const state = ledgerState(item);
     counts[state] = (counts[state] ?? 0) + 1;
   }
-  return ok({ items: items.map((item) => ledgerItemView(item, !!ctx.capability)), counts });
+  const scannedThrough = await deps.scans.inboxScannedThrough(cron.id);
+  return ok({
+    items: items.map((item) => ledgerItemView(item, !!ctx.capability)),
+    counts,
+    ...(scannedThrough !== undefined ? { scannedThrough } : {}),
+  });
 }
 
 async function ingestItems(ctx: ApiCtx): Promise<RouteResult> {
@@ -190,9 +196,13 @@ async function ingestItems(ctx: ApiCtx): Promise<RouteResult> {
   if (!ctx.capability) return reply(403, { error: "forbidden", message: "inbox items are ingested by the agent" });
   if (!readableItems(ctx, cron)) return;
   const body = isObj(ctx.body) ? ctx.body : {};
-  if (!Array.isArray(body.items) || body.items.length === 0)
-    return reply(400, { error: "bad_request", message: "items (non-empty array) required" });
-  if (body.items.length > MAX_ITEMS_PER_INGEST)
+  const scannedThrough = body.scannedThrough;
+  if (scannedThrough !== undefined && !(typeof scannedThrough === "number" && Number.isSafeInteger(scannedThrough)))
+    return reply(400, { error: "bad_request", message: "scannedThrough must be an ms epoch integer" });
+  const rawItems = body.items ?? [];
+  if (!Array.isArray(rawItems) || (rawItems.length === 0 && scannedThrough === undefined))
+    return reply(400, { error: "bad_request", message: "items (non-empty array) or scannedThrough required" });
+  if (rawItems.length > MAX_ITEMS_PER_INGEST)
     return reply(400, { error: "bad_request", message: `at most ${MAX_ITEMS_PER_INGEST} items per call` });
   const sessionId = await agentSessionId(ctx);
   const classifyInboxEmail =
@@ -201,7 +211,7 @@ async function ingestItems(ctx: ApiCtx): Promise<RouteResult> {
     (await inboxLoopsEnabled(ctx, cron.owner));
   const entries: IngestEntryInput[] = [];
   const existingItems = await deps.items.byCron(cron.id);
-  for (const [at, raw] of body.items.entries()) {
+  for (const [at, raw] of rawItems.entries()) {
     const parsed = parseIngestEntry(cron, raw);
     if ("error" in parsed) return reply(400, { error: "bad_request", message: `items[${at}]: ${parsed.error}` });
     if (classifyInboxEmail && parsed.source === "gmail" && isObj(raw)) {
@@ -219,6 +229,7 @@ async function ingestItems(ctx: ApiCtx): Promise<RouteResult> {
   }
   const outcome = await deps.items.ingest(entries);
   await deps.items.prune(cron.id, { maxItems: INBOX_LEDGER_MAX_ITEMS, retentionMs: INBOX_LEDGER_RETENTION_MS });
+  if (scannedThrough !== undefined) await deps.scans.advanceInboxScan(cron.id, scannedThrough);
   return ok(outcome);
 }
 
@@ -568,7 +579,7 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<RouteResult> {
   const body = isObj(ctx.body) ? ctx.body : {};
   const everyMs =
     typeof body.everyMs === "number" && Number.isFinite(body.everyMs)
-      ? Math.max(5 * 60 * 1000, Math.min(24 * 60 * 60 * 1000 - 1, Math.floor(body.everyMs)))
+      ? Math.floor(body.everyMs)
       : INBOX_SYNC_DEFAULT_EVERY_MS;
   const enable = body.enabled !== false;
   try {

@@ -11,7 +11,7 @@ import { createTurnLedger } from "../turns/turn-ledger.ts";
 import { bindTurnLedger, sweepTurns } from "../turns/turn-engine.ts";
 import { actorAssertionActive } from "../identity/identity-service.ts";
 import type { Session } from "../types.ts";
-import { stoppableAncestors, sessionTreeRunCount, sessionTreeRoot, SUBAGENT_TREE_RUN_CAP } from "../subagents/tree.ts";
+import { stoppableAncestors } from "../subagents/tree.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import { createProductAnalytics } from "../util/product-analytics.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
@@ -32,7 +32,7 @@ type RunsInputs = Pick<Head, "config" | "late"> & { stores: StoresModule; files:
 
 export function buildRuns(deps: RunsInputs) {
   const { config, late } = deps;
-  const { databaseUrl, identity, sessions, advisoryLock, every } = deps.stores;
+  const { databaseUrl, identity, sessions, every } = deps.stores;
   const { errors } = deps.files;
 
   const sessionStateBus: SessionStateBus = createPostgresSessionStateBus(databaseUrl);
@@ -62,38 +62,27 @@ export function buildRuns(deps: RunsInputs) {
     ...runStore.runs,
     ...turnBinding,
     async enqueue(input) {
-      const enqueue = async () => {
-        const known = await sessions.getByThread(input.sessionId);
-        if (
-          known &&
-          (known.parentSessionId || (await sessions.childrenOf(known.id)).length > 0) &&
-          !(input.dedupKey && (await runStore.runs.getByDedupKey(input.dedupKey))) &&
-          (await sessionTreeRunCount(sessions, runStore.runs, await sessionTreeRoot(sessions, known))) >=
-            SUBAGENT_TREE_RUN_CAP
-        )
-          throw new Error(`all ${SUBAGENT_TREE_RUN_CAP} session run slots are in use`);
-        const participants = known ? await sessions.participantsOf(known.id) : [];
-        const ancestors = known?.parentSessionId ? await workingAncestors(known) : [];
-        const result = await turnBinding.enqueue(input);
-        if (result.deduped) return result;
+      const known = await sessions.getByThread(input.sessionId);
+      const participants = known ? await sessions.participantsOf(known.id) : [];
+      const ancestors = known?.parentSessionId ? await workingAncestors(known) : [];
+      const result = await turnBinding.enqueue(input);
+      if (result.deduped) return result;
+      sessionStateBus.emit({
+        threadRef: input.sessionId,
+        ...(known ? { sessionId: known.id } : {}),
+        state: "working",
+        at: result.run.createdAt,
+        participants: participants.length ? participants : [input.request.actor.id],
+      });
+      for (const ancestor of ancestors)
         sessionStateBus.emit({
-          threadRef: input.sessionId,
-          ...(known ? { sessionId: known.id } : {}),
+          threadRef: ancestor.session.threadRef,
+          sessionId: ancestor.session.id,
           state: "working",
           at: result.run.createdAt,
-          participants: participants.length ? participants : [input.request.actor.id],
+          participants: ancestor.participants,
         });
-        for (const ancestor of ancestors)
-          sessionStateBus.emit({
-            threadRef: ancestor.session.threadRef,
-            sessionId: ancestor.session.id,
-            state: "working",
-            at: result.run.createdAt,
-            participants: ancestor.participants,
-          });
-        return result;
-      };
-      return advisoryLock.withLock("session-run-admission", enqueue);
+      return result;
     },
   };
   const productAnalytics = createProductAnalytics(() => tenant().orgId, config.productAnalytics);

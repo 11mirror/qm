@@ -7,7 +7,7 @@ import type { HarnessModule } from "./harness.ts";
 import type { CredentialsModule } from "./credentials.ts";
 import { swallowAs } from "../util/errors.ts";
 import { type Session, scopeId } from "../types.ts";
-import { sessionTreeWorking, stoppableAncestors } from "../subagents/tree.ts";
+import { sessionTreeWorking, stoppableAncestors, withSessionTreeLock } from "../subagents/tree.ts";
 import type { Run } from "../runs/run-store.ts";
 import { deliverSubagentMail } from "../subagents/mail.ts";
 import { isSubagentThreadRef } from "../sessions/thread-ref.ts";
@@ -62,28 +62,33 @@ export function buildSessionReturns(deps: SessionReturnsInputs) {
       for (const ancestor of await stoppableAncestors(sessions, session)) if (!(await settle(ancestor))) return;
     })().catch(swallowAs("session-state: terminal emit", undefined));
   });
-  const returnSessionRun = (run: Run) =>
-    advisoryLock
-      .withLock("session-tree-admission", async () => {
-        const settled = await deliverSubagentMail(
-          {
-            sessions,
-            runs,
-            maxAttempts,
-            mailbox: sessionMailbox,
-            prepareRequest: prepareSessionRequest,
-            delegationEnabled: (actorId) => featureFlags.enabled("responsive_spine", scopeId("personal", actorId)),
-            outbound,
-            signals: runSignals,
-          },
-          run,
-        );
-        if (settled) await runs.markReturned(run.id);
-      })
-      .catch(async (error: unknown) => {
-        await runs.deferReturn(run.id, 60_000);
-        throw error;
+  const deliver = async (run: Run) => {
+    const settled = await deliverSubagentMail(
+      {
+        sessions,
+        runs,
+        maxAttempts,
+        mailbox: sessionMailbox,
+        prepareRequest: prepareSessionRequest,
+        delegationEnabled: (actorId) => featureFlags.enabled("responsive_spine", scopeId("personal", actorId)),
+        outbound,
+        signals: runSignals,
+      },
+      run,
+    );
+    if (settled) await runs.markReturned(run.id);
+  };
+  const returnSessionRun = async (run: Run) => {
+    try {
+      const child = await sessions.getByThread(run.sessionId);
+      await (child ? withSessionTreeLock(advisoryLock, sessions, child, () => deliver(run)) : deliver(run));
+    } catch (error) {
+      await runs.deferReturn(run.id, 60_000).catch((deferError: unknown) => {
+        throw new AggregateError([error, deferError], `session return for run ${run.id} failed and was not deferred`);
       });
+      throw error;
+    }
+  };
   runs.onTerminal((run) => {
     if (isSubagentThreadRef(run.sessionId)) void returnSessionRun(run).catch(swallowAs("sessions: return", undefined));
   });

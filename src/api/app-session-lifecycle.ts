@@ -14,6 +14,7 @@ import { projectIdFromGroupRef } from "../projects/project-store.ts";
 
 import { type App, InstructionsUpdateDeniedError, InstructionsVersionConflictError } from "./app-types.ts";
 import { tenant } from "../tenant.ts";
+import { withSessionTreeLock } from "../subagents/tree.ts";
 import { type SessionKit, continuable, GOAL_CANCEL_LEASE_WAIT_MS, withProjectMembers } from "./app-session-kit.ts";
 
 export function sessionLifecycleMethods(k: SessionKit) {
@@ -28,15 +29,12 @@ export function sessionLifecycleMethods(k: SessionKit) {
     },
 
     async detachSession(sessionId, principalId) {
-      const detach = async () => {
-        const session = await h.sessionForViewer(sessionId, principalId);
-        if (!session?.parentSessionId || !(await h.principalCanWriteScope(principalId, session.scopeId))) return null;
+      const session = await h.sessionForViewer(sessionId, principalId);
+      if (!session?.parentSessionId || !(await h.principalCanWriteScope(principalId, session.scopeId))) return null;
+      return withSessionTreeLock(deps.advisoryLock, deps.sessions, session, async () => {
         await deps.sessions.setParentSession(sessionId, null);
         return { detached: true as const };
-      };
-      return deps.advisoryLock.withLock("session-tree-admission", () =>
-        deps.advisoryLock.withLock("session-run-admission", detach),
-      );
+      });
     },
 
     async cancelSessionGoal(sessionId, principalId) {

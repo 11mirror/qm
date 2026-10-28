@@ -1,8 +1,29 @@
+import type { CronStore } from "../../src/cron/cron-store.ts";
 import type { Scheduler } from "../../src/cron/scheduler.ts";
 
-export async function runNowSettled(scheduler: Scheduler, cronId: string): Promise<void> {
+export async function fireSettled(
+  crons: Pick<CronStore, "listFires">,
+  cronId: string,
+  fireKey: string,
+  timeoutMs?: number,
+): Promise<void> {
+  await eventually(
+    async () => (await crons.listFires(cronId)).runs.find((run) => run.fireKey === fireKey)?.status,
+    {
+      until: (status) => status !== undefined && status !== "running",
+      label: `fire ${fireKey}`,
+      ...(timeoutMs ? { timeoutMs } : {}),
+    },
+  );
+}
+
+export async function runNowSettled(
+  scheduler: Pick<Scheduler, "runNow">,
+  crons: Pick<CronStore, "listFires">,
+  cronId: string,
+): Promise<void> {
   const r = await scheduler.runNow(cronId);
-  if (r.started) await r.settled;
+  if (r.started) await fireSettled(crons, cronId, r.fireKey);
 }
 
 export async function eventually<T>(

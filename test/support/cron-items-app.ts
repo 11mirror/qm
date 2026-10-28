@@ -102,7 +102,7 @@ export async function call(
     capability: over.capability === undefined ? CAP : over.capability,
     deps: {
       featureFlags: { enabled: over.flagEnabled ?? (async () => true) },
-      inbox: { items: w.items, record: async () => {}, ...(w.chat ? { chat: w.chat } : {}) },
+      inbox: { items: w.items, record: async () => {}, scans: w.crons, ...(w.chat ? { chat: w.chat } : {}) },
       ...(w.sourceRefresh ? { inboxSourceRefresh: w.sourceRefresh } : {}),
       sessions: {
         getByThread: async (threadRef: string) =>

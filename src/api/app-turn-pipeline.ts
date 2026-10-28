@@ -3,7 +3,7 @@ import { externalSlackAdmitted } from "../resolution/external-slack.ts";
 import { availableRuntimeError, runtimeConfigBody, userRuntimeConfigBody } from "./runtime-config.ts";
 import { type Run, isTerminal } from "../runs/run-store.ts";
 import { isSubagentThreadRef } from "../sessions/thread-ref.ts";
-import { stopSessionTree } from "../subagents/tree.ts";
+import { stopSessionTree, withSessionTreeLock } from "../subagents/tree.ts";
 import {
   type Conversation,
   type Principal,
@@ -60,14 +60,14 @@ type TurnInput = ReturnType<typeof turnInput>;
 export async function stopRunTree(deps: AppDeps, run: Run): Promise<boolean> {
   if (!deps.signals) return false;
   const signals = deps.signals;
-  const stop = async () => {
-    const session = await deps.sessions.getByThread(run.sessionId);
-    if (session) return stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals }, session, USER_STOP);
-    await signals.send(run.id, { kind: "abort", reason: USER_STOP });
-    await deps.runs.cancelTurn(run.id);
-    return true;
-  };
-  return deps.advisoryLock.withLock("session-tree-admission", stop);
+  const session = await deps.sessions.getByThread(run.sessionId);
+  if (session)
+    return withSessionTreeLock(deps.advisoryLock, deps.sessions, session, () =>
+      stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals }, session, USER_STOP),
+    );
+  await signals.send(run.id, { kind: "abort", reason: USER_STOP });
+  await deps.runs.cancelTurn(run.id);
+  return true;
 }
 
 export async function admitTurn(deps: AppDeps, h: AppHelpers, req: TurnRequest): Promise<TurnResult | TurnAdmission> {

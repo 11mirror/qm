@@ -13,7 +13,7 @@ import { resolveTurnContext } from "../../resolution/turn-context.ts";
 import { recentPrincipalDeliveryNote } from "../../surfaces/recent-dm-posts.ts";
 import type { Lease } from "../../sessions/session-store.ts";
 import { isOverheard, isUserMessage, type Item, type NewItem } from "../../sessions/items.ts";
-import { isPollSurface } from "../../triggers/run-trigger.ts";
+import { isWakeTrigger } from "../../triggers/provenance.ts";
 import { forModelContext } from "../../harness/context-compaction.ts";
 import { securityScreenChunks } from "../../security/security-screen.ts";
 import { skillsIndex } from "../../skills/materialize.ts";
@@ -89,7 +89,7 @@ export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
   const turnInput = baseText;
   const continueTurn = !!partial && history.some((entry) => entry.seq === partial.userSeq);
   if (partial) spine.turnUserEntrySeq = partial.userSeq;
-  const isPollFire = automatedTurn && !!input.surface && isPollSurface(input.surface);
+  const isPollFire = automatedTurn && !!input.surface && isWakeTrigger(input.surface);
   const sessionUsedTools = visibleHistory.some(
     (e) => e.kind === "ToolCall" && !(e.tool === "skill" || (e.tool === "skills" && e.body.action === "read")),
   );

@@ -92,7 +92,6 @@ test(
           hosts: [`${name}.example.test`],
           dryRun: extra.dryRun ?? false,
           replace: extra.replace ?? false,
-          allowExtraColumns: false,
           createStaging: true,
           batchSize: 100,
           migrate,

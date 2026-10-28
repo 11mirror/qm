@@ -1,5 +1,5 @@
 import type { CronFireLogEntry } from "../types.ts";
-import { createPgPool, withPgTransaction, tenantCols } from "../persistence/pg-pool.ts";
+import { createPgPool, type PoolClient, withPgTransaction, tenantCols } from "../persistence/pg-pool.ts";
 import { pgTextSafe } from "../util/text.ts";
 
 export interface CronFireRecord extends CronFireLogEntry {
@@ -8,10 +8,20 @@ export interface CronFireRecord extends CronFireLogEntry {
 
 export type BeginFireResult = { begun: true } | { begun: false; running?: CronFireLogEntry };
 
+export interface BeginFireOptions {
+  exclusive?: boolean;
+  enqueue?: (db: PoolClient) => Promise<void>;
+}
+
 export interface CronFireStore {
   record(cronId: string, entry: CronFireLogEntry): Promise<void>;
 
-  beginExclusive(cronId: string, entry: CronFireLogEntry, staleRunningMs: number): Promise<BeginFireResult>;
+  beginExclusive(
+    cronId: string,
+    entry: CronFireLogEntry,
+    staleRunningMs: number,
+    enqueue?: BeginFireOptions["enqueue"],
+  ): Promise<BeginFireResult>;
 
   sweepStranded(now: number, staleRunningMs: number, note: string): Promise<number>;
 
@@ -43,7 +53,6 @@ const FIRE_COLUMNS = FIRE_COLUMN_DEFS.map((c) => c.name).join(", ");
 const VALUE_COLUMN_DEFS = FIRE_COLUMN_DEFS.filter((c) => c.name !== "cron_id" && c.name !== "fire_key");
 const UPSERT_SET = VALUE_COLUMN_DEFS.map((c) => `${c.name} = EXCLUDED.${c.name}`).join(", ");
 
-// Built per call: tenantCols depends on whether tenancy is on, which is decided after this module loads.
 const upsertFire = (): string => `INSERT INTO cron_fires (${FIRE_COLUMNS})
    VALUES (${FIRE_COLUMN_DEFS.map((_c, i) => `$${i + 1}`).join(", ")})
    ON CONFLICT (${tenantCols("cron_id, fire_key")}) DO UPDATE
@@ -96,11 +105,6 @@ const JSON_LOG_FIELDS = [
 const hasTenantColumn = (table: string) =>
   `EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = '${table}'::regclass AND attname = 'tenant_id' AND NOT attisdropped)`;
 
-/**
- * Fire history used to live in two older places: a `fireLog` array on each cron's JSON and a
- * `cron_fire_log` table kept in step by a trigger. Import whatever is left of both into cron_fires,
- * then remove the old copies so cron_fires is the only history.
- */
 const RETIRE_LEGACY_FIRE_HISTORY = {
   id: "cron/fires/0002-retire-legacy-history",
   statements: [
@@ -142,7 +146,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
     async record(cronId, entry) {
       await query(upsertFire(), fireParams(cronId, entry));
     },
-    async beginExclusive(cronId, entry, staleRunningMs) {
+    async beginExclusive(cronId, entry, staleRunningMs, enqueue) {
       return withPgTransaction(await pool(), async (client) => {
         await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`cron_fires:${cronId}`]);
         const running = await client.query(
@@ -155,6 +159,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
         const row = running.rows[0] as Record<string, unknown> | undefined;
         if (row) return { begun: false, running: rowToEntry(row) };
         await client.query(upsertFire(), fireParams(cronId, entry));
+        await enqueue?.(client);
         return { begun: true };
       });
     },

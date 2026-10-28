@@ -11,6 +11,7 @@ import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import type { VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import { recoverNextFireAt } from "./schedule.ts";
+import { renderSourceInboxTask } from "../inbox/sync-task.ts";
 import type { JobDisposition, JobWorker } from "../jobs/job-worker.ts";
 import { hashId } from "../util/crypto.ts";
 import { utcMinute } from "../util/time.ts";
@@ -22,7 +23,7 @@ const BUSY_DEFER_MAX_LATE_MS = 10 * 60_000;
 type FireResult = { authzFailed: boolean; deferred?: boolean };
 
 type RunNowResult =
-  | { started: true; fireKey: string; settled: Promise<void> }
+  | { started: true; fireKey: string }
   | { started: false; reason: "unavailable" }
   | { started: false; reason: "already_running"; running: CronFireLogEntry };
 
@@ -93,13 +94,6 @@ export function echoesCronContextMarkers(s: string): boolean {
   return CRON_CONTEXT_MARKERS.some((marker) => s.includes(marker));
 }
 
-function cronFireLogReply(s: string): string {
-  if (echoesCronContextMarkers(s)) {
-    return "[reply echoed cron runtime context; omitted]";
-  }
-  return s;
-}
-
 function isOneShotSchedule(schedule: Cron["schedule"]): boolean {
   return schedule.everyMs == null && schedule.cron == null;
 }
@@ -119,7 +113,7 @@ export function flattenFireNote(text: string): string {
 function fireNoteLine(note: CronFireNote | undefined): string[] {
   if (!note || !Number.isFinite(note.at)) return [];
   const text = flattenFireNote(note.text);
-  if (!text || echoesCronContextMarkers(text)) return [];
+  if (!text) return [];
   return [
     note.by
       ? `Note left for this fire by ${note.by} (${utcMinute(note.at)}): ${text}`
@@ -132,8 +126,7 @@ function cronFireThreadRef(cronId: string, fireKey: string): string {
 }
 
 function mentionable(m: DirectoryMember): string {
-  const mentionId = m.slackId ?? (/^[A-Z0-9]+$/i.test(m.principalId) ? m.principalId : undefined);
-  return `@${m.displayName}${mentionId ? ` (<@${mentionId}>)` : ""}`;
+  return `@${m.displayName}${m.slackId ? ` (<@${m.slackId}>)` : ""}`;
 }
 
 function cronMentionRoster(cron: Cron, homeRoster: DirectoryMember[] | undefined): string | undefined {
@@ -143,8 +136,12 @@ function cronMentionRoster(cron: Cron, homeRoster: DirectoryMember[] | undefined
   return internal.map(mentionable).join(", ");
 }
 
+function storedTask(cron: Pick<Cron, "inbox" | "action">): string {
+  return cron.inbox?.source ? renderSourceInboxTask(cron.inbox.source) : (cron.action ?? "");
+}
+
 function renderCronFireInput(cron: Cron, mentionRoster?: string): string {
-  const task = cron.action ?? "";
+  const task = storedTask(cron);
   if (!task.trim()) return task;
   if (isBangCommand(task)) return task;
   const readsNotes = cronFireReadsNotes(cron);
@@ -298,7 +295,7 @@ async function fireEnabled(
       ...(scheduledAt !== undefined ? { scheduledAt } : {}),
       status: outcome.status ?? (outcome.authzFailed ? "refused" : "ok"),
       ...(outcome.note ? { note: outcome.note } : {}),
-      ...(outcome.reply !== undefined ? { reply: cronFireLogReply(outcome.reply) } : {}),
+      ...(outcome.reply !== undefined ? { reply: outcome.reply } : {}),
       ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
     });
   }
@@ -320,7 +317,6 @@ interface ManualFireContext {
 
 function manualFireRunner(ctx: ManualFireContext): Scheduler["runNow"] {
   const { deps, now, withWork } = ctx;
-  const settling = new Map<string, PromiseWithResolvers<void>>();
 
   async function fireManualJob(job: CronManualFireJob): Promise<CronFireDisposition> {
     const cron = await deps.crons.get(job.cronId);
@@ -335,12 +331,7 @@ function manualFireRunner(ctx: ManualFireContext): Scheduler["runNow"] {
     CRON_MANUAL_FIRE_JOB,
     (params) => {
       const job = params as CronManualFireJob;
-      return withWork(() => fireManualJob(job))
-        .catch(ctx.retryWhenClosed)
-        .finally(() => {
-          settling.get(job.fireKey)?.resolve();
-          settling.delete(job.fireKey);
-        });
+      return withWork(() => fireManualJob(job)).catch(ctx.retryWhenClosed);
     },
     ctx.handlerOpts,
   );
@@ -348,35 +339,18 @@ function manualFireRunner(ctx: ManualFireContext): Scheduler["runNow"] {
   async function begin(cron: Cron): Promise<RunNowResult> {
     const t = now();
     const fireKey = `cron:${cron.id}:manual:${randomUUID()}`;
-    const threadRef = cronFireThreadRef(cron.id, fireKey);
+    const job: CronManualFireJob = { cronId: cron.id, fireKey, firedAt: t };
     const begun = await deps.crons.beginFire(
       cron.id,
-      { fireKey, threadRef, firedAt: t, status: "running" },
-      { exclusive: true },
+      { fireKey, threadRef: cronFireThreadRef(cron.id, fireKey), firedAt: t, status: "running" },
+      { exclusive: true, enqueue: (db) => deps.jobs.spawn(CRON_MANUAL_FIRE_JOB, job, fireKey, db) },
     );
     if (!begun.begun) {
       return begun.running
         ? { started: false, reason: "already_running", running: begun.running }
         : { started: false, reason: "unavailable" };
     }
-    const settled = Promise.withResolvers<void>();
-    settling.set(fireKey, settled);
-    const job: CronManualFireJob = { cronId: cron.id, fireKey, firedAt: t };
-    try {
-      await deps.jobs.spawn(CRON_MANUAL_FIRE_JOB, job, fireKey);
-    } catch (e) {
-      settling.delete(fireKey);
-      await deps.crons.recordFire(cron.id, {
-        fireKey,
-        threadRef,
-        firedAt: t,
-        endedAt: now(),
-        status: "failed",
-        note: errMessage(e),
-      });
-      throw e;
-    }
-    return { started: true, fireKey, settled: settled.promise };
+    return { started: true, fireKey };
   }
 
   return async (cronId) => {
@@ -488,10 +462,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const tick = async (nowArg?: number): Promise<void> => {
     const t = nowArg ?? now();
     await withWork(async () => {
-      for (const cron of await deps.crons.list()) {
-        const job = cron.enabled && !cron.archived ? nextJob(cron) : undefined;
-        if (job && job.scheduledAt <= t) await fireJob(job, t).catch(reportFailureAs("scheduler: fire", undefined));
-      }
+      const due = (await deps.crons.list())
+        .map((cron) => (cron.enabled && !cron.archived ? nextJob(cron) : undefined))
+        .filter((job): job is CronFireJob => job !== undefined && job.scheduledAt <= t);
+      await Promise.all(due.map((job) => fireJob(job, t).catch(reportFailureAs("scheduler: fire", undefined))));
     });
   };
 

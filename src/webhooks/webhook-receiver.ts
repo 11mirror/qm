@@ -3,7 +3,7 @@ import type { WebhookStore } from "./webhook-store.ts";
 import { getVerifier, type VerifierInput } from "./verifiers.ts";
 import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
 import { buildWebhookWakeEnvelope, capForEscaping } from "../core/wake-envelope.ts";
-import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
+import { errMessage } from "../util/errors.ts";
 import type { JobWorker } from "../jobs/job-worker.ts";
 import { isObj } from "../util/objects.ts";
 import { MAX_SCREEN_CHARS } from "../security/security-screen.ts";
@@ -107,10 +107,10 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
         ...(outcome.note ? { error: outcome.note } : {}),
       });
     } catch (e) {
-      await deps.webhooks
-        .recordFire(wh.id, { at: Date.now(), error: errMessage(e) })
-        .catch(reportFailureAs("webhook: persist fire failure", undefined, `webhook=${wh.id}`));
-      reportFailure("webhook: fire", e, `webhook=${wh.id}`);
+      await deps.webhooks.recordFire(wh.id, { at: Date.now(), error: errMessage(e) }).catch((recordError: unknown) => {
+        throw new AggregateError([e, recordError], `webhook ${wh.id} fire failed and the failure was not recorded`);
+      });
+      throw e;
     }
   }
   deps.jobs.handle(WEBHOOK_FIRE_JOB, async (params) => {

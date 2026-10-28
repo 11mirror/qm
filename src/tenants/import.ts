@@ -18,7 +18,6 @@ export interface TenantImportOptions {
   tenantId?: string;
   dryRun: boolean;
   replace: boolean;
-  allowExtraColumns: boolean;
   createStaging: boolean;
   maintenanceUrl?: string;
   batchSize: number;
@@ -183,11 +182,7 @@ async function publicColumns(client: pg.Client): Promise<ColumnShape[]> {
   return rows;
 }
 
-function schemaDifferences(
-  staging: readonly ColumnShape[],
-  target: readonly ColumnShape[],
-  allowExtraColumns: boolean,
-): string[] {
+function schemaDifferences(staging: readonly ColumnShape[], target: readonly ColumnShape[]): string[] {
   const key = (shape: ColumnShape) => `${shape.table}.${shape.column}`;
   const stagingColumns = new Map(staging.map((shape) => [key(shape), shape]));
   const targetColumns = new Map(target.map((shape) => [key(shape), shape]));
@@ -198,13 +193,13 @@ function schemaDifferences(
     if (!targetTables.has(shape.table)) continue;
     const other = targetColumns.get(name);
     if (!other) {
-      if (!allowExtraColumns) differences.push(`column ${name} is missing in the target`);
+      differences.push(`column ${name} is missing in the target`);
     } else if (other.type !== shape.type) {
       differences.push(`column ${name} is ${shape.type} in staging but ${other.type} in the target`);
     }
   }
   for (const [name, shape] of targetColumns) {
-    if (stagingTables.has(shape.table) && !stagingColumns.has(name) && !allowExtraColumns)
+    if (stagingTables.has(shape.table) && !stagingColumns.has(name))
       differences.push(`column ${name} is missing in staging`);
   }
   return differences;
@@ -345,8 +340,7 @@ async function copyToTarget(
   }
   const counts: TableCount[] = [];
   for (const table of tables) {
-    const targetColumns = new Set(await insertableColumns(target, table));
-    const columns = (await insertableColumns(staging, table)).filter((column) => targetColumns.has(column));
+    const columns = await insertableColumns(staging, table);
     const replaceOn = await primaryKey(target, table);
     const copied = await copyRows(staging, target, table, {
       batchSize: options.batchSize,
@@ -410,7 +404,7 @@ export async function importTenant(options: TenantImportOptions): Promise<Tenant
     async () => {
       const stagingShape = await publicColumns(staging);
       const targetShape = await publicColumns(target);
-      const differences = schemaDifferences(stagingShape, targetShape, options.allowExtraColumns);
+      const differences = schemaDifferences(stagingShape, targetShape);
       if (differences.length) {
         throw new Error(`staging and target schemas differ:\n  ${differences.join("\n  ")}`);
       }
