@@ -7,7 +7,7 @@ import { BOT_MODES } from "../../surface-cache/channel-policy-store.ts";
 import { adminOperations } from "../../tools/admin.ts";
 import { errMessage } from "../../util/errors.ts";
 import { type ToolKit } from "./kit.ts";
-import { optionalBoolean, optionalString, text } from "./shared.ts";
+import { fmtCandidates, optionalBoolean, optionalString, text } from "./shared.ts";
 
 export function controlPlaneTools(kit: ToolKit) {
   const { instructionsTool } = instructionsToolFor(kit);
@@ -220,10 +220,11 @@ function sharingTools(kit: ToolKit) {
         });
         if (isUnavailable(r)) return unavailable(callId, tool);
         if (!r.ok) {
-          const candidates = r.candidates?.length
-            ? `\nCandidates: ${r.candidates.map((c) => `${c.label} (${c.id})`).join(", ")}`
-            : "";
-          return recordFail(callId, { tool, action, error: r.code }, `[error] ${r.message}${candidates}`);
+          return recordFail(
+            callId,
+            { tool, action, error: r.code },
+            `[error] ${r.message}${fmtCandidates(r.candidates)}`,
+          );
         }
         let invitationNote = "";
         if (r.invitation) {

@@ -3,15 +3,8 @@ import { Type } from "typebox";
 import type { PublishInput } from "../../tools/primitives.ts";
 import { errMessage } from "../../util/errors.ts";
 import { type ToolKit } from "./kit.ts";
-import {
-  describePublishAudience,
-  optionalBoolean,
-  optionalInteger,
-  optionalString,
-  outsideWorkspace,
-  sandboxSelector,
-  text,
-} from "./shared.ts";
+import { optionalBoolean, optionalInteger, optionalString, outsideWorkspace, sandboxSelector, text } from "./shared.ts";
+import type { PublishAudienceDescriptor } from "../../tools/primitives.ts";
 
 export function workspaceTools(kit: ToolKit) {
   const { discoverSkills, skill } = skillTools(kit);
@@ -288,4 +281,20 @@ function publishTool(kit: ToolKit) {
     },
   });
   return { publish };
+}
+
+function describePublishAudience(a: PublishAudienceDescriptor | undefined): string {
+  if (!a) return "Owned by you.";
+  const note = a.note ? ` (note: ${a.note})` : "";
+  if (a.kind === "org") return `Owned by you; reachable by anyone at ${a.orgId ?? "your org"}.${note}`;
+  if (a.kind === "members") {
+    if (a.memberCount === undefined)
+      return `Owned by you; access follows the visibility and membership of its shared scopes.${note}`;
+    const n = a.memberCount;
+    const who = a.channelRef
+      ? `the ${n} ${n === 1 ? "person" : "people"} currently in #${a.channelRef}`
+      : `${n} ${n === 1 ? "person" : "people"} you've shared it with`;
+    return `Owned by you; reachable by ${who} (from any surface they sign in to).${note}`;
+  }
+  return `Owned by you; owner-only (only you can reach it — use apps action share to widen).${note}`;
 }

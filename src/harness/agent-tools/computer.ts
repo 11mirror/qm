@@ -12,14 +12,7 @@ import { SANDBOX_CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
 import { BACKGROUND_JOB_TTL_MAX_MS, BACKGROUND_JOB_TTL_MS } from "../../connectors/background-exec-broker.ts";
 import { type ToolKit } from "./kit.ts";
 import type { TurnHalt } from "../turn-tool-state.ts";
-import {
-  FILE_SEND_GUIDANCE,
-  PRESSURE_WARN_FULL60,
-  fmtStatus,
-  optionalBoolean,
-  optionalString,
-  text,
-} from "./shared.ts";
+import { optionalBoolean, optionalString, text } from "./shared.ts";
 
 export const EXEC_TIMEOUT_DEFAULT_MS = 120_000;
 export const EXEC_TIMEOUT_MAX_MS = 300_000;
@@ -695,3 +688,12 @@ const SANDBOX_TOOL_ARGS: Record<
     unwatch: { required: ["monitor_id"], fields: [] },
   },
 };
+
+const PRESSURE_WARN_FULL60 = 50;
+
+function fmtStatus(s: { state: "running" } | { state: "exited"; code: number }): string {
+  return s.state === "exited" ? `exited ${s.code}` : "running";
+}
+
+const FILE_SEND_GUIDANCE =
+  "execute, files, skills and apps use the default sandbox when sandbox_id is omitted. Send files with the surface `post` action's `files` if present, else `attach` (workspace paths or {file_id}); background jobs cannot deliver files. ";

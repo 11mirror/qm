@@ -8,7 +8,7 @@ import { reportFailureAs } from "../../util/errors.ts";
 import { isObj } from "../../util/objects.ts";
 import { type AgentToolsOptions } from "../agent-tools.ts";
 import type { ToolRuntime } from "../turn-tool-state.ts";
-import { cutPayloadStrings, isPolicyNotice, text } from "./shared.ts";
+import { text } from "./shared.ts";
 import { type RetryMark } from "./wrappers.ts";
 
 export function createToolKit(ref: ToolRuntime, opts?: AgentToolsOptions) {
@@ -207,3 +207,30 @@ function kitReplies({ recordFail }: Pick<ReturnType<typeof kitRecorders>, "recor
 }
 
 export type ToolKit = ReturnType<typeof createToolKit>;
+
+function isPolicyNotice(summary: Record<string, unknown>): boolean {
+  return summary.blocked !== undefined || summary.denied !== undefined;
+}
+
+function cutPayloadStrings(v: unknown, cut: (text: string) => string): unknown {
+  if (typeof v === "string") return cut(v);
+  if (Array.isArray(v)) {
+    let out: unknown[] | null = null;
+    for (let i = 0; i < v.length; i++) {
+      const c = cutPayloadStrings(v[i], cut);
+      if (c !== v[i]) (out ??= v.slice())[i] = c;
+    }
+    return out ?? v;
+  }
+  if (v && typeof v === "object") {
+    const proto = Object.getPrototypeOf(v);
+    if (proto !== Object.prototype && proto !== null) return v;
+    let out: Record<string, unknown> | null = null;
+    for (const [k, x] of Object.entries(v)) {
+      const c = cutPayloadStrings(x, cut);
+      if (c !== x) (out ??= { ...(v as Record<string, unknown>) })[k] = c;
+    }
+    return out ?? v;
+  }
+  return v;
+}

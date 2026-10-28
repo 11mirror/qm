@@ -2,7 +2,7 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { errMessage } from "../../util/errors.ts";
 import { isObj } from "../../util/objects.ts";
 import { type ToolKit } from "./kit.ts";
-import { CLIENT_TOOL_DEFAULT_TIMEOUT_MS, CLIENT_TOOL_TIMEOUT_TEXT, text } from "./shared.ts";
+import { text } from "./shared.ts";
 
 export function externalTools(kit: ToolKit) {
   const { ref, opts, recordCall, recordCoreAuthoredResult, recordExternalResult, recordFail } = kit;
@@ -95,3 +95,6 @@ export function externalTools(kit: ToolKit) {
   );
   return { mcpDefs, mcpCandidates, clientTools };
 }
+
+const CLIENT_TOOL_DEFAULT_TIMEOUT_MS = 10_000;
+const CLIENT_TOOL_TIMEOUT_TEXT = "The page didn't respond in time. It may have been closed or navigated away.";

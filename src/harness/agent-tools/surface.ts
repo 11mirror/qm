@@ -4,14 +4,7 @@ import { Type, type Static } from "typebox";
 import { type OutboundFile } from "../../core/attachments.ts";
 import { type ToolKit } from "./kit.ts";
 import type { TurnHalt } from "../turn-tool-state.ts";
-import {
-  optionalBoolean,
-  optionalString,
-  outboundFilesSchema,
-  outboundSandboxSchema,
-  SURFACE_ACTIONS,
-  text,
-} from "./shared.ts";
+import { optionalBoolean, optionalString, text } from "./shared.ts";
 
 type ToolContext = NonNullable<ToolKit["ref"]["current"]>;
 
@@ -532,3 +525,29 @@ function attachAndFinishTools(kit: ToolKit, halt: Pick<TurnHalt, "setSilent">) {
   });
   return { attach, finishSilently };
 }
+
+const SURFACE_ACTIONS = [
+  "post",
+  "reach",
+  "react",
+  "edit",
+  "delete",
+  "read_thread",
+  "whats_new",
+  "search",
+  "read_members",
+  "read_file",
+] as const;
+const outboundFilesSchema = Type.Array(
+  Type.Union([
+    Type.String({ minLength: 1 }),
+    Type.Object({ file_id: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
+  ]),
+  { description: 'Workspace paths or {file_id: "stored Files ID"} objects.' },
+);
+const outboundSandboxSchema = Type.Optional(
+  Type.String({
+    minLength: 1,
+    description: "Sandbox for workspace paths.",
+  }),
+);
