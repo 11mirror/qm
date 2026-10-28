@@ -1,5 +1,6 @@
 import { fileArtifactId, type FileArtifact } from "../../../files/file-artifact-store.ts";
-import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../../../core/attachments.ts";
+import { MAX_ATTACHMENT_BYTES, safeAttachmentName } from "../../../core/attachments.ts";
+import { mimeFromName } from "../../../core/document-kinds.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, pipeToResponse } from "../../http.ts";
 import { type ApiCtx, ok, reply, type RouteResult } from "../route.ts";
 import { adminAt, badRequest, discoverScopes, notFound, scopedAdmin } from "./common.ts";

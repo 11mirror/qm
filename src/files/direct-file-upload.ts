@@ -20,7 +20,8 @@ import {
   type FileArtifactStore,
 } from "./file-artifact-store.ts";
 import { FileUploadError, type FileUpload, type FileUploadStore } from "./file-upload-store.ts";
-import { safeAttachmentName, mimeFromName } from "../core/attachments.ts";
+import { safeAttachmentName } from "../core/attachments.ts";
+import { mimeFromName } from "../core/document-kinds.ts";
 
 export const FILE_UPLOAD_PART_SIZE = 64 * 1024 * 1024;
 const MAX_DIRECT_FILE_BYTES = 100 * 1024 ** 3;

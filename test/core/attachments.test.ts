@@ -13,13 +13,13 @@ import {
   inboundManifest,
   materializeInbound,
   withoutAlreadyIngested,
-  mimeFromName,
   safeAttachmentName,
   senderNote,
   sharedFilesSystemSection,
   sharedManifest,
   turnFileId,
 } from "../../src/core/attachments.ts";
+import { mimeFromName } from "../../src/core/document-kinds.ts";
 import { fakeSandbox } from "../support/attachment-sandbox.ts";
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
