@@ -120,6 +120,17 @@ default.
   `EGRESS_SERVICE_HOSTS`, `PI_CAPTURE_REQUESTS`, `PLUGIN_SKILLS_DIRS`, `SEED_SKILLS`,
   `SKILLS_SEED_DIR`, `SKILL_SYNC_POLL_MS`, `SECRETS_PREFIX` and `SURFACE_DEBUG_FOOTER`.
 
+## Tenant sandboxes use the deployment's sandbox scope
+
+On a deployment that serves several tenants, every tenant's sandboxes now run in the
+deployment's `MODAL_ENVIRONMENT` and are named under the deployment's
+`SANDBOX_NAME_PREFIX` followed by the tenant slug, for example `qm-prod-acme-…`. The
+per-tenant sandbox name prefix and Modal environment settings are gone. Values stored in
+the `sandbox_name_prefix` and `modal_environment` columns of the `tenants` table, or set
+in a tenant's env bags, are ignored. A tenant import spec that still sets
+`sandboxNamePrefix` or `modalEnvironment` is rejected as an unknown field. Sandboxes a
+tenant created under its old prefix are not reused.
+
 ## Typed tables: unknown JSON keys stop the upgrade
 
 Many stores used to keep each record as one JSON document in a `json` column. On first

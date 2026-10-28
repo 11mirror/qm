@@ -303,7 +303,6 @@ test(
       secretsKey: undefined,
       home: tenant(),
       homeHosts: [],
-      homeSandboxPrefix: "qm",
     });
     useTenantDirectory(real);
     const seen: Seen[] = [];

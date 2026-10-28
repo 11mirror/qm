@@ -36,7 +36,6 @@ const record: TenantRecord = {
   orgId: "acme",
   hosts: ["acme.example.test"],
   status: "active",
-  sandboxNamePrefix: "qm-acme-sbx",
   oidcClientId: "acme",
   oidcLabel: "Example SSO",
   oidcAdmin: true,
@@ -123,7 +122,7 @@ test("core verifies each tenant with the derived secrets its surfaces sign with,
   assert.notEqual(coreFor(other).signingSecret, coreFor(record).signingSecret);
   assert.equal(tenantConfig(config).signingSecret, deployment.CORE_SIGNING_SECRET);
   assert.equal(coreFor(record).publicUrl, "https://acme.example.test");
-  assert.equal(coreFor(record).sandboxNamePrefix, "qm-acme-sbx");
+  assert.equal(coreFor(record).sandboxNamePrefix, `${config.sandbox.namePrefix ?? "qm"}-acme`);
   assert.equal(coreFor(record).s3Prefix, "tenants/acme/");
   assert.equal(coreFor(record).modelGatewayApiKey, "acme-gateway-key");
   assert.equal(coreFor(record).adminGrants, undefined);
@@ -139,11 +138,11 @@ test("the one portal and web UI learn every active tenant's settings and serve e
   });
   edgeTenantFeed(deployment)([tenant(), tenantFor(record.orgId, record.id, record.slug)]);
   const edge = createServer((req, res) =>
-    serveForHost(req, res, () => void res.end(`${edgeTenant()?.orgId}:${edgeTenant()?.sandboxNamePrefix ?? ""}`)),
+    serveForHost(req, res, () => void res.end(`${edgeTenant()?.orgId}:${edgeTenant()?.oidcLabel ?? ""}`)),
   );
   const port = await listen(edge);
   t.after(() => edge.close());
-  assert.deepEqual(await get(port, "/", { host: "acme.example.test" }), { status: 200, body: "acme:qm-acme-sbx" });
+  assert.deepEqual(await get(port, "/", { host: "acme.example.test" }), { status: 200, body: "acme:Example SSO" });
   assert.deepEqual(await get(port, "/", { host: "home.example.test" }), { status: 200, body: `${tenant().orgId}:` });
   assert.deepEqual(await get(port, "/healthz", { host: "10.0.0.7" }), { status: 200, body: `${tenant().orgId}:` });
   assert.equal((await get(port, "/", { host: "stranger.example.test" })).status, 404);
@@ -212,14 +211,13 @@ before(async () => {
     secretsKey: undefined,
     home: tenant(),
     homeHosts: ["home.example.test"],
-    homeSandboxPrefix: "qm",
     now: () => clock,
   });
   useTenantDirectory(directory);
   const app = createServer((req, res) =>
     res.end(
-      req.url === "/prefix"
-        ? (tenantSettings().sandboxNamePrefix ?? "none")
+      req.url === "/bucket"
+        ? (tenantSettings().s3Bucket ?? "none")
         : JSON.stringify({ id: tenant().id ?? null, org: tenant().orgId }),
     ),
   );
@@ -262,10 +260,10 @@ test("a new registry row is served on its next request and a suspended one stops
 });
 
 test("a tenant's changed settings are live on its next request without a restart", async () => {
-  const prefix = async () => (await frontGet("/prefix", "acme.example.test")).body;
-  assert.equal(await prefix(), "none");
-  await upsertTenant(registry, { ...tenantRow(ACME, "acme"), sandboxNamePrefix: "a2" }, undefined);
-  await eventually(prefix, "a2");
+  const bucket = async () => (await frontGet("/bucket", "acme.example.test")).body;
+  assert.equal(await bucket(), "none");
+  await upsertTenant(registry, { ...tenantRow(ACME, "acme"), s3Bucket: "a2" }, undefined);
+  await eventually(bucket, "a2");
 });
 
 test("a tenant reusing another tenant's org id is not served", async () => {
@@ -283,7 +281,6 @@ test("a tenant whose preparation fails is unavailable while every other tenant i
     secretsKey: undefined,
     home: tenant(),
     homeHosts: ["home.example.test"],
-    homeSandboxPrefix: "qm",
     now: () => clock,
     prepare: async () => {
       if (tenant().id === ACME && attempts++ === 0) throw new Error("hydrate failed");

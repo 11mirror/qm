@@ -122,9 +122,7 @@ test("applying tenancy folds each tenant's env bags into its settings once, keep
     status: "active",
     appsDomain: "apps.closedai.example.test",
     s3Bucket: "qm-closedai-bucket",
-    sandboxNamePrefix: "qm-closedai",
     modalAppName: "qm-closedai",
-    modalEnvironment: "closedai",
     modalSnapshotBucket: "qm-closedai-snapshots",
     awsSandboxBucket: "qm-closedai-sandbox",
     sentryDeployment: "closedai",
@@ -146,7 +144,6 @@ test("applying tenancy folds each tenant's env bags into its settings once, keep
     orgId: "mt-fake-1",
     hosts: ["mt-fake-1.example.test"],
     status: "active",
-    sandboxNamePrefix: "qm-mt-fake-1",
     modalAppName: "qm-mt-fake-1",
     oidcAdmin: false,
     secrets: {},
@@ -242,4 +239,16 @@ test("tenantSettings() answers from the registry for a registered tenant and fro
     process.env = saved;
     registerTenantSettings([]);
   }
+});
+
+test("sandbox prefix and Modal environment values stored by earlier releases are ignored", async () => {
+  await pool.q(
+    `ALTER TABLE tenants ADD COLUMN IF NOT EXISTS sandbox_name_prefix TEXT, ADD COLUMN IF NOT EXISTS modal_environment TEXT`,
+  );
+  await pool.q(`UPDATE tenants SET sandbox_name_prefix = 'qm-closedai', modal_environment = 'closedai'`);
+  await applyTenancy(await pool.pool(), key);
+  const closedai = (await listTenants(pool, key)).find((t) => t.slug === "closedai")!;
+  assert.equal(closedai.modalAppName, "qm-closedai");
+  assert.equal(Object.hasOwn(closedai, "sandboxNamePrefix"), false);
+  assert.equal(Object.hasOwn(closedai, "modalEnvironment"), false);
 });

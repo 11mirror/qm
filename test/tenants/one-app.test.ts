@@ -109,7 +109,6 @@ before(async () => {
     secretsKey: undefined,
     home: tenant(),
     homeHosts: ["home.example.test"],
-    homeSandboxPrefix: "qm",
     prepare: () => built.start(),
   });
   useTenantDirectory(directory);
