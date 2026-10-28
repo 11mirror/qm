@@ -20,7 +20,7 @@ function subagentToolFor(kit: ToolKit) {
     name: "subagents",
     label: "subagents",
     description:
-      "Spawn and coordinate subagents: background workers that cannot see this conversation. Brief one like a capable colleague (goal, why it matters, what you know, real limits) and leave the approach to them; its final answer arrives as an internal message; if someone is waiting on the work, relay what matters in your own words, otherwise act on it without acknowledging it. Its full transcript stays with it for read or followup_task. " +
+      "Spawn and coordinate subagents: background workers that cannot see this conversation. Brief one like a capable colleague (goal, why it matters, what you know, real limits) and leave the approach to them; its final answer arrives as an internal message. " +
       "open: start one with `task`. followup_task: more work for an existing one; starts a turn if it is idle; active work is queued safely. " +
       'send_message: inform a subagent, sibling or parent (target="parent") without starting a turn; interrupt:true stops its run. ' +
       "read: list subagents or read one's transcript. " +
