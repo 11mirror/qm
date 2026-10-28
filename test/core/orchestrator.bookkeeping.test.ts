@@ -20,6 +20,7 @@ import type { HarnessTurnResult } from "../../src/harness/harness.ts";
 import type { Sandbox } from "../../src/sandbox/sandbox.ts";
 import { isOverheard } from "../../src/sessions/items.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
+import { inlineJobs } from "../support/inline-jobs.ts";
 import { createPostgresAuditLog } from "../../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
@@ -82,6 +83,7 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
   const outbound = recordingOutbound();
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
+    jobs: inlineJobs(),
     identity: createIdentityService(databaseUrl),
     resolution: createResolutionService(testConfigStore(), acl),
     sessions,

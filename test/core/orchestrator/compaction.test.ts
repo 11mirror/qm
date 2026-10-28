@@ -9,6 +9,8 @@ import { countTokens } from "../../../src/util/tokens.ts";
 import type { NewItem } from "../../../src/sessions/items.ts";
 import { createPostgresSessionStore } from "../../../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "../../support/test-database.ts";
+import { inlineJobs } from "../../support/inline-jobs.ts";
+import { createJobWorker } from "../../../src/jobs/job-worker.ts";
 import { createGoalRecord } from "../../../src/harness/goal.ts";
 import type { ScopeId } from "../../../src/types.ts";
 
@@ -32,6 +34,7 @@ async function fixture() {
     harness,
     maxContextTokens: 500,
     modelGateway: { recordCall() {} },
+    jobs: inlineJobs(),
   } as unknown as OrchestratorDeps);
   const input = {
     session,
@@ -205,6 +208,7 @@ test("compaction leaves the session goal on its row and writes no goal entries",
     maxContextTokens: 400,
     harness: { models: { compactHistory: async () => "Earlier work." }, turns: {} },
     modelGateway: { recordCall() {} },
+    jobs: inlineJobs(),
   } as unknown as OrchestratorDeps);
   try {
     for (let round = 0; round < 2; round++) {
@@ -253,9 +257,11 @@ test("background compaction cannot revive an older goal over one closed while it
       turns: {},
     },
     modelGateway: { recordCall() {} },
+    jobs: inlineJobs(),
   } as unknown as OrchestratorDeps);
   compaction.scheduleBackgroundCompaction({
     sessionId: session.id,
+    afterSeq: 0,
     scopeId: scope,
     orgScopeId: "org:test",
     actorId: "test",
@@ -273,4 +279,46 @@ test("background compaction cannot revive an older goal over one closed while it
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   assert.deepEqual((await sessions.goals([session.id])).get(session.id), closed);
+});
+
+test("background compaction scheduled by a process that dies before running it still runs on the next one", async () => {
+  const url = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(url);
+  const session = await sessions.getOrCreateByThread("restart", "dm", scope);
+  const { lease } = await sessions.acquireLease(session.id);
+  assert.ok(lease);
+  for (let i = 0; i < 10; i++) {
+    await sessions.append(lease, { kind: "UserMessage", text: `message ${i} `.repeat(100) });
+  }
+  await sessions.releaseLease(lease);
+  const build = (compactHistory: () => Promise<string>) => {
+    const jobs = createJobWorker(url);
+    const compaction = createCompaction({
+      sessions,
+      maxContextTokens: 400,
+      harness: { models: { compactHistory }, turns: {} },
+      modelGateway: { recordCall() {} },
+      jobs,
+    } as unknown as OrchestratorDeps);
+    return { jobs, compaction };
+  };
+  const dying = build(() => new Promise<string>(() => {}));
+  dying.compaction.scheduleBackgroundCompaction({
+    sessionId: session.id,
+    afterSeq: 9,
+    scopeId: scope,
+    orgScopeId: "org:test",
+    actorId: "test",
+  });
+  const next = build(async () => "Earlier work.");
+  await next.jobs.start();
+  try {
+    const deadline = Date.now() + 15_000;
+    while (!(await sessions.getItems(session.id)).some((item) => item.kind === "ContextCompaction")) {
+      assert.ok(Date.now() < deadline, "the scheduled compaction never ran after the restart");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  } finally {
+    await next.jobs.stop();
+  }
 });

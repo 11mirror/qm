@@ -418,9 +418,11 @@ async function releaseTurn(
     await held.catchUpMessageRevisions();
     await deps.sessions.releaseLease(held.lease);
   }
-  if (!run.contextRecovered && !held.turnAbort.signal.aborted)
+  const afterSeq = run.emittedEntries.at(-1)?.seq;
+  if (!run.contextRecovered && !held.turnAbort.signal.aborted && afterSeq !== undefined)
     o.compaction.scheduleBackgroundCompaction({
       sessionId: session.id,
+      afterSeq,
       scopeId,
       orgScopeId: resolution.orgScopeId,
       actorId: actor.id,

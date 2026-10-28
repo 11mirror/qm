@@ -25,6 +25,7 @@ import { createPostgresSessionStore } from "../../src/sessions/postgres-session-
 import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts";
 import { createMockHarness } from "./mock-harness.ts";
 import { singleProcessDeps } from "./single-process.ts";
+import { inlineJobs } from "./inline-jobs.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings } from "./test-database.ts";
 
 export const BARE_ORG = "default-org";
@@ -71,6 +72,7 @@ export function buildBareOrchestrator(
   const memory = opts.memory ?? createPostgresMemoryService(databaseUrl);
   return createOrchestrator({
     ...singleProcessDeps(),
+    jobs: inlineJobs(),
     identity: createIdentityService(databaseUrl),
     resolution: createResolutionService(testConfigStore(), acl),
     sessions: opts.sessions ?? createPostgresSessionStore(databaseUrl),

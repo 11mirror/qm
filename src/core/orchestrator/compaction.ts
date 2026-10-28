@@ -20,7 +20,6 @@ import {
 } from "../../harness/context-compaction.ts";
 import { estimateCostUsd } from "../../ratelimit/budget.ts";
 import { errMessage } from "../../util/errors.ts";
-import { createKeyedQueue } from "../../util/async.ts";
 import type { OrchestratorDeps } from "./types.ts";
 
 const MAX_CONTEXT_TOKENS = 120_000;
@@ -48,22 +47,19 @@ interface CompactInput {
 export interface CompactionContext {
   compactContextIfNeeded(input: CompactInput): Promise<Item[]>;
   compactRecent(input: CompactInput): Promise<Item[]>;
-  scheduleBackgroundCompaction(input: {
-    sessionId: string;
-    scopeId: string;
-    orgScopeId: string;
-    actorId: string;
-    model?: string;
-  }): void;
+  scheduleBackgroundCompaction(job: BackgroundCompaction): void;
   documentTokenBudget(scopeId: string, model?: string): number;
 }
 
 export function createCompaction(deps: OrchestratorDeps): CompactionContext {
-  const queue = { backgroundCompaction: createKeyedQueue<string>(), compactionPending: new Set<string>() };
+  deps.jobs.handle(BACKGROUND_COMPACTION_JOB, async (params) => {
+    await runBackgroundCompaction(deps, params as BackgroundCompaction);
+    return "done";
+  });
   return {
     compactContextIfNeeded: (input) => compactContextIfNeeded(deps, input),
     compactRecent: (input) => compactRecent(deps, input),
-    scheduleBackgroundCompaction: (input) => scheduleBackgroundCompaction(deps, queue, input),
+    scheduleBackgroundCompaction: (job) => scheduleBackgroundCompaction(deps, job),
     documentTokenBudget: (scopeId, model) => documentTokenBudget(deps, scopeId, model),
   };
 }
@@ -230,70 +226,64 @@ async function compactRecent(deps: OrchestratorDeps, input: CompactInput): Promi
   return [summary, ...recent];
 }
 
-function scheduleBackgroundCompaction(
-  deps: OrchestratorDeps,
-  queue: { backgroundCompaction: ReturnType<typeof createKeyedQueue<string>>; compactionPending: Set<string> },
-  input: {
-    sessionId: string;
-    scopeId: string;
-    orgScopeId: string;
-    actorId: string;
-    model?: string;
-  },
-): void {
-  const { backgroundCompaction, compactionPending } = queue;
-  if (compactionPending.has(input.sessionId)) return;
-  compactionPending.add(input.sessionId);
-  void backgroundCompaction(input.sessionId, async () => {
-    compactionPending.delete(input.sessionId);
-    let lease: Lease | null = null;
-    try {
-      const session = await deps.sessions.get(input.sessionId);
-      if (!session) return;
-      const maxContextTokens = tokenBudgetFor(deps, input.scopeId, input.model);
-      const entries = (await deps.sessions.getContextWindow(input.sessionId)).items;
-      const history = forModelContext(entries);
-      if (!overBudgetFraction(history, maxContextTokens, COMPACT_SOFT_FRACTION)) return;
-      const snapshotSeq = entries.at(-1)?.seq ?? -1;
-      const summarized = await summarizeForCompaction(deps, {
-        session,
-        visibleHistory: history,
-        scopeId: input.scopeId,
-        orgScopeId: input.orgScopeId,
-        actorId: input.actorId,
-        ...(input.model ? { model: input.model } : {}),
-      });
-      if (!summarized) return;
-      lease = (await acquireLeaseWithin(deps.sessions, input.sessionId, "compaction", WRITE_LEASE_WAIT_MS)).lease;
-      if (!lease) return;
-      const since = await deps.sessions.getItems(input.sessionId, { sinceSeq: snapshotSeq + 1 });
-      if (!since.some((entry) => !!contextSummary(entry))) {
-        await writeCompaction(deps, { session, lease, summarized });
-      }
-    } catch (e) {
-      deps.errors?.record(
-        {
-          category: "turn",
-          code: "background_compaction_failed",
-          message: errMessage(e),
-          scopeLabel: input.scopeId as ScopeId,
-          sessionId: input.sessionId,
-        },
-        e,
-      );
-    } finally {
-      if (lease) await deps.sessions.releaseLease(lease);
+interface BackgroundCompaction {
+  sessionId: string;
+  afterSeq: number;
+  scopeId: string;
+  orgScopeId: string;
+  actorId: string;
+  model?: string;
+}
+
+const BACKGROUND_COMPACTION_JOB = "background-compaction";
+
+function recordBackgroundFailure(deps: OrchestratorDeps, job: BackgroundCompaction, error: unknown): void {
+  deps.errors?.record(
+    {
+      category: "turn",
+      code: "background_compaction_failed",
+      message: errMessage(error),
+      scopeLabel: job.scopeId as ScopeId,
+      sessionId: job.sessionId,
+    },
+    error,
+  );
+}
+
+async function runBackgroundCompaction(deps: OrchestratorDeps, job: BackgroundCompaction): Promise<void> {
+  let lease: Lease | null = null;
+  try {
+    const session = await deps.sessions.get(job.sessionId);
+    if (!session) return;
+    const maxContextTokens = tokenBudgetFor(deps, job.scopeId, job.model);
+    const entries = (await deps.sessions.getContextWindow(job.sessionId)).items;
+    const history = forModelContext(entries);
+    if (!overBudgetFraction(history, maxContextTokens, COMPACT_SOFT_FRACTION)) return;
+    const snapshotSeq = entries.at(-1)?.seq ?? -1;
+    const summarized = await summarizeForCompaction(deps, {
+      session,
+      visibleHistory: history,
+      scopeId: job.scopeId,
+      orgScopeId: job.orgScopeId,
+      actorId: job.actorId,
+      ...(job.model ? { model: job.model } : {}),
+    });
+    if (!summarized) return;
+    lease = (await acquireLeaseWithin(deps.sessions, job.sessionId, "compaction", WRITE_LEASE_WAIT_MS)).lease;
+    if (!lease) return;
+    const since = await deps.sessions.getItems(job.sessionId, { sinceSeq: snapshotSeq + 1 });
+    if (!since.some((entry) => !!contextSummary(entry))) {
+      await writeCompaction(deps, { session, lease, summarized });
     }
-  }).catch((e) => {
-    deps.errors?.record(
-      {
-        category: "turn",
-        code: "background_compaction_failed",
-        message: errMessage(e),
-        scopeLabel: input.scopeId as ScopeId,
-        sessionId: input.sessionId,
-      },
-      e,
-    );
-  });
+  } catch (e) {
+    recordBackgroundFailure(deps, job, e);
+  } finally {
+    if (lease) await deps.sessions.releaseLease(lease);
+  }
+}
+
+function scheduleBackgroundCompaction(deps: OrchestratorDeps, job: BackgroundCompaction): void {
+  deps.jobs
+    .spawn(BACKGROUND_COMPACTION_JOB, job, `compaction:${job.sessionId}:${job.afterSeq}`)
+    .catch((e: unknown) => recordBackgroundFailure(deps, job, e));
 }

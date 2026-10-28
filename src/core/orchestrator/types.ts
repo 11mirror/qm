@@ -45,6 +45,7 @@ import type { ControlService } from "../../api/control-service.ts";
 import type { Harness } from "../../harness/harness.ts";
 import type { AdminService } from "../../admin/admin-service.ts";
 import type { ErrorLog } from "../../admin/error-log.ts";
+import type { JobWorker } from "../../jobs/job-worker.ts";
 import type { ToolLedger } from "../../runs/tool-ledger.ts";
 import type { RunSignalStore } from "../../runs/run-signal-store.ts";
 import type { TurnStream } from "../../runs/turn-stream.ts";
@@ -108,6 +109,7 @@ export interface OrchestratorDeps {
   brandingDefault?: OrgBranding;
   resolveBaseModelId?: () => string | undefined;
   sessions: SessionStore;
+  jobs: Pick<JobWorker, "handle" | "spawn">;
   sessionStateBus?: SessionStateBus;
   sessionSyscalls?: SessionSyscallsFactory;
   workspace: WorkspaceStore;
