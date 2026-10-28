@@ -1,37 +1,16 @@
 import { deriveTenantSecret, tenantSandboxPrefix } from "../../plugins/chassis/src/tenant-settings.ts";
-import type { Config } from "../config.ts";
+import type { Config, TenantPart } from "../config.ts";
+import { defined } from "../config-env.ts";
 import { tenant, tenantSettings } from "../tenant.ts";
 import type { TenantSettings } from "./registry.ts";
 
-type Inherited = Pick<
-  Config,
-  | "orgId"
-  | "brandingDefault"
-  | "brokerCredentials"
-  | "trustedOidcAdminIssuer"
-  | "emailAuthPrincipals"
-  | "emailAuthDomain"
-  | "apiBaseUrl"
-  | "publicUrl"
-  | "publicWebUrl"
-  | "slack"
-  | "externalSlackPolicies"
-  | "chatSurfaces"
-  | "s3Prefix"
-  | "s3Bucket"
-  | "adminGrants"
-  | "deployAppsSessionSecret"
-  | "deployAppsLoginUrl"
-  | "deployAppsLoginPath"
-  | "deployAppsDomain"
-  | "signingSecret"
-  | "capabilitySecret"
-  | "portalIdentitySecret"
-  | "connectorSecretKey"
-  | "awsDeploy"
->;
-
-export interface TenantConfig extends Inherited {
+export interface TenantConfig
+  extends
+    TenantPart,
+    Pick<
+      Config,
+      "s3Bucket" | "signingSecret" | "capabilitySecret" | "portalIdentitySecret" | "connectorSecretKey" | "awsDeploy"
+    > {
   sandboxNamePrefix?: string;
   modelGatewayApiKey?: string;
   slackServiceToken?: string;
@@ -61,7 +40,7 @@ function registeredConfig(config: Config, settings: TenantSettings & { id: strin
     url ? [new URL(url).origin] : [],
   );
   const derived = (shared: string | undefined) => (shared ? deriveTenantSecret(shared, settings.id) : undefined);
-  const view: TenantConfig = {
+  const view = {
     ...config,
     orgId: settings.orgId,
     apiBaseUrl: origin ?? config.apiBaseUrl,
@@ -84,8 +63,8 @@ function registeredConfig(config: Config, settings: TenantSettings & { id: strin
     modelGatewayApiKey: settings.secrets.modelGatewayApiKey ?? config.modelGateway?.apiKey,
     slackServiceToken: settings.secrets.slackServiceToken,
     sentryDeployment: settings.sentryDeployment,
-  };
-  return Object.fromEntries(Object.entries(view).filter(([, value]) => value !== undefined)) as TenantConfig;
+  } satisfies TenantConfig;
+  return defined(view) as TenantConfig;
 }
 
 export function tenantConfig(config: Config): TenantConfig {
