@@ -176,6 +176,78 @@ test("Pi title generation rejects a plain-text answer with the rule that fired a
   });
 });
 
+test("Pi title generation accepts a JSON text answer when the model does not call the answer tool", async (t) => {
+  let requestBody: Record<string, unknown> = {};
+  const server = createServer((request, response) => {
+    let raw = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => {
+      raw += String(chunk);
+    });
+    request.on("end", () => {
+      requestBody = JSON.parse(raw) as Record<string, unknown>;
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      for (const event of [
+        {
+          type: "message_start",
+          message: {
+            id: "msg_title",
+            type: "message",
+            role: "assistant",
+            model: "title-model",
+            content: [],
+            stop_reason: null,
+            stop_sequence: null,
+            usage: { input_tokens: 1, output_tokens: 0 },
+          },
+        },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: '```json\n{"title": "Deploy investigation"}\n```' },
+        },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn", stop_sequence: null },
+          usage: { output_tokens: 1 },
+        },
+        { type: "message_stop" },
+      ]) {
+        response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+      }
+      response.end();
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  );
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  const harness = createPiHarness({
+    defaultModelId: "claude-opus-4-8",
+    titleModelId: "claude-haiku-4-5",
+    modelGateway: {
+      url: `http://127.0.0.1:${address.port}`,
+      apiKey: "gateway-key",
+      apiKeyHeader: "api-key",
+      models: { "claude-haiku-4-5": "title-model" },
+    },
+  });
+
+  assert.equal(await harness.models.generateTitle!("User:\nInvestigate the deploy"), "Deploy investigation");
+  assert.equal((requestBody.thinking as { type?: string }).type, "enabled");
+  assert.equal(requestBody.tool_choice, undefined);
+});
+
 test("Pi title generation accepts an answer that leaves the title out without reporting a failure", async (t) => {
   const server = createServer((request, response) => {
     request.resume();

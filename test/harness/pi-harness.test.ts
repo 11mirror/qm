@@ -439,10 +439,10 @@ test("ack emoji keeps working on a non-Anthropic base model when an Anthropic ke
     resolveProviderKeys: async () => ({ anthropic: "sk-ant-test" }),
   });
   const realFetch = globalThis.fetch;
-  const calls: Array<{ url: string; model: unknown; thinking: unknown }> = [];
+  const calls: Array<{ url: string; model: unknown; thinking: unknown; toolChoice: unknown }> = [];
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? "{}"));
-    calls.push({ url: String(url), model: body.model, thinking: body.thinking });
+    calls.push({ url: String(url), model: body.model, thinking: body.thinking, toolChoice: body.tool_choice });
     const events = [
       {
         type: "message_start",
@@ -477,6 +477,7 @@ test("ack emoji keeps working on a non-Anthropic base model when an Anthropic ke
     assert.match(calls[0]!.url, /anthropic/, "it went to the Anthropic API");
     assert.equal(calls[0]!.model, "claude-haiku-5-5", "it used the Anthropic auxiliary, not the OpenAI judge model");
     assert.deepEqual(calls[0]!.thinking, { type: "disabled" }, "the 64-token pick never spends its budget thinking");
+    assert.deepEqual(calls[0]!.toolChoice, { type: "tool", name: "answer" });
   } finally {
     globalThis.fetch = realFetch;
   }

@@ -1,4 +1,5 @@
 import { errChain as errMessage } from "../../plugins/chassis/src/errors.ts";
+import { readTextPrefix } from "./response-body.ts";
 
 export {
   errorAlreadyReported,
@@ -18,8 +19,8 @@ export function withRequestId(message: string, headers: Headers): string {
   return message;
 }
 
-export async function httpFailure(res: Response, bodyChars = 200): Promise<string> {
-  const body = (await res.text().catch(() => "")).slice(0, bodyChars);
+export async function httpFailure(res: Response, bodyChars = 200, signal?: AbortSignal): Promise<string> {
+  const body = await readTextPrefix(res, bodyChars, signal).catch(() => "");
   return withRequestId(`http ${res.status} ${body}`, res.headers);
 }
 

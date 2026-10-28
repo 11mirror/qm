@@ -217,6 +217,7 @@ interface OneShotOptions {
   thinkingLevel?: ModelThinkingLevel;
   maxTokens?: number;
   retry?: false;
+  onPayload?: (payload: unknown, model: Model<Api>) => unknown;
 }
 
 async function completeMessage(
@@ -234,6 +235,7 @@ async function completeMessage(
         ...(opts?.signal ? { signal: opts.signal } : {}),
         ...(reasoning !== "off" ? { reasoning } : {}),
         ...(opts?.maxTokens ? { maxTokens: opts.maxTokens } : {}),
+        ...(opts?.onPayload ? { onPayload: opts.onPayload } : {}),
       }),
     opts?.retry === false ? undefined : ONE_SHOT_RETRY,
     opts?.signal,
@@ -269,6 +271,41 @@ const STRUCTURED_ANSWER_TOOL = "answer";
 
 export type StructuredAnswer<T extends TSchema> = { ok: true; value: Static<T> } | { ok: false; text: string };
 
+function forcedAnswerChoice(model: Model<Api>, payload: Record<string, unknown>): Record<string, unknown> | undefined {
+  const thinking = (payload.thinking as { type?: unknown } | undefined)?.type;
+  if (model.api === "anthropic-messages")
+    return thinking === "enabled" || thinking === "adaptive"
+      ? undefined
+      : { tool_choice: { type: "tool", name: STRUCTURED_ANSWER_TOOL } };
+  if (model.api === "openai-responses" || model.api === "azure-openai-responses")
+    return { tool_choice: { type: "function", name: STRUCTURED_ANSWER_TOOL } };
+  if (model.api === "openai-completions" && model.provider === "openai")
+    return { tool_choice: { type: "function", function: { name: STRUCTURED_ANSWER_TOOL } } };
+  if (model.api === "google-generative-ai" || model.api === "google-vertex") {
+    const config = (payload.config ?? {}) as Record<string, unknown>;
+    const toolConfig = { functionCallingConfig: { mode: "ANY", allowedFunctionNames: [STRUCTURED_ANSWER_TOOL] } };
+    return { config: { ...config, toolConfig } };
+  }
+  return undefined;
+}
+
+function forceAnswerTool(payload: unknown, model: Model<Api>): unknown {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const choice = forcedAnswerChoice(model, payload as Record<string, unknown>);
+  return choice ? { ...payload, ...choice } : undefined;
+}
+
+function answerFromText(text: string): unknown {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start < 0 || end < start) return undefined;
+  try {
+    return JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return undefined;
+  }
+}
+
 export async function completeStructured<T extends TSchema>(
   model: Model<Api>,
   keys: ProviderKeys,
@@ -279,17 +316,17 @@ export async function completeStructured<T extends TSchema>(
 ): Promise<StructuredAnswer<T> | undefined> {
   const context: Context = {
     ...userContext(
-      `${systemPrompt}\n\nGive your answer by calling the ${STRUCTURED_ANSWER_TOOL} tool exactly once.`,
+      `${systemPrompt}\n\nGive your answer by calling the ${STRUCTURED_ANSWER_TOOL} tool exactly once. If you cannot call tools, reply with only a JSON object matching the ${STRUCTURED_ANSWER_TOOL} tool's parameters.`,
       prompt,
     ),
     tools: [{ name: STRUCTURED_ANSWER_TOOL, description: "Return your answer.", parameters: schema }],
   };
-  const message = await completeMessage(model, keys, context, opts);
+  const message = await completeMessage(model, keys, context, { ...opts, onPayload: forceAnswerTool });
   if (!message) return undefined;
   const call = message.content.find((block) => block.type === "toolCall" && block.name === STRUCTURED_ANSWER_TOOL);
-  const args: unknown = call?.type === "toolCall" ? call.arguments : undefined;
+  const args: unknown = call?.type === "toolCall" ? call.arguments : answerFromText(messageText(message));
   if (Check(schema, args)) return { ok: true, value: args };
-  return { ok: false, text: args === undefined ? messageText(message) : JSON.stringify(args) };
+  return { ok: false, text: call?.type === "toolCall" ? JSON.stringify(args) : messageText(message) };
 }
 
 const FAST_MODE_BETA = "fast-mode-2026-02-01";

@@ -3,6 +3,7 @@ import type { HarnessDetectInput, HarnessDetectResult, HarnessModelUtilities } f
 import { TitleRejected } from "../../../src/core/turn-error.ts";
 import { compactionThroughSeq, compactTranscript } from "../../../src/harness/context-compaction.ts";
 import { countTokens } from "../../../src/util/tokens.ts";
+import { headSlice } from "../../../src/util/text.ts";
 import { SECURITY_SCREEN_STEP, SECURITY_SCREEN_SYSTEM_PROMPT } from "../../../src/security/security-screen.ts";
 
 export function createMockModels(flakyScreens: Set<string>): HarnessModelUtilities {
@@ -23,8 +24,8 @@ export function createMockModels(flakyScreens: Set<string>): HarnessModelUtiliti
       return Promise.resolve({ respond: false, reason: "not addressed" });
     },
 
-    async compactHistory({ history }) {
-      return deterministicCompactSummary(history);
+    async compactHistory({ history, summaryTokenBudget }) {
+      return deterministicCompactSummary(history, summaryTokenBudget);
     },
 
     oneShot(systemPrompt: string, prompt: string): Promise<string | undefined> {
@@ -124,8 +125,11 @@ export function createMockModels(flakyScreens: Set<string>): HarnessModelUtiliti
   };
 }
 
-export function deterministicCompactSummary(history: Item[]): string {
+function deterministicCompactSummary(history: Item[], maxTokens: number): string {
   const throughSeq = compactionThroughSeq(history);
   const header = `Compacted ${history.length} prior entr${history.length === 1 ? "y" : "ies"} through seq ${throughSeq}.`;
-  return `${header}\n${compactTranscript(history)}`;
+  const summary = `${header}\n${compactTranscript(history, Math.max(1, maxTokens - countTokens(header) - 1))}`;
+  let keep = summary.length;
+  while (keep > 1 && countTokens(headSlice(summary, keep)) > maxTokens) keep = Math.floor(keep / 2);
+  return headSlice(summary, keep);
 }

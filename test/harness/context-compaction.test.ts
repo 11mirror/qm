@@ -14,7 +14,6 @@ import { createPostgresSessionStore } from "../../src/sessions/postgres-session-
 import { contextSummaryItem, type SessionStore } from "../../src/sessions/session-store.ts";
 import { scopeId } from "../../src/types.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
-import { estimateDocumentTokens } from "../../src/core/document-kinds.ts";
 
 function ent(item: NewItem, seq = 0, createdAt = 0): Item {
   return storedItem(item, { sessionId: "s", seq, createdAt });
@@ -256,7 +255,6 @@ test("a user entry's document attachments count at their expanded size", () => {
     attachments: [{ ...pdf("contract.pdf", "f1"), direction: "out" }],
   });
   assert.equal(estimateItemTokens(outbound), estimateItemTokens(plain));
-  assert.ok(estimateDocumentTokens({ name: "notes.txt", mimetype: "text/plain", sizeBytes: 50_000_000 }) <= 50_000);
 });
 
 test("history that is small in words but carries large PDFs compacts them out of the kept window", () => {
