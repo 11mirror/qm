@@ -128,12 +128,12 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     assert.equal(res.status, 401);
   });
   it("a source records one observed room or group DM and rejects malformed or stale observations untouched", async () => {
-    const post = (body: unknown) => {
+    const post = (body: unknown, path = "/v1/directory/observations") => {
       const raw = JSON.stringify(body);
-      return fetch(`${base}/v1/directory/observations`, {
+      return fetch(`${base}${path}`, {
         method: "POST",
         headers: {
-          ...signedRequestHeaders(SECRET, "POST", "/v1/directory/observations", raw),
+          ...signedRequestHeaders(SECRET, "POST", path, raw),
           "content-type": "application/json",
         },
         body: raw,
@@ -157,6 +157,8 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
       { ...room, id: "C_BAD", isPrivate: "true" },
     ])
       assert.equal((await post(invalid)).status, 400, JSON.stringify(invalid));
+    const legacy = { groupMembers: [{ groupId: "G_BAD", principalId: "U2" }], groupIds: ["G_BAD"], groupsSyncedAt: 30 };
+    assert.equal((await post({ ...legacy, partialGroups: true }, "/v1/directory")).status, 400, "legacy partial push");
     assert.equal((await post(room)).status, 200);
     assert.equal((await post(group)).status, 200);
     assert.equal((await post({ ...bad, observedAt: 5 })).status, 409, "older than the last group crawl");

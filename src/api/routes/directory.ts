@@ -51,6 +51,9 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
     channelsSyncedAt?: unknown;
     groupsSyncedAt?: unknown;
   };
+  if (isObj(body) && ("partialChannels" in body || "partialGroups" in body)) {
+    return sendJson(res, 400, { error: "bad_request", message: "partial pushes moved to /v1/directory/observations" });
+  }
   if (!Array.isArray(b.members) && !Array.isArray(b.channels) && !Array.isArray(b.groupMembers)) {
     return sendJson(res, 400, {
       error: "bad_request",
