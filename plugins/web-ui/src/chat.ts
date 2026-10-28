@@ -124,6 +124,7 @@ import {
   fileContentUrl,
   onChatPrefsChange,
   pinLatestPrompt,
+  serverNow,
   switchedDefault,
 } from "./core-bridge";
 import {
@@ -217,7 +218,7 @@ import { createForkOriginController, forkOriginView } from "./fork-origin";
 import { base64ToBytes } from "./paste-text";
 import { pageAnchor, storeTranscript } from "./transcript-cache";
 import { tip } from "./tooltip";
-import { goalWorked, workSeconds, workedLabel } from "./work-duration";
+import { goalWorked, workSeconds, workStart, workedLabel } from "./work-duration";
 import { decorateTextCodeBlocks } from "./text-code";
 
 import { createTranscriptViewport } from "./transcript-viewport";
@@ -438,7 +439,7 @@ export function createChatSurface(
 
   let ctaThreadRef: string | null | undefined;
   let ctaText = CHAT_CTAS[0]!;
-  let workTicker: ReturnType<typeof setInterval> | null = null;
+  let workTicker: ReturnType<typeof setTimeout> | null = null;
   let liveWorkExpanded = false;
   let liveFoldOpened = false;
   const liveStepLine = createLiveStepLine(() => drawActiveChat());
@@ -2405,15 +2406,20 @@ export function createChatSurface(
   }
 
   function syncWorkTicker(): void {
+    const work = chatState.liveWork;
     const goalTicking = Boolean(chatState.agent?.state.isStreaming && currentGoal()?.status === "active");
-    const active =
-      (chatState.liveWork?.status === "working" && !chatState.liveWork.stale) || goalTicking || subagentUi.ticking;
-    if (active && !workTicker) {
-      workTicker = setInterval(() => drawActiveChat(), 1000);
-    } else if (!active && workTicker) {
-      clearInterval(workTicker);
+    const live = Boolean(work && (work.status === "thinking" || work.status === "working") && !work.stale);
+    if (workTicker) clearTimeout(workTicker);
+    workTicker = null;
+    if (!live && !goalTicking && !subagentUi.ticking) return;
+    const start = work ? workStart(work) : null;
+    const sinceStart = start == null ? 0 : serverNow() - start;
+    const untilNextSecond = 1000 - (((sinceStart % 1000) + 1000) % 1000);
+    workTicker = setTimeout(() => {
       workTicker = null;
-    }
+      drawActiveChat();
+      syncWorkTicker();
+    }, untilNextSecond + 15);
   }
 
   function currentGoal(): GoalStripState | null {
@@ -3018,7 +3024,7 @@ export function createChatSurface(
 
   function elapsedSeconds(startedAt: number | null | undefined): number {
     if (typeof startedAt !== "number" || startedAt <= 0) return 0;
-    return Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+    return Math.max(0, Math.floor((serverNow() - startedAt) / 1000));
   }
 
   function usedToolsSuffix(work: WorkBlock): string {

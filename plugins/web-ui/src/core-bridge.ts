@@ -791,6 +791,17 @@ function reportSigninRequired(detail: SigninRequired): void {
   onSigninRequired?.(detail);
 }
 
+let serverLeadMs = Number.NEGATIVE_INFINITY;
+
+export function serverNow(): number {
+  return Date.now() + (Number.isFinite(serverLeadMs) ? serverLeadMs : 0);
+}
+
+function noteServerClock(response: Response): void {
+  const stamped = Date.parse(response.headers.get("date") ?? "");
+  if (Number.isFinite(stamped)) serverLeadMs = Math.max(serverLeadMs, stamped - Date.now());
+}
+
 export async function webFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const startMs = Date.now();
   const request = input instanceof Request ? input : null;
@@ -804,6 +815,7 @@ export async function webFetch(input: RequestInfo | URL, init?: RequestInit): Pr
     throw error;
   }
   reportRequestTiming(url, method, startMs, response.status);
+  noteServerClock(response);
   if (response.status !== 401) return response;
   stopBrowserErrors();
   stopAnalytics();

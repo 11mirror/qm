@@ -1,10 +1,19 @@
 import { currentTextPhase } from "./timeline.ts";
 import { goalElapsedLabel, type GoalStripState } from "./goal-strip.ts";
-import { workPausedForApproval, type WorkBlock } from "./core-bridge.ts";
+import { serverNow, workPausedForApproval, type WorkBlock } from "./core-bridge.ts";
+
+function activityTimes(work: WorkBlock): number[] {
+  return work.activity.map((a) => a.createdAt).filter((t) => typeof t === "number" && t > 0);
+}
+
+export function workStart(work: WorkBlock): number | null {
+  if (typeof work.startedAt === "number") return work.startedAt;
+  const times = activityTimes(work);
+  return times.length ? Math.min(...times) : null;
+}
 
 export function workSeconds(work: WorkBlock): number {
-  const times = work.activity.map((a) => a.createdAt).filter((t) => typeof t === "number" && t > 0);
-  const start = work.startedAt ?? (times.length ? Math.min(...times) : null);
+  const start = workStart(work);
   if (start == null) return 0;
   const live = work.status === "thinking" || work.status === "working";
   const phase = currentTextPhase(work);
@@ -12,8 +21,9 @@ export function workSeconds(work: WorkBlock): number {
   let end = workPausedForApproval(work) ? last!.createdAt : work.finishedAt;
   if (phase?.phase === "final_answer") end = phase.startedAt;
   if (end == null) {
-    if (live) end = Date.now();
-    else end = times.length ? Math.max(...times, start) : start;
+    if (live) return Math.max(0, Math.floor((serverNow() - start) / 1000));
+    const times = activityTimes(work);
+    end = times.length ? Math.max(...times, start) : start;
   }
   return Math.max(0, Math.round((end - start) / 1000));
 }
@@ -40,10 +50,9 @@ export function goalWorked(messages: readonly unknown[], goal: GoalStripState): 
   for (const m of messages as readonly GoalTurn[]) {
     const work = m.role === "assistant" ? m.work : undefined;
     if (!work) continue;
-    const times = work.activity.map((a) => a.createdAt).filter((t) => typeof t === "number" && t > 0);
-    const start = work.startedAt ?? (times.length ? Math.min(...times) : undefined);
+    const start = workStart(work);
     if (!counting) {
-      if (start === undefined || (work.finishedAt ?? Infinity) < goal.createdAt) continue;
+      if (start === null || (work.finishedAt ?? Infinity) < goal.createdAt) continue;
       counting = true;
       workedMs -= Math.max(0, goal.createdAt - start);
     }
