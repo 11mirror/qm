@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from "node:crypto";
 import { hostOfUrl } from "./tenant-hosts.ts";
 
 export interface TenantSecrets {
@@ -17,11 +17,6 @@ export interface TenantSettings {
   status: "active" | "suspended";
   appsDomain?: string;
   s3Bucket?: string;
-  sandboxNamePrefix?: string;
-  modalAppName?: string;
-  modalEnvironment?: string;
-  modalSnapshotBucket?: string;
-  awsSandboxBucket?: string;
   sentryDeployment?: string;
   faviconSvg?: string;
   oidcClientId?: string;
@@ -43,11 +38,6 @@ export const TENANT_SECRET_NAMES = [
 export const TENANT_TEXT_SETTINGS = [
   ["appsDomain", "apps_domain"],
   ["s3Bucket", "s3_bucket"],
-  ["sandboxNamePrefix", "sandbox_name_prefix"],
-  ["modalAppName", "modal_app_name"],
-  ["modalEnvironment", "modal_environment"],
-  ["modalSnapshotBucket", "modal_snapshot_bucket"],
-  ["awsSandboxBucket", "aws_sandbox_bucket"],
   ["sentryDeployment", "sentry_deployment"],
   ["faviconSvg", "favicon_svg"],
   ["oidcClientId", "oidc_client_id"],
@@ -58,6 +48,10 @@ export const TENANT_COLUMNS = [
   "id::text AS id, slug, org_id, hosts, status, oidc_admin, secrets",
   ...TENANT_TEXT_SETTINGS.map(([, column]) => column),
 ].join(", ");
+
+export function tenantSandboxPrefix(deploymentPrefix: string, tenantId: string): string {
+  return `${deploymentPrefix}-${createHash("sha256").update(tenantId).digest("hex").slice(0, 8)}`;
+}
 
 export function deriveTenantSecret(shared: string, tenantId: string): string {
   return Buffer.from(hkdfSync("sha256", shared, tenantId, "qm-tenant", 32)).toString("hex");
@@ -137,11 +131,6 @@ export function settingsFromEnv(env: Env): TenantEnvSettings {
   return withoutUndefined({
     appsDomain: text(env.PORTAL_APPS_DOMAIN) ?? text(env.DEPLOY_APPS_DOMAIN),
     s3Bucket: text(env.S3_BUCKET),
-    sandboxNamePrefix: text(env.SANDBOX_NAME_PREFIX),
-    modalAppName: text(env.MODAL_APP_NAME),
-    modalEnvironment: text(env.MODAL_ENVIRONMENT),
-    modalSnapshotBucket: text(env.MODAL_SNAPSHOT_S3_BUCKET),
-    awsSandboxBucket: text(env.AWS_SANDBOX_S3_BUCKET),
     sentryDeployment: text(env.SENTRY_DEPLOYMENT),
     faviconSvg: text(env.WEB_UI_FAVICON_SVG) ?? text(env.PORTAL_FAVICON_SVG),
     oidcClientId: clientId,

@@ -122,11 +122,6 @@ test("applying tenancy folds each tenant's env bags into its settings once, keep
     status: "active",
     appsDomain: "apps.closedai.example.test",
     s3Bucket: "qm-closedai-bucket",
-    sandboxNamePrefix: "qm-closedai",
-    modalAppName: "qm-closedai",
-    modalEnvironment: "closedai",
-    modalSnapshotBucket: "qm-closedai-snapshots",
-    awsSandboxBucket: "qm-closedai-sandbox",
     sentryDeployment: "closedai",
     faviconSvg: "<svg>web</svg>",
     oidcClientId: "closedai",
@@ -146,8 +141,6 @@ test("applying tenancy folds each tenant's env bags into its settings once, keep
     orgId: "mt-fake-1",
     hosts: ["mt-fake-1.example.test"],
     status: "active",
-    sandboxNamePrefix: "qm-mt-fake-1",
-    modalAppName: "qm-mt-fake-1",
     oidcAdmin: false,
     secrets: {},
   });
@@ -169,10 +162,7 @@ test("the fold leaves rows that already have settings alone and changes nothing 
     { core: { S3_BUCKET: "qm-openaguy" } },
     sealTenantSecret({ core: { QM_SLACK_SERVICE_TOKEN: "openaguy-slack" } }, key),
   ]);
-  await assert.rejects(
-    applyTenancy(await pool.pool(), undefined),
-    /openaguy has secrets but QM_TENANT_SECRETS_KEY is unset/,
-  );
+  await assert.rejects(applyTenancy(await pool.pool(), undefined), /has secrets but QM_TENANT_SECRETS_KEY is unset/);
   assert.equal((await listTenants(pool, key)).find((t) => t.slug === "openaguy")?.s3Bucket, undefined);
   await applyTenancy(await pool.pool(), key);
   const after = await listTenants(pool, key);

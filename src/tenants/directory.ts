@@ -1,5 +1,6 @@
 import { AsyncResource } from "node:async_hooks";
 import { normalizeHost, routeForHost, type HostRoute } from "../../plugins/chassis/src/tenant-hosts.ts";
+import { tenantSandboxPrefix } from "../../plugins/chassis/src/tenant-settings.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
 import { registerTenantSettings, tenant, tenantFor, withTenant, type Tenant } from "../tenant.ts";
@@ -44,11 +45,11 @@ const reportedCollisions = new Set<string>();
 
 function servable(records: TenantRecord[], homeId: string, opts: DirectoryOptions): TenantRecord[] {
   const orgs = new Set([opts.home.orgId]);
-  const prefixes = new Set([opts.homeSandboxPrefix]);
+  const prefixes = new Set<string>();
   const kept: TenantRecord[] = [];
   for (const rec of records) {
     if (rec.id === homeId || rec.status !== "active") continue;
-    const prefix = rec.sandboxNamePrefix ?? `qm-${rec.slug}`;
+    const prefix = tenantSandboxPrefix(opts.homeSandboxPrefix, rec.id);
     if (orgs.has(rec.orgId) || prefixes.has(prefix)) {
       const collision = `${rec.id}:${rec.orgId}:${prefix}`;
       if (reportedCollisions.has(collision)) continue;

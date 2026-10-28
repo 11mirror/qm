@@ -181,10 +181,7 @@ function buildSandboxBackends(deps: SandboxInputs) {
       client: createSdkModalClient({
         tokenId: modal.tokenId,
         tokenSecret: modal.tokenSecret,
-        app: () => {
-          const { modalAppName, modalEnvironment } = tenantConfig(config);
-          return { name: modalAppName ?? "qm", ...(modalEnvironment ? { environment: modalEnvironment } : {}) };
-        },
+        app: () => ({ name: modal.appName ?? "qm", ...(modal.environment ? { environment: modal.environment } : {}) }),
         ...(modal.image ? { image: modal.image } : {}),
         ...(config.sandbox.cpus !== undefined ? { cpus: config.sandbox.cpus } : {}),
         ...(config.sandbox.memoryMb !== undefined ? { memoryMb: config.sandbox.memoryMb } : {}),

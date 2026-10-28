@@ -13,7 +13,7 @@ import {
   setEdgeTenants,
   type HostRoute,
 } from "../../plugins/chassis/src/tenant-hosts.ts";
-import { deriveTenantSecret } from "../../plugins/chassis/src/tenant-settings.ts";
+import { deriveTenantSecret, tenantSandboxPrefix } from "../../plugins/chassis/src/tenant-settings.ts";
 import { edgeTenantFeed } from "../../src/boot.ts";
 import { configurePgTenancy, createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
 import { loadConfig } from "../../src/config.ts";
@@ -36,7 +36,6 @@ const record: TenantRecord = {
   orgId: "acme",
   hosts: ["acme.example.test"],
   status: "active",
-  sandboxNamePrefix: "qm-acme-sbx",
   oidcClientId: "acme",
   oidcLabel: "Example SSO",
   oidcAdmin: true,
@@ -48,6 +47,7 @@ const deployment = {
   ORG_ID: "home",
   CORE_ORG_ID: "home",
   PORT: "8080",
+  SANDBOX_NAME_PREFIX: "qm-deploy",
   PUBLIC_API_URL: "https://home.example.test",
   PORTAL_PUBLIC_URL: "https://home.example.test",
   AUTH_ISSUER: "https://home.example.test/idp",
@@ -123,7 +123,10 @@ test("core verifies each tenant with the derived secrets its surfaces sign with,
   assert.notEqual(coreFor(other).signingSecret, coreFor(record).signingSecret);
   assert.equal(tenantConfig(config).signingSecret, deployment.CORE_SIGNING_SECRET);
   assert.equal(coreFor(record).publicUrl, "https://acme.example.test");
-  assert.equal(coreFor(record).sandboxNamePrefix, "qm-acme-sbx");
+  assert.equal(tenantConfig(config).sandboxNamePrefix, "qm-deploy");
+  assert.equal(coreFor(record).sandboxNamePrefix, tenantSandboxPrefix("qm-deploy", record.id));
+  assert.match(coreFor(record).sandboxNamePrefix!, /^qm-deploy-[0-9a-f]{8}$/);
+  assert.notEqual(coreFor(other).sandboxNamePrefix, coreFor(record).sandboxNamePrefix);
   assert.equal(coreFor(record).s3Prefix, "tenants/acme/");
   assert.equal(coreFor(record).modelGatewayApiKey, "acme-gateway-key");
   assert.equal(coreFor(record).adminGrants, undefined);
@@ -139,11 +142,11 @@ test("the one portal and web UI learn every active tenant's settings and serve e
   });
   edgeTenantFeed(deployment)([tenant(), tenantFor(record.orgId, record.id, record.slug)]);
   const edge = createServer((req, res) =>
-    serveForHost(req, res, () => void res.end(`${edgeTenant()?.orgId}:${edgeTenant()?.sandboxNamePrefix ?? ""}`)),
+    serveForHost(req, res, () => void res.end(`${edgeTenant()?.orgId}:${edgeTenant()?.oidcLabel ?? ""}`)),
   );
   const port = await listen(edge);
   t.after(() => edge.close());
-  assert.deepEqual(await get(port, "/", { host: "acme.example.test" }), { status: 200, body: "acme:qm-acme-sbx" });
+  assert.deepEqual(await get(port, "/", { host: "acme.example.test" }), { status: 200, body: "acme:Example SSO" });
   assert.deepEqual(await get(port, "/", { host: "home.example.test" }), { status: 200, body: `${tenant().orgId}:` });
   assert.deepEqual(await get(port, "/healthz", { host: "10.0.0.7" }), { status: 200, body: `${tenant().orgId}:` });
   assert.equal((await get(port, "/", { host: "stranger.example.test" })).status, 404);
@@ -219,7 +222,7 @@ before(async () => {
   const app = createServer((req, res) =>
     res.end(
       req.url === "/prefix"
-        ? (tenantSettings().sandboxNamePrefix ?? "none")
+        ? (tenantSettings().s3Bucket ?? "none")
         : JSON.stringify({ id: tenant().id ?? null, org: tenant().orgId }),
     ),
   );
@@ -264,7 +267,7 @@ test("a new registry row is served on its next request and a suspended one stops
 test("a tenant's changed settings are live on its next request without a restart", async () => {
   const prefix = async () => (await frontGet("/prefix", "acme.example.test")).body;
   assert.equal(await prefix(), "none");
-  await upsertTenant(registry, { ...tenantRow(ACME, "acme"), sandboxNamePrefix: "a2" }, undefined);
+  await upsertTenant(registry, { ...tenantRow(ACME, "acme"), s3Bucket: "a2" }, undefined);
   await eventually(prefix, "a2");
 });
 
