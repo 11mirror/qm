@@ -17,7 +17,7 @@ import {
 import { hashId } from "../util/crypto.ts";
 import { jsonbStringify } from "../util/text.ts";
 import { getVerifier } from "./verifiers.ts";
-import { LOOP_INGRESS_TO_WEBHOOKS_MIGRATION } from "./loop-ingress-migration.ts";
+import { LOOP_INGRESS_TO_WEBHOOKS_MIGRATION, LOOP_INGRESS_UNSAFE_IMPORTS_MIGRATION } from "./loop-ingress-migration.ts";
 
 const HISTORY_EVENTS = 50;
 
@@ -78,6 +78,7 @@ export function createWebhookStore(databaseUrl: string): WebhookStore {
     WEBHOOK_HISTORY_MIGRATION,
     ownerIndexMigration("webhooks"),
     LOOP_INGRESS_TO_WEBHOOKS_MIGRATION,
+    LOOP_INGRESS_UNSAFE_IMPORTS_MIGRATION,
   ]);
   const { q } = db;
   const table = typedTable<Webhook>(db, WEBHOOKS);
