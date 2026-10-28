@@ -5,6 +5,7 @@ import type { RunStore } from "../src/runs/run-store.ts";
 import type { ToolLedger } from "../src/runs/tool-ledger.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal } from "../src/types.ts";
+import { sleep } from "../src/util/async.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 function turn(text: string, surface?: string): OrchestratorInput {
@@ -19,8 +20,6 @@ function turn(text: string, surface?: string): OrchestratorInput {
 
 type Backend = { name: string; make: () => { runs: RunStore; ledger: ToolLedger } };
 const backends: Backend[] = [{ name: "memory", make: () => createMemoryRunStore() }];
-
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 for (const backend of backends) {
   test(`[${backend.name}] conversation lookup includes independent tasks and status context but excludes neighboring DMs`, async () => {
