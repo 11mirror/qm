@@ -926,6 +926,7 @@ test("same-name skills from distinct sources keep their materialized assets sepa
   const skillFrom = (source: string) => ({
     id: source,
     scopeId: source,
+    status: "published",
     version: 1,
     manifest: {
       name: "helper",

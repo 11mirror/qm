@@ -77,6 +77,10 @@ export interface SkillResolution<S extends SkillListing = SkillListing> {
   shadowed: S[];
 }
 
+export function stillListed(skill: Skill, listing: SkillListing): boolean {
+  return skill.status === "published" && skill.scopeId === listing.scopeId;
+}
+
 export interface SkillStoreOptions {
   signingSecret?: string;
   backing?: DurableMap<Skill>;

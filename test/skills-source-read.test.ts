@@ -127,6 +127,7 @@ test("a body read avoids sandbox work and a file request materializes that skill
       id: "s",
       version: 1,
       scopeId: "personal:U1",
+      status: "published",
       manifest: {
         name: "source-helper",
         body: "BODY",
@@ -226,6 +227,41 @@ test("a body read avoids sandbox work and a file request materializes that skill
     [...files.keys()].some((path) => path.includes("/unrelated/")),
     false,
   );
+});
+
+test("a skill archived or moved after the turn listed it is not served", async () => {
+  const { createTurnSandboxes } = await import("../src/core/orchestrator/sandboxes.ts");
+  type TurnSandboxContext = import("../src/core/orchestrator/sandboxes.ts").TurnSandboxContext;
+  const listed = {
+    id: "s",
+    version: 1,
+    scopeId: "personal:U1",
+    status: "published",
+    manifest: { name: "gone-helper", description: "d" },
+  };
+  let current: Record<string, unknown> = {
+    ...listed,
+    status: "archived",
+    manifest: { name: "gone-helper", description: "d", body: "ARCHIVED_BODY" },
+  };
+  const turn = createTurnSandboxes({
+    deps: { skills: { recordUse: async () => {}, get: async () => current }, sandbox: {} },
+    input: { origin: { kind: "human" } },
+    actor: { id: "U1" },
+    session: { id: "s" },
+    resolution: { layers: [{ scopeId: "personal:U1", mountPath: "", mode: "rw" }] },
+    scopeId: "personal:U1",
+    memoryScopeId: "personal:U1",
+    turnSessionDir: "turn/s",
+    turnFilesDir: "turn/s/t",
+    connectorEnv: {},
+    visibleSkillsForTurn: async () => [{ skill: listed, shadowed: [] }],
+    listedSkillsForTurn: async () => [{ skill: listed, shadowed: [] }],
+    perf: { credsMs: 0 },
+  } as unknown as TurnSandboxContext);
+  assert.deepEqual(await turn.useSkill("gone-helper", "SKILL.md"), { content: null, sourceScopeId: null });
+  current = { ...current, status: "published", scopeId: "personal:U2" };
+  assert.deepEqual(await turn.useSkill("gone-helper", "SKILL.md"), { content: null, sourceScopeId: null });
 });
 
 test("pack assets run from the skills root and stay across turns", async (t) => {

@@ -20,7 +20,7 @@ import {
   skillDir,
   SKILLS_ROOT,
 } from "../../skills/materialize.ts";
-import { safeSkillFilePath, type Skill, type SkillResolution } from "../../skills/skill-store.ts";
+import { safeSkillFilePath, stillListed, type Skill, type SkillResolution } from "../../skills/skill-store.ts";
 import { isSafeSkillName } from "../../skills/skill-name.ts";
 import type { SkillResult } from "../../tools/primitives.ts";
 import { TURN_FILES_DIR } from "../attachments.ts";
@@ -257,7 +257,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     );
     if (!listed?.skill) return missing;
     const skill = listed.screened?.skill ?? (await deps.skills?.get(listed.skill.id));
-    if (!skill) return missing;
+    if (!skill || !stillListed(skill, listed.skill)) return missing;
     const resolution: SkillResolution<Skill> = { ...listed, skill, shadowed: [] };
     const shipsFiles = (skill.manifest.files?.length ?? 0) > 0 || skill.pack !== undefined;
     const asset = skill.manifest.files?.find((f) => {
