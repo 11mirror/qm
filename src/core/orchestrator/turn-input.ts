@@ -5,7 +5,7 @@ import type { ScreenTrace } from "./inbound-screen.ts";
 import type { frameTurnPrompt } from "./turn-prompt.ts";
 import type { buildTurnTools } from "./turn-tools.ts";
 import type { SecurityObserver } from "./security-screen.ts";
-import type { Session } from "../../types.ts";
+import type { IncomingAttachment, Session } from "../../types.ts";
 import { memoryRecallQuery } from "../../memory/semantic-recall.ts";
 import { documentText, historicalDocumentMetas, loadDocumentInputs } from "../document-inputs.ts";
 import { MAX_DOCUMENT_BYTES, documentTokenCharges, isDocumentAttachment } from "../document-kinds.ts";
@@ -20,6 +20,7 @@ import { skillsIndex } from "../../skills/materialize.ts";
 import { PROACTIVE_OPENER_PROMPT } from "../../onboarding/onboarding.ts";
 import { createTranscriptSource } from "../../sessions/transcript-source.ts";
 import {
+  type ArtifactRegistration,
   environmentNote,
   inboundIssuesNote,
   inboundIssueList,
@@ -122,50 +123,73 @@ export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
 }
 
 async function stageInbound(ctx: TurnCtx, turn: TurnInputArgs) {
-  const { deps, input, actor, scopeId, strictReadOnly } = ctx;
-  const { blobTransfer } = deps;
+  const { deps, input, actor, scopeId } = ctx;
   const { screenTrace, session, provision, observeSecurityData } = turn;
-  const { turnInboxDir } = turn.framed;
-  const { fileRegistration } = turn.turnTools;
   if (input.attachments?.some((attachment) => attachment.sourceId)) {
     input.attachments = withoutAlreadyIngested(
       input.attachments,
       (await deps.sessions.getContextWindow(session.id)).items,
     );
   }
+  const { inbound, manifest, issues } = await stageAttachments(ctx, {
+    attachments: input.attachments ?? [],
+    provision,
+    registration: turn.turnTools.fileRegistration,
+    inboxDir: turn.framed.turnInboxDir,
+    surfaceNotes: input.inboundNotes ?? [],
+    observe: ({ content }) =>
+      void observeSecurityData(content, actor.id, scopeId, {
+        ...screenTrace,
+        sessionId: session.id,
+        hook: "tool_response",
+        request: input.text,
+        surface: "inbound_file",
+        origin: input.origin.kind,
+      }),
+  });
+  return { inbound, manifest, inboundIssues: issues };
+}
+
+export async function stageAttachments(
+  ctx: TurnCtx,
+  stage: {
+    attachments: IncomingAttachment[];
+    provision: TurnInputArgs["provision"];
+    registration: ArtifactRegistration;
+    inboxDir: string;
+    surfaceNotes: readonly string[];
+    observe: (file: { content: string; name: string; mimetype: string }) => void;
+  },
+) {
+  const { deps, strictReadOnly } = ctx;
+  const { attachments, inboxDir } = stage;
   const inbound =
-    input.attachments?.length && !strictReadOnly
+    attachments.length && !strictReadOnly
       ? await materializeInbound(
           deps.sandbox,
-          provision,
-          input.attachments,
-          blobTransfer,
-          fileRegistration,
-          turnInboxDir,
-          ({ content }) =>
-            void observeSecurityData(content, actor.id, scopeId, {
-              ...screenTrace,
-              sessionId: session.id,
-              hook: "tool_response",
-              request: input.text,
-              surface: "inbound_file",
-              origin: input.origin.kind,
-            }),
+          stage.provision,
+          attachments,
+          deps.blobTransfer,
+          stage.registration,
+          inboxDir,
+          stage.observe,
         )
       : { metas: [], images: [], unavailable: [] };
-  const manifest = inboundManifest(inbound.metas, turnInboxDir, inbound.unstaged);
-  const inboundIssues = inboundIssueList({
-    unavailable: inbound.unavailable,
-    surfaceNotes: [
-      ...(input.inboundNotes ?? []),
-      ...(strictReadOnly
-        ? (input.attachments ?? []).map(
-            (attachment) => `${safeAttachmentName(attachment.name)} — unavailable in read-only mode`,
-          )
-        : []),
-    ],
-  });
-  return { inbound, manifest, inboundIssues };
+  const readOnlyNotes = strictReadOnly
+    ? attachments.map((attachment) => `${safeAttachmentName(attachment.name)} — unavailable in read-only mode`)
+    : [];
+  return {
+    inbound,
+    manifest: inboundManifest(inbound.metas, inboxDir, inbound.unstaged),
+    issues: inboundIssueList({
+      unavailable: inbound.unavailable,
+      surfaceNotes: [...stage.surfaceNotes, ...readOnlyNotes],
+    }),
+  };
+}
+
+export function documentBytes(documents: readonly { dataBase64: string }[]): number {
+  return documents.reduce((sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"), 0);
 }
 
 async function importOverheard(ctx: TurnCtx, turn: TurnInputArgs): Promise<OverheardEntryPayload[]> {
@@ -256,9 +280,7 @@ async function loadTurnDocuments(
   const observeDocuments = (inputs: Awaited<ReturnType<typeof loadDocumentInputs>>, requestText: string) =>
     observeTurnDocuments(ctx, turn, inputs, requestText);
   observeDocuments(documentInputs, input.text);
-  const remainingDocumentBytes =
-    MAX_DOCUMENT_BYTES -
-    documentInputs.documents.reduce((sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"), 0);
+  const remainingDocumentBytes = MAX_DOCUMENT_BYTES - documentBytes(documentInputs.documents);
   const remainingDocumentTokens = documentBudget - documentInputs.tokens;
   return {
     history,

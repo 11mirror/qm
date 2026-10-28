@@ -22,20 +22,14 @@ import type { GapWork, HarnessTurnInput, RuntimeChoice } from "../../harness/har
 import { forModelContext } from "../../harness/context-compaction.ts";
 import { securityScreenChunks, toolLabelOf, type ToolResultScreenInput } from "../../security/security-screen.ts";
 import { artifactImageLoader } from "../../harness/replay-images.ts";
-import {
-  environmentNote,
-  inboundIssuesNote,
-  inboundIssueList,
-  inboundManifest,
-  materializeInbound,
-  safeAttachmentName,
-} from "../attachments.ts";
+import { environmentNote, inboundIssuesNote } from "../attachments.ts";
 import { runtimeSwitchNote } from "../turn-resume.ts";
 import { reportFailure, swallowAs } from "../../util/errors.ts";
 import { absoluteAppLinks } from "../../util/markdown.ts";
 import { NonRetryableTurnError } from "../turn-error.ts";
 import { randomUUID } from "node:crypto";
 import { stripAckPrefix } from "./turn-helpers.ts";
+import { documentBytes, stageAttachments } from "./turn-input.ts";
 import { createCompaction } from "./compaction.ts";
 import { createTurnSandboxes } from "./sandboxes.ts";
 import { isWebInboxThreadRef } from "../../sessions/thread-ref.ts";
@@ -270,8 +264,7 @@ function createPrepareSteer(
   turn: Pick<SegmentTurn, "frame" | "ready" | "session" | "held" | "run" | "provision" | "observeSecurityData">,
   initialDocuments: HarnessTurnInput["documents"],
 ): NonNullable<HarnessTurnInput["prepareSteer"]> {
-  const { deps, input, actor, conversation, scopeId, strictReadOnly } = ctx;
-  const { blobTransfer } = deps;
+  const { deps, input, actor, conversation, scopeId } = ctx;
   const { screenTrace } = turn.frame;
   const { turnInboxDir } = turn.frame.framed;
   const { fileRegistration, mayReadArtifact } = turn.ready.turnTools;
@@ -300,29 +293,25 @@ function createPrepareSteer(
       text = `${text}\n\n${refreshedInbox}`;
     }
     if (!request?.attachments?.length) return { text, author };
-    const seed = `${fileRegistration.seed}:steer:${randomUUID()}`;
     const inboxDir = `${turnInboxDir}/${randomUUID()}`;
-    const received = strictReadOnly
-      ? { metas: [], images: [], unavailable: [] }
-      : await materializeInbound(
-          deps.sandbox,
-          provision,
-          request.attachments,
-          blobTransfer,
-          { ...fileRegistration, seed },
-          inboxDir,
-          ({ content, name, mimetype }) =>
-            void observeSecurityData(JSON.stringify({ name, mimetype, content }), actor.id, scopeId, {
-              ...screenTrace,
-              sessionId: session.id,
-              hook: "tool_response",
-              surface: "inbound_file",
-              origin: input.origin.kind,
-            }),
-        );
+    const { inbound, manifest, issues } = await stageAttachments(ctx, {
+      attachments: request.attachments,
+      provision,
+      registration: { ...fileRegistration, seed: `${fileRegistration.seed}:steer:${randomUUID()}` },
+      inboxDir,
+      surfaceNotes: [],
+      observe: ({ content, name, mimetype }) =>
+        void observeSecurityData(JSON.stringify({ name, mimetype, content }), actor.id, scopeId, {
+          ...screenTrace,
+          sessionId: session.id,
+          hook: "tool_response",
+          surface: "inbound_file",
+          origin: input.origin.kind,
+        }),
+    });
     const steeredDocuments = await loadDocumentInputs(
       deps.files,
-      received.metas,
+      inbound.metas,
       mayReadArtifact,
       run.remainingDocumentBytes,
       turnAbort.signal,
@@ -330,29 +319,13 @@ function createPrepareSteer(
       run.remainingDocumentTokens,
     );
     observeDocuments(steeredDocuments, text);
-    run.remainingDocumentBytes -= steeredDocuments.documents.reduce(
-      (sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"),
-      0,
-    );
+    run.remainingDocumentBytes -= documentBytes(steeredDocuments.documents);
     run.remainingDocumentTokens -= steeredDocuments.tokens;
     documentInputs.documents.push(...steeredDocuments.documents);
-    const issues = inboundIssueList({
-      ...received,
-      surfaceNotes: strictReadOnly
-        ? request.attachments.map((a) => `${safeAttachmentName(a.name)} — unavailable in read-only mode`)
-        : [],
-    });
     return {
-      text: [
-        text,
-        inboundManifest(received.metas, inboxDir, received.unstaged),
-        ...steeredDocuments.notices,
-        inboundIssuesNote(issues),
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-      attachments: received.metas,
-      images: received.images,
+      text: [text, manifest, ...steeredDocuments.notices, inboundIssuesNote(issues)].filter(Boolean).join("\n\n"),
+      attachments: inbound.metas,
+      images: inbound.images,
       documents: steeredDocuments.documents,
       author,
     };
