@@ -1,6 +1,6 @@
 import type { DerivedOAuthAuth, Keychain } from "../credentials/keychain.ts";
 
-export const PERSONAL_MODEL_PROVIDERS = ["anthropic", "openai"] as const;
+const PERSONAL_MODEL_PROVIDERS = ["anthropic", "openai"] as const;
 export type PersonalModelProvider = (typeof PERSONAL_MODEL_PROVIDERS)[number];
 
 export function isPersonalModelProvider(value: unknown): value is PersonalModelProvider {
