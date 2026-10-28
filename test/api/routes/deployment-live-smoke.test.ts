@@ -6,7 +6,7 @@ import test from "node:test";
 import { createServer } from "../../../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../../src/auth/capability-token.ts";
 import { scopeId } from "../../../src/types.ts";
-import { signRequest } from "../../../src/auth/source-auth.ts";
+import { signRequest } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { buildApp } from "../../support/build-app.ts";
 import { createBackgroundOwnershipStore } from "../../../src/runs/background-ownership.ts";
 import { testConfig } from "../../support/test-config.ts";

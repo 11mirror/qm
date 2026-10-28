@@ -11,7 +11,7 @@ import pg from "pg";
 import { deriveTenantSecret } from "../../plugins/chassis/src/tenant-settings.ts";
 import { createServer } from "../../src/api/server.ts";
 import { mintPortalIdentity } from "../../src/auth/portal-identity.ts";
-import { signRequest } from "../../src/auth/source-auth.ts";
+import { signRequest } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { createPgPool, migrateRegisteredPgSchemas, type PgPool } from "../../src/persistence/pg-pool.ts";
 import { tenant } from "../../src/tenant.ts";
 import { createTenantDirectory, useTenantDirectory, type TenantDirectory } from "../../src/tenants/directory.ts";

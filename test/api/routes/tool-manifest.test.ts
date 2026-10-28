@@ -8,7 +8,7 @@ import { toolManifest, type ToolManifestInput } from "../../../src/harness/tool-
 import type { McpToolDescriptor } from "../../../src/mcp/mcp-tool-service.ts";
 import { createServer } from "../../../src/api/server.ts";
 import { mintPortalIdentity } from "../../../src/auth/portal-identity.ts";
-import { signRequest } from "../../../src/auth/source-auth.ts";
+import { signRequest } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { createPostgresReplayDedupe } from "../../../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "../../support/test-database.ts";
 import { buildApp } from "../../support/build-app.ts";

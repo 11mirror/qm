@@ -1,4 +1,4 @@
-import { signRequest as signCanonical } from "../../plugins/chassis/src/source-auth-sign.ts";
+import { signRequest } from "../../plugins/chassis/src/source-auth-sign.ts";
 import type { ReplayDedupe } from "./replay-dedupe.ts";
 import { constantTimeEqual } from "../util/crypto.ts";
 
@@ -31,10 +31,6 @@ export interface SourceAuthOptions {
 
 export interface SourceAuth {
   verify(req: SourceAuthRequest): Promise<SourceAuthResult>;
-}
-
-export function signRequest(secret: string, timestamp: number, body: string): string {
-  return signCanonical(secret, timestamp, body);
 }
 
 export function verifySignature(

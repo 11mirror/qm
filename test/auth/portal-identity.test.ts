@@ -8,7 +8,7 @@ import { authBrokerRoutes } from "../../src/api/routes/auth-broker.ts";
 import { createServer } from "../../src/api/server.ts";
 import { mintPortalIdentity } from "../../src/auth/portal-identity.ts";
 import { createPostgresReplayDedupe } from "../../src/auth/replay-dedupe.ts";
-import { signRequest } from "../../src/auth/source-auth.ts";
+import { signRequest } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";

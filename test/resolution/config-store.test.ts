@@ -11,7 +11,7 @@ import { test } from "node:test";
 import { createServer } from "../../src/api/server.ts";
 import { mintPortalIdentity } from "../../src/auth/portal-identity.ts";
 import { createPostgresReplayDedupe } from "../../src/auth/replay-dedupe.ts";
-import { signRequest } from "../../src/auth/source-auth.ts";
+import { signRequest } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { resolveTurnFastMode } from "../../src/core/turn-options.ts";
 import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { defaultOrgPolicy } from "../../src/policy/command-policy.ts";

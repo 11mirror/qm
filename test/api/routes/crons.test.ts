@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { signRequest } from "../../../src/auth/source-auth.ts";
+import { signRequest } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { createServer } from "../../../src/api/server.ts";
 import { buildApp } from "../../support/build-app.ts";
 import { testConfig } from "../../support/test-config.ts";
