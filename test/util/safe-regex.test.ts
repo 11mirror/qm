@@ -8,8 +8,17 @@ test("compileSafeRegex rejects repetition nested at any group depth", () => {
   }
 });
 
-test("compileSafeRegex accepts single-level repetition and literal parentheses", () => {
-  for (const pattern of ["(ab)+", "((ab))+", "a+b+", "(a)(b+)c*", "[(]+", "\\(a+\\)+"]) {
+test("compileSafeRegex accepts single-level repetition, optional groups and literal parentheses", () => {
+  for (const pattern of [
+    "(ab)+",
+    "((ab))+",
+    "a+b+",
+    "(a)(b+)c*",
+    "[(]+",
+    "\\(a+\\)+",
+    "^(sudo (apt|yum))? install",
+    "(a(b+))?c",
+  ]) {
     assert.ok(compileSafeRegex(pattern) instanceof RegExp, pattern);
   }
 });

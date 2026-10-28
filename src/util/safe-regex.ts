@@ -57,7 +57,7 @@ export function compileSafeRegex(pattern: string, flags = ""): RegExp {
     }
     const quantifier = ch === "*" || ch === "+" || (ch === "?" && pattern[i - 1] !== "(") || ch === "{";
     if (quantifier) {
-      if (previousQuantifier || (closed && (closed.quantified || closed.alternation))) {
+      if (previousQuantifier || (closed && ch !== "?" && (closed.quantified || closed.alternation))) {
         throw new Error("nested or ambiguous repetition is not supported");
       }
       if (groups.length) groups[groups.length - 1]!.quantified = true;
