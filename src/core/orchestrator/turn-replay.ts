@@ -1,7 +1,7 @@
 import type { TurnCtx } from "./turn-context.ts";
 import type { Session } from "../../types.ts";
 import { type TurnResult } from "../../types.ts";
-import { estimateCostUsd } from "../../ratelimit/budget.ts";
+import { modelCallRecorder } from "./turn-helpers.ts";
 import type { HarnessDetectResult } from "../../harness/harness.ts";
 import { createTranscriptSource } from "../../sessions/transcript-source.ts";
 import { findTrailingPartialTurn, turnAtSeq } from "../turn-resume.ts";
@@ -78,10 +78,7 @@ export async function detectAmbientDecline(
         systemPrompt: resolution.systemPrompt,
         ...(input.gatewayContext?.reactionGuidance ? { reactionGuidance: input.gatewayContext.reactionGuidance } : {}),
         history: detectHistory,
-        recordModelCall: (rec) => {
-          deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
-          void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
-        },
+        recordModelCall: modelCallRecorder(deps, scopeId, actor.id),
       })
       .catch((e: unknown): HarnessDetectResult => {
         deps.errors?.record(

@@ -17,7 +17,6 @@ import { reachPost } from "../../reach/reach.ts";
 import type { GapPhase } from "../../sessions/session-store.ts";
 import { isUserMessage, type Item, type NewItem } from "../../sessions/items.ts";
 import { environmentDelta } from "../environment-facts.ts";
-import { estimateCostUsd } from "../../ratelimit/budget.ts";
 import type { GapWork, HarnessTurnInput, RuntimeChoice } from "../../harness/harness.ts";
 import { forModelContext } from "../../harness/context-compaction.ts";
 import { securityScreenChunks, toolLabelOf, type ToolResultScreenInput } from "../../security/security-screen.ts";
@@ -28,7 +27,7 @@ import { reportFailure, swallowAs } from "../../util/errors.ts";
 import { absoluteAppLinks } from "../../util/markdown.ts";
 import { NonRetryableTurnError } from "../turn-error.ts";
 import { randomUUID } from "node:crypto";
-import { stripAckPrefix } from "./turn-helpers.ts";
+import { modelCallRecorder, stripAckPrefix } from "./turn-helpers.ts";
 import { documentBytes, stageAttachments } from "./turn-input.ts";
 import { createCompaction } from "./compaction.ts";
 import { createTurnSandboxes } from "./sandboxes.ts";
@@ -53,7 +52,7 @@ export interface TurnRunState {
 
 export interface GapWorkFeed {
   listener?: (work: GapWork) => void;
-  emit: (phase: GapPhase, start: number, end: number) => void;
+  emit: (phase: GapPhase, start: number, end: number, tool?: string) => void;
 }
 
 export interface SegmentTurn {
@@ -452,10 +451,7 @@ function segmentCallbacks(
     onGapWork: (cb) => {
       gapWork.listener = cb;
     },
-    recordModelCall: (rec) => {
-      deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
-      void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
-    },
+    recordModelCall: modelCallRecorder(deps, scopeId, actor.id),
     recordLlmRequest: async (rec, signal) => {
       try {
         await deps.sessions.recordLlmRequest(session.id, { ...rec, scopeLabel: scopeId }, signal);

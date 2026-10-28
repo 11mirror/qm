@@ -12,9 +12,10 @@ import type { Item } from "../../sessions/items.ts";
 import type { SkillBundle, SkillBundleStore } from "../../skills/skill-bundle-store.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
 import { hostMatches } from "../../resolution/egress-policy.ts";
-import { swallow } from "../../util/errors.ts";
+import { swallow, swallowAs } from "../../util/errors.ts";
+import { estimateCostUsd } from "../../ratelimit/budget.ts";
 import { hashId } from "../../util/crypto.ts";
-import type { OrchestratorInput } from "./types.ts";
+import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
 export function stripAckPrefix(text: string, ack: string | undefined): string {
   if (!text || !ack) return text;
@@ -199,4 +200,17 @@ export function deliveryCandidatesFor(
   }
   const defaultKey = candidates.find((c) => c.target === deliveryTarget)?.key ?? candidates[0]?.key;
   return { candidates, ...(defaultKey ? { defaultKey } : {}) };
+}
+
+export function modelCallRecorder(
+  deps: Pick<OrchestratorDeps, "modelGateway" | "budget">,
+  scopeLabel: ScopeId,
+  actorId: string,
+): (rec: { model: string; inputTokens: number; entryCount: number }) => void {
+  return (rec) => {
+    deps.modelGateway.recordCall({ at: Date.now(), scopeLabel, ...rec });
+    void deps.budget
+      ?.record(actorId, estimateCostUsd(rec.inputTokens))
+      .catch(swallowAs("budget: record model spend", undefined));
+  };
 }

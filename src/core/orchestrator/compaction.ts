@@ -18,7 +18,7 @@ import {
   planCompaction,
   recentItemCountWithinBudget,
 } from "../../harness/context-compaction.ts";
-import { estimateCostUsd } from "../../ratelimit/budget.ts";
+import { modelCallRecorder } from "./turn-helpers.ts";
 import { errMessage } from "../../util/errors.ts";
 import type { OrchestratorDeps } from "./types.ts";
 
@@ -117,10 +117,7 @@ async function summarizeForCompaction(
       session: input.session,
       history: plan.toSummarize,
       summaryTokenBudget,
-      recordModelCall: (rec) => {
-        deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: input.scopeId, ...rec });
-        void deps.budget?.record(input.actorId, estimateCostUsd(rec.inputTokens));
-      },
+      recordModelCall: modelCallRecorder(deps, input.scopeId as ScopeId, input.actorId),
     });
     text = validateCompactSummary(raw, summaryTokenBudget);
   } catch (error) {

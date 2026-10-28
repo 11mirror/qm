@@ -18,7 +18,7 @@ import { supportsProcessSessions } from "../../sandbox/sandbox.ts";
 import { createBackgroundBroker } from "../../connectors/background-exec-broker.ts";
 import { createMonitorBroker, readBackgroundOutputTail } from "../../monitors/monitor-broker.ts";
 import { finishProcessCredentials } from "../../credentials/execute-files.ts";
-import type { GapWork } from "../../harness/harness.ts";
+import type { GapWorkFeed } from "./turn-segment.ts";
 import { forSearchView } from "../../harness/context-compaction.ts";
 import { createToolContext } from "../../tools/tool-context.ts";
 import type { FileArtifact } from "../../files/file-artifact-store.ts";
@@ -26,7 +26,7 @@ import { principalEntitledToScope } from "../../resolution/context-filter.ts";
 import { openSessionItem, searchSessionItems } from "../../sessions/history-search.ts";
 import { defaultPublishAudience } from "../../resolution/publish-audience.ts";
 import { type ArtifactRegistration } from "../attachments.ts";
-import { errMessage, swallow, swallowAs } from "../../util/errors.ts";
+import { errMessage, swallowAs } from "../../util/errors.ts";
 import { randomUUID } from "node:crypto";
 import type { OrchestratorDeps } from "./types.ts";
 import { turnPostKeys } from "./turn-helpers.ts";
@@ -42,7 +42,7 @@ export interface TurnToolsInput {
   sandboxes: ReturnType<typeof createTurnSandboxes>;
   approvalLedger: ApprovalLedger;
   turnSandboxResources: OrchestratorDeps["sandboxResources"];
-  gapWork: { listener?: (work: GapWork) => void };
+  gapWork: Pick<GapWorkFeed, "emit">;
   turnAbort: AbortController;
   captureDependencies: () => MemoryProvenance[];
 }
@@ -418,13 +418,7 @@ function createTurnToolContext(
     attempt: input.attempt ?? 1,
     ...(backgroundBroker ? { backgroundBroker } : {}),
     ...(monitorBroker ? { monitorBroker } : {}),
-    onGapWork: (work) => {
-      try {
-        gapWork.listener?.(work);
-      } catch (e) {
-        swallow("gap-work forward", e);
-      }
-    },
+    onGapWork: (work) => gapWork.emit(work.phase, work.start, work.end, work.tool),
   });
 }
 

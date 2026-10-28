@@ -374,9 +374,9 @@ function newTurnRunState(): TurnRunState {
 
 function createGapWork(): GapWorkFeed {
   const gap: GapWorkFeed = {
-    emit: (phase: GapPhase, start: number, end: number): void => {
+    emit: (phase: GapPhase, start: number, end: number, tool?: string): void => {
       try {
-        gap.listener?.({ phase, start, end });
+        gap.listener?.({ phase, start, end, ...(tool ? { tool } : {}) });
       } catch (e) {
         swallow("gap-work emit", e);
       }
