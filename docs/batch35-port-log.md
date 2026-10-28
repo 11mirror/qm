@@ -49,3 +49,7 @@ Adapted to split live-work and work-summary modules and typed activity timestamp
 ## #2749 animate only the live step
 
 Adapted selectors to the split transcript stylesheet, preserving reduced-motion specificity and outgoing-label fade. Replaced upstream source-string assertions with a computed-style behavior test. Test passes; no persistence/settings or English changes.
+
+## #2711 desktop Cmd+N
+
+Adapted desktop menu addition to the extracted application-menu function. Preload dispatch and web new-chat handling ported unchanged. Modal dialogs block the command; only workspace windows receive it. No persisted data/settings. English: no File menu command → `File` → `New Session` with CmdOrCtrl+N. Desktop main/workspace targeted tests pass; web-ui typecheck passes.

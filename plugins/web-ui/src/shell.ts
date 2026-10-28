@@ -779,6 +779,12 @@ export async function boot(): Promise<void> {
   }
 }
 
+window.addEventListener("qm:new-session", () => {
+  if (!appState.me) return;
+  hideTooltip();
+  startNewChatInLastScope();
+});
+
 window.addEventListener("qm:prepare-update", (event) => {
   (event as CustomEvent<{ ready: boolean }>).detail.ready = true;
 });
