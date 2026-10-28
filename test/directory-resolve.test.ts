@@ -155,6 +155,7 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
       { ...bad, groupsSyncedAt: 30 },
       { ...room, id: "C_BAD", name: undefined },
       { ...room, id: "C_BAD", isPrivate: "true" },
+      { ...room, id: "C_BAD", channelsSyncedAt: 30 },
     ])
       assert.equal((await post(invalid)).status, 400, JSON.stringify(invalid));
     const legacy = { groupMembers: [{ groupId: "G_BAD", principalId: "U2" }], groupIds: ["G_BAD"], groupsSyncedAt: 30 };
