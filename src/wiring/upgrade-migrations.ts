@@ -5,7 +5,7 @@ import { CONTRACT_MIGRATIONS } from "../persistence/contract-migrations.ts";
 
 type UpgradeMigrationsInputs = { stores: StoresModule };
 
-export function registerLegacyMigrations(deps: UpgradeMigrationsInputs) {
+export function registerUpgradeMigrations(deps: UpgradeMigrationsInputs) {
   const { pgPool } = deps.stores;
 
   pgPool.registerMigration(LOOPS_TO_CRONS_MIGRATION);
