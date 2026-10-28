@@ -280,7 +280,6 @@ function orchestratorDepsTail(deps: OrchestratorInputs & { layerBrokerFor: Sessi
     isCurrentSharedScopeMember,
     currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
     managedGroups: projects,
-    projects,
     ...(config.reachExecEnabled ? { reachExec: true } : {}),
     environments,
     brokeredTools,

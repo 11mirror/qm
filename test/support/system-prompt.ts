@@ -22,7 +22,7 @@ import type { ConnectorStatusCache } from "../../src/credentials/connector-statu
 import type { ConnectorTokenStore } from "../../src/credentials/keychain.ts";
 import type { SkillStore } from "../../src/skills/skill-store.ts";
 import type { Conversation, Principal } from "../../src/types.ts";
-import type { ManagedGroupDirectory } from "../../src/resolution/scope-membership.ts";
+import type { OrchestratorDeps } from "../../src/core/orchestrator/types.ts";
 import type { IsCurrentSharedScopeMember } from "../../src/resolution/scope-membership.ts";
 import { singleProcessDeps } from "./single-process.ts";
 import { inlineJobs } from "./inline-jobs.ts";
@@ -96,7 +96,7 @@ export function buildOrchestrator(
     skills?: SkillStore;
     skillBundles?: SkillBundleStore;
     securityScreener?: SecurityScreener;
-    managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;
+    managedGroups?: OrchestratorDeps["managedGroups"];
     isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   } = {},
 ) {

@@ -183,10 +183,10 @@ export interface OrchestratorDeps {
   outbound?: Outbound;
   recentDmPosts?: RecentDmPosts;
   directory?: DirectoryStore;
-  projects?: Pick<ProjectStore, "recognizes" | "name">;
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   currentScopeMembers?: import("../../resolution/scope-membership.ts").CurrentScopeMembers;
-  managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;
+  managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel"> &
+    Pick<ProjectStore, "name">;
   reachExec?: boolean;
   environments?: EnvironmentStore;
   layerBrokerFor?: (tool: BrokeredLayerTool) => AwsRoleBroker | undefined;

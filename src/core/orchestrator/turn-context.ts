@@ -151,6 +151,6 @@ export async function resolveTurnWorkspace(ctx: TurnCtx, memoryPolicy: MemoryPol
     skills: deps.skills,
     auditLog: deps.auditLog,
     directory: deps.directory,
-    projects: deps.projects,
+    projects: deps.managedGroups,
   });
 }
