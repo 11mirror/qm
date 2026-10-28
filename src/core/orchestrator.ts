@@ -630,6 +630,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (result === undefined) throw new ProjectRosterChanged();
         return result;
       };
+      let mirrored = Promise.resolve();
       const mirrorRunActivity = async (appended: SessionEntry): Promise<void> => {
         if (
           input.runId &&
@@ -2745,10 +2746,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           })(),
           ...(deps.execTimeoutMs !== undefined ? { execTimeoutMs: deps.execTimeoutMs } : {}),
           ...(deps.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: deps.execTimeoutCeilingMs } : {}),
-          ...(deps.ledger ? { ledger: deps.ledger } : {}),
           ...(deps.signals ? { signals: deps.signals } : {}),
           ...(input.runId ? { runId: input.runId } : {}),
-          attempt: input.attempt ?? 1,
           ...(backgroundBroker ? { backgroundBroker } : {}),
           ...(monitorBroker ? { monitorBroker } : {}),
         });
@@ -3283,7 +3282,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 }
               }
             }
-            await mirrorRunActivity(appended);
+            mirrored = mirrored
+              .then(() => mirrorRunActivity(appended))
+              .catch(swallowAs("orchestrator: run-activity mirror", undefined));
             return appended;
           };
           const initialDocuments = [...documentInputs.documents];
@@ -3654,15 +3655,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   input.runId && deps.turnStream
                     ? deps.turnStream.startOffset(input.runId) + (deps.turnStream.snapshot(input.runId) ?? "").length
                     : undefined;
-                if (input.runId && deps.runActivity) {
-                  const started = deps.runActivity.append(input.runId, {
+                const runId = input.runId;
+                const runActivity = deps.runActivity;
+                if (runId && runActivity) {
+                  const entry = {
                     seq: emittedEntries.at(-1)?.seq ?? 0,
                     parentSeq: null,
                     type: "text_start",
                     payload: { ...(phase ? { phase } : {}), ...(streamOffset !== undefined ? { streamOffset } : {}) },
                     createdAt: Date.now(),
-                  });
-                  await (phase ? started : started.catch(swallowAs("orchestrator: text-start activity", undefined)));
+                  };
+                  const started = mirrored.then(() => runActivity.append(runId, entry));
+                  mirrored = started.catch(swallowAs("orchestrator: text-start activity", undefined));
+                  await (phase ? started : mirrored);
                 }
               }
             },
@@ -3726,6 +3731,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               { history: resumedHistory },
             );
           }
+          await mirrored;
           return {
             ...segment,
             ...(segment.reply ? { reply: absoluteAppLinks(segment.reply, deps.publicWebUrl) } : {}),
