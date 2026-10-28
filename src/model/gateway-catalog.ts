@@ -175,6 +175,7 @@ export function createGatewayCatalog(
   const baseUrl = `${root}/v1`;
   let routes: Readonly<Record<string, string>> = { ...config.models };
   let discovered = false;
+  let direct: Partial<ModelProviderAvailability> = {};
   let expiresAt = 0;
   let retryAt = 0;
   let lastSuccessAt = 0;
@@ -192,10 +193,13 @@ export function createGatewayCatalog(
     if (now() < retryAt) return;
     inFlight = (async () => {
       try {
-        const [listing, metadata, direct] = await Promise.all([
+        const [listing, metadata] = await Promise.all([
           readCatalog(`${baseUrl}/models`, config, fetcher),
           readCatalog(`${root}/model_group/info`, config, fetcher),
-          directProviders(),
+          directProviders().then(
+            (next) => (direct = next),
+            () => console.warn("[model] Direct provider key lookup failed; keeping last known keys"),
+          ),
         ]);
         const allowed = new Set(
           listing.flatMap((entry) => {

@@ -372,6 +372,27 @@ test("derived gateway routes defer to explicit mappings, direct keys and protoco
   assert.equal(mismatch.catalog.transport.models["claude-opus-5-5"], undefined);
 });
 
+test("a failed provider key lookup keeps the last known keys instead of dropping gateway routes", async () => {
+  let lookup = async () => ({ openai: true });
+  let clock = 0;
+  const models = [group("openai/gpt-6.1-terra", { providers: ["openai"] }), group()];
+  const catalog = createGatewayCatalog(
+    config,
+    async (url) =>
+      Response.json({ data: String(url).endsWith("/models") ? models.map((m) => ({ id: m.model_group })) : models }),
+    () => clock,
+    () => lookup(),
+  );
+  await catalog.refresh();
+  lookup = async () => {
+    throw new Error("database unavailable");
+  };
+  clock += 300001;
+  await catalog.refresh();
+  assert.ok(catalog.transport.models["gateway/vendor/new-model"]);
+  assert.equal(catalog.transport.models["gpt-6.1-terra"], undefined);
+});
+
 test("gateway document support uses provider metadata rather than vision alone", async () => {
   const f = fixture([
     group("openai-docs", { providers: ["openai"] }),
