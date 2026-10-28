@@ -8,7 +8,6 @@ import {
   type ActorAssertion,
   turnSource,
 } from "../../types.ts";
-import type { Item } from "../../sessions/items.ts";
 import type { SkillBundle, SkillBundleStore } from "../../skills/skill-bundle-store.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
 import { hostMatches } from "../../resolution/egress-policy.ts";
@@ -22,17 +21,6 @@ export function stripAckPrefix(text: string, ack: string | undefined): string {
   const lead = text.trimStart();
   if (!lead.startsWith(ack)) return text;
   return lead.slice(ack.length).trimStart();
-}
-
-export function headLooksLikeText(head: Buffer): boolean {
-  if (head.length === 0) return true;
-  if (head.includes(0)) return false;
-  let suspicious = 0;
-  for (const ch of head.toString("utf8")) {
-    const c = ch.codePointAt(0)!;
-    if (c === 0xfffd || (c < 0x20 && c !== 0x09 && c !== 0x0a && c !== 0x0d)) suspicious++;
-  }
-  return suspicious / head.length < 0.1;
 }
 
 const CONNECTOR_CAPABILITY = "connector:";
@@ -141,22 +129,6 @@ function candidateKey(target: string, audienceScopeId: ScopeId): string {
   return hashId([target, audienceScopeId]);
 }
 
-const SURFACE_ENQUEUE_ACTIONS = new Set(["post", "reach", "react", "edit", "delete"]);
-
-export function completedSurfaceEnqueues(entries: readonly Item[], sinceSeq: number, surfaceTool: string): number {
-  const later = entries.filter((e) => e.seq > sinceSeq);
-  const answered = new Set(
-    later.flatMap((e) => (e.kind === "ToolResult" && e.body.interrupted !== true ? [e.callId] : [])),
-  );
-  return later.filter(
-    (e) =>
-      e.kind === "ToolCall" &&
-      e.tool === surfaceTool &&
-      SURFACE_ENQUEUE_ACTIONS.has(String(e.body.action)) &&
-      answered.has(e.callId),
-  ).length;
-}
-
 export interface TurnPostKeys {
   seed(completed: number): void;
   take(): number;
@@ -172,12 +144,6 @@ export function turnPostKeys(turnKey: string): TurnPostKeys {
     take: () => next++,
     key: (destination, seq) => `post:${turnKey}:${destination.type}:${destination.target}:${seq}`,
   };
-}
-
-export function replaceThreadSegment(target: string, threadTs: string): string {
-  const i = target.lastIndexOf(":");
-  const channel = i < 0 ? target : target.slice(0, i);
-  return `${channel}:${threadTs}`;
 }
 
 export function deliveryCandidatesFor(

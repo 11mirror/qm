@@ -39,7 +39,7 @@ import {
 import { parseBotLedger, type BotPolicy, type ChannelPolicy } from "../../surface-cache/channel-policy-store.ts";
 import { isoFromTs } from "../../util/message-tag.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
-import { headLooksLikeText, replaceThreadSegment, type TurnPostKeys } from "./turn-helpers.ts";
+import { type TurnPostKeys } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./types.ts";
 import { fileMetas, unattachable } from "./attach-tool.ts";
 import { parseDeliveryTarget } from "../../slack/delivery.ts";
@@ -51,6 +51,23 @@ const SURFACE_SEARCH_DEFAULT = 10;
 const SURFACE_FILE_PAGE_CHARS = 20_000;
 const SLACK_CONVERSATIONS_HISTORY_TIER3_PER_MINUTE = 50;
 const HISTORY_PAGES_PER_CALL = SLACK_CONVERSATIONS_HISTORY_TIER3_PER_MINUTE / 5;
+
+function headLooksLikeText(head: Buffer): boolean {
+  if (head.length === 0) return true;
+  if (head.includes(0)) return false;
+  let suspicious = 0;
+  for (const ch of head.toString("utf8")) {
+    const c = ch.codePointAt(0)!;
+    if (c === 0xfffd || (c < 0x20 && c !== 0x09 && c !== 0x0a && c !== 0x0d)) suspicious++;
+  }
+  return suspicious / head.length < 0.1;
+}
+
+function replaceThreadSegment(target: string, threadTs: string): string {
+  const i = target.lastIndexOf(":");
+  const channel = i < 0 ? target : target.slice(0, i);
+  return `${channel}:${threadTs}`;
+}
 
 interface PulledPages {
   messages: unknown[];

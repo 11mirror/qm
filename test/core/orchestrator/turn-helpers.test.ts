@@ -4,11 +4,8 @@ import assert from "node:assert/strict";
 import { buildTestApp } from "../../support/test-app.ts";
 import type { TurnRequest } from "../../../src/types.ts";
 import { testConfig } from "../../support/test-config.ts";
-import {
-  completedSurfaceEnqueues,
-  turnPostKeys,
-  replayableRequest,
-} from "../../../src/core/orchestrator/turn-helpers.ts";
+import { turnPostKeys, replayableRequest } from "../../../src/core/orchestrator/turn-helpers.ts";
+import { completedSurfaceEnqueues } from "../../../src/core/orchestrator/turn-input.ts";
 import { storedItem, type NewItem } from "../../../src/sessions/items.ts";
 import type { OrchestratorInput } from "../../../src/core/orchestrator/types.ts";
 import { settle } from "../../support/settle.ts";

@@ -41,7 +41,6 @@ import {
 import { swallow, swallowAs } from "../../util/errors.ts";
 import { mapBounded } from "../../util/async.ts";
 import type { OrchestratorDeps } from "./types.ts";
-import { completedSurfaceEnqueues } from "./turn-helpers.ts";
 import { createCompaction } from "./compaction.ts";
 import { createTurnSandboxes } from "./sandboxes.ts";
 
@@ -396,4 +395,20 @@ export function turnFailureUserItem(
         },
       }
     : undefined;
+}
+
+const SURFACE_ENQUEUE_ACTIONS = new Set(["post", "reach", "react", "edit", "delete"]);
+
+export function completedSurfaceEnqueues(entries: readonly Item[], sinceSeq: number, surfaceTool: string): number {
+  const later = entries.filter((e) => e.seq > sinceSeq);
+  const answered = new Set(
+    later.flatMap((e) => (e.kind === "ToolResult" && e.body.interrupted !== true ? [e.callId] : [])),
+  );
+  return later.filter(
+    (e) =>
+      e.kind === "ToolCall" &&
+      e.tool === surfaceTool &&
+      SURFACE_ENQUEUE_ACTIONS.has(String(e.body.action)) &&
+      answered.has(e.callId),
+  ).length;
 }
