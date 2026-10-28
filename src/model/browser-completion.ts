@@ -40,17 +40,11 @@ export async function nativeBrowserCompletion(
   const { selection, body } = input;
   const routing = selection.routing;
   let model = selection.model ? resolveModel(selection.model) : undefined;
+  const subscribed = selection.account === "company" && input.companySubscriptionProvider === model?.provider;
+  if (subscribed && model?.provider === "openai") model = resolveModel(codexSubscriptionModelId(selection.model!));
   if ((!routing && selection.account !== "company") || !model)
     throw new BrowserCompletionError("Selected browser model is unavailable", 409);
-  if (selection.account === "company" && input.companySubscriptionProvider === model.provider) {
-    if (model.provider === "anthropic")
-      throw new BrowserCompletionError("Claude subscription access does not support browser inference", 422);
-    if (model.provider === "openai") {
-      model = resolveModel(codexSubscriptionModelId(selection.model!));
-      if (!model) throw new BrowserCompletionError("Selected browser model is unavailable", 409);
-    }
-  }
-  if (routing?.kind === "oauth" && routing.provider !== "openai")
+  if ((subscribed && model.provider === "anthropic") || (routing?.kind === "oauth" && routing.provider !== "openai"))
     throw new BrowserCompletionError("Claude subscription access does not support browser inference", 422);
   if (body.tools || body.tool_choice || body.parallel_tool_calls || !Array.isArray(body.messages))
     throw new BrowserCompletionError("Unsupported browser completion request");
@@ -120,13 +114,13 @@ export async function nativeBrowserCompletion(
     if (!key && !gatewayRequest) throw new BrowserCompletionError("Company model credentials are unavailable", 503);
     keys = key ? { [model.provider]: key } : {};
   } else {
-    if (!routing) throw new BrowserCompletionError("Selected browser model is unavailable", 409);
+    const personal = routing!;
     const auth =
-      routing.kind === "apikey"
-        ? routing.apiKey
+      personal.kind === "apikey"
+        ? personal.apiKey
         : (await input.credentials?.derivedOAuth(input.actorId, "openai"))?.accessToken;
     if (!auth) throw new BrowserCompletionError("Reconnect your selected AI account in Settings", 409);
-    keys = { [routing.kind === "apikey" ? routing.provider : CODEX_SUBSCRIPTION_PROVIDER]: auth };
+    keys = { [personal.kind === "apikey" ? personal.provider : CODEX_SUBSCRIPTION_PROVIDER]: auth };
   }
   const runtime = await runtimeFactory(keys, gateway);
   const modelApi = model.api;
