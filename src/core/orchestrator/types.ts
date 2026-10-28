@@ -48,7 +48,7 @@ import type { ErrorLog } from "../../admin/error-log.ts";
 import type { ToolLedger } from "../../runs/tool-ledger.ts";
 import type { RunSignalStore } from "../../runs/run-signal-store.ts";
 import type { TurnStream } from "../../runs/turn-stream.ts";
-import type { RunActivityStore } from "../../runs/run-activity-store.ts";
+import type { RunActivityStore } from "../../runs/postgres-run-activity-store.ts";
 import type { RunStore } from "../../runs/run-store.ts";
 import type { MemoryService } from "../../memory/memory-service.ts";
 import type { McpToolService } from "../../mcp/mcp-tool-service.ts";

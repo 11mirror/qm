@@ -1,6 +1,6 @@
 import type { Session } from "../../../../src/types.ts";
 import type { TranscriptItem } from "../../../../src/sessions/session-store.ts";
-import type { RunActivityEntry as CoreRunActivityEntry } from "../../../../src/runs/run-activity-store.ts";
+import type { RunActivityEntry as CoreRunActivityEntry } from "../../../../src/runs/postgres-run-activity-store.ts";
 import type { ContextSummary, ProjectView } from "../../../../src/api/app.ts";
 import type { CoreContext, CoreProject, CoreSession } from "../../src/core-bridge.ts";
 import type { Item, RunActivityEntry } from "../../src/items.ts";
