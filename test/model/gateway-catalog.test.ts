@@ -1,6 +1,6 @@
 import { nativeDocumentFormat } from "../../src/harness/document-inputs.ts";
 import { runtimeFallback } from "../../src/api/runtime-config.ts";
-import { validateWebTurnModelOptions } from "../../src/core/turn-options.ts";
+import { validateWebTurnModelOptions } from "../../src/api/app-turn-pipeline.ts";
 import { resolveRuntimeChoice } from "../../src/harness/runtime-choice.ts";
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
