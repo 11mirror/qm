@@ -124,7 +124,7 @@ export async function holdTurnLease(
     scopeId,
     automated: automatedTurn,
     ...(input.runId ? { runId: input.runId } : {}),
-    ...(input.turnFenceToken ? { fenceToken: input.turnFenceToken } : {}),
+    ...(input.runLeaseToken ? { fenceToken: input.runLeaseToken } : {}),
     ...(input.surface ? { surface: input.surface } : {}),
   });
   if (!acquired.lease) return { refused: acquired.refusal };

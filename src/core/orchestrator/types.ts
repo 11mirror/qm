@@ -84,7 +84,6 @@ export interface OrchestratorInput extends Omit<
   attempt?: number;
   resumeCause?: RunStop;
   runLeaseToken?: string;
-  turnFenceToken?: string;
 
   runStartedAt?: number;
   finalAttempt?: boolean;

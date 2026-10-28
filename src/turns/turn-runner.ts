@@ -44,7 +44,6 @@ function runTurnInput(
     attempt: run.attempts,
     ...(run.lastStop ? { resumeCause: run.lastStop } : {}),
     runLeaseToken: opts.token,
-    turnFenceToken: opts.token,
     finalAttempt: errorParks(run, opts.maxClaims),
     cancel: opts.cancel,
     shutdown: opts.shutdown,

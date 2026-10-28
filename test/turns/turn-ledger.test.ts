@@ -268,7 +268,7 @@ test("the runner hands a turn back on shutdown and another runner resumes it fro
   outgoing.start();
   for (let i = 0; i < 100 && !started.length; i++) await sleep(20);
   assert.equal(started[0]?.runId, admitted.run.id);
-  assert.ok(started[0]?.turnFenceToken);
+  assert.ok(started[0]?.runLeaseToken);
   await outgoing.releaseInFlight();
   release();
   const handed = await runStore.runs.get(admitted.run.id);
