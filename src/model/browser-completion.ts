@@ -16,6 +16,24 @@ function object(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
+const SCREENSHOT_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+
+function inlineImage(url: unknown): ImageContent {
+  const invalid = () => new BrowserCompletionError("Browser screenshots must be inline image data");
+  const comma = typeof url === "string" && url.startsWith("data:") ? url.indexOf(",") : -1;
+  if (typeof url !== "string" || comma < 0) throw invalid();
+  const header = url.slice("data:".length, comma);
+  const mimeType = header.slice(0, -";base64".length);
+  const data = url.slice(comma + 1);
+  if (!header.endsWith(";base64") || !SCREENSHOT_TYPES.has(mimeType) || !data) throw invalid();
+  try {
+    atob(data);
+  } catch {
+    throw invalid();
+  }
+  return { type: "image", mimeType, data };
+}
+
 export class BrowserCompletionError extends Error {
   readonly status: number;
   constructor(message: string, status = 400) {
@@ -70,13 +88,7 @@ export async function nativeBrowserCompletion(
       const part = object(rawPart);
       if (part?.type === "text" && typeof part.text === "string") content.push({ type: "text", text: part.text });
       else if (part?.type === "image_url" && message.role === "user") {
-        const url = object(part.image_url)?.url;
-        const match =
-          typeof url === "string"
-            ? /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=\r\n]+)$/.exec(url)
-            : null;
-        if (!match) throw new BrowserCompletionError("Browser screenshots must be inline image data");
-        content.push({ type: "image", mimeType: match[1]!, data: match[2]! });
+        content.push(inlineImage(object(part.image_url)?.url));
       } else throw new BrowserCompletionError("Unsupported browser message content");
     }
     const text = content

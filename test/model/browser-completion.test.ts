@@ -285,3 +285,40 @@ for (const mapped of [true, false]) {
     );
   });
 }
+
+test("browser screenshots must be base64 data URLs of a supported image type", async () => {
+  const complete = (url: string) =>
+    nativeBrowserCompletion(
+      {
+        selection: { account: "company", model: "gpt-5.6-sol", routing: null },
+        actorId: "U1",
+        companyProviderKeys: { openai: "company-key" },
+        body: { messages: [{ role: "user", content: [{ type: "image_url", image_url: { url } }] }] },
+        signal: new AbortController().signal,
+      },
+      async () => ({
+        completeSimple: async (model, context) => ({
+          role: "assistant",
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: zeroUsage(),
+          timestamp: Date.now(),
+          stopReason: "stop",
+          content: [{ type: "text", text: JSON.stringify(context.messages[0]?.content) }],
+        }),
+      }),
+    );
+  const accepted = await complete("data:image/webp;base64,aGVs\r\nbG8=");
+  assert.deepEqual(JSON.parse(String(accepted.choices[0]?.message.content)), [
+    { type: "image", mimeType: "image/webp", data: "aGVs\r\nbG8=" },
+  ]);
+  for (const url of [
+    "https://example.com/shot.png",
+    "data:image/svg+xml;base64,aGVsbG8=",
+    "data:image/png,hello",
+    "data:image/png;base64,",
+    "data:image/png;base64,not*base64",
+  ])
+    await assert.rejects(complete(url), /inline image data/, url);
+});
