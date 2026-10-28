@@ -53,3 +53,11 @@ Adapted selectors to the split transcript stylesheet, preserving reduced-motion 
 ## #2711 desktop Cmd+N
 
 Adapted desktop menu addition to the extracted application-menu function. Preload dispatch and web new-chat handling ported unchanged. Modal dialogs block the command; only workspace windows receive it. No persisted data/settings. English: no File menu command → `File` → `New Session` with CmdOrCtrl+N. Desktop main/workspace targeted tests pass; web-ui typecheck passes.
+
+## #2697 on-demand MCP tools
+
+Adapted to the split tool kit and turn segment, preserving tenant-local MCP snapshots/catalog caches. The manifest now truthfully shows remote tools as available on demand and exposes only tool_search/mcp_call; read-only and native-name collision filters apply before discovery. Underlying calls retain exact approval identity, recording, external-output screening and replay. Server descriptions are kept in the existing typed/RLS-scoped mcp_servers table via optional `about text` expand migration; the initial typed migration is unchanged. No new table/settings.
+
+Model/person English: remote schemas in every turn → `## Connectors` with `Load on demand: tool_search finds a tool, mcp_call runs it.` and per-server purpose/count; `From the {id} connector.` in manifest → `Available through tool_search and mcp_call.`; new discovery/run descriptions and repair errors are in deferred-tools.ts and agent-tools/external.ts. Existing remote descriptions, approval labels and outputs are unchanged. No tools available → discovery tools omitted.
+
+Checks: root typecheck/eslint and ratchets pass. 43 tool recovery/session tests, 12 focused MCP-client/manifest/replay tests and two search/note tests pass. Store integration waits for the designated PG test box.

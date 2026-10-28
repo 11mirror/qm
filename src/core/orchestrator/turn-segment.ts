@@ -1,3 +1,4 @@
+import { connectorToolsNote, deferredMcpTools } from "../../harness/deferred-tools.ts";
 import { surfaceHas } from "../../surfaces/surface.ts";
 import type { TurnCtx } from "./turn-context.ts";
 import type { ApprovalLedger } from "./approvals.ts";
@@ -111,6 +112,8 @@ async function runHarnessSegment(
   const { effectiveTurnWallClockMs, runtimeState } = turn.selected;
   const { mcpToolsReady } = frame;
   const { systemPrompt } = turn.begun;
+  const mcpTools = mcpToolsReady ? await mcpToolsReady : undefined;
+  const connectorNote = connectorToolsNote(deferredMcpTools(mcpTools, strictReadOnly));
   const { lease, turnAbort } = held;
   const { turnStart } = run;
   const segmentEnv = segmentEnvironment(
@@ -158,10 +161,10 @@ async function runHarnessSegment(
         ? Math.max(1, effectiveTurnWallClockMs - (Date.now() - turnStart))
         : effectiveTurnWallClockMs,
     toolApprovalGate: consumeApproval,
-    systemPrompt,
+    systemPrompt: connectorNote ? `${systemPrompt}\n\n${connectorNote}` : systemPrompt,
     history: continuation?.history ?? history,
     tools,
-    ...(mcpToolsReady ? { mcpTools: await mcpToolsReady } : {}),
+    ...(mcpTools ? { mcpTools } : {}),
     ...(resumePlan?.kind === "retry" && !continuation ? { resumeToolCall: resumePlan.call } : {}),
     emit,
     goal: sessionGoal,

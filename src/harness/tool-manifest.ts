@@ -4,7 +4,17 @@ import { SWARM_ACTIONS } from "../swarms/swarm.ts";
 
 export const CRON_ACTIONS = ["create", "list", "get", "runs", "patch", "delete", "run", "disable", "note"] as const;
 
-const READ_ONLY_TOOLS = new Set(["memory", "history", "finish_silently", "runtime", "sessions", "subagents", "swarm"]);
+const READ_ONLY_TOOLS = new Set([
+  "tool_search",
+  "mcp_call",
+  "memory",
+  "history",
+  "finish_silently",
+  "runtime",
+  "sessions",
+  "subagents",
+  "swarm",
+]);
 
 export interface ToolManifestInput {
   controlTools: boolean;
@@ -36,9 +46,12 @@ const DELEGATED = "Off because this conversation hands command work to helper ag
 const NO_SUBAGENTS = "Off for people outside the organization.";
 const POSTS_ITSELF = "On because the agent posts its own messages in this run, as in channels and scheduled runs.";
 const READ_ONLY = "Off because this run is read-only.";
+export const CONNECTOR_DEFERRED = "Available through tool_search and mcp_call.";
 export const CONNECTOR_SHADOWED = "Off because a built-in tool has the same name.";
 
 const PURPOSE: Record<string, string> = {
+  tool_search: "Finds connector tools on demand.",
+  mcp_call: "Runs a connector tool found with tool_search.",
   execute: "Runs commands on a sandbox computer.",
   skills: "Finds and reads saved skills.",
   files: "Reads and writes files.",
@@ -149,14 +162,23 @@ export function toolManifest(input: ToolManifestInput): ToolManifestEntry[] {
       present: true,
       reason: "Provided by the page you have open.",
     }));
-  const taken = new Set([...builtIn, ...client].filter((entry) => entry.present).map((entry) => entry.name));
+  const taken = new Set([
+    "tool_search",
+    "mcp_call",
+    ...[...builtIn, ...client].filter((entry) => entry.present).map((entry) => entry.name),
+  ]);
   const connectors = input.connectorTools.map((tool): ToolManifestEntry => {
     const base = { name: tool.name, source: "connector" as const, connector: tool.serverId };
     if (input.readOnly && !tool.readOnly)
       return { ...base, present: false, reason: "Off because this run is read-only and this tool makes changes." };
     if (taken.has(tool.name)) return { ...base, present: false, reason: CONNECTOR_SHADOWED };
-    return { ...base, present: true, reason: `From the ${tool.serverId} connector.` };
+    return { ...base, present: false, reason: CONNECTOR_DEFERRED };
   });
+  const deferred = connectors.some((entry) => entry.reason === CONNECTOR_DEFERRED);
+  for (const name of ["tool_search", "mcp_call"])
+    builtIn.push(
+      native(name, gate(deferred, "On when connector tools are available.", "Off until a connector is available.")),
+    );
   const scoped = [...builtIn, ...client].map((entry) =>
     input.readOnly && entry.present && !READ_ONLY_TOOLS.has(entry.name)
       ? { ...entry, present: false, reason: `${PURPOSE[entry.name] ?? ""} ${READ_ONLY}`.trim() }

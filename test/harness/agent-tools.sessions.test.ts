@@ -246,13 +246,14 @@ test("conversation coordinator mailbox checks never block on children", async ()
   assert.ok(waits.every((timeout) => timeout === 0));
 });
 
-test("resource catalog exposes one home per operation and leaves MCP tools intact", async () => {
+test("resource catalog exposes one home per operation and loads MCP tools on demand", async () => {
   const tools = createAgentTools(createTurnToolState({ current: fakeToolContext() }), {
     controlTools: true,
     mcpTools: [
       {
         name: "example_search",
         serverId: "example",
+        serverName: "example",
         remoteName: "search",
         description: "Search",
         inputSchema: { type: "object", properties: {} },
@@ -262,7 +263,7 @@ test("resource catalog exposes one home per operation and leaves MCP tools intac
     ],
   });
   const names = tools.map((tool) => tool.name);
-  for (const name of ["files", "apps", "skills", "subagents", "goal", "cron", "example_search"])
+  for (const name of ["files", "apps", "skills", "subagents", "goal", "cron", "tool_search", "mcp_call"])
     assert.ok(names.includes(name));
   for (const name of [
     "read",

@@ -11,7 +11,13 @@ import { computerTools } from "./agent-tools/computer.ts";
 import { createToolKit } from "./agent-tools/kit.ts";
 export { EXEC_TIMEOUT_DEFAULT_MS, EXEC_TIMEOUT_MAX_MS } from "./agent-tools/computer.ts";
 import { withRetrySafety, withToolApprovalGate, withRuntimeBarrier } from "./agent-tools/wrappers.ts";
-import { CONNECTOR_SHADOWED, CRON_ACTIONS, toolManifest, type ToolManifestEntry } from "./tool-manifest.ts";
+import {
+  CONNECTOR_SHADOWED,
+  CONNECTOR_DEFERRED,
+  CRON_ACTIONS,
+  toolManifest,
+  type ToolManifestEntry,
+} from "./tool-manifest.ts";
 import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type Config } from "../config.ts";
 import type { ClientToolDeclaration } from "../types.ts";
@@ -77,7 +83,7 @@ export function createAgentTools(state: TurnToolState, opts?: AgentToolsOptions)
 
   const { createGoal, getGoal, updateGoal } = goalTools(kit, goal);
 
-  const { mcpDefs, mcpCandidates, clientTools } = externalTools(kit);
+  const { mcpDefs, clientTools, deferredTools } = externalTools(kit, halt);
 
   const { context, runtime } = runtimeTools(kit, goal, halt);
 
@@ -106,7 +112,11 @@ export function createAgentTools(state: TurnToolState, opts?: AgentToolsOptions)
     needsApproval: (params: unknown) => isObj(params) && params.action === "install_canvas",
     approvalReason: "install an always-on canvas someone shared with you; its code runs in your QM web UI",
   };
+  const deferred = deferredTools(
+    new Set(manifest.filter((entry) => entry.reason === CONNECTOR_DEFERRED).map((entry) => entry.name)),
+  );
   const native: Record<string, ToolDefinition> = {
+    ...Object.fromEntries(deferred.map((t) => [t.name, t])),
     execute,
     skills: resourceTool(
       "skills",
@@ -148,15 +158,16 @@ export function createAgentTools(state: TurnToolState, opts?: AgentToolsOptions)
     context,
   };
   const client = new Map(clientTools.map((tool) => [tool.name, tool]));
-  const connectors = manifest.filter((entry) => entry.source === "connector");
   const bySource = {
     native: (entry: ToolManifestEntry) => native[entry.name]!,
     client: (entry: ToolManifestEntry) => client.get(entry.name)!,
-    connector: (entry: ToolManifestEntry) => mcpCandidates[connectors.indexOf(entry)]!,
+    connector: () => {
+      throw new Error("Connector tools must be loaded on demand");
+    },
   };
   const tools: ToolDefinition[] = [];
   for (const entry of manifest) {
-    if (entry.present) tools.push(bySource[entry.source](entry));
+    if (entry.present && entry.source !== "connector") tools.push(bySource[entry.source](entry));
     else if (entry.source === "connector" && entry.reason === CONNECTOR_SHADOWED)
       console.warn(`[mcp] ${entry.name} is hidden because a built-in tool has the same name`);
   }

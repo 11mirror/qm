@@ -21,13 +21,18 @@ interface McpRemoteTool {
   annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
 }
 
+export interface McpListing {
+  tools: McpRemoteTool[];
+  about?: string;
+}
+
 export type McpAuth =
   | { mode: "none" }
   | { mode: "bearer"; token: string }
   | { mode: "client-credentials"; clientId: string; clientSecret: string };
 
 export interface McpClient {
-  listTools(opts?: { headers?: Record<string, string>; maxTools?: number }): Promise<McpRemoteTool[]>;
+  listTools(opts?: { headers?: Record<string, string>; maxTools?: number }): Promise<McpListing>;
   callTool(name: string, args: Record<string, unknown>, headers?: Record<string, string>): Promise<CallToolResult>;
 }
 
@@ -91,7 +96,8 @@ export function createMcpClient(opts: { url: string; auth: McpAuth }): McpClient
             console.warn(
               `[mcp] ${endpoint.host} lists more than ${maxTools} tools; only the first ${maxTools} are offered`,
             );
-          return tools.slice(0, maxTools);
+          const about = (client.getServerVersion()?.description || client.getInstructions() || "").trim();
+          return { tools: tools.slice(0, maxTools), ...(about ? { about } : {}) };
         },
         opts?.headers,
       ),

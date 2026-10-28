@@ -1,3 +1,4 @@
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { test } from "node:test";
 import { createGoalRecord } from "../../src/harness/goal.ts";
 import assert from "node:assert/strict";
@@ -611,6 +612,7 @@ test("an MCP tool that needs approval is not called until its exact arguments ar
   };
   const descriptor = {
     serverId: "example",
+    serverName: "example",
     description: "Example",
     inputSchema: { type: "object", properties: {} },
     readOnly: false,
@@ -622,8 +624,8 @@ test("an MCP tool that needs approval is not called until its exact arguments ar
       { ...descriptor, name: "example_get", remoteName: "get", needsApproval: false },
     ],
   });
-  const del = tools.find((t) => t.name === "example_delete")!;
-  const get = tools.find((t) => t.name === "example_get")!;
+  const del = deferred(tools, "example_delete");
+  const get = deferred(tools, "example_get");
   assert.match(textOut(await call(get, { id: 1 })), /deleted/);
   assert.match(textOut(await call(del, { id: 1 })), /blocked: needs human approval/);
   assert.deepEqual(calls, [{ id: 1 }]);
@@ -650,6 +652,7 @@ function catalogTools(state: TurnToolState, name = "records") {
       {
         name,
         serverId: name,
+        serverName: name,
         remoteName: "",
         catalog: true,
         description: "Catalog",
@@ -677,7 +680,7 @@ test("a catalog tool asks per call and forwards the approval only on the approve
     toolApprovalGate: (callKey) => !callKey || approved.has(callKey),
   };
   const state = createTurnToolState(ref);
-  const catalog = catalogTools(state).find((t) => t.name === "records")!;
+  const catalog = deferred(catalogTools(state), "records");
   const send = { operation: "invoke", tool: "send-message", arguments: { to: "x" } };
   await call(catalog, { operation: "invoke", tool: "find", arguments: {} });
   await call(catalog, send);
@@ -709,7 +712,7 @@ test("a failing approval check returns its error to the model and offers no card
     toolApprovalGate: () => true,
   };
   const state = createTurnToolState(ref);
-  const catalog = catalogTools(state).find((t) => t.name === "records")!;
+  const catalog = deferred(catalogTools(state), "records");
   assert.match(
     textOut(await call(catalog, { operation: "invoke", tool: "nope" })),
     /could not check whether this call needs approval: Unknown Records tool: nope/,
@@ -729,6 +732,7 @@ test("a catalog named like a native tool never replaces it or widens read-only t
       {
         name: "files",
         serverId: "files",
+        serverName: "files",
         remoteName: "",
         catalog: true,
         description: "Catalog",
@@ -752,11 +756,12 @@ test("a tool that needs approval fails closed without an approval gate", async (
       },
     },
   };
-  const [tool] = createAgentTools(createTurnToolState(ref), {
+  const tools = createAgentTools(createTurnToolState(ref), {
     mcpTools: [
       {
         name: "example_delete",
         serverId: "example",
+        serverName: "example",
         remoteName: "delete",
         description: "Delete",
         inputSchema: { type: "object", properties: {} },
@@ -764,7 +769,13 @@ test("a tool that needs approval fails closed without an approval gate", async (
         needsApproval: true,
       },
     ],
-  }).filter((t) => t.name === "example_delete");
+  });
+  const tool = deferred(tools, "example_delete");
   assert.match(textOut(await call(tool!, {})), /blocked: needs human approval/);
   assert.equal(called, false);
 });
+
+function deferred(tools: ToolDefinition[], name: string): ToolDefinition {
+  const callTool = tools.find((t) => t.name === "mcp_call")!;
+  return { ...callTool, execute: (id, args, ...rest) => callTool.execute(id, { tool: name, args }, ...rest) };
+}

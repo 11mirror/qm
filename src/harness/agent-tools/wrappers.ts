@@ -55,7 +55,7 @@ export function withRetrySafety(tool: ToolDefinition, marks: Map<string, RetryMa
   } as ToolDefinition;
 }
 
-const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently"]);
+const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently", "tool_search", "mcp_call"]);
 const RESOURCE_TOOL_NAMES = new Set(["sandbox", "background", "files", "apps", "skills", "goal", "cron", "admin"]);
 const DECLARED_TOOL_APPROVAL_REASON = "this tool asks for approval before each call";
 

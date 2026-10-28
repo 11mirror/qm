@@ -44,7 +44,7 @@ test("mcp client lists every page of tools and calls one over JSON and SSE respo
   for (const json of [true, false]) {
     const mcp = await startMcpTestServer(t, { tools, pageSize: 1, json });
     const client = createMcpClient({ url: `${mcp.url}/mcp`, auth: { mode: "none" } });
-    assert.deepEqual(await client.listTools(), [
+    assert.deepEqual((await client.listTools()).tools, [
       { name: "a", description: "tool a", inputSchema: { type: "object" } },
       { name: "b", description: "tool b", inputSchema: { type: "object" } },
       { name: "c", description: "tool c", inputSchema: { type: "object" } },
@@ -58,8 +58,8 @@ test("mcp client caps a server's tool list", async (t) => {
   const tools = Array.from({ length: 100 }, (_, i) => ({ name: `t${i}`, inputSchema: { type: "object" as const } }));
   const mcp = await startMcpTestServer(t, { tools, pageSize: 40 });
   const listed = await createMcpClient({ url: mcp.url, auth: { mode: "none" } }).listTools();
-  assert.equal(listed.length, 64);
-  assert.equal(listed.at(-1)?.name, "t63");
+  assert.equal(listed.tools.length, 64);
+  assert.equal(listed.tools.at(-1)?.name, "t63");
   assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 2);
 });
 
@@ -87,7 +87,7 @@ test("mcp client starts a fresh session after the server forgets its sessions", 
 test("mcp client sends bearer auth", async (t) => {
   const mcp = await startMcpTestServer(t, { authorize: (auth) => auth === "Bearer sekret" });
   const good = createMcpClient({ url: mcp.url, auth: { mode: "bearer", token: "sekret" } });
-  assert.equal((await good.listTools()).length, 2);
+  assert.equal((await good.listTools()).tools.length, 2);
   const bad = createMcpClient({ url: mcp.url, auth: { mode: "none" } });
   await assert.rejects(bad.listTools(), /^Error: mcp tools\/list failed \(HTTP 401\)$/);
 });
@@ -115,7 +115,7 @@ test("mcp client mints client-credentials tokens on the server's origin and reus
     url: `${mcp.url}/mcp`,
     auth: { mode: "client-credentials", clientId: "id", clientSecret: "secret" },
   });
-  assert.equal((await client.listTools()).length, 2);
+  assert.equal((await client.listTools()).tools.length, 2);
   assert.equal(mcpResultText(await client.callTool("query", {})), "ran query");
   assert.deepEqual(mcp.tokenRequests, ["id"]);
   mcp.revokeTokens();
@@ -313,7 +313,10 @@ test("per-user calls resolve only the caller's fresh token while discovery uses 
     }),
   );
   await service.refresh();
-  assert.deepEqual(await service.probe((await store.get("crm"))!), ["query", "update"]);
+  assert.deepEqual(
+    (await service.probe((await store.get("crm"))!)).tools.map((t) => t.name),
+    ["query", "update"],
+  );
   assert.ok(authFor("tools/list").length > 0);
   assert.ok(authFor("tools/list").every((auth) => auth === "Bearer catalog-only"));
   assert.deepEqual(
@@ -648,4 +651,13 @@ test("stored oauth-user tools survive a restart but stay hidden from callers who
     (await service.toolDefsFor("internal:dave")).map((d) => d.name),
     ["orders_sign_in"],
   );
+});
+
+test("MCP listings preserve the server's description or instructions", async (t) => {
+  for (const metadata of [{ description: "Search company records." }, { instructions: "Run team workflows." }]) {
+    const mcp = await startMcpTestServer(t, metadata);
+    const listing = await createMcpClient({ url: mcp.url, auth: { mode: "none" } }).listTools();
+    assert.equal(listing.about, "description" in metadata ? metadata.description : metadata.instructions);
+    assert.equal(listing.tools.length, 2);
+  }
 });

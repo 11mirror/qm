@@ -8,6 +8,7 @@ export type McpApprovalPolicy = "annotations" | "all" | "none";
 export interface McpServer {
   id: string;
   name: string;
+  about?: string;
   url: string;
   auth: McpServerAuthMode;
   credentialScope?: "shared" | "per-user";
@@ -21,6 +22,7 @@ export interface McpServer {
   oauthScopes?: string[];
   tools?: Array<{
     name: string;
+    about?: string;
     description: string;
     inputSchema: Record<string, unknown>;
     annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
@@ -52,17 +54,25 @@ const MCP_SERVERS: TableSpec = {
   table: "mcp_servers",
   key: "id",
   keyIsField: true,
-  columns: cols(`name text!, url text!, auth text!, credentialScope text, credentialHost text,
+  columns: cols(`about text, name text!, url text!, auth text!, credentialScope text, credentialHost text,
     credentialAccountType text, bearerToken text, clientId text, clientSecret text,
     oauthAuthorizeUrl text, oauthTokenUrl text, oauthScopes text[], tools jsonb, approval text,
     catalog boolean, attestActor boolean, readOnly boolean!, enabled boolean!, updatedAt bigint!,
     updatedBy text!`),
 };
 
-const MCP_SERVERS_MIGRATION = mapToTableMigration("mcp/servers/0001-typed", MCP_SERVERS);
+const { about: _about, ...oldColumns } = MCP_SERVERS.columns;
+const MCP_SERVERS_MIGRATION = mapToTableMigration("mcp/servers/0001-typed", { ...MCP_SERVERS, columns: oldColumns });
+const MCP_ABOUT_MIGRATION = {
+  id: "mcp/servers/0002-about",
+  statements: ["ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS about text"],
+};
 
 export function createMcpServerStore(databaseUrl: string): McpServerStore {
-  const table = typedTable<McpServer>(createPgPool(databaseUrl, [MCP_SERVERS_MIGRATION]), MCP_SERVERS);
+  const table = typedTable<McpServer>(
+    createPgPool(databaseUrl, [MCP_SERVERS_MIGRATION, MCP_ABOUT_MIGRATION]),
+    MCP_SERVERS,
+  );
   const listeners = new Set<() => void>();
   const emit = () => {
     for (const l of listeners) l();

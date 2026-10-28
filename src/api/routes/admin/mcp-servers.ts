@@ -154,7 +154,9 @@ export async function putMcpServer(ctx: ApiCtx): Promise<RouteResult> {
   let toolNames: string[] | undefined;
   if (b.validate !== false && !oauthUser && ctx.deps.mcpToolService) {
     try {
-      toolNames = await ctx.deps.mcpToolService.probe(server, authz.actor.id);
+      const listing = await ctx.deps.mcpToolService.probe(server, authz.actor.id);
+      toolNames = listing.tools.map((t) => t.name);
+      if (listing.about) server.about = listing.about;
     } catch (e) {
       return reply(400, {
         error: "unreachable",

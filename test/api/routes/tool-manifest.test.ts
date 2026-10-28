@@ -17,6 +17,7 @@ import { testConfig } from "../../support/test-config.ts";
 const connector = (name: string, readOnly: boolean): McpToolDescriptor => ({
   name,
   serverId: "acme",
+  serverName: "acme",
   remoteName: name,
   description: name,
   inputSchema: { type: "object", properties: {} },
@@ -105,10 +106,10 @@ test("the manifest explains absent tools", () => {
   assert.equal(reason("execute"), "Runs commands on a sandbox computer. Off because this run is read-only.");
   assert.equal(reason("acme_write"), "Off because this run is read-only and this tool makes changes.");
   assert.equal(entries.find((entry) => entry.source === "connector" && entry.name === "memory")?.present, false);
-  assert.equal(reason("acme_search"), "From the acme connector.");
+  assert.equal(reason("acme_search"), "Available through tool_search and mcp_call.");
   assert.deepEqual(
     entries.filter((entry) => entry.present).map((entry) => entry.name),
-    ["memory", "history", "subagents", "swarm", "sessions", "finish_silently", "runtime", "acme_search"],
+    ["memory", "history", "subagents", "swarm", "sessions", "finish_silently", "runtime", "tool_search", "mcp_call"],
   );
 });
 
