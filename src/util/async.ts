@@ -1,10 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 
 export const sleep = (ms: number, opts?: { unref?: boolean }): Promise<void> =>
-  new Promise((r) => {
-    const t = setTimeout(r, ms);
-    if (opts?.unref) t.unref?.();
-  });
+  delay(ms, undefined, { ref: !opts?.unref });
 
 export async function withTimeout<T>(start: () => Promise<T>, ms: number, label: string): Promise<T> {
   const p = start();
