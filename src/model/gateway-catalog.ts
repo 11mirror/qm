@@ -175,7 +175,7 @@ export function createGatewayCatalog(
   const baseUrl = `${root}/v1`;
   let routes: Readonly<Record<string, string>> = { ...config.models };
   let discovered = false;
-  let direct: Partial<ModelProviderAvailability> = {};
+  let direct: Partial<ModelProviderAvailability> | undefined;
   let expiresAt = 0;
   let retryAt = 0;
   let lastSuccessAt = 0;
@@ -215,7 +215,7 @@ export function createGatewayCatalog(
         const next: Record<string, string> = Object.fromEntries(
           models.map((model) => [model.id, model.id.slice(GATEWAY_MODEL_PREFIX.length)]),
         );
-        const aliases = derivedRoutes(models, config.models, direct);
+        const aliases = direct ? derivedRoutes(models, config.models, direct) : {};
         for (const [id, target] of Object.entries(config.models)) {
           if (allowed.has(target) && !models.some((m) => m.id === GATEWAY_MODEL_PREFIX + target && isEmbeddingModel(m)))
             aliases[id] = target;
