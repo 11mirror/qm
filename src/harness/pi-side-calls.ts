@@ -134,7 +134,7 @@ export async function piScreenSecurity(
     const modelId = configuredScreenModel ?? detectModelId();
     const k = await keyed(access, modelId);
     if (!k) return undefined;
-    recordModelCall({
+    recordModelCall?.({
       model: modelId,
       inputTokens: countTokens(systemPrompt) + countTokens(payload),
       entryCount: 1,

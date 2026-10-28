@@ -1,14 +1,10 @@
 import type { Readable } from "node:stream";
+import { buffer } from "node:stream/consumers";
 import { basename } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AttachmentMeta, GrantedHandle, IncomingAttachment, OutgoingAttachment, ScopeId } from "../types.ts";
 import { hasParentPathSegment, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
-import {
-  MAX_BLOB_BYTES,
-  BlobTooLargeError,
-  collectBlob,
-  type BlobTransferStore,
-} from "../persistence/blob-transfer.ts";
+import { MAX_BLOB_BYTES, BlobTooLargeError, type BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { fileArtifactId, type FileArtifactStore, type FileDirection } from "../files/file-artifact-store.ts";
 import { swallowAs } from "../util/errors.ts";
 import { linesWithinTokenBudget } from "../util/tokens.ts";
@@ -250,7 +246,7 @@ export async function materializeInbound(
       unavailable.push(safeAttachmentName(a.name));
       continue;
     }
-    const bytes = await collectBlob(blob.stream);
+    const bytes = await buffer(blob.stream);
     const name = uniqueName(safeAttachmentName(a.name), usedNames);
     usedNames.add(name);
     const mimetype = baseMime(a.mimetype || mimeFromName(name));

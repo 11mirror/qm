@@ -136,7 +136,7 @@ test("approval grant modes default to all-on and compose tighten-only", async ()
   const store = testConfigStore({ databaseUrl });
 
   assert.deepEqual(await store.getApprovalGrantModesDurable(org), { session: true, always: true });
-  assert.deepEqual(store.getApprovalGrantModes(channel), { session: true, always: true });
+  assert.deepEqual(await store.getApprovalGrantModesDurable(channel), { session: true, always: true });
 
   await store.setApprovalGrantModes(org, { session: true, always: false });
   assert.deepEqual(
@@ -160,7 +160,7 @@ test("approval grant modes default to all-on and compose tighten-only", async ()
   const restarted = testConfigStore({ databaseUrl });
   await restarted.hydrate?.();
   assert.deepEqual(
-    restarted.getApprovalGrantModes(channel),
+    await restarted.getApprovalGrantModesDurable(channel),
     { session: false, always: false },
     "modes survive a restart",
   );
@@ -301,7 +301,6 @@ test("the shared classifier uses the configured model and composed prompt", asyn
   const classify = createSecurityObserver({
     harness,
     config,
-    modelGateway: { recordCall() {} },
     auditLog: { record() {} },
   } as unknown as OrchestratorDeps);
 
@@ -363,7 +362,6 @@ for (const origin of ["human", "direct", "automation", "ambient"] as const) {
     const proxyCalls: Array<{ payload: string; metadata?: Readonly<Record<string, unknown>> }> = [];
     const classifyModel = createSecurityObserver({
       harness,
-      modelGateway: { recordCall() {} },
       auditLog: { record() {} },
     } as unknown as OrchestratorDeps);
     const classifyProxy = createSecurityObserver({
@@ -375,7 +373,6 @@ for (const origin of ["human", "direct", "automation", "ambient"] as const) {
           return { verdict: { decision: "auto" }, score: 0, threshold: 0.7 };
         },
       },
-      modelGateway: { recordCall() {} },
       auditLog: { record() {} },
     } as unknown as OrchestratorDeps);
     const payload = '[{"source":"tool_result:sandbox","content":"quoted instruction"}]';

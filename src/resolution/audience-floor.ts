@@ -12,28 +12,14 @@ function principalScopes(p: Principal, orgScope: ScopeId, contextScope?: ScopeId
   ];
 }
 
-function principalEgressHosts(
+function principalHosts(
+  field: "allowedHosts" | "deniedHosts",
   p: Principal,
   config: ScopedConfigStore,
   orgScope: ScopeId,
   contextScope?: ScopeId,
 ): Set<string> {
-  const hosts = new Set<string>();
-  for (const s of principalScopes(p, orgScope, contextScope))
-    for (const h of config.setting("egress", s)?.allowedHosts ?? []) hosts.add(h);
-  return hosts;
-}
-
-function principalDeniedHosts(
-  p: Principal,
-  config: ScopedConfigStore,
-  orgScope: ScopeId,
-  contextScope?: ScopeId,
-): Set<string> {
-  const hosts = new Set<string>();
-  for (const s of principalScopes(p, orgScope, contextScope))
-    for (const h of config.setting("egress", s)?.deniedHosts ?? []) hosts.add(h);
-  return hosts;
+  return new Set(principalScopes(p, orgScope, contextScope).flatMap((s) => config.setting("egress", s)?.[field] ?? []));
 }
 
 export function audienceEgressFloor(
@@ -43,7 +29,7 @@ export function audienceEgressFloor(
   contextScope?: ScopeId,
 ): string[] {
   if (audience.length === 0) return [];
-  const sets = audience.map((p) => principalEgressHosts(p, config, orgScope, contextScope));
+  const sets = audience.map((p) => principalHosts("allowedHosts", p, config, orgScope, contextScope));
   const [first, ...rest] = sets;
   return [...(first ?? new Set<string>())].filter((h) => rest.every((s) => s.has(h)));
 }
@@ -55,6 +41,7 @@ export function audienceDeniedFloor(
   contextScope?: ScopeId,
 ): string[] {
   const out = new Set<string>();
-  for (const p of audience) for (const h of principalDeniedHosts(p, config, orgScope, contextScope)) out.add(h);
+  for (const p of audience)
+    for (const h of principalHosts("deniedHosts", p, config, orgScope, contextScope)) out.add(h);
   return [...out];
 }

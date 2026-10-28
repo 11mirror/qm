@@ -18,7 +18,6 @@ import { createAclStore } from "../../src/acl/acl-store.ts";
 import { createResolutionService } from "../../src/resolution/resolution-service.ts";
 import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../../src/files/durable-byte-store.ts";
-import { createModelGateway } from "../../src/model/model-gateway.ts";
 import { defineHarness, type HarnessTurnInput } from "../../src/harness/harness.ts";
 import { resumeInterruptedToolCall, type BridgedTool } from "../../src/harness/harness-shared.ts";
 import { createAgentTools } from "../../src/harness/agent-tools.ts";
@@ -613,7 +612,6 @@ function buildScenario() {
     workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
-    modelGateway: createModelGateway(),
     auditLog,
     rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 100, windowMs: 60_000 }),
     harness,

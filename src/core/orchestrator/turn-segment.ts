@@ -461,7 +461,7 @@ function segmentCallbacks(
         }
       }
     },
-    recordModelCall: modelCallRecorder(deps, scopeId, actor.id),
+    recordModelCall: modelCallRecorder(deps, actor.id),
     recordLlmRequest: async (rec, signal) => {
       try {
         await deps.sessions.recordLlmRequest(session.id, { ...rec, scopeLabel: scopeId }, signal);

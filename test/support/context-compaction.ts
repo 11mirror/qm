@@ -8,7 +8,6 @@ import { createAclStore } from "../../src/acl/acl-store.ts";
 import { createResolutionService } from "../../src/resolution/resolution-service.ts";
 import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../../src/files/durable-byte-store.ts";
-import { createModelGateway } from "../../src/model/model-gateway.ts";
 import { createRuntimeService } from "../../src/harness/runtime-control.ts";
 import { createMockHarness } from "./mock-harness.ts";
 import { createDeployStore } from "../../src/deploy/deploy-store.ts";
@@ -105,7 +104,6 @@ export function buildOrchestrator(harness: Harness, maxContextTokens?: number, d
     workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
-    modelGateway: createModelGateway(),
     auditLog,
     errors,
     rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 1000, windowMs: 60_000 }),

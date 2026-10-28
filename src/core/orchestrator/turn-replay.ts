@@ -78,7 +78,7 @@ export async function detectAmbientDecline(
         systemPrompt: resolution.systemPrompt,
         ...(input.gatewayContext?.reactionGuidance ? { reactionGuidance: input.gatewayContext.reactionGuidance } : {}),
         history: detectHistory,
-        recordModelCall: modelCallRecorder(deps, scopeId, actor.id),
+        recordModelCall: modelCallRecorder(deps, actor.id),
       })
       .catch((e: unknown): HarnessDetectResult => {
         deps.errors?.record(

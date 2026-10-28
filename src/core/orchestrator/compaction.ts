@@ -117,7 +117,7 @@ async function summarizeForCompaction(
       session: input.session,
       history: plan.toSummarize,
       summaryTokenBudget,
-      recordModelCall: modelCallRecorder(deps, input.scopeId as ScopeId, input.actorId),
+      recordModelCall: modelCallRecorder(deps, input.actorId),
     });
     text = validateCompactSummary(raw, summaryTokenBudget);
   } catch (error) {

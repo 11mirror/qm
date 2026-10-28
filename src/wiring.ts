@@ -68,7 +68,6 @@ import type { CredentialUsageSink } from "./admin/credential-usage-sink.ts";
 import type { EgressAuditSink } from "./admin/egress-audit-sink.ts";
 import { type ConsentLinkStore } from "./connectors/consent-link.ts";
 import { type OAuthFlowStore } from "./connectors/oauth-flow-store.ts";
-import { type ModelGateway } from "./model/model-gateway.ts";
 import { type ModelCredentialStore } from "./model/model-credential-store.ts";
 import { type UserModelCredentialStore } from "./model/user-model-credential-store.ts";
 import type { ModelGatewayTransportConfig } from "./model/provider-endpoints.ts";
@@ -215,7 +214,6 @@ export interface BuiltApp {
   secretDrops: SecretDropStore;
   modelGatewayTransport?: ModelGatewayTransportConfig;
   resolveBrowserCompanyKeys: (includeSubscription?: boolean) => Promise<ProviderKeys>;
-  modelGateway: ModelGateway;
   modelCredentials: ModelCredentialStore;
   userModelCredentials: UserModelCredentialStore;
   refreshModels: () => Promise<unknown>;

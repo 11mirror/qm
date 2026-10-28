@@ -73,7 +73,7 @@ export function createMockModels(flakyScreens: Set<string>): HarnessModelUtiliti
       recordLlmRequest,
     }) {
       const model = modelId ?? "mock-security";
-      recordModelCall({
+      recordModelCall?.({
         model,
         inputTokens: countTokens(systemPrompt) + countTokens(payload),
         entryCount: 1,

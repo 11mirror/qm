@@ -1,14 +1,12 @@
+import { buffer } from "node:stream/consumers";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Sandbox, SandboxHandle } from "../../../src/sandbox/sandbox.ts";
-import {
-  createMemoryBlobTransferStore,
-  collectBlob,
-  type BlobTransferStore,
-} from "../../../src/persistence/blob-transfer.ts";
+import type { BlobTransferStore } from "../../../src/persistence/blob-transfer.ts";
 import { MAX_ATTACHMENT_BYTES } from "../../../src/core/attachments.ts";
 import { createAttachStaging } from "../../../src/core/orchestrator/attach-tool.ts";
 import { fakeSandbox } from "../../support/attachment-sandbox.ts";
+import { createMemoryBlobTransferStore } from "../../support/in-process-stores.ts";
 
 function attachStaging(sandbox: Sandbox, handle: SandboxHandle, blobTransfer: BlobTransferStore) {
   return createAttachStaging({
@@ -40,7 +38,7 @@ test("attach stages a named workspace file as a blob attachment", async () => {
   const staged = staging.staged();
   assert.equal(staged.length, 1, "only the named file rides out");
   const blob = await transfer.open(staged[0]!.blobId);
-  assert.equal((await collectBlob(blob!.stream)).toString("utf8"), "a,b\n1,2");
+  assert.equal((await buffer(blob!.stream)).toString("utf8"), "a,b\n1,2");
 });
 
 test("attach delivers a safe basename for a nested path (not a Slack path)", async () => {
@@ -131,7 +129,7 @@ test("re-attaching a path replaces its staged bytes and releases the superseded 
   assert.ok((await staging.attach(["report.md"])).ok);
   assert.equal(staging.staged().length, 1);
   const blob = await transfer.open(staging.staged()[0]!.blobId);
-  assert.equal((await collectBlob(blob!.stream)).toString("utf8"), "fixed", "the reply carries the rewritten file");
+  assert.equal((await buffer(blob!.stream)).toString("utf8"), "fixed", "the reply carries the rewritten file");
   assert.equal(await transfer.open(staleBlobId), null, "the superseded bytes are not left behind");
 });
 

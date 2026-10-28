@@ -55,7 +55,6 @@ test("two stores serialize the durable head and shared skill projection under on
     withLock: serial.withLock,
     withSharedLock: serial.withLock,
     tryWithLock: serial.withLock,
-    tryWithLocks: (_keys, fn) => fn(),
   };
 
   const firstRuntime = emptyDeploymentLayer();

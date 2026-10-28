@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createNoopAdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import {
   createProviderSandbox,
   type SandboxDriver,
@@ -14,6 +13,7 @@ import type { SandboxBodies } from "../../src/sandbox/sandbox-bodies.ts";
 import { tenant, tenantFor, withTenant } from "../../src/tenant.ts";
 import { scopeId } from "../../src/types.ts";
 import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
+import { createNoopAdvisoryLock } from "../support/in-process-stores.ts";
 
 function memoryBodies(): SandboxBodies<StoredSandboxRecord> {
   const rows = new Map<string, StoredSandboxRecord>();

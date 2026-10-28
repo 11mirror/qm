@@ -10,9 +10,9 @@ import { createSkillStore } from "../../src/skills/skill-store.ts";
 import { scopeId } from "../../src/types.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
 import { tool, skill, readLayer, putLayer } from "../support/deployment-layer.ts";
-import { createNoopAdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import { createPostgresAdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import { tenantFor, withTenant } from "../../src/tenant.ts";
+import { createNoopAdvisoryLock } from "../support/in-process-stores.ts";
 
 const org = scopeId("org", "default-org");
 

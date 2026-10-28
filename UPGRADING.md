@@ -143,6 +143,14 @@ import spec that still sets `sandboxNamePrefix`, `modalAppName`, `modalEnvironme
 `modalSnapshotBucket` or `awsSandboxBucket` is rejected as an unknown field. Sandboxes a
 tenant created under its old prefix are not reused.
 
+## Tenant env bags are no longer read
+
+A tenant's settings live in typed columns of the `tenants` table. The release that
+introduced those columns copied each tenant's `env` and `secret_env` bags into them on
+boot. That copy is gone. If your deployment serves several tenants and has never booted
+a release with typed tenant settings, boot one first so the bags are copied, then
+upgrade. A tenant that still has only env bags starts with empty settings.
+
 ## Typed tables: unknown JSON keys stop the upgrade
 
 Many stores used to keep each record as one JSON document in a `json` column. On first

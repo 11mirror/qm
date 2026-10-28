@@ -63,7 +63,6 @@ test("private channel grants all other internal members", () => {
   });
   assert.equal(a.kind, "members");
   assert.deepEqual(a.grantees.sort(), [scopeId("personal", "U2"), scopeId("personal", "U3")].sort());
-  assert.equal(a.memberCount, 2);
 });
 
 test("private channel: externals/guests excluded from member grants (defense-in-depth)", () => {

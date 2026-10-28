@@ -5,10 +5,11 @@ import {
 } from "../../src/deployment/deployment-layer-store.ts";
 import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { testDatabaseUrl } from "./test-database.ts";
-import { createNoopAdvisoryLock, createPostgresAdvisoryLock } from "../../src/persistence/advisory-lock.ts";
+import { createPostgresAdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import { createSkillStore } from "../../src/skills/skill-store.ts";
 import { emptyDeploymentLayer } from "../../src/deployment/load-layer.ts";
 import { scopeId } from "../../src/types.ts";
+import { createNoopAdvisoryLock } from "./in-process-stores.ts";
 
 export const tool = (advertise: string): DeploymentLayerBundle["tools"][number] => ({
   path: "tools/acme/tool.json",

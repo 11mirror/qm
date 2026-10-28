@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createNoopLeaderLease } from "../../src/persistence/leader-lease.ts";
 import { createFeatureFlagStore } from "../../src/feature-flags.ts";
 import { createSlackSessionStatus, type SlackSessionStatusState } from "../../src/slack/session-status.ts";
 import { createSlackCoreClient, type SlackCoreClientDeps } from "../../src/api/slack-core-client.ts";
@@ -12,6 +11,7 @@ import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { createSessionStatusStore } from "../../src/slack/session-status.ts";
 import { SESSION_STATUS_MIGRATION } from "../../src/slack/session-status.ts";
 import { typedTable } from "../../src/persistence/typed-table.ts";
+import { createNoopLeaderLease } from "../support/in-process-stores.ts";
 
 function deferred() {
   let resolve!: () => void;

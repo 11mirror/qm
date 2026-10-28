@@ -82,7 +82,7 @@ export interface HarnessSecurityScreenInput {
   modelId?: string;
   systemPrompt?: string;
   signal: AbortSignal;
-  recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
+  recordModelCall?(rec: { model: string; inputTokens: number; entryCount: number }): void;
   recordLlmRequest?(rec: HarnessLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
 }
 

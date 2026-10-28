@@ -25,6 +25,7 @@ import {
 } from "./tenants/directory.ts";
 import { tenantConfig } from "./tenants/tenant-config.ts";
 import { assertRowSecurityEnforced } from "./tenants/registry.ts";
+import { tenantSecretsKey } from "../plugins/chassis/src/tenant-settings.ts";
 
 export interface BootedApp {
   config: Config;
@@ -160,7 +161,7 @@ async function useRegistryTenants(config: Config, env: NodeJS.ProcessEnv, prepar
     createTenantDirectory({
       databaseUrl,
       pool,
-      secretsKey: config.tenantSecretsKey,
+      secretsKey: tenantSecretsKey(env),
       home: tenant(),
       homeHosts: [config.publicUrl, config.apiBaseUrl, config.publicWebUrl]
         .map(hostOfUrl)

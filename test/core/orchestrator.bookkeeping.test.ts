@@ -9,7 +9,6 @@ import { createAclStore } from "../../src/acl/acl-store.ts";
 import { createResolutionService } from "../../src/resolution/resolution-service.ts";
 import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../../src/files/durable-byte-store.ts";
-import { createModelGateway } from "../../src/model/model-gateway.ts";
 import { defineHarness } from "../../src/harness/harness.ts";
 import { createDeployStore } from "../../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../../src/deploy/docker-deploy-provider.ts";
@@ -90,7 +89,6 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
     workspace,
     files: createPostgresFileArtifactStore(databaseUrl, createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
-    modelGateway: createModelGateway(),
     auditLog,
     rateLimiter: createPostgresRateLimiter(databaseUrl, { maxPerWindow: 100, windowMs: 60_000 }),
     harness,

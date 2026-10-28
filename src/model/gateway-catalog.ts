@@ -1,3 +1,4 @@
+import { asRecord } from "../util/objects.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import { readCappedText } from "../util/response-body.ts";
 import { isEmbeddingModel, type EmbeddingModel } from "./embedding-model.ts";
@@ -18,12 +19,6 @@ function transientFailure(error: unknown): boolean {
   return name === "TimeoutError" || name === "AbortError" || error instanceof TypeError;
 }
 
-function record(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function modelId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,191}$/.test(value);
 }
@@ -39,7 +34,7 @@ function price(value: unknown): number | undefined {
 }
 
 function parseModel(value: unknown, allowed: Set<string>, baseUrl: string): GatewayModel | EmbeddingModel | undefined {
-  const info = record(value);
+  const info = asRecord(value);
   if (!info || !modelId(info.model_group) || !allowed.has(info.model_group)) return undefined;
   if (info.mode === "embedding") {
     return {
@@ -120,7 +115,7 @@ async function readCatalog(
   const tooLarge = () => new Error("Gateway catalog exceeds size limit");
   const body = await readCappedText(response, MAX_BYTES, tooLarge);
   if (body === undefined) throw tooLarge();
-  const data = record(JSON.parse(body))?.data;
+  const data = asRecord(JSON.parse(body))?.data;
   if (!Array.isArray(data) || data.length > MAX_MODELS) throw new Error("Invalid gateway catalog");
   return data;
 }
@@ -134,7 +129,6 @@ export function createGatewayCatalog(
   const baseUrl = `${root}/v1`;
   let routes: Readonly<Record<string, string>> = { ...config.models };
   let discovered = false;
-  let expiresAt = 0;
   let retryAt = 0;
   let lastSuccessAt = 0;
   let inFlight: Promise<void> | undefined;
@@ -157,7 +151,7 @@ export function createGatewayCatalog(
         ]);
         const allowed = new Set(
           listing.flatMap((entry) => {
-            const id = record(entry)?.id;
+            const id = asRecord(entry)?.id;
             if (!modelId(id)) throw new Error("Invalid gateway model id");
             return [id];
           }),
@@ -175,8 +169,7 @@ export function createGatewayCatalog(
         }
         routes = next;
         discovered = true;
-        expiresAt = now() + TTL_MS;
-        retryAt = expiresAt;
+        retryAt = now() + TTL_MS;
         lastSuccessAt = now();
         const offeredAliases = new Set(selectableBaseModels().map(({ id }) => id));
         setGatewayModels(
@@ -195,7 +188,6 @@ export function createGatewayCatalog(
         }
         if (discovered || Object.keys(config.models).length === 0) {
           routes = {};
-          expiresAt = 0;
           setGatewayModels([]);
           console.warn(`[model] Gateway model discovery unavailable; retrying in 30 seconds: ${errMessage(error)}`);
         }

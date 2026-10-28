@@ -10,7 +10,6 @@ import { createIdentityService } from "../../src/identity/identity-service.ts";
 import { createAclStore } from "../../src/acl/acl-store.ts";
 import { createResolutionService } from "../../src/resolution/resolution-service.ts";
 import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
-import { createModelGateway } from "../../src/model/model-gateway.ts";
 import { createMockHarness } from "./mock-harness.ts";
 import type { CronStore } from "../../src/cron/cron-store.ts";
 import { createDeployStore } from "../../src/deploy/deploy-store.ts";
@@ -124,7 +123,6 @@ export function buildOrchestrator(
     workspace,
     files,
     sandbox: fakeSandbox(),
-    modelGateway: createModelGateway(),
     auditLog,
     rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 1000, windowMs: 60_000 }),
     harness: createMockHarness(),

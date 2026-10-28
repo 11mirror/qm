@@ -167,12 +167,10 @@ export function deliveryCandidatesFor(
 }
 
 export function modelCallRecorder(
-  deps: Pick<OrchestratorDeps, "modelGateway" | "budget">,
-  scopeLabel: ScopeId,
+  deps: Pick<OrchestratorDeps, "budget">,
   actorId: string,
-): (rec: { model: string; inputTokens: number; entryCount: number }) => void {
+): (rec: { inputTokens: number }) => void {
   return (rec) => {
-    deps.modelGateway.recordCall({ at: Date.now(), scopeLabel, ...rec });
     void deps.budget
       ?.record(actorId, estimateCostUsd(rec.inputTokens))
       .catch(swallowAs("budget: record model spend", undefined));

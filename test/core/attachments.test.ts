@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { NoDefaultSandboxError } from "../../src/sandbox/sandbox-routing.ts";
 import type { GrantedHandle, IncomingAttachment, TurnRequest } from "../../src/types.ts";
 import { storedItem, type NewItem } from "../../src/sessions/items.ts";
-import { createMemoryBlobTransferStore, type BlobTransferStore } from "../../src/persistence/blob-transfer.ts";
+import { type BlobTransferStore } from "../../src/persistence/blob-transfer.ts";
 import {
   environmentNote,
   inboundIssueList,
@@ -22,6 +22,7 @@ import {
 import { fakeSandbox } from "../support/attachment-sandbox.ts";
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
+import { createMemoryBlobTransferStore } from "../support/in-process-stores.ts";
 
 test("turn file ids are stable within one attempt and fenced across retries", () => {
   assert.equal(turnFileId("run-1", 1, 123), turnFileId("run-1", 1, 123));

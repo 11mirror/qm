@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPgPool } from "../../src/persistence/pg-pool.ts";
-import { createPostgresLeaderLease, createNoopLeaderLease } from "../../src/persistence/leader-lease.ts";
+import { createPostgresLeaderLease } from "../../src/persistence/leader-lease.ts";
 
 const URL = process.env.DATABASE_URL!;
 
@@ -10,17 +10,6 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   const promise = new Promise<void>((r) => (resolve = r));
   return { promise, resolve };
 }
-
-test("no-op lease: hold runs fn and returns its value (single-instance dev/test path)", async () => {
-  const lease = createNoopLeaderLease();
-  let ran = 0;
-  const out = await lease.hold("any:key", async () => {
-    ran++;
-    return 42;
-  });
-  assert.equal(out, 42, "returns fn's result");
-  assert.equal(ran, 1, "ran fn exactly once");
-});
 
 test("pg lease: while the leader's fn is running, a SECOND instance on the same key is skipped", async () => {
   const pg = createPgPool(URL);

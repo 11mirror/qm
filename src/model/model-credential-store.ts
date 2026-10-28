@@ -4,8 +4,6 @@ import { createPgPool } from "../persistence/pg-pool.ts";
 import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import { MODEL_PROVIDERS, type ModelProvider, type ModelProviderAvailability } from "./pi-models.ts";
 
-export { isModelProvider, type ModelProvider } from "./pi-models.ts";
-
 interface StoredModelCredential {
   provider: ModelProvider;
   secretEnc?: string;
@@ -100,11 +98,10 @@ export function createModelCredentialStore(input: {
 
     async availability() {
       const statuses = await this.statuses();
-      return {
-        anthropic: statuses.find((status) => status.provider === "anthropic")!.configured,
-        openai: statuses.find((status) => status.provider === "openai")!.configured,
-        openrouter: statuses.find((status) => status.provider === "openrouter")!.configured,
-      };
+      return Object.fromEntries(statuses.map((status) => [status.provider, status.configured])) as Record<
+        ModelProvider,
+        boolean
+      >;
     },
   };
 }

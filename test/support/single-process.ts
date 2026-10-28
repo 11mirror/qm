@@ -1,8 +1,6 @@
-import { createNoopAdvisoryLock } from "../../src/persistence/advisory-lock.ts";
-import { createNoopLeaderLease } from "../../src/persistence/leader-lease.ts";
-import { createMemoryBlobTransferStore } from "../../src/persistence/blob-transfer.ts";
 import { createApprovalGrants, createApprovalRecords } from "../../src/core/approval-store.ts";
 import { testDatabaseUrl } from "./test-database.ts";
+import { createMemoryBlobTransferStore, createNoopAdvisoryLock, createNoopLeaderLease } from "./in-process-stores.ts";
 
 export const singleProcessDeps = (url = testDatabaseUrl()) => ({
   advisoryLock: createNoopAdvisoryLock(),

@@ -1,3 +1,4 @@
+import { asRecord } from "../util/objects.ts";
 import { decodeJwt } from "jose";
 export type JsonObject = Record<string, unknown>;
 
@@ -24,12 +25,8 @@ export function tokenExpiry(raw: { expires_in?: number; access_token?: string })
   return typeof exp === "number" ? exp * 1000 : undefined;
 }
 
-export function asObject(value: unknown): JsonObject | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonObject) : null;
-}
-
 export function authTokens(auth: JsonObject): { access: string; refresh: string; id?: string } | null {
-  const tokens = asObject(auth.tokens);
+  const tokens = asRecord(auth.tokens);
   if (!tokens || typeof tokens.access_token !== "string" || !tokens.access_token) return null;
   if (typeof tokens.refresh_token !== "string" || !tokens.refresh_token) return null;
   return {
@@ -39,9 +36,13 @@ export function authTokens(auth: JsonObject): { access: string; refresh: string;
   };
 }
 
+export function chatgptAccountIdFromTokens(idToken: string | undefined, accessToken: string): string | undefined {
+  return chatgptAccountIdFromToken(idToken) ?? chatgptAccountIdFromToken(accessToken);
+}
+
 export function authAccountId(auth: JsonObject): string | undefined {
   const tokens = authTokens(auth);
-  return tokens ? (chatgptAccountIdFromToken(tokens.id) ?? chatgptAccountIdFromToken(tokens.access)) : undefined;
+  return tokens ? chatgptAccountIdFromTokens(tokens.id, tokens.access) : undefined;
 }
 
 export function accessExpiresAt(auth: JsonObject): number | undefined {
@@ -49,7 +50,7 @@ export function accessExpiresAt(auth: JsonObject): number | undefined {
 }
 
 export function chatgptAuthFromValue(value: unknown): JsonObject | null {
-  const auth = asObject(value);
+  const auth = asRecord(value);
   if (!auth || (auth.auth_mode !== "chatgpt" && auth.auth_mode !== "chatgptAuthTokens")) return null;
   return authTokens(auth) && authAccountId(auth) ? auth : null;
 }

@@ -1,4 +1,4 @@
-import { isModelProvider, type ModelProvider } from "../../../model/model-credential-store.ts";
+import { isModelProvider, type ModelProvider } from "../../../model/pi-models.ts";
 import { cachedModelCatalog, selectableModelCatalog } from "../../../model/model-catalog.ts";
 import { swallow } from "../../../util/errors.ts";
 import { type ApiCtx, ok, reply, type RouteResult } from "../route.ts";

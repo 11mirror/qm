@@ -7,7 +7,7 @@ import type { ExternalSlackPolicies } from "./resolution/external-slack.ts";
 import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";
 import { SANDBOX_BACKEND_NAMES, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
 import { existsSync, readdirSync } from "node:fs";
-import { homeTenantSettings, tenantSecretsKey, type TenantSettings } from "../plugins/chassis/src/tenant-settings.ts";
+import { homeTenantSettings, type TenantSettings } from "../plugins/chassis/src/tenant-settings.ts";
 import { parseProviderBaseUrl, type ModelGatewayTransportConfig } from "./model/provider-endpoints.ts";
 import { join, resolve } from "node:path";
 import { RUN_MAX_AGE_MS } from "./runs/run-store.ts";
@@ -71,7 +71,6 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   suggestedActivitiesContext?: string;
   production: boolean;
   multitenant: boolean;
-  tenantSecretsKey?: Buffer;
   port: number;
   publicPort?: number;
   dataDir: string;
@@ -531,7 +530,6 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     suggestedActivitiesEnabled: e.SUGGESTED_ACTIVITIES_ENABLED ?? true,
     production: e.NODE_ENV === "production",
     multitenant: e.QM_MULTITENANT === "1",
-    ...defined({ tenantSecretsKey: tenantSecretsKey(env) }),
     port: e.PORT ?? CONFIG_DEFAULTS.port,
     dataDir,
     sandboxBackend,

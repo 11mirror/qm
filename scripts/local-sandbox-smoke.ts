@@ -6,9 +6,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLocalSandbox, LOCAL_BODIES, localContainerName, localVolumeName } from "../src/sandbox/local-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createSandboxBodies } from "../src/sandbox/sandbox-bodies.ts";
 import { scopeId } from "../src/types.ts";
+import { createNoopAdvisoryLock } from "../test/support/in-process-stores.ts";
 
 const log = (...a: unknown[]) => console.log("[local-smoke]", ...a);
 
