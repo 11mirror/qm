@@ -77,6 +77,7 @@ test("each recorded model call carries the gateway's attempt headers in its tran
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () => responsesReply()) as typeof globalThis.fetch;
   let seq = 0;
+  let requested = 0;
   try {
     await harness.turns.runTurn({
       session: { id: "gateway-attempts" } as HarnessTurnInput["session"],
@@ -89,6 +90,9 @@ test("each recorded model call carries the gateway's attempt headers in its tran
       runtime: { modelId: "gpt-6-astra" },
       emit: async (item: NewItem) =>
         storedItem(item, { sessionId: "gateway-attempts", seq: seq++, createdAt: Date.now() }),
+      onModelRequest: () => {
+        requested += 1;
+      },
       recordModelCall: () => {},
       recordLlmRequest: (rec: HarnessLlmRequestRecord) => {
         rows.push(rec);
@@ -98,6 +102,9 @@ test("each recorded model call carries the gateway's attempt headers in its tran
     globalThis.fetch = realFetch;
   }
   assert.equal(rows.length, 1);
+  assert.equal(requested, 1, "one callback at each provider dispatch");
+  assert.equal("ttftMs" in rows[0]!, false);
+  assert.equal("durationMs" in rows[0]!, false);
   assert.equal(rows[0]!.transport?.modelId, "gpt-6-astra");
   assert.deepEqual(rows[0]!.transport?.gateway, gatewayAttemptHeaders(GATEWAY_HEADERS));
 });

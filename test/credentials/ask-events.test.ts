@@ -17,9 +17,9 @@ const base = {
 test("access events report only resolutions newer than the last user entry in order", async () => {
   const asks: KeychainAsk[] = [
     { ...base, status: "pending" },
-    { ...base, status: "denied", resolvedAt: 4 },
+    { ...base, status: "declined", resolvedAt: 4 },
     { ...base, status: "approved", resolvedAt: 8 },
-    { ...base, credentialId: "deleted", status: "denied", resolvedAt: 6 },
+    { ...base, credentialId: "deleted", status: "declined", resolvedAt: 6 },
   ];
   const events = await askResolutionEvents(
     asks,
@@ -29,7 +29,7 @@ test("access events report only resolutions newer than the last user entry in or
   );
   assert.equal(
     events,
-    "Access request to Ada for deleted credential `deleted` was denied.\nAccess request to Ada for `GitHub` was approved.",
+    "Access request to Ada for deleted credential `deleted` was declined.\nAccess request to Ada for `GitHub` was approved.",
   );
   assert.equal(
     await askResolutionEvents(

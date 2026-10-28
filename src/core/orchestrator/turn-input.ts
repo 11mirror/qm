@@ -1,3 +1,4 @@
+import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
 import { askResolutionEvents } from "../../credentials/ask-events.ts";
 import type { KeychainAsk } from "../../credentials/keychain.ts";
 import { availableParallelism } from "node:os";
@@ -221,7 +222,9 @@ async function loadTurnHistory(ctx: TurnCtx, turn: TurnInputArgs) {
   const { historyWindow, context, memoryView, recordedTurn, lease } = turn;
   const rawEntries = (await historyWindow()).items;
   let visibleHistory = filterHistory(forModelContext(rawEntries));
-  const recalled = await context.recallMemory(memoryRecallQuery(input.text, visibleHistory), memoryView.loaded);
+  const recalled = await tracePhase("turn.memory_recall", () =>
+    context.recallMemory(memoryRecallQuery(input.text, visibleHistory), memoryView.loaded),
+  );
   const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.runId)) : null;
   let resumePlan = partial ? resumeStrategy(visibleHistory, partial) : null;
   if (partial && resumePlan?.kind === "settle") {

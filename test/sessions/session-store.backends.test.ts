@@ -298,7 +298,6 @@ for (const [name, make] of backends) {
       scopeLabel: s.scopeId,
     });
     assert.ok(rec.id, "stamps an id");
-    assert.equal(rec.ttftMs, null, "per-call timing defaults to null when not captured");
     assert.equal(rec.usage, null, "usage defaults to null when the provider reported none");
     assert.equal(rec.transport, null, "transport defaults to null when not captured");
     await store.recordLlmRequest(s.id, {
@@ -306,8 +305,6 @@ for (const [name, make] of backends) {
       step: 1,
       model: "claude-x",
       scopeLabel: s.scopeId,
-      ttftMs: 1200,
-      durationMs: 8400,
       usage: { input: 30, output: 120, cacheRead: 5000, cacheWrite: 0, totalTokens: 5150, costUsd: 0.0123 },
       transport: { modelId: "claude-x", headers: { "anthropic-beta": "fast-mode-2026" } },
     });
@@ -320,8 +317,6 @@ for (const [name, make] of backends) {
       "ordered by step within the turn",
     );
     assert.equal(list[0]!.turnSeq, 0, "correlated to the turn's user entry seq");
-    assert.equal(list[1]!.ttftMs, 1200, "per-call TTFT round-trips");
-    assert.equal(list[1]!.durationMs, 8400, "per-call duration round-trips");
     assert.deepEqual(
       list[1]!.usage,
       { input: 30, output: 120, cacheRead: 5000, cacheWrite: 0, totalTokens: 5150, costUsd: 0.0123 },

@@ -44,15 +44,10 @@ test("pg session store: one-per-thread, TTL/fenced lease, monotonic log, visibil
     step: 1,
     model: "claude-x",
     scopeLabel: scope,
-    ttftMs: 1200,
-    durationMs: 8400,
     usage: { input: 30, output: 120, cacheRead: 5000, cacheWrite: 0, totalTokens: 5150, costUsd: 0.0123 },
   });
   const reqs = await s.listLlmRequests(a.id);
-  assert.equal(reqs[0]!.ttftMs, null, "absent per-call timing reads back null");
   assert.equal(reqs[0]!.usage, null, "absent usage reads back null");
-  assert.equal(reqs[1]!.ttftMs, 1200, "captured TTFT round-trips");
-  assert.equal(reqs[1]!.durationMs, 8400, "captured duration round-trips");
   assert.deepEqual(
     reqs[1]!.usage,
     { input: 30, output: 120, cacheRead: 5000, cacheWrite: 0, totalTokens: 5150, costUsd: 0.0123 },

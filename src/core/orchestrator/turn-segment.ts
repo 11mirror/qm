@@ -8,7 +8,7 @@ import type { SecurityObserver } from "./security-screen.ts";
 import type { Outbound } from "../../surfaces/outbound.ts";
 import type { Session } from "../../types.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
-import { markFirstToken } from "../../../plugins/chassis/src/error-reporting.ts";
+import { tracePhase, type DispatchTrace } from "../../../plugins/chassis/src/error-reporting.ts";
 import { memoryRecallDelta } from "../../memory/recall-delta.ts";
 import { loadDocumentInputs } from "../document-inputs.ts";
 import { type GoalRecord, openGoal } from "../../harness/goal.ts";
@@ -65,7 +65,7 @@ export async function mirrorRunActivity(
 export interface TurnRunState {
   toolCalls: number;
   failureUserItem?: NewItem<"UserMessage">;
-  firstTokenMarked: boolean;
+  dispatch: DispatchTrace;
   turnRuntime?: TurnRuntime;
   runtimeHandoffs: number;
   contextRecovered: boolean;
@@ -260,7 +260,9 @@ function createSegmentEmit(
         ? { ...entry, body, ...((syntheticPrompt || continuation) && { hidden: true }) }
         : { ...entry, body };
     })();
-    const appended = await withManagedRosterVersion(() => deps.sessions.append(lease, stored));
+    const appended = await tracePhase("step.persist", () =>
+      withManagedRosterVersion(() => deps.sessions.append(lease, stored)),
+    );
     emittedEntries.push(appended);
     if (isUserMessage(appended) && spine.turnUserEntrySeq === undefined) {
       spine.turnUserEntrySeq = appended.seq;
@@ -439,11 +441,9 @@ function segmentCallbacks(
           origin: input.origin.kind,
         });
     },
+    onModelRequest: () => run.dispatch.modelRequest(),
     onDelta: (chunk: string) => {
-      if (!run.firstTokenMarked) {
-        run.firstTokenMarked = true;
-        markFirstToken();
-      }
+      run.dispatch.firstToken();
       if (input.runId && deps.turnStream && !input.surfaceTools)
         deps.turnStream.publish(input.runId, chunk, input.runLeaseToken);
       if (input.surfaceTools && spineFirst.open) spineFirst.block += chunk;

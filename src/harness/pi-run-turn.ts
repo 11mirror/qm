@@ -1,3 +1,4 @@
+import { createPiTrace } from "./pi-tracing.ts";
 import { goalWorkDigest } from "./goal.ts";
 import { textFromContent } from "./pi-payload.ts";
 import { finishTurn } from "./turn-finish.ts";
@@ -77,6 +78,7 @@ interface OpenedPiTurn {
   wantFast: boolean;
   turnModelGateway: ModelGatewayTransportConfig | undefined;
   active: { steps?: StepRecorder };
+  tracing: ReturnType<typeof createPiTrace>;
 }
 
 async function openPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInput): Promise<OpenedPiTurn> {
@@ -100,6 +102,7 @@ async function openPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInput): Pr
   const request = createTurnRequestSettings(dispatched.documents);
   const calls = createModelCallLog();
   const active: OpenedPiTurn["active"] = {};
+  const tracing = createPiTrace(dispatched.onModelRequest);
   const tools = recordingTools(createTurnTools(opts.toolOptions, state, dispatched), () => active.steps);
   const resumed = await resumeInterruptedToolCall(dispatched, state, tools as unknown as BridgedTool[]);
   const turn = resumed ? { ...dispatched, history: resumed } : dispatched;
@@ -117,10 +120,14 @@ async function openPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInput): Pr
     request,
     halt: state.halt,
     abortSignal: () => state.tools.abortSignal,
-    tools,
+    onModelRequest: tracing.request,
+    tools: tools.map((tool) => ({
+      ...tool,
+      execute: (...args) => tracing.tool(tool.name, () => tool.execute(...args)),
+    })),
     loadImage: turn.loadImage,
   });
-  return { turn, entry, state, request, calls, desiredModelId, wantFast, turnModelGateway, active };
+  return { turn, entry, state, request, calls, desiredModelId, wantFast, turnModelGateway, active, tracing };
 }
 
 async function preparePiPrompt({
@@ -230,6 +237,7 @@ function subscribeMessageEnds(opts: {
   pendingSteers: Array<SteerIntake & { prompt: string }>;
   toolAbort: AbortController;
   continueTurn: boolean;
+  tracing: ReturnType<typeof createPiTrace>;
   noteDocumentRejection: (message: unknown) => void;
 }): (() => void) | undefined {
   const { turn, session, steps, persistence, pendingSteers, toolAbort, noteDocumentRejection } = opts;
@@ -253,6 +261,7 @@ function subscribeMessageEnds(opts: {
   };
   return (session as unknown as { agent?: PiAgentWithPayloadHook }).agent?.subscribe?.((event) => {
     const e = event as { type?: string; message?: unknown };
+    opts.tracing.event(e);
     if (e.type === "agent_start" && toolAbort.signal.aborted) session.agent.abort();
     if (e.type === "message_end") noteDocumentRejection(e.message);
     return e.type === "message_end" ? onMessageEnd(e.message) : undefined;
@@ -469,6 +478,7 @@ export async function runPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInpu
       pendingSteers,
       toolAbort,
       continueTurn,
+      tracing: opened.tracing,
       noteDocumentRejection: (message) => noteDocumentRejection(message),
     });
     const unsubscribe = session.subscribe(telemetry.onSessionEvent(steps, grindMeter));
@@ -587,6 +597,7 @@ export async function runPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInpu
       settled: persistence.settled,
     });
   } finally {
+    opened.tracing.finish();
     removeIsolatedDirs(entry);
   }
 }

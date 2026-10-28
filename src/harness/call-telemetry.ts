@@ -11,8 +11,6 @@ import { calculateCost, type Api, type Model, type Usage } from "@earendil-works
 import { FAST_COST_MULTIPLIER, scaleCost } from "./pi-model-runtime.ts";
 
 export interface PerCallStat {
-  ttftMs: number | null;
-  durationMs: number | null;
   usage: LlmCallUsage | null;
 }
 
@@ -97,23 +95,18 @@ export function createCallTelemetry(
   goal: () => GoalRecord | null | undefined,
 ) {
   const callStats: Array<PerCallStat> = [];
-  let curStart: number | undefined;
-  let curFirst: number | undefined;
 
   const onSessionEvent =
     (steps: StepRecorder, grindMeter: GrindMeter): AgentSessionEventListener =>
     (event) => {
       if (event.type === "message_start" && (event.message as { role?: string }).role === "assistant") {
         steps.startStreaming();
-        curStart = Date.now();
-        curFirst = undefined;
       } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_start") {
         turn.onTextBlockStart?.();
       } else if (event.type === "message_update" && event.assistantMessageEvent.type === "toolcall_start") {
         const block = event.assistantMessageEvent.partial.content[event.assistantMessageEvent.contentIndex];
         if (block?.type === "toolCall") turn.onToolCallStart?.(block.name);
       } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-        if (curFirst === undefined) curFirst = Date.now();
         turn.onDelta?.(event.assistantMessageEvent.delta);
       } else if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") {
         const { contentIndex, delta, partial } = event.assistantMessageEvent;
@@ -121,7 +114,6 @@ export function createCallTelemetry(
         if (block?.type === "thinking" && !block.redacted)
           turn.onReasoningDelta?.(steps.streamingStepId(), contentIndex, delta);
       } else if (event.type === "message_end" && (event.message as { role?: string }).role === "assistant") {
-        const end = Date.now();
         const u = (event.message as { usage?: Partial<Usage> }).usage;
         const stepModel = session.model;
         const usage = piUsageToCallUsage(u, stepModel, fast());
@@ -129,12 +121,8 @@ export function createCallTelemetry(
         const meteredGoal = goal();
         if (meteredGoal?.status === "active") meterGoalCall(meteredGoal, usage);
         callStats.push({
-          ttftMs: curStart !== undefined && curFirst !== undefined ? curFirst - curStart : null,
-          durationMs: curStart !== undefined ? end - curStart : null,
           usage,
         });
-        curStart = undefined;
-        curFirst = undefined;
       }
     };
   const drainCaptured = async (turnSeq: number | null, effectiveModel: string): Promise<void> => {
@@ -154,8 +142,6 @@ export function createCallTelemetry(
           transport: d?.gateway
             ? { ...captured[step]!.transport, gateway: d.gateway }
             : (captured[step]!.transport ?? null),
-          ttftMs: stat?.ttftMs ?? null,
-          durationMs: stat?.durationMs ?? null,
           usage: stat?.usage ?? null,
         });
       } catch (e) {

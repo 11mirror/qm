@@ -8,7 +8,7 @@ import * as Sentry from "@sentry/node";
 import {
   flushErrorReporting,
   initializeErrorReporting,
-  markFirstToken,
+  startDispatchTrace,
   traceQueued,
 } from "../../../plugins/chassis/src/error-reporting.ts";
 import { eventually } from "../../support/settle.ts";
@@ -96,7 +96,9 @@ test("a long run keeps its queries, waiting checkouts and first-token time withi
     await traceQueued(undefined, "long-run", {}, async () => {
       await Promise.all([pool.query("SELECT pg_sleep(0.02)"), pool.query("SELECT 'contended'")]);
       for (let i = 0; i < 700; i++) await pool.query("SELECT $1::int", [i]);
-      markFirstToken();
+      const dispatch = startDispatchTrace();
+      dispatch.firstToken();
+      dispatch.end();
       await pool.query("SELECT pg_sleep(0.02)");
     });
     const run = await capturedTransaction("long-run");

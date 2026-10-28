@@ -1,3 +1,4 @@
+import { startDispatchTrace, tracePhase, type DispatchTrace } from "../../../plugins/chassis/src/error-reporting.ts";
 import { surfaceHas } from "../../surfaces/surface.ts";
 import { UNTRACKED_PROVENANCE } from "../../memory/facts.ts";
 import { type Session, type TurnResult } from "../../types.ts";
@@ -60,6 +61,19 @@ interface TurnState {
 }
 
 export async function handleTurn(o: OrchestratorInstance, requested: OrchestratorInput): Promise<TurnResult> {
+  const dispatch = startDispatchTrace();
+  try {
+    return await handleTracedTurn(o, requested, dispatch);
+  } finally {
+    dispatch.end();
+  }
+}
+
+async function handleTracedTurn(
+  o: OrchestratorInstance,
+  requested: OrchestratorInput,
+  dispatch: DispatchTrace,
+): Promise<TurnResult> {
   const { deps } = o;
   const admission = await admitTurn(deps, requested);
   if ("refused" in admission) return admission.refused;
@@ -78,14 +92,16 @@ export async function handleTurn(o: OrchestratorInstance, requested: Orchestrato
     scopeLabel: ctx.scopeId,
   });
   const approvalLedger = loadApprovalLedger(await ctx.actorGrants(), session.id, ctx.resolution.approvalGrantModes);
-  const catalog = await buildCredentialCatalog(ctx, {
-    sharingSources: frame.context.sharingSources,
-    delivery: frame.framed.delivery,
-    defaultDestination: frame.framed.defaultDestination,
-    session,
-  });
+  const catalog = await tracePhase("turn.credentials", () =>
+    buildCredentialCatalog(ctx, {
+      sharingSources: frame.context.sharingSources,
+      delivery: frame.framed.delivery,
+      defaultDestination: frame.framed.defaultDestination,
+      session,
+    }),
+  );
   if (catalog.sandboxModelGateway) frame.framed.turnContextBlocks["Model access"] = MODEL_ACCESS_BLOCK;
-  const run = newTurnRunState();
+  const run = newTurnRunState(dispatch);
   const turnSandboxes = openTurnSandboxes(ctx, {
     context: frame.context,
     framed: frame.framed,
@@ -143,7 +159,9 @@ async function beginTurn(o: OrchestratorInstance, ctx: TurnCtx, turn: TurnState)
   });
   const memoryWindow = await deps.sessions.getContextWindow(session.id);
 
-  const memoryView = await frame.context.memorySnapshot();
+  const memoryView = await tracePhase("turn.memory_snapshot", () => frame.context.memorySnapshot(), {
+    counts: (view) => ({ "qm.facts": view.facts.length }),
+  });
   const captureDependencies = () => [
     ...memoryView.facts,
     ...(!memoryView.complete ||
@@ -351,10 +369,10 @@ async function releaseTurn(o: OrchestratorInstance, ctx: TurnCtx, turn: TurnStat
     });
 }
 
-function newTurnRunState(): TurnRunState {
+function newTurnRunState(dispatch: DispatchTrace): TurnRunState {
   return {
     toolCalls: 0,
-    firstTokenMarked: false,
+    dispatch,
     runtimeHandoffs: 0,
     contextRecovered: false,
     remainingDocumentBytes: 0,

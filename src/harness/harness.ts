@@ -48,8 +48,6 @@ export interface HarnessLlmRequestRecord {
   step: number;
   model: string;
   transport?: LlmTransportMeta | null;
-  ttftMs?: number | null;
-  durationMs?: number | null;
   usage?: LlmCallUsage | null;
 }
 
@@ -117,6 +115,7 @@ export interface HarnessTurnInput {
   onRuntime?(runtime: TurnRuntime): void;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
   recordLlmRequest?(rec: HarnessLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
+  onModelRequest?(): void;
   onDelta?(chunk: string): void;
   onReasoningDelta?(step: string, index: number, chunk: string): void;
   onTextBlockStart?(phase?: "commentary" | "final_answer"): void | Promise<void>;

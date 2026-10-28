@@ -182,6 +182,7 @@ export interface TurnSessionInput {
   modelGateway: ModelGatewayTransportConfig | undefined;
   tempDirPrefix: string;
   calls: ModelCallLog;
+  onModelRequest?: () => void;
   request: TurnRequestSettings;
   halt: Pick<TurnHalt, "stopsTools">;
   abortSignal: () => AbortSignal | undefined;
@@ -200,6 +201,7 @@ export async function createTurnSession({
   modelGateway,
   tempDirPrefix,
   calls,
+  onModelRequest,
   request,
   halt,
   abortSignal,
@@ -222,6 +224,7 @@ export async function createTurnSession({
   const prior = agent.onPayload;
   agent.onPayload = async (payload, model) => {
     calls.dispatched();
+    onModelRequest?.();
     applyFastSpeed(payload, request.fast(), (model as { api?: string } | undefined)?.api);
     applyReasoningMode(payload, model as Model<Api>, request.effortLevel());
     const result = prior ? await prior(payload, model) : payload;

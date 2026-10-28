@@ -1,3 +1,4 @@
+import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
 import { hashId } from "../../util/crypto.ts";
 import type { Principal, Resolution, ScopeId, Session } from "../../types.ts";
 import { personalScope } from "../../types.ts";
@@ -122,7 +123,6 @@ function scratchBox(t: SandboxBase, key: string, env?: Record<string, string>) {
     inFlight: Promise<SandboxHandle> | null;
     startedAt?: number;
     readyAt?: number;
-    provisionMs?: number;
   } = { handle: null, pending: null, inFlight: null };
   const record = (
     action: string,
@@ -142,7 +142,6 @@ function scratchBox(t: SandboxBase, key: string, env?: Record<string, string>) {
         sandboxId: handle?.id,
         startedAt: state.startedAt,
         readyAt: state.readyAt,
-        provisionMs: state.provisionMs,
         ...extra,
       }),
     });
@@ -151,7 +150,7 @@ function scratchBox(t: SandboxBase, key: string, env?: Record<string, string>) {
     if (state.handle) return Promise.resolve(state.handle);
     if (state.pending && !state.inFlight)
       return Promise.reject(new Error("Disposable sandbox initialization cleanup is still pending"));
-    state.inFlight ??= (async () => {
+    state.inFlight ??= tracePhase("sandbox.provision", async () => {
       state.startedAt = Date.now();
       record("provision_started");
       const handle = await deps.sandbox.provision(
@@ -166,11 +165,10 @@ function scratchBox(t: SandboxBase, key: string, env?: Record<string, string>) {
         },
       );
       state.readyAt = Date.now();
-      state.provisionMs = state.readyAt - state.startedAt;
       state.handle = handle;
       record("provision_ready", handle);
       return handle;
-    })().catch((error: unknown) => {
+    }).catch((error: unknown) => {
       state.inFlight = null;
       if (error instanceof SandboxProvisionCleanupError) state.pending = error.handle;
       record("provision_failed", state.pending ?? undefined, { error: errMessage(error) });
@@ -228,7 +226,7 @@ async function releaseHold(t: TurnSandboxState, handle: SandboxHandle): Promise<
 function provision(t: TurnSandboxState, eager = false): Promise<SandboxHandle> {
   const { box } = t;
   if (!eager) box.used = true;
-  t.provisionInFlight ??= doProvision(t, eager).catch((err: unknown) => {
+  t.provisionInFlight ??= tracePhase("sandbox.provision", () => doProvision(t, eager)).catch((err: unknown) => {
     t.provisionInFlight = null;
     recordProvisionFailure(t, err, eager);
     throw err;
@@ -264,7 +262,6 @@ async function doProvision(t: TurnSandboxState, eager: boolean): Promise<Sandbox
     onSandboxStatus,
     turnKey,
   } = t;
-  const provisionStart = Date.now();
   if (input.externalSlack) {
     const resource = await deps.sandboxResources?.resolve(memoryScopeId);
     if (resource && resource.ownerScopeId !== scopeId) throw new Error("External Slack requires its own sandbox.");
@@ -277,7 +274,6 @@ async function doProvision(t: TurnSandboxState, eager: boolean): Promise<Sandbox
   });
   box.pending = handle;
   await holdResource(t, handle);
-  const provisionMs = Date.now() - provisionStart;
   deps.auditLog?.record({
     at: Date.now(),
     principalId: actor.id,
@@ -289,7 +285,6 @@ async function doProvision(t: TurnSandboxState, eager: boolean): Promise<Sandbox
       sessionId: session.id,
       backend: handle.backend,
       sandboxId: handle.id,
-      provisionMs,
       coldStart: handle.coldStart,
       eager,
     }),

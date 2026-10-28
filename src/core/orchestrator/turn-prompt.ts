@@ -1,3 +1,4 @@
+import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
 import { skillsIndex } from "../../skills/materialize.ts";
 import { surfaceProfile, surfaceHas } from "../../surfaces/surface.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../../cron/schedule.ts";
@@ -152,7 +153,11 @@ export async function frameTurnPrompt(ctx: TurnCtx, turn: FrameTurnArgs) {
   const observedSkillScreens = new Set<string>();
   const visibleSkillsForTurn = (sources?: readonly string[]) =>
     listVisibleSkills(ctx, turn, configuredProviders, observedSkillScreens, sources);
-  const skillSourceContext = await context.listSkills([scopeId, resolution.orgScopeId]);
+  const skillSourceContext = await tracePhase(
+    "turn.skills",
+    () => context.listSkills([scopeId, resolution.orgScopeId]),
+    { counts: (listed) => ({ "qm.skills": listed.skills.length }) },
+  );
   const otherSkillSources = skillSourceContext.skillSources
     .filter((source) => source !== scopeId && source !== resolution.orgScopeId)
     .sort();

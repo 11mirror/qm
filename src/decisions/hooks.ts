@@ -1,3 +1,4 @@
+import { tracePhase } from "../../plugins/chassis/src/error-reporting.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { runHook, type DecisionBackend, type DecisionHook, type DecisionResult } from "./decisions.ts";
 import type { DecisionStore } from "./store.ts";
@@ -42,7 +43,7 @@ export function createDecisionHooks(store: DecisionStore | undefined, backend: D
     const rules = (await store?.rules(hook)) ?? [];
     if (!store || !rules.length) return undefined;
     const signal = AbortSignal.any([AbortSignal.timeout(HOOK_TIMEOUT_MS), ...(turn.cancel ? [turn.cancel] : [])]);
-    const { decisive, results } = await runHook(rules, hook, state, backend, signal);
+    const { decisive, results } = await tracePhase("turn.decision", () => runHook(rules, hook, state, backend, signal));
     for (const result of results)
       audit.record({
         at: Date.now(),

@@ -168,8 +168,6 @@ export interface LlmRequestRecord {
   model: string;
   scopeLabel: ScopeId;
   createdAt: number;
-  ttftMs: number | null;
-  durationMs: number | null;
   usage: LlmCallUsage | null;
   transport: LlmTransportMeta | null;
 }
@@ -179,8 +177,6 @@ export interface NewLlmRequest {
   step: number;
   model: string;
   scopeLabel: ScopeId;
-  ttftMs?: number | null;
-  durationMs?: number | null;
   usage?: LlmCallUsage | null;
   transport?: LlmTransportMeta | null;
 }
