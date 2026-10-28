@@ -36,9 +36,6 @@ export function replayRecordedAnswer(
     scopeLabel: scopeId,
     detail: `attempt ${input.attempt}; replaying the answer the previous attempt recorded at seq ${recordedAnswer.seq}`,
   });
-  console.error(
-    `[orchestrator] turn.already_answered attempt=${input.attempt} run=${input.runId} thread=${conversation.threadRef} answerSeq=${recordedAnswer.seq}`,
-  );
   return recordedAnswer.text.trim()
     ? {
         status: "ok",
@@ -109,10 +106,6 @@ export async function detectAmbientDecline(
         scopeLabel: scopeId,
         ...(decision.reason ? { detail: decision.reason } : {}),
       });
-      console.error(
-        `[orchestrator] turn.${reactions ? "react" : "silent"} (detection ${reactions ? `acknowledged emoji=${reactions.join(",")}` : "declined"}) thread=${conversation.threadRef}` +
-          (decision.reason ? ` reason=${JSON.stringify(decision.reason)}` : ""),
-      );
       return reactions
         ? { status: "react", sessionId: session.id, reactions }
         : { status: "silent", sessionId: session.id };

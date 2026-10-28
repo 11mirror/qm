@@ -85,7 +85,7 @@ export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
     ? [...visibleHistory].reverse().find((e) => isUserMessage(e) && !isOverheard(e) && e.body?.approvalDenial !== true)
     : undefined;
   const approvalReplay = !!pausedTurnUserEntry && (pausedTurnUserEntry.text ?? "").trim() === input.text.trim();
-  if (partial) await noteResume(ctx, turn, partial, resume, resumePlan!);
+  if (partial) await noteResume(ctx, turn, partial, resume);
   const turnInput = baseText;
   const continueTurn = !!partial && history.some((entry) => entry.seq === partial.userSeq);
   if (partial) spine.turnUserEntrySeq = partial.userSeq;
@@ -338,7 +338,6 @@ async function noteResume(
   turn: TurnInputArgs,
   partial: NonNullable<Awaited<ReturnType<typeof loadTurnHistory>>["partial"]>,
   resume: Awaited<ReturnType<typeof loadTurnHistory>>["resume"],
-  resumePlan: NonNullable<Awaited<ReturnType<typeof loadTurnHistory>>["resumePlan"]>,
 ): Promise<void> {
   const { deps, input, actor, conversation, scopeId, filterHistory } = ctx;
   const { session } = turn;
@@ -361,9 +360,6 @@ async function noteResume(
       ? `attempt ${input.attempt}; resuming partial turn at seq ${partial.userSeq} (${partial.workEntries} recorded entries)`
       : `attempt ${input.attempt}; re-running turn at seq ${partial.userSeq} (no recorded work to resume)`,
   });
-  console.error(
-    `[orchestrator] turn.resume attempt=${input.attempt} thread=${conversation.threadRef} userSeq=${partial.userSeq} workEntries=${partial.workEntries} strategy=${resumePlan.kind}`,
-  );
 }
 
 export function turnFailureUserItem(
