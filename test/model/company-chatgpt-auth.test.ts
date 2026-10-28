@@ -220,3 +220,25 @@ test("a corrupt auth file is reported with its path instead of read as absent", 
   assert.equal(await auth.accessToken(), undefined);
   assert.match(errors.mock.calls.map((call) => call.arguments.join(" ")).join("\n"), /\.codex\/auth\.json/);
 });
+
+test("a credential replaced during a refresh is kept instead of the refreshed one", async () => {
+  const state = keychainState(authJson("acct", STALE_EXP, "refresh-1"));
+  const replacement = authJson("acct", FRESH_EXP, "uploaded");
+  const auth = keychainCompanyChatGPTAuth({
+    keychain: fakeKeychain(state),
+    lock: serialLock(),
+    credentialId: "cred-1",
+    now: () => NOW,
+    refresh: async () => {
+      state.files = credFiles(replacement);
+      state.meta = { ...state.meta, fingerprint: "uploaded", updatedAt: 99 };
+      return {
+        accessToken: accessToken("acct", FRESH_EXP, "refreshed"),
+        idToken: idToken("acct"),
+        refreshToken: "refresh-2",
+      };
+    },
+  });
+  assert.equal(await auth.accessToken(), (replacement.tokens as Record<string, unknown>).access_token);
+  assert.equal(state.saves.length, 0);
+});
