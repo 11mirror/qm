@@ -38,6 +38,8 @@ Ring 0 is the exemplar: the code agents should imitate, kept as small, simple an
 - **Ring 1, hot but conditional:** code most turns reach depending on surface, tools or sandbox, listed in [`ring-1.txt`](../ring-1.txt): Slack, API, sandbox, credentials, tools, policy, memory, skills, surfaces, surface cache, jobs, cron, the plugin chassis, the migration definitions and boot. Gate: target zero; never more findings than the previous batch.
 - **Ring 2, everything else:** wiring, subagents, swarms, webhooks, triggers, monitors, processes, inbox, connectors, MCP, files, deploy, admin, plugins, CLI and the rest. Gate: the mechanical ratchets only (size, names, comments).
 
+One-shot tools do not live in the codebase in any ring: data imports, one-time sweeps and repair scripts that run once and are then dead. An agent writes one on demand when it is needed and does not commit it. Registered schema migrations are the exception.
+
 ## Wall of shame
 
 Patterns from this repo's history, with the PRs that introduced or removed them. Lenses marked _always reviewed_ get a reviewer on every PR; triage cannot mark them not relevant.
