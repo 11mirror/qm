@@ -206,3 +206,17 @@ test("instances sharing a lock rotate the refresh token once between them", asyn
   assert.deepEqual(calls, ["refresh-1"]);
   assert.equal(state.saves.length, 1);
 });
+
+test("a corrupt auth file is reported with its path instead of read as absent", async (t) => {
+  const state = keychainState(authJson("acct", FRESH_EXP));
+  state.files = [{ path: ".codex/auth.json", contentBase64: Buffer.from("{not json").toString("base64") }];
+  const errors = t.mock.method(console, "error", () => undefined);
+  const auth = keychainCompanyChatGPTAuth({
+    keychain: fakeKeychain(state),
+    lock: serialLock(),
+    credentialId: "cred-1",
+    now: () => NOW,
+  });
+  assert.equal(await auth.accessToken(), undefined);
+  assert.match(errors.mock.calls.map((call) => call.arguments.join(" ")).join("\n"), /\.codex\/auth\.json/);
+});

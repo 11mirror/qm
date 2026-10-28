@@ -1,6 +1,6 @@
 import type { CredentialFile, Keychain, KeychainCredentialMeta } from "../credentials/keychain.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { swallow } from "../util/errors.ts";
+import { reportFailure, swallow } from "../util/errors.ts";
 import {
   accessExpiresAt,
   asObject,
@@ -95,8 +95,8 @@ function authFromFiles(files: CredentialFile[]): { path: string; auth: JsonObjec
     try {
       const auth = chatgptAuthFromValue(JSON.parse(Buffer.from(file.contentBase64, "base64").toString("utf8")));
       if (auth) return { path: file.path, auth };
-    } catch {
-      continue;
+    } catch (error) {
+      reportFailure("model: company ChatGPT auth file is not valid JSON", error, file.path);
     }
   }
   return null;
