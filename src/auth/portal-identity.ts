@@ -1,31 +1,17 @@
-import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
+import { mintSignedPayload } from "./signed-token.ts";
 import { foreignTenant } from "../tenants/directory.ts";
+import {
+  verifyPortalIdentity as verifyClaims,
+  type PortalIdentity,
+} from "../../plugins/chassis/src/portal-identity.ts";
 
-export interface PortalIdentity {
-  p: string;
-  authenticatedAs?: string;
-  n?: string;
-  imp?: string;
-  t?: string;
-  exp: number;
-}
-
-export const PORTAL_IDENTITY_HEADER = "x-portal-identity";
+export { PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../../plugins/chassis/src/portal-identity.ts";
 
 export function mintPortalIdentity(claims: PortalIdentity, secret: string): Promise<string> {
   return mintSignedPayload(claims, secret);
 }
 
-export async function verifyPortalIdentity(
-  token: string,
-  secret: string,
-  nowMs: number,
-): Promise<PortalIdentity | null> {
-  const claims = (await verifySignedPayload(token, secret)) as PortalIdentity | null;
-  if (!claims || typeof claims.p !== "string" || !claims.p || typeof claims.exp !== "number") return null;
-  if (claims.authenticatedAs !== undefined && (typeof claims.authenticatedAs !== "string" || !claims.authenticatedAs))
-    return null;
-  if (nowMs > claims.exp) return null;
-  if (foreignTenant(claims.t, "portal identity")) return null;
-  return claims;
+export function verifyPortalIdentity(token: string, secret: string, nowMs: number): PortalIdentity | null {
+  const claims = verifyClaims(token, secret, nowMs);
+  return claims && !foreignTenant(claims.t, "portal identity") ? claims : null;
 }
