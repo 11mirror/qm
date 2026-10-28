@@ -402,6 +402,7 @@ export function mountLoadError(c: ChatCore, retry: () => void): void {
 export function clearLiveWork(c: ChatCore): void {
   if (c.state.liveWork?.goal) c.state.goal = c.state.liveWork.goal;
   c.state.liveWork = null;
+  c.resetLiveStep();
   c.state.pendingSend = null;
   syncWorkTicker(c);
 }

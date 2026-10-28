@@ -13,9 +13,17 @@ Visible English changes (old → new, #2730):
 - No passage action → `Ask about`; while opening → `Opening…` and accessible `Opening side chat`.
 - No anchor action → `Open side chat`, `Open side chat: {quote}`, and numbered `{n}. {title or Side chat}` choices.
 - No panel → `Side chat`; composer placeholder → `Ask about…` inside this panel only.
-- No panel controls → `Collapse side chat`, `Expand side chat`, `Close side chat`, tooltip `Close side chat · Esc`, `Remove excerpt`, `Open as conversation`, and `Dismiss error`.
+- No panel controls → `Collapse side chat`, `Expand side chat`, `Close side chat`, tooltip `Close side chat · Esc`, `Remove excerpt`, `Open as session`, and `Dismiss error`.
 - No side-chat failure text → `Could not load side chats.`, `Could not open side chat.`, `Could not start side chat.`, `Could not expand side chat.`, and `This message is still saving. Try again in a moment.`
 - No anchor validation error → `sideChat needs entrySeq, quote, and occurrence` and `sideChat needs a nonempty quote and an entrySeq inside the forked range`.
 - Ordinary first prompt → optional blockquoted selected passage followed by the raw draft, only on a side chat's first send. Failed-send restoration keeps the raw draft, not the prefixed text.
 
 Checks: root typecheck and web-ui source/server/test typechecks pass. Changed TypeScript eslint and code ratchets pass. Four targeted browser behavior tests pass (selection/reopen/expand, earlier inherited assistant reply, overlapping anchors and navigation, attachment retry). Root Postgres behavior tests added but not yet run; full suite deferred until the confirmed test box. Live browser smoke remains pending.
+
+## #2740 one live step
+
+Adapted to `live-work.ts` and split chat draw/mount modules, typed items and wrapped work-activity events. Keeps one live step line with icon and elapsed time; live folds start closed, remember manual opening, crossfade on step changes and do not animate when an unrelated finished head redraws. Step-less turns use one in-message Thinking line. #2718 and its revert #2739 are historical prerequisites superseded by this complete re-land, not separate implementations. No persistence/settings changes.
+
+Visible English changes (old → new, #2740): live `Working for {time}` → latest tool's existing activity/purpose label with elapsed time; step-less standalone `Thinking` → the same `Thinking` in the message; a current posting step → `Posting message`; an agent/session step → its existing session label and target. Existing finished, stopped and approval text remains unchanged.
+
+Checks: web-ui typecheck, changed-file eslint and two targeted browser behavior tests pass. Full suite and live smoke pending.

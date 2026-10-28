@@ -1,3 +1,4 @@
+import { preStepWork } from "./live-step";
 import { pinnedStrip } from "./pinned-strip";
 import { shouldShowWork } from "./live-work";
 import { type MessageFields } from "./message-rows";
@@ -172,8 +173,8 @@ export function drawActiveChat(c: ChatCore, agent = c.state.agent, opts: { force
       <div class="side-chat-layout" @keydown=${c.sideChats.onKeydown}>
         <div
           class="custom-chat-shell ${editingApp ? "app-edit-chat" : ""} ${c.ctx.pane ? "in-pane" : ""} ${c.ctx.composer.state.dragging ? "dragging" : ""} ${
-          emptyChat && !glanceTier && !editingApp ? "empty-chat" : ""
-        }"
+            emptyChat && !glanceTier && !editingApp ? "empty-chat" : ""
+          }"
           @dragenter=${(e: DragEvent) => c.ctx.composer.onDragEnter(e)}
           @dragover=${(e: DragEvent) => c.ctx.composer.onDragOver(e)}
           @dragleave=${(e: DragEvent) => c.ctx.composer.onDragLeave(e)}
@@ -558,10 +559,19 @@ export function chatMessage(
     const workText = isStreaming ? messageText(msg) : text;
     workView = c.workBlock(work, isStreaming, stoppedEarly ? "" : workText, msg.streamingBaseline ?? "");
   }
+  const preStep =
+    isStreaming &&
+    !showWork &&
+    c.runSlot.stopGeneration !== c.runSlot.generation &&
+    (c.state.liveWork ?? work) === work &&
+    preStepWork(work) &&
+    !text.trim();
+  if (preStep) workView = c.preStepHead(work);
   if (msg.stopReason === "aborted")
     workView = work ? c.workBlock(work, false, "", "", true) : html`<div class="stopped-head">You stopped</div>`;
   const hasVisibleContent =
     showWork ||
+    preStep ||
     steeringOnly.length > 0 ||
     Boolean(text) ||
     Boolean(msg.deliveredFiles?.length) ||

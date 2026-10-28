@@ -1,3 +1,6 @@
+import { createLiveStepLine, currentStep, preStepWork } from "./live-step";
+import { TOOL_META, UNKNOWN_TOOL } from "./tool-rows";
+import { toolCategory } from "./timeline";
 import { approvalMarker } from "./tool-rows";
 import { liveWorkSummary, timelineKey, usedToolsSuffix, workLabel } from "./work-summary";
 import { activityGroupSummary, activityGroups, thinkingPresentation } from "./activity-presentation";
@@ -48,11 +51,14 @@ interface LiveWorkDeps {
 
 class LiveWork {
   private liveWorkExpanded = false;
+  private liveFoldOpened = false;
+  private readonly liveStepLine;
   private readonly openThinking = new Set<string>();
   private readonly deps: LiveWorkDeps;
 
   constructor(deps: LiveWorkDeps) {
     this.deps = deps;
+    this.liveStepLine = createLiveStepLine(deps.drawActiveChat);
   }
 
   readonly liveWorkStatus = (agent: Agent): TemplateResult | typeof nothing => {
@@ -62,6 +68,8 @@ class LiveWork {
     const work = this.deps.chatState.liveWork ?? { status: "thinking", activity: [] };
     if (work.status !== "thinking" && work.status !== "working") return nothing;
     if (currentTextPhase(work)?.phase === "final_answer" || shouldShowWork(work, "")) return nothing;
+    const streaming = agent.state.streamingMessage as { work?: WorkBlock } | undefined;
+    if (streaming?.work === work && preStepWork(work)) return nothing;
     const summary = liveWorkSummary(work);
     const expandable = Boolean(summary?.detail);
     const expanded = expandable && this.liveWorkExpanded;
@@ -117,12 +125,20 @@ class LiveWork {
       const tail = active && last ? streamedAnswer(text, work) : "";
       const stopping = isStreaming && this.deps.runSlot.stopGeneration === this.deps.runSlot.generation;
       const animating = active && last && !stopping;
+      const oneStep = animating && !work.stale && !work.pendingApprovals?.length;
+      const step = oneStep
+        ? currentStep(timeline, work, (tool, payload) => TOOL_META[toolCategory(tool, payload)] ?? UNKNOWN_TOOL)
+        : null;
       let label = last ? workLabel(work) : "Worked";
+      if (step) label = step.label;
       if (stopping && last) label = "Stop requested";
       if (stopped && last) label = `You stopped after ${goalElapsedLabel(0, workSeconds(work) * 1000)}`;
+      const elapsed = step && workSeconds(work) > 0 ? goalElapsedLabel(0, workSeconds(work) * 1000) : "";
+      if (last) this.liveStepLine.track(step);
       if (
         timeline.length === 1 &&
         !tail.trim() &&
+        !oneStep &&
         !(last && (stopped || stopping || work.stale || work.pendingApprovals?.length))
       )
         return html`${this.renderTimelineItem(timeline[0]!, work)}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
@@ -130,10 +146,13 @@ class LiveWork {
         timeline.length || tail.trim() || (last && (active || work.pendingApprovals?.length))
           ? html`<details
               class=${stopped && last ? "stopped-work" : `work work-fold work-${work.status}`}
-              ?open=${last && (active || !!work.pendingApprovals?.length)}
+              ?open=${last && (oneStep ? this.liveFoldOpened : active || !!work.pendingApprovals?.length)}
+              @toggle=${(event: Event) => {
+                if (oneStep) this.liveFoldOpened = (event.currentTarget as HTMLDetailsElement).open;
+              }}
             >
               <summary class=${stopped && last ? "stopped-head" : "work-head"}>
-                ${sheenLabel(label, animating)}<span class="activity-chevron">${icon(ChevronRight, 14)}</span>
+                ${this.liveStepLine.line(step && last ? step : null, label, animating, elapsed)}
               </summary>
               ${stopped && last ? nothing : html`<div class="work-divider"></div>`}
               <div class="work-rows">
@@ -234,6 +253,22 @@ class LiveWork {
     return this.deps.toolRow(item.row, work, status, stale);
   };
 
+  readonly preStepHead = (work: WorkBlock): TemplateResult => {
+    const step = { icon: Brain, label: "Thinking" };
+    this.liveStepLine.track(step);
+    const secs = workSeconds(work);
+    return html`<details class="work work-fold work-${work.status} work-prestep">
+      <summary class="work-head">
+        ${this.liveStepLine.line(step, step.label, true, secs > 0 ? goalElapsedLabel(0, secs * 1000) : "")}
+      </summary>
+    </details>`;
+  };
+
+  readonly resetLiveStep = () => {
+    this.liveFoldOpened = false;
+    this.liveStepLine.reset();
+  };
+
   readonly resetThinking = () => this.openThinking.clear();
 }
 
@@ -241,6 +276,8 @@ export function createLiveWork(deps: LiveWorkDeps) {
   const w = new LiveWork(deps);
   return {
     liveWorkStatus: w.liveWorkStatus,
+    preStepHead: w.preStepHead,
+    resetLiveStep: w.resetLiveStep,
     workBlock: w.workBlock,
     waitingSteerRows: w.waitingSteerRows,
     renderTimelineItem: w.renderTimelineItem,
