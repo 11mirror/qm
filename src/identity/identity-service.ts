@@ -5,11 +5,6 @@ import { canonicalPerson, foldPrincipalId, personIds, personKey } from "../direc
 import { externalMemberActive, type ExternalMember } from "./external-members.ts";
 import { perTenant } from "../tenant.ts";
 
-interface IdentityProvider {
-  resolve(actor: ActorAssertion): Principal;
-  classify(externalId: string, isExternalGuest?: boolean): Principal;
-}
-
 type DeactivationSource = "manual" | "directory-sync";
 
 interface DeactivationRecord {
@@ -23,7 +18,9 @@ interface DirectorySyncOutcome {
   reactivated: string[];
 }
 
-export interface IdentityService extends IdentityProvider {
+export interface IdentityService {
+  resolve(actor: ActorAssertion): Principal;
+  classify(externalId: string, isExternalGuest?: boolean): Principal;
   isInternal(p: Principal): boolean;
   audienceIsAllInternal(audience: Principal[]): boolean;
   deactivate(externalId: string, source?: DeactivationSource): Promise<void>;
@@ -68,7 +65,7 @@ export function createIdentityService(
   databaseUrl: string,
   opts: {
     directorySyncProtected?: () => readonly string[] | undefined;
-    principalLinks?: { refresh(force?: boolean): Promise<void> };
+    principalLinks?: { refresh(): Promise<void> };
   } = {},
 ): IdentityService {
   const db = createPgPool(databaseUrl, [DEACTIVATED_PRINCIPALS_MIGRATION, EXTERNAL_MEMBERS_MIGRATION]);
@@ -90,7 +87,7 @@ export function createIdentityService(
 
   async function load(overwrite: boolean): Promise<void> {
     const { deactivated, externals } = state();
-    await opts.principalLinks?.refresh(true);
+    await opts.principalLinks?.refresh();
     const [storedDeactivations, storedMembers] = await Promise.all([deactivations.all(), members.all()]);
     if (overwrite) {
       deactivated.clear();

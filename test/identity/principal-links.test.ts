@@ -109,14 +109,14 @@ describe("principal link service: one person, several sign-ins", () => {
   it("reads links written by another process on refresh", async () => {
     const databaseUrl = testDatabaseUrl();
     const links = createPrincipalLinkService(databaseUrl, testAdvisoryLock());
-    await links.refresh(true);
+    await links.refresh();
     assert.equal(links.canonical(OIDC), undefined);
     await createPgPool(databaseUrl).q(
       `INSERT INTO principal_links (id, principal_id, canonical_id, evidence, linked_by, created_at)
        VALUES ($1, $1, $2, $3, 'ops', 1)`,
       [OIDC, EMAIL, EVIDENCE],
     );
-    await links.refresh(true);
+    await links.refresh();
     assert.equal(links.canonical(OIDC), EMAIL);
   });
 });
@@ -451,7 +451,7 @@ describe("link mutation serialization", () => {
       }
       return result;
     }) as typeof pool.query;
-    const pending = a.refresh(true);
+    const pending = a.refresh();
     await started.promise;
     await b.link({ principalId: "B", canonicalId: "C", evidence: "qa", linkedBy: "qa" });
     const result = a.link({ principalId: "A", canonicalId: "B", evidence: "qa", linkedBy: "qa" });
