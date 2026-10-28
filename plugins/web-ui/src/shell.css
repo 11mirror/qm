@@ -1,4 +1,5 @@
 @import "@earendil-works/pi-web-ui/app.css";
+@import "katex/dist/katex.min.css";
 @import "./styles/foundation.css";
 @import "./styles/foundation-settings.css";
 @import "./styles/transcript-sessions.css";
@@ -17,3 +18,7 @@
 @import "./styles/mobile.css";
 @import "./styles/surfaces-connections.css";
 @import "./styles/surfaces-panels.css";
+
+.katex-display {
+  margin: 0;
+}
