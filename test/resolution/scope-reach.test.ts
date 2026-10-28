@@ -379,14 +379,15 @@ test("roster: omitted when the actor shares no reachable channels", async () => 
   assert.ok(!res.reply!.includes("Other computers you can reach"));
 });
 
-test("roster: lists shared rooms and caps at 30 with a '…and N more' marker", async () => {
+test("roster: lists shared rooms within the inventory budget with a '…and N more' marker", async () => {
   const built = freshApp({ reachExecEnabled: true });
   await built.directory.replaceChannels(
-    Array.from({ length: 31 }, (_, i) => ({ channelId: `C${i}`, name: `room-${String(i).padStart(2, "0")}` })),
+    Array.from({ length: 5000 }, (_, i) => ({ channelId: `C${i}`, name: `room-${String(i).padStart(4, "0")}` })),
   );
   const res = await built.app.turn(dm("!sysprompt"));
   assert.ok(res.reply!.includes("Other computers you can reach"));
-  assert.match(res.reply!, /…and 1 more — name one to check/);
+  assert.match(res.reply!, /#room-0000, #room-0001\b/);
+  assert.match(res.reply!, /…and \d+ more — name one to check/);
 });
 
 test("roster: the directory read is cached per instance across turns (off the hot path)", async () => {

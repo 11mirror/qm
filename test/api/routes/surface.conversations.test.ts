@@ -15,10 +15,10 @@ import { testDatabaseUrl } from "../../support/test-database.ts";
 
 const SECRET = "agent-conversations-secret".repeat(2);
 
-function dm(externalId: string, text: string, thread: string): TurnRequest {
+function dm(externalId: string, text: string, thread: string, surface = "test"): TurnRequest {
   return {
     origin: { kind: "direct" },
-    surface: "test",
+    surface,
     actor: { externalId },
     conversation: { kind: "dm", threadRef: thread },
     text,
@@ -58,7 +58,7 @@ before(async () => {
   });
   await new Promise<void>((resolve) => server.listen(0, resolve));
   base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  mineId = (await built.app.turn(dm("U1", "plan the launch", "web:U1:c1"))).sessionId!;
+  mineId = (await built.app.turn(dm("U1", "plan the launch", "web:U1:c1", "web"))).sessionId!;
   theirsId = (await built.app.turn(dm("U2", "someone else's chat", "web:U2:c1"))).sessionId!;
 });
 
