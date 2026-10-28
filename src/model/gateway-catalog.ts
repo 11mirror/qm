@@ -129,7 +129,6 @@ export function createGatewayCatalog(
   const baseUrl = `${root}/v1`;
   let routes: Readonly<Record<string, string>> = { ...config.models };
   let discovered = false;
-  let expiresAt = 0;
   let retryAt = 0;
   let lastSuccessAt = 0;
   let inFlight: Promise<void> | undefined;
@@ -170,8 +169,7 @@ export function createGatewayCatalog(
         }
         routes = next;
         discovered = true;
-        expiresAt = now() + TTL_MS;
-        retryAt = expiresAt;
+        retryAt = now() + TTL_MS;
         lastSuccessAt = now();
         const offeredAliases = new Set(selectableBaseModels().map(({ id }) => id));
         setGatewayModels(
@@ -190,7 +188,6 @@ export function createGatewayCatalog(
         }
         if (discovered || Object.keys(config.models).length === 0) {
           routes = {};
-          expiresAt = 0;
           setGatewayModels([]);
           console.warn(`[model] Gateway model discovery unavailable; retrying in 30 seconds: ${errMessage(error)}`);
         }
