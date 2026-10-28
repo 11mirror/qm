@@ -42,8 +42,9 @@ export function turnStartState(turn: {
 
 function cutMiddle(text: string, room: number): string {
   if (text.length <= room) return text;
-  const marker = `\n[${text.length - room} characters cut]\n`;
-  const keep = Math.max(0, room - marker.length);
+  const width = `\n[${text.length} characters cut]\n`.length;
+  const keep = Math.max(0, room - width);
+  const marker = `\n[${text.length - keep} characters cut]\n`;
   return headSlice(text, Math.ceil(keep / 2)) + marker + tailSlice(text, Math.floor(keep / 2));
 }
 

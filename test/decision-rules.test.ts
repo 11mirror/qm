@@ -515,6 +515,10 @@ test("however long one part is, the reply check still sees the instructions, the
 
   const longInstructions = await seen({ guidance: "rule ".repeat(2_000) + guidance, input, reply });
   assert.ok(longInstructions.includes(input) && longInstructions.includes(reply));
+
+  const roomyDraft = reply + " word".repeat(1_400);
+  const unused = await seen({ guidance, input, reply: roomyDraft });
+  assert.ok(unused.includes(roomyDraft));
 });
 
 test("with several enforcing reply rules, any one asking for a rewrite wins over the rest", async () => {
