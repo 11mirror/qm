@@ -26,7 +26,6 @@ export function contextSummaryItem(throughSeq: number, text: string): NewItem<"C
 
 interface ContextWindow {
   items: Item[];
-  totalItems: number;
 }
 
 export interface Lease {

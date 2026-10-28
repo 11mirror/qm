@@ -253,23 +253,18 @@ export function sessionItemMethods(ctx: SessionStoreCtx) {
     },
 
     async getContextWindow(sessionId) {
-      const [meta, summary] = await Promise.all([
-        q(`SELECT count(*)::int AS total FROM items i WHERE i.tenant_id = ${TENANT} AND i.session_id = $1`, [
-          sessionId,
-        ]),
-        q(
-          `SELECT through_seq AS through FROM items
-            WHERE tenant_id = ${TENANT} AND session_id = $1 AND kind = 'ContextCompaction'
-              AND through_seq IS NOT NULL AND text IS NOT NULL ORDER BY seq DESC LIMIT 1`,
-          [sessionId],
-        ),
-      ]);
+      const summary = await q(
+        `SELECT through_seq AS through FROM items
+          WHERE tenant_id = ${TENANT} AND session_id = $1 AND kind = 'ContextCompaction'
+            AND through_seq IS NOT NULL AND text IS NOT NULL ORDER BY seq DESC LIMIT 1`,
+        [sessionId],
+      );
       const sinceSeq = summary[0]?.through == null ? 0 : Number(summary[0].through) + 1;
       const rows = await q(
         `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM} WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= $2 ORDER BY i.seq`,
         [sessionId, sinceSeq],
       );
-      return { items: rows.map(rowToItem), totalItems: Number(meta[0]?.total ?? 0) };
+      return { items: rows.map(rowToItem) };
     },
 
     async getItem(sessionId, seq): Promise<Item | undefined> {
