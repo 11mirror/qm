@@ -410,7 +410,6 @@ test("Haiku 5.5 offers every effort, keeps thinking off available, rejects tempe
     "high",
     "xhigh",
     "max",
-    "ultracode",
   ]);
   assert.ok(defaultWebuiModelIds().includes(id));
   assert.ok(!FAST_MODE_MODEL_IDS.includes(id));

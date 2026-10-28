@@ -1,3 +1,4 @@
+import { EFFORT_MIGRATION } from "../model/effort-migration.ts";
 import { CHANNEL_ORDERS_MIGRATION } from "../surface-cache/channel-orders-migration.ts";
 import type { StoresModule } from "./stores.ts";
 import { LOOPS_TO_CRONS_MIGRATION } from "../cron/migrations.ts";
@@ -10,6 +11,7 @@ export function registerUpgradeMigrations(deps: UpgradeMigrationsInputs) {
   const { pgPool } = deps.stores;
 
   pgPool.registerMigration(CHANNEL_ORDERS_MIGRATION);
+  pgPool.registerMigration(EFFORT_MIGRATION);
   pgPool.registerMigration(LOOPS_TO_CRONS_MIGRATION);
   pgPool.registerMigration(INBOX_ITEM_SOURCE_MIGRATION);
   pgPool.registerMigration(inboxConversationKeyMigration());

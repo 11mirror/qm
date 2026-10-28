@@ -119,7 +119,7 @@ test("adding at capacity preserves the newly selected model and never duplicates
 test("effort choices without model metadata exclude provider-native settings and label extra high clearly", () => {
   assert.deepEqual(
     effortLevelsForModel().map(({ value }) => value),
-    ["auto", "low", "medium", "high", "xhigh", "max", "ultracode"],
+    ["auto", "low", "medium", "high", "xhigh", "max"],
   );
   assert.equal(effortLevelsForModel().find(({ value }) => value === "xhigh")?.label, "Extra high");
 });

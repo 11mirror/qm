@@ -137,7 +137,7 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
           "auto",
           "adaptive",
           "low",
-          ...(mandatoryThinking ? ["xhigh", "max", "ultracode", "medium"] : []),
+          ...(mandatoryThinking ? ["xhigh", "max", "medium"] : []),
         ]) {
           sendTool = true;
           const result = await harness.turns.runTurn({
@@ -168,11 +168,7 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
           assert.equal(request.body.max_tokens, getRequiredModel(modelId).maxTokens);
           if (effortLevel === "adaptive" || effortLevel === "default")
             assert.equal(request.body.output_config?.effort, undefined);
-          else
-            assert.equal(
-              request.body.output_config?.effort,
-              { auto: "low", ultracode: "max" }[effortLevel] ?? effortLevel,
-            );
+          else assert.equal(request.body.output_config?.effort, { auto: "low" }[effortLevel] ?? effortLevel);
           if (effortLevel === "default" && (route === "gateway" || !mandatoryThinking))
             assert.equal(request.body.thinking, undefined);
           else assert.equal(request.body.thinking?.type, "adaptive");

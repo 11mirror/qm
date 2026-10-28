@@ -35,21 +35,18 @@ test("confetti celebrates only the highest supported effort and respects reduced
       await new Promise((resolve) => setTimeout(resolve, 0));
       assert.equal(dom.window.document.querySelector(".effort-confetti"), null);
     };
-    for (const level of ["high", "auto", "ultracode"]) {
+    for (const level of ["high", "auto", "max"]) {
       selectedLevel = level;
       button.click();
-      assert.equal(
-        dom.window.document.querySelectorAll(".effort-confetti > span").length,
-        level === "ultracode" ? 14 : 0,
-      );
+      assert.equal(dom.window.document.querySelectorAll(".effort-confetti > span").length, level === "max" ? 14 : 0);
       await finishBurst();
     }
-    for (const level of ["auto", "max"]) {
+    for (const level of ["auto", "xhigh"]) {
       selectedLevel = level;
       button.click();
       assert.equal(dom.window.document.querySelector(".effort-confetti"), null);
     }
-    selectedLevel = "ultracode";
+    selectedLevel = "max";
     reducedMotion = true;
     button.click();
     assert.equal(dom.window.document.querySelector(".effort-confetti"), null);

@@ -271,7 +271,6 @@ for (const [modelId, upper, allowed, off, minimal] of [
     });
     // Repeat turns in the same conversation with different effort selections.
     for (const [effortLevel, expected] of [
-      ["ultracode", upper],
       ["max", upper],
       ["medium", "medium"],
       ["low", "low"],

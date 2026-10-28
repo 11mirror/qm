@@ -25,17 +25,7 @@ export function codexSubscriptionModelId(id: string): string {
 export function codexProviderModelId(id: string): string {
   return id.startsWith(CODEX_SUBSCRIPTION_PREFIX) ? id.slice(CODEX_SUBSCRIPTION_PREFIX.length) : id;
 }
-export const THINKING_LEVELS = [
-  "auto",
-  "default",
-  "adaptive",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-  "ultracode",
-] as const;
+export const THINKING_LEVELS = ["auto", "default", "adaptive", "low", "medium", "high", "xhigh", "max"] as const;
 
 export function modelSupportsAdaptiveThinking(model: Pick<Model<Api>, "api" | "reasoning" | "compat">): boolean {
   return (

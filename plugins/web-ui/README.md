@@ -160,7 +160,7 @@ the CSS media queries, the composer, and the split canvas.
 - **Custom chat UI** — a first-party conversation surface with a left history rail, centered
   transcript, bottom composer, inline **model selector** (the models core reports as
   serviceable),
-  explicit **effort selector** (`low|medium|high|xhigh|max|ultracode|auto`), **Fast mode**
+  explicit **effort selector** (`low|medium|high|xhigh|max|auto`), **Fast mode**
   toggle, attachments, streaming partials, and a theme picker. Settings → Theme takes
   light, dark, or system, kept per browser.
   The UI drives Pi's `Agent` with a custom `streamFn` (`src/core-bridge.ts`) instead of

@@ -54,7 +54,6 @@ const TURN_EFFORT_LEVELS = new Set<string>([
   "high",
   "xhigh",
   "max",
-  "ultracode",
   "auto",
   "default",
   "adaptive",
@@ -411,8 +410,7 @@ export function applyTurnEffort(session: AgentSession, level?: string): void {
   const effectiveLevel =
     level === "auto" && session.state.model ? defaultInteractiveThinkingLevel(session.state.model) : level;
   const normalizedLevel = effectiveLevel === "auto" ? "medium" : effectiveLevel;
-  const providerLevel = normalizedLevel === "ultracode" ? "max" : normalizedLevel;
-  session.setThinkingLevel(providerLevel as ModelThinkingLevel);
+  session.setThinkingLevel(normalizedLevel as ModelThinkingLevel);
 }
 
 export function applyReasoningMode<T>(payload: T, model: Model<Api>, level?: string): T {
