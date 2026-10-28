@@ -6,9 +6,11 @@ import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import type { DecisionRule } from "../src/decisions/decisions.ts";
 import type { DecisionStore } from "../src/decisions/store.ts";
+import { scopeId } from "../src/types.ts";
 
 const REVISE_MESSAGE = "You used a table the user did not ask for.";
 const FIRST_DRAFT = "You said: summarise the options";
+const GUIDANCE = "Never use a table unless the person asked for one.";
 
 const draftText = (entry: { payload: unknown }): string => String((entry.payload as { text?: unknown }).text ?? "");
 
@@ -49,6 +51,7 @@ async function runTurn(options: { mode: DecisionRule["mode"]; threadRef: string;
       },
     },
   });
+  await built.config.setSoul(scopeId("personal", "U1"), GUIDANCE);
   built.runtime.start();
   try {
     const request: TurnRequest = {
@@ -93,6 +96,8 @@ test("an enforcing turn_end rule holds the draft back and delivers the rewrite",
   assert.match(states[0]!, /Draft reply, written but not yet delivered:/);
   assert.ok(states[0]!.includes(FIRST_DRAFT));
   assert.match(states[0]!, /revision attempt: 1 of 2/);
+  assert.ok(states[0]!.includes(GUIDANCE));
+  assert.match(states[0]!, /Standing instructions this conversation's replies must follow:/);
   assert.match(states[1]!, /revision attempt: 2 of 2/);
 });
 

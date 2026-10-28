@@ -38,12 +38,6 @@ export function turnStartState(turn: {
   ].join("\n");
 }
 
-const GUIDANCE_CHARS = 3_000;
-const MESSAGE_CHARS = 1_500;
-const REPLY_CHARS = 3_000;
-
-const section = (heading: string, body: string, limit: number): string => `${heading}\n${body.trim().slice(0, limit)}`;
-
 export function turnEndState(turn: {
   surfaceName?: string;
   scopeLabel: string;
@@ -60,13 +54,15 @@ export function turnEndState(turn: {
     `- scope: ${turn.scopeLabel.split(":")[0]}`,
     `- revision attempt: ${turn.attempt} of ${turn.attempts}`,
     "",
+    "Draft reply, written but not yet delivered:",
+    turn.reply.trim(),
+    "",
+    "Latest message:",
+    turn.input.trim(),
+    "",
     guidance
-      ? section("Standing instructions this conversation's replies must follow:", guidance, GUIDANCE_CHARS)
+      ? `Standing instructions this conversation's replies must follow:\n${guidance}`
       : "This conversation has no standing instructions of its own.",
-    "",
-    section("Latest message:", turn.input, MESSAGE_CHARS),
-    "",
-    section("Draft reply, written but not yet delivered:", turn.reply, REPLY_CHARS),
   ].join("\n");
 }
 

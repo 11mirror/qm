@@ -3228,6 +3228,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             heldChars: () => held.length,
           };
         })();
+        const conversationGuidance = deps.config?.getSoul(scopeId) ?? undefined;
         let revisionNote: string | undefined;
         let revisions = 0;
         const reviewReply = async (entry: NewEntry): Promise<NewEntry> => {
@@ -3240,7 +3241,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               turnEndState({
                 ...(input.surface ? { surfaceName: input.surface } : {}),
                 scopeLabel: scopeId,
-                guidance: resolution.systemPrompt,
+                ...(conversationGuidance ? { guidance: conversationGuidance } : {}),
                 input: baseText,
                 reply: text,
                 attempt: revisions + 1,
