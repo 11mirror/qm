@@ -153,13 +153,13 @@ export function sanitizeLlmPayload(
   return withTransport({ envelope: redacted, truncated: false });
 }
 
-export function textFromContent(content: unknown): string {
+export function textFromContent(content: unknown, separator = ""): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content
     .filter((c) => c && typeof c === "object" && (c as { type?: unknown }).type === "text")
     .map((c) => (typeof (c as { text?: unknown }).text === "string" ? (c as { text: string }).text : ""))
-    .join("");
+    .join(separator);
 }
 
 export const OUTPUT_BUDGET_FLOOR_TOKENS = 1_024;

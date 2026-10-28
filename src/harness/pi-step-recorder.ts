@@ -11,6 +11,7 @@ import {
   type ToolResultWire,
 } from "./replay.ts";
 import { errMessage } from "../util/errors.ts";
+import { textFromContent } from "./pi-payload.ts";
 
 type Persist = (write: () => Promise<unknown>) => void;
 type Positioned = { index: number; block: TextContent };
@@ -73,10 +74,6 @@ function toolResultWire(
   return { wire: { ...(sameError ? {} : { isError }), ...(sameContent ? {} : { content: stored }) } };
 }
 
-function resultText(content: ToolResultMessage["content"]): string {
-  return content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
-}
-
 export type StepRecorder = ReturnType<typeof createStepRecorder>;
 
 export function createStepRecorder(turn: Pick<HarnessTurnInput, "emit" | "shutdown">, persist: Persist) {
@@ -113,7 +110,7 @@ export function createStepRecorder(turn: Pick<HarnessTurnInput, "emit" | "shutdo
       tool: call.block.name,
       callId,
       isError,
-      text: resultText(content),
+      text: textFromContent(content, "\n"),
     };
     write({ ...result, body: { ...result.body, ...toolResultWire(result, content, isError) } });
   };

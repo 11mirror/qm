@@ -20,6 +20,7 @@ import { type Static, type TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { providerTurnError } from "./provider-error.ts";
+import { textFromContent } from "./pi-payload.ts";
 import { swallow } from "../util/errors.ts";
 import {
   DEFAULT_AGENT_MODEL_ID,
@@ -250,10 +251,7 @@ function userContext(systemPrompt: string, prompt: string): Context {
 }
 
 function messageText(message: AssistantMessage): string {
-  return message.content
-    .flatMap((block) => (block.type === "text" ? [block.text] : []))
-    .join("")
-    .trim();
+  return textFromContent(message.content).trim();
 }
 
 export async function complete(
