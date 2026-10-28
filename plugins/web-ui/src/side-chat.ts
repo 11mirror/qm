@@ -433,151 +433,151 @@ class SideChatController {
       ? html`<div
           class="side-chat-markers ${matches.some((chat) => this.choices.has(chat.id)) ? "choosing" : ""}"
           ${ref((element) => {
-              if (!element) return;
-              const host = element as HTMLElement;
-              queueMicrotask(() => {
-                for (const key of this.anchors.keys()) {
-                  if (key.isConnected) continue;
-                  this.highlightResize?.unobserve(key);
-                  const previous = this.observedRows.get(key);
-                  if (previous) this.highlightResize?.unobserve(previous);
-                  this.observedRows.delete(key);
-                  this.anchors.delete(key);
-                }
-                if (!host.isConnected) return;
-                const row = host.previousElementSibling;
-                this.anchors.set(
-                  host,
-                  row
-                    ? matches.flatMap((session) => {
-                        const range = passageRange(row, session.sideChat!.quote, session.sideChat!.occurrence);
-                        return range ? [{ session, range }] : [];
-                      })
-                    : [],
-                );
-                this.highlightResize?.observe(host);
-                if (row) {
-                  this.observedRows.set(host, row as HTMLElement);
-                  this.highlightResize?.observe(row);
-                }
-                this.paintHighlights();
-              });
-            })}
+            if (!element) return;
+            const host = element as HTMLElement;
+            queueMicrotask(() => {
+              for (const key of this.anchors.keys()) {
+                if (key.isConnected) continue;
+                this.highlightResize?.unobserve(key);
+                const previous = this.observedRows.get(key);
+                if (previous) this.highlightResize?.unobserve(previous);
+                this.observedRows.delete(key);
+                this.anchors.delete(key);
+              }
+              if (!host.isConnected) return;
+              const row = host.previousElementSibling;
+              this.anchors.set(
+                host,
+                row
+                  ? matches.flatMap((session) => {
+                      const range = passageRange(row, session.sideChat!.quote, session.sideChat!.occurrence);
+                      return range ? [{ session, range }] : [];
+                    })
+                  : [],
+              );
+              this.highlightResize?.observe(host);
+              if (row) {
+                this.observedRows.set(host, row as HTMLElement);
+                this.highlightResize?.observe(row);
+              }
+              this.paintHighlights();
+            });
+          })}
         >
           ${matches.map(
-              (chat, index) =>
-                html`<button
-                  class="side-chat-marker ${this.choices.has(chat.id) ? "choice" : ""}"
-                  type="button"
-                  aria-expanded=${this.active?.id === chat.id}
-                  aria-controls=${this.active?.id === chat.id ? this.panelId : nothing}
-                  aria-label=${`Open side chat: ${chat.sideChat!.quote}`}
-                  @click=${(event: MouseEvent) => {
-                    this.returnFocus = event.currentTarget as HTMLElement;
-                    void this.show(chat);
-                  }}
-                  ${tip(chat.sideChat!.quote)}
+            (chat, index) =>
+              html`<button
+                class="side-chat-marker ${this.choices.has(chat.id) ? "choice" : ""}"
+                type="button"
+                aria-expanded=${this.active?.id === chat.id}
+                aria-controls=${this.active?.id === chat.id ? this.panelId : nothing}
+                aria-label=${`Open side chat: ${chat.sideChat!.quote}`}
+                @click=${(event: MouseEvent) => {
+                  this.returnFocus = event.currentTarget as HTMLElement;
+                  void this.show(chat);
+                }}
+                ${tip(chat.sideChat!.quote)}
+              >
+                ${icon(MessageSquare, 14)}
+                <span
+                  >${this.choices.has(chat.id) ? `${index + 1}. ${chat.title || "Side chat"}` : "Open side chat"}</span
                 >
-                  ${icon(MessageSquare, 14)}
-                  <span
-                    >${this.choices.has(chat.id) ? `${index + 1}. ${chat.title || "Side chat"}` : "Open side chat"}</span
-                  >
-                  ${chat.sideChat!.expanded ? icon(ArrowUpRight, 13) : nothing}
-                </button>`,
-            )}
+                ${chat.sideChat!.expanded ? icon(ArrowUpRight, 13) : nothing}
+              </button>`,
+          )}
         </div>`
       : nothing;
   };
   view = () => {
     return html`${this.selected ? html`<button class="side-chat-discuss" type="button" style=${`left:${this.selected.left}px;top:${this.selected.top}px`} @mousedown=${(event: MouseEvent) => event.preventDefault()} @click=${() => void this.discuss()} ?disabled=${this.busy} aria-busy=${this.busy}>${this.busy ? waveLoader({ width: 14, height: 14, label: "Opening side chat" }) : icon(MessageSquare, 15)} <span>${this.busy ? "Opening…" : "Ask about"}</span></button>` : nothing}
     ${
-        this.error
-          ? html`<div class="side-chat-error" role="alert">
-              ${this.error}<button
+      this.error
+        ? html`<div class="side-chat-error" role="alert">
+            ${this.error}<button
+              @click=${() => {
+                this.error = "";
+                this.redraw();
+              }}
+              aria-label="Dismiss error"
+            >
+              ${icon(X, 14)}
+            </button>
+          </div>`
+        : nothing
+    }
+    ${
+      this.active
+        ? html`<aside
+            class="side-chat-panel ${this.maximized ? "maximized" : ""}"
+            style=${`--side-chat-left:${this.cardLeft}px;--side-chat-top:${this.cardTop}px`}
+            id=${this.panelId}
+            aria-label="Side chat"
+            @keydown=${this.panelKeydown}
+          >
+            <header
+              class="side-chat-header"
+              @pointerdown=${this.startDrag}
+              @pointermove=${this.moveDrag}
+              @pointerup=${this.endDrag}
+              @pointercancel=${this.endDrag}
+              @lostpointercapture=${this.endDrag}
+            >
+              <button
+                class="icon-btn subtle compact"
+                aria-label=${this.maximized ? "Collapse side chat" : "Expand side chat"}
                 @click=${() => {
-                  this.error = "";
+                  this.maximized = !this.maximized;
                   this.redraw();
                 }}
-                aria-label="Dismiss error"
               >
-                ${icon(X, 14)}
+                ${icon(this.maximized ? Minimize2 : Maximize2, 15)}
               </button>
-            </div>`
-          : nothing
-      }
-    ${
-        this.active
-          ? html`<aside
-              class="side-chat-panel ${this.maximized ? "maximized" : ""}"
-              style=${`--side-chat-left:${this.cardLeft}px;--side-chat-top:${this.cardTop}px`}
-              id=${this.panelId}
-              aria-label="Side chat"
-              @keydown=${this.panelKeydown}
-            >
-              <header
-                class="side-chat-header"
-                @pointerdown=${this.startDrag}
-                @pointermove=${this.moveDrag}
-                @pointerup=${this.endDrag}
-                @pointercancel=${this.endDrag}
-                @lostpointercapture=${this.endDrag}
+              <button
+                class="icon-btn subtle compact"
+                type="button"
+                @click=${() => void this.expand()}
+                ?disabled=${this.busy}
+                aria-busy=${this.busy}
+                aria-label="Open as session"
+                ${tip("Open as session")}
               >
-                <button
-                  class="icon-btn subtle compact"
-                  aria-label=${this.maximized ? "Collapse side chat" : "Expand side chat"}
-                  @click=${() => {
-                    this.maximized = !this.maximized;
-                    this.redraw();
-                  }}
-                >
-                  ${icon(this.maximized ? Minimize2 : Maximize2, 15)}
-                </button>
-                <button
-                  class="icon-btn subtle compact"
-                  type="button"
-                  @click=${() => void this.expand()}
-                  ?disabled=${this.busy}
-                  aria-busy=${this.busy}
-                  aria-label="Open as session"
-                  ${tip("Open as session")}
-                >
-                  ${icon(ArrowUpRight, 15)}
-                </button>
-                <button
-                  class="icon-btn subtle compact"
-                  type="button"
-                  aria-label="Close side chat"
-                  @click=${this.dismiss}
-                  ${tip("Close side chat · Esc")}
-                >
-                  ${icon(X, 17)}
-                </button>
-              </header>
-              ${
-                this.maximized && this.includeExcerpt && this.active.sideChat?.quote
-                  ? html`<div class="side-chat-excerpt">
-                      <span>${this.active.sideChat.quote}</span
-                      ><button
-                        class="icon-btn"
-                        aria-label="Remove excerpt"
-                        @click=${() => {
-                          this.includeExcerpt = false;
-                          this.redraw();
-                        }}
-                      >
-                        ${icon(X, 12)}
-                      </button>
-                    </div>`
-                  : nothing
-              }
-              <div
-                class="side-chat-conversation"
-                ${ref((element) => {
-                  this.panel = element as HTMLElement | null;
-                })}
-              ></div>
-            </aside>`
-          : nothing
-      }`;
+                ${icon(ArrowUpRight, 15)}
+              </button>
+              <button
+                class="icon-btn subtle compact"
+                type="button"
+                aria-label="Close side chat"
+                @click=${this.dismiss}
+                ${tip("Close side chat · Esc")}
+              >
+                ${icon(X, 17)}
+              </button>
+            </header>
+            ${
+              this.maximized && this.includeExcerpt && this.active.sideChat?.quote
+                ? html`<div class="side-chat-excerpt">
+                    <span>${this.active.sideChat.quote}</span
+                    ><button
+                      class="icon-btn"
+                      aria-label="Remove excerpt"
+                      @click=${() => {
+                        this.includeExcerpt = false;
+                        this.redraw();
+                      }}
+                    >
+                      ${icon(X, 12)}
+                    </button>
+                  </div>`
+                : nothing
+            }
+            <div
+              class="side-chat-conversation"
+              ${ref((element) => {
+                this.panel = element as HTMLElement | null;
+              })}
+            ></div>
+          </aside>`
+        : nothing
+    }`;
   };
 }

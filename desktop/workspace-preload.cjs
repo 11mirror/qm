@@ -9,6 +9,11 @@ contextBridge.exposeInMainWorld("qmDesktop", {
   },
 });
 
+function dispatchNewSession() {
+  if (document.querySelector('dialog[open], [aria-modal="true"]:not(.sidebar)')) return;
+  window.dispatchEvent(new CustomEvent("qm:new-session"));
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   const root = document.documentElement;
   const mac = process.platform === "darwin";
@@ -115,10 +120,7 @@ window.addEventListener("DOMContentLoaded", () => {
     if (document.querySelector('dialog[open], [aria-modal="true"]:not(.sidebar)')) return;
     window.dispatchEvent(new CustomEvent("qm:cycle-tab", { detail: step }));
   });
-  ipcRenderer.on("qm:new-session", () => {
-    if (document.querySelector('dialog[open], [aria-modal="true"]:not(.sidebar)')) return;
-    window.dispatchEvent(new CustomEvent("qm:new-session"));
-  });
+  ipcRenderer.on("qm:new-session", dispatchNewSession);
   window.addEventListener(
     "keydown",
     (event) => {
