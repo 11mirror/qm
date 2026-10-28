@@ -73,6 +73,8 @@ export function createSessionReports(
   now: () => number,
 ): Pick<SessionStore, "attributedTurns" | "spendRollup" | "spendReport" | "refreshSpendRollup"> {
   const { pool, q } = db;
+  const liveSpend = async (range: { from: number; to: number }): Promise<SpendRow[]> =>
+    (await q(spendSql, [range.from, range.to])).map(rowToSpendRow);
   return {
     async attributedTurns(): Promise<AttributedTurn[]> {
       for (;;) {
@@ -111,14 +113,10 @@ export function createSessionReports(
         lastAt: Number(r.last_at),
       }));
     },
-    async spendRollup(range): Promise<SpendRow[]> {
-      return (await q(spendSql, [range.from, range.to])).map(rowToSpendRow);
-    },
+    spendRollup: liveSpend,
     async spendReport(range) {
       const dayMs = 86_400_000;
-      if (range.from < 0 || range.from % dayMs || range.to % dayMs) {
-        return { rows: (await q(spendSql, [range.from, range.to])).map(rowToSpendRow) };
-      }
+      if (range.from < 0 || range.from % dayMs || range.to % dayMs) return { rows: await liveSpend(range) };
       let asOf = now();
       const days = await q(
         `WITH pending AS (SELECT DISTINCT day FROM session_spend_dirty WHERE day >= $1 AND day < $2)
@@ -128,9 +126,7 @@ export function createSessionReports(
            FULL JOIN pending p ON p.day = c.day ORDER BY day`,
         [range.from / dayMs, range.to / dayMs],
       );
-      if (days.some((day) => day.rows === null)) {
-        return { rows: (await q(spendSql, [range.from, range.to])).map(rowToSpendRow) };
-      }
+      if (days.some((day) => day.rows === null)) return { rows: await liveSpend(range) };
       const rows: SpendRow[] = [];
       for (const day of days) {
         rows.push(...(day.rows as Record<string, unknown>[]).map(rowToSpendRow));
