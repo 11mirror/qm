@@ -223,6 +223,9 @@ test("a body read avoids sandbox work and a file request materializes that skill
   assert.equal(onResource.packDir, `/workspace/${root}/.packs/pack`);
   assert.deepEqual(sandboxIds, [undefined, "box", "resource-1"]);
   assert.equal(files.get(`${root}/.packs/pack/lib.txt`), "PACK_RESOURCE");
+  files.delete(`${root}/.packs/pack/lib.txt`);
+  await turn.useSkill("source-helper", "SKILL.md", "resource-1");
+  assert.equal(files.get(`${root}/.packs/pack/lib.txt`), "PACK_RESOURCE");
   assert.equal(
     [...files.keys()].some((path) => path.includes("/unrelated/")),
     false,

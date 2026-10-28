@@ -224,7 +224,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const laidTrees = new Set<string>();
   const materializeSkillTree = async (handle: SandboxHandle, r: SkillResolution<Skill>): Promise<void> => {
     const treeKey = `${handle.resourceId ?? handle.id}:${skillDir(skillsRoot(r), r)}`;
-    if (laidTrees.has(treeKey)) return;
+    if (laidTrees.has(treeKey) && !r.screened) return;
     try {
       const bundles =
         r.screened?.bundles ?? (deps.skillBundles ? await loadActiveBundles(deps.skillBundles, r.skill!) : []);

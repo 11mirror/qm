@@ -1189,6 +1189,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 const loaded = deps.skills
                   ? await deps.skills.get(skill.id).catch(swallowAs("skill screening: load skill", null))
                   : null;
+                if (!loaded) carriedSkillScreens.delete(key);
                 const full = loaded && stillListed(loaded, skill) ? structuredClone(loaded) : null;
                 const bundles = structuredClone(
                   full && deps.skillBundles
