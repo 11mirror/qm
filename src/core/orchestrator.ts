@@ -154,7 +154,7 @@ import {
   selectOverheardToImport,
   type OverheardEntryPayload,
 } from "../harness/replay.ts";
-import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { headSlice, jsonbSafeStringify } from "../util/text.ts";
 import { createReplyCheck } from "../decisions/reply-check.ts";
@@ -3195,7 +3195,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
           if (error) throw new NonRetryableTurnError(error);
         }
-        const replyCheckMode = await deps.decide?.mode("turn_end");
+        const replyCheckMode = await deps.decide
+          ?.mode("turn_end")
+          .catch(reportFailureAs("orchestrator: reply check rules", undefined));
         const heldRunId =
           replyCheckMode === "enforce" && !input.surfaceTools && deps.turnStream ? input.runId : undefined;
         if (heldRunId) deps.turnStream!.hold(heldRunId);

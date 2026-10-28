@@ -27,7 +27,9 @@ export function createReplyCheck(opts: {
   return {
     async review(entry) {
       if (isApprovalEntry(entry)) awaitingApproval = true;
-      if (entry.type !== "assistant" || awaitingApproval || opts.posted() || opts.turn.cancel.aborted) return entry;
+      if (entry.type !== "assistant") return entry;
+      revision = undefined;
+      if (awaitingApproval || opts.posted() || opts.turn.cancel.aborted) return entry;
       const payload = isObj(entry.payload) ? entry.payload : {};
       const text = typeof payload.text === "string" ? payload.text : "";
       if (!text.trim() || payload.stopped === true) return entry;

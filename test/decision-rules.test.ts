@@ -494,6 +494,40 @@ test("an oversized reply is cut at its tail, keeping the instructions it is judg
   assert.ok(seen[0]!.length <= 8_000);
 });
 
+test("with several enforcing reply rules, any one asking for a rewrite wins over the rest", async () => {
+  const style = (id: string) =>
+    ({
+      ...injection(),
+      id,
+      hook: "turn_end",
+      onError: "keep",
+      options: {
+        keep: { description: "Follows it", action: "keep" },
+        revise: { description: "Breaks it", action: "revise", message: `fix ${id}` },
+      },
+    }) as DecisionRule;
+  assert.equal(checkRuleSet([style("no-tables"), style("no-dashes")]), undefined);
+  const backend: DecisionBackend = {
+    async choose({ questions }) {
+      return Object.fromEntries(
+        Object.keys(questions).map((k) => [
+          k,
+          k === "no-tables" ? { keep: 0.97, revise: 0.03 } : { keep: 0.1, revise: 0.9 },
+        ]),
+      );
+    },
+  };
+  const { decisive } = await runHook(
+    [style("no-tables"), style("no-dashes")],
+    "turn_end",
+    "s",
+    backend,
+    new AbortController().signal,
+  );
+  assert.equal(decisive?.action, "revise");
+  assert.equal(decisive?.message, "fix no-dashes");
+});
+
 test("a hook point reports enforce when any active rule enforces, observe when only observing rules exist", async () => {
   const hooks = (rules: DecisionRule[]) =>
     createDecisionHooks({ rules: async () => rules } as never, fixed({}), { record: () => {} } as never);

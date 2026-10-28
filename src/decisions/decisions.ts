@@ -2,7 +2,7 @@ const DECISION_HOOK_POINTS = {
   user_input: { actions: ["allow", "block"], decide: "most_restrictive" },
   tool_response: { actions: ["allow", "block"], decide: "most_restrictive" },
   turn_start: { actions: ["keep", "use_runtime"], decide: "most_confident" },
-  turn_end: { actions: ["keep", "revise"], decide: "most_confident" },
+  turn_end: { actions: ["keep", "revise"], decide: "most_restrictive" },
   goal_check: { actions: ["continue", "complete", "step_back", "pause"], decide: "most_confident" },
 } as const satisfies Record<string, { actions: readonly string[]; decide: "most_restrictive" | "most_confident" }>;
 export type DecisionHook = keyof typeof DECISION_HOOK_POINTS;
