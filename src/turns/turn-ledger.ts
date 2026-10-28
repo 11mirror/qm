@@ -287,7 +287,8 @@ async function begin(
     }
     const { rows } = await client.query(
       `UPDATE runs SET status = 'running', lease_token = $2, lease_expires_at = NULL, worker_id = $3,
-         attempts = attempts + 1, started_at = COALESCE(started_at, $4), absurd_run_id = $5
+         attempts = attempts + 1, started_at = COALESCE(started_at, $4), absurd_run_id = $5,
+         delivery_state = (delivery_state::jsonb - ARRAY['firstBlock', 'surfacePosted', 'replyDone', 'runtime'])::text
        WHERE id = $1 AND absurd_queue = $6 AND status IN ('pending','running')
        RETURNING *`,
       [turnId, token, workerId, Date.now(), absurdRunId, queue],

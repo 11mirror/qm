@@ -207,6 +207,32 @@ test("an expired claim is taken over by a new attempt and the old holder is fenc
   assert.equal(await ledger.finish(next.run, next.token, { status: "done", result: ok(run) }), true);
 });
 
+test("a new attempt starts with a clean reply status and the old holder cannot write to it", { skip }, async () => {
+  const thread = `web:alice:${randomUUID()}`;
+  await admit(thread);
+  const { run, token } = await claim();
+  assert.equal(
+    await runStore.runs.setDeliveryState(run.id, token, {
+      replying: true,
+      firstBlock: "On it.",
+      surfacePosted: true,
+      replyDone: true,
+      runtime: { modelId: "m1" } as never,
+      editRef: "ts-1",
+    }),
+    true,
+  );
+  await admin.query(
+    "UPDATE absurd.r_turns_people SET claim_expires_at = absurd.current_time() - interval '1 second' WHERE run_id = $1",
+    [run.absurdRunId],
+  );
+  const next = await claim();
+  assert.equal(next.run.id, run.id);
+  assert.deepEqual(next.run.deliveryState, { replying: true, editRef: "ts-1" });
+  assert.equal(await runStore.runs.setDeliveryState(run.id, token, { firstBlock: "stale" }), false);
+  assert.equal((await runStore.runs.get(run.id))?.deliveryState?.firstBlock, undefined);
+});
+
 test("stop withdraws a queued turn, cancels an unclaimed one, and lets a running one wrap up", { skip }, async () => {
   const thread = `web:alice:${randomUUID()}`;
   const first = await admit(thread, "one");
