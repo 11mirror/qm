@@ -149,7 +149,6 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     turnFenceToken: _turnFenceToken,
     runStartedAt: _runStartedAt,
     finalAttempt: _finalAttempt,
-    background: _background,
     cancel: _cancel,
     shutdown: _shutdown,
     sessionParticipantIds: _sessionParticipantIds,

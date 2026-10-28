@@ -29,6 +29,7 @@ import { createPostgresSessionStore } from "../../src/sessions/postgres-session-
 import type { Conversation, Principal } from "../../src/types.ts";
 import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
 import { createMockHarness } from "../support/mock-harness.ts";
+import { eventually } from "../support/settle.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
 import { testDatabaseUrl, testConfigStore, testDeployBackings } from "../support/test-database.ts";
 
@@ -394,10 +395,12 @@ test("a live durable process keeps the computer warm; none lets it suspend", asy
   });
   const res = await orch.handleTurn(turn("!run echo hi"));
   assert.equal(res.status, "ok");
+  await eventually(() => fake.teardowns.length === 1);
   assert.equal(fake.teardowns.at(-1)!.keepWarm, true);
 
   fake.procs.get(live.processId)!.exited = true;
   await orch.handleTurn(turn("!run echo hi"));
+  await eventually(() => fake.teardowns.length === 2);
   assert.equal(fake.teardowns.at(-1)!.keepWarm, false);
 });
 
@@ -416,6 +419,7 @@ test("reattach reconciles a session whose process died while core was down", asy
 
   const orch = buildOrchestrator(reg, fake.sandbox);
   await orch.handleTurn(turn("!run echo hi"));
+  await eventually(() => fake.teardowns.length === 1);
 
   assert.equal((await reg.liveByScope(await memoryScope())).length, 0);
   assert.equal(fake.teardowns.at(-1)!.keepWarm, false);
@@ -426,6 +430,6 @@ test("with no live session the per-scope box suspends as before (gate is off by 
   const fake = fakeProcessSandbox();
   const orch = buildOrchestrator(reg, fake.sandbox);
   await orch.handleTurn(turn("!run echo hello"));
-  assert.equal(fake.teardowns.length, 1);
+  await eventually(() => fake.teardowns.length === 1);
   assert.equal(fake.teardowns[0]!.keepWarm, false);
 });

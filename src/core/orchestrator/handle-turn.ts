@@ -321,7 +321,7 @@ async function executeTurn(
   },
 ): Promise<TurnResult> {
   const { deps, memoryPolicy, memoryStrategy, observeSecurityData, titles } = o;
-  const { input, scopeId } = ctx;
+  const { scopeId } = ctx;
   const { frame, session, held, run, begun, ready, titling } = turn;
   const { spine, surfaceToolDeps, attachStaging } = ready.turnTools;
   const { inboundIssues, partial, turnInput, isPollFire } = ready.prepared;
@@ -389,16 +389,11 @@ async function executeTurn(
   if (run.turnRuntime) finalResult = { ...finalResult, runtime: run.turnRuntime };
   await titling.title.write;
 
-  if (input.background) {
-    run.tailOwnsReclaim = true;
-    await held.catchUpMessageRevisions();
-    await deps.sessions.releaseLease(held.lease);
-    held.leaseState.released = true;
-    void tail().catch(swallowAs("orchestrator: background tail", undefined));
-  } else {
-    await tail();
-    run.tailOwnsReclaim = true;
-  }
+  run.tailOwnsReclaim = true;
+  await held.catchUpMessageRevisions();
+  await deps.sessions.releaseLease(held.lease);
+  held.leaseState.released = true;
+  void tail().catch(swallowAs("orchestrator: background tail", undefined));
   await deps.errors?.flush();
   return finalResult;
 }

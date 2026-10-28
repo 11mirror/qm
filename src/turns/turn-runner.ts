@@ -40,14 +40,12 @@ function runTurnInput(
 ): OrchestratorInput {
   return {
     ...run.request,
-    origin: run.request.origin,
     runId: run.id,
     attempt: run.attempts,
     ...(run.lastStop ? { resumeCause: run.lastStop } : {}),
     runLeaseToken: opts.token,
     turnFenceToken: opts.token,
     finalAttempt: errorParks(run, opts.maxClaims),
-    background: true,
     cancel: opts.cancel,
     shutdown: opts.shutdown,
     ...(run.startedAt !== null ? { runStartedAt: run.startedAt } : {}),
