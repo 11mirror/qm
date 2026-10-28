@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createServer, request, type Server } from "node:http";
+import { createServer, request, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { isDeepStrictEqual } from "node:util";
 import { test, after, before } from "node:test";
@@ -11,6 +11,7 @@ import {
   routeForHost,
   serveForHost,
   setEdgeTenants,
+  trustedRequestHost,
   type HostRoute,
 } from "../../plugins/chassis/src/tenant-hosts.ts";
 import { deriveTenantSecret } from "../../plugins/chassis/src/tenant-settings.ts";
@@ -92,6 +93,17 @@ test("request host prefers the forwarded host and drops the port", () => {
   assert.equal(requestHost({ "x-forwarded-host": "a.test, b.test", host: "c.test" }), "a.test");
   assert.equal(requestHost({}), undefined);
   assert.equal(normalizeHost("[::1]:8080"), "[::1]");
+});
+
+test("the forwarded host is trusted only from a loopback peer", () => {
+  const from = (remoteAddress: string) =>
+    ({
+      socket: { remoteAddress },
+      headers: { host: "acme.example.test:8080", "x-forwarded-host": "beta.example.test" },
+    }) as unknown as IncomingMessage;
+  assert.equal(trustedRequestHost(from("127.0.0.1")), "beta.example.test");
+  assert.equal(trustedRequestHost(from("::ffff:127.0.0.1")), "beta.example.test");
+  assert.equal(trustedRequestHost(from("203.0.113.9")), "acme.example.test");
 });
 
 test("routes match exact hosts before published-app domains", () => {

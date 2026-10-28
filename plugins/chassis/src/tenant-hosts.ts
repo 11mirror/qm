@@ -3,6 +3,7 @@ import type { TenantSettings } from "./tenant-settings.ts";
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
 
 const HEALTH_PATHS: ReadonlySet<string> = new Set(["/healthz", "/readyz"]);
+const LOOPBACK: ReadonlySet<string> = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
 export interface HostRoute<T> {
   hosts: readonly string[];
@@ -58,7 +59,7 @@ export function perEdgeTenant<T>(create: () => T): () => T {
 export function serveForHost(req: IncomingMessage, res: ServerResponse, handle: () => void): void {
   if (!edgeTenants.length) return handle();
   const tenant =
-    routeForHost(edgeRoutes, requestHost(req.headers)) ??
+    routeForHost(edgeRoutes, trustedRequestHost(req)) ??
     (HEALTH_PATHS.has(pathOf(req)) ? edgeTenants.find((t) => !t.id) : undefined);
   if (!tenant) return void res.writeHead(404, { "content-type": "text/plain; charset=utf-8" }).end("unknown host\n");
   servingTenant.run(tenant, handle);
@@ -79,6 +80,10 @@ export function normalizeHost(raw: string | undefined): string | undefined {
 export function requestHost(headers: IncomingHttpHeaders): string | undefined {
   const forwarded = headers["x-forwarded-host"];
   return normalizeHost(Array.isArray(forwarded) ? forwarded[0] : forwarded) ?? normalizeHost(headers.host);
+}
+
+export function trustedRequestHost(req: IncomingMessage): string | undefined {
+  return LOOPBACK.has(req.socket.remoteAddress ?? "") ? requestHost(req.headers) : normalizeHost(req.headers.host);
 }
 
 export function hostOfUrl(url: string | undefined): string | undefined {
