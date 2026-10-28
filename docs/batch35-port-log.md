@@ -45,3 +45,7 @@ Adapted to typed UserMessage/Retraction items and split transcript/draw modules.
 ## #2742 centisecond timers
 
 Adapted to split live-work and work-summary modules and typed activity timestamps. Uses a disconnected-aware animation-frame directive, throttled to 50ms, rather than adding an interval loop. Old chat DOM is explicitly released on replacement/disposal so directives disconnect. No persisted data/settings. English: elapsed `{whole seconds}s` or minute labels → `{seconds with two decimal places}s`, with minute prefix when needed; `Working/Worked/Posting message for ...` retains its prefix and uses that precision. Two duration tests and the chat replacement/disposal behavior test pass; web-ui typecheck passes.
+
+## #2749 animate only the live step
+
+Adapted selectors to the split transcript stylesheet, preserving reduced-motion specificity and outgoing-label fade. Replaced upstream source-string assertions with a computed-style behavior test. Test passes; no persistence/settings or English changes.
