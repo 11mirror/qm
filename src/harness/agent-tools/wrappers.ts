@@ -6,6 +6,7 @@ import { errMessage, reportFailure, swallow } from "../../util/errors.ts";
 import { isObj } from "../../util/objects.ts";
 import type { ToolRuntime, TurnHalt } from "../turn-tool-state.ts";
 import { optionalBoolean, text } from "./shared.ts";
+import type { ToolKit } from "./kit.ts";
 
 const RETRY_SAFE_FIELD = "retrySafe";
 
@@ -77,15 +78,7 @@ export function withToolApprovalGate(
   tool: ToolDefinition & ToolApprovalDeclaration,
   ref: Pick<ToolRuntime, "approves" | "holdApproval">,
   halt: Pick<TurnHalt, "pauseForApproval">,
-  rec: {
-    recordCall: (callId: string, payload: Record<string, unknown>) => Promise<void>;
-    recordResult: <T extends { content: Array<{ type: string; text?: string }>; details?: unknown }>(
-      callId: string,
-      summary: Record<string, unknown>,
-      ret: T,
-      isError?: boolean,
-    ) => Promise<T>;
-  },
+  rec: Pick<ToolKit, "recordCall" | "recordResult">,
 ): ToolDefinition {
   if (TOOL_APPROVAL_EXEMPT.has(tool.name)) return tool;
   const inner = tool.execute.bind(tool);
