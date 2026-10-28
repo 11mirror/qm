@@ -73,12 +73,15 @@ interface SurfaceProfile {
   promptFlavor?: "web" | "slack";
   dmContainer?: (threadRef: string) => string | null;
   toolHint?: string;
+  whereNote?: string;
   traits: readonly SurfaceTrait[];
 }
 
 const PROFILES: Readonly<Record<string, SurfaceProfile>> = {
   web: {
     promptFlavor: "web",
+    whereNote:
+      "A cron, reminder, or watch you create here with no explicit destination posts back into this web conversation, and the person sees it here. Leave the destination unset by default; use `recipient` or `channel` only when the person asks for delivery somewhere else.",
     traits: ["transcript", "sidebar", "pickModel", "editableTurns", "memberGate"],
   },
   slack: {
