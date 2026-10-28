@@ -4,9 +4,9 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { tenantSandboxPrefix } from "../../plugins/chassis/src/tenant-settings.ts";
 import { registerTenantSettings, tenantFor, withTenant } from "../../src/tenant.ts";
 import { tenantConfig } from "../../src/tenants/tenant-config.ts";
-import { modalApp } from "../../src/wiring/sandbox.ts";
 import { createModalSandbox, MODAL_BODIES } from "../../src/sandbox/modal-sandbox.ts";
 import { createSpritesSandbox, SPRITES_BODIES } from "../../src/sandbox/sprites-sandbox.ts";
 import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
@@ -25,7 +25,6 @@ registerTenantSettings([
     orgId: "org-guest",
     hosts: ["guest.example.test"],
     status: "active",
-    modalAppName: "qm-guest-app",
     oidcAdmin: false,
     secrets: {},
   },
@@ -34,19 +33,13 @@ after(() => registerTenantSettings([]));
 
 const config = loadConfig({
   SANDBOX_NAME_PREFIX: "qm-deploy",
-  MODAL_ENVIRONMENT: "deploy-env",
-  MODAL_APP_NAME: "qm-deploy-app",
 });
+const guestPrefix = tenantSandboxPrefix("qm-deploy", guestId);
 const scope = scopeId("personal", "shared@example.com");
 const layers = [{ scopeId: scope, mountPath: "/", mode: "rw" as const }];
 const workspace = () => createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "tenant-scope-ws-")));
 
-test("a non-home tenant's Modal sandboxes use the deployment environment and name prefix", async () => {
-  assert.deepEqual(modalApp(config), { name: "qm-deploy-app", environment: "deploy-env" });
-  assert.deepEqual(
-    withTenant(guest, () => modalApp(config)),
-    { name: "qm-guest-app", environment: "deploy-env" },
-  );
+test("a non-home tenant's Modal sandboxes are named under the deployment prefix and its tenant hash", async () => {
   const fake = installFakeModal();
   after(() => fake.cleanup());
   const sandbox = createModalSandbox(workspace(), {
@@ -58,13 +51,13 @@ test("a non-home tenant's Modal sandboxes use the deployment environment and nam
   const home = await sandbox.provision(layers);
   const forGuest = await withTenant(guest, () => sandbox.provision(layers));
   assert.match(home.id, /^qm-deploy-personal-/);
-  assert.match(forGuest.id, /^qm-deploy-guest-personal-/);
+  assert.ok(forGuest.id.startsWith(`${guestPrefix}-personal-`));
   const sandboxId = fake.current(forGuest.id)!.sandboxId;
   assert.equal(fake.tagsOf(sandboxId)["qm-org"], "org-guest");
-  assert.equal(fake.tagsOf(sandboxId)["qm-prefix"], "qm-deploy-guest");
+  assert.equal(fake.tagsOf(sandboxId)["qm-prefix"], guestPrefix);
 });
 
-test("a non-home tenant's sprites are named under the deployment prefix", async () => {
+test("a non-home tenant's sprites are named under the deployment prefix and its tenant hash", async () => {
   const fake = installFakeSprites();
   after(() => fake.cleanup());
   const sandbox = createSpritesSandbox(workspace(), {
@@ -77,6 +70,6 @@ test("a non-home tenant's sprites are named under the deployment prefix", async 
   const home = await sandbox.provision(layers);
   const forGuest = await withTenant(guest, () => sandbox.provision(layers));
   assert.match(home.id, /^qm-deploy-personal-/);
-  assert.match(forGuest.id, /^qm-deploy-guest-personal-/);
+  assert.ok(forGuest.id.startsWith(`${guestPrefix}-personal-`));
   assert.deepEqual(fake.names().sort(), [home.id, forGuest.id].sort());
 });

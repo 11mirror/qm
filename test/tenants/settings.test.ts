@@ -122,9 +122,6 @@ test("applying tenancy folds each tenant's env bags into its settings once, keep
     status: "active",
     appsDomain: "apps.closedai.example.test",
     s3Bucket: "qm-closedai-bucket",
-    modalAppName: "qm-closedai",
-    modalSnapshotBucket: "qm-closedai-snapshots",
-    awsSandboxBucket: "qm-closedai-sandbox",
     sentryDeployment: "closedai",
     faviconSvg: "<svg>web</svg>",
     oidcClientId: "closedai",
@@ -144,7 +141,6 @@ test("applying tenancy folds each tenant's env bags into its settings once, keep
     orgId: "mt-fake-1",
     hosts: ["mt-fake-1.example.test"],
     status: "active",
-    modalAppName: "qm-mt-fake-1",
     oidcAdmin: false,
     secrets: {},
   });
@@ -166,10 +162,7 @@ test("the fold leaves rows that already have settings alone and changes nothing 
     { core: { S3_BUCKET: "qm-openaguy" } },
     sealTenantSecret({ core: { QM_SLACK_SERVICE_TOKEN: "openaguy-slack" } }, key),
   ]);
-  await assert.rejects(
-    applyTenancy(await pool.pool(), undefined),
-    /openaguy has secrets but QM_TENANT_SECRETS_KEY is unset/,
-  );
+  await assert.rejects(applyTenancy(await pool.pool(), undefined), /has secrets but QM_TENANT_SECRETS_KEY is unset/);
   assert.equal((await listTenants(pool, key)).find((t) => t.slug === "openaguy")?.s3Bucket, undefined);
   await applyTenancy(await pool.pool(), key);
   const after = await listTenants(pool, key);
@@ -239,16 +232,4 @@ test("tenantSettings() answers from the registry for a registered tenant and fro
     process.env = saved;
     registerTenantSettings([]);
   }
-});
-
-test("sandbox prefix and Modal environment values stored by earlier releases are ignored", async () => {
-  await pool.q(
-    `ALTER TABLE tenants ADD COLUMN IF NOT EXISTS sandbox_name_prefix TEXT, ADD COLUMN IF NOT EXISTS modal_environment TEXT`,
-  );
-  await pool.q(`UPDATE tenants SET sandbox_name_prefix = 'qm-closedai', modal_environment = 'closedai'`);
-  await applyTenancy(await pool.pool(), key);
-  const closedai = (await listTenants(pool, key)).find((t) => t.slug === "closedai")!;
-  assert.equal(closedai.modalAppName, "qm-closedai");
-  assert.equal(Object.hasOwn(closedai, "sandboxNamePrefix"), false);
-  assert.equal(Object.hasOwn(closedai, "modalEnvironment"), false);
 });

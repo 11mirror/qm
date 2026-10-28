@@ -14,7 +14,7 @@ import {
   trustedRequestHost,
   type HostRoute,
 } from "../../plugins/chassis/src/tenant-hosts.ts";
-import { deriveTenantSecret } from "../../plugins/chassis/src/tenant-settings.ts";
+import { deriveTenantSecret, tenantSandboxPrefix } from "../../plugins/chassis/src/tenant-settings.ts";
 import { edgeTenantFeed } from "../../src/boot.ts";
 import { configurePgTenancy, createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
 import { loadConfig } from "../../src/config.ts";
@@ -48,6 +48,7 @@ const deployment = {
   ORG_ID: "home",
   CORE_ORG_ID: "home",
   PORT: "8080",
+  SANDBOX_NAME_PREFIX: "qm-deploy",
   PUBLIC_API_URL: "https://home.example.test",
   PORTAL_PUBLIC_URL: "https://home.example.test",
   AUTH_ISSUER: "https://home.example.test/idp",
@@ -134,7 +135,10 @@ test("core verifies each tenant with the derived secrets its surfaces sign with,
   assert.notEqual(coreFor(other).signingSecret, coreFor(record).signingSecret);
   assert.equal(tenantConfig(config).signingSecret, deployment.CORE_SIGNING_SECRET);
   assert.equal(coreFor(record).publicUrl, "https://acme.example.test");
-  assert.equal(coreFor(record).sandboxNamePrefix, `${config.sandbox.namePrefix ?? "qm"}-acme`);
+  assert.equal(tenantConfig(config).sandboxNamePrefix, "qm-deploy");
+  assert.equal(coreFor(record).sandboxNamePrefix, tenantSandboxPrefix("qm-deploy", record.id));
+  assert.match(coreFor(record).sandboxNamePrefix!, /^qm-deploy-[0-9a-f]{8}$/);
+  assert.notEqual(coreFor(other).sandboxNamePrefix, coreFor(record).sandboxNamePrefix);
   assert.equal(coreFor(record).s3Prefix, "tenants/acme/");
   assert.equal(coreFor(record).modelGatewayApiKey, "acme-gateway-key");
   assert.equal(coreFor(record).adminGrants, undefined);
@@ -223,6 +227,7 @@ before(async () => {
     secretsKey: undefined,
     home: tenant(),
     homeHosts: ["home.example.test"],
+    homeSandboxPrefix: "qm",
     now: () => clock,
   });
   useTenantDirectory(directory);
@@ -293,6 +298,7 @@ test("a tenant whose preparation fails is unavailable while every other tenant i
     secretsKey: undefined,
     home: tenant(),
     homeHosts: ["home.example.test"],
+    homeSandboxPrefix: "qm",
     now: () => clock,
     prepare: async () => {
       if (tenant().id === ACME && attempts++ === 0) throw new Error("hydrate failed");

@@ -170,6 +170,7 @@ async function useRegistryTenants(config: Config, env: NodeJS.ProcessEnv, prepar
         .filter((host): host is string => Boolean(host))
         .concat(homeHosts(env)),
       ...(config.deployAppsDomain ? { homeAppsDomain: config.deployAppsDomain } : {}),
+      homeSandboxPrefix: config.sandbox.namePrefix ?? "qm",
       prepare,
     }),
   );

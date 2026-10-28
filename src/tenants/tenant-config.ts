@@ -1,4 +1,4 @@
-import { deriveTenantSecret } from "../../plugins/chassis/src/tenant-settings.ts";
+import { deriveTenantSecret, tenantSandboxPrefix } from "../../plugins/chassis/src/tenant-settings.ts";
 import type { Config } from "../config.ts";
 import { tenant, tenantSettings } from "../tenant.ts";
 import type { TenantSettings } from "./registry.ts";
@@ -33,7 +33,6 @@ type Inherited = Pick<
 
 export interface TenantConfig extends Inherited {
   sandboxNamePrefix?: string;
-  modalAppName?: string;
   modelGatewayApiKey?: string;
   slackServiceToken?: string;
   sentryDeployment?: string;
@@ -45,7 +44,6 @@ function homeConfig(config: Config, settings: TenantSettings): TenantConfig {
   return {
     ...config,
     ...(config.sandbox.namePrefix ? { sandboxNamePrefix: config.sandbox.namePrefix } : {}),
-    ...(config.modalSandbox?.appName ? { modalAppName: config.modalSandbox.appName } : {}),
     ...(config.modelGateway?.apiKey ? { modelGatewayApiKey: config.modelGateway.apiKey } : {}),
     ...(settings.secrets.slackServiceToken ? { slackServiceToken: settings.secrets.slackServiceToken } : {}),
     ...(settings.sentryDeployment ? { sentryDeployment: settings.sentryDeployment } : {}),
@@ -82,8 +80,7 @@ function registeredConfig(config: Config, settings: TenantSettings & { id: strin
     capabilitySecret: derived(config.capabilitySecret),
     portalIdentitySecret: derived(config.portalIdentitySecret),
     connectorSecretKey: settings.secrets.connectorSecretKey ?? config.connectorSecretKey,
-    sandboxNamePrefix: `${config.sandbox.namePrefix ?? "qm"}-${settings.slug}`,
-    modalAppName: settings.modalAppName ?? config.modalSandbox?.appName,
+    sandboxNamePrefix: tenantSandboxPrefix(config.sandbox.namePrefix ?? "qm", settings.id),
     modelGatewayApiKey: settings.secrets.modelGatewayApiKey ?? config.modelGateway?.apiKey,
     slackServiceToken: settings.secrets.slackServiceToken,
     sentryDeployment: settings.sentryDeployment,

@@ -132,12 +132,15 @@ link sent before the upgrade has to be sent again. No configuration change is ne
 ## Tenant sandboxes use the deployment's sandbox scope
 
 On a deployment that serves several tenants, every tenant's sandboxes now run in the
-deployment's `MODAL_ENVIRONMENT` and are named under the deployment's
-`SANDBOX_NAME_PREFIX` followed by the tenant slug, for example `qm-prod-acme-…`. The
-per-tenant sandbox name prefix and Modal environment settings are gone. Values stored in
-the `sandbox_name_prefix` and `modal_environment` columns of the `tenants` table, or set
-in a tenant's env bags, are ignored. A tenant import spec that still sets
-`sandboxNamePrefix` or `modalEnvironment` is rejected as an unknown field. Sandboxes a
+deployment's `MODAL_APP_NAME` and `MODAL_ENVIRONMENT` and are named under the deployment's
+`SANDBOX_NAME_PREFIX` followed by the first 8 hex characters of the SHA-256 of the tenant
+id, for example `qm-prod-1a2b3c4d-…`. The home tenant's sandbox names do not change. The
+per-tenant sandbox name prefix, Modal app, Modal environment, Modal snapshot bucket and
+AWS sandbox bucket settings are gone. Values stored in the `sandbox_name_prefix`,
+`modal_app_name`, `modal_environment`, `modal_snapshot_bucket` and `aws_sandbox_bucket`
+columns of the `tenants` table, or set in a tenant's env bags, are ignored. A tenant
+import spec that still sets `sandboxNamePrefix`, `modalAppName`, `modalEnvironment`,
+`modalSnapshotBucket` or `awsSandboxBucket` is rejected as an unknown field. Sandboxes a
 tenant created under its old prefix are not reused.
 
 ## Typed tables: unknown JSON keys stop the upgrade
