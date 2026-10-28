@@ -11,6 +11,7 @@ import { errMessage, swallowAs } from "../../util/errors.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { headSlice } from "../../util/text.ts";
 import type { OrchestratorDeps } from "./types.ts";
+import { estimateCostUsd } from "../../ratelimit/budget.ts";
 
 type ScreenStatus = "allow" | "would_block" | "error";
 type Screened = Pick<SecurityScreenClassification, "verdict"> & Partial<SecurityScreenClassification>;
@@ -113,7 +114,11 @@ export function createSecurityObserver(deps: OrchestratorDeps): SecurityObserver
             }
           : {}),
         signal,
-        recordModelCall: (rec) => deps.modelGateway.recordCall({ at: Date.now(), scopeLabel, ...rec }),
+        recordModelCall: (rec) => {
+          void deps.budget
+            ?.record(actorId, estimateCostUsd(rec.inputTokens))
+            .catch(swallowAs("budget: record screen spend", undefined));
+        },
       });
       return verdict ? { verdict } : undefined;
     };

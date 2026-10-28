@@ -36,7 +36,6 @@ import type { FeatureFlagStore } from "../../feature-flags.ts";
 import type { TeamStore } from "../../teams/teams.ts";
 import type { CredentialUsageSink } from "../../admin/credential-usage-sink.ts";
 import type { ConnectorStatusCache } from "../../credentials/connector-status.ts";
-import type { ModelGateway } from "../../model/model-gateway.ts";
 import type { AuditLog } from "../../audit/audit-log.ts";
 import type { SecurityScreener } from "../../security/security-screener.ts";
 import type { RateLimiter } from "../../ratelimit/rate-limiter.ts";
@@ -115,7 +114,6 @@ export interface OrchestratorDeps {
   toolOutput?: ToolOutputStore;
   sandbox: Sandbox;
   sandboxResources?: SandboxResources;
-  modelGateway: ModelGateway;
   auditLog: AuditLog;
   rateLimiter: RateLimiter;
   budget?: BudgetTracker;

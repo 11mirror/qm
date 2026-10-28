@@ -82,7 +82,6 @@ export async function detectAmbientDecline(
         ...(input.gatewayContext?.reactionGuidance ? { reactionGuidance: input.gatewayContext.reactionGuidance } : {}),
         history: detectHistory,
         recordModelCall: (rec) => {
-          deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
           void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
         },
       })

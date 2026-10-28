@@ -56,7 +56,6 @@ function builtAppHead(deps: BuiltAppInputs) {
     consentLinks,
     oauthFlows,
     secretDrops,
-    modelGateway,
     userModelCredentials,
     mcpToolService,
   } = deps.credentials;
@@ -102,7 +101,6 @@ function builtAppHead(deps: BuiltAppInputs) {
     modelGatewayTransport: gatewayTransport,
     ...(budget ? { budget } : {}),
     resolveBrowserCompanyKeys,
-    modelGateway,
     modelCredentials,
     userModelCredentials,
     refreshModels,
