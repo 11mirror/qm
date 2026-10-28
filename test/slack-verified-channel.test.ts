@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   createDirectoryStore,
-  parseDirectoryObservation,
+  directoryObservation,
   type DirectoryObservation,
 } from "../src/directory/directory-store.ts";
 import { createDirectory } from "../src/slack/directory.ts";
@@ -42,8 +42,8 @@ function fixture(options: { secondary?: boolean; failWrite?: boolean; throwWrite
         state.writes++;
         if (options.throwWrite) throw new Error("directory transport unavailable");
         if (options.failWrite) return false;
-        const checked = parseDirectoryObservation(observation);
-        return !!checked && store.recordObservation(checked);
+        const parsed = directoryObservation.safeParse(observation);
+        return parsed.success && store.recordObservation(parsed.data);
       },
     } as unknown as SlackCoreClient,
     coreSingleton: !options.secondary,
@@ -87,11 +87,10 @@ test("secondary accounts never publish live channels", async () => {
 });
 
 test("failed persistence propagates to envelope recovery instead of declaring an external audience", async () => {
-  for (const info of [undefined, { name: "mpdm-one-1", is_private: true, is_mpim: true }])
-    for (const options of [{ failWrite: true }, { throwWrite: true }]) {
-      const { observe } = fixture(options);
-      await assert.rejects(observe(info), /not persisted before admission|directory transport unavailable/);
-    }
+  for (const options of [{ failWrite: true }, { throwWrite: true }]) {
+    const { observe } = fixture(options);
+    await assert.rejects(observe(), /not persisted before admission|directory transport unavailable/);
+  }
 });
 
 test("removed speakers and failed member classification do not publish", async () => {

@@ -1,5 +1,6 @@
 import { isPrincipalType, PRINCIPAL_TYPES } from "../../types.ts";
-import { parseDirectoryObservation, type DirectoryMember } from "../../directory/directory-store.ts";
+import { directoryObservation, type DirectoryMember } from "../../directory/directory-store.ts";
+import { zodMessage } from "../../util/errors.ts";
 import { canonicalPerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
@@ -140,15 +141,10 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
 }
 
 async function recordObservation(ctx: ApiCtx): Promise<void> {
-  const observation = parseDirectoryObservation(ctx.body);
-  if (!observation) {
-    return sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message:
-        "an observation is { kind: 'channel', id, name, isPrivate, memberIds[], observedAt } or { kind: 'group', id, memberIds[], observedAt }",
-    });
-  }
-  if (!(await ctx.app.recordDirectoryObservation(observation)))
+  const parsed = directoryObservation.safeParse(ctx.body);
+  if (!parsed.success)
+    return sendJson(ctx.res, 400, { error: "bad_request", message: zodMessage("observation", parsed.error) });
+  if (!(await ctx.app.recordDirectoryObservation(parsed.data)))
     return sendJson(ctx.res, 409, { error: "stale_directory_observation" });
   return sendJson(ctx.res, 200, { ok: true });
 }

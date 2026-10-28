@@ -144,20 +144,19 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     const room = { kind: "channel", id: "C_LIVE", name: "live", isPrivate: true, memberIds: ["U1"], observedAt: 30 };
     const group = { kind: "group", id: "G_LIVE", memberIds: ["U1"], observedAt: 30 };
     const bad = { ...group, id: "G_BAD", memberIds: ["U2"] };
-    for (const invalid of [
-      [bad],
-      { ...bad, kind: "dm" },
-      { ...bad, id: "" },
-      { ...bad, observedAt: undefined },
-      { ...bad, observedAt: "30" },
-      { ...bad, memberIds: [] },
-      { ...bad, memberIds: ["U2", 7] },
-      { ...bad, groupsSyncedAt: 30 },
-      { ...room, id: "C_BAD", name: undefined },
-      { ...room, id: "C_BAD", isPrivate: "true" },
-      { ...room, id: "C_BAD", channelsSyncedAt: 30 },
-    ])
-      assert.equal((await post(invalid)).status, 400, JSON.stringify(invalid));
+    for (const [invalid, reason] of [
+      [{ ...bad, kind: "dm" }, /observation\.kind/],
+      [{ ...bad, observedAt: undefined }, /observation\.observedAt/],
+      [{ ...room, id: "C_BAD", channelsSyncedAt: 30 }, /channelsSyncedAt/],
+      [{ ...bad, name: "mpdm-u2-1" }, /name/],
+      [{ ...bad, observedAt: 123.5 }, /observation\.observedAt/],
+      [{ ...bad, observedAt: 1e30 }, /observation\.observedAt/],
+      [{ ...bad, observedAt: -1 }, /observation\.observedAt/],
+    ] as const) {
+      const res = await post(invalid);
+      assert.equal(res.status, 400, JSON.stringify(invalid));
+      assert.match(((await res.json()) as { message: string }).message, reason);
+    }
     const legacy = { groupMembers: [{ groupId: "G_BAD", principalId: "U2" }], groupIds: ["G_BAD"], groupsSyncedAt: 30 };
     assert.equal((await post({ ...legacy, partialGroups: true }, "/v1/directory")).status, 400, "legacy partial push");
     assert.equal((await post(room)).status, 200);

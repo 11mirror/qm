@@ -21,6 +21,7 @@ import {
 } from "./lib.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
+import type { DirectoryObservation } from "../directory/directory-store.ts";
 
 export interface BotIdentity {
   ownTeamId: string;
@@ -630,7 +631,10 @@ export function createDirectory(deps: {
         return { audience: [actor, externalMarker()] };
       if (membership.publishMembers) {
         const memberIds = membership.publishMembers.map((member) => member.externalId);
-        if (!(await core.recordDirectoryObservation({ kind, id: channel, name, isPrivate, memberIds, observedAt })))
+        const roster = { id: channel, memberIds, observedAt };
+        const observation: DirectoryObservation =
+          kind === "group" ? { kind, ...roster } : { kind, ...roster, name: name!, isPrivate: isPrivate! };
+        if (!(await core.recordDirectoryObservation(observation)))
           throw new Error(`Slack ${kind} membership was not persisted before admission`);
       }
     }

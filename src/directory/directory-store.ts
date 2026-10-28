@@ -47,57 +47,21 @@ export type RecipientResolution =
 export type ChannelResolution =
   { kind: "one"; channel: DirectoryChannel } | { kind: "ambiguous"; candidates: DirectoryChannel[] } | { kind: "none" };
 
-export interface DirectoryObservation {
-  kind: "channel" | "group";
-  id: string;
-  name?: string;
-  isPrivate?: boolean;
-  memberIds: string[];
-  observedAt: number;
-}
-
-export type CheckedObservation =
-  | { kind: "channel"; id: string; name: string; isPrivate: boolean; memberIds: string[]; observedAt: number }
-  | { kind: "group"; id: string; memberIds: string[]; observedAt: number };
-
 const observedRoster = {
   id: z.string().min(1),
   memberIds: z.array(z.string().min(1)).min(1),
-  observedAt: z.number().finite(),
+  observedAt: z.number().int().nonnegative(),
 };
 
-const observationSchema = z
-  .discriminatedUnion("kind", [
-    z
-      .object({ kind: z.literal("channel"), ...observedRoster, name: z.string().min(1), isPrivate: z.boolean() })
-      .strict(),
-    z
-      .object({
-        kind: z.literal("group"),
-        ...observedRoster,
-        name: z.string().optional(),
-        isPrivate: z.boolean().optional(),
-      })
-      .strict(),
-  ])
-  .transform((observation): CheckedObservation => {
-    const base = {
-      id: observation.id,
-      memberIds: [...new Set(observation.memberIds)],
-      observedAt: observation.observedAt,
-    };
-    return observation.kind === "channel"
-      ? { kind: "channel", ...base, name: observation.name, isPrivate: observation.isPrivate }
-      : { kind: "group", ...base };
-  });
+export const directoryObservation = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("channel"), ...observedRoster, name: z.string().min(1), isPrivate: z.boolean() }).strict(),
+  z.object({ kind: z.literal("group"), ...observedRoster }).strict(),
+]);
 
-export function parseDirectoryObservation(value: unknown): CheckedObservation | undefined {
-  const parsed = observationSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
-}
+export type DirectoryObservation = z.infer<typeof directoryObservation>;
 
 export function staleObservation(
-  observation: CheckedObservation,
+  observation: DirectoryObservation,
   crawledAt: number | undefined,
   storedAt: number | undefined,
 ): string | undefined {
@@ -117,7 +81,7 @@ export interface DirectoryStore {
     channelRosterIds?: string[],
     revocations?: ChannelMembership[],
   ): Promise<boolean>;
-  recordObservation(observation: CheckedObservation): Promise<boolean>;
+  recordObservation(observation: DirectoryObservation): Promise<boolean>;
   list(): Promise<DirectoryMember[]>;
   listChannels(): Promise<DirectoryChannel[]>;
   get(principalId: string): Promise<DirectoryMember | null>;

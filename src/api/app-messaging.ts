@@ -3,7 +3,7 @@ import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { personKey, personKeys, samePersonInDirectory, samePersonMatcher } from "../directory/person.ts";
 import type { Destination, SurfaceContextRequest, SurfaceContextResult } from "../types.ts";
-import { reportFailureAs } from "../util/errors.ts";
+import { reportFailureAs, zodMessage } from "../util/errors.ts";
 import { adminCronHistoryUrl } from "../util/admin-links.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { randomUUID } from "node:crypto";
@@ -16,7 +16,7 @@ import {
   type ReachResolution,
 } from "../reach/reach.ts";
 import { isVisible } from "../directory/visibility.ts";
-import { parseDirectoryObservation, pickMatch, type DirectoryMember } from "../directory/directory-store.ts";
+import { directoryObservation, pickMatch, type DirectoryMember } from "../directory/directory-store.ts";
 import { externalMemberActive } from "../identity/external-members.ts";
 import { hasRevisionEvents, recordMessageRevisions } from "../core/message-revisions.ts";
 import { answerWebContextRequest } from "./web-context.ts";
@@ -469,8 +469,13 @@ export function createMessagingMethods(
       return deps.directory.replaceGroups(groupMembers, syncedAt, groupIds, groupRosterIds);
     },
     async recordDirectoryObservation(value) {
-      const observation = parseDirectoryObservation(value);
-      if (!observation || !(await deps.directory.recordObservation(observation))) return false;
+      const parsed = directoryObservation.safeParse(value);
+      if (!parsed.success) {
+        console.warn(`[directory] rejected malformed observation: ${zodMessage("observation", parsed.error)}`);
+        return false;
+      }
+      const observation = parsed.data;
+      if (!(await deps.directory.recordObservation(observation))) return false;
       if (observation.kind === "channel") await h.syncLinkedProjectRosters();
       return true;
     },
