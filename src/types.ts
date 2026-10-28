@@ -121,6 +121,7 @@ export interface Session {
   unread?: boolean;
   forkedFrom?: { sessionId: string; title?: string | null };
   forkBoundarySeq?: number;
+  sideChat?: { entrySeq: number; quote: string; occurrence: number; expanded: boolean };
   parentSessionId?: string;
   origin?: SessionOrigin;
   spawnMeta?: SpawnMeta;
