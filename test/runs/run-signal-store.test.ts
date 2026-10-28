@@ -346,6 +346,51 @@ test("pg store: pending retains steers until acknowledged and leaves aborts for 
   }
 });
 
+test("pg store: a steer whose processing crashes is redelivered to the next poller", { skip }, async () => {
+  const runId = `test-run-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const first = createPostgresRunSignalStore(URL!);
+  const second = createPostgresRunSignalStore(URL!);
+  try {
+    await first.send(runId, { kind: "steer", text: "done" });
+    await first.send(runId, { kind: "steer", text: "crashes" });
+    const firstSeen: string[] = [];
+    const stopFirst = startSignalPoll(
+      first,
+      runId,
+      {
+        onSteer: async (text) => {
+          firstSeen.push(text);
+          if (text === "crashes") throw new Error("process died mid-steer");
+        },
+        onAbort: async () => {},
+      },
+      { intervalMs: 60_000, onError: () => {} },
+    );
+    await settle(() => firstSeen.length >= 2);
+    await stopFirst();
+
+    const secondSeen: string[] = [];
+    const stopSecond = startSignalPoll(
+      second,
+      runId,
+      {
+        onSteer: async (text) => {
+          secondSeen.push(text);
+        },
+        onAbort: async () => {},
+      },
+      { intervalMs: 20 },
+    );
+    await settle(() => secondSeen.length >= 1);
+    await stopSecond();
+    assert.deepEqual(secondSeen, ["crashes"], "only the unfinished steer is delivered again");
+    assert.deepEqual(await second.pending(runId), [], "the redelivered steer is acknowledged after processing");
+  } finally {
+    await first.close?.();
+    await second.close?.();
+  }
+});
+
 test("memory store: a signal round-trips ts and request intact", async () => {
   const store = createMemoryRunSignalStore();
   const request = {
