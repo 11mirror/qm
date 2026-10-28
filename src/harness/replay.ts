@@ -22,7 +22,7 @@ import {
 } from "../sessions/items.ts";
 import { deliveryNote } from "../core/attachments.ts";
 import { GOAL_CANCELLED, goalCancelledNote } from "./goal.ts";
-import { messageRevision, renderMessageRevision } from "../core/message-revisions.ts";
+import { messageRevision, renderMessageRevision } from "../slack/message-revisions.ts";
 import { CONTEXT_SUMMARY_HEADER, INTERRUPTED_TOOL_RESULT, unrecordedToolResult } from "./context-compaction.ts";
 import { contextSummary } from "../sessions/session-store.ts";
 import { isoFromTs, messageTag } from "../util/message-tag.ts";

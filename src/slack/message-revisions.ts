@@ -1,6 +1,6 @@
 import { isReply, isUserMessage, messageTs, type Item, type NewItem } from "../sessions/items.ts";
 import type { Lease, SessionStore } from "../sessions/session-store.ts";
-import { parseSlackThreadRef, slackThreadRefCandidates } from "../slack/message-gating.ts";
+import { parseSlackThreadRef, slackThreadRefCandidates } from "./message-gating.ts";
 import type { IngestEvent, SurfaceCache } from "../surface-cache/types.ts";
 import { isoFromTs, xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 

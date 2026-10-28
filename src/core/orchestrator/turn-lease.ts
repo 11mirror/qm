@@ -2,7 +2,7 @@ import { surfaceHas } from "../../surfaces/surface.ts";
 import type { TurnCtx } from "./turn-context.ts";
 import type { Session } from "../../types.ts";
 import { startLeaseKeepalive } from "./lease-keepalive.ts";
-import { reconcileMessageRevisions, revisionAnchorAt } from "../message-revisions.ts";
+import { reconcileMessageRevisions, revisionAnchorAt } from "../../slack/message-revisions.ts";
 import { swallowAs } from "../../util/errors.ts";
 import type { Lease, LeaseAttempt } from "../../sessions/session-store.ts";
 import { acquireLeaseWithin } from "../../sessions/session-store.ts";
