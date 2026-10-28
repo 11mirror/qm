@@ -27,6 +27,7 @@ const FALLBACK_POLL_MS = 1_000;
 const HANDBACK_SETTLE_MS = 2_000;
 const FINISH_RETRY_MAX_MS = 5_000;
 const FINISH_RETRY_MS = 500;
+const FINISH_OUTAGE_WINDOW_MS = 120_000;
 const UNSAVED_RESULT_REASON = "This turn finished but its result could not be saved.";
 const FAILURE_REPORT_CONSECUTIVE = 5;
 const CLAIM_FAIL_REPORT_CONSECUTIVE = 20;
@@ -54,6 +55,7 @@ function runTurnInput(
 }
 
 const TRANSIENT_SQL_CLASSES = new Set(["08", "40", "53", "57"]);
+const TRANSIENT_SQL_CODES = new Set(["25006", "55P03"]);
 
 function unsaveable(error: unknown): boolean {
   if (error instanceof TypeError || error instanceof RangeError) return true;
@@ -62,7 +64,8 @@ function unsaveable(error: unknown): boolean {
     typeof code === "string" &&
     code.length === 5 &&
     !code.startsWith("E") &&
-    !TRANSIENT_SQL_CLASSES.has(code.slice(0, 2))
+    !TRANSIENT_SQL_CLASSES.has(code.slice(0, 2)) &&
+    !TRANSIENT_SQL_CODES.has(code)
   );
 }
 
@@ -220,14 +223,15 @@ async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
     });
   };
   const finishWith = async (outcome: TurnOutcome): Promise<void> => {
+    const giveUpAt = Date.now() + FINISH_OUTAGE_WINDOW_MS;
     for (let attempt = 1; !shutdown.signal.aborted && !lost; attempt++) {
       try {
         if (!(await deps.ledger.finish(run, token, outcome)))
           console.warn(`[turns] turn ${run.id} ended after losing its claim; its result was not recorded`);
         return;
       } catch (error) {
-        if (unsaveable(error)) return finishBare(error);
-        swallow(`turns: turn end failed for turn ${run.id} (retrying while the claim lasts)`, error);
+        if (unsaveable(error) || Date.now() >= giveUpAt) return finishBare(error);
+        swallow(`turns: turn end failed for turn ${run.id} (retrying)`, error);
         await sleep(Math.min(FINISH_RETRY_MS * attempt, FINISH_RETRY_MAX_MS));
       }
     }
