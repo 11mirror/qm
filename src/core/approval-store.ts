@@ -108,15 +108,16 @@ export function createApprovalStore(
       idempotencyKey: approvalDeliveryKey(id, record),
     });
   }
+  const deliverQuietly = (id: string, record: PendingApprovalRecord): Promise<void> =>
+    deliver(id, record).catch(swallowAs("approvals: post approval request (the sweep retries)", undefined));
   return {
     ...backing,
     async put(id: string, record: PendingApprovalRecord): Promise<void> {
       await backing.put(id, record);
-      await deliver(id, record).catch(swallowAs("approvals: post approval request (the sweep retries)", undefined));
+      await deliverQuietly(id, record);
     },
     async deliverPending(): Promise<void> {
-      for (const [id, record] of await backing.entries())
-        await deliver(id, record).catch(swallowAs("approvals: post approval request (the sweep retries)", undefined));
+      for (const [id, record] of await backing.entries()) await deliverQuietly(id, record);
     },
   };
 }
