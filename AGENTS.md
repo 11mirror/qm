@@ -4,9 +4,9 @@
 
 To run and test, see [`README.md`](./README.md).
 
-## Slop-free zone
+## Rings
 
-The paths in [`slop-free-zone.txt`](./slop-free-zone.txt) are the core we hold up as the example to follow. Put new code there when it fits, and follow its patterns. Exemplar modules to copy: to be named once the zone is clean. The zone is held at zero [Wall of shame](./docs/SPEC.md#wall-of-shame) findings. QM checks that with `node scripts/zone-review.ts --base origin/main`, or `node scripts/zone-review.ts` for the whole zone; it calls the model gateway at `MODEL_GATEWAY_URL` with `MODEL_GATEWAY_TOKEN` and prints the finding count and the findings as JSON. The `Slop-free zone` CI check runs `node scripts/code-ratchets.ts --base origin/main`: no PR may add a new `legacy` name, feature flag, `*_MODE`/`*_ENABLED` env name, id-plus-JSON blob table, key-value store helper, or comment in production code. `npm run lint` enforces the 150-line function and 800-line file limits everywhere.
+[Ring 0](./docs/SPEC.md#rings), the paths in [`ring-0.txt`](./ring-0.txt), is the turn spine we hold up as the example to follow: imitate its patterns, and put new code there only when every turn needs it. Ring 0 is held at zero [Wall of shame](./docs/SPEC.md#wall-of-shame) findings and ring 1 ([`ring-1.txt`](./ring-1.txt)) never gets worse. QM checks that with `node scripts/zone-review.ts ring-0.txt`, `node scripts/zone-review.ts --base origin/main` for a branch, or `node scripts/zone-review.ts` for both rings; it calls the model gateway at `MODEL_GATEWAY_URL` with `MODEL_GATEWAY_TOKEN` and prints finding counts per ring and severity and the findings as JSON. The `Slop-free zone` CI check runs `node scripts/code-ratchets.ts --base origin/main`: no PR may add a new `legacy` name, feature flag, `*_MODE`/`*_ENABLED` env name, id-plus-JSON blob table, key-value store helper, or comment in production code. `npm run lint` enforces the 150-line function and 800-line file limits everywhere.
 
 ## Working on the code
 

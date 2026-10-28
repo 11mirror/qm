@@ -1,0 +1,17 @@
+src/slack
+src/api
+src/sandbox
+src/credentials
+src/tools
+src/policy
+src/memory
+src/skills
+src/surfaces
+src/surface-cache
+src/jobs
+src/cron
+plugins/chassis
+src/persistence/contract-migrations.ts
+src/persistence/pg-migrations.ts
+src/persistence/schema-baseline.ts
+src/boot.ts

@@ -30,6 +30,14 @@
 
 **Artifacts.** Apps, files, skills, crons, etc should all be shareable with a familiar Google-Docs style interface, be versioned, and tracked in Postgres or object storage.
 
+## Rings
+
+Ring 0 is the exemplar: the code agents should imitate, kept as small, simple and bug-free as possible. The rings say how strictly each part of the repo is held to the [Wall of shame](#wall-of-shame), measured by `node scripts/zone-review.ts`.
+
+- **Ring 0, the turn spine:** code every turn runs regardless of surface, tools or sandbox, listed in [`ring-0.txt`](../ring-0.txt): core, harness, sessions, turns, model, resolution, runs, persistence (pool, typed tables, locks; not the migration definitions), tenants, auth, acl, identity, directory, util, and the top-level types and config. Gate: zero reviewer findings.
+- **Ring 1, hot but conditional:** code most turns reach depending on surface, tools or sandbox, listed in [`ring-1.txt`](../ring-1.txt): Slack, API, sandbox, credentials, tools, policy, memory, skills, surfaces, surface cache, jobs, cron, the plugin chassis, the migration definitions and boot. Gate: target zero; never more findings than the previous batch.
+- **Ring 2, everything else:** wiring, subagents, swarms, webhooks, triggers, monitors, processes, inbox, connectors, MCP, files, deploy, admin, plugins, CLI and the rest. Gate: the mechanical ratchets only (size, names, comments).
+
 ## Wall of shame
 
 Patterns from this repo's history, with the PRs that introduced or removed them. Lenses marked _always reviewed_ get a reviewer on every PR; triage cannot mark them not relevant.

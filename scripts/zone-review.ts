@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { parse } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { mapBounded } from "../src/util/async.ts";
@@ -15,6 +16,7 @@ export interface Source {
 }
 
 export interface Finding {
+  ring?: string;
   path: string;
   line: number;
   lens: string;
@@ -23,7 +25,9 @@ export interface Finding {
   anchor: string;
 }
 
-const readZone = () => lines(readFileSync("slop-free-zone.txt", "utf8")).filter(Boolean);
+const RINGS = ["ring-0.txt", "ring-1.txt"];
+
+const readRing = (file: string) => lines(readFileSync(file, "utf8")).filter(Boolean);
 
 export const inZone = (zone: string[], path: string) => zone.some((z) => path === z || path.startsWith(`${z}/`));
 
@@ -115,10 +119,25 @@ async function complete(system: string, user: string) {
   return choice.message.content;
 }
 
+export function tally(findings: Finding[]) {
+  const counts: Record<string, Record<string, number>> = {};
+  for (const { ring = "outside", severity } of findings) {
+    counts[ring] ??= { total: 0 };
+    counts[ring].total++;
+    counts[ring][severity] = (counts[ring][severity] ?? 0) + 1;
+  }
+  return counts;
+}
+
 async function main() {
-  const { values } = parseArgs({ options: { base: { type: "string" } } });
+  const { values, positionals } = parseArgs({ options: { base: { type: "string" } }, allowPositionals: true });
   const git = (...args: string[]) => execFileSync("git", args, { encoding: "utf8", maxBuffer: 1 << 28 });
-  const zone = readZone();
+  const rings = (positionals.length ? positionals : RINGS).map((file) => ({
+    name: parse(file).name,
+    paths: readRing(file),
+  }));
+  const zone = rings.flatMap((r) => r.paths);
+  const ringOf = (path: string) => rings.find((r) => inZone(r.paths, path))?.name;
   const base = values.base;
   const files = (base ? git("diff", "--name-only", "--diff-filter=d", `${base}...HEAD`) : git("ls-files", ...zone))
     .split("\n")
@@ -127,7 +146,7 @@ async function main() {
   const outside = base
     ? files.filter((p) => !inZone(zone, p)).map((p) => diffSource(p, git("diff", "-U30", `${base}...HEAD`, "--", p)))
     : [];
-  console.error(`Reviewing ${zoneFiles.length} zone files and ${outside.length} changed files outside the zone.`);
+  console.error(`Reviewing ${zoneFiles.length} ring files and ${outside.length} changed files outside them.`);
   const spec = section(lines(readFileSync("docs/SPEC.md", "utf8")), "## Wall of shame") ?? [];
   const system = [REVIEWER_PROMPT, "", ...spec].join("\n");
   const jobs = [
@@ -140,10 +159,10 @@ async function main() {
       chunk,
     ),
   );
-  const findings = results.flatMap((r) => r.findings);
+  const findings = results.flatMap((r) => r.findings).map((f) => ({ ring: ringOf(f.path), ...f }));
   const dropped = results.reduce((n, r) => n + r.unverified, 0);
-  console.log(JSON.stringify({ count: findings.length, dropped, findings }, null, 2));
-  if (findings.length) process.exit(1);
+  console.log(JSON.stringify({ count: findings.length, rings: tally(findings), dropped, findings }, null, 2));
+  if (findings.some((f) => f.ring === "ring-0")) process.exit(1);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();

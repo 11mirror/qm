@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chunks, diffSource, fileSource, inZone, isReviewable, verifiedFindings } from "../../scripts/zone-review.ts";
+import {
+  chunks,
+  diffSource,
+  fileSource,
+  inZone,
+  isReviewable,
+  tally,
+  verifiedFindings,
+} from "../../scripts/zone-review.ts";
 
-test("zone entries cover their directory and exact files only", () => {
+test("ring entries cover their directory and exact files only", () => {
   const zone = ["src/turns", "src/tenant.ts"];
   assert.deepEqual(
     ["src/turns/a.ts", "src/turns-old/a.ts", "src/tenant.ts", "src/tenant.tsx"].filter((p) => inZone(zone, p)),
@@ -53,4 +61,20 @@ test("chunks stay under the line cap unless one file exceeds it", () => {
     chunks([file(1000), file(400), file(200), file(2000)]).map((c) => c.map((s) => s.path)),
     [["f1000.ts", "f400.ts"], ["f200.ts"], ["f2000.ts"]],
   );
+});
+
+test("tally counts findings per ring and severity", () => {
+  const finding = (ring: string | undefined, severity: string) => ({
+    ring,
+    severity,
+    path: "x.ts",
+    line: 1,
+    lens: "Regex",
+    title: "t",
+    anchor: "a",
+  });
+  assert.deepEqual(tally([finding("ring-0", "high"), finding("ring-0", "low"), finding(undefined, "low")]), {
+    "ring-0": { total: 2, high: 1, low: 1 },
+    outside: { total: 1, low: 1 },
+  });
 });
