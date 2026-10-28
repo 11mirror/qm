@@ -72,8 +72,6 @@ export function safeAttachmentName(name: string): string {
   return base;
 }
 
-export const MAX_REPLY_ATTACHMENT_BYTES = MAX_ATTACHMENT_BYTES;
-
 export interface ArtifactRegistration {
   store: FileArtifactStore;
   ownerScopeId: ScopeId;

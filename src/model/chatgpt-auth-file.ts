@@ -11,7 +11,7 @@ function decodeJwtClaims(jwt: string | undefined): Record<string, unknown> | und
   }
 }
 
-export function chatgptAccountIdFromToken(jwt: unknown): string | undefined {
+function chatgptAccountIdFromToken(jwt: unknown): string | undefined {
   if (typeof jwt !== "string" || jwt.split(".").length !== 3) return undefined;
   const auth = decodeJwtClaims(jwt)?.["https://api.openai.com/auth"];
   const accountId = auth && typeof auth === "object" ? (auth as Record<string, unknown>).chatgpt_account_id : undefined;
