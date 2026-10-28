@@ -133,8 +133,7 @@ import {
 } from "../security/security-posture.ts";
 import { errMessage } from "../util/errors.ts";
 import { createGrindMeter, meterGrindCall } from "./grind.ts";
-import { createReplyHold, replyCheckPrompt } from "./reply-hold.ts";
-import { REPLY_CHECK_RETRIES } from "../decisions/hooks.ts";
+import { createReplyHold, replyCheckPrompt, REPLY_CHECK_RETRIES } from "./reply-hold.ts";
 import {
   createFloorCapPolicy,
   bankGoalTurn,
@@ -1814,6 +1813,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           tools,
           turn.loadImage,
         );
+        const held = turn.checkReply ? createReplyHold(turn) : undefined;
         try {
           const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
 
@@ -1904,7 +1904,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const toolAbort = new AbortController();
           const pendingSteers: Array<SteerIntake & { prompt: string }> = [];
           const unrecordedPrompts = new Set<string>();
-          const held = turn.checkReply ? createReplyHold(turn) : undefined;
           let persistError: Error | undefined;
           const persist = (write: () => Promise<unknown>): void => {
             thinkTail = thinkTail.then(async () => {
@@ -2349,7 +2348,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               const draft = (entry.agentSession.getLastAssistantText() ?? "").trim();
               if (!draft) break;
               const note = await turn.checkReply(draft).catch(swallowAs("pi: reply check", undefined));
-              if (!note || round >= REPLY_CHECK_RETRIES) break;
+              if (!note || round >= REPLY_CHECK_RETRIES || !checkable()) break;
               if (turnWallClockMs > 0 && rawRemainingCapMs() < EMPTY_ENDING_MIN_BUDGET_MS) break;
               console.error(`[pi] reply check asked for a rewrite session=${turn.session.id} round=${round + 1}`);
               held.drop();
@@ -2365,7 +2364,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             }
             held?.release();
           } catch (err) {
-            held?.release();
             if (persistError) throw persistError;
             const cancelAbortRejection =
               turn.cancel?.aborted === true && (err as { name?: string } | null)?.name === "AbortError";
@@ -2454,6 +2452,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             }
             const stoppedClosing = steps.closing(reply);
             await thinkTail;
+            if (persistError) throw persistError;
             await recordStoppedTurn(
               turn,
               partial,
@@ -2480,6 +2479,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const reply = entry.ref.silentRequested ? "" : closingText;
           const closing = steps.closing(reply);
           await thinkTail;
+          if (persistError) throw persistError;
           await turn.emit({
             type: "assistant",
             payload: { text: reply, ...closing },
@@ -2500,6 +2500,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             : { reply, modelCalls, ...silent };
           return cacheUsage ? { ...base, cacheUsage } : base;
         } finally {
+          held?.release();
           removeIsolatedDirs(entry);
         }
       },

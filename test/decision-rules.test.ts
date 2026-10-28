@@ -511,10 +511,14 @@ test("turn_end state carries the guidance, the user's message, measured facts an
   assert.ok(state.endsWith(`Draft reply:\n${reply}`));
   assert.match(turnEndState({ input: "hi", reply: "hello" }), /Guidance for this conversation:\n\(none\)/);
   const long = turnEndState({ guidance: "g", input: "i", reply: "x".repeat(10_000) });
-  assert.match(long, /\[truncated 6800 characters\]$/);
+  assert.match(long, /\[truncated 7000 characters\]$/);
 });
 
-test("the reply check is armed only when a turn_end rule is active and returns the retry note", async () => {
+test("turn_end onError must name a keep option", () => {
+  assert.match(err(parse({ ...guidanceCheck(), onError: "table" })), /onError must name a keep option/);
+});
+
+test("the reply check is armed only when a turn_end rule is active, enforces only with an enforcing rule, and returns the retry note", async () => {
   const { createDecisionHooks, createReplyCheck } = await import("../src/decisions/hooks.ts");
   const audit = { record: () => {} } as never;
   const states: string[] = [];
@@ -525,34 +529,34 @@ test("the reply check is armed only when a turn_end rule is active and returns t
     },
   });
   const turn = { scopeLabel: "personal:a", sessionId: "s1" };
-  const armed = createReplyCheck(
-    { rules: async () => [guidanceCheck()] },
-    createDecisionHooks({ rules: async () => [guidanceCheck()] } as never, backend({ ok: 0.1, table: 0.9 }), audit),
-  );
-  const check = await armed({ guidance: "No tables.", input: "status?", turn });
-  assert.ok(check);
-  assert.equal(await check("| a |\n|---|"), "Drop the table and write it as prose.");
+  const factory = (rules: DecisionRule[], p: Record<string, number>) =>
+    createReplyCheck(
+      { rules: async () => rules },
+      createDecisionHooks({ rules: async () => rules } as never, backend(p), audit),
+    );
+  let guidanceReads = 0;
+  const context = (guidance = "") => ({
+    surfaceName: "web",
+    runtimePurpose: "interactive",
+    guidance: async () => (guidanceReads++, guidance),
+    input: "status?",
+    turn,
+  });
+  const armed = await factory([guidanceCheck()], { ok: 0.1, table: 0.9 })(context("No tables."));
+  assert.ok(armed?.enforce);
+  assert.equal(await armed.check("| a |\n|---|"), "Drop the table and write it as prose.");
+  assert.match(states[0]!, /- surface: web\n- purpose: interactive/);
   assert.match(states[0]!, /No tables\./);
-  const passing = createReplyCheck(
-    { rules: async () => [guidanceCheck()] },
-    createDecisionHooks({ rules: async () => [guidanceCheck()] } as never, backend({ ok: 0.9, table: 0.1 }), audit),
-  );
-  assert.equal(await (await passing({ input: "x", turn }))!("fine"), undefined);
-  const observing = { ...guidanceCheck(), mode: "observe" as const };
-  const observed = createReplyCheck(
-    { rules: async () => [observing] },
-    createDecisionHooks({ rules: async () => [observing] } as never, backend({ ok: 0.1, table: 0.9 }), audit),
-  );
-  assert.equal(await (await observed({ input: "x", turn }))!("| a |"), undefined);
+  const passing = await factory([guidanceCheck()], { ok: 0.9, table: 0.1 })(context());
+  assert.equal(await passing!.check("fine"), undefined);
+  const observed = await factory([{ ...guidanceCheck(), mode: "observe" }], { ok: 0.1, table: 0.9 })(context());
+  assert.equal(observed?.enforce, false);
+  assert.equal(await observed!.check("| a |"), undefined);
+  assert.equal(guidanceReads, 3);
+  assert.equal(await factory([], {})(context()), undefined);
   assert.equal(
-    await createReplyCheck(
-      { rules: async () => [] },
-      createDecisionHooks(undefined, backend({}), audit),
-    )({ input: "x", turn }),
+    await createReplyCheck(undefined, createDecisionHooks(undefined, backend({}), audit))(context()),
     undefined,
   );
-  assert.equal(
-    await createReplyCheck(undefined, createDecisionHooks(undefined, backend({}), audit))({ input: "x", turn }),
-    undefined,
-  );
+  assert.equal(guidanceReads, 3, "guidance is not read when no rule is active");
 });

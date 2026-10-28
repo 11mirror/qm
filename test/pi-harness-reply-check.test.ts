@@ -4,8 +4,8 @@ import { createPiHarness } from "../src/harness/pi-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { SessionEntry } from "../src/types.ts";
-import { createReplyHold, replyCheckPrompt } from "../src/harness/reply-hold.ts";
-import { REPLY_CHECK_RETRIES } from "../src/decisions/hooks.ts";
+import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
+import { createReplyHold, replyCheckPrompt, REPLY_CHECK_RETRIES } from "../src/harness/reply-hold.ts";
 
 type Sink = { entries: Array<{ seq: number; type: string; payload: Record<string, unknown> }> };
 
@@ -188,6 +188,33 @@ test("a failing check never blocks the reply", async () => {
     assert.equal(result.reply, "Fine.");
     assert.deepEqual(streamed, ["Fine."]);
     assert.equal(model.requests.length, 1);
+  } finally {
+    model.restore();
+  }
+});
+
+test("a stop pressed while the check runs keeps the finished draft instead of rewriting", async () => {
+  const signals = createMemoryRunSignalStore();
+  const harness = createPiHarness({ apiKey: "sk-test", signals });
+  const sink: Sink = { entries: [] };
+  const model = fakeModel(["draft one", "never requested"]);
+  const streamed: string[] = [];
+  try {
+    const result = await harness.turns.runTurn(
+      turnInput("reply-check-abort", sink, {
+        runId: "run-abort",
+        onDelta: (chunk) => streamed.push(chunk),
+        checkReply: async () => {
+          await signals.send("run-abort", { kind: "abort", ts: "1712.002" });
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          return "Rewrite it.";
+        },
+      }),
+    );
+    assert.equal(model.requests.length, 1);
+    assert.equal(result.reply, "draft one");
+    assert.deepEqual(streamed, ["draft one"]);
+    assert.ok(sink.entries.some((e) => e.payload.text === "draft one"));
   } finally {
     model.restore();
   }

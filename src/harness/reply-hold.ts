@@ -1,5 +1,7 @@
 import type { HarnessTurnInput } from "./harness.ts";
 
+export const REPLY_CHECK_RETRIES = 2;
+
 export interface ReplyHold {
   blockStart(): void;
   delta(text: string): void;

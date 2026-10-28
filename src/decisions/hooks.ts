@@ -33,8 +33,7 @@ export function turnStartState(turn: {
 
 const TURN_END_GUIDANCE_CHARS = 3_000;
 const TURN_END_INPUT_CHARS = 1_500;
-const TURN_END_REPLY_CHARS = 3_200;
-export const REPLY_CHECK_RETRIES = 2;
+const TURN_END_REPLY_CHARS = 3_000;
 
 const clip = (text: string, max: number): string =>
   text.length <= max ? text : `${text.slice(0, max)}\n[truncated ${text.length - max} characters]`;
@@ -52,9 +51,19 @@ export function replyFacts(reply: string): string[] {
   ];
 }
 
-export function turnEndState(turn: { guidance?: string; input: string; reply: string }): string {
+export function turnEndState(turn: {
+  surfaceName?: string;
+  runtimePurpose?: string;
+  guidance?: string;
+  input: string;
+  reply: string;
+}): string {
   const guidance = turn.guidance?.trim();
   return [
+    "Turn context:",
+    `- surface: ${turn.surfaceName ?? "unknown"}`,
+    `- purpose: ${turn.runtimePurpose ?? "interactive"}`,
+    "",
     "Guidance for this conversation:",
     guidance ? clip(guidance, TURN_END_GUIDANCE_CHARS) : "(none)",
     "",
@@ -104,20 +113,27 @@ export function createDecisionHooks(store: DecisionStore | undefined, backend: D
 
 type ReplyCheck = (draft: string) => Promise<string | undefined>;
 export type ReplyCheckFactory = (context: {
-  guidance?: string;
+  surfaceName?: string;
+  runtimePurpose?: string;
+  guidance: () => Promise<string>;
   input: string;
   turn: DecisionTurn;
-}) => Promise<ReplyCheck | undefined>;
+}) => Promise<{ enforce: boolean; check: ReplyCheck } | undefined>;
 
 export function createReplyCheck(
   store: Pick<DecisionStore, "rules"> | undefined,
   decide: ReturnType<typeof createDecisionHooks>,
 ): ReplyCheckFactory {
   return async (context) => {
-    if (!(await store?.rules("turn_end"))?.length) return undefined;
-    return async (draft) => {
-      const verdict = await decide("turn_end", turnEndState({ ...context, reply: draft }), context.turn);
-      return verdict?.action === "retry" && verdict.message ? verdict.message : undefined;
+    const rules = (await store?.rules("turn_end")) ?? [];
+    if (!rules.length) return undefined;
+    const guidance = await context.guidance();
+    return {
+      enforce: rules.some((rule) => rule.mode === "enforce"),
+      check: async (draft) => {
+        const verdict = await decide("turn_end", turnEndState({ ...context, guidance, reply: draft }), context.turn);
+        return verdict?.action === "retry" && verdict.message ? verdict.message : undefined;
+      },
     };
   };
 }

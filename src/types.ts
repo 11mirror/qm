@@ -177,6 +177,7 @@ export interface Resolution {
   approvalGrantModes: ApprovalGrantModes;
   orgScopeId: ScopeId;
   grantedHandles: GrantedHandle[];
+  guidance?: string;
 }
 
 export type Permission = "read" | "write";
