@@ -68,7 +68,9 @@ async function recordMockRequest({ t, turnSeq, usage }: OpenTurn, step: number):
       ? { documents: turn.documents.map(({ name, mimeType, artifactId }) => ({ name, mimeType, artifactId })) }
       : {}),
   };
-  promptsSent.set(turn.session.id, [...mockPrompts(turn.session.id), prompt]);
+  const sent = promptsSent.get(turn.session.id);
+  if (sent) sent.push(prompt);
+  else promptsSent.set(turn.session.id, [prompt]);
   await turn.recordLlmRequest?.({ turnSeq, step, model: "mock", usage: usage(step) });
 }
 
