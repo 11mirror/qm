@@ -163,3 +163,15 @@ test("startup rejects an application role with table-wide escape privileges", as
     await admin.end();
   }
 });
+
+test("multitenant stores cannot open new migration work after startup", async () => {
+  const migration = { id: "test/late-schema", statements: ["CREATE TABLE late_schema(id int)"] };
+  assert.throws(() => createPgPool(url, [migration]), /must be registered before startup/);
+  await assert.rejects(pool.migrate(migration), /must be registered before startup/);
+  const existing = createPgPool(url);
+  try {
+    await withTenant(a, () => assert.doesNotReject(existing.q("SELECT id FROM boundary_rows")));
+  } finally {
+    await existing.close();
+  }
+});

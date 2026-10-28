@@ -102,6 +102,7 @@ const sharedPools = new Map<string, { pool: Pool; users: number }>();
 const tenantized = new Set<string>();
 
 const settledMigrations = new Map<string, Set<string>>();
+const startupMigrated = new Set<string>();
 
 async function applyAndSettle(
   pool: Pool,
@@ -269,6 +270,8 @@ function registerPgMigration(connectionString: string, migration: PgMigration): 
     registeredMigrations.set(connectionString, database);
   }
   const existing = database.get(migration.id);
+  if (tenancyEnabled && startupMigrated.has(connectionString) && !existing)
+    throw new Error("Multitenant migrations must be registered before startup");
   if (existing && existing.checksum !== migration.checksum) {
     throw new Error(`pg-pool: migration ${migration.id} was registered twice with different checksums`);
   }
@@ -290,6 +293,7 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
       const pool = guardedPool(new pg.Pool({ ...pgConnectionOptions(migrationDatabaseUrl(databaseUrl)), max: 1 }));
       try {
         await applyAndSettle(pool, databaseUrl, registeredPgMigrations(databaseUrl), true);
+        if (tenancyEnabled) startupMigrated.add(databaseUrl);
       } finally {
         await pool.end();
       }
@@ -318,14 +322,15 @@ export function createPgPool(connectionString: string, definitions?: readonly Pg
   }
   async function settle(): Promise<void> {
     if (!migrates && !tenancyEnabled) return;
-    await withMigrationPool(async (instance) => {
-      const migrations = registeredPgMigrations(connectionString);
-      const settled = settledMigrations.get(connectionString);
-      const current = settled && migrations.every((migration) => settled.has(migration.id));
-      if (current && (!tenancyEnabled || tenantized.has(connectionString))) return;
-      await applyAndSettle(instance, connectionString, migrations);
-    });
+    const migrations = registeredPgMigrations(connectionString);
+    const settled = settledMigrations.get(connectionString);
+    const current = settled && migrations.every((migration) => settled.has(migration.id));
+    if (current && (!tenancyEnabled || tenantized.has(connectionString))) return;
+    if (tenancyEnabled && startupMigrated.has(connectionString))
+      throw new Error("Multitenant schemas must be initialized before startup");
+    await withMigrationPool((instance) => applyAndSettle(instance, connectionString, migrations));
   }
+
   async function ready(): Promise<void> {
     if (closed) throw new Error("Postgres store is closed");
     await (readyP ??= settle().catch((error) => {
@@ -368,6 +373,7 @@ export function createPgPool(connectionString: string, definitions?: readonly Pg
     for (const migration of migrations) registerPgMigration(connectionString, migration);
     if (closed) throw new Error("Postgres store is closed");
     await ready();
+    if (tenancyEnabled && startupMigrated.has(connectionString)) return;
     await withMigrationPool((instance) => applyAndSettle(instance, connectionString, migrations));
   }
   function registerMigration(definition: PgMigrationDefinition): void {

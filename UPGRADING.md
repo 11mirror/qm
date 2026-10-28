@@ -14,7 +14,10 @@ Multitenant core now requires two database logins. `DATABASE_URL` (and
 role. `DATABASE_MIGRATION_URL` must use a separate `BYPASSRLS` migration role on
 the same server and database. It is a database credential, not a bypass switch.
 The migration login is used for schema initialization and migrations, not request
-queries, task handlers, or maintenance sweeps. Do not grant the application role
+queries, task handlers, or maintenance sweeps. Successful startup seals migration
+registration: new multitenant schemas must be registered and initialized before
+startup completes. Opening an already initialized store does not check out a
+migration connection. Do not grant the application role
 membership in the migration role, or ownership of tenant-private tables/functions.
 
 Before upgrading, stop all old core processes, take a database snapshot, and
