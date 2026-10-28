@@ -749,15 +749,10 @@ test("pg session store: one-per-thread, TTL/fenced lease, monotonic log, visibil
     scopeLabel: scope,
     promptEnvelope: { system: "sys" },
     truncated: true,
-    ttftMs: 1200,
-    durationMs: 8400,
     usage: { input: 30, output: 120, cacheRead: 5000, cacheWrite: 0, totalTokens: 5150, costUsd: 0.0123 },
   });
   const reqs = await s.listLlmRequests(a.id);
-  assert.equal(reqs[0]!.ttftMs, null, "absent per-call timing reads back null");
   assert.equal(reqs[0]!.usage, null, "absent usage reads back null");
-  assert.equal(reqs[1]!.ttftMs, 1200, "captured TTFT round-trips");
-  assert.equal(reqs[1]!.durationMs, 8400, "captured duration round-trips");
   assert.deepEqual(
     reqs[1]!.usage,
     { input: 30, output: 120, cacheRead: 5000, cacheWrite: 0, totalTokens: 5150, costUsd: 0.0123 },
@@ -770,7 +765,6 @@ test("pg session store: one-per-thread, TTL/fenced lease, monotonic log, visibil
     metaOnly.every((r) => r.promptEnvelope === undefined),
     "bodies omitted from the projection",
   );
-  assert.equal(metaOnly[1]!.ttftMs, 1200, "metadata (timing) still selected");
   await s.recordLlmRequest(a.id, {
     turnSeq: null,
     step: 0,

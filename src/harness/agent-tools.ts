@@ -15,7 +15,7 @@ import { Check } from "typebox/value";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 import type { ClientToolDeclaration, CronFireLogEntry, EntryType, ScopeId } from "../types.ts";
 import type { ToolContext, PublishInput, PublishAudienceDescriptor } from "../tools/primitives.ts";
-import type { GapWork } from "../sessions/session-store.ts";
+import { tracePhase, type Phase } from "../../plugins/chassis/src/error-reporting.ts";
 import { NeedsApproval, CommandDenied } from "../tools/primitives.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { deferredMcpTools, mcpToolDescription, searchMcpTools, visibleMcpTools } from "./deferred-tools.ts";
@@ -112,16 +112,8 @@ export interface ToolContextRef {
     transport?: { modelId?: string; headers?: Record<string, string> };
   }>;
   modelCalls?: number;
-  modelDispatch?: Array<{
-    start: number;
-    first?: number;
-    streamStart?: number;
-    prepareNextTurn?: number;
-    transformContext?: number;
-  }>;
-  pendingPrepareNextTurn?: number;
-  pendingTransformContext?: number;
-  onGapWork?: (work: GapWork) => void;
+  stepPhase?: Phase;
+  firstTokenPhase?: Phase;
   onModelRequest?: () => void;
   fast?: boolean;
   abortSignal?: AbortSignal;
@@ -4281,7 +4273,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const clientNames = new Set(clientTools.map((tool) => tool.name));
   return active.map((tool) => {
     const wrapped = withRuntimeBarrier(
-      withToolBodyTiming(withToolApprovalGate(validateSandboxTool(tool), ref, { recordCall, recordResult }), ref),
+      withToolSpan(withToolApprovalGate(validateSandboxTool(tool), ref, { recordCall, recordResult }), ref),
       ref,
     );
     return clientNames.has(tool.name) ? wrapped : withRetrySafety(wrapped, retryMarks);
@@ -4481,22 +4473,11 @@ function withToolApprovalGate(
   } as ToolDefinition;
 }
 
-function withToolBodyTiming(tool: ToolDefinition, ref: ToolContextRef): ToolDefinition {
-  const inner = tool.execute.bind(tool);
+function withToolSpan(tool: ToolDefinition, ref: ToolContextRef): ToolDefinition {
   return {
     ...tool,
-    async execute(callId: string, params: unknown) {
-      const start = Date.now();
-      try {
-        return await (inner as (callId: string, params: unknown) => unknown)(callId, params);
-      } finally {
-        try {
-          ref.onGapWork?.({ phase: "tool_body", tool: tool.name, start, end: Date.now() });
-        } catch (error) {
-          void error;
-        }
-      }
-    },
+    execute: (...args: Parameters<ToolDefinition["execute"]>) =>
+      tracePhase("step.tool", () => tool.execute(...args), { name: tool.name, parent: ref.stepPhase }),
   } as ToolDefinition;
 }
 

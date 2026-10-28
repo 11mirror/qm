@@ -88,7 +88,7 @@ export async function resolveTurnContext(input: ContextInput) {
       const notebooks = await tracePhase(
         "turn.memory_snapshot",
         () => Promise.all(read.map(async (scope) => ({ scope, facts: await memory.facts?.(scope) }))),
-        (loaded) => ({ "qm.facts": loaded.reduce((sum, { facts }) => sum + (facts?.length ?? 0), 0) }),
+        { counts: (loaded) => ({ "qm.facts": loaded.reduce((sum, { facts }) => sum + (facts?.length ?? 0), 0) }) },
       );
       for (const { scope } of notebooks) recordRead(scope, "memory");
       return {
@@ -105,10 +105,15 @@ export async function resolveTurnContext(input: ContextInput) {
           recallAcrossScopes(
             memory,
             read,
-            { query, actorId: input.actor.id, maxChars: RECALL_MAX_CHARS, ...(disclosedFacts ? { disclosedFacts } : {}) },
+            {
+              query,
+              actorId: input.actor.id,
+              maxChars: RECALL_MAX_CHARS,
+              ...(disclosedFacts ? { disclosedFacts } : {}),
+            },
             memoryLabels,
           ),
-        (recalled) => ({ "qm.recalled": recalled.length }),
+        { counts: (recalled) => ({ "qm.recalled": recalled.length }) },
       ),
     searchMemory: async (query: string, limit = 20, scope?: ScopeId): Promise<string[] | null> => {
       const hits = await searchNotebooks(memory, read, query, limit, scope, input.actor.id);

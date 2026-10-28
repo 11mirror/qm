@@ -52,7 +52,7 @@ import { reachEnqueue } from "../reach/reach.ts";
 import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../directory/directory-store.ts";
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
-import type { GapPhase, Lease, LeaseAttempt } from "../sessions/session-store.ts";
+import type { Lease, LeaseAttempt } from "../sessions/session-store.ts";
 import { SESSION_BUSY_FIRE_TEXT, SESSION_BUSY_USER_TEXT } from "./failure-copy.ts";
 import { CONFIG_DEFAULTS } from "../config.ts";
 import { acquireLeaseWithin, isOverheardEntry } from "../sessions/session-store.ts";
@@ -92,7 +92,6 @@ import {
   type CapabilityClaims,
 } from "../auth/capability-token.ts";
 import type {
-  GapWork,
   HarnessDetectResult,
   HarnessLlmRequestRecord,
   HarnessTurnInput,
@@ -1171,7 +1170,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           : [];
       const carriedSkillScreens = new Map<string, Promise<boolean>>();
       const visibleSkillsForTurn = async (sources?: readonly string[]): Promise<SkillResolution[]> => {
-        const current = await tracePhase("turn.skills", () => context.listSkills(sources), countSkills);
+        const current = await tracePhase("turn.skills", () => context.listSkills(sources), { counts: countSkills });
         const resolved = filterConnectorSkills(current.skills, configuredProviders);
         const allowed: SkillResolution[] = [];
         for (const entry of resolved) {
@@ -1246,7 +1245,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const skillSourceContext = await tracePhase(
         "turn.skills",
         () => context.listSkills([scopeId, resolution.orgScopeId]),
-        countSkills,
+        { counts: countSkills },
       );
       const otherSkillSources = skillSourceContext.skillSources
         .filter((source) => source !== scopeId && source !== resolution.orgScopeId)
@@ -1894,14 +1893,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
       }
       let toolCalls = 0;
-      let harnessOnGapWork: ((work: GapWork) => void) | undefined;
-      const emitGapWork = (phase: GapPhase, start: number, end: number): void => {
-        try {
-          harnessOnGapWork?.({ phase, start, end });
-        } catch (e) {
-          swallow("gap-work emit", e);
-        }
-      };
       const commandPolicy = resolution.commandPolicy;
       const layerCommandRules = [...(deps.deploymentLayer?.commandRules ?? [])];
       const reachAvailable = !!deps.reachExec && !!deps.directory && conversation.kind === "dm";
@@ -1957,7 +1948,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         egressTokenForPolicy,
         openResourceAccess: !external && (liveAuthorTurn || openAutomationKeychain),
         visibleSkillsForTurn,
-        emitGapWork,
       });
       const leaseStart = Date.now();
       const acquired = await acquireTurnLeaseOrRefuse({
@@ -2761,13 +2751,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           attempt: input.attempt ?? 1,
           ...(backgroundBroker ? { backgroundBroker } : {}),
           ...(monitorBroker ? { monitorBroker } : {}),
-          onGapWork: (work) => {
-            try {
-              harnessOnGapWork?.(work);
-            } catch (e) {
-              swallow("gap-work forward", e);
-            }
-          },
         });
 
         const tools = external ? externalTools(baseTools, accessResource) : baseTools;
@@ -3240,71 +3223,68 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           let recordedRecall = false;
           const emit: HarnessTurnInput["emit"] = async (entry) => {
             turnProgress++;
-            const persistStart = Date.now();
-            try {
-              const stored = (() => {
-                if (
-                  entry.type === "assistant" ||
-                  entry.type === "approval_request" ||
-                  ((entry.type === "tool_result" || entry.type === "tool_call") &&
-                    isObj(entry.payload) &&
-                    entry.payload.blocked === "needs_approval")
-                ) {
-                  const payload = isObj(entry.payload) ? { ...entry.payload } : {};
-                  if (typeof payload.workStartedAt !== "number")
-                    payload.workStartedAt = input.runStartedAt ?? coreReceivedAt;
-                  if (typeof payload.workFinishedAt !== "number") payload.workFinishedAt = Date.now();
-                  return { ...entry, payload };
-                }
-                if (entry.type !== "user") return entry;
+            const stored = (() => {
+              if (
+                entry.type === "assistant" ||
+                entry.type === "approval_request" ||
+                ((entry.type === "tool_result" || entry.type === "tool_call") &&
+                  isObj(entry.payload) &&
+                  entry.payload.blocked === "needs_approval")
+              ) {
                 const payload = isObj(entry.payload) ? { ...entry.payload } : {};
-                if (!recordedRecall && !payload.steered && !payload.overheard) {
-                  recordedRecall = true;
-                  if (snapshot.record) payload.environmentSnapshot = snapshot.record;
-                  if (environment) payload.environment = environment;
-                  if (recall.text) payload.memoryRecall = recall.record;
-                }
-                Object.assign(payload, swarmEntryProvenance);
-                if (input.runId) payload.runId = input.runId;
-                delete payload.speakerId;
-                if (humanInput && !syntheticPrompt && !continuation && !payload.steered && !payload.overheard)
-                  payload.speakerId = actor.id;
-                if (actor.displayName?.trim() && typeof payload.name !== "string")
-                  payload.name = actor.displayName.trim();
-                if (input.displayText?.trim() && payload.text === input.text && typeof payload.display !== "string")
-                  payload.display = input.displayText;
-                if ((syntheticPrompt || continuation) && payload.steered !== true) payload.hidden = true;
-                if ((partial || continuation) && !payload.steered && !payload.overheard) payload.resumeNote = true;
+                if (typeof payload.workStartedAt !== "number")
+                  payload.workStartedAt = input.runStartedAt ?? coreReceivedAt;
+                if (typeof payload.workFinishedAt !== "number") payload.workFinishedAt = Date.now();
                 return { ...entry, payload };
-              })();
-              const appended = await withManagedRosterVersion(() => deps.sessions.append(lease, stored));
-              emittedEntries.push(appended);
-              if (mailbox && !continuation && isObj(appended.payload) && appended.payload.environment !== undefined)
-                await mailbox.settle();
-              if (appended.type === "user" && spine.turnUserEntrySeq === undefined) {
-                spine.turnUserEntrySeq = appended.seq;
-                if (input.runId && deps.runs)
-                  await deps.runs
-                    .noteTurnUserSeq(input.runId, appended.seq)
-                    .catch(swallowAs("orchestrator: record turn boundary", false));
               }
-              if (appended.type === "user") failureUserPayload = undefined;
-              if (appended.type === "tool_call") {
-                toolCalls += 1;
-                if (toolCalls === 1 && input.runId) {
-                  if (!input.surfaceTools) {
-                    deps.turnStream?.noteToolCall(input.runId);
-                  } else {
-                    const payload = appended.payload as { tool?: unknown; action?: unknown };
-                    publishFirstAck(payload?.tool === surfaceName && payload?.action === "post");
-                  }
+              if (entry.type !== "user") return entry;
+              const payload = isObj(entry.payload) ? { ...entry.payload } : {};
+              if (!recordedRecall && !payload.steered && !payload.overheard) {
+                recordedRecall = true;
+                if (snapshot.record) payload.environmentSnapshot = snapshot.record;
+                if (environment) payload.environment = environment;
+                if (recall.text) payload.memoryRecall = recall.record;
+              }
+              Object.assign(payload, swarmEntryProvenance);
+              if (input.runId) payload.runId = input.runId;
+              delete payload.speakerId;
+              if (humanInput && !syntheticPrompt && !continuation && !payload.steered && !payload.overheard)
+                payload.speakerId = actor.id;
+              if (actor.displayName?.trim() && typeof payload.name !== "string")
+                payload.name = actor.displayName.trim();
+              if (input.displayText?.trim() && payload.text === input.text && typeof payload.display !== "string")
+                payload.display = input.displayText;
+              if ((syntheticPrompt || continuation) && payload.steered !== true) payload.hidden = true;
+              if ((partial || continuation) && !payload.steered && !payload.overheard) payload.resumeNote = true;
+              return { ...entry, payload };
+            })();
+            const appended = await tracePhase("step.persist", () =>
+              withManagedRosterVersion(() => deps.sessions.append(lease, stored)),
+            );
+            emittedEntries.push(appended);
+            if (mailbox && !continuation && isObj(appended.payload) && appended.payload.environment !== undefined)
+              await mailbox.settle();
+            if (appended.type === "user" && spine.turnUserEntrySeq === undefined) {
+              spine.turnUserEntrySeq = appended.seq;
+              if (input.runId && deps.runs)
+                await deps.runs
+                  .noteTurnUserSeq(input.runId, appended.seq)
+                  .catch(swallowAs("orchestrator: record turn boundary", false));
+            }
+            if (appended.type === "user") failureUserPayload = undefined;
+            if (appended.type === "tool_call") {
+              toolCalls += 1;
+              if (toolCalls === 1 && input.runId) {
+                if (!input.surfaceTools) {
+                  deps.turnStream?.noteToolCall(input.runId);
+                } else {
+                  const payload = appended.payload as { tool?: unknown; action?: unknown };
+                  publishFirstAck(payload?.tool === surfaceName && payload?.action === "post");
                 }
               }
-              await mirrorRunActivity(appended);
-              return appended;
-            } finally {
-              emitGapWork("persist", persistStart, Date.now());
             }
+            await mirrorRunActivity(appended);
+            return appended;
           };
           const initialDocuments = [...documentInputs.documents];
           const storedGoal = (await deps.sessions.goals([session.id])).get(session.id);
@@ -3331,7 +3311,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const mcpTools = await mcpToolsReady;
           const connectorNote = connectorToolsNote(deferredMcpTools(mcpTools, strictReadOnly));
           dispatchTrace ??= startDispatchTrace();
-          const turnResult = await deps.harness.turns.runTurn({
+          const turnRun = deps.harness.turns.runTurn({
             session,
             loadImage: artifactImageLoader(deps.files, mayReadArtifact),
             ...(turnTimezone ? { timezone: turnTimezone } : {}),
@@ -3686,9 +3666,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 }
               }
             },
-            onGapWork: (cb) => {
-              harnessOnGapWork = cb;
-            },
             recordModelCall: (rec) => {
               deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
               void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
@@ -3701,7 +3678,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
             },
           });
-          dispatchTrace.end();
+          const turnResult = await turnRun.finally(() => dispatchTrace?.end());
           if (!turnResult.stopped && !turnAbort.signal.aborted) await swarmHandoff?.settle();
           return turnResult;
         };

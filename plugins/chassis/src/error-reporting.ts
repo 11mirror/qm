@@ -91,7 +91,7 @@ function scrubDescription(
     if (typeof statement !== "string" && description && POOL_SPANS.has(description)) return description;
     return firstWord(typeof statement === "string" ? statement : undefined, SQL_VERBS) ?? "query";
   }
-  return op;
+  return op === "step.tool" ? description : op;
 }
 
 function scrubTraceContext<T extends TransactionEvent | ErrorEvent>(event: T): T {
@@ -311,17 +311,27 @@ export function traceQueued<T>(
     : sdk.startNewTrace(begin);
 }
 
+export type Phase = Sentry.Span;
+
 export function tracePhase<T>(
-  name: string,
+  op: string,
   work: () => Promise<T>,
-  counts?: (result: T) => Record<string, number>,
+  opts: { counts?: (result: T) => Record<string, number>; name?: string; parent?: Phase } = {},
 ): Promise<T> {
-  if (!client || !tracing || !client.getActiveSpan()) return work();
-  return client.startSpan({ op: name, name, onlyIfParent: true }, async (span) => {
-    const result = await work();
-    if (counts) span.setAttributes(counts(result));
-    return result;
-  });
+  if (!client || !tracing || !(opts.parent ?? client.getActiveSpan())) return work();
+  return client.startSpan(
+    { op, name: opts.name ?? op, onlyIfParent: true, ...(opts.parent ? { parentSpan: opts.parent } : {}) },
+    async (span) => {
+      const result = await work();
+      if (opts.counts) span.setAttributes(opts.counts(result));
+      return result;
+    },
+  );
+}
+
+export function startPhase(op: string): Phase | undefined {
+  if (!client || !tracing || !client.getActiveSpan()) return undefined;
+  return client.startInactiveSpan({ op, name: op, onlyIfParent: true });
 }
 
 export interface DispatchTrace {

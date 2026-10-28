@@ -217,7 +217,7 @@ test("a run past the span limit keeps its phases, model request, slow queries an
         query(start + 0.1, 0.0005);
         return [1, 2, 3];
       },
-      (facts) => ({ "qm.facts": facts.length }),
+      { counts: (facts) => ({ "qm.facts": facts.length }) },
     );
     const dispatch = startDispatchTrace();
     for (let i = 0; i < 300; i++) query(start + 0.2 + i / 10_000, 0.0005);

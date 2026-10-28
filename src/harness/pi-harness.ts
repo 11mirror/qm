@@ -54,11 +54,12 @@ const TURN_EFFORT_LEVELS = new Set<string>([
   "adaptive",
 ]);
 import type { ConversationTurn, ScopeId, SessionEntry } from "../types.ts";
-import type { GapPhase, GapPhases, LlmCallUsage, LlmTransportMeta } from "../sessions/session-store.ts";
+import type { LlmCallUsage, LlmTransportMeta } from "../sessions/session-store.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
 import { providerTurnError } from "./provider-error.ts";
 import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
 import { asError, swallow, swallowAs } from "../util/errors.ts";
+import { startPhase } from "../../plugins/chassis/src/error-reporting.ts";
 import {
   DEFAULT_AGENT_MODEL_ID,
   auxiliaryModelFor,
@@ -98,7 +99,6 @@ import {
   type HarnessDetectResult,
   type HarnessTurnInput,
   type HarnessTurnResult,
-  type GapWork,
 } from "./harness.ts";
 import {
   coreToolOptions,
@@ -452,167 +452,6 @@ interface TurnSession {
   ephemeralCwd?: string;
 }
 
-interface PerCallStat {
-  ttftMs: number | null;
-  durationMs: number | null;
-  stepGapMs: number | null;
-  usage: LlmCallUsage | null;
-}
-
-export function stepGapMs(prevStepEnd: number | undefined, curStreamStart: number | undefined): number | null {
-  if (prevStepEnd === undefined || curStreamStart === undefined) return null;
-  return Math.max(0, curStreamStart - prevStepEnd);
-}
-
-function unionMs(
-  intervals: ReadonlyArray<{ start: number; end: number }>,
-  windowStart: number,
-  windowEnd: number,
-): number {
-  const clamped = intervals
-    .map((i) => ({ start: Math.max(i.start, windowStart), end: Math.min(i.end, windowEnd) }))
-    .filter((i) => i.end > i.start)
-    .sort((a, b) => a.start - b.start);
-  let total = 0;
-  let curStart = -1;
-  let curEnd = -1;
-  for (const i of clamped) {
-    if (i.start > curEnd) {
-      if (curEnd > curStart) total += curEnd - curStart;
-      curStart = i.start;
-      curEnd = i.end;
-    } else if (i.end > curEnd) {
-      curEnd = i.end;
-    }
-  }
-  if (curEnd > curStart) total += curEnd - curStart;
-  return total;
-}
-
-export interface DispatchMarks {
-  onPayload?: number;
-  onResponse?: number;
-  messageStart?: number;
-  prepareNextTurn?: number;
-  transformContext?: number;
-}
-
-export function decomposeGapPhases(
-  gapWindow: { gapStart?: number; gapEnd: number } | undefined,
-  intervals: ReadonlyArray<GapWork>,
-  gap: number | null,
-  marks?: DispatchMarks,
-): GapPhases | undefined {
-  if (!gapWindow || gapWindow.gapStart === undefined || gap === null) return undefined;
-  const { gapStart, gapEnd } = gapWindow;
-  const byPhase = new Map<GapPhase, Array<{ start: number; end: number }>>();
-  for (const w of intervals) {
-    if (w.end <= gapStart || w.start >= gapEnd) continue;
-    if (w.phase === "tool_body" || w.phase === "persist") continue;
-    const arr = byPhase.get(w.phase) ?? [];
-    arr.push({ start: w.start, end: w.end });
-    byPhase.set(w.phase, arr);
-  }
-  const phases: GapPhases = {};
-  let attributed = 0;
-  for (const [phase, arr] of byPhase) {
-    const ms = unionMs(arr, gapStart, gapEnd);
-    if (ms > 0) {
-      phases[phase] = ms;
-      attributed += ms;
-    }
-  }
-  if (marks?.onPayload !== undefined && marks.onPayload > gapStart) {
-    const toolBefore = unionMs(
-      intervals
-        .filter((w) => w.phase !== "model_dispatch" && w.phase !== "tool_body" && w.phase !== "persist")
-        .map((w) => ({ start: w.start, end: w.end })),
-      gapStart,
-      marks.onPayload,
-    );
-    const glue = Math.max(0, marks.onPayload - gapStart - toolBefore);
-    if (glue > 0) {
-      phases.dispatch_glue = glue;
-      attributed += glue;
-      const inWindow = (t: number | undefined): boolean => t !== undefined && t >= gapStart && t <= marks.onPayload!;
-      let loopReentry = 0;
-      if (inWindow(marks.prepareNextTurn)) {
-        const toolBeforeReentry = unionMs(
-          intervals
-            .filter((w) => w.phase !== "model_dispatch" && w.phase !== "tool_body" && w.phase !== "persist")
-            .map((w) => ({ start: w.start, end: w.end })),
-          gapStart,
-          marks.prepareNextTurn!,
-        );
-        loopReentry = Math.min(glue, Math.max(0, marks.prepareNextTurn! - gapStart - toolBeforeReentry));
-      }
-      let contextAssemble = 0;
-      if (inWindow(marks.transformContext)) {
-        contextAssemble = Math.min(glue - loopReentry, Math.max(0, marks.onPayload - marks.transformContext!));
-      }
-      const glueOther = Math.max(0, glue - loopReentry - contextAssemble);
-      if (loopReentry > 0) phases.loop_reentry = loopReentry;
-      if (contextAssemble > 0) phases.context_assemble = contextAssemble;
-      if (glueOther > 0) phases.glue_other = glueOther;
-      if (loopReentry > 0 && inWindow(marks.prepareNextTurn)) {
-        const reentryEnd = marks.prepareNextTurn!;
-        const bodySpans = intervals
-          .filter((w) => w.phase === "tool_body")
-          .map((w) => ({ start: Math.max(w.start, gapStart), end: Math.min(w.end, reentryEnd) }))
-          .filter((w) => w.end > w.start);
-        if (bodySpans.length) {
-          const firstEntry = Math.min(...bodySpans.map((w) => w.start));
-          const lastExit = Math.max(...bodySpans.map((w) => w.end));
-          const bodyUnion = unionMs(bodySpans, gapStart, reentryEnd);
-          const taggedInside = unionMs(
-            intervals
-              .filter((w) => w.phase !== "model_dispatch" && w.phase !== "tool_body" && w.phase !== "persist")
-              .map((w) => ({ start: w.start, end: w.end })),
-            firstEntry,
-            lastExit,
-          );
-          const preTool = Math.min(loopReentry, Math.max(0, firstEntry - gapStart));
-          const inToolUntagged = Math.min(loopReentry - preTool, Math.max(0, bodyUnion - taggedInside));
-          const postTool = Math.min(loopReentry - preTool - inToolUntagged, Math.max(0, reentryEnd - lastExit));
-          if (preTool > 0) phases.pre_tool = preTool;
-          if (inToolUntagged > 0) {
-            phases.in_tool_untagged = inToolUntagged;
-            const byTool = new Map<string, Array<{ start: number; end: number }>>();
-            for (const w of intervals) {
-              if (w.phase !== "tool_body") continue;
-              const clamped = { start: Math.max(w.start, gapStart), end: Math.min(w.end, reentryEnd) };
-              if (clamped.end <= clamped.start) continue;
-              const key = w.tool ?? "unknown";
-              const arr = byTool.get(key) ?? [];
-              arr.push(clamped);
-              byTool.set(key, arr);
-            }
-            for (const [name, arr] of byTool) {
-              const ms = unionMs(arr, gapStart, reentryEnd);
-              if (ms > 0) phases[`tool_body.${name}`] = ms;
-            }
-          }
-          if (postTool > 0) phases.post_tool = postTool;
-        }
-      }
-    }
-  }
-  if (marks?.onResponse !== undefined && marks.messageStart !== undefined) {
-    const open = Math.max(0, marks.messageStart - marks.onResponse);
-    if (open > 0) {
-      phases.stream_open = open;
-      attributed += open;
-    }
-  }
-  const persistSpans = intervals.filter((w) => w.phase === "persist").map((w) => ({ start: w.start, end: w.end }));
-  if (persistSpans.length) {
-    const ms = unionMs(persistSpans, gapStart, gapEnd);
-    if (ms > 0) phases.persist = ms;
-  }
-  phases.residual = Math.max(0, gap - attributed);
-  return phases;
-}
-
 export function piUsageToCallUsage(
   u: Partial<Usage> | undefined,
   model: Model<Api> | undefined,
@@ -643,18 +482,18 @@ export function piUsageToCallUsage(
 }
 
 function sumCacheUsage(
-  stats: ReadonlyArray<{ usage: LlmCallUsage | null }>,
+  usages: ReadonlyArray<LlmCallUsage | null>,
 ): { cacheRead: number; cacheWrite: number; uncachedInput: number } | null {
   let saw = false;
   let cacheRead = 0;
   let cacheWrite = 0;
   let uncachedInput = 0;
-  for (const s of stats) {
-    if (!s.usage) continue;
+  for (const usage of usages) {
+    if (!usage) continue;
     saw = true;
-    cacheRead += s.usage.cacheRead;
-    cacheWrite += s.usage.cacheWrite;
-    uncachedInput += s.usage.input;
+    cacheRead += usage.cacheRead;
+    cacheWrite += usage.cacheWrite;
+    uncachedInput += usage.input;
   }
   return saw ? { cacheRead, cacheWrite, uncachedInput } : null;
 }
@@ -1672,13 +1511,10 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         agent.onPayload = async (payload, model) => {
           ref.modelCalls = (ref.modelCalls ?? 0) + 1;
           ref.onModelRequest?.();
-          (ref.modelDispatch ??= []).push({
-            start: Date.now(),
-            ...(ref.pendingPrepareNextTurn !== undefined ? { prepareNextTurn: ref.pendingPrepareNextTurn } : {}),
-            ...(ref.pendingTransformContext !== undefined ? { transformContext: ref.pendingTransformContext } : {}),
-          });
-          ref.pendingPrepareNextTurn = undefined;
-          ref.pendingTransformContext = undefined;
+          ref.stepPhase?.end();
+          ref.stepPhase = undefined;
+          ref.firstTokenPhase?.end();
+          ref.firstTokenPhase = startPhase("model.first_token");
           applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
           applyReasoningMode(payload, model as Model<Api>, ref.effortLevel);
           const result = prior ? await prior(payload, model) : payload;
@@ -1711,36 +1547,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           }
           return finalPayload;
         };
-        const priorResponse = agent.onResponse;
-        agent.onResponse = async (response, model) => {
-          try {
-            const calls = ref.modelDispatch;
-            const last = calls?.[calls.length - 1];
-            if (last && last.first === undefined) last.first = Date.now();
-          } catch (e) {
-            swallow("pi: model dispatch capture", e);
-          }
-          if (priorResponse) await priorResponse(response, model);
-        };
-        const priorTransform = agent.transformContext;
-        agent.transformContext = async (messages, signal) => {
-          try {
-            ref.pendingTransformContext = Date.now();
-          } catch (e) {
-            swallow("pi: transformContext stamp", e);
-          }
-          return priorTransform ? await priorTransform(messages, signal) : messages;
-        };
         agent.afterToolCall = pauseStampAfterToolCall(ref, agent.afterToolCall);
-        const priorPrepare = agent.prepareNextTurn;
-        agent.prepareNextTurn = async (signal) => {
-          try {
-            ref.pendingPrepareNextTurn = Date.now();
-          } catch (e) {
-            swallow("pi: prepareNextTurn stamp", e);
-          }
-          return priorPrepare ? await priorPrepare(signal) : undefined;
-        };
       }
     }
 
@@ -1826,17 +1633,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           entry.ref.effortLevel = turn.runtime?.effortLevel ?? defaultThinkingLevel;
           applyTurnEffort(entry.agentSession, entry.ref.effortLevel);
 
-          const toolWallByStep: number[][] = [];
-          const gapWork: GapWork[] = [];
-          const collectGapWork = (work: GapWork): void => {
-            gapWork.push(work);
-            if (work.phase === "exec") {
-              const bucket = toolWallByStep[toolWallByStep.length - 1];
-              if (bucket) bucket.push(Math.max(0, work.end - work.start));
-            }
-          };
-          turn.onGapWork?.(collectGapWork);
-          entry.ref.onGapWork = collectGapWork;
           const continued = turn.continueTurn ? continuableContext(entry.agentSession.agent.state.messages) : null;
           if (continued) entry.agentSession.agent.state.messages = continued;
           else if (turn.continueTurn)
@@ -1881,10 +1677,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               : "") + userPromptText({ goalNote, text: turn.input, environment: turn.environment });
           entry.ref.llmCapture = [];
           entry.ref.modelCalls = 0;
-          entry.ref.modelDispatch = [];
           entry.ref.onModelRequest = turn.onModelRequest;
-          entry.ref.pendingPrepareNextTurn = undefined;
-          entry.ref.pendingTransformContext = undefined;
           turn.recordModelCall({
             model: effectiveModel,
             inputTokens:
@@ -1894,11 +1687,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             entryCount: turn.history.length,
           });
 
-          const callStats: Array<PerCallStat> = [];
-          let curStart: number | undefined;
-          let curFirst: number | undefined;
-          let prevStepEnd: number | undefined;
-          const stepWindows: Array<{ gapStart?: number; gapEnd: number }> = [];
+          const callUsage: Array<LlmCallUsage | null> = [];
           let thinkTail: Promise<unknown> = Promise.resolve();
           let triggerSeen = continueTurn;
           const toolAbort = new AbortController();
@@ -1947,24 +1736,18 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             return e.type === "message_end" ? onMessageEnd(e.message) : undefined;
           });
           const unsubscribe = entry.agentSession.subscribe((event) => {
+            if (event.type === "message_update" && entry.ref.firstTokenPhase) {
+              entry.ref.firstTokenPhase.end();
+              entry.ref.firstTokenPhase = undefined;
+            }
             if (event.type === "message_start" && (event.message as { role?: string }).role === "assistant") {
               steps.startStreaming();
-              curStart = Date.now();
-              curFirst = undefined;
-              try {
-                const calls = entry.ref.modelDispatch;
-                const last = calls?.[calls.length - 1];
-                if (last && last.first !== undefined && last.streamStart === undefined) last.streamStart = curStart;
-              } catch (e) {
-                swallow("pi: stream-open capture", e);
-              }
             } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_start") {
               turn.onTextBlockStart?.();
             } else if (event.type === "message_update" && event.assistantMessageEvent.type === "toolcall_start") {
               const block = event.assistantMessageEvent.partial.content[event.assistantMessageEvent.contentIndex];
               if (block?.type === "toolCall") turn.onToolCallStart?.(block.name);
             } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-              if (curFirst === undefined) curFirst = Date.now();
               turn.onDelta?.(event.assistantMessageEvent.delta);
             } else if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") {
               const { contentIndex, delta, partial } = event.assistantMessageEvent;
@@ -1972,56 +1755,25 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               if (block?.type === "thinking" && !block.redacted)
                 turn.onReasoningDelta?.(steps.streamingStepId(), contentIndex, delta);
             } else if (event.type === "message_end" && (event.message as { role?: string }).role === "assistant") {
-              const end = Date.now();
               const u = (event.message as { usage?: Partial<Usage> }).usage;
               const stepModel = entry.agentSession.model;
               const usage = piUsageToCallUsage(u, stepModel, entry.ref.fast);
               meterGrindCall(grindMeter, usage);
               const meteredGoal = entry.ref.goal;
               if (meteredGoal?.status === "active") meterGoalCall(meteredGoal, usage);
-              callStats.push({
-                ttftMs: curStart !== undefined && curFirst !== undefined ? curFirst - curStart : null,
-                durationMs: curStart !== undefined ? end - curStart : null,
-                stepGapMs: stepGapMs(prevStepEnd, curStart),
-                usage,
-              });
-              stepWindows.push({
-                ...(prevStepEnd !== undefined ? { gapStart: prevStepEnd } : {}),
-                gapEnd: curStart ?? end,
-              });
-              prevStepEnd = end;
-              toolWallByStep.push([]);
-              curStart = undefined;
-              curFirst = undefined;
+              callUsage.push(usage);
+              entry.ref.firstTokenPhase?.end();
+              entry.ref.firstTokenPhase = undefined;
+              if ((event.message as AssistantMessage).stopReason === "toolUse")
+                entry.ref.stepPhase = startPhase("step.gap");
             }
           });
           const drainCaptured = async (): Promise<void> => {
             const captured = entry.ref.llmCapture ?? [];
             entry.ref.llmCapture = undefined;
             if (!turn.recordLlmRequest) return;
-            const statsAligned = callStats.length === captured.length;
-            const dispatch = entry.ref.modelDispatch ?? [];
-            const dispatchWork: GapWork[] = dispatch
-              .filter((d): d is { start: number; first: number } => d.first !== undefined)
-              .map((d) => ({ phase: "model_dispatch" as const, start: d.start, end: d.first }));
-            const marksAligned = dispatch.length === captured.length;
-            entry.ref.modelDispatch = undefined;
-            const allGapWork = [...gapWork, ...dispatchWork];
+            const usageAligned = callUsage.length === captured.length;
             for (let step = 0; step < captured.length; step++) {
-              const stat = statsAligned ? callStats[step] : undefined;
-              const d = marksAligned ? dispatch[step] : undefined;
-              const marks: DispatchMarks | undefined = d
-                ? {
-                    ...(d.start !== undefined ? { onPayload: d.start } : {}),
-                    ...(d.first !== undefined ? { onResponse: d.first } : {}),
-                    ...(d.streamStart !== undefined ? { messageStart: d.streamStart } : {}),
-                    ...(d.prepareNextTurn !== undefined ? { prepareNextTurn: d.prepareNextTurn } : {}),
-                    ...(d.transformContext !== undefined ? { transformContext: d.transformContext } : {}),
-                  }
-                : undefined;
-              const gapPhases = statsAligned
-                ? decomposeGapPhases(stepWindows[step], allGapWork, stat?.stepGapMs ?? null, marks)
-                : undefined;
               try {
                 await turn.recordLlmRequest({
                   turnSeq: userEntry?.seq ?? null,
@@ -2030,12 +1782,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   promptEnvelope: captured[step]!.envelope,
                   truncated: captured[step]!.truncated,
                   transport: captured[step]!.transport ?? null,
-                  ttftMs: stat?.ttftMs ?? null,
-                  durationMs: stat?.durationMs ?? null,
-                  stepGapMs: stat?.stepGapMs ?? null,
-                  toolWallMs: toolWallByStep[step] ?? null,
-                  gapPhases: gapPhases ?? null,
-                  usage: stat?.usage ?? null,
+                  usage: usageAligned ? (callUsage[step] ?? null) : null,
                 });
               } catch (e) {
                 swallow("pi: llm request record", e);
@@ -2356,12 +2103,15 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (pendingSteers.length) entry.agentSession.clearQueue();
             unsubscribeMessageEnd?.();
             unsubscribe?.();
+            entry.ref.stepPhase?.end();
+            entry.ref.stepPhase = undefined;
+            entry.ref.firstTokenPhase?.end();
+            entry.ref.firstTokenPhase = undefined;
             steps.settleResults();
             activeSteps = undefined;
             entry.ref.emit = turn.emit;
             await thinkTail;
             await drainCaptured();
-            entry.ref.onGapWork = undefined;
             entry.ref.onModelRequest = undefined;
             toolAbort.abort();
             entry.ref.abortSignal = undefined;
@@ -2390,7 +2140,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               reply: "",
               runtimeHandoff: entry.ref.runtimeHandoff,
               modelCalls: entry.ref.modelCalls ?? 0,
-              cacheUsage: sumCacheUsage(callStats) ?? undefined,
+              cacheUsage: sumCacheUsage(callUsage) ?? undefined,
             };
           }
           const freshStopReason = freshAssistantStopReason();
@@ -2422,7 +2172,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               userAborted ? abortReason : "because the run was cancelled",
               steps.closing(reply),
             );
-            const cacheUsage = sumCacheUsage(callStats);
+            const cacheUsage = sumCacheUsage(callUsage);
             const base = {
               reply,
               stopped: true as const,
@@ -2447,7 +2197,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           });
           const pendingApprovals = entry.ref.pendingApprovals ?? [];
           const modelCalls = entry.ref.modelCalls ?? 0;
-          const cacheUsage = sumCacheUsage(callStats);
+          const cacheUsage = sumCacheUsage(callUsage);
           const silent = entry.ref.silentRequested ? { silent: true as const } : {};
           const base = pendingApprovals.length
             ? {
