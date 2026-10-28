@@ -310,7 +310,7 @@ export async function finishSystemPrompt(
     directoryIndexFor: (directory: DirectoryStore) => Promise<Map<string, DirectoryMember>>;
   },
 ): Promise<{ systemPrompt: string; volatileContext: string }> {
-  const { deps, input, actor, conversation, external, automatedTurn, strictReadOnly, reachAvailable, scopeId } = ctx;
+  const { deps, input, actor, conversation, external, automatedTurn, strictReadOnly, reachAvailable } = ctx;
   const { turnContextBlocks, configuredProviders, timeBlock, onboardingBlock, inventoryBudget } = framed;
   const { openSpeakerKeychain, credentialDescriptions, serviceCredRecords, grantedCredSlugs, actorIsOrgAdmin } =
     catalog;
