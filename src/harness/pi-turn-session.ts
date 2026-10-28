@@ -186,10 +186,6 @@ export function createTurnTools(
   return createAgentTools(state, {
     reachExec: opts?.reachExec,
     controlTools: opts?.controlTools,
-    execTimeoutMs: opts?.execTimeoutMs,
-    execTimeoutCeilingMs: opts?.execTimeoutCeilingMs,
-    backgroundJobTtlMs: opts?.backgroundJobTtlMs,
-    backgroundJobTtlMaxMs: opts?.backgroundJobTtlMaxMs,
     sessionTools: Boolean(turn.tools.sessionSyscalls),
     delegateWork: turn.delegateWork === true,
     mcpTools: turn.mcpTools,

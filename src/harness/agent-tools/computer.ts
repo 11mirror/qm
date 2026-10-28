@@ -8,6 +8,8 @@ import { computerVerdict } from "../../sandbox/sandbox.ts";
 import { MaskedExecutionError } from "../../security/secret-masking.ts";
 import { CommandDenied, NeedsApproval } from "../../tools/primitives.ts";
 import { errMessage } from "../../util/errors.ts";
+import { SANDBOX_CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
+import { BACKGROUND_JOB_TTL_MAX_MS, BACKGROUND_JOB_TTL_MS } from "../../connectors/background-exec-broker.ts";
 import { type ToolKit } from "./kit.ts";
 import type { TurnHalt } from "../turn-tool-state.ts";
 import {
@@ -18,6 +20,16 @@ import {
   optionalString,
   text,
 } from "./shared.ts";
+
+export const EXEC_TIMEOUT_DEFAULT_MS = 120_000;
+export const EXEC_TIMEOUT_MAX_MS = 300_000;
+const EXEC_TIMEOUT_SEC = EXEC_TIMEOUT_DEFAULT_MS / 1000;
+const EXEC_CEILING_SEC = EXEC_TIMEOUT_MAX_MS / 1000;
+const BG_TTL_SEC = Math.round(BACKGROUND_JOB_TTL_MS / 1000);
+const BG_TTL_MAX_SEC = Math.round(BACKGROUND_JOB_TTL_MAX_MS / 1000);
+const BG_TTL_MIN = Math.round(BG_TTL_SEC / 60);
+const BG_TTL_MAX_MIN = Math.round(BG_TTL_MAX_SEC / 60);
+const CAPABILITY_EXPIRY = `Those turn tokens expire ${SANDBOX_CAPABILITY_TTL_MS / 3_600_000} hours after the launching turn started (then they 401), so publish checkpoints to Files before that and keep the file ID.`;
 
 export function computerTools(kit: ToolKit, halt: Pick<TurnHalt, "pauseForApproval">) {
   const { EXECUTE_TIMEOUT_GUIDANCE, executeBaseParams, blockOnApproval } = executeShared(kit, halt);
@@ -36,10 +48,10 @@ export function computerTools(kit: ToolKit, halt: Pick<TurnHalt, "pauseForApprov
 }
 
 function executeShared(kit: ToolKit, halt: Pick<TurnHalt, "pauseForApproval">) {
-  const { execTimeoutSec, execCeilingSec, bgTtlSec, bgTtlMaxSec, recordResult } = kit;
+  const { recordResult } = kit;
   const EXECUTE_TIMEOUT_GUIDANCE =
     "Commands may run under POSIX sh; wrap bash-only syntax in bash -c. " +
-    `Timeout default ${execTimeoutSec}s, max ${execCeilingSec}s: raise \`timeout_seconds\` for builds/installs/tests, lower it for quick commands. ` +
+    `Timeout default ${EXEC_TIMEOUT_SEC}s, max ${EXEC_CEILING_SEC}s: raise \`timeout_seconds\` for builds/installs/tests, lower it for quick commands. ` +
     "For anything longer, and for servers, use background:true (never a shell ampersand) and the background tool. " +
     "On hangs or unexplained transport errors use sandbox status/restart; if that fails twice, create a fresh sandbox, set it default, and recover work from git or Files.";
 
@@ -59,7 +71,7 @@ function executeShared(kit: ToolKit, halt: Pick<TurnHalt, "pauseForApproval">) {
     timeout_seconds: Type.Optional(
       Type.Integer({
         minimum: 1,
-        description: `Seconds until kill (exit 124); default ${execTimeoutSec}, max ${execCeilingSec}. With background:true, the job lifetime (default ${bgTtlSec}, max ${bgTtlMaxSec}).`,
+        description: `Seconds until kill (exit 124); default ${EXEC_TIMEOUT_SEC}, max ${EXEC_CEILING_SEC}. With background:true, the job lifetime (default ${BG_TTL_SEC}, max ${BG_TTL_MAX_SEC}).`,
       }),
     ),
 
@@ -422,7 +434,6 @@ function executeTool(
 }
 
 function backgroundTool(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeof executeShared>, "blockOnApproval">) {
-  const { execCeilingSec, bgTtlMin, bgTtlMaxMin, capabilityExpiry } = kit;
   const background = defineTool({
     name: "background",
     label: "background",
@@ -430,8 +441,8 @@ function backgroundTool(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeo
       "Manage a job started with execute background:true; it keeps running across turns. " +
       "poll: new output and running/exited state (pass the last cursor as since_cursor; ~64KB per read). send_input: write to stdin. stop: terminate it. list: your jobs. " +
       "watch: wake this conversation as a new turn on new output (optionally only lines matching `pattern`) and once on exit, to keep the user posted on long work; pass since_cursor and `instructions` for your future self. unwatch: disarm by monitor_id. " +
-      `Jobs stop after a hard TTL (default ${bgTtlMin} min, max ${bgTtlMaxMin}); anything that finishes within ${execCeilingSec}s should just use execute. ` +
-      `The job has the same environment as foreground execute ($AGENT_API_URL, $AGENT_API_TOKEN, $AGENT_CREDENTIAL_TOKEN). ${capabilityExpiry} It cannot deliver files; attach them from a live turn.\n` +
+      `Jobs stop after a hard TTL (default ${BG_TTL_MIN} min, max ${BG_TTL_MAX_MIN}); anything that finishes within ${EXEC_CEILING_SEC}s should just use execute. ` +
+      `The job has the same environment as foreground execute ($AGENT_API_URL, $AGENT_API_TOKEN, $AGENT_CREDENTIAL_TOKEN). ${CAPABILITY_EXPIRY} It cannot deliver files; attach them from a live turn.\n` +
       "INTERACTIVE LOGINS (`gh auth login` etc., anything printing a URL/code then waiting) must run with background:true: relay the URL/code to the user, then watch or poll until exit; answer prompts with send_input; never run one in the foreground or stop it mid-flight. Read and follow the `interactive-login` skill first.",
     parameters: backgroundParams(),
     execute: (callId, params) => runBackgroundAction(kit, blockOnApproval, callId, params),

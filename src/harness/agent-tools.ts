@@ -9,7 +9,7 @@ import { memoryTools } from "./agent-tools/memory.ts";
 import { workspaceTools } from "./agent-tools/workspace.ts";
 import { computerTools } from "./agent-tools/computer.ts";
 import { createToolKit } from "./agent-tools/kit.ts";
-export { EXEC_TIMEOUT_DEFAULT_MS, EXEC_TIMEOUT_MAX_MS } from "./agent-tools/kit.ts";
+export { EXEC_TIMEOUT_DEFAULT_MS, EXEC_TIMEOUT_MAX_MS } from "./agent-tools/computer.ts";
 import {
   withRetrySafety,
   withToolApprovalGate,
@@ -27,10 +27,6 @@ import { isObj } from "../util/objects.ts";
 export interface AgentToolsOptions {
   sessionTools?: boolean;
   reachExec?: boolean;
-  execTimeoutMs?: number;
-  execTimeoutCeilingMs?: number;
-  backgroundJobTtlMs?: number;
-  backgroundJobTtlMaxMs?: number;
   mcpTools?: McpToolDescriptor[];
   controlTools?: boolean;
   readOnly?: boolean;
