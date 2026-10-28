@@ -282,16 +282,19 @@ export function createMcpToolService(opts: {
     const key = catalogKey(server, principalId);
     const known = catalogInstructionsKnown.get(key);
     if (known && now() - known.at < CATALOG_INSTRUCTIONS_TTL_MS) return known.text;
+    const stampUnlessNewer = (text: string): void => {
+      if (catalogInstructionsKnown.peek(key) === known) catalogInstructionsKnown.set(key, { text, at: now() });
+    };
     const listing = catalogListing(server, principalId);
     listing.catch((e: unknown) => {
-      catalogInstructionsKnown.set(key, { text: known?.text ?? "", at: now() });
+      stampUnlessNewer(known?.text ?? "");
       if (!(e instanceof SignInRequired)) swallow("mcp: catalog instructions", e);
     });
     if (known) return known.text;
     return withTimeout(() => listing, CATALOG_INSTRUCTIONS_WAIT_MS, `${server.id} catalog listing`)
       .then((listed) => listed.instructions)
       .catch(() => {
-        catalogInstructionsKnown.set(key, { text: "", at: now() });
+        stampUnlessNewer("");
         return "";
       });
   }
