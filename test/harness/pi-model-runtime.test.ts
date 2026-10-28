@@ -127,7 +127,7 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
                   models: { [modelId]: "routed-model" },
                 },
               }
-            : { apiKey: "sk-offline-test-key" }),
+            : { resolveProviderKeys: async () => ({ anthropic: "sk-offline-test-key" }) }),
         });
         const mandatoryThinking = getRequiredModel(modelId).thinkingLevelMap?.off === null;
         for (const effortLevel of [
