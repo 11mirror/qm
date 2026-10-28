@@ -71,7 +71,7 @@ export interface Conversation {
   publishMembers?: Principal[];
 }
 
-export type SessionType = "dm" | "channel" | "group";
+export type SessionType = ConversationKind;
 
 export interface SpawnMeta {
   source?: TurnSource;
@@ -614,20 +614,11 @@ export interface PendingApproval {
   kind?: "approval" | "input";
 }
 
-export interface PendingApprovalRecord {
+export interface PendingApprovalRecord extends Omit<PendingApproval, "requestId" | "reason"> {
   sessionId: string;
-  command: string;
   createdAt?: number;
   reason?: string;
-  matched?: string;
-  purpose?: string;
-  summary?: string;
-  summaryDetail?: string;
-  approvalKey?: string;
-  grantModes?: ApprovalGrantModes;
   request?: TurnRequest;
-  blocksInput?: boolean;
-  kind?: "approval" | "input";
 }
 
 type ApprovalScope = "once" | "session" | "always";

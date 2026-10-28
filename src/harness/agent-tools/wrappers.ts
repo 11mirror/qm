@@ -2,7 +2,7 @@ import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { redactSensitiveKeys } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { toolCallApprovalKey } from "../../core/approval-id.ts";
-import { errMessage, reportFailure, swallow } from "../../util/errors.ts";
+import { errMessage, reportFailure } from "../../util/errors.ts";
 import { isObj } from "../../util/objects.ts";
 import type { ToolRuntime, TurnHalt } from "../turn-tool-state.ts";
 import { optionalBoolean, text } from "./shared.ts";
@@ -140,25 +140,6 @@ export function withToolApprovalGate(
         return await (inner as (callId: string, params: unknown) => unknown)(callId, params);
       } finally {
         release();
-      }
-    },
-  } as ToolDefinition;
-}
-
-export function withToolBodyTiming(tool: ToolDefinition, ref: Pick<ToolRuntime, "reportGapWork">): ToolDefinition {
-  const inner = tool.execute.bind(tool);
-  return {
-    ...tool,
-    async execute(callId: string, params: unknown) {
-      const start = Date.now();
-      try {
-        return await (inner as (callId: string, params: unknown) => unknown)(callId, params);
-      } finally {
-        try {
-          ref.reportGapWork({ phase: "tool_body", tool: tool.name, start, end: Date.now() });
-        } catch (error) {
-          swallow("tool body timing sink", error);
-        }
       }
     },
   } as ToolDefinition;

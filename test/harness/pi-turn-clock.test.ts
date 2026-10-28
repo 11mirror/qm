@@ -164,13 +164,12 @@ test("whitespace-only counts as empty", () => {
 });
 
 test("explicit finish_silently is intentional silence, never nudged", () => {
-  const { halt } = createTurnToolState({ current: null, silentRequested: true });
+  const { halt } = createTurnToolState({ current: null });
+  halt.setSilent(true);
   assert.equal(emptyEndingNote(base({ halted: halt.halted() })), null);
 });
 
-test("a paused turn (approval or input wall) ends mid-loop legitimately", () => {
-  const paused = createTurnToolState({ current: null, pausedOnApproval: true }).halt;
-  assert.equal(emptyEndingNote(base({ halted: paused.halted() })), null);
+test("a turn paused on approval ends mid-loop legitimately", () => {
   const approval = createTurnToolState({ current: null }).halt;
   approval.pauseForApproval({ command: "deploy", reason: "needs approval" });
   assert.equal(emptyEndingNote(base({ halted: approval.halted() })), null);

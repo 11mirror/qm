@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "../../../src/api/server.ts";
-import { signRequest } from "../../../src/auth/source-auth.ts";
+import { signRequest } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { buildApp } from "../../support/build-app.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../../src/auth/capability-token.ts";
 import { scopeId } from "../../../src/types.ts";

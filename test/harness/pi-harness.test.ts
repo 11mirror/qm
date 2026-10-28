@@ -34,7 +34,6 @@ function recordFetch(t: TestContext, headers: Headers[] = []): string[] {
 const companyHarness = (keys: Record<string, string>) =>
   createPiHarness({
     defaultModelId: "gpt-5.6-sol",
-    captureRequests: false,
     resolveProviderKeys: async () => keys,
     companyModelId: codexSubscriptionModelId,
   });
@@ -63,7 +62,6 @@ test("without a company subscription a plain OpenAI id stays metered", async (t)
   const urls = recordFetch(t);
   const harness = createPiHarness({
     defaultModelId: "gpt-5.6-sol",
-    captureRequests: false,
     resolveProviderKeys: async () => ({ openai: "sk-metered" }),
   });
   await assert.rejects(async () => harness.models.oneShot?.("system", "hi"), /offline test response/);
@@ -78,7 +76,6 @@ test("a subscription-only deployment's default utility model is served by the Ch
   const config = { ...loadConfig({}), codexAuthCredential: "cred-1" };
   const harness = createPiHarness({
     ...piHarnessConfigOptions(config),
-    captureRequests: false,
     resolveProviderKeys: async () => ({ "openai-codex": subscriptionToken }),
     companyModelId: codexSubscriptionModelId,
   });
@@ -94,7 +91,6 @@ test("a Claude subscription token as Pi's Anthropic key is sent as OAuth bearer 
   const urls = recordFetch(t, headers);
   const harness = createPiHarness({
     defaultModelId: "claude-sonnet-5",
-    captureRequests: false,
     resolveProviderKeys: async () => ({ anthropic: "sk-ant-oat01-company" }),
   });
   await assert.rejects(async () => harness.models.oneShot?.("system", "hi"), /offline test response/);
@@ -109,7 +105,7 @@ const scope = "personal:tester" as ScopeId;
 const NOTE = "(system note: your previous attempt at the request above was paused mid-turn and has resumed.)";
 
 test("the pi harness re-runs a retry-safe interrupted call before the model sees the resumed turn", async () => {
-  const harness = createPiHarness({ apiKey: "sk-test" });
+  const harness = createPiHarness({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const entries: Item[] = [];
   const queries: string[] = [];
   const requests: Array<Array<{ role: string; content: Array<Record<string, unknown>> | string }>> = [];
@@ -517,7 +513,7 @@ test("model utilities resolve provider credentials for every call", async () => 
 });
 
 test("prior-turn bootstrap reaches the model before the first prompt", async () => {
-  const harness = createPiHarness({ apiKey: "sk-test" });
+  const harness = createPiHarness({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const bodies: string[] = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
@@ -571,7 +567,7 @@ function goalTurn(sessionId: string, cancel: AbortSignal, entries: Item[]): Harn
 }
 
 test("an active goal stops continuing once a model round fails at the provider", async () => {
-  const harness = createPiHarness({ apiKey: "sk-test" });
+  const harness = createPiHarness({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const controller = new AbortController();
   const entries: Item[] = [];
   const realFetch = globalThis.fetch;
@@ -638,7 +634,7 @@ function textStream(text: string, stopReason = "end_turn"): Response {
 
 test("a refused goal round falls back to another model and the goal keeps going", async () => {
   const harness = createPiHarness({
-    apiKey: "sk-test",
+    resolveProviderKeys: async () => ({ anthropic: "sk-test" }),
     resolveFallbackRuntime: () => ({ modelId: "claude-sonnet-5" }),
   });
   const controller = new AbortController();
@@ -665,7 +661,7 @@ test("a refused goal round falls back to another model and the goal keeps going"
 });
 
 test("each governor checkpoint sees only the work since the last checkpoint, not the whole session", async () => {
-  const harness = createPiHarness({ apiKey: "sk-test" });
+  const harness = createPiHarness({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const controller = new AbortController();
   const entries: Item[] = [];
   const realFetch = globalThis.fetch;
@@ -695,7 +691,7 @@ test("each governor checkpoint sees only the work since the last checkpoint, not
 
 test("a goal never falls back to a model that already refused in the same turn", async () => {
   const harness = createPiHarness({
-    apiKey: "sk-test",
+    resolveProviderKeys: async () => ({ anthropic: "sk-test" }),
     resolveFallbackRuntime: () => ({ modelId: "claude-sonnet-5" }),
   });
   const controller = new AbortController();

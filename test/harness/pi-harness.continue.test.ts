@@ -76,7 +76,7 @@ function sse(text: string): Response {
 }
 
 async function runResume(history: Item[], overrides: Partial<HarnessTurnInput> = {}) {
-  const harness = createPiHarness({ apiKey: "sk-test" });
+  const harness = createPiHarness({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const requests: RequestBody[] = [];
   const llmTurnSeqs: Array<number | null> = [];

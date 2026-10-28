@@ -160,43 +160,6 @@ export interface LlmTransportMeta {
   gateway?: Record<string, string>;
 }
 
-export type GapPhase =
-  | "provision"
-  | "creds"
-  | "dir_cleanup"
-  | "proc_reconcile"
-  | "auth_probe"
-  | "skills_materialize"
-  | "recall"
-  | "memory_write"
-  | "file_op"
-  | "exec"
-  | "model_dispatch"
-  | "dispatch_glue"
-  | "loop_reentry"
-  | "context_assemble"
-  | "glue_other"
-  | "tool_body"
-  | "pre_tool"
-  | "in_tool_untagged"
-  | "post_tool"
-  | "tool_ledger"
-  | "persist"
-  | "stream_open";
-
-export interface GapWork {
-  phase: GapPhase;
-  start: number;
-  end: number;
-  tool?: string;
-}
-
-export type GapPhases = Partial<Record<GapPhase, number>> & {
-  residual?: number;
-} & {
-  [key: `tool_body.${string}`]: number | undefined;
-};
-
 export interface LlmRequestRecord {
   id: string;
   sessionId: string;
@@ -210,9 +173,6 @@ export interface LlmRequestRecord {
   truncated: boolean;
   ttftMs: number | null;
   durationMs: number | null;
-  stepGapMs: number | null;
-  toolWallMs: number[] | null;
-  gapPhases: GapPhases | null;
   usage: LlmCallUsage | null;
   transport: LlmTransportMeta | null;
 }
@@ -235,9 +195,6 @@ export interface NewLlmRequest {
   truncated?: boolean;
   ttftMs?: number | null;
   durationMs?: number | null;
-  stepGapMs?: number | null;
-  toolWallMs?: number[] | null;
-  gapPhases?: GapPhases | null;
   usage?: LlmCallUsage | null;
   transport?: LlmTransportMeta | null;
 }

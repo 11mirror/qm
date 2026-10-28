@@ -13,11 +13,10 @@ import { type GoalRecord, openGoal } from "../../harness/goal.ts";
 import { type Destination, type TurnRuntime } from "../../types.ts";
 import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
 import { reachPost } from "../../reach/reach.ts";
-import type { GapPhase } from "../../sessions/session-store.ts";
 import { isUserMessage, type Item, type NewItem } from "../../sessions/items.ts";
 import { environmentDelta } from "../environment-facts.ts";
 import { estimateCostUsd } from "../../ratelimit/budget.ts";
-import type { GapWork, HarnessTurnInput, RuntimeChoice } from "../../harness/harness.ts";
+import type { HarnessTurnInput, RuntimeChoice } from "../../harness/harness.ts";
 import { forModelContext } from "../../harness/context-compaction.ts";
 import { securityScreenChunks, toolLabelOf, type ToolResultScreenInput } from "../../security/security-screen.ts";
 import { artifactImageLoader } from "../../harness/replay-images.ts";
@@ -54,12 +53,6 @@ export interface TurnRunState {
   turnStart: number;
   emittedEntries: Item[];
   tailOwnsReclaim: boolean;
-  gap: GapWorkFeed;
-}
-
-export interface GapWorkFeed {
-  listener?: (work: GapWork) => void;
-  emit: (phase: GapPhase, start: number, end: number) => void;
 }
 
 export interface SegmentTurn {
@@ -203,68 +196,62 @@ function createSegmentEmit(
   const { publishFirstAck, syntheticPrompt } = turn.ready;
   const { lease, run } = turn;
   const { emittedEntries } = run;
-  const emitGapWork = run.gap.emit;
   let recordedRecall = false;
   const emit: HarnessTurnInput["emit"] = async (entry) => {
-    const persistStart = Date.now();
-    try {
-      const stored = ((): NewItem => {
-        if (
-          (entry.kind === "AgentMessage" && !entry.variant) ||
-          entry.kind === "Elicitation" ||
-          ((entry.kind === "ToolResult" || entry.kind === "ToolCall") && entry.body?.blocked === "needs_approval")
-        ) {
-          const body = { ...entry.body };
-          if (typeof body.workStartedAt !== "number") body.workStartedAt = input.runStartedAt ?? coreReceivedAt;
-          if (typeof body.workFinishedAt !== "number") body.workFinishedAt = Date.now();
-          return { ...entry, body };
-        }
-        if (entry.kind !== "UserMessage" && entry.kind !== "SteeringMessage") return entry;
-        const body: Record<string, unknown> = { ...entry.body };
-        const steered = entry.kind === "SteeringMessage";
-        const overheard = body.overheard === true;
-        const turnStart = !steered && !overheard;
-        if (!recordedRecall && turnStart) {
-          recordedRecall = true;
-          body.environmentSnapshot = snapshot.record;
-          if (environment) body.environment = environment;
-          if (recall.text) body.memoryRecall = recall.record;
-        }
-        delete body.speakerId;
-        if (humanInput && !syntheticPrompt && !continuation && turnStart) body.speakerId = actor.id;
-        if (actor.displayName?.trim() && typeof body.name !== "string") body.name = actor.displayName.trim();
-        if (input.displayText?.trim() && entry.text === input.text && typeof body.display !== "string")
-          body.display = input.displayText;
-        if ((partial || continuation) && turnStart) body.resumeNote = true;
-        return entry.kind === "UserMessage"
-          ? { ...entry, body, ...((syntheticPrompt || continuation) && { hidden: true }) }
-          : { ...entry, body };
-      })();
-      const appended = await withManagedRosterVersion(() => deps.sessions.append(lease, stored));
-      emittedEntries.push(appended);
-      if (isUserMessage(appended) && spine.turnUserEntrySeq === undefined) {
-        spine.turnUserEntrySeq = appended.seq;
-        if (input.runId && deps.runs)
-          await deps.runs
-            .noteTurnUserSeq(input.runId, appended.seq)
-            .catch(swallowAs("orchestrator: record turn boundary", false));
+    const stored = ((): NewItem => {
+      if (
+        (entry.kind === "AgentMessage" && !entry.variant) ||
+        entry.kind === "Elicitation" ||
+        ((entry.kind === "ToolResult" || entry.kind === "ToolCall") && entry.body?.blocked === "needs_approval")
+      ) {
+        const body = { ...entry.body };
+        if (typeof body.workStartedAt !== "number") body.workStartedAt = input.runStartedAt ?? coreReceivedAt;
+        if (typeof body.workFinishedAt !== "number") body.workFinishedAt = Date.now();
+        return { ...entry, body };
       }
-      if (isUserMessage(appended)) run.failureUserItem = undefined;
-      if (appended.kind === "ToolCall") {
-        run.toolCalls += 1;
-        if (run.toolCalls === 1 && input.runId) {
-          if (!input.surfaceTools) {
-            deps.turnStream?.noteToolCall(input.runId);
-          } else {
-            publishFirstAck(appended.tool === surfaceName && appended.body.action === "post");
-          }
-        }
+      if (entry.kind !== "UserMessage" && entry.kind !== "SteeringMessage") return entry;
+      const body: Record<string, unknown> = { ...entry.body };
+      const steered = entry.kind === "SteeringMessage";
+      const overheard = body.overheard === true;
+      const turnStart = !steered && !overheard;
+      if (!recordedRecall && turnStart) {
+        recordedRecall = true;
+        body.environmentSnapshot = snapshot.record;
+        if (environment) body.environment = environment;
+        if (recall.text) body.memoryRecall = recall.record;
       }
-      await mirrorRunActivity(appended);
-      return appended;
-    } finally {
-      emitGapWork("persist", persistStart, Date.now());
+      delete body.speakerId;
+      if (humanInput && !syntheticPrompt && !continuation && turnStart) body.speakerId = actor.id;
+      if (actor.displayName?.trim() && typeof body.name !== "string") body.name = actor.displayName.trim();
+      if (input.displayText?.trim() && entry.text === input.text && typeof body.display !== "string")
+        body.display = input.displayText;
+      if ((partial || continuation) && turnStart) body.resumeNote = true;
+      return entry.kind === "UserMessage"
+        ? { ...entry, body, ...((syntheticPrompt || continuation) && { hidden: true }) }
+        : { ...entry, body };
+    })();
+    const appended = await withManagedRosterVersion(() => deps.sessions.append(lease, stored));
+    emittedEntries.push(appended);
+    if (isUserMessage(appended) && spine.turnUserEntrySeq === undefined) {
+      spine.turnUserEntrySeq = appended.seq;
+      if (input.runId && deps.runs)
+        await deps.runs
+          .noteTurnUserSeq(input.runId, appended.seq)
+          .catch(swallowAs("orchestrator: record turn boundary", false));
     }
+    if (isUserMessage(appended)) run.failureUserItem = undefined;
+    if (appended.kind === "ToolCall") {
+      run.toolCalls += 1;
+      if (run.toolCalls === 1 && input.runId) {
+        if (!input.surfaceTools) {
+          deps.turnStream?.noteToolCall(input.runId);
+        } else {
+          publishFirstAck(appended.tool === surfaceName && appended.body.action === "post");
+        }
+      }
+    }
+    await mirrorRunActivity(appended);
+    return appended;
   };
   return emit;
 }
@@ -429,7 +416,7 @@ function segmentCallbacks(
   const { spineFirst, earlyTaskAck } = turn.ready.turnTools;
   const { publishFirstAck } = turn.ready;
   const { session, run, observeSecurityData } = turn;
-  const { emittedEntries, gap: gapWork } = run;
+  const { emittedEntries } = run;
   return {
     observeToolResult: ({ tool, result, unscreenable, provenance, source }: ToolResultScreenInput) => {
       if (provenance !== "external" || unscreenable) return;
@@ -481,9 +468,6 @@ function segmentCallbacks(
           await (phase ? started : started.catch(swallowAs("orchestrator: text-start activity", undefined)));
         }
       }
-    },
-    onGapWork: (cb) => {
-      gapWork.listener = cb;
     },
     recordModelCall: (rec) => {
       deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });

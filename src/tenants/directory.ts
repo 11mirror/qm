@@ -13,15 +13,6 @@ const PREPARE_RETRY_MS = 30_000;
 
 export type HomeHosts = Omit<HostRoute<Tenant>, "target">;
 
-export interface TenantDirectory {
-  byHost(host: string | undefined): Promise<Tenant | undefined>;
-  homeHosts(): HomeHosts;
-  active(): Promise<Tenant[]>;
-  exists(id: string): Promise<boolean>;
-  watch(listener: (active: Tenant[]) => void): void;
-  close(): Promise<void>;
-}
-
 interface Snapshot {
   at: number;
   home: HomeHosts;
@@ -67,7 +58,7 @@ function servable(records: TenantRecord[], homeId: string, opts: DirectoryOption
   return kept;
 }
 
-export function createTenantDirectory(opts: DirectoryOptions): TenantDirectory {
+export function createTenantDirectory(opts: DirectoryOptions) {
   const now = opts.now ?? Date.now;
   let current: Snapshot | undefined;
   let loading: Promise<Snapshot> | null = null;
@@ -181,29 +172,31 @@ export function createTenantDirectory(opts: DirectoryOptions): TenantDirectory {
   }
 
   return {
-    async byHost(raw) {
+    async byHost(raw: string | undefined) {
       const host = normalizeHost(raw);
       if (!host) return undefined;
       const found = routeForHost((await snapshot()).routes, host) ?? routeForHost((await fresher()).routes, host);
       if (found) await ready(found);
       return found;
     },
-    homeHosts() {
+    homeHosts(): HomeHosts {
       return current?.home ?? homeHostsOf([]);
     },
     async active() {
       await snapshot();
       return readyTenants();
     },
-    async exists(id) {
+    async exists(id: string) {
       return (await opts.pool.q("SELECT 1 FROM tenants WHERE id = $1::uuid", [id])).length > 0;
     },
-    watch(listener) {
+    watch(listener: (active: Tenant[]) => void) {
       listeners.push(listener);
     },
     close: unsubscribe,
   };
 }
+
+export type TenantDirectory = ReturnType<typeof createTenantDirectory>;
 
 let directory: TenantDirectory | undefined;
 

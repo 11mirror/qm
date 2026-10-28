@@ -18,7 +18,6 @@ import type {
   WorkspaceLayer,
 } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import type { GapWork } from "../sessions/session-store.ts";
 import type { SessionSyscalls } from "../subagents/session-tools.ts";
 import { type ToolLedger } from "../runs/tool-ledger.ts";
 import { type RunSignalStore } from "../runs/run-signal-store.ts";
@@ -118,7 +117,6 @@ export interface ToolContextDeps {
   attempt?: number;
   backgroundBroker?: BackgroundExecBroker;
   monitorBroker?: MonitorBroker;
-  onGapWork?: (work: GapWork) => void;
   control?: ControlService;
   controlClaims?: CapabilityClaims;
   webhookPublicUrl?: string;
@@ -141,15 +139,15 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     provisionForCommand,
     authorizeExecution,
   } = sandboxAccess(deps);
-  const { runId, timed, once, controlOp, surfaceOp } = callLedger(deps);
+  const { runId, once, controlOp, surfaceOp } = callLedger(deps);
   const { selectCredentials, stageCredentials } = credentialStaging(deps, { writableScopeId });
   return {
     ...contextBasics(deps, { writableScopeId, accessSandbox }),
     ...computerOps(deps, { writableScopeId, accessSandbox }),
-    ...executeOp(deps, { writableScopeId, provisionForCommand, timed, once, selectCredentials, stageCredentials }),
-    ...fileOps(deps, { writableScopeId, memory, fallbackMounts, persistExclude, machine, timed, once }),
+    ...executeOp(deps, { writableScopeId, provisionForCommand, once, selectCredentials, stageCredentials }),
+    ...fileOps(deps, { writableScopeId, memory, fallbackMounts, persistExclude, machine, once }),
     ...publishOps(deps, { writableScopeId, accessSandbox, machine, once }),
-    ...memoryAndHistoryOps(deps, { writableScopeId, memory, runId, timed, once }),
+    ...memoryAndHistoryOps(deps, { writableScopeId, memory, runId, once }),
     ...backgroundOps(deps, {
       writableScopeId,
       provisionForCommand,

@@ -1,3 +1,4 @@
+import { LRUCache } from "lru-cache";
 import type { RunStop } from "../runs/run-store.ts";
 import { contextSummary } from "../sessions/session-store.ts";
 import { isOverheard, isUserMessage, itemFields, proseText, stepMessage, type Item } from "../sessions/items.ts";
@@ -45,12 +46,15 @@ function modelReplayable(items: Item[]): Item[] {
   );
 }
 
+export function sinceLatestSummary(items: Item[]): { latest: Item | undefined; after: Item[] } {
+  const latest = items.findLast((e) => contextSummary(e));
+  const throughSeq = latest ? contextSummary(latest)!.throughSeq : Number.NEGATIVE_INFINITY;
+  return { latest, after: items.filter((e) => !contextSummary(e) && e.seq > throughSeq) };
+}
+
 export function forModelContext(items: Item[]): Item[] {
-  const replayable = modelReplayable(items);
-  const latest = replayable.findLast((e) => contextSummary(e));
-  if (!latest) return replayable;
-  const throughSeq = contextSummary(latest)!.throughSeq;
-  return [latest, ...replayable.filter((e) => !contextSummary(e) && e.seq > throughSeq)];
+  const { latest, after } = sinceLatestSummary(modelReplayable(items));
+  return latest ? [latest, ...after] : after;
 }
 
 export function forSearchView(items: Item[]): Item[] {
@@ -65,8 +69,7 @@ export function forSearchView(items: Item[]): Item[] {
   );
 }
 
-const itemTokenCache = new Map<string, number>();
-const ITEM_TOKEN_CACHE_MAX = 50_000;
+const itemTokenCache = new LRUCache<string, number>({ max: 50_000 });
 
 export function estimateItemTokens(item: Item): number {
   return estimateItemTextTokens(item) + (isUserMessage(item) ? documentAttachmentTokens(item.body) : 0);
@@ -82,9 +85,6 @@ function estimateItemTextTokens(item: Item): number {
   const hit = itemTokenCache.get(key);
   if (hit !== undefined) return hit;
   const n = countTokens(text);
-  if (itemTokenCache.size >= ITEM_TOKEN_CACHE_MAX) {
-    itemTokenCache.delete(itemTokenCache.keys().next().value!);
-  }
   itemTokenCache.set(key, n);
   return n;
 }
@@ -175,12 +175,7 @@ export function planCompaction(
   keepRecentTokenFraction: number,
   reuseBudgetTokens: number = maxTokens,
 ): CompactionPlan | null {
-  const latestSummary = history.findLast((item) => contextSummary(item));
-  const latestPayload = latestSummary ? contextSummary(latestSummary) : null;
-  const afterSummary = history.filter((entry) => {
-    if (contextSummary(entry)) return false;
-    return latestPayload ? entry.seq > latestPayload.throughSeq : true;
-  });
+  const { latest: latestSummary, after: afterSummary } = sinceLatestSummary(history);
   const keepRecentTokens = Math.floor(maxTokens * keepRecentTokenFraction);
   if (latestSummary && estimateHistoryTokens([latestSummary, ...afterSummary]) <= reuseBudgetTokens) {
     return { toSummarize: [], kept: [latestSummary, ...afterSummary], reuse: latestSummary };

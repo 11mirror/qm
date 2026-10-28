@@ -3,7 +3,6 @@ import type { Principal, Resolution, ScopeId, Session } from "../../types.ts";
 import { personalScope } from "../../types.ts";
 import { intersectEgressPolicies } from "../../resolution/egress-policy.ts";
 import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
-import type { GapPhase } from "../../sessions/session-store.ts";
 import { type SandboxHandle, supportsProcessSessions, SandboxProvisionCleanupError } from "../../sandbox/sandbox.ts";
 import {
   accessConversationSandbox,
@@ -46,7 +45,6 @@ export interface TurnSandboxContext {
   egressTokenForPolicy?: (policy: Resolution["egress"]) => Promise<string | undefined>;
   openResourceAccess?: boolean;
   visibleSkillsForTurn: (sources?: readonly string[]) => Promise<SkillResolution[]>;
-  emitGapWork: (phase: GapPhase, start: number, end: number) => void;
 }
 
 export function createTurnSandboxes(ctx: TurnSandboxContext) {
@@ -229,9 +227,9 @@ async function releaseHold(t: TurnSandboxState, handle: SandboxHandle): Promise<
 }
 
 function provision(t: TurnSandboxState, eager = false): Promise<SandboxHandle> {
-  const { emitGapWork, box } = t;
+  const { box } = t;
   if (!eager) box.used = true;
-  t.provisionInFlight ??= doProvision(t, eager ? () => {} : emitGapWork, eager).catch((err: unknown) => {
+  t.provisionInFlight ??= doProvision(t, eager).catch((err: unknown) => {
     t.provisionInFlight = null;
     recordProvisionFailure(t, err, eager);
     throw err;
@@ -252,11 +250,7 @@ function recordProvisionFailure(t: TurnSandboxState, error: unknown, eager: bool
   reportSandboxError(t, "provision_failed", error);
 }
 
-async function doProvision(
-  t: TurnSandboxState,
-  emit: TurnSandboxContext["emitGapWork"],
-  eager: boolean,
-): Promise<SandboxHandle> {
+async function doProvision(t: TurnSandboxState, eager: boolean): Promise<SandboxHandle> {
   const {
     deps,
     input,
@@ -284,7 +278,6 @@ async function doProvision(
   });
   box.pending = handle;
   await holdResource(t, handle);
-  emit("provision", provisionStart, Date.now());
   box.provisionMs = Date.now() - provisionStart;
   deps.auditLog?.record({
     at: Date.now(),
@@ -302,11 +295,8 @@ async function doProvision(
       eager,
     }),
   });
-  const dirCleanupStart = Date.now();
   await prepareTurnFiles(t, handle);
-  emit("dir_cleanup", dirCleanupStart, Date.now());
   if (deps.processes && supportsProcessSessions(deps.sandbox)) {
-    const procReconcileStart = Date.now();
     try {
       await reconcileProcesses(deps.sandbox, handle, deps.processes, memoryScopeId, (exited, processId) =>
         finishProcessCredentials(
@@ -330,8 +320,6 @@ async function doProvision(
         },
         err,
       );
-    } finally {
-      emit("proc_reconcile", procReconcileStart, Date.now());
     }
   }
   box.handle = handle;
@@ -344,10 +332,9 @@ function skillsRoot(t: TurnSandboxState, r: SkillResolution) {
 }
 
 async function materializeSkillTree(t: TurnSandboxState, handle: SandboxHandle, r: SkillResolution): Promise<void> {
-  const { deps, session, scopeId, emitGapWork, laidTrees } = t;
+  const { deps, session, scopeId, laidTrees } = t;
   const treeKey = `${handle.resourceId ?? handle.id}:${skillDir(skillsRoot(t, r), r)}`;
   if (laidTrees.has(treeKey)) return;
-  const start = Date.now();
   try {
     const bundles = deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [r]) : [];
     await laySkillTree(deps.sandbox, handle, skillsRoot(t, r), r, bundles);
@@ -364,8 +351,6 @@ async function materializeSkillTree(t: TurnSandboxState, handle: SandboxHandle, 
       err,
     );
     throw err;
-  } finally {
-    emitGapWork("skills_materialize", start, Date.now());
   }
 }
 

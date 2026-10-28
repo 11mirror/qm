@@ -15,7 +15,13 @@ import {
 import type { ScopeId } from "../../src/types.ts";
 import type { NewItem } from "../../src/sessions/items.ts";
 
-function toolbox(overrides: Partial<TurnToolStateInit> = {}) {
+interface GoalSeed {
+  goal?: GoalRecord | null;
+  goalRound?: number;
+  modelHasPrices?: () => boolean;
+}
+
+function toolbox({ goal, goalRound, modelHasPrices, ...overrides }: Partial<TurnToolStateInit> & GoalSeed = {}) {
   let row: GoalRecord | null = null;
   const saveGoal = async (goal: GoalRecord) => {
     row = structuredClone(goal);
@@ -25,11 +31,14 @@ function toolbox(overrides: Partial<TurnToolStateInit> = {}) {
     current: null,
     scopeLabel: { kind: "org", id: "test" } as unknown as ScopeId,
     emit: async () => undefined,
-    goalMeter: createGrindMeter(),
     governGoal: (input) => governor(input),
     saveGoal,
     ...overrides,
   });
+  state.goal.setMeter(createGrindMeter());
+  if (goal !== undefined) state.goal.set(goal);
+  if (goalRound !== undefined) state.goal.setRound(goalRound);
+  if (modelHasPrices) state.goal.setModelHasPrices(modelHasPrices);
   const saved = () => row;
   const setGovernor = (next: GoalGovernor) => {
     governor = next;
@@ -432,7 +441,7 @@ test("update reads evidence from the named sandbox and says why a file could not
   assert.match(seen, /<file path="report.md">\n\[unreadable: sandbox not found: gone\]/);
 });
 
-function nextTurn(goal: GoalRecord, overrides: Partial<TurnToolStateInit> = {}) {
+function nextTurn(goal: GoalRecord, overrides: Partial<TurnToolStateInit> & GoalSeed = {}) {
   return toolbox({ goal: openGoal(structuredClone(goal)), ...overrides });
 }
 

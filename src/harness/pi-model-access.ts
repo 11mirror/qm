@@ -4,9 +4,6 @@ import { modelGatewayRequest, type ModelGatewayTransportConfig } from "../model/
 import { type ProviderKeys } from "./pi-model-runtime.ts";
 
 export interface PiModelAccessOptions {
-  apiKey?: string;
-  openaiApiKey?: string;
-  openrouterApiKey?: string;
   resolveProviderKeys?: () => Promise<ProviderKeys>;
   modelGateway?: ModelGatewayTransportConfig;
   companyModelId?: (id: string) => string;
@@ -21,18 +18,11 @@ export interface PiModelAccess {
 }
 
 export function createPiModelAccess(opts?: PiModelAccessOptions): PiModelAccess {
-  const configuredProviderKeys: ProviderKeys = opts?.resolveProviderKeys
-    ? {}
-    : {
-        ...(opts?.apiKey ? { anthropic: opts.apiKey } : {}),
-        ...(opts?.openaiApiKey ? { openai: opts.openaiApiKey } : {}),
-        ...(opts?.openrouterApiKey ? { openrouter: opts.openrouterApiKey } : {}),
-      };
   const gateway = opts?.modelGateway;
   const servedId = (id: string) => (opts?.companyModelId ? opts.companyModelId(id) : id);
   return {
     gateway,
-    providerKeys: async () => ({ ...configuredProviderKeys, ...(await opts?.resolveProviderKeys?.()) }),
+    providerKeys: async () => (await opts?.resolveProviderKeys?.()) ?? {},
     servedId,
     model: (id, company = true) => getRequiredModel(company ? servedId(id) : id),
     keyFor: (keys, model) => modelGatewayRequest(gateway, model)?.apiKey ?? keys[String(model.provider)],

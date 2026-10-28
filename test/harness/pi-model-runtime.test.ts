@@ -127,7 +127,7 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
                   models: { [modelId]: "routed-model" },
                 },
               }
-            : { apiKey: "sk-offline-test-key" }),
+            : { resolveProviderKeys: async () => ({ anthropic: "sk-offline-test-key" }) }),
         });
         const mandatoryThinking = getRequiredModel(modelId).thinkingLevelMap?.off === null;
         for (const effortLevel of [
@@ -188,7 +188,7 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
 });
 
 test("runtime scope writes and turn dispatch reject unsupported modes without changing legacy selections", async () => {
-  const { resolveRuntimeChoice } = await import("../../src/harness/runtime-choice.ts");
+  const { resolveRuntimeChoiceDurable } = await import("../../src/harness/runtime-choice.ts");
   const { createRuntimeService } = await import("../../src/harness/runtime-control.ts");
   const config = testConfigStore();
   const active = { modelId: "claude-sonnet-5", effortLevel: "auto" };
@@ -198,23 +198,29 @@ test("runtime scope writes and turn dispatch reject unsupported modes without ch
   for (const effort of ["adaptive", "default"]) {
     const result = await service(claims, active, { action: "set", effort, lifetime: "scope" });
     assert.equal(result.ok, true);
-    assert.equal(resolveRuntimeChoice(config, "org:default-org", "personal:test", active).effortLevel, effort);
+    assert.equal(
+      (await resolveRuntimeChoiceDurable(config, "org:default-org", "personal:test", active)).effortLevel,
+      effort,
+    );
   }
   assert.deepEqual(
     await service(claims, active, { action: "set", effort: "adaptive", model: "gpt-6-astra", lifetime: "scope" }),
     { ok: false, error: "effort_not_supported" },
   );
   assert.equal(config.getRuntimeSelection("personal:test")?.effortLevel, "default");
-  assert.throws(
+  await assert.rejects(
     () =>
-      resolveRuntimeChoice(config, "org:default-org", "personal:test", active, {
+      resolveRuntimeChoiceDurable(config, "org:default-org", "personal:test", active, {
         modelId: "gpt-6-astra",
         effortLevel: "adaptive",
       }),
     /not supported/,
   );
   await config.setRuntimeSelection("personal:test", active);
-  assert.equal(resolveRuntimeChoice(config, "org:default-org", "personal:test", active).effortLevel, "auto");
+  assert.equal(
+    (await resolveRuntimeChoiceDurable(config, "org:default-org", "personal:test", active)).effortLevel,
+    "auto",
+  );
 });
 
 const subscriptionToken = `e30.${Buffer.from(

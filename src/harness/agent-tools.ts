@@ -10,12 +10,7 @@ import { workspaceTools } from "./agent-tools/workspace.ts";
 import { computerTools } from "./agent-tools/computer.ts";
 import { createToolKit } from "./agent-tools/kit.ts";
 export { EXEC_TIMEOUT_DEFAULT_MS, EXEC_TIMEOUT_MAX_MS } from "./agent-tools/computer.ts";
-import {
-  withRetrySafety,
-  withToolApprovalGate,
-  withToolBodyTiming,
-  withRuntimeBarrier,
-} from "./agent-tools/wrappers.ts";
+import { withRetrySafety, withToolApprovalGate, withRuntimeBarrier } from "./agent-tools/wrappers.ts";
 import { CONNECTOR_SHADOWED, CRON_ACTIONS, toolManifest, type ToolManifestEntry } from "./tool-manifest.ts";
 import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type Config } from "../config.ts";
@@ -167,7 +162,7 @@ export function createAgentTools(state: TurnToolState, opts?: AgentToolsOptions)
   }
   return tools.map((tool) => {
     const wrapped = withRuntimeBarrier(
-      withToolBodyTiming(withToolApprovalGate(validateSandboxTool(tool), ref, halt, { recordCall, recordResult }), ref),
+      withToolApprovalGate(validateSandboxTool(tool), ref, halt, { recordCall, recordResult }),
       ref,
       halt,
     );

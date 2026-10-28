@@ -3,7 +3,7 @@ import "../support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createInsecureTestServer, createServer } from "../../src/api/server.ts";
-import { signRequest } from "../../src/auth/source-auth.ts";
+import { signRequest } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { buildApp } from "../support/build-app.ts";
 import { createAdminService, parseAdminGrants } from "../../src/admin/admin-service.ts";
 import { createAdminGrantStore } from "../../src/admin/admin-grant-store.ts";

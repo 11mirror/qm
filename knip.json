@@ -1,7 +1,7 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "treatConfigHintsAsErrors": true,
-  "ignoreBinaries": ["tail", "cloudflared", "pg_dump", "pg_restore"],
+  "ignoreBinaries": ["tail", "cloudflared"],
   "ignoreIssues": {
     "src/slack/lib.ts": ["exports", "types"]
   },
@@ -9,7 +9,6 @@
     ".": {
       "entry": [
         "src/migrate-main.ts",
-        "src/tenant-import-main.ts",
         "src/sandbox/local-sandbox.ts",
         "scripts/aws-deploy-smoke.ts",
         "scripts/aws-litestream-smoke.ts",

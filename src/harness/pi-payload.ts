@@ -10,10 +10,9 @@ const LLM_REQUEST_TRIM_SLACK_BYTES = 3_000_000;
 export const GATEWAY_REQUEST_MAX_BYTES = 9_000_000;
 export function trimPayloadToByteBudget(payload: unknown, maxBytes: number = MAX_LLM_REQUEST_BYTES): unknown {
   const p = payload as Record<string, unknown> | null;
-  let listKey: "messages" | "input" | "contents" | undefined;
+  let listKey: "messages" | "input" | undefined;
   if (Array.isArray(p?.messages)) listKey = "messages";
   else if (Array.isArray(p?.input)) listKey = "input";
-  else if (Array.isArray(p?.contents)) listKey = "contents";
   if (!p || !listKey) return payload;
   const totalBytes = Buffer.byteLength(JSON.stringify(payload));
   if (totalBytes <= maxBytes) return payload;
@@ -25,7 +24,6 @@ export function trimPayloadToByteBudget(payload: unknown, maxBytes: number = MAX
       image_url?: unknown;
       file_data?: string;
       file?: { file_data?: string };
-      inlineData?: { data?: string };
     };
     if (
       (block?.type === "image" || block?.type === "document") &&
@@ -37,16 +35,14 @@ export function trimPayloadToByteBudget(payload: unknown, maxBytes: number = MAX
     if (block?.type === "input_image" && typeof block.image_url === "string" && block.image_url.startsWith("data:")) {
       return block.image_url.length;
     }
-    return block?.file_data?.length ?? block?.file?.file_data?.length ?? block?.inlineData?.data?.length ?? 0;
+    return block?.file_data?.length ?? block?.file?.file_data?.length ?? 0;
   };
   const placeholder = (b: unknown) => {
     const block = b as { type?: string; cache_control?: unknown };
     const cache = block.cache_control !== undefined ? { cache_control: block.cache_control } : undefined;
-    const text =
-      ["document", "input_file", "file"].includes(block.type ?? "") || (b as { inlineData?: unknown })?.inlineData
-        ? "[Document omitted because the model request exceeds its byte budget. Do not claim to have read it.]"
-        : ELIDED_IMAGE_TEXT;
-    if (listKey === "contents") return { text };
+    const text = ["document", "input_file", "file"].includes(block.type ?? "")
+      ? "[Document omitted because the model request exceeds its byte budget. Do not claim to have read it.]"
+      : ELIDED_IMAGE_TEXT;
     return block.type === "input_image" || block.type === "input_file"
       ? { type: "input_text", text }
       : { type: "text", text, ...cache };
@@ -77,11 +73,10 @@ export function trimPayloadToByteBudget(payload: unknown, maxBytes: number = MAX
 
   const items = (p[listKey] as unknown[]).map((m) => {
     if (toShed <= 0) return m;
-    const msg = m as { content?: unknown; parts?: unknown };
-    const key = listKey === "contents" ? "parts" : "content";
-    if (!Array.isArray(msg?.[key])) return m;
-    const content = trimContent(msg[key]);
-    return content === msg[key] ? m : { ...(m as Record<string, unknown>), [key]: content };
+    const msg = m as { content?: unknown };
+    if (!Array.isArray(msg?.content)) return m;
+    const content = trimContent(msg.content);
+    return content === msg.content ? m : { ...(m as Record<string, unknown>), content };
   });
   return { ...p, [listKey]: items };
 }
@@ -158,13 +153,13 @@ export function sanitizeLlmPayload(
   return withTransport({ envelope: redacted, truncated: false });
 }
 
-export function textFromContent(content: unknown): string {
+export function textFromContent(content: unknown, separator = ""): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content
     .filter((c) => c && typeof c === "object" && (c as { type?: unknown }).type === "text")
     .map((c) => (typeof (c as { text?: unknown }).text === "string" ? (c as { text: string }).text : ""))
-    .join("");
+    .join(separator);
 }
 
 export const OUTPUT_BUDGET_FLOOR_TOKENS = 1_024;

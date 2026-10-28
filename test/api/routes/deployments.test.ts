@@ -13,7 +13,7 @@ import { type App, type RedeployInput, createApp } from "../../../src/api/app.ts
 import { createServer } from "../../../src/api/server.ts";
 import { CAPABILITY_TTL_MS, CONTROL_PLANE_AUD, mintCapabilityToken } from "../../../src/auth/capability-token.ts";
 import { createPostgresReplayDedupe } from "../../../src/auth/replay-dedupe.ts";
-import { signRequest } from "../../../src/auth/source-auth.ts";
+import { signRequest } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { createDeployService } from "../../../src/deploy/deploy-service.ts";
 import { createDeployStore } from "../../../src/deploy/deploy-store.ts";
 import { portalSession } from "../../../src/deploy/viewer-session.ts";

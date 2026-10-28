@@ -4,7 +4,12 @@ import { contextSummary } from "../sessions/session-store.ts";
 import type { Item } from "../sessions/items.ts";
 import { contextTokenBudgetForModel } from "../model/pi-models.ts";
 import { countTokens } from "../util/tokens.ts";
-import { compactSummaryTokenBudget, compactTranscript, validateCompactSummary } from "./context-compaction.ts";
+import {
+  compactSummaryTokenBudget,
+  compactTranscript,
+  sinceLatestSummary,
+  validateCompactSummary,
+} from "./context-compaction.ts";
 import { providerTurnError } from "./provider-error.ts";
 
 type StreamFn = NonNullable<Parameters<typeof generateSummary>[9]>;
@@ -51,11 +56,8 @@ export async function summarizeHistory(
   streamFn: StreamFn,
   summaryShareTokens?: number,
 ): Promise<string> {
-  const previous = history.findLast((item) => contextSummary(item));
+  const { latest: previous, after: messages } = sinceLatestSummary(history);
   const previousSummary = previous ? contextSummary(previous) : null;
-  const messages = history.filter(
-    (item) => !contextSummary(item) && (!previousSummary || item.seq > previousSummary.throughSeq),
-  );
   const { inputBudget: historyBudget, summaryTokenBudget } = summarizerBudgets(model, summaryShareTokens);
   const instructions = summaryInstructions(summaryTokenBudget);
   const transcriptBudget = Math.max(

@@ -113,7 +113,10 @@ async function runTurn(
   signals?: RunSignalStore,
   onHistory?: () => Promise<void>,
 ) {
-  const harness = createPiHarness({ apiKey: "sk-test", ...(signals ? { signals } : {}) });
+  const harness = createPiHarness({
+    resolveProviderKeys: async () => ({ anthropic: "sk-test" }),
+    ...(signals ? { signals } : {}),
+  });
   const emitted: Item[] = [];
   const bodies: Body[] = [];
   let seq = (history.at(-1)?.seq ?? 0) + 1;
@@ -221,6 +224,27 @@ test("a turn on a later day is prompted under that day's marker and replays it b
     const after = withoutCacheControl(later.bodies[0]!.messages) as unknown[];
     assert.equal(JSON.stringify(after.slice(0, before.length)), JSON.stringify(before));
     assert.equal(userTexts(later.bodies[0]!).at(-1), "thanks");
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("day markers follow the turn's timezone in the live prompt and in replay", async () => {
+  const reply = (text: string) => () => anthropicSse([{ type: "text", text }], "end_turn");
+  const userTexts = (body: Body) =>
+    (body.messages as Array<{ role: string; content: Array<{ type: string; text?: string }> }>)
+      .filter((m) => m.role === "user")
+      .map((m) => m.content.find((b) => b.type === "text")?.text);
+  const tokyo = { timezone: "Asia/Tokyo" };
+  mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-10-16T17:00:00Z") });
+  try {
+    const first = await runTurn("the deadline is Saturday", [], [reply("Noted.")], tokyo);
+    mock.timers.setTime(Date.parse("2026-10-19T18:00:00Z"));
+    const second = await runTurn("has it passed?", forModelContext(first.emitted), [reply("Yes.")], tokyo);
+    assert.deepEqual(userTexts(second.bodies[0]!), [
+      "── Saturday, October 17, 2026 ──\nthe deadline is Saturday",
+      "── Tuesday, October 20, 2026 ──\nhas it passed?",
+    ]);
   } finally {
     mock.timers.reset();
   }

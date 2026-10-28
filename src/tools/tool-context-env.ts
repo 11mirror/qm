@@ -3,10 +3,9 @@ import { disclosedMemory } from "../memory/disclosure.ts";
 import type { SandboxAccessPlan, SandboxResource } from "../sandbox/sandbox-resources.ts";
 import { DROPPED_PROXY_ENV } from "../sandbox/sandbox-env.ts";
 import type { SandboxHandle } from "../sandbox/sandbox.ts";
-import type { GapPhase } from "../sessions/session-store.ts";
 import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
 import { TURN_FILES_DIR } from "../core/attachments.ts";
-import { swallow, withCleanup } from "../util/errors.ts";
+import { withCleanup } from "../util/errors.ts";
 import type { ControlService } from "../api/control-service.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import {
@@ -150,27 +149,13 @@ export function callLedger(deps: ToolContextDeps) {
   const attempt = deps.attempt ?? 1;
   let callIndex = -1;
 
-  async function timed<T>(phase: GapPhase, op: () => Promise<T>): Promise<T> {
-    const start = Date.now();
-    try {
-      return await op();
-    } finally {
-      try {
-        deps.onGapWork?.({ phase, start, end: Date.now() });
-      } catch (error) {
-        swallow("tool context timing sink", error);
-      }
-    }
-  }
-
   async function once<T>(produce: () => Promise<T>, shouldCache: (r: T) => boolean = () => true): Promise<T> {
     const index = ++callIndex;
     if (runId === undefined || !ledger) return produce();
-    const prior = await timed("tool_ledger", () => ledger.begin(runId, attempt, index));
+    const prior = await ledger.begin(runId, attempt, index);
     if (prior.cached) return JSON.parse(prior.output ?? "null") as T;
     const result = await produce();
-    if (shouldCache(result))
-      await timed("tool_ledger", () => ledger.record(runId, attempt, index, JSON.stringify(result ?? null)));
+    if (shouldCache(result)) await ledger.record(runId, attempt, index, JSON.stringify(result ?? null));
     return result;
   }
 
@@ -191,7 +176,7 @@ export function callLedger(deps: ToolContextDeps) {
     const call = () => run(deps.surface!);
     return cache ? once(call, cache) : call();
   }
-  return { runId, timed, once, controlOp, surfaceOp };
+  return { runId, once, controlOp, surfaceOp };
 }
 
 export function credentialStaging(

@@ -20,6 +20,7 @@ import { type Static, type TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { providerTurnError } from "./provider-error.ts";
+import { textFromContent } from "./pi-payload.ts";
 import { swallow } from "../util/errors.ts";
 import {
   DEFAULT_AGENT_MODEL_ID,
@@ -250,10 +251,7 @@ function userContext(systemPrompt: string, prompt: string): Context {
 }
 
 function messageText(message: AssistantMessage): string {
-  return message.content
-    .flatMap((block) => (block.type === "text" ? [block.text] : []))
-    .join("")
-    .trim();
+  return textFromContent(message.content).trim();
 }
 
 export async function complete(
@@ -277,15 +275,9 @@ function forcedAnswerChoice(model: Model<Api>, payload: Record<string, unknown>)
     return thinking === "enabled" || thinking === "adaptive"
       ? undefined
       : { tool_choice: { type: "tool", name: STRUCTURED_ANSWER_TOOL } };
-  if (model.api === "openai-responses" || model.api === "azure-openai-responses")
-    return { tool_choice: { type: "function", name: STRUCTURED_ANSWER_TOOL } };
+  if (model.api === "openai-responses") return { tool_choice: { type: "function", name: STRUCTURED_ANSWER_TOOL } };
   if (model.api === "openai-completions" && model.provider === "openai")
     return { tool_choice: { type: "function", function: { name: STRUCTURED_ANSWER_TOOL } } };
-  if (model.api === "google-generative-ai" || model.api === "google-vertex") {
-    const config = (payload.config ?? {}) as Record<string, unknown>;
-    const toolConfig = { functionCallingConfig: { mode: "ANY", allowedFunctionNames: [STRUCTURED_ANSWER_TOOL] } };
-    return { config: { ...config, toolConfig } };
-  }
   return undefined;
 }
 

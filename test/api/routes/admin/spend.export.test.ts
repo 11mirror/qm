@@ -4,7 +4,7 @@ import test from "node:test";
 import { cacheHitRatio } from "../../../../src/api/routes/admin/spend.ts";
 import { createInsecureTestServer, createServer } from "../../../../src/api/server.ts";
 import { createPostgresReplayDedupe } from "../../../../src/auth/replay-dedupe.ts";
-import { signRequest } from "../../../../src/auth/source-auth.ts";
+import { signRequest } from "../../../../plugins/chassis/src/source-auth-sign.ts";
 import { createPostgresSessionStore } from "../../../../src/sessions/postgres-session-store.ts";
 import type { SessionStore } from "../../../../src/sessions/session-store.ts";
 import { scopeId, type TurnRequest } from "../../../../src/types.ts";

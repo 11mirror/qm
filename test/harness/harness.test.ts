@@ -6,7 +6,6 @@ import { type HarnessTurnInput, promptEnvelopeWithoutHistory } from "../../src/h
 import { hashId } from "../../src/util/crypto.ts";
 import { buildTestApp, dm } from "../support/orchestrator-app.ts";
 import { testConfig } from "../support/test-config.ts";
-import type { Context } from "@earendil-works/pi-ai";
 import { sanitizeLlmPayload } from "../../src/harness/pi-payload.ts";
 import { promptEnvelopeBody } from "../../src/sessions/postgres-llm-capture.ts";
 
@@ -54,7 +53,7 @@ const cases: Array<{
   payload: (history: string[], instruction: string, tool: string) => unknown;
 }> = [
   {
-    name: "Anthropic and Bedrock messages",
+    name: "Anthropic messages",
     payload: (history, instruction, tool) => ({
       model: "test-model",
       system: [{ text: instruction }],
@@ -78,7 +77,7 @@ const cases: Array<{
     }),
   },
   {
-    name: "OpenAI and Azure Responses input",
+    name: "OpenAI Responses input",
     payload: (history, instruction, tool) => ({
       model: "test-model",
       tools: [{ type: "function", name: tool, parameters: {}, strict: false }],
@@ -110,26 +109,6 @@ const cases: Array<{
       input: history.join("\n"),
     }),
   },
-  {
-    name: "Gemini and Vertex contents",
-    payload: (history, instruction, tool) => ({
-      model: "test-model",
-      config: { systemInstruction: instruction, tools: [{ functionDeclarations: [{ name: tool }] }] },
-      contents: history.map((text) => ({ role: "user", parts: [{ text }] })),
-    }),
-  },
-  {
-    name: "Pi messages context",
-    payload: (history, instruction, tool) => ({
-      model: "test-model",
-      options: { temperature: 0.5 },
-      context: {
-        systemPrompt: instruction,
-        tools: [{ name: tool, description: "test tool", parameters: { type: "object", properties: {} } }],
-        messages: history.map((content) => ({ role: "user", content, timestamp: 1 })),
-      } satisfies Context,
-    }),
-  },
 ];
 
 for (const { name, payload } of cases) {
@@ -147,7 +126,7 @@ for (const { name, payload } of cases) {
       assert.match(body.body, /be helpful/);
       assert.match(body.body, /lookup/);
       assert.doesNotMatch(body.body, /hello|another user message|tool result|reasoning|call_1/);
-      if (name.includes("Chat") || name.includes("Azure")) assert.match(body.body, /developer instruction/);
+      if (name.includes("Chat") || name.includes("OpenAI")) assert.match(body.body, /developer instruction/);
     }
     assert.equal(sanitizeLlmPayload(grown).truncated, false);
   });
@@ -156,7 +135,7 @@ for (const { name, payload } of cases) {
 test("empty histories and malformed payloads do not add envelope fields or throw", () => {
   for (const value of [null, undefined, "text", 12, []]) assert.equal(promptEnvelopeWithoutHistory(value), value);
   for (const value of [null, "history", [], [{ role: "user", content: "hello" }]]) {
-    assert.deepEqual(promptEnvelopeWithoutHistory({ messages: value, input: value, contents: value }), {});
+    assert.deepEqual(promptEnvelopeWithoutHistory({ messages: value, input: value }), {});
   }
   assert.deepEqual(promptEnvelopeWithoutHistory({ input: [null, 1, {}, { role: "user" }] }), {});
 });

@@ -44,7 +44,7 @@ import {
   type Env,
 } from "./config-env.ts";
 
-interface TenantConfig {
+export interface TenantPart {
   orgId: string;
   brandingDefault?: OrgBranding;
   brokerCredentials?: DeploymentBrokerCredential[];
@@ -141,7 +141,7 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   awsDeploy: ReturnType<typeof awsDeployEnv>;
 }
 
-export type Config = DeploymentConfig & TenantConfig;
+export type Config = DeploymentConfig & TenantPart;
 
 export function configuredModel(config: Config): string | undefined {
   if (
@@ -563,7 +563,7 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
   };
 }
 
-function loadTenantConfig(env: Env): TenantConfig {
+function loadTenantConfig(env: Env): TenantPart {
   const publicApiUrl = env.PUBLIC_API_URL?.replace(/\/+$/, "");
   const publicWebUrl = env.PUBLIC_WEB_URL?.replace(/\/+$/, "");
   const publicUrl = publicWebUrl || publicApiUrl;

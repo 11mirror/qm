@@ -62,11 +62,6 @@ function stoppedToolCalls(
 
 export { INTERRUPTED_TOOL_RESULT };
 
-export interface SeededMessage {
-  role: "user" | "assistant";
-  text: string;
-}
-
 export interface OverheardEntryPayload {
   overheard: true;
   sourceRole?: "agent";
@@ -134,23 +129,23 @@ export function selectOverheardToImport(
   return out;
 }
 
-const DAY_MARKER_FORMAT = new Intl.DateTimeFormat("en-US", {
-  weekday: "long",
-  month: "long",
-  day: "numeric",
-  year: "numeric",
-  timeZone: DEFAULT_CRON_TIMEZONE,
-});
-
-function itemDay(e: Item): string {
-  const ov = overheardOf(e);
-  const sent = ov ? Date.parse(isoFromTs(ov.ts)) : Number.NaN;
-  return DAY_MARKER_FORMAT.format(Number.isFinite(sent) ? sent : e.createdAt);
-}
-
-export function dayMarkerPrefix(previous: Item | undefined, e: Item): string {
-  const day = itemDay(e);
-  return previous && itemDay(previous) === day ? "" : `── ${day} ──\n`;
+export function dayMarker(timeZone = DEFAULT_CRON_TIMEZONE): (previous: Item | undefined, e: Item) => string {
+  const format = new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    timeZone,
+  });
+  const itemDay = (e: Item): string => {
+    const ov = overheardOf(e);
+    const sent = ov ? Date.parse(isoFromTs(ov.ts)) : Number.NaN;
+    return format.format(Number.isFinite(sent) ? sent : e.createdAt);
+  };
+  return (previous, e) => {
+    const day = itemDay(e);
+    return previous && itemDay(previous) === day ? "" : `── ${day} ──\n`;
+  };
 }
 
 export function renderOverheard(p: OverheardEntryPayload): string {
@@ -230,7 +225,7 @@ function storedBlock(body: Record<string, unknown>): Record<string, unknown> {
   return rest;
 }
 
-export function textAssistant(content: AssistantMessage["content"], timestamp: number): AssistantMessage {
+function textAssistant(content: AssistantMessage["content"], timestamp: number): AssistantMessage {
   return {
     role: "assistant",
     content,
@@ -330,10 +325,8 @@ function toolResultMessage(
   };
 }
 
-export function reconstructMessagesFromHistory(
-  history: readonly Item[],
-  opts?: { requireUserStart?: boolean },
-): PiReplayMessage[] {
+export function reconstructMessagesFromHistory(history: readonly Item[], timeZone?: string): PiReplayMessage[] {
+  const dayMarkerPrefix = dayMarker(timeZone);
   const resultByCallId = new Map<string, Item>();
   const callById = new Map<string, Item>();
   for (const e of history) {
@@ -469,47 +462,20 @@ export function reconstructMessagesFromHistory(
       }
     }
   }
-  if (opts?.requireUserStart !== false && out[0] && out[0].role !== "user")
+  if (out[0] && out[0].role !== "user")
     out.unshift({ role: "user", content: [{ type: "text", text: AGENT_OPENED_TEXT }], timestamp: out[0].timestamp });
   return out;
 }
 
-function normalizeForDedup(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
-}
-
-export function seedPriorTurns(
-  turns: readonly ConversationTurn[],
-  existingTexts: readonly string[] = [],
-): SeededMessage[] {
-  const seen = new Set(existingTexts.map(normalizeForDedup).filter(Boolean));
-  const reconciled: SeededMessage[] = [];
-  for (const t of turns) {
+export function priorTurnsMessages(turns: readonly ConversationTurn[]): PiReplayMessage[] {
+  const tags = turns.flatMap((t) => {
     const text = String(t.text ?? "").trim();
-    if (!text) continue;
-    if (seen.has(normalizeForDedup(text))) continue;
-    const tag =
-      t.role === "assistant"
-        ? messageTag({ from: "agent", ...(t.name ? { via: t.name } : {}) }, text)
-        : messageTag({ from: "human", ...(t.name ? { author: t.name } : {}) }, text);
-    reconciled.push({ role: "user", text: tag });
-  }
-  const merged: SeededMessage[] = [];
-  for (const m of reconciled) {
-    const prev = merged[merged.length - 1];
-    if (prev && prev.role === m.role) prev.text = `${prev.text}\n${m.text}`;
-    else merged.push({ role: m.role, text: m.text });
-  }
-  return merged;
-}
-
-export type ColdStartSeedPlan = "structured" | "priorTurns" | "none";
-
-export function planColdStartSeed(
-  reconstructed: readonly PiReplayMessage[],
-  hasPriorTurns: boolean,
-): ColdStartSeedPlan {
-  if (reconstructed.length) return "structured";
-  if (hasPriorTurns) return "priorTurns";
-  return "none";
+    if (!text) return [];
+    return t.role === "assistant"
+      ? messageTag({ from: "agent", ...(t.name ? { via: t.name } : {}) }, text)
+      : messageTag({ from: "human", ...(t.name ? { author: t.name } : {}) }, text);
+  });
+  return tags.length
+    ? [{ role: "user", content: [{ type: "text", text: tags.join("\n") }], timestamp: Date.now() }]
+    : [];
 }

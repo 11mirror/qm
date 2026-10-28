@@ -12,7 +12,6 @@ import {
   piCompactHistory,
   piContextTokenBudget,
   piOneShot,
-  piJudge,
   piScreenSecurity,
   piPickAckEmoji,
   piGenerateTitle,
@@ -27,13 +26,9 @@ export interface PiHarnessOptions extends CoreToolOptions {
   detectModelId?: string;
   titleModelId?: string;
   judgeModelId?: string;
-  apiKey?: string;
-  openaiApiKey?: string;
-  openrouterApiKey?: string;
   modelGateway?: ModelGatewayTransportConfig;
   resolveProviderKeys?: () => Promise<ProviderKeys>;
   tempDirPrefix?: string;
-  captureRequests?: boolean;
   turnWallClockMs?: number;
   signals?: RunSignalStore;
 }
@@ -46,10 +41,6 @@ export function piHarnessConfigOptions(config: Config): PiHarnessOptions {
     ...(config.detectModelId ? { detectModelId: config.detectModelId } : {}),
     ...(config.titleModelId ? { titleModelId: config.titleModelId } : {}),
     ...(config.judgeModelId ? { judgeModelId: config.judgeModelId } : {}),
-    ...(config.anthropicApiKey ? { apiKey: config.anthropicApiKey } : {}),
-    ...(config.openaiApiKey ? { openaiApiKey: config.openaiApiKey } : {}),
-    ...(config.openrouterApiKey ? { openrouterApiKey: config.openrouterApiKey } : {}),
-    ...(config.modelGateway ? { modelGateway: config.modelGateway } : {}),
     ...coreToolOptions(config),
     turnWallClockMs: config.turnWallClockMs,
   };
@@ -71,7 +62,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     primaryModelId,
     toolOptions: opts,
     tempDirPrefix: opts?.tempDirPrefix ?? "pi",
-    captureRequests: opts?.captureRequests ?? true,
     turnWallClockMs: opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000,
     signals: opts?.signals,
     resolveFallbackRuntime,
@@ -81,8 +71,9 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     shouldRespond: (detect) => piShouldRespond(access, detectModelId, detect),
     compactHistory: (input) => piCompactHistory(access, primaryModelId, () => resolveFallbackRuntime()?.modelId, input),
     contextTokenBudget: (_scopeLabel, model) => piContextTokenBudget(primaryModelId, model),
-    oneShot: (systemPrompt, prompt) => piOneShot(access, primaryModelId, systemPrompt, prompt),
-    judge: (systemPrompt, prompt, signal) => piJudge(access, judgeModelId, systemPrompt, prompt, signal),
+    oneShot: (systemPrompt, prompt) => piOneShot(access, primaryModelId(), systemPrompt, prompt),
+    judge: (systemPrompt, prompt, signal) =>
+      piOneShot(access, judgeModelId(), systemPrompt, prompt, { signal, thinkingLevel: "low" }),
     judgeTokenBudget: () => contextTokenBudgetForModel(access.servedId(judgeModelId())),
     screenSecurity: (input) => piScreenSecurity(access, detectModelId, input),
     pickAckEmoji: (text, candidates) => piPickAckEmoji(access, text, candidates),

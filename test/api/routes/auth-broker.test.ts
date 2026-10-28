@@ -6,7 +6,7 @@ import { createServer } from "../../../src/api/server.ts";
 import { buildApp } from "../../support/build-app.ts";
 import { testConfig } from "../../support/test-config.ts";
 import { mintSignedPayload } from "../../../src/auth/signed-token.ts";
-import { signRequest } from "../../../src/auth/source-auth.ts";
+import { signRequest } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { trustedPrincipal } from "../../../plugins/portal/src/trusted-entry.ts";
 import { provisionTrustedAdmin } from "../../../plugins/portal/src/trusted-admin.ts";
 import { createPostgresReplayDedupe } from "../../../src/auth/replay-dedupe.ts";
