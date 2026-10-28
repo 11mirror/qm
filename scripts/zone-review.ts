@@ -122,9 +122,9 @@ async function complete(system: string, user: string) {
 export function tally(findings: Finding[]) {
   const counts: Record<string, Record<string, number>> = {};
   for (const { ring = "outside", severity } of findings) {
-    counts[ring] ??= { total: 0 };
-    counts[ring].total++;
-    counts[ring][severity] = (counts[ring][severity] ?? 0) + 1;
+    const ringCounts = (counts[ring] ??= { total: 0 });
+    ringCounts.total = (ringCounts.total ?? 0) + 1;
+    ringCounts[severity] = (ringCounts[severity] ?? 0) + 1;
   }
   return counts;
 }
