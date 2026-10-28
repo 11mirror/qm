@@ -73,6 +73,12 @@ export interface Conversation {
 
 export type SessionType = ConversationKind;
 
+export interface SurfaceBriefing {
+  name: string;
+  state?: string;
+  instructions?: string;
+}
+
 export interface SpawnMeta {
   source?: TurnSource;
   slackSource?: SlackIdSource;
@@ -591,6 +597,7 @@ export interface TurnRequest {
   redeliveryKey?: string;
   async?: boolean;
   clientTools?: ClientToolDeclaration[];
+  surfaceBriefing?: SurfaceBriefing;
 }
 
 export interface ActorAssertion {

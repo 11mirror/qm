@@ -47,3 +47,7 @@ export function outermostJsonObject(text: string): string | undefined {
 export function bareChannelName(name: string): string {
   return name.startsWith("#") ? name.slice(1) : name;
 }
+
+export function promptText(value: string): string {
+  return value.replaceAll("```", "ʼʼʼ");
+}

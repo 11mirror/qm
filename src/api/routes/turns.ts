@@ -1,3 +1,4 @@
+import { renderSurfaceBriefing } from "../../core/orchestrator/prompt-blocks.ts";
 import { fromJSONSchema, z, ZodObject } from "zod";
 import type { ClientToolDeclaration, TurnRequest } from "../../types.ts";
 import { samePerson } from "../../directory/person.ts";
@@ -57,6 +58,17 @@ const clientToolsSchema = z
     message: "names must be unique",
   });
 
+const surfaceBriefingSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .regex(/^[^\r\n]+$/),
+  state: z.string().max(20_000).optional(),
+  instructions: z.string().max(8_000).optional(),
+});
+
 const clientResultSchema = z.object({
   callId: z.string().min(1).max(256),
   result: z.object({
@@ -84,6 +96,7 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
     unattendedGrants: _unattendedGrants,
     redeliveryKey: _redeliveryKey,
     clientTools: rawClientTools,
+    surfaceBriefing: rawSurfaceBriefing,
     ...rest
   } = body;
   if (typeof rest.idempotencyKey === "string" && rest.idempotencyKey.startsWith("slack:"))
@@ -103,7 +116,20 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
     if (!parsed.success) return { error: zodMessage("clientTools", parsed.error) };
     clientTools = parsed.data;
   }
-  return { request: { ...rest, origin, ...(clientTools?.length ? { clientTools } : {}) } };
+  let conversationHeader = rest.conversationHeader;
+  if (rawSurfaceBriefing !== undefined) {
+    const parsed = surfaceBriefingSchema.safeParse(rawSurfaceBriefing);
+    if (!parsed.success) return { error: zodMessage("surfaceBriefing", parsed.error) };
+    conversationHeader = [conversationHeader, renderSurfaceBriefing(parsed.data)].filter(Boolean).join("\n\n");
+  }
+  return {
+    request: {
+      ...rest,
+      origin,
+      ...(conversationHeader ? { conversationHeader } : {}),
+      ...(clientTools?.length ? { clientTools } : {}),
+    },
+  };
 }
 
 function sendRunOutcome(succeeded: boolean, outcome: { reason?: string }): RouteResult {
