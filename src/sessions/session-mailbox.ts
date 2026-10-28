@@ -7,7 +7,6 @@ export interface SessionMessage {
   senderId: string;
   actor: OrchestratorInput["actor"];
   text: string;
-  sourceEntrySeq?: number;
   createdAt: number;
   consumed?: boolean;
 }

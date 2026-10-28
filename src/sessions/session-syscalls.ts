@@ -241,7 +241,6 @@ export interface SessionSyscallDeps {
     | "addParticipant"
     | "updateTitle"
     | "getEntries"
-    | "latestEntrySeq"
     | "visibleEntries"
     | "getForParticipant"
   >;
@@ -778,7 +777,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (text.length > 16_000) return { ok: false, message: "message exceeds 16000 characters" };
               const stamped = renderSubagentMessage({ title: callerTitle, sessionId: binding.session.id }, text);
               if (!input.followup) {
-                const sourceEntrySeq = await deps.sessions.latestEntrySeq(binding.session.id);
                 await deps.mailbox.send({
                   id: input.requestId
                     ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
@@ -787,7 +785,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   senderId: binding.session.id,
                   actor: caller.actor,
                   text: stamped,
-                  ...(sourceEntrySeq >= 0 ? { sourceEntrySeq } : {}),
                   createdAt: Date.now(),
                 });
                 return { ok: true, sessionId: target.id, title, delivered: "queued_message" };
@@ -1112,7 +1109,6 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     delete request[key];
   if (!originalParent) request.addressed = false;
   const prepared = deps.prepareRequest ? await deps.prepareRequest(request) : request;
-  const outputSeq = run.result?.sourceAssistantEntrySeq ?? run.turnUserSeq ?? run.result?.sourceUserSeq;
   if (result?.attachments?.length && deps.deliveries) {
     const delivery = deliveryCandidatesFor(meta.surface, meta.deliveryTarget, meta.deliveryCandidates, parent.scopeId);
     const candidate = delivery.candidates.find((item) => item.key === delivery.defaultKey);
@@ -1141,7 +1137,6 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     senderId: child.id,
     actor: prepared.actor,
     text,
-    ...(outputSeq !== undefined && outputSeq !== null ? { sourceEntrySeq: outputSeq } : {}),
     createdAt: Date.now(),
   });
   if (!isSubagentThreadRef(parent.threadRef)) {
