@@ -1813,7 +1813,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           tools,
           turn.loadImage,
         );
-        const held = turn.checkReply ? createReplyHold(turn) : undefined;
         try {
           const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
 
@@ -1904,6 +1903,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const toolAbort = new AbortController();
           const pendingSteers: Array<SteerIntake & { prompt: string }> = [];
           const unrecordedPrompts = new Set<string>();
+          const held = turn.checkReply ? createReplyHold(turn) : undefined;
           let persistError: Error | undefined;
           const persist = (write: () => Promise<unknown>): void => {
             thinkTail = thinkTail.then(async () => {
@@ -2386,6 +2386,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             }
             wallClock = "ok";
           } finally {
+            held?.release();
             turn.cancel?.removeEventListener("abort", onCancel);
             await stopSignalPoll?.();
             if (pendingSteers.length) entry.agentSession.clearQueue();
@@ -2500,7 +2501,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             : { reply, modelCalls, ...silent };
           return cacheUsage ? { ...base, cacheUsage } : base;
         } finally {
-          held?.release();
           removeIsolatedDirs(entry);
         }
       },
