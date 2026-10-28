@@ -13,7 +13,7 @@ import { createSkillBundleStore } from "../skills/skill-bundle-store.ts";
 import { createFeatureFlagStore } from "../feature-flags.ts";
 import { createPostgresTeamStore } from "../teams/teams.ts";
 import { tenant } from "../tenant.ts";
-import { type SessionStore, LLM_CAPTURE_RETENTION_MS } from "../sessions/session-store.ts";
+import type { SessionStore } from "../sessions/session-store.ts";
 import { createPostgresSessionStore } from "../sessions/postgres-session-store.ts";
 import { createAdminGrantStore } from "../admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "../admin/postgres-admin-grant-store.ts";
@@ -114,17 +114,6 @@ export function buildStores(deps: StoresInputs) {
       "w.usage_json IS NOT NULL AND w.spend_cost_usd IS NULL",
     )}`,
   });
-  every(
-    "llm-capture:retention",
-    5 * 60_000,
-    async () => {
-      const purged = await sessions.purgeLlmCaptures(Date.now() - LLM_CAPTURE_RETENTION_MS, {
-        deadline: Date.now() + 30_000,
-      });
-      if (purged) console.log(`[llm-capture] purged ${purged} prompt envelope(s) past retention`);
-    },
-    { shared: true },
-  );
   return {
     managesArtifactHome,
     skills,

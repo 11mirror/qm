@@ -215,8 +215,7 @@ function appDepsTail(deps: ApiAppInputs) {
   const { monitors, approvals } = deps.crons;
   const { sandbox } = deps.sandbox;
   const { files } = deps.files;
-  const { surfaceCache, channelPolicy, screenSecurity, ambientJudgments, ackEmojiPicks, providerKeys } =
-    deps.orchestrator;
+  const { surfaceCache, channelPolicy, ambientJudgments, ackEmojiPicks, providerKeys } = deps.orchestrator;
   const { harness, judgeModelId, fallback } = deps.harness;
   const { databaseUrl } = deps.stores;
   return {
@@ -236,7 +235,6 @@ function appDepsTail(deps: ApiAppInputs) {
     ...(harness.models.judge
       ? { ambientJudge: (s: string, pr: string, signal?: AbortSignal) => harness.models.judge!(s, pr, signal) }
       : {}),
-    ...(screenSecurity ? { screenSecurity } : {}),
     ambientCursors: createAmbientCursors(databaseUrl),
     ambientJudgments,
     ackEmojiPicks,
