@@ -59,6 +59,7 @@ export function spritesErrorDetail(e: unknown): string {
 }
 
 export async function retrySpritesControl<T>(operation: () => Promise<T>, timeoutMs = 60_000): Promise<T> {
+  const deadlineAt = Date.now() + timeoutMs;
   const signal = AbortSignal.timeout(timeoutMs);
   for (let attempt = 1; ; attempt++) {
     try {
@@ -68,9 +69,12 @@ export async function retrySpritesControl<T>(operation: () => Promise<T>, timeou
       if (!(error instanceof APIError) || ![429, 500, 502, 503, 504].includes(error.statusCode ?? 0) || attempt >= 4)
         throw error;
       const seconds = error.getRetryAfterSeconds();
-      const delay = seconds === undefined ? undefined : retryAfterMs(new Headers({ "retry-after": String(seconds) }));
+      const delay =
+        (seconds === undefined ? undefined : retryAfterMs(new Headers({ "retry-after": String(seconds) }))) ??
+        jitteredBackoffMs(attempt);
+      if (Date.now() + delay >= deadlineAt) throw error;
       try {
-        await wait(delay ?? jitteredBackoffMs(attempt), undefined, { signal });
+        await wait(delay, undefined, { signal });
       } catch (error) {
         signal.throwIfAborted();
         throw error;

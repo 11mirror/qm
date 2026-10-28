@@ -70,7 +70,6 @@ export interface BackoffOptions {
 const DEFAULT_ATTEMPTS = 4;
 const DEFAULT_BASE_DELAY_MS = 500;
 const DEFAULT_MAX_DELAY_MS = 8_000;
-const RETRY_AFTER_CAP_MS = 30_000;
 const REFUSED_STATUSES: ReadonlySet<number> = new Set([429]);
 const TRANSIENT_STATUSES: ReadonlySet<number> = new Set([429, 500, 502, 503, 504]);
 
@@ -85,10 +84,10 @@ export function retryAfterMs(headers: Headers, now = Date.now()): number | undef
   const raw = headers.get("retry-after")?.trim();
   if (!raw) return undefined;
   const seconds = Number(raw);
-  if (Number.isFinite(seconds)) return seconds < 0 ? undefined : Math.min(seconds * 1000, RETRY_AFTER_CAP_MS);
+  if (Number.isFinite(seconds)) return seconds < 0 ? undefined : seconds * 1000;
   const at = Date.parse(raw);
   if (Number.isNaN(at)) return undefined;
-  return Math.min(Math.max(0, at - now), RETRY_AFTER_CAP_MS);
+  return Math.max(0, at - now);
 }
 
 export type RetryClass = "idempotent" | "refused";
@@ -109,7 +108,9 @@ export async function fetchWithRetry(
   opts: RetryOptions = {},
 ): Promise<Response> {
   const attempts = opts.attempts ?? DEFAULT_ATTEMPTS;
-  const deadline = AbortSignal.timeout(opts.timeoutMs ?? 60_000);
+  const timeoutMs = opts.timeoutMs ?? 60_000;
+  const deadlineAt = Date.now() + timeoutMs;
+  const deadline = AbortSignal.timeout(timeoutMs);
   const signal = opts.signal ? AbortSignal.any([opts.signal, deadline]) : deadline;
   const wait = async (ms: number): Promise<void> => {
     try {
@@ -130,9 +131,10 @@ export async function fetchWithRetry(
       await wait(jitteredBackoffMs(attempt, opts));
       continue;
     }
-    if (!statuses.has(res.status) || attempt >= attempts) return res;
+    const delayMs = retryAfterMs(res.headers) ?? jitteredBackoffMs(attempt, opts);
+    if (!statuses.has(res.status) || attempt >= attempts || Date.now() + delayMs >= deadlineAt) return res;
     await withAbort(() => res.body?.cancel().catch(() => undefined) ?? Promise.resolve(), signal);
-    await wait(retryAfterMs(res.headers) ?? jitteredBackoffMs(attempt, opts));
+    await wait(delayMs);
   }
 }
 

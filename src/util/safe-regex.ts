@@ -47,12 +47,17 @@ export function compileSafeRegex(pattern: string, flags = ""): RegExp {
     }
     if (ch === ")") {
       closed = groups.pop() ?? { quantified: false, alternation: false };
+      const parent = groups.at(-1);
+      if (parent) {
+        parent.quantified ||= closed.quantified;
+        parent.alternation ||= closed.alternation;
+      }
       previousQuantifier = false;
       continue;
     }
     const quantifier = ch === "*" || ch === "+" || (ch === "?" && pattern[i - 1] !== "(") || ch === "{";
     if (quantifier) {
-      if (previousQuantifier || (closed && (closed.quantified || closed.alternation))) {
+      if (previousQuantifier || (closed && ch !== "?" && (closed.quantified || closed.alternation))) {
         throw new Error("nested or ambiguous repetition is not supported");
       }
       if (groups.length) groups[groups.length - 1]!.quantified = true;

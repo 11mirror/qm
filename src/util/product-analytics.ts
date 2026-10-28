@@ -13,7 +13,6 @@ export function createProductAnalytics(
 } {
   const apiKey = config.apiKey?.trim();
   const host = (config.host?.trim() || "https://us.i.posthog.com").replace(/\/$/, "");
-  let inFlight = 0;
   async function capture(
     event: string,
     principal: string,
@@ -21,8 +20,7 @@ export function createProductAnalytics(
     properties: Record<string, string> = {},
   ): Promise<void> {
     const company = companyId();
-    if (!apiKey || !company || !principal || inFlight >= 16) return;
-    inFlight++;
+    if (!apiKey || !company || !principal) return;
     try {
       const response = await send(`${host}/i/v0/e/`, {
         method: "POST",
@@ -48,8 +46,6 @@ export function createProductAnalytics(
       if (!response.ok) swallow(`product analytics: ${event} capture`, new Error(`HTTP ${response.status}`));
     } catch (e) {
       swallow(`product analytics: ${event} capture`, e);
-    } finally {
-      inFlight--;
     }
   }
   return {

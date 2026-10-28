@@ -1,5 +1,6 @@
 import { errChain as errMessage } from "../../plugins/chassis/src/errors.ts";
 import { readTextPrefix } from "./response-body.ts";
+import { tailSlice } from "./text.ts";
 
 export {
   errorAlreadyReported,
@@ -20,7 +21,9 @@ export function withRequestId(message: string, headers: Headers): string {
 }
 
 export async function httpFailure(res: Response, bodyChars = 200, signal?: AbortSignal): Promise<string> {
-  const body = await readTextPrefix(res, bodyChars, signal).catch(() => "");
+  const body = await readTextPrefix(res, bodyChars, signal).catch(
+    (e: unknown) => `(body unreadable: ${errMessage(e)})`,
+  );
   return withRequestId(`http ${res.status} ${body}`, res.headers);
 }
 
@@ -41,7 +44,10 @@ export async function withCleanup<T>(work: () => Promise<T>, cleanup: () => Prom
 const FAILURE_OUTPUT_CHARS = 300;
 
 export function execFailure(what: string, r: { stdout: string; stderr: string; code: number }): Error {
-  const tail = (out: string): string => out.trim().slice(-FAILURE_OUTPUT_CHARS);
+  const tail = (out: string): string => {
+    const trimmed = out.trim();
+    return trimmed.length > FAILURE_OUTPUT_CHARS ? `…${tailSlice(trimmed, FAILURE_OUTPUT_CHARS)}` : trimmed;
+  };
   const parts = [`${what} failed (exit ${r.code}${r.code === 124 ? ", timed out" : ""})`];
   if (r.stderr.trim()) parts.push(`stderr: ${tail(r.stderr)}`);
   if (r.stdout.trim()) parts.push(`stdout: ${tail(r.stdout)}`);

@@ -1,3 +1,4 @@
+import { isValidTimezone } from "../util/time.ts";
 import { LRUCache } from "lru-cache";
 
 export interface ActorAssertion {
@@ -71,13 +72,7 @@ export function classifyUser(
 export function slackUserTimezone(u: SlackUser | undefined): string | undefined {
   const raw = [u?.tz, u?.profile?.tz].find((tz) => typeof tz === "string") ?? "";
   const timezone = raw.trim();
-  if (!timezone || timezone.length > 64) return undefined;
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(0);
-    return timezone;
-  } catch {
-    return undefined;
-  }
+  return isValidTimezone(timezone) ? timezone : undefined;
 }
 
 export function externalMarker(): ActorAssertion {

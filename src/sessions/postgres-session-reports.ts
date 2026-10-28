@@ -1,6 +1,6 @@
 import type { PgPool } from "../persistence/pg-pool.ts";
 import { tenantCols, withPgTransaction } from "../persistence/pg-pool.ts";
-import { jsonbSafeStringify } from "../util/text.ts";
+import { jsonbStringify } from "../util/text.ts";
 import { reportFailure } from "../util/errors.ts";
 import type { ScopeId } from "../types.ts";
 import type { AttributedTurn, SessionStore, SpendRow } from "./session-store.ts";
@@ -164,7 +164,7 @@ export function createSessionReports(
             await client.query(
               `INSERT INTO session_spend_days(day, rows, updated_at) VALUES ($1, $2, $3)
                ON CONFLICT (${tenantCols("day")}) DO UPDATE SET rows = EXCLUDED.rows, updated_at = EXCLUDED.updated_at`,
-              [day, jsonbSafeStringify(rows.rows), updatedAt],
+              [day, jsonbStringify(rows.rows), updatedAt],
             );
           });
         } catch (error) {

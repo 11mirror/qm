@@ -669,7 +669,7 @@ test("control retries share an elapsed-time budget across backoff and SDK reques
       calls++;
       throw new APIError("rate limited", { statusCode: 429, retryAfterHeader: 30 });
     }, 30),
-    { name: "TimeoutError" },
+    { message: "rate limited" },
   );
   assert.equal(calls, 1);
   calls = 0;

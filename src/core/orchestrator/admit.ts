@@ -4,7 +4,7 @@ import { externalSlackAdmitted } from "../../resolution/external-slack.ts";
 import { delegatedAuthorizationOrigin } from "../../subagents/delegation.ts";
 import { isSubagentThreadRef } from "../../sessions/thread-ref.ts";
 import { createCanWriteScope, rosterAdmits } from "../../resolution/scope-membership.ts";
-import { isValidCapabilityTimezone } from "../../auth/capability-token.ts";
+import { isValidTimezone } from "../../util/time.ts";
 import { isSessionTurn } from "../turn-origin.ts";
 import { stepMessage, type Item } from "../../sessions/items.ts";
 import { scopeId as toScopeId, type ScopeId, type TurnResult } from "../../types.ts";
@@ -104,7 +104,7 @@ export async function admitTurn(
       ? input.origin.entryTs
       : undefined;
   const coreReceivedAt = Date.now();
-  const turnTimezone = isValidCapabilityTimezone(input.timezone) ? input.timezone : undefined;
+  const turnTimezone = isValidTimezone(input.timezone) ? input.timezone : undefined;
 
   if (!deps.identity.isInternal(actor)) {
     return {
