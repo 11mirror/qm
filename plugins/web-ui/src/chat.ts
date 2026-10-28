@@ -57,6 +57,7 @@ import {
   Pin,
   Radar,
   RefreshCw,
+  RotateCcw,
   Target,
   Rocket,
   ScrollText,
@@ -129,6 +130,8 @@ import {
   buildTimeline,
   thinkingStepKey,
   messageWorkTimeline,
+  retractedReason,
+  retractedReplies,
   workTimelineSegments,
   streamedAnswer,
   currentTextPhase,
@@ -2312,6 +2315,9 @@ export function createChatSurface(
   function assistantContent(message: AssistantMessage, isStreaming = false, hasWork = false): TemplateResult[] {
     const animating = isStreaming && runSlot.stopGeneration !== runSlot.generation;
     const parts: TemplateResult[] = [];
+    const finishedWork = isStreaming ? undefined : (message as AssistantWork).work;
+    if (finishedWork)
+      for (const draft of retractedReplies(finishedWork)) parts.push(retractedRow(draft.reason, draft.text));
     for (const [chunkIndex, chunk] of message.content.entries()) {
       if (chunk.type === "text") {
         const work = (message as AssistantWork).work;
@@ -3225,9 +3231,23 @@ export function createChatSurface(
         <div class="thinking-body">${markdown(thought.body)}</div>
       </details>`;
     }
-    if (item.kind === "text") return messageRow(item.activity);
+    if (item.kind === "text") {
+      const reason = retractedReason(item.activity);
+      const text = (item.activity.payload as { text?: string } | null)?.text ?? "";
+      return reason ? retractedRow(reason, text) : messageRow(item.activity);
+    }
     if (item.kind === "approval") return approvalMarker(item.approval);
     return toolRow(item.row, work, status, stale);
+  }
+
+  function retractedRow(reason: string, text: string): TemplateResult {
+    return html`<details class="retracted-reply">
+      <summary class="retracted-summary">
+        <span class="tool-icon">${icon(RotateCcw, 15)}</span><span>Retracted: ${reason}</span>
+        <span class="activity-chevron">${icon(ChevronRight, 14)}</span>
+      </summary>
+      <div class="retracted-body" dir="auto">${markdown(text)}</div>
+    </details>`;
   }
 
   function messageRow(activity: ToolActivity): TemplateResult {

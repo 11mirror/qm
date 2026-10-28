@@ -1,3 +1,4 @@
+import type { ReplyRetraction } from "../harness/harness.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { runHook, type DecisionBackend, type DecisionHook, type DecisionResult } from "./decisions.ts";
 import type { DecisionStore } from "./store.ts";
@@ -31,6 +32,53 @@ export function turnStartState(turn: {
   ].join("\n");
 }
 
+const TURN_END_GUIDANCE_CHARS = 3_000;
+const TURN_END_INPUT_CHARS = 1_500;
+const TURN_END_REPLY_CHARS = 3_000;
+
+const clip = (text: string, max: number): string =>
+  text.length <= max ? text : `${text.slice(0, max)}\n[truncated ${text.length - max} characters]`;
+
+export function replyFacts(reply: string): string[] {
+  const prose = reply.replace(/```[\s\S]*?```/g, "");
+  const paragraphs = prose.split(/\n\s*\n/).filter((block) => block.trim()).length;
+  const tables = (prose.match(/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/gm) ?? []).length;
+  const emDashes = (reply.match(/\u2014/g) ?? []).length;
+  return [
+    `- paragraphs: ${paragraphs}`,
+    `- markdown tables: ${tables}`,
+    `- em dashes: ${emDashes}`,
+    `- characters: ${reply.length}`,
+  ];
+}
+
+export function turnEndState(turn: {
+  surfaceName?: string;
+  runtimePurpose?: string;
+  guidance?: string;
+  input: string;
+  reply: string;
+}): string {
+  const guidance = turn.guidance?.trim();
+  return [
+    "Turn context:",
+    `- surface: ${turn.surfaceName ?? "unknown"}`,
+    `- purpose: ${turn.runtimePurpose ?? "interactive"}`,
+    "",
+    "Guidance for this conversation:",
+    guidance ? clip(guidance, TURN_END_GUIDANCE_CHARS) : "(none)",
+    "",
+    "Latest message from the user:",
+    clip(turn.input, TURN_END_INPUT_CHARS),
+    "",
+    "Measured in the draft reply:",
+    ...replyFacts(turn.reply),
+    "",
+    "Draft reply:",
+    clip(turn.reply, TURN_END_REPLY_CHARS),
+  ].join("\n");
+}
+
 export interface DecisionTurn {
   actorId?: string;
   scopeLabel: string;
@@ -61,6 +109,35 @@ export function createDecisionHooks(store: DecisionStore | undefined, backend: D
         }),
       });
     return decisive;
+  };
+}
+
+type ReplyCheck = (draft: string) => Promise<ReplyRetraction | undefined>;
+export type ReplyCheckFactory = (context: {
+  surfaceName?: string;
+  runtimePurpose?: string;
+  guidance: () => Promise<string>;
+  input: string;
+  turn: DecisionTurn;
+}) => Promise<{ enforce: boolean; check: ReplyCheck } | undefined>;
+
+export function createReplyCheck(
+  store: Pick<DecisionStore, "rules"> | undefined,
+  decide: ReturnType<typeof createDecisionHooks>,
+): ReplyCheckFactory {
+  return async (context) => {
+    const rules = (await store?.rules("turn_end")) ?? [];
+    if (!rules.length) return undefined;
+    const guidance = await context.guidance();
+    return {
+      enforce: rules.some((rule) => rule.mode === "enforce"),
+      check: async (draft) => {
+        const verdict = await decide("turn_end", turnEndState({ ...context, guidance, reply: draft }), context.turn);
+        return verdict?.action === "retry" && verdict.message
+          ? { reason: verdict.option.replace(/[_-]+/g, " "), message: verdict.message }
+          : undefined;
+      },
+    };
   };
 }
 
