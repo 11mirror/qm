@@ -192,11 +192,11 @@ export function createGatewayCatalog(
           swallow("model: gateway model discovery (keeping last known models, retrying in 30s)", error);
           return;
         }
+        console.warn(`[model] Gateway model discovery unavailable; retrying in 30 seconds: ${errMessage(error)}`);
         if (discovered || Object.keys(config.models).length === 0) {
           routes = {};
           expiresAt = 0;
           setGatewayModels([]);
-          console.warn(`[model] Gateway model discovery unavailable; retrying in 30 seconds: ${errMessage(error)}`);
         }
       }
     })().finally(() => {
