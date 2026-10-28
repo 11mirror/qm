@@ -21,7 +21,6 @@ import { finishProcessCredentials } from "../../credentials/execute-files.ts";
 import type { GapWork } from "../../harness/harness.ts";
 import { forSearchView } from "../../harness/context-compaction.ts";
 import { createToolContext } from "../../tools/tool-context.ts";
-import { type CommandCredential } from "../../tools/primitives.ts";
 import type { FileArtifact } from "../../files/file-artifact-store.ts";
 import { principalEntitledToScope } from "../../resolution/context-filter.ts";
 import { openSessionItem, searchSessionItems } from "../../sessions/history-search.ts";
@@ -288,41 +287,6 @@ function artifactReadCheck(ctx: TurnCtx): (artifact: FileArtifact, fresh?: boole
   return mayReadArtifact;
 }
 
-function commandCredentialResolver(catalog: TurnToolsInput["catalog"]) {
-  const {
-    commandCredentials,
-    credentialBroker,
-    registerKeychainCredentials,
-    registerConnectorCredentials,
-    registerServiceCredentials,
-    placeCredential,
-  } = catalog;
-  return async (handles: Parameters<typeof credentialBroker>[0]) => {
-    const refreshed = new Map<string, CommandCredential>();
-    const identities = new Map<string, string>();
-    const add: Parameters<typeof registerKeychainCredentials>[0] = (
-      credential,
-      _description,
-      identity = credential.handle,
-    ) => {
-      const prior = identities.get(credential.handle);
-      if (prior !== undefined) {
-        if (prior !== identity) throw new Error(`credential handle collision: ${credential.handle}`);
-        return;
-      }
-      identities.set(credential.handle, identity);
-      refreshed.set(credential.handle, placeCredential(credential));
-    };
-    const broker = credentialBroker(handles);
-    await registerKeychainCredentials(add, broker);
-    await registerConnectorCredentials(add, broker);
-    await registerServiceCredentials(add, broker);
-    for (const credential of commandCredentials.filter((candidate) => candidate.handle.startsWith("broker_")))
-      add(credential, "");
-    return [...refreshed.values()];
-  };
-}
-
 function sessionHistoryTools(ctx: TurnCtx, session: Session) {
   const { deps, filterHistory } = ctx;
   const historyView = async () => filterHistory(forSearchView(await deps.sessions.getItems(session.id)));
@@ -409,7 +373,7 @@ function createTurnToolContext(
     auditLog: deps.auditLog,
     createdBy: actor.id,
     commandCredentials,
-    resolveCommandCredentials: commandCredentialResolver(turn.catalog),
+    resolveCommandCredentials: turn.catalog.resolveCommandCredentials,
     ...(deps.publicWebUrl ? { publicWebUrl: deps.publicWebUrl } : {}),
     publishContext: publishContextFor(conversation),
     ...(deps.config ? { config: deps.config } : {}),
