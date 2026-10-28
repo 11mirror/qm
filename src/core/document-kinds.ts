@@ -57,9 +57,11 @@ export function mimeFromName(name: string): string {
   return MIME_BY_EXT[ext] ?? "application/octet-stream";
 }
 
-const EXTENSION_BY_MIME: Record<string, string> = Object.fromEntries(
-  Object.entries(MIME_BY_EXT).map(([ext, mime]) => [mime, ext]),
-);
+const EXTENSION_BY_MIME: Record<string, string> = Object.fromEntries([
+  ...Object.entries(MIME_BY_EXT).map(([ext, mime]) => [mime, ext]),
+  ["text/rtf", "rtf"],
+  ["application/javascript", "js"],
+]);
 
 export function documentExtension(file: { name: string; mimeType?: string; mimetype?: string }): string {
   const ext = extension(file.name);
