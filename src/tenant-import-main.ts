@@ -152,7 +152,7 @@ async function main(): Promise<void> {
   const batchSize = Number(values["batch-size"]);
   if (!Number.isInteger(batchSize) || batchSize < 1) usageError("--batch-size must be a positive integer");
 
-  configurePgTenancy(true, tenantSecretsKey(process.env));
+  configurePgTenancy(true);
   const log = (line: string) => console.log(`[qm:tenant-import] ${line}`);
   log(`tenant ${spec.slug} (org ${spec.orgId}); hosts: ${spec.hosts.join(", ") || "none"}`);
   log(describeSpec(spec));

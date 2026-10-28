@@ -48,7 +48,6 @@ export function buildStores(deps: StoresInputs) {
     ...(config.databasePoolMax !== undefined ? { queryMax: config.databasePoolMax } : {}),
     ...(config.databaseDirectPoolMax !== undefined ? { sessionMax: config.databaseDirectPoolMax } : {}),
     tenancy: config.multitenant,
-    ...(config.tenantSecretsKey ? { tenantSecretsKey: config.tenantSecretsKey } : {}),
   });
   configurePgCaTrust({
     ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),
