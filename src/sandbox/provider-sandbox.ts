@@ -70,9 +70,11 @@ export interface MachineState {
   state: "running" | "parked";
   detail: string;
   resources?: ComputerStatus["resources"];
+  expiresAtMs?: number;
 }
 
 interface DriverCheckpoints {
+  retentionMs?: number | null;
   machineBound?: boolean;
   capture(name: string): Promise<string>;
   restore(name: string, checkpointId: string): Promise<void>;
@@ -193,7 +195,7 @@ function createProviderCheckpointing({ driver, store, backend, report }: Provide
       const machineBound = !!driver.checkpoints?.machineBound;
       const restored =
         checkpointId && driver.checkpoints && !machineBound
-          ? (await driver.checkpoints.restore(name, checkpointId), true)
+          ? (await restoreProviderCheckpoint({ driver, store, backend }, scope, name, checkpointId), true)
           : false;
       const hydrated = restored || retained;
       await store.upsert(scope, {
@@ -312,11 +314,18 @@ async function providerRecovery(
 ): Promise<Pick<ComputerStatus, "recovery">> {
   if (!driver.checkpoints) return {};
   const stored = await store.get(scope);
+  const capturedAtMs = stored?.checkpointAtMs ?? stored?.lastSnapshotMs;
+  const retentionMs = driver.checkpoints.retentionMs;
+  const expiry =
+    retentionMs !== undefined && retentionMs !== null && capturedAtMs
+      ? { checkpointExpiresAtMs: capturedAtMs + retentionMs }
+      : {};
   return {
     recovery: {
       strategy: "provider_snapshot",
       ...(stored?.checkpointId ? { checkpointId: stored.checkpointId } : {}),
-      ...(stored?.lastSnapshotMs ? { checkpointAtMs: stored.lastSnapshotMs } : {}),
+      ...(capturedAtMs ? { checkpointAtMs: capturedAtMs } : {}),
+      ...(retentionMs === null ? { checkpointExpiresAtMs: null } : expiry),
       ...(stored?.snapshotError ? { error: stored.snapshotError } : {}),
     },
   };
@@ -424,6 +433,7 @@ function providerScopeMethods(ctx: ProviderContext, base: ExecSandboxBase, nameF
         ...(probeError ? { probeError } : {}),
         ...(pressure ? { pressure } : {}),
         ...(machine.resources ? { resources: machine.resources } : {}),
+        ...(machine.expiresAtMs ? { expiresAtMs: machine.expiresAtMs } : {}),
       };
     },
 
@@ -437,7 +447,7 @@ function providerScopeMethods(ctx: ProviderContext, base: ExecSandboxBase, nameF
                 if (driver.restart)
                   return driver.restart(name, { initializationPending: !!stored?.initializationPending });
                 if (!stored?.checkpointId) throw new Error(`${backend} restart: no checkpoint to restore`);
-                await driver.checkpoints!.restore(name, stored.checkpointId);
+                await restoreProviderCheckpoint({ driver, store, backend }, scopeId, name, stored.checkpointId);
               }),
             );
           },
@@ -558,4 +568,19 @@ export function createProviderSandbox(
     teardown,
     ...providerScopeMethods(ctx, base, nameFor),
   };
+}
+
+async function restoreProviderCheckpoint(
+  { driver, store, backend }: Pick<ProviderContext, "driver" | "store" | "backend">,
+  scope: string,
+  name: string,
+  checkpointId: string,
+): Promise<void> {
+  const at = (await store.get(scope))?.checkpointAtMs;
+  const retentionMs = driver.checkpoints!.retentionMs;
+  if (at && retentionMs != null && at + retentionMs <= Date.now())
+    throw new Error(
+      `${backend} home checkpoint has expired; explicitly import a recovery snapshot before creating a replacement`,
+    );
+  await driver.checkpoints!.restore(name, checkpointId);
 }

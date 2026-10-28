@@ -5,14 +5,12 @@ import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
 import {
   appEnv,
-  appLaunch,
+  startHostedApp,
   appLogs,
-  appReporter,
   bundleEntries,
   exportEnv,
   extractBundle,
   STOP_APP,
-  waitAppReady,
   type AppErrorSink,
 } from "./shared-deploy-provider.ts";
 import { makeTar } from "../sandbox/tar.ts";
@@ -106,12 +104,12 @@ export function createE2bDeployProvider(opts: E2bDeployProviderOptions): DeployP
     if (version.homeDir) await unpackTree(session, HOME_DIR, version.homeDir);
     const env = appEnv(version.env, { HOME: HOME_DIR, PORT: String(appPort), DATA_DIR });
     const inner = `${exportEnv(env)}; cd ${shq(APP_DIR)}; ${version.entrypoint}`;
-    const started = await runE2bScript(session, appLaunch(inner, appPort), 60);
-    if (started.code !== 0) throw execFailure("e2b deploy: app start", started);
-    await waitAppReady((script, timeoutSec) => runE2bScript(session, script, timeoutSec), {
+    await startHostedApp((script, timeoutSec) => runE2bScript(session, script, timeoutSec), d, {
+      inner,
       appPort,
       windowSec: readyWindowSec,
-      report: appReporter(opts.onError, d, version.env),
+      env: version.env,
+      ...(opts.onError ? { onError: opts.onError } : {}),
     });
   }
 

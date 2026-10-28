@@ -1,3 +1,4 @@
+import { cols } from "../persistence/typed-table.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { shq } from "../util/shell.ts";
 import { createProviderSandbox, type SandboxShared, type StoredSandboxRecord } from "./provider-sandbox.ts";
@@ -34,7 +35,7 @@ export interface StoredSuperserveSandbox extends StoredSandboxRecord {
   sandboxId?: string;
 }
 
-export const SUPERSERVE_BODIES = sandboxBodiesMigration("superserve_sandbox_bodies");
+export const SUPERSERVE_BODIES = sandboxBodiesMigration("superserve_sandbox_bodies", cols("sandboxId text"));
 
 export interface SuperserveSandboxOptions extends SandboxShared {
   client: SuperserveClient;

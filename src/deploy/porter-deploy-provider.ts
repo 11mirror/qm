@@ -7,12 +7,11 @@ import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
 import {
   appEnv as declaredAppEnv,
   appGone,
-  appLaunch,
+  startHostedApp,
   appLogs,
   appReporter,
   bundleEntries,
   extractBundle,
-  waitAppReady,
   type AppErrorSink,
 } from "./shared-deploy-provider.ts";
 import { posixJoin } from "./deploy-fs.ts";
@@ -198,17 +197,14 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
 
   async function startApp(d: Deployment, sandboxId: string, version: DeploymentVersion): Promise<void> {
     const inner = `cd ${shq(APP_DIR)}; ${version.entrypoint}`;
-    const script = [
-      `mkdir -p ${shq(APP_DIR)} ${shq(DATA_DIR)}`,
-      `export HOME=${shq(HOME_DIR)} PORT=${appPort} DATA_DIR=${shq(DATA_DIR)}`,
-      appLaunch(inner, appPort),
-    ].join("; ");
-    const r = await execRaw(sandboxId, script, APP_START_EXEC_TIMEOUT_SEC);
-    if (r.code !== 0) throw execFailure("porter deploy app start", r);
-    await waitAppReady((script, timeoutSec) => execRaw(sandboxId, script, timeoutSec), {
+    await startHostedApp((script, timeoutSec) => execRaw(sandboxId, script, timeoutSec), d, {
+      inner,
       appPort,
       windowSec: readyWindowSec,
-      report: appReporter(opts.onError, d, version.env),
+      timeoutSec: APP_START_EXEC_TIMEOUT_SEC,
+      prepare: `mkdir -p ${shq(APP_DIR)} ${shq(DATA_DIR)}; export HOME=${shq(HOME_DIR)} PORT=${appPort} DATA_DIR=${shq(DATA_DIR)}`,
+      env: version.env,
+      ...(opts.onError ? { onError: opts.onError } : {}),
     });
   }
 

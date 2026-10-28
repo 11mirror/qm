@@ -20,7 +20,7 @@ import {
   type SandboxShared,
   type StoredSandboxRecord,
 } from "./provider-sandbox.ts";
-import type { BackendSandbox, ComputerStatus, ExecResult, SandboxHandle, TeardownOptions } from "./sandbox.ts";
+import type { BackendSandbox, ExecResult, SandboxHandle, TeardownOptions } from "./sandbox.ts";
 import { sandboxBodiesMigration, type SandboxBodies } from "./sandbox-bodies.ts";
 
 const HOME_DIR = "/root";
@@ -243,7 +243,9 @@ function modalDriver(ctx: ModalCtx): SandboxDriver {
         return null;
       }
       sessions.set(name, found);
-      return { state: "running", detail: `modal sandbox ${found.sandboxId}` };
+      const scope = await provider().scopeOf(name);
+      const expiresAtMs = scope ? (await store.get(scope))?.expiresAtMs : undefined;
+      return { state: "running", detail: `modal sandbox ${found.sandboxId}`, ...(expiresAtMs ? { expiresAtMs } : {}) };
     },
     async create(name, { scratch }) {
       if (scratch) {
@@ -275,15 +277,8 @@ function modalDriver(ctx: ModalCtx): SandboxDriver {
     },
     checkpoints: {
       capture: async (name) => (await current(ctx, name)).snapshotHome(),
-      async restore(name, checkpointId) {
-        const scope = await provider().scopeOf(name);
-        const checkpointAtMs = scope ? (await store.get(scope))?.checkpointAtMs : undefined;
-        if (checkpointAtMs && checkpointAtMs + MODAL_CHECKPOINT_RETENTION_MS <= Date.now())
-          throw new Error(
-            "Modal home checkpoint has expired; explicitly import a recovery snapshot before creating a replacement",
-          );
-        await (await current(ctx, name)).restoreHome(checkpointId);
-      },
+      retentionMs: MODAL_CHECKPOINT_RETENTION_MS,
+      restore: async (name, checkpointId) => (await current(ctx, name)).restoreHome(checkpointId),
       drop: async () => {},
     },
   };
@@ -493,22 +488,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
         await store
           .update(scope, { lastActivityMs: Date.now() })
           .catch(swallowAs("modal-sandbox: record activity", undefined));
-    },
-
-    async computerStatus(scopeId: string): Promise<ComputerStatus> {
-      const [status, rec] = await Promise.all([provider.computerStatus!(scopeId), store.get(scopeId)]);
-      return {
-        ...status,
-        ...(status.provisioned && rec?.expiresAtMs ? { expiresAtMs: rec.expiresAtMs } : {}),
-        ...(status.recovery && rec?.checkpointAtMs
-          ? {
-              recovery: {
-                ...status.recovery,
-                checkpointExpiresAtMs: rec.checkpointAtMs + MODAL_CHECKPOINT_RETENTION_MS,
-              },
-            }
-          : {}),
-      };
     },
 
     async restartComputer(scopeId: string): Promise<void> {

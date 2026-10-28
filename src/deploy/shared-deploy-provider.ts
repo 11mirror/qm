@@ -189,3 +189,23 @@ export async function waitAppReady(exec: Exec, opts: AppReadyOptions): Promise<v
   const message = why + (log ? `; last output from the entrypoint:\n${log}` : "; the entrypoint produced no output");
   throw opts.report?.("app_start_failed", message) ?? new Error(message);
 }
+
+export async function startHostedApp(
+  exec: Exec,
+  d: Deployment,
+  opts: {
+    inner: string;
+    prepare?: string;
+    appPort: number;
+    windowSec: number;
+    timeoutSec?: number;
+    env?: Record<string, string>;
+    onError?: AppErrorSink;
+  },
+): Promise<void> {
+  const script = [opts.prepare, appLaunch(opts.inner, opts.appPort)].filter(Boolean).join("; ");
+  const result = await exec(script, opts.timeoutSec ?? 60);
+  const report = appReporter(opts.onError, d, opts.env);
+  if (result.code !== 0) throw report("app_start_failed", `app launch failed (exit ${result.code}): ${result.stderr}`);
+  await waitAppReady(exec, { appPort: opts.appPort, windowSec: opts.windowSec, report });
+}

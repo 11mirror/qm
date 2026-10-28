@@ -20,6 +20,8 @@ const stringPorts = {
   ],
 };
 
+FLY_DEPLOY_PORTS.before = [stringPorts];
+
 export function flyDeployPorts(databaseUrl: string) {
   const db = createPgPool(databaseUrl, [stringPorts, FLY_DEPLOY_PORTS]);
   const rows = typedTable<{ deploymentId: string }>(db, FLY_DEPLOY_PORTS.spec);

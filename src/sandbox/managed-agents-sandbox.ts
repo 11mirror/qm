@@ -269,18 +269,8 @@ export function createManagedAgentsSandbox(
   opts: ManagedAgentsSandboxOptions,
 ): BackendSandbox {
   const { client, store } = opts;
-  const knownScopes = new Map<string, string>();
-  const scopeOf = (name: string): string | undefined => sandbox.scopeFor(name) ?? knownScopes.get(name);
+  const scopeOf = (name: string): string | undefined => sandbox.scopeFor(name);
   const ctx = managedAgentsSessions(client, store, scopeOf, (scope) => sandbox.ensureResident(scope));
   const sandbox = createProviderSandbox(workspace, managedAgentsDriver(ctx, opts), opts, store);
-
-  const remember = (scopeId: string): void => {
-    knownScopes.set(sandbox.nameFor(scopeId), scopeId);
-  };
-  return {
-    ...sandbox,
-    computerStatus: (scopeId) => (remember(scopeId), sandbox.computerStatus!(scopeId)),
-    restartComputer: (scopeId) => (remember(scopeId), sandbox.restartComputer!(scopeId)),
-    destroyScope: (scopeId) => (remember(scopeId), sandbox.destroyScope!(scopeId)),
-  };
+  return sandbox;
 }

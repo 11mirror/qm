@@ -88,3 +88,30 @@ test("the same scope under two tenants provisions two machines named by each ten
   assert.equal(sandbox.scopeFor(handleA.id), scope);
   assert.equal(sandbox.scopeFor(handleB.id), scope);
 });
+
+test("checkpoint retention is enforced for every driver before native restore", async () => {
+  const { driver } = recordingDriver();
+  let restores = 0;
+  driver.checkpoints = {
+    retentionMs: 1000,
+    capture: async () => "snapshot",
+    restore: async () => {
+      restores++;
+    },
+  };
+  const store = memoryBodies();
+  const scope = scopeId("personal", "checkpoint-owner");
+  await store.upsert(scope, { checkpointId: "snapshot", checkpointAtMs: Date.now() - 2000 });
+  const sandbox = createProviderSandbox(
+    createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "provider-ws-"))),
+    driver,
+    { advisoryLock: createNoopAdvisoryLock() },
+    store,
+  );
+  await assert.rejects(sandbox.provision([{ scopeId: scope, mountPath: "/", mode: "rw" }]), /checkpoint has expired/);
+  await assert.rejects(sandbox.restartComputer!(scope), /checkpoint has expired/);
+  assert.equal(restores, 0);
+  const status = await sandbox.computerStatus!(scope);
+  const record = await store.get(scope);
+  assert.equal(status.recovery?.checkpointExpiresAtMs, record!.checkpointAtMs! + 1000);
+});

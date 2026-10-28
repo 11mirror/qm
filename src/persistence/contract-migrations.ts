@@ -37,6 +37,7 @@ export const CONTRACT_MIGRATIONS: readonly PgMigrationDefinition[] = [
   },
   {
     id: "contract/0010-drop-retired-schema",
+    acceptedChecksums: ["90b4edb8a992f189189e877c2b4b89a3fd69cfffc0b390132a7a0ef3e1faddd5"],
     statements: [
       "SET LOCAL lock_timeout = '3s'",
       "DROP TABLE IF EXISTS loop_ingress",
@@ -47,7 +48,6 @@ export const CONTRACT_MIGRATIONS: readonly PgMigrationDefinition[] = [
       "DROP TABLE IF EXISTS aws_sandbox_bodies",
       "DROP TABLE IF EXISTS sharing_postures",
       "DROP TABLE IF EXISTS superserve_config_epochs",
-      "DROP TABLE IF EXISTS superserve_sandbox_bodies",
       "DROP INDEX IF EXISTS loop_items_loopid_fold",
       "DROP INDEX IF EXISTS loop_items_loopid_unicode",
       "DROP STATISTICS IF EXISTS loop_items_loopid_stats",

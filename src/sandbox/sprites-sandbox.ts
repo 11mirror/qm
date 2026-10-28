@@ -467,7 +467,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       forget,
       restart,
       ...(opts.egressProxyUrl ? { ensureEgress: ensureEgressPolicy } : {}),
-      checkpoints: { machineBound: true, capture: captureCheckpoint, restore: restoreCheckpoint },
+      checkpoints: { retentionMs: null, machineBound: true, capture: captureCheckpoint, restore: restoreCheckpoint },
     },
     opts,
     opts.store,
@@ -489,10 +489,6 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
         );
       }
       return started;
-    },
-    async computerStatus(scopeId) {
-      const status = await sandbox.computerStatus!(scopeId);
-      return status.recovery ? { ...status, recovery: { ...status.recovery, checkpointExpiresAtMs: null } } : status;
     },
   };
 }
