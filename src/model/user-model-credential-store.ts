@@ -89,12 +89,17 @@ export function createUserModelCredentialStore(input: { keychain: Keychain }): U
     },
 
     async connections(userId) {
-      const found: UserCredentialConnection[] = [];
-      for (const provider of PERSONAL_MODEL_PROVIDERS) {
-        const cred = (await oauthCredential(userId, provider)) ?? (await apiKeyCredential(userId, provider));
-        if (cred) found.push({ provider, kind: cred.kind });
-      }
-      return found;
+      const [owned, ...subscriptions] = await Promise.all([
+        keychain.listByOwner(userId),
+        ...PERSONAL_MODEL_PROVIDERS.map((provider) =>
+          keychain.connectorTokenStatus(AI_OAUTH_HOSTS[provider], userId, AI_ACCOUNT_TYPE),
+        ),
+      ]);
+      const apiKeys = new Set(owned.filter((c) => c.origin === ORIGIN).map((c) => c.service));
+      return PERSONAL_MODEL_PROVIDERS.flatMap((provider, i): UserCredentialConnection[] => {
+        if (subscriptions[i]?.connected) return [{ provider, kind: "oauth" }];
+        return apiKeys.has(serviceFor(provider)) ? [{ provider, kind: "apikey" }] : [];
+      });
     },
 
     async setApiKey(userId, provider, apiKey) {
