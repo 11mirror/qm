@@ -1,4 +1,4 @@
-import { reportHandledError } from "./browser-errors";
+import { reportHandledError, reportSessionSwitch } from "./browser-errors";
 import { cachedTranscript, clearTranscriptCache, dropTranscript, storeTranscript } from "./transcript-cache";
 import { mountTranscript, reconcileCachedTranscript } from "./session-transcript";
 import { html, nothing, render, type TemplateResult } from "lit";
@@ -661,6 +661,22 @@ export async function openSessionInto(
     return;
   }
   if (s.id === conv.state.sessionId && !transcriptPrefetch) return;
+  const started = Date.now();
+  const reportPainted = (fetched: number, page: TranscriptPage | null, prefetched: boolean) => {
+    if (document.visibilityState !== "visible") return;
+    requestAnimationFrame(() =>
+      setTimeout(() =>
+        reportSessionSwitch(started, {
+          fetchedMs: fetched,
+          endMs: Date.now(),
+          loaded: page !== null,
+          prefetched,
+          tracked,
+          entries: page?.items.length ?? 0,
+        }),
+      ),
+    );
+  };
 
   refreshSessionsOnOpen();
   void loadSessionNeighbors(s);
@@ -673,6 +689,7 @@ export async function openSessionInto(
     const approvals = s.canContinue === true ? fetchSessionApprovals(s.id) : null;
     mountTranscript(conv, s, cached, approvals);
     renderList();
+    reportPainted(Date.now(), cached, true);
     void reconcileCachedTranscript(conv, s, cached, approvals, conv.transcriptAnchor()).catch((error: unknown) =>
       reportHandledError("web:transcript_reconcile", error),
     );
@@ -690,8 +707,15 @@ export async function openSessionInto(
     fetchTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(swallowAs("web-ui: load session transcript", null));
   const continuable = s.canContinue === true;
   const approvals = continuable ? (approvalsPrefetch ?? fetchSessionApprovals(s.id)) : null;
-  const transcriptRes = await (transcriptPrefetch ? transcriptPrefetch.then((r) => r ?? fetchPage()) : fetchPage());
+  let prefetched = false;
+  const transcriptRes = await (transcriptPrefetch
+    ? transcriptPrefetch.then((r) => {
+        prefetched = r !== null;
+        return r ?? fetchPage();
+      })
+    : fetchPage());
   if (!isLiveConversation(conv) || !isCurrent()) return;
+  const fetched = Date.now();
 
   if (tracked) {
     if (sessionsState.openingKey !== opening) return;
@@ -706,10 +730,12 @@ export async function openSessionInto(
     dropTranscript(s.id);
     conv.mountLoadError(() => void openSessionInto(conv, s, undefined, undefined, tracked));
     renderList();
+    reportPainted(fetched, null, prefetched);
     return;
   }
 
   storeTranscript(s.id, transcriptRes);
   mountTranscript(conv, s, transcriptRes, approvals);
   renderList();
+  reportPainted(fetched, transcriptRes, prefetched);
 }
