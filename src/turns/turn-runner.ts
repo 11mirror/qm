@@ -219,7 +219,9 @@ async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
         return;
       } catch (error) {
         if (rejectsData(error)) return finishBare(error);
-        swallow(`turns: turn end failed for turn ${run.id} (retrying)`, error);
+        clearInterval(beat);
+        lost = !(await deps.ledger.fenceHeld(run.id, token).catch(() => true));
+        swallow(`turns: turn end failed for turn ${run.id} (retrying while the claim lasts)`, error);
         await sleep(Math.min(FINISH_RETRY_MS * attempt, FINISH_RETRY_MAX_MS));
       }
     }
