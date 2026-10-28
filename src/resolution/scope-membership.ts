@@ -41,64 +41,45 @@ function activePrincipal(deps: ScopeMembershipDeps, principalId: string): boolea
   return type === undefined || type === "internal";
 }
 
-async function currentSharedScopeMember(
+async function sharedScopeMember(
   deps: ScopeMembershipDeps,
   kind: "channel" | "group",
   ref: string,
   principalId: string,
+  current: boolean,
 ): Promise<boolean> {
   if (actsAsScope(principalId, scopeId(kind, ref))) return true;
   if (!activePrincipal(deps, principalId)) return false;
-  const member = await deps.directory?.get?.(principalId).catch(swallowAs("scope membership: directory lookup", null));
-  const ids = [...new Set([principalId, member?.principalId, member?.slackId].filter((id): id is string => !!id))];
-  if (kind === "group" && deps.managedGroups?.recognizes(ref)) {
-    for (const id of ids)
-      if (
-        (await deps.managedGroups.membership(ref, id).catch(swallowAs("scope membership: group membership", false))) ===
-        true
-      )
-        return true;
-    return false;
-  }
-  const direct = kind === "channel" ? deps.directory?.channelMember : deps.directory?.groupMember;
-  for (const id of ids)
-    if (
-      (await direct?.call(deps.directory, ref, id).catch(swallowAs("scope membership: channel membership", false))) ===
-      true
-    )
+  for (const id of current ? await directoryIds(deps, principalId) : [principalId]) {
+    const membership = recordedMembership(deps, kind, ref, id, current);
+    if ((await membership?.catch(swallowAs("scope membership: shared scope membership", undefined))) === true)
       return true;
+  }
   return false;
 }
 
-function directoryMembership(
-  directory: ScopeMembershipDeps["directory"],
-  kind: "channel" | "group",
-  ref: string,
-  principalId: string,
-): Promise<boolean | undefined> | undefined {
-  if (kind === "channel") {
-    return directory?.channelMembership
-      ? directory.channelMembership(ref, principalId)
-      : directory?.channelMember(ref, principalId);
-  }
-  return directory?.groupMembership
-    ? directory.groupMembership(ref, principalId)
-    : directory?.groupMember(ref, principalId);
+async function directoryIds(deps: ScopeMembershipDeps, principalId: string): Promise<string[]> {
+  const member = await deps.directory?.get?.(principalId).catch(swallowAs("scope membership: directory lookup", null));
+  return [...new Set([principalId, member?.principalId, member?.slackId].filter((id): id is string => !!id))];
 }
 
-async function memberOfSharedScope(
+function recordedMembership(
   deps: ScopeMembershipDeps,
   kind: "channel" | "group",
   ref: string,
   principalId: string,
-): Promise<boolean> {
-  if (actsAsScope(principalId, scopeId(kind, ref))) return true;
-  if (!activePrincipal(deps, principalId)) return false;
-  const membership =
-    kind === "group" && deps.managedGroups?.recognizes(ref)
-      ? deps.managedGroups.membership(ref, principalId)
-      : directoryMembership(deps.directory, kind, ref, principalId);
-  return (await membership?.catch(swallowAs("scope membership: shared scope membership", undefined))) === true;
+  current: boolean,
+): Promise<boolean | undefined> | undefined {
+  if (kind === "group" && deps.managedGroups?.recognizes(ref)) return deps.managedGroups.membership(ref, principalId);
+  const directory = deps.directory;
+  if (!directory) return undefined;
+  if (kind === "channel")
+    return !current && directory.channelMembership
+      ? directory.channelMembership(ref, principalId)
+      : directory.channelMember(ref, principalId);
+  return !current && directory.groupMembership
+    ? directory.groupMembership(ref, principalId)
+    : directory.groupMember(ref, principalId);
 }
 
 export type CanReadScope = (principalId: string, targetScope: ScopeId) => Promise<boolean>;
@@ -109,7 +90,7 @@ export function createIsCurrentSharedScopeMember(deps: ScopeMembershipDeps): IsC
   return async function isCurrentSharedScopeMember(principalId, scope) {
     if (!principalId) return false;
     const { kind, ref } = parseScopeId(scope);
-    return (kind === "channel" || kind === "group") && currentSharedScopeMember(deps, kind, ref, principalId);
+    return (kind === "channel" || kind === "group") && sharedScopeMember(deps, kind, ref, principalId, true);
   };
 }
 
@@ -170,9 +151,9 @@ export function createCanReadScope(deps: ScopeMembershipDeps): CanReadScope {
     if (kind === "org") return deps.identity?.classify(principalId).type === "internal";
     if (kind === "personal") return samePerson(ref, principalId);
     if (kind === "team") return teamMember(deps, principalId, ref);
-    if (kind === "group") return memberOfSharedScope(deps, kind, ref, principalId);
+    if (kind === "group") return sharedScopeMember(deps, kind, ref, principalId, false);
     if (kind === "channel") {
-      if (await memberOfSharedScope(deps, kind, ref, principalId)) return true;
+      if (await sharedScopeMember(deps, kind, ref, principalId, false)) return true;
       const isPrivate = await deps.directory
         ?.channelPrivacy?.(ref)
         .catch(swallowAs("scope membership: channel privacy", undefined));
@@ -190,7 +171,7 @@ export function createCanWriteScope(deps: ScopeMembershipDeps): CanWriteScope {
     if (kind === "org") return true;
     if (kind === "personal") return samePerson(ref, principalId);
     if (kind === "team") return teamMember(deps, principalId, ref);
-    if (kind === "channel" || kind === "group") return currentSharedScopeMember(deps, kind, ref, principalId);
+    if (kind === "channel" || kind === "group") return sharedScopeMember(deps, kind, ref, principalId, true);
     return false;
   };
 }
@@ -215,13 +196,13 @@ export function createCanManageScope(deps: ScopeMembershipDeps): CanManageScope 
     if (!principalId || !activePrincipal(deps, principalId)) return false;
     const { kind, ref } = parseScopeId(scope);
     if (kind === "personal") return samePerson(ref, principalId);
-    if (kind === "group") return currentSharedScopeMember(deps, kind, ref, principalId);
+    if (kind === "group") return sharedScopeMember(deps, kind, ref, principalId, true);
     if (kind === "channel") {
       const isPrivate = await deps.directory
         ?.channelPrivacy?.(ref)
         .catch(swallowAs("scope membership: channel privacy", undefined));
       if (isPrivate !== true) return false;
-      return currentSharedScopeMember(deps, kind, ref, principalId);
+      return sharedScopeMember(deps, kind, ref, principalId, true);
     }
     return false;
   };
