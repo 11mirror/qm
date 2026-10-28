@@ -29,7 +29,6 @@ const WRITE_LEASE_WAIT_MS = 60_000;
 
 interface Summarized {
   text: string;
-  summaryLabel: ScopeId;
   throughSeq: number;
   mode?: "recent";
 }
@@ -114,9 +113,6 @@ async function summarizeForCompaction(
   const reuseBudgetTokens = Math.floor(maxContextTokens * COMPACT_KEEP_RECENT_FRACTION);
   const plan = planCompaction(input.visibleHistory, maxContextTokens, COMPACT_KEEP_RECENT_FRACTION, reuseBudgetTokens);
   if (!plan || !plan.toSummarize.length) return null;
-
-  const summaryLabel = input.scopeId;
-
   input.cancel?.throwIfAborted();
   let text: string;
   const summaryTokenBudget = compactSummaryTokenBudget(maxContextTokens);
@@ -126,7 +122,7 @@ async function summarizeForCompaction(
       history: plan.toSummarize,
       summaryTokenBudget,
       recordModelCall: (rec) => {
-        deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: summaryLabel, ...rec });
+        deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: input.scopeId, ...rec });
         void deps.budget?.record(input.actorId, estimateCostUsd(rec.inputTokens));
       },
     });
@@ -149,7 +145,6 @@ async function summarizeForCompaction(
   input.cancel?.throwIfAborted();
   return {
     text,
-    summaryLabel,
     throughSeq: compactionThroughSeq(plan.toSummarize),
   };
 }
@@ -228,7 +223,6 @@ async function compactRecent(deps: OrchestratorDeps, input: CompactInput): Promi
     ...input,
     summarized: {
       text,
-      summaryLabel: input.scopeId as ScopeId,
       throughSeq,
       mode: "recent",
     },
