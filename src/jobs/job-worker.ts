@@ -4,6 +4,7 @@ import {
   type AbsurdDb as AbsurdConnection,
   type ClaimedRun,
   claimTasks,
+  queueTenants,
   cleanup,
   completeRun,
   extendClaim,
@@ -17,7 +18,7 @@ import { WorkAdmissionClosed } from "../util/admitted-work.ts";
 import { reportFailure } from "../util/errors.ts";
 import { mapBounded, sleep } from "../util/async.ts";
 import { pgPoolMax, pgTenancyEnabled, tenantLockKey } from "../persistence/pg-pool.ts";
-import { holdTenant, tenant, withTenant, type Tenant } from "../tenant.ts";
+import { holdTenant, homeTenant, tenant, withTenant, type Tenant } from "../tenant.ts";
 import { activeTenants, retiredTenantReason, taskTenant } from "../tenants/directory.ts";
 
 export type JobDisposition = "done" | "release" | number;
@@ -159,6 +160,10 @@ async function dueTenants(db: AbsurdDb, job: string, due: string): Promise<Tenan
   return dueOwners.filter((owner): owner is Tenant => owner !== undefined);
 }
 
+async function cleanupJobs(db: AbsurdDb): Promise<void> {
+  while ((await cleanup(await db.pool(), JOB_QUEUE, DONE_RETENTION_SEC, CLEANUP_BATCH)).tasks >= CLEANUP_BATCH);
+}
+
 export function createJobWorker(databaseUrl: string): JobWorker {
   const db = registerAbsurdSchema(databaseUrl);
   const worker = `jobs:${randomUUID()}`;
@@ -187,7 +192,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
       let claimed = 0;
       if (free > 0) {
         try {
-          for (const owner of await activeTenants()) {
+          for (const owner of await queueTenants(await db.pool(), JOB_QUEUE)) {
             if (mine.size >= limit) break;
             const tasks = await withTenant(owner, async () =>
               claimTasks(await db.pool(), JOB_QUEUE, worker, CLAIM_TIMEOUT_SEC, limit - mine.size),
@@ -281,7 +286,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
     },
     async start() {
       if (started) return;
-      const home = tenant();
+      const home = homeTenant();
       await withTenant(home, async () => (await db.pool()).query("SELECT 1")).catch(noteError);
       const start = `${worker}:${++starts}`;
       await withTenant(home, async () => {
@@ -294,22 +299,13 @@ export function createJobWorker(databaseUrl: string): JobWorker {
       lastErrorAt = 0;
       loop = withTenant(home, () => poll());
     },
-    healthy() {
-      return started && Date.now() - lastErrorAt >= UNHEALTHY_AFTER_ERROR_MS;
-    },
+    healthy: () => started && Date.now() - lastErrorAt >= UNHEALTHY_AFTER_ERROR_MS,
     stopClaims,
     async stop() {
       await stopClaims();
       while (active.size) await Promise.allSettled([...active]);
     },
   });
-  jobWorker.every(
-    "jobs:cleanup",
-    60 * 60_000,
-    async () => {
-      while ((await cleanup(await db.pool(), JOB_QUEUE, DONE_RETENTION_SEC, CLEANUP_BATCH)).tasks >= CLEANUP_BATCH);
-    },
-    { shared: true },
-  );
+  jobWorker.every("jobs:cleanup", 60 * 60_000, () => cleanupJobs(db), { shared: true });
   return jobWorker;
 }

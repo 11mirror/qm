@@ -448,6 +448,7 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     POSTHOG_API_KEY: trimmed,
     POSTHOG_HOST: raw,
     DATABASE_URL: str,
+    DATABASE_MIGRATION_URL: str,
     DATABASE_POOL_URL: str,
     DATABASE_POOL_CA_CERT: str,
     DATABASE_POOL_MAX: num,

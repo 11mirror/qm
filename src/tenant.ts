@@ -28,6 +28,10 @@ let processTenant: Tenant | undefined;
 export function tenant(): Tenant {
   const scoped = current.getStore();
   if (scoped) return scoped;
+  return homeTenant();
+}
+
+export function homeTenant(): Tenant {
   const orgId = processOrgId();
   if (processTenant?.orgId !== orgId) processTenant = tenantFor(orgId);
   return processTenant;

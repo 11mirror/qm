@@ -6,7 +6,7 @@ import {
   definePgMigration,
   type PgMigrationDefinition,
 } from "../../src/persistence/pg-migrations.ts";
-import { applyTenancy, TENANT_BYPASS_OPTION } from "../../src/persistence/tenancy.ts";
+import { applyTenancy } from "../../src/persistence/tenancy.ts";
 import {
   columnName,
   tableCodec,
@@ -134,7 +134,7 @@ export async function assertMapConversion(
       ).rows,
     );
   for (const seeds of cases) {
-    const pool = new pg.Pool({ connectionString: testDatabaseUrl(), options: TENANT_BYPASS_OPTION });
+    const pool = new pg.Pool({ connectionString: testDatabaseUrl() });
     try {
       await seedMap(pool, spec.table, seeds);
       if (retired) await runMigration(pool, retired.migration);

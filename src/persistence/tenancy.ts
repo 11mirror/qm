@@ -195,10 +195,23 @@ async function tenantizeQueues(client: import("pg").PoolClient): Promise<void> {
   for (const { relname } of rows.filter(({ relname }) => relname.startsWith("e_")))
     await client.query(`UPDATE absurd.${relname} e SET tenant_id = w.tenant_id
       FROM absurd.w_${relname.slice(2)} w WHERE w.event_name = e.event_name`);
+  for (const { relname } of rows.filter(({ relname }) => relname.startsWith("e_")))
+    await client.query(`UPDATE absurd.${relname} e SET tenant_id = t.tenant_id
+      FROM absurd.t_${relname.slice(2)} t WHERE t.params->>'turnId' = e.payload->>'turnId'`);
+  await client.query(`CREATE OR REPLACE FUNCTION qm_queue_tenants(queue text) RETURNS TABLE(id uuid)
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $queue_tenants$
+    BEGIN
+      IF queue NOT IN ('jobs', 'turns_people', 'turns_delegated', 'turns_background') THEN
+        RAISE EXCEPTION 'Unknown work queue';
+      END IF;
+      RETURN QUERY EXECUTE format('SELECT DISTINCT tenant_id FROM absurd.%I
+        WHERE state IN (''pending'', ''running'', ''sleeping'') ORDER BY tenant_id', 't_' || queue);
+    END $queue_tenants$`);
   const tables = await client.query(`SELECT relname FROM pg_class
     WHERE relnamespace = 'absurd'::regnamespace AND relkind = 'r' AND relname <> 'queues'`);
   for (const { relname } of tables.rows) {
     if (!/^[trcewi]_[a-z_]+$/.test(relname)) throw new Error(`Unexpected queue table ${relname}`);
+    await client.query(`CREATE INDEX IF NOT EXISTS ${relname}_tenant ON absurd.${relname}(tenant_id)`);
     await client.query(`ALTER TABLE absurd.${relname} ENABLE ROW LEVEL SECURITY`);
     await client.query(`ALTER TABLE absurd.${relname} FORCE ROW LEVEL SECURITY`);
     await client.query(`DROP POLICY IF EXISTS qm_tenant_isolation ON absurd.${relname}`);
@@ -207,8 +220,13 @@ async function tenantizeQueues(client: import("pg").PoolClient): Promise<void> {
   }
 }
 
-export async function prepareTenancy(pool: Pool): Promise<string> {
-  for (const statement of TENANCY_FUNCTIONS.slice(0, 3)) await pool.query(statement);
+export async function prepareTenancy(pool: Pool): Promise<string | undefined> {
+  const { rows: roles } = await pool.query(
+    "SELECT rolsuper OR rolbypassrls AS allowed FROM pg_roles WHERE rolname = current_user",
+  );
+  if (!roles[0]?.allowed) throw new Error("Database migrations require a separate BYPASSRLS role");
+  const exists = await pool.query("SELECT to_regclass('qm_tenant') IS NOT NULL AS present");
+  if (!exists.rows[0]?.present) return undefined;
   const { rows } = await pool.query("SELECT id::text AS id FROM qm_tenant");
   const id = String(rows[0].id);
   await pool.query("SELECT set_config('qm.tenant_id', $1, false)", [id]);

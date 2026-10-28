@@ -8,7 +8,6 @@ import { CONTRACT_MIGRATIONS, HELD_BACK_CONTRACT_MIGRATIONS } from "../../src/pe
 import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
 import { applyPgMigrations, pgMigrationFrom } from "../../src/persistence/pg-migrations.ts";
 import { SCHEMA_BASELINE } from "../../src/persistence/schema-baseline.ts";
-import { TENANT_BYPASS_OPTION } from "../../src/persistence/tenancy.ts";
 import { buildApp } from "../../src/wiring.ts";
 import { testConfig } from "../support/test-config.ts";
 import { withClient } from "../support/pg-client.ts";
@@ -143,7 +142,7 @@ async function copyTenants(from: string, to: string): Promise<void> {
 }
 
 async function applyContracts(url: string): Promise<void> {
-  const pool = new pg.Pool({ connectionString: url, options: TENANT_BYPASS_OPTION });
+  const pool = new pg.Pool({ connectionString: url });
   try {
     await applyPgMigrations(pool, [...CONTRACT_MIGRATIONS, ...HELD_BACK_CONTRACT_MIGRATIONS].map(pgMigrationFrom));
   } finally {
@@ -255,7 +254,7 @@ test("a tenantized database that lacks a folded migration keeps every tenant's t
   const url = await createDatabase("styleup-323baddc.sql.gz");
   const lacking = "durable-map/pinned_skills/0002-drop";
   await withClient(url, async (client) => {
-    await client.query("SET qm.tenant_bypass = 'on'");
+    await client.query("SELECT set_config('qm.tenant_id', (SELECT id::text FROM qm_tenant), false)");
     await client.query("DELETE FROM qm_schema_migrations WHERE id = $1", [lacking]);
     const tenants = (await client.query<{ id: string }>("SELECT id FROM tenants ORDER BY id LIMIT 2")).rows;
     for (const tenant of tenants) {
@@ -267,7 +266,7 @@ test("a tenantized database that lacks a folded migration keeps every tenant's t
   });
   await migrate(url, true);
   const rows = await withClient(url, async (client) => {
-    await client.query("SET qm.tenant_bypass = 'on'");
+    await client.query("SELECT set_config('qm.tenant_id', (SELECT id::text FROM qm_tenant), false)");
     return (await client.query("SELECT tenant_id FROM tool_calls WHERE run_id = 'run-1'")).rows;
   });
   assert.equal(rows.length, 2);

@@ -1,8 +1,9 @@
+import { configureTestTenancy } from "../support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { createServer, request, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { isDeepStrictEqual } from "node:util";
-import { test, after, before } from "node:test";
+import { test, after, before } from "../support/tenant-test.ts";
 import pg from "pg";
 import {
   edgeTenant,
@@ -213,7 +214,7 @@ before(async () => {
   url.password = ROLE;
   url.pathname = `/${DB}`;
   appUrl = url.toString();
-  configurePgTenancy(true);
+  await configureTestTenancy(appUrl);
   registry = createPgPool(appUrl);
   await registry.pool();
   for (const [id, slug] of [

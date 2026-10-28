@@ -36,10 +36,6 @@ export function tenantLockKey(key: string): string {
   return id ? `tenant:${id}:${key}` : key;
 }
 
-const TENANT_GUC = Symbol("qm.tenant_id");
-
-type TenantTracked = PoolClient & { [TENANT_GUC]?: string };
-
 function tenantScopedPool(pool: Pool, connectionString: string): Pool {
   const connect = pool.connect.bind(pool) as () => Promise<PoolClient>;
   const scoped = (
@@ -49,15 +45,14 @@ function tenantScopedPool(pool: Pool, connectionString: string): Pool {
     const id = source === null ? homeTenantIds.get(connectionString) : source;
     const ready = Promise.resolve().then(async () => {
       if (tenancyEnabled && !id) throw new Error("Postgres query requires an explicit tenant context");
-      const client = (await connect()) as TenantTracked;
-      if (tenancyEnabled && client[TENANT_GUC] !== id) {
+      const client = await connect();
+      if (tenancyEnabled) {
         try {
           await client.query("SELECT set_config('qm.tenant_id', $1, false)", [id]);
         } catch (error) {
           client.release(error instanceof Error ? error : new Error(String(error)));
           throw error;
         }
-        client[TENANT_GUC] = id;
       }
       return client as PoolClient;
     });
@@ -114,13 +109,14 @@ async function applyAndSettle(
   migrations: readonly PgMigration[],
   retenantize = false,
 ): Promise<void> {
-  if (tenancyEnabled) homeTenantIds.set(connectionString, await prepareTenancy(pool));
+  if (tenancyEnabled) await prepareTenancy(pool);
   const applied = await applyPgMigrations(pool, migrations);
   let settled = settledMigrations.get(connectionString);
   if (!settled) settledMigrations.set(connectionString, (settled = new Set()));
   for (const migration of migrations) settled.add(migration.id);
   if (!tenancyEnabled || (!retenantize && applied === 0 && tenantized.has(connectionString))) return;
   await applyTenancy(pool);
+  homeTenantIds.set(connectionString, (await prepareTenancy(pool))!);
   tenantized.add(connectionString);
 }
 
@@ -291,7 +287,7 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
     if (!registered?.size) continue;
     await migrationQueue(databaseUrl, async () => {
       const pg = (await import("pg")).default;
-      const pool = guardedPool(new pg.Pool(pgConnectionOptions(migrationDatabaseUrl(databaseUrl))));
+      const pool = guardedPool(new pg.Pool({ ...pgConnectionOptions(migrationDatabaseUrl(databaseUrl)), max: 1 }));
       try {
         await applyAndSettle(pool, databaseUrl, registeredPgMigrations(databaseUrl), true);
       } finally {

@@ -1,6 +1,6 @@
 import { AsyncResource } from "node:async_hooks";
 import { createPgPool } from "./pg-pool.ts";
-import { registeredTenant, scopedTenant, tenant, withTenant } from "../tenant.ts";
+import { homeTenant, registeredTenant, scopedTenant, tenant, withTenant } from "../tenant.ts";
 import { swallowAs } from "../util/errors.ts";
 import { createMemoryEventBus, type EventBus } from "../util/event-bus.ts";
 
@@ -45,7 +45,7 @@ function deliverTo<T>(cb: (event: T) => void): (notice: Notice<T>) => void {
       if (notice.t === (own.id ?? null)) here(() => cb(notice.e));
     };
   return (notice) => {
-    if (notice.t === null) return here(() => cb(notice.e));
+    if (notice.t === null) return here(() => withTenant(homeTenant(), () => cb(notice.e)));
     const t = registeredTenant(notice.t);
     if (t) here(() => withTenant(t, () => cb(notice.e)));
   };

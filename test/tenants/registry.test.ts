@@ -1,4 +1,5 @@
-import { test } from "node:test";
+import { configureTestTenancy } from "../support/tenant-test.ts";
+import { test } from "../support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { configurePgTenancy, createPgPool, tenantCols } from "../../src/persistence/pg-pool.ts";
@@ -43,7 +44,7 @@ async function provision(): Promise<{ url: string; drop: () => Promise<void> }> 
 
 test("tenancy: tenant_id leads every key, RLS separates tenants, legacy rows stay with the home tenant", async () => {
   const { url, drop } = await provision();
-  configurePgTenancy(true);
+  await configureTestTenancy(url);
   try {
     const legacy = createPgPool(url, [
       {

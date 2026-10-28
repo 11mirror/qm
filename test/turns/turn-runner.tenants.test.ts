@@ -1,4 +1,5 @@
-import { after, before, test } from "node:test";
+import { configureTestTenancy } from "../support/tenant-test.ts";
+import { after, before, test } from "../support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
@@ -35,12 +36,14 @@ const withRetired = directoryOf(
   (id) => Promise.resolve(id !== RETIRED),
 );
 
-async function absurdTask(queue: string, taskId: string) {
-  const rows = await rls.q(
-    `SELECT t.state, (SELECT r.failure_reason->>'message' FROM absurd.${pg.escapeIdentifier(`r_${queue}`)} r
+async function absurdTask(queue: string, taskId: string, owner: Tenant) {
+  const rows = await withTenant(owner, () =>
+    rls.q(
+      `SELECT t.state, (SELECT r.failure_reason->>'message' FROM absurd.${pg.escapeIdentifier(`r_${queue}`)} r
         WHERE r.task_id = t.task_id AND r.failure_reason IS NOT NULL LIMIT 1) AS reason
        FROM absurd.${pg.escapeIdentifier(`t_${queue}`)} t WHERE t.task_id = $1`,
-    [taskId],
+      [taskId],
+    ),
   );
   return rows[0] as { state: string; reason: string | null } | undefined;
 }
@@ -85,7 +88,7 @@ before(async () => {
   url.password = ROLE;
   url.pathname = `/${DB}`;
   appUrl = url.toString();
-  configurePgTenancy(true);
+  await configureTestTenancy(appUrl);
   useTenantDirectory(directory);
   registerTenantSettings(
     [acme, beta].map((t): TenantSettings => ({
@@ -212,7 +215,7 @@ test("a person's turn in one tenant is claimed before background work in another
 });
 
 test(
-  "one job worker runs keyed jobs in their tenant, periodic work once per tenant, and shared periodic work once",
+  "one job worker runs keyed jobs in their tenant, periodic work once per tenant, and shared periodic work once per tenant",
   { skip },
   async () => {
     const jobs = createJobWorker(appUrl);
@@ -229,7 +232,7 @@ test(
     await withTenant(beta, () => jobs.spawn("probe", { name: "beta" }, "probe:1"));
     await jobs.start();
     try {
-      await eventually(() => fired.length === 2 && visits.length === 2 && sharedVisits.length === 1, {
+      await eventually(() => fired.length === 2 && visits.length === 2 && sharedVisits.length === 2, {
         label: "jobs ran",
       });
     } finally {
@@ -243,8 +246,16 @@ test(
       ],
     );
     assert.deepEqual(visits.toSorted(), [acme.id, beta.id].toSorted());
-    assert.deepEqual(sharedVisits, [undefined]);
-    const keys = await rls.q("SELECT idempotency_key FROM absurd.t_jobs WHERE task_name = 'probe' ORDER BY 1");
+    assert.deepEqual(sharedVisits.toSorted(), [acme.id, beta.id].toSorted());
+    const keys = (
+      await Promise.all(
+        [acme, beta].map((t) =>
+          withTenant(t, () => rls.q("SELECT idempotency_key FROM absurd.t_jobs WHERE task_name = 'probe' ORDER BY 1")),
+        ),
+      )
+    )
+      .flat()
+      .sort((a, b) => String(a.idempotency_key).localeCompare(String(b.idempotency_key)));
     assert.deepEqual(
       keys.map((row) => row.idempotency_key),
       [`tenant:${acme.id}:probe:1`, `tenant:${beta.id}:probe:1`].sort(),
@@ -273,10 +284,20 @@ test(
       useTenantDirectory(directory);
     }
     assert.deepEqual(ran, []);
-    const rows = await rls.q(
-      `SELECT t.task_name, t.state, t.attempts FROM absurd.t_jobs t
+    const rows = (
+      await Promise.all(
+        [tenant(), acme].map((t) =>
+          withTenant(t, () =>
+            rls.q(
+              `SELECT t.task_name, t.state, t.attempts FROM absurd.t_jobs t
       WHERE t.task_name IN ('orphan', 'every:spin-probe') ORDER BY 1`,
-    );
+            ),
+          ),
+        ),
+      )
+    )
+      .flat()
+      .sort((a, b) => String(a.task_name).localeCompare(String(b.task_name)));
     assert.deepEqual(
       rows.map((row) => [row.task_name, row.state, Number(row.attempts) <= 2]),
       [
@@ -364,13 +385,19 @@ test(
     });
     await withTenant(retired, () => jobs.spawn("tenant-gone-probe", { name: "retired" }, "gone:1"));
     await withTenant(waiting, () => jobs.spawn("tenant-gone-probe", { name: "waiting" }, "gone:1"));
-    const ids = async (key: string) =>
-      String((await rls.q("SELECT task_id::text AS id FROM absurd.t_jobs WHERE idempotency_key = $1", [key]))[0]?.id);
-    const gone = await ids(`tenant:${RETIRED}:gone:1`);
-    const later = await ids(`tenant:${WAITING}:gone:1`);
+    const ids = async (owner: Tenant, key: string) =>
+      String(
+        (
+          await withTenant(owner, () =>
+            rls.q("SELECT task_id::text AS id FROM absurd.t_jobs WHERE idempotency_key = $1", [key]),
+          )
+        )[0]?.id,
+      );
+    const gone = await ids(retired, `tenant:${RETIRED}:gone:1`);
+    const later = await ids(waiting, `tenant:${WAITING}:gone:1`);
     await jobs.start();
     try {
-      await eventually(async () => (await absurdTask("jobs", gone))?.state === "failed", {
+      await eventually(async () => (await absurdTask("jobs", gone, retired))?.state === "failed", {
         label: "the retired tenant's job was settled",
       });
       await new Promise((resolve) => setTimeout(resolve, 500));
@@ -379,11 +406,11 @@ test(
       useTenantDirectory(directory);
     }
     assert.deepEqual(ran, []);
-    assert.deepEqual(await absurdTask("jobs", gone), {
+    assert.deepEqual(await absurdTask("jobs", gone, retired), {
       state: "failed",
       reason: `tenant ${RETIRED} no longer exists`,
     });
-    assert.ok(["pending", "sleeping"].includes(String((await absurdTask("jobs", later))?.state)));
+    assert.ok(["pending", "sleeping"].includes(String((await absurdTask("jobs", later, waiting))?.state)));
   },
 );
 
@@ -410,7 +437,7 @@ test(
     const laterTask = await taskOf(waiting, later.id);
     runner.start();
     try {
-      await eventually(async () => (await absurdTask("turns_people", goneTask))?.state === "cancelled", {
+      await eventually(async () => (await absurdTask("turns_people", goneTask, retired))?.state === "cancelled", {
         label: "the retired tenant's turn task was settled",
       });
       await new Promise((resolve) => setTimeout(resolve, 500));
@@ -419,10 +446,10 @@ test(
       useTenantDirectory(directory);
     }
     assert.ok(!seen.some((each) => each.runId === gone.id || each.runId === later.id));
-    assert.deepEqual(await absurdTask("turns_people", goneTask), {
+    assert.deepEqual(await absurdTask("turns_people", goneTask, retired), {
       state: "cancelled",
       reason: `tenant ${RETIRED} no longer exists`,
     });
-    assert.notEqual((await absurdTask("turns_people", laterTask))?.state, "cancelled");
+    assert.notEqual((await absurdTask("turns_people", laterTask, waiting))?.state, "cancelled");
   },
 );

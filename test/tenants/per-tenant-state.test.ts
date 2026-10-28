@@ -1,6 +1,7 @@
+import { configureTestTenancy } from "../support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
-import { test } from "node:test";
+import { test } from "../support/tenant-test.ts";
 import pg from "pg";
 import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts";
 import { scopeActivity } from "../../src/api/routes/admin/scope-activity.ts";
@@ -40,7 +41,7 @@ async function provision(): Promise<{ url: string; drop: () => Promise<void> }> 
 
 test("grant, config and identity caches never show one tenant another tenant's rows", async () => {
   const { url, drop } = await provision();
-  configurePgTenancy(true);
+  await configureTestTenancy(url);
   const a = tenantFor("org-a", randomUUID(), "a");
   const b = tenantFor("org-b", randomUUID(), "b");
   try {

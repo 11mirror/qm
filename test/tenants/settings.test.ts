@@ -1,4 +1,5 @@
-import { test, after, before } from "node:test";
+import { configureTestTenancy } from "../support/tenant-test.ts";
+import { test, after, before } from "../support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import pg from "pg";
@@ -24,7 +25,7 @@ before(async () => {
   await admin.connect();
   await admin.query(`DROP DATABASE IF EXISTS ${DB} WITH (FORCE)`);
   await admin.query(`CREATE DATABASE ${DB}`);
-  configurePgTenancy(true);
+  await configureTestTenancy(databaseUrl());
   pool = createPgPool(databaseUrl());
   await pool.pool();
 });

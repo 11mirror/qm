@@ -1,4 +1,5 @@
-import { after, before, test } from "node:test";
+import { configureTestTenancy } from "../../support/tenant-test.ts";
+import { after, before, test } from "../../support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
@@ -36,7 +37,7 @@ before(async () => {
   url.password = ROLE;
   url.pathname = `/${DB}`;
   appUrl = url.toString();
-  configurePgTenancy(true);
+  await configureTestTenancy(appUrl);
 });
 
 after(async () => {

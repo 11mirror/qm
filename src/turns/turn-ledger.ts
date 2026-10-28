@@ -11,6 +11,7 @@ import {
   abandonTask,
   cancelTask,
   claimTasks,
+  queueTenants,
   cleanup as cleanupQueue,
   emitEvent,
   completeRun,
@@ -378,25 +379,40 @@ function admission(ctx: LedgerContext): Pick<TurnLedger, "admit" | "claim" | "mu
     },
 
     async claim(queue, token, workerId) {
-      const [claimed] = await claimTasks(await db.pool(), queue, token, TURN_CLAIM_TIMEOUT_SEC, 1);
+      let claimed: Awaited<ReturnType<typeof claimTasks>>[number] | undefined;
+      let scope: Tenant | undefined;
+      for (const owner of await queueTenants(await db.pool(), queue)) {
+        [claimed] = await withTenant(owner, async () =>
+          claimTasks(await db.pool(), queue, token, TURN_CLAIM_TIMEOUT_SEC, 1),
+        );
+        if (claimed) {
+          scope = owner;
+          break;
+        }
+      }
       if (!claimed) return { claimed: false, run: null };
-      const params = claimed.params as Partial<TurnTaskParams> | null;
-      const owner = await taskTenant(claimed.tenantId);
+      const task = claimed;
+      const params = task.params as Partial<TurnTaskParams> | null;
+      const owner = await taskTenant(task.tenantId);
       if (owner === "retired") {
-        await abandonTask(await db.pool(), queue, claimed, retiredTenantReason(claimed.tenantId));
+        await withTenant(scope!, async () =>
+          abandonTask(await db.pool(), queue, task, retiredTenantReason(task.tenantId)),
+        );
         return { claimed: true, run: null };
       }
-      if (claimed.taskName !== TURN_TASK || typeof params?.turnId !== "string" || !owner) {
-        const deferMs = owner || claimed.taskName !== TURN_TASK ? UNKNOWN_TASK_DEFER_MS : TENANT_NOT_READY_DEFER_MS;
-        await scheduleRun(await db.pool(), queue, claimed.runId, new Date(Date.now() + deferMs));
+      if (task.taskName !== TURN_TASK || typeof params?.turnId !== "string" || !owner) {
+        const deferMs = owner || task.taskName !== TURN_TASK ? UNKNOWN_TASK_DEFER_MS : TENANT_NOT_READY_DEFER_MS;
+        await withTenant(scope!, async () =>
+          scheduleRun(await db.pool(), queue, task.runId, new Date(Date.now() + deferMs)),
+        );
         return { claimed: true, run: null };
       }
       const turnId = params.turnId;
       return withTenant(owner, async () => {
-        const run = await begin(ctx, queue, claimed.runId, turnId, token, workerId);
+        const run = await begin(ctx, queue, task.runId, turnId, token, workerId);
         if (run === "suspended") return { claimed: true, run: null };
         if (!run) {
-          await completeRun(await db.pool(), queue, claimed.runId, { ok: false, reason: "turn not runnable" });
+          await completeRun(await db.pool(), queue, task.runId, { ok: false, reason: "turn not runnable" });
           return { claimed: true, run: null };
         }
         await db.query(

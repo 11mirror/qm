@@ -1,5 +1,6 @@
+import { configureTestTenancy } from "../support/tenant-test.ts";
 import "../support/auto-fake-sprites.ts";
-import { after, before, test } from "node:test";
+import { after, before, test } from "../support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
@@ -84,7 +85,9 @@ before(async () => {
   url.password = password;
   url.pathname = `/${DB}`;
   const databaseUrl = url.toString();
+  await configureTestTenancy(databaseUrl);
   const config = testConfig({
+    databaseMigrationUrl: new URL(process.env.DATABASE_URL!).toString(),
     databaseUrl,
     multitenant: true,
     dataDir: mkdtempSync(join(tmpdir(), "one-app-")),

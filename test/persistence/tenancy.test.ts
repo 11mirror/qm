@@ -1,9 +1,10 @@
-import { test } from "node:test";
+import { configureTestTenancy } from "../support/tenant-test.ts";
+import { test } from "../support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import pg from "pg";
 import { configurePgTenancy } from "../../src/persistence/pg-pool.ts";
-import { applyTenancy, TENANT_BYPASS_OPTION } from "../../src/persistence/tenancy.ts";
+import { applyTenancy } from "../../src/persistence/tenancy.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 import type { SessionStore } from "../../src/sessions/session-store.ts";
 import { tenantFor, withTenant, type Tenant } from "../../src/tenant.ts";
@@ -25,6 +26,7 @@ async function provision(): Promise<{ url: string; drop: () => Promise<void> }> 
   parsed.username = role;
   parsed.password = password;
   parsed.pathname = `/${role}`;
+  await configureTestTenancy(parsed.toString());
   return {
     url: parsed.toString(),
     drop: async () => {
@@ -37,7 +39,7 @@ async function provision(): Promise<{ url: string; drop: () => Promise<void> }> 
   };
 }
 
-const inTenant = <T>(t: Tenant | null, fn: () => Promise<T>): Promise<T> => (t ? withTenant(t, fn) : fn());
+const inTenant = <T>(t: Tenant | null, fn: () => Promise<T>): Promise<T> => withTenant(t ?? tenantFor("home"), fn);
 
 async function seed(store: SessionStore, t: Tenant | null, label: string, sessions: number): Promise<string[]> {
   return inTenant(t, async () => {
@@ -69,8 +71,10 @@ const turnsOf = (store: SessionStore, t: Tenant | null) =>
 
 test("attributed turns: every tenant's Admin Users counts survive the attributed_turns seed on a tenantized database", async () => {
   const { url, drop } = await provision();
-  configurePgTenancy(true);
-  const bypass = new pg.Client({ connectionString: url, options: TENANT_BYPASS_OPTION });
+  await configureTestTenancy(url);
+  const migration = new globalThis.URL(URL);
+  migration.pathname = new globalThis.URL(url).pathname;
+  const bypass = new pg.Client({ connectionString: migration.toString() });
   try {
     const other = tenantFor("org-other", randomUUID(), "other");
     const first = createPostgresSessionStore(url);
@@ -139,7 +143,9 @@ test("attributed turns: every tenant's Admin Users counts survive the attributed
 });
 
 async function tenantize(url: string): Promise<void> {
-  const pool = new pg.Pool({ connectionString: url });
+  const pool = new pg.Pool({
+    connectionString: Object.assign(new globalThis.URL(URL), { pathname: new globalThis.URL(url).pathname }).toString(),
+  });
   try {
     await applyTenancy(pool);
   } finally {
@@ -194,6 +200,7 @@ test("qm_tenantize rebuilds unique indexes and foreign keys from the catalog, ke
         "children_pinned_id_fkey: FOREIGN KEY (tenant_id, pinned_id) REFERENCES parents(tenant_id, id) MATCH FULL ON DELETE RESTRICT",
       ],
     );
+    await client.query("SELECT set_config('qm.tenant_id', (SELECT id::text FROM qm_tenant), false)");
     await client.query(`INSERT INTO parents(id, code, extra) VALUES (1, 'a', 1), (2, 'b', 2)`);
     await client.query(`INSERT INTO children(id, parent_id, pinned_id, defaulted_id) VALUES (1, 1, 2, 2)`);
     await client.query(`DELETE FROM parents WHERE id = 1`);
@@ -228,11 +235,12 @@ test("acl_grants_version bumps per tenant once the database is tenantized", asyn
     );
     await tenantize(url);
     const other = randomUUID();
+    await client.query("SELECT set_config('qm.tenant_id', (SELECT id::text FROM qm_tenant), false)");
     await client.query(`INSERT INTO acl_grants(id) VALUES (1)`);
     await client.query(`INSERT INTO acl_grants(id) VALUES (2)`);
     await client.query(`SELECT set_config('qm.tenant_id', $1, false)`, [other]);
     await client.query(`INSERT INTO acl_grants(id) VALUES (1)`);
-    await client.query(`SELECT set_config('qm.tenant_id', '', false)`);
+    await client.query(`SELECT set_config('qm.tenant_id', (SELECT id::text FROM qm_tenant), false)`);
     const versions = await client.query(
       `SELECT tenant_id = qm_tenant_id() AS home, v::int AS v FROM acl_grants_version ORDER BY home`,
     );

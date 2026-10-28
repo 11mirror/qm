@@ -1,7 +1,8 @@
 import pg from "pg";
 import type { Pool, PoolClient } from "../persistence/pg-pool.ts";
 import { errMessage } from "../util/errors.ts";
-import { tenant } from "../tenant.ts";
+import { homeTenant, tenant, tenantFor, withTenant, type Tenant } from "../tenant.ts";
+import { pgTenancyEnabled } from "../persistence/pg-pool.ts";
 import { ABSURD_QUEUES, type AbsurdQueue } from "./absurd-schema.ts";
 
 export type AbsurdDb = Pool | PoolClient;
@@ -94,6 +95,18 @@ export async function spawnTask(
   };
 }
 
+export async function queueTenants(db: AbsurdDb, queue: AbsurdQueue): Promise<Tenant[]> {
+  const home = homeTenant();
+  if (!pgTenancyEnabled()) return [home];
+  const { rows } = await withTenant(home, () =>
+    db.query(
+      "SELECT CASE WHEN id = (SELECT id FROM qm_tenant) THEN NULL ELSE id::text END AS id FROM qm_queue_tenants($1)",
+      [queue],
+    ),
+  );
+  return rows.map((row) => (row.id === null ? home : tenantFor(String(row.id), String(row.id))));
+}
+
 export async function claimTasks(
   db: AbsurdDb,
   queue: AbsurdQueue,
@@ -112,7 +125,7 @@ export async function claimTasks(
     taskId: String(row.task_id),
     attempt: Number(row.attempt),
     taskName: String(row.task_name),
-    tenantId: row.tenant_id === null ? undefined : String(row.tenant_id),
+    tenantId: pgTenancyEnabled() ? tenant().id : row.tenant_id === null ? undefined : String(row.tenant_id),
     params: row.params,
     maxAttempts: row.max_attempts === null ? null : Number(row.max_attempts),
     wakeEvent: row.wake_event === null ? null : String(row.wake_event),
