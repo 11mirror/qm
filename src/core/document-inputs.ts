@@ -102,15 +102,7 @@ export async function loadDocumentInputs(
         notices.push(`${artifact.name}: document content is unavailable.`);
         continue;
       }
-      if (
-        opened.artifact.sha256 !== artifact.sha256 ||
-        opened.sizeBytes !== artifact.sizeBytes ||
-        opened.artifact.mimetype !== artifact.mimetype ||
-        opened.artifact.ownerScopeId !== artifact.ownerScopeId ||
-        opened.artifact.sizeBytes !== artifact.sizeBytes ||
-        !opened.artifact.enabled ||
-        !(await authorize(opened.artifact))
-      ) {
+      if (!opened.artifact.enabled || !(await authorize(opened.artifact))) {
         opened.stream.destroy();
         notices.push(`${artifact.name}: document changed while being loaded; content withheld.`);
         continue;
