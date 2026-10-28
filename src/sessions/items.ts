@@ -112,28 +112,18 @@ export function storedItem(
   const turnId = item.turnId ?? at.turnId ?? null;
   if (turnId !== null && !TURN_ID.safeParse(turnId).success)
     throw new Error(`items: ${item.kind} at seq ${at.seq} has malformed turn id ${JSON.stringify(turnId)}`);
+  const columns = ITEM_COLUMNS.map(([, key, type]) => {
+    const value = (item as Partial<Record<string, unknown>>)[key];
+    return [key, type === "text" ? nonEmpty(value as string | null | undefined) : (value ?? null)];
+  });
   return {
     sessionId: at.sessionId,
     seq: at.seq,
     createdAt: at.createdAt,
+    ...Object.fromEntries(columns),
     kind: item.kind,
     turnId: turnId?.toLowerCase() ?? null,
     author: AUTHORED_KINDS.has(item.kind) ? nonEmpty(item.author) : null,
-    callId: nonEmpty(item.callId),
-    elicitId: nonEmpty(item.elicitId),
-    wakeCause: item.wakeCause ?? null,
-    errorCode: nonEmpty(item.errorCode),
-    text: nonEmpty(item.text),
-    tool: nonEmpty(item.tool),
-    step: item.step ?? null,
-    variant: item.variant ?? null,
-    isError: item.isError ?? null,
-    hidden: item.hidden ?? null,
-    externalId: nonEmpty(item.externalId),
-    throughSeq: item.throughSeq ?? null,
-    targetSeq: item.targetSeq ?? null,
-    approved: item.approved ?? null,
-    blobSha: nonEmpty(item.blobSha),
     body: item.body ?? {},
   } as Item;
 }
