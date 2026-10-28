@@ -159,7 +159,7 @@ async function main() {
       chunk,
     ),
   );
-  const findings = results.flatMap((r) => r.findings).map((f) => ({ ring: ringOf(f.path), ...f }));
+  const findings = results.flatMap((r) => r.findings).map((f) => ({ ...f, ring: ringOf(f.path) }));
   const dropped = results.reduce((n, r) => n + r.unverified, 0);
   console.log(JSON.stringify({ count: findings.length, rings: tally(findings), dropped, findings }, null, 2));
   if (findings.some((f) => f.ring === "ring-0")) process.exit(1);
