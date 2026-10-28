@@ -680,7 +680,7 @@ test("a catalog tool asks per call and forwards the approval only on the approve
     toolApprovalGate: (callKey) => !callKey || approved.has(callKey),
   };
   const state = createTurnToolState(ref);
-  const catalog = deferred(catalogTools(state), "records");
+  const catalog = catalogTools(state).find((tool) => tool.name === "records")!;
   const send = { operation: "invoke", tool: "send-message", arguments: { to: "x" } };
   await call(catalog, { operation: "invoke", tool: "find", arguments: {} });
   await call(catalog, send);
@@ -712,7 +712,7 @@ test("a failing approval check returns its error to the model and offers no card
     toolApprovalGate: () => true,
   };
   const state = createTurnToolState(ref);
-  const catalog = deferred(catalogTools(state), "records");
+  const catalog = catalogTools(state).find((tool) => tool.name === "records")!;
   assert.match(
     textOut(await call(catalog, { operation: "invoke", tool: "nope" })),
     /could not check whether this call needs approval: Unknown Records tool: nope/,
@@ -779,3 +779,38 @@ function deferred(tools: ToolDefinition[], name: string): ToolDefinition {
   const callTool = tools.find((t) => t.name === "mcp_call")!;
   return { ...callTool, execute: (id, args, ...rest) => callTool.execute(id, { tool: name, args }, ...rest) };
 }
+
+test("server-qualified and single-name deferred calls route to the same connector", async () => {
+  const called: string[] = [];
+  const state = createTurnToolState({
+    current: {
+      ...fakeToolContext(),
+      callMcpTool: async (name) => {
+        called.push(name);
+        return "ok";
+      },
+    },
+  });
+  const tools = createAgentTools(state, {
+    mcpTools: [
+      {
+        name: "crm_find",
+        serverId: "crm",
+        serverName: "CRM",
+        remoteName: "find",
+        description: "Find records",
+        inputSchema: { type: "object" },
+        readOnly: true,
+        needsApproval: false,
+      },
+    ],
+  });
+  const mcpCall = tools.find((tool) => tool.name === "mcp_call")!;
+  await call(mcpCall, { server: "crm", tool: "find", args: {} });
+  await call(mcpCall, { tool: "crm_find", args: {} });
+  assert.deepEqual(called, ["crm_find", "crm_find"]);
+  assert.match(
+    textOut(await call(mcpCall, { server: "other", tool: "find" })),
+    /unknown tool "find" on server "other"/,
+  );
+});

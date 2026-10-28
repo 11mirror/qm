@@ -83,7 +83,7 @@ export function createAgentTools(state: TurnToolState, opts?: AgentToolsOptions)
 
   const { createGoal, getGoal, updateGoal } = goalTools(kit, goal);
 
-  const { mcpDefs, clientTools, deferredTools } = externalTools(kit, halt);
+  const { mcpDefs, mcpCandidates, clientTools, deferredTools } = externalTools(kit, halt);
 
   const { context, runtime } = runtimeTools(kit, goal, halt);
 
@@ -112,11 +112,15 @@ export function createAgentTools(state: TurnToolState, opts?: AgentToolsOptions)
     needsApproval: (params: unknown) => isObj(params) && params.action === "install_canvas",
     approvalReason: "install an always-on canvas someone shared with you; its code runs in your QM web UI",
   };
+  const inline = new Set(
+    manifest.filter((entry) => entry.source === "connector" && entry.present).map((entry) => entry.name),
+  );
   const deferred = deferredTools(
     new Set(manifest.filter((entry) => entry.reason === CONNECTOR_DEFERRED).map((entry) => entry.name)),
+    inline,
   );
   const native: Record<string, ToolDefinition> = {
-    ...Object.fromEntries(deferred.map((t) => [t.name, t])),
+    ...Object.fromEntries([...mcpCandidates.filter((t) => inline.has(t.name)), ...deferred].map((t) => [t.name, t])),
     execute,
     skills: resourceTool(
       "skills",
@@ -161,13 +165,11 @@ export function createAgentTools(state: TurnToolState, opts?: AgentToolsOptions)
   const bySource = {
     native: (entry: ToolManifestEntry) => native[entry.name]!,
     client: (entry: ToolManifestEntry) => client.get(entry.name)!,
-    connector: () => {
-      throw new Error("Connector tools must be loaded on demand");
-    },
+    connector: (entry: ToolManifestEntry) => native[entry.name]!,
   };
   const tools: ToolDefinition[] = [];
   for (const entry of manifest) {
-    if (entry.present && entry.source !== "connector") tools.push(bySource[entry.source](entry));
+    if (entry.present) tools.push(bySource[entry.source](entry));
     else if (entry.source === "connector" && entry.reason === CONNECTOR_SHADOWED)
       console.warn(`[mcp] ${entry.name} is hidden because a built-in tool has the same name`);
   }

@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { deferredMcpTools, mcpToolDescription, searchMcpTools } from "../deferred-tools.ts";
+import { deferredMcpTools, visibleMcpTools, mcpToolDescription, searchMcpTools } from "../deferred-tools.ts";
 import type { TurnHalt } from "../turn-tool-state.ts";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { withToolApprovalGate } from "./wrappers.ts";
@@ -11,7 +11,7 @@ import { text } from "./shared.ts";
 
 export function externalTools(kit: ToolKit, halt: TurnHalt) {
   const { ref, opts, recordCall, recordCoreAuthoredResult, recordExternalResult, recordFail } = kit;
-  const mcpDefs = deferredMcpTools(opts?.mcpTools, opts?.readOnly);
+  const mcpDefs = visibleMcpTools(opts?.mcpTools, opts?.readOnly);
   const mcpCandidates = mcpDefs.map((d) => ({
     ...defineTool({
       name: d.name,
@@ -99,20 +99,23 @@ export function externalTools(kit: ToolKit, halt: TurnHalt) {
     mcpDefs,
     mcpCandidates,
     clientTools,
-    deferredTools: (names: Set<string>) =>
+    deferredTools: (names: Set<string>, direct: Set<string>) =>
       deferredTools(
         kit,
         halt,
-        mcpCandidates.filter((t) => names.has(t.name)),
+        mcpCandidates.filter((t) => names.has(t.name) || direct.has(t.name)),
       ),
   };
 }
 
 function deferredTools(kit: ToolKit, halt: TurnHalt, candidates: ToolDefinition[]): ToolDefinition[] {
-  if (!candidates.length) return [];
   const { ref, recordCall, recordResult } = kit;
   const targets = new Map(candidates.map((t) => [t.name, withToolApprovalGate(t, ref, halt, kit)]));
   const defs = deferredMcpTools(kit.opts?.mcpTools, kit.opts?.readOnly).filter((t) => targets.has(t.name));
+  if (!defs.length) return [];
+  const servers = new Map<string, Map<string, ToolDefinition>>();
+  for (const def of defs)
+    servers.set(def.serverId, (servers.get(def.serverId) ?? new Map()).set(def.remoteName, targets.get(def.name)!));
   return [
     defineTool({
       name: "tool_search",
@@ -130,21 +133,25 @@ function deferredTools(kit: ToolKit, halt: TurnHalt, candidates: ToolDefinition[
     defineTool({
       name: "mcp_call",
       label: "mcp_call",
-      description: "Run a connector tool found with tool_search.",
+      description: "Run a connector tool listed under ## Connectors or found with tool_search.",
       parameters: Type.Object({
-        tool: Type.String({ description: "Exact tool name from tool_search." }),
+        server: Type.Optional(Type.String({ description: "Server id, as shown in brackets or by tool_search." })),
+        tool: Type.String({ description: "Tool name on that server." }),
         args: Type.Optional(
           Type.Object({}, { additionalProperties: true, description: "Arguments matching that tool's input schema." }),
         ),
       }),
       async execute(callId, params, ...rest) {
-        const target = targets.get(params.tool);
+        const target =
+          params.server === undefined ? targets.get(params.tool) : servers.get(params.server)?.get(params.tool);
         if (target) return target.execute(callId, params.args ?? {}, ...rest);
-        await recordCall(callId, { tool: "mcp_call", target: params.tool, args: params.args });
+        const named =
+          params.server === undefined ? `"${params.tool}"` : `"${params.tool}" on server "${params.server}"`;
+        await recordCall(callId, { tool: "mcp_call", server: params.server, target: params.tool, args: params.args });
         return recordResult(
           callId,
           { tool: "mcp_call", failed: true },
-          text(`[error] unknown tool "${params.tool}"; use tool_search to find connector tools.`),
+          text(`[error] unknown tool ${named}; use tool_search to find connector tools.`),
           true,
         );
       },

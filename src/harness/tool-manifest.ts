@@ -25,7 +25,7 @@ export interface ToolManifestInput {
   readOnly: boolean;
   canvasInstall: boolean;
   adminOperations: boolean;
-  connectorTools: ReadonlyArray<{ name: string; serverId: string; readOnly: boolean }>;
+  connectorTools: ReadonlyArray<{ name: string; serverId: string; readOnly: boolean; catalog?: boolean }>;
   clientTools: readonly string[];
 }
 
@@ -171,7 +171,8 @@ export function toolManifest(input: ToolManifestInput): ToolManifestEntry[] {
     const base = { name: tool.name, source: "connector" as const, connector: tool.serverId };
     if (input.readOnly && !tool.readOnly)
       return { ...base, present: false, reason: "Off because this run is read-only and this tool makes changes." };
-    if (taken.has(tool.name)) return { ...base, present: false, reason: CONNECTOR_SHADOWED };
+    if (tool.catalog && taken.has(tool.name)) return { ...base, present: false, reason: CONNECTOR_SHADOWED };
+    if (tool.catalog) return { ...base, present: true, reason: "Available directly from this connector." };
     return { ...base, present: false, reason: CONNECTOR_DEFERRED };
   });
   const deferred = connectors.some((entry) => entry.reason === CONNECTOR_DEFERRED);
