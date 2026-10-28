@@ -1,3 +1,4 @@
+import { asRecord } from "../util/objects.ts";
 import { Type } from "typebox";
 import { modelGatewayRequest, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 import type { Context, ImageContent, TextContent } from "@earendil-works/pi-ai";
@@ -11,10 +12,6 @@ import {
 } from "./pi-models.ts";
 import type { resolveBrowserModel } from "./browser-model.ts";
 import type { UserModelCredentialStore } from "./user-model-credential-store.ts";
-
-function object(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
-}
 
 export class BrowserCompletionError extends Error {
   readonly status: number;
@@ -60,17 +57,17 @@ export async function nativeBrowserCompletion(
   const context: Context = { messages: [] };
   const systems: string[] = [];
   for (const raw of body.messages) {
-    const message = object(raw);
+    const message = asRecord(raw);
     if (!message || !["system", "developer", "user", "assistant"].includes(String(message.role)))
       throw new BrowserCompletionError("Unsupported browser message");
     const content: (TextContent | ImageContent)[] = [];
     const parts = typeof message.content === "string" ? [{ type: "text", text: message.content }] : message.content;
     if (!Array.isArray(parts)) throw new BrowserCompletionError("Invalid browser message content");
     for (const rawPart of parts) {
-      const part = object(rawPart);
+      const part = asRecord(rawPart);
       if (part?.type === "text" && typeof part.text === "string") content.push({ type: "text", text: part.text });
       else if (part?.type === "image_url" && message.role === "user") {
-        const url = object(part.image_url)?.url;
+        const url = asRecord(part.image_url)?.url;
         const match =
           typeof url === "string"
             ? /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=\r\n]+)$/.exec(url)
@@ -97,8 +94,8 @@ export async function nativeBrowserCompletion(
         timestamp: Date.now(),
       });
   }
-  const format = object(body.response_format);
-  const schema = object(object(format?.json_schema)?.schema);
+  const format = asRecord(body.response_format);
+  const schema = asRecord(asRecord(format?.json_schema)?.schema);
   if (format && (format.type !== "json_schema" || !schema))
     throw new BrowserCompletionError("Browser responses require a JSON schema");
   if (schema) {
@@ -139,7 +136,7 @@ export async function nativeBrowserCompletion(
     maxRetries: 0,
     onPayload: schema
       ? (raw) => {
-          const payload = object(raw);
+          const payload = asRecord(raw);
           if (!payload) throw new BrowserCompletionError("Invalid model request");
           let toolChoice: object = { type: "function", name: "browser_result" };
           if (modelApi === "anthropic-messages") toolChoice = { type: "tool", name: "browser_result" };

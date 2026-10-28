@@ -1,8 +1,8 @@
+import { asRecord } from "../util/objects.ts";
 import type { CredentialFile, Keychain, KeychainCredentialMeta } from "../credentials/keychain.ts";
 import { swallow } from "../util/errors.ts";
 import {
   accessExpiresAt,
-  asObject,
   authAccountId,
   authTokens,
   chatgptAuthFromValue,
@@ -35,7 +35,7 @@ function rotated(auth: JsonObject, next: UserOAuthTokens): JsonObject | null {
     ...auth,
     last_refresh: new Date().toISOString(),
     tokens: {
-      ...asObject(auth.tokens),
+      ...asRecord(auth.tokens),
       access_token: next.accessToken,
       ...(next.idToken ? { id_token: next.idToken } : {}),
       ...(next.refreshToken ? { refresh_token: next.refreshToken } : {}),
