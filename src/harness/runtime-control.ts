@@ -1,5 +1,5 @@
 import type { RuntimeChoice } from "./harness.ts";
-import type { RuntimeService } from "./runtime-types.ts";
+import type { RuntimeResult, RuntimeService } from "./runtime-types.ts";
 import type { App } from "../api/app.ts";
 import {
   runtimeConfigBody,
@@ -22,7 +22,8 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
     purpose,
     defaults,
   ) => {
-    if (!deps.config) return { ok: false, error: "runtime_unavailable" };
+    const config = deps.config;
+    if (!config) return { ok: false, error: "runtime_unavailable" };
     const scope = parseScopeId(claims.scopeId);
     if (
       scope.kind === "org" ||
@@ -51,9 +52,7 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
     const cronTask = cronFire && claims.triggered === true && !claims.botActor && lifetime === "task";
     if (!cronTask && (!livePersonCapability(claims) || claims.triggered || claims.botActor))
       return { ok: false, error: "live_actor_required" };
-    if (request.action === "inherit") {
-      const purposeConfigured = purpose && (await deps.config.getPurposeRuntimeDurable(purpose));
-      const choice = lifetime === "scope" && !purposeConfigured ? snapshot.orgDefault : snapshot.effective;
+    const handoff = async (choice: RuntimeChoice, scopeSelection: RuntimeChoice | null): Promise<RuntimeResult> => {
       const error = validateRuntimeChoice(choice);
       if (error) return { ok: false, error };
       if (!snapshot.models.includes(choice.modelId)) return { ok: false, error: "runtime_unavailable" };
@@ -62,8 +61,12 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
       const authError = await authorizeChoice?.(choice);
       if (authError) return { ok: false, error: "account_runtime_unavailable", message: authError };
       if (signal?.aborted) return { ok: false, error: "cancelled" };
-      if (lifetime === "scope") await deps.config.setRuntimeSelection(claims.scopeId, null);
+      if (lifetime === "scope") await config.setRuntimeSelection(claims.scopeId, scopeSelection);
       return { ok: true, handoff: { choice, lifetime } };
+    };
+    if (request.action === "inherit") {
+      const purposeConfigured = purpose && (await config.getPurposeRuntimeDurable(purpose));
+      return handoff(lifetime === "scope" && !purposeConfigured ? snapshot.orgDefault : snapshot.effective, null);
     }
     if (request.action !== "set") return { ok: false, error: "invalid_action" };
     const candidates = snapshot.models;
@@ -82,18 +85,11 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
         };
       modelId = matches[0]!;
     }
-    if (!(await webuiModelEnabled({ deps }, modelId, purpose))) return { ok: false, error: "model_not_enabled" };
     const choice: RuntimeChoice = {
       modelId,
       effortLevel: request.effort ?? active.effortLevel ?? "auto",
       fastMode: request.fastMode ?? active.fastMode ?? false,
     };
-    const error = validateRuntimeChoice(choice);
-    if (error) return { ok: false, error };
-    const authError = await authorizeChoice?.(choice);
-    if (authError) return { ok: false, error: "account_runtime_unavailable", message: authError };
-    if (signal?.aborted) return { ok: false, error: "cancelled" };
-    if (lifetime === "scope") await deps.config.setRuntimeSelection(claims.scopeId, choice);
-    return { ok: true, handoff: { choice, lifetime } };
+    return handoff(choice, choice);
   };
 }

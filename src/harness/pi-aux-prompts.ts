@@ -200,12 +200,10 @@ export const ApprovalSummaryAnswer = Type.Object({
   summary: Type.Optional(Type.String({ description: "The sentence; omit when the command is unintelligible." })),
 });
 
-const MAX_TITLE_CHARS = 60;
-
 export function titleFromAnswer(answer: StructuredAnswer<typeof TitleAnswer>): string | undefined {
   if (!answer.ok) throw new TitleRejected("no_title", answer.text);
   if (answer.value.title === undefined) return undefined;
   const title = answer.value.title.trim();
   if (!title) throw new TitleRejected("empty", answer.value.title);
-  return title.length > MAX_TITLE_CHARS ? `${title.slice(0, MAX_TITLE_CHARS).trimEnd()}…` : title;
+  return title;
 }

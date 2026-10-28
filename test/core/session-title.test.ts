@@ -124,7 +124,7 @@ test("POST /v1/sessions/:id/title answers 200 with the fallback title and record
   }
 });
 
-test("the durable fallback strips turn boilerplate and stays within the generated title limit", async () => {
+test("the durable fallback strips turn boilerplate and is cut to a sidebar-length label", async () => {
   const { app } = freshApp();
   const turn = await app.turn(
     dm(
@@ -220,7 +220,7 @@ test("titleFromAnswer keeps the structured title, treats an omitted title as no 
       ok: true,
       value: { title: "Investigate the nightly deploy rollback across every staging region" },
     }),
-    "Investigate the nightly deploy rollback across every staging…",
+    "Investigate the nightly deploy rollback across every staging region",
   );
   assert.throws(() => titleFromAnswer({ ok: true, value: { title: "   " } }), {
     name: "TitleRejected",

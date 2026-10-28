@@ -33,17 +33,17 @@ async function goalEvidenceFiles(
   signal?: AbortSignal,
   sandboxId?: string,
 ): Promise<string[]> {
-  const out: string[] = [];
-  for (const path of paths ?? []) {
-    const content = tc
-      ? await tc.read(path, signal, sandboxId).then(
-          (r) => r.content ?? (r.outsideWorkspace ? outsideWorkspace(path) : "[missing: no such file]"),
-          (e: unknown) => `[unreadable: ${errMessage(e)}]`,
-        )
-      : "[missing: no such file]";
-    out.push(`<file path="${path.replace(/"/g, "")}">\n${content}\n</file>`);
-  }
-  return out;
+  return Promise.all(
+    (paths ?? []).map(async (path) => {
+      const content = tc
+        ? await tc.read(path, signal, sandboxId).then(
+            (r) => r.content ?? (r.outsideWorkspace ? outsideWorkspace(path) : "[missing: no such file]"),
+            (e: unknown) => `[unreadable: ${errMessage(e)}]`,
+          )
+        : "[missing: no such file]";
+      return `<file path="${path.replace(/"/g, "")}">\n${content}\n</file>`;
+    }),
+  );
 }
 
 function createGoalTool(kit: ToolKit, turnGoal: TurnGoal) {
