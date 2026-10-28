@@ -266,11 +266,12 @@ test("rows older than a day are dropped whatever their account, so retired apps 
 test("gate: acceptance that lands while the stage write is still in flight still clears the row once it lands", async () => {
   const map = stagedMap();
   let release: (() => void) | undefined;
+  let landed: Promise<unknown> | undefined;
   const slowMap: typeof map = {
     ...map,
     stage: (key, value) =>
       new Promise((resolve) => {
-        release = () => resolve(map.stage(key, value));
+        release = () => resolve((landed = map.stage(key, value)));
       }),
   };
   const staging = createEnvelopeStaging(slowMap, { account: "acct", stageTimeoutMs: 10 });
@@ -287,7 +288,7 @@ test("gate: acceptance that lands while the stage write is still in flight still
   gate.persisted();
   await tick(0);
   release!();
-  await tick(10);
+  await landed;
   assert.equal(acks, 1);
   assert.equal(
     await cleared(() => map.get("slack:acct:message:C1:1.0")),
