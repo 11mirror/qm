@@ -205,6 +205,7 @@ export const runRoutes: readonly WebRoute[] = [
     const resolved = await resolveWebConversation(user, threadRef, scope, channelLabel(p.channelName));
     if ("error" in resolved) return json(res, 403, resolved);
 
+    const privateConversation = threadRef.startsWith(`web:${user}:`) && resolved.conversation.kind === "dm";
     const timezone = typeof p.timezone === "string" ? p.timezone.trim().slice(0, 64) : "";
     const idempotencyKey =
       namespacedSendKey(user, p.idempotencyKey) ??
@@ -218,6 +219,13 @@ export const runRoutes: readonly WebRoute[] = [
       ...(typeof p.thinkingLevel === "string" && p.thinkingLevel ? { thinkingLevel: p.thinkingLevel } : {}),
       ...(typeof p.fastMode === "boolean" ? { fastMode: p.fastMode } : {}),
       ...(timezone ? { timezone } : {}),
+      ...(privateConversation && Array.isArray(p.clientTools) ? { clientTools: p.clientTools } : {}),
+      ...(privateConversation &&
+      p.surfaceBriefing &&
+      typeof p.surfaceBriefing === "object" &&
+      !Array.isArray(p.surfaceBriefing)
+        ? { surfaceBriefing: p.surfaceBriefing }
+        : {}),
       ...(attachments.length ? { attachments } : {}),
       ...(approval ? { approval } : {}),
       ...(proactiveOpener ? { proactiveOpener: true } : {}),
