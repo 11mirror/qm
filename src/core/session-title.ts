@@ -47,7 +47,8 @@ export function createSessionTitles(deps: {
         e,
       );
     }
-    title = title ? sidebarLabel(title) : fallbackText ? fallbackSessionTitle(fallbackText) : undefined;
+    if (title) title = sidebarLabel(title);
+    else if (fallbackText) title = fallbackSessionTitle(fallbackText);
     if (title) {
       if (principalId) await deps.sessions.updateParticipantView(sessionId, principalId, { title });
       else await deps.sessions.updateTitle(sessionId, title);
