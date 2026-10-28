@@ -60,10 +60,20 @@ export function buildFiles(deps: FilesInputs) {
     },
   });
   const blobTransfer: BlobTransferStore = config.s3Bucket
-    ? tenantBlobTransfer(perTenant(() => createS3BlobTransferStore(s3Options(""))))
+    ? tenantBlobTransfer(
+        perTenant(
+          () => createS3BlobTransferStore(s3Options("")),
+          (store) => store.close?.(),
+        ),
+      )
     : createLocalBlobTransferStore(join(config.dataDir, "transfer"));
   const s3Bytes = (prefix: string): DurableByteStore =>
-    tenantBytes(perTenant(() => createS3DurableByteStore(s3Options(prefix))));
+    tenantBytes(
+      perTenant(
+        () => createS3DurableByteStore(s3Options(prefix)),
+        (store) => store.close?.(),
+      ),
+    );
   const byteStore = (prefix: string, localDir: string): DurableByteStore =>
     config.s3Bucket ? s3Bytes(prefix) : createLocalDurableByteStore(join(config.dataDir, localDir));
   const fileBytes = byteStore("", "docstore");
