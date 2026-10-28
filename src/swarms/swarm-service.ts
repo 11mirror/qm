@@ -90,6 +90,7 @@ export interface SwarmService {
     options?: { skipRuns?: ReadonlySet<string>; mailboxOnly?: boolean },
   ): Promise<SwarmMessage[]>;
   handOver(input: OrchestratorInput, messageIds: readonly string[]): Promise<SwarmMessage[]>;
+  held(input: OrchestratorInput): Promise<boolean>;
 }
 
 export function swarmMessageText(message: SwarmMessage): string {
@@ -842,6 +843,23 @@ export function createSwarmService(deps: {
         if (input.state === "active") delete member.control;
         else member.control = input.state;
       });
+      if (input.state === "paused") {
+        let withdrawing: string[] = [];
+        await store.update(updated.id, (current) => {
+          withdrawing = [];
+          for (const message of current.messages)
+            for (const [id, notification] of Object.entries(message.notifications))
+              if (notification.state === "queued" && notification.runId && controlState(current, id) === "paused") {
+                message.notifications[id] = { state: "pending", runId: notification.runId };
+                withdrawing.push(notification.runId);
+              }
+        });
+        await Promise.all(
+          withdrawing.map((runId) =>
+            runs.withdraw(runId, { unstartedOnly: true }).catch(swallowAs("swarm: withdraw a paused run", false)),
+          ),
+        );
+      }
       if (input.state === "stopped") {
         const stopped = new Set(
           updated.members.filter((m) => controlState(updated, m.id) === "stopped").map((m) => m.id),
@@ -851,10 +869,17 @@ export function createSwarmService(deps: {
         );
         await Promise.all(
           runIds.map(async (runId) => {
-            if (await runs.withdraw(runId, { unstartedOnly: true }).catch(() => false)) return;
+            if (
+              await runs
+                .withdraw(runId, { unstartedOnly: true })
+                .catch(swallowAs("swarm: withdraw a stopped run", false))
+            )
+              return;
             const run = await runs.get(runId);
             if (run?.status === "running")
-              await deps.signals?.send(runId, { kind: "abort", reason: "by the swarm" }).catch(() => false);
+              await deps.signals
+                ?.send(runId, { kind: "abort", reason: "by the swarm" })
+                .catch(swallowAs("swarm: abort a stopped run", false));
           }),
         );
       }
@@ -898,6 +923,11 @@ export function createSwarmService(deps: {
         })
         .sort((a, b) => a.seq - b.seq);
     },
+    async held(input) {
+      if (!input.swarm) return false;
+      const swarm = await store.get(input.swarm.swarmId);
+      return !!swarm && controlState(swarm, input.swarm.recipientId) !== "active";
+    },
     async handOver(input, messageIds) {
       if (!input.runId || !input.runLeaseToken || !messageIds.length) return [];
       const session = await sessions.getByThread(input.conversation.threadRef);
@@ -920,7 +950,13 @@ export function createSwarmService(deps: {
           for (const id of messageIds) {
             const message = current.messages.find((item) => item.id === id);
             const notification = message?.notifications[target.recipientId];
-            if (!message || (notification?.state !== "queued" && notification?.state !== "mailbox")) continue;
+            if (
+              !message ||
+              (notification?.state !== "queued" &&
+                notification?.state !== "mailbox" &&
+                !(notification?.state === "pending" && notification.runId))
+            )
+              continue;
             message.notifications[target.recipientId] = { ...notification, state: "handed" };
             handed.push(structuredClone(message));
           }

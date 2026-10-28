@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { createGrindMeter } from "../src/harness/grind.ts";
 import { harnessToolContext } from "../src/harness/harness-shared.ts";
+import { emptyEndingNote } from "../src/harness/pi-harness.ts";
 import {
   GovernorUndecided,
   supersedeGoal,
@@ -713,4 +714,51 @@ test("wait ends and says so when the swarm inbox cannot be read", async (t) => {
   }
   assert.match(textOf((await waiting) as never), /could not be read \(swarm store unavailable\)/);
   assert.equal(ref.goal?.status, "active");
+});
+
+test("wait ends within one poll once the swarm pauses the worker, and the goal stays open", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const { ref, create, update } = toolbox();
+  await create.execute("c1", { objective: "merge lanes" });
+  let paused = false;
+  ref.goalInbox = { receive: async () => [], acknowledge: async () => {}, held: async () => paused };
+  let settled = false;
+  const waiting = update.execute("u1", { status: "wait", note: "worker 7" }).finally(() => {
+    settled = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  paused = true;
+  for (let i = 0; i < 3 && !settled; i++) {
+    t.mock.timers.tick(5_000);
+    for (let j = 0; j < 5; j++) await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(settled, true, "the wait returned instead of running out its thirty minutes");
+  assert.match(textOf((await waiting) as never), /The swarm paused or stopped you, so the wait ended/);
+  assert.equal(ref.goal?.status, "active");
+});
+
+test("a swarm-paused worker's next tool result ends its reply", async () => {
+  const { ref, create, get } = toolbox();
+  await create.execute("c1", { objective: "lane A" });
+  let received = 0;
+  ref.goalInbox = { receive: async () => (received++, []), acknowledge: async () => {}, held: async () => true };
+  await get.execute("g1", {});
+  assert.deepEqual(await pauseStampAfterToolCall(ref)({}), { terminate: true });
+  assert.equal(received, 0, "a held worker's queued messages stay queued for when it resumes");
+  const endedEmpty = { getLastAssistantText: () => "", messages: [{ role: "assistant", stopReason: "stop" }] };
+  assert.equal(
+    emptyEndingNote({
+      wallClock: "ok",
+      userAborted: false,
+      cancelled: false,
+      surfaceTools: false,
+      pollFire: false,
+      ref: { ...ref, modelCalls: 3 },
+      session: endedEmpty as unknown as Parameters<typeof emptyEndingNote>[0]["session"],
+      turnWallClockMs: 0,
+      elapsedMs: 0,
+    }),
+    null,
+    "the empty reply a held worker ends on is not re-prompted",
+  );
 });

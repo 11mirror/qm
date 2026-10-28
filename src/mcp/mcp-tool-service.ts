@@ -12,7 +12,7 @@ import { errMessage, reportFailureAs } from "../util/errors.ts";
 import { setPublicOAuthClients, type PublicOAuthClient } from "../connectors/oauth.ts";
 import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { createMcpClient, mcpResultText, type McpAuth, type McpClient } from "./mcp-client.ts";
+import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
@@ -66,6 +66,8 @@ export interface McpToolDescriptor {
   /** Namespaced tool name exposed to the model, e.g. "salesforce_query". */
   name: string;
   serverId: string;
+  serverName: string;
+  serverAbout?: string;
   remoteName: string;
   description: string;
   inputSchema: Record<string, unknown>;
@@ -84,8 +86,7 @@ export interface McpToolService {
   needsApproval(name: string, args: Record<string, unknown>, principalId?: string): Promise<boolean>;
   /** Force a registry re-read + tools/list refresh (admin save path, tests). */
   refresh(): Promise<void>;
-  /** Probe a server config without persisting it. Returns its tool names. */
-  probe(server: McpServer, principalId?: string): Promise<string[]>;
+  probe(server: McpServer, principalId?: string): Promise<McpListing>;
   close(): void;
 }
 
@@ -97,6 +98,7 @@ function catalogDescriptor(server: McpServer): McpToolDescriptor {
   return {
     name: server.id,
     serverId: server.id,
+    serverName: server.name,
     remoteName: "",
     catalog: true,
     description: `${server.name}: a catalog of tools behind one interface. Search for a tool, describe it to see its parameters, then invoke it. Tools marked "needs approval" pause until the person approves that exact call.`,
@@ -228,7 +230,9 @@ export function createMcpToolService(opts: {
     const key = `${server.id}\0${server.updatedAt}\0${perPerson ? (principalId ?? "") : ""}`;
     const cached = catalogs.get(key);
     if (cached) return cached;
-    const listing = client.listTools({ headers: headersFor(server, principalId), maxTools: CATALOG_MAX_TOOLS });
+    const listing = client
+      .listTools({ headers: headersFor(server, principalId), maxTools: CATALOG_MAX_TOOLS })
+      .then((listed) => listed.tools);
     catalogs.set(key, listing);
     listing.catch(() => {
       if (catalogs.peek(key) === listing) catalogs.delete(key);
@@ -287,6 +291,7 @@ export function createMcpToolService(opts: {
     for (const server of servers) {
       try {
         let tools: NonNullable<McpServer["tools"]>;
+        let about = server.about;
         if (server.catalog) {
           next.push(catalogDescriptor(server));
           continue;
@@ -296,6 +301,7 @@ export function createMcpToolService(opts: {
           next.push({
             name: `${server.id}_sign_in`.replace(/[^a-zA-Z0-9_-]/g, "_"),
             serverId: server.id,
+            serverName: server.name,
             remoteName: "sign_in",
             signIn: true,
             description: `Connect your own ${server.name} account and load its tools. Call this before anything else on ${server.name}.`,
@@ -305,11 +311,17 @@ export function createMcpToolService(opts: {
           });
           tools = server.tools ?? [];
           if (!tools.length) continue;
-        } else tools = await clientFor(server).listTools({ headers: headersFor(server, undefined) });
+        } else {
+          const listing = await clientFor(server).listTools({ headers: headersFor(server, undefined) });
+          tools = listing.tools;
+          about = listing.about ?? about;
+        }
         for (const tool of tools) {
           next.push({
             name: `${server.id}_${tool.name}`.replace(/[^a-zA-Z0-9_-]/g, "_"),
             serverId: server.id,
+            serverName: server.name,
+            ...(about ? { serverAbout: about } : {}),
             remoteName: tool.name,
             description: tool.description || `${tool.name} on ${server.name}`,
             inputSchema: modelInputSchema(tool.inputSchema),
@@ -384,12 +396,12 @@ export function createMcpToolService(opts: {
         if (def.catalog) return await callCatalog(server, args, principalId, approval);
         const client = await callerClient(server, principalId);
         if (def.signIn) {
-          const tools = await client.listTools();
+          const { tools, about } = await client.listTools();
           const current = await opts.servers.get(server.id);
-          if (current) await opts.servers.put({ ...current, tools });
+          if (current) await opts.servers.put({ ...current, tools, about: about ?? current.about });
           await refresh();
           record("call", `${def.serverId}/sign_in`, `ok tools=${tools.length}`, principalId);
-          return `Signed in to ${server.name}. Tools now available: ${tools.map((t) => `${server.id}_${t.name}`).join(", ")}`;
+          return `Signed in to ${server.name}. Tools now available on server "${server.id}": ${tools.map((t) => t.name).join(", ")}`;
         }
         const result = await client.callTool(def.remoteName, args, headersFor(server, principalId, approval));
         record("call", `${def.serverId}/${def.remoteName}`, approval ? "ok approved" : "ok", principalId);
@@ -405,11 +417,10 @@ export function createMcpToolService(opts: {
     },
     refresh,
     async probe(server, principalId) {
-      const tools = await createMcpClient({ url: server.url, auth: authOf(server) }).listTools({
+      return createMcpClient({ url: server.url, auth: authOf(server) }).listTools({
         headers: headersFor(server, principalId),
         ...(server.catalog ? { maxTools: CATALOG_MAX_TOOLS } : {}),
       });
-      return tools.map((t) => t.name);
     },
     close() {
       closed = true;
