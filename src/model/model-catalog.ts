@@ -131,6 +131,12 @@ async function fetchOpenRouterModels(fetcher: typeof fetch): Promise<ModelCatalo
   });
 }
 
+function withBuiltIns(dynamic: readonly ModelCatalogEntry[] = []): ModelCatalogEntry[] {
+  const models = builtInModelCatalog();
+  const known = new Set(models.map((model) => model.id));
+  return [...models, ...dynamic.filter((model) => !known.has(model.id))];
+}
+
 export async function selectableModelCatalog(fetcher: typeof fetch = fetch): Promise<ModelCatalogEntry[]> {
   const now = Date.now();
   const existing = catalogCache().get(fetcher);
@@ -146,20 +152,15 @@ export async function selectableModelCatalog(fetcher: typeof fetch = fetch): Pro
   entry.inFlight = fetchOpenRouterModels(fetcher)
     .then((dynamic) => {
       entry.dynamic = dynamic;
-      const models = builtInModelCatalog();
-      const known = new Set(models.map((model) => model.id));
-      entry.models = [...models, ...dynamic.filter((model) => !known.has(model.id))];
-      entry.expiresAt = Date.now() + CACHE_TTL_MS;
-      entry.customVersion = customProvidersVersion();
-      entry.gatewayVersion = gatewayModelsVersion();
-      return entry.models;
+      return CACHE_TTL_MS;
     })
     .catch((error: unknown) => {
       console.warn(`[model] OpenRouter catalog fetch failed; using cached and built-in models: ${errMessage(error)}`);
-      const models = builtInModelCatalog();
-      const known = new Set(models.map((model) => model.id));
-      entry.models = [...models, ...(entry.dynamic ?? []).filter((model) => !known.has(model.id))];
-      entry.expiresAt = Date.now() + FAILURE_TTL_MS;
+      return FAILURE_TTL_MS;
+    })
+    .then((ttlMs) => {
+      entry.models = withBuiltIns(entry.dynamic);
+      entry.expiresAt = Date.now() + ttlMs;
       entry.customVersion = customProvidersVersion();
       entry.gatewayVersion = gatewayModelsVersion();
       return entry.models;
@@ -180,11 +181,9 @@ export function cachedModelCatalog(fetcher: typeof fetch = fetch): {
   refreshing: boolean;
 } {
   void selectableModelCatalog(fetcher);
-  const models = builtInModelCatalog();
-  const known = new Set(models.map((model) => model.id));
   const entry = catalogCache().get(fetcher);
   return {
-    models: [...models, ...(entry?.dynamic ?? []).filter((model) => !known.has(model.id))],
+    models: withBuiltIns(entry?.dynamic),
     refreshing: !!entry?.inFlight,
   };
 }
