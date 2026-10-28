@@ -4,6 +4,7 @@ import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeI
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
 import { tenant } from "../tenant.ts";
 import { isBlobId } from "../persistence/blob-transfer.ts";
+import { isValidTimezone } from "../util/time.ts";
 
 export const CAPABILITY_TTL_MS = 60 * 60_000;
 export const DEPLOYMENT_CREDENTIAL_TTL_MS = 10 * 365 * 24 * 60 * 60_000;
@@ -98,17 +99,6 @@ async function readCapabilityClaims(token: string, secret: string | string[]): P
   }
 }
 
-export function isValidCapabilityTimezone(timezone: unknown): timezone is string {
-  if (typeof timezone !== "string") return false;
-  if (timezone.length === 0 || timezone.length > 64 || timezone.trim() !== timezone) return false;
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export async function verifyCapabilityToken(
   token: string,
   secret: string | string[],
@@ -130,7 +120,7 @@ export async function verifyCapabilityToken(
     return null;
   if (claims.browserModel !== undefined && (typeof claims.browserModel !== "string" || !claims.browserModel))
     return null;
-  if (claims.timezone !== undefined && !isValidCapabilityTimezone(claims.timezone)) return null;
+  if (claims.timezone !== undefined && !isValidTimezone(claims.timezone)) return null;
   if (claims.scopeVersion !== undefined && typeof claims.scopeVersion !== "string") return null;
   if (claims.destinations !== undefined && !Array.isArray(claims.destinations)) return null;
   if (claims.ownerConnections !== undefined && typeof claims.ownerConnections !== "boolean") return null;
