@@ -219,3 +219,13 @@ test("once the agent has posted through the surface tool, its leftover text is n
     await built.runtime.stop();
   }
 });
+
+test("once a final answer is sent back, the run stops reading as responding while the rewrite is written", async () => {
+  const { run } = await runTurn({ mode: "enforce", threadRef: "reply-check-phase", text: "!phased-reply" });
+
+  const phases = (run?.activity ?? [])
+    .filter((entry) => entry.type === "text_start")
+    .map((entry) => (entry.payload as { phase?: string }).phase);
+  assert.ok(phases.includes("final_answer"));
+  assert.equal(phases.at(-1), undefined);
+});

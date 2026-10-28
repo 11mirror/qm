@@ -3209,6 +3209,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deps.turnStream!.release(heldRunId);
           deps.turnStream!.hold(heldRunId);
         };
+        const markTextStart = (phase?: "commentary" | "final_answer"): Promise<unknown> => {
+          const runId = input.runId;
+          const runActivity = deps.runActivity;
+          if (!runId || !runActivity) return Promise.resolve();
+          const streamOffset = deps.turnStream?.endOffset(runId);
+          const entry = {
+            seq: emittedEntries.at(-1)?.seq ?? 0,
+            parentSeq: null,
+            type: "text_start",
+            payload: { ...(phase ? { phase } : {}), ...(streamOffset !== undefined ? { streamOffset } : {}) },
+            createdAt: Date.now(),
+          };
+          const started = mirrored.then(() => runActivity.append(runId, entry));
+          mirrored = started.catch(swallowAs("orchestrator: text-start activity", undefined));
+          return phase ? started : mirrored;
+        };
         const conversationGuidance = deps.config?.getSoul(scopeId) ?? undefined;
         const replyCheck =
           replyCheckMode && deps.decide
@@ -3226,7 +3242,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 },
                 posted: () => spine.surfaceOutboundCount > 0,
                 onRevise: () => {
-                  if (heldRunId) deps.turnStream!.discard(heldRunId);
+                  if (!heldRunId) return;
+                  deps.turnStream!.discard(heldRunId);
+                  void markTextStart();
                 },
               })
             : undefined;
@@ -3688,24 +3706,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             onTextBlockStart: async (phase) => {
               if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publishBlockStart(input.runId);
               if (input.surfaceTools && spineFirstBlock) spineFirstBlockOpen = false;
-              if (!input.surfaceTools) {
-                const streamOffset =
-                  input.runId && deps.turnStream ? deps.turnStream.endOffset(input.runId) : undefined;
-                const runId = input.runId;
-                const runActivity = deps.runActivity;
-                if (runId && runActivity) {
-                  const entry = {
-                    seq: emittedEntries.at(-1)?.seq ?? 0,
-                    parentSeq: null,
-                    type: "text_start",
-                    payload: { ...(phase ? { phase } : {}), ...(streamOffset !== undefined ? { streamOffset } : {}) },
-                    createdAt: Date.now(),
-                  };
-                  const started = mirrored.then(() => runActivity.append(runId, entry));
-                  mirrored = started.catch(swallowAs("orchestrator: text-start activity", undefined));
-                  await (phase ? started : mirrored);
-                }
-              }
+              if (!input.surfaceTools) await markTextStart(phase);
             },
             recordModelCall: (rec) => {
               deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
