@@ -38,6 +38,38 @@ export function turnStartState(turn: {
   ].join("\n");
 }
 
+const GUIDANCE_CHARS = 3_000;
+const MESSAGE_CHARS = 1_500;
+const REPLY_CHARS = 3_000;
+
+const section = (heading: string, body: string, limit: number): string => `${heading}\n${body.trim().slice(0, limit)}`;
+
+export function turnEndState(turn: {
+  surfaceName?: string;
+  scopeLabel: string;
+  guidance?: string;
+  input: string;
+  reply: string;
+  attempt: number;
+  attempts: number;
+}): string {
+  const guidance = turn.guidance?.trim();
+  return [
+    "Turn context:",
+    `- surface: ${turn.surfaceName ?? "unknown"}`,
+    `- scope: ${turn.scopeLabel.split(":")[0]}`,
+    `- revision attempt: ${turn.attempt} of ${turn.attempts}`,
+    "",
+    guidance
+      ? section("Standing instructions this conversation's replies must follow:", guidance, GUIDANCE_CHARS)
+      : "This conversation has no standing instructions of its own.",
+    "",
+    section("Latest message:", turn.input, MESSAGE_CHARS),
+    "",
+    section("Draft reply, written but not yet delivered:", turn.reply, REPLY_CHARS),
+  ].join("\n");
+}
+
 export interface DecisionTurn {
   actorId?: string;
   scopeLabel: string;
@@ -46,8 +78,17 @@ export interface DecisionTurn {
   cancel?: AbortSignal;
 }
 
-export function createDecisionHooks(store: DecisionStore | undefined, backend: DecisionBackend, audit: AuditLog) {
-  const run = async (rules: readonly DecisionRule[], hook: DecisionHook, state: string, turn: DecisionTurn) => {
+export interface DecisionHooks {
+  active(hook: DecisionHook): Promise<boolean>;
+  run(hook: DecisionHook, state: string, turn: DecisionTurn): Promise<DecisionResult | undefined>;
+}
+
+export function createDecisionHooks(
+  store: DecisionStore | undefined,
+  backend: DecisionBackend,
+  audit: AuditLog,
+): DecisionHooks {
+  const classify = async (rules: readonly DecisionRule[], hook: DecisionHook, state: string, turn: DecisionTurn) => {
     if (!rules.length) return undefined;
     const signal = AbortSignal.any([AbortSignal.timeout(HOOK_TIMEOUT_MS), ...(turn.cancel ? [turn.cancel] : [])]);
     const { decisive, results } = await runHook(rules, hook, state, backend, signal);
@@ -68,17 +109,21 @@ export function createDecisionHooks(store: DecisionStore | undefined, backend: D
       });
     return decisive;
   };
-  return async (hook: DecisionHook, state: string, turn: DecisionTurn) => {
-    const rules = (await store?.rules(hook)) ?? [];
-    const enforced = new Set(rules.filter((rule) => rule.mode === "enforce").map(classifierKey));
-    const awaited = (rule: DecisionRule) => enforced.has(classifierKey(rule));
-    void run(
-      rules.filter((rule) => !awaited(rule)),
-      hook,
-      state,
-      { ...turn, cancel: undefined },
-    ).catch(swallowAs("decisions: observe-only rules", undefined));
-    return run(rules.filter(awaited), hook, state, turn);
+  const rulesFor = async (hook: DecisionHook) => (await store?.rules(hook)) ?? [];
+  return {
+    active: async (hook) => (await rulesFor(hook)).length > 0,
+    run: async (hook, state, turn) => {
+      const rules = await rulesFor(hook);
+      const enforced = new Set(rules.filter((rule) => rule.mode === "enforce").map(classifierKey));
+      const awaited = (rule: DecisionRule) => enforced.has(classifierKey(rule));
+      void classify(
+        rules.filter((rule) => !awaited(rule)),
+        hook,
+        state,
+        { ...turn, cancel: undefined },
+      ).catch(swallowAs("decisions: observe-only rules", undefined));
+      return classify(rules.filter(awaited), hook, state, turn);
+    },
   };
 }
 

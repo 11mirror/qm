@@ -313,6 +313,29 @@ test("each hook point only accepts its own actions; use_runtime carries a runtim
   );
 });
 
+test("turn_end rules revise with a message and refuse a runtime switch", () => {
+  const style = (options: Record<string, unknown>) =>
+    parse({ ...injection(), id: "style", hook: "turn_end", onError: "keep", options });
+  const ok = style({
+    keep: { description: "follows the instructions", action: "keep" },
+    revise: { description: "breaks one", action: "revise", message: "Drop the table." },
+  });
+  assert.ok("rule" in ok, JSON.stringify(ok));
+  assert.match(
+    err(style({ keep: { description: "a", action: "keep" }, revise: { description: "b", action: "revise" } })),
+    /revise needs a message/,
+  );
+  assert.match(
+    err(
+      style({
+        keep: { description: "a", action: "keep" },
+        deep: { description: "b", action: "use_runtime", runtime: { modelId: "m-deep" } },
+      }),
+    ),
+    /turn_end must be one of keep, revise/,
+  );
+});
+
 test("most_confident hook points follow the likeliest enforced verdict and errored rules fall back to onError", async () => {
   const signal = new AbortController().signal;
   const goal = (id: string, model: string) => ({
@@ -391,7 +414,10 @@ test("decision hooks load active rules for the hook, decide, and audit every ver
     ),
   } as never;
   const decide = createDecisionHooks(store, fixed({ keep: 0.2, deep: 0.8 }), audit);
-  const verdict = await decide("turn_start", "refactor the scheduler", { scopeLabel: "personal:a", sessionId: "s1" });
+  const verdict = await decide.run("turn_start", "refactor the scheduler", {
+    scopeLabel: "personal:a",
+    sessionId: "s1",
+  });
   assert.deepEqual(asked, ["turn_start"]);
   assert.deepEqual(verdict?.runtime, { modelId: "m-deep" });
   assert.deepEqual(
@@ -402,7 +428,7 @@ test("decision hooks load active rules for the hook, decide, and audit every ver
     ],
   );
   assert.equal(
-    await createDecisionHooks(undefined, fixed({}), audit)("turn_start", "x", {
+    await createDecisionHooks(undefined, fixed({}), audit).run("turn_start", "x", {
       scopeLabel: "s",
       sessionId: "s",
     }),
@@ -426,7 +452,10 @@ test("observe-only rules do not hold up the turn and are still audited", async (
     },
   };
   const decide = createDecisionHooks(store, backend, audit);
-  const verdict = await decide("turn_start", "refactor the scheduler", { scopeLabel: "personal:a", sessionId: "s1" });
+  const verdict = await decide.run("turn_start", "refactor the scheduler", {
+    scopeLabel: "personal:a",
+    sessionId: "s1",
+  });
   assert.equal(verdict?.ruleId, "router");
   assert.deepEqual(
     records.map((r) => r.resource),

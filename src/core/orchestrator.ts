@@ -52,7 +52,7 @@ import { reachEnqueue } from "../reach/reach.ts";
 import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../directory/directory-store.ts";
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
-import type { Lease, LeaseAttempt } from "../sessions/session-store.ts";
+import type { NewEntry, Lease, LeaseAttempt } from "../sessions/session-store.ts";
 import { SESSION_BUSY_FIRE_TEXT, SESSION_BUSY_USER_TEXT } from "./failure-copy.ts";
 import { CONFIG_DEFAULTS } from "../config.ts";
 import { acquireLeaseWithin, isOverheardEntry } from "../sessions/session-store.ts";
@@ -157,6 +157,7 @@ import {
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { headSlice, jsonbSafeStringify } from "../util/text.ts";
+import { turnEndState } from "../decisions/hooks.ts";
 import { absoluteAppLinks } from "../util/markdown.ts";
 import {
   isModelBudget,
@@ -234,6 +235,8 @@ const MODE_CONVERSATION_MD = loadProtocolFile("mode-conversation");
 const MODE_AUTONOMOUS_MD = loadProtocolFile("mode-autonomous");
 const MODE_FALLBACK_MD = loadProtocolFile("mode-fallback");
 
+const REPLY_REVISIONS = 2;
+const REPLY_BLOCK_JOIN = "\n\n";
 const FIRST_BLOCK_CAPTURE_MAX_CHARS = 20_000;
 
 const DETECT_HISTORY_TAIL = 400;
@@ -3194,6 +3197,70 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
           if (error) throw new NonRetryableTurnError(error);
         }
+        const replyChecks = await (async () => {
+          const runId = input.runId;
+          const stream = input.surfaceTools ? undefined : deps.turnStream;
+          const armed = !!deps.decide && (await deps.decide.active("turn_end"));
+          const holding = armed && !!runId && !!stream;
+          let held = "";
+          return {
+            armed,
+            publish: (chunk: string) => {
+              if (!runId || !stream) return;
+              if (holding) held += chunk;
+              else stream.publish(runId, chunk);
+            },
+            blockStart: () => {
+              if (!runId || !stream) return;
+              if (!holding) return stream.publishBlockStart(runId);
+              const written = (stream.snapshot(runId) ?? "") + held;
+              if (written && !written.endsWith(REPLY_BLOCK_JOIN)) held += REPLY_BLOCK_JOIN;
+            },
+            deliver: () => {
+              if (!runId || !stream || !held) return;
+              const text = held;
+              held = "";
+              stream.publish(runId, text);
+            },
+            drop: () => {
+              held = "";
+            },
+            heldChars: () => held.length,
+          };
+        })();
+        let revisionNote: string | undefined;
+        let revisions = 0;
+        const reviewReply = async (entry: NewEntry): Promise<NewEntry> => {
+          if (entry.type !== "assistant" || !replyChecks.armed || revisions >= REPLY_REVISIONS) return entry;
+          const text = isObj(entry.payload) ? String((entry.payload as { text?: unknown }).text ?? "") : "";
+          if (!text.trim()) return entry;
+          const verdict = await deps
+            .decide!.run(
+              "turn_end",
+              turnEndState({
+                ...(input.surface ? { surfaceName: input.surface } : {}),
+                scopeLabel: scopeId,
+                guidance: resolution.systemPrompt,
+                input: baseText,
+                reply: text,
+                attempt: revisions + 1,
+                attempts: REPLY_REVISIONS,
+              }),
+              {
+                actorId: actor.id,
+                scopeLabel: scopeId,
+                sessionId: session.id,
+                ...(input.runId ? { runId: input.runId } : {}),
+                ...(input.cancel ? { cancel: input.cancel } : {}),
+              },
+            )
+            .catch(swallowAs("orchestrator: reply check", undefined));
+          if (verdict?.action !== "revise" || !verdict.message) return entry;
+          revisions += 1;
+          revisionNote = verdict.message;
+          replyChecks.drop();
+          return { ...entry, type: "text", payload: { type: "text", text } };
+        };
         const runHarnessSegment = async (
           harnessInput: string,
           extras: {
@@ -3225,7 +3292,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const environment = [turnEnvironment, ...documentInputs.notices].filter(Boolean).join("\n");
           const silentResume = continueTurn && !continuation && !snapshot.text && !recall.text;
           let recordedRecall = false;
-          const emit: HarnessTurnInput["emit"] = async (entry) => {
+          const emit: HarnessTurnInput["emit"] = async (incoming) => {
+            if (incoming.type === "tool_call") replyChecks.deliver();
+            const entry = await reviewReply(incoming);
             turnProgress++;
             const stored = (() => {
               if (
@@ -3639,7 +3708,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             onModelRequest: () => dispatchTrace?.modelRequest(),
             onDelta: (chunk: string) => {
               dispatchTrace?.firstToken();
-              if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publish(input.runId, chunk);
+              replyChecks.publish(chunk);
               if (input.surfaceTools && spineFirstBlockOpen && spineFirstBlock.length < FIRST_BLOCK_CAPTURE_MAX_CHARS)
                 spineFirstBlock += chunk;
             },
@@ -3653,12 +3722,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               else if (input.runId) deps.turnStream?.noteToolCall(input.runId);
             },
             onTextBlockStart: async (phase) => {
-              if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publishBlockStart(input.runId);
+              replyChecks.blockStart();
               if (input.surfaceTools && spineFirstBlock) spineFirstBlockOpen = false;
               if (!input.surfaceTools) {
                 const streamOffset =
                   input.runId && deps.turnStream
-                    ? deps.turnStream.startOffset(input.runId) + (deps.turnStream.snapshot(input.runId) ?? "").length
+                    ? deps.turnStream.startOffset(input.runId) +
+                      (deps.turnStream.snapshot(input.runId) ?? "").length +
+                      replyChecks.heldChars()
                     : undefined;
                 const runId = input.runId;
                 const runActivity = deps.runActivity;
@@ -3748,6 +3819,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(inbound.metas.length ? { attachments: inbound.metas } : {}),
           ...(inbound.images.length ? { images: inbound.images } : {}),
         });
+        while (revisionNote && !result.stopped && !input.cancel?.aborted) {
+          const note = revisionNote;
+          revisionNote = undefined;
+          console.error(`[decisions] reply revision ${revisions} session=${session.id}`);
+          result = await runHarnessTurn(
+            `[system] Your draft reply was held back, not delivered. ${note} Write the reply again.`,
+            inbound.images.length ? { images: inbound.images } : {},
+            { history: filterHistory(forModelContext((await historyWindow()).entries)) },
+          );
+        }
+        replyChecks.deliver();
         if (
           input.addressed &&
           !strictReadOnly &&
