@@ -28,6 +28,8 @@ export function emitRunReasoning(
     bus.emit({ runId, kind: "reasoning", step: block.step, index: block.index, offset: offset + at, text: chunk });
 }
 
+export const REASONING_SYNC_BLOCKS = 8;
+
 export function reasoningKey(block: { step: string; index: number }): string {
   return `${block.step}:${block.index}`;
 }
