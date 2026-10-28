@@ -266,6 +266,31 @@ body.resizing-sidebar {
   letter-spacing: 0;
   line-height: 1;
 }
+.history-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: auto;
+}
+.history-btn {
+  width: 28px;
+  height: 28px;
+}
+.history-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  background: transparent;
+}
+.layout.sidebar-closed .history-nav {
+  margin-right: 0;
+  gap: 0;
+}
+.layout.sidebar-closed .history-btn {
+  width: 24px;
+}
+html:not([data-qm-desktop="darwin"]) .layout.sidebar-closed .history-nav {
+  display: none;
+}
 .brand-lockup {
   min-width: 0;
   display: flex;
