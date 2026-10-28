@@ -33,3 +33,7 @@ Checks: web-ui typecheck, changed-file eslint and two targeted browser behavior 
 Adapted to typed item pages and the split chat refresh/mount architecture. LRU holds 40 transcript pages in browser memory; revisits mount immediately and reconcile in the background, with generation, active-agent, stream and pagination-anchor guards. Auth gates and session reset clear the cache. Read-only and continuable sessions share one mount helper. Existing StyleUp `pageAnchor` and read-only page mounting replace duplicate helpers from main. Cache timing metadata is deferred to the #2270 trace port because the baseline does not yet have session-switch timing. No persisted data or settings. No visible English changes.
 
 Checks: web-ui typecheck, changed-file eslint and all eight cache tests pass (capacity, change detection, instant revisit, unchanged view, approval refresh, read-only refresh, failure eviction, signout).
+
+## #2731 sticky steer prompt
+
+Adapted the viewport's preceding-block traversal to its existing class and placed CSS in the surfaces stylesheet. Inline steers now take the latest-prompt sticky marker and anchor past boxless wrappers. No persistence/settings or visible English changes. Targeted viewport tests pass.

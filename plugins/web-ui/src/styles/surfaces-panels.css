@@ -578,17 +578,14 @@ qm-markdown.markdown-content table {
 }
 
 .inline-steer {
+  display: contents;
+}
+.message-stack .inline-steer > .user-row {
+  width: 100%;
   margin-block: 16px;
 }
-
-.message-stack .inline-steer .user-row {
-  width: 100%;
-  position: relative;
-  top: auto;
-  z-index: auto;
-  margin: 0;
-  padding-top: 0;
-  pointer-events: auto;
+.message-stack .inline-steer > .user-row.latest-prompt {
+  margin-top: 8px;
 }
 
 .inline-steer .user-row .message-meta {

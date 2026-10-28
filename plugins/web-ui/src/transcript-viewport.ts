@@ -144,14 +144,26 @@ class TranscriptViewport {
     this.syncPrompt();
   }
 
+  private precedingBlock(): Element | null {
+    let node: Element | null = this.prompt;
+    while (node && node !== this.stack) {
+      let previous = node.previousElementSibling;
+      while (previous && getComputedStyle(previous).display === "contents")
+        previous = previous.lastElementChild ?? previous.previousElementSibling;
+      if (previous) return previous;
+      node = node.parentElement;
+    }
+    return null;
+  }
+
   private anchorEdge(): number {
-    const previous = this.prompt?.previousElementSibling;
+    const previous = this.precedingBlock();
     if (previous) return previous.getBoundingClientRect().bottom;
     return this.stack?.getBoundingClientRect().top ?? 0;
   }
 
   private restingGap(promptStyle: CSSStyleDeclaration): number {
-    const previous = this.prompt?.previousElementSibling;
+    const previous = this.precedingBlock();
     let before = 0;
     if (previous) before = parseFloat(getComputedStyle(previous).marginBottom) || 0;
     else if (this.stack) before = parseFloat(getComputedStyle(this.stack).paddingTop) || 0;
@@ -338,7 +350,7 @@ class TranscriptViewport {
       this.stack = this.observe(this.stack, nextStack);
     }
     const nextPins = this.scroller?.querySelector<HTMLElement>(".pinned-strip") ?? null;
-    const prompts = this.stack?.querySelectorAll<HTMLElement>(":scope > .user-row");
+    const prompts = this.stack?.querySelectorAll<HTMLElement>(":scope > .user-row, .inline-steer > .user-row");
     const pinPrompt = this.options.pinPrompt?.() ?? true;
     const nextPrompt = pinPrompt ? (prompts?.item(prompts.length - 1) ?? null) : null;
     if (this.pins !== nextPins) {
