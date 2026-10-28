@@ -13,7 +13,7 @@ import { goalView } from "../../runs/turn-stream.ts";
 import { type GoalRecord, openGoal } from "../../harness/goal.ts";
 import { type Destination, type TurnRuntime } from "../../types.ts";
 import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
-import { reachPost } from "../../reach/reach.ts";
+import { postCounted } from "./surface-tools.ts";
 import type { GapPhase } from "../../sessions/session-store.ts";
 import { isUserMessage, type Item, type NewItem } from "../../sessions/items.ts";
 import { environmentDelta } from "../environment-facts.ts";
@@ -523,12 +523,8 @@ export async function runSegments(
       ...(segment.reply ? { reply: absoluteAppLinks(segment.reply, deps.publicWebUrl) } : {}),
     };
   };
-  const postToDefault = async (outbound: Outbound, destination: Destination, text: string): Promise<void> => {
-    const key = postKeys.key(destination, postKeys.take());
-    await reachPost({ outbound, destination, text, idempotencyKey: key, provenance: postProvenance(key) });
-    spine.surfaceOutboundCount += 1;
-    if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
-  };
+  const postToDefault = (outbound: Outbound, destination: Destination, text: string) =>
+    postCounted({ deps, input, postKeys, postProvenance, spine }, outbound, destination, text, postKeys.take());
   let result = await runHarnessTurn(baseText, {
     ...(priorTurns?.length ? { priorTurns } : {}),
     ...(importedOverheard.length ? { overheard: importedOverheard } : {}),

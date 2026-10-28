@@ -131,6 +131,27 @@ export interface SurfaceToolsContext {
   signal: AbortSignal;
 }
 
+export async function postCounted(
+  turn: Pick<SurfaceToolsContext, "deps" | "input" | "postKeys" | "postProvenance" | "spine">,
+  outbound: NonNullable<OrchestratorDeps["outbound"]>,
+  destination: Destination,
+  text: string,
+  seq: number,
+  attachments?: OutgoingAttachment[],
+): Promise<void> {
+  const idempotencyKey = turn.postKeys.key(destination, seq);
+  await reachPost({
+    outbound,
+    destination,
+    text,
+    ...(attachments?.length ? { attachments } : {}),
+    idempotencyKey,
+    provenance: turn.postProvenance(idempotencyKey),
+  });
+  turn.spine.surfaceOutboundCount += 1;
+  if (turn.input.runId) turn.deps.turnStream?.markSurfacePosted(turn.input.runId);
+}
+
 type SurfaceTurn = SurfaceToolsContext & {
   here: Destination;
   outbound: NonNullable<OrchestratorDeps["outbound"]>;
@@ -162,20 +183,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
 }
 
 function destinationTools(turn: SurfaceTurn) {
-  const {
-    deps,
-    input,
-    actor,
-    conversation,
-    blobTransfer,
-    fileRegistration,
-    provision,
-    postProvenance,
-    postKeys,
-    spine,
-    outbound,
-    here: currentDestination,
-  } = turn;
+  const { deps, actor, conversation, blobTransfer, fileRegistration, provision, outbound } = turn;
+  const currentDestination = turn.here;
   const resolveDestination = async (
     target?: {
       channel?: string;
@@ -234,17 +243,7 @@ function destinationTools(turn: SurfaceTurn) {
     attachments?: OutgoingAttachment[],
   ): Promise<SurfacePostResult> => {
     try {
-      const idempotencyKey = postKeys.key(destination, seq);
-      await reachPost({
-        outbound,
-        destination,
-        text: postText,
-        ...(attachments?.length ? { attachments } : {}),
-        idempotencyKey,
-        provenance: postProvenance(idempotencyKey),
-      });
-      spine.surfaceOutboundCount += 1;
-      if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
+      await postCounted(turn, outbound, destination, postText, seq, attachments);
       return { ok: true };
     } catch (e) {
       return { ok: false, message: errMessage(e) };
