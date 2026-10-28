@@ -7,6 +7,7 @@ import { headSlice, tailSlice } from "../../src/util/text.ts";
 import type { Scenario } from "./harness.ts";
 
 const providerCoverage: Record<SandboxBackendName, true> = {
+  superserve: true,
   sprites: true,
   local: true,
   smolmachines: true,

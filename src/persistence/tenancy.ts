@@ -20,6 +20,9 @@ const TENANCY_FUNCTIONS: readonly string[] = [
      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
    )`,
   `ALTER TABLE tenants
+     ADD COLUMN IF NOT EXISTS deploy_provider TEXT CHECK (deploy_provider IN ('aws', 'docker', 'porter', 'e2b', 'fly')),
+     ADD COLUMN IF NOT EXISTS fly_app_prefix TEXT,
+     ADD COLUMN IF NOT EXISTS fly_shared_app_name TEXT,
      ADD COLUMN IF NOT EXISTS apps_domain TEXT,
      ADD COLUMN IF NOT EXISTS s3_bucket TEXT,
      ADD COLUMN IF NOT EXISTS sentry_deployment TEXT,

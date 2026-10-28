@@ -1,3 +1,6 @@
+import { perTenant, tenantSettings } from "../tenant.ts";
+import { createFlyDeployProvider } from "../deploy/fly-deploy-provider.ts";
+import { flyDeployPorts } from "../deploy/fly-deploy-ports.ts";
 import type { StoresModule } from "./stores.ts";
 import type { FilesModule } from "./files.ts";
 import type { SandboxModule } from "./sandbox.ts";
@@ -72,6 +75,7 @@ export function buildDeploy(deps: DeployInputs) {
       onError: sandboxOnError,
     });
   const buildDeployProvider: Record<Config["deployProvider"], () => DeployProvider> = {
+    fly: () => buildFlyDeploy(config, databaseUrl, sandboxOnError),
     aws: buildAwsDeploy,
     docker: () => createDockerDeployProvider({ onError: sandboxOnError }),
     porter: () =>
@@ -91,7 +95,18 @@ export function buildDeploy(deps: DeployInputs) {
         onError: sandboxOnError,
       }),
   };
-  const deployProvider: DeployProvider = buildDeployProvider[config.deployProvider]();
+  const currentProvider = perTenant(() =>
+    buildDeployProvider[tenantSettings().deployProvider ?? config.deployProvider](),
+  );
+  const deployProvider: DeployProvider = {
+    get profile() {
+      return currentProvider().profile;
+    },
+    apply: (...args) => currentProvider().apply(...args),
+    resolveEndpoint: (...args) => currentProvider().resolveEndpoint(...args),
+    destroy: (...args) => currentProvider().destroy(...args),
+    logs: (...args) => currentProvider().logs(...args),
+  };
   if (config.deployProvider === "aws" && !config.awsDeploy.dataBucket) {
     console.warn(
       "[wiring] aws deploy: no data bucket resolved (AWS_DEPLOY_DATA_BUCKET unset) — deployed apps have NO durable /data",
@@ -166,3 +181,20 @@ export function buildDeploy(deps: DeployInputs) {
 }
 
 export type DeployModule = ReturnType<typeof buildDeploy>;
+
+function buildFlyDeploy(
+  config: Config,
+  databaseUrl: string,
+  onError: Parameters<typeof createFlyDeployProvider>[0]["onError"],
+) {
+  const settings = tenantSettings();
+  const port = config.flyDeploy.socksProxyPort;
+  return createFlyDeployProvider({
+    ...config.flyDeploy,
+    appPrefix: settings.flyAppPrefix ?? config.flyDeploy.appPrefix,
+    ...(settings.flySharedAppName ? { sharedAppName: settings.flySharedAppName } : {}),
+    ...(port ? { privateTransport: { ensure: async () => port } } : {}),
+    portStore: flyDeployPorts(databaseUrl),
+    ...(onError ? { onError } : {}),
+  });
+}

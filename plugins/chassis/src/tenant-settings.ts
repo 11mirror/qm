@@ -23,6 +23,9 @@ export interface TenantSettings {
   oidcLabel?: string;
   oidcAdmin: boolean;
   secrets: TenantSecrets;
+  deployProvider?: "aws" | "docker" | "porter" | "e2b" | "fly";
+  flyAppPrefix?: string;
+  flySharedAppName?: string;
 }
 
 type Env = Record<string, string | undefined>;
@@ -36,6 +39,9 @@ const TENANT_SECRET_NAMES = [
 ] as const satisfies readonly (keyof TenantSecrets)[];
 
 export const TENANT_TEXT_SETTINGS = [
+  ["deployProvider", "deploy_provider"],
+  ["flyAppPrefix", "fly_app_prefix"],
+  ["flySharedAppName", "fly_shared_app_name"],
   ["appsDomain", "apps_domain"],
   ["s3Bucket", "s3_bucket"],
   ["sentryDeployment", "sentry_deployment"],
@@ -129,6 +135,9 @@ export type TenantEnvSettings = Omit<TenantSettings, "id" | "slug" | "orgId" | "
 function settingsFromEnv(env: Env): TenantEnvSettings {
   const clientId = trustedClientId(env.PORTAL_TRUSTED_OIDC);
   return withoutUndefined({
+    deployProvider: env.DEPLOY_PROVIDER as TenantSettings["deployProvider"],
+    flyAppPrefix: text(env.FLY_DEPLOY_APP_PREFIX),
+    flySharedAppName: text(env.FLY_DEPLOY_SHARED_APP_NAME),
     appsDomain: text(env.PORTAL_APPS_DOMAIN) ?? text(env.DEPLOY_APPS_DOMAIN),
     s3Bucket: text(env.S3_BUCKET),
     sentryDeployment: text(env.SENTRY_DEPLOYMENT),

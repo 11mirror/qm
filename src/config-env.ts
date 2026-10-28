@@ -83,8 +83,16 @@ export function sandboxProvidersEnv(env: Env) {
     MODAL_APP_NAME: str,
     MODAL_ENVIRONMENT: str,
     MODAL_IMAGE: str,
+    SUPERSERVE_API_KEY: str,
+    SUPERSERVE_TEMPLATE: str,
+    SUPERSERVE_BASE_URL: str,
   });
   return {
+    superserveSandbox: defined({
+      apiKey: e.SUPERSERVE_API_KEY,
+      template: e.SUPERSERVE_TEMPLATE,
+      baseUrl: e.SUPERSERVE_BASE_URL,
+    }),
     localSandbox: defined({
       image: e.LOCAL_SANDBOX_IMAGE,
       dockerBin: e.LOCAL_SANDBOX_DOCKER_BIN,
@@ -287,4 +295,29 @@ export function numEnv(value: string | undefined): number | undefined {
   if (value === undefined || value.trim() === "") return undefined;
   const n = Number(value);
   return Number.isFinite(n) ? n : undefined;
+}
+
+export function flyDeployEnv(env: Env) {
+  const e = readEnv(env, {
+    FLY_DEPLOY_API_TOKEN: str,
+    FLY_DEPLOY_APP_PREFIX: str,
+    FLY_DEPLOY_BASE_IMAGE: str,
+    FLY_ORG: str,
+    FLY_DEPLOY_REGION: str,
+    FLY_DEPLOY_SHARED_APP_NAME: str,
+    FLY_DEPLOY_DATA_VOLUME_SIZE_GB: num,
+    FLY_DEPLOY_SOCKS_PROXY_PORT: num,
+  });
+  return {
+    token: e.FLY_DEPLOY_API_TOKEN ?? "",
+    appPrefix: e.FLY_DEPLOY_APP_PREFIX ?? "",
+    baseImage: e.FLY_DEPLOY_BASE_IMAGE ?? "",
+    org: e.FLY_ORG ?? "",
+    ...defined({
+      region: e.FLY_DEPLOY_REGION,
+      sharedAppName: e.FLY_DEPLOY_SHARED_APP_NAME,
+      dataVolumeSizeGb: e.FLY_DEPLOY_DATA_VOLUME_SIZE_GB,
+      socksProxyPort: e.FLY_DEPLOY_SOCKS_PROXY_PORT,
+    }),
+  };
 }

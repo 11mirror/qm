@@ -1,3 +1,4 @@
+import { endpointTransport } from "../../deploy/endpoint-transport.ts";
 import { type Reach } from "../../deploy/deploy-service.ts";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -443,6 +444,7 @@ export async function proxyReach(
   const htmlNav = wantsWarmingPage(req, method);
   const up = (reach.endpoint.tls ? httpsRequest : httpRequest)(
     {
+      ...endpointTransport(reach.endpoint),
       hostname: host,
       port,
       path: subPath + url.search,
@@ -522,6 +524,7 @@ function deploymentFetchHttp1(
     const { host, port, tls, proxyHeaders } = endpoint.endpoint;
     const request = (tls ? httpsRequest : httpRequest)(
       {
+        ...endpointTransport(endpoint.endpoint),
         hostname: host,
         port,
         path,

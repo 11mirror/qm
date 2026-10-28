@@ -1,3 +1,10 @@
+import {
+  createSuperserveSandbox,
+  SUPERSERVE_BODIES,
+  type StoredSuperserveSandbox,
+} from "../sandbox/superserve-sandbox.ts";
+import { createSdkSuperserveClient } from "../sandbox/superserve-client.ts";
+import { perTenant } from "../tenant.ts";
 import type { StoresModule } from "./stores.ts";
 import type { FilesModule } from "./files.ts";
 import type { DeploymentLayerModule } from "./deployment-layer.ts";
@@ -193,6 +200,18 @@ function buildSandboxBackends(deps: SandboxInputs) {
     });
   };
   const buildBackend: Record<Config["sandboxBackend"], () => BackendSandbox> = {
+    superserve: () => {
+      const apiKey = config.superserveSandbox.apiKey;
+      const template = config.superserveSandbox.template;
+      if (!apiKey || !template) throw new Error("Superserve requires an API key and template");
+      const baseUrl = config.superserveSandbox.baseUrl;
+      return createSuperserveSandbox(workspace, {
+        ...sandboxShared,
+        template,
+        client: createSdkSuperserveClient({ apiKey, ...(baseUrl ? { baseUrl } : {}) }),
+        store: createSandboxBodies<StoredSuperserveSandbox>(databaseUrl, SUPERSERVE_BODIES),
+      });
+    },
     local: buildLocal,
     sprites: buildSprites,
     smolmachines: buildSmolmachines,
@@ -202,10 +221,22 @@ function buildSandboxBackends(deps: SandboxInputs) {
   };
   const enabledBackends = new Set(enabledSandboxBackends(config));
   const sandboxBackends: Partial<Record<SandboxBackendName, BackendSandbox>> = {
-    [config.sandboxBackend]: buildBackend[config.sandboxBackend](),
+    [config.sandboxBackend]: tenantBackend(buildBackend[config.sandboxBackend]),
   };
   for (const name of Object.keys(buildBackend) as Array<Config["sandboxBackend"]>) {
-    if (name !== config.sandboxBackend && enabledBackends.has(name)) sandboxBackends[name] = buildBackend[name]();
+    if (name !== config.sandboxBackend && enabledBackends.has(name))
+      sandboxBackends[name] = tenantBackend(buildBackend[name]);
   }
   return { sandboxBackends, sandboxOnError, e2bClient };
+}
+
+function tenantBackend(create: () => BackendSandbox): BackendSandbox {
+  const current = perTenant(create);
+  return new Proxy({} as BackendSandbox, {
+    get: (_target, key) => {
+      const backend = current();
+      const value = Reflect.get(backend, key);
+      return typeof value === "function" ? value.bind(backend) : value;
+    },
+  });
 }

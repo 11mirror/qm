@@ -5,6 +5,7 @@ type SecretGate =
   | SandboxBackendName
   | "production"
   | "background-work-control"
+  | "fly-deploy"
   | "porter-deploy"
   | "e2b-deploy"
   | "aws-deploy-gate"
@@ -44,6 +45,8 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "DO_AGENTS_API_TOKEN", requiredWhen: "do-managed-agents" },
   { name: "MODAL_TOKEN_ID", requiredWhen: "modal" },
   { name: "MODAL_TOKEN_SECRET", requiredWhen: "modal" },
+  { name: "SUPERSERVE_API_KEY", requiredWhen: "superserve" },
+  { name: "FLY_DEPLOY_API_TOKEN", requiredWhen: "fly-deploy" },
   { name: "PORTER_DEPLOY_API_TOKEN", requiredWhen: "porter-deploy" },
   { name: "AWS_DEPLOY_GATE_SECRET", requiredWhen: "aws-deploy-gate" },
   { name: "GOOGLE_OAUTH_CLIENT_SECRET", requiredWhen: "google-oauth" },
@@ -60,6 +63,7 @@ const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => b
       (env: NodeJS.ProcessEnv) => env.SANDBOX_BACKEND?.trim() === backend,
     ]),
   ) as Record<SandboxBackendName, (env: NodeJS.ProcessEnv) => boolean>),
+  "fly-deploy": (env) => env.DEPLOY_PROVIDER === "fly",
   "porter-deploy": (env) => env.DEPLOY_PROVIDER === "porter",
   "e2b-deploy": (env) => env.DEPLOY_PROVIDER === "e2b",
   "aws-deploy-gate": (env) => Boolean(env.DEPLOY_APPS_DOMAIN),

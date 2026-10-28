@@ -27,6 +27,7 @@ import {
 } from "./model/pi-models.ts";
 import {
   awsDeployEnv,
+  flyDeployEnv,
   defined,
   deployAppsDomainEnv,
   deployAppsEnv,
@@ -81,7 +82,7 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   databasePoolMax?: number;
   databaseDirectPoolMax?: number;
   sandboxBackend: SandboxBackendName;
-  deployProvider: "docker" | "aws" | "porter" | "e2b";
+  deployProvider: "docker" | "aws" | "porter" | "e2b" | "fly";
   modelId?: string;
   codexAuthCredential?: string;
   claudeAuthCredential?: string;
@@ -137,6 +138,7 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   sandbox: ReturnType<typeof sandboxEnv>;
   porterDeploy: ReturnType<typeof porterDeployEnv>;
   awsDeploy: ReturnType<typeof awsDeployEnv>;
+  flyDeploy: ReturnType<typeof flyDeployEnv>;
 }
 
 export type Config = DeploymentConfig & TenantPart;
@@ -212,6 +214,7 @@ function orgBrandingFromEnv(env: Env): Config["brandingDefault"] {
 
 export function enabledSandboxBackends(config: Config): Array<Config["sandboxBackend"]> {
   const credentialed: Record<Config["sandboxBackend"], boolean> = {
+    superserve: Boolean(config.superserveSandbox?.apiKey && config.superserveSandbox?.template),
     local: Boolean(config.localSandbox?.image),
     sprites: Boolean(config.spritesSandbox?.token),
     smolmachines: Boolean(config.smolmachinesSandbox?.token),
@@ -421,13 +424,14 @@ function securityScreenProxyEnv(env: Env): Config["securityScreenProxy"] {
 function deployProviderEnv(env: Env): Config["deployProvider"] {
   const deployProvider = env.DEPLOY_PROVIDER ?? "docker";
   if (
+    deployProvider !== "fly" &&
     deployProvider !== "aws" &&
     deployProvider !== "docker" &&
     deployProvider !== "porter" &&
     deployProvider !== "e2b"
   ) {
     throw new Error(
-      `DEPLOY_PROVIDER=${JSON.stringify(deployProvider)} is not recognized (expected aws, docker, porter, or e2b)`,
+      `DEPLOY_PROVIDER=${JSON.stringify(deployProvider)} is not recognized (expected aws, docker, porter, e2b, or fly)`,
     );
   }
   return deployProvider;
@@ -556,6 +560,7 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     sandbox: sandboxEnv(env),
     ...sandboxProvidersEnv(env),
     porterDeploy: porterDeployEnv(env),
+    flyDeploy: flyDeployEnv(env),
     awsDeploy: awsDeployEnv(env, env.DEPLOY_APPS_DOMAIN?.trim() ? deployAppsDomain : undefined),
   };
 }

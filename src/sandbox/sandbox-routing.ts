@@ -16,7 +16,15 @@ import {
   type TeardownOptions,
 } from "./sandbox.ts";
 
-export const SANDBOX_BACKEND_NAMES = ["local", "sprites", "smolmachines", "e2b", "modal", "do-managed-agents"] as const;
+export const SANDBOX_BACKEND_NAMES = [
+  "local",
+  "sprites",
+  "smolmachines",
+  "e2b",
+  "modal",
+  "do-managed-agents",
+  "superserve",
+] as const;
 export type SandboxBackendName = (typeof SANDBOX_BACKEND_NAMES)[number];
 
 export class NoDefaultSandboxError extends Error {
