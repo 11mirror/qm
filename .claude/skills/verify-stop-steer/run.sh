@@ -73,7 +73,7 @@ case "$mode" in
     ;;
   one)
     invariant=${2:?usage: run.sh one <Invariant> [current|fixed] [break]}
-    fixes=""; [ "${3:-current}" = fixed ] && fixes=$FIXES
+    fixes=""; [ "${3:-current}" = fixed ] && fixes=$FIXES; [ -n "${FIX_ONLY:-}" ] && fixes=$FIX_ONLY
     breaks=""; [ -n "${4:-}" ] && breaks="\"$4\""
     result=$(tlc one-"$invariant" "$invariant" "$fixes" "$breaks" 1)
     echo "$invariant: $result"

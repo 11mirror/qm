@@ -32,7 +32,8 @@ Needs Java 11+ and curl. The script downloads tla2tools v1.7.4 once (checksum pi
 - `run.sh fixed` turns on every proposed fix flag (`FIXES` in `run.sh`). Everything passes except `SentIsShown`.
 - `run.sh breaks` adds a deliberate break to the fixed model and expects the guarded invariant to fail, proving the check can fail.
 - `run.sh one <Invariant> [current|fixed] [break]` runs one check with the shortest counterexample and prints the log path.
-- `MSGS='{1, 2}' run.sh one <Invariant>` uses two messages. It is much slower (tens of millions of states); use it for deep checks, not every edit.
+- `FIX_ONLY='"serial_controls"' run.sh one <Invariant>` runs with just the listed fix flags, which peels one finding off to show the next one.
+- `MSGS='{1, 2}' run.sh one <Invariant>` uses two messages. It is far larger: a current-code `DeliveredOnce` run passed 37 million distinct states without a violation before its on-disk state queue filled the machine. Use it only on a machine with room to spare, never on every edit.
 
 `ok` means the result matched the recorded expectation. `CHANGED` means it did not, and the script exits 1. Logs and traces land in `$TMPDIR/verify-stop-steer/` (override with `VERIFY_OUT`).
 
@@ -43,7 +44,7 @@ Read every result with the pstack `/statechart` skill: it turns a TLC violation 
 Coverage record, last confirmed against commit `393cd746e9dfa7c3ee363aa407343b504978f484` (sync commit):
 
 ```bash
-git diff --stat 393cd746e9dfa7c3ee363aa407343b504978f484..HEAD -- \
+git diff --stat 393cd746e9dfa7c3ee363aa407343b504978f484 -- \
   plugins/web-ui/src/composer.ts plugins/web-ui/src/chat.ts plugins/web-ui/src/core-bridge.ts \
   plugins/web-ui/src/conversations.ts plugins/web-ui/server/index.ts \
   src/api/app-turn.ts src/api/app-helpers.ts src/api/routes/turns.ts src/sessions/session-syscalls.ts \
@@ -51,7 +52,7 @@ git diff --stat 393cd746e9dfa7c3ee363aa407343b504978f484..HEAD -- \
   src/harness/pi-harness.ts src/harness/claude-harness.ts src/harness/harness-shared.ts src/wiring.ts
 ```
 
-If that diff touches a function in the table below, re-read the function, decide whether the matching model action still says what the code does, and run the check. Move the sync commit forward (here and in this paragraph's command) only after you have confirmed the model describes the code at the new commit.
+The command compares the working tree with the sync commit, so it also sees uncommitted edits. If that diff touches a function in the table below, re-read the function, decide whether the matching model action still says what the code does, and run the check. Move the sync commit forward (here and in this paragraph's command) only after you have confirmed the model describes the code at the new commit.
 
 | Model action                                  | Code                                                                                                                                                              |
 | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -80,7 +81,7 @@ If that diff touches a function in the table below, re-read the function, decide
 | `ServerActive`                                | `app-turn.ts` `activeRunForThread`; `plugins/web-ui/server/index.ts` `GET /api/runs/active`                                                                       |
 | `ClientActiveReply`                           | `chat.ts` `followNextQueuedRun`, `resumeTrackedRun` → `resumeRun`; `core-bridge.ts` `continuableMessages`                                                         |
 
-Each server request is split where the code awaits between reads and the write that matters (`ServerSteerCheck` / `ServerSteerCte` / `ServerSteerAfter`). `steerQueued` and `stopSessionTree` (under the session-tree advisory lock) are single steps. A browser handler runs atomically between awaits.
+Each server request is split where the code awaits between reads and the write that matters (`ServerSteerCheck` / `ServerSteerCte` / `ServerSteerAfter`). `steerQueued` and `stopSessionTree` (under the session-tree advisory lock) are single steps. A browser handler runs atomically between awaits. The session-state `working` event fires when a run is enqueued (`Created`, `DrainEffect`), and the `idle` event after the thread's last live run ends drives `IdleRefresh` (`conversations.ts` → `chat.ts` `onDelivery`).
 
 ## Real bug or modeling error?
 
@@ -94,12 +95,16 @@ Walk the counterexample step by step against the table. It is a real bug if ever
 4. Add a break to `BREAKS` for any new invariant so it is seen failing.
 5. Move the sync commit after confirming the model matches the code.
 
+## Stop and queued messages
+
+Today Stop deletes the thread's queued messages (`stopSessionTree` withdraws every pending run) but replays steers the model had not yet taken in (`replayOrphanedRunSignals`). `NoSilentLoss` and `NoTurnAfterStop` together state the intended rule: after Stop nothing sent before it runs, and nothing sent before it disappears, so undelivered text goes back to the composer. If the product decides Stop should instead keep queued messages queued, change those two invariants deliberately and record why.
+
 ## Fix flags (proposals, not shipped code)
 
-`freeze_on_stop` (stop rendering a run once Stop is clicked or acknowledged for it), `serial_controls` (send queue, steer and stop requests one at a time in click order), `stop_returns_inputs` (Stop takes withdrawn queued messages and unconsumed steers off the server and puts their text back in the composer; intake claims its signal before recording it), `stop_terminal_target` (Stop on a run that just ended still stops the thread), `drop_replay_push` (do not push a local row on a `replayed` steer reply), `optimistic_submit` (show the message as sending while `queueTurn` is in flight), `steer_rows_until_landed` (keep a waiting steer row until the message lands in the transcript), `chip_skips_started` (hide a Queued chip once its run's prompt row is shown), `no_self_steer` (never steer a queued run into itself), `turn_reply_resyncs` (an idle chat re-reads the run queue after a queue reply), `fresh_queue_sync` (ignore a run-queue snapshot taken before a newer local change), `sync_includes_transcript` (the run-queue sync also brings in landed prompt rows).
+`freeze_on_stop` (stop rendering a run once Stop is clicked or acknowledged for it), `serial_controls` (send queue, steer and stop requests one at a time in click order; a server-side alternative is taking the session-tree lock in web `turn()`), `stop_returns_inputs` (Stop takes withdrawn queued messages and unconsumed steers off the server and returns their text in the abort response for the composer; this changes the API and needs `recordSteerIntake` to acknowledge before it records, so a taken steer cannot also reach the model), `stop_terminal_target` (Stop on a run that just ended still stops the thread), `drop_replay_push` (do not push a local row on a `replayed` steer reply), `optimistic_submit` (show the message as sending while `queueTurn` is in flight), `steer_rows_until_landed` (keep a waiting steer row until the message lands in the transcript), `chip_skips_started` (hide a Queued chip once its run's prompt row is shown), `no_self_steer` (never steer a queued run into itself), `turn_reply_resyncs` (an idle chat re-reads the run queue after a queue reply), `fresh_queue_sync` (ignore a run-queue snapshot taken before a newer local change), `sync_includes_transcript` (the run-queue sync also brings in landed prompt rows).
 
 Break flags: `skip_ack` (`recordSteerIntake` stops acknowledging; guards `DeliveredOnce`), `stop_only_target` (Stop aborts only the clicked run; guards `NoTurnAfterStop`).
 
 ## Scope
 
-Verified: every interleaving of the listed steps for one message (and, slower, two), one Stop per behavior, one chunk of assistant text per run, one initial running turn. Assumed: one browser tab, no network errors or retries, no process crashes, no lease expiry or reaping, no approvals, no attachments, no subagent trees beyond the thread itself, the pi and Claude harnesses behave the same at this level. Not covered: Slack, inbox threads, `editQueuedRun`, `withdrawRun` from the chip's Remove button, approval pauses, and timing (how long any step takes).
+Verified: every interleaving of the listed steps for one message (and, slower, two), one Stop per behavior, one chunk of assistant text per run, one initial running turn. Assumed: one browser tab, no network errors or retries, no process crashes, no lease expiry or reaping, no approvals, no attachments, no subagent trees beyond the thread itself, the pi and Claude harnesses behave the same at this level. Not covered: liveness (no fairness; "Stop eventually stops" and "a queued message eventually runs" are unchecked), Slack, inbox threads, `editQueuedRun`, `withdrawRun` from the chip's Remove button, approval pauses, timing (how long any step takes), out-of-order replies between concurrent `/api/runs/active` calls (the model keeps one in flight), the two separate core reads behind the web server's `GET /api/runs/active`, a transcript page fetched before the moment it is applied, the `hasDedupeKey` short-circuit for retried steers, swallowed `steer acknowledge` failures, and Stop waiting on the session-tree lock behind subagent operations.

@@ -33,13 +33,13 @@ NoActive == [st |-> None, why |-> None, live |-> None, queued |-> <<>>, chipsAt 
 VARIABLES
   status, order, sig, hq, aborted, text, intakes, delivered, notifyWorking,
   composer, streaming, follow, slotRun, stopReq, chips, steering, pendingSteers,
-  rowsLocal, rowsRun, seenIntake, rendered, endChain, frozen, resumeWanted,
+  rowsLocal, rowsRun, seenIntake, rendered, endChain, frozen, resumeWanted, lastAborted, idleEvent,
   turnReq, sendReq, steerReq, abortReq, activeReq, ctl,
   stopClicked, stopRun, stopAcked, ackRendered, postStop, lateRuns, stopMissed
 
 server == <<status, order, sig, hq, aborted, text, intakes, delivered, notifyWorking>>
 client == <<composer, streaming, follow, slotRun, stopReq, chips, steering, pendingSteers,
-            rowsLocal, rowsRun, seenIntake, rendered, endChain, frozen, resumeWanted>>
+            rowsLocal, rowsRun, seenIntake, rendered, endChain, frozen, resumeWanted, lastAborted, idleEvent>>
 reqs == <<turnReq, sendReq, steerReq, abortReq, activeReq, ctl>>
 ghosts == <<stopClicked, stopRun, stopAcked, ackRendered, postStop, lateRuns, stopMissed>>
 vars == <<server, client, reqs, ghosts>>
@@ -69,6 +69,8 @@ Init ==
   /\ endChain = "idle"
   /\ frozen = {}
   /\ resumeWanted = FALSE
+  /\ lastAborted = FALSE
+  /\ idleEvent = FALSE
   /\ turnReq = [m \in Msgs |-> NoTurn]
   /\ sendReq = [m \in Msgs |-> None]
   /\ steerReq = [m \in Msgs |-> NoSteer]
@@ -104,6 +106,7 @@ CanSteer == streaming /\ ~stopReq /\ slotRun # None
 
 Created(r) == /\ status' = [status EXCEPT ![r] = "pending"]
               /\ order' = Append(order, r)
+              /\ notifyWorking' = TRUE
 
 SubmitWhileStreaming(m, pref) ==
   /\ m \in composer /\ streaming
@@ -112,18 +115,18 @@ SubmitWhileStreaming(m, pref) ==
   /\ ctl' = Append(ctl, TurnTag(m))
   /\ postStop' = IF stopClicked THEN postStop \cup {m} ELSE postStop
   /\ UNCHANGED <<server, streaming, follow, slotRun, stopReq, chips, steering, pendingSteers, rowsLocal, rowsRun,
-                 seenIntake, rendered, endChain, frozen, resumeWanted, sendReq, steerReq, abortReq, activeReq,
+                 seenIntake, rendered, endChain, frozen, resumeWanted, lastAborted, idleEvent, sendReq, steerReq, abortReq, activeReq,
                  stopClicked, stopRun, stopAcked, ackRendered, lateRuns, stopMissed>>
 
 SubmitIdle(m) ==
   /\ m \in composer /\ ~streaming
   /\ composer' = composer \ {m}
-  /\ streaming' = TRUE /\ follow' = None /\ slotRun' = None /\ stopReq' = FALSE
+  /\ streaming' = TRUE /\ follow' = None /\ slotRun' = None /\ stopReq' = FALSE /\ lastAborted' = FALSE
   /\ rowsLocal' = [rowsLocal EXCEPT ![m] = @ + 1]
   /\ sendReq' = [sendReq EXCEPT ![m] = "sent"]
   /\ ctl' = Append(ctl, SendTag(m))
   /\ postStop' = IF stopClicked THEN postStop \cup {m} ELSE postStop
-  /\ UNCHANGED <<server, chips, steering, pendingSteers, rowsRun, seenIntake, rendered, endChain, frozen, resumeWanted,
+  /\ UNCHANGED <<server, chips, steering, pendingSteers, rowsRun, seenIntake, rendered, endChain, frozen, resumeWanted, idleEvent,
                  turnReq, steerReq, abortReq, activeReq, stopClicked, stopRun, stopAcked, ackRendered,
                  lateRuns, stopMissed>>
 
@@ -131,14 +134,14 @@ ServerTurn(m) ==
   /\ turnReq[m].st = "sent" /\ Serial(TurnTag(m))
   /\ Created(Q(m))
   /\ turnReq' = [turnReq EXCEPT ![m].st = "done"]
-  /\ UNCHANGED <<sig, hq, aborted, text, intakes, delivered, notifyWorking, client, sendReq, steerReq,
+  /\ UNCHANGED <<sig, hq, aborted, text, intakes, delivered, client, sendReq, steerReq,
                  abortReq, activeReq, ctl, ghosts>>
 
 ServerSend(m) ==
   /\ sendReq[m] = "sent" /\ Serial(SendTag(m))
   /\ Created(Q(m))
   /\ sendReq' = [sendReq EXCEPT ![m] = "done"]
-  /\ UNCHANGED <<sig, hq, aborted, text, intakes, delivered, notifyWorking, client, turnReq, steerReq,
+  /\ UNCHANGED <<sig, hq, aborted, text, intakes, delivered, client, turnReq, steerReq,
                  abortReq, activeReq, ctl, ghosts>>
 
 ClientSendReply(m) ==
@@ -155,7 +158,7 @@ ClientSendReply(m) ==
      ELSE /\ ctl' = Drop(SendTag(m))
           /\ UNCHANGED <<follow, slotRun, rowsLocal, rowsRun, abortReq, stopRun, frozen>>
   /\ UNCHANGED <<server, composer, streaming, stopReq, chips, steering, pendingSteers, seenIntake, rendered,
-                 endChain, resumeWanted, turnReq, steerReq, activeReq, stopClicked, stopAcked, ackRendered, postStop,
+                 endChain, resumeWanted, lastAborted, idleEvent, turnReq, steerReq, activeReq, stopClicked, stopAcked, ackRendered, postStop,
                  lateRuns, stopMissed>>
 
 SteerStart(m, fresh, ctl0) ==
@@ -180,20 +183,22 @@ ClientTurnReply(m) ==
           /\ UNCHANGED <<pendingSteers, steerReq>>
   /\ resumeWanted' = (resumeWanted \/ (Fix("turn_reply_resyncs") /\ ~streaming))
   /\ UNCHANGED <<server, composer, streaming, follow, slotRun, stopReq, rowsLocal, rowsRun, seenIntake,
-                 rendered, endChain, frozen, sendReq, abortReq, activeReq, ghosts>>
+                 rendered, endChain, frozen, sendReq, abortReq, activeReq, lastAborted, idleEvent, ghosts>>
 
 ClickChipSteer(m) ==
   /\ m \in VisibleChips /\ CanSteer /\ turnReq[m].st = None
   /\ SteerStart(m, FALSE, ctl)
   /\ UNCHANGED <<server, composer, streaming, follow, slotRun, stopReq, rowsLocal, rowsRun, seenIntake,
-                 rendered, endChain, frozen, resumeWanted, turnReq, sendReq, abortReq, activeReq, ghosts>>
+                 rendered, endChain, frozen, resumeWanted, lastAborted, idleEvent, turnReq, sendReq, abortReq, activeReq, ghosts>>
 
 ServerSteerCheck(m) ==
   LET r == steerReq[m].r IN
   /\ steerReq[m].st = "sent" /\ Serial(SteerTag(m))
   /\ steerReq' = [steerReq EXCEPT ![m] =
-        CASE status[r] \in Terminal -> [@ EXCEPT !.st = "done", !.res = "terminal"]
+        CASE status[r] \in Gone -> [@ EXCEPT !.st = "done", !.res = "not_found"]
+          [] status[r] \in Terminal -> [@ EXCEPT !.st = "done", !.res = "terminal"]
           [] status[Q(m)] \in Gone -> [@ EXCEPT !.st = "done", !.res = "not_found"]
+          [] r = Q(m) -> [@ EXCEPT !.st = "done", !.res = "queued_started"]
           [] status[Q(m)] # "pending" -> [@ EXCEPT !.st = "done", !.res = "queued_started"]
           [] OTHER -> [@ EXCEPT !.st = "cte"]]
   /\ UNCHANGED <<server, client, turnReq, sendReq, abortReq, activeReq, ctl, ghosts>>
@@ -218,6 +223,7 @@ DrainEffect(r) ==
   IN /\ sig' = [sig EXCEPT ![r] = <<>>]
      /\ status' = [x \in RunIds |-> IF \E m \in fresh : x = R(m) THEN "pending" ELSE status[x]]
      /\ order' = order \o added
+     /\ notifyWorking' = (notifyWorking \/ fresh # {})
 
 ServerSteerAfter(m) ==
   LET r == steerReq[m].r IN
@@ -227,8 +233,8 @@ ServerSteerAfter(m) ==
           /\ steerReq' = [steerReq EXCEPT ![m] = [@ EXCEPT !.st = "done",
                  !.res = "replayed"]]
      ELSE /\ steerReq' = [steerReq EXCEPT ![m] = [@ EXCEPT !.st = "done", !.res = "ok"]]
-          /\ UNCHANGED <<status, order, sig>>
-  /\ UNCHANGED <<hq, aborted, text, intakes, delivered, notifyWorking, client, turnReq, sendReq,
+          /\ UNCHANGED <<status, order, sig, notifyWorking>>
+  /\ UNCHANGED <<hq, aborted, text, intakes, delivered, client, turnReq, sendReq,
                  abortReq, activeReq, ctl, ghosts>>
 
 ClientSteerReply(m) ==
@@ -245,7 +251,7 @@ ClientSteerReply(m) ==
   /\ rowsLocal' = IF res = "replayed" /\ ~Fix("drop_replay_push") THEN [rowsLocal EXCEPT ![m] = @ + 1] ELSE rowsLocal
   /\ resumeWanted' = (resumeWanted \/ ~streaming)
   /\ UNCHANGED <<server, composer, streaming, follow, slotRun, stopReq, rowsRun, seenIntake, rendered,
-                 endChain, frozen, turnReq, sendReq, abortReq, activeReq, ghosts>>
+                 endChain, frozen, turnReq, sendReq, abortReq, activeReq, lastAborted, idleEvent, ghosts>>
 
 ClickStop ==
   /\ streaming /\ ~stopReq /\ ~stopClicked
@@ -255,7 +261,7 @@ ClickStop ==
   /\ abortReq' = IF slotRun # None THEN [st |-> "sent", r |-> slotRun, res |-> None, back |-> {}, hit |-> {}] ELSE abortReq
   /\ ctl' = IF slotRun # None THEN Append(ctl, AbortTag) ELSE ctl
   /\ UNCHANGED <<server, composer, streaming, follow, slotRun, chips, steering, pendingSteers, rowsLocal,
-                 rowsRun, seenIntake, rendered, endChain, resumeWanted, turnReq, sendReq, steerReq, activeReq,
+                 rowsRun, seenIntake, rendered, endChain, resumeWanted, lastAborted, idleEvent, turnReq, sendReq, steerReq, activeReq,
                  stopAcked, ackRendered, postStop, lateRuns, stopMissed>>
 
 ServerAbort ==
@@ -269,7 +275,7 @@ ServerAbort ==
   IN
   /\ abortReq.st = "sent" /\ Serial(AbortTag)
   /\ IF targetGone /\ ~Fix("stop_terminal_target")
-     THEN /\ abortReq' = [abortReq EXCEPT !.st = "done", !.res = "terminal"]
+     THEN /\ abortReq' = [abortReq EXCEPT !.st = "done", !.res = IF status[r] \in Gone THEN "not_found" ELSE "terminal"]
           /\ stopMissed' = (stopMissed \/ LiveRuns # {})
           /\ UNCHANGED <<status, sig>>
      ELSE /\ sig' = [x \in RunIds |->
@@ -297,7 +303,7 @@ ClientAbortReply ==
   /\ steering' = steering \ abortReq.back
   /\ frozen' = IF Fix("freeze_on_stop") THEN frozen \cup abortReq.hit ELSE frozen
   /\ UNCHANGED <<server, streaming, follow, slotRun, stopReq, pendingSteers, seenIntake,
-                 rendered, endChain, resumeWanted, turnReq, sendReq, steerReq, activeReq, stopClicked, stopRun,
+                 rendered, endChain, resumeWanted, lastAborted, idleEvent, turnReq, sendReq, steerReq, activeReq, stopClicked, stopRun,
                  postStop, lateRuns, stopMissed>>
 
 Dispatch ==
@@ -306,8 +312,7 @@ Dispatch ==
   /\ LET r == FirstLive IN
      /\ status' = [status EXCEPT ![r] = "running"]
      /\ delivered' = IF Input(r) # 0 THEN [delivered EXCEPT ![Input(r)] = @ + 1] ELSE delivered
-  /\ notifyWorking' = TRUE
-  /\ UNCHANGED <<order, sig, hq, aborted, text, intakes, client, reqs, ghosts>>
+  /\ UNCHANGED <<order, sig, hq, aborted, text, intakes, notifyWorking, client, reqs, ghosts>>
 
 HEmit(r) ==
   /\ status[r] = "running" /\ ~aborted[r] /\ text[r] < MaxText
@@ -337,20 +342,27 @@ HIntake(r, m) ==
   /\ UNCHANGED <<status, order, aborted, text, notifyWorking, client, reqs, ghosts>>
 
 HFinish(r) ==
-  /\ status[r] = "running" /\ ~aborted[r] /\ hq[r] = {}
+  /\ status[r] = "running" /\ ~aborted[r]
   /\ status' = [status EXCEPT ![r] = "done"]
-  /\ UNCHANGED <<order, sig, hq, aborted, text, intakes, delivered, notifyWorking, client, reqs, ghosts>>
+  /\ hq' = [hq EXCEPT ![r] = {}]
+  /\ idleEvent' = (idleEvent \/ Keep(order, LAMBDA x : x # r /\ status[x] \in Live) = <<>>)
+  /\ UNCHANGED <<order, sig, aborted, text, intakes, delivered, notifyWorking, composer, streaming, follow, slotRun,
+                 stopReq, chips, steering, pendingSteers, rowsLocal, rowsRun, seenIntake, rendered, endChain, frozen,
+                 resumeWanted, lastAborted, reqs, ghosts>>
 
 HStopped(r) ==
   /\ status[r] = "running" /\ aborted[r]
   /\ status' = [status EXCEPT ![r] = "stopped"]
-  /\ UNCHANGED <<order, sig, hq, aborted, text, intakes, delivered, notifyWorking, client, reqs, ghosts>>
+  /\ idleEvent' = (idleEvent \/ Keep(order, LAMBDA x : x # r /\ status[x] \in Live) = <<>>)
+  /\ UNCHANGED <<order, sig, hq, aborted, text, intakes, delivered, notifyWorking, composer, streaming, follow, slotRun,
+                 stopReq, chips, steering, pendingSteers, rowsLocal, rowsRun, seenIntake, rendered, endChain, frozen,
+                 resumeWanted, lastAborted, reqs, ghosts>>
 
 OrphanDrain(r) ==
   /\ status[r] \in Terminal
   /\ SteerSignals(r) # {}
   /\ DrainEffect(r)
-  /\ UNCHANGED <<hq, aborted, text, intakes, delivered, notifyWorking, client, reqs, ghosts>>
+  /\ UNCHANGED <<hq, aborted, text, intakes, delivered, client, reqs, ghosts>>
 
 Frozen(r) == r \in frozen
 ShownText(r) == IF Frozen(r) THEN rendered[r] ELSE text[r]
@@ -376,9 +388,10 @@ Observe ==
      THEN /\ streaming' = FALSE /\ follow' = None /\ slotRun' = None /\ stopReq' = FALSE
           /\ steering' = IF Fix("steer_rows_until_landed") THEN NotLanded(steering, r) ELSE {}
           /\ endChain' = IF status[r] = "done" THEN "refresh" ELSE "active"
+          /\ lastAborted' = (status[r] # "done")
      ELSE /\ steering' = IF Fix("steer_rows_until_landed") THEN NotLanded(steering, r) ELSE steering \ intakes[r]
-          /\ UNCHANGED <<streaming, follow, slotRun, stopReq, endChain>>
-  /\ UNCHANGED <<server, composer, chips, pendingSteers, rowsLocal, rowsRun, frozen, resumeWanted, reqs,
+          /\ UNCHANGED <<streaming, follow, slotRun, stopReq, endChain, lastAborted>>
+  /\ UNCHANGED <<server, composer, chips, pendingSteers, rowsLocal, rowsRun, frozen, resumeWanted, idleEvent, reqs,
                  stopClicked, stopRun, stopAcked, ackRendered, postStop, stopMissed>>
 
 Refresh ==
@@ -391,14 +404,14 @@ Refresh ==
                   THEN {m \in steering : \A x \in ServerRows : Input(x) # m /\ \A y \in RunIds : m \notin intakes[y]}
                   ELSE steering
   /\ UNCHANGED <<server, composer, streaming, follow, slotRun, stopReq, chips, pendingSteers,
-                 rendered, frozen, resumeWanted, reqs, ghosts>>
+                 rendered, frozen, resumeWanted, lastAborted, idleEvent, reqs, ghosts>>
 
 StartFollowNext ==
   /\ endChain = "active" /\ activeReq.st = None
   /\ endChain' = "idle"
   /\ activeReq' = [NoActive EXCEPT !.st = "sent", !.why = "follow", !.chipsAt = chips]
   /\ UNCHANGED <<server, composer, streaming, follow, slotRun, stopReq, chips, steering, pendingSteers,
-                 rowsLocal, rowsRun, seenIntake, rendered, frozen, resumeWanted, turnReq, sendReq, steerReq, abortReq, ctl, ghosts>>
+                 rowsLocal, rowsRun, seenIntake, rendered, frozen, resumeWanted, lastAborted, idleEvent, turnReq, sendReq, steerReq, abortReq, ctl, ghosts>>
 
 NotifiedWorking ==
   /\ notifyWorking
@@ -406,7 +419,7 @@ NotifiedWorking ==
   /\ resumeWanted' = (resumeWanted \/ ~streaming)
   /\ UNCHANGED <<status, order, sig, hq, aborted, text, intakes, delivered, composer, streaming, follow, slotRun,
                  stopReq, chips, steering, pendingSteers, rowsLocal, rowsRun, seenIntake, rendered, endChain,
-                 frozen, reqs, ghosts>>
+                 frozen, reqs, lastAborted, idleEvent, ghosts>>
 
 ResumeIfIdle ==
   /\ resumeWanted /\ activeReq.st = None
@@ -414,7 +427,7 @@ ResumeIfIdle ==
   /\ activeReq' = IF ~streaming THEN [NoActive EXCEPT !.st = "sent", !.why = "resume", !.chipsAt = chips] ELSE activeReq
   /\ UNCHANGED <<server, composer, streaming, follow, slotRun, stopReq, chips, steering, pendingSteers,
                  rowsLocal, rowsRun, seenIntake, rendered, endChain, frozen, turnReq, sendReq, steerReq, abortReq,
-                 ctl, ghosts>>
+                 ctl, lastAborted, idleEvent, ghosts>>
 
 ServerActive ==
   /\ activeReq.st = "sent"
@@ -435,19 +448,35 @@ ClientActiveReply ==
   /\ chips' = IF streaming /\ activeReq.why = "follow" THEN chips ELSE synced
   /\ IF attach
      THEN /\ streaming' = TRUE /\ follow' = live /\ slotRun' = live /\ stopReq' = FALSE
-          /\ IF activeReq.why = "resume"
+          /\ lastAborted' = FALSE
+          /\ IF activeReq.why = "resume" /\ ~lastAborted
              THEN /\ rowsLocal' = [m \in Msgs |-> 0]
                   /\ seenIntake' = intakes
                   /\ rowsRun' = ServerRows \cup withInput
              ELSE /\ rowsRun' = rowsRun \cup withInput
                   /\ UNCHANGED <<rowsLocal, seenIntake>>
           /\ steering' = IF Fix("steer_rows_until_landed") THEN steering \ {Input(x) : x \in rowsRun'} ELSE steering
-     ELSE /\ rowsRun' = IF Fix("sync_includes_transcript") /\ ~streaming THEN rowsRun \cup activeReq.rows ELSE rowsRun
+     ELSE /\ UNCHANGED lastAborted
+          /\ rowsRun' = IF Fix("sync_includes_transcript") /\ ~streaming THEN rowsRun \cup activeReq.rows ELSE rowsRun
           /\ steering' = IF Fix("sync_includes_transcript") /\ Fix("steer_rows_until_landed") /\ ~streaming
                           THEN steering \ {Input(x) : x \in activeReq.rows} ELSE steering
           /\ UNCHANGED <<streaming, follow, slotRun, stopReq, rowsLocal, seenIntake>>
   /\ UNCHANGED <<server, composer, pendingSteers, rendered, endChain, frozen, turnReq, sendReq, steerReq,
-                 abortReq, ctl, ghosts>>
+                 abortReq, ctl, idleEvent, ghosts>>
+
+IdleRefresh ==
+  /\ idleEvent
+  /\ idleEvent' = FALSE
+  /\ IF ~streaming /\ ~lastAborted
+     THEN /\ rowsLocal' = [m \in Msgs |-> 0]
+          /\ rowsRun' = ServerRows
+          /\ seenIntake' = intakes
+          /\ steering' = IF Fix("steer_rows_until_landed")
+                          THEN {m \in steering : \A x \in ServerRows : Input(x) # m /\ \A y \in RunIds : m \notin intakes[y]}
+                          ELSE steering
+     ELSE UNCHANGED <<rowsLocal, rowsRun, seenIntake, steering>>
+  /\ UNCHANGED <<server, composer, streaming, follow, slotRun, stopReq, chips, pendingSteers,
+                 rendered, endChain, frozen, resumeWanted, lastAborted, reqs, ghosts>>
 
 Next ==
   \/ \E m \in Msgs, pref \in BOOLEAN : SubmitWhileStreaming(m, pref)
@@ -458,7 +487,7 @@ Next ==
   \/ Dispatch
   \/ \E r \in RunIds : \/ HEmit(r) \/ HDrain(r) \/ HFinish(r) \/ HStopped(r) \/ OrphanDrain(r)
                        \/ \E m \in Msgs : HIntake(r, m)
-  \/ Observe \/ Refresh \/ StartFollowNext \/ NotifiedWorking \/ ResumeIfIdle \/ ServerActive \/ ClientActiveReply
+  \/ Observe \/ Refresh \/ IdleRefresh \/ StartFollowNext \/ NotifiedWorking \/ ResumeIfIdle \/ ServerActive \/ ClientActiveReply
 
 Spec == Init /\ [][Next]_vars
 
@@ -502,7 +531,7 @@ ServerSettled ==
 
 ClientSettled ==
   /\ \A m \in Msgs : turnReq[m].st = None /\ sendReq[m] = None /\ steerReq[m].st = None
-  /\ abortReq.st = None /\ activeReq.st = None /\ endChain = "idle" /\ ~notifyWorking /\ ~resumeWanted
+  /\ abortReq.st = None /\ activeReq.st = None /\ endChain = "idle" /\ ~notifyWorking /\ ~resumeWanted /\ ~idleEvent
   /\ ~ObserveEnabled
 
 ControlsMatchServer ==
