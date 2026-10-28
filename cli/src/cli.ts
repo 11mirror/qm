@@ -171,9 +171,6 @@ ${bold("DEVELOP (contributor)")} ${dim("— runs in the QM repo")}
   dev up [--surface web|slack|both] [--org <id>] · dev down · dev status · dev restart · dev canary · dev logs · dev doctor [options]
                                            run the supervised contributor engine in scripts/dev/
   dev --ci [up|down]                       CI mode: core only (Slack in-process), no pool lease (live-e2e)
-  tenant import --source-url <url> --staging-url <url> --slug <slug> --org-id <id>
-                                           copy one company database into the shared multitenant
-                                           database as a new tenant (--dry-run, --replace; --help for all)
 
   help · version
 
@@ -287,25 +284,6 @@ async function devCommand(argv: string[], positionals: string[], flags: Flags): 
     cwd: root,
     stdio: "inherit",
     env: { ...process.env, DEV_INSTANCE_ORG_ID: orgId },
-  });
-  if (result.error) throw result.error;
-  process.exitCode = result.status ?? 1;
-  return;
-}
-
-async function tenantCommand(argv: string[], positionals: string[]): Promise<void> {
-  if (positionals[0] !== "import") {
-    throw new CliError(
-      `usage: ${CLI_NAME} tenant import --source-url <url> --staging-url <url> --slug <slug> --org-id <id> [options]`,
-      {
-        clause: "cli.invocation",
-      },
-    );
-  }
-  const root = gitTopLevel();
-  const result = spawnSync(process.execPath, [join(root, "src/tenant-import-main.ts"), ...argv.slice(2)], {
-    cwd: root,
-    stdio: "inherit",
   });
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;
@@ -608,9 +586,6 @@ async function dispatch(argv: string[]): Promise<void> {
 
     case "dev":
       return devCommand(argv, positionals, flags);
-
-    case "tenant":
-      return tenantCommand(argv, positionals);
 
     case "check":
       return checkCommand(positionals, flags);

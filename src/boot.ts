@@ -25,7 +25,7 @@ import {
   watchActiveTenants,
 } from "./tenants/directory.ts";
 import { tenantConfig } from "./tenants/tenant-config.ts";
-import { assertRowSecurityEnforced, tenantSecretsKey } from "./tenants/registry.ts";
+import { assertRowSecurityEnforced } from "./tenants/registry.ts";
 
 export interface BootedApp {
   config: Config;
@@ -158,12 +158,11 @@ async function useRegistryTenants(config: Config, env: NodeJS.ProcessEnv, prepar
   tagErrorDeployment(() =>
     isHomeTenant(tenant()) ? undefined : (tenantConfig(config).sentryDeployment ?? tenant().orgId),
   );
-  const secretsKey = tenantSecretsKey(env);
   useTenantDirectory(
     createTenantDirectory({
       databaseUrl,
       pool,
-      secretsKey,
+      secretsKey: config.tenantSecretsKey,
       home: tenant(),
       homeHosts: [config.publicUrl, config.apiBaseUrl, config.publicWebUrl]
         .map(hostOfUrl)

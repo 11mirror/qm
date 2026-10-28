@@ -8,7 +8,7 @@ import {
 
 export const TENANT_BYPASS_OPTION = "-c qm.tenant_bypass=on";
 
-export const TENANCY_EXCLUDED_TABLES = ["qm_tenant", "tenants", "qm_schema_migrations"];
+const TENANCY_EXCLUDED_TABLES = ["qm_tenant", "tenants", "qm_schema_migrations"];
 
 const EXCLUDED = TENANCY_EXCLUDED_TABLES.map((t) => `'${t}'`).join(", ");
 

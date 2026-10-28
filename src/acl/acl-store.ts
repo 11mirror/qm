@@ -1,5 +1,5 @@
 import type { Grant, GrantedHandle, Principal, ScopeId } from "../types.ts";
-import { parseScopeId } from "../types.ts";
+import { isSharedScope, parseScopeId } from "../types.ts";
 import { parseRef, refPrefix } from "./resource-ref.ts";
 import { samePerson } from "../directory/person.ts";
 import type { ResourceKind } from "./resource-ref.ts";
@@ -25,11 +25,6 @@ export type ScopeManagement = (principalId: string, scopeId: ScopeId, authoredBy
 function ownerOf(scopeId: ScopeId): string | null {
   const { kind, ref } = parseScopeId(scopeId);
   return kind === "personal" ? ref : null;
-}
-
-function isMembershipManaged(scopeId: ScopeId): boolean {
-  const { kind } = parseScopeId(scopeId);
-  return kind === "channel" || kind === "group";
 }
 
 export interface AclStore {
@@ -129,7 +124,7 @@ export function createAclStore(persist: GrantPersistence, opts: AclStoreOptions 
   async function canManage(scopeId: ScopeId, principalId: string, authoredBy?: string): Promise<boolean> {
     const owner = ownerOf(scopeId);
     if (owner !== null) return samePerson(principalId, owner);
-    if (isMembershipManaged(scopeId) && opts.manages) return opts.manages(principalId, scopeId, authoredBy);
+    if (isSharedScope(scopeId) && opts.manages) return opts.manages(principalId, scopeId, authoredBy);
     return true;
   }
   return {
@@ -169,9 +164,7 @@ export function createAclStore(persist: GrantPersistence, opts: AclStoreOptions 
       const reached = reachesAudience(audience, sessionScopeId, orgScopeId, entitled);
       return handles((await persist.all()).filter((g) => isFileGrant(g) && reached(g)));
     },
-    async grantsFor(ownerScopeId, ref) {
-      return persist.forResource(ownerScopeId, ref);
-    },
+    grantsFor: (ownerScopeId, ref) => persist.forResource(ownerScopeId, ref),
     async grantsOfKind(kind, audience, sessionScopeId, orgScopeId, entitled) {
       if (audience.length === 0) return [];
       const prefix = refPrefix(kind);

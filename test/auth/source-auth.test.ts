@@ -5,12 +5,8 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { createInsecureTestServer, createServer } from "../../src/api/server.ts";
 import { createPostgresReplayDedupe } from "../../src/auth/replay-dedupe.ts";
-import {
-  createSourceAuth,
-  signRequest,
-  verifySignature,
-  SOURCE_AUTH_REPLAY_WINDOW_MS,
-} from "../../src/auth/source-auth.ts";
+import { createSourceAuth, verifySignature, SOURCE_AUTH_REPLAY_WINDOW_MS } from "../../src/auth/source-auth.ts";
+import { signRequest } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";

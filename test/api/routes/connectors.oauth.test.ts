@@ -9,7 +9,7 @@ import {
   CONTROL_PLANE_AUD,
 } from "../../../src/auth/capability-token.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../../src/auth/portal-identity.ts";
-import { signRequest } from "../../../src/auth/source-auth.ts";
+import { signRequest } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { PROVIDERS, setPublicOAuthClients, type FetchLike, openOAuthState } from "../../../src/connectors/oauth.ts";
 import type { BuiltApp } from "../../../src/wiring.ts";
 import { buildApp } from "../../support/build-app.ts";

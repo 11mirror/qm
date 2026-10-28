@@ -188,7 +188,6 @@ export function porterDeployEnv(env: Env) {
       });
       return undefined;
     }),
-    SANDBOX_NAME_PREFIX: trimmed,
   });
   if (e.PORTER_DEPLOY_VISIBILITY === "internal" && e.PORTER_DEPLOY_APPS_DOMAIN) {
     throw new Error(
@@ -201,7 +200,6 @@ export function porterDeployEnv(env: Env) {
     runnerImage: e.PORTER_DEPLOY_RUNNER_IMAGE,
     appsDomain: e.PORTER_DEPLOY_APPS_DOMAIN,
     visibility: e.PORTER_DEPLOY_VISIBILITY,
-    namePrefix: e.SANDBOX_NAME_PREFIX,
   });
 }
 
