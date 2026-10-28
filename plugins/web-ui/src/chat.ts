@@ -2315,7 +2315,8 @@ export function createChatSurface(
   function assistantContent(message: AssistantMessage, isStreaming = false, hasWork = false): TemplateResult[] {
     const animating = isStreaming && runSlot.stopGeneration !== runSlot.generation;
     const parts: TemplateResult[] = [];
-    const finishedWork = isStreaming ? undefined : (message as AssistantWork).work;
+    const answered = message.content.some((chunk) => chunk.type === "text" && chunk.text.trim());
+    const finishedWork = isStreaming || !answered ? undefined : (message as AssistantWork).work;
     if (finishedWork)
       for (const draft of retractedReplies(finishedWork)) parts.push(retractedRow(draft.reason, draft.text));
     for (const [chunkIndex, chunk] of message.content.entries()) {

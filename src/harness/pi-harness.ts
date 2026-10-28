@@ -2136,6 +2136,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 extendMs: extendCapMs,
                 abort: () => entry.agentSession.abort(),
               });
+              if (wallClock === "ok") await recoverFailedRound();
             }
           } catch (err) {
             if (persistError) throw persistError;

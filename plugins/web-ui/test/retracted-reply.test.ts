@@ -66,13 +66,20 @@ test("a finished reply shows the retracted draft as a collapsed stub above the n
         seq: 2,
         type: "text",
         createdAt: at + 3000,
-        payload: { text: "Here \u2014 a draft.", retracted: "em dash", step: { id: "s1", index: 0 } },
+        payload: {
+          text: "Here \u2014 a draft.",
+          retracted: "em dash",
+          step: { id: "s1", index: 0, api: "anthropic-messages", stopReason: "stop" },
+        },
       },
       {
         seq: 3,
         type: "assistant",
         createdAt: at + 6000,
-        payload: { text: "Here is a clean reply.", step: { id: "s2", index: 0 } },
+        payload: {
+          text: "Here is a clean reply.",
+          step: { id: "s2", index: 0, api: "anthropic-messages", stopReason: "stop" },
+        },
       },
     ],
   });
