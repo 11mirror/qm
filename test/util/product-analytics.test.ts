@@ -37,19 +37,19 @@ test("publication has matching company identity, groups and deduplication withou
   );
 });
 
-test("delivery failures cannot fail publication and concurrent requests are bounded", async () => {
+test("delivery failures cannot fail publication and a burst sends every event", async () => {
   const failing = createProductAnalytics(company, { apiKey: "token" }, async () => {
     throw Error("offline");
   });
   await assert.doesNotReject(failing.appPublished("person", "app", 1));
   await assert.doesNotReject(failing.responseFinished(humanRun()));
   const releases: Array<() => void> = [];
-  const bounded = createProductAnalytics(company, { apiKey: "token" }, async () => {
+  const burst = createProductAnalytics(company, { apiKey: "token" }, async () => {
     await new Promise<void>((resolve) => releases.push(resolve));
     return new Response("ok");
   });
-  const requests = Array.from({ length: 20 }, () => bounded.appPublished("person", "app", 1));
-  assert.equal(releases.length, 16);
+  const requests = Array.from({ length: 20 }, () => burst.appPublished("person", "app", 1));
+  assert.equal(releases.length, 20);
   releases.forEach((release) => release());
   await Promise.all(requests);
 });
