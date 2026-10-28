@@ -4,10 +4,6 @@ import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { createNotebookMemory, type FactStoreTx, type MemoryService } from "./memory-service.ts";
 import { isMemorySensitivity, type MemoryFact } from "./facts.ts";
 
-/**
- * Also registered by the vector store, which reads text_hash: the pool that runs first adds the
- * column either way.
- */
 const TEXT_HASH_FUNCTION = `CREATE OR REPLACE FUNCTION memory_facts_text_hash() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN
         NEW.text_hash := encode(sha256(convert_to(NEW.text, 'UTF8')), 'hex');
@@ -16,7 +12,6 @@ const TEXT_HASH_FUNCTION = `CREATE OR REPLACE FUNCTION memory_facts_text_hash() 
 
 export const MEMORY_FACTS_MIGRATIONS = [
   {
-    // The embedding index keys vectors by this hash; a trigger keeps it in step with text on every write path.
     id: "memory/facts/0002-text-hash",
     statements: [
       "ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS text_hash TEXT",
@@ -28,7 +23,6 @@ export const MEMORY_FACTS_MIGRATIONS = [
       "ALTER TABLE memory_facts ALTER COLUMN text_hash SET NOT NULL",
     ],
     expectedChecksum: "c7ca6a779272265e9201ccf0430ec1ca98836701b2eff508b08af22e008aadb5",
-    // The first release of this id lacked SET NOT NULL; 0003 finishes those databases.
     acceptedChecksums: ["3548fb7774545aa8d6ce9ab89eba26c8f4817b7865bb5b6d839011b52ea39a1e"],
   },
   {

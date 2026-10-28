@@ -46,7 +46,6 @@ export interface DirectFileUploads {
   sign(id: string, partNumber: number): Promise<{ url: string; headers: Record<string, string>; expiresAt: number }>;
   complete(id: string): Promise<FileArtifact>;
   abort(id: string): Promise<void>;
-  /** Finish or abort expired uploads; run by the `file-uploads` background job. */
   sweep(): Promise<void>;
 }
 

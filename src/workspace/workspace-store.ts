@@ -13,12 +13,9 @@ export interface WorkspaceStore {
   list(scopeId: ScopeId, opts?: { limit: number }): Promise<string[]>;
 }
 
-/** The path names no readable file (absent, a directory, or under a file) — every other error is real. */
 const missing = (error: unknown): boolean =>
   ["ENOENT", "ENOTDIR", "EISDIR"].includes((error as NodeJS.ErrnoException | null)?.code ?? "");
 
-/** A bounded listing inspects at most this many entries per path it may return, so a tree of mostly
- * directories cannot turn one listing into a full walk. */
 const LIST_SCAN_FACTOR = 8;
 
 function safeJoin(baseDir: string, relPath: string): string {

@@ -45,7 +45,6 @@ function lastSegment(path: string): string {
   return parts.at(-1) ?? path;
 }
 
-/** A skill's bundled files, or why the skill can't be imported: a binary file or a path that isn't safe to write. */
 function collectAssets(repo: FetchedRepo, skillDir: string): SkillFile[] | "binary-asset" | "malformed" {
   const prefix = skillDir ? `${skillDir}/` : "";
   const out: SkillFile[] = [];

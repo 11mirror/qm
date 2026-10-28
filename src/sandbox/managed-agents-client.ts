@@ -373,7 +373,6 @@ function guestConnection(api: ManagedAgentsApi, sessionId: string): GuestConnect
         const abort = tunnel.whenFailed().then((detail) => {
           throw new Error(detail);
         });
-        // Both are observed by the race below; the loser's later rejection is not a failure.
         dial.catch(() => undefined);
         abort.catch(() => undefined);
         return { tunnel, agent: await Promise.race([dial, abort]) };

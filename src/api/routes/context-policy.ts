@@ -4,7 +4,6 @@ import { parseBotLedger, type BotPolicy, type ChannelPolicyStore } from "../../s
 import { audit, isObj, refuse } from "./shared.ts";
 import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 
-/** Validates a channel-settings write (bots, ambientEnabled) and checks it against the loaded snapshot. */
 export async function checkChannelSettings(
   store: ChannelPolicyStore,
   container: string,

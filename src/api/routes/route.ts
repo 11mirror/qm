@@ -34,7 +34,6 @@ export interface ApiCtx extends BaseCtx {
   body: unknown;
   capability: CapabilityClaims | null;
   actor?: PortalIdentity | null;
-  /** Who is calling, resolved once by the gate: the capability's actor, the route's verified actor field, or the signed portal identity. */
   caller?: string | null;
 }
 
@@ -69,7 +68,6 @@ export type Route<C extends BaseCtx = ApiCtx> = {
   actor?: RouteActor;
   admin?: AdminAccess;
   maxBodyBytes?: number;
-  /** Validates (and replaces) the parsed JSON body before the handler runs; a failure is a 400. */
   body?: ZodType;
 } & ({ method: string; path: string } | { match: (method: string, pathname: string) => boolean });
 

@@ -39,7 +39,6 @@ import { readDeploymentState, withDeploymentLock, writeDeploymentState, type Dep
 import { templateUrl } from "../templates.ts";
 import { containerExists, containerRunning, docker, dockerInherit, requireDocker, volumeExists } from "./docker-cli.ts";
 
-/** Deployment-layer transport for docker: signed HTTP to the locally published core port. */
 export const dockerDeploymentLayerTransport: DeploymentLayerTransport = httpDeploymentLayerTransport({
   urlOf: (config) => new URL(`http://127.0.0.1:${dockerBasePort(config)}/v1/deployment-layer`),
 });
@@ -100,9 +99,7 @@ function ensureLocalSandboxImage(config: QmConfig): string {
       image,
     ]).trim();
     if (labeled === base) return image;
-  } catch {
-    // Build the local wrapper when it is absent or stale.
-  }
+  } catch {}
   const dir = mkdtempSync(join(tmpdir(), "qm-local-sandbox-"));
   try {
     writeFileSync(join(dir, "agent.mjs"), localAgentSource());

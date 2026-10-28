@@ -38,7 +38,6 @@ export async function materializeRoLayers(
   }
   if (!roFiles.length) return;
   roFiles.sort((a, b) => Number(a.path > b.path) - Number(a.path < b.path));
-  // Fingerprint by path, size and mtime so an unchanged layer is never read just to be compared.
   const fp = createHash("sha256");
   for (const f of roFiles) {
     const st = await stat(f.abs);

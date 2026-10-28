@@ -43,7 +43,7 @@ export function queueSessionPatch(
   versions.set(id, version);
   const prior = tails.get(id) ?? Promise.resolve();
   const request = prior
-    .catch(() => undefined) // the earlier patch's caller already got its failure
+    .catch(() => undefined)
     .then(async () => {
       const { session } = await updateSession(id, patch);
       if (generation === queuedIn && versions.get(id) === version) applyLatest(session);

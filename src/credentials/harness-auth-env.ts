@@ -1,14 +1,6 @@
 import type { Keychain } from "./keychain.ts";
 import { reportFailure } from "../util/errors.ts";
 
-/**
- * Resolve a keychain env credential (e.g. a CLAUDE_CODE_OAUTH_TOKEN saved by
- * `claude setup-token`) into the env vars a harness child should receive.
- * Resolved fresh on every call, so a rotated or revoked credential takes
- * effect on the next session with no restart. Returns {} when the credential
- * is missing, expired, or not env-shaped, so the harness falls back to
- * whatever static configuration it has.
- */
 export function keychainHarnessAuthEnv(
   keychain: Keychain,
   credentialId: string,

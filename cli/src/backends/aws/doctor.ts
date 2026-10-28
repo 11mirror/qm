@@ -375,7 +375,6 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
 
 type LiveCheckOpts = { report?: boolean; configDir?: string; envFile?: string; sandboxDir?: string };
 
-/** The image each prebuilt workload should run; records provenance drift against the manifest. */
 function desiredLiveImages(
   config: QmConfig,
   services: string[],
@@ -418,7 +417,6 @@ function desiredLiveImages(
   }
 }
 
-/** Records runtime, task, environment, secret and image drift for one workload. */
 async function recordServiceDrift(
   config: QmConfig,
   service: string,

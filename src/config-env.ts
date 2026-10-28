@@ -1,14 +1,9 @@
 import { z } from "zod";
 
-// ---- Env parsing: one zod object per section; a bad value names its variable. ----
-
 export type Env = Readonly<Record<string, string | undefined>>;
 const ENV_NAME = "\u0000env\u0000";
-/** The raw value, blank included. */
 export const raw = z.string().optional();
-/** A non-empty value, untouched. */
 export const str = raw.transform((v) => v || undefined);
-/** A value with surrounding whitespace removed; blank reads as unset. */
 export const trimmed = raw.transform((v) => v?.trim() || undefined);
 const csv = raw.transform((v) => {
   const items = (v ?? "")
@@ -45,7 +40,6 @@ export function readEnv<S extends z.ZodRawShape>(env: Env, shape: S): z.output<z
   throw new Error(issue.message.replaceAll(ENV_NAME, String(issue.path[0])));
 }
 
-/** Drop unset keys so an absent variable leaves no key behind. */
 export function defined<T extends Record<string, unknown>>(value: T): { [K in keyof T]?: Exclude<T[K], undefined> } {
   return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as never;
 }
@@ -91,7 +85,6 @@ export function sandboxProvidersEnv(env: Env) {
     MODAL_IMAGE: str,
   });
   return {
-    // The Docker target sets QM_CORE_CONTAINER so core, itself a container, joins each sandbox's network.
     localSandbox: defined({
       image: e.LOCAL_SANDBOX_IMAGE,
       dockerBin: e.LOCAL_SANDBOX_DOCKER_BIN,
@@ -265,7 +258,6 @@ const HOSTNAME_LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
 const HOSTNAME_RE = new RegExp(`^${HOSTNAME_LABEL}(?:\\.${HOSTNAME_LABEL})+$`);
 
 export function deployAppsDomainEnv(env: Env): string | undefined {
-  // Porter's sandbox-ingress name (PORTER_DEPLOY_APPS_DOMAIN) is a separate, ungated mechanism; it stays separate.
   const raw = env.DEPLOY_APPS_DOMAIN?.trim();
   if (raw) {
     const canonical = raw.toLowerCase().replace(/\.$/, "");

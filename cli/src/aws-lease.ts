@@ -19,10 +19,6 @@ export function awsText(aws: AwsConfig, args: string[]): string {
   return capture(process.env.AWS_BIN ?? "aws", [...args, "--region", aws.region, "--output", "text"]).trim();
 }
 
-/**
- * The AWS error code behind a failed call: the error's own name (SDK-style errors), the AWS CLI's
- * "An error occurred (<Code>)", or a leading "<Code>: message" line.
- */
 export function awsErrorCode(error: unknown): string | undefined {
   const name = (error as { name?: unknown } | null | undefined)?.name;
   if (typeof name === "string" && /^\w+(?:Exception|Fault)$/.test(name)) return name;

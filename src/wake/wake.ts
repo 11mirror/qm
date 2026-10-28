@@ -12,7 +12,6 @@ export interface Wake {
   text?: string;
   isSelf?: boolean;
   halt?: boolean;
-  /** Names of files attached to the message — a file with no caption is still a message. */
   fileNames?: string[];
 }
 

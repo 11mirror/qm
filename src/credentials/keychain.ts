@@ -302,13 +302,10 @@ export interface OAuthToken {
   clientRef?: string;
   accountType?: string;
   orgId?: string;
-  /** OIDC id token, for providers whose API needs it alongside the access token (e.g. Codex). */
   idToken?: string;
-  /** Provider-side account identifier carried with the token (e.g. ChatGPT account id). */
   accountId?: string;
 }
 
-/** Derived, sandbox-safe view of a connector token: never carries the refresh token. */
 export interface DerivedOAuthAuth {
   accessToken: string;
   idToken?: string;
@@ -349,11 +346,6 @@ export interface ConnectorTokenStore {
   deleteConnectorToken(host: string, principalId: string, accountType?: string): Promise<void>;
   connectorTokenStatus(host: string, principalId: string, accountType?: string): Promise<OAuthTokenStatus>;
   connectorAccessToken(host: string, principalId: string, accountType?: string): Promise<string | null>;
-  /**
-   * Fresh derived material for the connector token (access + id token +
-   * account id), refreshing single-flight if stale. The refresh token never
-   * leaves the keychain record.
-   */
   connectorDerivedAuth(host: string, principalId: string, accountType?: string): Promise<DerivedOAuthAuth | null>;
 }
 
@@ -468,7 +460,6 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   listByOwner(ownerId: string): Promise<KeychainCredentialMeta[]>;
   listByOwners(ownerIds: string[]): Promise<Map<string, KeychainCredentialMeta[]>>;
   getCredential(id: string): Promise<KeychainCredentialMeta | null>;
-  /** Decrypt an env credential the caller OWNS — no grant machinery, never someone else's. */
   readOwnSecret(ownerId: string, credentialId: string): Promise<string | null>;
   remove(ownerId: string, id: string): Promise<boolean>;
 

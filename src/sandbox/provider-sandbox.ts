@@ -81,7 +81,6 @@ interface DriverCheckpoints {
 
 export interface SandboxDriver {
   backend: string;
-  /** cpus/memoryMb/diskGb are read live, so a driver may fill them in once it observes the machine. */
   homeDir: string;
   os: string;
   runtimes?: string[];

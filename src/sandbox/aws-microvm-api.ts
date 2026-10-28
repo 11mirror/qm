@@ -56,7 +56,6 @@ export interface MicrovmDescription {
   stateReason?: string;
 }
 
-/** `credentials` and `requestHandler` exist for tests; callers pass the region and an optional profile. */
 export interface AwsMicrovmApiOptions extends Pick<LambdaMicrovmsClientConfig, "credentials" | "requestHandler"> {
   region: string;
   profile?: string;
@@ -93,7 +92,6 @@ export interface AwsMicrovmApi {
   ): Promise<MicrovmDescription>;
 }
 
-/** Service failures become AwsApiError with the HTTP status and AWS request id; transport errors pass through. */
 async function call<T>(operation: string, send: () => Promise<T>): Promise<T> {
   try {
     return await send();
@@ -110,8 +108,6 @@ async function call<T>(operation: string, send: () => Promise<T>): Promise<T> {
 }
 
 export function createMicrovmApi(opts: AwsMicrovmApiOptions): AwsMicrovmApi {
-  // The SDK retries throttling and server errors; RunMicrovm and the image calls carry an
-  // idempotency token the SDK fills in, so a retried create cannot launch twice.
   const { region, profile, credentials, requestHandler } = opts;
   const client = new LambdaMicrovmsClient({
     region,

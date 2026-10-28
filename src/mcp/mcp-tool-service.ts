@@ -1,11 +1,3 @@
-// Turns registered MCP servers into callable agent tools.
-//
-// Maintains a cached snapshot of each enabled server's tool list per tenant
-// (refreshed when the registry changes and on a slow interval), and executes calls with
-// the server's configured credential. Every call is audited. Tool names are
-// namespaced `<serverId>_<toolName>` so two servers can't collide with each
-// other or with built-in tools.
-
 import type { ConnectorTokenStore } from "../credentials/keychain.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
@@ -65,7 +57,6 @@ export function mcpPublicOAuthClients(servers: McpServer[]): PublicOAuthClient[]
 }
 
 export interface McpToolDescriptor {
-  /** Namespaced tool name exposed to the model, e.g. "salesforce_query". */
   name: string;
   serverId: string;
   remoteName: string;
@@ -78,15 +69,11 @@ export interface McpToolDescriptor {
 }
 
 export interface McpToolService {
-  /** Current snapshot of injectable tools across enabled servers. */
   toolDefs(): McpToolDescriptor[];
   toolDefsFor(principalId?: string): Promise<McpToolDescriptor[]>;
-  /** Call a namespaced tool. Returns the tool's text output (clamped). */
   call(name: string, args: Record<string, unknown>, principalId?: string, approval?: string): Promise<string>;
   needsApproval(name: string, args: Record<string, unknown>, principalId?: string): Promise<boolean>;
-  /** Force a registry re-read + tools/list refresh (admin save path, tests). */
   refresh(): Promise<void>;
-  /** Probe a server config without persisting it. Returns its tool names. */
   probe(server: McpServer, principalId?: string): Promise<string[]>;
   close(): void;
 }
@@ -334,7 +321,6 @@ async function refreshMcpTools(opts: McpToolServiceOptions, state: McpToolState)
       callers.record("list", server.id, `error: ${errMessage(e)}`);
     }
   }
-  // De-duplicate on the namespaced name; first server wins deterministically.
   const seen = new Set<string>();
   state.snapshot = next.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
   state.perUserServers = nextPerUser;

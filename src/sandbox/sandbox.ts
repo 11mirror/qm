@@ -282,7 +282,6 @@ export function supportsBlobStaging(
 export type ProcessSandbox = Sandbox &
   Required<Pick<Sandbox, "startProcess" | "readProcess" | "writeStdin" | "signalProcess" | "listProcesses">>;
 
-/** What every routed backend implements (all of them are built on createProviderSandbox). */
 export type BackendSandbox = ProcessSandbox &
   Required<Pick<Sandbox, "exportFiles" | "computerStatus" | "destroyScope">>;
 
@@ -297,6 +296,5 @@ export function supportsProcessSessions(sandbox: Sandbox): sandbox is ProcessSan
   );
 }
 
-/** Backing scopes of computers reserved for one credentialed background job; their homes are never checkpointed. */
 export const JOB_COMPUTER_SCOPE_PREFIX = "job-";
 export const isJobComputerScope = (scope: string): boolean => scope.startsWith(JOB_COMPUTER_SCOPE_PREFIX);

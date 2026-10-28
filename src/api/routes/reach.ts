@@ -102,7 +102,7 @@ async function reachAttachments(
     return r.attachments;
   } finally {
     if (provisioned) {
-      const used = await provisioned.catch(() => undefined); // a failed provision already failed the attach
+      const used = await provisioned.catch(() => undefined);
       if (used)
         await sandbox!.teardown(used, { keepWarm: true }).catch(swallowAs("reach: sandbox teardown", undefined));
     }

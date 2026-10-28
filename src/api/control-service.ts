@@ -239,7 +239,6 @@ function patchFromCronPatchRequest(
   };
 }
 
-/** Applies a cron edit for whoever is allowed to make it: builds the patch, skips no-ops, writes, and tells the owner. */
 export async function applyCronPatch(
   app: App,
   before: Cron,

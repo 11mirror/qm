@@ -32,7 +32,6 @@ const DEPLOYMENT_POINTER_KEY = "deployment/current";
 
 const DEPLOYMENT_MANIFEST_PREFIX = "deployment/manifest/";
 
-/** A string attribute of the deployment-state item at `key`, read consistently. */
 async function deploymentStateString(aws: AwsConfig, key: string, name: string): Promise<string | undefined> {
   const { Item } = await dynamo(aws).send(
     new GetItemCommand({

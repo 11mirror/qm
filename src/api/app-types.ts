@@ -465,7 +465,6 @@ export interface App {
   pendingContextRequests(source: string): Promise<SurfaceContextRequest[]>;
   fulfillContextRequest(id: string, outcome: { result?: SurfaceContextResult; error?: string }): Promise<boolean>;
   onContextRequestCreated(listener: (request: SurfaceContextRequest) => void): () => void;
-  /** Resolves when a context request is created (id null: any) or settles, or after ms, whichever is first. */
   awaitContextRequestEvent(kind: ContextRequestEvent["kind"], id: string | null, ms: number): Promise<void>;
   ingestSurfaceEvents(
     events: IngestEvent[],
@@ -597,7 +596,6 @@ export interface AppDeps {
   orchestrator: Orchestrator;
   runs: RunStore;
   maxAttempts: number;
-  /** Starts this process claiming turns, so a caller waiting on a turn is not stranded. */
   startTurns?: () => void;
   runWaitMs?: number;
   turnStream?: TurnStream;

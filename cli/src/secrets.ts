@@ -47,7 +47,6 @@ export function mintSigningJwk(): string {
   return JSON.stringify(generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ format: "jwk" }));
 }
 
-/** A fresh value for a secret the CLI can mint locally, or undefined when an operator must supply it. */
 export function mintSecret(secret: { generate?: string }): string | undefined {
   if (secret.generate === MINT_LOCALLY) return randomBytes(32).toString("hex");
   if (secret.generate === MINT_JWK) return mintSigningJwk();

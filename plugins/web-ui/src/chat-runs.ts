@@ -197,7 +197,7 @@ async function transcriptRefreshesSettled(c: ChatCore): Promise<void> {
   let current: Promise<void>;
   do {
     current = c.transcriptRefresh;
-    await current.catch(() => undefined); // refreshTranscriptFromItems callers get the failure; this only waits
+    await current.catch(() => undefined);
   } while (current !== c.transcriptRefresh);
 }
 

@@ -69,9 +69,6 @@ async function listFiles(
     filters.push((t) => `${t}.name ILIKE $${n}::text ESCAPE '\\'`);
   }
   const visibleTo = (t: string) => filters.map((f) => f(t)).join(" AND ");
-  // A shared listing shows one row per document: copies with the same bytes created in the same
-  // scope collapse to the caller's own copy, else the oldest. A row is kept when no visible copy
-  // outranks it, so the page is cut straight from the created_at order without sorting every file.
   const owned = (t: string) => `(${t}.owner_scope_id = ANY($1::text[]))`;
   const representative =
     sharedRefs === undefined

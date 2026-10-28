@@ -106,7 +106,6 @@ export const secretsManager = (aws: AwsConfig): SecretsManagerClient => awsClien
 
 export const s3 = (config: QmConfig): S3Client => awsClient(S3Client, requireAws(config).region);
 
-/** The AWSCURRENT value of `<secretsPrefix><name>`, trimmed. */
 export async function awsSecretString(aws: AwsConfig, name: string): Promise<string> {
   const id = `${aws.secretsPrefix}${name}`;
   const { SecretString } = await secretsManager(aws).send(new GetSecretValueCommand({ SecretId: id }));
@@ -129,14 +128,12 @@ export async function describeTaskDefinition(
   return (await ecs(aws).send(new DescribeTaskDefinitionCommand({ taskDefinition }))).taskDefinition;
 }
 
-/** Every item a paginated AWS listing returns, across pages. */
 export async function all<P, T>(pages: AsyncIterable<P>, items: (page: P) => T[] | undefined): Promise<T[]> {
   const out: T[] = [];
   for await (const page of pages) out.push(...(items(page) ?? []));
   return out;
 }
 
-/** Every RUNNING task ARN of an ECS service, across pages. */
 export function runningTaskArns(aws: AwsConfig, serviceName: string): Promise<string[]> {
   const input = { cluster: aws.cluster, serviceName, desiredStatus: "RUNNING" as const };
   return all(paginateListTasks({ client: ecs(aws) }, input), (page) => page.taskArns);
@@ -152,7 +149,6 @@ export function chunks<T>(values: T[], size: number): T[][] {
 
 export const dynamo = (aws: AwsConfig): DynamoDBClient => awsClient(DynamoDBClient, aws.region);
 
-/** Milliseconds since the epoch for an SDK Date (or an ISO string); NaN when absent or invalid. */
 export function timestamp(value: Date | string | undefined): number {
   return value === undefined ? NaN : new Date(value).getTime();
 }

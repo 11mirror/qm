@@ -20,13 +20,10 @@ export const isSandboxBackendId = (value: unknown): value is SandboxBackendId =>
   typeof value === "string" && Object.hasOwn(SANDBOX_BACKENDS, value);
 
 export interface SandboxBackendPolicy {
-  /** Sandbox backends this hosting target can run. */
   allowed: readonly SandboxBackendId[];
-  /** Whether the target requires "sandbox.backend" to be set explicitly in config. */
   requireExplicit: boolean;
 }
 
-/** Keyed by hosting target so adding a target forces a sandbox-backend decision. */
 export const SANDBOX_BACKEND_POLICY: Record<Target, SandboxBackendPolicy> = {
   docker: {
     allowed: ["local", "sprites", "e2b", "modal", "do-managed-agents", "smolmachines"],

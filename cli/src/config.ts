@@ -204,7 +204,6 @@ export const dockerBasePort = (config: QmConfig): number => envNum("QM_BASE_PORT
 
 export const isDigestPinned = (ref: string): boolean => /@sha256:[0-9a-f]{64}$/.test(ref);
 
-/** The backend core runs: env.core.SANDBOX_BACKEND when set, else sandbox.backend. Every caller reads it here. */
 export const effectiveSandboxBackend = (config: Pick<QmConfig, "env" | "sandbox">): string | undefined =>
   config.env.core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend;
 

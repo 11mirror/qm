@@ -164,6 +164,6 @@ export function callComputer(args, client, deadline) {
     if (submitted !== lifecycle) throw new Error("Desktop turn has ended");
     return evaluate(args, client, expires);
   });
-  queue = job.catch(() => {}); // the caller gets job's failure; the queue only orders work
+  queue = job.catch(() => {});
   return job;
 }

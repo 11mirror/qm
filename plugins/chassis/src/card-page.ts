@@ -1,7 +1,5 @@
 import { escapeHtml } from "./http.ts";
 
-// The harbour scene and its styling come from the QM Desktop connect page (desktop/setup.html, setup.css);
-// the portal serves the painting at CARD_SCENE_PATH.
 export const CARD_SCENE_PATH = "/auth/assets/becalmed-off-halfway-rock.webp";
 
 const CARD_STYLE = `<style>

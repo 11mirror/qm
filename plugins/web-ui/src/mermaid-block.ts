@@ -87,7 +87,7 @@ export async function renderMermaid(
     }
     return mermaid.render(id, source, staging);
   });
-  renderQueue = operation.catch(() => undefined); // the caller gets operation's failure
+  renderQueue = operation.catch(() => undefined);
   return operation;
 }
 
