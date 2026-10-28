@@ -16,7 +16,7 @@ import {
   withToolBodyTiming,
   withRuntimeBarrier,
 } from "./agent-tools/wrappers.ts";
-import { CONNECTOR_SHADOWED, CRON_ACTIONS, toolManifest } from "./tool-manifest.ts";
+import { CONNECTOR_SHADOWED, CRON_ACTIONS, toolManifest, type ToolManifestEntry } from "./tool-manifest.ts";
 import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type Config } from "../config.ts";
 import type { ClientToolDeclaration } from "../types.ts";
@@ -76,7 +76,7 @@ export function createAgentTools(state: TurnToolState, opts?: AgentToolsOptions)
 
   const { cron, webhook } = schedulingTools(kit);
 
-  const { instructionsTool, sharingTool, resourceTool, adminActions, adminPreamble } = controlPlaneTools(kit);
+  const { instructionsTool, sharingTool, resourceTool, adminTool } = controlPlaneTools(kit);
 
   const { surface, attach, finishSilently } = replyTools(kit, halt);
 
@@ -86,6 +86,7 @@ export function createAgentTools(state: TurnToolState, opts?: AgentToolsOptions)
 
   const { context, runtime } = runtimeTools(kit, goal, halt);
 
+  const adminOperations = ref.current === null || Boolean(ref.current.admin?.operationsAvailable);
   const manifest = toolManifest({
     controlTools,
     surfaceTools,
@@ -94,20 +95,14 @@ export function createAgentTools(state: TurnToolState, opts?: AgentToolsOptions)
     sessionTools: opts?.sessionTools !== false,
     readOnly: opts?.readOnly === true,
     canvasInstall: Boolean(ref.current?.installSharedCanvas),
-    adminOperations: ref.current === null || Boolean(ref.current.admin?.operationsAvailable),
+    adminOperations,
     connectorTools: mcpDefs,
     clientTools: clientTools.map((tool) => tool.name),
   });
+  const manifestActions = (name: string): string[] =>
+    manifest.find((entry) => entry.source === "native" && entry.name === name)?.actions ?? [];
   const actionsOf = (name: string, all: Record<string, ToolDefinition>): Record<string, ToolDefinition> =>
-    Object.fromEntries(
-      (manifest.find((entry) => entry.source === "native" && entry.name === name)?.actions ?? []).map((action) => [
-        action,
-        all[action]!,
-      ]),
-    );
-  const admin = resourceTool("admin", actionsOf("admin", adminActions));
-  if (ref.current === null || ref.current.admin?.operationsAvailable)
-    admin.description = adminPreamble + admin.description;
+    Object.fromEntries(manifestActions(name).map((action) => [action, all[action]!]));
   const files = {
     ...resourceTool(
       "files",
@@ -148,7 +143,7 @@ export function createAgentTools(state: TurnToolState, opts?: AgentToolsOptions)
       }),
     ),
     webhook,
-    admin,
+    admin: adminTool(manifestActions("admin"), adminOperations),
     instructions: instructionsTool,
     [surface.name]: surface,
     attach,
@@ -157,26 +152,25 @@ export function createAgentTools(state: TurnToolState, opts?: AgentToolsOptions)
     runtime,
     context,
   };
+  const client = new Map(clientTools.map((tool) => [tool.name, tool]));
+  const connectors = manifest.filter((entry) => entry.source === "connector");
   const bySource = {
-    native: (entry: { name: string }) => native[entry.name]!,
-    client: (_entry: unknown, index: number) => clientTools[index]!,
-    connector: (_entry: unknown, index: number) => mcpCandidates[index]!,
+    native: (entry: ToolManifestEntry) => native[entry.name]!,
+    client: (entry: ToolManifestEntry) => client.get(entry.name)!,
+    connector: (entry: ToolManifestEntry) => mcpCandidates[connectors.indexOf(entry)]!,
   };
-  const seen = { native: 0, client: 0, connector: 0 };
   const tools: ToolDefinition[] = [];
   for (const entry of manifest) {
-    const index = seen[entry.source]++;
-    if (entry.present) tools.push(bySource[entry.source](entry, index));
+    if (entry.present) tools.push(bySource[entry.source](entry));
     else if (entry.source === "connector" && entry.reason === CONNECTOR_SHADOWED)
       console.warn(`[mcp] ${entry.name} is hidden because a built-in tool has the same name`);
   }
-  const clientNames = new Set(clientTools.map((tool) => tool.name));
   return tools.map((tool) => {
     const wrapped = withRuntimeBarrier(
       withToolBodyTiming(withToolApprovalGate(validateSandboxTool(tool), ref, halt, { recordCall, recordResult }), ref),
       ref,
       halt,
     );
-    return clientNames.has(tool.name) ? wrapped : withRetrySafety(wrapped, retryMarks);
+    return client.has(tool.name) ? wrapped : withRetrySafety(wrapped, retryMarks);
   });
 }
