@@ -716,6 +716,7 @@ test(
       );
     } finally {
       for (const release of releases) release();
+      await eventually(() => runner.held().length, { until: (n) => n === 0 });
       await runner.stopClaims();
     }
   },
