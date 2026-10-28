@@ -120,6 +120,15 @@ default.
   `EGRESS_SERVICE_HOSTS`, `PI_CAPTURE_REQUESTS`, `PLUGIN_SKILLS_DIRS`, `SEED_SKILLS`,
   `SKILLS_SEED_DIR`, `SKILL_SYNC_POLL_MS`, `SECRETS_PREFIX` and `SURFACE_DEBUG_FOOTER`.
 
+## Signed links and sessions stop working once
+
+Each tenant other than the home tenant now signs with its own secrets, derived from the
+shared ones with HKDF-SHA256 over the tenant id. Every signed token now uses the HS256
+compact JWS format; the older two-part format is gone. Tokens signed before the upgrade,
+by the shared secrets or in the old format, no longer verify. This happens once, on the
+first boot of the new release. People on those tenants sign in again, and any signed
+link sent before the upgrade has to be sent again. No configuration change is needed.
+
 ## Typed tables: unknown JSON keys stop the upgrade
 
 Many stores used to keep each record as one JSON document in a `json` column. On first

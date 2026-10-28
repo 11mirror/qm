@@ -7,6 +7,13 @@ const SLACK_FILTERS = `CASE WHEN i.json ->> 'kind' = 'slack' THEN NULLIF(
          THEN jsonb_build_array(jsonb_build_object('path', 'team_id', 'in', jsonb_build_array(i.json ->> 'teamId'))) ELSE '[]'::jsonb END,
        '[]'::jsonb) END`;
 
+const UNSAFE_REASON = `CASE
+       WHEN i.json ->> 'kind' <> 'gmail' AND COALESCE(i.json ->> 'secret', '') = ''
+         THEN 'Imported disabled: the loop endpoint had no signing secret, so no request could ever verify. Create a new webhook to replace it.'
+       WHEN i.json ->> 'kind' = 'slack' AND ${SLACK_FILTERS} IS NULL
+         THEN 'Imported disabled: the Slack loop endpoint had no channel or team filter, so it would fire on every event. Create a new webhook with filters to replace it.'
+     END`;
+
 function loopIngressToWebhooks(tenant: boolean): string {
   const col = tenant ? "tenant_id, " : "";
   const same = (a: string, b: string) => (tenant ? ` AND ${a}.tenant_id = ${b}.tenant_id` : "");
@@ -17,7 +24,7 @@ function loopIngressToWebhooks(tenant: boolean): string {
             i.json ->> 'owner',
             i.json ->> 'owner',
             c.destination,
-            COALESCE((i.json ->> 'enabled')::boolean, false) AND COALESCE(c.enabled, false),
+            COALESCE((i.json ->> 'enabled')::boolean, false) AND COALESCE(c.enabled, false) AND ${UNSAFE_REASON} IS NULL,
             COALESCE((i.json ->> 'createdAt')::numeric::bigint, (extract(epoch FROM clock_timestamp()) * 1000)::bigint),
             (i.json ->> 'lastReceivedAt')::numeric::bigint,
             COALESCE(c.action, l.json ->> 'playbook', ''),
@@ -25,7 +32,7 @@ function loopIngressToWebhooks(tenant: boolean): string {
               'scheme', CASE i.json ->> 'kind' WHEN 'slack' THEN 'slack' WHEN 'gmail' THEN 'google-pubsub' ELSE 'hmac-sha256' END,
               'secret', COALESCE(NULLIF(i.json ->> 'secret', ''), ${RANDOM_SECRET})),
             ${SLACK_FILTERS},
-            i.json ->> 'lastError'
+            COALESCE(${UNSAFE_REASON}, i.json ->> 'lastError')
      FROM loop_ingress i
      LEFT JOIN loops l ON l.id = i.json ->> 'loopId'${same("l", "i")}
      LEFT JOIN crons c ON c.id = l.json ->> 'cronId'${same("c", "l")}

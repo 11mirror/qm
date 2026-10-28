@@ -1,12 +1,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
-import { requestHost } from "../../plugins/chassis/src/tenant-hosts.ts";
+import { trustedRequestHost } from "../../plugins/chassis/src/tenant-hosts.ts";
 import { tenant, withTenant, type Tenant } from "../tenant.ts";
 import { reportFailure } from "../util/errors.ts";
 import { tenantByHost } from "./directory.ts";
 
 const HEALTH_PATHS: ReadonlySet<string> = new Set(["/healthz", "/readyz"]);
-const LOOPBACK: ReadonlySet<string> = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
 function pathOf(req: IncomingMessage): string {
   const url = req.url ?? "/";
@@ -18,9 +17,8 @@ export function createTenantFront(server: Server): Server {
   const home = tenant();
   const resolve = async (req: IncomingMessage): Promise<Tenant | "unknown" | "unavailable"> => {
     if (HEALTH_PATHS.has(pathOf(req))) return home;
-    const host = LOOPBACK.has(req.socket.remoteAddress ?? "") ? requestHost(req.headers) : req.headers.host;
     try {
-      return (await tenantByHost(host)) ?? "unknown";
+      return (await tenantByHost(trustedRequestHost(req))) ?? "unknown";
     } catch (error) {
       reportFailure("tenant front: tenant lookup failed", error);
       return "unavailable";

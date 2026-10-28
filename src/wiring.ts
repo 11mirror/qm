@@ -122,7 +122,7 @@ import { buildOutbound } from "./wiring/outbound.ts";
 
 import { buildDeploy } from "./wiring/deploy.ts";
 
-import { registerLegacyMigrations } from "./wiring/legacy-migrations.ts";
+import { registerUpgradeMigrations } from "./wiring/upgrade-migrations.ts";
 
 import { buildCrons } from "./wiring/crons.ts";
 
@@ -317,7 +317,7 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
   const outbound = buildOutbound({ config, late, stores, runs });
   const deploy = buildDeploy({ config, stores, files, sandbox, outbound, runs, deploymentLayer, credentials });
   const crons = buildCrons({ late, config, overrides, runs, stores, outbound });
-  registerLegacyMigrations({ stores });
+  registerUpgradeMigrations({ stores });
   const orchestrator = buildOrchestrator({
     late,
     config,

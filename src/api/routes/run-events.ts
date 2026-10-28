@@ -1,4 +1,4 @@
-import { reasoningKey } from "../../runs/run-stream-events.ts";
+import { REASONING_SYNC_BLOCKS, reasoningKey } from "../../runs/run-stream-events.ts";
 import type { Item } from "../../sessions/items.ts";
 import { type ApiCtx, reply, type Route, type RouteResult } from "./route.ts";
 import { SSE_HEADERS } from "./session-state.ts";
@@ -39,6 +39,11 @@ function drained(res: ApiCtx["res"]): Promise<void> {
   });
 }
 
+function markReasoning(sent: Map<string, number>, key: string, length: number): void {
+  sent.delete(key);
+  sent.set(key, length);
+}
+
 async function streamRun(ctx: ApiCtx): Promise<RouteResult> {
   const { app, req, res, actor } = ctx;
   const runId = ctx.params.id!;
@@ -70,7 +75,8 @@ async function streamRun(ctx: ApiCtx): Promise<RouteResult> {
     if (syncing || closed) return;
     syncing = true;
     queueMicrotask(() => {
-      if (!closed) app.syncRunStream(runId, offset, Object.fromEntries(sentReasoning.entries()));
+      if (!closed)
+        app.syncRunStream(runId, offset, Object.fromEntries([...sentReasoning].slice(-REASONING_SYNC_BLOCKS)));
     });
   };
   const sendDrained = async (data: unknown, id?: string): Promise<void> => {
@@ -83,7 +89,7 @@ async function streamRun(ctx: ApiCtx): Promise<RouteResult> {
     offset = Math.max(offset, (run.partialStartOffset ?? 0) + (run.partial?.length ?? 0));
     for (const block of run.reasoning ?? []) {
       const key = reasoningKey(block);
-      sentReasoning.set(key, Math.max(sentReasoning.get(key) ?? 0, block.text.length));
+      markReasoning(sentReasoning, key, Math.max(sentReasoning.get(key) ?? 0, block.text.length));
     }
     for (const entry of toolItems) {
       const event = toolEvent(entry);
@@ -159,7 +165,7 @@ async function streamRun(ctx: ApiCtx): Promise<RouteResult> {
           name: "reasoning",
           value: { step: event.step, index: event.index, offset: sent, delta },
         });
-        sentReasoning.set(key, sent + delta.length);
+        markReasoning(sentReasoning, key, sent + delta.length);
         return;
       }
       if (event.kind !== "delta" || refreshing) return;

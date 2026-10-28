@@ -76,6 +76,8 @@ const ingress = {
     createdAt: 3000,
   },
   o1: { kind: "webhook", loopId: "gone", owner: "U9", enabled: true, secret: "orphan-secret", createdAt: 4000 },
+  s2: { kind: "slack", loopId: "L1", owner: "U1", enabled: true, teamId: "T1", channels: ["C1"] },
+  s3: { kind: "slack", loopId: "L1", owner: "U1", enabled: true, secret: "slack-secret", channels: [] },
   c1: { kind: "conversation", loopId: "L1", owner: "U1", enabled: true, createdAt: 5000 },
 };
 
@@ -109,7 +111,7 @@ test("each loop-ingress endpoint becomes a webhook with its secret and its cron'
     const rows = Object.fromEntries(
       (await pool.query(`SELECT ${WEBHOOK_COLUMNS} FROM webhooks ORDER BY id`)).rows.map((row) => [row.id, row]),
     );
-    assert.deepEqual(Object.keys(rows), ["g1", "o1", "s1", "w1"]);
+    assert.deepEqual(Object.keys(rows), ["g1", "o1", "s1", "s2", "s3", "w1"]);
     const destination = { type: "slack", target: "C1", audienceScopeId: "channel:C1" };
     assert.deepEqual(rows.w1, {
       id: "w1",
@@ -131,6 +133,11 @@ test("each loop-ingress endpoint becomes a webhook with its secret and its cron'
       { path: "team_id", in: ["T1"] },
     ]);
     assert.equal(rows.s1.last_error, "boom");
+    assert.equal(rows.s1.enabled, true);
+    assert.equal(rows.s2.enabled, false);
+    assert.match(rows.s2.last_error, /no signing secret/);
+    assert.equal(rows.s3.enabled, false);
+    assert.match(rows.s3.last_error, /no channel or team filter/);
     assert.equal(rows.g1.verification.scheme, "google-pubsub");
     assert.match(rows.g1.verification.secret, /^[0-9a-f]{64}$/);
     assert.equal(rows.g1.enabled, false);
@@ -165,7 +172,7 @@ test("a tenantized database keeps each tenant's endpoints in that tenant", async
         [other, "triage the event"],
       ].sort(),
     );
-    assert.equal((await pool.query("SELECT count(*)::int AS n FROM webhooks")).rows[0].n, 8);
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM webhooks")).rows[0].n, 12);
   });
 });
 

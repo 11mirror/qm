@@ -22,7 +22,13 @@ import { createPostgresReplayDedupe } from "../auth/replay-dedupe.ts";
 import { createPostgresCredentialUsageSink } from "../admin/postgres-credential-usage-sink.ts";
 import { createPostgresEgressAuditSink } from "../admin/postgres-egress-audit-sink.ts";
 import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
-import { type RunStreamEvent, emitRunText, emitRunReasoning, reasoningKey } from "../runs/run-stream-events.ts";
+import {
+  type RunStreamEvent,
+  emitRunText,
+  emitRunReasoning,
+  reasoningKey,
+  REASONING_SYNC_BLOCKS,
+} from "../runs/run-stream-events.ts";
 import type { ContextRequestEvent } from "../api/app-types.ts";
 import { createTurnStream } from "../runs/turn-stream.ts";
 import type { RunActivityStore } from "../runs/run-activity-store.ts";
@@ -160,10 +166,13 @@ function buildRunStreams(deps: RunsInputs, runs: RunStore) {
     const startOffset = turnStream.startOffset(event.runId);
     const offset = Math.max(event.offset, startOffset);
     if (text) emitRunText(runStreamEvents, event.runId, text.slice(offset - startOffset), offset, startOffset);
-    for (const block of turnStream.reasoning(event.runId)) {
-      const sent = event.reasoning?.[reasoningKey(block)] ?? 0;
-      if (block.text.length > sent) emitRunReasoning(runStreamEvents, event.runId, block, block.text.slice(sent), sent);
-    }
+    const blocks = turnStream.reasoning(event.runId);
+    blocks.forEach((block, at) => {
+      const sent = event.reasoning?.[reasoningKey(block)];
+      if (sent === undefined && at < blocks.length - REASONING_SYNC_BLOCKS) return;
+      if (block.text.length > (sent ?? 0))
+        emitRunReasoning(runStreamEvents, event.runId, block, block.text.slice(sent ?? 0), sent ?? 0);
+    });
   });
   runs.onTerminal((run) => refreshRunStream(run.id));
   const activityStore: RunActivityStore = createPostgresRunActivityStore(databaseUrl);
