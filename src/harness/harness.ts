@@ -14,8 +14,6 @@ import type {
 } from "../types.ts";
 import type { HarnessId } from "../model/pi-models.ts";
 import type { ModelRequestPurpose } from "../model/provider-endpoints.ts";
-import type { GapPhases, GapWork, LlmCallUsage, LlmTransportMeta, NewEntry } from "../sessions/session-store.ts";
-export type { GapWork } from "../sessions/session-store.ts";
 import type { LlmCallUsage, LlmTransportMeta, NewEntry } from "../sessions/session-store.ts";
 import type { OverheardEntryPayload } from "./replay.ts";
 import type { GoalRecord } from "./goal.ts";
