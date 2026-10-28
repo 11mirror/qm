@@ -32,7 +32,7 @@ import { sessionLink, UI_BASE } from "./deep-link";
 import { errMessage } from "../../chassis/src/errors";
 import { showStateError } from "./error-banner";
 import { slackWireToPlain, stripSlackDirectives } from "./slack-text";
-import { attachmentGallery, brandMark, browserRenderableImage, copyText, waveLoader } from "./ui";
+import { attachmentGallery, brandName, brandMark, browserRenderableImage, copyText, waveLoader } from "./ui";
 import { icon } from "./icons";
 import { appState, switchView } from "./shell";
 import { contextsState, scopeTitle } from "./contexts";
@@ -540,9 +540,10 @@ export function chatMessage(
     if (note.note !== "goal_cancelled")
       body =
         note.action === "deleted"
-          ? html`${note.speaker ?? "The user"} deleted their message`
-          : html`${note.speaker ?? "The user"} edited their message:
-              <span class="system-note-text">${note.content}</span>`;
+          ? html`${note.byAgent ? brandName() : (note.speaker ?? "The user")} deleted ${note.byAgent ? "its" : "their"}
+            message`
+          : html`${note.byAgent ? brandName() : (note.speaker ?? "The user")} edited ${note.byAgent ? "its" : "their"}
+              message: <span class="system-note-text">${note.content}</span>`;
     return messageRow("system-note-row", index, seqs, html`<div class="system-note">${body}</div>`);
   }
   if (m.role !== "assistant") return nothing;

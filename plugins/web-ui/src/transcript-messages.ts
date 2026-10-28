@@ -257,6 +257,7 @@ interface MessageRevisionNote {
   ts: string;
   content: string;
   speaker?: string;
+  byAgent?: boolean;
   timestamp?: number;
 }
 
@@ -341,7 +342,8 @@ function goalCancelledNote(item: Item): GoalCancelledNote | null {
 
 function messageRevisionNote(item: Item): MessageRevisionNote | null {
   if (item.kind !== "Retraction") return null;
-  const { action, ts, text, name } = item.body;
+  const { action, ts, text, name, sourceRole } = item.body;
+  const byAgent = sourceRole === "agent";
   if (action !== "edited" && action !== "deleted") return null;
   if (typeof ts !== "string" || !ts) return null;
   return {
@@ -350,8 +352,13 @@ function messageRevisionNote(item: Item): MessageRevisionNote | null {
     action,
     ts,
     content: typeof text === "string" ? text : "",
-    ...(typeof name === "string" && name.trim() ? { speaker: name.trim() } : {}),
+    ...(byAgent ? { byAgent } : {}),
+    ...(!byAgent && typeof name === "string" && name.trim() ? { speaker: name.trim() } : {}),
   };
+}
+
+function isAgentEcho(item: Item): boolean {
+  return item.body.overheard === true && item.body.sourceRole === "agent";
 }
 
 function userItemText(item: Item): string | null {
@@ -363,7 +370,7 @@ function userItemText(item: Item): string | null {
 type UserAttachment = { name?: string; mimetype?: string; sizeBytes?: number; artifactId?: string };
 
 export function userItemMessage(item: Item): HistoryUserMessage | null {
-  if (isHidden(item)) return null;
+  if (isHidden(item) || isAgentEcho(item)) return null;
   const text = userItemText(item) ?? "";
   const attachments = Array.isArray(item.body.attachments) ? (item.body.attachments as UserAttachment[]) : [];
   if (!text && !attachments.length) return null;
@@ -551,6 +558,12 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
       continue;
     }
     if (isUserMessage(e)) {
+      if (isAgentEcho(e)) {
+        posted = false;
+        spillHeldPosts();
+        flushWork(r, "", e.createdAt);
+        continue;
+      }
       const steered = e.kind === "SteeringMessage";
       if (!steered) {
         r.stoppedShown = false;

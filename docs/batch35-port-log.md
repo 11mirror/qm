@@ -37,3 +37,7 @@ Checks: web-ui typecheck, changed-file eslint and all eight cache tests pass (ca
 ## #2731 sticky steer prompt
 
 Adapted the viewport's preceding-block traversal to its existing class and placed CSS in the surfaces stylesheet. Inline steers now take the latest-prompt sticky marker and anchor past boxless wrappers. No persistence/settings or visible English changes. Targeted viewport tests pass.
+
+## #2702 agent Slack echoes
+
+Adapted to typed UserMessage/Retraction items and split transcript/draw modules. Agent echoes are excluded from bubbles and fork boundaries but close preceding unfinished work. Human overheard messages remain visible. Agent revision notes carry `byAgent` in the in-memory view only. No persistence/settings changes. English: `{person or The user} deleted their message` → `{assistant brand} deleted its message` for an agent revision; likewise `edited their message` → `edited its message`. Web-ui typecheck and three targeted tests pass.
