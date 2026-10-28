@@ -425,15 +425,12 @@ function directoryGroups(db: Pick<PgPool, "q" | "pool">) {
            SELECT $1, $2, * FROM unnest($3::text[])`,
           [tenant().orgId, groupId, ids],
         );
-        const all = await client.query("SELECT group_id, principal_id FROM directory_group_members WHERE org_id = $1", [
-          tenant().orgId,
-        ]);
         await client.query(
-          `INSERT INTO directory_sync (org_id, groups_hash, groups_synced_at, updated_at) VALUES ($1, $2, $3, $3)
-           ON CONFLICT (${tenantCols("org_id")}) DO UPDATE SET groups_hash = EXCLUDED.groups_hash,
+          `INSERT INTO directory_sync (org_id, groups_hash, groups_synced_at, updated_at) VALUES ($1, NULL, $2, $2)
+           ON CONFLICT (${tenantCols("org_id")}) DO UPDATE SET groups_hash = NULL,
              groups_synced_at = GREATEST(COALESCE(directory_sync.groups_synced_at, 0), EXCLUDED.groups_synced_at),
              updated_at = EXCLUDED.updated_at`,
-          [tenant().orgId, hashRoster(all.rows.map((r) => `${r.group_id}|${r.principal_id}`)), Date.now()],
+          [tenant().orgId, Date.now()],
         );
       });
     },

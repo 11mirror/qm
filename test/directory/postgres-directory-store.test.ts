@@ -521,3 +521,14 @@ test("pg directory: one store keeps each tenant's roster to itself", async () =>
 test("released directory migrations still match their pinned source checksums", () => {
   assert.doesNotThrow(() => createPostgresDirectoryStore("postgres://migration-pin.invalid"));
 });
+
+test("pg directory: a live group upsert makes the next identical snapshot rewrite rosters", async () => {
+  const store = createPostgresDirectoryStore(URL);
+  const snapshot = [{ groupId: "G-live", principalId: "U-alice" }];
+  await store.replaceGroups(snapshot);
+  await store.upsertGroup("G-live", ["U-bob"]);
+  assert.equal(await store.groupMember("G-live", "U-bob"), true);
+  assert.equal(await store.replaceGroups(snapshot), true);
+  assert.equal(await store.groupMember("G-live", "U-bob"), false);
+  assert.equal(await store.groupMember("G-live", "U-alice"), true);
+});
