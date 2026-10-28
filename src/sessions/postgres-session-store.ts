@@ -1068,6 +1068,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           `CREATE INDEX IF NOT EXISTS sessions_side_chat_origin ON sessions (forked_from_session_id) WHERE side_chat IS NOT NULL`,
         ],
       },
+      {
+        id: "sessions/store/0046-spend-days-cron-rebuild",
+        statements: [`INSERT INTO session_spend_dirty(day) SELECT day FROM session_spend_days ON CONFLICT DO NOTHING`],
+      },
     ],
     [
       {
