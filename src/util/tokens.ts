@@ -32,8 +32,8 @@ export function headWithinTokens(text: string, maxTokens: number): { head: strin
       if (used + chunkTokens(headSlice(chunk, mid)) <= maxTokens) lo = mid;
       else hi = mid - 1;
     }
-    const head = headSlice(chunk, lo);
-    return { head: text.slice(0, i) + head, tokens: used + chunkTokens(head) };
+    const head = headSlice(text, i + lo);
+    return { head, tokens: countTokens(head) };
   }
   return { head: text, tokens: used };
 }

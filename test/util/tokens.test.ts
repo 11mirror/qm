@@ -26,3 +26,10 @@ test("headWithinTokens returns the longest head that fits and its exact count", 
   }
   assert.deepEqual(headWithinTokens(text, countTokens(text)), { head: text, tokens: countTokens(text) });
 });
+
+test("headWithinTokens never ends on half of a surrogate pair split across chunks", () => {
+  const text = `${"a".repeat(3_999)}\u{1F600}${"b".repeat(5_000)}`;
+  const { head, tokens } = headWithinTokens(text, countTokens(text.slice(0, 4_000)));
+  assert.equal(head, "a".repeat(3_999));
+  assert.equal(tokens, countTokens(head));
+});
