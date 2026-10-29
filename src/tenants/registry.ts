@@ -1,30 +1,84 @@
 import {
-  sealTenantSecrets,
+  sealTenantSecret,
+  openTenantSecret,
   TENANT_COLUMNS,
   TENANT_TEXT_SETTINGS,
   tenantFromRow,
-  type TenantEnvSettings,
-  type TenantSettings,
+  type TenantSettings as EdgeTenantSettings,
 } from "../../plugins/chassis/src/tenant-settings.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 
-export type { TenantSettings } from "../../plugins/chassis/src/tenant-settings.ts";
+import type { TenantPart } from "../config.ts";
+
+export type TenantSettings = Omit<EdgeTenantSettings, "secrets"> &
+  Partial<
+    Omit<
+      TenantPart,
+      "orgId" | "slack" | "brokerCredentials" | "chatSurfaces" | "deployAppsSessionSecret" | "adminGrants"
+    >
+  > & {
+    sandboxNamePrefix?: string;
+    secrets: EdgeTenantSettings["secrets"] &
+      Pick<TenantPart, "slack" | "brokerCredentials" | "chatSurfaces" | "deployAppsSessionSecret"> & {
+        slackAccounts?: NonNullable<TenantPart["slack"]>[];
+        keychainSigningFallback?: string;
+      };
+  };
+
+export const TENANT_EXTRA_COLUMNS = [
+  ["apiBaseUrl", "api_base_url", "text"],
+  ["publicUrl", "public_url", "text"],
+  ["portalUrl", "portal_url", "text"],
+  ["publicWebUrl", "public_web_url", "text"],
+  ["sandboxNamePrefix", "sandbox_name_prefix", "text"],
+  ["s3Prefix", "s3_prefix", "text"],
+  ["deployAppsLoginUrl", "apps_login_url", "text"],
+  ["deployAppsLoginPath", "apps_login_path", "text"],
+  ["trustedOidcAdminIssuer", "trusted_oidc_admin_issuer", "text"],
+  ["emailAuthPrincipals", "email_auth_principals", "text[]"],
+  ["emailAuthDomain", "email_auth_domain", "text"],
+  ["apiAllowedOrigins", "api_allowed_origins", "text[]"],
+  ["principalRule", "principal_rule", "jsonb"],
+  ["brandingDefault", "branding_default", "jsonb"],
+  ["externalSlackPolicies", "external_slack_policies", "jsonb"],
+] as const;
 
 export type TenantRecord = TenantSettings & { id: string };
 
 export async function listTenants(pool: PgPool, key: Buffer | undefined): Promise<TenantRecord[]> {
-  const rows = await pool.q(`SELECT ${TENANT_COLUMNS} FROM tenants ORDER BY created_at, slug`);
-  return rows.map((row) => tenantFromRow(row, key));
+  const { rows } = await (
+    await pool.deploymentPool()
+  ).query(
+    `SELECT ${TENANT_COLUMNS}, ${TENANT_EXTRA_COLUMNS.map(([, col]) => col).join(", ")} FROM tenants ORDER BY created_at, slug`,
+  );
+  return rows.map((row) => tenantRecordFromRow(row, key));
+}
+
+export function tenantRecordFromRow(row: Record<string, unknown>, key: Buffer | undefined): TenantRecord {
+  return {
+    ...tenantFromRow(row, key),
+    ...Object.fromEntries(
+      TENANT_EXTRA_COLUMNS.filter(([, col]) => row[col] !== null).map(([field, col]) => [field, row[col]]),
+    ),
+    secrets: row.secrets
+      ? (openTenantSecret(row.secrets as Buffer, key, String(row.slug)) as TenantSettings["secrets"])
+      : {},
+  };
 }
 
 export interface SqlRunner {
   query(text: string, params?: unknown[]): Promise<unknown>;
 }
 
-const settingValues = (rec: TenantEnvSettings) => TENANT_TEXT_SETTINGS.map(([field]) => rec[field] ?? null);
+function requireKey(key: Buffer | undefined): Buffer {
+  if (!key) throw new Error("QM_TENANT_SECRETS_KEY is required to store tenant secrets");
+  return key;
+}
+
+const settingValues = (rec: TenantSettings) => TENANT_TEXT_SETTINGS.map(([field]) => rec[field] ?? null);
 
 export async function upsertTenant(pool: SqlRunner, rec: TenantRecord, key: Buffer | undefined): Promise<void> {
-  const columns = TENANT_TEXT_SETTINGS.map(([, column]) => column);
+  const columns = [...TENANT_TEXT_SETTINGS, ...TENANT_EXTRA_COLUMNS].map(([, column]) => column);
   const at = (i: number) => `$${i + 8}`;
   await pool.query(
     `INSERT INTO tenants(id, slug, org_id, hosts, status, oidc_admin, secrets, ${columns.join(", ")})
@@ -39,21 +93,20 @@ export async function upsertTenant(pool: SqlRunner, rec: TenantRecord, key: Buff
       rec.hosts,
       rec.status,
       rec.oidcAdmin,
-      sealTenantSecrets(rec.secrets, key),
+      Object.values(rec.secrets).some(Boolean) ? sealTenantSecret(rec.secrets, requireKey(key)) : null,
       ...settingValues(rec),
+      ...TENANT_EXTRA_COLUMNS.map(([field, , type]) => {
+        if (rec[field] === undefined) return null;
+        return type === "jsonb" ? JSON.stringify(rec[field]) : rec[field];
+      }),
     ],
   );
 }
 
-export async function homeTenantId(pool: PgPool): Promise<string> {
-  const rows = await pool.q("SELECT id::text AS id FROM qm_tenant");
-  const id = rows[0]?.id;
-  if (typeof id !== "string") throw new Error("qm_tenant has no row; run migrations first");
-  return id;
-}
-
 export async function assertRowSecurityEnforced(pool: PgPool): Promise<void> {
-  const rows = await pool.q(`SELECT rolsuper OR rolbypassrls AS bypass,
+  const { rows } = await (
+    await pool.deploymentPool()
+  ).query(`SELECT rolsuper OR rolbypassrls AS bypass,
     EXISTS (SELECT 1 FROM pg_database WHERE datname = current_database() AND pg_has_role(current_user, datdba, 'MEMBER')) AS database_owner,
     EXISTS (SELECT 1 FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid
       WHERE c.relkind = 'r' AND a.attname = 'tenant_id' AND NOT a.attisdropped

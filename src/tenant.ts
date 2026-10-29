@@ -1,12 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { processOrgId, processTenantSettings } from "./config.ts";
 import { configurePgTenantSource } from "./persistence/pg-pool.ts";
 import type { TenantSettings } from "./tenants/registry.ts";
 import { scopeId, type ScopeId } from "./types.ts";
 import { reportFailureAs } from "./util/errors.ts";
 
 export interface Tenant {
-  readonly id?: string;
+  readonly id: string;
   readonly slug?: string;
   readonly orgId: string;
   readonly orgScope: ScopeId;
@@ -16,25 +15,17 @@ const current = new AsyncLocalStorage<Tenant>();
 
 configurePgTenantSource(() => {
   const scoped = current.getStore();
-  return scoped ? (scoped.id ?? null) : undefined;
+  return scoped?.id;
 });
 
-export function tenantFor(orgId: string, id?: string, slug?: string): Tenant {
-  return { orgId, orgScope: scopeId("org", orgId), ...(id ? { id } : {}), ...(slug ? { slug } : {}) };
+export function tenantFor(orgId: string, id: string, slug?: string): Tenant {
+  return { orgId, orgScope: scopeId("org", orgId), id, ...(slug ? { slug } : {}) };
 }
-
-let processTenant: Tenant | undefined;
 
 export function tenant(): Tenant {
   const scoped = current.getStore();
   if (scoped) return scoped;
-  return homeTenant();
-}
-
-export function homeTenant(): Tenant {
-  const orgId = processOrgId();
-  if (processTenant?.orgId !== orgId) processTenant = tenantFor(orgId);
-  return processTenant;
+  throw new Error("Tenant work requires an explicit registered tenant");
 }
 
 export function scopedTenant(): Tenant | undefined {
@@ -50,7 +41,6 @@ export function withoutTenant<T>(fn: () => T): T {
 }
 
 let registered = new Map<string, TenantSettings>();
-let home: { tenant: Tenant; settings: TenantSettings } | undefined;
 
 export function registerTenantSettings(list: readonly TenantSettings[]): void {
   registered = new Map(list.flatMap((settings) => (settings.id ? [[settings.id, settings] as const] : [])));
@@ -67,17 +57,13 @@ export function tenantSettings(t: Tenant = tenant()): TenantSettings {
     if (!own) throw new Error(`tenant ${t.slug ?? t.id} has no registered settings`);
     return own;
   }
-  if (home?.tenant !== t) home = { tenant: t, settings: processTenantSettings(t) };
-  return home.settings;
+  throw new Error("Tenant settings require a registered tenant id");
 }
 
 const IDLE_MS = 30 * 60_000;
 const SWEEP_MS = 60_000;
 type Slot = { dispose?: (state: never) => unknown };
-const cached = new Map<
-  string,
-  { tenant: Tenant; at: number; holds: number; evictable: boolean; slots: Map<Slot, unknown> }
->();
+const cached = new Map<string, { tenant: Tenant; at: number; holds: number; slots: Map<Slot, unknown> }>();
 let sweptAt = 0;
 
 function drop(key: string): void {
@@ -92,19 +78,18 @@ function drop(key: string): void {
 }
 
 export function evictTenant(t: Tenant): void {
-  drop(t.id ?? t.orgId);
+  drop(t.id);
 }
 
 function cachedEntry(t: Tenant) {
-  const key = t.id ?? t.orgId;
+  const key = t.id;
   const now = Date.now();
   if (now - sweptAt >= SWEEP_MS) {
     sweptAt = now;
-    for (const [id, entry] of cached) if (entry.evictable && entry.holds === 0 && now - entry.at >= IDLE_MS) drop(id);
+    for (const [id, entry] of cached) if (entry.holds === 0 && now - entry.at >= IDLE_MS) drop(id);
   }
   let entry = cached.get(key);
-  if (!entry)
-    cached.set(key, (entry = { tenant: t, at: now, holds: 0, evictable: t.id !== undefined, slots: new Map() }));
+  if (!entry) cached.set(key, (entry = { tenant: t, at: now, holds: 0, slots: new Map() }));
   entry.at = now;
   return entry;
 }
@@ -140,7 +125,7 @@ export function pinnedPerTenant<T>(create: () => T): () => T {
   const states = new Map<string, T>();
   return () => {
     const t = tenant();
-    const key = t.id ?? t.orgId;
+    const key = t.id;
     let state = states.get(key);
     if (state === undefined) {
       state = create();

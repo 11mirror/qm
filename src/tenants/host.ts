@@ -1,7 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { trustedRequestHost } from "../../plugins/chassis/src/tenant-hosts.ts";
-import { tenant, withTenant, type Tenant } from "../tenant.ts";
+import { withoutTenant, withTenant, type Tenant } from "../tenant.ts";
+import { deploymentControlPath } from "../deployment/control-paths.ts";
 import { reportFailure } from "../util/errors.ts";
 import { tenantByHost } from "./directory.ts";
 
@@ -14,9 +15,8 @@ function pathOf(req: IncomingMessage): string {
 }
 
 export function createTenantFront(server: Server): Server {
-  const home = tenant();
-  const resolve = async (req: IncomingMessage): Promise<Tenant | "unknown" | "unavailable"> => {
-    if (HEALTH_PATHS.has(pathOf(req))) return home;
+  const resolve = async (req: IncomingMessage): Promise<Tenant | "unknown" | "unavailable" | "deployment"> => {
+    if (HEALTH_PATHS.has(pathOf(req)) || deploymentControlPath(pathOf(req))) return "deployment";
     try {
       return (await tenantByHost(trustedRequestHost(req))) ?? "unknown";
     } catch (error) {
@@ -26,6 +26,7 @@ export function createTenantFront(server: Server): Server {
   };
   const front = createServer((req: IncomingMessage, res: ServerResponse) => {
     void resolve(req).then((found) => {
+      if (found === "deployment") return withoutTenant(() => void server.emit("request", req, res));
       if (typeof found === "object") return withTenant(found, () => void server.emit("request", req, res));
       if (found === "unknown")
         res.writeHead(404, { "content-type": "text/plain; charset=utf-8" }).end("unknown host\n");

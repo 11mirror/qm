@@ -19,47 +19,40 @@ export interface TenantConfig
 
 const views = new WeakMap<Config, WeakMap<TenantSettings, TenantConfig>>();
 
-function homeConfig(config: Config, settings: TenantSettings): TenantConfig {
-  return {
-    ...config,
-    ...(config.sandbox.namePrefix ? { sandboxNamePrefix: config.sandbox.namePrefix } : {}),
-    ...(config.modelGateway?.apiKey ? { modelGatewayApiKey: config.modelGateway.apiKey } : {}),
-    ...(settings.secrets.slackServiceToken ? { slackServiceToken: settings.secrets.slackServiceToken } : {}),
-    ...(settings.sentryDeployment ? { sentryDeployment: settings.sentryDeployment } : {}),
-  };
-}
-
-function rehomed(value: string | undefined, homeOrigins: readonly string[], origin: string): string | undefined {
-  const from = value && homeOrigins.find((o) => value === o || value.startsWith(`${o}/`));
-  return from ? origin + value.slice(from.length) : value;
-}
-
 function registeredConfig(config: Config, settings: TenantSettings & { id: string }): TenantConfig {
   const origin = settings.hosts[0] ? `https://${settings.hosts[0]}` : undefined;
-  const homeOrigins = [config.publicUrl, config.apiBaseUrl, config.publicWebUrl].flatMap((url) =>
-    url ? [new URL(url).origin] : [],
-  );
   const derived = (shared: string | undefined) => (shared ? deriveTenantSecret(shared, settings.id) : undefined);
   const view = {
     ...config,
     orgId: settings.orgId,
-    apiBaseUrl: origin ?? config.apiBaseUrl,
-    publicUrl: origin ?? config.publicUrl,
-    publicWebUrl: origin ?? config.publicWebUrl,
-    slack: undefined,
-    externalSlackPolicies: {},
+    brandingDefault: settings.brandingDefault,
+    brokerCredentials: settings.secrets.brokerCredentials,
+    trustedOidcAdminIssuer: settings.trustedOidcAdminIssuer,
+    emailAuthPrincipals: settings.emailAuthPrincipals,
+    emailAuthDomain: settings.emailAuthDomain,
+    apiBaseUrl: settings.apiBaseUrl ?? origin,
+    publicUrl: settings.publicUrl ?? origin,
+    publicWebUrl: settings.publicWebUrl ?? origin,
+    slack: settings.secrets.slack,
+    chatSurfaces: settings.secrets.chatSurfaces,
+    externalSlackPolicies: settings.externalSlackPolicies ?? {},
     s3Bucket: settings.s3Bucket ?? config.s3Bucket,
-    s3Prefix: settings.s3Bucket ? undefined : `tenants/${settings.slug}/`,
+    s3Prefix: settings.s3Prefix ?? (settings.s3Bucket ? undefined : `tenants/${settings.slug}/`),
     adminGrants: settings.secrets.adminGrants,
-    deployAppsSessionSecret: derived(config.deployAppsSessionSecret),
-    deployAppsLoginUrl: origin ? rehomed(config.deployAppsLoginUrl, homeOrigins, origin) : config.deployAppsLoginUrl,
+    deployAppsSessionSecret:
+      settings.secrets.deployAppsSessionSecret ?? derived(config.deployAppsSessionSecret ?? config.portalSessionSecret),
+    deployAppsLoginUrl:
+      settings.deployAppsLoginUrl ??
+      (origin ? new URL(settings.deployAppsLoginPath ?? "/auth/login", origin).href : undefined),
     deployAppsDomain: settings.appsDomain,
+    deployAppsLoginPath: settings.deployAppsLoginPath,
     awsDeploy: { ...config.awsDeploy, appsDomain: settings.appsDomain },
     signingSecret: derived(config.signingSecret),
     capabilitySecret: derived(config.capabilitySecret),
     portalIdentitySecret: derived(config.portalIdentitySecret),
     connectorSecretKey: settings.secrets.connectorSecretKey ?? config.connectorSecretKey,
-    sandboxNamePrefix: tenantSandboxPrefix(config.sandbox.namePrefix ?? "qm", settings.id),
+    sandboxNamePrefix:
+      settings.sandboxNamePrefix ?? tenantSandboxPrefix(config.sandbox.namePrefix ?? "qm", settings.id),
     modelGatewayApiKey: settings.secrets.modelGatewayApiKey ?? config.modelGateway?.apiKey,
     slackServiceToken: settings.secrets.slackServiceToken,
     sentryDeployment: settings.sentryDeployment,
@@ -73,7 +66,8 @@ export function tenantConfig(config: Config): TenantConfig {
   if (!byTenant) views.set(config, (byTenant = new WeakMap()));
   let view = byTenant.get(settings);
   if (!view) {
-    view = settings.id ? registeredConfig(config, { ...settings, id: settings.id }) : homeConfig(config, settings);
+    if (!settings.id) throw new Error("Tenant config requires a registered tenant id");
+    view = registeredConfig(config, { ...settings, id: settings.id });
     byTenant.set(settings, view);
   }
   return view;

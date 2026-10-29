@@ -1,13 +1,18 @@
 import type { Pool } from "pg";
+import { TENANT_EXTRA_COLUMNS } from "../tenants/registry.ts";
+import { convertDatabaseTenant } from "../tenants/bootstrap.ts";
 
-const TENANCY_EXCLUDED_TABLES = ["qm_tenant", "tenants", "qm_schema_migrations"];
+const DEPLOYMENT_TABLES = {
+  instance_heartbeats: "instance_id",
+  background_ownership: "id",
+  source_auth_replay: "event_id",
+};
+
+const TENANCY_EXCLUDED_TABLES = ["qm_tenant", "tenants", "qm_schema_migrations", ...Object.keys(DEPLOYMENT_TABLES)];
 
 const EXCLUDED = TENANCY_EXCLUDED_TABLES.map((t) => `'${t}'`).join(", ");
 
 const TENANCY_FUNCTIONS: readonly string[] = [
-  `CREATE TABLE IF NOT EXISTS qm_tenant(id UUID PRIMARY KEY)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS qm_tenant_singleton ON qm_tenant((true))`,
-  `INSERT INTO qm_tenant(id) SELECT gen_random_uuid() WHERE NOT EXISTS (SELECT 1 FROM qm_tenant)`,
   `CREATE TABLE IF NOT EXISTS tenants(
      id UUID PRIMARY KEY,
      slug TEXT NOT NULL UNIQUE,
@@ -26,6 +31,7 @@ const TENANCY_FUNCTIONS: readonly string[] = [
      ADD COLUMN IF NOT EXISTS oidc_label TEXT,
      ADD COLUMN IF NOT EXISTS oidc_admin BOOLEAN NOT NULL DEFAULT false,
      ADD COLUMN IF NOT EXISTS secrets BYTEA`,
+  ...TENANT_EXTRA_COLUMNS.map(([, column, type]) => `ALTER TABLE tenants ADD COLUMN IF NOT EXISTS ${column} ${type}`),
   `CREATE OR REPLACE FUNCTION qm_tenants_changed() RETURNS trigger LANGUAGE plpgsql
    AS $qm_tenants_changed$ BEGIN PERFORM pg_notify('qm_tenants', TG_OP); RETURN NULL; END $qm_tenants_changed$`,
   `CREATE OR REPLACE TRIGGER tenants_changed AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON tenants
@@ -110,7 +116,8 @@ const TENANCY_FUNCTIONS: readonly string[] = [
      RETURN NULL;
    END
    $acl_grants_bump_version$`,
-  `CREATE OR REPLACE FUNCTION qm_tenantize() RETURNS integer LANGUAGE plpgsql AS $qm_tenantize$
+  `DROP FUNCTION IF EXISTS qm_tenantize()`,
+  `CREATE OR REPLACE FUNCTION qm_tenantize(owner uuid DEFAULT NULL) RETURNS integer LANGUAGE plpgsql AS $qm_tenantize$
 DECLARE
   t record;
   ix record;
@@ -125,7 +132,12 @@ BEGIN
       AND c.relname NOT IN (${EXCLUDED}) AND c.relname NOT LIKE 'pg\\_%'
       AND NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attname = 'tenant_id' AND NOT a.attisdropped)
   LOOP
-    EXECUTE format('ALTER TABLE %I ADD COLUMN tenant_id uuid NOT NULL DEFAULT qm_tenant_id()', t.relname);
+    IF owner IS NULL THEN
+      EXECUTE format('ALTER TABLE %I ADD COLUMN tenant_id uuid NOT NULL', t.relname);
+    ELSE
+      EXECUTE format('ALTER TABLE %I ADD COLUMN tenant_id uuid NOT NULL DEFAULT %L::uuid', t.relname, owner);
+    END IF;
+    EXECUTE format('ALTER TABLE %I ALTER COLUMN tenant_id SET DEFAULT qm_tenant_id()', t.relname);
     changed := changed + 1;
   END LOOP;
 
@@ -193,18 +205,20 @@ END
 $qm_tenantize$`,
 ];
 
-async function tenantizeQueues(client: import("pg").PoolClient): Promise<void> {
+async function tenantizeQueues(client: import("pg").PoolClient, owner: string | undefined): Promise<void> {
   const { rows } = await client.query(`SELECT relname FROM pg_class
     WHERE relnamespace = 'absurd'::regnamespace AND relkind = 'r' AND relname <> 'queues'
       AND NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = pg_class.oid AND attname = 'tenant_id')`);
   for (const { relname } of rows) {
     if (!/^[trcewi]_[a-z0-9_]+$/.test(relname)) throw new Error(`Unexpected queue table ${relname}`);
-    await client.query(`ALTER TABLE absurd.${relname} ADD COLUMN tenant_id uuid NOT NULL DEFAULT qm_tenant_id()`);
+    await client.query(
+      `ALTER TABLE absurd.${relname} ADD COLUMN tenant_id uuid ${owner ? `DEFAULT '${owner}'::uuid` : ""}`,
+    );
   }
   for (const { relname } of rows.filter(({ relname }) => relname.startsWith("t_")))
-    await client.query(
-      `UPDATE absurd.${relname} SET tenant_id = COALESCE((headers->>'tenantId')::uuid, qm_tenant_id())`,
-    );
+    await client.query(`UPDATE absurd.${relname} SET tenant_id = COALESCE((headers->>'tenantId')::uuid, $1::uuid)`, [
+      owner ?? null,
+    ]);
   for (const { relname } of rows.filter(({ relname }) => /^[rcwi]_/.test(relname)))
     await client.query(`UPDATE absurd.${relname} q SET tenant_id = t.tenant_id
       FROM absurd.t_${relname.slice(2)} t WHERE t.task_id = q.task_id`);
@@ -222,15 +236,23 @@ async function tenantizeQueues(client: import("pg").PoolClient): Promise<void> {
   }
   for (const { relname } of rows.filter(({ relname }) => relname.startsWith("e_"))) {
     const queue = relname.slice(2);
-    const unknown = await client.query(`SELECT 1 FROM absurd.${relname} e
+    const unknown = await client.query(
+      `SELECT 1 FROM absurd.${relname} e
       WHERE (SELECT count(DISTINCT owner) FROM (
         SELECT w.tenant_id AS owner FROM absurd.w_${queue} w WHERE w.event_name = e.event_name
         UNION SELECT t.tenant_id FROM absurd.t_${queue} t WHERE t.params->>'turnId' = e.payload->>'turnId'
-      ) owners) > 1 OR (EXISTS (SELECT 1 FROM absurd.t_${queue} t WHERE t.tenant_id <> qm_tenant_id())
+      ) owners) > 1 OR (EXISTS (SELECT 1 FROM absurd.t_${queue} t WHERE ($1::uuid IS NULL OR t.tenant_id <> $1::uuid))
         AND NOT EXISTS (SELECT 1 FROM absurd.w_${queue} w WHERE w.event_name = e.event_name)
-        AND NOT EXISTS (SELECT 1 FROM absurd.t_${queue} t WHERE t.params->>'turnId' = e.payload->>'turnId')) LIMIT 1`);
+        AND NOT EXISTS (SELECT 1 FROM absurd.t_${queue} t WHERE t.params->>'turnId' = e.payload->>'turnId')) LIMIT 1`,
+      [owner ?? null],
+    );
     if (unknown.rowCount)
       throw new Error(`Queue event ownership is missing in ${relname}; repair queue state before migrating`);
+  }
+  for (const { relname } of rows) {
+    await client.query(
+      `ALTER TABLE absurd.${relname} ALTER COLUMN tenant_id SET NOT NULL, ALTER COLUMN tenant_id SET DEFAULT qm_tenant_id()`,
+    );
   }
   await client.query(`CREATE OR REPLACE FUNCTION qm_queue_tenants(queue text) RETURNS TABLE(id uuid)
     LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $queue_tenants$
@@ -258,20 +280,16 @@ async function tenantizeQueues(client: import("pg").PoolClient): Promise<void> {
   }
 }
 
-export async function prepareTenancy(pool: Pool): Promise<string | undefined> {
+export async function prepareTenancy(pool: Pool): Promise<boolean> {
   const { rows: roles } = await pool.query(
     "SELECT rolsuper OR rolbypassrls AS allowed FROM pg_roles WHERE rolname = current_user",
   );
   if (!roles[0]?.allowed) throw new Error("Database migrations require a separate BYPASSRLS role");
-  const exists = await pool.query("SELECT to_regclass('qm_tenant') IS NOT NULL AS present");
-  if (!exists.rows[0]?.present) return undefined;
-  const { rows } = await pool.query("SELECT id::text AS id FROM qm_tenant");
-  const id = String(rows[0].id);
-  await pool.query("SELECT set_config('qm.tenant_id', $1, false)", [id]);
-  return id;
+  return (await pool.query("SELECT COALESCE(to_regclass('qm_tenant'), to_regclass('sessions')) IS NOT NULL AS present"))
+    .rows[0].present;
 }
 
-export async function applyTenancy(pool: Pool): Promise<void> {
+export async function applyTenancy(pool: Pool, existing: boolean): Promise<void> {
   const client = await pool.connect();
   let broken: Error | undefined;
   const discardOnFailure = (e: unknown) => {
@@ -281,13 +299,40 @@ export async function applyTenancy(pool: Pool): Promise<void> {
     await client.query("SELECT pg_advisory_lock(hashtext('qm:tenantize'))");
     try {
       await client.query("BEGIN");
-      for (const statement of TENANCY_FUNCTIONS.slice(0, 3)) await client.query(statement);
-      await client.query("SELECT set_config('qm.tenant_id', (SELECT id::text FROM qm_tenant), false)");
       for (const statement of TENANCY_FUNCTIONS) await client.query(statement);
-      await client.query("SELECT qm_tenantize()");
+      const present = (await client.query("SELECT to_regclass('qm_tenant') IS NOT NULL AS present")).rows[0].present;
+      let owner = present ? (await client.query("SELECT id::text AS id FROM qm_tenant")).rows[0]?.id : undefined;
+      if (owner) {
+        if (!(await convertDatabaseTenant(client, owner, existing))) {
+          owner = undefined;
+          await client.query("DELETE FROM acl_grants_version WHERE only_row = true AND v = 0");
+        }
+      }
+      for (const [table, primaryKey] of Object.entries(DEPLOYMENT_TABLES)) {
+        const column = await client.query(
+          "SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass($1) AND attname = 'tenant_id' AND NOT attisdropped",
+          [table],
+        );
+        if (!column.rowCount) continue;
+        if (table === "instance_heartbeats") await client.query("TRUNCATE instance_heartbeats");
+        await client.query(`ALTER TABLE ${table} DISABLE ROW LEVEL SECURITY`);
+        await client.query(`ALTER TABLE ${table} NO FORCE ROW LEVEL SECURITY`);
+        await client.query(`ALTER TABLE ${table} DROP COLUMN tenant_id CASCADE`);
+        if (table === "source_auth_replay")
+          await client.query(
+            "DELETE FROM source_auth_replay a USING source_auth_replay b WHERE a.event_id = b.event_id AND (a.expires_at, a.ctid) < (b.expires_at, b.ctid)",
+          );
+        await client.query(`ALTER TABLE ${table} ADD PRIMARY KEY (${primaryKey})`);
+      }
+      await client.query("SELECT qm_tenantize($1::uuid)", [owner ?? null]);
       if ((await client.query("SELECT to_regnamespace('absurd') IS NOT NULL AS present")).rows[0].present)
-        await tenantizeQueues(client);
+        await tenantizeQueues(client, owner);
+      if ((await client.query("SELECT to_regclass('absurd.t_jobs') IS NOT NULL AS present")).rows[0].present)
+        await client.query(
+          "SELECT absurd.cancel_task('jobs', task_id) FROM absurd.t_jobs WHERE task_name LIKE 'every:%' AND state IN ('pending', 'running', 'sleeping')",
+        );
       await client.query("DROP FUNCTION IF EXISTS qm_tenant_bypass()");
+      await client.query("DROP TABLE IF EXISTS qm_tenant");
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK").catch(discardOnFailure);

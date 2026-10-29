@@ -26,7 +26,10 @@ function loopsToCrons(tenant: boolean): string {
 
 export const LOOPS_TO_CRONS_MIGRATION = {
   id: "durable-map/crons/0002-loops-to-crons",
-  acceptedChecksums: ["61ac2ad5d1909cfbe1119e0e16519a0f6e551a653d154b132349305ac12cd20a"],
+  acceptedChecksums: [
+    "61ac2ad5d1909cfbe1119e0e16519a0f6e551a653d154b132349305ac12cd20a",
+    "97a042fb7fe422c0e82045d2641f9f62f588eaf12908733252f7e7af777093f0",
+  ],
   statements: [
     ...["crons", "loops", "loop_items", "cron_items"].map(
       (table) => `CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
@@ -34,7 +37,14 @@ export const LOOPS_TO_CRONS_MIGRATION = {
     `DO $loops_to_crons$
      BEGIN
        IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'loops'::regclass AND attname = 'tenant_id' AND NOT attisdropped) THEN
-         ALTER TABLE cron_items ADD COLUMN IF NOT EXISTS tenant_id uuid NOT NULL DEFAULT qm_tenant_id();
+         ALTER TABLE cron_items ADD COLUMN IF NOT EXISTS tenant_id uuid;
+         IF EXISTS (SELECT 1 FROM cron_items i WHERE i.tenant_id IS NULL AND
+           (SELECT count(DISTINCT c.tenant_id) FROM crons c WHERE c.id = i.json->>'cronId') <> 1) THEN
+           RAISE EXCEPTION 'Cron item ownership is missing or ambiguous; repair inbox state before migrating';
+         END IF;
+         UPDATE cron_items i SET tenant_id = c.tenant_id FROM crons c WHERE i.tenant_id IS NULL AND c.id = i.json->>'cronId';
+         ALTER TABLE cron_items ALTER COLUMN tenant_id SET NOT NULL, ALTER COLUMN tenant_id SET DEFAULT qm_tenant_id();
+         PERFORM qm_tenantize();
          ${loopsToCrons(true)}
        ELSE
          ${loopsToCrons(false)}

@@ -5,20 +5,16 @@ import type { PgPool } from "../persistence/pg-pool.ts";
 import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
 import { perTenant, registerTenantSettings, tenant, tenantFor, withTenant, type Tenant } from "../tenant.ts";
 import { reportFailure, reportFailureAs } from "../util/errors.ts";
-import { homeTenantId, listTenants, type TenantRecord } from "./registry.ts";
+import { listTenants, type TenantRecord } from "./registry.ts";
 
 const FRESH_MS = 60_000;
 const MISS_RELOAD_MS = 1_000;
 const PREPARE_RETRY_MS = 30_000;
 
-export type HomeHosts = Omit<HostRoute<Tenant>, "target">;
-
 interface Snapshot {
   at: number;
-  home: HomeHosts;
   routes: HostRoute<Tenant>[];
   tenants: Tenant[];
-  homeId: string;
   byId: Map<string, Tenant>;
 }
 
@@ -26,36 +22,35 @@ interface DirectoryOptions {
   databaseUrl: string;
   pool: PgPool;
   secretsKey: Buffer | undefined;
-  home: Tenant;
-  homeHosts: readonly string[];
-  homeAppsDomain?: string;
-  homeSandboxPrefix: string;
+  sandboxPrefix: string;
   prepare?: () => Promise<void>;
   now?: () => number;
 }
 
 const reportedCollisions = new Set<string>();
 
-function servable(records: TenantRecord[], homeId: string, opts: DirectoryOptions): TenantRecord[] {
-  const orgs = new Set([opts.home.orgId]);
-  const prefixes = new Set<string>();
-  const kept: TenantRecord[] = [];
-  for (const rec of records) {
-    if (rec.id === homeId || rec.status !== "active") continue;
-    const prefix = tenantSandboxPrefix(opts.homeSandboxPrefix, rec.id);
-    if (orgs.has(rec.orgId) || prefixes.has(prefix)) {
-      const collision = `${rec.id}:${rec.orgId}:${prefix}`;
-      if (reportedCollisions.has(collision)) continue;
-      reportedCollisions.add(collision);
-      reportFailure(
-        `tenant ${rec.slug}: not served`,
-        new Error(`org id ${rec.orgId} or sandbox prefix ${prefix} is already used by another tenant`),
-      );
-      continue;
-    }
-    orgs.add(rec.orgId);
-    prefixes.add(prefix);
-    kept.push(rec);
+function servable(records: TenantRecord[], opts: DirectoryOptions): TenantRecord[] {
+  const active = records.filter((rec) => rec.status === "active");
+  const keys = (rec: TenantRecord) => [
+    `org:${rec.orgId}`,
+    `sandbox:${rec.sandboxNamePrefix ?? tenantSandboxPrefix(opts.sandboxPrefix, rec.id)}`,
+    ...rec.hosts.map((h) => `host:${normalizeHost(h)}`),
+  ];
+  const counts = new Map<string, number>();
+  for (const rec of active) for (const key of new Set(keys(rec))) counts.set(key, (counts.get(key) ?? 0) + 1);
+  const kept = [];
+  for (const rec of active) {
+    const conflicts = keys(rec).filter((key) => counts.get(key)! > 1);
+    if (conflicts.length) {
+      const collision = `${rec.id}:${conflicts.join(",")}`;
+      if (!reportedCollisions.has(collision)) {
+        reportedCollisions.add(collision);
+        reportFailure(
+          `tenant ${rec.slug}: not served`,
+          new Error(`routing keys are shared by another tenant: ${conflicts.join(", ")}`),
+        );
+      }
+    } else kept.push(rec);
   }
   return kept;
 }
@@ -66,7 +61,7 @@ function tenantPreparation(prepare: (() => Promise<void>) | undefined, now: () =
     pending: undefined as Promise<void> | undefined,
     failedAt: -Infinity,
   }));
-  const isReady = (t: Tenant) => !prepare || t.id === undefined || withTenant(t, () => readiness().done);
+  const isReady = (t: Tenant) => !prepare || withTenant(t, () => readiness().done);
   const ready = (t: Tenant): Promise<void> => {
     if (!prepare || isReady(t)) return Promise.resolve();
     return withTenant(t, () => {
@@ -102,42 +97,25 @@ export function createTenantDirectory(opts: DirectoryOptions) {
   const listeners: Array<(active: Tenant[]) => void> = [];
 
   const notify = () => {
-    const active = current?.tenants ?? [opts.home];
+    const active = current?.tenants ?? [];
     for (const listener of listeners) listener(active);
   };
 
   const { isReady, ready } = tenantPreparation(opts.prepare, now);
 
   async function load(): Promise<Snapshot> {
-    const [homeId, records] = await withTenant(opts.home, () =>
-      Promise.all([homeTenantId(opts.pool), listTenants(opts.pool, opts.secretsKey)]),
-    );
-    registerTenantSettings(records.filter((rec) => rec.id !== homeId));
-    const homeRecord = records.find((rec) => rec.id === homeId);
-    const others = servable(records, homeId, opts).map((rec) => ({
-      rec,
-      t: tenantFor(rec.orgId, rec.id, rec.slug),
-    }));
-    const home = homeHostsOf(homeRecord?.hosts ?? []);
-    const routes = others.map(({ rec, t }) => ({
-      hosts: rec.hosts,
-      ...(rec.appsDomain ? { appsDomain: rec.appsDomain } : {}),
-      target: t,
-    }));
+    const records = await listTenants(opts.pool, opts.secretsKey);
+    registerTenantSettings(records);
+    const entries = servable(records, opts).map((rec) => ({ rec, t: tenantFor(rec.orgId, rec.id, rec.slug) }));
     return {
       at: now(),
-      home,
-      routes: [{ ...home, target: opts.home }, ...routes],
-      tenants: [opts.home, ...others.map(({ t }) => t)],
-      homeId,
-      byId: new Map([[homeId, opts.home], ...others.map(({ rec, t }) => [rec.id, t] as const)]),
-    };
-  }
-
-  function homeHostsOf(registered: readonly string[]): HomeHosts {
-    return {
-      hosts: [...new Set([...opts.homeHosts, ...registered])],
-      ...(opts.homeAppsDomain ? { appsDomain: opts.homeAppsDomain } : {}),
+      routes: entries.map(({ rec, t }) => ({
+        hosts: rec.hosts,
+        ...(rec.appsDomain ? { appsDomain: rec.appsDomain } : {}),
+        target: t,
+      })),
+      tenants: entries.map(({ t }) => t),
+      byId: new Map(entries.map(({ rec, t }) => [rec.id, t] as const)),
     };
   }
 
@@ -190,18 +168,15 @@ export function createTenantDirectory(opts: DirectoryOptions) {
       if (found) await ready(found);
       return found;
     },
-    homeHosts(): HomeHosts {
-      return current?.home ?? homeHostsOf([]);
-    },
     async active() {
       return (await snapshot()).tenants;
     },
     async owner(id: string | undefined, wait = false): Promise<Tenant | "retired" | undefined> {
-      const found = id === undefined ? opts.home : ((await snapshot()).byId.get(id) ?? (await fresher()).byId.get(id));
+      const found = id === undefined ? undefined : ((await snapshot()).byId.get(id) ?? (await fresher()).byId.get(id));
       if (!found) {
         if (id === undefined) return undefined;
-        return (await withTenant(opts.home, () => opts.pool.q("SELECT 1 FROM tenants WHERE id = $1::uuid", [id])))
-          .length > 0
+        return ((await (await opts.pool.deploymentPool()).query("SELECT 1 FROM tenants WHERE id = $1::uuid", [id]))
+          .rowCount ?? 0) > 0
           ? undefined
           : "retired";
       }
@@ -232,38 +207,23 @@ export function tenantByHost(host: string | undefined): Promise<Tenant | undefin
   return directory.byHost(host);
 }
 
-export function homeTenantHosts(): HomeHosts {
-  return directory ? directory.homeHosts() : { hosts: [] };
-}
-
 export function watchActiveTenants(listener: (active: Tenant[]) => void): void {
   directory?.watch(listener);
 }
 
 export async function activeTenants(): Promise<Tenant[]> {
-  return directory ? directory.active() : [tenant()];
+  return directory ? directory.active() : [];
 }
 
-export function foreignTenant(claimed: string | undefined, credential: string): boolean {
-  const serving = tenant().orgId;
-  if (claimed === undefined || claimed === serving) return false;
-  if (directory) return true;
-  reportFailure(
-    "tenant: credential issued for another tenant",
-    new Error(`${credential} names tenant ${claimed}; this process serves ${serving}`),
-  );
-  return false;
-}
-
-export function isHomeTenant(t: Tenant): boolean {
-  return t.id === undefined;
+export function foreignTenant(claimed: string | undefined, _credential: string): boolean {
+  return claimed !== undefined && claimed !== tenant().orgId;
 }
 
 export async function taskTenant(id: string | undefined, wait = false): Promise<Tenant | "retired" | undefined> {
   if (directory) return directory.owner(id, wait);
-  return id === undefined ? tenant() : undefined;
+  return undefined;
 }
 
 export function retiredTenantReason(id: string | undefined): string {
-  return `tenant ${id ?? "home"} no longer exists`;
+  return `tenant ${id ?? "unregistered"} no longer exists`;
 }

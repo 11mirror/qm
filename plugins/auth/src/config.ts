@@ -47,26 +47,17 @@ export interface AuthConfig {
   coreSigningSecret: string | undefined;
 }
 
+export type DeploymentAuthConfig = Omit<
+  AuthConfig,
+  "issuer" | "redirectUri" | "allowedEmails" | "allowedEmailDomain" | "faviconSvg"
+>;
+export type EmailConfig = Pick<AuthConfig, "transport" | "resendApiKey" | "emailFrom" | "smtp">;
+
 const MAX_RATE_LIMIT_SLOTS = 64;
 
 function numberFrom(raw: string | undefined, fallback: number): number {
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-function listFrom(raw: string | undefined): string[] {
-  return (raw ?? "")
-    .split(",")
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean);
-}
-
-function issuerPath(issuer: string): string {
-  try {
-    return new URL(issuer).pathname.replace(/\/$/, "");
-  } catch {
-    return "";
-  }
 }
 
 function smtpTlsFrom(mode: string | undefined, port: string | undefined): SmtpTlsMode {
@@ -85,28 +76,22 @@ function parseJwk(raw: string | undefined): Record<string, unknown> | null {
   }
 }
 
-export function readConfig(env: NodeJS.ProcessEnv): AuthConfig {
-  const issuer = (env.AUTH_ISSUER ?? `http://localhost:${env.PORT ?? 8099}`).replace(/\/$/, "");
-  const publicPath = issuerPath(issuer);
+export function readDeploymentConfig(env: NodeJS.ProcessEnv): DeploymentAuthConfig {
+  const publicPath = (env.AUTH_BROKER_PREFIX ?? "/idp").replace(/\/$/, "");
   const transport: EmailTransportKind = env.AUTH_EMAIL_TRANSPORT?.trim() === "smtp" ? "smtp" : "resend";
   const passwordUsers = parsePasswordUsers(env.AUTH_PASSWORD_USERS);
   return {
-    issuer,
     publicPath,
     clientId: env.AUTH_CLIENT_ID?.trim() ?? "",
     clientSecret: env.AUTH_CLIENT_SECRET ?? "",
-    redirectUri: env.AUTH_REDIRECT_URI?.trim() ?? "",
     signingJwk: parseJwk(env.AUTH_SIGNING_JWK),
     tokenSecret: env.AUTH_TOKEN_SECRET ?? "",
-    allowedEmails: listFrom(env.AUTH_ALLOWED_EMAILS),
-    allowedEmailDomain: env.AUTH_ALLOWED_EMAIL_DOMAIN?.trim().toLowerCase() || undefined,
     passwordUsers: passwordUsers.users,
     passwordUserProblems: passwordUsers.problems,
     passwordLimitPerEmail: numberFrom(env.AUTH_PASSWORD_LIMIT_PER_EMAIL, 10),
     passwordLimitPerIp: numberFrom(env.AUTH_PASSWORD_LIMIT_PER_IP, 30),
     emailFrom: env.AUTH_EMAIL_FROM?.trim() ?? "",
     brandName: env.AUTH_BRAND_NAME?.trim() || "qm",
-    faviconSvg: env.AUTH_FAVICON_SVG?.trim() || undefined,
     transport,
     resendApiKey: env.RESEND_API_KEY ?? "",
     smtp: {
@@ -162,11 +147,11 @@ export function parsePasswordUsers(raw: string | undefined): { users: Map<string
   return { users, problems };
 }
 
-export function passwordConfigured(cfg: AuthConfig): boolean {
+export function passwordConfigured(cfg: Pick<AuthConfig, "passwordUsers">): boolean {
   return cfg.passwordUsers.size > 0;
 }
 
-export function emailConfigured(cfg: AuthConfig): boolean {
+export function emailConfigured(cfg: EmailConfig): boolean {
   const credentials =
     cfg.transport === "resend" ? [cfg.resendApiKey] : [cfg.smtp.host, cfg.smtp.username, cfg.smtp.password];
   return [cfg.emailFrom, ...credentials].every((value) => Boolean(value.trim()));
@@ -185,14 +170,31 @@ function httpsUrlProblem(label: string, value: string, requireHttps: boolean): s
   return null;
 }
 
-export function bootProblems(cfg: AuthConfig, isProd: boolean): string[] {
-  const problems: string[] = [];
-  const push = (problem: string | null): void => {
-    if (problem) problems.push(problem);
-  };
+export function tenantProblems(cfg: AuthConfig, isProd: boolean): string[] {
+  const problems = [
+    httpsUrlProblem("Tenant issuer", cfg.issuer, isProd),
+    httpsUrlProblem("Tenant redirect URI", cfg.redirectUri, isProd),
+  ].filter((problem): problem is string => problem !== null);
+  if (!cfg.allowedEmails.length && !cfg.allowedEmailDomain && !cfg.coreSigningSecret) {
+    problems.push(
+      "AUTH_ALLOWED_EMAILS or AUTH_ALLOWED_EMAIL_DOMAIN is required; without one, anybody with an inbox could sign in",
+    );
+  }
+  const badEmail = cfg.allowedEmails.find((email) => !validEmail(email) || isMissingOrPlaceholder(email));
+  if (badEmail)
+    problems.push("AUTH_ALLOWED_EMAILS must be a comma-separated list of valid, non-placeholder email addresses");
+  if (
+    cfg.allowedEmailDomain &&
+    (isMissingOrPlaceholder(cfg.allowedEmailDomain) || !validEmailDomain(cfg.allowedEmailDomain))
+  ) {
+    problems.push("AUTH_ALLOWED_EMAIL_DOMAIN must be a valid, non-placeholder email domain when set");
+  }
 
-  push(httpsUrlProblem("AUTH_ISSUER", cfg.issuer, isProd));
-  push(httpsUrlProblem("AUTH_REDIRECT_URI", cfg.redirectUri, isProd));
+  return problems;
+}
+
+export function bootProblems(cfg: DeploymentAuthConfig, isProd: boolean): string[] {
+  const problems: string[] = [];
   if (isMissingOrPlaceholder(cfg.clientId)) problems.push("AUTH_CLIENT_ID is required and may not be a placeholder");
   if (isMissingOrPlaceholder(cfg.clientSecret))
     problems.push("AUTH_CLIENT_SECRET is required and may not be a placeholder");
@@ -209,21 +211,6 @@ export function bootProblems(cfg: AuthConfig, isProd: boolean): string[] {
   if (!cfg.signingJwk) problems.push("AUTH_SIGNING_JWK is required and must be a JSON Web Key object");
   else if (cfg.signingJwk.kty !== "EC" || cfg.signingJwk.crv !== "P-256" || typeof cfg.signingJwk.d !== "string") {
     problems.push("AUTH_SIGNING_JWK must be a P-256 private JSON Web Key (kty EC, crv P-256, with d)");
-  }
-
-  if (!cfg.allowedEmails.length && !cfg.allowedEmailDomain) {
-    problems.push(
-      "AUTH_ALLOWED_EMAILS or AUTH_ALLOWED_EMAIL_DOMAIN is required; without one, anybody with an inbox could sign in",
-    );
-  }
-  const badEmail = cfg.allowedEmails.find((email) => !validEmail(email) || isMissingOrPlaceholder(email));
-  if (badEmail)
-    problems.push("AUTH_ALLOWED_EMAILS must be a comma-separated list of valid, non-placeholder email addresses");
-  if (
-    cfg.allowedEmailDomain &&
-    (isMissingOrPlaceholder(cfg.allowedEmailDomain) || !validEmailDomain(cfg.allowedEmailDomain))
-  ) {
-    problems.push("AUTH_ALLOWED_EMAIL_DOMAIN must be a valid, non-placeholder email domain when set");
   }
 
   if (emailConfigured(cfg)) {

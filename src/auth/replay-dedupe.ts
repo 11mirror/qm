@@ -1,4 +1,4 @@
-import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
 
 export interface ReplayDedupe {
   claim(eventId: string, expiresAtMs: number): Promise<boolean>;
@@ -12,14 +12,15 @@ export function createPostgresReplayDedupe(connectionString: string): ReplayDedu
   return {
     async claim(eventId, expiresAtMs) {
       const t = Date.now();
+      const connection = await pg.deploymentPool();
       if (t >= nextPruneAt) {
         nextPruneAt = t + PRUNE_INTERVAL_MS;
-        await pg.query("DELETE FROM source_auth_replay WHERE expires_at < to_timestamp($1 / 1000.0)", [t]);
+        await connection.query("DELETE FROM source_auth_replay WHERE expires_at < to_timestamp($1 / 1000.0)", [t]);
       }
-      const res = await pg.query(
+      const res = await connection.query(
         `INSERT INTO source_auth_replay (event_id, expires_at)
          VALUES ($1, to_timestamp($2 / 1000.0))
-         ON CONFLICT (${tenantCols("event_id")}) DO NOTHING`,
+         ON CONFLICT (event_id) DO NOTHING`,
         [eventId, expiresAtMs],
       );
       return res.rowCount === 1;

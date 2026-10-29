@@ -1,7 +1,10 @@
+import type { OidcConfig, PrincipalRule } from "./oidc-config.ts";
 import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from "node:crypto";
 import { hostOfUrl } from "./tenant-hosts.ts";
 
 export interface TenantSecrets {
+  primaryOidc?: OidcConfig;
+  trustedOidc?: OidcConfig;
   oidcClientSecret?: string;
   modelGatewayApiKey?: string;
   slackServiceToken?: string;
@@ -10,10 +13,11 @@ export interface TenantSecrets {
 }
 
 export interface TenantSettings {
-  id?: string;
+  id: string;
   slug: string;
   orgId: string;
   hosts: string[];
+  portalUrl?: string;
   status: "active" | "suspended";
   appsDomain?: string;
   s3Bucket?: string;
@@ -22,6 +26,10 @@ export interface TenantSettings {
   oidcClientId?: string;
   oidcLabel?: string;
   oidcAdmin: boolean;
+  emailAuthPrincipals?: string[];
+  emailAuthDomain?: string;
+  apiAllowedOrigins?: string[];
+  principalRule?: PrincipalRule;
   secrets: TenantSecrets;
 }
 
@@ -65,14 +73,14 @@ export function tenantSecretsKey(env: Env): Buffer | undefined {
   return key;
 }
 
-function sealTenantSecret(value: unknown, key: Buffer): Buffer {
+export function sealTenantSecret(value: unknown, key: Buffer): Buffer {
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
   const body = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()]);
   return Buffer.concat([Buffer.from([1]), iv, cipher.getAuthTag(), body]);
 }
 
-function openTenantSecret(sealed: Buffer, key: Buffer | undefined, slug: string): unknown {
+export function openTenantSecret(sealed: Buffer, key: Buffer | undefined, slug: string): unknown {
   if (!key) throw new Error(`tenant ${slug} has secrets but QM_TENANT_SECRETS_KEY is unset`);
   if (sealed[0] !== 1) throw new Error(`tenant ${slug}: unknown secrets format`);
   const decipher = createDecipheriv("aes-256-gcm", key, sealed.subarray(1, 13));
@@ -146,18 +154,18 @@ function settingsFromEnv(env: Env): TenantEnvSettings {
   });
 }
 
-export function homeHosts(env: Env): string[] {
+export function tenantHostsFromEnv(env: Env): string[] {
   return [env.PORTAL_PUBLIC_URL, env.PUBLIC_WEB_URL, env.PUBLIC_API_URL, env.AGENT_API_URL]
     .map(hostOfUrl)
     .filter((host): host is string => Boolean(host));
 }
 
-export function homeTenantSettings(env: Env, home: { orgId: string; id?: string; slug?: string }): TenantSettings {
+export function tenantSettingsFromEnv(env: Env, record: { orgId: string; id: string; slug: string }): TenantSettings {
   return {
-    ...(home.id ? { id: home.id } : {}),
-    slug: home.slug ?? "home",
-    orgId: home.orgId,
-    hosts: homeHosts(env),
+    id: record.id,
+    slug: record.slug,
+    orgId: record.orgId,
+    hosts: tenantHostsFromEnv(env),
     status: "active",
     ...settingsFromEnv(env),
   };

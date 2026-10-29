@@ -25,7 +25,6 @@ interface PgPoolingConfig {
 let poolingConfig: PgPoolingConfig = {};
 
 let tenantSource: () => string | null | undefined = () => undefined;
-const homeTenantIds = new Map<string, string>();
 
 export function configurePgTenantSource(source: () => string | null | undefined): void {
   tenantSource = source;
@@ -36,13 +35,12 @@ export function tenantLockKey(key: string): string {
   return id ? `tenant:${id}:${key}` : key;
 }
 
-function tenantScopedPool(pool: Pool, connectionString: string): Pool {
+function tenantScopedPool(pool: Pool): Pool {
   const connect = pool.connect.bind(pool) as () => Promise<PoolClient>;
   const scoped = (
     callback?: (err: Error | undefined, client?: PoolClient, done?: (release?: unknown) => void) => void,
   ) => {
-    const source = tenantSource();
-    const id = source === null ? homeTenantIds.get(connectionString) : source;
+    const id = tenantSource();
     const ready = Promise.resolve().then(async () => {
       if (tenancyEnabled && !id) throw new Error("Postgres query requires an explicit tenant context");
       const client = await connect();
@@ -110,15 +108,26 @@ async function applyAndSettle(
   migrations: readonly PgMigration[],
   retenantize = false,
 ): Promise<void> {
-  if (tenancyEnabled) await prepareTenancy(pool);
-  const applied = await applyPgMigrations(pool, migrations);
-  let settled = settledMigrations.get(connectionString);
-  if (!settled) settledMigrations.set(connectionString, (settled = new Set()));
-  for (const migration of migrations) settled.add(migration.id);
-  if (!tenancyEnabled || (!retenantize && applied === 0 && tenantized.has(connectionString))) return;
-  await applyTenancy(pool);
-  homeTenantIds.set(connectionString, (await prepareTenancy(pool))!);
-  tenantized.add(connectionString);
+  const lock = tenancyEnabled ? await pool.connect() : undefined;
+  let failed: Error | undefined;
+  try {
+    if (lock) await lock.query("SELECT pg_advisory_lock(hashtext('qm:bootstrap'))");
+    const existing = tenancyEnabled && (await prepareTenancy(pool));
+    const applied = await applyPgMigrations(pool, migrations);
+    let settled = settledMigrations.get(connectionString);
+    if (!settled) settledMigrations.set(connectionString, (settled = new Set()));
+    for (const migration of migrations) settled.add(migration.id);
+    if (!tenancyEnabled || (!retenantize && applied === 0 && tenantized.has(connectionString))) return;
+    await applyTenancy(pool, existing);
+    tenantized.add(connectionString);
+  } finally {
+    if (lock) {
+      await lock.query("SELECT pg_advisory_unlock(hashtext('qm:bootstrap'))").catch((error: unknown) => {
+        failed = error instanceof Error ? error : new Error(String(error));
+      });
+      lock.release(failed);
+    }
+  }
 }
 
 const DEFAULT_QUERY_POOL_MAX = 10;
@@ -130,7 +139,10 @@ export function pgPoolMax(kind: "query" | "session"): number {
     : (poolingConfig.sessionMax ?? DEFAULT_SESSION_POOL_MAX);
 }
 
-async function retainPool(connectionString: string, kind: "query" | "session" | "migration"): Promise<Pool> {
+async function retainPool(
+  connectionString: string,
+  kind: "query" | "session" | "migration" | "deployment",
+): Promise<Pool> {
   const pg = (await import("pg")).default;
   const key = `${kind}:${connectionString}`;
   const existing = sharedPools.get(key);
@@ -139,19 +151,23 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
     return existing.pool;
   }
   const setting = kind === "query" ? "DATABASE_POOL_MAX" : "DATABASE_DIRECT_POOL_MAX";
-  const max = kind === "migration" ? 1 : pgPoolMax(kind);
+  const max = kind === "migration" ? 2 : pgPoolMax(kind === "deployment" ? "session" : kind);
   if (!Number.isInteger(max) || max < 1) throw new Error(`${setting} must be a positive integer`);
   const connection = pgConnectionOptions(
     kind === "migration" ? migrationDatabaseUrl(connectionString) : connectionString,
     kind === "query" && connectionString === poolingConfig.poolUrl ? poolingConfig.caCert : undefined,
   );
-  const poolOptions = { ...connection, max, connectionTimeoutMillis: 10_000, allowExitOnIdle: true };
+  const poolOptions = {
+    ...connection,
+    ...(kind === "deployment" ? { options: "-c qm.tenant_id=" } : {}),
+    max,
+    connectionTimeoutMillis: 10_000,
+    allowExitOnIdle: true,
+  };
   const pool =
-    kind === "migration"
+    kind === "migration" || kind === "deployment"
       ? guardedPool(new pg.Pool(poolOptions))
-      : tenantScopedPool(guardedPool(new pg.Pool(poolOptions)), connectionString);
-  if (connectionString === poolingConfig.poolUrl && poolingConfig.databaseUrl)
-    homeTenantIds.set(connectionString, homeTenantIds.get(poolingConfig.databaseUrl)!);
+      : tenantScopedPool(guardedPool(new pg.Pool(poolOptions)));
   sharedPools.set(key, { pool, users: 1 });
   return pool;
 }
@@ -174,7 +190,7 @@ function guardedPool(pool: Pool): Pool {
 async function releasePool(
   connectionString: string,
   pool: Pool,
-  kind: "query" | "session" | "migration",
+  kind: "query" | "session" | "migration" | "deployment",
 ): Promise<void> {
   const key = `${kind}:${connectionString}`;
   const entry = sharedPools.get(key);
@@ -208,6 +224,7 @@ export interface PgQueryOptions {
 export interface PgPool {
   pool(): Promise<Pool>;
   sessionPool(): Promise<Pool>;
+  deploymentPool(): Promise<Pool>;
   q(text: string, params?: unknown[], options?: PgQueryOptions): Promise<Rows>;
   query(text: string, params?: unknown[], options?: PgQueryOptions): Promise<{ rows: Rows; rowCount: number }>;
   registerMigration(migration: PgMigrationDefinition): void;
@@ -307,6 +324,7 @@ export function createPgPool(connectionString: string, definitions?: readonly Pg
   for (const migration of migrations) registerPgMigration(connectionString, migration);
   let readyP: Promise<void> | null = null;
   let sessionPoolP: Promise<Pool> | null = null;
+  let deploymentPoolP: Promise<Pool> | null = null;
   let queryPoolP: Promise<Pool> | null = null;
   let closed = false;
   const queryUrl = pooledDatabaseUrl(connectionString);
@@ -344,6 +362,11 @@ export function createPgPool(connectionString: string, definitions?: readonly Pg
     if (closed) throw new Error("Postgres store is closed");
     return (queryPoolP ??= retainPool(queryUrl, "query"));
   }
+  async function deploymentPool(): Promise<Pool> {
+    await ready();
+    return (deploymentPoolP ??= retainPool(connectionString, "deployment"));
+  }
+
   async function sessionPool(): Promise<Pool> {
     await ready();
     if (closed) throw new Error("Postgres store is closed");
@@ -366,6 +389,7 @@ export function createPgPool(connectionString: string, definitions?: readonly Pg
     await Promise.all([
       queryPoolP?.then((instance) => releasePool(queryUrl, instance, "query")),
       sessionPoolP?.then((instance) => releasePool(connectionString, instance, "session")),
+      deploymentPoolP?.then((instance) => releasePool(connectionString, instance, "deployment")),
     ]);
   }
   async function migrate(definition: PgMigrationDefinition): Promise<void> {
@@ -379,5 +403,5 @@ export function createPgPool(connectionString: string, definitions?: readonly Pg
   function registerMigration(definition: PgMigrationDefinition): void {
     for (const migration of pgMigrationsFrom(definition)) registerPgMigration(connectionString, migration);
   }
-  return { pool, sessionPool, q, query, registerMigration, migrate, close };
+  return { pool, sessionPool, deploymentPool, q, query, registerMigration, migrate, close };
 }

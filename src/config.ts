@@ -7,7 +7,6 @@ import type { ExternalSlackPolicies } from "./resolution/external-slack.ts";
 import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";
 import { SANDBOX_BACKEND_NAMES, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
 import { existsSync, readdirSync } from "node:fs";
-import { homeTenantSettings, type TenantSettings } from "../plugins/chassis/src/tenant-settings.ts";
 import { MODEL_PROVIDERS, parseProviderBaseUrl, type ModelGatewayTransportConfig } from "./model/provider-endpoints.ts";
 import { join, resolve } from "node:path";
 import { RUN_MAX_AGE_MS } from "./runs/run-store.ts";
@@ -69,7 +68,6 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   suggestedActivitiesEnabled?: boolean;
   suggestedActivitiesContext?: string;
   production: boolean;
-  multitenant: boolean;
   port: number;
   publicPort?: number;
   dataDir: string;
@@ -109,6 +107,7 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   signingSecret?: string;
   capabilitySecret?: string;
   portalIdentitySecret?: string;
+  portalSessionSecret?: string;
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
   seedSkills: boolean;
@@ -140,7 +139,7 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   awsDeploy: ReturnType<typeof awsDeployEnv>;
 }
 
-export type Config = DeploymentConfig & TenantPart;
+export type Config = DeploymentConfig & Partial<TenantPart>;
 
 export function configuredModel(config: Config): string | undefined {
   if (
@@ -173,14 +172,6 @@ export function companySubscriptionAuth(config: Config): ModelProvider | undefin
 }
 
 const DEFAULT_ORG_ID = "default-org";
-
-export function processOrgId(): string {
-  return process.env.ORG_ID ?? DEFAULT_ORG_ID;
-}
-
-export function processTenantSettings(home: { orgId: string; id?: string; slug?: string }): TenantSettings {
-  return homeTenantSettings(process.env, home);
-}
 
 export const CONFIG_DEFAULTS = {
   port: 8080,
@@ -442,7 +433,6 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
   const modelGateway = modelGatewayFromEnv(env);
   const e = readEnv(env, {
     NODE_ENV: raw,
-    QM_MULTITENANT: raw,
     PORT: num,
     PUBLIC_PORT: num,
     POSTHOG_API_KEY: trimmed,
@@ -474,7 +464,9 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
     GIT_SHA: str,
     CORE_SIGNING_SECRET: str,
     CAPABILITY_SECRET: str,
+    DEPLOY_APPS_SESSION_SECRET: str,
     PORTAL_IDENTITY_SECRET: str,
+    PORTAL_SESSION_SECRET: str,
     REQUIRE_SIGNED_PORTAL_IDENTITY: raw,
     CONNECTOR_SECRET_KEY: str,
     DEPLOYMENT_LAYER: str,
@@ -520,7 +512,9 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
       buildSha: e.GIT_SHA,
       signingSecret: e.CORE_SIGNING_SECRET,
       capabilitySecret: e.CAPABILITY_SECRET,
+      deployAppsSessionSecret: e.DEPLOY_APPS_SESSION_SECRET,
       portalIdentitySecret: e.PORTAL_IDENTITY_SECRET,
+      portalSessionSecret: e.PORTAL_SESSION_SECRET,
       connectorSecretKey: e.CONNECTOR_SECRET_KEY,
       deploymentLayerDir: e.DEPLOYMENT_LAYER ? resolve(e.DEPLOYMENT_LAYER) : undefined,
       s3Bucket: e.S3_BUCKET,
@@ -531,7 +525,6 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
       : {}),
     suggestedActivitiesEnabled: e.SUGGESTED_ACTIVITIES_ENABLED ?? true,
     production: e.NODE_ENV === "production",
-    multitenant: e.QM_MULTITENANT === "1",
     port: e.PORT ?? CONFIG_DEFAULTS.port,
     dataDir,
     sandboxBackend,
@@ -563,7 +556,7 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
   };
 }
 
-function loadTenantConfig(env: Env): TenantPart {
+export function tenantPartFromEnv(env: Env): TenantPart {
   const publicApiUrl = env.PUBLIC_API_URL?.replace(/\/+$/, "");
   const publicWebUrl = env.PUBLIC_WEB_URL?.replace(/\/+$/, "");
   const publicUrl = publicWebUrl || publicApiUrl;
@@ -609,5 +602,5 @@ function loadTenantConfig(env: Env): TenantPart {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  return { ...loadDeploymentConfig(env), ...loadTenantConfig(env) };
+  return loadDeploymentConfig(env);
 }

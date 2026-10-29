@@ -89,6 +89,7 @@ export const SESSION_STORE_MIGRATIONS: PgMigrationDefinition[] = [
   },
   {
     id: "sessions/store/0049-attributed-turns-tenant",
+    acceptedChecksums: ["c64598a4e38d569215477bf9b7f7b0aee37ec292297b6119182ec85df8e997b1"],
     statements: [
       `SET LOCAL lock_timeout = '3s'`,
       `CREATE OR REPLACE FUNCTION mark_attribution_dirty() RETURNS trigger LANGUAGE plpgsql AS $mark_attribution_dirty$
@@ -110,10 +111,12 @@ export const SESSION_STORE_MIGRATIONS: PgMigrationDefinition[] = [
            BEGIN
              IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'participants'::regclass
                          AND attname = 'tenant_id' AND NOT attisdropped) THEN
-               ALTER TABLE attributed_turns ADD COLUMN IF NOT EXISTS tenant_id uuid NOT NULL DEFAULT qm_tenant_id();
-               ALTER TABLE attributed_turns_dirty ADD COLUMN IF NOT EXISTS tenant_id uuid NOT NULL DEFAULT qm_tenant_id();
+               ALTER TABLE attributed_turns ADD COLUMN IF NOT EXISTS tenant_id uuid;
+               ALTER TABLE attributed_turns_dirty ADD COLUMN IF NOT EXISTS tenant_id uuid;
                DELETE FROM attributed_turns;
                DELETE FROM attributed_turns_dirty;
+               ALTER TABLE attributed_turns ALTER COLUMN tenant_id SET NOT NULL, ALTER COLUMN tenant_id SET DEFAULT qm_tenant_id();
+               ALTER TABLE attributed_turns_dirty ALTER COLUMN tenant_id SET NOT NULL, ALTER COLUMN tenant_id SET DEFAULT qm_tenant_id();
                INSERT INTO attributed_turns_dirty(tenant_id, session_id)
                  SELECT DISTINCT tenant_id, session_id FROM participants
                ON CONFLICT DO NOTHING;

@@ -1,5 +1,5 @@
-import { createPgPool } from "../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
+import { createPgPool, withPgTransaction, type PoolClient } from "../persistence/pg-pool.ts";
+import { cols, mapToTableMigration, type TableSpec } from "../persistence/typed-table.ts";
 
 export interface BackgroundOwnership {
   ownerDeploymentId: string | null;
@@ -54,26 +54,39 @@ const KEY = "ownership";
 const UNOWNED: BackgroundOwnership = { ownerDeploymentId: null, setAt: null, setBy: null };
 
 export function createBackgroundOwnershipStore(databaseUrl: string) {
-  const table = typedTable<Partial<BackgroundOwnership>>(
-    createPgPool(databaseUrl, [BACKGROUND_OWNERSHIP_MIGRATION]),
-    BACKGROUND_OWNERSHIP,
-  );
-  const get = async (): Promise<BackgroundOwnership> => ({ ...UNOWNED, ...(await table.get(KEY)) });
+  const pg = createPgPool(databaseUrl, [BACKGROUND_OWNERSHIP_MIGRATION]);
+  const read = async (client: Pick<PoolClient, "query">): Promise<BackgroundOwnership> => {
+    const { rows } = await client.query(
+      'SELECT owner_deployment_id AS "ownerDeploymentId", set_at AS "setAt", set_by AS "setBy" FROM background_ownership WHERE id = $1',
+      [KEY],
+    );
+    return { ...UNOWNED, ...rows[0] };
+  };
+  const get = async () => read(await pg.deploymentPool());
   return {
     get,
     async set(change: BackgroundOwnershipChange): Promise<BackgroundOwnership> {
-      const next = await table.modify(KEY, (stored) => {
-        const current = { ...UNOWNED, ...stored };
+      return withPgTransaction(await pg.deploymentPool(), async (client) => {
+        await client.query("SELECT pg_advisory_xact_lock(hashtext('qm:background-ownership'))");
+        const current = await read(client);
         if (
           change.expectedOwnerDeploymentId !== undefined &&
           current.ownerDeploymentId !== change.expectedOwnerDeploymentId &&
           current.ownerDeploymentId !== change.ownerDeploymentId
         )
           throw new BackgroundOwnershipConflict("Background owner changed");
-        if (current.ownerDeploymentId === change.ownerDeploymentId) return stored;
-        return { ownerDeploymentId: change.ownerDeploymentId, setAt: new Date().toISOString(), setBy: change.setBy };
+        if (current.ownerDeploymentId === change.ownerDeploymentId) return current;
+        const next = {
+          ownerDeploymentId: change.ownerDeploymentId,
+          setAt: new Date().toISOString(),
+          setBy: change.setBy,
+        };
+        await client.query(
+          "INSERT INTO background_ownership(id, owner_deployment_id, set_at, set_by) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO UPDATE SET owner_deployment_id=EXCLUDED.owner_deployment_id, set_at=EXCLUDED.set_at, set_by=EXCLUDED.set_by",
+          [KEY, next.ownerDeploymentId, next.setAt, next.setBy],
+        );
+        return next;
       });
-      return { ...UNOWNED, ...next };
     },
   };
 }
