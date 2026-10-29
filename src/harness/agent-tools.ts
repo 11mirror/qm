@@ -2899,6 +2899,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                   description: "true: anyone with the link; false: restricted.",
                 }),
               ),
+              notify: Type.Optional(
+                Type.Boolean({
+                  description: "false: skip the access DM and invite email.",
+                }),
+              ),
             }
           : {}),
         ...(!move
@@ -2918,6 +2923,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           email?: string;
           public?: boolean;
           permission?: "read" | "write";
+          notify?: boolean;
         };
         const tc = ref.current;
         if (!tc) return text("[error] no active tool context");
@@ -2952,6 +2958,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ...(params.email !== undefined ? { email: params.email } : {}),
           ...(params.permission !== undefined ? { permission: params.permission } : {}),
           ...(move ? { move: true } : {}),
+          ...(params.notify !== undefined ? { notify: params.notify } : {}),
         });
         if (isUnavailable(r)) return unavailable(callId, tool);
         if (!r.ok) {
@@ -2961,13 +2968,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           return recordResult(callId, { tool, action, error: r.code }, text(`[error] ${r.message}${candidates}`), true);
         }
         let invitationNote = "";
-        if (r.invitation) {
-          if (r.invitation.emailSent) invitationNote = " App invitation email sent.";
-          else if (r.invitation.alreadyShared) invitationNote = " Already shared; no duplicate email sent.";
-          else
-            invitationNote = ` Access granted, but invitation email was not sent: ${r.invitation.emailProblem ?? "delivery unavailable"}`;
-          if (r.invitation.appUrl) invitationNote += ` App link: ${r.invitation.appUrl}`;
-        }
+        if (params.notify === false) invitationNote = " No DM or invitation email sent.";
+        else if (r.invitation?.emailSent) invitationNote = " App invitation email sent.";
+        else if (r.invitation?.alreadyShared) invitationNote = " Already shared; no duplicate email sent.";
+        else if (r.invitation)
+          invitationNote = ` Access granted, but invitation email was not sent: ${r.invitation.emailProblem ?? "delivery unavailable"}`;
+        if (r.invitation?.appUrl) invitationNote += ` App link: ${r.invitation.appUrl}`;
         return recordResult(
           callId,
           { tool, action, verb: r.verb, type: r.type, id: r.id, target: r.target.scope },
