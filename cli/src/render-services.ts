@@ -155,9 +155,7 @@ export function renderServiceEnv(
     Object.assign(out, renderStorageEnv(connections.storage));
   }
   if (service === "portal") {
-    Object.assign(out, {
-      ...(connections.webUiUrl ? { WEB_UI_UPSTREAM: connections.webUiUrl } : {}),
-    });
+    if (connections.webUiUrl) out.WEB_UI_UPSTREAM = connections.webUiUrl;
     if (config.services.includes("auth")) {
       for (const key of ["AUTH_ALLOWED_EMAIL_DOMAIN", "OIDC_ALLOWED_EMAIL_DOMAIN"])
         out[key] = config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN ?? "";
