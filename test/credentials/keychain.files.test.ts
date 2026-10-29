@@ -258,7 +258,7 @@ test("multi-input login: re-save upserts the same slot, and unique/non-empty fie
   );
 });
 
-test("manifest: explains itself in a bare channel, lists credentials + protocol when present, flags standing grants", async () => {
+test("manifest: explains itself in a bare channel, lists credentials + protocol when present, omits grant metadata", async () => {
   const empty = renderKeychainManifest({
     scopeId: "channel:C1",
     conversationKind: "channel",
@@ -283,7 +283,7 @@ test("manifest: explains itself in a bare channel, lists credentials + protocol 
     detectedByOwner: new Map([["U1", ["GitHub", "AWS SSO"]]]),
   });
   assert.match(detected, /NOT registered or grantable/);
-  assert.match(detected, /### Alice \(U1\)/);
+  assert.match(detected, /### Alice/);
   assert.match(detected, /AWS SSO — detected/);
 
   const k = kc();
@@ -312,9 +312,10 @@ test("manifest: explains itself in a bare channel, lists credentials + protocol 
     ],
   });
   assert.match(block, /## Credentials/);
-  assert.match(block, /### Alice \(U1\)/);
+  assert.match(block, /### Alice/);
   assert.match(block, new RegExp(`github:${cred.id}`));
-  assert.match(block, /STANDING grant .*gh for repo work here/);
+  assert.doesNotMatch(block, /STANDING grant|gh for repo work here/);
+  assert.ok(!block.includes(grant.id));
   assert.match(block, /github:[a-f0-9]+.*GITHUB_TOKEN/);
   assert.match(block, /select them in execute.credentials/);
   assert.ok(!block.includes("/v1/keychain/grants"));
@@ -339,56 +340,39 @@ test("manifest: explains itself in a bare channel, lists credentials + protocol 
   assert.ok(!block.includes("ghp_secret"), "the manifest is metadata-only");
 });
 
-test("manifest: own credentials need no grant but require explicit execution requests", async () => {
+test("manifest: only executable credential handles are advertised", async () => {
   const k = kc();
-  await k.save(GH);
-  await k.save({ ownerId: "U1", service: "npm", secret: "npm_x", envKey: "NPM_TOKEN", expiresAt: Date.now() - 1 });
-  await k.save({
+  const credential = await k.save(GH);
+  const expired = await k.save({
     ownerId: "U1",
-    service: "file-login",
-    files: [{ path: ".qa/token", contentBase64: Buffer.from("file-secret").toString("base64") }],
+    service: "npm",
+    secret: "npm_x",
+    envKey: "NPM_TOKEN",
+    expiresAt: Date.now() - 1,
   });
+  const entriesByOwner = new Map([["U1", await k.listByOwner("U1")]]);
+  const input = {
+    scopeId: "personal:U1" as const,
+    conversationKind: "dm" as const,
+    actorId: "U1",
+    members: [{ id: "U1", displayName: "Alice" }],
+    entriesByOwner,
+    scopeGrants: [],
+  };
   const own = renderKeychainManifest({
-    scopeId: "personal:U1",
-    conversationKind: "dm",
-    actorId: "U1",
-    members: [{ id: "U1", displayName: "Alice" }],
-    entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
-    scopeGrants: [],
+    ...input,
+    execution: [
+      { credentialId: credential.id, ownerId: "U1", handle: credentialHandle(credential), description: "github" },
+    ],
   });
-  assert.match(own, /### Alice \(U1\) — own; no grant needed \(including background turns\)\n.*file-login/);
-  assert.doesNotMatch(own, /Teammate keychains/);
-  assert.ok(!own.includes("no grant for this conversation"));
-  assert.match(
-    own,
-    /EXPIRED — they must re-auth before it can be used/,
-    "an expired own credential points at re-auth, not the grant flow",
-  );
-  assert.ok(!own.includes("before requesting a grant"));
-
-  const other = renderKeychainManifest({
-    scopeId: "personal:U2",
-    conversationKind: "dm",
-    actorId: "U2",
-    members: [{ id: "U2" }, { id: "U1", displayName: "Alice" }],
-    entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
-    scopeGrants: [],
-  });
-  assert.match(other, /no grant for this conversation/);
-  assert.match(other, /EXPIRED — ask the owner to re-auth before requesting a grant/);
-  assert.ok(!other.includes("their own — no grant needed"), "a teammate's credential never reads as implied");
-
-  const channel = renderKeychainManifest({
-    scopeId: "channel:C1",
-    conversationKind: "channel",
-    actorId: "U1",
-    members: [{ id: "U1", displayName: "Alice" }],
-    entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
-    scopeGrants: [],
-  });
-  assert.ok(
-    !channel.includes("access is implied"),
-    "the actor's own credentials in a shared scope keep the grant protocol",
-  );
-  assert.match(channel, /no grant for this conversation/);
+  assert.match(own, /### Alice/);
+  assert.ok(own.includes(credentialHandle(credential)));
+  assert.ok(!own.includes(expired.id));
+  assert.doesNotMatch(own, /expires at|no grant for this conversation/);
+  for (const scopeId of ["personal:U2", "channel:C1"] as const) {
+    const unavailable = renderKeychainManifest({ ...input, scopeId, actorId: "U2" });
+    assert.match(unavailable, /No credentials available/);
+    assert.ok(!unavailable.includes(credential.id));
+    assert.match(unavailable, /requires an explicit grant/);
+  }
 });

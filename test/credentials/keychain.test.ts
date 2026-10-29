@@ -360,7 +360,7 @@ describe("connectors are grantable like any keychain record", () => {
     assert.equal(await k2.connectorAccessToken(GMAIL, "bob@x"), "ya29.plenty");
   });
 
-  it("the manifest lists a participant's connected apps with credential id and grant status", async () => {
+  it("the manifest does not advertise an unavailable participant connector", async () => {
     const k = kc();
     await k.setConnectorToken(GMAIL, "alex@x", { accessToken: "ya29.alex", expiresAt: Date.now() + 3_600_000 });
     const connectorsByOwner = await k.listConnectorsByOwners(["alex@x"]);
@@ -373,9 +373,8 @@ describe("connectors are grantable like any keychain record", () => {
       connectorsByOwner,
       scopeGrants: [],
     });
-    assert.match(md, /connected app gmail\.googleapis\.com/);
-    assert.match(md, /credential id/);
-    assert.match(md, /no grant for this conversation/);
+    assert.match(md, /No credentials available/);
+    assert.doesNotMatch(md, /gmail\.googleapis\.com|credential id|no grant for this conversation/);
   });
 });
 

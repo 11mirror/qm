@@ -203,7 +203,7 @@ async function registerKeychainCredentials(
           };
         },
       },
-      description: `${credential.service}, owner ${credential.ownerId}${grantId ? `, grant ${grantId}` : ""}${connector ? `; ${connectorTokenNote(connector.host)}` : ""}`,
+      description: `${credential.service}, owner ${credential.ownerId}${connector ? `; ${connectorTokenNote(connector.host)}` : ""}`,
       ownerId: credential.ownerId,
       credentialId: credential.id,
     });

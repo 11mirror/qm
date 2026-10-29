@@ -488,7 +488,7 @@ test("fireAskResolution: a turn that fires but doesn't land falls back to a plai
   assert.deepEqual(await texts(ok), ["done"], "just the turn's reply, no fallback");
 });
 
-test("manifest: the requester-side ledger names no ask ids or purposes, and asks go through one route", async () => {
+test("manifest excludes request status, ask ids and purposes from the system inventory", async () => {
   const now = Date.now();
   const pending: KeychainAsk = {
     id: "a1b2c3d4e5f6",
@@ -518,11 +518,9 @@ test("manifest: the requester-side ledger names no ask ids or purposes, and asks
     scopeGrants: [],
     scopeAsks: [pending, declined],
   });
-  assert.match(channel, /Asks sent from this conversation:/);
-  assert.match(channel, /- waiting on U_ALICE's approval card/);
-  assert.match(channel, /- request to U_ALICE: declined/);
+  assert.doesNotMatch(channel, /Asks sent from this conversation:|waiting on|request to U_ALICE: declined/);
   assert.match(channel, /`request-access` skill/, "the manifest names the request skill");
-  assert.match(channel, /approval card/);
+  assert.doesNotMatch(channel, /approval card/);
   assert.match(channel, /requires an explicit grant/);
   assert.ok(!channel.includes("/v1/keychain/grants"), "no approval-by-POST ladder");
   for (const leak of [pending.id, declined.id, pending.purpose, "not for prod"])
