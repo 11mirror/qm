@@ -55,7 +55,7 @@ test("publishing uploads assets and documents before moving the live pointer", (
   withFakeAws((dir, calls) => {
     const dist = build(dir, "one");
     const id = uiReleaseId(dist);
-    runUiPublish({ bucket: "ui-bucket", dir: dist, distribution: "E123" });
+    runUiPublish({ bucket: "ui-bucket", dir: dist });
     const log = calls();
     const targets = log.map((args) => args.find((arg) => arg.startsWith("s3://")) ?? args.at(-1));
     assert.deepEqual(targets, [
@@ -64,7 +64,6 @@ test("publishing uploads assets and documents before moving the live pointer", (
       `s3://ui-bucket/releases/${id}/shared.html`,
       "s3://ui-bucket/channels/live.json",
       `{"id":"${id}"}`,
-      "/channels/live.json",
     ]);
     assert.ok(log[0]!.includes("immutable"));
     assert.ok(log[3]!.includes("no-cache"));

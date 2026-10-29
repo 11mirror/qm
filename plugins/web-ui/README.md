@@ -259,7 +259,7 @@ the CSS media queries, the composer, and the split canvas.
 ## Releases from object storage
 
 A web UI deploy is an upload and a pointer flip; no service restarts. `npm run build`, then
-`qm ui publish --bucket <bucket> [--distribution <cloudfront id>]` uploads:
+`qm ui publish --bucket <bucket>` uploads:
 
 | Object                                       | Cache      | Written                       |
 | -------------------------------------------- | ---------- | ----------------------------- |

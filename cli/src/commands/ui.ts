@@ -9,7 +9,6 @@ export interface UiPublishOptions {
   bucket: string;
   dir: string;
   release?: string;
-  distribution?: string;
 }
 
 const IMMUTABLE = "public, max-age=31536000, immutable";
@@ -70,14 +69,5 @@ export function runUiPublish(o: UiPublishOptions): void {
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
-  if (o.distribution)
-    capture(aws, [
-      "cloudfront",
-      "create-invalidation",
-      "--distribution-id",
-      o.distribution,
-      "--paths",
-      "/channels/live.json",
-    ]);
   ok(`web UI release ${id} is live (${((Date.now() - started) / 1000).toFixed(1)}s)`);
 }

@@ -156,7 +156,7 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
   slack render                             render the bot manifest (+ SSO manifest for Slack OIDC)
   outputs [--json]                         print the Web UI, health, and Slack app creation links
   admin-login [--email <admin-email>]      print a single-use admin login link, valid for five minutes
-  ui publish --bucket <name> [--release <id>] [--distribution <id>] [--dir <path>]
+  ui publish --bucket <name> [--release <id>] [--dir <path>]
                                            upload the built web UI to the bucket and make it live;
                                            --release makes an earlier release live (rollback)
   proof scope-key <scope-id>               derive the provider snapshot key for an exact scope
@@ -471,20 +471,16 @@ async function dispatch(argv: string[]): Promise<void> {
 
     case "ui": {
       if (positionals[0] !== "publish")
-        throw new CliError(
-          `usage: ${CLI_NAME} ui publish --bucket <name> [--release <id>] [--distribution <id>] [--dir <path>]`,
-        );
+        throw new CliError(`usage: ${CLI_NAME} ui publish --bucket <name> [--release <id>] [--dir <path>]`);
       rejectExtraPositionals(positionals, 1);
-      rejectUnknownFlags(flags, ["bucket", "release", "distribution", "dir"]);
+      rejectUnknownFlags(flags, ["bucket", "release", "dir"]);
       const bucket = strFlag(flags, "bucket");
       if (!bucket) throw new CliError("--bucket is required", { clause: "cli.invocation" });
       const release = strFlag(flags, "release");
-      const distribution = strFlag(flags, "distribution");
       runUiPublish({
         bucket,
         dir: resolve(strFlag(flags, "dir") ?? "plugins/web-ui/dist-web"),
         ...(release ? { release } : {}),
-        ...(distribution ? { distribution } : {}),
       });
       return;
     }
