@@ -17,11 +17,7 @@ import {
   type PublicServiceCredential,
   type KeychainManifestInput,
 } from "../../credentials/keychain.ts";
-import {
-  configuredConnectorProviders,
-  connectorStatusIsStale,
-  refreshConnectorStatus,
-} from "../../credentials/connector-status.ts";
+import { configuredConnectorProviders, refreshConnectorStatus } from "../../credentials/connector-status.ts";
 import { renderConnectedAppsBlock } from "../environment-facts.ts";
 import { securityScreenChunks } from "../../security/security-screen.ts";
 import { isIdeasConversation } from "../../onboarding/onboarding.ts";
@@ -476,11 +472,7 @@ async function addConnectedApps(
 ): Promise<void> {
   let status = null;
   try {
-    status = deps.connectorStatusCache ? await deps.connectorStatusCache.get(actor.id) : null;
-    if (deps.connectorTokens && deps.connectorStatusCache && connectorStatusIsStale(status, Date.now())) {
-      status = await refreshConnectorStatus(deps.connectorTokens, actor.id, Date.now());
-      await deps.connectorStatusCache.put(status);
-    }
+    if (deps.connectorTokens) status = await refreshConnectorStatus(deps.connectorTokens, actor.id, Date.now());
   } catch (e) {
     swallow("orchestrator: connected-app status", e);
   }

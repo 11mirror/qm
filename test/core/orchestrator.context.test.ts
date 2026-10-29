@@ -1,3 +1,4 @@
+import { createConnectorStatusCache } from "../../src/credentials/connector-status.ts";
 import "../support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -412,4 +413,22 @@ test("a file shared with the session is LISTED in the cached system prompt — w
   assert.match(res.reply ?? "", /shared\/budget\.csv/);
   assert.match(res.reply ?? "", /read a path below to fetch that file on demand/);
   assert.equal(boxes.provisioned, 0, "listing shared files must not provision a box");
+});
+
+test("connected-app prompt reads current tokens rather than a fresh stale cache", async () => {
+  const config = testConfig({ signingSecret: "test-secret" });
+  const built = buildTestApp(config, {
+    env: { GOOGLE_OAUTH_CLIENT_ID: "test-google-id", GOOGLE_OAUTH_CLIENT_SECRET: "test-google-secret" },
+  });
+  const cache = createConnectorStatusCache(config.databaseUrl!);
+  await cache.put({ principalId: "U1", checkedAt: Date.now(), providers: { google: { connected: false } } });
+  await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "google-token" });
+  const connected = await built.app.turn(dm("!sysprompt"));
+  assert.equal(connected.status, "ok");
+  assert.match(connected.reply ?? "", /Connected: Google/);
+  await built.connectorTokens.deleteConnectorToken("gmail.googleapis.com", "U1");
+  await cache.put({ principalId: "U1", checkedAt: Date.now(), providers: { google: { connected: true } } });
+  const disconnected = await built.app.turn(dm("!sysprompt"));
+  assert.equal(disconnected.status, "ok");
+  assert.doesNotMatch(disconnected.reply ?? "", /Connected: Google/);
 });
