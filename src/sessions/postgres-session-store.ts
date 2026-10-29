@@ -39,6 +39,7 @@ import type {
 } from "./session-store.ts";
 import { tsPrefixQuery } from "./entry-search.ts";
 import { ITEMS_CUTOVER_MIGRATIONS, LEGACY_TAPE_MIGRATIONS } from "./legacy-history-migrations.ts";
+import { TENANT, TENANT_MIGRATIONS } from "../tenants/migrations.ts";
 import {
   cronIdOf,
   legacyOriginPattern,
@@ -200,7 +201,6 @@ function rowToEntry(r: Record<string, unknown>): SessionEntry {
 
 const ITEM_FIELDS = `i.session_id, i.seq, ${ITEM_COLUMNS.map(([column, key]) => `${column === "blob_sha" ? "encode(i.blob_sha, 'hex')" : `i.${column}`} AS "${key}"`).join(",")}, ts.scope_id AS scope_label, ${msOf("i.created_at")} AS created_at`;
 const ITEM_FROM = "items i JOIN sessions ts ON ts.id = i.session_id";
-const TENANT = "qm_tenant_id()";
 const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.created_at, s.title, s.channel_name,
   s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.side_chat`;
 const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";
@@ -1072,6 +1072,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         id: "sessions/store/0046-spend-days-cron-rebuild",
         statements: [`INSERT INTO session_spend_dirty(day) SELECT day FROM session_spend_days ON CONFLICT DO NOTHING`],
       },
+      ...TENANT_MIGRATIONS,
     ],
     [
       {
@@ -1463,9 +1464,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async getContextWindow(sessionId) {
       const [meta, summary] = await Promise.all([
-        q(`SELECT count(*)::int AS total FROM items i WHERE i.tenant_id = ${TENANT} AND i.session_id = $1`, [
-          sessionId,
-        ]),
+        q(`SELECT count(*)::int AS total FROM items WHERE tenant_id = ${TENANT} AND session_id = $1`, [sessionId]),
         q(
           `SELECT through_seq AS through FROM items
             WHERE tenant_id = ${TENANT} AND session_id = $1 AND kind = 'ContextCompaction'

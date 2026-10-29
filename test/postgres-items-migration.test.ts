@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { applyPgMigrations, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { scopeId, type EntryType, type SessionEntry } from "../src/types.ts";
+import { enterTenant } from "../src/tenants/context.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the items upgrade test";
@@ -72,6 +73,8 @@ test(
 
       await applyPgMigrations(raw, migrations);
       await applyPgMigrations(raw, migrations);
+      const tenant = String((await raw.query("SELECT id::text AS id FROM tenants")).rows[0].id);
+      enterTenant(tenant);
 
       const store = createPostgresSessionStore(URL!);
       const copied = await store.getEntries(sessionId);
@@ -149,7 +152,7 @@ test(
       );
       await assert.rejects(raw.query("TRUNCATE items"), /TRUNCATE on items is forbidden/);
       await raw.query(
-        "INSERT INTO blobs(tenant_id, sha256, size, mime, storage_key, created_at) VALUES (qm_tenant_id(), decode(repeat('00', 32), 'hex'), 1, 'text/plain', 'k', now())",
+        `INSERT INTO blobs(tenant_id, sha256, size, mime, storage_key, created_at) VALUES ('${tenant}', decode(repeat('00', 32), 'hex'), 1, 'text/plain', 'k', now())`,
       );
       await assert.rejects(raw.query("UPDATE blobs SET size = 2"), /UPDATE on blobs is forbidden/);
 

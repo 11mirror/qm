@@ -5,6 +5,9 @@ import pg from "pg";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 for (const backend of ["memory", "postgres"] as const) {
   test(

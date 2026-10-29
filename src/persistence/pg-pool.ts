@@ -4,6 +4,7 @@ import type { ClientConfig, Pool, PoolClient } from "pg";
 import { parseIntoClientConfig } from "pg-connection-string";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import { tenantPgPool } from "../tenants/pg.ts";
 
 export type { Pool, PoolClient };
 
@@ -52,7 +53,8 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
     connectionString,
     kind === "query" && connectionString === poolingConfig.poolUrl ? poolingConfig.caCert : undefined,
   );
-  const pool = guardedPool(new pg.Pool({ ...connection, max, connectionTimeoutMillis: 10_000 }));
+  const options = { ...connection, max, connectionTimeoutMillis: 10_000 };
+  const pool = guardedPool(kind === "migration" ? new pg.Pool(options) : tenantPgPool(pg, options));
   sharedPools.set(key, { pool, users: 1 });
   return pool;
 }

@@ -2,7 +2,12 @@ import "./run-availability.ts";
 import { test, before } from "node:test";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
-import { applyPgMigrations, migrateRegisteredPgSchemas, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
+import {
+  applyPgMigrations,
+  createPgPool,
+  migrateRegisteredPgSchemas,
+  registeredPgMigrations,
+} from "../src/persistence/pg-pool.ts";
 import { PARALLEL_EXCEPTION_QUERY } from "../src/deployment/postdeploy-smoke.ts";
 import { createPostgresSessionStore, rowToSession } from "../src/sessions/postgres-session-store.ts";
 import { SECURITY_SCREEN_STEP } from "../src/security/security-posture.ts";
@@ -13,6 +18,9 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertLateJoinerScopes, assertLeanListing } from "./support/participant-scopes.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres store tests";
@@ -72,11 +80,11 @@ test("pg participant presence checks seek into the visible history window", { sk
   const owner = `window-${randomUUID()}`;
   const session = await store.getOrCreateByThread(owner, "channel", scopeId("channel", owner));
   const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: URL });
+  const raw = createPgPool(URL!);
   try {
     await raw.query(
       `INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at)
-       SELECT qm_tenant_id(), $1, n, 'UserMessage', '{"text":"window fixture"}', to_timestamp(n * 10 / 1000.0)
+       SELECT '${TEST_TENANT}', $1, n, 'UserMessage', '{"text":"window fixture"}', to_timestamp(n * 10 / 1000.0)
          FROM generate_series(0, 3999) n`,
       [session.id],
     );
@@ -125,7 +133,7 @@ test("pg participant presence checks seek into the visible history window", { sk
       if (window.fromSeq === null ? window.toSeq !== null : window.toSeq === null && window.to !== null) continue;
       for (const query of captured) {
         const result = await raw.query(`EXPLAIN (ANALYZE, FORMAT JSON) ${query.text}`, query.values);
-        const rejected = rejectedEntries(result.rows[0]["QUERY PLAN"][0].Plan);
+        const rejected = rejectedEntries((result.rows[0]!["QUERY PLAN"] as { Plan: any }[])[0]!.Plan);
         assert.ok(
           rejected < 32,
           `presence check rejected ${rejected} historical entries for ${JSON.stringify(window)}`,
@@ -134,7 +142,7 @@ test("pg participant presence checks seek into the visible history window", { sk
     }
   } finally {
     t.mock.restoreAll();
-    await raw.end();
+    await raw.close();
   }
 });
 
@@ -257,19 +265,21 @@ test("pg spend refresh keeps concurrent writes pending and failures preserve the
       scopeLabel: scope,
       usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 1, costUsd: 1 },
     });
-  const query = pg.Client.prototype.query;
+  const ready = (pg.Query.prototype as any).handleReadyForQuery;
   const wallClock = Date.now;
   let duringRollup: (() => Promise<unknown>) | undefined;
-  pg.Client.prototype.query = function (...args: any[]): any {
-    if (duringRollup && typeof args[0] === "string" && args[0].startsWith("WITH RECURSIVE ancestry")) {
+  (pg.Query.prototype as any).handleReadyForQuery = function (this: any, ...args: any[]): any {
+    if (duringRollup && this.text?.startsWith("WITH RECURSIVE ancestry")) {
       const hook = duringRollup;
+      const callback = this.callback;
       duringRollup = undefined;
-      return Promise.resolve(Reflect.apply(query, this, args)).then(async (result) => {
-        await hook();
-        return result;
-      });
+      this.callback = (error: unknown, result: unknown) =>
+        void hook().then(
+          () => callback(error, result),
+          (failure: unknown) => callback(failure),
+        );
     }
-    return Reflect.apply(query, this, args);
+    return Reflect.apply(ready, this, args);
   };
   try {
     await bill();
@@ -318,7 +328,7 @@ test("pg spend refresh keeps concurrent writes pending and failures preserve the
       0,
     );
   } finally {
-    pg.Client.prototype.query = query;
+    (pg.Query.prototype as any).handleReadyForQuery = ready;
     Date.now = wallClock;
     await raw.end();
   }
@@ -616,7 +626,8 @@ test("pg spend ancestry only visits sessions with usage inside the requested ran
   const execute = pg.Pool.prototype.query;
   let query = "";
   t.mock.method(pg.Pool.prototype, "query", function (this: InstanceType<typeof pg.Pool>, ...args: unknown[]) {
-    if (typeof args[0] === "string" && args[0].startsWith("WITH RECURSIVE")) query = args[0];
+    const text = (args[0] as { text?: string } | undefined)?.text ?? args[0];
+    if (typeof text === "string" && text.startsWith("WITH RECURSIVE")) query = text;
     return Reflect.apply(execute, this, args);
   });
   try {
@@ -1765,7 +1776,7 @@ test("pg null-byte payloads: stripped on write and counted alongside raw items",
   const raw = new pg.Pool({ connectionString: URL });
   try {
     await raw.query(
-      "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_tenant_id(),$1,$2,'UserMessage',$3,to_timestamp($4 / 1000.0))",
+      `INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES ('${TEST_TENANT}',$1,$2,'UserMessage',$3,to_timestamp($4 / 1000.0))`,
       [a.id, 1, { text: "xy" }, Date.now()],
     );
     await raw.query("UPDATE sessions SET messages = NULL, turns = NULL, last_activity = NULL WHERE id = $1", [a.id]);
@@ -1830,7 +1841,7 @@ test(
       assert.equal(legacy.lastActivity, entries[entries.length - 1]!.createdAt, "last-activity = newest entry");
 
       await raw.query(
-        "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_tenant_id(),$1,$2,'UserMessage',$3,to_timestamp($4 / 1000.0))",
+        `INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES ('${TEST_TENANT}',$1,$2,'UserMessage',$3,to_timestamp($4 / 1000.0))`,
         [a.id, 4, { text: "from the old instance" }, Date.now()],
       );
       const { lease: lease2 } = await s2.acquireLease(a.id);
@@ -1841,7 +1852,7 @@ test(
       assert.equal(healed.turns, 3, "seq/messages mismatch triggers a full turns recount");
 
       await raw.query(
-        "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_tenant_id(),$1,0,'UserMessage',$2,to_timestamp($3 / 1000.0)), (qm_tenant_id(),$1,1,'AgentMessage',$4,to_timestamp($5 / 1000.0))",
+        `INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES ('${TEST_TENANT}',$1,0,'UserMessage',$2,to_timestamp($3 / 1000.0)), ('${TEST_TENANT}',$1,1,'AgentMessage',$4,to_timestamp($5 / 1000.0))`,
         [b.id, { text: "drained turn" }, Date.now(), { text: "reply" }, Date.now() + 1],
       );
       await raw.query("UPDATE sessions SET messages = 0, turns = 0 WHERE id = $1", [b.id]);
@@ -3192,7 +3203,8 @@ test(
       ]);
       await raw.query("UPDATE sessions SET last_user_activity = NULL WHERE id = ANY($1)", [ids]);
       await raw.query("DELETE FROM qm_schema_migrations WHERE id = 'sessions/store/0044-last-user-activity-backfill'");
-      await applyPgMigrations(raw, registeredPgMigrations(URL!));
+      const bound = new pg.Pool({ connectionString: URL, options: `-c qm.tenant_id=${TEST_TENANT}` });
+      await applyPgMigrations(bound, registeredPgMigrations(URL!)).finally(() => bound.end());
       assert.deepEqual(
         (await raw.query("SELECT id, last_user_activity FROM sessions WHERE id = ANY($1) ORDER BY id", [ids])).rows,
         stored.rows,

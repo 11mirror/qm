@@ -11,6 +11,9 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { artifactImageLoader } from "../src/harness/replay-images.ts";
 import { createPostgresToolOutputStore, type ToolOutputStore } from "../src/sessions/tool-output.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 type Body = { messages?: unknown[]; input?: unknown[] };
 type Reply = Array<Record<string, unknown>>;
