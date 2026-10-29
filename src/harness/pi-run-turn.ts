@@ -4,7 +4,7 @@ import { textFromContent } from "./pi-payload.ts";
 import { finishTurn } from "./turn-finish.ts";
 import { watchTurnSignals, type TurnStop } from "./turn-signals.ts";
 import { createTurnRecovery } from "./turn-recovery.ts";
-import { FALLBACK_CODES, piRoundFailed, piTurnError } from "./turn-recovery.ts";
+import { piRoundFailed, piTurnError } from "./turn-recovery.ts";
 import { createCallTelemetry } from "./call-telemetry.ts";
 import {
   recordSteerIntake,
@@ -15,7 +15,7 @@ import {
 } from "./harness-shared.ts";
 import { type AssistantMessage, type ToolResultMessage } from "@earendil-works/pi-ai";
 import { isUserMessage } from "../sessions/items.ts";
-import { NonRetryableTurnError, ProviderTurnError } from "../core/turn-error.ts";
+import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { asError, cleanupAll, swallow, swallowAs } from "../util/errors.ts";
 import { defaultInteractiveThinkingLevel, modelHasPrices } from "../model/pi-models.ts";
 import { type HarnessTurnInput, type HarnessTurnResult } from "./harness.ts";
@@ -383,11 +383,11 @@ async function recoverTurnError(
     stop: TurnStop;
     rethrowPersistFailure: () => void;
     messagesBefore: number;
-    recovery: Pick<ReturnType<typeof createTurnRecovery>, "retryWithoutDocuments" | "attemptRefusalFallback">;
+    recovery: Pick<ReturnType<typeof createTurnRecovery>, "retryWithoutDocuments">;
   },
 ): Promise<void> {
   const { turn, session, stop, rethrowPersistFailure, messagesBefore } = o;
-  const { retryWithoutDocuments, attemptRefusalFallback } = o.recovery;
+  const { retryWithoutDocuments } = o.recovery;
   rethrowPersistFailure();
   const cancelAbortRejection =
     turn.cancel?.aborted === true && (err as { name?: string } | null)?.name === "AbortError";
@@ -398,13 +398,6 @@ async function recoverTurnError(
       recovered = await retryWithoutDocuments();
     } catch (e) {
       swallow("pi: document-free retry", e);
-    }
-    if (!recovered && turnErr instanceof ProviderTurnError && FALLBACK_CODES.has(turnErr.code)) {
-      try {
-        recovered = await attemptRefusalFallback(turnErr.message);
-      } catch (e) {
-        swallow("pi: refusal fallback", e);
-      }
     }
     if (!recovered && !stop.userAborted) throw turnErr;
   }
@@ -417,7 +410,6 @@ export interface PiTurnOptions {
   tempDirPrefix: string;
   turnWallClockMs: number;
   signals: RunSignalStore | undefined;
-  resolveFallbackRuntime: () => { modelId: string; effortLevel?: string; fastMode?: boolean } | undefined;
 }
 
 function wallClockLimitError(turnWallClockMs: number, wallClock: TurnWallClockOutcome): NonRetryableTurnError {
@@ -461,9 +453,9 @@ function turnRacePolicy(input: Parameters<typeof createFloorCapPolicy>[0], abort
 }
 
 export async function runPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInput): Promise<HarnessTurnResult> {
-  const { access, signals } = opts;
+  const { signals } = opts;
   const opened = await openPiTurn(opts, dispatched);
-  const { turn, entry, state, request, calls, turnModelGateway, active } = opened;
+  const { turn, entry, state, request, calls, active } = opened;
   const session = entry.agentSession;
   const { goal, halt } = state;
   try {
@@ -510,21 +502,17 @@ export async function runPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInpu
       { goal: goal.current, meter: grindMeter, promptStart, turnWallClockMs },
       () => session.abort(),
     );
-    const { noteDocumentRejection, retryWithoutDocuments, attemptRefusalFallback, recoverFailedRound } =
-      createTurnRecovery({
-        turn,
-        session,
-        request,
-        halt,
-        messagesBefore,
-        turnWallClockMs,
-        raceCapMs,
-        race,
-        stopped: () => stop.userAborted,
-        directModel: (id) => !turnModelGateway?.models[id],
-        servedModelId: (id) => (turn.providerKeys ? id : access.servedId(id)),
-        resolveFallbackRuntime: opts.resolveFallbackRuntime,
-      });
+    const { noteDocumentRejection, retryWithoutDocuments, recoverFailedRound } = createTurnRecovery({
+      turn,
+      session,
+      request,
+      halt,
+      messagesBefore,
+      turnWallClockMs,
+      raceCapMs,
+      race,
+      stopped: () => stop.userAborted,
+    });
     const promptRound = async (note: string): Promise<TurnWallClockOutcome> => {
       if (noRoomForRound(turnWallClockMs, rawRemainingCapMs())) return "aborted";
       const outcome = await race(session.prompt(note));
@@ -569,22 +557,18 @@ export async function runPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInpu
         stop,
         rethrowPersistFailure: persistence.rethrow,
         messagesBefore,
-        recovery: { retryWithoutDocuments, attemptRefusalFallback },
+        recovery: { retryWithoutDocuments },
       });
       wallClock = "ok";
     } finally {
       await cleanupAll(
         [
           releaseSignals,
-          () => {
-            if (pendingSteers.length) session.clearQueue();
-          },
+          () => pendingSteers.length && session.clearQueue(),
           () => unsubscribeMessageEnd?.(),
           () => unsubscribe?.(),
           () => steps.settleResults(),
-          () => {
-            active.steps = undefined;
-          },
+          () => Object.assign(active, { steps: undefined }),
           () => state.routeEmit(turn.emit),
           () => persistence.drain(),
           () => telemetry.drainCaptured(userEntry?.seq ?? null, effectiveModel),

@@ -351,14 +351,19 @@ test("a failed lease release before tail scheduling still reclaims the sandbox",
   const { orch, sessions } = buildOrchestrator(g.sandbox);
   const release = sessions.releaseLease.bind(sessions);
   let releases = 0;
+  let sessionId = "";
   sessions.releaseLease = async (lease) => {
+    sessionId = lease.sessionId;
     if (++releases === 1) throw new Error("lease release unavailable");
     await release(lease);
   };
-  const result = await orch.handleTurn({ ...dm("dm:U1:tail-release-failure", "!run echo hi"), runId: randomUUID() });
+  await assert.rejects(
+    orch.handleTurn({ ...dm("dm:U1:tail-release-failure", "!run echo hi"), runId: randomUUID() }),
+    /lease release unavailable/,
+  );
   assert.equal(teardowns, 1);
   assert.ok(releases >= 2);
-  const acquired = await sessions.acquireLease(result.sessionId!);
+  const acquired = await sessions.acquireLease(sessionId);
   assert.ok(acquired.lease);
   await release(acquired.lease!);
 });

@@ -1,10 +1,7 @@
 import { NonRetryableTurnError } from "../core/turn-error.ts";
-import { defaultInteractiveThinkingLevel, modelDisplayName } from "../model/pi-models.ts";
-import { swallow } from "../util/errors.ts";
 import type { TurnHalt } from "./turn-tool-state.ts";
 import type { TurnRequestSettings } from "./turn-request.ts";
 import type { HarnessTurnInput } from "./harness.ts";
-import { applyTurnEffort, wantsFastMode, withRequestHeaders } from "./pi-model-runtime.ts";
 import { noRoomForRound, type TurnWallClockOutcome } from "./pi-turn-clock.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import { documentStub } from "../core/document-kinds.ts";
@@ -12,7 +9,6 @@ import { type AgentSession } from "@earendil-works/pi-coding-agent";
 import { type AssistantMessage } from "@earendil-works/pi-ai";
 import { ProviderTurnError } from "../core/turn-error.ts";
 import { providerTurnError } from "./provider-error.ts";
-import { resolveModel } from "../model/pi-models.ts";
 
 export type AssistantTextSession = Pick<AgentSession, "getLastAssistantText" | "messages">;
 
@@ -77,26 +73,6 @@ export function providerRefusalError(session: AssistantTextSession, messagesBefo
   return err && FALLBACK_CODES.has(err.code) ? err.message : null;
 }
 
-export function refusalFallbackModelId(
-  fromId: string,
-  configuredId: string | undefined,
-  usable: (id: string) => boolean,
-): string | undefined {
-  return configuredId && configuredId !== fromId && usable(configuredId) ? configuredId : undefined;
-}
-
-export function refusalFallbackNote(fromModel: string, toModel: string, refusal: string): string {
-  return (
-    `[system] Your previous response was blocked or failed at the model provider before it reached the user ` +
-    `— these failures can fire spuriously; the user did nothing wrong. ` +
-    `The provider's stated reason was: "${refusal}". ` +
-    `The turn has been switched from ${fromModel} to ${toModel}. Start your reply by briefly ` +
-    `telling the user that ${fromModel} could not answer this request and why (paraphrase the provider's ` +
-    `stated reason in plain words), and that you are answering as ${toModel} instead — then answer ` +
-    `their message.`
-  );
-}
-
 export function createTurnRecovery(o: {
   turn: HarnessTurnInput;
   session: AgentSession;
@@ -107,58 +83,8 @@ export function createTurnRecovery(o: {
   raceCapMs: () => number;
   race: (prompting: Promise<void>, capMs?: number) => Promise<TurnWallClockOutcome>;
   stopped: () => boolean;
-  directModel: (id: string) => boolean;
-  servedModelId: (id: string) => string;
-  resolveFallbackRuntime: () => { modelId: string; effortLevel?: string; fastMode?: boolean } | undefined;
 }) {
-  const {
-    turn,
-    session,
-    request,
-    halt,
-    messagesBefore,
-    turnWallClockMs,
-    raceCapMs,
-    race,
-    stopped,
-    directModel,
-    servedModelId,
-    resolveFallbackRuntime,
-  } = o;
-  const refusedModelIds = new Set<string>();
-  const attemptRefusalFallback = async (refusal: string): Promise<boolean> => {
-    if (stopped() || turn.cancel?.aborted) return false;
-    const fromId = (session.model as { id?: string } | undefined)?.id;
-    if (fromId) refusedModelIds.add(fromId);
-    const configured = resolveFallbackRuntime();
-    const fallbackId = fromId
-      ? refusalFallbackModelId(fromId, configured?.modelId, (id) => !!resolveModel(servedModelId(id)))
-      : undefined;
-    const fallback = fallbackId ? resolveModel(servedModelId(fallbackId)) : undefined;
-    if (!fallbackId || !fallback || refusedModelIds.has(fallbackId) || refusedModelIds.has(servedModelId(fallbackId)))
-      return false;
-    const capMs = raceCapMs();
-    if (noRoomForRound(turnWallClockMs, capMs)) return false;
-    console.error(
-      `[pi] provider refusal — retrying on fallback model ${fromId} -> ${fallbackId} session=${turn.session.id}: ${refusal}`,
-    );
-    const custom = configured?.modelId === fallbackId ? configured : undefined;
-    const wantFast = wantsFastMode(custom?.fastMode ?? turn.runtime?.fastMode, fallbackId);
-    await session.setModel(withRequestHeaders(fallback, directModel(fallbackId), wantFast));
-    request.setFast(wantFast);
-    request.setEffortLevel(
-      custom?.effortLevel ?? turn.runtime?.effortLevel ?? defaultInteractiveThinkingLevel(fallback),
-    );
-    applyTurnEffort(session, request.effortLevel());
-    dropFailedAssistant(session, messagesBefore);
-    const outcome = await race(
-      session.prompt(refusalFallbackNote(modelDisplayName(fromId!), modelDisplayName(fallbackId), refusal)),
-      capMs,
-    );
-    if (stopped()) return false;
-    if (outcome !== "ok") throw new NonRetryableTurnError(refusal);
-    return true;
-  };
+  const { turn, session, request, halt, messagesBefore, turnWallClockMs, raceCapMs, race, stopped } = o;
   let documentRejection: ProviderTurnError | undefined;
   let documentRetried = false;
   const noteDocumentRejection = (message: unknown): void => {
@@ -190,14 +116,6 @@ export function createTurnRecovery(o: {
   const recoverFailedRound = async (): Promise<void> => {
     if (halt.handoff() || stopped() || turn.cancel?.aborted) return;
     await retryWithoutDocuments();
-    const refusal = providerRefusalError(session, messagesBefore);
-    if (!refusal) return;
-    try {
-      await attemptRefusalFallback(refusal);
-    } catch (e) {
-      swallow("pi: refusal fallback", e);
-      throw new NonRetryableTurnError(refusal);
-    }
   };
-  return { noteDocumentRejection, retryWithoutDocuments, attemptRefusalFallback, recoverFailedRound };
+  return { noteDocumentRejection, retryWithoutDocuments, recoverFailedRound };
 }

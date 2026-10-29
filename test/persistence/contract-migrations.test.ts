@@ -12,7 +12,7 @@ test("boot registers the numbered contracts and leaves the held-back ones unregi
   const contracts = ids.filter((id) => id.startsWith("contract/"));
   assert.deepEqual(
     contracts.map((id) => id.slice("contract/".length, "contract/".length + 4)),
-    ["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0026"],
+    ["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0026", "0027"],
   );
   for (const { id } of HELD_BACK_CONTRACT_MIGRATIONS) assert.ok(!ids.includes(id), `${id} stays held back`);
 });

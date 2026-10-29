@@ -1,12 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  piLastAssistantTextOrThrow,
-  piTurnError,
-  providerRefusalError,
-  refusalFallbackNote,
-  refusalFallbackModelId,
-} from "../../src/harness/turn-recovery.ts";
+import { piLastAssistantTextOrThrow, piTurnError, providerRefusalError } from "../../src/harness/turn-recovery.ts";
 import { resolveModel } from "../../src/model/pi-models.ts";
 import { ProviderTurnError, turnFailureMessage } from "../../src/core/turn-error.ts";
 
@@ -160,24 +154,4 @@ test("providerRefusalError finds this prompt's refusal but never a prior turn's"
   } as unknown as Parameters<typeof providerRefusalError>[0];
   assert.match(providerRefusalError(session) ?? "", /Terms of Service/);
   assert.equal(providerRefusalError(session, 2), null);
-});
-
-test("refusalFallbackNote names both models, carries the provider's refusal, and tells the agent to inform the user", () => {
-  const note = refusalFallbackNote(
-    "Claude Fable 5",
-    "Claude Opus 4.8",
-    "This request was blocked as it seems to violate Anthropic's Terms of Service restrictions on reverse engineering.",
-  );
-  assert.match(note, /Claude Fable 5/);
-  assert.match(note, /Claude Opus 4.8/);
-  assert.match(note, /restrictions on reverse engineering/);
-  assert.match(note, /telling the user/);
-});
-
-test("refusal fallback goes only to the configured fallback model, never the refused model back", () => {
-  const usable = (id: string) => !!resolveModel(id);
-  assert.equal(refusalFallbackModelId("claude-fable-5-1", undefined, usable), undefined);
-  assert.equal(refusalFallbackModelId("claude-opus-5", "gpt-6-sol", usable), "gpt-6-sol");
-  assert.equal(refusalFallbackModelId("gpt-6-sol", "gpt-6-sol", usable), undefined);
-  assert.equal(refusalFallbackModelId("claude-opus-5", "not-a-pi-model", usable), undefined);
 });

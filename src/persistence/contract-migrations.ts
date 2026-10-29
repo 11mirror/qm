@@ -59,6 +59,10 @@ export const CONTRACT_MIGRATIONS: readonly PgMigrationDefinition[] = [
     id: "contract/0026-drop-unused-admin-settings",
     statements: ["DROP TABLE IF EXISTS browse_model_configs", "DROP TABLE IF EXISTS unfulfilled_insights_flag"],
   },
+  {
+    id: "contract/0027-drop-fallback-runtime",
+    statements: ["ALTER TABLE base_model_configs DROP COLUMN IF EXISTS fallback_runtime"],
+  },
 ];
 
 export const HELD_BACK_CONTRACT_MIGRATIONS: readonly PgMigrationDefinition[] = [

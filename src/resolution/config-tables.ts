@@ -41,7 +41,7 @@ export const CONFIG_TABLES = {
   baseModels: scoped(
     "base_model_configs",
     `embeddingModelId text, modelId text, cronRuntime jsonb, subagentRuntime jsonb,
-    fallbackRuntime jsonb, orgRevision bigint, revision bigint, effortLevel text, fastMode boolean`,
+    orgRevision bigint, revision bigint, effortLevel text, fastMode boolean`,
   ),
   orgAmbient: flag("org_ambient_flag"),
   interactiveFastMode: flag("interactive_fast_mode_flag"),
@@ -66,7 +66,19 @@ const CONVERSION_OPTIONS: Partial<Record<ConfigTableName, Parameters<typeof mapT
 
 const CONFIG_TABLE_MIGRATIONS: readonly MapConversion[] = (
   Object.entries(CONFIG_TABLES) as [ConfigTableName, TableSpec][]
-).map(([name, spec]) => mapToTableMigration(`typed/config/${spec.table}/0001`, spec, CONVERSION_OPTIONS[name]));
+).map(([name, spec]) =>
+  mapToTableMigration(
+    `typed/config/${spec.table}/0001`,
+    name === "baseModels"
+      ? {
+          ...spec,
+          columns: cols(`embeddingModelId text, modelId text, cronRuntime jsonb, subagentRuntime jsonb,
+    fallbackRuntime jsonb, orgRevision bigint, revision bigint, effortLevel text, fastMode boolean`),
+        }
+      : spec,
+    CONVERSION_OPTIONS[name],
+  ),
+);
 
 export type ConfigTables<R extends Record<ConfigTableName, unknown>> = { [K in ConfigTableName]: TypedTable<R[K]> };
 

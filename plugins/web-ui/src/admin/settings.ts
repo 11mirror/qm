@@ -19,7 +19,7 @@ import { repeat } from "lit/directives/repeat.js";
 
 type Model = { id: string; name?: string };
 type Data = Record<string, any>;
-const runtimeKeys = ["runtime", "cron-runtime", "subagent-runtime", "fallback-runtime"];
+const runtimeKeys = ["runtime", "cron-runtime", "subagent-runtime"];
 export const modelSettingKeys = [...runtimeKeys, "webui-models", "memory-embedding-model"];
 const runtimeReadKey = (key: string) => key.replace(/-runtime$/, "Runtime");
 export class SettingsState extends SettingState {

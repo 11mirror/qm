@@ -41,7 +41,7 @@ export async function withCleanup<T>(work: () => Promise<T>, cleanup: () => Prom
   return result;
 }
 
-export async function cleanupAll(actions: Array<() => void | Promise<unknown>>, original?: unknown): Promise<void> {
+export async function cleanupAll(actions: Array<() => unknown>, original?: unknown): Promise<void> {
   const failures: unknown[] = [];
   for (const action of actions) {
     try {

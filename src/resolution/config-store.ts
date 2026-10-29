@@ -51,13 +51,12 @@ export interface PersistedBaseModel {
   modelId?: string;
   cronRuntime?: RuntimeSelection;
   subagentRuntime?: RuntimeSelection;
-  fallbackRuntime?: RuntimeSelection;
   orgRevision?: number;
   revision?: number;
   effortLevel?: string;
   fastMode?: boolean;
 }
-export type RuntimePurpose = "cron" | "subagent" | "fallback";
+export type RuntimePurpose = "cron" | "subagent";
 
 interface RuntimeSelection {
   modelId: string;
@@ -394,7 +393,6 @@ function createRuntimeConfig(org: ScopeId, rows: TypedTable<PersistedBaseModel>,
     ...(row?.embeddingModelId ? { embeddingModelId: row.embeddingModelId } : {}),
     ...(row?.cronRuntime ? { cronRuntime: row.cronRuntime } : {}),
     ...(row?.subagentRuntime ? { subagentRuntime: row.subagentRuntime } : {}),
-    ...(row?.fallbackRuntime ? { fallbackRuntime: row.fallbackRuntime } : {}),
   });
   const setOrgField = <K extends keyof PersistedBaseModel>(key: K, value: PersistedBaseModel[K] | undefined) =>
     queue(`model:${org}`, async () => {

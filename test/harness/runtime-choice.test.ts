@@ -59,7 +59,7 @@ test("cron entry points defer legacy injections until runtime resolution", () =>
 test("each purpose ignores conversation overrides and explicit fields including false win", async () => {
   const config = await setup();
   const conversation = await resolveRuntimeChoiceDurable(config, ORG, SCOPE, fallback);
-  for (const purpose of ["cron", "subagent", "fallback"] as const) {
+  for (const purpose of ["cron", "subagent"] as const) {
     await config.setPurposeRuntime(purpose, category);
     assert.deepEqual(
       await resolveRuntimeChoiceDurable(config, ORG, SCOPE, fallback, undefined, undefined, purpose),

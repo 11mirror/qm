@@ -1,7 +1,5 @@
-import { refusalFallbackModelId } from "./turn-recovery.ts";
 import { type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { type TSchema } from "typebox";
-import { ProviderTurnError } from "../core/turn-error.ts";
 import { swallow } from "../util/errors.ts";
 import { auxiliaryModelForProvider, resolveModel, contextTokenBudgetForModel } from "../model/pi-models.ts";
 import { type HarnessCompactInput, type HarnessDetectInput, type HarnessDetectResult } from "./harness.ts";
@@ -73,7 +71,6 @@ export async function piShouldRespond(
 export async function piCompactHistory(
   access: PiModelAccess,
   primaryModelId: () => string,
-  fallbackModelId: () => string | undefined,
   input: HarnessCompactInput,
 ): Promise<string> {
   const primaryId = primaryModelId();
@@ -93,24 +90,7 @@ export async function piCompactHistory(
       },
       input.summaryTokenBudget,
     );
-  try {
-    return await summarize(primaryId);
-  } catch (error) {
-    const fallbackId = refusalFallbackModelId(
-      primaryId,
-      fallbackModelId(),
-      (id) => !!resolveModel(access.servedId(id)),
-    );
-    if (
-      !(error instanceof ProviderTurnError) ||
-      error.code !== "refusal" ||
-      !fallbackId ||
-      access.servedId(fallbackId) === access.servedId(primaryId)
-    )
-      throw error;
-    console.error(`[pi] compaction failed on ${primaryId}; retrying on fallback model ${fallbackId}: ${error.message}`);
-    return summarize(fallbackId);
-  }
+  return summarize(primaryId);
 }
 
 export function piContextTokenBudget(primaryModelId: () => string, model?: string): number | undefined {

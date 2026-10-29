@@ -21,7 +21,6 @@ import {
 export interface PiHarnessOptions extends CoreToolOptions {
   defaultModelId?: string;
   resolveBaseModelId?: () => string | undefined;
-  resolveFallbackRuntime?: () => { modelId: string; effortLevel?: string; fastMode?: boolean } | undefined;
   companyModelId?: (id: string) => string;
   detectModelId?: string;
   titleModelId?: string;
@@ -56,7 +55,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
   const detectModelId = (): string => opts?.detectModelId ?? auxiliaryModelId();
   const titleModelId = (): string => opts?.titleModelId ?? auxiliaryModelId();
   const judgeModelId = (): string => opts?.judgeModelId ?? auxiliaryModelId();
-  const resolveFallbackRuntime = () => opts?.resolveFallbackRuntime?.();
   const turnOptions: PiTurnOptions = {
     access,
     primaryModelId,
@@ -64,12 +62,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     tempDirPrefix: opts?.tempDirPrefix ?? "pi",
     turnWallClockMs: opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000,
     signals: opts?.signals,
-    resolveFallbackRuntime,
   };
   return defineHarness({
     runTurn: (turn) => runPiTurn(turnOptions, turn),
     shouldRespond: (detect) => piShouldRespond(access, detectModelId, detect),
-    compactHistory: (input) => piCompactHistory(access, primaryModelId, () => resolveFallbackRuntime()?.modelId, input),
+    compactHistory: (input) => piCompactHistory(access, primaryModelId, input),
     contextTokenBudget: (_scopeLabel, model) => piContextTokenBudget(primaryModelId, model),
     oneShot: (systemPrompt, prompt) => piOneShot(access, primaryModelId(), systemPrompt, prompt),
     judge: (systemPrompt, prompt, signal) =>

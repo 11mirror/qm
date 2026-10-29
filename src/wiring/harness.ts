@@ -78,7 +78,6 @@ export function buildHarness(deps: HarnessInputs) {
       ...piHarnessConfigOptions(config),
       modelGateway: gatewayTransport,
       resolveBaseModelId: () => orgBaseModelId() ?? deploymentDefaultModel(),
-      resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
       resolveProviderKeys: resolvePiProviderKeys,
       ...(directProviderAvailability.codexOAuth ? { companyModelId } : {}),
       signals: runSignals,

@@ -474,7 +474,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       return { ok: true };
     },
   },
-  ...([undefined, "cron", "subagent", "fallback"] as const).map((purpose): AdminResource => ({
+  ...([undefined, "cron", "subagent"] as const).map((purpose): AdminResource => ({
     id: purpose ? `${purpose}-runtime` : "runtime",
     refreshesModels: true,
     kind: "custom",

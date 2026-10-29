@@ -204,7 +204,7 @@ test("retired browser-model and unfulfilled-insight admin controls are absent", 
     assert.equal("browseModel" in scope, false);
     assert.equal("browseModelOptions" in scope, false);
     assert.equal("unfulfilledInsights" in scope, false);
-    for (const key of ["browse-model", "unfulfilled-insights"]) {
+    for (const key of ["browse-model", "unfulfilled-insights", "fallback-runtime"]) {
       const response = await fetch(`${base}/v1/admin/scopes/org%3Adefault-org/${key}`, {
         method: "PUT",
         headers: { ...ALICE, "content-type": "application/json" },

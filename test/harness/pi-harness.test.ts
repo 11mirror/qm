@@ -631,34 +631,6 @@ function textStream(text: string, stopReason = "end_turn"): Response {
   );
 }
 
-test("a refused goal round falls back to another model and the goal keeps going", async () => {
-  const harness = createPiHarness({
-    resolveProviderKeys: async () => ({ anthropic: "sk-test" }),
-    resolveFallbackRuntime: () => ({ modelId: "claude-sonnet-5" }),
-  });
-  const controller = new AbortController();
-  const entries: Item[] = [];
-  const realFetch = globalThis.fetch;
-  const models: string[] = [];
-  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-    const model = (JSON.parse(String(init?.body ?? "{}")) as { model: string }).model;
-    models.push(model);
-    if (models.length >= 5) controller.abort();
-    if (models.length >= 2 && model === models[0]) return textStream("", "refusal");
-    return textStream(`reply ${models.length}`);
-  }) as typeof globalThis.fetch;
-  try {
-    await harness.turns.runTurn(goalTurn("goal-refusal-fallback", controller.signal, entries)).catch(() => undefined);
-    const [primary, refused, fallback, continued] = models;
-    assert.equal(refused, primary, "the second round goes to the primary model and is refused");
-    assert.notEqual(fallback, primary, "the refused round is answered by a fallback model");
-    assert.equal(continued, fallback, "the goal keeps going on the fallback model instead of stopping");
-    assert.equal(savedGoal("goal-refusal-fallback")?.status, "active");
-  } finally {
-    globalThis.fetch = realFetch;
-  }
-});
-
 test("each governor checkpoint sees only the work since the last checkpoint, not the whole session", async () => {
   const harness = createPiHarness({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const controller = new AbortController();
@@ -683,39 +655,6 @@ test("each governor checkpoint sees only the work since the last checkpoint, not
     assert.match(first!, /reply 1/);
     assert.doesNotMatch(second!, /reply 1\b/, "the second checkpoint does not resend work the first one judged");
     assert.match(second!, /reply [4-7]/);
-  } finally {
-    globalThis.fetch = realFetch;
-  }
-});
-
-test("a goal never falls back to a model that already refused in the same turn", async () => {
-  const harness = createPiHarness({
-    resolveProviderKeys: async () => ({ anthropic: "sk-test" }),
-    resolveFallbackRuntime: () => ({ modelId: "claude-sonnet-5" }),
-  });
-  const controller = new AbortController();
-  const entries: Item[] = [];
-  const realFetch = globalThis.fetch;
-  const models: string[] = [];
-  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-    const request = JSON.parse(String(init?.body ?? "{}")) as { model: string; messages: unknown[] };
-    models.push(request.model);
-    if (models.length >= 8) controller.abort();
-    const latest = JSON.stringify(request.messages.at(-1));
-    if (models.length === 1 || latest.includes("could not answer this request"))
-      return textStream(`reply ${models.length}`);
-    return textStream("", "refusal");
-  }) as typeof globalThis.fetch;
-  try {
-    const outcome = await harness.turns.runTurn(goalTurn("goal-refusal-alternation", controller.signal, entries)).then(
-      (result) => ({ result }),
-      (error: unknown) => ({ error }),
-    );
-    const [primary, refused, fallback, refusedAgain] = models;
-    assert.deepEqual([refused, refusedAgain], [primary, fallback]);
-    assert.equal(models.length, 4, "the turn ends instead of bouncing back to the model that already refused");
-    assert.ok("error" in outcome && outcome.error instanceof ProviderTurnError && !outcome.error.retryable);
-    assert.equal(savedGoal("goal-refusal-alternation")?.status, "active");
   } finally {
     globalThis.fetch = realFetch;
   }
