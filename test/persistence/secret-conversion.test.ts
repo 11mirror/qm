@@ -133,3 +133,46 @@ test("failed secret conversion rolls back converted rows and does not record suc
     await pool.end();
   }
 });
+
+test("same provider rows in separate tenants use their own imported keys", async () => {
+  const { sealTenantSecrets } = await import("../../plugins/chassis/src/tenant-settings.ts");
+  const pool = new pg.Pool({ connectionString: testDatabaseUrl() });
+  const sealing = randomBytes(32);
+  const migration = pgMigrationFrom(secretConversionMigration({ connector: "home", tenantSecretsKey: sealing }));
+  try {
+    await applyPgMigrations(pool, []);
+    await pool.query("DELETE FROM qm_schema_migrations WHERE id=$1", [migration.id]);
+    for (const table of [
+      "keychain_credentials",
+      "connector_clients",
+      "model_credentials",
+      "custom_model_providers",
+      "browser_sessions",
+      "slack_installation",
+      "tenants",
+    ])
+      await pool.query(`DROP TABLE IF EXISTS ${table} CASCADE`);
+    await pool.query(
+      "CREATE TABLE tenants (id uuid, slug text, org_id text, secrets bytea); CREATE TABLE model_credentials (tenant_id uuid, provider text, secret_enc text, PRIMARY KEY (tenant_id,provider))",
+    );
+    for (const [id, material] of [
+      ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "import one"],
+      ["bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "import two"],
+    ]) {
+      await pool.query("INSERT INTO tenants VALUES ($1,$2,$2,$3)", [
+        id,
+        material,
+        sealTenantSecrets({ connectorSecretKey: material! }, sealing),
+      ]);
+      await pool.query("INSERT INTO model_credentials VALUES ($1,'openai',$2)", [id, v1(material!, material!)]);
+    }
+    assert.equal(await applyPgMigrations(pool, [migration]), 1);
+    const rows = (await pool.query("SELECT * FROM model_credentials ORDER BY tenant_id")).rows;
+    for (const [index, material] of ["import one", "import two"].entries()) {
+      assert.equal(decryptSecret(rows[index].secret_enc, deriveConnectorKey(material, "model-credentials")), material);
+      assert.throws(() => decryptSecret(rows[index].secret_enc, deriveConnectorKey("home", "model-credentials")));
+    }
+  } finally {
+    await pool.end();
+  }
+});

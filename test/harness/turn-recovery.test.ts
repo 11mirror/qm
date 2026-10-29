@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { piLastAssistantTextOrThrow, piTurnError, providerRefusalError } from "../../src/harness/turn-recovery.ts";
-import { resolveModel } from "../../src/model/pi-models.ts";
 import { ProviderTurnError, turnFailureMessage } from "../../src/core/turn-error.ts";
 
 test("Pi assistant error messages fail the turn instead of becoming a blank reply", () => {
