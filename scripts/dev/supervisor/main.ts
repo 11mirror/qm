@@ -273,7 +273,7 @@ function writeLegacyMeta(booting: boolean): void {
     branch,
     port: String(ports.core),
     web_port: String(ports.web),
-    admin_port: String(ports.admin),
+    harness_port: String(ports.harness),
     portal_port: String(ports.portal),
     handle,
     supervisor_pid: String(process.pid),

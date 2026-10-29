@@ -121,6 +121,7 @@ export interface Config {
   backgroundJobTtlMs: number;
   sandboxCapabilityTtlMs: number;
   backgroundJobTtlMaxMs: number;
+  role: ProcessRole;
   backgroundWorkEnabled: boolean;
   backgroundDeploymentId?: string;
   deploymentControlSecret?: string;
@@ -1238,6 +1239,17 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
   return declared;
 }
 
+export type ProcessRole = "all" | "edge" | "harness";
+
+function resolveRole(env: NodeJS.ProcessEnv, stores: Pick<Config, "sessionStore" | "runStore">): ProcessRole {
+  const role = env.QM_ROLE?.trim() || "all";
+  if (role !== "all" && role !== "edge" && role !== "harness")
+    throw new Error(`QM_ROLE must be all, edge or harness (got ${JSON.stringify(env.QM_ROLE)})`);
+  if (role !== "all" && (stores.sessionStore !== "postgres" || stores.runStore !== "postgres"))
+    throw new Error(`QM_ROLE=${role} needs SESSION_STORE=postgres and a Postgres run store shared with the other role`);
+  return role;
+}
+
 function resolveStoreKinds(env: NodeJS.ProcessEnv): Pick<Config, "sessionStore" | "runStore"> {
   for (const key of ["SESSION_STORE", "RUN_STORE", "ARTIFACT_STORE"] as const) {
     if (env[key] === "sqlite") {
@@ -1673,6 +1685,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     backgroundJobTtlMaxMs:
       (numEnvStrict("BACKGROUND_JOB_TTL_MAX_SEC", env.BACKGROUND_JOB_TTL_MAX_SEC) ??
         CONFIG_DEFAULTS.backgroundJobTtlMaxSec) * 1000,
+    role: resolveRole(env, { sessionStore, runStore }),
     backgroundWorkEnabled:
       boolEnvStrict("BACKGROUND_WORK_ENABLED", env.BACKGROUND_WORK_ENABLED) ?? CONFIG_DEFAULTS.backgroundWorkEnabled,
     ...(env.BACKGROUND_DEPLOYMENT_ID

@@ -91,7 +91,7 @@ export function slotPorts(slot: string, basePort = Number(process.env.DEV_INSTAN
   return {
     core: first,
     web: first + stride,
-    admin: first + 2 * stride,
+    harness: first + 2 * stride,
     portal: first + 3 * stride,
     prodProxy: first + 4 * stride,
     slackHealth: first + 5 * stride,

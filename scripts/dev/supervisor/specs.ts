@@ -28,6 +28,7 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
   siblingBase.CODEX_AUTH_FILE = "";
   const orgId = i.baseEnv.DEV_INSTANCE_ORG_ID || "acme";
   const signing: Record<string, string> = i.coreSigningSecret ? { CORE_SIGNING_SECRET: i.coreSigningSecret } : {};
+  const split = i.runStore === "postgres";
   const specs: ChildSpec[] = [
     {
       name: "core",
@@ -53,6 +54,7 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
         DEV_INSTANCE_NO_SLACK: i.slack ? "0" : "1",
         CORE_ORG_ID: orgId,
         SHUTDOWN_DRAIN_MS: "2000",
+        ...(split ? { QM_ROLE: "edge" } : {}),
       },
       port: i.ports.core,
       readiness: { kind: "log", pattern: `listening on :${i.ports.core}` },
@@ -103,5 +105,16 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
       stopGraceMs: 5_000,
     },
   ];
-  return i.web === false ? specs.filter((spec) => spec.name === "core") : specs;
+  if (split) {
+    const core = specs[0]!;
+    specs.splice(1, 0, {
+      ...core,
+      name: "harness",
+      env: { ...core.env, QM_ROLE: "harness", PORT: String(i.ports.harness), SLACK_BOT_TOKEN: "", SLACK_APP_TOKEN: "" },
+      port: i.ports.harness,
+      readiness: { kind: "log", pattern: `listening on :${i.ports.harness}` },
+      health: { kind: "tcp", port: i.ports.harness },
+    });
+  }
+  return i.web === false ? specs.filter((spec) => spec.name === "core" || spec.name === "harness") : specs;
 }

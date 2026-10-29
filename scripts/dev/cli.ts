@@ -221,7 +221,7 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
       `branch=${branch}`,
       `port=${ports.core}`,
       `web_port=${ports.web}`,
-      `admin_port=${ports.admin}`,
+      `harness_port=${ports.harness}`,
       `portal_port=${ports.portal}`,
       `slack=${withSlack ? "1" : "0"}`,
       `web=${withWeb ? "1" : "0"}`,
@@ -568,7 +568,7 @@ async function cmdStatus(): Promise<number> {
       [
         String(r.slot).padEnd(7),
         state.padEnd(18),
-        (ports ? `${ports.core}/${ports.web}/${ports.admin}/${ports.portal}` : "-").padEnd(21),
+        (ports ? `${ports.core}/${ports.web}/${ports.harness}/${ports.portal}` : "-").padEnd(21),
         age.padEnd(8),
         (r.mine ? "this" : "").padEnd(5),
         String(r.branch ?? "-").padEnd(28),

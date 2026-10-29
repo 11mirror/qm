@@ -649,6 +649,7 @@ interface DeploymentGitPrincipals {
 export interface AppDeps {
   externalSlackPolicies?: ExternalSlackPolicies;
   admittedWork?: AdmittedWork;
+  edgeOnly?: boolean;
   shutdown?: () => AbortSignal;
   resourceSearch?: ResourceSearchStore;
   swarms?: SwarmService;

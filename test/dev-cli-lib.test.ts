@@ -65,7 +65,7 @@ test("slotPorts derive the full port block from the slot number", () => {
   assert.deepEqual(ports, {
     core: 8083,
     web: 8099,
-    admin: 8115,
+    harness: 8115,
     portal: 8131,
     prodProxy: 8147,
     slackHealth: 8163,

@@ -1978,7 +1978,9 @@ export function buildApp(
     publishLoopEvent({ loopId: output.loopId, itemId: output.itemId, op: "ready", at: Date.now() }),
   );
   const loopGrants = createShipGrantStore(artifactMap<ShipGrant>("loop_ship_grants"));
-  const cronChanged: { notify?: (id: string) => void } = {};
+  const cronChanged = config.databaseUrl
+    ? createPostgresNotifyBus<string>(config.databaseUrl, "cron_changed", "cron-changed")
+    : createMemoryEventBus<string>("cron-changed");
   const cronFires = config.databaseUrl ? createPostgresCronFireStore(config.databaseUrl) : createMemoryCronFireStore();
   const cronsBase = createCronStore(artifactMap<Cron>("crons", ["ownerScopeId"]), {
     staleRunningMs: config.runMaxAgeMs,
@@ -1988,17 +1990,17 @@ export function buildApp(
     ...cronsBase,
     async create(input) {
       const cron = await cronsBase.create(input);
-      cronChanged.notify?.(cron.id);
+      cronChanged.emit(cron.id);
       return cron;
     },
     async update(id, patch) {
       const cron = await cronsBase.update(id, patch);
-      cronChanged.notify?.(id);
+      cronChanged.emit(id);
       return cron;
     },
     async setEnabled(id, enabled) {
       await cronsBase.setEnabled(id, enabled);
-      cronChanged.notify?.(id);
+      cronChanged.emit(id);
     },
   };
   pgArtifactMap?.pool.registerMigration(DROP_RUN_AS_MIGRATION);
@@ -2348,6 +2350,7 @@ export function buildApp(
     externalSlackPolicies: config.externalSlackPolicies,
     admittedWork,
     shutdown: () => inlineShutdown.signal,
+    ...(config.role === "edge" ? { edgeOnly: true } : {}),
     ...(pgArtifactMap ? { resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool) } : {}),
     swarms,
     identity,
@@ -2737,7 +2740,7 @@ export function buildApp(
     enabled: config.suggestedActivitiesEnabled === true,
     ...(config.suggestedActivitiesContext ? { context: config.suggestedActivitiesContext } : {}),
   });
-  cronChanged.notify = (id) => scheduler.notifyChanged(id);
+  const stopCronSync = cronChanged.subscribe((id) => scheduler.notifyChanged(id));
   orchestratorDeps.control = createControlService(app, scheduler, admin);
   orchestratorDeps.validateScheduledRuntime = (scope, choice, purpose) =>
     availableRuntimeError(
@@ -2817,7 +2820,7 @@ export function buildApp(
       }
     : undefined;
   const instanceRegistry: InstanceRegistry =
-    pgArtifactMap && !backgroundOwnership && config.buildSha && config.backgroundWorkEnabled
+    pgArtifactMap && !backgroundOwnership && config.buildSha && config.backgroundWorkEnabled && config.role !== "edge"
       ? createPostgresInstanceRegistry(pgArtifactMap.pool, {
           instanceId: randomUUID(),
           buildSha: config.buildSha,
@@ -3040,7 +3043,7 @@ export function buildApp(
       if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
       flyTunnel?.monitor();
       drain.start();
-      if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
+      if (config.backgroundWorkEnabled && !config.backgroundDeploymentId && config.role !== "edge") startBackground();
     },
     startBackground,
     setBackgroundAdmission(canClaim, active) {
@@ -3068,6 +3071,7 @@ export function buildApp(
       await releaseInFlightRuns();
       await drain.stop();
       stopStreamSync();
+      stopCronSync();
       await Promise.all(
         [
           runs.close?.(),
@@ -3076,6 +3080,7 @@ export function buildApp(
           ledgerEventBus.close?.(),
           runActivity.close?.(),
           runStreamEvents.close?.(),
+          cronChanged.close?.(),
         ].map((closing) => closing?.catch(reportFailureAs("shutdown: close event stores", undefined))),
       );
       await harness.turns.close?.();
