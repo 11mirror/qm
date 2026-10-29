@@ -180,7 +180,7 @@ test("side chats reject missing anchors and anchors beyond the fork boundary", a
 });
 
 test("side-chat reads bind the query principal to the authenticated portal identity", async () => {
-  const { app } = freshApp();
+  const { app, replayDedupe } = freshApp();
   const result = await app.turn(dm("Explain shared queues", "web:U1:side-chat-auth"));
   const fork = await app.forkSession(result.sessionId!, "U1", {
     sideChat: { entrySeq: 0, quote: "shared queues", occurrence: 0 },
@@ -189,6 +189,7 @@ test("side-chat reads bind the query principal to the authenticated portal ident
   const sourceSecret = "side-chat-source-secret-for-http-tests";
   const identitySecret = "side-chat-identity-secret-for-http-tests";
   const server = createServer(app, {
+    replayDedupe,
     signingSecret: sourceSecret,
     capabilitySecret: "side-chat-capability-secret-for-http-tests",
     portalIdentitySecret: identitySecret,
