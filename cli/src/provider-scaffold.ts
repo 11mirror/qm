@@ -313,7 +313,7 @@ export const renderScaffold: ProviderScaffold = {
     "storage": { "plan": "0.5c-512mb", "diskSizeGB": 10 }
   },
 `,
-      services: ["core", "slack", "web-ui", "admin", "portal", "auth"],
+      services: ["core", "slack", "web-ui", "portal", "auth"],
       env: `{ "core": { "HARNESS": "pi", "SANDBOX_BACKEND": "render", "DEPLOY_PROVIDER": "render", "SNAPSHOT_STORE": "s3", "TRANSFER_STORE": "s3" }, "slack": { "SLACK_IDENTITY_EMAIL": "1" }, "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
       secretEnv: `,
 

@@ -81,7 +81,7 @@ means Composio is configured.
 **Own OAuth apps.** `GET $AGENT_API_URL/v1/connectors/catalog` (header `x-agent-capability: $AGENT_API_TOKEN`) marks each provider
 configured with client credentials, from Settings → Connectors or deployment secrets, with
 `configured: true`. No such entry means none are.
-`GET /v1/admin/scopes/<org scope>?view=connectors` shows only apps added in Admin →
+`GET /v1/admin/scopes/<org scope>?view=connectors` shows only apps added in Settings →
 Connectors, not ones set by deployment secrets, so it cannot prove absence.
 
 Composio is absent only when the toolkits read fails and the org check finds no such
