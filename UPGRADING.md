@@ -7,9 +7,9 @@ procedure: pinning, migrations, qualification and rollback.
 Before you start, take a database recovery point and keep the previous image and
 deployment configuration available.
 
-## Multitenant database roles and explicit tenant context
+## Database roles and explicit tenant context
 
-Multitenant core now requires two database logins. `DATABASE_URL` (and
+Every core deployment, including one that serves one tenant, requires two database logins. `DATABASE_URL` (and
 `DATABASE_POOL_URL`, when used) must use a `NOSUPERUSER NOBYPASSRLS` application
 role. `DATABASE_MIGRATION_URL` must use a separate `BYPASSRLS` migration role on
 the same server and database. It is a database credential, not a bypass switch.
@@ -17,7 +17,8 @@ The migration login is used for schema initialization and migrations, not reques
 queries, task handlers, or maintenance sweeps. Successful startup seals migration
 registration: new multitenant schemas must be registered and initialized before
 startup completes. Opening an already initialized store does not check out a
-migration connection. Do not grant the application role
+migration connection. Bootstrap is serialized across processes; a migration pool has
+two connections so its bootstrap lock does not consume its migration worker. Do not grant the application role
 membership in the migration role, or ownership of tenant-private tables/functions.
 
 Before upgrading, stop all old core processes, take a database snapshot, and
@@ -64,15 +65,60 @@ application objects are owned by the migration role before restarting. A role
 that owns a table can alter its RLS policy; `FORCE ROW LEVEL SECURITY` alone is
 not sufficient to separate schema authority from application queries.
 
-Start the new core with the two URLs. Startup replaces the home-tenant fallback
-with a database error and replaces every public-table isolation policy, including
-policies installed by previous versions. It also adds RLS to Absurd queue tables.
-Existing task ownership comes from task headers; related runs, checkpoints, and
+Use the migration entrypoint with the two URLs before starting the new core.
+There is no home tenant. The original company's existing `qm_tenant.id` becomes
+an ordinary `tenants.id`; its UUID and all existing tenant-private row IDs stay
+unchanged. Existing registered tenants retain their UUIDs and configured settings.
+The conversion reads the previous deployment's tenant settings once, seals secrets
+with `QM_TENANT_SECRETS_KEY`, and drops `qm_tenant` in the same transaction.
+Set a stable 32-byte, base64-encoded `QM_TENANT_SECRETS_KEY` before conversion and
+keep it afterward. Do not replace an existing key: it decrypts registered tenants'
+secrets. If a registered tenant has a trusted client but no stored provider payload,
+conversion requires the previous `PORTAL_TRUSTED_OIDC` endpoint template and copies
+it into that tenant's typed trusted-provider connection.
+
+For an existing single-tenant database, keep its previous `ORG_ID`, public URLs,
+Slack configuration, grants, branding, credential configuration, sign-in policy,
+and storage prefix available to the migration entrypoint. Verify `ORG_ID` matches
+the existing company's scope IDs. Its effective sandbox prefix, including the
+old default `qm`, and its storage prefix are stored explicitly, rather than being
+chosen because that company is the deployment's original tenant.
+
+For StyleUp's existing multitenant database, snapshot it and record the singleton
+UUID and every registry UUID first. Run the same conversion with StyleUp's previous
+tenant configuration and existing secrets key. It registers the singleton UUID
+without renumbering any company, preserves existing typed overrides, and fills
+missing trusted-provider connections. Compare IDs and per-tenant row counts before
+opening traffic. A routing-key conflict disables every conflicting tenant, not just
+the newer row. Resolve conflicts in org IDs, hosts and sandbox prefixes before rollout.
+
+After successful conversion, remove tenant-specific process settings such as
+`ORG_ID`, `CORE_ORG_ID`, `ADMIN_GRANTS`, public URLs, branding, Slack tokens,
+trusted-client configuration and email admission policy from the deployment.
+They now belong to registry rows. Retain deployment-wide infrastructure, shared
+provider endpoints, cryptographic roots, database URLs and the tenant-secrets key.
+`QM_MULTITENANT` is retired; there is no single-tenant runtime bypass path.
+A fresh deployment creates no tenant, even if old tenant environment variables
+are present. Provision an explicit registry row through `upsertTenant` or the
+operator's import workflow before serving a company; health endpoints still work.
+
+All tenants, including the original one, use UUID-derived API, capability, portal,
+viewer and broker signing secrets. Deployment signing roots are not stored as
+per-tenant signing settings. Existing keychain data retains a purpose-derived
+AES decryption fallback, not the old API signing root. The original company's
+old signed links and sessions therefore need to be renewed too. Rotate deployment
+roots if they were previously known outside the infrastructure-admin boundary.
+
+Startup replaces permissive isolation policies and adds RLS to Absurd queue tables.
+Existing task ownership comes from task headers; related runs, checkpoints and
 waits inherit that ownership. Events are attributed through waits and turn IDs.
-Historical home tasks without headers are assigned explicitly during migration.
-Do not import cross-tenant queue data without ownership metadata. Migration fails
-rather than assigning orphaned queue rows or unidentifiable events in a mixed-tenant
-queue to the home tenant; repair that queue state before retrying.
+Headerless tasks from the original single-tenant database receive its preserved
+UUID during conversion. Orphaned queue state and ambiguous or unattributable
+mixed-tenant events stop migration; repair them before retrying. Old `every:*`
+scheduler tasks are cancelled. Deployment-wide periodic ticks now hold a neutral
+advisory lease and dispatch ordinary scoped callbacks, with no tenant owning the
+scheduler. Periodic cadence resets on process-owner replacement; durable queued
+jobs and turns retain their tenant ownership.
 
 `qm_queue_tenants(queue)` is a privileged application-callable queue
 routing function. Its owner is the migration role, its search path is fixed, and
@@ -88,11 +134,53 @@ protect a table-wide truncate, and application-created triggers must not execute
 as the migration role. Shared maintenance now runs separately inside each active tenant, never with RLS
 disabled. Host routing continues to use the non-RLS `tenants` registry.
 
-An application query with no explicit tenant scope now fails with
-`Postgres query requires an explicit tenant context`. Home work must explicitly
-use the home tenant; omitting a tenant no longer selects it. Global notification
-subscriptions keep tenant-aware routing, but their LISTEN connection explicitly
-uses the home tenant. There is no application bypass setting or wrapper.
+An application query with no explicit tenant scope fails with
+`Postgres query requires an explicit tenant context`. Boot, migrations, routing,
+directory reads, LISTEN and health checks do not select a tenant. Dedicated neutral
+application-role connections read only deployment metadata, run the approved UUID
+routing functions, or LISTEN; they have no RLS exemption. Tenant notifications carry
+an explicit UUID, and callbacks re-enter only that tenant's context.
+
+### Persisted shape changes
+
+`qm_tenant` is removed. The registry keeps its `id UUID PRIMARY KEY`, unique `slug`,
+`org_id`, host array, `active | suspended` status, timestamps, existing typed fields,
+and encrypted `secrets BYTEA`. It adds these nullable typed columns:
+
+| Columns                                                         | Type                   |
+| --------------------------------------------------------------- | ---------------------- |
+| `api_base_url`, `public_url`, `portal_url`, `public_web_url`    | `TEXT`                 |
+| `sandbox_name_prefix`, `s3_prefix`                              | `TEXT`                 |
+| `apps_login_url`, `apps_login_path`                             | `TEXT`                 |
+| `trusted_oidc_admin_issuer`, `email_auth_domain`                | `TEXT`                 |
+| `email_auth_principals`, `api_allowed_origins`                  | `TEXT[]`               |
+| `principal_rule`, `branding_default`, `external_slack_policies` | typed `JSONB` payloads |
+
+The application login-path type remains `/auth/login | /auth/trusted/login`.
+`principal_rule` declares `claim: email | sub`, optional email restrictions and
+optional core admission. Branding and external Slack policy retain their existing
+domain types. There is no generic settings or env bag.
+
+The sealed secrets payload retains its original fields and adds typed `slack`,
+`slackAccounts`, `brokerCredentials`, `chatSurfaces`, optional tenant-owned
+`deployAppsSessionSecret`, `primaryOidc`, `trustedOidc`, and the base64 AES key
+`keychainSigningFallback`. OIDC connections carry issuer, authorization/token/userinfo
+and JWKS endpoints, client ID and secret, redirect URI, scopes and optional provider
+parameters. These are tenant-owned provider connections, not deployment signing roots.
+
+`background_ownership`, `instance_heartbeats` and `source_auth_replay` are deployment metadata: their
+`tenant_id` columns are removed, their keys become `id`, `instance_id` and `event_id`, and they
+are no longer tenant-private tables. Conflicting ownership records stop migration
+instead of selecting the original tenant's value. Heartbeat rows are transient
+liveness state and are cleared during the change. Background-control HTTP routes
+still require both the deployment signing root and the separate deployment-control secret; no tenant gains that authority. Replay signatures are global metadata and are deduplicated conservatively while retaining their latest expiry.
+
+`/v1/background-work` and `/v1/deployment/live-session` run without a tenant, even when reached through a company host. The live-session request changes from `{ requestId, expectedDeploymentId }` to `{ requestId, expectedDeploymentId, tenantId }`: select an active tenant UUID explicitly. The canary enters that tenant context only for its customer-level work. The smoke CLI likewise takes an explicit tenant UUID as its first argument, followed by an optional base URL. There is no default company for a deployment canary.
+
+Invented example: an existing singleton UUID `11111111-1111-4111-8111-111111111111`
+becomes the same registry UUID with `org_id=acme`, explicit hosts and a stored sandbox
+prefix. Its existing private rows keep that UUID. It can subsequently be suspended
+or retired exactly like any other registered tenant.
 
 Qualification must cover ordinary requests, cross-tenant jobs and turns, tenant
 retirement/suspension, and per-tenant shared sweeps. Rollback requires restoring
@@ -213,26 +301,19 @@ default.
 
 ## Signed links and sessions stop working once
 
-Each tenant other than the home tenant now signs with its own secrets, derived from the
-shared ones with HKDF-SHA256 over the tenant id. Every signed token now uses the HS256
-compact JWS format; the older two-part format is gone. Tokens signed before the upgrade,
-by the shared secrets or in the old format, no longer verify. This happens once, on the
-first boot of the new release. People on those tenants sign in again, and any signed
-link sent before the upgrade has to be sent again. No configuration change is needed.
+Every tenant signs with UUID-scoped secrets derived from deployment roots. The
+original tenant has no exception. Shared-secret or old-format tokens must be renewed;
+people may need to sign in again and old signed links must be sent again.
 
-## Tenant sandboxes use the deployment's sandbox scope
+## Tenant sandboxes use explicit tenant prefixes
 
-On a deployment that serves several tenants, every tenant's sandboxes now run in the
-deployment's `MODAL_APP_NAME` and `MODAL_ENVIRONMENT` and are named under the deployment's
-`SANDBOX_NAME_PREFIX` followed by the first 8 hex characters of the SHA-256 of the tenant
-id, for example `qm-prod-1a2b3c4d-…`. The home tenant's sandbox names do not change. The
-per-tenant sandbox name prefix, Modal app, Modal environment, Modal snapshot bucket and
-AWS sandbox bucket settings are gone. Values stored in the `sandbox_name_prefix`,
-`modal_app_name`, `modal_environment`, `modal_snapshot_bucket` and `aws_sandbox_bucket`
-columns of the `tenants` table, or set in a tenant's env bags, are ignored. A tenant
-import spec that still sets `sandboxNamePrefix`, `modalAppName`, `modalEnvironment`,
-`modalSnapshotBucket` or `awsSandboxBucket` is rejected as an unknown field. Sandboxes a
-tenant created under its old prefix are not reused.
+The deployment still supplies shared Modal/AWS infrastructure. A tenant may carry an
+explicit `sandbox_name_prefix`; otherwise names derive from the deployment prefix
+and the tenant UUID. The original database conversion stores its previous effective
+prefix, so existing machines can be reused without a special original-tenant branch.
+Prefix collisions make all affected tenants unavailable. Other provider infrastructure
+is deployment-wide; a per-tenant prefix is not permission to use another tenant's
+machines.
 
 ## Tenant env bags are no longer read
 
