@@ -21,6 +21,12 @@ migration connection. Bootstrap is serialized across processes; a migration pool
 two connections so its bootstrap lock does not consume its migration worker. Do not grant the application role
 membership in the migration role, or ownership of tenant-private tables/functions.
 
+Tenant-scoped queries use `DATABASE_URL` directly, not `DATABASE_POOL_URL`:
+session tenant settings must not cross a transaction-pooling proxy. LISTEN uses
+one dedicated application-role connection per database and never initializes
+schemas or reads tables. Neutral metadata queries and neutral session leases use
+separate pools, so a held scheduler lease does not consume their query capacity.
+
 Before upgrading, stop all old core processes, take a database snapshot, and
 provision the roles using an administrator connection. The example names below
 must be adapted to the deployment's existing application role and database. Set
@@ -90,7 +96,7 @@ tenant configuration and existing secrets key. It registers the singleton UUID
 without renumbering any company, preserves existing typed overrides, and fills
 missing trusted-provider connections. Compare IDs and per-tenant row counts before
 opening traffic. A routing-key conflict disables every conflicting tenant, not just
-the newer row. Resolve conflicts in org IDs, hosts and sandbox prefixes before rollout.
+the newer row. Resolve conflicts in org IDs, hosts, identical app namespaces and sandbox prefixes before rollout. Nested app namespaces use the most specific domain, never registry age or original-tenant priority.
 
 After successful conversion, remove tenant-specific process settings such as
 `ORG_ID`, `CORE_ORG_ID`, `ADMIN_GRANTS`, public URLs, branding, Slack tokens,

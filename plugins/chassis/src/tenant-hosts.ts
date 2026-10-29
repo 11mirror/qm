@@ -98,11 +98,16 @@ export function hostOfUrl(url: string | undefined): string | undefined {
 export function routeForHost<T>(routes: readonly HostRoute<T>[], host: string | undefined): T | undefined {
   if (!host) return undefined;
   for (const route of routes) if (route.hosts.some((h) => normalizeHost(h) === host)) return route.target;
+  let match: HostRoute<T> | undefined;
+  let longest = 0;
   for (const route of routes) {
     const apps = normalizeHost(route.appsDomain);
-    if (apps && (host === apps || host.endsWith(`.${apps}`))) return route.target;
+    if (apps && (host === apps || host.endsWith(`.${apps}`)) && apps.length > longest) {
+      match = route;
+      longest = apps.length;
+    }
   }
-  return undefined;
+  return match?.target;
 }
 
 function pathOf(req: IncomingMessage): string {

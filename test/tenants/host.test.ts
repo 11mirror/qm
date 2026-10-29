@@ -127,6 +127,18 @@ test("routes match exact hosts before published-app domains", () => {
   assert.equal(routeForHost(routes, undefined), undefined);
 });
 
+test("nested app namespaces route to the most specific domain regardless of tenant order", () => {
+  const parent = { hosts: [], appsDomain: "apps.example.test", target: "parent" };
+  const child = { hosts: [], appsDomain: "child.apps.example.test", target: "child" };
+  for (const routes of [
+    [parent, child],
+    [child, parent],
+  ]) {
+    assert.equal(routeForHost(routes, "demo.child.apps.example.test"), "child");
+    assert.equal(routeForHost(routes, "demo.apps.example.test"), "parent");
+  }
+});
+
 test("core verifies each tenant with the derived secrets its surfaces sign with, distinct per tenant", () => {
   const config = loadConfig({
     ...deployment,

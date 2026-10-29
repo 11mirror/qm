@@ -35,6 +35,7 @@ function servable(records: TenantRecord[], opts: DirectoryOptions): TenantRecord
     `org:${rec.orgId}`,
     `sandbox:${rec.sandboxNamePrefix ?? tenantSandboxPrefix(opts.sandboxPrefix, rec.id)}`,
     ...rec.hosts.map((h) => `host:${normalizeHost(h)}`),
+    ...(rec.appsDomain ? [`apps:${normalizeHost(rec.appsDomain)}`] : []),
   ];
   const counts = new Map<string, number>();
   for (const rec of active) for (const key of new Set(keys(rec))) counts.set(key, (counts.get(key) ?? 0) + 1);
