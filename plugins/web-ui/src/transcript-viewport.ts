@@ -31,6 +31,7 @@ const NEAR_TOP = 400;
 
 export function createTranscriptViewport(options: { pinPrompt?: () => boolean } = {}) {
   let scroller: HTMLElement | null = null;
+  let scrollIdle: ReturnType<typeof setTimeout> | undefined;
   let pins: HTMLElement | null = null;
   let prompt: HTMLElement | null = null;
   let stack: HTMLElement | null = null;
@@ -216,8 +217,26 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     else prompt.style.removeProperty("--pin-content-max");
   }
 
+  function hideScrollbar(): void {
+    clearTimeout(scrollIdle);
+    scrollIdle = undefined;
+    scroller?.classList.remove("user-scrolling");
+  }
+
+  function showScrollbar(): void {
+    if (!scroller?.closest(".split-canvas:not(.single-pane)")) {
+      hideScrollbar();
+      return;
+    }
+    if (scroller.scrollHeight <= scroller.clientHeight) return;
+    scroller.classList.add("user-scrolling");
+    clearTimeout(scrollIdle);
+    scrollIdle = setTimeout(hideScrollbar, 700);
+  }
+
   function onScroll(): void {
     if (!scroller || contentUpdates.size > 0) return;
+    if (scroller.scrollTop !== lastTop) showScrollbar();
     const movingUp = scroller.scrollTop < lastTop;
     const atBottom = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 1;
     const resumeFollowing = atBottom && (following || !movingUp);
@@ -282,10 +301,12 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
   function onKeyDown(event: KeyboardEvent): void {
     if (event.target !== scroller || event.key !== "End" || event.shiftKey || event.altKey) return;
     event.preventDefault();
+    showScrollbar();
     follow(true);
   }
 
   function dispose(): void {
+    hideScrollbar();
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
     observer?.disconnect();

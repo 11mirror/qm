@@ -4,6 +4,74 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import { createTranscriptViewport, preserveTranscriptScroll } from "../src/transcript-viewport.ts";
 
+test("the scrollbar follows scrolling without requiring wheel input or pane focus", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = fixture();
+  f.s.parentElement!.classList.add("split-canvas");
+  try {
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    assert.notEqual(f.s.ownerDocument.activeElement, f.s);
+    f.scroll(500);
+    assert.equal(f.s.classList.contains("user-scrolling"), true);
+    t.mock.timers.tick(500);
+    f.scroll(400);
+    t.mock.timers.tick(500);
+    assert.equal(f.s.classList.contains("user-scrolling"), true);
+    f.viewport.follow(true);
+    f.flush();
+    f.scroll(800);
+    t.mock.timers.tick(500);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    f.scroll(300);
+    f.viewport.dispose();
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    f.scroll(200);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+  } finally {
+    f.close();
+  }
+});
+
+test("the End key reveals the scrollbar for the user-requested jump", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = fixture();
+  f.s.parentElement!.classList.add("split-canvas");
+  try {
+    f.scroll(300);
+    t.mock.timers.tick(1000);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    f.s.dispatchEvent(new f.s.ownerDocument.defaultView!.KeyboardEvent("keydown", { key: "End" }));
+    f.flush();
+    assert.equal(f.s.scrollTop, 800);
+    assert.equal(f.s.classList.contains("user-scrolling"), true);
+    t.mock.timers.tick(1000);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+  } finally {
+    f.close();
+  }
+});
+
+test("scrollbar presentation follows transitions between single and split views", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = fixture();
+  const canvas = f.s.parentElement!;
+  try {
+    f.scroll(500);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    canvas.className = "split-canvas single-pane";
+    f.scroll(400);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    canvas.classList.remove("single-pane");
+    f.scroll(300);
+    assert.equal(f.s.classList.contains("user-scrolling"), true);
+    canvas.classList.add("single-pane");
+    f.scroll(200);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+  } finally {
+    f.close();
+  }
+});
+
 test("layout mutations preserve bottom following and an earlier reading anchor independently", () => {
   const dom = new JSDOM(
     '<main><section class="chat-scroll"><div class="message-stack"><p>Reading here</p></div></section><section class="chat-scroll"></section></main>',
