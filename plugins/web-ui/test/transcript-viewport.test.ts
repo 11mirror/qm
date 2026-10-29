@@ -4,6 +4,74 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import { createTranscriptViewport, preserveTranscriptScroll } from "../src/transcript-viewport.ts";
 
+test("the scrollbar follows scrolling without requiring wheel input or pane focus", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = fixture();
+  f.s.parentElement!.classList.add("split-canvas");
+  try {
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    assert.notEqual(f.s.ownerDocument.activeElement, f.s);
+    f.scroll(500);
+    assert.equal(f.s.classList.contains("user-scrolling"), true);
+    t.mock.timers.tick(500);
+    f.scroll(400);
+    t.mock.timers.tick(500);
+    assert.equal(f.s.classList.contains("user-scrolling"), true);
+    f.viewport.follow(true);
+    f.flush();
+    f.scroll(800);
+    t.mock.timers.tick(500);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    f.scroll(300);
+    f.viewport.dispose();
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    f.scroll(200);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+  } finally {
+    f.close();
+  }
+});
+
+test("the End key reveals the scrollbar for the user-requested jump", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = fixture();
+  f.s.parentElement!.classList.add("split-canvas");
+  try {
+    f.scroll(300);
+    t.mock.timers.tick(1000);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    f.s.dispatchEvent(new f.s.ownerDocument.defaultView!.KeyboardEvent("keydown", { key: "End" }));
+    f.flush();
+    assert.equal(f.s.scrollTop, 800);
+    assert.equal(f.s.classList.contains("user-scrolling"), true);
+    t.mock.timers.tick(1000);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+  } finally {
+    f.close();
+  }
+});
+
+test("scrollbar presentation follows transitions between single and split views", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = fixture();
+  const canvas = f.s.parentElement!;
+  try {
+    f.scroll(500);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    canvas.className = "split-canvas single-pane";
+    f.scroll(400);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    canvas.classList.remove("single-pane");
+    f.scroll(300);
+    assert.equal(f.s.classList.contains("user-scrolling"), true);
+    canvas.classList.add("single-pane");
+    f.scroll(200);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+  } finally {
+    f.close();
+  }
+});
+
 test("layout mutations preserve bottom following and an earlier reading anchor independently", () => {
   const dom = new JSDOM(
     '<main><section class="chat-scroll"><div class="message-stack"><p>Reading here</p></div></section><section class="chat-scroll"></section></main>',
@@ -994,7 +1062,7 @@ test("the latest-prompt marker moves between rows and is restored after a templa
   }
 });
 
-test("an inline steer does not take the sticky prompt marker from the original request", () => {
+test("an inline steer takes the sticky prompt marker from the original request", () => {
   const f = fixture();
   try {
     const work = f.s.ownerDocument.createElement("article");
@@ -1002,9 +1070,58 @@ test("an inline steer does not take the sticky prompt marker from the original r
     work.innerHTML = '<div class="inline-steer"><article class="user-row steered-row" data-index="1"></article></div>';
     f.prompt.after(work);
     f.viewport.sync(f.s);
-    assert.equal(f.prompt.classList.contains("latest-prompt"), true);
-    assert.equal(work.querySelector(".steered-row")!.classList.contains("latest-prompt"), false);
+    assert.equal(f.prompt.classList.contains("latest-prompt"), false);
+    assert.equal(work.querySelector(".steered-row")!.classList.contains("latest-prompt"), true);
   } finally {
     f.close();
+  }
+});
+
+test("a steer rendered inside the running turn is the latest prompt and anchors to the block above it", () => {
+  // Two consecutive steers inside one assistant turn. Each sits behind a boxless wrapper whose own
+  // rect is empty, so anchoring must look past the wrapper to the previous steer's row.
+  const dom = new JSDOM(
+    '<section><div class="message-stack"><article class="user-row" data-index="0"></article>' +
+      '<article class="assistant-row" data-index="1"><div class="assistant-body"><details class="work"></details>' +
+      '<div class="inline-steer" style="display: contents"><article class="user-row steered-row" data-index="2"><div class="pin-content"></div></article></div>' +
+      '<div class="inline-steer" style="display: contents"><article class="user-row steered-row" data-index="3"><div class="pin-content"></div></article></div>' +
+      "</div></article></div></section>",
+  );
+  const s = dom.window.document.querySelector("section")!;
+  const [first, earlier, steer] = [...s.querySelectorAll<HTMLElement>(".user-row")];
+  const content = steer!.querySelector<HTMLElement>(".pin-content")!;
+  let scrollTop = 0;
+  Object.defineProperties(s, {
+    scrollHeight: { value: 1000 },
+    clientHeight: { value: 200 },
+    scrollTop: { get: () => scrollTop, set: (value: number) => (scrollTop = value) },
+  });
+  s.getBoundingClientRect = () => ({ top: 20 }) as DOMRect;
+  earlier!.getBoundingClientRect = () => ({ top: 100 - scrollTop, bottom: 140 - scrollTop, height: 40 }) as DOMRect;
+  steer!.getBoundingClientRect = () => ({ top: Math.max(20, 156 - scrollTop), height: 50 }) as DOMRect;
+  content.getBoundingClientRect = () => ({ height: 40 }) as DOMRect;
+  Object.defineProperty(content, "scrollHeight", { value: 40 });
+  const restore = Object.getOwnPropertyDescriptor(globalThis, "getComputedStyle");
+  Object.assign(globalThis, { getComputedStyle: dom.window.getComputedStyle.bind(dom.window) });
+  const viewport = createTranscriptViewport();
+  try {
+    viewport.sync(s);
+    assert.equal(first!.classList.contains("latest-prompt"), false);
+    assert.equal(earlier!.classList.contains("latest-prompt"), false);
+    assert.equal(steer!.classList.contains("latest-prompt"), true);
+    s.scrollTop = 1;
+    s.dispatchEvent(new dom.window.Event("scroll"));
+    assert.equal(steer!.classList.contains("stuck"), false);
+    s.scrollTop = 150;
+    s.dispatchEvent(new dom.window.Event("scroll"));
+    assert.equal(steer!.classList.contains("stuck"), true);
+    // The steer rested 16px below the earlier steer, which has since scrolled 10px past the sticky
+    // edge: 14px of travel, so 14px of the 40px content has folded away. Anchoring to the boxless
+    // wrapper (an empty rect that never scrolls) would have folded nothing.
+    assert.equal(steer!.style.getPropertyValue("--pin-content-max"), "26px");
+    assert.equal(steer!.classList.contains("pin-condensed"), false);
+  } finally {
+    viewport.dispose();
+    if (restore) Object.defineProperty(globalThis, "getComputedStyle", restore);
   }
 });

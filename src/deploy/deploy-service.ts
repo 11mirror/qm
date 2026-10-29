@@ -12,6 +12,7 @@ import type { AclStore } from "../acl/acl-store.ts";
 import { deployRef, encodeRef } from "../acl/resource-ref.ts";
 import { normalizeRelPath } from "./deploy-fs.ts";
 import { samePerson } from "../directory/person.ts";
+import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import {
   currentVersionOf,
@@ -26,6 +27,7 @@ import type { LeaderLease } from "../persistence/leader-lease.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
+import { uuidSchema } from "../util/ids.ts";
 
 export interface DeployFile {
   path: string;
@@ -39,6 +41,7 @@ export interface RedeployInput {
   env?: Record<string, string>;
   stampEnv?: Record<string, string>;
   alwaysOn?: boolean;
+  actor?: string;
 }
 
 export interface DeployInput extends RedeployInput {
@@ -77,7 +80,7 @@ export interface DeployService {
   redeploy(id: string, input: RedeployInput): Promise<Deployment>;
   getDeployment(idOrName: string): Promise<Deployment | null>;
   listDeployments(): Promise<Deployment[]>;
-  rollbackDeployment(id: string, version: number, options?: { alwaysOn?: boolean }): Promise<void>;
+  rollbackDeployment(id: string, version: number, options?: { alwaysOn?: boolean; actor?: string }): Promise<void>;
   archiveDeployment(id: string): Promise<void>;
   restoreDeployment(id: string, actorId?: string): Promise<Deployment>;
   renameDeployment(id: string, name: string): Promise<Deployment>;
@@ -85,13 +88,14 @@ export interface DeployService {
   setDeploymentAlwaysOn(id: string, alwaysOn: boolean): Promise<Deployment>;
   setDeploymentEmbedAncestors(id: string, embedAncestors: string[]): Promise<Deployment>;
   setDeploymentPublic(idOrName: string, isPublic: boolean, actor: { createdBy: string }): Promise<Deployment>;
+  setDeploymentConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<Deployment>;
 
   maintainDeployments(): Promise<number>;
   reachDeployment(idOrName: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
   /** Recent app output (entrypoint stdout+stderr) for a deployment, newest last; null when the provider keeps none. */
   deploymentLogs(idOrName: string, opts: { tailLines: number }): Promise<string | null>;
   gitRepoPath(idOrName: string): Promise<string | null>;
-  pushGit<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>): Promise<T>;
+  pushGit<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>, actor?: string): Promise<T>;
   reapIdleDeployments(ttlMs: number, now?: number): Promise<number>;
   deployOrUpdate(input: DeployOrUpdateInput): Promise<Deployment>;
   deploymentGrantees(idOrName: string): Promise<DeploymentGrantee[]>;
@@ -119,7 +123,7 @@ const PUBLIC_LINKS_UNAVAILABLE =
   "This instance serves apps at /d/<app>/ on its own domain, which always requires sign-in, so a public link would still ask visitors to sign in. Public links need an apps domain: set DEPLOY_APPS_DOMAIN to a domain with a wildcard DNS record routed to the portal, and AWS_DEPLOY_GATE_SECRET.";
 
 export type DeployAccessErrorCode =
-  "not_found" | "forbidden" | "external_sharing_disabled" | "public_links_unavailable";
+  "not_found" | "forbidden" | "external_sharing_disabled" | "public_links_unavailable" | "unknown_connector";
 
 export class DeployAccessError extends Error {
   readonly code: DeployAccessErrorCode;
@@ -152,7 +156,6 @@ export interface DeployServiceDeps {
 }
 
 const NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function assertAppSize(sizes: readonly number[], maxBytes: number | undefined): void {
   if (!maxBytes) return;
@@ -168,7 +171,7 @@ const fileSizes = (files: readonly DeployFile[] | undefined): number[] =>
   (files ?? []).map((f) => (typeof f.data === "string" ? Buffer.byteLength(f.data) : f.data.byteLength));
 
 function validateName(name: string): void {
-  if (UUID_RE.test(name)) throw new Error(`invalid deployment name (looks like an id): ${name}`);
+  if (uuidSchema.safeParse(name).success) throw new Error(`invalid deployment name (looks like an id): ${name}`);
   if (!NAME_RE.test(name)) {
     throw new Error(
       `invalid deployment name "${name}": use 2-40 chars, lowercase letters/digits/hyphens, no leading/trailing hyphen`,
@@ -204,6 +207,19 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     if ((await deps.canManageEmail?.(ref)) || (await externalSharingAllowed(ownerScopeId))) return;
     throw new DeployAccessError("external_sharing_disabled", EXTERNAL_APP_SHARING_OFF);
   }
+  async function withdrawLoanUnlessPublisher(d: Deployment, actor: string | undefined): Promise<void> {
+    if (!d.connectors || samePerson(actor, d.createdBy)) return;
+    await deps.deployStore.setConnectors(d.id, undefined);
+    deps.auditLog.record({
+      at: Date.now(),
+      principalId: actor ?? "unknown",
+      action: "deploy_connectors",
+      resource: deploymentRef(d.id),
+      scopeLabel: d.ownerScopeId,
+      detail: "withdrawn: someone other than the publisher changed the running version",
+    });
+  }
+
   function withDeployLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
     return deployQueue(id, () => advisoryLock.withLock(`deploy:${id}`, fn));
   }
@@ -252,8 +268,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     await deps.deployStore.setAppliedVersion(id, version);
   };
 
-  const liveEndpoint = async (d: Deployment): Promise<DeployEndpoint> => {
-    if (!deps.provider.resolveEndpoint || d.endpoint == null) return d.endpoint!;
+  const liveEndpoint = async (d: Deployment): Promise<DeployEndpoint | null> => {
+    if (!deps.provider.resolveEndpoint || d.endpoint == null) return d.endpoint;
     const version = currentVersionOf(d);
     if (!version) return d.endpoint;
     const resolved = await deps.provider.resolveEndpoint(d, version);
@@ -262,7 +278,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return resolved;
     }
     return withDeployLock(d.id, async () => {
-      const cur = (await deps.deployStore.get(d.id)) ?? d;
+      const cur = await deps.deployStore.get(d.id);
+      if (cur?.status !== "running") return null;
       const v = currentVersionOf(cur) ?? version;
       const again = await deps.provider.resolveEndpoint!(cur, v);
       if (again) {
@@ -389,6 +406,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return withDeployLock(id, async () => {
         const before = await deps.deployStore.get(id);
         if (!before) throw new Error(`unknown deployment: ${id}`);
+        await withdrawLoanUnlessPublisher(before, input.actor);
         const current = currentVersionOf(before);
         assertAppSize(fileSizes(input.files), deps.provider.profile.maxAppBytes);
         const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
@@ -430,6 +448,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     async rollbackDeployment(id, version, options) {
       return withDeployLock(id, async () => {
         const before = await deps.deployStore.get(id);
+        if (before) await withdrawLoanUnlessPublisher(before, options?.actor);
         await deps.deployStore.setCurrentVersion(id, version);
         const v = await deps.deployStore.versionOf(id, version);
         const d = await deps.deployStore.get(id);
@@ -561,6 +580,32 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
+    async setDeploymentConnectors(idOrName, connectors, actor) {
+      const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
+      if (!d) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
+      if (!samePerson(d.createdBy, actor.createdBy))
+        throw new DeployAccessError(
+          "forbidden",
+          `only the person who published "${d.name ?? d.id}" can lend it their connectors`,
+        );
+      const hosts = [...new Set(connectors.map((host) => host.toLowerCase()))].sort();
+      const unknown = hosts.filter((host) => !CONNECTOR_HOSTS.includes(host));
+      if (unknown.length)
+        throw new DeployAccessError("unknown_connector", `not a connected-app host: ${unknown.join(", ")}`);
+      if (hosts.length && d.public)
+        throw new DeployAccessError("forbidden", "a public app cannot borrow connectors; make it restricted first");
+      await deps.deployStore.setConnectors(d.id, hosts.length ? hosts : undefined);
+      deps.auditLog.record({
+        at: Date.now(),
+        principalId: actor.createdBy,
+        action: "deploy_connectors",
+        resource: deploymentRef(d.id),
+        scopeLabel: d.ownerScopeId,
+        detail: hosts.join(",") || "(none)",
+      });
+      return (await deps.deployStore.get(d.id))!;
+    },
+
     async setDeploymentPublic(idOrName, isPublic, actor) {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       if (!d) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
@@ -571,6 +616,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         throw new DeployAccessError("external_sharing_disabled", EXTERNAL_APP_SHARING_OFF);
       if (isPublic && deps.publicLinksAvailable === false)
         throw new DeployAccessError("public_links_unavailable", PUBLIC_LINKS_UNAVAILABLE);
+      if (isPublic && d.connectors)
+        throw new DeployAccessError(
+          "forbidden",
+          "an app that borrows connectors cannot be public; withdraw them first",
+        );
       await deps.deployStore.setPublic(d.id, isPublic);
       deps.auditLog.record({
         at: Date.now(),
@@ -593,8 +643,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             if (await deps.provider.rotationDue?.(cur)) {
               await rotateDeployment(cur.id);
               maintained++;
-            } else if (cur.alwaysOn) {
-              await liveEndpoint(cur);
+            } else if (cur.alwaysOn && (await liveEndpoint(cur))) {
               maintained++;
             }
           } catch (e) {
@@ -611,6 +660,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       if (!d || d.status !== "running" || d.endpoint == null) return { status: "not_found" };
       if (!opts.bypassAcl && !(await reachAllowed(d, principalId))) return { status: "denied" };
       const endpoint = await liveEndpoint(d);
+      if (!endpoint) return { status: "not_found" };
       await deps.deployStore.touch(d.id, Date.now()).catch((e) => swallow("deploy reach touch", e));
       return { status: "ok", id: d.id, endpoint };
     },
@@ -627,7 +677,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return d ? await deps.deployStore.repoUrl(d.id) : null;
     },
 
-    async pushGit(id, runReceivePack) {
+    async pushGit(id, runReceivePack, actor) {
       return withDeployLock(id, async () => {
         const { result, ok } = await runReceivePack();
         if (!ok) return result;
@@ -643,6 +693,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             tree.map((f) => f.size),
             deps.provider.profile.maxAppBytes,
           );
+          await withdrawLoanUnlessPublisher(before, actor);
           const v = await deps.deployStore.addVersionFromCommit(id, pushed);
           if (!v) return result;
           const endpoint = await applyVersion(id, v, before.appliedVersion ?? before.currentVersion);
@@ -720,6 +771,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (input.files?.length) {
           const entrypoint = requiredEntrypoint(input.entrypoint, existing);
           await this.redeploy(existing.id, {
+            actor: createdBy,
             entrypoint,
             files: input.files,
             ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
@@ -739,11 +791,10 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (!existing) throw new Error(`no deployment named: ${input.name}`);
         if (!(await canManage(existing, ownerScopeId, createdBy, input.createdInScope)))
           throw new Error(`not authorized to manage deployment: ${input.name}`);
-        await this.rollbackDeployment(
-          existing.id,
-          input.rollbackTo,
-          input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : undefined,
-        );
+        await this.rollbackDeployment(existing.id, input.rollbackTo, {
+          actor: createdBy,
+          ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
+        });
         if (input.embedAncestors !== undefined)
           await this.setDeploymentEmbedAncestors(existing.id, input.embedAncestors);
         return (await deps.deployStore.get(existing.id))!;
@@ -760,6 +811,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         }
         const entrypoint = requiredEntrypoint(input.entrypoint, existing);
         await this.redeploy(existing.id, {
+          actor: createdBy,
           entrypoint,
           files,
           ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),

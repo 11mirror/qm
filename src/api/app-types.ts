@@ -133,6 +133,7 @@ export interface DeploymentView {
   status: Deployment["status"];
   alwaysOn?: boolean;
   embedAncestors?: string[];
+  connectors?: string[];
   public: boolean;
   lastAccessAt?: number;
   createdAt?: number;
@@ -163,6 +164,7 @@ export function deploymentView(d: Deployment): DeploymentView {
     status: d.status,
     ...(d.alwaysOn ? { alwaysOn: true } : {}),
     ...(d.embedAncestors?.length ? { embedAncestors: d.embedAncestors } : {}),
+    ...(d.connectors ? { connectors: d.connectors } : {}),
     public: d.public === true,
     ...(d.lastAccessAt !== undefined ? { lastAccessAt: d.lastAccessAt } : {}),
     ...(versions[0] ? { createdAt: versions[0].createdAt } : {}),
@@ -368,6 +370,8 @@ export interface App {
   unpinConversationItem(threadRef: string, pinId: string): Promise<boolean | null>;
   listSessions(principalId: string): Promise<Session[]>;
   listSessionPage(principalId: string, query: SessionPageQuery): Promise<SessionPageResult>;
+  sideChats(principalId: string, sessionId: string): Promise<Session[] | null>;
+  expandSideChat(principalId: string, sessionId: string): Promise<Session | null>;
   sessionChildren(principalId: string, sessionId: string): Promise<Session[] | null>;
   sessionRow(principalId: string, ref: { id?: string; threadRef?: string }): Promise<Session | null>;
   searchResources(
@@ -417,7 +421,7 @@ export interface App {
   forkSession(
     sessionId: string,
     principalId: string,
-    opts?: { upToSeq?: number },
+    opts?: { upToSeq?: number; sideChat?: { entrySeq: number; quote: string; occurrence: number } },
   ): Promise<{ session: Session; entries: SessionEntry[] } | null>;
   listFilesForViewer(principalId: string, opts?: ListOwnedOptions, inScope?: ScopeId): Promise<FileListPage>;
   uploadFileForViewer(
@@ -587,7 +591,7 @@ export interface App {
     id: string;
     liveActor?: boolean;
   }): Promise<"missing" | "forbidden" | "trigger_blocked" | "deleted">;
-  rollbackDeployment(id: string, version: number): Promise<void>;
+  rollbackDeployment(id: string, version: number, actor?: string): Promise<void>;
   archiveDeployment(id: string): Promise<void>;
   restoreDeployment(id: string, actorId?: string): Promise<Deployment>;
   canManageDeployment(idOrName: string, callerId: string, actingScopeId?: ScopeId): Promise<boolean>;
@@ -596,6 +600,7 @@ export interface App {
   setDeploymentAlwaysOn(id: string, alwaysOn: boolean): Promise<Deployment>;
   setDeploymentEmbedAncestors(id: string, embedAncestors: string[]): Promise<Deployment>;
   setDeploymentPublic(idOrName: string, isPublic: boolean, actor: { createdBy: string }): Promise<Deployment>;
+  setDeploymentConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<Deployment>;
   maintainDeployments(): Promise<number>;
   reachDeployment(id: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
   deploymentLogsFor(
@@ -619,7 +624,11 @@ export interface App {
   }>;
   deploymentGrantees(idOrName: string): Promise<DeploymentGrantee[]>;
   deploymentGitRepoPath(id: string): Promise<string | null>;
-  runDeploymentGitPush<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>): Promise<T>;
+  runDeploymentGitPush<T>(
+    id: string,
+    actor: string | undefined,
+    runReceivePack: () => Promise<{ result: T; ok: boolean }>,
+  ): Promise<T>;
   deploymentGitUrlFor(
     idOrName: string,
     principalId: string,
@@ -631,6 +640,10 @@ export interface App {
   createEnvironment(input: { scopeId: ScopeId; name: string; actorId: string }): Promise<Environment>;
   resolveEnvironmentByName(name: string): Promise<Environment | null>;
   attachScope(input: { scopeId: ScopeId; environmentId: string; actorId: string }): Promise<void>;
+}
+
+interface DeploymentGitPrincipals {
+  authorizes(deployment: Deployment, principalId: string, permission: "read" | "write"): Promise<boolean | undefined>;
 }
 
 export interface AppDeps {
@@ -681,6 +694,7 @@ export interface AppDeps {
   projects?: ProjectStore;
   deploy: DeployService;
   deployAppsDomain?: string;
+  deploymentGitPrincipals?: DeploymentGitPrincipals;
   deploymentLayer?: DeploymentLayerRuntime;
   files: FileArtifactStore;
   approvals?: DurableMap<PendingApprovalRecord>;
@@ -783,6 +797,13 @@ export class SoulUpdateDeniedError extends Error {
   constructor() {
     super("not authorized to update SOUL for this scope");
     this.name = "SoulUpdateDeniedError";
+  }
+}
+
+export class SideChatAnchorError extends Error {
+  constructor() {
+    super("sideChat needs a nonempty quote and an entrySeq inside the forked range");
+    this.name = "SideChatAnchorError";
   }
 }
 

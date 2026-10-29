@@ -47,6 +47,7 @@ async function workspace(platform = "darwin") {
     add,
     key,
     cycle: (step) => listeners.get("qm:cycle-tab")({}, step),
+    newSession: () => listeners.get("qm:new-session")({}),
     close: () => {
       window.dispatchEvent(new window.Event("blur"));
       window.close();
@@ -164,6 +165,63 @@ test("cycle-tab commands reach the page unless a modal dialog is open", async ()
     dialog.remove();
     app.cycle(-1);
     assert.deepEqual(steps, [1, -1]);
+  } finally {
+    app.close();
+  }
+});
+
+test("new-session commands reach the page unless a modal dialog is open", async () => {
+  const app = await workspace();
+  try {
+    let count = 0;
+    app.window.addEventListener("qm:new-session", () => count++);
+    app.newSession();
+    const dialog = app.window.document.createElement("dialog");
+    dialog.open = true;
+    app.window.document.body.append(dialog);
+    app.newSession();
+    dialog.remove();
+    app.newSession();
+    assert.equal(count, 2);
+  } finally {
+    app.close();
+  }
+});
+
+function useAppRegionAsCustomProperty(document) {
+  const styles = [...document.querySelectorAll("style")];
+  const probe = document.createElement("style");
+  probe.textContent = styles
+    .map((style) => style.textContent.replaceAll("-webkit-app-region", "--app-region"))
+    .join("\n");
+  document.head.append(probe);
+  const flat = [...probe.sheet.cssRules].flatMap((rule) => (rule.media ? [...rule.cssRules] : [rule]));
+  probe.textContent = flat.map((rule) => rule.cssText).join("\n");
+  for (const style of styles) style.remove();
+  return (selector) =>
+    document.defaultView.getComputedStyle(document.querySelector(selector)).getPropertyValue("--app-region").trim();
+}
+
+test("Mac pane strip controls stay outside the window drag region", async () => {
+  const app = await workspace();
+  try {
+    const { document } = app.window;
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      `<div class="split-canvas"><div class="dv-groupview dv-inactive-group"><div class="dv-tabs-and-actions-container">
+        <div class="dv-scrollable"><div class="dv-tabs-container"><div class="dv-tab" role="tab"><span class="split-pane-title">A</span></div></div></div>
+        <div class="dv-void-container"></div>
+        <div class="dv-right-actions-container">
+          <div class="dv-tabs-overflow-dropdown-root"><div class="dv-tabs-overflow-dropdown-default"><svg></svg><span>2</span></div></div>
+        </div>
+      </div></div></div>`,
+    );
+    const region = useAppRegionAsCustomProperty(document);
+    assert.equal(region(".dv-void-container"), "drag");
+    assert.equal(region(".dv-tab"), "no-drag");
+    assert.equal(region(".dv-tabs-overflow-dropdown-default span"), "no-drag");
+    document.querySelector(".split-canvas").classList.add("single-pane");
+    assert.equal(region(".dv-tab"), "drag");
   } finally {
     app.close();
   }

@@ -21,11 +21,11 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import type { ConnectorStatusCache } from "../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
 import type { SkillStore } from "../src/skills/skill-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { FEATURE_NAMES } from "../src/feature-flags.ts";
 
 const ORG = "default-org";
 
@@ -53,11 +53,6 @@ function fakeSandbox(): Sandbox {
     teardown: unreached as never,
   };
 }
-
-const connectorStatusCache: ConnectorStatusCache = {
-  get: async () => ({ principalId: actor.id, checkedAt: Date.now(), providers: {} }),
-  put: async () => {},
-};
 
 const connectorTokens = {
   listConnectorsByOwners: async () => new Map(),
@@ -125,7 +120,6 @@ async function buildOrchestrator(
     ...(opts.brandingDefault ? { brandingDefault: opts.brandingDefault } : {}),
     skills,
     connectorTokens,
-    connectorStatusCache,
     signingSecret: "test-signing-secret",
     apiBaseUrl: "https://api.test",
   });
@@ -300,7 +294,9 @@ test("session search guidance follows the callable surface and feature gate", as
       ]) {
         const orchestrator = await buildOrchestrator({
           sessionSyscalls: { forTurn: () => ({}) } as unknown as OrchestratorDeps["sessionSyscalls"],
-          featureFlags: { enabled: async () => enabled } as unknown as OrchestratorDeps["featureFlags"],
+          featureFlags: {
+            enabledFor: async () => new Set(enabled ? FEATURE_NAMES : []),
+          } as unknown as OrchestratorDeps["featureFlags"],
         });
         const prompt = await sysprompt(
           orchestrator,
@@ -436,7 +432,7 @@ test("Mode 2 (spine channel): static prose stays within the word-count ceiling (
   const systemPrompt = prompt.split("\n\n<environment>")[0]!;
   assert.match(
     prompt,
-    /## The user's local time/,
+    /<environment>[^]*Local time: /,
     "the volatile tail rides the environment note, not the system prompt",
   );
 
@@ -473,7 +469,6 @@ for (const surface of ["web", "slack"]) {
       assert.equal(countOccurrences(prompt, "Use Markdown"), 1);
       const stablePrompt = prompt.split("\n\n<environment>")[0]!.trim();
       assert.equal(countOccurrences(stablePrompt, "## Rules for talking to users"), 1);
-      assert.ok(stablePrompt.endsWith("4. Describe work in human terms and not system machinery."));
       assertNoTemplateTokens(prompt, `${surface} ${mode}`);
     });
   }

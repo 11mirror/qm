@@ -123,7 +123,9 @@ Postgres stores create their tables lazily with idempotent DDL through the share
 
 ## Commands, conformance, and versioning
 
-The normal gate order is `check`, `doctor`, `plan`, `up --yes`, then `check --live`. On AWS with MicroVM sandboxes, `infra build-image` precedes `plan`. First-party services come from the package's matching image manifest; `--build-from` explicitly builds modified services from a source fork or contributor checkout; use the checkout's CLI when changing deployment logic too. `check` is static and has JSON output keyed to clause ids. `doctor` makes read-only external checks. `plan` renders without mutation. On AWS, rollback restores the prior recorded deployment manifest as one unit under the deployment lease; `--to` selects another complete manifest by manifest id or recorded release label. Because rollback restores code and configuration but never data, it prints the pre-deploy database point-in-time restore timestamp recorded on the deployment it rolls back (or the legacy snapshot for older manifests). Fly and Docker do not claim rollback.
+The normal gate order is `check`, `doctor`, `plan`, `up --yes`, then `check --live`. On AWS with MicroVM sandboxes, `infra build-image` precedes `plan`. First-party services come from the package's matching image manifest; `--build-from` explicitly builds modified services from a source fork or contributor checkout; use the checkout's CLI when changing deployment logic too. `check` is static and has JSON output keyed to clause ids. `doctor` makes read-only external checks. `plan` renders without mutation. On AWS, rollback restores the prior recorded deployment manifest as one unit under the deployment lease; `--to` selects another complete manifest by manifest id or recorded release label. Because rollback restores code and configuration but never data, it prints the pre-deploy database point-in-time restore timestamp recorded on the deployment it rolls back (or the legacy snapshot for older manifests). On Render, rollback builds and deploys the selected commit with the current service settings and secret values. It can take as long as a normal deployment. `--to` selects a recorded release by label, commit, or deploy ID, or selects a full commit. Without `--to`, an interrupted rollback resumes its saved target. An explicit `--to` replaces that target and deploys all services in the selected release. Render accepts operator-owned HTTPS origins for `publicUrl` and `apiUrl` and manages them as Render custom domains. Fly and Docker do not claim rollback.
+
+Render Sandboxes require `DATABASE_URL` in production, including when credentials enable Render as a secondary backend. `SANDBOX_TIMEOUT_SEC` must stay at least 60 seconds below the Render sandbox lifetime whenever Render is enabled. Unconfirmed resource and storage-job submissions remain pending until Render reports their result. A retry or purge stops while a submission is unresolved. A crash before submission can require operator reconciliation; clear a pending record only after its outcome is confirmed.
 
 AWS `aws.dbInstanceClass` selects the RDS class rendered as `db_instance_class` and defaults to `db.t4g.small`. Operators set `db_backup_retention_days` in `infra/terraform.tfvars` to override its 35-day default. `aws.dbRetentionMinDays` is separate: it is the minimum retention that `qm up` accepts for its restore-point safety check and does not configure RDS. Before applying, the account must permit the chosen class and retention in the selected region and account plan; AWS availability and plan restrictions vary, and the rest of the deployment is not guaranteed to fit any free tier.
 
@@ -176,6 +178,30 @@ The destination host, HTTP methods, and paths remain constrained by the credenti
 record. If its injection configuration enables actor attestation, the broker sets
 `x-qm-actor` from the stored publisher. Caller-supplied actor headers are rejected.
 The destination receives the configured credential, never the deployment token.
+
+### Lending a publisher's connected apps to their app
+
+A publisher can let their app call any of their connected apps (mail, calendar, chat,
+files, and so on) as them, the same way apps use org credentials through the broker.
+Nothing is lent by default. The publisher opts in per app and per connected-app host with
+`POST /v1/deployments/:id/connectors` and `{"connectors": ["<host>", ...]}`; `[]`
+withdraws. Only the publisher may call it, from a live turn or a signed-in session. Public
+apps cannot borrow connectors, and an app that borrows them cannot be made public. When
+anyone other than the publisher publishes, pushes or rolls back a version, the loan is
+withdrawn before that version runs. The token comes from the publisher's personal
+connection, else their default, else their company one.
+
+The app's server sends the broker `connector` (the host) instead of `credential`, with
+the same `url`, `method`, `headers` and `body`. The broker pins the URL to that exact host
+over standard HTTPS, injects the token and returns only the response; the app never sees
+the token. Every call acts as the publisher, whoever is using the app, so the app's own
+code decides who may do what, typically from the signed-in viewer in
+`x-portal-identity`. A bug in the app, or code a co-manager slipped in before the
+publisher lent again, can act as the publisher without a click, exactly as with an org
+credential.
+
+Each call and refusal is audited as `connector.broker.use`, `.denied` or `.error` with the
+app, method, path and outcome; each loan change as `deploy_connectors`.
 
 ### Public AWS plugin routes
 

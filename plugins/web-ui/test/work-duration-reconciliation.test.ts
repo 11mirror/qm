@@ -132,16 +132,40 @@ test("historical transcripts without persisted timing keep the activity-inferenc
   assert.equal(work?.finishedAt, 130);
 });
 
-test("live and completed work use compact minute and second labels", () => {
+test("live and completed work use whole seconds with minute rollover", () => {
   for (const prefix of ["Working", "Worked"]) {
     for (const [seconds, duration] of [
+      [0.12, "0s"],
       [7, "7s"],
-      [60, "1m"],
-      [65, "1m 5s"],
-      [365, "6m 5s"],
+      [57.239, "57s"],
+      [59.999, "59s"],
+      [60, "1m 00s"],
+      [65.129, "1m 05s"],
+      [365, "6m 05s"],
     ] as const)
       assert.equal(workedLabel(prefix, seconds), `${prefix} for ${duration}`);
   }
+});
+
+test("work timing keeps fractions through live updates, completion and transcript refresh", (t) => {
+  t.mock.method(Date, "now", () => 157_239);
+  const work: WorkBlock = { status: "working", startedAt: 100_000, activity: [] };
+  assert.equal(workedLabel("Working", workSeconds(work)), "Working for 57s");
+  work.status = "complete";
+  work.finishedAt = 157_239;
+  const entries: SessionEntry[] = [
+    { seq: 1, type: "user", payload: { text: "hello" }, createdAt: 100_000 },
+    { seq: 2, type: "tool_call", parentSeq: 1, payload: { tool: "execute" }, createdAt: 101_000 },
+    {
+      seq: 3,
+      type: "assistant",
+      payload: { text: "done", workStartedAt: 100_000, workFinishedAt: 157_239 },
+      createdAt: 157_239,
+    },
+  ];
+  const rebuilt = (entriesToMessages(entries, MODEL)[1] as AssistantWork).work!;
+  assert.equal(workedLabel("Worked", workSeconds(rebuilt)), "Worked for 57s");
+  assert.equal(workSeconds(rebuilt), workSeconds(work));
 });
 
 test("work duration ends at final-answer start while the run stays active and survives history projection", () => {

@@ -9,6 +9,7 @@ import {
 } from "../../src/harness/harness.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../../src/core/turn-error.ts";
 import { NeedsApproval } from "../../src/tools/primitives.ts";
+import { toolCallApprovalKey } from "../../src/core/approval-id.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "../../src/harness/context-compaction.ts";
 import { countTokens } from "../../src/util/tokens.ts";
 import { recordStoppedTurn } from "../../src/harness/harness-shared.ts";
@@ -24,7 +25,6 @@ const READ_ONLY_BLOCKED_PREFIXES = [
   "!run ",
   "!execute ",
   "!scratch ",
-  "!owner ",
   "!reach ",
   "!paused-approval ",
   "!collect-approval ",
@@ -181,6 +181,8 @@ export function createMockHarness(): Harness {
           kind?: "approval";
           matched?: string;
           approvalKey?: string;
+          grantModes?: { session: boolean; always: boolean };
+          summary?: string;
         }> = [];
         let pausedOnApproval = false;
         const gateTool = (tool: string): boolean => {
@@ -400,23 +402,21 @@ export function createMockHarness(): Harness {
           const params = JSON.parse(cmd.slice(cmd.indexOf("!execute ") + 9)) as {
             command: string;
             credentials?: string[];
-            ownerAuth?: boolean;
+            scratch?: boolean;
             sandboxId?: string;
           };
           const result = await turn.tools.execute(params.command, {
             credentials: params.credentials,
-            ownerAuth: params.ownerAuth,
+            scratch: params.scratch,
             sandboxId: params.sandboxId,
           });
           await turn.emit({ type: "tool_result", payload: result, scopeLabel: turn.scopeLabel });
           turn.onProgress?.({ toolCalls: 1 });
           usedTool = true;
           reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
-        } else if (command0.startsWith("!run ") || command0.startsWith("!scratch ") || command0.startsWith("!owner ")) {
-          let tag = "!run ";
-          if (command0.startsWith("!scratch ")) tag = "!scratch ";
-          else if (command0.startsWith("!owner ")) tag = "!owner ";
-          const inboxDir = /available in \.\/(\S+?)\/:/.exec(turn.environment ?? "")?.[1] ?? "inbox";
+        } else if (command0.startsWith("!run ") || command0.startsWith("!scratch ")) {
+          const tag = command0.startsWith("!scratch ") ? "!scratch " : "!run ";
+          const inboxDir = / shared \S+ \(\.\/(\S+)\/[^/)]+\)\./.exec(turn.environment ?? "")?.[1] ?? "inbox";
           const command = cmd.slice(cmd.indexOf(tag) + tag.length).replaceAll("{INBOX}", inboxDir);
           if (gateTool("execute")) {
             await turn.emit({
@@ -428,10 +428,7 @@ export function createMockHarness(): Harness {
             reply = "";
           } else {
             await turn.emit({ type: "tool_call", payload: { tool: "execute", command }, scopeLabel: turn.scopeLabel });
-            let opts: { scratch?: boolean; ownerAuth?: boolean } | undefined;
-            if (tag === "!scratch ") opts = { scratch: true };
-            else if (tag === "!owner ") opts = { ownerAuth: true };
-            const result = await turn.tools.execute(command, opts);
+            const result = await turn.tools.execute(command, tag === "!scratch " ? { scratch: true } : undefined);
             await turn.emit({ type: "tool_result", payload: result, scopeLabel: turn.scopeLabel });
             turn.onProgress?.({ toolCalls: 1 });
             usedTool = true;
@@ -560,6 +557,23 @@ export function createMockHarness(): Harness {
           }
           usedTool = true;
           reply = `ran ${ran}`;
+        } else if (command0.startsWith("!declared ")) {
+          const args = JSON.parse(command0.slice("!declared ".length)) as Record<string, unknown>;
+          const callKey = toolCallApprovalKey("example_send", args);
+          usedTool = true;
+          if (turn.toolApprovalGate?.("example_send", callKey)) reply = `sent ${JSON.stringify(args)}`;
+          else {
+            collected.push({
+              command: `example_send ${JSON.stringify(args)}`,
+              reason: "this tool asks for approval before each call",
+              kind: "approval",
+              approvalKey: callKey,
+              summary: "example_send",
+              grantModes: { session: false, always: false },
+            });
+            pausedOnApproval = true;
+            reply = "";
+          }
         } else if (command0.startsWith("!read ") && gateTool("read")) {
           usedTool = true;
           reply = "";
@@ -946,20 +960,28 @@ export function createMockHarness(): Harness {
         return { ...base, ...(silent ? { silent: true as const } : {}), cacheUsage };
       },
 
-      shouldRespond(detect: HarnessDetectInput): Promise<HarnessDetectResult> {
+      async shouldRespond(detect: HarnessDetectInput): Promise<HarnessDetectResult> {
+        const input = countTokens(detect.message);
+        await detect.recordLlmRequest?.({
+          turnSeq: null,
+          step: 0,
+          model: "mock-detect",
+          truncated: false,
+          usage: { input, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: input + 1, costUsd: 0 },
+        });
         const msg = detect.message.trim();
         const first = msg.split("\n")[0]?.trim() ?? "";
-        if (first.startsWith("!")) return Promise.resolve({ respond: true, reason: "command" });
-        if (msg.endsWith("?")) return Promise.resolve({ respond: true, reason: "question" });
-        if (/\b(agent|bot)\b/i.test(msg)) return Promise.resolve({ respond: true, reason: "addressed" });
+        if (first.startsWith("!")) return { respond: true, reason: "command" };
+        if (msg.endsWith("?")) return { respond: true, reason: "question" };
+        if (/\b(agent|bot)\b/i.test(msg)) return { respond: true, reason: "addressed" };
         if (
           detect.reactionGuidance?.trim() &&
           /\b(thanks|thank you|thx|ty|nice|great|awesome|perfect|lgtm)\b/i.test(msg)
         ) {
-          return Promise.resolve({ respond: false, reactions: ["pray"], reason: "acknowledgement" });
+          return { respond: false, reactions: ["pray"], reason: "acknowledgement" };
         }
-        if (detect.threadOpener?.trim()) return Promise.resolve({ respond: true, reason: "own thread" });
-        return Promise.resolve({ respond: false, reason: "not addressed" });
+        if (detect.threadOpener?.trim()) return { respond: true, reason: "own thread" };
+        return { respond: false, reason: "not addressed" };
       },
 
       async compactHistory({ history }) {
