@@ -4,7 +4,7 @@ import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker 
 import { withAbort } from "../util/async.ts";
 import { readContextFile } from "../resolution/context-files.ts";
 import { canReadNotebook, readNotebook, searchNotebooks } from "../memory/cross-scope.ts";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { workspacePathOf } from "../sandbox/exec-file-ops.ts";
 import { interpolateSplitEnv } from "../deployment/deployment-layer.ts";
 import type { ExecResult, Sandbox, SandboxHandle } from "../sandbox/sandbox.ts";
@@ -167,6 +167,10 @@ export function fileOps(
         }
         const content = await withAbort(() => memory.read(deps.memoryScopeId!), signal);
         return { content, sourceScopeId: deps.memoryScopeId };
+      }
+      if (posix.normalize(`${path}/`) === "shared/") {
+        const names = [...new Set(deps.grantedHandles.map((handle) => handle.handlePath))].sort();
+        return { content: names.length ? names.join("\n") : "[no files are shared with you]", sourceScopeId: null };
       }
       const sharedFile = deps.context
         ? await withAbort(() => deps.context!.readFile(path), signal)

@@ -643,6 +643,9 @@ function connectorDescription(cm: ConnectorMeta): string {
   }${typeof cm.expiresAt === "number" ? `, token expires at ${new Date(cm.expiresAt).toISOString()}` : ""}; ${connectorTokenNote(cm.host)}`;
 }
 
+export const connectorHandle = (host: string, accountType?: string): string =>
+  `connector:${host}:${accountType ?? "default"}`;
+
 export const MAX_CREDENTIAL_FILES = 500;
 export const MAX_CREDENTIAL_BYTES = 8 * 1024 * 1024;
 

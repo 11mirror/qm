@@ -366,3 +366,18 @@ test("non-memory writes still go to the workspace file store", async () => {
   assert.equal(wsWrites.includes("notes/todo.txt"), true);
   assert.equal(getDurable(), "");
 });
+
+test("shared directory reads list only granted handles without sandbox IO", async () => {
+  const handle = (handlePath: string) => ({
+    handlePath,
+    fileId: handlePath,
+    ownerScopeId: scopeId("personal", "U2"),
+    permission: "read" as const,
+  });
+  const { tc, reads } = setup({ grantedHandles: [handle("shared/b"), handle("shared/a"), handle("shared/b")] });
+  for (const path of ["shared", "shared/", "./shared/", "shared/../shared"]) {
+    assert.deepEqual(await tc.read(path), { content: "shared/a\nshared/b", sourceScopeId: null });
+  }
+  assert.equal(reads(), 0);
+  assert.deepEqual(await setup().tc.read("shared"), { content: "[no files are shared with you]", sourceScopeId: null });
+});

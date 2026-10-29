@@ -638,3 +638,27 @@ test("an expired consent link reports an expiry status", async () => {
     await srv.close();
   }
 });
+
+test("connector catalog accepts an agent capability without a source signature", async () => {
+  const srv = start(async () => {
+    throw new Error("no token exchange expected");
+  });
+  try {
+    const capability = await mintCapabilityToken(
+      { actorId: "U1", scopeId: "personal:U1", exp: Date.now() + CAPABILITY_TTL_MS },
+      SECRET,
+    );
+    const response = await fetch(`${srv.base}/v1/connectors/catalog`, {
+      headers: { "x-agent-capability": capability },
+    });
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.ok(
+      ((await response.json()) as { catalog: { provider: string }[] }).catalog.some(
+        (entry) => entry.provider === "google",
+      ),
+    );
+    assert.equal((await fetch(`${srv.base}/v1/connectors/catalog`)).status, 401);
+  } finally {
+    await srv.close();
+  }
+});

@@ -286,3 +286,47 @@ it("overview includes safe connector metadata so its grants remain visible and r
   assert.equal(body.grants.find((entry: any) => entry.id === grant!.id)?.status, "active");
   assert.ok(!JSON.stringify(body).includes("never-return-this-connector"));
 });
+
+it("named credential asks resolve only current conversation members and return safe ambiguity candidates", async () => {
+  await built.directory.replace([
+    { principalId: "OWNER", displayName: "Alice", type: "internal" },
+    { principalId: "U3", displayName: "Bob", type: "internal" },
+    { principalId: "OUTSIDE", displayName: "Outsider", type: "guest" },
+  ]);
+  const deploy = await built.keychain!.save({
+    ownerId: "OWNER",
+    service: "named-deploy",
+    secret: "named-secret",
+    envKey: "NAMED_DEPLOY",
+  });
+  for (const accountLabel of ["home", "work"])
+    await built.keychain!.save({
+      ownerId: "OWNER",
+      service: "named-twin",
+      accountLabel,
+      secret: "twin-secret",
+      envKey: `TWIN_${accountLabel.toUpperCase()}`,
+    });
+  const cap = await capFor("U3", "channel:C7", {
+    threadRef: "slack:C7:named",
+    destination: { type: "slack", target: "C7", audienceScopeId: "channel:C7" },
+  });
+  const ask = (body: Record<string, string>) => post("/v1/keychain/asks", { purpose: "run the deploy", ...body }, cap);
+  const outsider = await post(
+    "/v1/keychain/asks",
+    { owner: "Alice", service: "unknown-service", purpose: "not a participant" },
+    await capFor("OUTSIDE", "channel:C7"),
+  );
+  assert.equal(outsider.status, 403);
+  assert.ok(!(await outsider.text()).includes("named-deploy"));
+  const resolved = await ask({ owner: "Alice", service: "Named-Deploy" });
+  assert.equal(resolved.status, 200, await resolved.clone().text());
+  assert.equal(((await resolved.json()) as { ask: { credentialId: string } }).ask.credentialId, deploy.id);
+  const ambiguous = await ask({ owner: "OWNER", service: "named-twin" });
+  assert.equal(ambiguous.status, 409);
+  const body = (await ambiguous.json()) as { candidates: { credential: string; account: string }[] };
+  assert.deepEqual(body.candidates.map((c) => c.account).sort(), ["home", "work"]);
+  assert.ok(!JSON.stringify(body).includes("twin-secret"));
+  assert.equal((await ask({ credential: body.candidates[0]!.credential })).status, 200);
+  assert.equal((await ask({ owner: "Outsider", service: "named-deploy" })).status, 404);
+});

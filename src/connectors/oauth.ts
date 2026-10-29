@@ -718,6 +718,10 @@ function providerForHost(host: string): { name: string; config: OAuthProviderCon
   return null;
 }
 
+export function connectorHostLabel(host: string): string {
+  return providerForHost(host)?.config.label ?? host;
+}
+
 export function makeRefresh(opts: {
   resolveClient: OAuthClientResolver;
   fetchImpl?: FetchLike;

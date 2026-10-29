@@ -521,5 +521,5 @@ export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "either",
     handle: oauthRevoke,
   },
-  { method: "GET", path: "/v1/connectors/catalog", auth: "source", handle: catalog },
+  { method: "GET", path: "/v1/connectors/catalog", auth: "either", handle: catalog },
 ];
