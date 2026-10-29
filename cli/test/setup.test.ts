@@ -14,11 +14,7 @@ import {
 } from "../src/commands/setup.ts";
 import { CliError } from "../src/log.ts";
 
-function configFor(
-  services: string[],
-  extra = "",
-  env = `{ "core": { "HARNESS": "pi" } }`,
-): ReturnType<typeof loadConfigAt>["config"] {
+function configFor(services: string[], extra = "", env = `{}`): ReturnType<typeof loadConfigAt>["config"] {
   const dir = mkdtempSync(join(tmpdir(), "qm-setup-"));
   try {
     writeFileSync(
@@ -148,7 +144,7 @@ test("the broker's operator secrets replace the external-IdP ones", () => {
   const broker = configFor(
     ["core", "web-ui", "admin", "portal", "auth"],
     "",
-    `{ "core": { "HARNESS": "pi" }, "auth": { "AUTH_EMAIL_TRANSPORT": "resend" } }`,
+    `{ "auth": { "AUTH_EMAIL_TRANSPORT": "resend" } }`,
   );
   const brokerNames = pendingSecrets(broker, new Map()).todo.map((secret) => secret.name);
   assert.ok(!brokerNames.includes("OIDC_CLIENT_SECRET"), "the broker mints the portal's client secret");
