@@ -152,15 +152,6 @@ export interface SandboxDriver extends ProviderControls {
   checkpoints?: DriverCheckpoints;
 }
 
-export type ProviderSandbox = BackendSandbox & {
-  readonly scopeFor: (name: string) => string | undefined;
-  readonly scopeOf: (name: string) => Promise<string | undefined>;
-  readonly nameFor: (scopeId: string) => Promise<string>;
-  readonly lifecycle: <T>(scopeId: string, fn: () => Promise<T>) => Promise<T>;
-  readonly captureCheckpoint: (scopeId: string, name: string) => Promise<void>;
-  readonly ensureResident: (scopeId: string) => Promise<void>;
-};
-
 export interface ProviderContext {
   driver: SandboxDriver;
   store: SandboxBodies<StoredSandboxRecord>;
@@ -553,7 +544,7 @@ function providerScopeMethods(
         }),
       );
     },
-  } satisfies Partial<ProviderSandbox>;
+  } satisfies Partial<BackendSandbox>;
 }
 
 export function createProviderSandbox(
@@ -561,7 +552,7 @@ export function createProviderSandbox(
   driver: SandboxDriver,
   shared: SandboxShared,
   store: SandboxBodies<StoredSandboxRecord>,
-): ProviderSandbox {
+): BackendSandbox {
   const { backend, homeDir } = driver;
   const policy = sandboxPolicy(backend, shared);
   const prefix = (): string => sandboxNamePrefix(shared);
@@ -671,15 +662,6 @@ export function createProviderSandbox(
 
   return {
     profile,
-    scopeFor,
-    scopeOf,
-    nameFor,
-    lifecycle: (scope, fn) => base.provisionQueue(scope, () => lock(scope, fn)),
-    captureCheckpoint,
-    ensureResident: async (scope) => {
-      const name = await nameFor(scope);
-      await base.provisionQueue(scope, () => lock(scope, () => initialize(scope, name)));
-    },
     provision,
     run: base.run,
     writeFile: base.writeFile,

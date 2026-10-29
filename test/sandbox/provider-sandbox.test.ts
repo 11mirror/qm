@@ -77,10 +77,6 @@ test("the same scope under two tenants provisions two machines named by each ten
   assert.match(handleA.id, /^qm-a-/);
   assert.match(handleB.id, /^qm-b-/);
   assert.deepEqual(created, [handleA.id, handleB.id]);
-  assert.equal(await withTenant(a, () => sandbox.nameFor(scope)), handleA.id);
-  assert.equal(await withTenant(b, () => sandbox.nameFor(scope)), handleB.id);
-  assert.equal(sandbox.scopeFor(handleA.id), scope);
-  assert.equal(sandbox.scopeFor(handleB.id), scope);
 });
 
 test("checkpoint retention is enforced for every driver before native restore", async () => {

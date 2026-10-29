@@ -113,15 +113,8 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       },
       writeAbsBytes: async (name, absPath, data) => (await current(name)).writeFileBytes(absPath, data),
       readAbsBytes: async (name, absPath) => (await current(name)).readFileBytes(absPath),
-      async inspect(name, identity) {
-        let found = await client.fromName(name);
-        if (!found && identity) {
-          try {
-            found = await client.fromId(identity);
-          } catch (error) {
-            if (!(error instanceof ModalSandboxGoneError)) throw error;
-          }
-        }
+      async inspect(name) {
+        const found = await client.fromName(name);
         if (!found) {
           sessions.delete(name);
           return null;
