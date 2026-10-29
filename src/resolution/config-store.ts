@@ -144,7 +144,6 @@ interface ConfigRecords {
   commandPolicies: ScopedRow<"policy", CommandPolicy>;
   approvalGrantModes: PersistedApprovalGrantModes;
   egressPolicies: PersistedEgressPolicy;
-  unfulfilledInsights: PersistedScopedFlag;
   externalSlackParticipants: PersistedScopedFlag;
   channelHeaderPin: PersistedScopedFlag;
   baseModels: PersistedBaseModel;
@@ -156,7 +155,6 @@ interface ConfigRecords {
   slackEmojiCatalog: PersistedSlackEmojiCatalog;
   branding: ScopedRow<"branding", OrgBranding>;
   browseMaxSteps: ScopedRow<"steps", number>;
-  browseModels: ScopedRow<"modelId", string>;
   autoFlaggerConfigs: PersistedAutoFlaggerConfig;
   deploymentIdentity: PersistedDeploymentIdentity;
 }
@@ -174,7 +172,6 @@ type SettingTable = Exclude<
 interface ScopeSettingValues {
   commandPolicy: CommandPolicy | null;
   egress: EgressPolicy | null;
-  unfulfilledInsights: boolean;
   externalSlackParticipants: boolean;
   channelHeaderPin: boolean;
   orgAmbient: boolean;
@@ -184,7 +181,6 @@ interface ScopeSettingValues {
   ackEmoji: string[] | null;
   branding: OrgBranding | null;
   browseMaxSteps: number | null;
-  browseModel: string | null;
   autoFlagger: AutoFlaggerConfig | null;
 }
 export type ScopeSettingName = keyof ScopeSettingValues;
@@ -204,7 +200,6 @@ const emptyAsNull = (items: string[]): string[] | null => (items.length ? items 
 export const SCOPE_SETTINGS: { [K in ScopeSettingName]: ScopeSettingSpec<ScopeSettingValue<K>> } = {
   commandPolicy: { table: "commandPolicies", target: "any", orgDefault: defaultOrgPolicy() },
   egress: { table: "egressPolicies", target: "any", orgDefault: { allowedHosts: [], deniedHosts: [] } },
-  unfulfilledInsights: { table: "unfulfilledInsights", target: "any", inherit: "any" },
   externalSlackParticipants: { table: "externalSlackParticipants", target: "org", inherit: "any" },
   channelHeaderPin: { table: "channelHeaderPin", target: "org", inherit: "fallback", orgDefault: false },
   orgAmbient: { table: "orgAmbient", target: "org", orgOnly: true, orgDefault: true },
@@ -214,7 +209,6 @@ export const SCOPE_SETTINGS: { [K in ScopeSettingName]: ScopeSettingSpec<ScopeSe
   ackEmoji: { table: "ackEmoji", target: "org", normalize: emptyAsNull },
   branding: { table: "branding", target: "org" },
   browseMaxSteps: { table: "browseMaxSteps", target: "org" },
-  browseModel: { table: "browseModels", target: "org" },
   autoFlagger: { table: "autoFlaggerConfigs", target: "org", orgOnly: true },
 };
 
@@ -286,13 +280,12 @@ function createScopeSettings(org: ScopeId, tables: ConfigTables<ConfigRecords>, 
       name,
       tables[name] as TypedTable<ConfigRecords[N]>,
       (row) => row[key],
-      (id, value: ConfigRecords[N][K]) => ({ scopeId: id, [key]: value }) as ConfigRecords[N],
+      (id, value: ConfigRecords[N][K]) => ({ scopeId: id, [key]: value }) as unknown as ConfigRecords[N],
     );
   return {
     commandPolicies: field("commandPolicies", "policy"),
     approvalGrantModes: field("approvalGrantModes", "modes"),
     egressPolicies: field("egressPolicies", "policy"),
-    unfulfilledInsights: field("unfulfilledInsights", "on"),
     externalSlackParticipants: field("externalSlackParticipants", "on"),
     channelHeaderPin: field("channelHeaderPin", "on"),
     orgAmbient: field("orgAmbient", "on"),
@@ -302,7 +295,6 @@ function createScopeSettings(org: ScopeId, tables: ConfigTables<ConfigRecords>, 
     ackEmoji: field("ackEmoji", "names"),
     branding: field("branding", "branding"),
     browseMaxSteps: field("browseMaxSteps", "steps"),
-    browseModels: field("browseModels", "modelId"),
     autoFlaggerConfigs: scopeSetting(
       org,
       queue,

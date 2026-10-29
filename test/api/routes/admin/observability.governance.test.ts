@@ -191,43 +191,7 @@ test("admin governance: browse step limit round-trips, validates, and is org-sco
   }
 });
 
-test("an OpenAI-only deployment still gets a browse model picker, and Anthropic picks are refused", async () => {
-  const built = buildApp(testConfig({ modelId: "gpt-5.6-sol", openaiApiKey: "sk-openai-test" }));
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    config: built.config,
-    auditLog: built.auditLog,
-    baseModelDefault: "gpt-5.6-sol",
-    providerKeys: { anthropic: false, openai: true, openrouter: false },
-  });
-  const base = listenLocal(server);
-  const putModel = (modelId: unknown) =>
-    fetch(base + "/v1/admin/scopes/org%3Adefault-org/browse-model", {
-      method: "PUT",
-      headers: { ...ALICE, "content-type": "application/json" },
-      body: JSON.stringify({ modelId }),
-    });
-  try {
-    const opts = (await getJson(base, "/v1/admin/scopes/org:default-org")).browseModelOptions as Array<{ id: string }>;
-    assert.ok(opts.length > 0, "the picker is not empty just because the deployment has no Anthropic key");
-    assert.ok(
-      opts.every((m) => m.id.startsWith("gpt-")),
-      "only models this deployment can actually serve are offered",
-    );
-
-    assert.equal(
-      (await putModel("claude-opus-4-8")).status,
-      400,
-      "an Anthropic pick is refused when no Anthropic key is configured",
-    );
-    assert.equal((await putModel("gpt-5.6-luna")).status, 200);
-    assert.equal(built.config.setting("browseModel", "org:default-org"), "gpt-5.6-luna");
-  } finally {
-    await new Promise<void>((r) => server.close(() => r()));
-  }
-});
-
-test("admin governance: browse model round-trips, validates, and is org-scoped", async () => {
+test("retired browser-model and unfulfilled-insight admin controls are absent", async () => {
   const built = buildApp(testConfig());
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
@@ -235,60 +199,19 @@ test("admin governance: browse model round-trips, validates, and is org-scoped",
     auditLog: built.auditLog,
   });
   const base = listenLocal(server);
-  const putModel = (scope: string, modelId: unknown, headers: Record<string, string>) =>
-    fetch(base + `/v1/admin/scopes/${encodeURIComponent(scope)}/browse-model`, {
-      method: "PUT",
-      headers: { ...headers, "content-type": "application/json" },
-      body: JSON.stringify({ modelId }),
-    });
   try {
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).browseModel, null, "no override by default");
-
-    assert.equal(
-      (await putModel("org:default-org", "claude-sonnet-4-6", { "x-admin-actor": "nobody@default-org" })).status,
-      403,
-      "admin-gated",
-    );
-    assert.equal(
-      (await putModel("channel:C1", "claude-sonnet-4-6", ALICE)).status,
-      400,
-      "org-wide only — a channel scope is rejected",
-    );
-    assert.equal(
-      (await putModel("org:default-org", "not-a-model", ALICE)).status,
-      400,
-      "an unknown model id is rejected",
-    );
-    assert.equal(
-      (await putModel("org:default-org", "gpt-5.6-luna", ALICE)).status,
-      200,
-      "a non-Anthropic model is accepted — the browse runner follows the model's provider",
-    );
-    assert.equal(
-      (await putModel("org:default-org", 42, ALICE)).status,
-      400,
-      "a non-string is rejected, not treated as a clear",
-    );
-
-    assert.equal((await putModel("org:default-org", "claude-sonnet-4-6", ALICE)).status, 200);
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).browseModel, "claude-sonnet-4-6");
-    assert.equal(
-      built.config.setting("browseModel", "org:default-org"),
-      "claude-sonnet-4-6",
-      "the store the orchestrator reads sees the change",
-    );
-    const opts = (await getJson(base, "/v1/admin/scopes/org:default-org")).browseModelOptions;
-    assert.ok(
-      Array.isArray(opts) && opts.some((m: { id: string }) => m.id === "claude-opus-4-8"),
-      "the scope read carries the browse model picker options",
-    );
-    assert.ok(
-      opts.some((m: { id: string }) => m.id === "gpt-5.6-sol"),
-      "the browse picker spans providers, not Anthropic alone",
-    );
-
-    assert.equal((await putModel("org:default-org", "", ALICE)).status, 200, "empty clears to the default");
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).browseModel, null);
+    const scope = await getJson(base, "/v1/admin/scopes/org:default-org");
+    assert.equal("browseModel" in scope, false);
+    assert.equal("browseModelOptions" in scope, false);
+    assert.equal("unfulfilledInsights" in scope, false);
+    for (const key of ["browse-model", "unfulfilled-insights"]) {
+      const response = await fetch(`${base}/v1/admin/scopes/org%3Adefault-org/${key}`, {
+        method: "PUT",
+        headers: { ...ALICE, "content-type": "application/json" },
+        body: JSON.stringify({ modelId: "m", on: true }),
+      });
+      assert.equal(response.status, 404);
+    }
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }

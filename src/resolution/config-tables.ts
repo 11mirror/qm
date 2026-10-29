@@ -36,7 +36,6 @@ export const CONFIG_TABLES = {
   commandPolicies: scoped("command_policies", "policy jsonb!"),
   approvalGrantModes: scoped("approval_grant_modes", "modes jsonb!"),
   egressPolicies: scoped("egress_policies", "policy jsonb!"),
-  unfulfilledInsights: flag("unfulfilled_insights_flag"),
   externalSlackParticipants: flag("external_slack_participants_flag"),
   channelHeaderPin: flag("channel_header_pin_flag"),
   baseModels: scoped(
@@ -52,7 +51,6 @@ export const CONFIG_TABLES = {
   slackEmojiCatalog: scoped("slack_emoji_catalog", "emoji jsonb!, updatedAt bigint!"),
   branding: scoped("branding_configs", "branding jsonb!"),
   browseMaxSteps: scoped("browse_max_steps_configs", "steps bigint!"),
-  browseModels: scoped("browse_model_configs", "modelId text!"),
   autoFlaggerConfigs: scoped("auto_flagger_configs", "modelId text!, rubric text!"),
   deploymentIdentity: { table: "deployment_identity", key: "id", columns: cols("orgId text!") },
 } satisfies Record<string, TableSpec>;

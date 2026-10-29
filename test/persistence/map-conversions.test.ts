@@ -20,7 +20,7 @@ import { testDatabaseUrl } from "../support/test-database.ts";
 const CONVERSIONS = mapConversions();
 const CONTRACTS = [...CONTRACT_MIGRATIONS, ...CONVERSIONS.map((conversion) => conversion.contract)];
 
-test("every former durable-map table has a conversion", () => assert.equal(CONVERSIONS.length, 80));
+test("every former durable-map table has a conversion", () => assert.equal(CONVERSIONS.length, 78));
 
 for (const conversion of CONVERSIONS)
   test(`${conversion.spec.table} converts in place for one tenant and for two`, () => assertMapConversion(conversion));

@@ -370,7 +370,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       return { ok: true };
     },
   },
-  settingResource("unfulfilledInsights", { id: "unfulfilled-insights", kind: "boolean", parse: boolBody }),
   settingResource("externalSlackParticipants", {
     id: "external-slack-participants",
     kind: "boolean",
@@ -578,26 +577,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (accentInput && !value?.accent) return { error: "branding accent must be a hex color (e.g. #4f46e5)" };
       if (markUrlInput && !value?.markUrl) return { error: "branding mark image must be an https URL" };
       return { value: value ?? null };
-    },
-  }),
-  settingResource("browseModel", {
-    id: "browse-model",
-    refreshesModels: true,
-    kind: "enum",
-    clearable: true,
-    label:
-      "The model driving the browser agent in the browse skill, org-wide (empty follows the deployment's base model; fast mode applies only on Opus models).",
-    get enumValues() {
-      return selectableBaseModels();
-    },
-    orgWide: "the browse model is org-wide",
-    parse: async (body, deps) => {
-      const raw = (body as { modelId?: unknown }).modelId;
-      if (raw !== undefined && raw !== null && typeof raw !== "string")
-        return { error: "browse-model requires { modelId: string } (empty string clears the override)" };
-      const modelId = typeof raw === "string" ? raw.trim() : "";
-      if (modelId && !resolveModel(modelId)) return { error: `unknown model id: ${modelId}` };
-      return (modelId ? await unserviceable(deps, modelId) : null) ?? { value: modelId || null };
     },
   }),
   settingResource("browseMaxSteps", {

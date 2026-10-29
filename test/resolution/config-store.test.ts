@@ -198,7 +198,6 @@ test("pg config store: scoped soul/policy/egress/flags survive a restart (write-
   await a.setSetting("egress", { allowedHosts: ["api.example.com"], deniedHosts: ["evil.example"] }, ch);
   await a.setRuntimeSelection(ch, { modelId: "claude-opus-4-8" });
   await a.setSetting("browseMaxSteps", 120, ch);
-  await a.setSetting("browseModel", "claude-sonnet-4-6", ch);
 
   const b = open();
   assert.equal(b.getInstructions(ch), null, "a cold instance has no scoped soul until it hydrates");
@@ -219,7 +218,6 @@ test("pg config store: scoped soul/policy/egress/flags survive a restart (write-
   );
   assert.equal(b.getRuntimeSelection(ch)?.modelId ?? null, "claude-opus-4-8", "the base model survived");
   assert.equal(b.setting("browseMaxSteps", ch), 120, "the browse step limit survived");
-  assert.equal(b.setting("browseModel", ch), "claude-sonnet-4-6", "the browse model survived");
 });
 
 test("pg config store: rapid overlapping writes to one scope converge to the last value (serialized write-through)", async () => {
@@ -236,8 +234,6 @@ test("pg config store: rapid overlapping writes to one scope converge to the las
   await a.setRuntimeSelection(ch, null);
   await a.setSetting("browseMaxSteps", 60, ch);
   await a.setSetting("browseMaxSteps", null, ch);
-  await a.setSetting("browseModel", "claude-sonnet-4-6", ch);
-  await a.setSetting("browseModel", null, ch);
 
   const b = open();
   await b.hydrate?.();
@@ -254,7 +250,6 @@ test("pg config store: rapid overlapping writes to one scope converge to the las
   );
   assert.equal(b.getRuntimeSelection(ch)?.modelId ?? null, null, "a cleared base model stays cleared after restart");
   assert.equal(b.setting("browseMaxSteps", ch), null, "a cleared browse step limit stays cleared after restart");
-  assert.equal(b.setting("browseModel", ch), null, "a cleared browse model stays cleared after restart");
 });
 
 test("pg config store: settings written on one core reach another core through refreshScope", async () => {
@@ -269,7 +264,6 @@ test("pg config store: settings written on one core reach another core through r
   await a.setSetting("webuiModels", ["claude-opus-4-8"], ch);
   await a.setSetting("ackEmoji", ["eyes"], ch);
   await a.setSetting("browseMaxSteps", 77, ch);
-  await a.setSetting("browseModel", "claude-sonnet-4-6", ch);
   await a.setSetting("branding", { accent: "#123456" }, ch);
   await a.setSetting("channelHeaderPin", true, ch);
   await a.setApprovalGrantModes(ch, { session: false, always: true });
@@ -281,7 +275,6 @@ test("pg config store: settings written on one core reach another core through r
   assert.deepEqual(b.setting("webuiModels", ch), ["claude-opus-4-8"]);
   assert.deepEqual(b.setting("ackEmoji", ch), ["eyes"]);
   assert.equal(b.setting("browseMaxSteps", ch), 77);
-  assert.equal(b.setting("browseModel", ch), "claude-sonnet-4-6");
   assert.deepEqual(b.setting("branding", ch), { accent: "#123456" });
   assert.equal(b.setting("channelHeaderPin", ch), true);
   assert.deepEqual(await b.getApprovalGrantModesDurable(ch), { session: false, always: true });
@@ -291,14 +284,12 @@ test("pg config store: settings written on one core reach another core through r
   await a.setSetting("webuiModels", null, ch);
   await a.setSetting("ackEmoji", null, ch);
   await a.setSetting("browseMaxSteps", null, ch);
-  await a.setSetting("browseModel", null, ch);
   await b.refreshScope(ch);
   await b.refreshScope(org);
 
   assert.equal(b.setting("webuiModels", ch), null);
   assert.equal(b.setting("ackEmoji", ch), null);
   assert.equal(b.setting("browseMaxSteps", ch), null);
-  assert.equal(b.setting("browseModel", ch), null);
 });
 
 test("a durable database is pinned to one organization", async () => {

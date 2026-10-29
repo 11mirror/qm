@@ -4,7 +4,6 @@ import { computeRetention } from "../../../admin/retention.ts";
 import {
   FAST_MODE_MODEL_IDS,
   modelCatalogFor,
-  selectableBaseModels,
   embeddingModelCatalog,
   defaultModel,
   modelServiceable,
@@ -222,7 +221,6 @@ const SETTINGS_RESOURCES = {
     "interactiveFastMode",
     "individualModelAuth",
     "memoryEmbeddingModel",
-    "browseModel",
     "browseMaxSteps",
   ],
   credentials: [],
@@ -340,7 +338,6 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
     fastModeModelIds: FAST_MODE_MODEL_IDS,
     autoFlaggerDefault: defaultAutoFlaggerConfig(deps),
     memoryEmbeddingOptions: embeddingModelCatalog(),
-    browseModelOptions: selectableBaseModels().filter((m) => modelServiceable(m.id, managedKeys)),
   };
 }
 

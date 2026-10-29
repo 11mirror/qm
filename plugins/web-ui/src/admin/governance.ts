@@ -31,7 +31,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
             </div>
           </div>
           <div class="governance-prompt">
-            <label for="auto-flagger-rubric">Quarantine prompt (classification rubric)</label>
+            <label for="auto-flagger-rubric">Observation prompt (classification rubric)</label>
             <textarea
               id="auto-flagger-rubric"
               rows="6"

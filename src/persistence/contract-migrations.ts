@@ -55,6 +55,10 @@ export const CONTRACT_MIGRATIONS: readonly PgMigrationDefinition[] = [
       "ALTER TABLE runs DROP COLUMN IF EXISTS fair_key",
     ],
   },
+  {
+    id: "contract/0026-drop-unused-admin-settings",
+    statements: ["DROP TABLE IF EXISTS browse_model_configs", "DROP TABLE IF EXISTS unfulfilled_insights_flag"],
+  },
 ];
 
 export const HELD_BACK_CONTRACT_MIGRATIONS: readonly PgMigrationDefinition[] = [
