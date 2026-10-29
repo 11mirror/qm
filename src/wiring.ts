@@ -313,7 +313,7 @@ export function buildApp(config: Config, overrides: AppOverrides = {}): BuiltApp
     secretConversionMigration({
       connector: connectorSecretKey,
       signing: config.signingSecret,
-      tenantSecretsKey: tenantSecretsKey(overrides.env ?? {}),
+      tenantSecretsKey: config.tenantSecretsKey ?? tenantSecretsKey(overrides.env ?? {}),
     }),
   );
   const orchestrator = buildOrchestrator({

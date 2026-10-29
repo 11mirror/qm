@@ -22,6 +22,9 @@ test("main secret-box rows and target/username credentials convert transactional
   const migration = pgMigrationFrom(secretConversionMigration({ connector: material, signing: "signing secret" }));
   try {
     await applyPgMigrations(pool, []);
+    await pool.query("DELETE FROM qm_schema_migrations WHERE id = ANY($1)", [
+      [migration.id, KEYCHAIN_CREDENTIALS_MIGRATION.id],
+    ]);
     await pool.query(
       "DROP TABLE keychain_credentials CASCADE; CREATE TABLE keychain_credentials (id text PRIMARY KEY, json jsonb NOT NULL)",
     );
@@ -100,6 +103,9 @@ test("failed secret conversion rolls back converted rows and does not record suc
   const migration = pgMigrationFrom(secretConversionMigration(input));
   try {
     await applyPgMigrations(pool, []);
+    await pool.query("DELETE FROM qm_schema_migrations WHERE id = ANY($1)", [
+      [migration.id, KEYCHAIN_CREDENTIALS_MIGRATION.id],
+    ]);
     for (const table of [
       "keychain_credentials",
       "connector_clients",

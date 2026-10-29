@@ -61,7 +61,7 @@ export function pgMigrationFrom(definition: PgMigrationDefinition): PgMigration 
   const result = definePgMigration(
     definition.id,
     definition.transform
-      ? [...definition.statements, `SELECT ${JSON.stringify(definition.transform.version).replaceAll('"', "'")}`]
+      ? [...definition.statements, `SELECT '${definition.transform.version.replaceAll("'", "''")}'`]
       : definition.statements,
     definition.expectedChecksum,
     definition.acceptedChecksums,

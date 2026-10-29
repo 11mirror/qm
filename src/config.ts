@@ -7,7 +7,7 @@ import type { ExternalSlackPolicies } from "./resolution/external-slack.ts";
 import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";
 import { SANDBOX_BACKEND_NAMES, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
 import { existsSync, readdirSync } from "node:fs";
-import { homeTenantSettings, type TenantSettings } from "../plugins/chassis/src/tenant-settings.ts";
+import { homeTenantSettings, tenantSecretsKey, type TenantSettings } from "../plugins/chassis/src/tenant-settings.ts";
 import { MODEL_PROVIDERS, parseProviderBaseUrl, type ModelGatewayTransportConfig } from "./model/provider-endpoints.ts";
 import { join, resolve } from "node:path";
 import { RUN_MAX_AGE_MS } from "./runs/run-store.ts";
@@ -110,6 +110,7 @@ interface DeploymentConfig extends ReturnType<typeof sandboxProvidersEnv> {
   portalIdentitySecret?: string;
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
+  tenantSecretsKey?: Buffer;
   seedSkills: boolean;
   pluginSkillDirs: string[];
   deploymentLayerDir?: string;
@@ -519,6 +520,7 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
       capabilitySecret: e.CAPABILITY_SECRET,
       portalIdentitySecret: e.PORTAL_IDENTITY_SECRET,
       connectorSecretKey: e.CONNECTOR_SECRET_KEY,
+      tenantSecretsKey: tenantSecretsKey(env),
       deploymentLayerDir: e.DEPLOYMENT_LAYER ? resolve(e.DEPLOYMENT_LAYER) : undefined,
       s3Bucket: e.S3_BUCKET,
       s3Region: e.S3_REGION,
