@@ -1,7 +1,8 @@
+import { readConfig } from "./helpers.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server, type Socket } from "node:net";
-import { readConfig } from "../src/config.ts";
+import {} from "../src/config.ts";
 import { mailerFor, renderSignInEmail } from "../src/email.ts";
 import { testEnv } from "./helpers.ts";
 

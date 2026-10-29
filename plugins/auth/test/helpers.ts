@@ -1,7 +1,7 @@
 import type { RememberedSessions, RememberedSession } from "../src/sessions.ts";
 import { createServer, type Server } from "node:http";
 import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
-import { emailConfigured, readConfig, type AuthConfig } from "../src/config.ts";
+import { emailConfigured, readDeploymentConfig, type AuthConfig } from "../src/config.ts";
 import type { ClaimStore } from "../../chassis/src/claims.ts";
 import type { Mailer, OutgoingEmail } from "../../chassis/src/resend.ts";
 import { loadSigningKey } from "../src/keys.ts";
@@ -17,6 +17,22 @@ export const REDIRECT_URI = "https://agent.example.test/auth/callback";
 export function signingJwk(): string {
   const { privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
   return JSON.stringify(privateKey.export({ format: "jwk" }));
+}
+
+export function readConfig(env: NodeJS.ProcessEnv): AuthConfig {
+  const issuer = (env.AUTH_ISSUER ?? `http://localhost:${env.PORT ?? 8099}`).replace(/\/$/, "");
+  return {
+    ...readDeploymentConfig(env),
+    issuer,
+    publicPath: new URL(issuer).pathname.replace(/\/$/, ""),
+    redirectUri: env.AUTH_REDIRECT_URI?.trim() ?? "",
+    allowedEmails: (env.AUTH_ALLOWED_EMAILS ?? "")
+      .split(/[,\s]+/)
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean),
+    allowedEmailDomain: env.AUTH_ALLOWED_EMAIL_DOMAIN?.trim().toLowerCase() || undefined,
+    faviconSvg: env.AUTH_FAVICON_SVG,
+  };
 }
 
 export function testEnv(overrides: Record<string, string | undefined> = {}): NodeJS.ProcessEnv {

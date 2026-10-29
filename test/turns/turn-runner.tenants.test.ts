@@ -60,7 +60,6 @@ function directoryOf(
       return (await exists(id)) ? undefined : "retired";
     },
     byHost: () => Promise.resolve(undefined),
-    homeHosts: () => ({ hosts: [] }),
     watch: () => {},
     close: () => Promise.resolve(),
   };
@@ -90,6 +89,13 @@ before(async () => {
   appUrl = url.toString();
   await configureTestTenancy(appUrl);
   useTenantDirectory(directory);
+  registerAbsurdSchema(appUrl);
+  const runStore = createPostgresRunStore(appUrl);
+  createPostgresSessionStore(appUrl);
+  ledger = createTurnLedger(appUrl);
+  rls = createPgPool(appUrl);
+  closers = [() => ledger.close(), () => runStore.close(), () => rls.close()];
+  await migrateRegisteredPgSchemas(appUrl);
   registerTenantSettings(
     [acme, beta].map((t): TenantSettings => ({
       id: t.id,
@@ -101,13 +107,7 @@ before(async () => {
       secrets: {},
     })),
   );
-  registerAbsurdSchema(appUrl);
-  const runStore = createPostgresRunStore(appUrl);
-  createPostgresSessionStore(appUrl);
-  ledger = createTurnLedger(appUrl);
-  rls = createPgPool(appUrl);
-  closers = [() => ledger.close(), () => runStore.close(), () => rls.close()];
-  await migrateRegisteredPgSchemas(appUrl);
+
   await rls.query("INSERT INTO tenants(id, slug, org_id) VALUES ($1, 'acme', 'acme'), ($2, 'beta', 'beta')", [
     acme.id,
     beta.id,
@@ -313,10 +313,7 @@ test(
       .sort((a, b) => String(a.task_name).localeCompare(String(b.task_name)));
     assert.deepEqual(
       rows.map((row) => [row.task_name, row.state, Number(row.attempts) <= 2]),
-      [
-        ["every:spin-probe", "sleeping", true],
-        ["orphan", "sleeping", true],
-      ],
+      [["orphan", "sleeping", true]],
     );
   },
 );
@@ -339,9 +336,7 @@ test(
       databaseUrl: appUrl,
       pool: rls,
       secretsKey: undefined,
-      home: tenant(),
-      homeHosts: [],
-      homeSandboxPrefix: "qm",
+      sandboxPrefix: "qm",
     });
     useTenantDirectory(real);
     const seen: Seen[] = [];
@@ -466,3 +461,27 @@ test(
     assert.notEqual((await absurdTask("turns_people", laterTask, waiting))?.state, "cancelled");
   },
 );
+
+test("periodic ticks have one deployment owner and never create a tenant-owned scheduler task", { skip }, async () => {
+  useTenantDirectory(directory);
+  const first = createJobWorker(appUrl);
+  const second = createJobWorker(appUrl);
+  const seen: string[] = [];
+  for (const worker of [first, second])
+    worker.every("neutral-owner-probe", 60_000, () => seen.push(tenant().id), { shared: true });
+  try {
+    await Promise.all([first.start(), second.start()]);
+    await eventually(() => seen.length, { until: (n) => n === 2, label: "one periodic tick per tenant" });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.deepEqual(seen.toSorted(), [acme.id, beta.id].toSorted());
+    for (const owner of [acme, beta])
+      await withTenant(owner, async () => {
+        assert.equal(
+          (await rls.q("SELECT count(*)::int AS n FROM absurd.t_jobs WHERE task_name LIKE 'every:%'"))[0]!.n,
+          0,
+        );
+      });
+  } finally {
+    await Promise.all([first.stop(), second.stop()]);
+  }
+});

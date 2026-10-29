@@ -408,6 +408,8 @@ test("concurrent cold and repeat migration entrypoints exit and reject checksum 
           PATH: process.env.PATH,
           NODE_ENV: "test",
           DATABASE_URL: url,
+          DATABASE_MIGRATION_URL: url,
+          QM_TENANT_SECRETS_KEY: Buffer.alloc(32, 7).toString("base64"),
           SANDBOX_BACKEND: "local",
           ORG_ID: "migration-test",
           CONNECTOR_SECRET_KEY: "test-connector-secret-0123456789abcdef",
@@ -417,6 +419,7 @@ test("concurrent cold and repeat migration entrypoints exit and reject checksum 
     for (const result of [...cold, await run()]) {
       assert.match(result.stdout, /\[qm:migrate\] database migrations applied/);
     }
+    assert.equal((await admin.query("SELECT count(*)::int AS n FROM tenants")).rows[0].n, 0);
     const applied = await admin.query(`SELECT id FROM ${PG_MIGRATIONS_TABLE} ORDER BY id`);
     assert.ok(applied.rowCount! > 10);
     await admin.query(`UPDATE ${PG_MIGRATIONS_TABLE} SET checksum = 'invalid' WHERE id = $1`, [applied.rows[0].id]);

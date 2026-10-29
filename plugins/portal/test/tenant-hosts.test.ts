@@ -99,7 +99,28 @@ Object.assign(process.env, {
 });
 const { server } = await import("../src/index.ts");
 setEdgeTenants([
-  { slug: "home", orgId: "home-org", hosts: ["home.example.test"], status: "active", oidcAdmin: false, secrets: {} },
+  {
+    id: "tenant-home",
+    slug: "home",
+    orgId: "home-org",
+    hosts: ["home.example.test"],
+    status: "active",
+    oidcAdmin: false,
+    apiAllowedOrigins: ["https://embedder.example.test"],
+    secrets: {
+      primaryOidc: {
+        authEndpoint: "https://primary.example.test/authorize",
+        tokenEndpoint: "https://primary.example.test/token",
+        userinfoEndpoint: "https://primary.example.test/userinfo",
+        issuer: "https://primary.example.test",
+        jwksUri: "https://primary.example.test/jwks",
+        clientId: "primary-client",
+        clientSecret: "test-primary",
+        scopes: "openid profile email",
+        redirectUri: "http://home.example.test/auth/callback",
+      },
+    },
+  },
   ...(["a", "b"] as const).map((name) => ({
     id: `tenant-${name}`,
     slug: name,
@@ -109,7 +130,20 @@ setEdgeTenants([
     faviconSvg: `<svg xmlns="http://www.w3.org/2000/svg"><title>${name}</title></svg>`,
     oidcClientId: `${name}-client`,
     oidcAdmin: false,
-    secrets: { oidcClientSecret: clients[`${name}-client`]! },
+    secrets: {
+      oidcClientSecret: clients[`${name}-client`]!,
+      trustedOidc: {
+        issuer,
+        authEndpoint: `${issuer}/authorize`,
+        tokenEndpoint: `${issuer}/token`,
+        userinfoEndpoint: `${issuer}/userinfo`,
+        jwksUri: `${issuer}/jwks`,
+        clientId: `${name}-client`,
+        clientSecret: clients[`${name}-client`]!,
+        redirectUri: `https://${name}.example.test/auth/trusted/callback`,
+        scopes: "openid profile",
+      },
+    },
   })),
   {
     id: "tenant-c",
@@ -181,7 +215,7 @@ test("a tenant whose trusted sign-in is misconfigured keeps serving with that si
   assert.equal((await get("c.example.test", "/auth/login")).status, 404);
 });
 
-test("the deployment's cross-origin API allowlist applies to the home host only", async () => {
+test("a tenant's typed cross-origin allowlist grants no access to another tenant", async () => {
   const preflight = (host: string) =>
     get(
       host,
@@ -199,7 +233,7 @@ test("each tenant host serves its own favicon", async () => {
   assert.match((await get("home.example.test", "/favicon.svg")).text, /\u{1F3F4}/u);
 });
 
-test("a tenant host signs in through its own trusted client while home keeps its primary provider", async () => {
+test("each tenant uses only its explicitly configured sign-in provider", async () => {
   const tenant = await get("a.example.test", "/auth/login?returnTo=%2Fsettings");
   assert.equal(tenant.headers.location, "/auth/trusted/login?returnTo=%2Fsettings");
   const trusted = new URL(String((await get("a.example.test", "/auth/trusted/login")).headers.location));

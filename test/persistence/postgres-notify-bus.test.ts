@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mock, test } from "node:test";
+import { mock } from "node:test";
+import { test } from "../support/tenant-test.ts";
 
 const PG_POOL = "../../src/persistence/pg-pool.ts";
 const actual = (await import(`${PG_POOL}?actual`)) as typeof import("../../src/persistence/pg-pool.ts");

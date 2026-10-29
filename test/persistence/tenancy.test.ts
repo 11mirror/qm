@@ -1,9 +1,10 @@
-import { configureTestTenancy } from "../support/tenant-test.ts";
+import { configureTestTenancy, fixtureSettings } from "../support/tenant-test.ts";
 import { test } from "../support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import pg from "pg";
 import { configurePgTenancy } from "../../src/persistence/pg-pool.ts";
+import { upsertTenant } from "../../src/tenants/registry.ts";
 import { applyTenancy } from "../../src/persistence/tenancy.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 import type { SessionStore } from "../../src/sessions/session-store.ts";
@@ -39,7 +40,8 @@ async function provision(): Promise<{ url: string; drop: () => Promise<void> }> 
   };
 }
 
-const inTenant = <T>(t: Tenant | null, fn: () => Promise<T>): Promise<T> => withTenant(t ?? tenantFor("home"), fn);
+const inTenant = <T>(t: Tenant | null, fn: () => Promise<T>): Promise<T> =>
+  withTenant(t ?? tenantFor("home", "a6e20175-91cf-4f61-8ac5-b111a88ef022"), fn);
 
 async function seed(store: SessionStore, t: Tenant | null, label: string, sessions: number): Promise<string[]> {
   return inTenant(t, async () => {
@@ -117,7 +119,8 @@ test("attributed turns: every tenant's Admin Users counts survive the attributed
 
     // A database that already ran the old seed and was tenantized (StyleUp after 0048): the other tenant's cache is
     // empty and its sessions' dirty marks sit under the home tenant. Applying 0049 there re-seeds every tenant.
-    const home = (await bypass.query(`SELECT id::text AS id FROM qm_tenant`)).rows[0].id as string;
+    const home = (await bypass.query(`SELECT id::text AS id FROM tenants ORDER BY created_at LIMIT 1`)).rows[0]
+      .id as string;
     await bypass.query(`DELETE FROM attributed_turns WHERE tenant_id = $1`, [other.id]);
     await bypass.query(
       `INSERT INTO attributed_turns_dirty(tenant_id, session_id)
@@ -147,7 +150,8 @@ async function tenantize(url: string): Promise<void> {
     connectionString: Object.assign(new globalThis.URL(URL), { pathname: new globalThis.URL(url).pathname }).toString(),
   });
   try {
-    await applyTenancy(pool);
+    await applyTenancy(pool, true);
+    await upsertTenant(pool, fixtureSettings(), undefined);
   } finally {
     await pool.end();
   }
@@ -200,7 +204,9 @@ test("qm_tenantize rebuilds unique indexes and foreign keys from the catalog, ke
         "children_pinned_id_fkey: FOREIGN KEY (tenant_id, pinned_id) REFERENCES parents(tenant_id, id) MATCH FULL ON DELETE RESTRICT",
       ],
     );
-    await client.query("SELECT set_config('qm.tenant_id', (SELECT id::text FROM qm_tenant), false)");
+    await client.query(
+      "SELECT set_config('qm.tenant_id', (SELECT id::text FROM tenants ORDER BY created_at LIMIT 1), false)",
+    );
     await client.query(`INSERT INTO parents(id, code, extra) VALUES (1, 'a', 1), (2, 'b', 2)`);
     await client.query(`INSERT INTO children(id, parent_id, pinned_id, defaulted_id) VALUES (1, 1, 2, 2)`);
     await client.query(`DELETE FROM parents WHERE id = 1`);
@@ -235,12 +241,16 @@ test("acl_grants_version bumps per tenant once the database is tenantized", asyn
     );
     await tenantize(url);
     const other = randomUUID();
-    await client.query("SELECT set_config('qm.tenant_id', (SELECT id::text FROM qm_tenant), false)");
+    await client.query(
+      "SELECT set_config('qm.tenant_id', (SELECT id::text FROM tenants ORDER BY created_at LIMIT 1), false)",
+    );
     await client.query(`INSERT INTO acl_grants(id) VALUES (1)`);
     await client.query(`INSERT INTO acl_grants(id) VALUES (2)`);
     await client.query(`SELECT set_config('qm.tenant_id', $1, false)`, [other]);
     await client.query(`INSERT INTO acl_grants(id) VALUES (1)`);
-    await client.query(`SELECT set_config('qm.tenant_id', (SELECT id::text FROM qm_tenant), false)`);
+    await client.query(
+      `SELECT set_config('qm.tenant_id', (SELECT id::text FROM tenants ORDER BY created_at LIMIT 1), false)`,
+    );
     const versions = await client.query(
       `SELECT tenant_id = qm_tenant_id() AS home, v::int AS v FROM acl_grants_version ORDER BY home`,
     );

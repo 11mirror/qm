@@ -1,5 +1,6 @@
+import { configureTestTenancy } from "../support/tenant-test.ts";
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../support/tenant-test.ts";
 import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../../src/runs/background-ownership.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
@@ -50,6 +51,7 @@ test(
   { skip: !databaseUrl, timeout: 20_000 },
   async () => {
     const { createJobWorker } = await import("../../src/jobs/job-worker.ts");
+    await configureTestTenancy(databaseUrl!);
     const queue = createJobWorker(databaseUrl!);
     const oldEntered = Promise.withResolvers<void>();
     const oldFinish = Promise.withResolvers<void>();

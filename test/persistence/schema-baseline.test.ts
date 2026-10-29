@@ -110,10 +110,10 @@ async function dropTenantQueues(url: string): Promise<void> {
   );
 }
 
-async function migrate(url: string, multitenant: boolean): Promise<void> {
+async function migrate(url: string): Promise<void> {
   const { runtime } = buildApp({
     anthropicApiKey: "test-anthropic-key",
-    ...testConfig({ databaseUrl: url, databaseMigrationUrl: url, multitenant }),
+    ...testConfig({ databaseUrl: url, databaseMigrationUrl: url }),
   });
   try {
     await migrateRegisteredPgSchemas(url);
@@ -131,12 +131,10 @@ async function copyTenants(from: string, to: string): Promise<void> {
   const rows = await withClient(from, async (client) => (await client.query("SELECT * FROM tenants")).rows);
   await withClient(to, async (client) => {
     for (const row of rows) {
-      await client.query("INSERT INTO tenants(id, slug, org_id, hosts) VALUES ($1, $2, $3, $4)", [
-        row.id,
-        row.slug,
-        row.org_id,
-        row.hosts,
-      ]);
+      await client.query(
+        "INSERT INTO tenants(id, slug, org_id, hosts) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING",
+        [row.id, row.slug, row.org_id, row.hosts],
+      );
     }
   });
 }
@@ -186,8 +184,8 @@ async function ledgerIds(url: string): Promise<Map<string, string>> {
 async function upgradeSingleTenant(fixture: string): Promise<string> {
   const upgraded = await createDatabase(fixture);
   const fresh = await createDatabase();
-  await migrate(upgraded, false);
-  await migrate(fresh, false);
+  await migrate(upgraded);
+  await migrate(fresh);
   await assertSameSchema(upgraded, fresh);
   return upgraded;
 }
@@ -195,10 +193,10 @@ async function upgradeSingleTenant(fixture: string): Promise<string> {
 async function upgradeMultitenant(fixture: string): Promise<string> {
   const upgraded = await createDatabase(fixture);
   const fresh = await createDatabase();
-  await migrate(upgraded, true);
-  await migrate(fresh, true);
+  await migrate(upgraded);
+  await migrate(fresh);
   await copyTenants(upgraded, fresh);
-  await migrate(fresh, true);
+  await migrate(fresh);
   assert.ok((await fingerprint(upgraded)).some((line) => line.startsWith("policy public.items qm_tenant_isolation")));
   await assertSameSchema(upgraded, fresh);
   return upgraded;
@@ -254,7 +252,9 @@ test("a tenantized database that lacks a folded migration keeps every tenant's t
   const url = await createDatabase("styleup-323baddc.sql.gz");
   const lacking = "durable-map/pinned_skills/0002-drop";
   await withClient(url, async (client) => {
-    await client.query("SELECT set_config('qm.tenant_id', (SELECT id::text FROM qm_tenant), false)");
+    await client.query(
+      "SELECT set_config('qm.tenant_id', (SELECT id::text FROM tenants ORDER BY created_at LIMIT 1), false)",
+    );
     await client.query("DELETE FROM qm_schema_migrations WHERE id = $1", [lacking]);
     const tenants = (await client.query<{ id: string }>("SELECT id FROM tenants ORDER BY id LIMIT 2")).rows;
     for (const tenant of tenants) {
@@ -264,9 +264,11 @@ test("a tenantized database that lacks a folded migration keeps every tenant's t
       );
     }
   });
-  await migrate(url, true);
+  await migrate(url);
   const rows = await withClient(url, async (client) => {
-    await client.query("SELECT set_config('qm.tenant_id', (SELECT id::text FROM qm_tenant), false)");
+    await client.query(
+      "SELECT set_config('qm.tenant_id', (SELECT id::text FROM tenants ORDER BY created_at LIMIT 1), false)",
+    );
     return (await client.query("SELECT tenant_id FROM tool_calls WHERE run_id = 'run-1'")).rows;
   });
   assert.equal(rows.length, 2);
@@ -283,7 +285,7 @@ test("a pre-baseline migration recorded with another checksum refuses the run be
     await client.query("INSERT INTO qm_schema_migrations(id, checksum) VALUES ($1, 'x')", [first!.id]);
   });
   await assert.rejects(
-    migrate(url, false),
+    migrate(url),
     new RegExp(`refusing to migrate; nothing was applied: migration ${first!.id} checksum mismatch \\(database=x,`),
   );
   assert.deepEqual([...(await ledgerIds(url)).keys()], [first!.id]);

@@ -100,7 +100,7 @@ test("invalid descriptors never replace the durable current layer", async () => 
 
 test("a legacy published skill with an unsafe name is quarantined without blocking layer replacement", async () => {
   const { databaseUrl, skills, layer } = fixture();
-  const legacyTenant = tenantFor("legacy-org");
+  const legacyTenant = tenantFor("legacy-org", "7e96f0fd-f1f0-4c96-852e-b5bfe19f9aac");
   await createPgPool(databaseUrl).q(
     `INSERT INTO skills (id, scope_id, manifest, status, created_by, version, granted_capabilities, approvals)
      VALUES ('legacy', $1, $2, 'published', 'legacy-import', 1, '{}', '{}')`,

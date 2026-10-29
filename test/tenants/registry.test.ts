@@ -4,13 +4,7 @@ import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { configurePgTenancy, createPgPool, tenantCols } from "../../src/persistence/pg-pool.ts";
 import { tenantFor, withTenant } from "../../src/tenant.ts";
-import {
-  assertRowSecurityEnforced,
-  homeTenantId,
-  listTenants,
-  upsertTenant,
-  type TenantRecord,
-} from "../../src/tenants/registry.ts";
+import { assertRowSecurityEnforced, listTenants, upsertTenant, type TenantRecord } from "../../src/tenants/registry.ts";
 
 const URL = process.env.DATABASE_URL!;
 
@@ -78,7 +72,7 @@ test("tenancy: tenant_id leads every key, RLS separates tenants, legacy rows sta
     ]);
     await legacy.pool();
     await assertRowSecurityEnforced(legacy);
-    const home = await homeTenantId(legacy);
+    const home = String((await listTenants(legacy, undefined))[0]!.id);
     const cols = await legacy.q(
       `SELECT conname, pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid = 'parts'::regclass ORDER BY conname`,
     );

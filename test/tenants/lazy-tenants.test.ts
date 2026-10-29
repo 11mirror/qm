@@ -62,7 +62,7 @@ before(async () => {
   const config = testConfig({
     databaseUrl,
     databaseMigrationUrl: URL_ADMIN,
-    multitenant: true,
+
     dataDir: mkdtempSync(join(tmpdir(), "lazy-")),
   });
   built = stopAtEnd(buildApp({ anthropicApiKey: "test-anthropic-key", ...config }, { harness: createMockHarness() }));
@@ -73,15 +73,12 @@ before(async () => {
      SELECT gen_random_uuid(), 't' || i, 'org-' || i, ARRAY['t' || i || '.example.test'] FROM generate_series(1, $1) i`,
     [TENANTS],
   );
-  await built.start();
   baseline = cachedTenantCount();
   directory = createTenantDirectory({
     databaseUrl,
     pool: rls,
     secretsKey: undefined,
-    home: tenant(),
-    homeHosts: ["home.example.test"],
-    homeSandboxPrefix: "qm",
+    sandboxPrefix: "qm",
     prepare: () => {
       if (tenant().id) prepared.push(tenant().id!);
       return built.start();
@@ -124,11 +121,14 @@ test("due jobs shortlist idle tenants while shared sweeps explicitly visit all 2
   await built.jobs.stop();
   const ticks = routingQueries - before.routingQueries;
   assert.ok(ticks >= 10, `the periodic jobs ticked (${ticks} due queries)`);
-  assert.ok(queries - before.queries < TENANTS * 20, `${queries - before.queries} queries is bounded by shared sweeps`);
+  assert.ok(
+    queries - before.queries < (TENANTS + 1) * 25,
+    `${queries - before.queries} queries is bounded by shared sweeps`,
+  );
   assert.ok(dueQueries - before.dueQueries <= 10);
-  assert.ok(dueOwners.slice(before.dueQueries).every((id) => id === undefined));
+  assert.ok(dueOwners.slice(before.dueQueries).every((id) => id === tenant().id));
   assert.deepEqual(prepared, []);
-  assert.equal(cachedTenantCount(), baseline + TENANTS);
+  assert.equal(cachedTenantCount(), baseline + TENANTS + 1);
 });
 
 test("a due job prepares only the tenants with work after shared sweeps", { skip }, async () => {

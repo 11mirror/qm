@@ -38,7 +38,7 @@ function tenantSlack() {
     },
     slackCore: {},
   } as unknown as ReturnType<typeof buildApp>;
-  const slack = createTenantSlack({ env: {}, config: loadConfig({}), built, slackConfig: null, running: true });
+  const slack = createTenantSlack({ env: {}, config: loadConfig({}), built, running: true });
   const changed = (t: Tenant) => withTenant(t, () => listeners.forEach((cb) => cb()));
   return { slack, loads, changed };
 }

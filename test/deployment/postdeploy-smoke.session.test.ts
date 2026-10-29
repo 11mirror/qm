@@ -56,6 +56,7 @@ test("session command preserves archive then database checks with bounded reques
     });
   });
   const config = testConfig({
+    orgId: "smoke",
     databaseUrl: "postgres://unused",
     adminGrants: "admin:org_admin",
     portalIdentitySecret: "portal-secret",

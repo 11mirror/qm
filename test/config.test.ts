@@ -4,6 +4,7 @@ import {
   companySubscriptionAuth,
   baseModelProviders,
   loadConfig,
+  tenantPartFromEnv,
   configuredModel,
   providerKeysPresent,
   CONFIG_DEFAULTS,
@@ -21,23 +22,26 @@ const productionEnv = {
 } as const;
 
 test("ORG_BRAND_* parses into a validated branding default", () => {
-  assert.equal(loadConfig({}).brandingDefault, undefined);
+  assert.equal(tenantPartFromEnv({}).brandingDefault, undefined);
   assert.deepEqual(
-    loadConfig({ ORG_BRAND_ACCENT: "#6366f1", ORG_BRAND_MARK: "Q", ORG_BRAND_SELF_LABEL: "qm" }).brandingDefault,
+    tenantPartFromEnv({ ORG_BRAND_ACCENT: "#6366f1", ORG_BRAND_MARK: "Q", ORG_BRAND_SELF_LABEL: "qm" }).brandingDefault,
     { accent: "#6366f1", mark: "Q", selfLabel: "qm" },
   );
-  assert.equal(loadConfig({ ORG_BRAND_ACCENT: "#abcde" }).brandingDefault, undefined);
-  assert.deepEqual(loadConfig({ ORG_BRAND_MARK: 'a"bc' }).brandingDefault, { mark: "ab" });
-  assert.equal(loadConfig({ ORG_BRAND_SELF_LABEL: "x".repeat(80) }).brandingDefault?.selfLabel?.length, 80);
-  assert.deepEqual(loadConfig({ ORG_BRAND_ORG_NAME: "Acme Corp" }).brandingDefault, { orgName: "Acme Corp" });
-  assert.equal(loadConfig({ ORG_BRAND_ORG_NAME: "x".repeat(80) }).brandingDefault?.orgName?.length, 80);
-  assert.deepEqual(loadConfig({ ORG_BRAND_SELF_LABEL: "{{straylight}}" }).brandingDefault, { selfLabel: "straylight" });
+  assert.equal(tenantPartFromEnv({ ORG_BRAND_ACCENT: "#abcde" }).brandingDefault, undefined);
+  assert.deepEqual(tenantPartFromEnv({ ORG_BRAND_MARK: 'a"bc' }).brandingDefault, { mark: "ab" });
+  assert.equal(tenantPartFromEnv({ ORG_BRAND_SELF_LABEL: "x".repeat(80) }).brandingDefault?.selfLabel?.length, 80);
+  assert.deepEqual(tenantPartFromEnv({ ORG_BRAND_ORG_NAME: "Acme Corp" }).brandingDefault, { orgName: "Acme Corp" });
+  assert.equal(tenantPartFromEnv({ ORG_BRAND_ORG_NAME: "x".repeat(80) }).brandingDefault?.orgName?.length, 80);
+  assert.deepEqual(tenantPartFromEnv({ ORG_BRAND_SELF_LABEL: "{{straylight}}" }).brandingDefault, {
+    selfLabel: "straylight",
+  });
 });
 
 test("AUTH_ALLOWED_EMAILS becomes a normalized email-auth principal set", () => {
-  assert.equal(loadConfig({}).emailAuthPrincipals, undefined);
+  assert.equal(tenantPartFromEnv({}).emailAuthPrincipals, undefined);
   assert.deepEqual(
-    loadConfig({ AUTH_ALLOWED_EMAILS: " New@Example.com,other@example.com,new@example.com " }).emailAuthPrincipals,
+    tenantPartFromEnv({ AUTH_ALLOWED_EMAILS: " New@Example.com,other@example.com,new@example.com " })
+      .emailAuthPrincipals,
     ["new@example.com", "other@example.com"],
   );
 });
@@ -182,21 +186,24 @@ test("defaults come from CONFIG_DEFAULTS, set exactly once", () => {
 });
 
 test("PUBLIC_API_URL is not treated as the human-facing web URL", () => {
-  const apiOnly = loadConfig({ PUBLIC_API_URL: "https://agent-api.example" });
+  const apiOnly = tenantPartFromEnv({ PUBLIC_API_URL: "https://agent-api.example" });
   assert.equal(apiOnly.apiBaseUrl, "https://agent-api.example");
   assert.equal(apiOnly.publicUrl, "https://agent-api.example");
   assert.equal(apiOnly.publicWebUrl, undefined);
 
-  const disabledWeb = loadConfig({ PUBLIC_API_URL: "https://agent-api.example", PUBLIC_WEB_URL: "" });
+  const disabledWeb = tenantPartFromEnv({ PUBLIC_API_URL: "https://agent-api.example", PUBLIC_WEB_URL: "" });
   assert.equal(disabledWeb.apiBaseUrl, "https://agent-api.example");
   assert.equal(disabledWeb.publicUrl, "https://agent-api.example");
   assert.equal(disabledWeb.publicWebUrl, undefined);
 
-  const web = loadConfig({ PUBLIC_API_URL: "https://agent-api.example/", PUBLIC_WEB_URL: "https://portal.example//" });
+  const web = tenantPartFromEnv({
+    PUBLIC_API_URL: "https://agent-api.example/",
+    PUBLIC_WEB_URL: "https://portal.example//",
+  });
   assert.equal(web.apiBaseUrl, "https://agent-api.example");
   assert.equal(web.publicUrl, "https://portal.example");
   assert.equal(web.publicWebUrl, "https://portal.example");
-  const slack = loadConfig({
+  const slack = tenantPartFromEnv({
     SLACK_BOT_TOKEN: "xoxb-1",
     SLACK_APP_TOKEN: "xapp-1",
     WEB_UI_PUBLIC_URL: " https://web.example/ ",
@@ -223,7 +230,7 @@ test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary
 });
 
 test("Slack runtime settings are parsed once into Config", () => {
-  const config = loadConfig({
+  const config = tenantPartFromEnv({
     SLACK_BOT_TOKEN: "xoxb-test",
     SLACK_APP_TOKEN: "xapp-test",
     SLACK_API_URL: "https://slack.example/api",
@@ -345,7 +352,7 @@ test("DEPLOY_APPS_DOMAIN is the one-var apps setup: it feeds the gate and defaul
     DEPLOY_APPS_DOMAIN: "apps.example.com",
     AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef",
   });
-  assert.equal(config.deployAppsDomain, "apps.example.com");
+  assert.equal(config.deployAppsDomain, undefined);
   assert.equal(
     config.porterDeploy.appsDomain,
     undefined,
@@ -362,7 +369,7 @@ test("DEPLOY_APPS_DOMAIN is the one-var apps setup: it feeds the gate and defaul
     AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef",
   });
   assert.equal(overridden.porterDeploy.appsDomain, "apps.other.example.com");
-  assert.equal(overridden.deployAppsDomain, "apps.example.com");
+  assert.equal(overridden.deployAppsDomain, undefined);
 });
 
 test("the active provider's own apps domain reaches the gate when DEPLOY_APPS_DOMAIN is unset", () => {
@@ -373,14 +380,14 @@ test("the active provider's own apps domain reaches the gate when DEPLOY_APPS_DO
     PORTER_DEPLOY_CLUSTER_ID: "9",
     PORTER_DEPLOY_APPS_DOMAIN: "apps.example.com",
   });
-  assert.equal(porter.deployAppsDomain, "apps.example.com");
+  assert.equal(porter.deployAppsDomain, undefined);
   assert.equal(porter.awsDeploy.appsDomain, undefined);
   assert.equal(porter.porterDeploy.appsDomain, "apps.example.com");
   const aws = loadConfig({
     DEPLOY_APPS_DOMAIN: "apps.example.com",
     AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef",
   });
-  assert.equal(aws.deployAppsDomain, "apps.example.com");
+  assert.equal(aws.deployAppsDomain, undefined);
   assert.equal(aws.awsDeploy.appsDomain, "apps.example.com");
   assert.equal(loadConfig({}).deployAppsDomain, undefined);
 });
@@ -390,26 +397,34 @@ test("DEPLOY_APPS_DOMAIN refuses shared platform domains that cannot carry per-a
   assert.throws(() => loadConfig({ DEPLOY_APPS_DOMAIN: "myapp.fly.dev" }), /shared platform domain/);
   assert.throws(() => loadConfig({ DEPLOY_APPS_DOMAIN: "8081-abc.e2b.app" }), /shared platform domain/);
   assert.equal(
-    loadConfig({ DEPLOY_APPS_DOMAIN: "apps.example.com", AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef" })
-      .deployAppsDomain,
+    tenantPartFromEnv({
+      DEPLOY_APPS_DOMAIN: "apps.example.com",
+      AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef",
+    }).deployAppsDomain,
     "apps.example.com",
   );
 });
 
 test("DEPLOY_APPS_DOMAIN must be a bare DNS name, normalized to lowercase without a trailing dot", () => {
   const gate = { AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef" };
-  assert.equal(loadConfig({ DEPLOY_APPS_DOMAIN: "Apps.Example.COM.", ...gate }).deployAppsDomain, "apps.example.com");
-  assert.throws(() => loadConfig({ DEPLOY_APPS_DOMAIN: "https://apps.example.com", ...gate }), /bare domain/);
-  assert.throws(() => loadConfig({ DEPLOY_APPS_DOMAIN: "apps.example.com:443@evil.example", ...gate }), /bare domain/);
-  assert.throws(() => loadConfig({ DEPLOY_APPS_DOMAIN: "*.apps.example.com", ...gate }), /bare domain/);
-  assert.throws(() => loadConfig({ DEPLOY_APPS_DOMAIN: "myapp.fly.dev.", ...gate }), /shared platform domain/);
+  assert.equal(
+    tenantPartFromEnv({ DEPLOY_APPS_DOMAIN: "Apps.Example.COM.", ...gate }).deployAppsDomain,
+    "apps.example.com",
+  );
+  assert.throws(() => tenantPartFromEnv({ DEPLOY_APPS_DOMAIN: "https://apps.example.com", ...gate }), /bare domain/);
+  assert.throws(
+    () => tenantPartFromEnv({ DEPLOY_APPS_DOMAIN: "apps.example.com:443@evil.example", ...gate }),
+    /bare domain/,
+  );
+  assert.throws(() => tenantPartFromEnv({ DEPLOY_APPS_DOMAIN: "*.apps.example.com", ...gate }), /bare domain/);
+  assert.throws(() => tenantPartFromEnv({ DEPLOY_APPS_DOMAIN: "myapp.fly.dev.", ...gate }), /shared platform domain/);
 });
 
 test("the portal session secret is the deploy-apps viewer secret when a login URL exists", () => {
-  const derived = loadConfig({ PORTAL_SESSION_SECRET: "shared", PUBLIC_WEB_URL: "https://qm.example.com" });
+  const derived = tenantPartFromEnv({ PORTAL_SESSION_SECRET: "shared", PUBLIC_WEB_URL: "https://qm.example.com" });
   assert.equal(derived.deployAppsSessionSecret, "shared");
   assert.equal(derived.deployAppsLoginUrl, "https://qm.example.com");
-  const noUrl = loadConfig({ PORTAL_SESSION_SECRET: "shared" });
+  const noUrl = tenantPartFromEnv({ PORTAL_SESSION_SECRET: "shared" });
   assert.equal(
     noUrl.deployAppsSessionSecret,
     undefined,
@@ -418,7 +433,7 @@ test("the portal session secret is the deploy-apps viewer secret when a login UR
 });
 
 test("the deploy-apps sign-in address defaults to the public web URL", () => {
-  const derived = loadConfig({
+  const derived = tenantPartFromEnv({
     PORTAL_SESSION_SECRET: "s",
     PUBLIC_WEB_URL: "https://qm.example.com/",
   });
@@ -426,23 +441,23 @@ test("the deploy-apps sign-in address defaults to the public web URL", () => {
   assert.equal(derived.deployAppsSessionSecret, "s");
   assert.equal(derived.deployAppsLoginPath, "/auth/login");
   assert.equal(
-    loadConfig({
+    tenantPartFromEnv({
       PORTAL_SESSION_SECRET: "s",
       PUBLIC_WEB_URL: "https://qm.example.com",
       DEPLOY_APPS_LOGIN_PATH: "/auth/trusted/login",
     }).deployAppsLoginPath,
     "/auth/trusted/login",
   );
-  assert.throws(() => loadConfig({ DEPLOY_APPS_LOGIN_PATH: "//evil.example" }), /DEPLOY_APPS_LOGIN_PATH/);
-  const explicit = loadConfig({
+  assert.throws(() => tenantPartFromEnv({ DEPLOY_APPS_LOGIN_PATH: "//evil.example" }), /DEPLOY_APPS_LOGIN_PATH/);
+  const explicit = tenantPartFromEnv({
     PORTAL_SESSION_SECRET: "s",
     DEPLOY_APPS_LOGIN_URL: "https://portal.example.com/",
     PUBLIC_WEB_URL: "https://qm.example.com",
   });
   assert.equal(explicit.deployAppsLoginUrl, "https://portal.example.com");
-  assert.equal(loadConfig({ PORTAL_SESSION_SECRET: "s" }).deployAppsSessionSecret, undefined);
+  assert.equal(tenantPartFromEnv({ PORTAL_SESSION_SECRET: "s" }).deployAppsSessionSecret, undefined);
   assert.throws(
-    () => loadConfig({ DEPLOY_APPS_LOGIN_URL: "https://portal.example.com" }),
+    () => tenantPartFromEnv({ DEPLOY_APPS_LOGIN_URL: "https://portal.example.com" }),
     /requires PORTAL_SESSION_SECRET/,
   );
 });

@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, fixtureSettings } from "../support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { buildApp } from "../support/build-app.ts";
@@ -31,13 +31,30 @@ const config = testConfig({
   s3Bucket: "home-bucket",
   s3Region: "us-west-2",
 });
+registerTenantSettings([
+  {
+    id: betaId,
+    slug: "beta",
+    orgId: "tenant-beta",
+    hosts: ["beta.example.com"],
+    status: "active",
+    oidcAdmin: false,
+    secrets: {},
+  },
+  {
+    ...fixtureSettings(),
+    hosts: ["home.example.com"],
+    s3Prefix: "",
+    secrets: {},
+  },
+]);
 const built = buildApp(config);
 const deps = serverDeps(config, built);
 
 test("server deps read the current tenant's URLs and secrets at use time", () => {
   assert.equal(deps.apiBaseUrl, "https://home.example.com");
   assert.equal(deps.portalUrl, "https://home.example.com");
-  assert.equal(deps.signingSecret, config.signingSecret);
+  assert.equal(deps.signingSecret, deriveTenantSecret(config.signingSecret!, fixtureSettings().id));
   withTenant(beta, () => {
     assert.equal(deps.apiBaseUrl, "https://beta.example.com");
     assert.equal(deps.portalUrl, "https://beta.example.com");

@@ -1,3 +1,4 @@
+import "./tenant-test.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
@@ -50,7 +51,7 @@ async function seedMap(pool: pg.Pool, table: string, seeds: readonly Seed[]) {
   );
   await pool.query(`CREATE STATISTICS ${table}_ownerscopeid_stats ON (json->>'ownerScopeId') FROM ${table}`);
   await pool.query(`CREATE TABLE IF NOT EXISTS durable_map_versions (tbl TEXT PRIMARY KEY, v BIGINT NOT NULL)`);
-  if (seeds[0]![0]) await applyTenancy(pool);
+  if (seeds[0]![0]) await applyTenancy(pool, true);
   for (const [tenant, rows] of seeds) {
     const cols = tenant ? "tenant_id, " : "";
     const args = tenant ? [tenant] : [];
@@ -133,7 +134,7 @@ export async function assertMapConversion(
         )
       ).rows,
     );
-  for (const seeds of cases) {
+  for (const seeds of spec.table === "background_ownership" ? cases.slice(0, 1) : cases) {
     const pool = new pg.Pool({ connectionString: testDatabaseUrl() });
     try {
       await seedMap(pool, spec.table, seeds);

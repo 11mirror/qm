@@ -9,7 +9,7 @@ import {
   migrateRegisteredPgSchemas,
   type PgPool,
 } from "../../src/persistence/pg-pool.ts";
-import { homeTenant, tenantFor, withTenant, withoutTenant } from "../../src/tenant.ts";
+import { tenantFor, withTenant, withoutTenant } from "../../src/tenant.ts";
 import { claimTasks, emitEvent, spawnTask } from "../../src/turns/absurd.ts";
 import { registerAbsurdSchema } from "../../src/turns/absurd-schema.ts";
 
@@ -84,7 +84,7 @@ test("an unscoped query and both pool checkout APIs fail closed", async () => {
       }),
     );
   });
-  await withTenant(homeTenant(), () => assert.doesNotReject(pool.q("SELECT 1")));
+  await withTenant(a, () => assert.doesNotReject(pool.q("SELECT 1")));
   const raw = new pg.Client({ connectionString: url });
   await raw.connect();
   try {

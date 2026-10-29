@@ -502,8 +502,8 @@ test("pg directory: room membership follows a person's linked identities", async
 
 test("pg directory: one store keeps each tenant's roster to itself", async () => {
   const store = createPostgresDirectoryStore(URL);
-  const alpha = tenantFor("tenant-alpha");
-  const beta = tenantFor("tenant-beta");
+  const alpha = tenantFor("tenant-alpha", "111686f4-76da-4860-8b2e-97672ca1a42b");
+  const beta = tenantFor("tenant-beta", "091c5a9b-9c62-4916-8a6b-e7b5e3063350");
   await withTenant(alpha, () =>
     store.replace([{ principalId: "U-only-alpha", displayName: "Only Alpha", type: "internal" }]),
   );

@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "../support/tenant-test.ts";
 import assert from "node:assert/strict";
 import pg from "pg";
 import { subscribePostgresChannel } from "../../src/persistence/postgres-listener.ts";

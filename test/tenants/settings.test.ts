@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import pg from "pg";
 import { configurePgTenancy, createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
-import { registerTenantSettings, tenant, tenantFor, tenantSettings, withTenant } from "../../src/tenant.ts";
+import { registerTenantSettings, tenantFor, withoutTenant, tenantSettings, withTenant } from "../../src/tenant.ts";
 import { listTenants, upsertTenant, type TenantRecord } from "../../src/tenants/registry.ts";
 
 const ADMIN_URL = process.env.DATABASE_URL!;
@@ -65,7 +65,7 @@ test("a tenant record round-trips through its row with secrets sealed at rest", 
   await assert.rejects(upsertTenant(pool, record, undefined), /QM_TENANT_SECRETS_KEY/);
 });
 
-test("tenantSettings() answers from the registry for a registered tenant and from process env for the home tenant", () => {
+test("tenantSettings() reads only registered settings and never falls back to process env", () => {
   const acme: TenantRecord = {
     id: randomUUID(),
     slug: "acme",
@@ -87,11 +87,7 @@ test("tenantSettings() answers from the registry for a registered tenant and fro
       withTenant(tenantFor("acme", acme.id, "acme"), () => tenantSettings()),
       acme,
     );
-    const home = tenantSettings();
-    assert.equal(home.orgId, tenant().orgId);
-    assert.equal(home.s3Bucket, "home-bucket");
-    assert.deepEqual(home.hosts, ["home.example.test"]);
-    assert.equal(home.secrets.modelGatewayApiKey, "home-gateway");
+    withoutTenant(() => assert.throws(() => tenantSettings(), /explicit registered tenant/));
     assert.throws(() => tenantSettings(tenantFor("ghost", randomUUID(), "ghost")), /ghost has no registered settings/);
   } finally {
     process.env = saved;

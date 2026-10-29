@@ -305,7 +305,9 @@ test("a durable database is pinned to one organization", async () => {
   const databaseUrl = testDatabaseUrl();
   await testConfigStore({ databaseUrl }).hydrate!();
   await assert.rejects(
-    withTenant(tenantFor("other"), () => testConfigStore({ databaseUrl }).hydrate!()),
+    withTenant(tenantFor("other", "ddb0b7bc-efaf-4d33-89a8-bb4f9a618599"), () =>
+      testConfigStore({ databaseUrl }).hydrate!(),
+    ),
     /database belongs to org default-org/,
   );
 });

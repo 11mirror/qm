@@ -10,6 +10,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
   return {
     ...loadConfig({}),
     databaseUrl: overrides.databaseUrl ?? testMigratedDatabaseUrl(),
+    databaseMigrationUrl: process.env.DATABASE_URL,
     adminGrants: TEST_ADMIN_GRANTS,
     databasePoolMax: 4,
     databaseDirectPoolMax: 8,

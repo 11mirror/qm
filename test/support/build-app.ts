@@ -1,3 +1,4 @@
+import { scopedTenant } from "../../src/tenant.ts";
 import { after } from "node:test";
 import type { Config } from "../../src/config.ts";
 import { buildApp as buildProductionApp, type BuiltApp } from "../../src/wiring.ts";
@@ -16,7 +17,9 @@ export function buildApp(config: Config, overrides: Parameters<typeof buildProdu
     { anthropicApiKey: "test-anthropic-key", ...config },
     { harness: createMockHarness(), ...overrides },
   );
-  void app.start().catch(() => {}); // start() reports its own failures
-  void app.jobs.start().catch(() => {}); // on-demand cron fires and sweeps run as background jobs, as in production
+  if (scopedTenant()) {
+    void app.start().catch(() => {});
+    void app.jobs.start().catch(() => {});
+  }
   return stopAtEnd(app);
 }

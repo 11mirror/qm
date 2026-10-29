@@ -1,4 +1,4 @@
-import { after, afterEach, before, beforeEach, test } from "node:test";
+import { after, afterEach, before, beforeEach, test } from "../support/tenant-test.ts";
 import assert from "node:assert/strict";
 import pg from "pg";
 import type { PoolClient } from "../../src/persistence/pg-pool.ts";

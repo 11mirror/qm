@@ -94,7 +94,7 @@ test(
     ]);
     await db.pool();
     const channel = `run_stream_${randomUUID().replaceAll("-", "")}`;
-    const home = tenantApp(tenantFor("home"), db, channel);
+    const home = tenantApp(tenantFor("home", "a6e20175-91cf-4f61-8ac5-b111a88ef022"), db, channel);
     const kitten = tenantApp(tenantFor("kittens", randomUUID(), "kittens"), db, channel);
     const runId = randomUUID();
     await withTenant(kitten.tenant, () =>
@@ -164,7 +164,7 @@ test(
 );
 
 test("run signal wakeups run in the waiting tenant's context", { skip, timeout: 20_000 }, async () => {
-  const home = tenantFor("home");
+  const home = tenantFor("home", "a6e20175-91cf-4f61-8ac5-b111a88ef022");
   const kittens = tenantFor("kittens", randomUUID(), "kittens");
   const homeSignals = withTenant(home, () => createPostgresRunSignalStore(appUrl));
   const signals = withTenant(kittens, () => createPostgresRunSignalStore(appUrl));

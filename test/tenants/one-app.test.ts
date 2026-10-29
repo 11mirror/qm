@@ -1,4 +1,4 @@
-import { configureTestTenancy } from "../support/tenant-test.ts";
+import { configureTestTenancy, testTenant } from "../support/tenant-test.ts";
 import "../support/auto-fake-sprites.ts";
 import { after, before, test } from "../support/tenant-test.ts";
 import assert from "node:assert/strict";
@@ -14,7 +14,6 @@ import { createServer } from "../../src/api/server.ts";
 import { mintPortalIdentity } from "../../src/auth/portal-identity.ts";
 import { signRequest } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { createPgPool, migrateRegisteredPgSchemas, type PgPool } from "../../src/persistence/pg-pool.ts";
-import { tenant } from "../../src/tenant.ts";
 import { createTenantDirectory, useTenantDirectory, type TenantDirectory } from "../../src/tenants/directory.ts";
 import { createTenantFront } from "../../src/tenants/host.ts";
 import { upsertTenant, type TenantRecord } from "../../src/tenants/registry.ts";
@@ -89,7 +88,7 @@ before(async () => {
   const config = testConfig({
     databaseMigrationUrl: new URL(process.env.DATABASE_URL!).toString(),
     databaseUrl,
-    multitenant: true,
+
     dataDir: mkdtempSync(join(tmpdir(), "one-app-")),
     signingSecret: SIGNING,
     capabilitySecret: CAPABILITY,
@@ -110,9 +109,7 @@ before(async () => {
     databaseUrl,
     pool: registry,
     secretsKey: undefined,
-    home: tenant(),
-    homeHosts: ["home.example.test"],
-    homeSandboxPrefix: "qm",
+    sandboxPrefix: "qm",
     prepare: () => built.start(),
   });
   useTenantDirectory(directory);
@@ -144,7 +141,7 @@ test("one app: a request on a tenant's host reads and writes only that tenant's 
     call(host, id, "GET", `/v1/ui-state?principalId=alice%40example.test&key=${key}`);
   assert.deepEqual((await read("acme.example.test", ACME)).body.value, { owner: "acme" });
   assert.equal((await read("beta.example.test", BETA)).body.value, null);
-  assert.equal((await read("home.example.test", undefined)).body.value, null);
+  assert.equal((await read("home.example.test", testTenant().id)).body.value, null);
 });
 
 test("one app: a request signed with one tenant's secrets is refused on another tenant's host", { skip }, async () => {

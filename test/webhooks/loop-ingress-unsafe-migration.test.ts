@@ -26,7 +26,7 @@ async function withDatabase(body: (pool: Pool) => Promise<void>): Promise<void> 
     for (const table of ["loops", "loop_ingress", "loop_ingress_deliveries"])
       await pool.query(`CREATE TABLE ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`);
     for (const sql of [...CRONS_MIGRATION.statements, ...WEBHOOKS_MIGRATION.statements]) await pool.query(sql);
-    await applyTenancy(pool);
+    await applyTenancy(pool, true);
     await body(pool);
   } finally {
     await pool.end();

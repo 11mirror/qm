@@ -90,7 +90,15 @@ Object.assign(process.env, {
 });
 const { startServer } = await import("../src/index.ts");
 setEdgeTenants([
-  { slug: "home", orgId: "home-org", hosts: ["home.example.test"], status: "active", oidcAdmin: false, secrets: {} },
+  {
+    id: "tenant-home",
+    slug: "home",
+    orgId: "home-org",
+    hosts: ["home.example.test"],
+    status: "active",
+    oidcAdmin: false,
+    secrets: {},
+  },
   ...(["a", "b"] as const).map((name) => ({
     id: `tenant-${name}`,
     slug: name,

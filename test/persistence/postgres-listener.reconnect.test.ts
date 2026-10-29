@@ -31,20 +31,11 @@ mock.module("../../src/persistence/pg-pool.ts", {
     createPgPool(url: string) {
       const pool = pools.get(url)!;
       return {
-        sessionPool: async () => pool,
+        deploymentPool: async () => pool,
         close: async () => {
           pool.closes++;
         },
       };
-    },
-  },
-});
-mock.module("../../src/tenant.ts", {
-  namedExports: {
-    homeTenant: () => ({ orgId: "home", orgScope: "org:home" }),
-    withTenant: (owner: { orgId: string }, fn: () => unknown) => {
-      assert.equal(owner.orgId, "home");
-      return fn();
     },
   },
 });

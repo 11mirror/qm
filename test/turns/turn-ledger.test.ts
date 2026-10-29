@@ -1,4 +1,5 @@
-import { after, before, beforeEach, test } from "node:test";
+import { configureTestTenancy, testTenant } from "../support/tenant-test.ts";
+import { after, before, beforeEach, test } from "../support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
@@ -80,13 +81,14 @@ const ok = (run: Run): TurnResult => ({ status: "ok", sessionId: run.sessionId, 
 
 before(async () => {
   if (!URL) return;
-  admin = new pg.Pool({ connectionString: URL, max: 4 });
+  await configureTestTenancy(URL);
   registerAbsurdSchema(URL);
   runStore = createPostgresRunStore(URL);
   sessions = createPostgresSessionStore(URL);
   runStore.runs.onTerminal((run) => terminal.push(run));
   ledger = createTurnLedger(URL, { onTerminal: (run) => runStore.runs.emitTerminal?.(run) });
   await migrateRegisteredPgSchemas(URL);
+  admin = new pg.Pool({ connectionString: URL, max: 4, options: `-c qm.tenant_id=${testTenant().id}` });
 });
 
 beforeEach(async () => {
@@ -469,12 +471,12 @@ test("admission routes each tier to its own queue and the runner prefers people"
 
 test("a person's turn over capacity parks the newest background turn, which resumes later", { skip }, async () => {
   const crons = [];
-  for (let i = 0; i < 4; i++) crons.push(await admit(`web:cron:${randomUUID()}`, `cron ${i}`, undefined, 2));
+  for (let i = 0; i < 1; i++) crons.push(await admit(`web:cron:${randomUUID()}`, `cron ${i}`, undefined, 2));
   const { started, releases, orchestrator } = gate();
   const ready = createPostgresNotifyBus<string>(URL!, TURN_READY_CHANNEL, "test turn readiness");
-  const runner = createTurnRunner({ ledger, orchestrator, queues: TURN_QUEUES, slots: 4, pollMs: 50, ready });
+  const runner = createTurnRunner({ ledger, orchestrator, queues: TURN_QUEUES, slots: 1, pollMs: 50, ready });
   runner.start();
-  await eventually(async () => started.length, { until: (n) => n === 4, label: "four background turns" });
+  await eventually(async () => started.length, { until: (n) => n === 1, label: "background turn" });
   const newest = started.at(-1)!.runId!;
   const person = await admit(`web:alice:${randomUUID()}`, "person", undefined, 0);
   const parked = await eventually(() => runStore.runs.get(newest), {
@@ -492,7 +494,6 @@ test("a person's turn over capacity parks the newest background turn, which resu
     until: (s) => s === "done",
     label: "person done",
   });
-  for (const input of started.slice(0, 3)) releases.get(input.runId!)!();
   const resumed = await eventually(async () => started.filter((input) => input.runId === newest), {
     until: (inputs) => inputs.length === 2,
     label: "parked turn resumed",

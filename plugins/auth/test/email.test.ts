@@ -1,6 +1,7 @@
+import { readConfig } from "./helpers.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readConfig } from "../src/config.ts";
+import {} from "../src/config.ts";
 import { resendMailer } from "../../chassis/src/resend.ts";
 import { mailerFor, renderSignInEmail } from "../src/email.ts";
 import { testEnv } from "./helpers.ts";

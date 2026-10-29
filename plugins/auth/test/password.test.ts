@@ -1,7 +1,8 @@
+import { readConfig } from "./helpers.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { hashPassword, parsePasswordHash, passwordProblem, verifyPassword } from "../src/password.ts";
-import { bootProblems, parsePasswordUsers, passwordConfigured, readConfig } from "../src/config.ts";
+import { bootProblems, parsePasswordUsers, passwordConfigured } from "../src/config.ts";
 import { testEnv } from "./helpers.ts";
 
 const PASSWORD = "correct horse battery staple";

@@ -149,7 +149,7 @@ test("each loop-ingress endpoint becomes a webhook with its secret and its cron'
 
 test("a tenantized database keeps each tenant's endpoints in that tenant", async () => {
   await withDatabase("loop_ingress_tenancy", async (pool) => {
-    await applyTenancy(pool);
+    await applyTenancy(pool, true);
     const home = (await pool.query("SELECT id::text AS id FROM qm_tenant")).rows[0].id;
     const other = randomUUID();
     await seed(pool, home);

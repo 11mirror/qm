@@ -19,7 +19,7 @@ const core = createServer((req, res) => {
   req.on("data", (chunk: Buffer) => (body += chunk.toString()));
   req.on("end", () => {
     const host = String(req.headers["x-forwarded-host"]);
-    const secret = host.startsWith("home.") ? CORE_SECRET : deriveTenantSecret(CORE_SECRET, `tenant-${host[0]}`);
+    const secret = deriveTenantSecret(CORE_SECRET, host.startsWith("home.") ? "tenant-home" : `tenant-${host[0]}`);
     const canonical = canonicalPayload(req.method!, req.url!, body);
     const path = req.url!.split("?")[0]!;
     coreCalls.push({
@@ -57,7 +57,16 @@ Object.assign(process.env, {
 delete process.env.RESEND_API_KEY;
 const { startServer } = await import("../src/index.ts");
 setEdgeTenants([
-  { slug: "home", orgId: "home", hosts: ["home.example.test"], status: "active", oidcAdmin: false, secrets: {} },
+  {
+    id: "tenant-home",
+    slug: "home",
+    orgId: "home",
+    hosts: ["home.example.test"],
+    status: "active",
+    oidcAdmin: false,
+    emailAuthPrincipals: ["admin@example.com"],
+    secrets: {},
+  },
   ...(["a", "b"] as const).map((name) => ({
     id: `tenant-${name}`,
     slug: name,
@@ -65,6 +74,7 @@ setEdgeTenants([
     hosts: [`${name}.example.test`],
     status: "active" as const,
     oidcAdmin: false,
+    emailAuthPrincipals: ["admin@example.com"],
     secrets: {},
   })),
 ]);

@@ -28,6 +28,7 @@ process.env.PORTAL_IDENTITY_SECRET = secret;
 const { startServer } = await import("../../server/index.ts");
 setEdgeTenants([
   {
+    id: "tenant-home",
     slug: "home",
     orgId: "home-org",
     hosts: ["home.example.test"],
@@ -48,7 +49,8 @@ setEdgeTenants([
   })),
 ]);
 const server = await startServer(0, "127.0.0.1");
-while (!coreHosts.has("undefined")) await new Promise((resolve) => setTimeout(resolve, 10));
+while (!stateFeeds.has("a.example.test")) await new Promise((resolve) => setTimeout(resolve, 10));
+assert.equal(coreHosts.has("undefined"), false);
 const port = (server.address() as AddressInfo).port;
 
 test.after(() => {
@@ -62,7 +64,7 @@ test.after(() => {
 const identityFor = (host: string): string =>
   mintPortalIdentity(
     { p: "alice@example.com", exp: Date.now() + 60_000 },
-    host.startsWith("home.") ? secret : deriveTenantSecret(secret, `tenant-${host[0]}`),
+    deriveTenantSecret(secret, host.startsWith("home.") ? "tenant-home" : `tenant-${host[0]}`),
   );
 
 function get(
@@ -87,7 +89,7 @@ function get(
   });
 }
 
-test("the web surface answers each tenant's host with that tenant's org, branding and favicon, and the home host with the deployment's own", async () => {
+test("the web surface answers each tenant's host with that tenant's org, branding and favicon, including the original tenant from its registered settings", async () => {
   for (const name of ["a", "b"]) {
     const host = `${name}.example.test`;
     coreHosts.clear();
@@ -99,7 +101,7 @@ test("the web surface answers each tenant's host with that tenant's org, brandin
     assert.match((await get(host, "/favicon.svg")).text, new RegExp(`<title>${name}</title>`));
   }
   assert.equal((JSON.parse((await get("home.example.test", "/me", true)).text) as { org: string }).org, "home-org");
-  assert.match((await get("home.example.test", "/favicon.svg")).text, /\u{1F3F4}/u);
+  assert.match((await get("home.example.test", "/favicon.svg")).text, /<title>home<\/title>/);
 });
 
 test("an identity minted for one tenant is refused on another tenant's host", async () => {

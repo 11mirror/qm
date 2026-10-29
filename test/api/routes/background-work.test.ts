@@ -1,14 +1,12 @@
 import "../../support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-import test from "node:test";
+import { test } from "../../support/tenant-test.ts";
 import { createServer } from "../../../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../../src/auth/capability-token.ts";
 import { scopeId } from "../../../src/types.ts";
 import { signRequest } from "../../../plugins/chassis/src/source-auth-sign.ts";
-import { buildApp } from "../../support/build-app.ts";
 import { createBackgroundOwnershipStore } from "../../../src/runs/background-ownership.ts";
-import { testConfig } from "../../support/test-config.ts";
 import { testDatabaseUrl } from "../../support/test-database.ts";
 import { createPostgresReplayDedupe } from "../../../src/auth/replay-dedupe.ts";
 
@@ -20,10 +18,10 @@ async function fixture(secret: string | undefined = controlSecret) {
   const store = createBackgroundOwnershipStore(testDatabaseUrl());
   await store.set({ ownerDeploymentId: "cohort-a", setBy: "cohort-a" });
   let active = false;
-  const built = buildApp(testConfig({ signingSecret: sourceSecret }));
-  const server = createServer(built.app, {
+  const server = createServer({} as Parameters<typeof createServer>[0], {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: sourceSecret,
+    deploymentSigningSecret: sourceSecret,
     portalIdentitySecret: "portal-identity-secret".repeat(3),
     capabilitySecret: "capability-only-secret".repeat(3),
     requireSignedPortalIdentity: true,

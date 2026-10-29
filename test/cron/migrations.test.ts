@@ -1,4 +1,5 @@
-import { test } from "node:test";
+import { test, fixtureSettings } from "../support/tenant-test.ts";
+import { upsertTenant } from "../../src/tenants/registry.ts";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { LOOPS_TO_CRONS_MIGRATION } from "../../src/cron/migrations.ts";
@@ -94,8 +95,9 @@ test("a tenantized database migrates each tenant's loops into that tenant's cron
   const pool = new pg.Pool({ connectionString: target.toString() });
   try {
     for (const sql of LOOPS_TO_CRONS_MIGRATION.statements.slice(0, 3)) await pool.query(sql);
-    await applyTenancy(pool);
-    const [home, other] = [(await pool.query("SELECT id::text AS id FROM qm_tenant")).rows[0].id, randomUUID()];
+    await applyTenancy(pool, true);
+    const [home, other] = [randomUUID(), randomUUID()];
+    await upsertTenant(pool, { ...fixtureSettings(), id: home }, undefined);
     const rows: Array<[string, string, string, Record<string, unknown>]> = [
       [home, "loops", "L", { name: "Home repairs", state: "enabled", cronId: "c-home", playbook: "home" }],
       [home, "crons", "c-home", { title: "Loop: Home repairs", enabled: true, action: "x", loopId: "L" }],
@@ -112,7 +114,7 @@ test("a tenantized database migrates each tenant's loops into that tenant's cron
       ]);
 
     for (const sql of LOOPS_TO_CRONS_MIGRATION.statements) await pool.query(sql);
-    await applyTenancy(pool);
+    await applyTenancy(pool, true);
 
     const crons = (await pool.query("SELECT tenant_id::text AS t, id, json FROM crons ORDER BY id")).rows;
     assert.deepEqual(

@@ -1,11 +1,14 @@
+import { readConfig } from "./helpers.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { bootProblems, readConfig, senderAddress } from "../src/config.ts";
+import { bootProblems, tenantProblems, senderAddress } from "../src/config.ts";
 import { testEnv } from "./helpers.ts";
 
 const problemsFor = (over: Record<string, string | undefined>, isProd = true): string =>
-  bootProblems(readConfig(testEnv(over)), isProd).join(" | ");
+  [...bootProblems(readConfig(testEnv(over)), isProd), ...tenantProblems(readConfig(testEnv(over)), isProd)].join(
+    " | ",
+  );
 
 test("a complete broker configuration boots", () => {
   const signing = { CORE_SIGNING_SECRET: "a".repeat(48) };
@@ -31,10 +34,7 @@ test("the broker boots without email delivery while keeping its authentication r
       CORE_SIGNING_SECRET: "a".repeat(48),
     };
     assert.equal(problemsFor(withoutEmail), "");
-    assert.match(
-      problemsFor({ ...withoutEmail, AUTH_ALLOWED_EMAILS: undefined }),
-      /AUTH_ALLOWED_EMAILS or AUTH_ALLOWED_EMAIL_DOMAIN is required/,
-    );
+    assert.equal(problemsFor({ ...withoutEmail, AUTH_ALLOWED_EMAILS: undefined }), "");
     assert.match(problemsFor({ ...withoutEmail, AUTH_TOKEN_SECRET: undefined }), /AUTH_TOKEN_SECRET is required/);
   }
 });
@@ -58,10 +58,10 @@ test("production refuses missing or placeholder credentials and keys", () => {
 });
 
 test("production refuses cleartext endpoints and cleartext SMTP", () => {
-  assert.match(problemsFor({ AUTH_ISSUER: "http://agent.example.test/idp" }), /AUTH_ISSUER must be https/);
+  assert.match(problemsFor({ AUTH_ISSUER: "http://agent.example.test/idp" }), /Tenant issuer must be https/);
   assert.match(
     problemsFor({ AUTH_REDIRECT_URI: "http://agent.example.test/auth/callback" }),
-    /AUTH_REDIRECT_URI must be https/,
+    /Tenant redirect URI must be https/,
   );
   assert.match(
     problemsFor({
