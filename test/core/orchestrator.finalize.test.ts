@@ -367,3 +367,27 @@ test("a failed lease release before tail scheduling still reclaims the sandbox",
   assert.ok(acquired.lease);
   await release(acquired.lease!);
 });
+
+test("sandbox reclaim failure does not skip releasing the session lease", async () => {
+  const g = gatedSandbox();
+  g.sandbox.teardown = async () => {
+    throw new Error("sandbox reclaim failed");
+  };
+  const { orch, sessions } = buildOrchestrator(g.sandbox);
+  const release = sessions.releaseLease.bind(sessions);
+  let releases = 0;
+  let sessionId = "";
+  sessions.releaseLease = async (lease) => {
+    sessionId = lease.sessionId;
+    if (++releases === 1) throw new Error("lease release unavailable");
+    await release(lease);
+  };
+  await assert.rejects(
+    orch.handleTurn({ ...dm("dm:U1:reclaim-failure", "!run echo hi"), runId: randomUUID() }),
+    /lease release unavailable/,
+  );
+  assert.equal(releases, 2);
+  const acquired = await sessions.acquireLease(sessionId);
+  assert.ok(acquired.lease);
+  await release(acquired.lease!);
+});

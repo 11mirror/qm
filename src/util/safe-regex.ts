@@ -89,14 +89,11 @@ function rejectOverlappingRepetition(pattern: string, flags: string): void {
     if (atom.length === 2 && atom[0] === "\\" && !/[a-zA-Z0-9]/.test(atom[1]!)) return atom[1];
     return undefined;
   };
-  for (let i = 1; i < terms.length; i++) {
-    const previous = terms[i - 1]!;
-    const current = terms[i]!;
-    const between = pattern.slice(previous.index! + previous[0].length, current.index);
-    if (/[^():?]/.test(between)) continue;
-    const a = literal(previous[1]!);
-    const b = literal(current[1]!);
-    if (a === undefined || b === undefined || a === b)
+  const repeated = new Set<string>();
+  for (const term of terms) {
+    const atom = literal(term[1]!);
+    if (repeated.size && (atom === undefined || repeated.has("*") || repeated.has(atom)))
       throw new Error("nested or ambiguous repetition is not supported");
+    repeated.add(atom ?? "*");
   }
 }

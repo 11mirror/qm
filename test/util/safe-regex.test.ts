@@ -36,8 +36,13 @@ test("compileSafeRegex accepts single-level repetition, optional groups and lite
 test("overlapping adjacent repetitions are rejected before a quadratic timing input is evaluated", () => {
   const input = `${"a".repeat(100_000)}!`;
   const started = performance.now();
-  for (const pattern of ["^a+a+$", "^[a-z]+[a-z]+$", "^a+\\w+$", "^(a)+(a)+$"]) {
+  for (const pattern of ["^a+a+$", "^[a-z]+[a-z]+$", "^a+\\w+$", "^(a)+(a)+$", "^a+aa+$", "^a+a?a+$"]) {
     assert.throws(() => compileSafeRegex(pattern).test(input), /ambiguous repetition/, pattern);
   }
   assert.ok(performance.now() - started < 1000);
+});
+
+test("case-insensitive overlapping repetitions cannot bypass the checker", () => {
+  assert.throws(() => compileSafeRegex("^a+A+$", "i"), /ambiguous repetition/);
+  assert.throws(() => compileSafeRegex("^\\x61+a+$"), /escaped character codes/);
 });
