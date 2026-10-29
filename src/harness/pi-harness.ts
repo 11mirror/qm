@@ -1246,7 +1246,7 @@ async function recordOneShotCall(
       step,
       model: model.id,
       truncated: false,
-      usage: piUsageToCallUsage(call.usage, model, false),
+      usage: piUsageToCallUsage(call.usage, model, false, (call as { serviceTier?: string }).serviceTier),
     });
   } catch (e) {
     swallow("pi: one-shot request record", e);
