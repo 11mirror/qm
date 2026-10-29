@@ -79,21 +79,44 @@ export function compileSafeRegex(pattern: string, flags = ""): RegExp {
 }
 
 function rejectOverlappingRepetition(pattern: string, flags: string): void {
-  if (flags.includes("i")) pattern = pattern.toLowerCase();
+  const optionalGroup = /\((?:\?:)?(?:\\.|\[(?:\\.|[^\]\\])*\]|[^()[\]])*\)\?/g;
+  while (optionalGroup.test(pattern)) {
+    optionalGroup.lastIndex = 0;
+    pattern = pattern.replace(optionalGroup, "");
+  }
   pattern = pattern.replace(/\\.|\[(?:\\.|[^\]\\])*\]|\(\?:|[()]/g, (token) =>
     token.startsWith("(") || token === ")" ? "" : token,
   );
-  const terms = [...pattern.matchAll(/(\\.|\[(?:\\.|[^\]\\])*\]|[^\\[(){}*+?^$|])([*+]|\{\d+(?:,\d*)?\})/g)];
-  const literal = (atom: string): string | undefined => {
-    if (atom.length === 1 && atom !== ".") return atom;
-    if (atom.length === 2 && atom[0] === "\\" && !/[a-zA-Z0-9]/.test(atom[1]!)) return atom[1];
+  const atom = String.raw`(\\.|\[(?:\\.|[^\]\\])*\]|[^\\[(){}*+?^$|])`;
+  const terms = [...pattern.matchAll(new RegExp(`${atom}([*+]|\\{\\d+(?:,\\d*)?\\})`, "g"))];
+  const literal = (value: string): string | undefined => {
+    if (value.length === 1 && value !== ".") return value;
+    if (value.length === 2 && value[0] === "\\" && !/[a-zA-Z0-9]/.test(value[1]!)) return value[1];
     return undefined;
   };
-  const repeated = new Set<string>();
-  for (const term of terms) {
-    const atom = literal(term[1]!);
-    if (repeated.size && (atom === undefined || repeated.has("*") || repeated.has(atom)))
-      throw new Error("nested or ambiguous repetition is not supported");
-    repeated.add(atom ?? "*");
-  }
+  const disjoint = (a: string, b: string): boolean => {
+    const left = literal(a);
+    const right = literal(b);
+    if (left !== undefined) return !new RegExp(`^(?:${b})$`, flags).test(left);
+    if (right !== undefined) return !new RegExp(`^(?:${a})$`, flags).test(right);
+    return ["s", "w", "d"].some(
+      (kind) =>
+        (a === `\\${kind}` && b === `\\${kind.toUpperCase()}`) ||
+        (b === `\\${kind}` && a === `\\${kind.toUpperCase()}`),
+    );
+  };
+  for (let i = 1; i < terms.length; i++)
+    for (const previous of terms.slice(0, i)) {
+      const current = terms[i]!;
+      if (disjoint(previous[1]!, current[1]!)) continue;
+      const between = pattern.slice(previous.index! + previous[0].length, current.index);
+      const separated =
+        !between.includes("|") &&
+        [...between.matchAll(new RegExp(`${atom}([*+?]|\\{\\d+(?:,\\d*)?\\})?`, "g"))].some((part) => {
+          if (["*", "?"].includes(part[2] ?? "") || part[2]?.startsWith("{0") || /^\\[bB]$/.test(part[1]!))
+            return false;
+          return disjoint(part[1]!, previous[1]!) || disjoint(part[1]!, current[1]!);
+        });
+      if (!separated) throw new Error("nested or ambiguous repetition is not supported");
+    }
 }
