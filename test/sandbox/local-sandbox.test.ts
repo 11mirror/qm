@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { tenant } from "../../src/tenant.ts";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { createServer, type AddressInfo } from "node:net";
@@ -66,6 +67,7 @@ function makeSandbox(fake: FakeDocker, opts: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "local-ws-"));
   return createLocalSandbox(createLocalWorkspaceStore(dir), {
     ...singleProcessDeps(),
+    tenantConfig: () => ({ orgId: tenant().orgId }),
     store: testSandboxBodies(LOCAL_BODIES),
     dockerExec: fake.dockerExec,
     homeDir: guestHome,
@@ -248,6 +250,7 @@ test("read-only layers materialize into the workspace once per content fingerpri
   await workspace.write(shared, "guide.md", "shared doc");
   const sb = createLocalSandbox(workspace, {
     ...singleProcessDeps(),
+    tenantConfig: () => ({ orgId: tenant().orgId }),
     store: testSandboxBodies(LOCAL_BODIES),
     dockerExec: fake.dockerExec,
     homeDir: guestHome,
@@ -358,6 +361,7 @@ test("Local scope deletion removes deterministic resources without provisioning,
   let fail = false;
   const sandbox = createLocalSandbox(workspace(), {
     ...singleProcessDeps(),
+    tenantConfig: () => ({ orgId: tenant().orgId }),
     store: testSandboxBodies(LOCAL_BODIES),
     dockerExec: async (args) => {
       calls.push(args);
@@ -380,6 +384,7 @@ test("Local scope deletion fails a refused core disconnect only while the core i
   const network = localNetworkName(localContainerName("scope"));
   const sandbox = createLocalSandbox(workspace(), {
     ...singleProcessDeps(),
+    tenantConfig: () => ({ orgId: tenant().orgId }),
     store: testSandboxBodies(LOCAL_BODIES),
     coreContainer: "qm-core",
     dockerExec: async (args) =>
@@ -427,6 +432,7 @@ for (const [name, create, resource] of [["Smolmachines", createSmolmachinesSandb
     let exists = true;
     const sandbox = create(workspace(), {
       ...singleProcessDeps(),
+      tenantConfig: () => ({ orgId: tenant().orgId }),
       store: testSandboxBodies(SMOLMACHINES_BODIES),
       token: "test",
       fetchImpl: async (input, init) => {
@@ -459,6 +465,7 @@ test("Local deletion retries remaining disk cleanup after partial failure withou
   let volumeBusy = true;
   const sandbox = createLocalSandbox(workspace(), {
     ...singleProcessDeps(),
+    tenantConfig: () => ({ orgId: tenant().orgId }),
     store: testSandboxBodies(LOCAL_BODIES),
     dockerExec: async (args) => {
       calls.push(args);

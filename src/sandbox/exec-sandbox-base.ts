@@ -42,6 +42,7 @@ export interface ExecSandboxBaseDeps {
   workspace: WorkspaceStore;
   label: string;
   prefix: () => string;
+  nameFor?: (scope: string) => Promise<string>;
   homeDir: string;
   defaultTimeoutSec: number;
   credentialPaths: CredentialPathSpec[];
@@ -211,14 +212,13 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
           return;
         }
         activeScratch.delete(handle.id);
-        deps.forgetInstance?.(handle.id);
         if (tdOpts?.destroy) await deps.deleteInstance(handle.id);
         else await deps.deleteInstance(handle.id).catch(swallowAs(`${label}-sandbox: scratch delete`, undefined));
+        deps.forgetInstance?.(handle.id);
         scratchKeyByName.delete(handle.id);
       });
     }
     if (!tdOpts?.destroy) return;
-    deps.forgetInstance?.(handle.id);
     await deps.deleteInstance(handle.id).catch((e) => {
       const scope = scopeByName.get(handle.id);
       deps.onError?.({
@@ -239,7 +239,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
     if (scratch) {
       ({ name, coldStart } = await ensureScratch(scratch.key));
     } else {
-      name = sandboxScopeName(prefix(), scope);
+      name = deps.nameFor ? await deps.nameFor(scope) : sandboxScopeName(prefix(), scope);
       scopeByName.set(name, scope);
       ({ coldStart } = await provisionQueue(scope, () => deps.ensureResident(name, scope, provOpts?.onStatus)));
     }

@@ -1,3 +1,5 @@
+import { createProviderMaintenance } from "./provider-maintenance.ts";
+import { createProviderRecovery } from "./provider-recovery.ts";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -37,6 +39,7 @@ const OPTIONAL_TOOLS = ["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"];
 type ErrorReport = (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 
 export interface SandboxShared extends BlobStagingOptions {
+  machineName?: (scope: string) => Promise<string | undefined>;
   defaultTimeoutSec?: number;
   egressProxyUrl?: string;
   snapshotIntervalSec?: number;
@@ -57,7 +60,18 @@ export interface SandboxShared extends BlobStagingOptions {
 export const sandboxNamePrefix = (shared: BlobStagingOptions): string =>
   shared.tenantConfig?.().sandboxNamePrefix ?? "qm";
 
+export const sandboxOwnership = (shared: BlobStagingOptions, kind: "scope" | "scratch"): Record<string, string> => ({
+  "qm-org": shared.tenantConfig?.().orgId ?? "",
+  "qm-prefix": sandboxNamePrefix(shared),
+  "qm-kind": kind,
+});
+
 export interface StoredSandboxRecord {
+  sandboxId?: string;
+  createdAtMs?: number;
+  expiresAtMs?: number;
+  lastActivityMs?: number;
+  orgId?: string;
   initializationPending?: boolean;
   lastSnapshotMs?: number;
   homeDirty?: boolean;
@@ -67,6 +81,7 @@ export interface StoredSandboxRecord {
 }
 
 export interface MachineState {
+  id?: string;
   state: "running" | "parked";
   detail: string;
   resources?: ComputerStatus["resources"];
@@ -98,14 +113,23 @@ export interface SandboxDriver {
   writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void>;
   readAbsBytes(name: string, absPath: string): Promise<Uint8Array | null>;
   inspect(name: string): Promise<MachineState | null>;
-  create(name: string, opts: { scratch: boolean; scope?: string }): Promise<void | { homeRetained: boolean }>;
+  create(
+    name: string,
+    opts: { scratch: boolean; scope?: string; checkpointId?: string },
+  ): Promise<void | { homeRetained?: boolean; id?: string; expiresAtMs?: number }>;
   resume(name: string): Promise<void>;
   park?(name: string, opts: { keepWarm: boolean }): Promise<void>;
   destroy(name: string): Promise<void>;
   isLive(name: string): boolean;
   forget?(name: string): void;
   restart?(name: string, ctx: { initializationPending: boolean }): Promise<void>;
-  rotationDue?(name: string): Promise<boolean>;
+  lifetimeMs?: number;
+  isGone?(error: unknown): boolean;
+  isCommandLost?(error: unknown): boolean;
+  replacement?: "checkpoint";
+  listRunning?(tags: Record<string, string>): AsyncIterable<string>;
+  terminateById?(id: string): Promise<void>;
+  knownIds?(): Iterable<string>;
   ensureEgress?(name: string): Promise<void>;
   checkpoints?: DriverCheckpoints;
 }
@@ -113,21 +137,22 @@ export interface SandboxDriver {
 export type ProviderSandbox = BackendSandbox & {
   readonly scopeFor: (name: string) => string | undefined;
   readonly scopeOf: (name: string) => Promise<string | undefined>;
-  readonly nameFor: (scopeId: string) => string;
+  readonly nameFor: (scopeId: string) => Promise<string>;
   readonly lifecycle: <T>(scopeId: string, fn: () => Promise<T>) => Promise<T>;
   readonly captureCheckpoint: (scopeId: string, name: string) => Promise<void>;
   readonly ensureResident: (scopeId: string) => Promise<void>;
 };
 
-interface ProviderContext {
+export interface ProviderContext {
   driver: SandboxDriver;
   store: SandboxBodies<StoredSandboxRecord>;
   backend: string;
   lock: <T>(scope: string, fn: () => Promise<T>) => Promise<T>;
+  rotationDue: (name: string, stored: StoredSandboxRecord | null | undefined) => boolean;
   report: (category: string, code: string, e: unknown, scopeLabel?: string) => void;
 }
 
-function createProviderCheckpointing({ driver, store, backend, report }: ProviderContext) {
+function createProviderCheckpointing({ driver, store, backend, report, rotationDue }: ProviderContext) {
   async function captureCheckpoint(scope: string, name: string): Promise<void> {
     if (isJobComputerScope(scope)) return;
     const previous = (await store.get(scope))?.checkpointId;
@@ -166,12 +191,7 @@ function createProviderCheckpointing({ driver, store, backend, report }: Provide
     let stored = await store.get(scope);
     if (driver.isLive(name) && !stored?.initializationPending) return false;
     let existing = await driver.inspect(name);
-    if (
-      existing &&
-      !stored?.initializationPending &&
-      (await driver.rotationDue?.(name)) &&
-      (await rotate(scope, name))
-    ) {
+    if (existing && !stored?.initializationPending && rotationDue(name, stored) && (await rotate(scope, name))) {
       existing = null;
       stored = await store.get(scope);
     }
@@ -179,6 +199,10 @@ function createProviderCheckpointing({ driver, store, backend, report }: Provide
       if (existing.state === "parked") await driver.resume(name);
       return false;
     }
+    if (!existing && driver.replacement === "checkpoint" && stored?.homeDirty && !stored.checkpointId)
+      throw new Error(`${backend} sandbox is gone; explicitly import a recovery snapshot before replacing its home`);
+    if (!existing && stored?.checkpointId && driver.checkpoints && !driver.checkpoints.machineBound)
+      await assertProviderCheckpoint({ driver, store, backend }, scope);
     await store.upsert(scope, { initializationPending: true });
     onStatus?.("Preparing the sandbox…");
     let created = false;
@@ -187,14 +211,21 @@ function createProviderCheckpointing({ driver, store, backend, report }: Provide
     try {
       if (existing) await driver.resume(name);
       else {
-        retained = (await driver.create(name, { scratch: false, scope }))?.homeRetained ?? false;
+        const made = await driver.create(name, { scratch: false, scope, checkpointId: stored?.checkpointId });
+        retained = made?.homeRetained ?? false;
+        if (driver.lifetimeMs)
+          await store.update(scope, {
+            sandboxId: made?.id,
+            createdAtMs: Date.now(),
+            expiresAtMs: made?.expiresAtMs ?? Date.now() + driver.lifetimeMs,
+          });
         created = true;
       }
       booted = true;
       const checkpointId = stored?.checkpointId;
       const machineBound = !!driver.checkpoints?.machineBound;
       const restored =
-        checkpointId && driver.checkpoints && !machineBound
+        !retained && checkpointId && driver.checkpoints && !machineBound
           ? (await restoreProviderCheckpoint({ driver, store, backend }, scope, name, checkpointId), true)
           : false;
       const hydrated = restored || retained;
@@ -231,6 +262,7 @@ function createProviderBase(
     defaultTimeoutSec: number;
     initialize: (scope: string, name: string, onStatus?: (text: string) => void) => Promise<boolean>;
     scopeOf: (name: string) => Promise<string | undefined>;
+    nameFor: (scope: string) => Promise<string>;
   },
 ): ExecSandboxBase {
   const { homeDir } = driver;
@@ -239,6 +271,7 @@ function createProviderBase(
     workspace,
     label: backend,
     prefix,
+    nameFor: deps.nameFor,
     homeDir,
     defaultTimeoutSec,
     credentialPaths: shared.credentialPaths ?? [],
@@ -335,7 +368,7 @@ function createProviderResidency(
   { driver, store, lock, report }: ProviderContext,
   base: ExecSandboxBase,
   deps: {
-    nameFor: (scope: string) => string;
+    nameFor: (scope: string) => Promise<string>;
     requireScope: (name: string) => Promise<string>;
     checkpointDue: (stored: StoredSandboxRecord | null | undefined, opts?: TeardownOptions) => boolean;
     captureCheckpoint: (scope: string, name: string) => Promise<void>;
@@ -352,7 +385,7 @@ function createProviderResidency(
   async function provision(layers: WorkspaceLayer[], opts?: ProvisionOptions): Promise<SandboxHandle> {
     if (opts?.scratch) return base.provision(layers, opts);
     const writable = layers.find((l) => l.mode === "rw") ?? layers[0];
-    const name = nameFor(writable?.scopeId ?? "default");
+    const name = await nameFor(writable?.scopeId ?? "default");
     hold(name, 1);
     try {
       return await base.provision(layers, opts);
@@ -397,12 +430,16 @@ function createProviderResidency(
   return { provision, teardown };
 }
 
-function providerScopeMethods(ctx: ProviderContext, base: ExecSandboxBase, nameFor: (scope: string) => string) {
+function providerScopeMethods(
+  ctx: ProviderContext,
+  base: ExecSandboxBase,
+  nameFor: (scope: string) => Promise<string>,
+) {
   const { driver, store, backend, lock } = ctx;
   const recovery = (scope: string) => providerRecovery(ctx, scope);
   return {
     async computerStatus(scopeId: string): Promise<ComputerStatus> {
-      const name = nameFor(scopeId);
+      const name = await nameFor(scopeId);
       const rec = await recovery(scopeId);
       let machine: MachineState | null;
       try {
@@ -440,10 +477,19 @@ function providerScopeMethods(ctx: ProviderContext, base: ExecSandboxBase, nameF
     ...(driver.restart || driver.checkpoints
       ? {
           async restartComputer(scopeId: string): Promise<void> {
-            const name = nameFor(scopeId);
+            const name = await nameFor(scopeId);
             await base.provisionQueue(scopeId, () =>
               lock(scopeId, async () => {
                 const stored = await store.get(scopeId);
+                if (driver.lifetimeMs) {
+                  if (!stored) return;
+                  if (!stored.initializationPending && (await driver.inspect(name)))
+                    await createProviderCheckpointing(ctx).captureCheckpoint(scopeId, name);
+                  await driver.destroy(name);
+                  driver.forget?.(name);
+                  await store.update(scopeId, { initializationPending: undefined, snapshotError: undefined });
+                  return;
+                }
                 if (driver.restart)
                   return driver.restart(name, { initializationPending: !!stored?.initializationPending });
                 if (!stored?.checkpointId) throw new Error(`${backend} restart: no checkpoint to restore`);
@@ -455,7 +501,7 @@ function providerScopeMethods(ctx: ProviderContext, base: ExecSandboxBase, nameF
       : {}),
 
     async destroyScope(scopeId: string): Promise<void> {
-      const name = nameFor(scopeId);
+      const name = await nameFor(scopeId);
       await base.provisionQueue(scopeId, () =>
         lock(scopeId, async () => {
           const stored = await store.get(scopeId);
@@ -489,8 +535,8 @@ export function createProviderSandbox(
   const lock = <T>(scope: string, fn: () => Promise<T>): Promise<T> =>
     shared.advisoryLock.withLock(`${backend}-provision:${prefix()}:${scope}`, fn);
   const scopeByName = new Map<string, string>();
-  const nameFor = (scope: string): string => {
-    const name = sandboxScopeName(prefix(), scope);
+  const nameFor = async (scope: string): Promise<string> => {
+    const name = (await shared.machineName?.(scope)) ?? sandboxScopeName(prefix(), scope);
     scopeByName.set(name, scope);
     return name;
   };
@@ -498,7 +544,7 @@ export function createProviderSandbox(
   async function scopeOf(name: string): Promise<string | undefined> {
     const known = scopeFor(name);
     if (known) return known;
-    for (const [scope] of await store.entries()) nameFor(scope);
+    for (const [scope] of await store.entries()) await nameFor(scope);
     return scopeByName.get(name);
   }
   async function requireScope(name: string): Promise<string> {
@@ -511,26 +557,52 @@ export function createProviderSandbox(
   const report = (category: string, code: string, e: unknown, scopeLabel?: string): void => {
     shared.onError?.({ category, code, message: errMessage(e), ...(scopeLabel ? { scopeLabel } : {}) });
   };
-  const ctx: ProviderContext = { driver, store, backend, lock, report };
+  const maintenance = createProviderMaintenance(driver, store, shared, {
+    nameFor,
+    scopeOf,
+    report,
+    lifecycle: (scope, fn) => base.provisionQueue(scope, () => lock(scope, fn)),
+    ensureResident: async (scope) => {
+      const name = await nameFor(scope);
+      await base.provisionQueue(scope, () => lock(scope, () => initialize(scope, name)));
+    },
+    captureCheckpoint: (scope, name) => captureCheckpoint(scope, name),
+  });
+  const ctx: ProviderContext = { driver, store, backend, lock, report, rotationDue: maintenance.rotationDue };
   const { captureCheckpoint, initialize } = createProviderCheckpointing(ctx);
-  const base = createProviderBase(workspace, ctx, shared, { prefix, defaultTimeoutSec, initialize, scopeOf });
+  const recovered = createProviderRecovery(driver, store, shared, {
+    scopeOf,
+    initialize: (scope, name) => base.provisionQueue(scope, () => lock(scope, () => initialize(scope, name))),
+    touch: maintenance.touch,
+  });
+  const base = createProviderBase(workspace, { ...ctx, driver: recovered }, shared, {
+    prefix,
+    defaultTimeoutSec,
+    initialize,
+    scopeOf,
+    nameFor,
+  });
   const profile = providerProfile(driver, shared, base.workspaceDir);
 
   const procSessions = createExecProcessSessions({
     run: (handle, command, execOpts) =>
-      driver.exec(handle.id, command, execOpts?.timeoutMs ? Math.ceil(execOpts.timeoutMs / 1000) : defaultTimeoutSec),
+      recovered.exec(
+        handle.id,
+        command,
+        execOpts?.timeoutMs ? Math.ceil(execOpts.timeoutMs / 1000) : defaultTimeoutSec,
+      ),
   });
   const fileOps = createExecFileOps({
     label: backend,
-    exec: driver.exec,
-    writeInline: driver.writeAbsBytes,
+    exec: recovered.exec,
+    writeInline: recovered.writeAbsBytes,
     ...(driver.combineRoundTrips ? { combineRemoveAndList: true } : {}),
   });
-  const staging = createBackendBlobStaging(backend, driver.exec, shared);
+  const staging = createBackendBlobStaging(backend, recovered.exec, shared);
   const execExport = createExecExport({
     label: backend,
-    exec: driver.exec,
-    readAbsBytes: driver.readAbsBytes,
+    exec: recovered.exec,
+    readAbsBytes: recovered.readAbsBytes,
     defaultHomeDir: homeDir,
     ephemeralCredentialPrefixes: credentialPrefixes,
   });
@@ -549,7 +621,8 @@ export function createProviderSandbox(
     lifecycle: (scope, fn) => base.provisionQueue(scope, () => lock(scope, fn)),
     captureCheckpoint,
     ensureResident: async (scope) => {
-      await base.provisionQueue(scope, () => lock(scope, () => initialize(scope, nameFor(scope))));
+      const name = await nameFor(scope);
+      await base.provisionQueue(scope, () => lock(scope, () => initialize(scope, name)));
     },
     provision,
     run: base.run,
@@ -565,8 +638,12 @@ export function createProviderSandbox(
     writeStdin: procSessions.writeStdin,
     signalProcess: procSessions.signalProcess,
     listProcesses: procSessions.listProcesses,
-    teardown,
+    teardown: async (handle, opts) => {
+      await teardown(handle, opts);
+      if (!handle.scratch && !opts?.destroy) await maintenance.touch(handle.id, true);
+    },
     ...providerScopeMethods(ctx, base, nameFor),
+    ...(driver.lifetimeMs ? { reapDeepIdle: maintenance.reapDeepIdle } : {}),
   };
 }
 
@@ -576,11 +653,18 @@ async function restoreProviderCheckpoint(
   name: string,
   checkpointId: string,
 ): Promise<void> {
+  await assertProviderCheckpoint({ driver, store, backend }, scope);
+  await driver.checkpoints!.restore(name, checkpointId);
+}
+
+async function assertProviderCheckpoint(
+  { driver, store, backend }: Pick<ProviderContext, "driver" | "store" | "backend">,
+  scope: string,
+): Promise<void> {
   const at = (await store.get(scope))?.checkpointAtMs;
   const retentionMs = driver.checkpoints!.retentionMs;
   if (at && retentionMs != null && at + retentionMs <= Date.now())
     throw new Error(
       `${backend} home checkpoint has expired; explicitly import a recovery snapshot before creating a replacement`,
     );
-  await driver.checkpoints!.restore(name, checkpointId);
 }

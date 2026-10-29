@@ -258,6 +258,7 @@ interface ExecBlobStaging {
 }
 
 interface SandboxTenantConfig {
+  orgId?: string;
   sandboxNamePrefix?: string;
   apiBaseUrl?: string;
   signingSecret?: string;

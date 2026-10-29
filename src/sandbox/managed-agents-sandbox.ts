@@ -55,7 +55,6 @@ function managedAgentsSessions(
   client: ManagedAgentsClient,
   store: SandboxBodies<StoredManagedAgentsSandbox>,
   scopeOf: (name: string) => string | undefined,
-  ensureResident: (scopeId: string) => Promise<void>,
 ) {
   const sessions = new Map<string, ManagedAgentsSession>();
 
@@ -107,18 +106,8 @@ function managedAgentsSessions(
     session?.close().catch(swallowAs("managed-agents-sandbox: close session", undefined));
   }
 
-  async function withSession<T>(name: string, action: (session: ManagedAgentsSession) => Promise<T>): Promise<T> {
-    try {
-      return await action(await connect(name));
-    } catch (e) {
-      if (!(e instanceof ManagedAgentsCommandLostError || e instanceof ManagedAgentsSandboxGoneError)) throw e;
-      forget(name);
-      const scope = e instanceof ManagedAgentsSandboxGoneError ? scopeOf(name) : undefined;
-      if (!scope || (await store.get(scope))?.initializationPending) throw e;
-      await ensureResident(scope);
-      return action(await connect(name));
-    }
-  }
+  const withSession = async <T>(name: string, action: (session: ManagedAgentsSession) => Promise<T>): Promise<T> =>
+    action(await connect(name));
 
   async function exec(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
     return withSession(name, async (session) => {
@@ -228,6 +217,8 @@ function managedAgentsDriver(ctx: ManagedAgentsSessions, opts: ManagedAgentsSand
     tools: ["git", "curl", "tar", "python3"],
     writablePersistence: "provider_managed",
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
+    isGone: (error) => error instanceof ManagedAgentsSandboxGoneError,
+    isCommandLost: (error) => error instanceof ManagedAgentsCommandLostError,
     exec,
     writeAbsBytes: (name, absPath, data) => writeAbsBytes(ctx, name, absPath, data),
     readAbsBytes: (name, absPath) => readAbsBytes(ctx, name, absPath),
@@ -270,7 +261,7 @@ export function createManagedAgentsSandbox(
 ): BackendSandbox {
   const { client, store } = opts;
   const scopeOf = (name: string): string | undefined => sandbox.scopeFor(name);
-  const ctx = managedAgentsSessions(client, store, scopeOf, (scope) => sandbox.ensureResident(scope));
+  const ctx = managedAgentsSessions(client, store, scopeOf);
   const sandbox = createProviderSandbox(workspace, managedAgentsDriver(ctx, opts), opts, store);
   return sandbox;
 }

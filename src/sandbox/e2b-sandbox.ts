@@ -10,7 +10,6 @@ import {
 import {
   createProviderSandbox,
   type MachineState,
-  type ProviderSandbox,
   type SandboxDriver,
   type SandboxShared,
   type StoredSandboxRecord,
@@ -44,7 +43,6 @@ export interface E2bSandboxOptions extends SandboxShared {
 interface E2bState {
   client: E2bClient;
   sessions: Map<string, E2bSession>;
-  restoredFrom: Map<string, string>;
   observed: Pick<SandboxDriver, "cpus" | "memoryMb" | "diskGb">;
 }
 
@@ -54,11 +52,10 @@ async function locate(client: E2bClient, name: string): Promise<{ sandboxId: str
 }
 
 async function destroy(state: E2bState, name: string): Promise<void> {
-  const { client, sessions, restoredFrom } = state;
+  const { client, sessions } = state;
   const ids = new Set([sessions.get(name)?.sandboxId, ...(await client.list({ name })).map((s) => s.sandboxId)]);
   for (const id of ids) if (id) await client.kill(id);
   sessions.delete(name);
-  restoredFrom.delete(name);
 }
 
 async function inspect(state: E2bState, name: string): Promise<MachineState | null> {
@@ -90,11 +87,8 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
   const { client, store } = opts;
   const keepWarmMs = (opts.keepWarmSec ?? DEFAULT_KEEP_WARM_SEC) * 1000;
   const sessions = new Map<string, E2bSession>();
-  const scratchNames = new Set<string>();
-  const restoredFrom = new Map<string, string>();
-  const reviving = new Map<string, Promise<E2bSession>>();
   const observed: Pick<SandboxDriver, "cpus" | "memoryMb" | "diskGb"> = {};
-  const state: E2bState = { client, sessions, restoredFrom, observed };
+  const state: E2bState = { client, sessions, observed };
 
   async function adopt(name: string, session: E2bSession): Promise<E2bSession> {
     sessions.set(name, session);
@@ -110,19 +104,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       autoPause: !scratch,
       ...(fromSnapshot ? { fromSnapshot } : {}),
     });
-    if (scratch) scratchNames.add(name);
     return adopt(name, session);
-  }
-
-  async function createResident(name: string, scope: string): Promise<E2bSession> {
-    const stored = await store.get(scope);
-    const checkpointId = stored?.checkpointId;
-    if (stored?.homeDirty && !checkpointId)
-      throw new Error("e2b sandbox is gone; explicitly import a recovery snapshot before replacing its home");
-    const session = await launch(name, false, checkpointId);
-    if (checkpointId) restoredFrom.set(name, checkpointId);
-    await store.update(scope, { sandboxId: session.sandboxId });
-    return session;
   }
 
   async function connect(name: string): Promise<E2bSession> {
@@ -133,33 +115,10 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
     return adopt(name, await client.connect(found.sandboxId));
   }
 
-  async function replace(name: string): Promise<E2bSession> {
-    if (scratchNames.has(name)) return launch(name, true);
-    const found = await locate(client, name);
-    if (found) return adopt(name, await client.connect(found.sandboxId));
-    const scope = sandbox.scopeFor(name);
-    if (!scope) throw new Error(`e2b sandbox ${name} is not provisioned`);
-    return createResident(name, scope);
-  }
+  const withSession = async <T>(name: string, action: (session: E2bSession) => Promise<T>): Promise<T> =>
+    action(await connect(name));
 
-  function revive(name: string): Promise<E2bSession> {
-    const pending = reviving.get(name) ?? replace(name).finally(() => reviving.delete(name));
-    reviving.set(name, pending);
-    return pending;
-  }
-
-  async function withSession<T>(name: string, action: (session: E2bSession) => Promise<T>): Promise<T> {
-    try {
-      return await action(await connect(name));
-    } catch (err) {
-      if (err instanceof E2bCommandLostError) sessions.delete(name);
-      if (!(err instanceof E2bSandboxGoneError)) throw err;
-      sessions.delete(name);
-      return action(await revive(name));
-    }
-  }
-
-  const sandbox: ProviderSandbox = createProviderSandbox(
+  const sandbox = createProviderSandbox(
     workspace,
     {
       get cpus() {
@@ -176,13 +135,17 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       os: "Linux — E2B Firecracker sandbox (provider pause preserves state; publish durable work to git or Files)",
       writablePersistence: "provider_managed",
       egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
+      replacement: "checkpoint",
+      isGone: (error) => error instanceof E2bSandboxGoneError,
+      isCommandLost: (error) => error instanceof E2bCommandLostError,
       exec: (name, script, timeoutSec) => withSession(name, (s) => runE2bScript(s, script, timeoutSec)),
       writeAbsBytes: (name, absPath, data) => withSession(name, (s) => s.writeFileBytes(absPath, data)),
       readAbsBytes: (name, absPath) => withSession(name, (s) => s.readFileBytes(absPath)),
       inspect: (name) => inspect(state, name),
-      async create(name, { scratch, scope }) {
-        if (scratch || !scope) await launch(name, scratch);
-        else await createResident(name, scope);
+      async create(name, { scratch, scope, checkpointId }) {
+        const session = await launch(name, scratch, checkpointId);
+        if (scope) await store.update(scope, { sandboxId: session.sandboxId });
+        return { homeRetained: !!checkpointId };
       },
       async resume(name) {
         sessions.delete(name);
@@ -199,8 +162,6 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       isLive: (name) => sessions.has(name),
       forget(name) {
         sessions.delete(name);
-        scratchNames.delete(name);
-        restoredFrom.delete(name);
       },
       async restart(name) {
         const session = await connect(name);
@@ -211,9 +172,6 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       checkpoints: {
         capture: async (name) => (await (await connect(name)).createSnapshot()).snapshotId,
         async restore(name, checkpointId) {
-          const fresh = restoredFrom.get(name) === checkpointId;
-          restoredFrom.delete(name);
-          if (fresh) return;
           await destroy(state, name);
           await launch(name, false, checkpointId);
         },

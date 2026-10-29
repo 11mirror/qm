@@ -4,7 +4,6 @@ import { isIP } from "node:net";
 import { resolveModalImage } from "./modal-image.ts";
 import { swallow } from "../util/errors.ts";
 import { withTimeout } from "../util/async.ts";
-import { perTenant } from "../tenant.ts";
 
 export interface ModalCommandResult {
   stdout: string;
@@ -224,10 +223,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
   const idleTimeoutMs = wholeSeconds(Math.min(opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS, sandboxTimeoutMs));
   const maxCommandMs = opts.maxCommandMs ?? DEFAULT_MAX_COMMAND_MS;
   const network = opts.egressProxyUrl ? modalEgressAllowlist(opts.egressProxyUrl) : {};
-  const ctxByTenant = perTenant(
-    () => ({ ctx: null as Promise<Ctx> | null }),
-    (slot) => slot.ctx?.then(({ client }) => client.close()).catch(() => {}),
-  );
+  let ctx: Promise<Ctx> | null = null;
   const buildCtx = async (): Promise<Ctx> => {
     let sdk: ModalSdk;
     try {
@@ -246,9 +242,8 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
     return { sdk, client, app, image };
   };
   const loadCtx = (): Promise<Ctx> => {
-    const slot = ctxByTenant();
-    return (slot.ctx ??= buildCtx().catch((e) => {
-      slot.ctx = null;
+    return (ctx ??= buildCtx().catch((e) => {
+      ctx = null;
       throw e;
     }));
   };

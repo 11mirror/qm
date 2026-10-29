@@ -113,6 +113,7 @@ function buildSandboxBackends(deps: SandboxInputs) {
     ...config.sandbox,
     keepWarmSec: Math.ceil(BACKGROUND_JOB_TTL_MAX_MS / 1000),
     advisoryLock,
+    machineName: createSandboxResourceStore(databaseUrl).machineNameFor,
     blobTransfer,
     extraTools: deploymentLayer.advertisedTools,
     credentialPaths: deploymentLayer.credentialPaths,

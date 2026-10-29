@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { tenant } from "../tenant.ts";
 import { arch } from "node:os";
 import { join } from "node:path";
 import { readdir, readFile as fsReadFile } from "node:fs/promises";
@@ -11,6 +10,7 @@ import { sandboxScopeName } from "./exec-sandbox-base.ts";
 import {
   createProviderSandbox,
   sandboxNamePrefix,
+  sandboxOwnership,
   type SandboxShared,
   type StoredSandboxRecord,
 } from "./provider-sandbox.ts";
@@ -236,7 +236,7 @@ function createLocalContainers(ld: LocalDocker, waitDaemon: (name: string) => Pr
         "--label",
         "qm.sandbox=1",
         "--label",
-        `qm.org=${tenant().orgId}`,
+        `qm.org=${sandboxOwnership(opts, "scope")["qm-org"]}`,
         "--label",
         "agent_env=dev",
         "--network",
