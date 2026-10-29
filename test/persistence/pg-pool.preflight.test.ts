@@ -1,10 +1,16 @@
+import { SESSION_STORE_MIGRATIONS } from "../../src/sessions/postgres-session-migrations.ts";
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import pg from "pg";
-import { applyPgMigrations, definePgMigration, pgMigrationChecksum } from "../../src/persistence/pg-migrations.ts";
+import {
+  applyPgMigrations,
+  definePgMigration,
+  pgMigrationChecksum,
+  pgMigrationFrom,
+} from "../../src/persistence/pg-migrations.ts";
 import { MEMORY_FACTS_MIGRATIONS } from "../../src/memory/postgres-memory-service.ts";
 import { CONTRACT_MIGRATIONS } from "../../src/persistence/contract-migrations.ts";
 import { withClient } from "../support/pg-client.ts";
@@ -249,5 +255,65 @@ test("contract migrations are idempotent, before and after the drops they hold b
     }
     assert.equal(await relation(pool, "deliveries"), null);
     assert.equal(await relation(pool, "swarms"), null);
+  });
+});
+
+test("side-chat index builds after the column transaction and does not block session readers or writers", async () => {
+  const column = pgMigrationFrom(SESSION_STORE_MIGRATIONS.find((m) => m.id === "sessions/store/0054-side-chats")!);
+  const index = pgMigrationFrom(SESSION_STORE_MIGRATIONS.find((m) => m.id === "sessions/store/0055-side-chats-index")!);
+  const url = await createDatabase();
+  await withPool(url, async (pool) => {
+    await applyPgMigrations(pool, [column]);
+    const holder = await pool.connect();
+    let build: Promise<number> | undefined;
+    try {
+      await holder.query("BEGIN");
+      await holder.query("LOCK TABLE sessions IN ROW EXCLUSIVE MODE");
+      build = applyPgMigrations(pool, [column, index]);
+      const waiting = async () =>
+        (
+          await pool.query(
+            "SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND query LIKE 'CREATE INDEX CONCURRENTLY IF NOT EXISTS sessions_side_chat_origin%' AND wait_event_type = 'Lock'",
+          )
+        ).rows[0].n;
+      for (let i = 0; i < 100 && (await waiting()) === 0; i++) await new Promise((r) => setTimeout(r, 50));
+      assert.equal(await waiting(), 1);
+      const probe = await pool.connect();
+      try {
+        await probe.query("BEGIN");
+        await probe.query("SET LOCAL lock_timeout = '1s'");
+        await probe.query("SELECT side_chat FROM sessions LIMIT 1");
+        await probe.query("LOCK TABLE sessions IN ROW EXCLUSIVE MODE");
+      } finally {
+        await probe.query("ROLLBACK");
+        probe.release();
+      }
+    } finally {
+      await holder.query("ROLLBACK");
+      holder.release();
+      if (build) await build;
+    }
+    const result = await pool.query(
+      "SELECT indisvalid, indisready FROM pg_index WHERE indexrelid = 'sessions_side_chat_origin'::regclass",
+    );
+    assert.deepEqual(result.rows, [{ indisvalid: true, indisready: true }]);
+    assert.equal(await applyPgMigrations(pool, [column, index]), 0);
+  });
+});
+
+test("split side-chat migration accepts an already recorded combined column and index", async () => {
+  const definitions = SESSION_STORE_MIGRATIONS.filter(
+    (m) => m.id.startsWith("sessions/store/0054") || m.id.startsWith("sessions/store/0055"),
+  ).map(pgMigrationFrom);
+  const combined = definePgMigration("sessions/store/0054-side-chats", [
+    "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS side_chat JSONB",
+    "CREATE INDEX IF NOT EXISTS sessions_side_chat_origin ON sessions (forked_from_session_id) WHERE side_chat IS NOT NULL",
+  ]);
+  const url = await createDatabase();
+  await withPool(url, async (pool) => {
+    await applyPgMigrations(pool, [combined]);
+    assert.equal(await applyPgMigrations(pool, definitions), 1);
+    assert.equal(await applyPgMigrations(pool, definitions), 0);
+    assert.equal((await ledger(pool)).find((row) => row.id === combined.id)?.checksum, combined.checksum);
   });
 });

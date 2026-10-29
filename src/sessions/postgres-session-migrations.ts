@@ -193,9 +193,13 @@ export const SESSION_STORE_MIGRATIONS: PgMigrationDefinition[] = [
   },
   {
     id: "sessions/store/0054-side-chats",
+    acceptedChecksums: ["eb2f4cc9e0d5553044c5c21b1b7535a7548607277610573fc4963715b4ac096f"],
+    statements: [`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS side_chat JSONB`],
+  },
+  {
+    id: "sessions/store/0055-side-chats-index",
     statements: [
-      `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS side_chat JSONB`,
-      `CREATE INDEX IF NOT EXISTS sessions_side_chat_origin ON sessions (forked_from_session_id) WHERE side_chat IS NOT NULL`,
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS sessions_side_chat_origin ON sessions (forked_from_session_id) WHERE side_chat IS NOT NULL`,
     ],
   },
 ];
