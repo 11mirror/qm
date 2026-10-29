@@ -71,12 +71,6 @@ export function createDecisionHooks(store: DecisionStore | undefined, backend: D
     const rules = (await store?.rules(hook)) ?? [];
     const enforced = new Set(rules.filter((rule) => rule.mode === "enforce").map(classifierKey));
     const awaited = (rule: DecisionRule) => enforced.has(classifierKey(rule));
-    void run(
-      rules.filter((rule) => !awaited(rule)),
-      hook,
-      state,
-      { ...turn, cancel: undefined },
-    ).catch(swallowAs("decisions: observe-only rules", undefined));
     return run(rules.filter(awaited), hook, state, turn);
   };
 }

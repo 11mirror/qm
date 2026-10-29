@@ -1,3 +1,5 @@
+import { createPostgresDecisionStore } from "../../src/decisions/store.ts";
+import { testDatabaseUrl } from "../support/test-database.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createDecisionHooks } from "../../src/decisions/hooks.ts";
@@ -16,7 +18,7 @@ const route: DecisionRule = {
   onError: "keep",
 };
 
-test("observe-only classifiers do not delay enforcing classifiers and still audit", async () => {
+test("separate observe-only classifiers are not launched outside durable execution", async () => {
   const records: { resource?: string }[] = [];
   const release = Promise.withResolvers<void>();
   const backend: DecisionBackend = {
@@ -45,7 +47,7 @@ test("observe-only classifiers do not delay enforcing classifiers and still audi
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(
     records.map((r) => r.resource),
-    ["router", "shadow"],
+    ["router"],
   );
 });
 
@@ -79,4 +81,30 @@ test("observe rules sharing an enforcing classifier stay in the same awaited req
     records.map((r) => r.resource),
     ["router", "observer"],
   );
+});
+
+test("persisted observe-only rules do not launch detached classifiers or audit unexecuted work", async () => {
+  const store = createPostgresDecisionStore(testDatabaseUrl());
+  await store.saveProvider({ id: "gw", protocol: "chat-completions" }, { actorId: "admin" });
+  await store.saveRule({ ...route, id: "shadow", mode: "observe" }, { actorId: "admin" });
+  let calls = 0;
+  let records = 0;
+  const decide = createDecisionHooks(
+    store,
+    {
+      choose: async () => {
+        calls++;
+        return {};
+      },
+    },
+    {
+      record: () => {
+        records++;
+      },
+    } as never,
+  );
+  assert.equal(await decide("turn_start", "refactor", { scopeLabel: "personal:a", sessionId: "s1" }), undefined);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 0);
+  assert.equal(records, 0);
 });
