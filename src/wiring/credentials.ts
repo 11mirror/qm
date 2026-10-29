@@ -3,13 +3,13 @@ import type { FilesModule } from "./files.ts";
 import type { DeploymentLayerModule } from "./deployment-layer.ts";
 import type { Head } from "./late.ts";
 import { tenantConfig } from "../tenants/tenant-config.ts";
-import { perTenant } from "../tenant.ts";
+import { perTenant, tenant, tenantSettings } from "../tenant.ts";
 import { tenantSecretKey } from "../credentials/tenant-secret-key.ts";
 import { createEnvSecretSource } from "../credentials/secret-source.ts";
 import { type OAuthClientResolver, withPublicOAuthClients, makeRefresh } from "../connectors/oauth.ts";
 import { createConnectorClientResolver, deriveConnectorKey } from "../connectors/connector-client-store.ts";
 import { scopeId } from "../types.ts";
-import type { Keychain, OAuthToken } from "../credentials/keychain.ts";
+import type { Keychain, OAuthToken, ServiceCredentialStore } from "../credentials/keychain.ts";
 import { createKeychain } from "../credentials/create-keychain.ts";
 import { createKeychainStore } from "../credentials/keychain-store.ts";
 import { refreshChatGPTTokens, refreshClaudeTokens } from "../model/subscription-oauth.ts";
@@ -47,9 +47,14 @@ export function buildCredentials(deps: CredentialsInputs) {
     const { signingSecret, connectorSecretKey: tenantKey = connectorSecretKey } = tenantConfig(config);
     const signingSecretCredentialKey =
       signingSecret && signingSecret !== tenantKey ? deriveConnectorKey(signingSecret, "keychain") : undefined;
+    const imported = tenantSettings().secrets.keychainSigningFallback;
+    const fallbacks = [
+      signingSecretCredentialKey,
+      imported ? { current: Buffer.from(imported, "base64") } : undefined,
+    ].filter((key) => key !== undefined);
     return {
       ...deriveConnectorKey(tenantKey, "keychain"),
-      ...(signingSecretCredentialKey ? { fallbacks: [signingSecretCredentialKey] } : {}),
+      ...(fallbacks.length ? { fallbacks } : {}),
     };
   });
   const credentialStore: Keychain = createKeychain({
@@ -86,18 +91,26 @@ export function buildCredentials(deps: CredentialsInputs) {
   });
   const userModelCredentials = createUserModelCredentialStore({ keychain: credentialStore });
   const keychain: Keychain = credentialStore;
-  const serviceCreds = withDeploymentCredentials(
-    credentialStore,
-    scopeId("org", config.orgId),
-    config.brokerCredentials ?? [],
+  const configuredCredentials = perTenant(() =>
+    withDeploymentCredentials(credentialStore, tenant().orgScope, tenantConfig(config).brokerCredentials ?? []),
   );
+  const serviceCreds = new Proxy({} as ServiceCredentialStore, {
+    get:
+      (_target, key) =>
+      (...args: unknown[]) => {
+        const store = configuredCredentials();
+        return Reflect.apply(Reflect.get(store, key), store, args);
+      },
+  });
   const warnShadowedBrokerCredentials = (brokerCredentials: NonNullable<Config["brokerCredentials"]>) => {
     const reserved = new Set(brokerCredentials.map((c) => c.slug));
-    void credentialStore.listServiceCredentials(scopeId("org", config.orgId)).then(
+    void credentialStore.listServiceCredentials(tenant().orgScope).then(
       (stored) => {
         const shadowed = stored.filter((c) => reserved.has(c.slug)).map((c) => c.slug);
         if (shadowed.length)
-          console.warn(`[broker-credentials] BROKER_CREDENTIALS overrides stored credentials: ${shadowed.join(", ")}`);
+          console.warn(
+            `[broker-credentials] Tenant broker credentials override stored credentials: ${shadowed.join(", ")}`,
+          );
       },
       (error) =>
         console.warn(`[broker-credentials] could not check for overridden stored credentials: ${errMessage(error)}`),

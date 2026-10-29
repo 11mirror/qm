@@ -1,7 +1,7 @@
 import pg from "pg";
 import type { Pool, PoolClient } from "../persistence/pg-pool.ts";
 import { errMessage } from "../util/errors.ts";
-import { homeTenant, tenant, tenantFor, withTenant, type Tenant } from "../tenant.ts";
+import { tenant, tenantFor, type Tenant } from "../tenant.ts";
 import { pgTenancyEnabled } from "../persistence/pg-pool.ts";
 import { ABSURD_QUEUES, type AbsurdQueue } from "./absurd-schema.ts";
 
@@ -96,15 +96,9 @@ export async function spawnTask(
 }
 
 export async function queueTenants(db: AbsurdDb, queue: AbsurdQueue): Promise<Tenant[]> {
-  const home = homeTenant();
-  if (!pgTenancyEnabled()) return [home];
-  const { rows } = await withTenant(home, () =>
-    db.query(
-      "SELECT CASE WHEN id = (SELECT id FROM qm_tenant) THEN NULL ELSE id::text END AS id FROM qm_queue_tenants($1)",
-      [queue],
-    ),
-  );
-  return rows.map((row) => (row.id === null ? home : tenantFor(String(row.id), String(row.id))));
+  if (!pgTenancyEnabled()) return [tenant()];
+  const { rows } = await db.query("SELECT id::text AS id FROM qm_queue_tenants($1)", [queue]);
+  return rows.map((row) => tenantFor(String(row.id), String(row.id)));
 }
 
 function claimedTenant(id: unknown): string | undefined {

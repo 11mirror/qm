@@ -567,10 +567,12 @@ export function createConfigStore(opts: {
   const queue = createKeyedQueue();
   const connectorClients = connectorClientsApi(tables.connectorClients, opts.connectorSecretKey);
   const stores = perTenant(() => createTenantConfigStore(tables, queue, connectorClients));
-  const bound: Record<string, unknown> = {};
-  for (const key of Object.keys(stores())) {
-    bound[key] = (...args: unknown[]) =>
-      (stores() as unknown as Record<string, (...args: unknown[]) => unknown>)[key]!(...args);
-  }
-  return bound as unknown as ScopedConfigStore;
+  return new Proxy({} as ScopedConfigStore, {
+    get:
+      (_target, key) =>
+      (...args: unknown[]) => {
+        const store = stores();
+        return Reflect.apply(Reflect.get(store, key), store, args);
+      },
+  });
 }

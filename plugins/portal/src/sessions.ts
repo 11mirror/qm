@@ -18,8 +18,8 @@ import {
   SESSION_TTL_S,
   SESSION_MAX_TTL_S,
   SESSION_RENEW_AFTER_S,
-  SECURE_COOKIES,
-  LOCAL_AUTH_BYPASS,
+  secureCookies,
+  localAuthBypass,
   LOCAL_AUTH_PRINCIPAL,
   PLAYGROUND,
   PLAYGROUND_MINTS_PER_IP,
@@ -34,7 +34,7 @@ export const LOCAL_LOGOUT_COOKIE = "portal_local_logout";
 export const sameOriginRequest = (req: IncomingMessage) => sameOriginFor(req, site().origin);
 
 export function localDevSession(req: IncomingMessage, nowMs = Date.now(), ignoreLogout = false): SessionClaims | null {
-  if (!LOCAL_AUTH_BYPASS) return null;
+  if (!localAuthBypass()) return null;
   if (!isLoopbackAddress(req.socket.remoteAddress)) return null;
   if (!ignoreLogout && readCookie(req.headers.cookie, LOCAL_LOGOUT_COOKIE) === "1") return null;
   const now = Math.floor(nowMs / 1000);
@@ -62,9 +62,9 @@ export function loginProviderCookie(sub: string): string[] {
       ? setCookie("portal_login_provider", issuerHash, {
           path: "/",
           maxAge: 365 * 24 * 60 * 60,
-          secure: SECURE_COOKIES,
+          secure: secureCookies(),
         })
-      : clearCookie("portal_login_provider", "/", SECURE_COOKIES),
+      : clearCookie("portal_login_provider", "/", secureCookies()),
   ];
 }
 
@@ -75,7 +75,7 @@ export function sessionCookieSet(value: string, sub: string): string[] {
   const attrs = {
     path: "/",
     maxAge: SESSION_TTL_S,
-    secure: SECURE_COOKIES,
+    secure: secureCookies(),
     ...(cookieDomain ? { domain: cookieDomain } : {}),
   };
   return [...sessionCookieHeaders(value, attrs), ...loginProviderCookie(sub)];
@@ -167,8 +167,8 @@ export function setAuthenticatedSession(res: ServerResponse, sub: string, name =
   };
   setSession(res, [
     ...sessionCookieSet(seal(session, site().sessionKey), session.sub),
-    clearCookie("portal_trusted_tmp", "/auth/trusted", SECURE_COOKIES),
-    clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
-    clearCookie("portal_impersonate", "/", SECURE_COOKIES),
+    clearCookie("portal_trusted_tmp", "/auth/trusted", secureCookies()),
+    clearCookie("portal_oidc_tmp", "/auth", secureCookies()),
+    clearCookie("portal_impersonate", "/", secureCookies()),
   ]);
 }

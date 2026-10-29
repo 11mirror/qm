@@ -286,11 +286,15 @@ function providerProfile(driver: SandboxDriver, shared: SandboxShared, workdir: 
     spec: {
       os: driver.os,
       runtimes: driver.runtimes ?? ["Node", "Python 3"],
-      tools: visibleTools([...(driver.tools ?? BASE_TOOLS), ...extraTools]),
-      notInstalled: visibleNotInstalled(
-        OPTIONAL_TOOLS.filter((t) => !(driver.tools ?? []).includes(t)),
-        extraTools,
-      ),
+      get tools() {
+        return visibleTools([...(driver.tools ?? BASE_TOOLS), ...extraTools]);
+      },
+      get notInstalled() {
+        return visibleNotInstalled(
+          OPTIONAL_TOOLS.filter((t) => !(driver.tools ?? []).includes(t)),
+          extraTools,
+        );
+      },
       get cpus() {
         return driver.cpus;
       },
@@ -496,7 +500,7 @@ export function createProviderSandbox(
     if (!scope) throw new Error(`${backend} sandbox ${name}: no stored scope maps to this name`);
     return scope;
   }
-  const credentialPrefixes = ephemeralCredLinkPaths(shared.credentialPaths ?? []).map(({ rel }) => rel);
+  const credentialPrefixes = () => ephemeralCredLinkPaths(shared.credentialPaths ?? []).map(({ rel }) => rel);
 
   const report = (category: string, code: string, e: unknown, scopeLabel?: string): void => {
     shared.onError?.({ category, code, message: errMessage(e), ...(scopeLabel ? { scopeLabel } : {}) });
@@ -504,7 +508,6 @@ export function createProviderSandbox(
   const ctx: ProviderContext = { driver, store, backend, lock, report };
   const { captureCheckpoint, initialize } = createProviderCheckpointing(ctx);
   const base = createProviderBase(workspace, ctx, shared, { prefix, defaultTimeoutSec, initialize, scopeOf });
-  const profile = providerProfile(driver, shared, base.workspaceDir);
 
   const procSessions = createExecProcessSessions({
     run: (handle, command, execOpts) =>
@@ -532,7 +535,9 @@ export function createProviderSandbox(
   });
 
   return {
-    profile,
+    get profile() {
+      return providerProfile(driver, shared, base.workspaceDir);
+    },
     scopeFor,
     scopeOf,
     nameFor,

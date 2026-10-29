@@ -1,3 +1,5 @@
+import { withoutTenant } from "../tenant.ts";
+import { deploymentControlPath } from "../deployment/control-paths.ts";
 import { surfaceHas } from "../surfaces/surface.ts";
 import { externalSlackCapabilityAllowed } from "./external-slack-capability.ts";
 import { CREDENTIAL_HTTP_BROKER_PREFIX } from "./credential-http-broker.ts";
@@ -169,6 +171,8 @@ async function gate(
   const isPublicRoute = routeAuth === "public";
   const requiredAuth = typeof routeAuth === "object" ? routeAuth : null;
   const requiredAud = requiredAuth?.aud ?? null;
+  if (deploymentControlPath(pathname) && capabilityFromHeaders(req))
+    return refuse(res, 403, "deployment control requires source authentication");
   let capability: CapabilityClaims | null = null;
   if (!isPublicRoute && (requiredAud || capabilityFromHeaders(req))) {
     capability = await verifyCapability(base, requiredAuth);
@@ -206,9 +210,9 @@ async function gate(
 
   let actor: PortalIdentity | null = null;
   if (!capability) {
-    const psecret = deps.portalIdentitySecret ?? secret;
     const rawToken = req.headers[PORTAL_IDENTITY_HEADER];
     const token = Array.isArray(rawToken) ? rawToken[0] : rawToken;
+    const psecret = token && !deploymentControlPath(pathname) ? (deps.portalIdentitySecret ?? secret) : undefined;
     actor = token && psecret ? await verifyPortalIdentity(token, psecret, Date.now()) : null;
     if (actor && deps.identity) {
       await deps.identity.refresh(Boolean(actor.authenticatedAs));
@@ -259,7 +263,10 @@ function assertedActorField(field: string, url: URL, body: unknown): unknown {
 
 function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): BaseCtx {
   const url = new URL(req.url ?? "/", "http://localhost");
-  return { req, res, ...wiring, url, pathname: url.pathname, method: req.method ?? "GET", params: {} };
+  return Object.defineProperties(
+    { req, res, url, pathname: url.pathname, method: req.method ?? "GET", params: {} } as BaseCtx,
+    Object.getOwnPropertyDescriptors(wiring),
+  );
 }
 
 function typedFailure(err: unknown): HttpError | null {
@@ -292,10 +299,10 @@ const matchApi = createRouter(apiRoutes);
 
 function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boolean): Server {
   const requirePortalIdentity = Boolean(deps.requireSignedPortalIdentity || deps.production);
-  if (deps.signingSecret && !deps.replayDedupe) throw new Error("source auth requires a replay dedupe store");
+  if (!allowUnsignedSourceAuth && !deps.replayDedupe) throw new Error("source auth requires a replay dedupe store");
   const dedupe = deps.replayDedupe;
   const auth =
-    deps.signingSecret && dedupe
+    !allowUnsignedSourceAuth && dedupe
       ? createSourceAuth({
           get signingSecret() {
             return deps.signingSecret!;
@@ -310,16 +317,32 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       Object.getOwnPropertyDescriptors(deps),
     ),
     get secret() {
-      return deps.signingSecret;
+      const secret = deps.signingSecret;
+      if (!allowUnsignedSourceAuth && !isStrongSigningSecret(secret))
+        throw new Error(`CORE_SIGNING_SECRET must be at least ${MIN_SIGNING_SECRET_LENGTH} characters`);
+      return secret;
     },
     auth,
     requirePortalIdentity,
     allowUnsignedSourceAuth,
   };
+  const deploymentSecret = isStrongSigningSecret(deps.deploymentSigningSecret)
+    ? deps.deploymentSigningSecret
+    : undefined;
+  const deploymentAuth =
+    deploymentSecret && dedupe ? createSourceAuth({ signingSecret: deploymentSecret, dedupe }) : null;
+  const neutral = Object.defineProperties({} as Wiring, {
+    ...Object.getOwnPropertyDescriptors(wiring),
+    secret: { value: deploymentSecret, enumerable: true },
+    auth: { value: deploymentAuth, enumerable: true },
+  });
   const server = createHttpServer((req, res) => {
     req.on("error", () => res.destroy());
     res.on("error", () => res.destroy());
-    void front(req, res).catch((err: unknown) => respondError(req, res, err));
+    const path = (req.url ?? "/").split("?")[0]!;
+    const neutral = deploymentControlPath(path) || path === "/healthz" || path === "/readyz";
+    const serve = () => front(req, res);
+    void (neutral ? withoutTenant(serve) : serve()).catch((err: unknown) => respondError(req, res, err));
   });
   server.requestTimeout = 0;
   server.headersTimeout = 10_000;
@@ -328,8 +351,15 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
 
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
     armBodyDeadline(req, 30_000);
-    const base = baseCtx(req, res, wiring);
-    if (await proxyDeploymentSubdomain(base)) {
+    const deployment = deploymentControlPath(new URL(req.url ?? "/", "http://localhost").pathname);
+    const selected = deployment ? neutral : wiring;
+    const base = baseCtx(req, res, selected);
+    if (base.method === "GET" && (base.pathname === "/healthz" || base.pathname === "/readyz")) {
+      const health = matchRaw(base.method, base.pathname)!;
+      await run(health.route, health.params, base);
+      return;
+    }
+    if (!deployment && (await proxyDeploymentSubdomain(base))) {
       nameRequest(base.method, "/deployment-proxy/*");
       return;
     }
@@ -352,7 +382,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     if (matched && "path" in matched.route) nameRequest(base.method, matched.route.path);
     const routeAuth = matched?.route.auth;
     const acceptsSourceAuth = !matched || routeAuth === "source" || routeAuth === "either";
-    if (wiring.secret && !capabilityFromHeaders(req) && routeAuth !== "public" && acceptsSourceAuth) {
+    if (selected.secret && !capabilityFromHeaders(req) && routeAuth !== "public" && acceptsSourceAuth) {
       const timestamp = Number(req.headers["x-timestamp"] ?? 0);
       if (
         !Number.isFinite(timestamp) ||
@@ -368,7 +398,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     }
     const gated = await gate(
       base,
-      wiring,
+      selected,
       await readRawBody(req, matched?.route.maxBodyBytes),
       matched?.route,
       matched?.params ?? {},
@@ -394,11 +424,6 @@ export function loggablePath(url: string | undefined): string {
 }
 
 export function createServer(app: App, deps: ServerOptions = {}): Server {
-  if (!isStrongSigningSecret(deps.signingSecret)) {
-    throw new Error(
-      `CORE_SIGNING_SECRET must be at least ${MIN_SIGNING_SECRET_LENGTH} characters; tests that intentionally need unsigned source auth must use createInsecureTestServer`,
-    );
-  }
   return buildServer(app, deps, false);
 }
 

@@ -1,3 +1,5 @@
+import { taskTenant } from "./tenants/directory.ts";
+import { withTenant } from "./tenant.ts";
 import { type TeamStore } from "./teams/teams.ts";
 import { type DecisionStore } from "./decisions/store.ts";
 import { type KeychainApprovals } from "./credentials/keychain-approval.ts";
@@ -15,8 +17,6 @@ import { companySubscriptionAuth, configuredModel, providerKeysPresent, type Con
 import type { ServerDeps } from "./api/deps.ts";
 import type { ManagedSlack } from "./surfaces/slack-managed.ts";
 import { tenantConfig } from "./tenants/tenant-config.ts";
-import { isHomeTenant } from "./tenants/directory.ts";
-import { tenant } from "./tenant.ts";
 import { type IdentityService } from "./identity/identity-service.ts";
 import { type PrincipalLinkService } from "./identity/principal-links.ts";
 import type { ComposioReturns, SlackAccounts } from "./connectors/composio-links.ts";
@@ -431,7 +431,15 @@ export function serverDeps(
         ? {
             backgroundOwnership: built.backgroundOwnership,
             deploymentControlSecret: config.deploymentControlSecret,
-            deploymentLiveSmoke: () => runSessionSmoke(config, `http://127.0.0.1:${config.port}`),
+            deploymentSigningSecret: config.signingSecret,
+            deploymentLiveSmoke: async (tenantId: string) => {
+              const owner = await taskTenant(tenantId, true);
+              if (!owner || owner === "retired")
+                throw new Error("live session smoke requires an active prepared tenant");
+              await withTenant(owner, () =>
+                runSessionSmoke({ ...config, ...tenantConfig(config) }, `http://127.0.0.1:${config.port}`),
+              );
+            },
           }
         : {}),
       ...(config.spendExportToken ? { spendExportToken: config.spendExportToken } : {}),
@@ -515,9 +523,11 @@ export function serverDeps(
         record: built.inbox.record,
         tokens: built.keychain,
         directory: built.directory,
-        ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
+        get slackApiUrl() {
+          return tenantConfig(config).slack?.apiUrl;
+        },
       }),
-      inboxSlackClient: slackUserClientFactory(config.slack?.apiUrl),
+      inboxSlackClient: (token: string) => slackUserClientFactory(tenantConfig(config).slack?.apiUrl)(token),
       sessionShares: built.sessionShares,
       sessionShareBytes: built.sessionShareBytes,
       environments: built.environments,
@@ -539,10 +549,10 @@ function tenantServerDeps(
   const current = () => tenantConfig(config);
   return {
     get slackEnvironmentState() {
-      return isHomeTenant(tenant()) ? slack.slackEnvironmentState : "absent";
+      return current().slack ? ("configured" as const) : ("absent" as const);
     },
     get slackEnvBotToken() {
-      return isHomeTenant(tenant()) ? slack.slackEnvBotToken : undefined;
+      return current().slack?.botToken;
     },
     get externalSlackPolicies() {
       return current().externalSlackPolicies;

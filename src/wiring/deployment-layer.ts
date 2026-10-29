@@ -2,7 +2,7 @@ import type { StoresModule } from "./stores.ts";
 import type { Head } from "./late.ts";
 import { loadDeploymentLayer, emptyDeploymentLayer, type DeploymentLayerRuntime } from "../deployment/load-layer.ts";
 import { resolve } from "node:path";
-import { perTenant, tenant } from "../tenant.ts";
+import { perTenant, tenant, withTenant } from "../tenant.ts";
 import { createPostgresAuditLog } from "../admin/postgres-audit-log.ts";
 import {
   createDeploymentLayerStore,
@@ -12,6 +12,7 @@ import {
 } from "../deployment/deployment-layer-store.ts";
 import { installSeedSkills } from "../skills/seed.ts";
 import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
+import { activeTenants } from "../tenants/directory.ts";
 import { reportFailureAs } from "../util/errors.ts";
 
 type DeploymentLayerInputs = Pick<Head, "config"> & { stores: StoresModule };
@@ -60,7 +61,13 @@ export function buildDeploymentLayer(deps: DeploymentLayerInputs) {
     put: (bundle, by) => layerStore.put(bundle, by).finally(() => deploymentLayerChanged.emit(null)),
   };
   const rehydrateLayer = () => void layerStore.hydrate().catch(reportFailureAs("deployment layer refresh", undefined));
-  deploymentLayerChanged.subscribe(rehydrateLayer, { onResync: rehydrateLayer });
+  deploymentLayerChanged.subscribe(rehydrateLayer, {
+    onResync: () => {
+      void activeTenants()
+        .then((tenants) => Promise.all(tenants.map((t) => withTenant(t, () => layerStore.hydrate()))))
+        .catch(reportFailureAs("deployment layer refresh", undefined));
+    },
+  });
   const installCatalogs = async (): Promise<void> => {
     const { orgScope } = tenant();
     await installSeedSkills(skills, { dir: resolve("./skills-seed"), scopeId: orgScope, respectArchived: true });

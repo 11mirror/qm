@@ -80,19 +80,22 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     },
   };
 
-  const refreshers = new Map<string, SourceRefresher>([
-    ["gmail", createGmailRefresher(kit, { ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}) })],
-    [
-      "slack",
-      createSlackRefresher(kit, {
-        directory: deps.directory,
-        ...(deps.slackApiUrl ? { slackApiUrl: deps.slackApiUrl } : {}),
-      }),
-    ],
-  ]);
+  const refreshers = perTenant(
+    () =>
+      new Map<string, SourceRefresher>([
+        ["gmail", createGmailRefresher(kit, { ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}) })],
+        [
+          "slack",
+          createSlackRefresher(kit, {
+            directory: deps.directory,
+            ...(deps.slackApiUrl ? { slackApiUrl: deps.slackApiUrl } : {}),
+          }),
+        ],
+      ]),
+  );
 
   async function refresh(owner: string, item: InboxItem): Promise<void> {
-    const refresher = item.source ? refreshers.get(item.source) : undefined;
+    const refresher = item.source ? refreshers().get(item.source) : undefined;
     if (!refresher) return;
     await refresher.refresh(owner, item, async () => {
       const token = await refresher.connectorToken(deps.tokens, owner, item);
@@ -102,7 +105,7 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
   }
 
   async function refreshAvatars(owner: string, item: InboxItem): Promise<void> {
-    await (item.source ? refreshers.get(item.source) : undefined)?.refreshAvatars?.(owner, item);
+    await (item.source ? refreshers().get(item.source) : undefined)?.refreshAvatars?.(owner, item);
   }
 
   async function one(owner: string, item: InboxItem, mode?: "avatars"): Promise<void> {

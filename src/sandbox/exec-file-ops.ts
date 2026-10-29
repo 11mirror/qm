@@ -164,7 +164,7 @@ export interface ExecExportDeps {
   exec: ExecFileOpsDeps["exec"];
   readAbsBytes(id: string, absPath: string): Promise<Uint8Array | null>;
   defaultHomeDir: string;
-  ephemeralCredentialPrefixes: readonly string[];
+  ephemeralCredentialPrefixes: readonly string[] | (() => readonly string[]);
 }
 
 export interface ExecExport {
@@ -185,7 +185,14 @@ export function createExecExport({
     async exportFiles(handle, exportOpts = {}): Promise<AgentComputerExportEntry[]> {
       const include = exportOpts.include ?? ["workspace", "home"];
       const exclude =
-        exportOpts.exclude ?? ((entry) => defaultExcludeAgentComputerExport(entry, ephemeralCredentialPrefixes));
+        exportOpts.exclude ??
+        ((entry) =>
+          defaultExcludeAgentComputerExport(
+            entry,
+            typeof ephemeralCredentialPrefixes === "function"
+              ? ephemeralCredentialPrefixes()
+              : ephemeralCredentialPrefixes,
+          ));
       const entries: AgentComputerExportEntry[] = [];
       for (const area of include) {
         const root = rootForArea(handle, area);
@@ -283,7 +290,7 @@ export function createBackendBlobStaging(
   exec: ExecBlobStagingDeps["exec"],
   opts: BlobStagingOptions,
 ): Required<Pick<Sandbox, "stageIn" | "stageOut">> | null {
-  if (!opts.blobTransfer || !blobControlPlane(opts)) return null;
+  if (!opts.blobTransfer) return null;
   const controlPlane = (): { apiBaseUrl: string; secret: string } => {
     const current = blobControlPlane(opts);
     if (!current) throw new Error(`${label} blob staging: the current tenant has no control-plane url or secret`);

@@ -9,11 +9,10 @@ const hosted = (path: string): Promise<HostedSurface> =>
   import(new URL(path, import.meta.url).href) as Promise<HostedSurface>;
 
 export async function startWebEdge(
-  opts: { publicPort: number; corePort: number; orgId: string },
+  opts: { publicPort: number; corePort: number },
   env: NodeJS.ProcessEnv,
 ): Promise<Server[]> {
   env.CORE_API_URL = `http://127.0.0.1:${opts.corePort}`;
-  env.CORE_ORG_ID = opts.orgId;
   const web = await hosted("../plugins/web-ui/server/index.ts");
   const webServer = await web.startServer(0, "127.0.0.1");
   const webUrl = `http://127.0.0.1:${(webServer.address() as AddressInfo).port}`;

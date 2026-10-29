@@ -1,8 +1,11 @@
 import { edgeTenant } from "./tenant-hosts.ts";
 import { deriveTenantSecret } from "./tenant-settings.ts";
 export const CORE_API_URL = (process.env.CORE_API_URL ?? "http://localhost:8080").replace(/\/$/, "");
-const CORE_ORG_ID = process.env.CORE_ORG_ID ?? "acme";
-export const coreOrgId = (): string => edgeTenant()?.orgId ?? CORE_ORG_ID;
+export const coreOrgId = (): string => {
+  const t = edgeTenant();
+  if (!t) throw new Error("Edge work requires a registered tenant");
+  return t.orgId;
+};
 const secret = (raw: string | undefined): string | undefined => (raw?.trim() ? raw : undefined);
 
 const CORE_SIGNING_SECRET = secret(process.env.CORE_SIGNING_SECRET);

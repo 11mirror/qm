@@ -44,11 +44,11 @@ export function buildStores(deps: StoresInputs) {
   configurePgPooling({
     databaseUrl,
     migrationUrl: config.databaseMigrationUrl,
-    ...(config.databasePoolUrl && !config.multitenant ? { poolUrl: config.databasePoolUrl } : {}),
+    ...(config.databasePoolUrl ? { poolUrl: config.databasePoolUrl } : {}),
     ...(config.databasePoolCaCert ? { caCert: config.databasePoolCaCert } : {}),
     ...(config.databasePoolMax !== undefined ? { queryMax: config.databasePoolMax } : {}),
     ...(config.databaseDirectPoolMax !== undefined ? { sessionMax: config.databaseDirectPoolMax } : {}),
-    tenancy: config.multitenant,
+    tenancy: true,
   });
   configurePgCaTrust({
     ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),
@@ -79,7 +79,11 @@ export function buildStores(deps: StoresInputs) {
   const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
     seed: () => parseAdminGrants(tenantConfig(config).adminGrants, tenant().orgId) ?? [],
   });
-  const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
+  const admin = createAdminService(adminGrantStore, {
+    get trustedOidcAdminIssuer() {
+      return tenantConfig(config).trustedOidcAdminIssuer;
+    },
+  });
   const directory = createPostgresDirectoryStore(databaseUrl);
   const environments = createPostgresEnvironmentStore(databaseUrl);
   const projects = createProjectStore(databaseUrl, {

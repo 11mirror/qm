@@ -4,21 +4,8 @@ import { createRemoteJWKSet, customFetch, jwtVerify, type JWTPayload } from "jos
 
 type FetchLike = typeof fetch;
 
-export interface OidcConfig {
-  authEndpoint: string;
-  tokenEndpoint: string;
-  userinfoEndpoint: string;
-  clientId: string;
-  clientSecret: string;
-  scopes: string;
-  redirectUri: string;
-  issuer: string;
-  jwksUri: string;
-  expectedTeamId?: string;
-  prompt?: string;
-  hostedDomain?: string;
-  headers?: Record<string, string>;
-}
+export type { OidcConfig } from "../../chassis/src/oidc-config.ts";
+import type { OidcConfig } from "../../chassis/src/oidc-config.ts";
 
 const GOOGLE_ISSUER = "https://accounts.google.com";
 
@@ -133,12 +120,8 @@ export async function verifyIdToken(
   return payload as JWTPayload & Record<string, unknown>;
 }
 
-export interface PrincipalRule {
-  claim: "sub" | "email";
-  allowedEmailDomain?: string;
-  allowedEmails?: readonly string[];
-  requireCoreAdmission?: boolean;
-}
+export type { PrincipalRule } from "../../chassis/src/oidc-config.ts";
+import type { PrincipalRule } from "../../chassis/src/oidc-config.ts";
 
 type PrincipalArgs = { sub: string; claims: Record<string, unknown>; userinfo: Record<string, unknown> };
 

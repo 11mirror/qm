@@ -505,7 +505,7 @@ export function mountBuiltIns() {
 
 function installationTitle(data: Record<string, any>) {
   if (data.configured) return data.teamName || data.teamId || "Slack workspace";
-  return data.source === "invalid_environment" ? "Finish connecting your app" : "Connect your workspace";
+  return data.source === "invalid_tenant_settings" ? "Finish connecting your app" : "Connect your workspace";
 }
 function installationDescription(data: Record<string, any>) {
   if (data.configured) return data.source === "service" ? "QM app" : "Custom app";

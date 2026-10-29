@@ -27,7 +27,7 @@ export async function holdUntilDone(
   throw new Error(timeoutMessage);
 }
 
-export function createPostgresLeaderLease(pg: PgPool): LeaderLease {
+export function createPostgresLeaderLease(pg: Pick<PgPool, "sessionPool">): LeaderLease {
   interface Conn {
     cp: Promise<PoolClient>;
     onError: (e: unknown) => void;

@@ -39,7 +39,7 @@ export type CoreToolOptions = Omit<
 export function coreToolOptions(config: Config): CoreToolOptions {
   return {
     reachExec: config.reachExecEnabled,
-    controlTools: Boolean(config.signingSecret && config.apiBaseUrl),
+    controlTools: Boolean(config.signingSecret),
   };
 }
 

@@ -34,9 +34,9 @@ import { CORE_API_URL as CORE, coreOrgId, coreSigningSecret, portalIdentitySecre
 import {
   SESSION_SECRET,
   SESSION_MAX_TTL_S,
-  SECURE_COOKIES,
+  secureCookies,
   AUTH_BROKER_PREFIX,
-  PRINCIPAL_RULE,
+  principalRule,
   site,
   type Site,
 } from "./config.ts";
@@ -113,7 +113,7 @@ export async function desktopLogin(req: IncomingMessage, res: ServerResponse, ur
     }
     setSession(res, [
       ...sessionCookieSet(seal(claims.session, site().sessionKey), claims.session.sub),
-      clearCookie("portal_impersonate", "/", SECURE_COOKIES),
+      clearCookie("portal_impersonate", "/", secureCookies()),
     ]);
     return json(res, 200, { ok: true });
   }
@@ -281,11 +281,11 @@ export async function trustedAuth(req: IncomingMessage, res: ServerResponse, url
       return redirect(res, 302, returnTarget(returnTo));
     }
     const login = trustedEntry.start(returnTarget(returnTo));
-    setSession(res, [setCookie(cookieName, login.cookie, { path, maxAge: login.ttl, secure: SECURE_COOKIES })]);
+    setSession(res, [setCookie(cookieName, login.cookie, { path, maxAge: login.ttl, secure: secureCookies() })]);
     return redirect(res, 302, login.location);
   }
   if (url.pathname !== `${path}/callback`) return json(res, 404, { error: "not_found" });
-  setSession(res, [clearCookie(cookieName, path, SECURE_COOKIES)]);
+  setSession(res, [clearCookie(cookieName, path, secureCookies())]);
   try {
     const identity = await trustedEntry.finish(readCookie(req.headers.cookie, cookieName), url);
     if (current.trustedAdmin) {
@@ -331,9 +331,9 @@ export function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): 
   if (localSession) {
     setSession(res, [
       ...sessionCookieSet(seal(localSession, sessionKey), localSession.sub),
-      clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
+      clearCookie("portal_oidc_tmp", "/auth", secureCookies()),
       ...(brokerUpstream ? [clearCookie("qm_idp_session", AUTH_BROKER_PREFIX, true)] : []),
-      clearCookie(LOCAL_LOGOUT_COOKIE, "/", SECURE_COOKIES),
+      clearCookie(LOCAL_LOGOUT_COOKIE, "/", secureCookies()),
     ]);
     return redirect(res, 302, returnTo);
   }
@@ -343,7 +343,7 @@ export function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): 
   const now = Math.floor(Date.now() / 1000);
   const tmp: TmpClaims = { k: "tmp", state, nonce, pkceVerifier: verifier, returnTo, iat: now, exp: now + TMP_TTL_S };
   setSession(res, [
-    setCookie("portal_oidc_tmp", seal(tmp, tmpKey), { path: "/auth", maxAge: TMP_TTL_S, secure: SECURE_COOKIES }),
+    setCookie("portal_oidc_tmp", seal(tmp, tmpKey), { path: "/auth", maxAge: TMP_TTL_S, secure: secureCookies() }),
   ]);
   redirect(res, 302, buildAuthorizeUrl(oidc, { state, nonce, challenge }));
 }
@@ -352,7 +352,7 @@ export async function authCallback(req: IncomingMessage, res: ServerResponse, ur
   const { oidc, tmpKey } = site();
   if (!oidc) return json(res, 404, { error: "not_found" });
   const fail = (detail: string): void => {
-    setSession(res, [clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES)]);
+    setSession(res, [clearCookie("portal_oidc_tmp", "/auth", secureCookies())]);
     sendHtml(res, 400, signInErrorHtml(detail));
   };
 
@@ -391,7 +391,7 @@ export async function authCallback(req: IncomingMessage, res: ServerResponse, ur
     const infoSub = typeof info.sub === "string" ? info.sub : "";
     if (!infoSub) throw new Error("userinfo missing sub");
     if (typeof claims.sub === "string" && claims.sub !== infoSub) throw new Error("subject mismatch");
-    principal = await resolvePrincipal(PRINCIPAL_RULE, { sub: infoSub, claims, userinfo: info }, (email) =>
+    principal = await resolvePrincipal(principalRule(), { sub: infoSub, claims, userinfo: info }, (email) =>
       coreEmailAdmission(CORE, coreSigningSecret(), email, "portal"),
     );
     const rawName = info.name ?? claims.name;

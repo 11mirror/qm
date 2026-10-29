@@ -1,11 +1,11 @@
 import { createTransport } from "nodemailer";
 import { escapeHtml } from "../../chassis/src/http.ts";
 import { resendMailer, type Mailer, type OutgoingEmail } from "../../chassis/src/resend.ts";
-import { emailConfigured, type AuthConfig } from "./config.ts";
+import { emailConfigured, type EmailConfig } from "./config.ts";
 
 const SMTP_TIMEOUT_MS = 15_000;
 
-function smtpMailer(cfg: AuthConfig): Mailer {
+function smtpMailer(cfg: EmailConfig): Mailer {
   const { host, port, username, password, tls } = cfg.smtp;
   const transport = createTransport({
     host,
@@ -31,7 +31,7 @@ function smtpMailer(cfg: AuthConfig): Mailer {
   };
 }
 
-export function mailerFor(cfg: AuthConfig): Mailer | null {
+export function mailerFor(cfg: EmailConfig): Mailer | null {
   if (!emailConfigured(cfg)) return null;
   return cfg.transport === "smtp" ? smtpMailer(cfg) : resendMailer(cfg.resendApiKey, cfg.emailFrom);
 }

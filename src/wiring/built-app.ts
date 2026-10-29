@@ -69,7 +69,8 @@ function builtAppHead(deps: BuiltAppInputs) {
   return {
     app,
     checkReadiness: async (signal) => {
-      await pgPool.q("SELECT 1", [], { signal });
+      signal?.throwIfAborted();
+      await (await pgPool.deploymentPool()).query("SELECT 1");
     },
     deploymentLayer,
     deploymentLayerStore,

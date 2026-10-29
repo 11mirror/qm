@@ -8,20 +8,15 @@ import { createTenantFront } from "./tenants/host.ts";
 
 const servers: Server[] = [];
 const booted = await bootApp(process.env, async (server, config) => {
-  const listener = config.multitenant ? createTenantFront(server) : server;
+  const listener = createTenantFront(server);
   servers.push(listener);
   await new Promise<void>((resolve) => listener.listen(config.port, resolve));
   console.log(
-    `[qm] listening on :${config.port} (org=${config.orgId}, ` +
-      `workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled}, multitenant=${config.multitenant})`,
+    `[qm] listening on :${config.port} (` +
+      `workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
   );
   if (config.publicPort)
-    servers.push(
-      ...(await startWebEdge(
-        { publicPort: config.publicPort, corePort: config.port, orgId: config.orgId },
-        process.env,
-      )),
-    );
+    servers.push(...(await startWebEdge({ publicPort: config.publicPort, corePort: config.port }, process.env)));
 });
 
 let shuttingDown = false;

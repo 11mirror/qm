@@ -14,18 +14,19 @@ import {
   spawnTask,
 } from "../turns/absurd.ts";
 import { JOB_QUEUE, registerAbsurdSchema } from "../turns/absurd-schema.ts";
+import { createPostgresLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
 import { WorkAdmissionClosed } from "../util/admitted-work.ts";
 import { reportFailure } from "../util/errors.ts";
 import { mapBounded, sleep } from "../util/async.ts";
 import { pgPoolMax, pgTenancyEnabled, tenantLockKey } from "../persistence/pg-pool.ts";
-import { holdTenant, homeTenant, tenant, withTenant, type Tenant } from "../tenant.ts";
+import { holdTenant, tenant, withoutTenant, withTenant, type Tenant } from "../tenant.ts";
 import { activeTenants, retiredTenantReason, taskTenant } from "../tenants/directory.ts";
 
 export type JobDisposition = "done" | "release" | number;
 
 export type JobHandler = (params: unknown) => Promise<JobDisposition>;
 
-type TenantWork = { sql: string; tables: string[]; home?: true };
+type TenantWork = { sql: string; tables: string[] };
 export type EveryOptions = { immediate?: boolean } & ({ shared: true } | { due: string | TenantWork });
 
 export const hasRows = (table: string, where = "true"): TenantWork => ({
@@ -134,18 +135,18 @@ async function runRecurring(job: string, fn: () => unknown, context?: string): P
 
 function tenantTicker(job: string, fn: () => unknown, track: (work: Promise<void>) => void) {
   const inFlight = new Set<string>();
-  return async (owners: Tenant[], budgetMs: number): Promise<void> => {
+  return async (owners: Tenant[]): Promise<void> => {
     const ready = owners.filter((owner) => !inFlight.has(owner.id ?? ""));
     for (const owner of ready) inFlight.add(owner.id ?? "");
     const work = mapBounded(ready, claimBudget(), async (owner) => {
       const release = holdTenant(owner);
-      await runRecurring(job, () => withTenant(owner, fn), `tenant=${owner.slug ?? "home"}`).finally(() => {
+      await runRecurring(job, () => withTenant(owner, fn), `tenant=${owner.slug ?? owner.id}`).finally(() => {
         release();
         inFlight.delete(owner.id ?? "");
       });
     }).then(() => undefined);
     track(work);
-    await Promise.race([work, sleep(budgetMs, { unref: true })]);
+    await work;
   };
 }
 
@@ -155,20 +156,16 @@ async function dueTenants(db: AbsurdDb, job: string, due: string | TenantWork): 
   const tables = typeof due === "string" ? [] : due.tables;
   const sql = typeof due === "string" ? due : due.sql;
   const candidates = tables.length
-    ? await withTenant(homeTenant(), async () =>
-        (await db.pool())
-          .query(
-            "SELECT CASE WHEN id = (SELECT id FROM qm_tenant) THEN NULL ELSE id::text END AS id FROM qm_tenants_with_rows($1::regclass[])",
-            [tables],
-          )
-          .catch((error: unknown) => {
-            if ((error as { code?: string }).code === UNDEFINED_TABLE) return { rows: [] };
-            throw error;
-          }),
+    ? await (
+        await db.deploymentPool()
       )
+        .query("SELECT id::text AS id FROM qm_tenants_with_rows($1::regclass[])", [tables])
+        .catch((error: unknown) => {
+          if ((error as { code?: string }).code === UNDEFINED_TABLE) return { rows: [] };
+          throw error;
+        })
     : undefined;
   const ids = new Set(candidates?.rows.map((row) => row.id));
-  if (typeof due !== "string" && due.home) ids.add(null);
   const owners = candidates ? active.filter((owner) => ids.has(owner.id ?? null)) : active;
   const dueOwners = await mapBounded(owners, claimBudget(), (owner) =>
     withTenant(owner, async () => {
@@ -188,7 +185,7 @@ async function dueTenants(db: AbsurdDb, job: string, due: string | TenantWork): 
     claimBudget(),
     (owner) =>
       taskTenant(owner.id, true).catch((error: unknown) => {
-        reportFailure(`jobs: ${job} tenant`, error, `tenant=${owner.id ?? "home"}`);
+        reportFailure(`jobs: ${job} tenant`, error, `tenant=${owner.id}`);
         return undefined;
       }),
   );
@@ -199,12 +196,50 @@ async function cleanupJobs(db: AbsurdDb): Promise<void> {
   while ((await cleanup(await db.pool(), JOB_QUEUE, DONE_RETENTION_SEC, CLEANUP_BATCH)).tasks >= CLEANUP_BATCH);
 }
 
+type RecurringJob = { run: () => Promise<void>; everyMs: number; nextAt: number; pending: boolean };
+
+async function recurringTicks(
+  lease: LeaderLease,
+  jobs: RecurringJob[],
+  started: () => boolean,
+  stopped: Promise<void>,
+  track: (work: Promise<void>) => void,
+): Promise<void> {
+  while (started()) {
+    await lease
+      .hold("jobs:recurring", async (lost) => {
+        let held = true;
+        const halt = Promise.race([lost, stopped]);
+        void halt.then(() => {
+          held = false;
+        });
+        while (held && started()) {
+          for (const job of jobs) {
+            if (job.pending || Date.now() < job.nextAt) continue;
+            job.pending = true;
+            job.nextAt = Date.now() + job.everyMs;
+            track(
+              job.run().finally(() => {
+                job.pending = false;
+              }),
+            );
+          }
+          await Promise.race([sleep(POLL_MS, { unref: true }), halt]);
+        }
+      })
+      .catch((error: unknown) => reportFailure("jobs: recurring ownership", error));
+    if (started()) await Promise.race([sleep(POLL_MS, { unref: true }), stopped]);
+  }
+}
+
 export function createJobWorker(databaseUrl: string): JobWorker {
   const db = registerAbsurdSchema(databaseUrl);
   const worker = `jobs:${randomUUID()}`;
   const handlers: JobHandlers = new Map();
-  const recurring: Array<{ job: string; immediate: boolean }> = [];
-  let starts = 0;
+  const lease = createPostgresLeaderLease({ sessionPool: () => db.deploymentPool() });
+  const recurring: RecurringJob[] = [];
+  let ticks: Promise<void> | undefined;
+  let stopping = Promise.withResolvers<void>();
   let started = false;
   let lastErrorAt = 0;
   let loop: Promise<void> | null = null;
@@ -227,7 +262,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
       let claimed = 0;
       if (free > 0) {
         try {
-          for (const owner of await queueTenants(await db.pool(), JOB_QUEUE)) {
+          for (const owner of await queueTenants(await db.deploymentPool(), JOB_QUEUE)) {
             if (mine.size >= limit) break;
             const tasks = await withTenant(owner, async () =>
               claimTasks(await db.pool(), JOB_QUEUE, worker, CLAIM_TIMEOUT_SEC, limit - mine.size),
@@ -275,7 +310,8 @@ export function createJobWorker(databaseUrl: string): JobWorker {
   async function stopClaims(): Promise<void> {
     started = false;
     wake.resolve();
-    await loop;
+    stopping.resolve();
+    await Promise.all([loop, ticks]);
     loop = null;
   }
 
@@ -301,38 +337,30 @@ export function createJobWorker(databaseUrl: string): JobWorker {
     },
     every(name, everyMs, fn, opts) {
       const job = `every:${name}`;
-      recurring.push({ job, immediate: opts.immediate ?? false });
       const tick = tenantTicker(job, fn, track);
-      handlers.set(job, {
-        run: async (params) => {
-          if ("shared" in opts) await tick(await activeTenants(), everyMs);
-          else {
-            const owners = await dueTenants(db, job, opts.due).catch((e: unknown) => {
-              reportFailure(`jobs: ${job} tenants`, e);
-              return [];
-            });
-            await tick(owners, everyMs);
+      recurring.push({
+        everyMs,
+        nextAt: 0,
+        pending: false,
+        run: async () => {
+          try {
+            const owners = "shared" in opts ? await activeTenants() : await dueTenants(db, job, opts.due);
+            await tick(owners);
+          } catch (error) {
+            reportFailure(`jobs: ${job}`, error);
           }
-          return (params as { once?: boolean } | null)?.once ? "done" : Date.now() + everyMs;
         },
-        concurrency: 1,
-        running: 0,
       });
     },
     async start() {
       if (started) return;
-      const home = homeTenant();
-      await withTenant(home, async () => (await db.pool()).query("SELECT 1")).catch(noteError);
-      const start = `${worker}:${++starts}`;
-      await withTenant(home, async () => {
-        for (const { job, immediate } of recurring) {
-          const created = await spawnKeyed(job, null, job, null);
-          if (immediate && !created) await spawnKeyed(job, { once: true }, `${job}:start:${start}`, 1);
-        }
-      });
+      await (await db.deploymentPool()).query("SELECT 1").catch(noteError);
+      for (const job of recurring) job.nextAt = 0;
       started = true;
       lastErrorAt = 0;
-      loop = withTenant(home, () => poll());
+      stopping = Promise.withResolvers<void>();
+      loop = withoutTenant(() => poll());
+      ticks = withoutTenant(() => recurringTicks(lease, recurring, () => started, stopping.promise, track));
     },
     healthy: () => started && Date.now() - lastErrorAt >= UNHEALTHY_AFTER_ERROR_MS,
     stopClaims,

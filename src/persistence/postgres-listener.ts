@@ -1,4 +1,3 @@
-import { homeTenant, withTenant } from "../tenant.ts";
 import { createPgPool, type PoolClient } from "./pg-pool.ts";
 import { swallow } from "../util/errors.ts";
 
@@ -47,7 +46,7 @@ function createListener(connectionString: string) {
       return;
     }
     if (!client) {
-      const acquired = await withTenant(homeTenant(), async () => (await pg.sessionPool()).connect());
+      const acquired = await (await pg.deploymentPool()).connect();
       if (closed) {
         acquired.release(true);
         return;

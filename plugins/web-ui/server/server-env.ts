@@ -4,21 +4,21 @@ import { browserErrorConfig } from "./browser-error-config.ts";
 import { type ServerResponse } from "node:http";
 
 export const PORT = portFromEnv(8096);
-const PUBLIC_URL = (process.env.WEB_UI_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
 export const publicUrl = (): string => {
   const tenant = edgeTenant();
-  return tenant?.id ? tenantPublicUrl(tenant) : PUBLIC_URL;
+  if (!tenant) throw new Error("Web UI work requires a registered tenant");
+  return tenantPublicUrl(tenant);
 };
 
 export const faviconSvg = (): string | undefined => {
   const tenant = edgeTenant();
-  return (tenant?.id ? tenant.faviconSvg : undefined) ?? process.env.WEB_UI_FAVICON_SVG;
+  return tenant?.faviconSvg;
 };
 
 const SLACK_SERVICE_URL = process.env.QM_SLACK_SERVICE_URL || undefined;
 export const slackServiceUrl = (): string | undefined => {
   const tenant = edgeTenant();
-  return tenant?.id && !tenant.secrets.slackServiceToken ? undefined : SLACK_SERVICE_URL;
+  return tenant?.secrets.slackServiceToken ? SLACK_SERVICE_URL : undefined;
 };
 
 export const analyticsKey = process.env.POSTHOG_API_KEY?.trim();
@@ -26,10 +26,9 @@ export const analyticsHost = new URL((analyticsKey && process.env.POSTHOG_HOST?.
 export const analyticsConfig = analyticsKey ? { apiKey: analyticsKey, host: analyticsHost.origin } : undefined;
 
 export const browserErrors = browserErrorConfig(process.env);
-const APPS_FRAME_DOMAIN = (process.env.DEPLOY_APPS_DOMAIN ?? "").toLowerCase();
 export const appsFrameDomain = (): string => {
   const tenant = edgeTenant();
-  return tenant?.id ? (tenant.appsDomain ?? "").toLowerCase() : APPS_FRAME_DOMAIN;
+  return (tenant?.appsDomain ?? "").toLowerCase();
 };
 
 export function framedByOwnSurfaces(

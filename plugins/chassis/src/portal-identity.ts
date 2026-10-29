@@ -10,7 +10,7 @@ export interface PortalIdentity {
   exp: number;
 }
 
-const coreTenant = (): string | undefined => edgeTenant()?.orgId ?? (process.env.CORE_ORG_ID?.trim() || undefined);
+const coreTenant = (): string | undefined => edgeTenant()?.orgId;
 
 const HEADER = Buffer.from(JSON.stringify({ alg: "HS256" }), "utf8").toString("base64url");
 

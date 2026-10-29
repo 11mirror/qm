@@ -12,7 +12,7 @@ export interface HostRoute<T> {
 }
 
 export function tenantPublicUrl(tenant: TenantSettings): string {
-  return `https://${tenant.hosts[0] ?? ""}`;
+  return tenant.portalUrl ?? `https://${tenant.hosts[0] ?? ""}`;
 }
 
 const servingTenant = new AsyncLocalStorage<TenantSettings>();
@@ -44,9 +44,10 @@ export function withEdgeTenant<T>(tenant: TenantSettings | undefined, fn: () => 
 }
 
 export function perEdgeTenant<T>(create: () => T): () => T {
-  const states = new Map<string, T>([["", create()]]);
+  const states = new Map<string, T>();
   return () => {
-    const key = edgeTenant()?.id ?? "";
+    const key = edgeTenant()?.id;
+    if (!key) throw new Error("Edge work requires a registered tenant");
     let state = states.get(key);
     if (state === undefined) {
       state = create();
@@ -57,10 +58,9 @@ export function perEdgeTenant<T>(create: () => T): () => T {
 }
 
 export function serveForHost(req: IncomingMessage, res: ServerResponse, handle: () => void): void {
-  if (!edgeTenants.length) return handle();
-  const tenant =
-    routeForHost(edgeRoutes, trustedRequestHost(req)) ??
-    (HEALTH_PATHS.has(pathOf(req)) ? edgeTenants.find((t) => !t.id) : undefined);
+  if (HEALTH_PATHS.has(pathOf(req)))
+    return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true }));
+  const tenant = routeForHost(edgeRoutes, trustedRequestHost(req));
   if (!tenant) return void res.writeHead(404, { "content-type": "text/plain; charset=utf-8" }).end("unknown host\n");
   servingTenant.run(tenant, handle);
 }

@@ -212,7 +212,7 @@ export function initializeErrorReporting(
     tracePropagationTargets: traced ? internalTraceTargets(env) : [],
     attachStacktrace: true,
     sendClientReports: false,
-    initialScope: { tags: { service, deployment: env.SENTRY_DEPLOYMENT ?? env.ORG_ID ?? env.CORE_ORG_ID } },
+    initialScope: { tags: { service, deployment: env.BACKGROUND_DEPLOYMENT_ID ?? env.GIT_SHA } },
     shutdownTimeout: FLUSH_MS,
   });
   client = sdk;

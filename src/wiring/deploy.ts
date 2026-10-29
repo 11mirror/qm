@@ -130,7 +130,7 @@ export function buildDeploy(deps: DeployInputs) {
       );
     },
     managesArtifactHome,
-    ...(config.signingSecret && config.apiBaseUrl
+    ...(config.signingSecret
       ? {
           deploymentEnv: async (deployment: Deployment): Promise<Record<string, string>> => {
             const { signingSecret, apiBaseUrl, capabilitySecret, orgId } = current();

@@ -420,7 +420,7 @@ export async function startServer(port = PORT, host?: string): Promise<Server> {
   const address = server.address();
   const bound = typeof address === "object" && address ? address.port : port;
   console.log(
-    `[web-ui] surface on http://${host ?? "localhost"}:${bound} → core ${CORE} (org ${coreOrgId()})${WEB_UI_DEV ? " [vite hmr]" : ""}`,
+    `[web-ui] surface on http://${host ?? "localhost"}:${bound} → core ${CORE}${WEB_UI_DEV ? " [vite hmr]" : ""}`,
   );
   if (!WEB_UI_DEV && !existsSync(join(DIST, "index.html")))
     console.warn("[web-ui] dist-web/ not built, run `npm run build`");

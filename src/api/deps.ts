@@ -86,12 +86,13 @@ export interface ServerDeps {
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   production?: boolean;
   signingSecret?: string;
+  deploymentSigningSecret?: string;
   capabilitySecret?: string;
   portalIdentitySecret?: string;
   requireSignedPortalIdentity?: boolean;
   control: ControlService;
   replayDedupe?: ReplayDedupe;
-  deploymentLiveSmoke?: () => Promise<void>;
+  deploymentLiveSmoke?: (tenantId: string) => Promise<void>;
   brokerSessions?: BrokerSessionStore;
   connectorTokens?: ConnectorTokenStore;
   managedSlack?: ManagedSlack;

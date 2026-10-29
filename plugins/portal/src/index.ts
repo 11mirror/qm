@@ -30,23 +30,19 @@ import { errMessage } from "../../chassis/src/errors.ts";
 import { isUiChannel, UI_CHANNEL_COOKIE } from "../../chassis/src/ui-release.ts";
 import { CARD_SCENE_PATH, LOCK_ICON } from "../../chassis/src/card-page.ts";
 import { json, serveFavicon, readBody, PayloadTooLargeError } from "../../chassis/src/http.ts";
-import { CORE_API_URL as CORE, coreOrgId, coreSigningSecret, portalIdentitySecret } from "../../chassis/src/env.ts";
+import { CORE_API_URL as CORE, coreSigningSecret, portalIdentitySecret } from "../../chassis/src/env.ts";
 
 import {
   PORT,
   SESSION_SECRET,
   SESSION_TTL_S,
-  SECURE_COOKIES,
-  LOCAL_AUTH_BYPASS,
-  LOCAL_AUTH_PRINCIPAL,
+  secureCookies,
+  localAuthBypass,
   PLAYGROUND,
   DEPLOYMENTS_ENABLED,
-  PLAYGROUND_MINTS_PER_IP,
-  PLAYGROUND_MINT_WINDOW_S,
   WEB_UI_UPSTREAM,
   AUTH_BROKER_PREFIX,
   brokerRouteFor,
-  XFF_TRUSTED_HOPS,
   clientIpOf,
   IMPERSONATE_TTL_S,
   isLoopbackAddress,
@@ -383,17 +379,17 @@ async function publicRoutes(ctx: RequestCtx): Promise<void | typeof NEXT> {
     const redirectTo = !brokerUpstream && signedOutSession && !signedOutSession.anon ? "/auth/signed-out" : "/";
     setSession(res, [
       ...(signedOutSession ? loginProviderCookie(signedOutSession.sub) : []),
-      clearCookie("portal_impersonate", "/", SECURE_COOKIES),
-      clearCookie("portal_trusted_tmp", "/auth/trusted", SECURE_COOKIES),
-      clearCookie("portal_session", "/", SECURE_COOKIES, cookieDomain),
-      clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES, cookieDomain),
+      clearCookie("portal_impersonate", "/", secureCookies()),
+      clearCookie("portal_trusted_tmp", "/auth/trusted", secureCookies()),
+      clearCookie("portal_session", "/", secureCookies(), cookieDomain),
+      clearCookie(FRAME_SESSION_COOKIE, "/", secureCookies(), cookieDomain),
       ...(cookieDomain
-        ? [clearCookie("portal_session", "/", SECURE_COOKIES), clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES)]
+        ? [clearCookie("portal_session", "/", secureCookies()), clearCookie(FRAME_SESSION_COOKIE, "/", secureCookies())]
         : []),
-      clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
+      clearCookie("portal_oidc_tmp", "/auth", secureCookies()),
       ...(brokerUpstream ? [clearCookie("qm_idp_session", AUTH_BROKER_PREFIX, true)] : []),
-      ...(LOCAL_AUTH_BYPASS && isLoopbackAddress(req.socket.remoteAddress)
-        ? [setCookie(LOCAL_LOGOUT_COOKIE, "1", { path: "/", maxAge: SESSION_TTL_S, secure: SECURE_COOKIES })]
+      ...(localAuthBypass() && isLoopbackAddress(req.socket.remoteAddress)
+        ? [setCookie(LOCAL_LOGOUT_COOKIE, "1", { path: "/", maxAge: SESSION_TTL_S, secure: secureCookies() })]
         : []),
     ]);
     if (wantsHtml(req)) {
@@ -464,7 +460,7 @@ async function sessionRoutes(ctx: RequestCtx): Promise<void | typeof NEXT> {
       setCookie("portal_impersonate", seal(imp, site().impersonateKey), {
         path: "/",
         maxAge: IMPERSONATE_TTL_S,
-        secure: SECURE_COOKIES,
+        secure: secureCookies(),
       }),
     ]);
     return json(res, 200, { ok: true, target, displayName: result.displayName ?? target });
@@ -477,7 +473,7 @@ async function sessionRoutes(ctx: RequestCtx): Promise<void | typeof NEXT> {
       site().impersonateKey,
       Date.now(),
     );
-    setSession(res, [clearCookie("portal_impersonate", "/", SECURE_COOKIES)]);
+    setSession(res, [clearCookie("portal_impersonate", "/", secureCookies())]);
     if (session && imp && imp.actor === session.sub) await coreImpersonate("stop", session.sub, imp.target);
     if (wantsHtml(req)) {
       return redirect(res, 303, "/");
@@ -696,8 +692,8 @@ async function surfaceRoutes(ctx: RequestCtx): Promise<void> {
     url.searchParams.delete("ui");
     setSession(res, [
       requestedChannel === "live"
-        ? clearCookie(UI_CHANNEL_COOKIE, "/", SECURE_COOKIES)
-        : setCookie(UI_CHANNEL_COOKIE, requestedChannel, { secure: SECURE_COOKIES }),
+        ? clearCookie(UI_CHANNEL_COOKIE, "/", secureCookies())
+        : setCookie(UI_CHANNEL_COOKIE, requestedChannel, { secure: secureCookies() }),
     ]);
     return redirect(res, 302, `${pathname}${url.search}`);
   }
@@ -730,14 +726,12 @@ function loopbackPort(upstream: string): number | undefined {
 export async function startServer(port = PORT, host?: string): Promise<Server> {
   bootChecks();
   if (process.env.AUTH_EMBEDDED === "1") {
-    const home = site();
-    const brokerPort = loopbackPort(home.brokerUpstream);
+    const brokerPort = loopbackPort(process.env.AUTH_BROKER_UPSTREAM ?? "");
     if (!brokerPort) throw new Error("Embedded auth requires a loopback broker upstream");
     const auth = await import("../../auth/src/index.ts");
     const broker = await auth.startServer({
       port: brokerPort,
       host: "127.0.0.1",
-      ...(home.trustedLabel ? { trustedSignInLabel: home.trustedLabel } : {}),
     });
     server.once("close", () => broker.close());
     server.once("error", () => broker.close());
@@ -747,23 +741,9 @@ export async function startServer(port = PORT, host?: string): Promise<Server> {
     server.listen(port, host, () => {
       server.off("error", reject);
       resolve();
-      console.log(`[portal] public front door on http://localhost:${port} → web-ui over 6PN (org ${coreOrgId()})`);
+      console.log(`[portal] public front door on http://localhost:${port} → web-ui over 6PN`);
       if (!SESSION_SECRET)
         console.warn("[portal] PORTAL_SESSION_SECRET unset, using an INSECURE dev key (dev/test only)");
-      if (!SECURE_COOKIES)
-        console.warn("[portal] PORTAL_PUBLIC_URL is not https, cookies are NOT Secure (dev/test only)");
-      if (LOCAL_AUTH_BYPASS)
-        console.warn(
-          `[portal] PORTAL_LOCAL_AUTH_BYPASS=1 -- using ${LOCAL_AUTH_PRINCIPAL} as the local session principal (dev/test only)`,
-        );
-      if (PLAYGROUND)
-        console.warn(
-          `[portal] PORTAL_PLAYGROUND=1 -- unauthenticated visitors get anonymous browser-pinned sessions (${PLAYGROUND_MINTS_PER_IP} mints per IP per ${PLAYGROUND_MINT_WINDOW_S}s); admin sign-in stays on /auth/login`,
-        );
-      if (PLAYGROUND && XFF_TRUSTED_HOPS === 0)
-        console.warn(
-          "[portal] playground mint limits key on the socket address — set PORTAL_XFF_TRUSTED_HOPS when behind a reverse proxy, or every visitor shares one bucket",
-        );
     });
   });
   return server;

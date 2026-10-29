@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { json } from "../../chassis/src/http.ts";
 import { portFromEnv } from "../../chassis/src/env.ts";
-import { bootProblems, readConfig, type AuthConfig } from "./config.ts";
+import { bootProblems, tenantProblems, readDeploymentConfig, type AuthConfig } from "./config.ts";
 import { coreClaimStore } from "../../chassis/src/claims.ts";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
 import { createBrandingCache } from "../../chassis/src/branding.ts";
@@ -18,7 +18,7 @@ import { deriveTenantSecret, type TenantSettings } from "../../chassis/src/tenan
 
 const PORT = portFromEnv(8099);
 const IS_PROD = process.env.NODE_ENV === "production";
-const CFG = readConfig(process.env);
+const CFG = readDeploymentConfig(process.env);
 
 export function bootChecks(): void {
   const problems = bootProblems(CFG, IS_PROD);
@@ -32,10 +32,12 @@ function tenantConfig(tenant: TenantSettings & { id: string }): AuthConfig {
   return {
     ...CFG,
     issuer: `${origin}${CFG.publicPath}`,
-    redirectUri: `${origin}${new URL(CFG.redirectUri).pathname}`,
+    redirectUri: `${origin}/auth/callback`,
     clientSecret: deriveTenantSecret(CFG.clientSecret, tenant.id),
     tokenSecret: deriveTenantSecret(CFG.tokenSecret, tenant.id),
-    faviconSvg: tenant.faviconSvg ?? CFG.faviconSvg,
+    faviconSvg: tenant.faviconSvg,
+    allowedEmails: tenant.emailAuthPrincipals ?? [],
+    allowedEmailDomain: tenant.emailAuthDomain,
     coreSigningSecret: CFG.coreSigningSecret && deriveTenantSecret(CFG.coreSigningSecret, tenant.id),
   };
 }
@@ -47,6 +49,8 @@ export async function startServer(
   const signingKey = await loadSigningKey(CFG.signingJwk!);
   const mailer = mailerFor(CFG);
   const handlerFor = (cfg: AuthConfig, trustedSignInLabel: string | undefined) => {
+    const problems = tenantProblems(cfg, IS_PROD);
+    if (problems.length) throw new Error(`tenant sign-in configuration is invalid: ${problems.join("; ")}`);
     const branding = createBrandingCache(async () => {
       const path = withSourceAuthNonce("/v1/surface-config", cfg.coreSigningSecret);
       const r = await fetch(`${cfg.coreApiUrl}${path}`, {
@@ -71,11 +75,10 @@ export async function startServer(
       },
     });
   };
-  const home = handlerFor(CFG, options.trustedSignInLabel);
   const tenants = new WeakMap<TenantSettings, ReturnType<typeof createAuthHandler>>();
   const handlerOf = (): ReturnType<typeof createAuthHandler> => {
     const tenant = edgeTenant();
-    if (!tenant?.id) return home;
+    if (!tenant?.id) throw new Error("Auth work requires a registered tenant");
     let handle = tenants.get(tenant);
     if (!handle) {
       handle = handlerFor(
@@ -104,7 +107,7 @@ export async function startServer(
     });
   });
   console.log(
-    `[auth] sign-in broker on http://${options.host ?? "localhost"}:${options.port ?? PORT} (issuer ${CFG.issuer}, key ${signingKey.kid}, ${mailer ? `${CFG.transport} email` : "email not configured"})`,
+    `[auth] sign-in broker on http://${options.host ?? "localhost"}:${options.port ?? PORT} (key ${signingKey.kid}, ${mailer ? `${CFG.transport} email` : "email not configured"})`,
   );
   if (!CFG.coreSigningSecret)
     console.warn(

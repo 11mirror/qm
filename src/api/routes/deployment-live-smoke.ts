@@ -16,8 +16,10 @@ async function deploymentLiveSmoke(ctx: ApiCtx): Promise<RouteResult> {
   const body = ctx.body;
   if (
     !isObj(body) ||
-    !Object.keys(body).every((key) => ["requestId", "expectedDeploymentId"].includes(key)) ||
+    !Object.keys(body).every((key) => ["requestId", "expectedDeploymentId", "tenantId"].includes(key)) ||
     typeof body.requestId !== "string" ||
+    typeof body.tenantId !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.tenantId) ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.requestId) ||
     body.expectedDeploymentId !== control.deploymentId
   )
@@ -45,7 +47,7 @@ async function deploymentLiveSmoke(ctx: ApiCtx): Promise<RouteResult> {
     ctx.res.once("close", () => clearInterval(heartbeat));
     let error: string | undefined;
     try {
-      await run();
+      await run(body.tenantId);
       if (!valid(await control.store.get())) error = "deployment_smoke_ownership_changed";
     } catch (cause) {
       reportFailure("deployment live smoke", cause);

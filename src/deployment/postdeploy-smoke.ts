@@ -1,3 +1,7 @@
+import { registerTenantSettings, tenantFor, withTenant } from "../tenant.ts";
+import { tenantRecordFromRow } from "../tenants/registry.ts";
+import { tenantConfig } from "../tenants/tenant-config.ts";
+import { tenantSecretsKey } from "../../plugins/chassis/src/tenant-settings.ts";
 import { pgConnectionOptions, resolvePgCaTrust } from "../persistence/pg-pool.ts";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
@@ -35,7 +39,7 @@ export function firstAdminPrincipal(raw: string | undefined): string {
     .find((entry) => entry.endsWith(":org_admin"))
     ?.slice(0, -":org_admin".length)
     .trim();
-  if (!principal) throw new Error("postdeploy smoke requires ADMIN_GRANTS with an org_admin");
+  if (!principal) throw new Error("postdeploy smoke requires an org_admin in tenant settings");
   return principal;
 }
 
@@ -65,7 +69,10 @@ export async function stagingApiHeaders(
   );
 }
 
-type LiveSessionConfig = Pick<Config, "adminGrants" | "orgId" | "portalIdentitySecret" | "signingSecret">;
+type LiveSessionConfig = Pick<
+  Config,
+  "adminGrants" | "orgId" | "portalIdentitySecret" | "signingSecret" | "apiBaseUrl"
+>;
 
 export async function checkLiveSession(
   config: LiveSessionConfig,
@@ -77,7 +84,7 @@ export async function checkLiveSession(
   },
 ): Promise<void> {
   const { orgId, portalIdentitySecret, signingSecret: sourceSecret } = config;
-  if (!orgId) throw new Error("live session smoke requires ORG_ID");
+  if (!orgId) throw new Error("live session smoke requires an explicit tenant org ID");
   if (!sourceSecret) throw new Error("live session smoke requires CORE_SIGNING_SECRET");
   if (!portalIdentitySecret) throw new Error("live session smoke requires PORTAL_IDENTITY_SECRET");
   const principalId = firstAdminPrincipal(config.adminGrants);
@@ -101,7 +108,11 @@ export async function checkLiveSession(
     );
     const response = await fetchImpl(`${root}${path}`, {
       method,
-      headers: { ...headers, ...(raw ? { "content-type": "application/json" } : {}) },
+      headers: {
+        ...headers,
+        ...(config.apiBaseUrl ? { "x-forwarded-host": new URL(config.apiBaseUrl).host } : {}),
+        ...(raw ? { "content-type": "application/json" } : {}),
+      },
       ...(raw ? { body: raw } : {}),
       ...(signal ? { signal } : {}),
     });
@@ -246,6 +257,26 @@ export async function runSessionSmoke(config: PostdeployConfig, baseUrl: string)
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const config = loadConfig();
-  await runSessionSmoke(config, process.argv[3] ?? `http://127.0.0.1:${config.port}`);
+  const id = process.argv[2];
+  if (!id || !config.databaseUrl)
+    throw new Error("live session smoke requires DATABASE_URL and an explicit tenant UUID");
+  const pg = (await import("pg")).default;
+  const client = new pg.Client({
+    ...pgConnectionOptions(config.databaseUrl),
+    ...resolvePgCaTrust({ cert: config.databaseCaCert, certFile: config.databaseCaCertFile }),
+  });
+  await client.connect();
+  let row;
+  try {
+    row = (await client.query("SELECT * FROM tenants WHERE id = $1::uuid AND status = 'active'", [id])).rows[0];
+  } finally {
+    await client.end();
+  }
+  if (!row) throw new Error("live session smoke requires an active tenant UUID");
+  const record = tenantRecordFromRow(row, tenantSecretsKey(globalThis.process.env));
+  registerTenantSettings([record]);
+  await withTenant(tenantFor(record.orgId, record.id, record.slug), () =>
+    runSessionSmoke({ ...config, ...tenantConfig(config) }, process.argv[3] ?? `http://127.0.0.1:${config.port}`),
+  );
   console.log("database and live session smoke passed");
 }

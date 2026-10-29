@@ -381,7 +381,7 @@ function admission(ctx: LedgerContext): Pick<TurnLedger, "admit" | "claim" | "mu
     async claim(queue, token, workerId) {
       let claimed: Awaited<ReturnType<typeof claimTasks>>[number] | undefined;
       let scope: Tenant | undefined;
-      for (const owner of await queueTenants(await db.pool(), queue)) {
+      for (const owner of await queueTenants(await db.deploymentPool(), queue)) {
         [claimed] = await withTenant(owner, async () =>
           claimTasks(await db.pool(), queue, token, TURN_CLAIM_TIMEOUT_SEC, 1),
         );

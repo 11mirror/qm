@@ -150,11 +150,11 @@ export function hasCustomModelPrefix(id: string): boolean {
 }
 
 export function resolveCustomModel(id: string): CustomRuntimeModel | undefined {
-  return registryState().registry.get(id);
+  return hasCustomModelPrefix(id) ? registryState().registry.get(id) : undefined;
 }
 
 export function isCustomModelId(id: string): boolean {
-  return registryState().registry.has(id);
+  return hasCustomModelPrefix(id) && registryState().registry.has(id);
 }
 
 export function customModelCatalog(): Array<{ id: string; name: string; provider: string }> {

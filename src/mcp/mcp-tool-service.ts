@@ -418,7 +418,6 @@ export function createMcpToolService(opts: McpToolServiceOptions): McpToolServic
   }
 
   const unsubscribe = opts.servers.onChange(refreshInBackground);
-  state();
 
   return {
     toolDefs: () => state().snapshot,

@@ -7,8 +7,6 @@ import { slackBotManifestCreationUrl } from "../../../surfaces/slack-manifest.ts
 import { slackWebClient } from "../../../slack/web-client.ts";
 import { slackErrorCode } from "../../../slack/payloads.ts";
 import { resolveBranding } from "../../../resolution/branding.ts";
-import { tenant } from "../../../tenant.ts";
-import { isHomeTenant } from "../../../tenants/directory.ts";
 import emojiData from "emoji-datasource/emoji.json" with { type: "json" };
 
 type StandardEmojiEntry = [name: string, char: string, category: string];
@@ -19,10 +17,10 @@ const standardEmoji = (): StandardEmojiEntry[] =>
     .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
     .map((e) => [e.short_name, String.fromCodePoint(...e.unified.split("-").map((h) => parseInt(h, 16))), e.category]));
 
-const environmentSlack = (ctx: ApiCtx) =>
-  isHomeTenant(tenant())
-    ? { state: ctx.deps.slackEnvironmentState, botToken: ctx.deps.slackEnvBotToken }
-    : { state: "absent" as const };
+const environmentSlack = (ctx: ApiCtx) => ({
+  state: ctx.deps.slackEnvironmentState,
+  botToken: ctx.deps.slackEnvBotToken,
+});
 
 export async function getSlackInstallation(ctx: ApiCtx): Promise<RouteResult> {
   const authz = await orgAdmin(ctx);
@@ -33,7 +31,7 @@ export async function getSlackInstallation(ctx: ApiCtx): Promise<RouteResult> {
   const branding = await resolveBranding(ctx.deps.config, scope, ctx.deps.brandingDefault);
   const createUrl = slackBotManifestCreationUrl(branding.selfLabel);
   const status = await ctx.deps.slackInstallation.status();
-  const fromEnvironment = () => ok({ configured: true, managed: false, source: "environment", createUrl });
+  const fromEnvironment = () => ok({ configured: true, managed: false, source: "tenant", createUrl });
   if (ctx.deps.managedSlack) {
     if (!status.managed && environment === "configured") return fromEnvironment();
     const installation = await ctx.deps.slackInstallation.get();
@@ -69,7 +67,7 @@ export async function getSlackInstallation(ctx: ApiCtx): Promise<RouteResult> {
   return ok({
     configured: false,
     managed: false,
-    source: environment === "partial" ? "invalid_environment" : "none",
+    source: environment === "partial" ? "invalid_tenant_settings" : "none",
     createUrl,
   });
 }
