@@ -5,7 +5,7 @@ import { buildTestApp } from "../../support/test-app.ts";
 import type { TurnRequest } from "../../../src/types.ts";
 import { testConfig } from "../../support/test-config.ts";
 import { turnPostKeys, replayableRequest } from "../../../src/core/orchestrator/turn-helpers.ts";
-import { completedSurfaceEnqueues } from "../../../src/core/orchestrator/turn-input.ts";
+import { reservedSurfaceEnqueues } from "../../../src/core/orchestrator/turn-input.ts";
 import { storedItem, type NewItem } from "../../../src/sessions/items.ts";
 import type { OrchestratorInput } from "../../../src/core/orchestrator/types.ts";
 import { settle } from "../../support/settle.ts";
@@ -30,7 +30,7 @@ function channelTurn(text: string, extra: Partial<TurnRequest> = {}): TurnReques
   };
 }
 
-test("a retried turn does not re-post: the same position dedups against the delivered row", async () => {
+test("a new post after a send with a lost result does not reuse the reserved position", async () => {
   const built = freshApp();
   const req = channelTurn("!post-lost-result deploy is done", { idempotencyKey: "dedup-retry-1" });
 
@@ -43,7 +43,8 @@ test("a retried turn does not re-post: the same position dedups against the deli
   assert.equal(res.status, "silent", res.reason);
 
   const rows = (await built.posts.pending("slack")).filter((d) => d.idempotencyKey.startsWith("post:"));
-  assert.equal(rows.length, 1, "the retry's re-post collapses onto the first attempt's delivery");
+  assert.equal(rows.length, 2, "new work cannot reuse the first attempt's delivery position");
+  assert.equal(new Set(rows.map((row) => row.idempotencyKey)).size, 2);
   assert.equal(rows[0]!.text, "deploy is done", "the delivered copy is the first attempt's, keyed not text-matched");
   assert.match(
     rows[0]!.idempotencyKey,
@@ -101,7 +102,7 @@ test("distinct posts in one turn each get their own key and all deliver", async 
   assert.equal(new Set(rows.map((d) => d.idempotencyKey)).size, 2);
 });
 
-test("completedSurfaceEnqueues counts only completed surface enqueue calls after the interrupted user entry", () => {
+test("reservedSurfaceEnqueues counts durable surface enqueue reservations, including missing results, after the interrupted user entry", () => {
   const entry = (seq: number, item: NewItem) => storedItem(item, { sessionId: "s", seq, createdAt: seq });
   const entries = [
     entry(0, { kind: "UserMessage", text: "!go" }),
@@ -114,8 +115,12 @@ test("completedSurfaceEnqueues counts only completed surface enqueue calls after
     entry(7, { kind: "ToolCall", tool: "slack", callId: "d", body: { action: "post" } }),
     entry(8, { kind: "ToolResult", tool: "slack", callId: "d", isError: true, body: { interrupted: true } }),
   ];
-  assert.equal(completedSurfaceEnqueues(entries, 0, "slack"), 2, "the interrupted post at seq 7 is not counted");
-  assert.equal(completedSurfaceEnqueues(entries, 5, "slack"), 0, "entries at or before sinceSeq are excluded");
+  assert.equal(
+    reservedSurfaceEnqueues(entries, 0, "slack"),
+    3,
+    "the interrupted post already consumed its delivery position",
+  );
+  assert.equal(reservedSurfaceEnqueues(entries, 5, "slack"), 1, "entries at or before sinceSeq are excluded");
 });
 
 test("turnPostKeys mints deterministic per-destination position keys and seeds past recorded work", () => {

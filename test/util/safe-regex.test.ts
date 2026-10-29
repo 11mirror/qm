@@ -32,3 +32,12 @@ test("compileSafeRegex accepts single-level repetition, optional groups and lite
     assert.ok(compileSafeRegex(pattern) instanceof RegExp, pattern);
   }
 });
+
+test("overlapping adjacent repetitions are rejected before a quadratic timing input is evaluated", () => {
+  const input = `${"a".repeat(100_000)}!`;
+  const started = performance.now();
+  for (const pattern of ["^a+a+$", "^[a-z]+[a-z]+$", "^a+\\w+$", "^(a)+(a)+$"]) {
+    assert.throws(() => compileSafeRegex(pattern).test(input), /ambiguous repetition/, pattern);
+  }
+  assert.ok(performance.now() - started < 1000);
+});

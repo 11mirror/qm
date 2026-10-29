@@ -28,8 +28,6 @@ const FALLBACK_POLL_MS = 1_000;
 const HANDBACK_SETTLE_MS = 2_000;
 const FINISH_RETRY_MAX_MS = 5_000;
 const FINISH_RETRY_MS = 500;
-const FINISH_OUTAGE_WINDOW_MS = 120_000;
-const UNSAVED_RESULT_REASON = "This turn finished but its result could not be saved.";
 const FAILURE_REPORT_CONSECUTIVE = 5;
 const CLAIM_FAIL_REPORT_CONSECUTIVE = 20;
 const TENANT_BUSY_DEFER_MS = 10_000;
@@ -51,21 +49,6 @@ function runTurnInput(
     shutdown: opts.shutdown,
     ...(run.startedAt !== null ? { runStartedAt: run.startedAt } : {}),
   };
-}
-
-const TRANSIENT_SQL_CLASSES = new Set(["08", "40", "53", "57"]);
-const TRANSIENT_SQL_CODES = new Set(["25006", "55P03"]);
-
-function unsaveable(error: unknown): boolean {
-  if (error instanceof TypeError || error instanceof RangeError) return true;
-  const code = (error as { code?: unknown } | null)?.code;
-  return (
-    typeof code === "string" &&
-    code.length === 5 &&
-    !code.startsWith("E") &&
-    !TRANSIENT_SQL_CLASSES.has(code.slice(0, 2)) &&
-    !TRANSIENT_SQL_CODES.has(code)
-  );
 }
 
 function recordTurnError(errors: ErrorLog | undefined, run: Run, err: unknown): void {
@@ -211,27 +194,14 @@ async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
     cancelTimer.unref?.();
   };
   const claim = keepClaim(deps, held);
-  const finishBare = async (error: unknown): Promise<void> => {
-    reportFailure(`turns: the result of turn ${run.id} cannot be saved; recording a bare failure instead`, error);
-    const bare: TurnOutcome = {
-      status: "failed",
-      countsAsError: true,
-      result: { status: "failed", sessionId: run.sessionId, reason: UNSAVED_RESULT_REASON },
-    };
-    await deps.ledger.finish(run, token, bare).catch((fallback: unknown) => {
-      claim.stop();
-      reportFailure(`turns: recording a bare failure failed for turn ${run.id}; letting its claim expire`, fallback);
-    });
-  };
   const finishWith = async (outcome: TurnOutcome): Promise<void> => {
-    const giveUpAt = Date.now() + FINISH_OUTAGE_WINDOW_MS;
     for (let attempt = 1; !shutdown.signal.aborted && !claim.lost(); attempt++) {
       try {
         if (!(await deps.ledger.finish(run, token, outcome)))
           console.warn(`[turns] turn ${run.id} ended after losing its claim; its result was not recorded`);
         return;
       } catch (error) {
-        if (unsaveable(error) || Date.now() >= giveUpAt) return finishBare(error);
+        claim.stop();
         swallow(`turns: turn end failed for turn ${run.id} (retrying)`, error);
         await sleep(Math.min(FINISH_RETRY_MS * attempt, FINISH_RETRY_MAX_MS));
       }

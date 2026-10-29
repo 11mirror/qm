@@ -359,37 +359,42 @@ for (const [label, rejection] of [
   ["the database rejects", Object.assign(new Error("unsupported Unicode escape sequence"), { code: "22P05" })],
   ["cannot be serialized", new TypeError("Do not know how to serialize a BigInt")],
 ] as const)
-  test(`a turn whose result ${label} records a bare failure after outages are retried`, { skip }, async () => {
-    const thread = `web:alice:${randomUUID()}`;
-    const admitted = await admit(thread);
-    const orchestrator = {
-      async handleTurn(): Promise<TurnResult> {
-        return { status: "ok", sessionId: thread, reply: "unsaveable" };
-      },
-    } as unknown as Orchestrator;
-    let rejected = 0;
-    const rejecting: TurnLedger = {
-      ...ledger,
-      async finish(run, token, outcome) {
-        if (outcome.result.reply !== "unsaveable") return ledger.finish(run, token, outcome);
-        rejected += 1;
-        if (rejected === 1) throw new Error("connection terminated unexpectedly");
-        if (rejected === 2) throw Object.assign(new Error("terminating connection"), { code: "57P01" });
-        throw rejection;
-      },
-    };
-    const runner = createTurnRunner({ ledger: rejecting, orchestrator, queues: TURN_QUEUES, slots: 1, pollMs: 50 });
-    runner.start();
-    const run = await eventually(() => runStore.runs.get(admitted.run.id), {
-      until: (found) => found?.status === "failed",
-      label: "the unsaveable turn ended",
-      timeoutMs: 20_000,
-    });
-    await runner.stopClaims();
-    assert.equal(rejected, 3);
-    assert.match(run?.result?.reason ?? "", /could not be saved/);
-    assert.equal(await pointer(thread), null);
-  });
+  test(
+    `a turn whose result ${label} never replaces its completed result after outages are retried`,
+    { skip },
+    async () => {
+      const thread = `web:alice:${randomUUID()}`;
+      const admitted = await admit(thread);
+      const orchestrator = {
+        async handleTurn(): Promise<TurnResult> {
+          return { status: "ok", sessionId: thread, reply: "unsaveable" };
+        },
+      } as unknown as Orchestrator;
+      let rejected = 0;
+      const rejecting: TurnLedger = {
+        ...ledger,
+        async finish(run, token, outcome) {
+          if (outcome.result.reply !== "unsaveable") return ledger.finish(run, token, outcome);
+          rejected += 1;
+          if (rejected === 1) throw new Error("connection terminated unexpectedly");
+          if (rejected === 2) throw Object.assign(new Error("terminating connection"), { code: "57P01" });
+          if (rejected === 3) throw rejection;
+          return ledger.finish(run, token, outcome);
+        },
+      };
+      const runner = createTurnRunner({ ledger: rejecting, orchestrator, queues: TURN_QUEUES, slots: 1, pollMs: 50 });
+      runner.start();
+      const run = await eventually(() => runStore.runs.get(admitted.run.id), {
+        until: (found) => found?.status === "done",
+        label: "the completed turn was saved",
+        timeoutMs: 20_000,
+      });
+      await runner.stopClaims();
+      assert.equal(rejected, 4);
+      assert.equal(run?.result?.reply, "unsaveable");
+      assert.equal(await pointer(thread), null);
+    },
+  );
 
 test("a claim handed straight back before the turn starts does not count as an attempt", { skip }, async () => {
   const thread = `web:alice:${randomUUID()}`;

@@ -519,3 +519,24 @@ test("a superseded attempt neither evicts nor writes for the attempt that reclai
     ["lease-2", { surfacePosted: true }],
   ]);
 });
+
+test("a failed surface-post save can be retried without suppressing durable state", async () => {
+  let attempts = 0;
+  const stream = createTurnStream({
+    runs: {
+      async setDeliveryState() {
+        attempts++;
+        if (attempts === 1) throw new Error("connection unavailable");
+        return attempts > 2;
+      },
+    },
+  });
+  stream.markSurfacePosted("retry");
+  await flush();
+  stream.markSurfacePosted("retry");
+  await flush();
+  stream.markSurfacePosted("retry");
+  await flush();
+  stream.markSurfacePosted("retry");
+  assert.equal(attempts, 3);
+});

@@ -360,7 +360,7 @@ async function noteResume(
   const { session } = turn;
   const { surfaceName } = turn.framed;
   const { spine, postKeys } = turn.turnTools;
-  const posted = completedSurfaceEnqueues(
+  const posted = reservedSurfaceEnqueues(
     filterHistory(await deps.sessions.getItems(session.id, { sinceSeq: partial.userSeq })),
     partial.userSeq,
     surfaceName,
@@ -402,16 +402,12 @@ export function turnFailureUserItem(
 
 const SURFACE_ENQUEUE_ACTIONS = new Set(["post", "reach", "react", "edit", "delete"]);
 
-export function completedSurfaceEnqueues(entries: readonly Item[], sinceSeq: number, surfaceTool: string): number {
-  const later = entries.filter((e) => e.seq > sinceSeq);
-  const answered = new Set(
-    later.flatMap((e) => (e.kind === "ToolResult" && e.body.interrupted !== true ? [e.callId] : [])),
-  );
-  return later.filter(
-    (e) =>
-      e.kind === "ToolCall" &&
-      e.tool === surfaceTool &&
-      SURFACE_ENQUEUE_ACTIONS.has(String(e.body.action)) &&
-      answered.has(e.callId),
+export function reservedSurfaceEnqueues(entries: readonly Item[], sinceSeq: number, surfaceTool: string): number {
+  return entries.filter(
+    (entry) =>
+      entry.seq > sinceSeq &&
+      entry.kind === "ToolCall" &&
+      entry.tool === surfaceTool &&
+      SURFACE_ENQUEUE_ACTIONS.has(String(entry.body.action)),
   ).length;
 }

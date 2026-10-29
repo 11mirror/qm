@@ -41,6 +41,21 @@ export async function withCleanup<T>(work: () => Promise<T>, cleanup: () => Prom
   return result;
 }
 
+export async function cleanupAll(actions: Array<() => void | Promise<unknown>>, original?: unknown): Promise<void> {
+  const failures: unknown[] = [];
+  for (const action of actions) {
+    try {
+      await action();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length) {
+    const cause = original ?? failures[0];
+    throw new AggregateError(original === undefined ? failures : [original, ...failures], errMessage(cause), { cause });
+  }
+}
+
 const FAILURE_OUTPUT_CHARS = 300;
 
 export function execFailure(what: string, r: { stdout: string; stderr: string; code: number }): Error {

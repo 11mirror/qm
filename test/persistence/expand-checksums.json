@@ -64,7 +64,6 @@
   "typed/config/base_model_configs/0001": "61b121dbd92ea3a589b6664fe4aaea6486e77dd7cee6c0f474c88fc667f2ff2c",
   "typed/config/branding_configs/0001": "b1914c65abc789b4ed11427469ba8009e42e960fb2b8b783eb18f38a28938c6c",
   "typed/config/browse_max_steps_configs/0001": "e8e05490f23d1baf5f8a32ac6203eea80fcd117ff62c2898898bbec81c01551f",
-  "typed/config/browse_model_configs/0001": "bdbe48afa4d20dad7524f78cb37d3252fe7f1a69c74dab8c81974a9ffb6afc7d",
   "typed/config/channel_header_pin_flag/0001": "7f727813b4facc87b9b714c81e8128f333ede39e3caaa8199e614f73013c1c5a",
   "typed/config/command_policies/0001": "969087e6d7c2b2eea585d92ed12cfe962cb15293581adef2c01fe3e1570af223",
   "typed/config/connector_clients/0001": "927fa630bbdcf4b71c8783d318a9a2de9639b64e4ff8de852c7dda97126e4fe5",
@@ -77,6 +76,5 @@
   "typed/config/slack_emoji_catalog/0001": "e0e03d1c51825ec608de85bf4dc6f6f75321beeb3700610a88faf48e2893c112",
   "typed/config/soul_configs/0001": "562c54e2de0969bad63f879b7c1868b9f495d7c28c1596eb8390022e16ef0df8",
   "typed/config/soul_history/0001": "7809847eefad5fe5b4529d0b4be5a8c4392cca1536955565a90d586e18f08a69",
-  "typed/config/unfulfilled_insights_flag/0001": "43a33a87fb669f8d96e0eca28c14f74083948fbf0a2824e29078c89e2f1a889c",
   "typed/config/webui_model_configs/0001": "668bda676ded878b62d5996a0b75d01871e9c9262974e4c768d4cc350b225132"
 }

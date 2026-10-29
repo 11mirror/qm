@@ -102,3 +102,25 @@ test("wall-clock failure survives a cancel only for abandoned turns", () => {
   assert.equal(wallClockTurnFailure("abandoned", false, true), true);
   assert.equal(wallClockTurnFailure("abandoned", false, false), true);
 });
+
+test("revision lookup failure releases a newly acquired turn lease", async () => {
+  const { holdTurnLease } = await import("../../../src/core/orchestrator/turn-lease.ts");
+  let released = false;
+  const ctx = {
+    deps: {
+      surfaceCache: {},
+      sessions: {
+        acquireLease: async () => ({ lease }),
+        getContextWindow: async () => {
+          throw new Error("revision lookup failed");
+        },
+        releaseLease: async () => {
+          released = true;
+        },
+      },
+    },
+    input: { surface: "slack" },
+  };
+  await assert.rejects(holdTurnLease(ctx as never, { id: "s1" } as never), /revision lookup failed/);
+  assert.equal(released, true);
+});

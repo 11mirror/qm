@@ -110,7 +110,6 @@ async function handleTracedTurn(
   });
   const held = await holdTurnLease(ctx, session);
   if ("refused" in held) return held.refused;
-  if (!ctx.ambientTurn) titling.assignSessionTitle();
   const turn: TurnState = {
     frame,
     session,
@@ -124,6 +123,7 @@ async function handleTracedTurn(
   };
   let failure: unknown;
   try {
+    if (!ctx.ambientTurn) titling.assignSessionTitle();
     const begun = await beginTurn(o, ctx, turn);
     if (begun.done) return begun.result;
     const ready = await readyTurn(o, ctx, turn, begun);
@@ -346,11 +346,11 @@ async function executeTurn(
   const finalResult = run.turnRuntime ? { ...settled, runtime: run.turnRuntime } : settled;
   await titling.title.write;
 
-  run.tailOwnsReclaim = true;
   await held.catchUpMessageRevisions();
   await deps.sessions.releaseLease(held.lease);
   held.leaseState.released = true;
   void tail().catch(swallowAs("orchestrator: background tail", undefined));
+  run.tailOwnsReclaim = true;
   await deps.errors?.flush();
   return finalResult;
 }
@@ -361,11 +361,17 @@ async function releaseTurn(o: OrchestratorInstance, ctx: TurnCtx, turn: TurnStat
   const { session, held, run } = turn;
   if (input.runId) deps.turnStream?.end(input.runId, input.runLeaseToken);
   held.stopLeaseKeepalive();
-  if (!run.tailOwnsReclaim) await turn.sandboxes.sandboxes.reclaimBox();
-  if (!held.leaseState.released) {
-    await held.catchUpMessageRevisions();
-    await deps.sessions.releaseLease(held.lease);
-  }
+  await withCleanup(
+    async () => {
+      if (!run.tailOwnsReclaim) await turn.sandboxes.sandboxes.reclaimBox();
+    },
+    async () => {
+      if (!held.leaseState.released) {
+        await withCleanup(held.catchUpMessageRevisions, () => deps.sessions.releaseLease(held.lease));
+        held.leaseState.released = true;
+      }
+    },
+  );
   const afterSeq = run.emittedEntries.at(-1)?.seq;
   if (!run.contextRecovered && !held.turnAbort.signal.aborted && afterSeq !== undefined)
     o.compaction.scheduleBackgroundCompaction({

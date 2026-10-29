@@ -5,6 +5,8 @@ export function compileSafeRegex(pattern: string, flags = ""): RegExp {
     throw new Error(`pattern must be 1-${MAX_PATTERN_CHARS} characters`);
   if (/\\[1-9]|\\k<|\(\?[=!<]/.test(pattern)) throw new Error("backreferences and lookarounds are not supported");
 
+  rejectOverlappingRepetition(pattern);
+
   const groups: Array<{ quantified: boolean; alternation: boolean; nested: boolean }> = [];
   let escaped = false;
   let inClass = false;
@@ -72,4 +74,26 @@ export function compileSafeRegex(pattern: string, flags = ""): RegExp {
     closed = null;
   }
   return new RegExp(pattern, flags);
+}
+
+function rejectOverlappingRepetition(pattern: string): void {
+  pattern = pattern.replace(/\\.|\[(?:\\.|[^\]\\])*\]|\(\?:|[()]/g, (token) =>
+    token.startsWith("(") || token === ")" ? "" : token,
+  );
+  const terms = [...pattern.matchAll(/(\\.|\[(?:\\.|[^\]\\])*\]|[^\\[(){}*+?^$|])([*+]|\{\d+(?:,\d*)?\})/g)];
+  const literal = (atom: string): string | undefined => {
+    if (atom.length === 1 && atom !== ".") return atom;
+    if (atom.length === 2 && atom[0] === "\\" && !/[a-zA-Z0-9]/.test(atom[1]!)) return atom[1];
+    return undefined;
+  };
+  for (let i = 1; i < terms.length; i++) {
+    const previous = terms[i - 1]!;
+    const current = terms[i]!;
+    const between = pattern.slice(previous.index! + previous[0].length, current.index);
+    if (/[^():?]/.test(between)) continue;
+    const a = literal(previous[1]!);
+    const b = literal(current[1]!);
+    if (a === undefined || b === undefined || a === b)
+      throw new Error("nested or ambiguous repetition is not supported");
+  }
 }

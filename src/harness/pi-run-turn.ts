@@ -16,7 +16,7 @@ import {
 import { type AssistantMessage, type ToolResultMessage } from "@earendil-works/pi-ai";
 import { isUserMessage } from "../sessions/items.ts";
 import { NonRetryableTurnError, ProviderTurnError } from "../core/turn-error.ts";
-import { asError, swallow, swallowAs } from "../util/errors.ts";
+import { asError, cleanupAll, swallow, swallowAs } from "../util/errors.ts";
 import { defaultInteractiveThinkingLevel, modelHasPrices } from "../model/pi-models.ts";
 import { type HarnessTurnInput, type HarnessTurnResult } from "./harness.ts";
 import { dayMarker, userPromptText } from "./replay.ts";
@@ -453,6 +453,13 @@ function trackGoalWork(goal: TurnGoal, session: AgentSession, from: number): voi
   );
 }
 
+function turnRacePolicy(input: Parameters<typeof createFloorCapPolicy>[0], abort: () => Promise<void>) {
+  const floorCap = createFloorCapPolicy(input);
+  const race: TurnRace = (prompting, capMs = floorCap.raceCapMs()) =>
+    raceTurnWallClock(prompting, { capMs, extendMs: floorCap.extendMs, abort });
+  return { rawRemainingCapMs: floorCap.remainingCapMs, raceCapMs: floorCap.raceCapMs, race };
+}
+
 export async function runPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInput): Promise<HarnessTurnResult> {
   const { access, signals } = opts;
   const opened = await openPiTurn(opts, dispatched);
@@ -499,12 +506,10 @@ export async function runPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInpu
       stop,
     });
     const promptStart = Date.now();
-    const floorCap = createFloorCapPolicy({ goal: goal.current, meter: grindMeter, promptStart, turnWallClockMs });
-    const rawRemainingCapMs = floorCap.remainingCapMs;
-    const raceCapMs = floorCap.raceCapMs;
-    const extendCapMs = floorCap.extendMs;
-    const race: TurnRace = (prompting, capMs = raceCapMs()) =>
-      raceTurnWallClock(prompting, { capMs, extendMs: extendCapMs, abort: () => session.abort() });
+    const { rawRemainingCapMs, raceCapMs, race } = turnRacePolicy(
+      { goal: goal.current, meter: grindMeter, promptStart, turnWallClockMs },
+      () => session.abort(),
+    );
     const { noteDocumentRejection, retryWithoutDocuments, attemptRefusalFallback, recoverFailedRound } =
       createTurnRecovery({
         turn,
@@ -526,6 +531,7 @@ export async function runPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInpu
       if (outcome === "ok") await recoverFailedRound();
       return outcome;
     };
+    let turnFailure: unknown;
     try {
       wallClock = await race(firstPrompt(session, turn, modelPrompt, continueTurn));
       if (wallClock === "ok") await recoverFailedRound();
@@ -556,6 +562,7 @@ export async function runPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInpu
         raceCapMs,
       });
     } catch (err) {
+      turnFailure = err;
       await recoverTurnError(err, {
         turn,
         session,
@@ -566,18 +573,27 @@ export async function runPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInpu
       });
       wallClock = "ok";
     } finally {
-      await releaseSignals();
-      if (pendingSteers.length) session.clearQueue();
-      unsubscribeMessageEnd?.();
-      unsubscribe?.();
-      steps.settleResults();
-      active.steps = undefined;
-      state.routeEmit(turn.emit);
-      await persistence.drain();
-      await telemetry.drainCaptured(userEntry?.seq ?? null, effectiveModel);
-      toolAbort.abort();
-      state.bindAbort(undefined);
-      state.stopObserving();
+      await cleanupAll(
+        [
+          releaseSignals,
+          () => {
+            if (pendingSteers.length) session.clearQueue();
+          },
+          () => unsubscribeMessageEnd?.(),
+          () => unsubscribe?.(),
+          () => steps.settleResults(),
+          () => {
+            active.steps = undefined;
+          },
+          () => state.routeEmit(turn.emit),
+          () => persistence.drain(),
+          () => telemetry.drainCaptured(userEntry?.seq ?? null, effectiveModel),
+          () => toolAbort.abort(),
+          () => state.bindAbort(undefined),
+          () => state.stopObserving(),
+        ],
+        turnFailure,
+      );
     }
     persistence.rethrow();
     if (wallClockTurnFailure(wallClock, stop.userAborted, turn.cancel?.aborted === true))

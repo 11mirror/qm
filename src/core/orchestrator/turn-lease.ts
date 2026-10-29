@@ -2,7 +2,7 @@ import { surfaceHas } from "../../surfaces/surface.ts";
 import type { TurnCtx } from "./turn-context.ts";
 import type { Session } from "../../types.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../../slack/message-revisions.ts";
-import { swallowAs } from "../../util/errors.ts";
+import { swallowAs, withCleanup } from "../../util/errors.ts";
 import type { Lease, SessionStore } from "../../sessions/session-store.ts";
 import { acquireLeaseWithin } from "../../sessions/session-store.ts";
 import { SESSION_BUSY_FIRE_TEXT, SESSION_BUSY_USER_TEXT } from "../failure-copy.ts";
@@ -99,7 +99,15 @@ export async function holdTurnLease(
   if ("refused" in acquired) return acquired;
   const { lease } = acquired;
   const trackRevisions = surfaceHas(input.surface, "revisions") && Boolean(deps.surfaceCache);
-  const revisionAnchor = trackRevisions ? await revisionAnchorAt(deps.sessions, session.id) : undefined;
+  let revisionAnchor: number | undefined;
+  try {
+    revisionAnchor = trackRevisions ? await revisionAnchorAt(deps.sessions, session.id) : undefined;
+  } catch (error) {
+    return withCleanup(
+      () => Promise.reject(error),
+      () => deps.sessions.releaseLease(lease),
+    );
+  }
   const catchUpMessageRevisions = async (): Promise<void> => {
     if (!trackRevisions || !deps.surfaceCache) return;
     await reconcileMessageRevisions({

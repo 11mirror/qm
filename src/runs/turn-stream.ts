@@ -46,6 +46,7 @@ interface Entry {
   leaseToken: string | null;
   reasoning: ReasoningBlock[];
   surfacePosted: boolean;
+  surfacePosting: Promise<void> | null;
   timer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -71,6 +72,7 @@ function makeEntry(): Entry {
     leaseToken: null,
     reasoning: [],
     surfacePosted: false,
+    surfacePosting: null,
     timer: null,
   };
 }
@@ -201,9 +203,11 @@ function streamStateMethods(opts: TurnStreamOptions, runs: Map<string, Entry>) {
 
     markSurfacePosted(runId, leaseToken) {
       const entry = owned(runs, runId, leaseToken);
-      if (!entry || entry.surfacePosted) return;
-      entry.surfacePosted = true;
-      void persist(runId, entry, { surfacePosted: true });
+      if (!entry || entry.surfacePosted || entry.surfacePosting) return;
+      entry.surfacePosting = persist(runId, entry, { surfacePosted: true }).then((saved) => {
+        entry.surfacePosted = saved;
+        entry.surfacePosting = null;
+      });
     },
 
     snapshot(runId) {

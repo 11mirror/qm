@@ -341,3 +341,24 @@ test("background: an error in the detached tail still reclaims the box (no machi
   for (let i = 0; i < 2000 && teardowns === 0; i++) await tick();
   assert.equal(teardowns, 1, "the box is reclaimed even though the tail failed");
 });
+
+test("a failed lease release before tail scheduling still reclaims the sandbox", async () => {
+  const g = gatedSandbox();
+  let teardowns = 0;
+  g.sandbox.teardown = async () => {
+    teardowns++;
+  };
+  const { orch, sessions } = buildOrchestrator(g.sandbox);
+  const release = sessions.releaseLease.bind(sessions);
+  let releases = 0;
+  sessions.releaseLease = async (lease) => {
+    if (++releases === 1) throw new Error("lease release unavailable");
+    await release(lease);
+  };
+  const result = await orch.handleTurn({ ...dm("dm:U1:tail-release-failure", "!run echo hi"), runId: randomUUID() });
+  assert.equal(teardowns, 1);
+  assert.ok(releases >= 2);
+  const acquired = await sessions.acquireLease(result.sessionId!);
+  assert.ok(acquired.lease);
+  await release(acquired.lease!);
+});
