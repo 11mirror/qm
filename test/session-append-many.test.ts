@@ -127,7 +127,7 @@ test(
     const releaseCommit = Promise.withResolvers<void>();
     let held = false;
     pg.Client.prototype.query = function (this: pg.Client, ...args: Parameters<typeof query>) {
-      if (args[0] === "COMMIT" && !held) {
+      if (((args[0] as { text?: string })?.text ?? args[0]) === "COMMIT" && !held) {
         held = true;
         reachedCommit.resolve();
         return releaseCommit.promise.then(() => query.apply(this, args));

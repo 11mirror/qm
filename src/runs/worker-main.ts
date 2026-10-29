@@ -9,7 +9,7 @@ import { enterTenant } from "../tenants/context.ts";
 const config = loadConfig();
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
-const tenant = await instanceTenant(config.databaseUrl);
+const tenant = await instanceTenant(config);
 if (tenant) enterTenant(tenant);
 await built.sandboxResources.initialize();
 await built.config.hydrate?.();
