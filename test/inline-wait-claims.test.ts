@@ -60,3 +60,34 @@ for (const backend of ["memory", "postgres"] as const) {
     },
   );
 }
+
+test("an edge process leaves a queued run for the harness and waits for its result", { timeout: 30_000 }, async () => {
+  const built = buildApp(testConfig({ runWaitMs: 5_000, role: "edge" }));
+  try {
+    const request: TurnRequest = {
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: `edge-wait-${randomUUID()}` },
+      text: "hello",
+      idempotencyKey: `edge-${randomUUID()}`,
+    };
+    const queued = await built.app.turn({ ...request, async: true });
+    let claims = 0;
+    const claimForSession = built.runs.claimForSession.bind(built.runs);
+    built.runs.claimForSession = async (...args) => {
+      claims += 1;
+      return claimForSession(...args);
+    };
+    const waiting = built.app.turn(request);
+    await sleep(500);
+    assert.equal(claims, 0);
+    assert.equal((await built.runs.get(queued.runId!))?.status, "pending");
+    const held = await built.runs.claimById(queued.runId!, "harness", 60_000);
+    assert.ok(held?.leaseToken);
+    await built.runs.complete(held.id, held.leaseToken, { status: "ok", reply: "done by the harness" });
+    const result = await waiting;
+    assert.equal(result.reply, "done by the harness");
+  } finally {
+    await built.runtime.stop();
+  }
+});

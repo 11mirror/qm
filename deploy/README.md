@@ -57,6 +57,17 @@ attach it to a load balancer. Never `fly launch` that file by hand — a broker 
 public IP exposes its token endpoint and lets a caller forge the rate-limit client
 address.
 
+## Edge and harness roles
+
+Core is one image with three roles, chosen by `QM_ROLE`. `all` (the default, and what the CLI
+targets run) does everything in one process. `edge` serves HTTP, the Slack surface and webhooks,
+and only enqueues and reads runs; `harness` claims runs from the Postgres queue, executes them,
+and runs crons, sweeps and other background work, answering only `/healthz` and `/readyz`. Run
+them as two services from the same image and configuration to deploy HTTP changes without
+draining running turns: an edge restart drops open streams, which clients reconnect, while turns
+continue in the harness. Restarting the harness hands its in-flight turns back to the queue, as an
+`all` restart does today. Split roles require Postgres session and run stores.
+
 ## Fixtures
 
 [`stacks/`](./stacks/) contains account-neutral contract fixtures. The checked-in

@@ -34,7 +34,11 @@ export function runUiPublish(o: UiPublishOptions): void {
   const id = o.release ?? uiReleaseId(o.dir);
   if (!/^[a-f0-9]{16}$/.test(id)) throw new CliError("--release must be a 16-character release id");
   if (o.release) {
-    capture(aws, ["s3api", "head-object", "--bucket", o.bucket, "--key", `releases/${id}/index.html`]);
+    try {
+      capture(aws, ["s3api", "head-object", "--bucket", o.bucket, "--key", `releases/${id}/index.html`]);
+    } catch (error) {
+      throw new CliError(`web UI release ${id} is not in ${bucket}`, { cause: error });
+    }
   } else {
     step(`uploading web UI release ${id}`);
     capture(aws, [

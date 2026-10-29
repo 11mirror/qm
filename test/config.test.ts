@@ -1049,3 +1049,12 @@ test("The Render sandbox backend needs the Postgres workspace store", () => {
   assert.throws(() => loadConfig(env), /SANDBOX_BACKEND=render requires WORKSPACE_STORE=postgres/);
   assert.equal(loadConfig({ ...env, WORKSPACE_STORE: "postgres" }).sandboxBackend, "render");
 });
+
+test("QM_ROLE selects the process role and needs shared Postgres stores to split", () => {
+  const durable = { SESSION_STORE: "postgres", RUN_STORE: "postgres", DATABASE_URL: "postgres://localhost/test" };
+  assert.equal(loadConfig({}).role, "all");
+  assert.equal(loadConfig({ ...durable, QM_ROLE: "edge" }).role, "edge");
+  assert.equal(loadConfig({ ...durable, QM_ROLE: "harness" }).role, "harness");
+  assert.throws(() => loadConfig({ ...durable, QM_ROLE: "worker" }), /QM_ROLE must be all, edge or harness/);
+  assert.throws(() => loadConfig({ QM_ROLE: "edge" }), /QM_ROLE=edge needs SESSION_STORE=postgres/);
+});

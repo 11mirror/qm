@@ -625,3 +625,45 @@ test("run reports the exit code of a child that exits before it reads its input"
   const result = await run(process.execPath, ["-e", "process.exit(3)"], { input: "x".repeat(8 * 1024 * 1024) });
   assert.equal(result.code, 3);
 });
+
+test("a Postgres-backed dev instance runs the edge and the harness as separate children", () => {
+  const inputs: SpecInputs = {
+    worktree: "/tmp/worktree",
+    ports: slotPorts("pool1"),
+    baseEnv: {},
+    watch: false,
+    webUiBasePath: "/",
+    slack: { botToken: "xoxb-test", appToken: "xapp-test" },
+    sessionStore: "postgres",
+    runStore: "postgres",
+    databaseUrl: "postgres://localhost/dev",
+    adminGrantsSeed: "",
+    coreSigningSecret: "",
+    portalSessionSecret: "secret",
+    portalDevPrincipal: "U1",
+    sandboxEnv: {},
+  };
+  const specs = buildChildSpecs(inputs);
+  const core = specs.find((spec) => spec.name === "core")!;
+  const harness = specs.find((spec) => spec.name === "harness")!;
+  assert.deepEqual(
+    specs.map((spec) => spec.name),
+    ["core", "harness", "web", "portal"],
+  );
+  assert.equal(core.env.QM_ROLE, "edge");
+  assert.equal(core.env.SLACK_BOT_TOKEN, "xoxb-test");
+  assert.equal(harness.env.QM_ROLE, "harness");
+  assert.equal(harness.env.PORT, String(inputs.ports.harness));
+  assert.equal(harness.env.SLACK_BOT_TOKEN, "");
+  assert.equal(harness.env.DATABASE_URL, "postgres://localhost/dev");
+  assert.deepEqual(
+    buildChildSpecs({ ...inputs, web: false }).map((spec) => spec.name),
+    ["core", "harness"],
+  );
+  assert.deepEqual(
+    buildChildSpecs({ ...inputs, sessionStore: "memory", runStore: "memory", databaseUrl: "" }).map(
+      (spec) => spec.name,
+    ),
+    ["core", "web", "portal"],
+  );
+});

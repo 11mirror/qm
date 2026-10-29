@@ -97,7 +97,7 @@ if (config.deployProvider === "docker") {
 
 if (runsTurns && config.backgroundWorkEnabled && !config.backgroundDeploymentId) {
   built.scheduler.start(1000);
-} else if (!config.backgroundDeploymentId) {
+} else if (runsTurns && !config.backgroundDeploymentId) {
   console.log("[qm] background work disabled; scheduler and runtime loops will not start");
 }
 

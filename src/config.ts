@@ -1239,7 +1239,7 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
   return declared;
 }
 
-export type ProcessRole = "all" | "edge" | "harness";
+type ProcessRole = "all" | "edge" | "harness";
 
 function resolveRole(env: NodeJS.ProcessEnv, stores: Pick<Config, "sessionStore" | "runStore">): ProcessRole {
   const role = env.QM_ROLE?.trim() || "all";
