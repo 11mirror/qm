@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, configureTestTenancy } from "../support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { createPostgresAdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import { createPgPool, configurePgPooling } from "../../src/persistence/pg-pool.ts";
@@ -136,6 +136,8 @@ test(
   "the job worker shares the query pool and stopping it preserves other stores",
   { skip, timeout: 30_000 },
   async () => {
+    await configureTestTenancy(direct!);
+    configurePgPooling({ ...pooling, tenancy: true, migrationUrl: direct });
     const { createJobWorker } = await import("../../src/jobs/job-worker.ts");
     const store = createPgPool(direct!);
     const queue = createJobWorker(direct!);
@@ -154,6 +156,7 @@ test(
     };
     try {
       await store.q("SELECT 1");
+      assert.equal(new URL((await store.pool()).options.connectionString!).port, new URL(direct!).port);
       await fireOnce(`pool-test-${Date.now()}`);
       await queue.stop();
       assert.equal((await store.q("SELECT 42 AS answer"))[0]!.answer, 42);

@@ -46,7 +46,7 @@ function createListener(connectionString: string) {
       return;
     }
     if (!client) {
-      const acquired = await (await pg.deploymentPool()).connect();
+      const acquired = await (await pg.listenerPool()).connect();
       if (closed) {
         acquired.release(true);
         return;

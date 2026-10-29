@@ -236,7 +236,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
   const db = registerAbsurdSchema(databaseUrl);
   const worker = `jobs:${randomUUID()}`;
   const handlers: JobHandlers = new Map();
-  const lease = createPostgresLeaderLease({ sessionPool: () => db.deploymentPool() });
+  const lease = createPostgresLeaderLease({ sessionPool: () => db.deploymentSessionPool() });
   const recurring: RecurringJob[] = [];
   let ticks: Promise<void> | undefined;
   let stopping = Promise.withResolvers<void>();

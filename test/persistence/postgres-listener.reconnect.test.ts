@@ -31,7 +31,7 @@ mock.module("../../src/persistence/pg-pool.ts", {
     createPgPool(url: string) {
       const pool = pools.get(url)!;
       return {
-        deploymentPool: async () => pool,
+        listenerPool: async () => pool,
         close: async () => {
           pool.closes++;
         },

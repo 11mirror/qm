@@ -67,7 +67,7 @@ export function pgMigrationFrom(definition: PgMigrationDefinition): PgMigration 
 
 const SCHEMA_LOCK_POLL_MS = 50;
 
-async function lockSchema(client: PoolClient, name: string): Promise<void> {
+export async function lockSchema(client: PoolClient, name: string): Promise<void> {
   for (;;) {
     const result = await client.query<{ locked: boolean }>("SELECT pg_try_advisory_lock(hashtext($1)) AS locked", [
       name,
