@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { hasParentPathSegment } from "./sandbox.ts";
 import {
@@ -51,18 +51,10 @@ export interface ManagedAgentsSandboxOptions extends SandboxShared {
 
 type ManagedAgentsSessions = ReturnType<typeof managedAgentsSessions>;
 
-function managedAgentsSessions(
-  client: ManagedAgentsClient,
-  store: SandboxBodies<StoredManagedAgentsSandbox>,
-  scopeOf: (name: string) => string | undefined,
-) {
+function managedAgentsSessions(client: ManagedAgentsClient) {
   const sessions = new Map<string, ManagedAgentsSession>();
 
-  async function recordSession(name: string, sessionId: string): Promise<void> {
-    const scope = scopeOf(name);
-    if (!scope) return;
-    await store.upsert(scope, { sessionId });
-  }
+  const idByName = new Map<string, string>();
 
   async function probe(sessionId: string): Promise<SessionFound | null> {
     try {
@@ -76,15 +68,14 @@ function managedAgentsSessions(
     }
   }
 
-  async function findSession(name: string): Promise<SessionFound | null> {
-    const scope = scopeOf(name);
-    const storedId = scope ? (await store.get(scope))?.sessionId : undefined;
+  async function findSession(name: string, identity?: string): Promise<SessionFound | null> {
+    const storedId = identity ?? idByName.get(name);
     const stored = storedId ? await probe(storedId) : null;
     if (stored) return stored;
     for (const summary of await client.list(name)) {
       const found = await probe(summary.sessionId);
       if (!found) continue;
-      await recordSession(name, found.sessionId);
+      idByName.set(name, found.sessionId);
       return found;
     }
     return null;
@@ -123,7 +114,7 @@ function managedAgentsSessions(
     });
   }
 
-  return { client, store, sessions, scopeOf, recordSession, findSession, connect, forget, withSession, exec };
+  return { client, sessions, idByName, findSession, connect, forget, withSession, exec };
 }
 
 const relayFailure = (what: string, r: ExecResult): Error =>
@@ -161,12 +152,10 @@ async function readAbsBytes(ctx: ManagedAgentsSessions, name: string, absPath: s
   }
 }
 
-async function destroy(ctx: ManagedAgentsSessions, name: string): Promise<void> {
-  const { client, store, sessions } = ctx;
+async function destroy(ctx: ManagedAgentsSessions, name: string, storedId?: string): Promise<void> {
+  const { client, sessions } = ctx;
   const cached = sessions.get(name);
   sessions.delete(name);
-  const scope = ctx.scopeOf(name);
-  const storedId = scope ? (await store.get(scope))?.sessionId : undefined;
   const ids = new Set([cached?.sessionId, storedId].filter((id): id is string => !!id));
   if (!ids.size) for (const summary of await client.list(name)) ids.add(summary.sessionId);
   for (const id of ids) {
@@ -179,39 +168,21 @@ async function destroy(ctx: ManagedAgentsSessions, name: string): Promise<void> 
   }
 }
 
-async function rollback(
-  ctx: ManagedAgentsSessions,
-  opts: ManagedAgentsSandboxOptions,
-  name: string,
-  checkpointId: string,
-): Promise<void> {
-  const scope = ctx.scopeOf(name);
+async function rollback(ctx: ManagedAgentsSessions, name: string, checkpointId: string): Promise<{ detail: string }> {
   const found = await ctx.findSession(name);
   if (!found) throw new Error("do-managed-agents restart: no sandbox provisioned yet");
   ctx.forget(name);
-  try {
-    const restored = await ctx.client.rollback(found.sessionId, checkpointId);
-    opts.onError?.({
-      category: "agent_computer",
-      code: "checkpoint_restored",
-      message: `session ${found.sessionId}: restored checkpoint ${checkpointId} onto sandbox ${restored.sandboxId}`,
-      ...(scope ? { scopeLabel: scope } : {}),
-    });
-  } catch (e) {
-    opts.onError?.({
-      category: "agent_computer",
-      code: "checkpoint_rollback_failed",
-      message: errMessage(e),
-      ...(scope ? { scopeLabel: scope } : {}),
-    });
-    throw e;
-  }
+  const restored = await ctx.client.rollback(found.sessionId, checkpointId);
+  return {
+    detail: `session ${found.sessionId}: restored checkpoint ${checkpointId} onto sandbox ${restored.sandboxId}`,
+  };
 }
 
 function managedAgentsDriver(ctx: ManagedAgentsSessions, opts: ManagedAgentsSandboxOptions): SandboxDriver {
-  const { client, sessions, findSession, connect, recordSession, exec, forget } = ctx;
+  const { client, sessions, idByName, findSession, connect, exec, forget } = ctx;
   return {
     backend: "do-managed-agents",
+    identityField: "sessionId",
     homeDir: HOME_DIR,
     os: "Linux — DigitalOcean Managed Agents Firecracker microVM (provider pause preserves state; publish durable work to git or Files)",
     tools: ["git", "curl", "tar", "python3"],
@@ -222,14 +193,16 @@ function managedAgentsDriver(ctx: ManagedAgentsSessions, opts: ManagedAgentsSand
     exec,
     writeAbsBytes: (name, absPath, data) => writeAbsBytes(ctx, name, absPath, data),
     readAbsBytes: (name, absPath) => readAbsBytes(ctx, name, absPath),
-    async inspect(name) {
-      const found = await findSession(name);
-      return found ? { state: found.paused ? "parked" : "running", detail: found.detail } : null;
+    async inspect(name, identity) {
+      const found = await findSession(name, identity);
+      if (found) idByName.set(name, found.sessionId);
+      return found ? { id: found.sessionId, state: found.paused ? "parked" : "running", detail: found.detail } : null;
     },
-    async create(name, { scratch }) {
+    async create(name) {
       const session = await client.create({ name });
       sessions.set(name, session);
-      if (!scratch) await recordSession(name, session.sessionId);
+      idByName.set(name, session.sessionId);
+      return { id: session.sessionId };
     },
     async resume(name) {
       await connect(name);
@@ -240,13 +213,14 @@ function managedAgentsDriver(ctx: ManagedAgentsSessions, opts: ManagedAgentsSand
       await session.pause();
       sessions.delete(name);
     },
-    destroy: (name) => destroy(ctx, name),
+    destroy: (name, identity) => destroy(ctx, name, identity),
     isLive: (name) => sessions.has(name),
     forget,
     checkpoints: {
       machineBound: true,
       capture: async (name) => (await (await connect(name)).createCheckpoint(CHECKPOINT_LABEL)).checkpointId,
-      restore: (name, checkpointId) => rollback(ctx, opts, name, checkpointId),
+      kind: "session",
+      restore: (name, checkpointId) => rollback(ctx, name, checkpointId),
       async drop(name, checkpointId) {
         const found = await findSession(name);
         if (found) await client.deleteCheckpoint(found.sessionId, checkpointId);
@@ -259,9 +233,6 @@ export function createManagedAgentsSandbox(
   workspace: WorkspaceStore,
   opts: ManagedAgentsSandboxOptions,
 ): BackendSandbox {
-  const { client, store } = opts;
-  const scopeOf = (name: string): string | undefined => sandbox.scopeFor(name);
-  const ctx = managedAgentsSessions(client, store, scopeOf);
-  const sandbox = createProviderSandbox(workspace, managedAgentsDriver(ctx, opts), opts, store);
-  return sandbox;
+  const ctx = managedAgentsSessions(opts.client);
+  return createProviderSandbox(workspace, managedAgentsDriver(ctx, opts), opts, opts.store);
 }

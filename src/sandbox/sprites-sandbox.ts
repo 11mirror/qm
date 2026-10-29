@@ -377,6 +377,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
           ),
       },
       checkpoints: {
+        kind: "machine",
         retentionMs: null,
         machineBound: true,
         capture: captureCheckpoint,

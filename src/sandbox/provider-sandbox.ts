@@ -1,3 +1,4 @@
+import { bindProviderIdentity } from "./provider-identity.ts";
 import {
   createProviderEgress,
   withProcessHold,
@@ -11,7 +12,7 @@ import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { createExecProcessSessions } from "./exec-process-session.ts";
 import {
@@ -75,6 +76,7 @@ export const sandboxOwnership = (shared: BlobStagingOptions, kind: "scope" | "sc
 
 export interface StoredSandboxRecord {
   sandboxId?: string;
+  sessionId?: string;
   createdAtMs?: number;
   expiresAtMs?: number;
   lastActivityMs?: number;
@@ -98,16 +100,18 @@ export interface MachineState {
 }
 
 interface DriverCheckpoints {
+  kind?: "directory" | "image" | "machine" | "session";
   retentionMs?: number | null;
   machineBound?: boolean;
   latest?(name: string): Promise<{ id: string; createdAt: string } | undefined>;
   capture(name: string): Promise<string>;
-  restore(name: string, checkpointId: string): Promise<void>;
+  restore(name: string, checkpointId: string): Promise<void | { detail: string }>;
   drop?(name: string, checkpointId: string): Promise<void>;
 }
 
 export interface SandboxDriver extends ProviderControls {
   backend: string;
+  identityField?: "sandboxId" | "sessionId";
   homeDir: string;
   os: string;
   runtimes?: string[];
@@ -122,7 +126,7 @@ export interface SandboxDriver extends ProviderControls {
   exec(name: string, script: string, timeoutSec: number, env?: Record<string, string>): Promise<ExecResult>;
   writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void>;
   readAbsBytes(name: string, absPath: string): Promise<Uint8Array | null>;
-  inspect(name: string): Promise<MachineState | null>;
+  inspect(name: string, identity?: string): Promise<MachineState | null>;
   create(
     name: string,
     opts: { scratch: boolean; scope?: string; checkpointId?: string },
@@ -133,7 +137,7 @@ export interface SandboxDriver extends ProviderControls {
   replace?(name: string): Promise<void>;
   processHold?: { refresh(processId: string): string; release(processId: string): string };
   configure?(name: string, resources: { cpus?: number; memoryMb?: number; diskGb?: number }): Promise<void>;
-  destroy(name: string): Promise<void>;
+  destroy(name: string, identity?: string): Promise<void>;
   isLive(name: string): boolean;
   forget?(name: string): void;
   restart?(name: string, ctx: { initializationPending: boolean }): Promise<void>;
@@ -458,6 +462,7 @@ function providerScopeMethods(
     async computerStatus(scopeId: string): Promise<ComputerStatus> {
       const name = await nameFor(scopeId);
       const rec = await recovery(scopeId);
+      const stored = await store.get(scopeId);
       let machine: MachineState | null;
       try {
         machine = await driver.inspect(name);
@@ -487,7 +492,9 @@ function providerScopeMethods(
         ...(probeError ? { probeError } : {}),
         ...(pressure ? { pressure } : {}),
         ...(machine.resources ? { resources: machine.resources } : {}),
-        ...(machine.expiresAtMs ? { expiresAtMs: machine.expiresAtMs } : {}),
+        ...((machine.expiresAtMs ?? stored?.expiresAtMs)
+          ? { expiresAtMs: machine.expiresAtMs ?? stored?.expiresAtMs }
+          : {}),
       };
     },
 
@@ -512,7 +519,19 @@ function providerScopeMethods(
                     ctx.report("agent_computer", "checkpoint_restored", message, scopeId),
                   );
                 if (!stored?.checkpointId) throw new Error(`${backend} restart: no checkpoint to restore`);
-                await restoreProviderCheckpoint({ driver, store, backend }, scopeId, name, stored.checkpointId);
+                try {
+                  const restored = await restoreProviderCheckpoint(
+                    { driver, store, backend },
+                    scopeId,
+                    name,
+                    stored.checkpointId,
+                  );
+                  if (restored) ctx.report("agent_computer", "checkpoint_restored", restored.detail, scopeId);
+                } catch (error) {
+                  if (driver.checkpoints?.kind === "session")
+                    ctx.report("agent_computer", "checkpoint_rollback_failed", error, scopeId);
+                  throw error;
+                }
               }),
             );
           },
@@ -572,10 +591,15 @@ export function createProviderSandbox(
     if (!scope) throw new Error(`${backend} sandbox ${name}: no stored scope maps to this name`);
     return scope;
   }
+  driver = bindProviderIdentity(driver, store, scopeOf);
   const credentialPrefixes = ephemeralCredLinkPaths(shared.credentialPaths ?? []).map(({ rel }) => rel);
 
   const report = (category: string, code: string, e: unknown, scopeLabel?: string): void => {
-    shared.onError?.({ category, code, message: errMessage(e), ...(scopeLabel ? { scopeLabel } : {}) });
+    try {
+      shared.onError?.({ category, code, message: errMessage(e), ...(scopeLabel ? { scopeLabel } : {}) });
+    } catch (error) {
+      swallow(`${backend}-sandbox: ${code} report`, error);
+    }
   };
   const maintenance = createProviderMaintenance(driver, store, shared, {
     nameFor,
@@ -595,13 +619,16 @@ export function createProviderSandbox(
     const cold = await checkpointing.initialize(scope, name, onStatus);
     const desired = { cpus: shared.cpus, memoryMb: shared.memoryMb, diskGb: shared.diskGb };
     await driver.configure?.(name, desired);
-    if (driver.network && shared.egressProxyUrl) await createProviderEgress(driver, shared).ensureEgress(name);
+    if (driver.network && (shared.egressProxyUrl || driver.network.reconcile === "always"))
+      await createProviderEgress(driver, shared).ensureEgress(name);
     return cold;
   };
   const recovered = createProviderRecovery(driver, store, shared, {
     scopeOf,
     initialize: (scope, name) => base.provisionQueue(scope, () => lock(scope, () => initialize(scope, name))),
     touch: maintenance.touch,
+    report,
+    scopeFor,
   });
   const base = createProviderBase(workspace, { ...ctx, driver: recovered }, shared, {
     prefix,
@@ -681,9 +708,10 @@ async function restoreProviderCheckpoint(
   scope: string,
   name: string,
   checkpointId: string,
-): Promise<void> {
+): Promise<void | { detail: string }> {
   await assertProviderCheckpoint({ driver, store, backend }, scope);
-  await driver.checkpoints!.restore(name, checkpointId);
+  const result = await driver.checkpoints!.restore(name, checkpointId);
+  return result;
 }
 
 async function assertProviderCheckpoint(

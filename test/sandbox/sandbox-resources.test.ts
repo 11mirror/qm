@@ -782,3 +782,14 @@ test("a job computer whose destroy fails keeps its record for retry, and is refu
     /need a computer that local can retire/,
   );
 });
+
+test("stored machine names survive retirement so imported computers are cleaned by their original names", async () => {
+  const { store, resources } = fixture();
+  const record = await resources.create("alice", "personal:alice", "local");
+  const imported = { ...record, machineId: "old-deployment-computer-name" };
+  await store.put(imported);
+  assert.equal(await store.machineNameFor(record.backingScopeId), imported.machineId);
+  await resources.retire("alice", record.id);
+  assert.equal(await store.machineNameFor(record.backingScopeId), imported.machineId);
+  assert.equal(await store.machineNameFor("missing-scope"), undefined);
+});

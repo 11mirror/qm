@@ -91,10 +91,11 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     sessions.set(name, found);
     return found;
   }
-  const sandbox = createProviderSandbox(
+  return createProviderSandbox(
     workspace,
     {
       backend: "modal",
+      identityField: "sandboxId",
       homeDir: HOME_DIR,
       os: "Debian 12 — Modal sandbox (24h max lifetime; home checkpoints have limited retention; publish durable work to git or Files)",
       ...(opts.cpus ? { cpus: opts.cpus } : {}),
@@ -112,21 +113,21 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       },
       writeAbsBytes: async (name, absPath, data) => (await current(name)).writeFileBytes(absPath, data),
       readAbsBytes: async (name, absPath) => (await current(name)).readFileBytes(absPath),
-      async inspect(name) {
-        const found = await client.fromName(name);
+      async inspect(name, identity) {
+        let found = await client.fromName(name);
+        if (!found && identity) {
+          try {
+            found = await client.fromId(identity);
+          } catch (error) {
+            if (!(error instanceof ModalSandboxGoneError)) throw error;
+          }
+        }
         if (!found) {
           sessions.delete(name);
           return null;
         }
         sessions.set(name, found);
-        const scope = await sandbox.scopeOf(name);
-        const expiresAtMs = scope ? (await store.get(scope))?.expiresAtMs : undefined;
-        return {
-          id: found.sandboxId,
-          state: "running",
-          detail: `modal sandbox ${found.sandboxId}`,
-          ...(expiresAtMs ? { expiresAtMs } : {}),
-        };
+        return { id: found.sandboxId, state: "running", detail: `modal sandbox ${found.sandboxId}` };
       },
       async create(name, { scratch }) {
         const session = scratch
@@ -137,15 +138,13 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
         return { id: session.sandboxId };
       },
       resume: async () => {},
-      async destroy(name) {
+      async destroy(name, stored) {
         const cached = sessions.get(name);
         if (cached) await cached.terminate();
         if (!scratchNames.has(name)) {
           const ids = new Set<string>();
           const found = await client.fromName(name);
           if (found) ids.add(found.sandboxId);
-          const scope = await sandbox.scopeOf(name);
-          const stored = scope ? (await store.get(scope))?.sandboxId : undefined;
           if (stored) ids.add(stored);
           if (cached) ids.delete(cached.sandboxId);
           for (const id of ids) await client.terminate(id);
@@ -161,6 +160,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       terminateById: (id) => client.terminate(id),
       knownIds: () => Array.from(sessions.values(), (session) => session.sandboxId),
       checkpoints: {
+        kind: "directory",
         capture: async (name) => (await current(name)).snapshotHome(),
         retentionMs: MODAL_CHECKPOINT_RETENTION_MS,
         restore: async (name, checkpointId) => (await current(name)).restoreHome(checkpointId),
@@ -169,5 +169,4 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     opts,
     store,
   );
-  return sandbox;
 }

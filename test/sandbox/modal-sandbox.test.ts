@@ -755,3 +755,15 @@ test("shared contract adopts an imported machine name and refreshes its control-
   const client = await sandboxApiOverHttp(t, fake.client);
   await sandboxAdoptionContract((options) => make({ ...options, client }), layers);
 });
+
+test("stored Modal IDs adopt computers from a different app namespace without recreating them", async () => {
+  const first = await sandbox.provision(layers);
+  await sandbox.writeFile(first, "namespace.txt", "keep this home");
+  const client: ModalClient = { ...fake.client, fromName: async () => null };
+  const adopted = make({ client, machineName: async () => first.id });
+  const next = await adopted.provision(layers);
+  assert.equal(next.id, first.id);
+  assert.equal(next.coldStart, false);
+  assert.equal(await adopted.readFile(next, "namespace.txt"), "keep this home");
+  assert.equal(fake.createdCount(first.id), 1);
+});

@@ -110,6 +110,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
       os: "Ubuntu — Superserve sandbox (disk persists across pause/resume; publish durable work to git or Files)",
       tools: TEMPLATE_TOOLS,
       egressEnforcement: egressProxyHost ? "domain" : "none",
+      isGone: (error) => error instanceof SuperserveSandboxGoneError,
       exec,
       writeAbsBytes: (name, absPath, data) => withSession(name, (s) => s.writeFileBytes(absPath, data)),
       readAbsBytes: (name, absPath) => withSession(name, (s) => s.readFileBytes(absPath)),
@@ -118,10 +119,6 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
           const info = candidate;
           if (info.metadata[SUPERSERVE_METADATA.template] !== template)
             throw new Error(`superserve sandbox ${info.id} uses another template; reconcile it before provisioning`);
-          await client.update(info.id, {
-            metadata: { ...info.metadata, ...(await stamp(name)) },
-            autoDeleteSeconds: policy.retentionSec,
-          });
           idByName.set(name, info.id);
           return {
             state: PAUSED_STATES.has(info.status) ? "parked" : "running",
@@ -132,6 +129,14 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
         return null;
       },
       create,
+      async configure(name) {
+        const info = (await listed(name)).find((candidate) => candidate.id === idByName.get(name));
+        if (info)
+          await client.update(info.id, {
+            metadata: { ...info.metadata, ...(await stamp(name)) },
+            autoDeleteSeconds: policy.retentionSec,
+          });
+      },
       async resume(name) {
         live.delete(name);
         await session(name);
@@ -147,6 +152,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
         await session(name);
       },
       network: {
+        reconcile: "always",
         async read(name) {
           const info = (await listed(name)).find((s) => s.id === idByName.get(name));
           return {
@@ -180,7 +186,7 @@ function superserveSessions(
     const cached = live.get(name);
     if (cached) return cached;
     const id = idByName.get(name) ?? (await listed(name))[0]?.id;
-    if (!id) throw new Error(`superserve sandbox for ${name} is gone; the next provision creates a replacement`);
+    if (!id) throw new SuperserveSandboxGoneError(name, "no sandbox is registered under this name");
     const connected = await client.connect(id);
     idByName.set(name, id);
     live.set(name, connected);
@@ -192,17 +198,8 @@ function superserveSessions(
     idByName.delete(name);
   }
 
-  async function withSession<T>(name: string, action: (s: SuperserveSession) => Promise<T>): Promise<T> {
-    try {
-      return await action(await session(name));
-    } catch (err) {
-      if (!(err instanceof SuperserveSandboxGoneError)) throw err;
-      forget(name);
-      throw new Error(`superserve sandbox for ${name} is gone; the next provision creates a replacement`, {
-        cause: err,
-      });
-    }
-  }
+  const withSession = async <T>(name: string, action: (s: SuperserveSession) => Promise<T>): Promise<T> =>
+    action(await session(name));
 
   const exec = (name: string, script: string, timeoutSec: number): Promise<ExecResult> =>
     withSession(name, async (s) => {

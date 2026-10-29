@@ -66,6 +66,7 @@ async function inspect(state: E2bState, name: string): Promise<MachineState | nu
   const metrics = running && session ? await session.metrics().catch(swallowAs("e2b-sandbox: metrics", null)) : null;
   if (metrics?.diskTotalBytes) observed.diskGb = Math.round(metrics.diskTotalBytes / 2 ** 30);
   return {
+    id: found.sandboxId,
     state: running ? "running" : "parked",
     detail: `e2b sandbox ${found.sandboxId} ${found.state}`,
     ...(metrics
@@ -83,7 +84,7 @@ async function inspect(state: E2bState, name: string): Promise<MachineState | nu
 }
 
 export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOptions): BackendSandbox {
-  const { client, store } = opts;
+  const { client } = opts;
   const sessions = new Map<string, E2bSession>();
   const observed: Pick<SandboxDriver, "cpus" | "memoryMb" | "diskGb"> = {};
   const state: E2bState = { client, sessions, observed };
@@ -129,6 +130,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
         return observed.diskGb;
       },
       backend: "e2b",
+      identityField: "sandboxId",
       homeDir: HOME_DIR,
       os: "Linux — E2B Firecracker sandbox (provider pause preserves state; publish durable work to git or Files)",
       writablePersistence: "provider_managed",
@@ -140,10 +142,9 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       writeAbsBytes: (name, absPath, data) => withSession(name, (s) => s.writeFileBytes(absPath, data)),
       readAbsBytes: (name, absPath) => withSession(name, (s) => s.readFileBytes(absPath)),
       inspect: (name) => inspect(state, name),
-      async create(name, { scratch, scope, checkpointId }) {
+      async create(name, { scratch, checkpointId }) {
         const session = await launch(name, scratch, checkpointId);
-        if (scope) await store.update(scope, { sandboxId: session.sandboxId });
-        return { homeRetained: !!checkpointId };
+        return { homeRetained: !!checkpointId, id: session.sandboxId };
       },
       async resume(name) {
         sessions.delete(name);
@@ -168,6 +169,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
         await adopt(name, await client.connect(session.sandboxId));
       },
       checkpoints: {
+        kind: "image",
         capture: async (name) => (await (await connect(name)).createSnapshot()).snapshotId,
         async restore(name, checkpointId) {
           await destroy(state, name);

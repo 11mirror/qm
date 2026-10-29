@@ -32,10 +32,7 @@ export function createSandboxResourceStore(databaseUrl: string) {
   return {
     get: resources.get,
     async machineNameFor(backingScopeId: string): Promise<string | undefined> {
-      const rows = await q(
-        `SELECT machine_id FROM sandbox_resources WHERE backing_scope_id = $1 AND state <> 'retired'`,
-        [backingScopeId],
-      );
+      const rows = await q(`SELECT machine_id FROM sandbox_resources WHERE backing_scope_id = $1`, [backingScopeId]);
       if (rows.length > 1) throw new Error(`multiple sandbox records own ${backingScopeId}`);
       return rows[0]?.machine_id as string | undefined;
     },

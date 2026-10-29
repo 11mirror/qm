@@ -13,6 +13,7 @@ export interface SandboxNetwork {
 
 export interface ProviderControls {
   network?: {
+    reconcile?: "always";
     read(name: string): Promise<SandboxNetwork>;
     write?(name: string, network: SandboxNetwork): Promise<void>;
   };
@@ -151,4 +152,13 @@ export function withProcessHold(
     }
     return started;
   };
+}
+
+export class SandboxNotRunningError extends Error {
+  readonly state: "gone" | "parked";
+  constructor(state: "gone" | "parked", detail: string) {
+    super(detail);
+    this.name = "SandboxNotRunningError";
+    this.state = state;
+  }
 }

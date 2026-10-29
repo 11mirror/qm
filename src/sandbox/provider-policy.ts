@@ -70,7 +70,7 @@ export function e2bLease(opts: { sandboxTtlMs?: number; maxLifetimeMs?: number }
   if (!Number.isFinite(maxLifetimeMs) || maxLifetimeMs <= E2B_EXEC_MARGIN_MS)
     throw new Error(`e2b maxLifetimeMs must be a finite number of milliseconds above ${E2B_EXEC_MARGIN_MS}`);
   const maxCommandMs = Math.min(DEFAULT_MAX_COMMAND_MS, maxLifetimeMs - E2B_EXEC_MARGIN_MS);
-  const requested = opts.sandboxTtlMs ?? Math.max(3600_000, maxCommandMs + E2B_EXEC_MARGIN_MS);
+  const requested = opts.sandboxTtlMs ?? Math.max(15 * 60_000, maxCommandMs + E2B_EXEC_MARGIN_MS);
   return { sandboxTtlMs: Math.min(maxLifetimeMs, requested), maxLifetimeMs, maxCommandMs };
 }
 

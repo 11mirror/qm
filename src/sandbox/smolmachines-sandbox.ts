@@ -1,3 +1,4 @@
+import { SandboxNotRunningError } from "./provider-controls.ts";
 import { sandboxPolicy } from "./provider-policy.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -178,10 +179,7 @@ function createSmolmachinesClient({ opts, baseUrl, resources, network, idByName 
 
 type SmolmachinesClient = ReturnType<typeof createSmolmachinesClient>;
 
-function createSmolmachinesIo(
-  { api, apiJson, startMachine, machineIdFor }: SmolmachinesClient,
-  idByName: Map<string, string>,
-) {
+function createSmolmachinesIo({ api, apiJson, machineIdFor }: SmolmachinesClient, idByName: Map<string, string>) {
   async function postExec(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
     const id = await machineIdFor(name);
     const req = {
@@ -189,20 +187,16 @@ function createSmolmachinesIo(
       timeoutMs: timeoutSec * 1000 + 2 * EXIT_GRACE_MS,
     };
     const execPath = (machineId: string): string => `${machinePath(machineId)}/exec?output=b64`;
-    const first = await api("POST", execPath(id), req);
-    let res = first;
-    if (!first.ok) {
-      const detail = await httpFailure(first);
-      if (first.status === 404) idByName.delete(name);
-      else if (first.status !== 409 && isRunning(await apiJson<MachineInfo>("GET", machinePath(id)))) {
-        throw new Error(`smolmachines exec ${name}: ${detail}`);
+    const res = await api("POST", execPath(id), req);
+    if (!res.ok) {
+      const detail = await httpFailure(res);
+      if (res.status === 404) {
+        idByName.delete(name);
+        throw new SandboxNotRunningError("gone", `smolmachines exec ${name}: ${detail}`);
       }
-      const retryId = await machineIdFor(name);
-      await startMachine(retryId);
-      res = await api("POST", execPath(retryId), req);
-      if (!res.ok) {
-        throw new Error(`smolmachines exec ${name}: ${await httpFailure(res)}`);
-      }
+      if (res.status === 409 || !isRunning(await apiJson<MachineInfo>("GET", machinePath(id))))
+        throw new SandboxNotRunningError("parked", `smolmachines exec ${name}: ${detail}`);
+      throw new Error(`smolmachines exec ${name}: ${detail}`);
     }
     const r = (await res.json()) as MachineExecResponse;
     return {
@@ -305,8 +299,9 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
         };
       },
       async create(name, { scratch }) {
-        const { info } = await createMachine(name, scratch);
+        const { info, created } = await createMachine(name, scratch);
         idByName.set(name, info.id);
+        return { homeRetained: !created };
       },
       resume: async (name) => startMachine(await machineIdFor(name)),
       destroy: deleteMachine,
