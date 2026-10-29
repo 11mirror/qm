@@ -3061,6 +3061,7 @@ export function buildApp(
     },
     releaseInFlightRuns,
     async stop() {
+      if (config.role === "edge") inlineShutdown.abort();
       await stopBackground();
       await Promise.all([
         withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(

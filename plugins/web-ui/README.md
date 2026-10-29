@@ -269,12 +269,14 @@ A web UI deploy is an upload and a pointer flip; no service restarts. `npm run b
 
 The release id is a hash of the two documents, which name every hashed asset. Set
 `WEB_UI_RELEASES_URL` on this service to the bucket's or CDN's public origin. Page loads then
-use the release `channels/live.json` names, re-read every 10 seconds; if the pointer is briefly
+use the release named by `channels/live.json`, which is re-read every 10 seconds; if the pointer is briefly
 unreadable the last one read keeps serving. `/assets/*` is relayed from the bucket, gzip when the
 browser accepts it, or a CDN can serve `/assets/*` directly. Assets from older releases stay in the
 bucket, so open tabs keep loading their lazy chunks after a deploy. Grant the reader
 `s3:ListBucket` so a missing object is a 404. Without `WEB_UI_RELEASES_URL`, the service serves the
 `dist-web/` baked into its image.
+
+Root files from `public/` (such as `brand-mark.svg`) still ship with the service image, not the release.
 
 Rollback: `qm ui publish --bucket <bucket> --release <older id>` repoints `live` without uploading.
 Publish a bundle only after the server code it calls is deployed.

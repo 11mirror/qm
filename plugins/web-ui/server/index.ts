@@ -1018,7 +1018,7 @@ async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> 
   const isFile = existsSync(filePath) && statSync(filePath).isFile() && !filePath.endsWith("index.html");
   const immutable = isFile && /(?:^|[/\\])assets[/\\]/.test(rel);
   if (!isFile) {
-    if (extname(rel) && !rel.endsWith("index.html")) return void json(res, 404, { error: "not_found" });
+    if (extname(rel) && rel !== "/index.html") return void json(res, 404, { error: "not_found" });
     const html = await uiDocument("index.html");
     if (html === null) {
       return void json(res, 503, { error: "not_built", message: "run `npm run build` to produce dist-web/" });
@@ -3480,7 +3480,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const dev = vite && !external;
     const template = dev
       ? await vite!.transformIndexHtml("/shared.html", readFileSync(join(ROOT, "shared.html"), "utf8"))
-      : ((await uiDocument("shared.html")) ?? "");
+      : ((await uiDocument("shared.html")) ?? readFileSync(join(DIST, "shared.html"), "utf8"));
     res.writeHead(result.status, {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",

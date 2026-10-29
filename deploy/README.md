@@ -66,7 +66,8 @@ and runs crons, sweeps and other background work, answering only `/healthz` and 
 them as two services from the same image and configuration to deploy HTTP changes without
 draining running turns: an edge restart drops open streams, which clients reconnect, while turns
 continue in the harness. Restarting the harness hands its in-flight turns back to the queue, as an
-`all` restart does today. Split roles require Postgres session and run stores.
+`all` restart does today. Split roles require Postgres session and run stores. With `BACKGROUND_DEPLOYMENT_ID`, give the edge and harness of one
+stack the same id: ownership moves both together, and redeploying either in place keeps the id.
 
 ## Fixtures
 

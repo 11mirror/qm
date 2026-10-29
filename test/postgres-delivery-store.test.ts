@@ -95,3 +95,21 @@ test("pg delivery store: undelivered rows expire after the TTL instead of cloggi
 test("pg delivery store: once-ever keys revive after a TTL drop instead of deadlocking", { skip }, async () => {
   await exerciseDeliveryExpiryRevive((opts) => createPostgresDeliveryStore(URL!, opts));
 });
+
+test("pg delivery store: an enqueue in one process wakes listeners in another", { skip }, async () => {
+  const harness = createPostgresDeliveryStore(URL!);
+  const edge = createPostgresDeliveryStore(URL!);
+  const woken = new Promise<void>((resolve) => {
+    const off = edge.onEnqueue(() => {
+      off();
+      resolve();
+    });
+  });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  await harness.enqueue({
+    destination: { type: "slack", target: "C-cross-process" },
+    text: "from the harness",
+    idempotencyKey: "cross-process-wake",
+  });
+  await woken;
+});

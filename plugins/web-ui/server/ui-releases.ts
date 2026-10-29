@@ -56,7 +56,11 @@ export function createUiReleases(baseUrl: string, fetchImpl: typeof fetch = fetc
             ["", {}],
           ] as const)
         : ([["", {}]] as const)) {
-        const upstream = await fetchImpl(`${base}${path}${suffix}`, { signal: AbortSignal.timeout(15_000) });
+        const headersArrived = new AbortController();
+        const timer = setTimeout(() => headersArrived.abort(), 15_000);
+        const upstream = await fetchImpl(`${base}${path}${suffix}`, { signal: headersArrived.signal }).finally(() =>
+          clearTimeout(timer),
+        );
         if (!upstream.ok || !upstream.body) {
           await upstream.body?.cancel();
           if (upstream.status !== 404)

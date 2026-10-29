@@ -91,3 +91,35 @@ test("an edge process leaves a queued run for the harness and waits for its resu
     await built.runtime.stop();
   }
 });
+
+test(
+  "postgres: a cron saved through the edge wakes the harness scheduler",
+  { skip: !databaseUrl, timeout: 60_000 },
+  async () => {
+    const shared = {
+      databaseUrl: databaseUrl!,
+      sessionStore: "postgres" as const,
+      runStore: "postgres" as const,
+    };
+    const edge = buildApp(testConfig({ ...shared, role: "edge", dataDir: mkdtempSync(join(tmpdir(), "edge-")) }));
+    const harness = buildApp(
+      testConfig({ ...shared, role: "harness", dataDir: mkdtempSync(join(tmpdir(), "harness-")) }),
+    );
+    try {
+      const woken = new Set<string>();
+      harness.scheduler.notifyChanged = (id) => void woken.add(id);
+      await sleep(300);
+      const cron = await edge.crons.create({
+        ownerScopeId: "personal:U1",
+        owner: "U1",
+        createdBy: "U1",
+        schedule: { everyMs: 60_000 },
+        action: "check in",
+      });
+      for (let i = 0; i < 50 && !woken.has(cron.id); i++) await sleep(100);
+      assert.ok(woken.has(cron.id));
+    } finally {
+      await Promise.all([edge.runtime.stop(), harness.runtime.stop()]);
+    }
+  },
+);

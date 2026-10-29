@@ -28,6 +28,8 @@ export function uiReleaseId(dir: string): string {
 
 export function runUiPublish(o: UiPublishOptions): void {
   const aws = process.env.AWS_BIN ?? "aws";
+  if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(o.bucket))
+    throw new CliError("--bucket takes a bucket name, such as my-ui-releases", { clause: "cli.invocation" });
   const bucket = `s3://${o.bucket}`;
   const started = Date.now();
   const id = o.release ?? uiReleaseId(o.dir);
