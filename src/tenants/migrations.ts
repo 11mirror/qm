@@ -2,21 +2,6 @@ import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 
 export const TENANT = "qm_tenant_id()";
 
-export function tenantTableStatements(table: string): string[] {
-  return [
-    `DO $tenant_column$ BEGIN
-       IF NOT EXISTS (SELECT 1 FROM pg_attribute
-                       WHERE attrelid = '${table}'::regclass AND attname = 'tenant_id' AND NOT attisdropped) THEN
-         EXECUTE format('ALTER TABLE ${table} ADD COLUMN tenant_id UUID NOT NULL DEFAULT %L', (SELECT id FROM tenants));
-       END IF;
-     END $tenant_column$`,
-    `ALTER TABLE ${table} ALTER COLUMN tenant_id SET DEFAULT ${TENANT}`,
-    `ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`,
-    `ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`,
-    `CREATE POLICY tenant_isolation ON ${table} USING (tenant_id = ${TENANT}) WITH CHECK (tenant_id = ${TENANT})`,
-  ];
-}
-
 export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
   {
     id: "sessions/store/0047-tenants",
@@ -35,7 +20,11 @@ export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
          END $qm_tenant_unbound$`,
       `CREATE OR REPLACE FUNCTION qm_tenant_id() RETURNS uuid LANGUAGE sql STABLE PARALLEL SAFE
          AS $qm_tenant_id$ SELECT COALESCE(NULLIF(current_setting('qm.tenant_id', true), '')::uuid, qm_tenant_unbound()) $qm_tenant_id$`,
-      ...tenantTableStatements("items"),
+      `ALTER TABLE items ALTER COLUMN tenant_id SET DEFAULT qm_tenant_id()`,
+      `ALTER TABLE items ENABLE ROW LEVEL SECURITY`,
+      `ALTER TABLE items FORCE ROW LEVEL SECURITY`,
+      `CREATE POLICY tenant_isolation ON items
+         USING (tenant_id = qm_tenant_id()) WITH CHECK (tenant_id = qm_tenant_id())`,
       `DROP TABLE qm_tenant`,
     ],
   },

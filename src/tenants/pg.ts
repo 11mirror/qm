@@ -21,6 +21,7 @@ interface Queryable {
 }
 
 interface ClientInternals extends Queryable {
+  transactionTenant?: string;
   getTransactionStatus(): string | null;
 }
 
@@ -44,11 +45,12 @@ function tenantPgPoolClass(pg: PgModule): new (config: PoolConfig) => PgPoolInst
       this.tenant = tenant;
     }
     override submit(connection: Connection): Error | null {
-      this.bound =
-        Boolean(this.tenant) &&
-        this.client?.getTransactionStatus() === "I" &&
-        !this.rows &&
-        typeof this.text === "string";
+      const idle = this.client?.getTransactionStatus() === "I";
+      if (this.client && idle) this.client.transactionTenant = this.tenant;
+      if (this.tenant && !idle && this.client?.transactionTenant && this.client.transactionTenant !== this.tenant) {
+        return new Error("This transaction is bound to another tenant");
+      }
+      this.bound = Boolean(this.tenant) && idle && !this.rows && typeof this.text === "string";
       if (!this.bound || this.requiresPreparation()) return super.submit(connection);
       connection.query(`SELECT set_config('qm.tenant_id', '${this.tenant}', true);${this.text}`);
       return null;
@@ -77,10 +79,9 @@ function tenantPgPoolClass(pg: PgModule): new (config: PoolConfig) => PgPoolInst
         config.client = this;
         return super.query(config, values, callback);
       }
-      const tenant = boundTenant();
-      if (!tenant || !plainQuery(config)) return super.query(config, values, callback);
+      if (!plainQuery(config)) return super.query(config, values, callback);
       const done = (typeof values === "function" ? values : callback) as Callback | undefined;
-      const query = new TenantQuery(tenant, config, typeof values === "function" ? undefined : values);
+      const query = new TenantQuery(boundTenant(), config, typeof values === "function" ? undefined : values);
       query.client = this;
       if (done) {
         query.callback = done;

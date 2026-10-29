@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { createPgPool, migrateRegisteredPgSchemas, withPgTransaction } from "../src/persistence/pg-pool.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { tenantTableStatements } from "../src/tenants/migrations.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
 
@@ -131,23 +130,19 @@ test("transactions and queued pool queries keep the tenant of the caller that is
       counts.map((outcome) => (outcome.status === "fulfilled" ? outcome.value : "rejected")),
       counts.map((_, index) => [2, 0, "rejected"][index % 3]),
     );
+    const client = await pool.connect();
+    try {
+      await withTenant(tenant, () => client.query("BEGIN"));
+      await assert.rejects(
+        withTenant(other, () => client.query(countItems, [sessionId])),
+        /This transaction is bound to another tenant/,
+      );
+      assert.deepEqual((await withTenant(tenant, () => client.query(countItems, [sessionId]))).rows, [{ n: 2 }]);
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
     const simple = await withTenant(tenant, () => pool.query("SELECT count(*)::int AS n FROM items"));
     assert.deepEqual(simple.rows, [{ n: 2 }]);
-  });
-});
-
-test("tenantizing an existing table assigns its rows to the instance tenant", { skip }, async () => {
-  await asAppRole(async ({ app, admin, tenant }) => {
-    await admin.query("CREATE TABLE notes(id int PRIMARY KEY)");
-    await admin.query("INSERT INTO notes SELECT generate_series(1, 3)");
-    await withPgTransaction(admin, async (client) => {
-      for (const statement of tenantTableStatements("notes")) await client.query(statement);
-    });
-    const role = new globalThis.URL((await app.pool()).options.connectionString as string).username;
-    await admin.query(`ALTER TABLE notes OWNER TO ${role}`);
-    assert.deepEqual(await withTenant(tenant, () => app.q("SELECT count(*)::int AS n FROM notes")), [{ n: 3 }]);
-    assert.deepEqual(await withTenant(randomUUID(), () => app.q("SELECT count(*)::int AS n FROM notes")), [{ n: 0 }]);
-    await withTenant(tenant, () => app.q("INSERT INTO notes(id) VALUES (4)"));
-    assert.deepEqual((await admin.query("SELECT count(DISTINCT tenant_id)::int AS n FROM notes")).rows, [{ n: 1 }]);
   });
 });
