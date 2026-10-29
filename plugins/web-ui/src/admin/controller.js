@@ -2295,6 +2295,7 @@ export function startAdmin(host, env) {
   async function renderData() {
     const root = $("view-data");
     const reqId = ++dataReq;
+    const reqView = view;
     const q = "scope=" + encodeURIComponent(scope);
     const ep = ENDPOINT[view] || view;
     let path = ORG_WIDE.has(view) ? `/api/${ep}` : `/api/${ep}?${q}`;
@@ -2324,7 +2325,7 @@ export function startAdmin(host, env) {
       root.appendChild(loading);
     }
     const r = await api("GET", path);
-    if (reqId !== dataReq) return;
+    if (reqId !== dataReq || reqView !== view) return;
     if (!r.ok) {
       if (cached !== undefined) return;
       root.textContent = "";

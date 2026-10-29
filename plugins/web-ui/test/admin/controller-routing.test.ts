@@ -170,3 +170,28 @@ test("the org-wide history landing lists named environments with their attached 
   assert.match(card!.textContent!, /#eng/);
   admin.close();
 });
+
+test("a data response that lands after switching to General is dropped", async () => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const admin = await mountAdmin("/settings/crons", {
+    ...routes,
+    "/crons": async () => {
+      await held;
+      return { crons: [{ id: "c1", action: "late", schedule: { everyMs: 60_000 }, ownerScopeId: "org:acme" }] };
+    },
+  });
+  await admin.settle();
+  admin.controller.show("general");
+  await admin.settle();
+  const rejections: unknown[] = [];
+  const onRejection = (reason: unknown) => rejections.push(reason);
+  process.on("unhandledRejection", onRejection);
+  release();
+  await admin.settle(20);
+  process.off("unhandledRejection", onRejection);
+  assert.equal(admin.location(), "/settings");
+  assert.deepEqual(rejections, []);
+  assert.doesNotMatch(admin.document.getElementById("view-data")?.textContent ?? "", /late/);
+  admin.close();
+});
