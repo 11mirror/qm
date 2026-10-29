@@ -1,3 +1,4 @@
+import { sandboxContainerName, sandboxVolumeName, sandboxNetworkName } from "../../src/sandbox/sandbox-names.ts";
 import { sandboxAdoptionContract } from "../support/sandbox-adoption-contract.ts";
 import assert from "node:assert/strict";
 import { tenant } from "../../src/tenant.ts";
@@ -8,13 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, before, after } from "node:test";
 import { sandboxScopeName } from "../../src/sandbox/exec-sandbox-base.ts";
-import {
-  createLocalSandbox,
-  localContainerName,
-  localNetworkName,
-  localVolumeName,
-  LOCAL_BODIES,
-} from "../../src/sandbox/local-sandbox.ts";
+import { createLocalSandbox, LOCAL_BODIES } from "../../src/sandbox/local-sandbox.ts";
 import { supportsProcessSessions } from "../../src/sandbox/sandbox.ts";
 import { createSmolmachinesSandbox, SMOLMACHINES_BODIES } from "../../src/sandbox/smolmachines-sandbox.ts";
 import { createSpritesSandbox, SPRITES_BODIES } from "../../src/sandbox/sprites-sandbox.ts";
@@ -116,17 +111,17 @@ test("cold provision creates volume + container, run() execs over the daemon, by
   const sb = makeSandbox(fake);
   const scope = scopeId("personal", "U1");
   const h = await sb.provision(rw(scope));
-  assert.equal(h.id, localContainerName(scope));
+  assert.equal(h.id, sandboxContainerName(scope));
   assert.equal(h.rootDir, `${guestHome}/workspace`);
   assert.equal(h.homeDir, guestHome);
   assert.equal(h.coldStart, true);
   assert.equal(fake.runCount, 1);
-  assert.equal(fake.volumes.has(localVolumeName(scope)), true);
+  assert.equal(fake.volumes.has(sandboxVolumeName(scope)), true);
   const c = fake.containers.get(h.id)!;
   assert.equal(c.labels["qm.sandbox"], "1");
   assert.equal(c.labels["qm.org"], "default-org");
   assert.equal(c.labels["agent_env"], "dev");
-  assert.equal(c.volume, localVolumeName(scope));
+  assert.equal(c.volume, sandboxVolumeName(scope));
 
   const r = await sb.run(h, "echo hello");
   assert.equal(r.code, 0);
@@ -186,7 +181,7 @@ test("teardown destroy removes both the container and its volume", async () => {
   const h = await sb.provision(rw(scope));
   await sb.teardown(h, { destroy: true });
   assert.equal(fake.containers.has(h.id), false);
-  assert.equal(fake.volumes.has(localVolumeName(scope)), false);
+  assert.equal(fake.volumes.has(sandboxVolumeName(scope)), false);
 });
 
 test("concurrent provisions for one scope run a single container", async () => {
@@ -271,8 +266,8 @@ test("each container runs on its own network; destroy removes it", async () => {
   const scopeB = scopeId("personal", "U21");
   const ha = await sb.provision(rw(scopeA));
   const hb = await sb.provision(rw(scopeB));
-  const netA = localNetworkName(ha.id);
-  const netB = localNetworkName(hb.id);
+  const netA = sandboxNetworkName(ha.id);
+  const netB = sandboxNetworkName(hb.id);
   assert.notEqual(netA, netB);
   assert.equal(fake.networks.has(netA), true);
   assert.equal(fake.networks.has(netB), true);
@@ -304,7 +299,7 @@ test("a replacement core reattaches to an already-running sandbox", async () => 
   };
   const layers = rw(scopeId("personal", "U39"));
   const first = await makeSandbox(fake, { coreContainer: "qm-test-core", fetchImpl }).provision(layers);
-  const connection = `${localNetworkName(first.id)}|qm-test-core`;
+  const connection = `${sandboxNetworkName(first.id)}|qm-test-core`;
   assert.equal(fake.connections.has(connection), true);
   fake.connections.delete(connection);
   const replacement = makeSandbox(fake, { coreContainer: "qm-test-core", fetchImpl });
@@ -327,10 +322,10 @@ test("containerized core joins each sandbox network and reaches the daemon by co
   const h = await sb.provision(rw(scopeId("personal", "U40")));
   const args = fake.containers.get(h.id)!.args;
   assert.equal(args.includes("-p"), false);
-  assert.equal(fake.connections.has(`${localNetworkName(h.id)}|qm-test-core`), true);
+  assert.equal(fake.connections.has(`${sandboxNetworkName(h.id)}|qm-test-core`), true);
   assert.ok(seen.includes(`http://${h.id}:8080/health`));
   await sb.teardown(h, { destroy: true });
-  assert.equal(fake.connections.has(`${localNetworkName(h.id)}|qm-test-core`), false);
+  assert.equal(fake.connections.has(`${sandboxNetworkName(h.id)}|qm-test-core`), false);
 });
 
 test("core attachment trusts the core's actual networks, not docker's connect error", async () => {
@@ -345,7 +340,7 @@ test("core attachment trusts the core's actual networks, not docker's connect er
   const first = await sb.provision(layers);
   const again = await sb.provision(layers);
   assert.equal(again.id, first.id);
-  fake.connections.delete(`${localNetworkName(first.id)}|qm-test-core`);
+  fake.connections.delete(`${sandboxNetworkName(first.id)}|qm-test-core`);
   const refusing = makeSandbox(fake, {
     coreContainer: "qm-test-core",
     fetchImpl,
@@ -372,10 +367,10 @@ test("Local scope deletion removes deterministic resources without provisioning,
   });
   await sandbox.destroyScope!("missing");
   assert.deepEqual(calls, [
-    ["inspect", "-f", "{{json .}}", localContainerName("missing")],
-    ["rm", "-f", localContainerName("missing")],
-    ["network", "rm", "-f", localNetworkName(localContainerName("missing"))],
-    ["volume", "rm", "-f", localVolumeName("missing")],
+    ["inspect", "-f", "{{json .}}", sandboxContainerName("missing")],
+    ["rm", "-f", sandboxContainerName("missing")],
+    ["network", "rm", "-f", sandboxNetworkName(sandboxContainerName("missing"))],
+    ["volume", "rm", "-f", sandboxVolumeName("missing")],
   ]);
   fail = true;
   await assert.rejects(sandbox.destroyScope!("missing"), /daemon unavailable/);
@@ -384,7 +379,7 @@ test("Local scope deletion removes deterministic resources without provisioning,
 
 test("Local scope deletion fails a refused core disconnect only while the core is still attached", async () => {
   const fake = installFakeDocker(0);
-  const network = localNetworkName(localContainerName("scope"));
+  const network = sandboxNetworkName(sandboxContainerName("scope"));
   const sandbox = createLocalSandbox(workspace(), {
     ...singleProcessDeps(),
     tenantConfig: () => ({ orgId: tenant().orgId }),
@@ -483,7 +478,7 @@ test("Local deletion retries remaining disk cleanup after partial failure withou
   await sandbox.destroyScope!("scope");
   assert.deepEqual(calls.slice(0, 4), calls.slice(4));
   assert.equal(calls.length, 8);
-  assert.equal(calls.at(-1)?.at(-1), localVolumeName("scope"));
+  assert.equal(calls.at(-1)?.at(-1), sandboxVolumeName("scope"));
 });
 
 for (const [name, create, install] of [["Smolmachines", createSmolmachinesSandbox, installFakeSmolmachines]] as const) {

@@ -1,12 +1,10 @@
-import { createHash } from "node:crypto";
+import { checkSandboxImage } from "./sandbox-image.ts";
+import { sandboxSiblingName, sandboxNetworkName } from "./sandbox-names.ts";
 import { arch } from "node:os";
-import { join } from "node:path";
-import { readdir, readFile as fsReadFile } from "node:fs/promises";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { sleep } from "../util/async.ts";
 import { errMessage } from "../util/errors.ts";
 import { dockerContainerNetworks, ensureDockerNetwork, spawnDockerExec, type DockerExec } from "./docker-exec.ts";
-import { sandboxScopeName } from "./exec-sandbox-base.ts";
 import {
   createProviderSandbox,
   sandboxNamePrefix,
@@ -22,7 +20,6 @@ const HOME_DIR = "/root";
 const AGENT_PORT = 8080;
 const FINGERPRINT_LABEL = "qm.sandbox-fingerprint";
 const BUILD_HINT = "run `npm run sandbox:local:build`";
-const DEFAULT_PREFIX = "qm";
 
 export type { DockerExec };
 
@@ -40,42 +37,6 @@ export interface LocalSandboxOptions extends SandboxShared {
   fetchImpl?: typeof fetch;
   store: SandboxBodies<StoredLocalSandbox>;
 }
-
-const FINGERPRINT_FIXED_SOURCES = [
-  "sandbox-base/Dockerfile",
-  "local/Dockerfile",
-  "cli/templates/aws/microvm-agent/agent.mjs",
-];
-
-export async function computeSandboxImageFingerprint(repoRoot: string): Promise<string | null> {
-  try {
-    const tools = (await readdir(join(repoRoot, "sandbox-base/tools"))).sort().map((f) => `sandbox-base/tools/${f}`);
-    const paths = [...FINGERPRINT_FIXED_SOURCES, ...tools].sort();
-    const fp = createHash("sha256");
-    for (const p of paths) {
-      fp.update(p);
-      fp.update("\0");
-      fp.update(
-        createHash("sha256")
-          .update(await fsReadFile(join(repoRoot, p)))
-          .digest(),
-      );
-      fp.update("\n");
-    }
-    return fp.digest("hex");
-  } catch {
-    return null;
-  }
-}
-
-const sibling = (kind: "home" | "net", containerName: string, prefix: string): string =>
-  `${prefix}-${kind}-${containerName.slice(prefix.length + 1)}`;
-export const localContainerName = (scopeId: string, prefix = DEFAULT_PREFIX): string =>
-  sandboxScopeName(prefix, scopeId);
-export const localVolumeName = (scopeId: string, prefix = DEFAULT_PREFIX): string =>
-  sibling("home", localContainerName(scopeId, prefix), prefix);
-export const localNetworkName = (containerName: string, prefix = DEFAULT_PREFIX): string =>
-  sibling("net", containerName, prefix);
 
 interface LocalDocker {
   opts: LocalSandboxOptions;
@@ -172,7 +133,6 @@ function createLocalContainers(ld: LocalDocker, waitDaemon: (name: string) => Pr
   const { opts, dexec, image, homeDir, networkOf, volumeOf, portByName, resourceNames } = ld;
 
   let preflightDone: Promise<string> | undefined;
-  let staleWarned = false;
 
   async function preflight(): Promise<string> {
     preflightDone ??= (async () => {
@@ -194,13 +154,7 @@ function createLocalContainers(ld: LocalDocker, waitDaemon: (name: string) => Pr
         image,
       ]);
       const labeled = label.code === 0 ? label.stdout.trim() : "";
-      if (!staleWarned) {
-        const want = await computeSandboxImageFingerprint(opts.repoRoot ?? process.cwd());
-        if (want && labeled && labeled !== want) {
-          staleWarned = true;
-          console.warn(`[local-sandbox] sandbox image ${image} is stale — ${BUILD_HINT}`);
-        }
-      }
+      await checkSandboxImage(opts.repoRoot ?? process.cwd(), image, labeled);
       return img.stdout.trim();
     })();
     return preflightDone;
@@ -288,9 +242,9 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
   const homeDir = opts.homeDir ?? HOME_DIR;
   const resourceNames = new Map<string, { network?: string; volume?: string }>();
   const networkOf = (name: string): string =>
-    resourceNames.get(name)?.network ?? localNetworkName(name, sandboxNamePrefix(opts));
+    resourceNames.get(name)?.network ?? sandboxNetworkName(name, sandboxNamePrefix(opts));
   const volumeOf = (name: string): string =>
-    resourceNames.get(name)?.volume ?? sibling("home", name, sandboxNamePrefix(opts));
+    resourceNames.get(name)?.volume ?? sandboxSiblingName("home", name, sandboxNamePrefix(opts));
 
   const portByName = new Map<string, number>();
   const attached = new Set<string>();

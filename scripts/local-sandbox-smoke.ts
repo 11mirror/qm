@@ -1,10 +1,11 @@
 #!/usr/bin/env node
+import { sandboxContainerName, sandboxVolumeName } from "../src/sandbox/sandbox-names.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createLocalSandbox, LOCAL_BODIES, localContainerName, localVolumeName } from "../src/sandbox/local-sandbox.ts";
+import { createLocalSandbox, LOCAL_BODIES } from "../src/sandbox/local-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createSandboxBodies } from "../src/sandbox/sandbox-bodies.ts";
 import { scopeId } from "../src/types.ts";
@@ -70,8 +71,8 @@ async function main(): Promise<void> {
 
     log("\n=== ALL LIVE ASSERTIONS PASSED ===");
   } finally {
-    spawnSync("docker", ["rm", "-f", localContainerName(scope)], { stdio: "ignore" });
-    spawnSync("docker", ["volume", "rm", localVolumeName(scope)], { stdio: "ignore" });
+    spawnSync("docker", ["rm", "-f", sandboxContainerName(scope)], { stdio: "ignore" });
+    spawnSync("docker", ["volume", "rm", sandboxVolumeName(scope)], { stdio: "ignore" });
     log("cleanup done");
   }
 }
