@@ -5,15 +5,15 @@ import { background, person, DATA, render } from "../support/admin-spend.ts";
 test("spend chart: category stacks and keyboard details use exact amounts", () => {
   const { f } = render({
     ...DATA,
-    series: [{ day: "2026-09-24", live: { costUsd: 3 }, background: background({ cron: 2, loop: 1, swarm: 0.5 }) }],
+    series: [{ day: "2026-09-24", live: { costUsd: 3 }, background: background({ cron: 3, swarm: 0.5 }) }],
   });
   const bar = f.root.querySelectorAll<HTMLElement>(".spend-column")[29]!;
   bar.dispatchEvent(new f.window.Event("focus"));
   assert.match(
     f.root.querySelector(".spend-chart-detail")!.textContent!,
-    /Live \$3.00.*Crons \$2.00.*Loops \$1.00.*Swarms \$0.50.*Webhooks \$0.00.*Monitors \$0.00/,
+    /Live \$3.00.*Crons \$3.00.*Swarms \$0.50.*Webhooks \$0.00.*Monitors \$0.00/,
   );
-  assert.equal(bar.querySelectorAll(".spend-segment").length, 6);
+  assert.equal(bar.querySelectorAll(".spend-segment").length, 5);
   assert.ok(!f.root.innerHTML.includes("NaN"));
   f.window.close();
 });

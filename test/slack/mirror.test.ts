@@ -32,7 +32,6 @@ function fixture(
   const events: any[] = [];
   const dispatches: any[] = [];
   const refreshes: any[] = [];
-  const inbox: any[] = [];
   const directory = options.directory ?? {
     forceDirectorySync: async (...args: any[]) => {
       refreshes.push(args);
@@ -72,9 +71,6 @@ function fixture(
   });
   app.error(async () => {});
   registerSlackEvents(app, {
-    inboxMessage: (...args: any[]) => {
-      inbox.push(args);
-    },
     ids,
     mirror,
     directory,
@@ -97,7 +93,7 @@ function fixture(
     });
     gate?.gate.persisted();
   }
-  return { mirror, events, dispatches, refreshes, inbox, fire };
+  return { mirror, events, dispatches, refreshes, fire };
 }
 
 test("visible Slack system messages and their edits mirror without agent dispatch", async () => {
@@ -156,25 +152,6 @@ test("hidden messages never enter context or dispatch", async () => {
   await f.fire({ type: "message", subtype: "message_changed", channel: "C1", channel_type: "channel", message });
   assert.deepEqual(f.events, []);
   assert.deepEqual(f.dispatches, []);
-  assert.deepEqual(f.inbox, []);
-});
-
-test("inbox events take DM-ness from Slack's channel_type, not the channel id", async () => {
-  const f = fixture();
-  for (const [channel, channel_type] of [
-    ["D1", "channel"],
-    ["G1", "mpim"],
-    ["C1", "im"],
-  ])
-    await f.fire({ type: "message", channel, channel_type, user: "U1", ts: "5.000001", text: "hi" });
-  assert.deepEqual(
-    f.inbox.map(([, msg]) => [msg.channel, msg.isDirectMessage]),
-    [
-      ["D1", false],
-      ["G1", true],
-      ["C1", true],
-    ],
-  );
 });
 
 test("a system-message edit arriving first is already handled", async () => {

@@ -121,16 +121,8 @@ export type BackgroundModule = ReturnType<typeof buildBackground>;
 
 async function closeEventStores(deps: BackgroundInputs): Promise<void> {
   const { semanticMemory } = deps.memory;
-  const {
-    stopStreamSync,
-    runs,
-    turnLedger,
-    contextRequestEvents,
-    sessionStateBus,
-    ledgerEventBus,
-    runActivity,
-    runStreamEvents,
-  } = deps.runs;
+  const { stopStreamSync, runs, turnLedger, contextRequestEvents, sessionStateBus, runActivity, runStreamEvents } =
+    deps.runs;
   const { runSignals, customProvidersChanged } = deps.harness;
   const { turnReady, turnCancels, turnYields } = deps.workers;
   const { deploymentLayerChanged } = deps.deploymentLayer;
@@ -146,7 +138,6 @@ async function closeEventStores(deps: BackgroundInputs): Promise<void> {
       turnCancels.close?.(),
       turnYields.close?.(),
       sessionStateBus.close?.(),
-      ledgerEventBus.close?.(),
       deploymentLayerChanged.close?.(),
       customProvidersChanged.close?.(),
       runActivity.close?.(),

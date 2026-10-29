@@ -1,9 +1,8 @@
 import "../../support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { scopeId } from "../../../src/types.ts";
 import { completeTurn } from "../../support/turns.ts";
-import { serveSignalRoute, request, asUser, steererRequest } from "../../support/turn-signal-route.ts";
+import { serveSignalRoute, asUser, steererRequest } from "../../support/turn-signal-route.ts";
 import { takePending } from "../../support/memory-run-signal-store.ts";
 
 const { built, runTurns, webBase } = await serveSignalRoute({ web: true });
@@ -68,76 +67,6 @@ test("web proxy: a steer carries a server-built ts and TurnRequest for the signe
   assert.equal(signal.request?.actor.externalId, "alice", "a client-supplied request/actor is ignored");
   assert.equal(signal.request?.surface, "web");
   assert.deepEqual(signal.request?.conversation, { kind: "dm", threadRef });
-});
-
-test("web proxy: inbox steering cannot omit or disguise its context to bypass rollout gates", async () => {
-  const threadRef = "web:alice:inbox";
-  const { run } = await built.runs.enqueue({
-    sessionId: "inbox-steer-gates",
-    request: {
-      ...request("Review my inbox", threadRef),
-      surface: "web",
-      actor: { id: "alice", type: "internal" },
-      conversation: { kind: "dm", threadRef, audience: [{ id: "alice", type: "internal" }] },
-    },
-  });
-  const steer = (body: Record<string, unknown>) =>
-    fetch(`${webBase}/api/runs/${run.id}/signal`, asUser("alice", { method: "POST", body: JSON.stringify(body) }));
-  try {
-    for (const enabled of [false, true]) {
-      await built.featureFlags.setEnabled("inbox_loops", scopeId("personal", "alice"), enabled, "test");
-      for (const context of [{}, { threadRef: "" }, { threadRef: "invalid" }, { threadRef: "web:alice:ordinary" }]) {
-        const response = await steer({
-          kind: "steer",
-          text: "Prioritize these",
-          request: steererRequest("alice", threadRef, "forged"),
-          ...context,
-        });
-        assert.equal(response.status, 400);
-        assert.equal(((await response.json()) as { reason?: string }).reason, "conversation_mismatch");
-        assert.deepEqual(await takePending(built.signals, run.id), []);
-      }
-      const response = await steer({ kind: "steer", text: "Prioritize these", threadRef });
-      assert.equal(response.status, enabled ? 200 : 403);
-      const signals = await takePending(built.signals, run.id);
-      assert.equal(signals.length, enabled ? 1 : 0);
-      if (enabled) {
-        assert.equal(signals[0]?.request?.conversation.threadRef, threadRef);
-        assert.match(signals[0]?.request?.conversationHeader ?? "", /fresh snapshot/);
-      }
-    }
-    const abort = await steer({ kind: "abort" });
-    assert.equal(abort.status, 200);
-  } finally {
-    await built.featureFlags.setEnabled("inbox_loops", scopeId("personal", "alice"), false, "test");
-  }
-});
-
-test("web proxy: shared scopes cannot disguise an alias-owned inbox thread", async () => {
-  const user = "alice@example.com";
-  const threadRef = "web:ALICE@example.com:inbox";
-  const { run } = await built.runs.enqueue({
-    sessionId: "inbox-alias-steer-gates",
-    request: {
-      ...request("Review my inbox", threadRef),
-      surface: "web",
-      actor: { id: user, type: "internal" },
-      conversation: { kind: "dm", threadRef, audience: [{ id: user, type: "internal" }] },
-    },
-  });
-  for (const scopeId of ["channel:any", "group:any"]) {
-    for (const path of ["/api/turn", `/api/runs/${run.id}/signal`]) {
-      const response = await fetch(
-        `${webBase}${path}`,
-        asUser(user, {
-          method: "POST",
-          body: JSON.stringify({ kind: "steer", text: "Prioritize these", threadRef, scopeId }),
-        }),
-      );
-      assert.equal(response.status, 403);
-      assert.deepEqual(await takePending(built.signals, run.id), []);
-    }
-  }
 });
 
 test("web proxy: a steer claiming another user's thread is refused", async () => {

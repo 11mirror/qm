@@ -34,7 +34,7 @@ function chatCoreState(ctx: ConvCtx, dependencies: ChatDependencies) {
   const runSlot = createRunSlot((message) => {
     ctx.composer.state.error = message;
   });
-  const transcriptViewport = createTranscriptViewport({ pinPrompt: () => !ctx.inbox && pinLatestPrompt() });
+  const transcriptViewport = createTranscriptViewport({ pinPrompt: () => pinLatestPrompt() });
   return {
     ctx,
     sideChats: createSideChatController(ctx),

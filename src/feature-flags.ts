@@ -10,7 +10,6 @@ export const FEATURES = {
     hint: "Enables app text comments and annotation tools for the selected people. Applies on the next app page load; app management permission is still required.",
   },
   responsive_spine: { label: "Responsive spine (delegation)", personalOnly: true },
-  inbox_loops: { label: "Inbox" },
   slack_loading_indicator: {
     label: "Slack loading indicator (experimental)",
     hint: "Shows an activity card in Slack threads, including background work and monitors. After five minutes, the card links to the web conversation. Everyone in a shared thread can see it. Top-level DMs stay unchanged. Turning this off leaves existing cards.",

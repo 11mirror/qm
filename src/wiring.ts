@@ -29,16 +29,12 @@ import { type SkillStore } from "./skills/skill-store.ts";
 import { type SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import type { UiStateStore } from "./surfaces/ui-state.ts";
-import { slackUserClientFactory } from "./inbox/sources/slack.ts";
 import { type AdvisoryLock } from "./persistence/advisory-lock.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { type AppPageViewLog } from "./deploy/page-views.ts";
 import type { RateLimiter } from "./ratelimit/rate-limiter.ts";
 import { type BudgetTracker } from "./ratelimit/budget.ts";
 import { type CronStore } from "./cron/cron-store.ts";
-import { type LedgerEventBus } from "./inbox/events.ts";
-import { createInboxSourceRefresh } from "./inbox/source-refresh.ts";
-import type { InboxServiceDeps } from "./api/routes/cron-items.ts";
 import { type Outbound } from "./surfaces/outbound.ts";
 import type { DirectoryStore } from "./directory/directory-store.ts";
 import { type EnvironmentStore } from "./environments/environment-store.ts";
@@ -202,7 +198,6 @@ export interface BuiltApp {
   turnLedger: TurnLedger;
   signals: RunSignalStore;
   sessionStateBus: SessionStateBus;
-  ledgerEventBus: LedgerEventBus;
   surfaceCache: SurfaceCache;
   runtime: Runtime;
   config: ScopedConfigStore;
@@ -227,7 +222,6 @@ export interface BuiltApp {
   auditLog: AuditLog;
   scheduler: Scheduler;
   sweepAsks(now: number): Promise<void>;
-  inbox: InboxServiceDeps;
   webhookReceiver: WebhookReceiver;
   jobs: JobWorker;
   admin: AdminService;
@@ -482,7 +476,6 @@ export function serverDeps(
       auditLog: built.auditLog,
       errors: built.errors,
       crons: built.crons,
-      inbox: built.inbox,
       deploymentLayer: built.deploymentLayerStore,
       ...(config.awsDeploy.gateSecret ? { deployGateSecret: config.awsDeploy.gateSecret } : {}),
       ...(built.appPageViews ? { appPageViews: built.appPageViews } : {}),
@@ -516,17 +509,6 @@ export function serverDeps(
       channelPolicy: built.channelPolicy,
       ...(built.suggestedActivities ? { suggestedActivities: built.suggestedActivities } : {}),
       uiState: built.uiState,
-      inboxSourceTokens: built.keychain,
-      inboxSourceRefresh: createInboxSourceRefresh({
-        featureFlags: built.featureFlags,
-        items: built.inbox.items,
-        errors: built.errors,
-        record: built.inbox.record,
-        tokens: built.keychain,
-        directory: built.directory,
-        ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
-      }),
-      inboxSlackClient: slackUserClientFactory(config.slack?.apiUrl),
       sessionShares: built.sessionShares,
       sessionShareBytes: built.sessionShareBytes,
       environments: built.environments,

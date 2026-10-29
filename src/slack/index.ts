@@ -249,28 +249,6 @@ function sessionStatusSync(core: SlackCoreClient, conn: SlackConnection, ids: Bo
   return { statusHooks, reconcileStatus: async () => reconcileStatus() };
 }
 
-function inboxForwarder(core: SlackCoreClient, directory: SlackDirectory) {
-  return (
-    client: unknown,
-    msg: Parameters<NonNullable<Parameters<typeof registerSlackEvents>[1]["inboxMessage"]>>[1],
-  ) =>
-    void (async () => {
-      const actor = msg.senderSlackId
-        ? await directory
-            .classifyActor(client, msg.senderSlackId)
-            .catch(swallowAs("slack: classify inbox message sender", undefined))
-        : undefined;
-      await core.inboxSlackMessage({
-        channel: msg.channel,
-        ts: msg.ts,
-        isDirectMessage: msg.isDirectMessage,
-        threadTs: msg.threadTs,
-        text: msg.text,
-        senderEmail: actor?.externalId.includes("@") ? actor.externalId : undefined,
-      });
-    })().catch((e) => swallow("slack: forward message to inbox", e));
-}
-
 async function connectAccount(
   cfg: SlackPluginConfig,
   app: SlackApp,
@@ -493,7 +471,6 @@ function assembleSlackPlugin(cfg: SlackPluginConfig, core: SlackCoreClient) {
     directory,
     ids,
     deduper,
-    inboxMessage: cfg.externalAccess ? undefined : inboxForwarder(core, directory),
     allowActor,
     denyResponder,
     webUiPublicUrl: cfg.webUiPublicUrl || undefined,

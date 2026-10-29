@@ -53,7 +53,6 @@
   "surfaces/recent-dm-posts/0001-typed": "2f48c057201c8c83c99e85c23a5afa85618e5bcaeb1de6290509eed3043cd100",
   "surfaces/slack-installation/0001-typed": "df5e82de493cfa564830db35361323e20a8a2ac17c3ad7bb286be133aaec3c47",
   "surfaces/ui-state/0001-typed": "65c358cd2f082ddf7f7ba3b520a70bc872e3a8f87d36a53b8b2c4c298faf9228",
-  "triggers/cron-items/0001-typed": "b5ec8f8bfb78744696afe937aa20d3cfb22dca2107a5900366db9d520572d3a8",
   "triggers/crons/0001-typed": "4e18132573c58ee299bbbd5793ccee69a9d88e46f5aba2a25e3b95aa2589963d",
   "triggers/monitors/0001-typed": "210befd47d22ebe505b795dfb75fc8d2747f22f1946cd8512dc333321fa50812",
   "triggers/webhook-history/0001-typed": "d55b5bc6a6c6dd02ffbe42802191f0c6c4d11e456102f0dc1d8345d7e1c11733",

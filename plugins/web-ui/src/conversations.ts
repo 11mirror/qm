@@ -67,18 +67,6 @@ export function onExitCanvas(fn: () => void): void {
   exitCanvas = fn;
 }
 
-let inboxItemHandler: ((event: { cronId: string; itemId: string; op: string }) => void) | null = null;
-
-export function onInboxItemEvent(fn: (event: { cronId: string; itemId: string; op: string }) => void): void {
-  inboxItemHandler = fn;
-}
-
-let inboxResyncHandler: (() => void) | null = null;
-
-export function onInboxResync(fn: () => void): void {
-  inboxResyncHandler = fn;
-}
-
 let deliveryStreamOpen = false;
 
 export function ensureDeliveryStream(): void {
@@ -111,8 +99,6 @@ export function ensureDeliveryStream(): void {
       void refreshSessions({ silent: true });
       resyncUiCanvas([...live].map((conv) => conv.state.sessionId));
     },
-    (event) => inboxItemHandler?.(event),
-    () => inboxResyncHandler?.(),
   );
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;

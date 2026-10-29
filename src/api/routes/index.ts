@@ -10,7 +10,6 @@ import { connectorRawRoutes, connectorRoutes } from "./connectors.ts";
 import { deploymentRawRoutes, deploymentRoutes } from "./deployments.ts";
 import { blobRoutes } from "./blobs.ts";
 import { sessionStateRawRoutes } from "./session-state.ts";
-import { cronItemEventsRawRoutes } from "./cron-item-events.ts";
 import { webhookRawRoutes, webhookRoutes } from "./webhooks.ts";
 import { runEventRoutes } from "./run-events.ts";
 import { turnRoutes } from "./turns.ts";
@@ -39,8 +38,6 @@ import { egressAuditRoutes } from "./egress-audit.ts";
 import { slackEventRawRoutes } from "./slack-events.ts";
 import { chatSurfaceRawRoutes } from "./chat-surface-events.ts";
 import { authBrokerRoutes } from "./auth-broker.ts";
-import { inboxRoutes } from "./inbox.ts";
-import { cronItemRoutes } from "./cron-items.ts";
 import { searchRoutes } from "./search.ts";
 import { userModelAuthRoutes } from "./user-model-auth.ts";
 import { toolManifestRoutes } from "./tool-manifest.ts";
@@ -83,7 +80,6 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   ...deploymentRawRoutes,
   ...blobRoutes,
   ...sessionStateRawRoutes,
-  ...cronItemEventsRawRoutes,
   ...webhookRawRoutes,
 ];
 
@@ -109,7 +105,6 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...projectRoutes,
   ...contextPolicyRoutes,
   ...cronRoutes,
-  ...cronItemRoutes,
   ...reachRoutes,
   ...webhookRoutes,
   ...directoryRoutes,
@@ -119,7 +114,6 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...surfaceCacheRoutes,
   ...environmentRoutes,
   ...emojiRoutes,
-  ...inboxRoutes,
   ...deploymentRoutes,
   ...egressAuditRoutes,
   ...authBrokerRoutes,

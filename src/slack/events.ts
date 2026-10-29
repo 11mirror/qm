@@ -12,7 +12,6 @@ import {
 } from "./message-gating.ts";
 import { onBotJoinedChannel, type SurfaceHeaderClient } from "./delivery.ts";
 import {
-  isDirectChannelType,
   parseEventId,
   parseLifecycleEvent,
   parseMessageEvent,
@@ -54,17 +53,6 @@ type SlackEventDeps = {
     scopeId: string,
     kind: "dm" | "channel",
     ensureOpts?: { pinNew?: boolean },
-  ) => void;
-  inboxMessage?: (
-    client: unknown,
-    msg: {
-      channel: string;
-      ts: string;
-      threadTs?: string;
-      text?: string;
-      senderSlackId?: string;
-      isDirectMessage: boolean;
-    },
   ) => void;
 };
 
@@ -204,7 +192,6 @@ function onAppMention(ctx: SlackEventContext) {
 
 function onMessage(ctx: SlackEventContext) {
   const {
-    deps,
     ids,
     directory,
     botHasStakeInThread,
@@ -238,16 +225,6 @@ function onMessage(ctx: SlackEventContext) {
       if (isGroupMembershipMessage(m)) await forceDirectorySync(client);
       const { ackGate } = context;
       const dm = m.channel_type === "im" ? { kind: "dm" as const } : {};
-      if (m.channel && m.ts && !m.hidden && !m.subtype && !m.bot_id) {
-        deps.inboxMessage?.(client, {
-          channel: m.channel,
-          ts: m.ts,
-          isDirectMessage: isDirectChannelType(m.channel_type),
-          ...(m.thread_ts ? { threadTs: m.thread_ts } : {}),
-          ...(typeof m.text === "string" && m.text ? { text: m.text } : {}),
-          ...(m.user ? { senderSlackId: m.user } : {}),
-        });
-      }
       if (m.subtype === "message_changed" && m.message?.subtype === "tombstone" && m.message.ts && m.channel) {
         await pushSurfaceEvents([{ container: m.channel, ts: m.message.ts, deleted: true }]);
         return;

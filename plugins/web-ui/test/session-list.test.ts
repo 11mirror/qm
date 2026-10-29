@@ -644,7 +644,7 @@ test("surfaceOf shows only stored web and Slack surfaces as themselves", () => {
 test("sidebar excludes cron, webhook, and loop runs but keeps conversations", () => {
   const web = { ...saved("web", "web:alice:one"), surface: "web" };
   const slack = { ...saved("slack", "grp:C1:1700000000.000100"), surface: "slack" };
-  const runs = ["cron", "webhook", "loop"].map((surface) => ({ ...saved(surface, `${surface}:x`), surface }));
+  const runs = ["cron", "webhook", "monitor"].map((surface) => ({ ...saved(surface, `${surface}:x`), surface }));
   assert.deepEqual(sidebarSessions([web, slack, ...runs]), [web, slack]);
   assert.deepEqual([...runs, slack].map(automationRunLabel), ["Cron run", "Webhook run", "Loop run", null]);
 });

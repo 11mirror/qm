@@ -20,7 +20,6 @@ const storedRequest = {
 };
 
 const calls: Call[] = [];
-let inboxEnabled = false;
 const core = createServer((req: IncomingMessage, res) => {
   let raw = "";
   req.on("data", (chunk) => (raw += chunk));
@@ -32,10 +31,7 @@ const core = createServer((req: IncomingMessage, res) => {
       body: raw ? (JSON.parse(raw) as Record<string, unknown>) : {},
     });
     res.setHeader("content-type", "application/json");
-    if (url.startsWith("/v1/inbox/access")) {
-      res.end(JSON.stringify({ enabled: inboxEnabled }));
-      return;
-    }
+
     if (url.startsWith("/v1/approvals/a-inbox")) {
       res.end(
         JSON.stringify({
@@ -193,30 +189,5 @@ test("subagent approvals require the child session to be visible and on the same
     });
     assert.equal(response.status, 404);
     assert.equal(turnPosts(before).length, 0);
-  }
-});
-
-test("inbox approval replay requires the inbox flag and preserves the screened snapshot", async () => {
-  try {
-    for (const [enabled, id, status] of [
-      [false, "a-inbox", 403],
-      [true, "a-inbox-other", 403],
-      [true, "a-inbox-channel", 403],
-      [true, "a-inbox", 200],
-    ] as const) {
-      inboxEnabled = enabled;
-      const before = calls.length;
-      const response = await fetch(`${base}/api/approvals/${id}`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ approved: true }),
-      });
-      assert.equal(response.status, status, `${enabled}/${id}`);
-      const posts = turnPosts(before);
-      assert.equal(posts.length, status === 200 ? 1 : 0);
-      if (status === 200) assert.equal(posts[0]!.body.conversationHeader, "Stored inbox snapshot");
-    }
-  } finally {
-    inboxEnabled = false;
   }
 });

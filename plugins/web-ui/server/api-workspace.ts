@@ -30,7 +30,6 @@ import { type ServerResponse } from "node:http";
 import { resolveIdentity } from "./identity.ts";
 import { json } from "../../chassis/src/http.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
-import { hasInboxLoopPreview } from "./web-turns.ts";
 import { stageFromRequest, sendStaged, stagedFile } from "./uploads.ts";
 import { adminRoute } from "./admin-routes.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
@@ -95,22 +94,6 @@ function scriptCapableContentType(contentType: string): boolean {
 function upstreamMissing(res: ServerResponse, status: number): void {
   res.writeHead(status === 404 ? 404 : 502, { "content-type": "application/json" });
   res.end(JSON.stringify({ error: status === 404 ? "not_found" : "upstream_error" }));
-}
-
-async function serveInboxItemImage(c: WebCtx): Promise<unknown> {
-  const { res } = c;
-  const r = await fetchCoreGet(
-    `${corePathFor("/api/crons/:id/items/:itemId/image", c)}?${copyParams(c, ["ctx", "i"])}`,
-  );
-  if (!r.ok || !r.body) return upstreamMissing(res, r.status);
-  const contentType = r.headers.get("content-type") ?? "application/octet-stream";
-  res.writeHead(200, {
-    "content-type": contentType.startsWith("image/") ? contentType : "application/octet-stream",
-    "cache-control": "private, max-age=3600",
-    "content-security-policy": "sandbox",
-    "x-content-type-options": "nosniff",
-  });
-  return res.end(Buffer.from(await r.arrayBuffer()));
 }
 
 async function serveFileContent(c: WebCtx): Promise<unknown> {
@@ -254,8 +237,7 @@ export const workspaceRoutes: readonly WebRoute[] = [
         account?: string;
         connections?: { provider: string }[];
       };
-      const permissions = allPermissions.filter((permission) => permission !== "inbox");
-      if (await hasInboxLoopPreview(user)) permissions.push("inbox");
+      const permissions = allPermissions;
       return json(res, 200, {
         user,
         org: coreOrgId(),
@@ -410,20 +392,6 @@ export const workspaceRoutes: readonly WebRoute[] = [
     read: "strict",
     shape: (p, c) => ({ pinned: p.pinned, dismiss: p.dismiss, principalId: c.user }),
   }),
-  relayRoute("GET", "/api/inbox", {
-    query: (c) => copyParams(c, ["cursor", "cronId", "view", "itemId", "filter"]),
-  }),
-  relayRoute("POST", "/api/inbox/sent-chat", { raw: true, noStore: true }),
-  relayRoute("POST", "/api/inbox/selection", { core: "/v1/inbox", to: "PUT", who: "principalId", raw: true }),
-  relayRoute("POST", "/api/inbox/sync-cron", { who: "principalId", raw: true }),
-  relayRoute("GET", "/api/crons/:id/items", { query: (c) => copyParams(c, ["state"]) }),
-  relayRoute("GET", "/api/crons/:id/items/:itemId", {
-    query: (c) => copyParams(c, c.url.searchParams.get("refreshSource") === "1" ? ["refreshSource"] : []),
-  }),
-  route("GET", "/api/crons/:id/items/:itemId/image", serveInboxItemImage),
-  ...["action", "followup"].map((leaf) =>
-    relayRoute("POST", `/api/crons/:id/items/:itemId/${leaf}`, { who: "principalId", raw: true }),
-  ),
   ...["runtime-config", "channel-header-pin"].flatMap((leaf): WebRoute[] => [
     relayRoute("GET", `/api/${leaf}`, {
       query: (c) => ({

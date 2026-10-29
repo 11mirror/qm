@@ -28,8 +28,6 @@ import {
   fireDropResolution,
   createAskExpirySweep,
 } from "../triggers/keychain-ask.ts";
-import type { InboxServiceDeps } from "../api/routes/cron-items.ts";
-import { createInboxChat } from "../inbox/item-chat.ts";
 
 type ApiAppInputs = Pick<Head, "late" | "config" | "admittedWork" | "gates" | "overrides" | "connectorSecretKey"> & {
   stores: StoresModule;
@@ -47,11 +45,11 @@ type ApiAppInputs = Pick<Head, "late" | "config" | "admittedWork" | "gates" | "o
 
 export function buildApiApp(deps: ApiAppInputs) {
   const { late, config } = deps;
-  const { every, identity, directory, currentScopeMembers, sessions, advisoryLock } = deps.stores;
+  const { every, identity, directory, currentScopeMembers, sessions } = deps.stores;
   const { runSignals } = deps.harness;
   const { runs } = deps.runs;
   const { outbound, idempotency } = deps.outbound;
-  const { crons, inboxItems, recordInboxEvent } = deps.crons;
+  const { crons } = deps.crons;
   const { keychain } = deps.credentials;
   const { auditLog } = deps.deploymentLayer;
 
@@ -126,18 +124,8 @@ export function buildApiApp(deps: ApiAppInputs) {
       grant,
     );
   const dropResolution = (drop: DropResolution) => fireDropResolution(triggerDeps, drop);
-  const inbox: InboxServiceDeps = {
-    lock: advisoryLock,
-    items: inboxItems,
-    record: recordInboxEvent,
-    scans: crons,
-    chat: createInboxChat({
-      items: inboxItems,
-      trigger: triggerDeps,
-    }),
-  };
   const sweepAsks = createAskExpirySweep({ keychain, fire: askResolution, auditLog });
-  return { app, askResolution, triggerDeps, sweepAsks, inbox, dropResolution };
+  return { app, askResolution, triggerDeps, sweepAsks, dropResolution };
 }
 
 function appDepsHead(deps: ApiAppInputs) {
@@ -211,7 +199,7 @@ function appDepsTail(deps: ApiAppInputs) {
   const { config } = deps;
   const { deployService } = deps.deploy;
   const { deploymentLayer } = deps.deploymentLayer;
-  const { processes, sessionStateBus, ledgerEventBus, contextRequestEvents } = deps.runs;
+  const { processes, sessionStateBus, contextRequestEvents } = deps.runs;
   const { monitors, approvals } = deps.crons;
   const { sandbox } = deps.sandbox;
   const { files } = deps.files;
@@ -227,7 +215,6 @@ function appDepsTail(deps: ApiAppInputs) {
     files,
     approvals,
     sessionStateBus,
-    ledgerEventBus,
     contextRequests: createContextRequests(databaseUrl),
     contextRequestEvents,
     surfaceCache,

@@ -45,7 +45,8 @@ export function assembleBuiltApp(deps: BuiltAppInputs): BuiltApp {
 }
 
 function builtAppHead(deps: BuiltAppInputs) {
-  const { app, sweepAsks, inbox } = deps.apiApp;
+  const { app, sweepAsks } = deps.apiApp;
+  const { runs, turnLedger, sessionStateBus } = deps.runs;
   const { pgPool, sessions, configStore, slackInstallation, skills, skillBundles, jobs } = deps.stores;
   const { surfaceCache, skillFetcher } = deps.orchestrator;
   const { deploymentLayer, deploymentLayerStore, brokeredTools, auditLog } = deps.deploymentLayer;
@@ -59,7 +60,6 @@ function builtAppHead(deps: BuiltAppInputs) {
     userModelCredentials,
     mcpToolService,
   } = deps.credentials;
-  const { runs, turnLedger, sessionStateBus, ledgerEventBus } = deps.runs;
   const { runSignals, gatewayTransport, resolveBrowserCompanyKeys, modelCredentials, refreshModels, customProviders } =
     deps.harness;
   const { runtime } = deps.background;
@@ -80,7 +80,6 @@ function builtAppHead(deps: BuiltAppInputs) {
     turnLedger,
     signals: runSignals,
     sessionStateBus,
-    ledgerEventBus,
     surfaceCache,
     runtime,
     config: configStore,
@@ -106,7 +105,6 @@ function builtAppHead(deps: BuiltAppInputs) {
     auditLog,
     scheduler,
     sweepAsks,
-    inbox,
     webhookReceiver,
     jobs,
   } satisfies Partial<BuiltApp>;

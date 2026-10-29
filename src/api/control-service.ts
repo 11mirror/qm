@@ -43,7 +43,6 @@ export interface CronCreateRequest {
   unfurlLinks?: boolean;
   unattendedGrants?: string[];
   session?: boolean;
-  inbox?: boolean;
 }
 
 type ReachFailureCode =
@@ -339,8 +338,6 @@ function cronCreateMethods(app: App, admin?: AdminService): Pick<ControlService,
       if (invalidGrants) return invalidGrants;
       if (req.action === undefined && req.text === undefined)
         return fail("bad_request", "task (what to do) or text (exact text to send) required");
-      if (req.inbox && req.action === undefined)
-        return fail("bad_request", "an inbox cron needs a task, not exact text");
       if (req.recipient !== undefined && req.channel !== undefined)
         return fail("bad_request", "specify at most one of recipient (a teammate) or channel");
 
@@ -409,7 +406,6 @@ function cronCreateMethods(app: App, admin?: AdminService): Pick<ControlService,
         ...(typeof req.title === "string" ? { title: req.title } : {}),
         ...(destination ? { destination } : {}),
         ...(req.unattendedGrants !== undefined ? { unattendedGrants: req.unattendedGrants } : {}),
-        ...(req.inbox ? { inbox: {} } : {}),
       };
       const sessionRef = req.session === false ? undefined : liveSessionRef(capability, ownerScopeId);
       if (sessionRef) input.sessionRef = sessionRef;

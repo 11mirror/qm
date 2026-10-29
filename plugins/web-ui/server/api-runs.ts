@@ -14,7 +14,6 @@ import {
   relayCore,
   fetchCoreGet,
   pipeWeb,
-  copyParams,
 } from "./core-relay.ts";
 import { json, PayloadTooLargeError } from "../../chassis/src/http.ts";
 import { resolveIdentity } from "./identity.ts";
@@ -146,11 +145,6 @@ export const runRoutes: readonly WebRoute[] = [
     const delegated = threadRef.startsWith(SUBAGENT_THREAD_PREFIX);
     if ((!threadRef.startsWith("web:") && !delegated) || actor !== user || !record.request) {
       return json(res, 404, { error: "not_found" });
-    }
-    if (/^web:.+:inbox$/.test(threadRef)) {
-      const resolved = await resolveWebConversation(user, threadRef, undefined, undefined);
-      if ("error" in resolved) return json(res, 403, resolved);
-      if (record.request.conversation?.kind !== "dm") return json(res, 403, { error: "forbidden_scope" });
     }
     if (!threadRef.startsWith(`web:${user}:`)) {
       const sessionId = typeof record.sessionId === "string" ? record.sessionId : "";
@@ -340,16 +334,6 @@ export const runRoutes: readonly WebRoute[] = [
     }
   }),
   relayRoute("GET", "/api/runs/:id"),
-  relayRoute("GET", "/api/inbox/sent/:messageId", {
-    core: "/v1/connectors/gmail/sent/:messageId",
-    query: (c) => copyParams(c, ["accountType"], {}),
-    noStore: true,
-  }),
-  relayRoute("GET", "/api/inbox/sent", {
-    core: "/v1/connectors/gmail/sent",
-    query: (c) => copyParams(c, ["pageToken", "accountType"], {}),
-    noStore: true,
-  }),
   relayRoute("GET", "/api/webhooks", { who: "viewer" }),
   relayRoute("GET", "/api/webhooks/:id/events", { who: "viewer" }),
   route("POST", "/api/webhooks", async (c) => {

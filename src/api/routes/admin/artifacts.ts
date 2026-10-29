@@ -7,7 +7,7 @@ import { type ApiCtx, ok, reply, type RouteResult } from "../route.ts";
 import { notifyOwnerOfCronEdit } from "../../../triggers/edit-notice.ts";
 import { ADMIN_CRON_FIELDS, badRequest, pick, requireScopedResource, scopedAdmin } from "./common.ts";
 
-const CRON_FIELDS = [...ADMIN_CRON_FIELDS, "runtime", "inbox", "unattendedGrants", "destination"] as const;
+const CRON_FIELDS = [...ADMIN_CRON_FIELDS, "runtime", "unattendedGrants", "destination"] as const;
 
 function isAdminCronDestination(v: unknown): v is Destination {
   if (typeof v !== "object" || v === null) return false;

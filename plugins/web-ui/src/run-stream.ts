@@ -19,7 +19,6 @@ import { type Item, type WorkActivity, isHidden } from "./items.ts";
 import {
   type ActiveRun,
   ApiError,
-  type InboxItemEvent,
   type LiveReasoning,
   type QueuedRun,
   type RunPoll,
@@ -581,8 +580,6 @@ export async function pollRun(live: Live, runId: string): Promise<void> {
 export function subscribeDeliveries(
   onSessionState?: (event: SessionStateEvent) => void,
   onResync?: () => void,
-  onInboxItem?: (event: InboxItemEvent) => void,
-  onInboxResync?: () => void,
 ): () => void {
   if (typeof EventSource === "undefined") return () => {};
   const es = new EventSource(withBase("/api/session-events"));
@@ -590,12 +587,10 @@ export function subscribeDeliveries(
   es.onopen = (): void => {
     if (everOpened) {
       onResync?.();
-      onInboxResync?.();
     }
     everOpened = true;
   };
   es.addEventListener("session_state_resync", () => onResync?.());
-  es.addEventListener("inbox_resync", () => onInboxResync?.());
   const frames = <T>(name: string, label: string, handle: (event: T) => void): void =>
     es.addEventListener(name, (e: MessageEvent) => {
       try {
@@ -606,9 +601,6 @@ export function subscribeDeliveries(
     });
   frames<SessionStateEvent>("session_state", "session-state", (ev) => {
     if (typeof ev.threadRef === "string" && ev.threadRef && typeof ev.state === "string") onSessionState?.(ev);
-  });
-  frames<InboxItemEvent>("inbox_item", "inbox-item", (ev) => {
-    if (typeof ev.cronId === "string" && typeof ev.itemId === "string") onInboxItem?.(ev);
   });
   return () => es.close();
 }

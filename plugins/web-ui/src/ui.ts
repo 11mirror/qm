@@ -220,7 +220,7 @@ function avatarHue(key: string): number {
 export function avatarTpl(person: { key: string; name: string; avatarUrl?: string }): TemplateResult {
   const photo = person.avatarUrl?.startsWith("https://") ? person.avatarUrl : undefined;
   return html`<span
-    class="inbox-avatar"
+    class="person-avatar"
     style=${`--avatar-hue:${avatarHue(person.key)}`}
     ${tip(person.name)}
     aria-hidden="true"

@@ -6,7 +6,6 @@ import { tenant } from "../tenant.ts";
 import type { Head } from "./late.ts";
 import type { SessionStateBus } from "../runs/session-state-bus.ts";
 import { createPostgresSessionStateBus } from "../runs/postgres-session-state-bus.ts";
-import { type LedgerEventBus, createPostgresLedgerEventBus } from "../inbox/events.ts";
 import { createPostgresRunStore } from "../runs/postgres-run-store.ts";
 import { createTurnLedger } from "../turns/turn-ledger.ts";
 import { bindTurnLedger, sweepTurns } from "../turns/turn-engine.ts";
@@ -42,7 +41,6 @@ export function buildRuns(deps: RunsInputs) {
   const { errors } = deps.files;
 
   const sessionStateBus: SessionStateBus = createPostgresSessionStateBus(databaseUrl);
-  const ledgerEventBus: LedgerEventBus = createPostgresLedgerEventBus(databaseUrl);
   const maxAttempts = config.maxAttempts;
   const runStore = createPostgresRunStore(databaseUrl);
   const turnLedger = createTurnLedger(databaseUrl, { onTerminal: (run) => runStore.runs.emitTerminal(run) });
@@ -115,7 +113,6 @@ export function buildRuns(deps: RunsInputs) {
     runs,
     sessionStateBus,
     productAnalytics,
-    ledgerEventBus,
     maxAttempts,
     blockingApprovalSessions,
     turnLedger,

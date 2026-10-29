@@ -41,7 +41,6 @@ import type { Orchestrator } from "../core/orchestrator.ts";
 import type { Run, RunDeliveryState, RunStore } from "../runs/run-store.ts";
 import type { GoalView, ReasoningBlock, TurnStream } from "../runs/turn-stream.ts";
 import type { SessionStateBus, SessionStateEvent } from "../runs/session-state-bus.ts";
-import type { LedgerEventBus, OwnedLedgerEvent } from "../inbox/events.ts";
 import type { RunActivityEntry, RunActivityStore } from "../runs/postgres-run-activity-store.ts";
 import type { RunSignal, RunSignalStore } from "../runs/run-signal-store.ts";
 import type { ModelCredentialStore } from "../model/model-credential-store.ts";
@@ -275,7 +274,6 @@ export interface App {
   turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult>;
   getApproval(requestId: string, viewer?: string): Promise<(PendingApprovalRecord & { requestId: string }) | null>;
   subscribeSessionStates(cb: (event: SessionStateEvent) => void, opts?: SubscribeOptions): () => void;
-  subscribeLedgerEvents(cb: (event: OwnedLedgerEvent) => void, opts?: SubscribeOptions): () => void;
   listSessionApprovals(sessionId: string, viewer: string): Promise<PendingApproval[]>;
   pendingApprovalForThread(threadRef: string, viewer?: string): Promise<TurnResult | null>;
   subscribeRun(runId: string, listener: (event: RunStreamEvent) => void, onResync?: () => void): () => void;
@@ -642,7 +640,6 @@ export interface AppDeps {
   files: FileArtifactStore;
   approvals?: ApprovalRecords;
   sessionStateBus?: SessionStateBus;
-  ledgerEventBus?: LedgerEventBus;
   contextRequests: ContextRequests;
   contextRequestEvents?: EventBus<ContextRequestEvent>;
   contextViewerTokenKey?: SecretKey;

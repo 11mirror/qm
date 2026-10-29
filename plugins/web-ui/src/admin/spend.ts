@@ -258,7 +258,7 @@ class SpendView {
           : null,
       )}${card(
         "Spend per person",
-        "Live is interactive conversation. Background is work nobody is typing into: crons, loops, swarms, webhooks and monitors, split out under each amount.",
+        "Live is interactive conversation. Background is work nobody is typing into: crons, swarms, webhooks and monitors, split out under each amount.",
         table(
           this.header(),
           people.map((row: any) => this.rowCells(row)),

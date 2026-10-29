@@ -23,7 +23,6 @@ export async function serveSignalRoute(opts: { web?: boolean } = {}) {
   const core = serveCore(built.app, {
     webhookReceiver: built.webhookReceiver,
     featureFlags: built.featureFlags,
-    inbox: built.inbox,
     uiState: built.uiState,
   });
   let webBase = "";

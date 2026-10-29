@@ -602,9 +602,3 @@ export interface SessionStateEvent {
   at: number;
   ui?: unknown;
 }
-
-export interface InboxItemEvent {
-  cronId: string;
-  itemId: string;
-  op: string;
-}

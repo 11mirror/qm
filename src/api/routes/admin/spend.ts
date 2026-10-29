@@ -25,7 +25,7 @@ const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 const EPOCH_MS = /^\d+$/;
 const CSV_FORMULA_LEAD = /^[=+\-@\t\r]/;
 const CSV_NEEDS_QUOTES = /["\r\n,]/;
-const BACKGROUND_SOURCES = ["cron", "loop", "swarm", "webhook", "monitor"] as const satisfies readonly Exclude<
+const BACKGROUND_SOURCES = ["cron", "swarm", "webhook", "monitor"] as const satisfies readonly Exclude<
   SessionOrigin,
   "conversation"
 >[];

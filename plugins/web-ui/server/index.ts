@@ -36,7 +36,6 @@ import { cookieUser, unauthorized, resolveIdentity } from "./identity.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
 import { UI_VERSION_HEADER } from "../../chassis/src/ui-release.ts";
 import { handleVoiceRoute, sweepDictationSpool } from "./voice-routes.ts";
-import { hasInboxLoopPreview } from "./web-turns.ts";
 import { findRoute } from "../../chassis/src/router.ts";
 import { PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { startLiveFeeds } from "./live-feeds.ts";
@@ -358,10 +357,6 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
       });
     }
 
-    const inboxPath = path === "/api/inbox" || path.startsWith("/api/inbox/");
-    const itemsPath = /^\/api\/crons\/[^/]+\/items(\/|$)/.test(path);
-    if ((inboxPath || itemsPath) && !(await hasInboxLoopPreview(user)))
-      return json(res, 403, { error: "feature_disabled" });
     const found = findRoute(apiRoutes, method, path);
     if (!found) return json(res, 404, { error: "not found" });
     return found.route.handle({ req, res, url, user, params: found.params });

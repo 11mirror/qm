@@ -60,7 +60,6 @@
     var(--foreground) 4%,
     color-mix(in srgb, var(--secondary) 42%, var(--background))
   );
-  --inbox-row-hover: color-mix(in srgb, var(--foreground) 4%, var(--background));
   --success: #1a7f37;
   --warning: #a66700;
   --scrim: oklch(0.145 0 0);
@@ -750,4 +749,54 @@ a.chat-row-open {
   margin-top: 4px;
   padding: 8px 9px 5px;
   border-top: 1px solid var(--border);
+}
+
+.person-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+.person-avatars {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.person-avatar {
+  position: relative;
+  overflow: hidden;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  font-size: var(--font-8);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  background: oklch(0.92 0.05 var(--avatar-hue, 250));
+  color: oklch(0.38 0.09 var(--avatar-hue, 250));
+}
+.person-avatar img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.person-avatar.more {
+  background: var(--secondary);
+  color: var(--muted-foreground);
+}
+:root.dark .person-avatar,
+.dark .person-avatar {
+  background: oklch(0.37 0.06 var(--avatar-hue, 250));
+  color: oklch(0.91 0.045 var(--avatar-hue, 250));
+}
+:root.dark .person-avatar.more,
+.dark .person-avatar.more {
+  background: var(--secondary);
+  color: var(--muted-foreground);
 }

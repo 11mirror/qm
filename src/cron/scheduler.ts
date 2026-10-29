@@ -11,7 +11,6 @@ import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import type { VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import { recoverNextFireAt } from "./schedule.ts";
-import { renderSourceInboxTask } from "../inbox/sync-task.ts";
 import type { JobDisposition, JobWorker } from "../jobs/job-worker.ts";
 import { hashId } from "../util/crypto.ts";
 import { utcMinute } from "../util/time.ts";
@@ -136,8 +135,8 @@ function cronMentionRoster(cron: Cron, homeRoster: DirectoryMember[] | undefined
   return internal.map(mentionable).join(", ");
 }
 
-function storedTask(cron: Pick<Cron, "inbox" | "action">): string {
-  return cron.inbox?.source ? renderSourceInboxTask(cron.inbox.source) : (cron.action ?? "");
+function storedTask(cron: Pick<Cron, "action">): string {
+  return cron.action ?? "";
 }
 
 function renderCronFireInput(cron: Cron, mentionRoster?: string): string {
@@ -153,11 +152,6 @@ function renderCronFireInput(cron: Cron, mentionRoster?: string): string {
     "- The stored task below: the standing instructions every fire receives. Edit it (via the cron tool) only to change what future fires are told to do.",
     "Use a cron-specific filename. Never put credentials in published state. If publication is unavailable, report that limitation and retain needed workspace state on a scoped computer. Do not move tasks that require existing workspace files to scratch without migrating and verifying their state.",
     `The retained fire log (cron tool, action="runs", id="${cron.id}") shows how prior fires went — useful when this run hits errors or surprising state.`,
-    ...(cron.inbox
-      ? [
-          `This cron keeps an inbox of work items. GET $AGENT_API_URL/v1/crons/${cron.id}/items lists them. POST it with {"items":[{"dedupeKey","summary","sourcePayload":{...},"proposal":{...}}]} to add or refresh items; a repeated dedupeKey updates the same item. Close one with POST $AGENT_API_URL/v1/crons/${cron.id}/items/<item id>/action and {"kind":"done"|"fail"|"dismiss","args":{"reason":"<one line>"}}. Work every pending item before finishing.`,
-        ]
-      : []),
     ...(readsNotes ? fireNoteLine(cron.lastFireNote) : []),
     ...(readsNotes
       ? [

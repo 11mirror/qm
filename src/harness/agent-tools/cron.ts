@@ -111,9 +111,6 @@ function cronParams() {
           "create/patch: read-only admin grants for unattended fires (org admins only; the cron must live in and deliver to their own DM); admin unattended_grants lists which read needs which. patch replaces; [] removes.",
       }),
     ),
-    inbox: optionalBoolean(
-      "create: give the cron an inbox, a durable queue of work items each fire reads, adds to and closes at $AGENT_API_URL/v1/crons/<id>/items.",
-    ),
     enabled: optionalBoolean("patch: false pauses, true resumes."),
     archived: optionalBoolean("patch: true archives the cron."),
     limit: Type.Optional(
@@ -280,7 +277,6 @@ async function cronCreateAction(
     ...cronFields(params),
     ...(params.recipient !== undefined ? { recipient: params.recipient } : {}),
     ...(params.channel !== undefined ? { channel: params.channel } : {}),
-    ...(params.inbox === true ? { inbox: true } : {}),
   });
   if (isUnavailable(r)) return unavailable(callId, "cron");
   if (!r.ok) {

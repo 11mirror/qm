@@ -36,7 +36,6 @@ export function surfaceOf(s: Pick<CoreSession, "surface">): "web" | "slack" | "c
 const AUTOMATION_RUN_LABELS: Record<string, string> = {
   cron: "Cron run",
   webhook: "Webhook run",
-  loop: "Loop run",
 };
 
 export function automationRunLabel(s: Pick<CoreSession, "surface">): string | null {

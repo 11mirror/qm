@@ -15,7 +15,6 @@ import { createStagedEnvelopes } from "../slack/envelope-staging.ts";
 import { createSessionStatusStore } from "../slack/session-status.ts";
 import { createTaskAckStore } from "../slack/task-ack.ts";
 import { createHandledEvents } from "../slack/message-gating.ts";
-import { createInboxRealtime } from "../inbox/realtime.ts";
 import { createKeychainApprovals } from "../credentials/keychain-approval.ts";
 import { createSlackCoreClient } from "../api/slack-core-client.ts";
 import { auxiliaryModelForProvider } from "../model/pi-models.ts";
@@ -36,7 +35,7 @@ type SlackCoreInputs = Pick<Head, "config"> & {
 };
 
 export function buildSlackCore(deps: SlackCoreInputs) {
-  const { crons, inboxItems, recordInboxEvent, monitors } = deps.crons;
+  const { monitors } = deps.crons;
   const { keychain } = deps.credentials;
   const { app, askResolution } = deps.apiApp;
   const { identity, sessions, featureFlags, leaderLease, configStore, databaseUrl, every } = deps.stores;
@@ -49,11 +48,6 @@ export function buildSlackCore(deps: SlackCoreInputs) {
   const { fallback, harness } = deps.harness;
   const { blobTransfer, errors } = deps.files;
 
-  const inboxRealtime = createInboxRealtime({
-    crons,
-    items: inboxItems,
-    record: recordInboxEvent,
-  });
   const keychainApprovals = createKeychainApprovals({
     keychain,
     app,
@@ -73,7 +67,6 @@ export function buildSlackCore(deps: SlackCoreInputs) {
     sessionStatus: createSessionStatusStore(databaseUrl),
     statusActivity: { processes, monitors, sessions, publicWebUrl: () => tenantConfig(config).publicWebUrl },
     featureFlags,
-    inboxEvent: (event) => inboxRealtime.onConversationEvent(event),
     app,
     leaderLease,
     stagedEnvelopes: createStagedEnvelopes(databaseUrl),

@@ -290,7 +290,7 @@ function startProactiveOpenerIfNew(
   scopeId: string | null,
   messages: AgentMessage[],
 ): boolean {
-  if (c.ctx.inbox || appEditSlug(threadRef, appState.me?.user)) return false;
+  if (appEditSlug(threadRef, appState.me?.user)) return false;
   if (
     !shouldStartProactiveOpener({
       started: proactiveOpenerStarted,

@@ -1,8 +1,7 @@
+import { REMOVE_LOOP_WORK_MIGRATION } from "../cron/retired-work.ts";
 import { EFFORT_MIGRATION } from "../model/effort-migration.ts";
 import { CHANNEL_ORDERS_MIGRATION } from "../surface-cache/channel-orders-migration.ts";
 import type { StoresModule } from "./stores.ts";
-import { LOOPS_TO_CRONS_MIGRATION } from "../cron/migrations.ts";
-import { INBOX_ITEM_SOURCE_MIGRATION, inboxConversationKeyMigration } from "../inbox/ledger.ts";
 import { CONTRACT_MIGRATIONS } from "../persistence/contract-migrations.ts";
 
 type UpgradeMigrationsInputs = { stores: StoresModule };
@@ -12,9 +11,7 @@ export function registerUpgradeMigrations(deps: UpgradeMigrationsInputs) {
 
   pgPool.registerMigration(CHANNEL_ORDERS_MIGRATION);
   pgPool.registerMigration(EFFORT_MIGRATION);
-  pgPool.registerMigration(LOOPS_TO_CRONS_MIGRATION);
-  pgPool.registerMigration(INBOX_ITEM_SOURCE_MIGRATION);
-  pgPool.registerMigration(inboxConversationKeyMigration());
+  pgPool.registerMigration(REMOVE_LOOP_WORK_MIGRATION);
   pgPool.registerMigration({
     id: "runtime/0002-drop-harness-choice",
     acceptedChecksums: ["2e7a8523090c84d00b557197f2e3038b5b2fd418e6b3b4b08c10ef0cf596a792"],

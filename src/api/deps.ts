@@ -9,7 +9,6 @@ import type { ModelGatewayTransportConfig } from "../model/provider-endpoints.ts
 import type { BackgroundOwnershipControl } from "../runs/background-ownership.ts";
 import type { createSuggestedActivityService } from "../suggestions/activities.ts";
 import type { ManagedSlack } from "../surfaces/slack-managed.ts";
-import type { InboxSourceRefresh } from "../inbox/source-refresh.ts";
 import type { BrokerSessionStore } from "../auth/broker-sessions.ts";
 import type { DirectFileUploads } from "../files/direct-file-upload.ts";
 import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
@@ -55,7 +54,6 @@ import type { DropResolution } from "../triggers/keychain-ask.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import type { Outbound } from "../surfaces/outbound.ts";
 import type { ControlService } from "./control-service.ts";
-import type { InboxServiceDeps } from "./routes/cron-items.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import type { ProcessRegistry } from "../processes/process-registry.ts";
 import type { BrowserSessionStore } from "../connectors/browser-session-store.ts";
@@ -66,7 +64,6 @@ import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts
 import type { ChannelPolicyStore } from "../surface-cache/channel-policy-store.ts";
 import type { UiStateStore } from "../surfaces/ui-state.ts";
 import type { SessionStateBus } from "../runs/session-state-bus.ts";
-import type { ConnectorTokenSource, SlackUserClient } from "../inbox/sources/adapter.ts";
 import type { RateLimiter } from "../ratelimit/rate-limiter.ts";
 import type { BudgetTracker } from "../ratelimit/budget.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -142,7 +139,6 @@ export interface ServerDeps {
   auditLog?: AuditLog;
   errors?: ErrorLog;
   crons?: CronStore;
-  inbox?: InboxServiceDeps;
   runs?: RunStore;
   signals?: RunSignalStore;
   sessionStateBus?: SessionStateBus;
@@ -164,9 +160,6 @@ export interface ServerDeps {
   ackEmojiPicks?: AckEmojiPickStore;
   channelPolicy?: ChannelPolicyStore;
   uiState?: UiStateStore;
-  inboxSourceTokens?: ConnectorTokenSource;
-  inboxSourceRefresh?: InboxSourceRefresh;
-  inboxSlackClient?: (token: string) => SlackUserClient;
   sessionShares?: SessionShareStore;
   sessionShareBytes?: DurableByteStore;
   environments?: EnvironmentStore;

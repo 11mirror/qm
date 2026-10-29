@@ -67,7 +67,7 @@ export function createAssistantContent({
     const segments = splitSlackWire(text).map((seg) => {
       if (seg.kind === "mention") return chip(seg.handle);
       if (seg.kind === "link")
-        return html`<a class="inbox-text-link" href=${seg.href} target="_blank" rel="noreferrer noopener"
+        return html`<a class="assistant-text-link" href=${seg.href} target="_blank" rel="noreferrer noopener"
           >${seg.label}</a
         >`;
       return seg.text;

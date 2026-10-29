@@ -18,7 +18,6 @@ export interface Me {
 
 const VIEWS = [
   "chats",
-  "inbox",
   "calendar",
   "contexts",
   "webhooks",
@@ -49,8 +48,7 @@ export function can(key: string): boolean {
   return appState.me?.permissions?.includes(key) === true;
 }
 
-export function canView(view: View): boolean {
-  if (view === "inbox" || view === "calendar") return can("inbox");
+export function canView(_view: View): boolean {
   return true;
 }
 

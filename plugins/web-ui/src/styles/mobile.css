@@ -88,8 +88,7 @@
     height: 44px;
   }
 
-  .pane > .pane-head:first-child,
-  .pane > .inbox-item-head:first-child {
+  .pane > .pane-head:first-child {
     min-height: 44px;
     padding-left: 48px;
     margin-top: -44px;
@@ -200,10 +199,6 @@
   }
   .composer-wrap .composer-right {
     margin-left: auto;
-  }
-  .inbox-chat-composer .composer-wrap .composer-input,
-  .inbox-chat-composer .composer-wrap .composer-toolbar {
-    grid-column: 1 / -1;
   }
   .composer-toolbar .stop-btn {
     width: 44px;

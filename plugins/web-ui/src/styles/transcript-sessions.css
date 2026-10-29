@@ -540,7 +540,7 @@
   max-width: 72%;
   margin-right: 12px;
 }
-.named-user-row > .speaker-label > .inbox-avatar,
+.named-user-row > .speaker-label > .person-avatar,
 .named-assistant-row > .speaker-label > .brand-mark {
   width: 20px;
   height: 20px;

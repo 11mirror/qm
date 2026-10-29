@@ -7,20 +7,20 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 
 test("feature flags map each feature to enabled scopes", async () => {
   const store = createFeatureFlagStore(testDatabaseUrl());
-  assert.equal(await store.enabled("inbox_loops", "channel:C1"), false);
-  await store.setEnabled("inbox_loops", "channel:C1", true, "admin");
-  await store.setEnabled("inbox_loops", "personal:U1", true, "admin");
-  assert.equal(await store.enabled("inbox_loops", "channel:C1"), true);
-  assert.equal(await store.enabled("inbox_loops", "channel:C2"), false);
-  assert.deepEqual((await store.get("inbox_loops"))?.enabledScopes, ["channel:C1", "personal:U1"]);
-  await store.setEnabled("inbox_loops", "channel:C1", false, "admin");
-  assert.equal(await store.enabled("inbox_loops", "channel:C1"), false);
+  assert.equal(await store.enabled("team_scopes", "channel:C1"), false);
+  await store.setEnabled("team_scopes", "channel:C1", true, "admin");
+  await store.setEnabled("team_scopes", "personal:U1", true, "admin");
+  assert.equal(await store.enabled("team_scopes", "channel:C1"), true);
+  assert.equal(await store.enabled("team_scopes", "channel:C2"), false);
+  assert.deepEqual((await store.get("team_scopes"))?.enabledScopes, ["channel:C1", "personal:U1"]);
+  await store.setEnabled("team_scopes", "channel:C1", false, "admin");
+  assert.equal(await store.enabled("team_scopes", "channel:C1"), false);
 });
 
 test("the org scope enables a feature everywhere", async () => {
   const store = createFeatureFlagStore(testDatabaseUrl());
-  await store.setEnabled("inbox_loops", "org:default-org", true, "admin");
-  assert.equal(await store.enabled("inbox_loops", "channel:C1"), true);
+  await store.setEnabled("team_scopes", "org:default-org", true, "admin");
+  assert.equal(await store.enabled("team_scopes", "channel:C1"), true);
 });
 
 test("ui canvas and responsive spine default off and are enabled per person, independently", async () => {
@@ -48,17 +48,17 @@ test("retired feature records are not offered as configurable flags", async () =
      VALUES ('command_scoped_credentials', ARRAY['channel:C1'], 1, 'admin')`,
   );
   const store = createFeatureFlagStore(url);
-  await store.setEnabled("inbox_loops", "channel:C1", true, "admin");
+  await store.setEnabled("team_scopes", "channel:C1", true, "admin");
   assert.deepEqual(
     (await store.list()).map((row) => row.featureName),
-    ["inbox_loops"],
+    ["team_scopes"],
   );
 });
 
 test("enabledFor includes the tenant org and personal scopes in a single snapshot", async () => {
   const store = createFeatureFlagStore(testDatabaseUrl());
-  await store.setEnabled("inbox_loops", tenant().orgScope, true, "admin");
+  await store.setEnabled("team_scopes", tenant().orgScope, true, "admin");
   await store.setEnabled("ui_canvas", "personal:U1", true, "admin");
-  assert.deepEqual([...(await store.enabledFor("personal:U1"))].sort(), ["inbox_loops", "ui_canvas"]);
-  assert.deepEqual([...(await store.enabledFor("personal:U2"))], ["inbox_loops"]);
+  assert.deepEqual([...(await store.enabledFor("personal:U1"))].sort(), ["team_scopes", "ui_canvas"]);
+  assert.deepEqual([...(await store.enabledFor("personal:U2"))], ["team_scopes"]);
 });

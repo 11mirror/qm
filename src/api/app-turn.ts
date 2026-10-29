@@ -30,7 +30,6 @@ import {
   warmRuntimeCatalog,
   withCurrentProjectRoster,
 } from "./app-turn-pipeline.ts";
-import { isWebInboxThreadRef } from "../sessions/thread-ref.ts";
 
 const PARTICIPANT_REHYDRATE_TIMEOUT_MS = 5_000;
 
@@ -135,8 +134,6 @@ function sessionStateMethods(deps: AppDeps, h: AppHelpers) {
         onResync ? { onResync: () => queue(onResync) } : undefined,
       );
     },
-
-    subscribeLedgerEvents: (cb, opts) => deps.ledgerEventBus?.subscribe(cb, opts) ?? (() => {}),
 
     async getApproval(requestId, viewer) {
       const record = await deps.approvals?.get(requestId);
@@ -324,13 +321,6 @@ function signalMethods(deps: AppDeps, h: AppHelpers) {
       const run = await deps.runs.get(runId);
       if (!run) return { accepted: false, reason: "not_found" };
       if (viewer && !(await h.viewerMayUseRun(run, viewer))) return { accepted: false, reason: "not_found" };
-      if (
-        signal.kind === "steer" &&
-        surfaceHas(run.request.surface, "sidebar") &&
-        isWebInboxThreadRef(run.request.conversation.threadRef) &&
-        !signal.request
-      )
-        return { accepted: false, reason: "conversation_mismatch" };
       const queuedKey = signal.queuedRunId
         ? `queued-steer:${run.request.conversation.threadRef}:${signal.queuedRunId}`
         : undefined;

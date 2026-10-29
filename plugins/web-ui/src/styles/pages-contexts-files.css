@@ -746,12 +746,12 @@
   font-size: var(--font-10);
   font-weight: 650;
 }
-.speaker-label > .inbox-avatar {
+.speaker-label > .person-avatar {
   width: 18px;
   height: 18px;
 }
-.project-member-row > .inbox-avatar,
-.project-member-result > .inbox-avatar {
+.project-member-row > .person-avatar,
+.project-member-result > .person-avatar {
   width: 36px;
   height: 36px;
   font-size: var(--font-12);

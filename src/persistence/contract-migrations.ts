@@ -63,6 +63,17 @@ export const CONTRACT_MIGRATIONS: readonly PgMigrationDefinition[] = [
     id: "contract/0027-drop-fallback-runtime",
     statements: ["ALTER TABLE base_model_configs DROP COLUMN IF EXISTS fallback_runtime"],
   },
+  {
+    id: "contract/0028-drop-loops-and-cron-inbox",
+    statements: [
+      "DROP TABLE IF EXISTS loops",
+      "DROP TABLE IF EXISTS loop_items",
+      "DROP TABLE IF EXISTS cron_items",
+      "ALTER TABLE crons DROP COLUMN IF EXISTS inbox, DROP COLUMN IF EXISTS inbox_scanned_through",
+      "DELETE FROM feature_flags WHERE feature_name = 'inbox_loops'",
+      "UPDATE sessions SET origin = 'cron' WHERE origin = 'loop'",
+    ],
+  },
 ];
 
 export const HELD_BACK_CONTRACT_MIGRATIONS: readonly PgMigrationDefinition[] = [

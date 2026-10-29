@@ -14,7 +14,6 @@ import {
   Files,
   Folder,
   House,
-  Inbox as InboxGlyph,
   KeyRound,
   LayoutGrid,
   LogOut,
@@ -57,9 +56,7 @@ import { clearAllDrafts, newChatDraftKey, saveDraft } from "./drafts";
 import { deepLinkPath, isPlainLeftClick, parseDeepLink, sessionLinkTarget, UI_BASE } from "./deep-link";
 import {
   adoptRemoteSplit,
-  beginPaneKindDrag,
   drawCanvas,
-  endPaneDrag,
   exitSplitIfActive,
   fetchRemoteSplit,
   focusedPaneSession,
@@ -95,9 +92,6 @@ import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeych
 import { openDeployById, renderDeploys } from "./deploys";
 import { renderMemory, resetMemoryState } from "./memory";
 import { renderCalendar } from "./calendar";
-import { renderInbox, resetActiveInboxItem, resetInboxState, routeInboxHistory } from "./inbox";
-import { refreshInbox } from "./inbox-feed";
-import { inboxOpenCount } from "./inbox-model";
 import { openSkillById, renderSkills, routeSkillsHistory } from "./skills";
 import { watchAppAnnotations } from "./app-annotations";
 import { applyTheme, renderSettings, loadOpenNewChat, watchSystemTheme } from "./settings";
@@ -188,7 +182,6 @@ trackVisualViewport();
 
 const ICON = {
   newChat: Plus,
-  inbox: InboxGlyph,
   calendar: CalendarDays,
   chats: MessageSquare,
   contexts: Folder,
@@ -208,7 +201,6 @@ export async function signOut(): Promise<void> {
   stopBrowserErrors();
   appState.me = null;
   closeBrowse();
-  resetInboxState();
   clearAllDrafts();
   exitSplitIfActive();
   mainConversation().resetChatState();
@@ -312,24 +304,6 @@ export function mountShell(): void {
   syncSidebarAccessibility(false);
 }
 
-function inboxNavRow(): TemplateResult {
-  const count = inboxOpenCount();
-  return html`<a
-    class="navrow ${appState.currentView === "inbox" ? "active" : ""}"
-    href=${deepLinkPath(UI_BASE, "inbox", null)}
-    data-view="inbox"
-    draggable="true"
-    @dragstart=${(e: DragEvent) => {
-      e.dataTransfer?.setData("application/x-webui-inbox", "all");
-      if (e.dataTransfer) e.dataTransfer.effectAllowed = "copy";
-      beginPaneKindDrag("inboxView", "all");
-    }}
-    @dragend=${() => endPaneDrag()}
-  >
-    ${icon(ICON.inbox, 17)}<span>Inbox</span>${count > 0 ? html`<span class="nav-badge" aria-label=${`${count} waiting on you`}>${count > 99 ? "99+" : count}</span>` : nothing}
-  </a>`;
-}
-
 export function renderSidebarFooter(): void {
   if (!footerEl) return;
   render(
@@ -398,8 +372,7 @@ export function renderSidebarTop(): void {
   render(
     html`
       <nav class="nav quick-nav" @click=${onNavClick}>
-        ${navRow("chats", ICON.home, "Home")}
-        ${can("inbox") ? html`${inboxNavRow()} ${navRow("calendar", ICON.calendar, "Calendar")}` : nothing}
+        ${navRow("chats", ICON.home, "Home")} ${navRow("calendar", ICON.calendar, "Calendar")}
         ${actionRow(Search, "Search", () => {
           hideTooltip();
           openChatSearch();
@@ -471,7 +444,6 @@ export function switchView(v: View): void {
   }
   renderSidebarTop();
   syncUrlFromState();
-  if (v === "inbox") resetActiveInboxItem();
   if (v !== "chats") return void VIEW_RENDERERS[v]();
   const seq = appState.viewRenderSeq;
   const showChats = () => {
@@ -488,7 +460,6 @@ export function switchView(v: View): void {
 }
 
 const VIEW_RENDERERS: Record<Exclude<View, "chats">, () => unknown> = {
-  inbox: renderInbox,
   calendar: renderCalendar,
   contexts: renderContexts,
   webhooks: renderWebhooksPage,
@@ -502,7 +473,6 @@ const VIEW_RENDERERS: Record<Exclude<View, "chats">, () => unknown> = {
 };
 
 function refreshActiveView(v: View): void {
-  if (v === "inbox") resetActiveInboxItem();
   syncUrlFromState();
   if (v === "keychain") clearConnectorNotice();
   if (v !== "chats") void VIEW_RENDERERS[v]();
@@ -528,7 +498,6 @@ const HISTORY_ROUTES: Partial<Record<View, (item: string | null) => void>> = {
   crons: routeCronsHistory,
   webhooks: routeWebhooksHistory,
   skills: routeSkillsHistory,
-  inbox: routeInboxHistory,
 };
 
 const OPEN_BY_ID: Partial<Record<View, (id: string) => void>> = {
@@ -635,7 +604,6 @@ async function openWantedView(wanted: View, wantedItem: string | null, params: U
   }
   if (wantedItem) OPEN_BY_ID[wanted]?.(wantedItem);
   switchView(wanted);
-  if (wanted === "inbox") routeInboxHistory(wantedItem);
 }
 
 export async function boot(): Promise<void> {
@@ -704,7 +672,6 @@ export async function boot(): Promise<void> {
   shellMounted = true;
   ensureDeliveryStream();
   warmDeferredChunks();
-  void refreshInbox({ silent: true });
   const connectedProvider = params.get("status") === "connected" ? params.get("connector") : null;
   if (connectedProvider) markConnectorConnected(connectedProvider);
   const viewIntent = isView(wanted) && canView(wanted) && wanted !== "chats";

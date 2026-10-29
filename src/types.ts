@@ -285,7 +285,6 @@ export interface Cron extends TriggerBase {
   archived?: boolean;
   action?: string;
   message?: string;
-  inbox?: { source?: string };
   createdAt: number;
   unattendedGrants?: string[];
   sessionRef?: string;
@@ -322,51 +321,6 @@ export interface Monitor extends TriggerBase {
   tail?: string;
   expiresAt: number;
   lastError?: string;
-}
-
-export type InboxItemStatus = "queued" | "ready" | "shipped" | "failed" | "skipped";
-
-export type InboxPayload = Record<string, unknown>;
-
-export interface InboxProposal {
-  data: InboxPayload;
-  summary?: string;
-  by: "agent" | "human";
-  at: number;
-  sessionId?: string;
-}
-
-export interface InboxThreadMessage {
-  id: string;
-  role: "human" | "agent" | "system";
-  text: string;
-  at: number;
-  actorId?: string;
-}
-
-export interface InboxItem {
-  inboxPreview?: InboxPayload;
-  id: string;
-  cronId: string;
-  sourceKey: string;
-  sourceSummary?: string;
-  source?: string;
-  sourcePayload?: InboxPayload;
-  conversationKey?: string;
-  sourceAt?: number;
-  proposal?: InboxProposal;
-  agentDrafts?: InboxProposal[];
-  agentMentionKeys?: string[];
-  thread?: InboxThreadMessage[];
-  status: InboxItemStatus;
-  parkedReason?: string;
-  actedAt?: number;
-  actionKind?: string;
-  actionResult?: string;
-  decisionAt?: number;
-  decisionToken?: string;
-  createdAt: number;
-  updatedAt: number;
 }
 
 export interface SurfaceContextQuery {

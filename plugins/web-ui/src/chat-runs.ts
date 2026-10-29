@@ -384,12 +384,7 @@ async function resumeRun(
   initialRun?: RunPoll,
   onStarted?: () => void,
 ): Promise<boolean> {
-  if (
-    agent !== c.state.agent ||
-    (c.ctx.inbox ? !c.ctx.visible() : appState.currentView !== "chats") ||
-    agent.state.isStreaming
-  )
-    return false;
+  if (agent !== c.state.agent || appState.currentView !== "chats" || agent.state.isStreaming) return false;
   await refreshTranscriptFromItems(c, agent);
   if (agent !== c.state.agent || agent.state.isStreaming) return false;
   if (!initialRun) initialRun = await api<RunPoll>(`/api/runs/${encodeURIComponent(runId)}`);

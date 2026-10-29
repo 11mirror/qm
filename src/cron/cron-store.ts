@@ -35,7 +35,6 @@ export interface CreateCronInput extends CreateTriggerInput {
   action?: string;
   message?: string;
   unattendedGrants?: string[];
-  inbox?: Cron["inbox"];
   sessionRef?: string;
 }
 
@@ -80,8 +79,6 @@ export interface CronStore {
   defer(id: string, until: number): Promise<void>;
   claimSlot(id: string, scheduledAt: number, at: number): Promise<boolean>;
   unclaimSlot(id: string, scheduledAt: number, at: number, priorLastFiredAt: number | undefined): Promise<void>;
-  inboxScannedThrough(id: string): Promise<number | undefined>;
-  advanceInboxScan(id: string, scannedThrough: number): Promise<void>;
 }
 
 export function cronIsActive(cron: Pick<Cron, "enabled" | "archived" | "schedule" | "lastFiredAt">): boolean {
@@ -109,33 +106,35 @@ const CRONS: TableSpec = {
   columns: {
     ...TRIGGER_COLUMNS,
     ...cols(`runtime jsonb, schedule jsonb!, nextFireAt bigint, deferUntil bigint, title text,
-    archived boolean, action text, message text, inbox jsonb, unattendedGrants text[],
+    archived boolean, action text, message text, unattendedGrants text[],
     sessionRef text, lastFireNote jsonb`),
   },
 };
 
-export const CRONS_MIGRATION = mapToTableMigration("triggers/crons/0001-typed", CRONS, {
-  statements: [
-    `CREATE INDEX IF NOT EXISTS crons_resource_search_gin ON crons USING gin
+export const CRONS_MIGRATION = mapToTableMigration(
+  "triggers/crons/0001-typed",
+  {
+    ...CRONS,
+    columns: {
+      ...TRIGGER_COLUMNS,
+      ...cols(`runtime jsonb, schedule jsonb!, nextFireAt bigint, deferUntil bigint, title text,
+    archived boolean, action text, message text, inbox jsonb, unattendedGrants text[],
+    sessionRef text, lastFireNote jsonb`),
+    },
+  },
+  {
+    statements: [
+      `CREATE INDEX IF NOT EXISTS crons_resource_search_gin ON crons USING gin
      (to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(action, '') || ' ' || coalesce(message, '')))`,
-  ],
-});
+    ],
+  },
+);
 
 export const CRONS_RETIRED_KEYS = retireJsonKeysMigration("triggers/crons/0000-drop-retired-keys", "crons", {
   drop: ["adminAuthorization", "deliveryMigration", "initialVerificationRequestedAt", "groupDeliveryTestRequestedAt"],
 });
 
-const CRONS_INBOX_SCAN_MIGRATION = {
-  id: "triggers/crons/0002-inbox-scanned-through",
-  statements: ["ALTER TABLE crons ADD COLUMN IF NOT EXISTS inbox_scanned_through bigint"],
-};
-
-const CRONS_MIGRATIONS = [
-  CRONS_RETIRED_KEYS,
-  CRONS_MIGRATION,
-  CRONS_INBOX_SCAN_MIGRATION,
-  ownerIndexMigration("crons"),
-];
+const CRONS_MIGRATIONS = [CRONS_RETIRED_KEYS, CRONS_MIGRATION, ownerIndexMigration("crons")];
 
 function cronContentId(input: CreateCronInput, title: string | undefined): string {
   return hashId([
@@ -147,7 +146,6 @@ function cronContentId(input: CreateCronInput, title: string | undefined): strin
     contentPart(input.destination),
     contentPart(input.unattendedGrants),
     contentPart(title),
-    ...(input.inbox !== undefined ? [contentPart(input.inbox)] : []),
     ...(input.runtime ? [contentPart(input.runtime)] : []),
   ]);
 }
@@ -180,7 +178,6 @@ export function createCronStore(
         ...(input.action !== undefined ? { action: input.action } : {}),
         ...(input.message !== undefined ? { message: input.message } : {}),
         ...(input.unattendedGrants ? { unattendedGrants: input.unattendedGrants } : {}),
-        ...(input.inbox ? { inbox: input.inbox } : {}),
         ...(input.sessionRef ? { sessionRef: input.sessionRef } : {}),
         ...(input.runtime ? { runtime: input.runtime } : {}),
       });
@@ -282,16 +279,6 @@ export function createCronStore(
     },
     async defer(id, until) {
       await q(`UPDATE crons SET defer_until = $2 WHERE id = $1`, [id, until]);
-    },
-    async inboxScannedThrough(id) {
-      const [row] = await q(`SELECT inbox_scanned_through FROM crons WHERE id = $1`, [id]);
-      return row?.inbox_scanned_through == null ? undefined : Number(row.inbox_scanned_through);
-    },
-    async advanceInboxScan(id, scannedThrough) {
-      await q(
-        `UPDATE crons SET inbox_scanned_through = GREATEST(COALESCE(inbox_scanned_through, $2), $2) WHERE id = $1`,
-        [id, scannedThrough],
-      );
     },
   };
 }

@@ -15,7 +15,6 @@ export const PRODUCT_TITLE = "QM · Web";
 
 export const VIEW_TITLES: Record<View, string> = {
   chats: "Chats",
-  inbox: "Inbox",
   calendar: "Calendar",
   contexts: "Projects",
   crons: "Crons",

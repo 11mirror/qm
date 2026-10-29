@@ -22,8 +22,6 @@ const RESERVED_SURFACES = new Set([
   "webhook",
   "monitor",
   "swarm",
-  "loop",
-  "inbox",
   "agent",
   "unknown",
 ]);

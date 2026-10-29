@@ -4,10 +4,7 @@ const zero = { costUsd: 0, calls: 0, tokens: 0 };
 
 export const background = (sources: Record<string, number> = {}) => {
   const all = Object.fromEntries(
-    ["cron", "loop", "swarm", "webhook", "monitor"].map((source) => [
-      source,
-      { ...zero, costUsd: sources[source] ?? 0 },
-    ]),
+    ["cron", "swarm", "webhook", "monitor"].map((source) => [source, { ...zero, costUsd: sources[source] ?? 0 }]),
   );
   return { ...zero, costUsd: Object.values(sources).reduce((a, b) => a + b, 0), sources: all };
 };

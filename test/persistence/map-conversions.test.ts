@@ -20,7 +20,7 @@ import { testDatabaseUrl } from "../support/test-database.ts";
 const CONVERSIONS = mapConversions();
 const CONTRACTS = [...CONTRACT_MIGRATIONS, ...CONVERSIONS.map((conversion) => conversion.contract)];
 
-test("every former durable-map table has a conversion", () => assert.equal(CONVERSIONS.length, 78));
+test("every former durable-map table has a conversion", () => assert.equal(CONVERSIONS.length, 77));
 
 for (const conversion of CONVERSIONS)
   test(`${conversion.spec.table} converts in place for one tenant and for two`, () => assertMapConversion(conversion));
@@ -136,7 +136,7 @@ test("a store that registers a conversion registers its contract with it", () =>
 
 test("data migrations that clean a table's json run before its typed expand, and every contract runs last", async () => {
   const pairs: Array<[string, string]> = [
-    ["durable-map/crons/0002-loops-to-crons", "triggers/crons/0001-typed"],
+    ["durable-map/crons/0001-remove-loop-work", "triggers/crons/0001-typed"],
     ["triggers/crons/0000-drop-retired-keys", "triggers/crons/0001-typed"],
     ["runtime/0002-drop-harness-choice", "typed/config/base_model_configs/0001"],
     ["core/approvals/0000-drop-screened-output", "core/approvals/0001-typed"],

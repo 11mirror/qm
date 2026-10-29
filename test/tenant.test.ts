@@ -48,9 +48,9 @@ test("a tenant context follows async work and does not leak into concurrent work
 
 test("one feature flag store serves each tenant its own org-wide switch", async () => {
   const store = createFeatureFlagStore(testDatabaseUrl());
-  await withTenant(tenantFor("alpha"), () => store.setEnabled("inbox_loops", "org:alpha", true, "admin"));
-  assert.equal(await withTenant(tenantFor("alpha"), () => store.enabled("inbox_loops", "channel:C1")), true);
-  assert.equal(await withTenant(tenantFor("beta"), () => store.enabled("inbox_loops", "channel:C1")), false);
+  await withTenant(tenantFor("alpha"), () => store.setEnabled("team_scopes", "org:alpha", true, "admin"));
+  assert.equal(await withTenant(tenantFor("alpha"), () => store.enabled("team_scopes", "channel:C1")), true);
+  assert.equal(await withTenant(tenantFor("beta"), () => store.enabled("team_scopes", "channel:C1")), false);
 });
 
 test("one admin service resolves internal actors only for the tenant in context", () => {

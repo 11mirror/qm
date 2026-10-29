@@ -1,7 +1,7 @@
 import { swallow } from "../../chassis/src/errors.ts";
 import { type ServerResponse } from "node:http";
 
-import { coreFetch, fetchCoreGet, tryParse } from "./core-relay.ts";
+import { fetchCoreGet } from "./core-relay.ts";
 import { onEdgeTenants, perEdgeTenant, withEdgeTenant } from "../../chassis/src/tenant-hosts.ts";
 import type { TenantSettings } from "../../chassis/src/tenant-settings.ts";
 
@@ -111,13 +111,6 @@ function runFeeds(signal: AbortSignal): void {
     signal,
     () => sendTo(eventClients().keys(), "session_state_resync"),
   );
-  void consumeCoreFeed(
-    "/v1/cron-items/events",
-    "inbox_item",
-    (data) => void forwardInboxItem(data as { cronId?: string; itemId?: string; op?: string }),
-    signal,
-    resyncInbox,
-  );
 }
 
 export function startLiveFeeds(): void {
@@ -141,20 +134,4 @@ export function startLiveFeeds(): void {
       withEdgeTenant(tenant, () => runFeeds(feed.signal));
     }
   });
-}
-
-const resyncInbox = () => sendTo(eventClients().keys(), "inbox_resync");
-
-async function forwardInboxItem(ev: { cronId?: string; itemId?: string; op?: string }): Promise<void> {
-  const clients = eventClients();
-  if (!ev.cronId || !ev.itemId || !clients.size) return;
-  const r = await coreFetch(
-    "POST",
-    "/v1/inbox/viewers",
-    JSON.stringify({ cronId: ev.cronId, candidates: [...clients.keys()] }),
-  ).catch(() => null);
-  if (r?.status === 404) return;
-  const viewers = r?.status === 200 ? tryParse<{ viewers?: string[] }>(r.text)?.viewers : undefined;
-  if (!viewers) return resyncInbox();
-  sendTo(viewers, "inbox_item", { cronId: ev.cronId, itemId: ev.itemId, op: ev.op ?? "" });
 }

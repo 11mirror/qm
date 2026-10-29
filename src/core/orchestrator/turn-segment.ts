@@ -1,5 +1,4 @@
 import { connectorToolsNote, deferredMcpTools } from "../../harness/deferred-tools.ts";
-import { surfaceHas } from "../../surfaces/surface.ts";
 import type { TurnCtx } from "./turn-context.ts";
 import type { ApprovalLedger } from "./approvals.ts";
 import type { selectTurnRuntime } from "./turn-runtime.ts";
@@ -31,7 +30,6 @@ import { modelCallRecorder, stripAckPrefix } from "./turn-helpers.ts";
 import { documentBytes, stageAttachments } from "./turn-input.ts";
 import { createCompaction } from "./compaction.ts";
 import { createTurnSandboxes } from "./sandboxes.ts";
-import { isWebInboxThreadRef } from "../../sessions/thread-ref.ts";
 
 const ADDRESSED_NUDGE_MD = loadProtocolFile("turn-addressed-nudge");
 
@@ -300,7 +298,7 @@ function createPrepareSteer(
   turn: Pick<SegmentTurn, "frame" | "ready" | "session" | "held" | "run" | "provision" | "observeSecurityData">,
   initialDocuments: HarnessTurnInput["documents"],
 ): NonNullable<HarnessTurnInput["prepareSteer"]> {
-  const { deps, input, actor, conversation, scopeId } = ctx;
+  const { deps, input, actor, scopeId } = ctx;
   const { screenTrace } = turn.frame;
   const { turnInboxDir } = turn.frame.framed;
   const { fileRegistration, mayReadArtifact } = turn.ready.turnTools;
@@ -309,25 +307,6 @@ function createPrepareSteer(
   const { turnAbort } = turn.held;
   return async (text, request) => {
     const author = request ? deps.identity.resolve(request.actor).id : actor.id;
-    const refreshedInbox =
-      surfaceHas(input.surface, "sidebar") &&
-      conversation.kind === "dm" &&
-      isWebInboxThreadRef(conversation.threadRef) &&
-      request?.conversation.threadRef === conversation.threadRef
-        ? request.conversationHeader?.trim()
-        : undefined;
-    if (refreshedInbox) {
-      for (const chunk of securityScreenChunks("conversation-header", refreshedInbox))
-        void observeSecurityData(chunk, actor.id, scopeId, {
-          ...screenTrace,
-          sessionId: session.id,
-          hook: "user_input",
-          request: text,
-          surface: "steer",
-          origin: input.origin.kind,
-        });
-      text = `${text}\n\n${refreshedInbox}`;
-    }
     if (!request?.attachments?.length) return { text, author };
     const inboxDir = `${turnInboxDir}/${randomUUID()}`;
     const { inbound, manifest, issues } = await stageAttachments(ctx, {

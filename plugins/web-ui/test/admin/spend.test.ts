@@ -222,7 +222,7 @@ test("spend view: crons show each cron's spend under its title, scope and schedu
 test("spend view: background by source names where background spend came from, largest first", () => {
   const { f } = render({
     ...DATA,
-    org: { ...DATA.org, background: background({ cron: 6, loop: 3, swarm: 1 }) },
+    org: { ...DATA.org, background: background({ cron: 6, webhook: 3, swarm: 1 }) },
   });
   const card = [...f.root.querySelectorAll(".tablewrap")].find((t) => t.textContent!.includes("Share of background"))!;
   const rows = [...card.querySelectorAll("tbody tr")].map((r) =>
@@ -230,7 +230,7 @@ test("spend view: background by source names where background spend came from, l
   );
   assert.deepEqual(rows, [
     ["Crons", "$6.00", "60.0%"],
-    ["Loops", "$3.00", "30.0%"],
+    ["Webhooks", "$3.00", "30.0%"],
     ["Swarms", "$1.00", "10.0%"],
   ]);
   f.window.close();

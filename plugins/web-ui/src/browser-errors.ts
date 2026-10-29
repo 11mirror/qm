@@ -17,7 +17,6 @@ const API_RESOURCES = new Set([
   "deployments",
   "directory",
   "files",
-  "inbox",
   "keychain",
   "memory",
   "projects",

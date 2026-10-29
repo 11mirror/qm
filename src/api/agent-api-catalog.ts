@@ -175,41 +175,6 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     guidance:
-      "A cron created with an inbox keeps a durable queue of work items. Each entry carries an opaque sourcePayload, a proposal held for human review, and a follow-up chat thread. States run pending -> held -> actioned|dismissed|failed. Ingest only what the cron task tells you to; proposals are prepared, never executed — the person actions them from their review surface.",
-    routes: [
-      {
-        method: "GET",
-        path: "/v1/crons/:id/items",
-        summary:
-          "the cron's inbox — items (dedupeKey, state, sourcePayload, proposal, thread, sourceAt, …) plus counts per state; read this first and skip any dedupeKey already tracked unless a newer source event arrived (compare sourceAt)",
-      },
-      {
-        method: "POST",
-        path: "/v1/crons/:id/items",
-        summary:
-          'upsert inbox items — body {"items":[…]}. For an inbox with a known source, each item is that source\'s own shape: {source:"gmail"|"slack", sourceKey, title, from, fromDetail?, snippet, context?:[{author,at?,text}], receivedAt(ms), externalUrl?, draft?:{to?,cc?,subject?,body}, gmail?:{threadId,messageId?,rfcMessageId?,to?,cc?,subject?}, slack?:{channelId,channelLabel?,ts,threadTs?}}. Otherwise: {dedupeKey, sourcePayload:{…}, sourceAt?, summary?, proposal?:{…}}. Dedupes by dedupeKey per cron, never resurrects items the person already handled unless a newer source event arrived, keeps a proposal the person edited, and stamps the drafting session automatically',
-      },
-      {
-        method: "GET",
-        path: "/v1/crons/:id/items/:itemId",
-        summary: "one inbox item with its full sourcePayload, current proposal, and follow-up thread",
-      },
-      {
-        method: "POST",
-        path: "/v1/crons/:id/items/:itemId/action",
-        summary:
-          'act on an item — body {kind, args?}. kind "edit" replaces the proposal ({args:{proposal}}), "done" closes it as finished, "fail" parks it with {args:{reason}}, "dismiss", "replied" or "no_reply_needed" drop it (with an optional {args:{reason}}), "reopen" un-dismisses it, and any action the item\'s source declares (e.g. "send", or Slack\'s "react" with {args:{name}}, which annotates the item without closing it) executes it and records the outcome',
-      },
-      {
-        method: "POST",
-        path: "/v1/crons/:id/items/:itemId/followup",
-        summary:
-          "chat about one item — body {message}; the reply lands on the item's thread and may revise its proposal",
-      },
-    ],
-  },
-  {
-    guidance:
       "Pins are conversation-scoped bookmarks shown at the top of the web UI — for the handful of things worth keeping in view for a whole session: a decision, a link, a working answer, a key transcript entry. Use them SPARINGLY — a few pins that matter, not a running log (there is a hard cap, and every pin takes reader attention); durable facts belong in memory, working state in files. Pin a transcript entry by its seq, or a short free-text note. In a Slack DM, pinning a transcript entry also pins the underlying Slack message natively (and unpinning removes it). Keep them current — unpin what no longer matters.",
     routes: [
       {

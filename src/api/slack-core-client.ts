@@ -43,8 +43,6 @@ import { reportFailure, swallowAs } from "../util/errors.ts";
 import { resolveRuntimeChoiceDurable } from "../harness/runtime-choice.ts";
 import type { RuntimeChoice } from "../harness/harness.ts";
 import { modelDisplayName } from "../model/pi-models.ts";
-import type { ConversationEvent } from "../inbox/sources/adapter.ts";
-import { slackConversationRef } from "../inbox/sources/slack.ts";
 import { pinnedPerTenant, tenant } from "../tenant.ts";
 
 interface SlackRunHooks {
@@ -121,14 +119,6 @@ export interface SlackCoreClient {
   fulfillContextRequest(id: string, outcome: { result?: SurfaceContextResult; error?: string }): Promise<void>;
   pickAckEmoji(text: string, candidates: readonly string[]): Promise<string | undefined>;
   recordAckPick(pick: AckPickInput): Promise<void>;
-  inboxSlackMessage(msg: {
-    channel: string;
-    ts: string;
-    threadTs?: string;
-    text?: string;
-    senderEmail?: string;
-    isDirectMessage: boolean;
-  }): Promise<void>;
 }
 
 type AckPickInput = {
@@ -167,7 +157,6 @@ export interface SlackCoreClientDeps {
   handledEvents?: HandledEvents;
   surfaceCache?: SurfaceCache;
   memory?: MemoryService;
-  inboxEvent?(event: ConversationEvent): Promise<void>;
 }
 
 const RUN_FALLBACK_POLL_MS = 1_000;
@@ -463,18 +452,6 @@ function directoryAndContextMethods(deps: SlackCoreClientDeps, lease: LeaderLeas
 
     pickAckEmoji: (text, candidates) => deps.pickAckEmoji?.(text, candidates) ?? Promise.resolve(undefined),
 
-    async inboxSlackMessage(msg) {
-      const at = Math.round(Number.parseFloat(msg.ts) * 1000);
-      if (!Number.isFinite(at)) return;
-      await deps.inboxEvent?.({
-        source: "slack",
-        conversationKey: msg.channel,
-        conversationRef: slackConversationRef(msg.channel, msg.ts, msg.threadTs, msg.isDirectMessage),
-        at,
-        ...(msg.text ? { text: msg.text } : {}),
-        ...(msg.senderEmail ? { senderEmail: msg.senderEmail } : {}),
-      });
-    },
     async recordAckPick(pick) {
       if (!deps.ackPicks) return;
       const ackModel = deps.ackModelId?.();

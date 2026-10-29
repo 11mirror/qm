@@ -5,9 +5,6 @@ import type { OutboundModule } from "./outbound.ts";
 import { tenantConfig } from "../tenants/tenant-config.ts";
 import type { Head } from "./late.ts";
 import { createMonitorStore } from "../monitors/monitor-store.ts";
-import type { LedgerEvent } from "../inbox/events.ts";
-import { swallowAs } from "../util/errors.ts";
-import { createInboxLedger, type InboxEventSink } from "../inbox/ledger.ts";
 import { createCronStore, type CronStore } from "../cron/cron-store.ts";
 import { RUN_MAX_AGE_MS } from "../runs/run-store.ts";
 import { createWebhookStore } from "../webhooks/webhook-store.ts";
@@ -21,27 +18,11 @@ type CronsInputs = Pick<Head, "late" | "config" | "overrides"> & {
 };
 
 export function buildCrons(deps: CronsInputs) {
-  const { ledgerEventBus } = deps.runs;
   const { late, config, overrides } = deps;
   const { databaseUrl, every } = deps.stores;
   const { outbound, chatSurfaces } = deps.outbound;
 
   const monitors = createMonitorStore(databaseUrl);
-  const cronOwnerCache = new Map<string, string>();
-  const publishInboxEvent = (event: LedgerEvent): void => {
-    void (async () => {
-      let owner = cronOwnerCache.get(event.cronId);
-      if (owner === undefined) {
-        owner = (await crons.get(event.cronId))?.owner ?? "";
-        cronOwnerCache.set(event.cronId, owner);
-      }
-      if (owner) ledgerEventBus.emit({ ...event, owner });
-    })().catch(swallowAs("inbox: publish ledger event", undefined));
-  };
-  const inboxItems = createInboxLedger(databaseUrl, publishInboxEvent);
-  const recordInboxEvent: InboxEventSink = async (item, event) => {
-    if (await inboxItems.recordEvent(item, event)) await late.scheduler.runNow(item.cronId);
-  };
   const cronsBase = createCronStore(databaseUrl, { staleRunningMs: RUN_MAX_AGE_MS });
   const crons: CronStore = {
     ...cronsBase,
@@ -61,7 +42,6 @@ export function buildCrons(deps: CronsInputs) {
     },
     async delete(id) {
       await cronsBase.delete(id);
-      await inboxItems.deleteByCron(id);
     },
   };
   const webhooks = createWebhookStore(databaseUrl);
@@ -89,7 +69,7 @@ export function buildCrons(deps: CronsInputs) {
     immediate: true,
     due: hasRows("approvals"),
   });
-  return { securityScreener, approvals, monitors, crons, webhooks, inboxItems, recordInboxEvent };
+  return { securityScreener, approvals, monitors, crons, webhooks };
 }
 
 export type CronsModule = ReturnType<typeof buildCrons>;

@@ -5,7 +5,9 @@ export function compileSafeRegex(pattern: string, flags = ""): RegExp {
     throw new Error(`pattern must be 1-${MAX_PATTERN_CHARS} characters`);
   if (/\\[1-9]|\\k<|\(\?[=!<]/.test(pattern)) throw new Error("backreferences and lookarounds are not supported");
 
-  rejectOverlappingRepetition(pattern);
+  rejectOverlappingRepetition(pattern, flags);
+
+  if (/\\[xu]/.test(pattern)) throw new Error("escaped character codes are not supported");
 
   const groups: Array<{ quantified: boolean; alternation: boolean; nested: boolean }> = [];
   let escaped = false;
@@ -76,7 +78,8 @@ export function compileSafeRegex(pattern: string, flags = ""): RegExp {
   return new RegExp(pattern, flags);
 }
 
-function rejectOverlappingRepetition(pattern: string): void {
+function rejectOverlappingRepetition(pattern: string, flags: string): void {
+  if (flags.includes("i")) pattern = pattern.toLowerCase();
   pattern = pattern.replace(/\\.|\[(?:\\.|[^\]\\])*\]|\(\?:|[()]/g, (token) =>
     token.startsWith("(") || token === ")" ? "" : token,
   );
