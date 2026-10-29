@@ -1,3 +1,4 @@
+import { sandboxAdoptionContract, sandboxApiOverHttp } from "../support/sandbox-adoption-contract.ts";
 import type { SandboxBodies } from "../../src/sandbox/sandbox-bodies.ts";
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
@@ -408,4 +409,9 @@ test("layer tools install outside /workspace by staging inside it", async () => 
   const r = await sandbox.run(h, `${target}`);
   assert.equal(r.code, 0, r.stderr);
   assert.equal(r.stdout.trim(), "ok");
+});
+
+test("shared contract adopts an imported machine name and refreshes its control-plane environment over HTTP", async (t) => {
+  const client = await sandboxApiOverHttp(t, fake.client);
+  await sandboxAdoptionContract((options) => make({ ...options, client }), layers);
 });

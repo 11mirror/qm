@@ -1,3 +1,10 @@
+import {
+  createProviderEgress,
+  withProcessHold,
+  restartWithCheckpointFallback,
+  type ProviderControls,
+} from "./provider-controls.ts";
+import { sandboxPolicy } from "./provider-policy.ts";
 import { createProviderMaintenance } from "./provider-maintenance.ts";
 import { createProviderRecovery } from "./provider-recovery.ts";
 import type { WorkspaceLayer } from "../types.ts";
@@ -82,6 +89,8 @@ export interface StoredSandboxRecord {
 
 export interface MachineState {
   id?: string;
+  fault?: string;
+  replacementRequired?: boolean;
   state: "running" | "parked";
   detail: string;
   resources?: ComputerStatus["resources"];
@@ -91,12 +100,13 @@ export interface MachineState {
 interface DriverCheckpoints {
   retentionMs?: number | null;
   machineBound?: boolean;
+  latest?(name: string): Promise<{ id: string; createdAt: string } | undefined>;
   capture(name: string): Promise<string>;
   restore(name: string, checkpointId: string): Promise<void>;
   drop?(name: string, checkpointId: string): Promise<void>;
 }
 
-export interface SandboxDriver {
+export interface SandboxDriver extends ProviderControls {
   backend: string;
   homeDir: string;
   os: string;
@@ -118,7 +128,11 @@ export interface SandboxDriver {
     opts: { scratch: boolean; scope?: string; checkpointId?: string },
   ): Promise<void | { homeRetained?: boolean; id?: string; expiresAtMs?: number }>;
   resume(name: string): Promise<void>;
-  park?(name: string, opts: { keepWarm: boolean }): Promise<void>;
+  park?(name: string): Promise<void>;
+  keepWarm?(name: string, seconds: number): Promise<void>;
+  replace?(name: string): Promise<void>;
+  processHold?: { refresh(processId: string): string; release(processId: string): string };
+  configure?(name: string, resources: { cpus?: number; memoryMb?: number; diskGb?: number }): Promise<void>;
   destroy(name: string): Promise<void>;
   isLive(name: string): boolean;
   forget?(name: string): void;
@@ -196,7 +210,8 @@ function createProviderCheckpointing({ driver, store, backend, report, rotationD
       stored = await store.get(scope);
     }
     if (existing && !stored?.initializationPending) {
-      if (existing.state === "parked") await driver.resume(name);
+      if (existing.replacementRequired && driver.replace) await driver.replace(name);
+      else if (existing.state === "parked") await driver.resume(name);
       return false;
     }
     if (!existing && driver.replacement === "checkpoint" && stored?.homeDirty && !stored.checkpointId)
@@ -299,13 +314,14 @@ function createProviderBase(
     async recreateScratch(name) {
       await driver.destroy(name).catch(swallowAs(`${backend}-sandbox: stale scratch destroy`, undefined));
       await driver.create(name, { scratch: true });
+      await driver.configure?.(name, { cpus: shared.cpus, memoryMb: shared.memoryMb, diskGb: shared.diskGb });
     },
     deleteInstance: async (name) => {
       const scope = await scopeOf(name);
       return scope ? lock(scope, () => driver.destroy(name)) : driver.destroy(name);
     },
     ...(driver.forget ? { forgetInstance: driver.forget } : {}),
-    ...(driver.ensureEgress ? { ensureEgress: driver.ensureEgress } : {}),
+    ...(driver.ensureEgress || driver.network ? createProviderEgress(driver, shared) : {}),
   });
 }
 
@@ -372,6 +388,7 @@ function createProviderResidency(
     requireScope: (name: string) => Promise<string>;
     checkpointDue: (stored: StoredSandboxRecord | null | undefined, opts?: TeardownOptions) => boolean;
     captureCheckpoint: (scope: string, name: string) => Promise<void>;
+    keepWarmSec: number;
   },
 ) {
   const { nameFor, requireScope, checkpointDue, captureCheckpoint } = deps;
@@ -416,10 +433,10 @@ function createProviderResidency(
               report("sandbox_snapshot", "teardown_snapshot_failed", e, scope),
             );
           }
-          if (driver.park) {
-            await driver
-              .park(handle.id, { keepWarm: !!opts?.keepWarm })
-              .catch((e) => report("sandbox_teardown", "park_failed", e, scope));
+          if (driver.park && (!opts?.keepWarm || driver.keepWarm)) {
+            await driver[opts?.keepWarm && driver.keepWarm ? "keepWarm" : "park"]!(handle.id, deps.keepWarmSec).catch(
+              (e) => report("sandbox_teardown", "park_failed", e, scope),
+            );
           }
         }),
       );
@@ -491,7 +508,9 @@ function providerScopeMethods(
                   return;
                 }
                 if (driver.restart)
-                  return driver.restart(name, { initializationPending: !!stored?.initializationPending });
+                  return restartWithCheckpointFallback(driver, name, stored, (message) =>
+                    ctx.report("agent_computer", "checkpoint_restored", message, scopeId),
+                  );
                 if (!stored?.checkpointId) throw new Error(`${backend} restart: no checkpoint to restore`);
                 await restoreProviderCheckpoint({ driver, store, backend }, scopeId, name, stored.checkpointId);
               }),
@@ -525,6 +544,7 @@ export function createProviderSandbox(
   store: SandboxBodies<StoredSandboxRecord>,
 ): ProviderSandbox {
   const { backend, homeDir } = driver;
+  const policy = sandboxPolicy(backend, shared);
   const prefix = (): string => sandboxNamePrefix(shared);
   const defaultTimeoutSec = shared.defaultTimeoutSec ?? DEFAULT_TIMEOUT_SEC;
   const snapshotIntervalMs = (shared.snapshotIntervalSec ?? DEFAULT_SNAPSHOT_INTERVAL_SEC) * 1000;
@@ -569,7 +589,15 @@ export function createProviderSandbox(
     captureCheckpoint: (scope, name) => captureCheckpoint(scope, name),
   });
   const ctx: ProviderContext = { driver, store, backend, lock, report, rotationDue: maintenance.rotationDue };
-  const { captureCheckpoint, initialize } = createProviderCheckpointing(ctx);
+  const checkpointing = createProviderCheckpointing(ctx);
+  const { captureCheckpoint } = checkpointing;
+  const initialize = async (scope: string, name: string, onStatus?: (text: string) => void): Promise<boolean> => {
+    const cold = await checkpointing.initialize(scope, name, onStatus);
+    const desired = { cpus: shared.cpus, memoryMb: shared.memoryMb, diskGb: shared.diskGb };
+    await driver.configure?.(name, desired);
+    if (driver.network && shared.egressProxyUrl) await createProviderEgress(driver, shared).ensureEgress(name);
+    return cold;
+  };
   const recovered = createProviderRecovery(driver, store, shared, {
     scopeOf,
     initialize: (scope, name) => base.provisionQueue(scope, () => lock(scope, () => initialize(scope, name))),
@@ -611,6 +639,7 @@ export function createProviderSandbox(
     requireScope,
     checkpointDue,
     captureCheckpoint,
+    keepWarmSec: policy.keepWarmSec,
   });
 
   return {
@@ -633,7 +662,7 @@ export function createProviderSandbox(
     ...fileOps,
     ...staging,
     exportFiles: execExport.exportFiles,
-    startProcess: procSessions.startProcess,
+    startProcess: withProcessHold(driver, recovered.exec, procSessions.startProcess, report, scopeFor),
     readProcess: procSessions.readProcess,
     writeStdin: procSessions.writeStdin,
     signalProcess: procSessions.signalProcess,

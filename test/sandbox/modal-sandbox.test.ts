@@ -1,3 +1,4 @@
+import { sandboxAdoptionContract, sandboxApiOverHttp } from "../support/sandbox-adoption-contract.ts";
 import { pollProcess } from "../../src/sandbox/process-poll.ts";
 import type { SandboxBodies } from "../../src/sandbox/sandbox-bodies.ts";
 import { test, after, beforeEach, mock } from "node:test";
@@ -748,4 +749,9 @@ test("untracked scope sandboxes are terminated after a grace period while scratc
   for await (const id of fake.client.listRunning!({})) running.add(id);
   assert.deepEqual(running, new Set([tracked, scratch, foreign]));
   assert.equal(running.has(orphan), false);
+});
+
+test("shared contract adopts an imported machine name and refreshes its control-plane environment over HTTP", async (t) => {
+  const client = await sandboxApiOverHttp(t, fake.client);
+  await sandboxAdoptionContract((options) => make({ ...options, client }), layers);
 });

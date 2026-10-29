@@ -170,7 +170,6 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
         try {
           await deps.recreateScratch(name);
         } catch (error) {
-          deps.forgetInstance?.(name);
           await cleanupFailedProvision(
             { teardown: () => deps.deleteInstance(name) },
             { id: name, rootDir: workspaceDir, scratch: true, backend: label },

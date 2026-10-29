@@ -1,3 +1,4 @@
+import { sandboxAdoptionContract } from "../support/sandbox-adoption-contract.ts";
 import {
   SandboxProvisionCleanupError,
   execFailureDetail,
@@ -749,4 +750,8 @@ test("a binary file round-trips through the sandbox (base64-over-exec) without u
   await sandbox.writeFileBytes(handle, "keep.bin", raw);
   const read = await sandbox.readFileBytes(handle, "keep.bin");
   assert.deepEqual(new Uint8Array(read!), raw);
+});
+
+test("shared contract adopts an imported machine name and refreshes its control-plane environment over HTTP", async () => {
+  await sandboxAdoptionContract(make, layers);
 });

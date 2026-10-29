@@ -1,3 +1,4 @@
+import { sandboxAdoptionContract } from "../support/sandbox-adoption-contract.ts";
 import { pollProcess } from "../../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
@@ -127,7 +128,7 @@ test("force-through fails closed on a machine that was created with open network
   const s = make({ egressProxyUrl: "https://proxy.example.com" });
   await assert.rejects(
     s.provision(layers, { egressToken: await proxyToken() }),
-    /machine network is .*"open".*allowCidrs/,
+    /egress policy .*readback mismatch.*allow list/,
   );
   assert.ok(fake.machine(open.id), "the open machine is left for the operator to destroy, never silently replaced");
 });
@@ -430,4 +431,8 @@ test("destructive teardown waits for another core's lifecycle lock", async () =>
   }
   await Promise.all([holding, teardown]);
   assert.equal(fake.machine(handle.id), null);
+});
+
+test("shared contract adopts an imported machine name and refreshes its control-plane environment over HTTP", async () => {
+  await sandboxAdoptionContract(make, layers);
 });

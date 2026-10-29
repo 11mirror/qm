@@ -1,3 +1,4 @@
+import { createPressureObserver } from "./provider-controls.ts";
 import type { SandboxBodies } from "./sandbox-bodies.ts";
 import type { SandboxDriver, SandboxShared, StoredSandboxRecord } from "./provider-sandbox.ts";
 
@@ -11,6 +12,13 @@ export function createProviderRecovery(
     touch: (name: string, force?: boolean) => Promise<void>;
   },
 ): SandboxDriver {
+  const notePressure = createPressureObserver((name, pressure) =>
+    shared.onError?.({
+      category: "agent_computer",
+      code: "io_pressure_high",
+      message: `${driver.backend} ${name}: io pressure full avg60=${pressure.ioFull60}% (load ${pressure.load1}) — disk-bound work is stalling`,
+    }),
+  );
   const reviving = new Map<string, Promise<unknown>>();
   const use = <T>(scope: string | undefined, action: () => Promise<T>): Promise<T> =>
     scope && driver.lifetimeMs
@@ -41,7 +49,11 @@ export function createProviderRecovery(
 
   return {
     ...driver,
-    exec: (name, script, timeoutSec, env) => withMachine(name, () => driver.exec(name, script, timeoutSec, env)),
+    exec: async (name, script, timeoutSec, env) => {
+      const result = await withMachine(name, () => driver.exec(name, script, timeoutSec, env));
+      notePressure(name, result.pressure);
+      return result;
+    },
     writeAbsBytes: (name, path, data) => withMachine(name, () => driver.writeAbsBytes(name, path, data)),
     readAbsBytes: (name, path) => withMachine(name, () => driver.readAbsBytes(name, path)),
   };

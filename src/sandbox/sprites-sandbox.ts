@@ -1,5 +1,5 @@
+import { sandboxPolicy } from "./provider-policy.ts";
 import { randomUUID } from "node:crypto";
-import { egressProxyHost } from "./sandbox-env.ts";
 import { setTimeout as wait } from "node:timers/promises";
 import type { Readable } from "node:stream";
 import {
@@ -12,9 +12,7 @@ import {
 } from "@fly/sprites";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { jitteredBackoffMs, retryAfterMs, withAbort, withTimeout } from "../util/async.ts";
-import { swallow, errMessage } from "../util/errors.ts";
-import { shq } from "../util/shell.ts";
-import { processSessionDir } from "./exec-process-session.ts";
+import { errMessage } from "../util/errors.ts";
 import { createProviderSandbox, type SandboxShared, type StoredSandboxRecord } from "./provider-sandbox.ts";
 import { sandboxBodiesMigration, type SandboxBodies } from "./sandbox-bodies.ts";
 import type { BackendSandbox, ExecPressure, ExecResult } from "./sandbox.ts";
@@ -22,14 +20,7 @@ import type { BackendSandbox, ExecPressure, ExecResult } from "./sandbox.ts";
 const HOME_DIR = "/home/sprite";
 export const SCRIPT_RUNNER = 's=$(mktemp) && cat > "$s" && sh "$s" </dev/null; rc=$?; rm -f "$s"; exit $rc';
 const EXIT_GRACE_MS = 60_000;
-const KEEPALIVE_TIMEOUT_SEC = 20;
 const CHECKPOINT_COMMENT = "qm turn end";
-const KEEPALIVE_EXPIRE = "5m";
-const KEEPALIVE_RENEW_SEC = 60;
-const SPRITE_CPUS = 8;
-const SPRITE_DISK_GB = 100;
-const PRESSURE_RECORD_FULL60 = 75;
-const PRESSURE_CLEAR_FULL60 = 40;
 
 function parsePressure(ioFull10Raw: string, ioFull60Raw: string, load1Raw: string): ExecPressure | undefined {
   const ioFull10 = Number.parseFloat(ioFull10Raw);
@@ -87,19 +78,14 @@ const isMissing = (e: unknown): boolean => e instanceof APIError && e.statusCode
 
 const describeCheck = (check: SpriteCheck): string => `${check.status}${check.reason ? ` (${check.reason})` : ""}`;
 
-export function processKeepaliveScript(processId: string): string {
-  const task = `qm-proc-${processId}`;
-  const api = "curl -sf --unix-socket /.sprite/api.sock -H 'Content-Type: application/json'";
-  const loop = [
-    `P="${processSessionDir(processId)}"`,
-    `while [ ! -f "$P/code" ] && kill -0 "$(cat "$P/pid" 2>/dev/null)" 2>/dev/null; do`,
-    `  ${api} -X PUT -d '{"expire":"${KEEPALIVE_EXPIRE}"}' http://sprite/v1/tasks/${task} >/dev/null 2>&1 || true`,
-    `  i=0; while [ $i -lt ${KEEPALIVE_RENEW_SEC} ] && [ ! -f "$P/code" ]; do sleep 1; i=$((i+1)); done`,
-    `done`,
-    `${api} -X DELETE http://sprite/v1/tasks/${task} >/dev/null 2>&1 || true`,
-  ].join("\n");
-  return `LOOP=${shq(loop)}; if command -v setsid >/dev/null 2>&1; then setsid sh -c "$LOOP" >/dev/null 2>&1 & else sh -c "$LOOP" >/dev/null 2>&1 & fi; echo OK`;
-}
+import { processHoldScript } from "./provider-controls.ts";
+export const processKeepaliveScript = (processId: string): string => processHoldScript(processId, processHold);
+
+const TASK_API = "curl -sf --unix-socket /.sprite/api.sock -H 'Content-Type: application/json'";
+const processHold = {
+  refresh: (processId: string) => `${TASK_API} -X PUT -d '{"expire":"5m"}' http://sprite/v1/tasks/qm-proc-${processId}`,
+  release: (processId: string) => `${TASK_API} -X DELETE http://sprite/v1/tasks/qm-proc-${processId}`,
+};
 
 export type StoredSpritesSandbox = StoredSandboxRecord;
 
@@ -181,18 +167,12 @@ async function settleStream(stream: AsyncIterable<StreamMessage>, what: string):
 }
 
 interface SpritesContext {
-  opts: SpritesSandboxOptions;
   client: SpritesClient;
   sprite: (name: string) => Sprite;
-  reportError: (category: string, code: string, message: string, scopeLabel?: string) => void;
-  scopeFor: (name: string) => string | undefined;
   live: Set<string>;
-  resourcesApplied: Set<string>;
-  egressPolicyByName: Map<string, string>;
-  pressureEpisodes: Set<string>;
 }
 
-function createSpritesIo({ sprite, reportError, scopeFor, pressureEpisodes }: SpritesContext) {
+function createSpritesIo({ sprite }: SpritesContext) {
   async function execRaw(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
     const uid = randomUUID();
     const out = `/tmp/.exec-${uid}.out`;
@@ -218,7 +198,6 @@ function createSpritesIo({ sprite, reportError, scopeFor, pressureEpisodes }: Sp
       throw new Error(`sprites exec ${name}: bad envelope (rc=${r.rc}): ${detail}`);
     }
     const pressure = header.length === 6 ? parsePressure(header[3]!, header[4]!, header[5]!) : undefined;
-    if (pressure) notePressure(name, pressure);
     const code = Number.parseInt(header[0]!, 10);
     const outLen = Number.parseInt(header[1]!, 10);
     const errLen = Number.parseInt(header[2]!, 10);
@@ -237,20 +216,6 @@ function createSpritesIo({ sprite, reportError, scopeFor, pressureEpisodes }: Sp
       timedOut: code === 124,
       ...(pressure ? { pressure } : {}),
     };
-  }
-
-  function notePressure(name: string, pressure: ExecPressure): void {
-    if (pressure.ioFull60 >= PRESSURE_RECORD_FULL60 && !pressureEpisodes.has(name)) {
-      pressureEpisodes.add(name);
-      reportError(
-        "agent_computer",
-        "io_pressure_high",
-        `sprite ${name}: io pressure full avg60=${pressure.ioFull60}% (load ${pressure.load1}) — disk-bound work is stalling`,
-        scopeFor(name),
-      );
-    } else if (pressure.ioFull60 < PRESSURE_CLEAR_FULL60) {
-      pressureEpisodes.delete(name);
-    }
   }
 
   async function writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void> {
@@ -275,34 +240,9 @@ function createSpritesIo({ sprite, reportError, scopeFor, pressureEpisodes }: Sp
 }
 
 function createSpritesMachines(ctx: SpritesContext) {
-  const { opts, client, sprite, reportError, scopeFor, live, resourcesApplied, egressPolicyByName, pressureEpisodes } =
-    ctx;
-  const proxyHost = opts.egressProxyUrl ? egressProxyHost(opts.egressProxyUrl) : "";
-
-  async function ensureEgressPolicy(name: string): Promise<void> {
-    const rules = [{ domain: proxyHost, action: "allow" as const }];
-    const want = JSON.stringify(rules);
-    if (egressPolicyByName.get(name) === want) return;
-    const s = sprite(name);
-    await attempt(`egress policy ${name}`, () => retrySpritesControl(() => s.updateNetworkPolicy({ rules })));
-    const got = await attempt(`egress policy readback ${name}`, () => retrySpritesControl(() => s.getNetworkPolicy()));
-    const actual = got.rules ?? [];
-    const bound =
-      actual.length === 1 &&
-      actual[0]!.action?.toLowerCase() === "allow" &&
-      (actual[0]!.domain ?? "").toLowerCase().replace(/\.$/, "") === proxyHost;
-    if (!bound)
-      throw new Error(`sprites egress policy ${name}: readback mismatch (${JSON.stringify(got).slice(0, 200)})`);
-    egressPolicyByName.set(name, want);
-  }
+  const { client, sprite, live } = ctx;
 
   async function adopt(name: string): Promise<void> {
-    if (opts.memoryMb !== undefined && !resourcesApplied.has(name)) {
-      await attempt(`resources policy ${name}`, () =>
-        sprite(name).updateResourcesPolicy({ memory: { limitMB: opts.memoryMb! } }),
-      );
-      resourcesApplied.add(name);
-    }
     live.add(name);
   }
 
@@ -334,98 +274,33 @@ function createSpritesMachines(ctx: SpritesContext) {
 
   const forget = (name: string): void => {
     live.delete(name);
-    resourcesApplied.delete(name);
-    pressureEpisodes.delete(name);
-    egressPolicyByName.delete(name);
   };
 
-  async function restart(name: string, ctx: { initializationPending: boolean }): Promise<void> {
-    if (ctx.initializationPending)
-      throw new Error(`sprites ${name}: initialization is incomplete; refusing to capture or restore a checkpoint`);
-    forget(name);
-    const s = sprite(name);
-    const restartFailure = await s.restart().then(
-      () => undefined,
-      (e) => spritesErrorDetail(e),
-    );
-    if (restartFailure === undefined) return;
-    let check: SpriteCheck;
-    try {
-      check = await retrySpritesControl(() => s.check());
-    } catch (e) {
-      throw new Error(
-        `sprites restart ${name}: ${restartFailure}; check failed: ${spritesErrorDetail(e)}; no checkpoint was restored`,
-        { cause: e },
-      );
-    }
-    if (check.status !== "unhealthy") {
-      throw new Error(
-        `sprites restart ${name}: ${restartFailure}; the health check reports no fault, so no checkpoint was restored`,
-      );
-    }
-    const fault = `check reports ${describeCheck(check)}`;
-    let restored: Checkpoint | undefined;
-    try {
-      restored = await latestCheckpoint(name);
-      if (restored) await restoreCheckpoint(name, restored.id);
-    } catch (e) {
-      throw new Error(
-        `sprites restart ${name}: ${restartFailure}; ${fault}; checkpoint restore failed: ${errMessage(e)}`,
-        {
-          cause: e,
-        },
-      );
-    }
-    if (!restored) throw new Error(`sprites restart ${name}: ${restartFailure}; ${fault}; no checkpoint to restore`);
-    reportError(
-      "agent_computer",
-      "checkpoint_restored",
-      `sprite ${name}: restart failed (${restartFailure}); ${fault}; restored checkpoint ${restored.id} from ${restored.createTime.toISOString()}`,
-      scopeFor(name),
-    );
-  }
-
   return {
-    ensureEgressPolicy,
     adopt,
     deleteSprite,
     restoreCheckpoint,
+    latestCheckpoint,
     captureCheckpoint,
     forget,
-    restart,
   };
 }
 
 export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSandboxOptions): BackendSandbox {
   if (!opts.token) throw new Error("SANDBOX_BACKEND=sprites requires SPRITES_TOKEN");
+  const policy = sandboxPolicy("sprites", opts);
   const client = new SpritesClient(opts.token, opts.baseUrl ? { baseURL: opts.baseUrl } : {});
   const sprite = (name: string) => client.sprite(name);
 
   const live = new Set<string>();
-  const resourcesApplied = new Set<string>();
-  const egressPolicyByName = new Map<string, string>();
-  const pressureEpisodes = new Set<string>();
 
-  const reportError = (category: string, code: string, message: string, scopeLabel?: string): void => {
-    try {
-      opts.onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) });
-    } catch (e) {
-      swallow(`sprites-sandbox: ${code} report`, e);
-    }
-  };
   const ctx: SpritesContext = {
-    opts,
     client,
     sprite,
-    reportError,
-    scopeFor: (name) => sandbox.scopeFor(name),
     live,
-    resourcesApplied,
-    egressPolicyByName,
-    pressureEpisodes,
   };
   const { execRaw, writeAbsBytes, readAbsBytes } = createSpritesIo(ctx);
-  const { ensureEgressPolicy, adopt, deleteSprite, restoreCheckpoint, captureCheckpoint, forget, restart } =
+  const { adopt, deleteSprite, restoreCheckpoint, captureCheckpoint, forget, latestCheckpoint } =
     createSpritesMachines(ctx);
 
   const sandbox = createProviderSandbox(
@@ -435,12 +310,13 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       homeDir: HOME_DIR,
       os: "Ubuntu (25.10 for newly created sprites; existing sprites keep the release they were created with) — Fly Sprite microVM: the whole disk persists and idle sprites sleep; background processes are held awake while they run but do not survive a cold wake or restart",
       tools: ["git", "curl", "jq", "tar", "python3"],
-      cpus: SPRITE_CPUS,
+      cpus: policy.cpus,
       ...(opts.memoryMb !== undefined ? { memoryMb: opts.memoryMb } : {}),
-      diskGb: SPRITE_DISK_GB,
+      diskGb: policy.diskGb,
       egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
       combineRoundTrips: true,
       exec: execRaw,
+      processHold,
       writeAbsBytes,
       readAbsBytes,
       async inspect(name) {
@@ -452,43 +328,68 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
           throw new Error(`sprites check ${name}: ${spritesErrorDetail(e)}`, { cause: e });
         }
         await adopt(name);
-        return { state: "running", detail: describeCheck(check) };
+        return {
+          state: "running",
+          detail: describeCheck(check),
+          ...(check.status === "unhealthy" ? { fault: `check reports ${describeCheck(check)}` } : {}),
+        };
       },
       async create(name) {
         await attempt(`create ${name}`, () => client.createSprite(name, { waitForCapacity: true }));
         await adopt(name);
       },
       resume: adopt,
+      async configure(name, resources) {
+        if (resources.memoryMb !== undefined)
+          await attempt(`resources policy ${name}`, () =>
+            sprite(name).updateResourcesPolicy({ memory: { limitMB: resources.memoryMb! } }),
+          );
+      },
       async destroy(name) {
         forget(name);
         await deleteSprite(name);
       },
       isLive: (name) => live.has(name),
       forget,
-      restart,
-      ...(opts.egressProxyUrl ? { ensureEgress: ensureEgressPolicy } : {}),
-      checkpoints: { retentionMs: null, machineBound: true, capture: captureCheckpoint, restore: restoreCheckpoint },
+      restart: async (name) => {
+        await sprite(name).restart();
+      },
+      errorDetail: spritesErrorDetail,
+      network: {
+        async read(name) {
+          const got = await attempt(`egress policy readback ${name}`, () =>
+            retrySpritesControl(() => sprite(name).getNetworkPolicy()),
+          );
+          const rules = got.rules ?? [];
+          return {
+            allowHosts: rules.filter((rule) => rule.action?.toLowerCase() === "allow").map((rule) => rule.domain ?? ""),
+            allowCidrs: [],
+            denyAll: rules.every((rule) => rule.action?.toLowerCase() === "allow"),
+          };
+        },
+        write: (name, network) =>
+          attempt(`egress policy ${name}`, () =>
+            retrySpritesControl(() =>
+              sprite(name).updateNetworkPolicy({
+                rules: network.allowHosts.map((domain) => ({ domain, action: "allow" as const })),
+              }),
+            ),
+          ),
+      },
+      checkpoints: {
+        retentionMs: null,
+        machineBound: true,
+        capture: captureCheckpoint,
+        restore: restoreCheckpoint,
+        latest: async (name) => {
+          const found = await latestCheckpoint(name);
+          return found && { id: found.id, createdAt: found.createTime.toISOString() };
+        },
+      },
     },
     opts,
     opts.store,
   );
 
-  return {
-    ...sandbox,
-    async startProcess(handle, command, spOpts) {
-      const started = await sandbox.startProcess!(handle, command, spOpts);
-      try {
-        const r = await execRaw(handle.id, processKeepaliveScript(started.processId), KEEPALIVE_TIMEOUT_SEC);
-        if (r.code !== 0 || !r.stdout.includes("OK")) throw new Error(r.stderr.trim() || `exit ${r.code}`);
-      } catch (e) {
-        reportError(
-          "agent_computer",
-          "process_keepalive_failed",
-          `sprite ${handle.id}: process ${started.processId} runs without a Tasks hold and may freeze when the sprite idles: ${errMessage(e)}`,
-          sandbox.scopeFor(handle.id),
-        );
-      }
-      return started;
-    },
-  };
+  return sandbox;
 }

@@ -1,3 +1,4 @@
+import { sandboxPolicy } from "./provider-policy.ts";
 import { cols } from "../persistence/typed-table.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { shq } from "../util/shell.ts";
@@ -13,11 +14,6 @@ import { sandboxBodiesMigration, type SandboxBodies } from "./sandbox-bodies.ts"
 import type { BackendSandbox, ExecResult } from "./sandbox.ts";
 
 const HOME_DIR = "/root";
-const DEFAULT_IDLE_PAUSE_SEC = 15 * 60;
-const DEFAULT_KEEP_WARM_SEC = 3600;
-const RETENTION_SEC = 30 * 24 * 3600;
-const SCRATCH_IDLE_PAUSE_SEC = 10 * 60;
-const SCRATCH_RETENTION_SEC = 24 * 3600;
 const TIMEOUT_EXIT_CODE = 124;
 const TIMEOUT_KILLED_EXIT_CODE = 137;
 const KILL_AFTER_SEC = 10;
@@ -43,15 +39,6 @@ export interface SuperserveSandboxOptions extends SandboxShared {
   store: SandboxBodies<StoredSuperserveSandbox>;
 }
 
-const isConflict = (err: unknown): boolean =>
-  typeof err === "object" && err !== null && (err as { statusCode?: unknown }).statusCode === 409;
-
-const normalizedNetwork = (value: SuperserveNetwork | undefined): string =>
-  JSON.stringify([
-    [...(value?.allowOut ?? [])].map((rule) => rule.trim()).sort(),
-    [...(value?.denyOut ?? [])].map((rule) => rule.trim()).sort(),
-  ]);
-
 function spooledScript(script: string, timeoutSec: number): string {
   const capture = (file: string): string => `{ head -c ${OUTPUT_CAP_BYTES} >"${file}"; wc -c >"${file}.rest"; }`;
   return [
@@ -68,17 +55,14 @@ function spooledScript(script: string, timeoutSec: number): string {
 
 export function createSuperserveSandbox(workspace: WorkspaceStore, opts: SuperserveSandboxOptions): BackendSandbox {
   const { client, template } = opts;
-  const idlePauseSec = opts.idleParkSec ?? DEFAULT_IDLE_PAUSE_SEC;
-  const keepWarmSec = Math.max(opts.keepWarmSec ?? DEFAULT_KEEP_WARM_SEC, idlePauseSec);
-  const egressProxyHost = opts.egressProxyUrl ? new URL(opts.egressProxyUrl).hostname : undefined;
+  const policy = sandboxPolicy("superserve", opts);
+  const egressProxyHost = policy.egressHost;
   const network: SuperserveNetwork | undefined = egressProxyHost
     ? { allowOut: [egressProxyHost], denyOut: ["0.0.0.0/0"] }
     : undefined;
-  const expectedNetwork = normalizedNetwork(network);
 
   const idByName = new Map<string, string>();
   const live = new Map<string, SuperserveSession>();
-  const egressVerified = new Set<string>();
 
   const stamp = async (name: string): Promise<Record<string, string>> => ({
     [SUPERSERVE_METADATA.scope]: name,
@@ -87,30 +71,6 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
 
   const listed = (name: string): Promise<SuperserveSandboxInfo[]> => client.list({ [SUPERSERVE_METADATA.scope]: name });
 
-  async function applyNetwork(name: string, info: SuperserveSandboxInfo): Promise<boolean> {
-    if (normalizedNetwork(info.network) === expectedNetwork) return true;
-    try {
-      await client.update(info.id, { network: network ?? { allowOut: [], denyOut: [] } });
-    } catch (err) {
-      if (isConflict(err)) return false;
-      throw err;
-    }
-    const after = (await listed(name)).find((s) => s.id === info.id);
-    return normalizedNetwork(after?.network) === expectedNetwork;
-  }
-
-  async function reconcile(name: string, info: SuperserveSandboxInfo): Promise<SuperserveSandboxInfo | null> {
-    if (info.metadata[SUPERSERVE_METADATA.template] !== template)
-      throw new Error(`superserve sandbox ${info.id} uses another template; reconcile it before provisioning`);
-    if (!(await applyNetwork(name, info)))
-      throw new Error(`superserve sandbox ${info.id} could not take the configured egress policy`);
-    await client.update(info.id, {
-      metadata: { ...info.metadata, ...(await stamp(name)) },
-      autoDeleteSeconds: RETENTION_SEC,
-    });
-    return info;
-  }
-
   const { session, forget, withSession, exec } = superserveSessions(client, listed, idByName, live);
 
   async function create(name: string, { scratch }: { scratch: boolean }): Promise<void> {
@@ -118,8 +78,8 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
       name,
       metadata: await stamp(name),
       template,
-      timeoutSeconds: scratch ? SCRATCH_IDLE_PAUSE_SEC : idlePauseSec,
-      autoDeleteSeconds: scratch ? SCRATCH_RETENTION_SEC : RETENTION_SEC,
+      timeoutSeconds: (scratch ? policy.scratchIdleParkSec : policy.idleParkSec)!,
+      autoDeleteSeconds: (scratch ? policy.scratchLifetimeSec : policy.retentionSec)!,
       ...(network ? { network } : {}),
     });
     idByName.set(name, created.id);
@@ -134,26 +94,15 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
     forget(name);
   }
 
-  async function park(name: string, { keepWarm }: { keepWarm: boolean }): Promise<void> {
+  async function park(name: string): Promise<void> {
     const cached = live.get(name);
     if (!cached) return;
     const info = (await listed(name)).find((s) => s.id === cached.id);
     if (!info) return forget(name);
-    await withSession(name, (s) => (keepWarm ? client.update(s.id, { timeoutSeconds: keepWarmSec }) : s.pause()));
+    await withSession(name, (s) => s.pause());
   }
 
-  async function ensureEgress(name: string): Promise<void> {
-    const id = idByName.get(name);
-    if (id && egressVerified.has(id)) return;
-    const info = (await listed(name)).find((s) => s.id === id);
-    if (!info || !(await applyNetwork(name, info)))
-      throw new Error(
-        `superserve egress ${name}: sandbox network is ${JSON.stringify(info?.network)}, expected ${JSON.stringify(network)}; destroy the sandbox so it is recreated with the allow list`,
-      );
-    egressVerified.add(info.id);
-  }
-
-  return createProviderSandbox(
+  const sandbox = createProviderSandbox(
     workspace,
     {
       backend: "superserve",
@@ -166,8 +115,13 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
       readAbsBytes: (name, absPath) => withSession(name, (s) => s.readFileBytes(absPath)),
       async inspect(name) {
         for (const candidate of await listed(name)) {
-          const info = await reconcile(name, candidate);
-          if (!info) continue;
+          const info = candidate;
+          if (info.metadata[SUPERSERVE_METADATA.template] !== template)
+            throw new Error(`superserve sandbox ${info.id} uses another template; reconcile it before provisioning`);
+          await client.update(info.id, {
+            metadata: { ...info.metadata, ...(await stamp(name)) },
+            autoDeleteSeconds: policy.retentionSec,
+          });
           idByName.set(name, info.id);
           return {
             state: PAUSED_STATES.has(info.status) ? "parked" : "running",
@@ -183,6 +137,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
         await session(name);
       },
       park,
+      keepWarm: (name, seconds) => withSession(name, (s) => client.update(s.id, { timeoutSeconds: seconds })),
       destroy,
       isLive: (name) => live.has(name),
       forget,
@@ -191,11 +146,28 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
         live.delete(name);
         await session(name);
       },
-      ...(egressProxyHost ? { ensureEgress } : {}),
+      network: {
+        async read(name) {
+          const info = (await listed(name)).find((s) => s.id === idByName.get(name));
+          return {
+            allowHosts: info?.network?.allowOut ?? [],
+            allowCidrs: [],
+            denyAll: info?.network?.denyOut?.includes("0.0.0.0/0") ?? false,
+          };
+        },
+        async write(name, desired) {
+          const id = idByName.get(name) ?? (await listed(name))[0]?.id;
+          if (!id) throw new SuperserveSandboxGoneError(name, "no sandbox is registered under this name");
+          await client.update(id, {
+            network: { allowOut: desired.allowHosts, denyOut: desired.denyAll ? ["0.0.0.0/0"] : [] },
+          });
+        },
+      },
     },
     opts,
     opts.store,
   );
+  return sandbox;
 }
 
 function superserveSessions(

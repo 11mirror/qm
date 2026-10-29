@@ -1,3 +1,5 @@
+import { sandboxAdoptionContract } from "../support/sandbox-adoption-contract.ts";
+import type { SandboxShared } from "../../src/sandbox/provider-sandbox.ts";
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -60,7 +62,7 @@ function setup(t: TestContext, egressProxyUrl?: string) {
     update: merge,
     upsert: merge,
   };
-  const make = () =>
+  const make = (options?: Partial<SandboxShared>) =>
     createSuperserveSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "super-ws-"))), {
       template: "qm-agent",
       store,
@@ -68,6 +70,7 @@ function setup(t: TestContext, egressProxyUrl?: string) {
       advisoryLock: createNoopAdvisoryLock(),
       tenantConfig: () => ({ sandboxNamePrefix: "qm-test" }),
       ...(egressProxyUrl ? { egressProxyUrl } : {}),
+      ...options,
     });
   const scope = scopeId("personal", "person");
   const layers = [{ scopeId: scope, mountPath: "/", mode: "rw" as const }];
@@ -98,7 +101,7 @@ test("Superserve obeys shared provision, exec, files, pause, restart and destroy
   assert.equal(fixture.rows.size, 0);
 });
 
-test("Superserve keep-warm and scratch lifetime remain provider policy while cleanup is shared", async (t) => {
+test("Superserve uses shared keep-warm, scratch lifetime and cleanup policy", async (t) => {
   const fixture = setup(t);
   const sandbox = fixture.make();
   const handle = await sandbox.provision(fixture.layers);
@@ -132,4 +135,10 @@ test("Superserve refuses an unverified egress policy", async (t) => {
     fixture.calls.some((c) => c.method === "DELETE"),
     false,
   );
+});
+
+test("shared contract adopts an imported Superserve name and refreshes the control-plane environment over HTTP", async (t) => {
+  const fixture = setup(t);
+  await sandboxAdoptionContract(fixture.make, fixture.layers);
+  assert.equal(fixture.calls.filter((call) => call.path === "/sandboxes" && call.method === "POST").length, 1);
 });

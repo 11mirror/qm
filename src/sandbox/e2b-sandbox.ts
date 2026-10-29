@@ -19,7 +19,6 @@ import { sandboxBodiesMigration, withRetiredColumns, type SandboxBodies } from "
 import { cols } from "../persistence/typed-table.ts";
 
 const HOME_DIR = "/home/user";
-const DEFAULT_KEEP_WARM_SEC = 3600;
 
 export const E2B_TEMPLATE_TOOLS = ["wget", "unzip", "gh", "aws", "x-api"];
 
@@ -85,7 +84,6 @@ async function inspect(state: E2bState, name: string): Promise<MachineState | nu
 
 export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOptions): BackendSandbox {
   const { client, store } = opts;
-  const keepWarmMs = (opts.keepWarmSec ?? DEFAULT_KEEP_WARM_SEC) * 1000;
   const sessions = new Map<string, E2bSession>();
   const observed: Pick<SandboxDriver, "cpus" | "memoryMb" | "diskGb"> = {};
   const state: E2bState = { client, sessions, observed };
@@ -151,10 +149,10 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
         sessions.delete(name);
         await connect(name);
       },
-      async park(name, { keepWarm }) {
+      keepWarm: async (name, seconds) => (await connect(name)).keepAlive(seconds * 1000),
+      async park(name) {
         const session = sessions.get(name);
         if (!session) return;
-        if (keepWarm) return session.keepAlive(keepWarmMs);
         await session.pause();
         sessions.delete(name);
       },

@@ -35,7 +35,7 @@ export function createProviderMaintenance(
   const orphanFirstSeen = new Map<string, number>();
   const snapshotIntervalMs = (shared.snapshotIntervalSec ?? 300) * 1000;
   const exclusive = <T>(scope: string, fn: () => Promise<T>): Promise<T> =>
-    shared.advisoryLock.withLock(`${driver.backend}-use:${scope}`, fn);
+    exclusiveProviderUse(driver, shared, scope, fn);
   const report = (category: string, code: string, error: unknown, scope?: string): void => {
     if (!driver.isGone?.(error)) deps.report(category, code, error, scope);
   };
@@ -61,12 +61,6 @@ export function createProviderMaintenance(
       return false;
     rotationHold.set(name, now + ROTATION_HOLD_MS);
     return true;
-  };
-  const renewalDue = (rec: StoredSandboxRecord, now: number): boolean => {
-    const retentionMs = driver.checkpoints?.retentionMs;
-    if (!rec.checkpointId || !rec.checkpointAtMs || retentionMs == null) return false;
-    const remaining = rec.checkpointAtMs + retentionMs - now;
-    return remaining > 0 && remaining <= RENEW_MARGIN_MS;
   };
   async function destroy(name: string): Promise<void> {
     await driver.destroy(name);
@@ -107,7 +101,7 @@ export function createProviderMaintenance(
   async function forgetGone(scope: string, name: string, rec: StoredSandboxRecord, now: number): Promise<void> {
     driver.forget?.(name);
     if (rec.checkpointId) {
-      if (renewalDue(rec, now)) await renew(scope, name, rec);
+      if (renewalDue(driver, rec, now)) await renew(scope, name, rec);
       return;
     }
     await deps.lifecycle(scope, async () => {
@@ -219,4 +213,20 @@ async function reapProviderOrphans(
     }
   }
   return reaped;
+}
+
+function exclusiveProviderUse<T>(
+  driver: SandboxDriver,
+  shared: SandboxShared,
+  scope: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return shared.advisoryLock.withLock(`${driver.backend}-use:${scope}`, fn);
+}
+
+function renewalDue(driver: SandboxDriver, rec: StoredSandboxRecord, now: number): boolean {
+  const retentionMs = driver.checkpoints?.retentionMs;
+  if (!rec.checkpointId || !rec.checkpointAtMs || retentionMs == null) return false;
+  const remaining = rec.checkpointAtMs + retentionMs - now;
+  return remaining > 0 && remaining <= RENEW_MARGIN_MS;
 }

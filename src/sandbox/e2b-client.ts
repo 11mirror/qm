@@ -1,3 +1,5 @@
+import { e2bLease, createLeaseCoverage, E2B_EXEC_MARGIN_MS } from "./provider-policy.ts";
+export { E2B_EXEC_MARGIN_MS } from "./provider-policy.ts";
 import { isIP } from "node:net";
 import { errMessage } from "../util/errors.ts";
 import { egressProxyHost } from "./sandbox-env.ts";
@@ -110,10 +112,6 @@ export interface E2bEgressNetwork {
 }
 
 const DEFAULT_TEMPLATE = "base";
-const DEFAULT_TTL_MS = 15 * 60_000;
-const DEFAULT_MAX_COMMAND_MS = 3600_000;
-const E2B_PRO_MAX_LIFETIME_MS = 24 * 3600_000;
-export const E2B_EXEC_MARGIN_MS = 60_000;
 
 export async function runE2bScript(session: E2bSession, script: string, timeoutSec: number): Promise<ExecResult> {
   const r = await session.runCommand(`timeout ${timeoutSec} sh -c ${shq(script)}`, {
@@ -135,19 +133,6 @@ export function e2bEgressNetwork(egressProxyUrl: string): E2bEgressNetwork {
       `E2B egress proxy ${egressProxyUrl}: E2B matches allowed hostnames only on ports 80 and 443; give the proxy on one of those ports or by IP address`,
     );
   return { allowOut: [host], denyOut: [ALL_TRAFFIC] };
-}
-
-function e2bSandboxTtlMs(opts: Pick<SdkE2bClientOptions, "sandboxTtlMs" | "maxLifetimeMs">): {
-  sandboxTtlMs: number;
-  maxLifetimeMs: number;
-  maxCommandMs: number;
-} {
-  const maxLifetimeMs = opts.maxLifetimeMs ?? E2B_PRO_MAX_LIFETIME_MS;
-  if (!Number.isFinite(maxLifetimeMs) || maxLifetimeMs <= E2B_EXEC_MARGIN_MS)
-    throw new Error(`e2b maxLifetimeMs must be a finite number of milliseconds above ${E2B_EXEC_MARGIN_MS}`);
-  const maxCommandMs = Math.min(DEFAULT_MAX_COMMAND_MS, maxLifetimeMs - E2B_EXEC_MARGIN_MS);
-  const requested = opts.sandboxTtlMs ?? Math.max(DEFAULT_TTL_MS, maxCommandMs + E2B_EXEC_MARGIN_MS);
-  return { sandboxTtlMs: Math.min(maxLifetimeMs, requested), maxLifetimeMs, maxCommandMs };
 }
 
 function commandResultFrom(value: unknown): E2bCommandResult | null {
@@ -173,25 +158,16 @@ async function isSandboxGone(sdk: E2bSdk, err: unknown, isRunning?: () => Promis
 type SdkSandbox = Awaited<ReturnType<E2bSdk["Sandbox"]["create"]>>;
 
 const wrap = (lib: E2bSdk, sbx: SdkSandbox, ttlMs: number, maxLifetimeMs: number, maxCommandMs: number): E2bSession => {
-  let expiresAtMs = Date.now() + ttlMs;
   const isRunning = (): Promise<boolean> => sbx.isRunning();
   const gone = async (err: unknown): Promise<unknown> =>
     (await isSandboxGone(lib, err, isRunning)) ? new E2bSandboxGoneError(sbx.sandboxId, err) : err;
-  const extend = async (ms: number): Promise<void> => {
-    const bounded = Math.min(maxLifetimeMs, Math.max(ms, expiresAtMs - Date.now()));
-    const at = Date.now() + bounded;
+  const { extend, cover } = createLeaseCoverage(ttlMs, maxLifetimeMs, maxCommandMs, E2B_EXEC_MARGIN_MS, async (ms) => {
     try {
-      await sbx.setTimeout(bounded);
-    } catch (err) {
-      throw await gone(err);
+      await sbx.setTimeout(ms);
+    } catch (error) {
+      throw await gone(error);
     }
-    expiresAtMs = at;
-  };
-  const cover = async (commandMs: number): Promise<void> => {
-    const needed = Math.min(commandMs, maxCommandMs) + E2B_EXEC_MARGIN_MS;
-    if (Date.now() + needed <= expiresAtMs) return;
-    await extend(Math.max(ttlMs, needed));
-  };
+  });
   return {
     sandboxId: sbx.sandboxId,
     ...(sbx.trafficAccessToken ? { trafficAccessToken: sbx.trafficAccessToken } : {}),
@@ -275,7 +251,7 @@ const wrap = (lib: E2bSdk, sbx: SdkSandbox, ttlMs: number, maxLifetimeMs: number
 
 export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
   const templateId = opts.templateId ?? DEFAULT_TEMPLATE;
-  const { sandboxTtlMs, maxLifetimeMs, maxCommandMs } = e2bSandboxTtlMs(opts);
+  const { sandboxTtlMs, maxLifetimeMs, maxCommandMs } = e2bLease(opts);
   const network = opts.egressProxyUrl ? e2bEgressNetwork(opts.egressProxyUrl) : undefined;
   const common = { apiKey: opts.apiKey };
 

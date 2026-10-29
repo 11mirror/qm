@@ -234,9 +234,9 @@ function managedAgentsDriver(ctx: ManagedAgentsSessions, opts: ManagedAgentsSand
     async resume(name) {
       await connect(name);
     },
-    async park(name, { keepWarm }) {
+    async park(name) {
       const session = sessions.get(name);
-      if (keepWarm || !session) return;
+      if (!session) return;
       await session.pause();
       sessions.delete(name);
     },

@@ -86,6 +86,7 @@ interface LocalDocker {
   volumeOf: (name: string) => string;
   portByName: Map<string, number>;
   attached: Set<string>;
+  resourceNames: Map<string, { network?: string; volume?: string }>;
 }
 
 function createLocalDaemon(ld: LocalDocker, fetchImpl: typeof fetch) {
@@ -168,7 +169,7 @@ function createLocalDaemon(ld: LocalDocker, fetchImpl: typeof fetch) {
 }
 
 function createLocalContainers(ld: LocalDocker, waitDaemon: (name: string) => Promise<void>) {
-  const { opts, dexec, image, homeDir, networkOf, volumeOf, portByName } = ld;
+  const { opts, dexec, image, homeDir, networkOf, volumeOf, portByName, resourceNames } = ld;
 
   let preflightDone: Promise<string> | undefined;
   let staleWarned = false;
@@ -206,10 +207,20 @@ function createLocalContainers(ld: LocalDocker, waitDaemon: (name: string) => Pr
   }
 
   async function containerState(name: string): Promise<{ running: boolean; imageId: string } | null> {
-    const r = await dexec(["inspect", "-f", "{{.State.Running}} {{.Image}}", name]);
+    const r = await dexec(["inspect", "-f", "{{json .}}", name]);
     if (r.code !== 0) return null;
-    const [running = "", imageId = ""] = r.stdout.trim().split(/\s+/);
-    return { running: running === "true", imageId };
+    const info = JSON.parse(r.stdout) as {
+      State: { Running: boolean };
+      Image: string;
+      Mounts: Array<{ Name?: string; Destination: string }>;
+      NetworkSettings: { Networks: Record<string, unknown> };
+    };
+    const networks = Object.keys(info.NetworkSettings.Networks);
+    const volume = info.Mounts.find((mount) => mount.Destination === homeDir)?.Name;
+    if (networks.length !== 1)
+      throw new Error(`local sandbox ${name}: expected one private network, found ${networks.length}`);
+    resourceNames.set(name, { network: networks[0], volume });
+    return { running: info.State.Running, imageId: info.Image };
   }
 
   async function startContainer(name: string): Promise<void> {
@@ -256,6 +267,7 @@ function createLocalContainers(ld: LocalDocker, waitDaemon: (name: string) => Pr
   }
 
   async function recreate(name: string): Promise<void> {
+    await containerState(name);
     await dexec(["rm", "-f", name]);
     await runContainer(name, true);
   }
@@ -274,12 +286,15 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
   const dexec = opts.dockerExec ?? spawnDockerExec(opts.dockerBin ?? "docker");
   const fetchImpl = opts.fetchImpl ?? fetch;
   const homeDir = opts.homeDir ?? HOME_DIR;
-  const networkOf = (name: string): string => localNetworkName(name, sandboxNamePrefix(opts));
-  const volumeOf = (name: string): string => sibling("home", name, sandboxNamePrefix(opts));
+  const resourceNames = new Map<string, { network?: string; volume?: string }>();
+  const networkOf = (name: string): string =>
+    resourceNames.get(name)?.network ?? localNetworkName(name, sandboxNamePrefix(opts));
+  const volumeOf = (name: string): string =>
+    resourceNames.get(name)?.volume ?? sibling("home", name, sandboxNamePrefix(opts));
 
   const portByName = new Map<string, number>();
   const attached = new Set<string>();
-  const ld: LocalDocker = { opts, dexec, image, homeDir, networkOf, volumeOf, portByName, attached };
+  const ld: LocalDocker = { opts, dexec, image, homeDir, networkOf, volumeOf, portByName, attached, resourceNames };
   const { daemon, waitDaemon, writeAbsBytes, readAbsBytes } = createLocalDaemon(ld, fetchImpl);
   const { preflight, containerState, startContainer, runContainer, recreate, ensureRunning } = createLocalContainers(
     ld,
@@ -295,6 +310,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
   }
 
   async function destroy(name: string): Promise<void> {
+    await containerState(name);
     const remove = async (args: string[]) => {
       const result = await dexec(args);
       if (result.code !== 0) throw new Error(`docker ${args.join(" ")}: ${result.stderr.trim()}`);
@@ -331,19 +347,15 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
         if (!state) return null;
         const current = state.imageId === imageId;
         return {
-          state: state.running && current ? "running" : "parked",
+          state: state.running ? "running" : "parked",
+          replacementRequired: !current,
           detail: `container ${name} ${state.running ? "running" : "stopped"}${current ? "" : " on a superseded image"}`,
         };
       },
       create: (name, { scratch }) => runContainer(name, !scratch),
-      async resume(name) {
-        const imageId = await preflight();
-        const state = await containerState(name);
-        if (!state || state.imageId !== imageId) await recreate(name);
-        else if (!state.running) await startContainer(name);
-      },
-      async park(name, { keepWarm }) {
-        if (keepWarm) return;
+      resume: startContainer,
+      replace: recreate,
+      async park(name) {
         portByName.delete(name);
         const r = await dexec(["stop", "-t", "2", name], 60_000);
         if (r.code !== 0) throw new Error(`docker stop ${name} failed: ${r.stderr.trim()}`);

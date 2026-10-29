@@ -1,5 +1,5 @@
+import { sandboxPolicy } from "./provider-policy.ts";
 import { randomUUID } from "node:crypto";
-import { egressProxyHost } from "./sandbox-env.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { fetchWithRetry, sleep } from "../util/async.ts";
 import { httpFailure } from "../util/errors.ts";
@@ -15,11 +15,8 @@ const EXEC_POLL_MS = 2_000;
 const EXIT_GRACE_MS = 60_000;
 const READY_TIMEOUT_MS = 180_000;
 const READY_POLL_MS = 1_000;
-const SCRATCH_TTL_SEC = 24 * 3600;
 const BASE_URL = "https://api.smolmachines.com";
 const IMAGE = "codex";
-const DEFAULT_CPUS = 4;
-const DEFAULT_MEMORY_MB = 8192;
 const RUNNING_STATES = new Set(["running", "started", "ready"]);
 
 type MachineNetwork =
@@ -73,6 +70,7 @@ interface SmolmachinesClientDeps {
 }
 
 function createSmolmachinesClient({ opts, baseUrl, resources, network, idByName }: SmolmachinesClientDeps) {
+  const policy = sandboxPolicy("smolmachines", opts);
   const fetchImpl = opts.fetchImpl ?? fetch;
 
   function api(method: string, path: string, req: { body?: unknown; timeoutMs?: number } = {}): Promise<Response> {
@@ -127,7 +125,7 @@ function createSmolmachinesClient({ opts, baseUrl, resources, network, idByName 
         network,
         workdir: HOME_DIR,
         ephemeral,
-        ...(ephemeral ? { ttlSeconds: SCRATCH_TTL_SEC } : {}),
+        ...(ephemeral ? { ttlSeconds: policy.scratchLifetimeSec } : {}),
         ...(opts.idleParkSec ? { autoStopSeconds: opts.idleParkSec } : {}),
       },
     });
@@ -274,30 +272,14 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     ...(opts.memoryMb ? { memoryMb: opts.memoryMb } : {}),
     ...(opts.diskGb ? { diskGb: opts.diskGb } : {}),
   };
-  const proxyHost = opts.egressProxyUrl ? egressProxyHost(opts.egressProxyUrl) : undefined;
+  const policy = sandboxPolicy("smolmachines", opts);
+  const proxyHost = policy.egressHost;
   const network: MachineNetwork = proxyHost ? { mode: "allowCidrs", hosts: [proxyHost] } : { mode: "open" };
 
   const idByName = new Map<string, string>();
-  const egressVerified = new Set<string>();
   const client = createSmolmachinesClient({ opts, baseUrl, resources, network, idByName });
   const { apiJson, findMachine, createMachine, startMachine, machineIdFor, deleteMachine } = client;
   const { execRaw, writeAbsBytes, readAbsBytes } = createSmolmachinesIo(client, idByName);
-
-  async function ensureEgress(name: string): Promise<void> {
-    const id = await machineIdFor(name);
-    if (egressVerified.has(id)) return;
-    const info = await apiJson<MachineInfo>("GET", machinePath(id));
-    const got = info.network;
-    const hosts = got?.mode === "allowCidrs" ? (got.hosts ?? []).map((h) => h.toLowerCase()) : [];
-    const cidrs = got?.mode === "allowCidrs" ? (got.cidrs ?? []) : [];
-    const bound = hosts.length === 1 && hosts[0] === proxyHost && cidrs.length === 0;
-    if (!bound) {
-      throw new Error(
-        `smolmachines egress ${name}: machine network is ${JSON.stringify(got)}, expected ${JSON.stringify(network)}; destroy the sandbox so it is recreated with the allow list`,
-      );
-    }
-    egressVerified.add(id);
-  }
 
   const idleNote = opts.idleParkSec ? `; stops after ${opts.idleParkSec}s idle and restarts on the next command` : "";
   return createProviderSandbox(
@@ -306,8 +288,8 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       backend: "smolmachines",
       homeDir: HOME_DIR,
       os: `smolmachines microVM booted from the ${IMAGE} image (the whole disk persists across stops${idleNote})`,
-      cpus: opts.cpus ?? DEFAULT_CPUS,
-      memoryMb: opts.memoryMb ?? DEFAULT_MEMORY_MB,
+      cpus: policy.cpus,
+      memoryMb: policy.memoryMb,
       ...(opts.diskGb ? { diskGb: opts.diskGb } : {}),
       egressEnforcement: proxyHost ? "domain" : "none",
       exec: execRaw,
@@ -330,7 +312,16 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       destroy: deleteMachine,
       isLive: (name) => idByName.has(name),
       forget: (name) => idByName.delete(name),
-      ...(proxyHost ? { ensureEgress } : {}),
+      network: {
+        async read(name) {
+          const info = await apiJson<MachineInfo>("GET", machinePath(await machineIdFor(name)));
+          return {
+            allowHosts: info.network?.mode === "allowCidrs" ? (info.network.hosts ?? []) : [],
+            allowCidrs: info.network?.mode === "allowCidrs" ? (info.network.cidrs ?? []) : [],
+            denyAll: info.network?.mode === "allowCidrs" || info.network?.mode === "blocked",
+          };
+        },
+      },
     },
     opts,
     opts.store,

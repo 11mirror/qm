@@ -1,3 +1,4 @@
+import { sandboxAdoptionContract, sandboxApiOverHttp } from "../support/sandbox-adoption-contract.ts";
 import { SandboxProvisionCleanupError } from "../../src/sandbox/sandbox.ts";
 import { pollProcess } from "../../src/sandbox/process-poll.ts";
 import type { SandboxBodies } from "../../src/sandbox/sandbox-bodies.ts";
@@ -714,4 +715,9 @@ test("failed scratch preparation retains the sandbox when rollback fails", async
   assert.ok(pending);
   await box.teardown(pending, { destroy: true });
   assert.equal(kills, 2);
+});
+
+test("shared contract adopts an imported machine name and refreshes its control-plane environment over HTTP", async (t) => {
+  const client = await sandboxApiOverHttp(t, fake.client);
+  await sandboxAdoptionContract((options) => make({ ...options, client }), layers);
 });

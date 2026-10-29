@@ -1,3 +1,4 @@
+import { sandboxAdoptionContract } from "../support/sandbox-adoption-contract.ts";
 import assert from "node:assert/strict";
 import { tenant } from "../../src/tenant.ts";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -365,18 +366,20 @@ test("Local scope deletion removes deterministic resources without provisioning,
     store: testSandboxBodies(LOCAL_BODIES),
     dockerExec: async (args) => {
       calls.push(args);
+      if (args[0] === "inspect") return { code: 1, stdout: "", stderr: "no container" };
       return fail ? { code: 1, stdout: "", stderr: "daemon unavailable" } : { code: 0, stdout: "", stderr: "" };
     },
   });
   await sandbox.destroyScope!("missing");
   assert.deepEqual(calls, [
+    ["inspect", "-f", "{{json .}}", localContainerName("missing")],
     ["rm", "-f", localContainerName("missing")],
     ["network", "rm", "-f", localNetworkName(localContainerName("missing"))],
     ["volume", "rm", "-f", localVolumeName("missing")],
   ]);
   fail = true;
   await assert.rejects(sandbox.destroyScope!("missing"), /daemon unavailable/);
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 6);
 });
 
 test("Local scope deletion fails a refused core disconnect only while the core is still attached", async () => {
@@ -469,6 +472,7 @@ test("Local deletion retries remaining disk cleanup after partial failure withou
     store: testSandboxBodies(LOCAL_BODIES),
     dockerExec: async (args) => {
       calls.push(args);
+      if (args[0] === "inspect") return { code: 1, stdout: "", stderr: "no container" };
       return args[0] === "volume" && volumeBusy
         ? { code: 1, stdout: "", stderr: "volume is in use" }
         : { code: 0, stdout: "", stderr: "" };
@@ -477,8 +481,8 @@ test("Local deletion retries remaining disk cleanup after partial failure withou
   await assert.rejects(sandbox.destroyScope!("scope"), /volume is in use/);
   volumeBusy = false;
   await sandbox.destroyScope!("scope");
-  assert.deepEqual(calls.slice(0, 3), calls.slice(3));
-  assert.equal(calls.length, 6);
+  assert.deepEqual(calls.slice(0, 4), calls.slice(4));
+  assert.equal(calls.length, 8);
   assert.equal(calls.at(-1)?.at(-1), localVolumeName("scope"));
 });
 
@@ -508,3 +512,10 @@ for (const [name, create, install] of [["Smolmachines", createSmolmachinesSandbo
     }
   });
 }
+
+test("shared contract adopts a Docker name, disk and network after the deployment prefix changes", async () => {
+  const fake = installFakeDocker(daemonPort);
+  await sandboxAdoptionContract((options) => makeSandbox(fake, options), rw(scopeId("personal", "adopted")));
+  assert.equal(fake.volumes.size, 0);
+  assert.equal(fake.networks.size, 0);
+});

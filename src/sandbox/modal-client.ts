@@ -1,3 +1,5 @@
+import { modalLease, sandboxPolicy, MODAL_CHECKPOINT_RETENTION_MS } from "./provider-policy.ts";
+export { MODAL_CHECKPOINT_RETENTION_MS } from "./provider-policy.ts";
 import { randomUUID } from "node:crypto";
 import { egressProxyHost } from "./sandbox-env.ts";
 import { isIP } from "node:net";
@@ -70,16 +72,10 @@ export interface SdkModalClientOptions {
   egressProxyUrl?: string;
 }
 
-const MAX_LIFETIME_MS = 24 * 3600_000;
-const DEFAULT_IDLE_TIMEOUT_MS = 12 * 3600_000;
-const DEFAULT_MAX_COMMAND_MS = 3600_000;
-const DEFAULT_CPUS = 1;
-const DEFAULT_MEMORY_MB = 2048;
 export const MODAL_EXEC_GRACE_MS = 30_000;
 export const MODAL_MAX_EXEC_ARG_BYTES = 64 * 1024;
 const SNAPSHOT_CALL_TIMEOUT_MS = 600_000;
 const TERMINATE_WAIT_MS = 60_000;
-export const MODAL_CHECKPOINT_RETENTION_MS = 30 * 24 * 3600_000;
 
 function wholeSeconds(ms: number): number {
   return Math.max(1000, Math.ceil(ms / 1000) * 1000);
@@ -219,9 +215,8 @@ const wrap = (sdk: ModalSdk, sbx: SdkSandbox, maxCommandMs: number, loadCtx: () 
 });
 
 export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
-  const sandboxTimeoutMs = wholeSeconds(Math.min(opts.sandboxTimeoutMs ?? MAX_LIFETIME_MS, MAX_LIFETIME_MS));
-  const idleTimeoutMs = wholeSeconds(Math.min(opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS, sandboxTimeoutMs));
-  const maxCommandMs = opts.maxCommandMs ?? DEFAULT_MAX_COMMAND_MS;
+  const { sandboxTimeoutMs, idleTimeoutMs, maxCommandMs } = modalLease(opts);
+  const resources = sandboxPolicy("modal", opts);
   const network = opts.egressProxyUrl ? modalEgressAllowlist(opts.egressProxyUrl) : {};
   let ctx: Promise<Ctx> | null = null;
   const buildCtx = async (): Promise<Ctx> => {
@@ -258,8 +253,8 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
           ...(createOpts.tags ? { tags: createOpts.tags } : {}),
           timeoutMs: sandboxTimeoutMs,
           idleTimeoutMs,
-          cpu: opts.cpus ?? DEFAULT_CPUS,
-          memoryMiB: opts.memoryMb ?? DEFAULT_MEMORY_MB,
+          cpu: resources.cpus!,
+          memoryMiB: resources.memoryMb!,
           ...network,
         });
         return wrap(sdk, sbx, maxCommandMs, loadCtx);
