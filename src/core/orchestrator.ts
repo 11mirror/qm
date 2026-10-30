@@ -292,9 +292,11 @@ function deliveryWithMcpEvidence(
 ): { text: string; refs: McpOutputEvidenceRef[] } {
   const canonicalText = absoluteAppLinks(text, publicWebUrl);
   const canonicalRefs = mcpOutputEvidenceRefs(entries, canonicalText);
-  if (canonicalText === text || canonicalRefs.length) return { text: canonicalText, refs: canonicalRefs };
-  const refs = mcpOutputEvidenceRefs(entries, text);
-  return refs.length ? { text, refs } : { text: canonicalText, refs: [] };
+  if (canonicalText === text) return { text: canonicalText, refs: canonicalRefs };
+  if (mcpOutputEvidenceRefs(entries, text).length) {
+    throw new Error("MCP output evidence does not attest the canonical delivery bytes");
+  }
+  return { text: canonicalText, refs: canonicalRefs };
 }
 
 export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {

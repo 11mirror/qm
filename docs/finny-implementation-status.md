@@ -39,14 +39,14 @@ Lanes A, B, and C run in parallel. Lane D is the convergence point. Lanes F and 
 ## Implemented
 
 - The Finny profile uses QM's Pi harness and exposes only the native `finance` tool.
-- The model-visible finance input is one object: `{ "request": "<complete finance request>" }`.
-- The host owns Finance IR normalization, capability/schema compilation, Golden Loop transitions, approval, source custody, artifact policy, verification, and release.
+- The model-visible finance input is `{capabilityId, dimensions, artifactFormat?}`; free-form request text is never model-supplied tool authority.
+- The host owns typed-intent validation, capability compilation, Golden Loop transitions, approval, source custody, artifact policy, verification, and release.
 - A separate reviewed capability sub-bundle defines semantic aliases, dimension support, a fixed operation graph, host-owned parameter bindings, artifact policy, approval policy, and verification policy. The production controller resolves and executes AP and an unrelated synthetic measure through the same data-driven path.
 - The operation plan is canonical and binds the manifest, catalog, capability revision, dimensions, parameters, full operation graph, result operation, and artifact, approval, and verification policies.
 - Native execution supports only the primitives used by installed reviewed packs: `suiteql_select`, `repeat_pull`, and `reconcile`. Projection, filtering, aggregation, and joins remain inside reviewed SuiteQL rather than a second host relational engine. Only the designated result operation is released; a result-connected independent repeat and reconciliation gate verification.
 - Each operation result is stored as a canonical `finny.operation_result.v1` envelope before its stable `operation_completed` checkpoint. Resume validates custody and dependencies, skips committed operations, and reruns an operation only when no stable completion event exists.
 - Reviewed finance knowledge is loaded from the content-addressed `finny-skills` bundle with ranked section retrieval, provenance, and no silent default truncation.
-- NetSuite credentials are read through QM service-credential custody; values are not placed in prompts, traces, or durable summaries. Hindsight is advisory.
+- NetSuite credentials are read through QM service-credential custody; values are not placed in prompts, traces, or durable summaries. Approval preflight is local and reads no provider credential.
 - Finny requires Postgres-backed sessions and runs plus a stable `CONNECTOR_SECRET_KEY`. Credentials, safe diagnostics, full Golden Loop checkpoints, and private query/source evidence survive process restarts.
 - Stable workflow event IDs, a shared per-run advisory lock, and deterministic artifact identities prevent overlapping workers from duplicating stage work; a resumed run starts at its first incomplete stage.
 - Typed failures distinguish unsupported capability, missing schema mapping, credential/configuration faults, provider faults, verification failure, and policy blocks.
@@ -60,7 +60,7 @@ Lanes A, B, and C run in parallel. Lane D is the convergence point. Lanes F and 
 
 Finny is opt-in. `FINNY_PROFILE=finny` selects the profile and requires `HARNESS=pi` or the default Pi harness. `PI_MODEL` is the single model setting for both the Finny profile and Pi; it must be set to the pinned deployment model. There is no Finny-specific model override or precedence rule.
 
-`FINNY_PROVIDER_TIMEOUT_MS` is required and must be a positive integer. It applies independently to each Hindsight bank recall and each NetSuite page request. `FINNY_SKILLS_DIR` is required for the Finny profile, resolves to an absolute path, and supplies both reviewed knowledge and the manifest-digested capability catalog under `capabilities/`. Every Finny run uses the plan-native controller and durable evidence custody.
+`FINNY_PROVIDER_TIMEOUT_MS` is required and must be a positive integer. It applies independently to each NetSuite page request. `FINNY_SKILLS_DIR` is required for the Finny profile, resolves to an absolute path, and supplies both reviewed knowledge and the manifest-digested capability catalog under `capabilities/`. Every Finny run uses the plan-native controller and durable evidence custody.
 
 The operator-controlled `FINNY_SKILLS_DIR` deployment is the capability-review trust root. Manifest sizes and hashes provide content identity and mutation detection inside that trusted deployment; they do not authenticate an untrusted directory or replace human review, signing, or deployment access control.
 

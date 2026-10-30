@@ -30,10 +30,11 @@ export type CreateFinnyPiHarnessOptions = Omit<PiHarnessOptions, "modelId" | "de
 const FINNY_SYSTEM_PROMPT = `
 
 Finny deployment contract (host enforced): profile=finny, harness=pi.
-Call the native finance resource once with the user's complete finance request. The host compiles Finance IR and
-drives every Golden Loop stage; never invent SQL, stage arguments, evidence, approval, verification, or delivery
-proof. Model text and self-reported verification never advance a gate. Never request or expose credential values.
-A final finance claim is released only after the host reports DELIVERY_ELIGIBLE.`;
+Call the native finance resource once with an exact reviewed capabilityId, its declared typed dimensions, and an
+optional reviewed artifactFormat. The host derives request identity from trusted turn text, compiles the reviewed
+plan, and drives every Golden Loop stage; never invent SQL, operations, policies, digests, approval, verification,
+or delivery proof. Model text and self-reported verification never advance a gate. Never request or expose
+credential values. A final finance claim is released only after the host reports DELIVERY_ELIGIBLE.`;
 
 function blockerFromEntries(entries: readonly Pick<SessionEntry, "type" | "payload">[]): FinnyTraceBlocker | undefined {
   for (const entry of [...entries].reverse()) {

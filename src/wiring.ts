@@ -333,7 +333,7 @@ import { createFinnyPiHarness } from "./finny/pi-profile.ts";
 import type { FinanceService } from "./finny/finance.ts";
 import type { AtomicFetchAdapter } from "./finny/credential-brokered-finance-service.ts";
 import { createFinnyAtomicFetchAdapter } from "./finny/provider-adapter.ts";
-import { createFinnyHindsightClient, createFinnyNetSuiteClient } from "./finny/provider-clients.ts";
+import { createFinnyNetSuiteClient } from "./finny/provider-clients.ts";
 import { createDefaultFinnyFinanceService } from "./finny/default-finance-service.ts";
 import { loadFinnyKnowledgeIndex } from "./finny/knowledge-index.ts";
 import { loadFinnyCapabilityPack } from "./finny/capability-pack.ts";
@@ -1571,9 +1571,7 @@ export function buildApp(
                   atomicFetch:
                     overrides.finnyAtomicFetchAdapter ??
                     createFinnyAtomicFetchAdapter({
-                      hindsight: createFinnyHindsightClient({ timeoutMs: config.finnyProfile.providerTimeoutMs }),
                       netsuite: createFinnyNetSuiteClient({ timeoutMs: config.finnyProfile.providerTimeoutMs }),
-                      diagnostics: finnyDiagnostics,
                     }),
                 }),
               modelGateway: gatewayTransport,

@@ -24,7 +24,6 @@ export function createDefaultFinnyFinanceService(options: DefaultFinnyFinanceSer
     credentialReader: options.credentialReader,
     orgScopeId: options.orgScopeId,
     credentialSlugs: {
-      hindsight: "finny-hindsight",
       netsuite: "finny-netsuite",
     },
     atomicFetch: options.atomicFetch,

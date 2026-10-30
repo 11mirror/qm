@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { digestFinnyEvidence } from "../src/finny/golden-loop.ts";
 import type { FinnyOperationPlan } from "../src/finny/operation-compiler.ts";
-import { createFinnyAtomicFetchAdapter, createFinnyNetSuiteOperationExecutor } from "../src/finny/provider-adapter.ts";
+import { createFinnyNetSuiteOperationExecutor } from "../src/finny/provider-adapter.ts";
 
 const digest = (value: string) => digestFinnyEvidence(value);
 const credential = {
@@ -42,23 +42,6 @@ function plan(): FinnyOperationPlan {
   };
 }
 
-test("plan preflight binds reviewed authority without a query bridge", async () => {
-  const operationPlan = plan();
-  const adapter = createFinnyAtomicFetchAdapter({
-    hindsight: { recall: async () => ({ matched: true }) },
-    netsuite: { suiteql: async () => [] },
-  });
-  const output = await adapter.preflightPlan(
-    { request: "second", clarificationDigest: digest("clarify"), plan: operationPlan },
-    { runId: "run", actorId: "actor" },
-    { hindsight: JSON.stringify({ apiUrl: "https://hindsight.test", apiKey: "key", bankIds: ["bank"] }) },
-  );
-
-  assert.equal(output.approvalPolicyDigest, operationPlan.approvalPolicyDigest);
-  assert.equal(output.approvalRequired, true);
-  assert.equal("query" in output, false);
-});
-
 test("operation executor runs the exact requested SuiteQL node", async () => {
   const operationPlan = plan();
   const queries: string[] = [];
@@ -81,7 +64,6 @@ test("operation executor runs the exact requested SuiteQL node", async () => {
   assert.deepEqual(queries, ["SELECT second FROM two"]);
   assert.deepEqual(rows, [{ value: 2 }]);
 });
-
 test("repeat pulls execute their reviewed SuiteQL source fresh", async () => {
   const operationPlan = plan();
   const queries: string[] = [];
@@ -140,33 +122,4 @@ test("operation executor rejects forged and derived external work", async () => 
     }),
     /does not belong/i,
   );
-});
-
-test("invalid optional Hindsight configuration is omitted without touching NetSuite", async () => {
-  let hindsightCalls = 0;
-  let netsuiteCalls = 0;
-  const operationPlan = plan();
-  const adapter = createFinnyAtomicFetchAdapter({
-    hindsight: {
-      async recall() {
-        hindsightCalls += 1;
-        return {};
-      },
-    },
-    netsuite: {
-      async suiteql() {
-        netsuiteCalls += 1;
-        return [];
-      },
-    },
-  });
-  const output = await adapter.preflightPlan(
-    { request: "second", clarificationDigest: digest("clarify"), plan: operationPlan },
-    { runId: "run", actorId: "actor" },
-    { hindsight: JSON.stringify({ apiUrl: "http://insecure.test", apiKey: "key", bankIds: ["bank"] }) },
-  );
-
-  assert.equal(output.enrichment?.state, "omitted");
-  assert.equal(hindsightCalls, 0);
-  assert.equal(netsuiteCalls, 0);
 });

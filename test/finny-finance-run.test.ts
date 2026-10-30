@@ -173,13 +173,7 @@ function planNativeService(
       return { records: [{ operation: "recovered_result" }] };
     },
     async preflightPlan({ plan }) {
-      calls.push(`preflightPlan:${plan.capabilityId}`);
-      return {
-        planSummary: plan.semanticCapability,
-        preflightDigest: digest(`preflight:${plan.planDigest}`),
-        approvalRequired: true,
-        approvalPolicyDigest: digest("untrusted-service-policy"),
-      };
+      throw new Error(`external preflight must not run for ${plan.capabilityId}`);
     },
     async executeOperation() {
       throw new Error("sourcePlan owns test operation custody");
@@ -264,13 +258,7 @@ test("plan-native AP and unrelated capabilities share one controller path withou
       result.content[0]?.type === "text" ? result.content[0].text : "",
       new RegExp(scenario.resultOperationId),
     );
-    assert.deepEqual(calls, [
-      "clarify",
-      `preflightPlan:${scenario.capabilityId}`,
-      `sourcePlan:${scenario.capabilityId}`,
-      "artifact",
-      "verify",
-    ]);
+    assert.deepEqual(calls, ["clarify", `sourcePlan:${scenario.capabilityId}`, "artifact", "verify"]);
   }
 });
 
@@ -354,7 +342,7 @@ test("overlapping approved resumes serialize the plan source under the workflow 
   );
 });
 
-test("plan-native resume uses its custodied plan when the current catalog has changed", async () => {
+test("plan-native resume rejects a candidate whose current compilation differs from custody", async () => {
   const runStore = createFinnyRunStore(createMemoryMap<FinnyRunV2Checkpoint>());
   const evidenceBytes = createMemoryDurableByteStore();
   const firstTurn = turn();
@@ -409,9 +397,9 @@ test("plan-native resume uses its custodied plan when the current catalog has ch
 
   const result = await resumed.execute("plan-native-changed", apCandidate, undefined, undefined, {} as never);
 
-  assert.equal((result as { isError?: boolean }).isError, undefined);
-  assert.deepEqual(calls, ["artifact", "verify", "recoverSource"]);
-  assert.equal(replayFinnyLedger("run-ap", (await runStore.load("run-ap"))!.ledger).stage, "DELIVERY_ELIGIBLE");
+  assert.equal((result as { isError?: boolean }).isError, true);
+  assert.deepEqual(calls, []);
+  assert.equal(replayFinnyLedger("run-ap", (await runStore.load("run-ap"))!.ledger).stage, "SOURCE");
 });
 
 test("plan-native resume fails closed when its custodied plan is unavailable", async () => {
@@ -489,6 +477,17 @@ test("plan-native approval binds every compiled plan authority field", async () 
 
   assert.equal((result as { terminate?: boolean }).terminate, true);
   assert.equal(pendingApprovals.length, 1);
+  const expectedSummary = [
+    "Capability: ap_balance @ ap_balance.2026-10-30",
+    'Dimensions: {"artifact":"optional","currency":"source_base","entity":"all","grain":"total","period":"current","sources":["netsuite"]}',
+    "Provider data scope:",
+    '- ap_source: NetSuite SuiteQL "SELECT total FROM ap_balance"',
+    "Result operation: ap_source",
+    "Artifact: format json; allowed json; attachment when_requested",
+    "Verification: required operations none; release gate delivery_eligible",
+  ].join("\n");
+  assert.equal(pendingApprovals[0]!.summary, expectedSummary);
+  assert.equal(pendingApprovals[0]!.command, expectedSummary);
   const expectedApprovalKey = toolCallApprovalKey("finance", {
     request: "AP balance",
     schema: compiled.plan.schema,
@@ -504,6 +503,7 @@ test("plan-native approval binds every compiled plan authority field", async () 
     artifactPolicyDigest: compiled.plan.artifactPolicyDigest,
     approvalPolicyDigest: compiled.plan.approvalPolicyDigest,
     verificationPolicyDigest: compiled.plan.verificationPolicyDigest,
+    approvalSummary: expectedSummary,
   });
   assert.equal(pendingApprovals[0]!.approvalKey, expectedApprovalKey);
 
@@ -545,7 +545,48 @@ test("approval binds typed intent while keeping prose request from the trusted t
   assert.equal(binding.request, "AP balance");
 });
 
-test("plan-native approval resume derives its key from the custodied plan", async () => {
+test("resumed approval displays the same exact custodied plan summary", async () => {
+  const runStore = createFinnyRunStore(createMemoryMap<FinnyRunV2Checkpoint>());
+  const evidenceBytes = createMemoryDurableByteStore();
+  const firstTurn = turn();
+  firstTurn.runId = "run-ap";
+  firstTurn.input = "AP balance";
+  const firstRef = approvalRef();
+  const first = createFinnyFinanceTool(firstTurn, firstRef, planNativeService(runStore, []), {
+    runStore,
+    evidenceBytes,
+    capabilityCatalog: planNativeCatalog,
+  });
+  await first.execute("approval-first", apCandidate, undefined, undefined, {} as never);
+  const firstApproval = firstRef.pendingApprovals?.at(-1);
+  assert.ok(firstApproval?.summary);
+
+  const resumedTurn = turn([
+    {
+      type: "tool_result",
+      payload: { finnyWorkflowRunId: "run-ap" },
+      scopeLabel: "personal:actor-1",
+      seq: 1,
+      createdAt: 1,
+    },
+  ] as HarnessTurnInput["history"]);
+  resumedTurn.runId = "run-ap-resume";
+  resumedTurn.input = "AP balance";
+  const resumedRef = approvalRef();
+  const resumed = createFinnyFinanceTool(resumedTurn, resumedRef, planNativeService(runStore, []), {
+    runStore,
+    evidenceBytes,
+    capabilityCatalog: planNativeCatalog,
+  });
+  await resumed.execute("approval-resumed", apCandidate, undefined, undefined, {} as never);
+  const resumedApproval = resumedRef.pendingApprovals?.at(-1);
+
+  assert.equal(resumedApproval?.summary, firstApproval.summary);
+  assert.equal(resumedApproval?.command, firstApproval.command);
+  assert.equal(resumedApproval?.approvalKey, firstApproval.approvalKey);
+});
+
+test("plan-native approval resume rejects a candidate that no longer compiles to its custodied plan", async () => {
   const approvalCapability: FinnyCapabilityDescriptor = {
     ...planNativeAp,
     approvalPolicy: { ...planNativeAp.approvalPolicy, mode: "before_source" },
@@ -596,21 +637,6 @@ test("plan-native approval resume derives its key from the custodied plan", asyn
 
   assert.equal(typeof resumed.needsApproval, "function");
   if (typeof resumed.needsApproval !== "function") throw new Error("approval callback is unavailable");
-  assert.equal(await resumed.needsApproval(apCandidate), true);
-  assert.deepEqual(resumed.approvalKeyParams?.(apCandidate), {
-    request: "AP balance",
-    schema: original.plan.schema,
-    planDigest: original.plan.planDigest,
-    catalogDigest: original.plan.catalogDigest,
-    manifestDigest: original.plan.manifestDigest,
-    capabilityId: original.plan.capabilityId,
-    revisionId: original.plan.revisionId,
-    semanticCapability: original.plan.semanticCapability,
-    dimensionsDigest: original.plan.dimensionsDigest,
-    operationGraphDigest: original.plan.operationGraphDigest,
-    resultOperationId: original.plan.resultOperationId,
-    artifactPolicyDigest: original.plan.artifactPolicyDigest,
-    approvalPolicyDigest: original.plan.approvalPolicyDigest,
-    verificationPolicyDigest: original.plan.verificationPolicyDigest,
-  });
+  const needsApproval = resumed.needsApproval;
+  await assert.rejects(async () => needsApproval(apCandidate), /candidate.*custodied plan/i);
 });

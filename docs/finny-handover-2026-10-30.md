@@ -44,27 +44,13 @@ The bundled pack contains current aggregate AP and an unrelated inventory capabi
 
 ### 1. Prove the real Pi harness boundary
 
-Install a usable credential for the pinned `PI_MODEL`, activate the Finny profile with the reviewed skills directory, and run a real turn. Acceptance requires proof that Pi sees only `finance({request})`, the host selects and executes the reviewed plan, and no model-authored figure bypasses `DELIVERY_ELIGIBLE`.
+Install a usable credential for the pinned `PI_MODEL`, activate the Finny profile with the reviewed skills directory, and run a real turn. Acceptance requires proof that Pi sees only `finance({capabilityId, dimensions, artifactFormat?})`, the host validates and executes the reviewed plan, and no model-authored figure bypasses `DELIVERY_ELIGIBLE`.
 
-### 2. Implement the failed acceptance capability family
+### 2. Prove capability-pack generality
 
-The first target is the exact failed request family:
+Do not create sequential AR, AP, receipts, and aging controller projects. The core exit criterion is that one reviewed descriptor can be added or changed without changing TypeScript control flow and can traverse the same intent, approval, execution, verification, custody, and delivery path.
 
-- accounts receivable / open receivables;
-- named entity such as the synthetic `Example Manufacturing` fixture;
-- explicit `as_of` cutoff;
-- aggregate total first, then invoice detail;
-- NetSuite plus reviewed synthetic legacy-ERP migration inclusion where required;
-- AR subledger/control-total verification plus independent repeat pull.
-
-Required work:
-
-- Parse human dates such as `15-Sep-2025` and unambiguous named entities into Finance IR.
-- Add reviewed NetSuite schema authority for AR population, applications/credits, entity/subsidiary, accounting book, currency, cutoff semantics, and migration markers.
-- Add deterministic compiler primitives rather than a report-specific raw query.
-- Register current/as-of aggregate AR, then detailed AR.
-- Add frozen positive, negative, boundary, and injection cases. Unsupported dimensions must never silently broaden a query.
-- Validate against a safe non-production NetSuite account and finance-owned expected totals.
+AP and an unrelated inventory measure provide local structural evidence today. After the real Pi proof, the first finance-owned live descriptor should cover the failed open-AR/entity/as-of request family because it exercises the important semantic dimensions. Its NetSuite population, applications and credits, entity or subsidiary, accounting book, currency, cutoff, migration markers, result grain, and controls must be supplied as reviewed deployment data. Unsupported dimensions must fail closed. The host must not parse finance prose into a parallel IR, accept model-generated SQL, or add capability-specific branches.
 
 ### 3. Prove deployment-owned credentials and provider behavior live
 
@@ -124,9 +110,9 @@ Re-run after every capability change; historical counts are not evidence for new
 ## Continuation order
 
 1. Supply a working pinned model credential and prove one real Pi turn through the catalog-enabled production controller.
-2. Complete fresh-context correctness, security, durability, and Wall of shame reviews for the current plan-native head; resolve all findings.
-3. Obtain finance review for AR-as-of/entity/currency/book/migration schema authority and express it as a deployment-owned capability pack using the existing primitives.
-4. Bind deployment-owned read-only NetSuite credentials through QM and validate AR for a synthetic entity fixture against finance-owned expected data.
+2. Complete fresh-context correctness, security, durability, and Wall of shame reviews for the current plan-native head; resolve all findings in parallel with environment preparation.
+3. Prove that additional reviewed descriptors require no capability-specific TypeScript control flow; keep capability semantics in the deployment-owned pack.
+4. Obtain finance review for AR-as-of/entity/currency/book/migration authority, bind a read-only NetSuite credential, and validate the descriptor against finance-owned expected data.
 5. Run the installed-desktop matrix, including restart and provider failures.
 6. Prove Slack parity and attestation in Firefox.
 7. Expand capabilities deliberately through reviewed pack data; never use model-generated SQL.

@@ -136,14 +136,6 @@ test("default Finny service brokers exact operation execution into durable v2 cu
     evidenceBytes: bytes,
     runStore,
     atomicFetch: {
-      async preflightPlan(input) {
-        return {
-          planSummary: input.plan.semanticCapability,
-          preflightDigest: digest("preflight"),
-          approvalRequired: false,
-          approvalPolicyDigest: input.plan.approvalPolicyDigest,
-        };
-      },
       async executeOperation() {
         operationCalls += 1;
         return { rows: [{ value: "42" }] };

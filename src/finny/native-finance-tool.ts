@@ -11,6 +11,7 @@ import { compileFinnyControllerRequest } from "./controller-compiler.ts";
 import type { FinnyIntentCandidate } from "./intent-resolver.ts";
 import {
   finnyApprovalPolicyDigest,
+  createFinnyPlanPreflight,
   type FinanceAction,
   type FinanceExecutionContext,
   type FinanceService,
@@ -175,6 +176,11 @@ export function createFinnyFinanceTool(
     artifactPolicyDigest: plan.artifactPolicyDigest,
     approvalPolicyDigest: plan.approvalPolicyDigest,
     verificationPolicyDigest: plan.verificationPolicyDigest,
+    approvalSummary: createFinnyPlanPreflight({
+      request: resolvedRequest,
+      clarificationDigest: state.clarificationDigest ?? digestFinnyEvidence("finny-clarification:pending"),
+      plan,
+    }).planSummary,
   });
 
   const executeRunUnlocked = async (callId: string, candidate: FinnyIntentCandidate) => {
@@ -213,13 +219,16 @@ export function createFinnyFinanceTool(
           diagnosticId: digestFinnyEvidence(`finny-diagnostic:v1:${callId}:request_mismatch`),
         });
       }
+      const controller = compileFinnyControllerRequest(candidate, await Promise.resolve(options.capabilityCatalog));
+      if (controller.status !== "compiled") throw new FinanceFailure("schema_mapping_required");
+      const candidatePlan = controller.plan;
       let operationPlan: FinnyOperationPlan;
       if (existing) {
+        if (existing.plan.planDigest !== candidatePlan.planDigest)
+          throw new Error("Finny candidate does not match the custodied plan");
         operationPlan = await loadCustodiedPlan(options.evidenceBytes, existing);
       } else {
-        const controller = compileFinnyControllerRequest(candidate, await Promise.resolve(options.capabilityCatalog));
-        if (controller.status !== "compiled") throw new FinanceFailure("schema_mapping_required");
-        operationPlan = controller.plan;
+        operationPlan = candidatePlan;
         await storeFinnyOperationPlan(options.evidenceBytes, operationPlan);
       }
       approvalOperationPlan = operationPlan;
@@ -254,10 +263,11 @@ export function createFinnyFinanceTool(
       if (state.stage === "PREFLIGHT" && !state.planDigest) {
         activeAction = "preflight";
         if (!state.clarificationDigest) throw new Error("Host clarification evidence is missing");
-        const output = await service.preflightPlan(
-          { request: normalizedRequest, clarificationDigest: state.clarificationDigest, plan: operationPlan },
-          context,
-        );
+        const output = createFinnyPlanPreflight({
+          request: normalizedRequest,
+          clarificationDigest: state.clarificationDigest,
+          plan: operationPlan,
+        });
         const approvalRequired = operationPlan.approvalPolicy.mode === "before_source";
         await applyRun([
           {
@@ -279,7 +289,7 @@ export function createFinnyFinanceTool(
         if (approvalRequired) {
           const approvalKey = toolCallApprovalKey(FINANCE_RESOURCE_NAME, planApprovalBinding(operationPlan));
           ref.pendingApprovals?.push({
-            command: "finance run",
+            command: output.planSummary,
             reason: "approve the exact Finny finance plan before source execution",
             kind: "approval",
             approvalKey,
@@ -312,12 +322,17 @@ export function createFinnyFinanceTool(
         const approvalKey = toolCallApprovalKey(FINANCE_RESOURCE_NAME, planApprovalBinding(operationPlan));
         const exactCallApproved = ref.approvedToolCalls?.get(callId) === approvalKey;
         if (state.approvalRequired !== false && !exactCallApproved) {
+          const planSummary = createFinnyPlanPreflight({
+            request: normalizedRequest,
+            clarificationDigest: state.clarificationDigest!,
+            plan: operationPlan,
+          }).planSummary;
           ref.pendingApprovals?.push({
-            command: "finance run",
+            command: planSummary,
             reason: "approve the exact Finny finance plan before source execution",
             kind: "approval",
             approvalKey,
-            summary: "Finny reviewed finance plan",
+            summary: planSummary,
             grantModes: { session: false, always: false },
           });
           ref.pausedOnApproval = true;
@@ -557,11 +572,13 @@ export function createFinnyFinanceTool(
       if (!isFinnyRunRequest(candidate)) return false;
       await resolveWorkflow();
       const checkpoint = await runStore.load(workflowRunId);
-      if (checkpoint) approvalOperationPlan = await loadCustodiedPlan(options.evidenceBytes, checkpoint);
-      else {
-        const controller = compileFinnyControllerRequest(candidate, await Promise.resolve(options.capabilityCatalog));
-        approvalOperationPlan = controller.status === "compiled" ? controller.plan : undefined;
-      }
+      const controller = compileFinnyControllerRequest(candidate, await Promise.resolve(options.capabilityCatalog));
+      if (controller.status !== "compiled") return false;
+      if (checkpoint) {
+        if (checkpoint.plan.planDigest !== controller.plan.planDigest)
+          throw new Error("Finny candidate does not match the custodied plan");
+        approvalOperationPlan = await loadCustodiedPlan(options.evidenceBytes, checkpoint);
+      } else approvalOperationPlan = controller.plan;
       if (checkpoint) state = replayFinnyLedger(checkpoint.runId, checkpoint.ledger);
       return state.stage === "PREFLIGHT" && !!state.planDigest && state.approvalRequired !== false;
     },

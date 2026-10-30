@@ -4,19 +4,12 @@ import type {
   FinanceExecutionContext,
   FinanceOperationInput,
   FinanceOperationOutput,
-  FinancePlanPreflightInput,
-  FinancePlanPreflightOutput,
   FinanceService,
 } from "./finance.ts";
-import {
-  FinanceFailure,
-  financeFailureWithDiagnostic,
-  type FinanceDiagnosticSink,
-  type FinanceFailureMetadata,
-} from "./finance-failure.ts";
+import { createFinnyPlanPreflight } from "./finance.ts";
+import { FinanceFailure, financeFailureWithDiagnostic, type FinanceDiagnosticSink } from "./finance-failure.ts";
 
 export interface FinnyCredentialSlugs {
-  hindsight: string;
   netsuite: string;
 }
 
@@ -26,25 +19,7 @@ export interface AtomicFetchContext {
   requestText?: string;
 }
 
-export type FinnyAdvisoryEnrichment =
-  | {
-      provider: "hindsight";
-      state: "available";
-      evidenceDigest: FinancePlanPreflightOutput["preflightDigest"];
-    }
-  | {
-      provider: "hindsight";
-      state: "omitted";
-      reason: "credential_unavailable" | "provider_unavailable";
-      failure?: FinanceFailureMetadata;
-    };
-
 export interface AtomicFetchAdapter {
-  preflightPlan(
-    input: FinancePlanPreflightInput,
-    context: AtomicFetchContext,
-    credentials: { hindsight?: string; hindsightFailure?: FinanceFailureMetadata },
-  ): Promise<FinancePlanPreflightOutput & { enrichment?: FinnyAdvisoryEnrichment }>;
   executeOperation(
     input: FinanceOperationInput,
     context: AtomicFetchContext,
@@ -116,16 +91,12 @@ function outputContainsSecret(output: unknown, secrets: readonly string[]): bool
 }
 
 export function createBrokeredFinanceService(options: BrokeredFinanceServiceOptions): FinanceService {
-  const credential = async (
-    slug: string,
-    required: boolean,
-    context: FinanceExecutionContext,
-  ): Promise<{ secret?: string; failure?: FinanceFailureMetadata }> => {
+  const credential = async (slug: string, context: FinanceExecutionContext): Promise<string> => {
     try {
       const stored = await options.credentialReader.getServiceCredentialSecret(options.orgScopeId, slug);
-      if (stored?.enabled && stored.secret) return { secret: stored.secret };
+      if (stored?.enabled && stored.secret) return stored.secret;
     } catch (error) {
-      const failure = financeFailureWithDiagnostic(error, {
+      throw financeFailureWithDiagnostic(error, {
         runId: context.runId,
         operation: `credential read ${slug}`,
         cause: "credential_missing",
@@ -134,10 +105,7 @@ export function createBrokeredFinanceService(options: BrokeredFinanceServiceOpti
         message: `blocked_external: QM service credential ${slug} is unavailable`,
         diagnostics: options.diagnostics,
       });
-      if (required) throw failure;
-      return { failure: failure.toSafeMetadata() };
     }
-    if (!required) return {};
     throw new FinanceFailure("credential_missing", {
       retryable: false,
       dependency: slug,
@@ -186,19 +154,11 @@ export function createBrokeredFinanceService(options: BrokeredFinanceServiceOpti
 
   return {
     clarify: (input, context) => options.delegate.clarify(input, context),
-    preflightPlan: async (input, context) => {
-      const hindsight = await credential(options.credentialSlugs.hindsight, false, context);
-      return run("operation plan preflight", [hindsight.secret], context, () =>
-        options.atomicFetch.preflightPlan(input, safeContext(context), {
-          hindsight: hindsight.secret,
-          hindsightFailure: hindsight.failure,
-        }),
-      );
-    },
+    preflightPlan: async (input) => createFinnyPlanPreflight(input),
     executeOperation: async (input, context) => {
-      const netsuite = await credential(options.credentialSlugs.netsuite, true, context);
-      return run("operation execution", [netsuite.secret], context, () =>
-        options.atomicFetch.executeOperation(input, safeContext(context), { netsuite: netsuite.secret! }),
+      const netsuite = await credential(options.credentialSlugs.netsuite, context);
+      return run("operation execution", [netsuite], context, () =>
+        options.atomicFetch.executeOperation(input, safeContext(context), { netsuite }),
       );
     },
     sourcePlan: async (input, context) => {

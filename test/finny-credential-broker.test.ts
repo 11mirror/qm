@@ -76,23 +76,14 @@ function reader(values: Record<string, string>): ServiceCredentialReader {
 function broker(options: {
   reader: ServiceCredentialReader;
   delegate?: FinanceService;
-  preflight?: string;
   rows?: readonly Readonly<Record<string, unknown>>[];
 }) {
   return createBrokeredFinanceService({
     delegate: options.delegate ?? delegate(),
     credentialReader: options.reader,
     orgScopeId: "org:test",
-    credentialSlugs: { hindsight: "finny-hindsight", netsuite: "finny-netsuite" },
+    credentialSlugs: { netsuite: "finny-netsuite" },
     atomicFetch: {
-      async preflightPlan(input) {
-        return {
-          planSummary: options.preflight ?? input.request,
-          preflightDigest: digest("preflight"),
-          approvalRequired: false,
-          approvalPolicyDigest: input.plan.approvalPolicyDigest,
-        };
-      },
       async executeOperation() {
         return { rows: options.rows ?? [{ value: 42 }] };
       },
@@ -100,7 +91,7 @@ function broker(options: {
   });
 }
 
-test("broker keeps credentials opaque while executing exact plan nodes", async () => {
+test("broker preflight stays local and reads credentials only for exact plan nodes", async () => {
   const operationPlan = plan();
   const queries: string[] = [];
   const reads: string[] = [];
@@ -123,9 +114,8 @@ test("broker keeps credentials opaque while executing exact plan nodes", async (
       },
     },
     orgScopeId: "org:test",
-    credentialSlugs: { hindsight: "finny-hindsight", netsuite: "finny-netsuite" },
+    credentialSlugs: { netsuite: "finny-netsuite" },
     atomicFetch: createFinnyAtomicFetchAdapter({
-      hindsight: { recall: async () => ({ reviewed: true }) },
       netsuite: {
         async suiteql(query, credential) {
           queries.push(query);
@@ -157,7 +147,7 @@ test("broker keeps credentials opaque while executing exact plan nodes", async (
     context,
   );
 
-  assert.deepEqual(reads, ["finny-hindsight", "finny-netsuite", "finny-netsuite"]);
+  assert.deepEqual(reads, ["finny-netsuite", "finny-netsuite"]);
   assert.deepEqual(queries, ["SELECT value FROM source", "SELECT value FROM source"]);
   assert.equal(JSON.stringify({ preflight, first, repeated }).includes("secret"), false);
 });
@@ -203,13 +193,6 @@ test("v2 source custody delegates without reading credentials", async () => {
 test("credential fragments cannot escape plan outputs", async () => {
   const operationPlan = plan();
   const credentials = reader({ "finny-hindsight": "hs-secret", "finny-netsuite": "ns-secret" });
-  await assert.rejects(
-    broker({ reader: credentials, preflight: "hs-secret" }).preflightPlan(
-      { request: "balance", clarificationDigest: digest("clarify"), plan: operationPlan },
-      context,
-    ),
-    /credential boundary/i,
-  );
   await assert.rejects(
     broker({ reader: credentials, rows: [{ leaked: "ns-secret" }] }).executeOperation(
       {

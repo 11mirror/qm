@@ -7,8 +7,18 @@ import {
 } from "@vectorize-io/hindsight-client";
 import OAuth from "oauth-1.0a";
 
-import type { FinnyHindsightClient, FinnyNetSuiteClient, FinnyNetSuiteCredential } from "./provider-adapter.ts";
+import type { FinnyNetSuiteClient, FinnyNetSuiteCredential } from "./provider-adapter.ts";
 import { FinanceFailure, type FinanceFailureCause } from "./finance-failure.ts";
+
+export interface FinnyHindsightCredential {
+  apiUrl: string;
+  apiKey: string;
+  bankIds: readonly string[];
+}
+
+export interface FinnyHindsightClient {
+  recall(query: string, credential: FinnyHindsightCredential): Promise<unknown>;
+}
 
 interface ProviderClientOptions {
   fetch?: typeof fetch;

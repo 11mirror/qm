@@ -8,7 +8,6 @@ import test from "node:test";
 
 import { createServer } from "../src/api/server.ts";
 import type { AtomicFetchAdapter } from "../src/finny/credential-brokered-finance-service.ts";
-import { digestFinnyEvidence } from "../src/finny/golden-loop.ts";
 import { buildApp } from "../src/wiring.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { finnyTestStores } from "./support/finny-test-stores.ts";
@@ -17,7 +16,6 @@ import { testConfig } from "./support/test-config.ts";
 const SECRET = "finny-default-web-secret".repeat(2);
 const MODEL = "gpt-5.6-sol";
 const SKILLS_DIR = fileURLToPath(new URL("../finny-skills", import.meta.url));
-const digest = (value: string) => digestFinnyEvidence(value);
 const AP_CANDIDATE = {
   capabilityId: "ap_gl_control_balance",
   dimensions: {
@@ -90,14 +88,6 @@ test("default QM web path requires reviewed-plan approval before provider execut
   });
 
   const atomicFetch: AtomicFetchAdapter = {
-    async preflightPlan({ plan }) {
-      return {
-        planSummary: plan.semanticCapability,
-        preflightDigest: digest(`preflight:${plan.planDigest}`),
-        approvalRequired: true,
-        approvalPolicyDigest: plan.approvalPolicyDigest,
-      };
-    },
     async executeOperation() {
       sourceCalls += 1;
       return { rows: Array.from({ length: 11 }, (_, index) => ({ id: index + 1, amount: index + 10 })) };
