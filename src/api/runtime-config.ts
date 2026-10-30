@@ -1,3 +1,5 @@
+import { errMessage } from "../util/errors.ts";
+import { NonRetryableTurnError } from "../core/turn-error.ts";
 import type { RuntimePurpose } from "../resolution/config-store.ts";
 import { resolveRuntimeChoiceDurable } from "../harness/harness-router.ts";
 import { resolveIndividualAuthRouting } from "../core/individual-auth-routing.ts";
@@ -254,14 +256,54 @@ export async function availableRuntimeError(
   purpose?: RuntimePurpose,
 ): Promise<string | null> {
   await ctx.deps.refreshModels?.();
-  const choices = await runtimeConfigBody(ctx, scope, undefined, purpose, choice);
-  if (
-    !choices.modelsByHarness[choice.harnessId]?.includes(choice.modelId) ||
-    !(await webuiModelEnabled(ctx, choice.modelId, purpose))
-  )
-    return "runtime is no longer available or enabled on this deployment";
-  return validateRuntimeChoice({
-    ...choice,
-    effortLevel: choice.effortLevel === "adaptive" || choice.effortLevel === "default" ? choice.effortLevel : undefined,
+  let reason: string;
+  try {
+    const choices = await runtimeConfigBody(ctx, scope, undefined, purpose, choice);
+    if (
+      choices.modelsByHarness[choice.harnessId]?.includes(choice.modelId) &&
+      (await webuiModelEnabled(ctx, choice.modelId, purpose))
+    )
+      return validateRuntimeChoice({
+        ...choice,
+        effortLevel:
+          choice.effortLevel === "adaptive" || choice.effortLevel === "default" ? choice.effortLevel : undefined,
+      });
+    reason = "runtime is no longer available or enabled on this deployment";
+  } catch (error) {
+    if (!(error instanceof NonRetryableTurnError)) throw error;
+    reason = `${error.message}; it may be an unknown model ID`;
+  }
+  const head = `${choice.harnessId}/${choice.modelId} can't run here (${reason}). Pick from this list rather than guessing another model: the default`;
+  try {
+    const { effective, approvedHarnesses, modelsByHarness } = await runtimeConfigBody(ctx, scope, undefined, purpose);
+    const usable: string[] = [];
+    for (const harnessId of approvedHarnesses)
+      for (const modelId of modelsByHarness[harnessId] ?? [])
+        if (await webuiModelEnabled(ctx, modelId, purpose)) usable.push(`${harnessId}/${modelId}`);
+    return `${head}, ${effective.harnessId}/${effective.modelId}${usable.length ? `, or one of: ${usable.join(", ")}` : ""}.`;
+  } catch (listError) {
+    return `${head} (listing usable models failed: ${errMessage(listError)}).`;
+  }
+}
+
+export async function requestedRuntimeError(
+  ctx: { deps: RuntimeDeps },
+  scope: ScopeId,
+  requested: Partial<RuntimeChoice>,
+  purpose?: RuntimePurpose,
+): Promise<string | null> {
+  const { effective } = await runtimeConfigBody(ctx, scope, undefined, purpose, requested).catch((error: unknown) => {
+    if (!(error instanceof NonRetryableTurnError)) throw error;
+    return runtimeConfigBody(ctx, scope, undefined, purpose);
   });
+  return availableRuntimeError(
+    ctx,
+    scope,
+    {
+      ...requested,
+      harnessId: requested.harnessId ?? effective.harnessId,
+      modelId: requested.modelId ?? effective.modelId,
+    },
+    purpose,
+  );
 }
