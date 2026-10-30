@@ -4418,12 +4418,10 @@ const STRICT_TOOL_APPROVAL_REASON = "strict posture: this tool call requires hum
 const DECLARED_TOOL_APPROVAL_REASON = "this tool asks for approval before each call";
 const APPROVAL_ARGS_MAX_CHARS = 16_000;
 
-interface ToolApprovalDeclaration {
-  needsApproval?: boolean | ((params: unknown) => boolean | Promise<boolean>);
-  approvalReason?: string;
-  approvalKeyParams?(params: unknown): unknown;
-  approvalCommand?(params: unknown): string;
-}
+type ToolApprovalDeclaration = Pick<
+  NativeToolDefinition,
+  "needsApproval" | "approvalReason" | "approvalKeyParams" | "approvalCommand"
+>;
 
 async function declaredApprovalReason(tool: ToolApprovalDeclaration, params: unknown): Promise<string | undefined> {
   const needed =
