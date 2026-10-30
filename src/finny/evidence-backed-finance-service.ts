@@ -175,7 +175,6 @@ export function createEvidenceBackedFinanceService(options: EvidenceBackedFinanc
 
   return {
     clarify: (input, context) => options.delegate.clarify(input, context),
-    preflightPlan: (input, context) => options.delegate.preflightPlan(input, context),
     sourcePlan,
     executeOperation: (input, context) => options.delegate.executeOperation(input, context),
     artifact,

@@ -42,21 +42,6 @@ const context = {
   credentialHandles: [],
 };
 
-test("unavailable service locally preflights exact provider scope without executing it", async () => {
-  const service = createUnavailableFinanceService();
-
-  const result = await service.preflightPlan(
-    { request: "reviewed balance", clarificationDigest: digest("clarify"), plan },
-    context,
-  );
-
-  assert.equal(result.approvalRequired, false);
-  assert.equal(result.approvalPolicyDigest, plan.approvalPolicyDigest);
-  assert.match(result.preflightDigest, /^sha256:[a-f0-9]{64}$/);
-  assert.equal("query" in result, false);
-  assert.match(result.planSummary, /NetSuite SuiteQL "SELECT balance FROM reviewed_source"/);
-});
-
 test("unavailable service blocks plan execution and source custody", async () => {
   const service = createUnavailableFinanceService();
 

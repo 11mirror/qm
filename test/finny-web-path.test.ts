@@ -236,14 +236,6 @@ test("QM web approval resumes the same Pi-native Golden Loop and releases only v
     async clarify() {
       return { clarification: "entity and period pinned", evidenceDigest: digest("clarified") };
     },
-    async preflightPlan({ plan }) {
-      return {
-        planSummary: plan.semanticCapability,
-        preflightDigest: digest(`preflight:${plan.planDigest}`),
-        approvalRequired: true,
-        approvalPolicyDigest: plan.approvalPolicyDigest,
-      };
-    },
     async executeOperation() {
       throw new Error("sourcePlan owns test operation custody");
     },

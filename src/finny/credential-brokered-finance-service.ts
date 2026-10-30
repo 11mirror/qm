@@ -6,7 +6,6 @@ import type {
   FinanceOperationOutput,
   FinanceService,
 } from "./finance.ts";
-import { createFinnyPlanPreflight } from "./finance.ts";
 import { FinanceFailure, financeFailureWithDiagnostic, type FinanceDiagnosticSink } from "./finance-failure.ts";
 
 export interface FinnyCredentialSlugs {
@@ -154,7 +153,6 @@ export function createBrokeredFinanceService(options: BrokeredFinanceServiceOpti
 
   return {
     clarify: (input, context) => options.delegate.clarify(input, context),
-    preflightPlan: async (input) => createFinnyPlanPreflight(input),
     executeOperation: async (input, context) => {
       const netsuite = await credential(options.credentialSlugs.netsuite, context);
       return run("operation execution", [netsuite], context, () =>

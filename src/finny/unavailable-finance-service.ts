@@ -1,4 +1,4 @@
-import { createFinnyPlanPreflight, type FinanceService } from "./finance.ts";
+import type { FinanceService } from "./finance.ts";
 import { digestFinnyEvidence } from "./golden-loop.ts";
 
 const blocked = (capability: string): never => {
@@ -14,9 +14,6 @@ export function createUnavailableFinanceService(): FinanceService {
           JSON.stringify({ runId: context.runId, actorId: context.actorId, request: input.request }),
         ),
       };
-    },
-    async preflightPlan(input) {
-      return createFinnyPlanPreflight(input);
     },
     async executeOperation() {
       return blocked("operation execution");

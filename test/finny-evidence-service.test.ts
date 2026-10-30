@@ -122,9 +122,6 @@ function delegate(valueForCall: (call: number) => string = () => "42"): FinanceS
     async clarify() {
       return { clarification: "scope", evidenceDigest: digest("clarify") };
     },
-    async preflightPlan() {
-      throw new Error("unused");
-    },
     async executeOperation() {
       calls += 1;
       return { rows: [{ total: valueForCall(calls) }] };

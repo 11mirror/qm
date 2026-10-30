@@ -97,6 +97,20 @@ function assertCustodiedPlanBinding(checkpoint: FinnyRunV2Checkpoint, plan: Finn
     throw new Error(`Finny run ${checkpoint.runId} has a conflicting custodied plan`);
 }
 
+function assertCandidatePlanSemantics(candidate: FinnyOperationPlan, custodied: FinnyOperationPlan): void {
+  if (
+    candidate.capabilityId !== custodied.capabilityId ||
+    candidate.revisionId !== custodied.revisionId ||
+    candidate.dimensionsDigest !== custodied.dimensionsDigest ||
+    candidate.operationGraphDigest !== custodied.operationGraphDigest ||
+    candidate.resultOperationId !== custodied.resultOperationId ||
+    candidate.artifactPolicyDigest !== custodied.artifactPolicyDigest ||
+    candidate.approvalPolicyDigest !== custodied.approvalPolicyDigest ||
+    candidate.verificationPolicyDigest !== custodied.verificationPolicyDigest
+  )
+    throw new Error("Finny candidate does not match the custodied plan");
+}
+
 async function loadCustodiedPlan(
   evidenceBytes: DurableByteStore,
   checkpoint: FinnyRunV2Checkpoint,
@@ -161,7 +175,13 @@ export function createFinnyFinanceTool(
     eventId: `${workflowRunId}:${suffix}`,
     occurredAt: now(),
   });
-  const planApprovalBinding = (plan: FinnyOperationPlan) => ({
+  const planApprovalSummary = (plan: FinnyOperationPlan) =>
+    createFinnyPlanPreflight({
+      request: resolvedRequest,
+      clarificationDigest: state.clarificationDigest ?? digestFinnyEvidence("finny-clarification:pending"),
+      plan,
+    }).planSummary;
+  const planApprovalBinding = (plan: FinnyOperationPlan, approvalSummary = planApprovalSummary(plan)) => ({
     request: resolvedRequest,
     schema: plan.schema,
     planDigest: plan.planDigest,
@@ -176,11 +196,7 @@ export function createFinnyFinanceTool(
     artifactPolicyDigest: plan.artifactPolicyDigest,
     approvalPolicyDigest: plan.approvalPolicyDigest,
     verificationPolicyDigest: plan.verificationPolicyDigest,
-    approvalSummary: createFinnyPlanPreflight({
-      request: resolvedRequest,
-      clarificationDigest: state.clarificationDigest ?? digestFinnyEvidence("finny-clarification:pending"),
-      plan,
-    }).planSummary,
+    approvalSummary,
   });
 
   const executeRunUnlocked = async (callId: string, candidate: FinnyIntentCandidate) => {
@@ -224,9 +240,8 @@ export function createFinnyFinanceTool(
       const candidatePlan = controller.plan;
       let operationPlan: FinnyOperationPlan;
       if (existing) {
-        if (existing.plan.planDigest !== candidatePlan.planDigest)
-          throw new Error("Finny candidate does not match the custodied plan");
         operationPlan = await loadCustodiedPlan(options.evidenceBytes, existing);
+        assertCandidatePlanSemantics(candidatePlan, operationPlan);
       } else {
         operationPlan = candidatePlan;
         await storeFinnyOperationPlan(options.evidenceBytes, operationPlan);
@@ -287,7 +302,10 @@ export function createFinnyFinanceTool(
           },
         ]);
         if (approvalRequired) {
-          const approvalKey = toolCallApprovalKey(FINANCE_RESOURCE_NAME, planApprovalBinding(operationPlan));
+          const approvalKey = toolCallApprovalKey(
+            FINANCE_RESOURCE_NAME,
+            planApprovalBinding(operationPlan, output.planSummary),
+          );
           ref.pendingApprovals?.push({
             command: output.planSummary,
             reason: "approve the exact Finny finance plan before source execution",
@@ -319,14 +337,10 @@ export function createFinnyFinanceTool(
 
       if (state.stage === "PREFLIGHT" && state.planDigest) {
         activeAction = "plan";
-        const approvalKey = toolCallApprovalKey(FINANCE_RESOURCE_NAME, planApprovalBinding(operationPlan));
+        const planSummary = planApprovalSummary(operationPlan);
+        const approvalKey = toolCallApprovalKey(FINANCE_RESOURCE_NAME, planApprovalBinding(operationPlan, planSummary));
         const exactCallApproved = ref.approvedToolCalls?.get(callId) === approvalKey;
         if (state.approvalRequired !== false && !exactCallApproved) {
-          const planSummary = createFinnyPlanPreflight({
-            request: normalizedRequest,
-            clarificationDigest: state.clarificationDigest!,
-            plan: operationPlan,
-          }).planSummary;
           ref.pendingApprovals?.push({
             command: planSummary,
             reason: "approve the exact Finny finance plan before source execution",
@@ -575,9 +589,8 @@ export function createFinnyFinanceTool(
       const controller = compileFinnyControllerRequest(candidate, await Promise.resolve(options.capabilityCatalog));
       if (controller.status !== "compiled") return false;
       if (checkpoint) {
-        if (checkpoint.plan.planDigest !== controller.plan.planDigest)
-          throw new Error("Finny candidate does not match the custodied plan");
         approvalOperationPlan = await loadCustodiedPlan(options.evidenceBytes, checkpoint);
+        assertCandidatePlanSemantics(controller.plan, approvalOperationPlan);
       } else approvalOperationPlan = controller.plan;
       if (checkpoint) state = replayFinnyLedger(checkpoint.runId, checkpoint.ledger);
       return state.stage === "PREFLIGHT" && !!state.planDigest && state.approvalRequired !== false;

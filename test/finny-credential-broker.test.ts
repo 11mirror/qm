@@ -43,9 +43,6 @@ function delegate(sourcePlan?: FinanceService["sourcePlan"]): FinanceService {
     async clarify() {
       return { clarification: "scope", evidenceDigest: digest("clarify") };
     },
-    async preflightPlan() {
-      throw new Error("broker owns preflight");
-    },
     async executeOperation() {
       throw new Error("broker owns execution");
     },
@@ -91,7 +88,7 @@ function broker(options: {
   });
 }
 
-test("broker preflight stays local and reads credentials only for exact plan nodes", async () => {
+test("broker reads credentials only for exact plan nodes", async () => {
   const operationPlan = plan();
   const queries: string[] = [];
   const reads: string[] = [];
@@ -127,10 +124,6 @@ test("broker preflight stays local and reads credentials only for exact plan nod
   });
   const source = operationPlan.operations[0]!;
   const repeat = operationPlan.operations[1]!;
-  const preflight = await service.preflightPlan(
-    { request: "source", clarificationDigest: digest("clarify"), plan: operationPlan },
-    context,
-  );
   const first = await service.executeOperation(
     { plan: operationPlan, execution: { operation: source, dependencyResultSets: {}, dependencyDigests: {} } },
     context,
@@ -149,16 +142,12 @@ test("broker preflight stays local and reads credentials only for exact plan nod
 
   assert.deepEqual(reads, ["finny-netsuite", "finny-netsuite"]);
   assert.deepEqual(queries, ["SELECT value FROM source", "SELECT value FROM source"]);
-  assert.equal(JSON.stringify({ preflight, first, repeated }).includes("secret"), false);
+  assert.equal(JSON.stringify({ first, repeated }).includes("secret"), false);
 });
 
 test("NetSuite is required only at external execution", async () => {
   const operationPlan = plan();
   const service = broker({ reader: reader({}) });
-  await service.preflightPlan(
-    { request: "balance", clarificationDigest: digest("clarify"), plan: operationPlan },
-    context,
-  );
   await assert.rejects(
     service.executeOperation(
       {

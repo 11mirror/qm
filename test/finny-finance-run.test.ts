@@ -172,9 +172,6 @@ function planNativeService(
       calls.push("recoverSource");
       return { records: [{ operation: "recovered_result" }] };
     },
-    async preflightPlan({ plan }) {
-      throw new Error(`external preflight must not run for ${plan.capabilityId}`);
-    },
     async executeOperation() {
       throw new Error("sourcePlan owns test operation custody");
     },
@@ -448,6 +445,19 @@ test("plan-native approval binds every compiled plan authority field", async () 
   const approvalCapability: FinnyCapabilityDescriptor = {
     ...planNativeAp,
     approvalPolicy: { ...planNativeAp.approvalPolicy, mode: "before_source" },
+    operations: [
+      ...planNativeAp.operations,
+      { id: "ap_repeat", primitive: "repeat_pull", dependsOn: ["ap_source"], operationId: "ap_source" },
+      {
+        id: "ap_reconcile",
+        primitive: "reconcile",
+        dependsOn: ["ap_source", "ap_repeat"],
+        leftField: "total",
+        rightField: "total",
+        tolerance: "0.01",
+      },
+    ],
+    resultOperationId: "ap_reconcile",
   };
   const catalog: FinnyCapabilityCatalog = {
     ...planNativeCatalog,
@@ -480,9 +490,11 @@ test("plan-native approval binds every compiled plan authority field", async () 
   const expectedSummary = [
     "Capability: ap_balance @ ap_balance.2026-10-30",
     'Dimensions: {"artifact":"optional","currency":"source_base","entity":"all","grain":"total","period":"current","sources":["netsuite"]}',
-    "Provider data scope:",
-    '- ap_source: NetSuite SuiteQL "SELECT total FROM ap_balance"',
-    "Result operation: ap_source",
+    "Operations:",
+    '- {"dependsOn":[],"id":"ap_source","parameters":[],"primitive":"suiteql_select","sql":"SELECT total FROM ap_balance"}',
+    '- {"dependsOn":["ap_source"],"id":"ap_repeat","operationId":"ap_source","primitive":"repeat_pull"}',
+    '- {"dependsOn":["ap_source","ap_repeat"],"id":"ap_reconcile","leftField":"total","primitive":"reconcile","rightField":"total","tolerance":"0.01"}',
+    "Result operation: ap_reconcile",
     "Artifact: format json; allowed json; attachment when_requested",
     "Verification: required operations none; release gate delivery_eligible",
   ].join("\n");
@@ -586,7 +598,7 @@ test("resumed approval displays the same exact custodied plan summary", async ()
   assert.equal(resumedApproval?.approvalKey, firstApproval.approvalKey);
 });
 
-test("plan-native approval resume rejects a candidate that no longer compiles to its custodied plan", async () => {
+test("plan-native approval resume ignores unrelated catalog digest changes", async () => {
   const approvalCapability: FinnyCapabilityDescriptor = {
     ...planNativeAp,
     approvalPolicy: { ...planNativeAp.approvalPolicy, mode: "before_source" },
@@ -629,6 +641,66 @@ test("plan-native approval resume rejects a candidate that no longer compiles to
   ] as HarnessTurnInput["history"]);
   resumedTurn.runId = "run-ap-resume";
   resumedTurn.input = "AP balance";
+  const resumedCalls: string[] = [];
+  const resumedRef = approvalRef();
+  const resumed = createFinnyFinanceTool(resumedTurn, resumedRef, planNativeService(runStore, resumedCalls), {
+    runStore,
+    evidenceBytes,
+    capabilityCatalog: changedCatalog,
+  });
+
+  assert.equal(typeof resumed.needsApproval, "function");
+  if (typeof resumed.needsApproval !== "function") throw new Error("approval callback is unavailable");
+  const needsApproval = resumed.needsApproval;
+  assert.equal(await needsApproval(apCandidate), true);
+  const approvalKey = toolCallApprovalKey("finance", resumed.approvalKeyParams!(apCandidate));
+  resumedRef.approvedToolCalls?.set("approval-resumed", approvalKey);
+  const result = await resumed.execute("approval-resumed", apCandidate, undefined, undefined, {} as never);
+
+  assert.equal((result as { isError?: boolean }).isError, undefined);
+  assert.equal((await runStore.load("run-ap"))!.plan.catalogDigest, original.plan.catalogDigest);
+  assert.equal(resumedCalls.includes("sourcePlan:ap_balance"), true);
+});
+
+test("plan-native approval resume rejects selected capability semantics drift", async () => {
+  const runStore = createFinnyRunStore(createMemoryMap<FinnyRunV2Checkpoint>());
+  const evidenceBytes = createMemoryDurableByteStore();
+  const firstTurn = turn();
+  firstTurn.runId = "run-ap";
+  firstTurn.input = "AP balance";
+  const first = createFinnyFinanceTool(firstTurn, {} as ToolContextRef, planNativeService(runStore, []), {
+    runStore,
+    evidenceBytes,
+    capabilityCatalog: planNativeCatalog,
+  });
+  await first.execute("approval-original", apCandidate, undefined, undefined, {} as never);
+
+  const resumedTurn = turn([
+    {
+      type: "tool_result",
+      payload: { finnyWorkflowRunId: "run-ap" },
+      scopeLabel: "personal:actor-1",
+      seq: 1,
+      createdAt: 1,
+    },
+  ] as HarnessTurnInput["history"]);
+  resumedTurn.runId = "run-ap-resume";
+  resumedTurn.input = "AP balance";
+  const changedAp: FinnyCapabilityDescriptor = {
+    ...planNativeAp,
+    operations: planNativeAp.operations.map((operation) =>
+      operation.primitive === "suiteql_select"
+        ? { ...operation, sql: "SELECT changed_total FROM ap_balance" }
+        : operation,
+    ),
+  };
+  const changedCatalog: FinnyCapabilityCatalog = {
+    ...planNativeCatalog,
+    capabilities: new Map([
+      [changedAp.semanticCapability, changedAp],
+      [planNativeInventory.semanticCapability, planNativeInventory],
+    ]),
+  };
   const resumed = createFinnyFinanceTool(resumedTurn, {} as ToolContextRef, planNativeService(runStore, []), {
     runStore,
     evidenceBytes,
