@@ -140,7 +140,7 @@ test("every unattended read grant type is accepted on create", async () => {
   assert.deepEqual(created.ok ? created.cron.unattendedGrants : undefined, grants);
 });
 
-test("a grant-carrying cron delivers only to its owner: shared or third-party destinations are refused at create and retarget", async () => {
+test("a grant-carrying cron lives in its owner's DM, and only the live owner chooses where its output goes", async () => {
   const { built, control } = setup();
   await built.app.upsertDirectory([
     { principalId: "admin-alice", displayName: "Alice", type: "internal" },
@@ -157,25 +157,23 @@ test("a grant-carrying cron delivers only to its owner: shared or third-party de
     unattendedGrants: ["admin.spend.read"],
   };
 
-  for (const elsewhere of [{ channel: "spend" }, { recipient: "User Two" }, { destinationKey: ROOM.key }]) {
-    const refused = await control.createCron({ ...request, ...elsewhere }, live);
-    assert.equal(refused.ok, false, JSON.stringify(elsewhere));
-    assert.match(refused.ok ? "" : refused.message, /delivers only to them/);
+  const homedInRoom = await control.createCron({ ...request, channel: "spend" }, live);
+  assert.equal(homedInRoom.ok, false);
+  assert.match(homedInRoom.ok ? "" : homedInRoom.message, /lives in its owner's own DM/);
+
+  for (const elsewhere of [{ recipient: "User Two" }, { destinationKey: ROOM.key }]) {
+    const created = await control.createCron({ ...request, ...elsewhere }, live);
+    assert.ok(created.ok, JSON.stringify(elsewhere));
+    assert.equal(created.cron.ownerScopeId, scopeId("personal", "admin-alice"));
   }
 
   const own = await control.createCron(request, live);
   assert.ok(own.ok, JSON.stringify(own));
-  assert.equal(own.cron.ownerScopeId, scopeId("personal", "admin-alice"));
-
-  const retarget = await control.retargetCron(own.cron.id, ROOM.key, live);
-  assert.equal(retarget.ok, false);
-  assert.match(retarget.ok ? "" : retarget.message, /delivers only to them/);
-
-  const cleared = await control.patchCron(own.cron.id, { unattendedGrants: [] }, claims("admin-alice"));
-  assert.ok(cleared.ok, "removing grants only narrows access, so it needs no live admin turn");
-  assert.deepEqual(cleared.ok ? cleared.cron.unattendedGrants : undefined, []);
+  const unattended = await control.retargetCron(own.cron.id, ROOM.key, claims("admin-alice"));
+  assert.equal(unattended.ok, false, "an autonomous turn cannot move a grant-carrying cron");
   const moved = await control.retargetCron(own.cron.id, ROOM.key, live);
-  assert.ok(moved.ok, "once grants are gone the cron can deliver anywhere");
+  assert.ok(moved.ok, JSON.stringify(moved));
+  assert.deepEqual(moved.ok ? moved.cron.unattendedGrants : undefined, ["admin.spend.read"]);
 });
 
 test("a raw unreaffirmed cron patch strips unattended grants; a live-owner patch reaffirms them", async () => {

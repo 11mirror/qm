@@ -75,7 +75,11 @@ test("cron credential approval resumes the original fire once and delivers to th
   assert.equal(request.actor.externalId, "U_ALICE");
   assert.equal(request.conversation.threadRef, f.ask.requesterThreadRef);
   assert.deepEqual(request.triggerDestination, destination);
-  assert.equal(request.unattendedGrants, undefined, "grants never ride a fire that delivers to another person");
+  assert.deepEqual(
+    request.unattendedGrants,
+    ["allowed-job-grant"],
+    "grants stay with the owner's home cron wherever its output goes",
+  );
   assert.match(request.text, /approved access until revoked/);
   assert.ok(!request.text.includes(f.ask.id) && !request.text.includes(f.ask.purpose));
   const pending = await f.deliveries.pending("principal");

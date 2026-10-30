@@ -458,7 +458,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         const refusal = await unattendedGrantRefusal(
           app,
           admin,
-          { owner: capability.actorId, ownerScopeId, ...(destination ? { destination } : {}) },
+          { owner: capability.actorId, ownerScopeId },
           capability,
         );
         if (refusal) return { ok: false, ...refusal };
@@ -694,12 +694,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         };
       }
       if ((cron.unattendedGrants?.length ?? 0) > 0) {
-        const refusal = await unattendedGrantRefusal(
-          app,
-          admin,
-          { ...cron, destination: resolved.destination },
-          capability,
-        );
+        const refusal = await unattendedGrantRefusal(app, admin, cron, capability);
         if (refusal) return { ok: false, code: "forbidden", message: refusal.message };
       }
       if (isDeepStrictEqual(cron.destination, resolved.destination)) return { ok: true, cron };
