@@ -101,6 +101,7 @@ function assertCandidatePlanSemantics(candidate: FinnyOperationPlan, custodied: 
   if (
     candidate.capabilityId !== custodied.capabilityId ||
     candidate.revisionId !== custodied.revisionId ||
+    candidate.semanticCapability !== custodied.semanticCapability ||
     candidate.dimensionsDigest !== custodied.dimensionsDigest ||
     candidate.operationGraphDigest !== custodied.operationGraphDigest ||
     candidate.resultOperationId !== custodied.resultOperationId ||

@@ -688,11 +688,7 @@ test("plan-native approval resume rejects selected capability semantics drift", 
   resumedTurn.input = "AP balance";
   const changedAp: FinnyCapabilityDescriptor = {
     ...planNativeAp,
-    operations: planNativeAp.operations.map((operation) =>
-      operation.primitive === "suiteql_select"
-        ? { ...operation, sql: "SELECT changed_total FROM ap_balance" }
-        : operation,
-    ),
+    semanticCapability: "finance.ap.changed",
   };
   const changedCatalog: FinnyCapabilityCatalog = {
     ...planNativeCatalog,
