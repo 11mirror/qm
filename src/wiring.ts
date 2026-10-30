@@ -2210,6 +2210,9 @@ export function buildApp(
   const runtimeDeps: RuntimeDeps = {
     config: configStore,
     harnessId: fallbackHarness,
+    ...(config.finnyProfile
+      ? { runtimeConstraint: { harnessId: "pi" as const, modelId: config.finnyProfile.modelId } }
+      : {}),
     get baseModelDefault() {
       return fallback.modelId;
     },

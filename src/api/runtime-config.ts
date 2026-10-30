@@ -28,6 +28,8 @@ import {
 import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../model/model-catalog.ts";
 import type { RuntimeChoice } from "../harness/harness.ts";
 
+type RuntimeConstraint = Pick<RuntimeChoice, "harnessId" | "modelId">;
+
 export type RuntimeDeps = Partial<
   Pick<
     AppDeps,
@@ -39,9 +41,19 @@ export type RuntimeDeps = Partial<
     | "refreshModels"
     | "userModelCredentials"
   >
-> & { baseModelDefault?: string };
+> & { baseModelDefault?: string; runtimeConstraint?: RuntimeConstraint };
+
+function runtimeConstraintError(constraint: RuntimeConstraint, choice: Partial<RuntimeChoice>): string | null {
+  if (
+    (choice.harnessId !== undefined && choice.harnessId !== constraint.harnessId) ||
+    (choice.modelId !== undefined && choice.modelId !== constraint.modelId)
+  )
+    return "runtime_constraint_mismatch";
+  return null;
+}
 
 export function runtimeFallback(ctx: { deps: RuntimeDeps }): { harnessId: HarnessId; modelId: string } {
+  if (ctx.deps.runtimeConstraint) return ctx.deps.runtimeConstraint;
   const harnessId = harnessIdOrPi(ctx.deps.harnessId);
   const gatewayIds = gatewayModelCatalog(true).map((model) => model.id);
   const providers =
@@ -52,6 +64,7 @@ export function runtimeFallback(ctx: { deps: RuntimeDeps }): { harnessId: Harnes
 }
 
 export async function userRuntimeConfigBody(ctx: { deps: RuntimeDeps }, scope: ScopeId, actorId: string) {
+  if (ctx.deps.runtimeConstraint) return runtimeConfigBody(ctx, scope);
   const account = await ctx.deps.config?.getModelAccountDurable(actorId);
   const store = ctx.deps.userModelCredentials;
   if (!store || !account || account === "company") return runtimeConfigBody(ctx, scope);
@@ -95,6 +108,32 @@ export async function runtimeConfigBody(
   if (authorizeChoice)
     ctx = { deps: { ...ctx.deps, providerKeys: ALL_PROVIDERS_AVAILABLE, modelCredentials: undefined } };
   const config = ctx.deps.config!;
+  const constraint = ctx.deps.runtimeConstraint;
+  if (constraint) {
+    const constraintError = runtimeConstraintError(constraint, requested ?? {});
+    if (constraintError) throw new NonRetryableTurnError(constraintError);
+    const effective = {
+      ...constraint,
+      ...(requested?.effortLevel !== undefined ? { effortLevel: requested.effortLevel } : {}),
+      ...(typeof requested?.fastMode === "boolean" ? { fastMode: requested.fastMode } : {}),
+    };
+    const validationError = validateRuntimeChoice(effective);
+    if (validationError) throw new NonRetryableTurnError(validationError);
+    const modelIds = [constraint.modelId];
+    return {
+      scopeId: scope,
+      ...(purpose ? { executionPurpose: purpose } : {}),
+      approvedHarnesses: [constraint.harnessId],
+      modelsByHarness: { [constraint.harnessId]: modelIds },
+      modelCatalog: modelCatalogFor(new Set(modelIds)),
+      orgDefault: { ...constraint, revision: 0 },
+      scopeOverride: null,
+      effective,
+      upgradeAvailable: false,
+      fastModeModelIds: fastModeModelIds().filter((modelId) => modelId === constraint.modelId),
+      interactiveFastMode: await config.getInteractiveFastModeDurable(),
+    };
+  }
   const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
   const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
   const fallback = runtimeFallback(ctx);
@@ -237,6 +276,7 @@ export async function webuiModelEnabled(
   modelId: string,
   purpose?: RuntimePurpose,
 ): Promise<boolean> {
+  if (ctx.deps.runtimeConstraint) return modelId === ctx.deps.runtimeConstraint.modelId;
   modelId = codexProviderModelId(modelId);
   const config = ctx.deps.config!;
   const picker = await config.getWebuiModelsDurable(orgScope());
@@ -255,6 +295,10 @@ export async function availableRuntimeError(
   choice: RuntimeChoice,
   purpose?: RuntimePurpose,
 ): Promise<string | null> {
+  const constraintError = ctx.deps.runtimeConstraint
+    ? runtimeConstraintError(ctx.deps.runtimeConstraint, choice)
+    : null;
+  if (constraintError) return constraintError;
   await ctx.deps.refreshModels?.();
   let reason: string;
   try {
@@ -292,6 +336,17 @@ export async function requestedRuntimeError(
   requested: Partial<RuntimeChoice>,
   purpose?: RuntimePurpose,
 ): Promise<string | null> {
+  if (ctx.deps.runtimeConstraint) {
+    const constraintError = runtimeConstraintError(ctx.deps.runtimeConstraint, requested);
+    if (constraintError) return constraintError;
+    const validationError = validateRuntimeChoice({
+      harnessId: requested.harnessId ?? ctx.deps.runtimeConstraint.harnessId,
+      modelId: requested.modelId ?? ctx.deps.runtimeConstraint.modelId,
+      ...(requested.effortLevel !== undefined ? { effortLevel: requested.effortLevel } : {}),
+      ...(requested.fastMode !== undefined ? { fastMode: requested.fastMode } : {}),
+    });
+    if (validationError) return validationError;
+  }
   const { effective } = await runtimeConfigBody(ctx, scope, undefined, purpose, requested).catch((error: unknown) => {
     if (!(error instanceof NonRetryableTurnError)) throw error;
     return runtimeConfigBody(ctx, scope, undefined, purpose);

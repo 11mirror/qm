@@ -1,4 +1,4 @@
-import { availableRuntimeError } from "../src/api/runtime-config.ts";
+import { availableRuntimeError, requestedRuntimeError, runtimeConfigBody } from "../src/api/runtime-config.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -231,4 +231,48 @@ test("runtime availability preserves the existing harness normalization of inher
   const resolved = resolveRuntimeChoice(config, ORG, PERSONAL, choice, choice);
   assert.equal(resolved.modelId, choice.modelId);
   assert.equal(resolved.effortLevel, undefined);
+});
+
+test("a deployment runtime constraint is the only advertised and effective runtime", async () => {
+  const config = createMemoryConfigStore("default-org");
+  await config.setApprovedHarnesses(["pi", "claude"]);
+  await config.setRuntimeSelection(ORG, { harnessId: "claude", modelId: "claude-opus-5" });
+  await config.setRuntimeSelection(PERSONAL, { harnessId: "pi", modelId: "gpt-6-astra" });
+  await config.setPurposeRuntime("subagent", { harnessId: "claude", modelId: "claude-sonnet-5" });
+  const runtimeConstraint = { harnessId: "pi" as const, modelId: "gpt-5.6-sol" };
+
+  const body = await runtimeConfigBody(
+    { deps: { config, harnessId: "claude", runtimeConstraint } },
+    PERSONAL,
+    async () => "account_runtime_unavailable",
+    "subagent",
+    { effortLevel: "high", fastMode: true },
+  );
+
+  assert.deepEqual(body.approvedHarnesses, ["pi"]);
+  assert.deepEqual(body.modelsByHarness, { pi: ["gpt-5.6-sol"] });
+  assert.deepEqual(Object.keys(body.modelCatalog), ["gpt-5.6-sol"]);
+  assert.deepEqual(body.orgDefault, { ...runtimeConstraint, revision: 0 });
+  assert.equal(body.scopeOverride, null);
+  assert.deepEqual(body.effective, { ...runtimeConstraint, effortLevel: "high", fastMode: true });
+});
+
+test("a deployment runtime constraint rejects other runtimes while preserving effort and fast validation", async () => {
+  const config = createMemoryConfigStore("default-org");
+  const runtimeConstraint = { harnessId: "pi" as const, modelId: "gpt-5.6-sol" };
+  const ctx = { deps: { config, runtimeConstraint } };
+
+  assert.equal(
+    await availableRuntimeError(ctx, PERSONAL, { harnessId: "claude", modelId: "claude-opus-5" }, "cron"),
+    "runtime_constraint_mismatch",
+  );
+  assert.equal(
+    await requestedRuntimeError(ctx, PERSONAL, { modelId: "gpt-6-astra" }, "subagent"),
+    "runtime_constraint_mismatch",
+  );
+  assert.equal(
+    await requestedRuntimeError(ctx, PERSONAL, { effortLevel: "impossible" }, "subagent"),
+    "effort_not_supported",
+  );
+  assert.equal(await requestedRuntimeError(ctx, PERSONAL, { effortLevel: "high", fastMode: true }, "subagent"), null);
 });
