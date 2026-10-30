@@ -6,7 +6,9 @@ Source branch: `codex/qm-host-attestation`
 
 ## Executive status
 
-The host-attested finance harness is implemented, including durable credential rebinding, stage checkpoints, evidence custody, and delivery attestation. The user-facing finance product is still blocked on reviewed AR semantics and live deployment acceptance.
+The host-attested finance harness is now general and plan-native when a reviewed capability catalog is configured. The production path resolves a catalog capability, compiles its complete operation graph, executes and checkpoints each primitive durably, verifies the graph's required controls, and releases only the designated result. AP and an unrelated inventory capability prove that this is not a report-by-report TypeScript controller.
+
+The harness is still not live-validated with a real authenticated Pi model. The running development environment has no usable model credential, no deployment-owned NetSuite binding, no Slack pool slot, and no Firefox acceptance surface. The user-facing finance product is additionally blocked on finance-reviewed AR semantics.
 
 Observed acceptance failure:
 
@@ -16,7 +18,7 @@ Observed acceptance failure:
 
 Finance IR now preserves the AR measure, named entity, and historical cutoff. The compiler still returns `schema_mapping_required` and makes no source call because the executable registry has no finance-reviewed NetSuite field, join, currency, book, entity, or cutoff semantics for this request family. This is safe fail-closed behavior, but it does not meet the product requirement.
 
-Do not report this build as “the finance product works.” Report it as: **host orchestration and durable custody implemented; AR capability authority and live deployment acceptance incomplete**.
+Do not report this build as “live Pi works” or “the finance product works.” Report it as: **the general plan-native harness is implemented and locally verified; real Pi authentication, AR capability authority, and live provider/surface acceptance are incomplete**.
 
 ## What was implemented
 
@@ -24,7 +26,7 @@ The implementation inventory and source links are in [Finny Pi harness implement
 
 The architectural change is real: Pi sees one `finance({request})` operation, while the host compiles and drives the Golden Loop. Seven internal `FinanceService` stages remain as host and compatibility-test seams; they are not model-visible.
 
-The build contains reviewed skill-bundle loading, typed Finance IR, a reviewed capability/schema registry, exact approval binding, crash-resumable stage checkpoints, durable credential rebinding, evidence custody, repeat-pull/accounting verification, artifact publication, safe health/trace APIs, typed provider diagnostics, Slack delivery attestation, and bounded autoresearch scaffolding.
+The build contains reviewed knowledge and capability-pack loading, catalog-driven intent resolution, deterministic operation-plan compilation, exact approval binding, durable per-operation result custody, crash-resumable stage checkpoints, credential rebinding, repeat-pull/reconciliation verification, artifact publication, safe plan-native trace APIs, typed provider diagnostics, Slack delivery attestation, and bounded autoresearch scaffolding.
 
 ## Why the screenshot fails
 
@@ -34,11 +36,15 @@ Knowledge and execution authority are separate:
 2. Finance IR represents request dimensions.
 3. The compiler executes only registry entries backed by reviewed schema authority and deterministic queries.
 
-Only current aggregate AP has such an entry. Skill prose is not sufficient authority to invent SuiteQL or NetSuite mappings. The next build must turn finance-reviewed rules into reusable compiler primitives and registry entries.
+The bundled compatibility pack contains current aggregate AP and an unrelated inventory capability. Both traverse the same primitives and controller. Skill prose is not sufficient authority to invent SuiteQL or NetSuite mappings; AR must arrive as reviewed deployment-owned capability data, not another host code path.
 
 ## P0 blockers
 
-### 1. Implement the failed acceptance capability family
+### 1. Prove the real Pi harness boundary
+
+Install a usable credential for the pinned `PI_MODEL`, activate the Finny profile with the reviewed skills directory, and run a real turn. Acceptance requires proof that Pi sees only `finance({request})`, the host selects and executes the reviewed plan, and no model-authored figure bypasses `DELIVERY_ELIGIBLE`.
+
+### 2. Implement the failed acceptance capability family
 
 The first target is the exact failed request family:
 
@@ -58,7 +64,7 @@ Required work:
 - Add frozen positive, negative, boundary, and injection cases. Unsupported dimensions must never silently broaden a query.
 - Validate against a safe non-production NetSuite account and finance-owned expected totals.
 
-### 2. Prove deployment-owned credentials and provider behavior live
+### 3. Prove deployment-owned credentials and provider behavior live
 
 The source implementation requires Postgres-backed sessions and runs, a stable `CONNECTOR_SECRET_KEY`, and an operator-selected positive `FINNY_PROVIDER_TIMEOUT_MS`. Restart tests prove that opaque credential bindings survive process replacement, and typed provider failures retain safe status/cause diagnostics without upstream bodies or secrets. Each provider request receives a fresh configured deadline so a stalled dependency cannot hold the serialized run indefinitely.
 
@@ -66,7 +72,7 @@ The current development environment has no deployment-owned NetSuite binding or 
 
 The supported configuration matrix is documented in [Finny Pi harness implementation status](finny-implementation-status.md#configuration-contract). In short, Finny uses the existing `PI_MODEL` setting as its sole pinned model owner, requires the Pi harness plus Postgres session/run stores and a stable connector secret, requires a positive provider timeout, and optionally accepts a reviewed skills directory.
 
-### 3. Prove a live desktop acceptance matrix
+### 4. Prove a live desktop acceptance matrix
 
 Run from installed QM, not only fixtures:
 
@@ -115,14 +121,14 @@ Re-run after every capability change; historical counts are not evidence for new
 
 ## Continuation order
 
-1. Obtain finance review for AR-as-of/entity schema authority and compiler semantics.
-2. Implement that compiler family with tests first.
-3. Bind deployment-owned read-only NetSuite and model credentials through QM.
-4. Validate AR for a synthetic entity fixture against finance-owned expected data.
+1. Supply a working pinned model credential and prove one real Pi turn through the catalog-enabled production controller.
+2. Complete fresh-context correctness, security, durability, and Wall of shame reviews for the current plan-native head; resolve all findings.
+3. Obtain finance review for AR-as-of/entity/currency/book/migration schema authority and express it as a deployment-owned capability pack using the existing primitives.
+4. Bind deployment-owned read-only NetSuite credentials through QM and validate AR for a synthetic entity fixture against finance-owned expected data.
 5. Run the installed-desktop matrix, including restart and provider failures.
 6. Prove Slack parity and attestation in Firefox.
-7. Expand capabilities deliberately; never use model-generated SQL.
+7. Remove the compatibility registry after downstream deployments supply reviewed catalogs; never use model-generated SQL.
 
 ## Definition of done
 
-Call the harness working only when installed QM can answer a deployment-owned open-AR-as-of acceptance request from NetSuite, show reviewed scope/cutoff, pass independent verification, release only after `DELIVERY_ELIGIBLE`, survive restart without losing credential presence, and reproduce the governed outcome through Slack.
+Call the architecture implemented now, but call the live harness working only after installed QM completes a real authenticated Pi turn through the catalog-enabled controller. Call the finance acceptance complete only when it can additionally answer a deployment-owned open-AR-as-of request from NetSuite, show reviewed scope/cutoff, pass independent verification, release only after `DELIVERY_ELIGIBLE`, survive restart without losing credential presence, and reproduce the governed outcome through Slack.

@@ -7,7 +7,12 @@ import {
   type FinnyHostEvent,
   type FinnyLedgerMetadata,
 } from "../src/finny/golden-loop.ts";
-import { createFinnyRunStore, type FinnyRunCheckpoint } from "../src/finny/run-store.ts";
+import {
+  createFinnyRunStore,
+  type FinnyRunCheckpoint,
+  type FinnyStoredRunCheckpoint,
+  type FinnyRunV2Binding,
+} from "../src/finny/run-store.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
@@ -17,6 +22,21 @@ const binding = {
   sessionId: "session-1",
   scopeId: "scope-1",
   artifactRequest: "optional" as const,
+};
+
+const v2Binding: FinnyRunV2Binding = {
+  schema: "finny.run.v2",
+  runId: "run-v2",
+  requestDigest: digestFinnyEvidence("request-v2"),
+  sessionId: "session-v2",
+  scopeId: "scope-v2",
+  plan: {
+    catalogDigest: digestFinnyEvidence("catalog"),
+    capabilityId: "ap-gl-control-balance",
+    revisionId: "2026-10-30",
+    operationGraphDigest: digestFinnyEvidence("operation-graph"),
+    planDigest: digestFinnyEvidence("plan-v2"),
+  },
 };
 
 const event = (
@@ -33,8 +53,8 @@ const event = (
     ...fields,
   }) as FinnyHostEvent;
 
-function ledgerFor(events: readonly FinnyHostEvent[]): readonly FinnyLedgerMetadata[] {
-  let state = createFinnyGoldenLoop(binding.runId);
+function ledgerFor(events: readonly FinnyHostEvent[], runId: string = binding.runId): readonly FinnyLedgerMetadata[] {
+  let state = createFinnyGoldenLoop(runId);
   for (const item of events) state = applyFinnyHostEvent(state, item);
   return state.ledger;
 }
@@ -110,6 +130,96 @@ test("initialization rejects a checkpoint without its canonical artifact request
   await assert.rejects(store.initialize(binding), /artifact request/i);
 });
 
+test("v2 initialization persists one canonical plan binding without an artifact request", async () => {
+  const backing = createMemoryMap<FinnyStoredRunCheckpoint>();
+  const store = createFinnyRunStore(backing, () => "2026-10-30T11:00:00.000Z");
+
+  const initialized = await store.initialize(v2Binding);
+
+  assert.deepEqual(initialized, {
+    ...v2Binding,
+    ledger: [],
+    updatedAt: "2026-10-30T11:00:00.000Z",
+  });
+  assert.equal("artifactRequest" in initialized, false);
+  assert.deepEqual(Object.keys((await backing.get(v2Binding.runId))!).sort(), [
+    "ledger",
+    "plan",
+    "requestDigest",
+    "runId",
+    "schema",
+    "scopeId",
+    "sessionId",
+    "updatedAt",
+  ]);
+});
+
+test("v2 initialization rejects conflicting plan identity", async () => {
+  const store = createFinnyRunStore(createMemoryMap<FinnyStoredRunCheckpoint>());
+  await store.initialize(v2Binding);
+
+  for (const [field, value] of [
+    ["catalogDigest", digestFinnyEvidence("other-catalog")],
+    ["capabilityId", "inventory-velocity"],
+    ["revisionId", "2026-10-31"],
+    ["operationGraphDigest", digestFinnyEvidence("other-operation-graph")],
+    ["planDigest", digestFinnyEvidence("other-plan")],
+  ] as const) {
+    await assert.rejects(store.initialize({ ...v2Binding, plan: { ...v2Binding.plan, [field]: value } }), /binding/i);
+  }
+});
+
+test("v2 initialization rejects malformed plan identity", async () => {
+  const store = createFinnyRunStore(createMemoryMap<FinnyStoredRunCheckpoint>());
+  const malformed = [
+    { ...v2Binding.plan, catalogDigest: "sha256:not-a-digest" },
+    { ...v2Binding.plan, capabilityId: "" },
+    { ...v2Binding.plan, revisionId: "" },
+    { ...v2Binding.plan, operationGraphDigest: "not-a-digest" },
+    { ...v2Binding.plan, planDigest: "not-a-digest" },
+  ];
+
+  for (const plan of malformed)
+    await assert.rejects(store.initialize({ ...v2Binding, plan } as FinnyRunV2Binding), /plan identity/i);
+});
+
+test("v2 initialization rejects a duplicated artifact request", async () => {
+  const store = createFinnyRunStore(createMemoryMap<FinnyStoredRunCheckpoint>());
+
+  await assert.rejects(
+    store.initialize({ ...v2Binding, artifactRequest: "required" } as FinnyRunV2Binding),
+    /artifact request/i,
+  );
+});
+
+test("v2 initialization rejects an invalid persisted schema", async () => {
+  const backing = createMemoryMap<FinnyStoredRunCheckpoint>();
+  await backing.put(v2Binding.runId, {
+    ...v2Binding,
+    schema: "finny.run.v3",
+    ledger: [],
+    updatedAt: "2026-10-30T10:00:00.000Z",
+  } as unknown as FinnyStoredRunCheckpoint);
+  const store = createFinnyRunStore(backing);
+
+  await assert.rejects(store.initialize(v2Binding), /schema/i);
+  await assert.rejects(store.load(v2Binding.runId), /schema/i);
+});
+
+test("checkpoint preserves the exact v2 plan binding", async () => {
+  const store = createFinnyRunStore(createMemoryMap<FinnyStoredRunCheckpoint>());
+  await store.initialize(v2Binding);
+  const metadata = ledgerFor([clarify], v2Binding.runId)[0]!;
+
+  const checkpoint = await store.checkpoint(v2Binding.runId, metadata);
+
+  assert.equal("schema" in checkpoint, true);
+  if (!("schema" in checkpoint)) throw new Error("expected a v2 checkpoint");
+  assert.equal(checkpoint.schema, "finny.run.v2");
+  assert.deepEqual(checkpoint.plan, v2Binding.plan);
+  assert.equal("artifactRequest" in checkpoint, false);
+});
+
 test("checkpoint atomically appends valid ledger metadata and preserves the artifact reference", async () => {
   const backing = createMemoryMap<FinnyRunCheckpoint>();
   const first = createFinnyRunStore(backing, () => "2026-10-30T11:00:00.000Z");
@@ -183,4 +293,18 @@ test("run work is serialized across store instances sharing the distributed lock
   await Promise.all([work(first), work(second)]);
 
   assert.equal(maximum, 1);
+});
+
+test("a run lock is reentrant within the same host workflow", async () => {
+  const store = createFinnyRunStore(createMemoryMap<FinnyRunCheckpoint>());
+  const calls: string[] = [];
+
+  await store.withRunLock(binding.runId, async () => {
+    calls.push("outer");
+    await store.withRunLock(binding.runId, async () => {
+      calls.push("inner");
+    });
+  });
+
+  assert.deepEqual(calls, ["outer", "inner"]);
 });

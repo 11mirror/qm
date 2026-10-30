@@ -10,6 +10,7 @@ import {
   isFinnyEventKind,
   isFinnyEvidenceRole,
   isFinnyStage,
+  type FinnyCompletedOperation,
   type FinnyGoldenLoopState,
   type FinnyLedgerMetadata,
 } from "./golden-loop.ts";
@@ -19,7 +20,7 @@ export type FinnyTraceTransition = Pick<
   "eventId" | "eventKind" | "occurredAt" | "fromStage" | "toStage" | "evidence"
 >;
 
-export interface FinnyTraceSnapshot {
+export interface FinnyTraceSnapshotV2 {
   schema: "finny.trace.v2";
   workflowRunId: string;
   currentRunId: string;
@@ -35,6 +36,34 @@ export interface FinnyTraceSnapshot {
   latestAction?: FinnyTraceAction;
   blocker?: FinnyTraceBlocker;
 }
+
+export interface FinnyTraceOperation extends FinnyCompletedOperation {
+  operationId: string;
+}
+
+export interface FinnyTraceSnapshotV3 extends Omit<FinnyTraceSnapshotV2, "schema"> {
+  schema: "finny.trace.v3";
+  plan: {
+    catalogDigest: string;
+    capabilityId: string;
+    revisionId: string;
+    operationGraphDigest: string;
+    planDigest: string;
+  };
+  operations: readonly FinnyTraceOperation[];
+  approval: {
+    required: boolean;
+    policyDigest: string;
+    digest?: string;
+  };
+  verification: {
+    status: "pending" | "passed";
+    policyDigest: string;
+    digest?: string;
+  };
+}
+
+export type FinnyTraceSnapshot = FinnyTraceSnapshotV2 | FinnyTraceSnapshotV3;
 
 export interface FinnyTraceAction {
   action: FinanceAction;
@@ -103,7 +132,7 @@ function safeTransition(value: unknown): FinnyTraceTransition | null {
   };
 }
 
-export function safeFinnyTraceSnapshot(value: unknown): FinnyTraceSnapshot | null {
+function safeFinnyTraceSnapshotV2(value: unknown): FinnyTraceSnapshotV2 | null {
   const input = record(value);
   if (!input || input.schema !== "finny.trace.v2" || input.profile !== "finny" || input.harness !== "pi") return null;
   const workflowRunId = text(input.workflowRunId);
@@ -180,7 +209,7 @@ export function safeFinnyTraceSnapshot(value: unknown): FinnyTraceSnapshot | nul
     modelId,
     surface,
     stage,
-    outcome: outcome as FinnyTraceSnapshot["outcome"],
+    outcome: outcome as FinnyTraceSnapshotV2["outcome"],
     transitionCount: transitionCount as number,
     ...(latestTransition ? { latestTransition } : {}),
     ...(action
@@ -208,6 +237,83 @@ export function safeFinnyTraceSnapshot(value: unknown): FinnyTraceSnapshot | nul
   };
 }
 
+function safeDigest(value: unknown): string | null {
+  const valueText = text(value);
+  return valueText && DIGEST.test(valueText) ? valueText : null;
+}
+
+function safeFinnyTraceSnapshotV3(value: unknown): FinnyTraceSnapshotV3 | null {
+  const input = record(value);
+  if (!input || input.schema !== "finny.trace.v3") return null;
+  const common = safeFinnyTraceSnapshotV2({ ...input, schema: "finny.trace.v2" });
+  const plan = record(input.plan);
+  const catalogDigest = plan && safeDigest(plan.catalogDigest);
+  const capabilityId = plan && text(plan.capabilityId);
+  const revisionId = plan && text(plan.revisionId);
+  const operationGraphDigest = plan && safeDigest(plan.operationGraphDigest);
+  const planDigest = plan && safeDigest(plan.planDigest);
+  const approval = record(input.approval);
+  const approvalPolicyDigest = approval && safeDigest(approval.policyDigest);
+  const approvalDigest = approval?.digest === undefined ? undefined : safeDigest(approval.digest);
+  const verification = record(input.verification);
+  const verificationPolicyDigest = verification && safeDigest(verification.policyDigest);
+  const verificationDigest = verification?.digest === undefined ? undefined : safeDigest(verification.digest);
+  const verificationStatus = verification && text(verification.status);
+  if (
+    !common ||
+    !catalogDigest ||
+    !capabilityId ||
+    !revisionId ||
+    !operationGraphDigest ||
+    !planDigest ||
+    !approval ||
+    typeof approval.required !== "boolean" ||
+    !approvalPolicyDigest ||
+    (approval.digest !== undefined && !approvalDigest) ||
+    !verificationPolicyDigest ||
+    (verificationStatus !== "pending" && verificationStatus !== "passed") ||
+    (verification?.digest !== undefined && !verificationDigest) ||
+    !Array.isArray(input.operations)
+  )
+    return null;
+  const operations = input.operations.map((value) => {
+    const operation = record(value);
+    const operationId = operation && text(operation.operationId);
+    const primitive = operation && text(operation.primitive);
+    const operationDigest = operation && safeDigest(operation.operationDigest);
+    const resultDigest = operation && safeDigest(operation.resultDigest);
+    const knownPrimitive =
+      primitive &&
+      ["suiteql_select", "project", "filter", "aggregate", "join", "reconcile", "repeat_pull"].includes(primitive);
+    return operationId && knownPrimitive && operationDigest && resultDigest
+      ? { operationId, primitive: primitive as FinnyCompletedOperation["primitive"], operationDigest, resultDigest }
+      : null;
+  });
+  if (operations.some((operation) => operation === null)) return null;
+  return {
+    ...common,
+    schema: "finny.trace.v3",
+    plan: { catalogDigest, capabilityId, revisionId, operationGraphDigest, planDigest },
+    operations: operations as FinnyTraceOperation[],
+    approval: {
+      required: approval.required,
+      policyDigest: approvalPolicyDigest,
+      ...(approvalDigest ? { digest: approvalDigest } : {}),
+    },
+    verification: {
+      status: verificationStatus,
+      policyDigest: verificationPolicyDigest,
+      ...(verificationDigest ? { digest: verificationDigest } : {}),
+    },
+  };
+}
+
+export function safeFinnyTraceSnapshot(value: unknown): FinnyTraceSnapshot | null {
+  const input = record(value);
+  if (input?.schema === "finny.trace.v3") return safeFinnyTraceSnapshotV3(value);
+  return safeFinnyTraceSnapshotV2(value);
+}
+
 export function createFinnyTraceSnapshot(
   state: FinnyGoldenLoopState,
   turn: Pick<HarnessTurnInput, "runId" | "runtime" | "session" | "surfaceName">,
@@ -217,10 +323,10 @@ export function createFinnyTraceSnapshot(
   const currentRunId = turn.runId;
   if (!currentRunId) throw new Error("Finny trace requires a trusted runId");
   const eligible = state.stage === "DELIVERY_ELIGIBLE";
-  let outcome: FinnyTraceSnapshot["outcome"] = "blocked";
+  let outcome: FinnyTraceSnapshotV2["outcome"] = "blocked";
   if (eligible) outcome = turn.surfaceName === "web" ? "web_only_unattested" : "delivery_pending_attestation";
   const latest = state.ledger.at(-1);
-  return {
+  const common: FinnyTraceSnapshotV2 = {
     schema: "finny.trace.v2",
     workflowRunId: state.runId,
     currentRunId,
@@ -246,5 +352,41 @@ export function createFinnyTraceSnapshot(
       : {}),
     ...(latestAction ? { latestAction } : {}),
     ...(blocker ? { blocker } : {}),
+  };
+  if (
+    !state.catalogDigest ||
+    !state.capabilityId ||
+    !state.revisionId ||
+    !state.operationGraphDigest ||
+    !state.planDigest ||
+    state.approvalRequired === undefined ||
+    !state.approvalPolicyDigest ||
+    !state.verificationPolicyDigest
+  )
+    return common;
+  return {
+    ...common,
+    schema: "finny.trace.v3",
+    plan: {
+      catalogDigest: state.catalogDigest,
+      capabilityId: state.capabilityId,
+      revisionId: state.revisionId,
+      operationGraphDigest: state.operationGraphDigest,
+      planDigest: state.planDigest,
+    },
+    operations: Object.entries(state.completedOperations).map(([operationId, operation]) => ({
+      operationId,
+      ...operation,
+    })),
+    approval: {
+      required: state.approvalRequired,
+      policyDigest: state.approvalPolicyDigest,
+      ...(state.approvalDigest ? { digest: state.approvalDigest } : {}),
+    },
+    verification: {
+      status: state.verificationDigest ? "passed" : "pending",
+      policyDigest: state.verificationPolicyDigest,
+      ...(state.verificationDigest ? { digest: state.verificationDigest } : {}),
+    },
   };
 }

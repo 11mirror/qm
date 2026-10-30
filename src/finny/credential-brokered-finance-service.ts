@@ -4,6 +4,10 @@ import type {
   FinanceActionInputMap,
   FinanceActionOutputMap,
   FinanceExecutionContext,
+  FinanceOperationInput,
+  FinanceOperationOutput,
+  FinancePlanPreflightInput,
+  FinancePlanPreflightOutput,
   FinanceService,
 } from "./finance.ts";
 import {
@@ -48,6 +52,16 @@ export interface AtomicFetchAdapter {
     context: AtomicFetchContext,
     credentials: { hindsight?: string; hindsightFailure?: FinanceFailureMetadata; netsuite: string },
   ): Promise<FinanceActionOutputMap["source"] & { enrichment?: FinnyAdvisoryEnrichment }>;
+  preflightPlan?(
+    input: FinancePlanPreflightInput,
+    context: AtomicFetchContext,
+    credentials: { hindsight?: string; hindsightFailure?: FinanceFailureMetadata },
+  ): Promise<FinancePlanPreflightOutput & { enrichment?: FinnyAdvisoryEnrichment }>;
+  executeOperation?(
+    input: FinanceOperationInput,
+    context: AtomicFetchContext,
+    credentials: { netsuite: string },
+  ): Promise<FinanceOperationOutput>;
 }
 
 export interface BrokeredFinanceServiceOptions {
@@ -184,6 +198,42 @@ export function createBrokeredFinanceService(options: BrokeredFinanceServiceOpti
 
   return {
     clarify: (input, context) => options.delegate.clarify(input, context),
+    preflightPlan: async (input, context) => {
+      if (!options.atomicFetch.preflightPlan)
+        throw new FinanceFailure("provider_unavailable", {
+          retryable: false,
+          dependency: "finance-provider",
+          message: "blocked_external: operation plan preflight is unavailable",
+        });
+      const hindsight = await credential(options.credentialSlugs.hindsight, false, context);
+      return run("operation plan preflight", [hindsight.secret], context, () =>
+        options.atomicFetch.preflightPlan!(input, safeContext(context), {
+          hindsight: hindsight.secret,
+          hindsightFailure: hindsight.failure,
+        }),
+      );
+    },
+    executeOperation: async (input, context) => {
+      if (!options.atomicFetch.executeOperation)
+        throw new FinanceFailure("provider_unavailable", {
+          retryable: false,
+          dependency: "finance-provider",
+          message: "blocked_external: operation execution is unavailable",
+        });
+      const netsuite = await credential(options.credentialSlugs.netsuite, true, context);
+      return run("operation execution", [netsuite.secret], context, () =>
+        options.atomicFetch.executeOperation!(input, safeContext(context), { netsuite: netsuite.secret! }),
+      );
+    },
+    sourcePlan: async (input, context) => {
+      if (!options.delegate.sourcePlan)
+        throw new FinanceFailure("provider_unavailable", {
+          retryable: false,
+          dependency: "finance-provider",
+          message: "blocked_external: operation plan source custody is unavailable",
+        });
+      return options.delegate.sourcePlan(input, context);
+    },
     preflight: async (input, context) => {
       const hindsight = await credential(options.credentialSlugs.hindsight, false, context);
       return run("atomic preflight", [hindsight.secret], context, () =>

@@ -336,7 +336,13 @@ import { createFinnyAtomicFetchAdapter } from "./finny/provider-adapter.ts";
 import { createFinnyHindsightClient, createFinnyNetSuiteClient } from "./finny/provider-clients.ts";
 import { createDefaultFinnyFinanceService } from "./finny/default-finance-service.ts";
 import { loadFinnyKnowledgeIndex } from "./finny/knowledge-index.ts";
-import { createFinnyRunStore, type FinnyRunCheckpoint, type FinnyRunStore } from "./finny/run-store.ts";
+import { loadFinnyCapabilityPack } from "./finny/capability-pack.ts";
+import {
+  createFinnyRunStore,
+  type FinnyMixedRunStore,
+  type FinnyRunStore,
+  type FinnyStoredRunCheckpoint,
+} from "./finny/run-store.ts";
 import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Harness } from "./harness/harness.ts";
@@ -598,7 +604,7 @@ export function buildApp(
     harnesses?: Partial<Record<HarnessId, Harness>>;
     finnyFinanceService?: FinanceService;
     finnyAtomicFetchAdapter?: AtomicFetchAdapter;
-    finnyRunStore?: FinnyRunStore;
+    finnyRunStore?: FinnyRunStore | FinnyMixedRunStore;
     finnyEvidenceBytes?: DurableByteStore;
   } = {},
 ): BuiltApp {
@@ -688,7 +694,7 @@ export function buildApp(
     : createMemoryAdvisoryLock();
   const finnyRunStore = config.finnyProfile
     ? (overrides.finnyRunStore ??
-      createFinnyRunStore(artifactMap<FinnyRunCheckpoint>("finny_runs"), undefined, advisoryLock))
+      createFinnyRunStore(artifactMap<FinnyStoredRunCheckpoint>("finny_runs"), undefined, advisoryLock))
     : undefined;
   const principalLinks = createPrincipalLinkService(artifactMap<PrincipalLink>("principal_links"), advisoryLock);
   installPrincipalLinks(principalLinks);
@@ -799,10 +805,15 @@ export function buildApp(
       (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
     );
   }
+  const finnySkillsReady = skillsReady;
   const finnyKnowledgeIndex = config.finnyProfile?.skillsDir
-    ? skillsReady.then(() => loadFinnyKnowledgeIndex(config.finnyProfile!.skillsDir!))
+    ? finnySkillsReady.then(() => loadFinnyKnowledgeIndex(config.finnyProfile!.skillsDir!))
     : undefined;
-  if (finnyKnowledgeIndex) skillsReady = finnyKnowledgeIndex.then(() => undefined);
+  const finnyCapabilityCatalog = config.finnyProfile?.skillsDir
+    ? finnySkillsReady.then(() => loadFinnyCapabilityPack(join(config.finnyProfile!.skillsDir!, "capabilities")))
+    : undefined;
+  if (finnyKnowledgeIndex && finnyCapabilityCatalog)
+    skillsReady = Promise.all([finnyKnowledgeIndex, finnyCapabilityCatalog]).then(() => undefined);
   const rateLimitOpts = { maxPerWindow: config.rateLimitPerWindow, windowMs: config.rateLimitWindowMs };
   const rateLimiter = config.databaseUrl
     ? createPostgresRateLimiter(config.databaseUrl, rateLimitOpts)
@@ -1549,7 +1560,9 @@ export function buildApp(
               ...piHarnessConfigOptions(config),
               modelId: config.finnyProfile.modelId,
               ...(finnyKnowledgeIndex ? { knowledgeIndex: finnyKnowledgeIndex } : {}),
+              capabilityCatalog: finnyCapabilityCatalog!,
               runStore: finnyRunStore!,
+              evidenceBytes: finnyEvidenceBytes!,
               diagnostics: finnyDiagnostics,
               financeService:
                 overrides.finnyFinanceService ??
@@ -1558,6 +1571,7 @@ export function buildApp(
                   orgScopeId: runtimeOrgScope,
                   files,
                   evidenceBytes: finnyEvidenceBytes!,
+                  runStore: finnyRunStore!,
                   diagnostics: finnyDiagnostics,
                   atomicFetch:
                     overrides.finnyAtomicFetchAdapter ??

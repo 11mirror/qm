@@ -13,6 +13,7 @@ import { createFinnyPiHarness, withFinnyPiProfile } from "../src/finny/pi-profil
 import { createFinnyRunStore, type FinnyRunCheckpoint, type FinnyRunStore } from "../src/finny/run-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createUnavailableFinanceService } from "../src/finny/unavailable-finance-service.ts";
+import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 
 const d = (value: string) => digestFinnyEvidence(value);
 
@@ -363,6 +364,13 @@ test("the Finny factory remains the standard Pi harness and pins its model", () 
     modelId: "gpt-5.6-sol",
     financeService: createUnavailableFinanceService(),
     runStore: createFinnyRunStore(createMemoryMap<FinnyRunCheckpoint>()),
+    evidenceBytes: createMemoryDurableByteStore(),
+    capabilityCatalog: {
+      manifestDigest: `sha256:${"a".repeat(64)}`,
+      catalogDigest: `sha256:${"b".repeat(64)}`,
+      capabilities: new Map(),
+      aliases: new Map(),
+    },
   });
   assert.equal(harness.profile.id, "pi");
   assert.equal(harness.profile.toolTransport, "in-process");

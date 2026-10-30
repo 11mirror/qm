@@ -13,6 +13,7 @@ import { FinanceFailure } from "../src/finny/finance-failure.ts";
 import { digestFinnyEvidence } from "../src/finny/golden-loop.ts";
 import { createFinnyNetSuiteClient } from "../src/finny/provider-clients.ts";
 import { FINNY_AP_GL_CONTROL_BALANCE_QUERY } from "../src/finny/reviewed-query.ts";
+import type { FinnyOperationPlan } from "../src/finny/operation-compiler.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId } from "../src/types.ts";
@@ -24,6 +25,51 @@ const context = {
   scopeId: "personal:actor-1",
   credentialHandles: ["unrelated-personal-handle"],
 };
+
+function operationPlan(): FinnyOperationPlan {
+  return {
+    schema: "finny.operation_plan.v1",
+    capabilityId: "multi-source",
+    revisionId: "multi-source.2026-10-30",
+    semanticCapability: "multi_source",
+    manifestDigest: digest("manifest"),
+    catalogDigest: digest("catalog"),
+    dimensions: {},
+    dimensionsDigest: digest("dimensions"),
+    parameterValues: {},
+    operations: [
+      {
+        id: "first_source",
+        primitive: "suiteql_select",
+        dependsOn: [],
+        sql: "SELECT first_value FROM first_table",
+        parameters: [],
+      },
+      {
+        id: "second_source",
+        primitive: "suiteql_select",
+        dependsOn: [],
+        sql: "SELECT second_value FROM second_table",
+        parameters: [],
+      },
+      {
+        id: "second_repeat",
+        primitive: "repeat_pull",
+        dependsOn: ["second_source"],
+        operationId: "second_source",
+      },
+    ],
+    resultOperationId: "second_source",
+    operationGraphDigest: digest("operation-graph"),
+    artifactPolicy: { allowedFormats: ["json"], defaultFormat: "json", attachment: "when_requested" },
+    artifactPolicyDigest: digest("artifact-policy"),
+    approvalPolicy: { mode: "none", binds: ["capability_revision", "dimensions", "operation_graph"] },
+    approvalPolicyDigest: digest("approval-policy"),
+    verificationPolicy: { requiredOperationIds: ["second_repeat"], releaseGate: "delivery_eligible" },
+    verificationPolicyDigest: digest("verification-policy"),
+    planDigest: digest("operation-plan"),
+  };
+}
 
 function delegate(): FinanceService {
   return {
@@ -66,6 +112,178 @@ function reader(values: Record<string, string>): ServiceCredentialReader {
     },
   };
 }
+
+test("plan-native broker keeps credentials opaque and routes exact SuiteQL and repeat pulls", async () => {
+  const plan = operationPlan();
+  const queries: string[] = [];
+  const credentialReads: string[] = [];
+  const netsuiteBundle = JSON.stringify({
+    accountId: "account-id",
+    consumerKey: "consumer-key",
+    consumerSecret: "consumer-secret",
+    tokenId: "token-id",
+    tokenSecret: "token-secret",
+  });
+  const stored = reader({ "finny-hindsight": "hs-secret", "finny-netsuite": netsuiteBundle });
+  const service = createBrokeredFinanceService({
+    delegate: delegate(),
+    credentialReader: {
+      async getServiceCredentialSecret(scope, slug) {
+        credentialReads.push(slug);
+        return stored.getServiceCredentialSecret(scope, slug);
+      },
+    },
+    orgScopeId: "org:test",
+    credentialSlugs: { hindsight: "finny-hindsight", netsuite: "finny-netsuite" },
+    atomicFetch: createFinnyAtomicFetchAdapter({
+      hindsight: { recall: async () => ({ reviewed: true }) },
+      netsuite: {
+        async suiteql(query, credential) {
+          queries.push(query);
+          assert.equal(credential.consumerSecret, "consumer-secret");
+          return [{ pull: queries.length }];
+        },
+      },
+    }),
+  });
+  const second = plan.operations[1]!;
+  const repeat = plan.operations[2]!;
+
+  const preflight = await service.preflightPlan!(
+    { request: "second source", clarificationDigest: digest("clarify"), plan },
+    context,
+  );
+  const source = await service.executeOperation!(
+    { plan, execution: { operation: second, dependencyResultSets: {}, dependencyDigests: {} } },
+    context,
+  );
+  const repeated = await service.executeOperation!(
+    {
+      plan,
+      execution: {
+        operation: repeat,
+        dependencyResultSets: { second_source: source.rows },
+        dependencyDigests: { second_source: digest("source-result") },
+      },
+    },
+    context,
+  );
+
+  assert.deepEqual(credentialReads, ["finny-hindsight", "finny-netsuite", "finny-netsuite"]);
+  assert.deepEqual(queries, ["SELECT second_value FROM second_table", "SELECT second_value FROM second_table"]);
+  assert.deepEqual(source.rows, [{ pull: 1 }]);
+  assert.deepEqual(repeated.rows, [{ pull: 2 }]);
+  assert.equal(JSON.stringify({ preflight, source, repeated }).includes("secret"), false);
+});
+
+test("plan-native broker fails closed without adapter methods and never invents a query bridge", async () => {
+  const plan = operationPlan();
+  const input = { request: "second source", clarificationDigest: digest("clarify"), plan };
+  const service = createBrokeredFinanceService({
+    delegate: delegate(),
+    credentialReader: reader({}),
+    orgScopeId: "org:test",
+    credentialSlugs: { hindsight: "finny-hindsight", netsuite: "finny-netsuite" },
+    atomicFetch: {
+      async preflight() {
+        throw new Error("legacy preflight must not run");
+      },
+      async source() {
+        throw new Error("legacy source must not run");
+      },
+    },
+  });
+  await assert.rejects(service.preflightPlan!(input, context), /blocked_external.*plan preflight/i);
+  await assert.rejects(
+    service.executeOperation!(
+      {
+        plan,
+        execution: { operation: plan.operations[1]!, dependencyResultSets: {}, dependencyDigests: {} },
+      },
+      context,
+    ),
+    /blocked_external.*operation execution/i,
+  );
+  await assert.rejects(service.sourcePlan!({ plan }, context), /blocked_external.*source custody/i);
+  assert.equal("query" in input, false);
+});
+
+test("plan-native broker rejects credential fragments in adapter outputs", async () => {
+  const plan = operationPlan();
+  const service = createBrokeredFinanceService({
+    delegate: delegate(),
+    credentialReader: reader({ "finny-hindsight": "hs-secret", "finny-netsuite": "ns-secret" }),
+    orgScopeId: "org:test",
+    credentialSlugs: { hindsight: "finny-hindsight", netsuite: "finny-netsuite" },
+    atomicFetch: {
+      async preflight() {
+        throw new Error("unused");
+      },
+      async source() {
+        throw new Error("unused");
+      },
+      async preflightPlan() {
+        return {
+          planSummary: "hs-secret",
+          preflightDigest: digest("preflight"),
+          approvalRequired: false,
+          approvalPolicyDigest: digest("policy"),
+        };
+      },
+      async executeOperation() {
+        return { rows: [{ leaked: "ns-secret" }] };
+      },
+    },
+  });
+
+  await assert.rejects(
+    service.preflightPlan!({ request: "balance", clarificationDigest: digest("clarify"), plan }, context),
+    /credential boundary/i,
+  );
+  await assert.rejects(
+    service.executeOperation!(
+      {
+        plan,
+        execution: { operation: plan.operations[1]!, dependencyResultSets: {}, dependencyDigests: {} },
+      },
+      context,
+    ),
+    /credential boundary/i,
+  );
+});
+
+test("plan-native broker delegates source custody without reading credentials", async () => {
+  const plan = operationPlan();
+  const service = createBrokeredFinanceService({
+    delegate: {
+      ...delegate(),
+      async sourcePlan(input) {
+        assert.equal(input.plan, plan);
+        return { records: [{ total: 42 }], sourceDigest: digest("source-plan") };
+      },
+    },
+    credentialReader: {
+      async getServiceCredentialSecret() {
+        throw new Error("source custody must not read credentials");
+      },
+    },
+    orgScopeId: "org:test",
+    credentialSlugs: { hindsight: "finny-hindsight", netsuite: "finny-netsuite" },
+    atomicFetch: {
+      async preflight() {
+        throw new Error("unused");
+      },
+      async source() {
+        throw new Error("unused");
+      },
+    },
+  });
+
+  assert.deepEqual(await service.sourcePlan!({ plan }, context), {
+    records: [{ total: 42 }],
+    sourceDigest: digest("source-plan"),
+  });
+});
 
 test("atomic fetch treats Hindsight as advisory while keeping NetSuite required", async () => {
   const calls: string[] = [];

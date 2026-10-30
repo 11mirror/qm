@@ -1,4 +1,5 @@
 import type { AtomicFetchAdapter, FinnyAdvisoryEnrichment } from "./credential-brokered-finance-service.ts";
+import { isDeepStrictEqual } from "node:util";
 import { selectFinnyVerificationPolicy } from "./accounting-validator.ts";
 import { isReviewedFinnyQuery } from "./capability-registry.ts";
 import { digestFinnyEvidence } from "./golden-loop.ts";
@@ -8,6 +9,10 @@ import {
   type FinanceDiagnosticSink,
   type FinanceFailureMetadata,
 } from "./finance-failure.ts";
+import type { FinnyOperationPlan } from "./operation-compiler.ts";
+import type { FinnyOperationRow } from "./operation-executor.ts";
+import type { FinnyOperationRunnerInput } from "./operation-runner.ts";
+import { finnyApprovalPolicyDigest } from "./finance.ts";
 
 export interface FinnyHindsightCredential {
   apiUrl: string;
@@ -37,8 +42,85 @@ export interface FinnyAtomicFetchClients {
   diagnostics?: FinanceDiagnosticSink;
 }
 
+export interface FinnyNetSuiteOperationExecutorInput {
+  plan: FinnyOperationPlan;
+  credential: FinnyNetSuiteCredential;
+  client: FinnyNetSuiteClient;
+}
+
+export function createFinnyNetSuiteOperationExecutor({
+  plan,
+  credential,
+  client,
+}: FinnyNetSuiteOperationExecutorInput): FinnyOperationRunnerInput["executeExternal"] {
+  const operations = new Map(plan.operations.map((operation) => [operation.id, operation]));
+  if (operations.size !== plan.operations.length) throw new Error("Finny operation plan contains duplicate identities");
+
+  return async ({ operation }) => {
+    const reviewed = operations.get(operation.id);
+    if (!reviewed) throw new Error(`Finny operation ${operation.id} does not belong to the compiled plan`);
+    if (!isDeepStrictEqual(operation, reviewed))
+      throw new Error(`Finny operation ${operation.id} does not match its compiled plan identity`);
+
+    let query: string;
+    if (reviewed.primitive === "suiteql_select") {
+      query = reviewed.sql;
+    } else if (reviewed.primitive === "repeat_pull") {
+      const repeated = operations.get(reviewed.operationId);
+      if (!repeated || repeated.primitive !== "suiteql_select" || !reviewed.dependsOn.includes(repeated.id))
+        throw new Error(`Finny repeat operation ${reviewed.id} has an invalid reviewed SuiteQL reference`);
+      query = repeated.sql;
+    } else {
+      throw new Error(`Finny derived operation ${reviewed.id} cannot execute through NetSuite`);
+    }
+
+    const rows = await client.suiteql(query, credential);
+    if (!Array.isArray(rows)) throw new Error(`Finny operation ${reviewed.id} result must be an array`);
+    return rows as readonly FinnyOperationRow[];
+  };
+}
+
 export function createFinnyAtomicFetchAdapter(clients: FinnyAtomicFetchClients) {
   return {
+    async preflightPlan(input, context, credentials) {
+      const enrichment = await advisoryEnrichment(
+        input.request,
+        credentials.hindsight,
+        clients.hindsight,
+        context,
+        clients.diagnostics,
+        credentials.hindsightFailure,
+      );
+      const approvalPolicyDigest = finnyApprovalPolicyDigest(input.plan);
+      const evidence = JSON.stringify({
+        runId: context.runId,
+        actorId: context.actorId,
+        request: input.request,
+        clarificationDigest: input.clarificationDigest,
+        plan: input.plan,
+        approvalPolicyDigest,
+        enrichment,
+        access: "read-only",
+      });
+      return {
+        planSummary:
+          enrichment.state === "available"
+            ? "Reviewed operation plan with advisory Hindsight enrichment and brokered NetSuite execution."
+            : "Reviewed operation plan with brokered NetSuite execution; optional Hindsight enrichment omitted.",
+        preflightDigest: digestFinnyEvidence(`operation-plan-preflight:${evidence}`),
+        approvalRequired: input.plan.approvalPolicy.mode !== "none",
+        approvalPolicyDigest,
+        enrichment,
+      };
+    },
+    async executeOperation(input, _context, credentials) {
+      const execute = createFinnyNetSuiteOperationExecutor({
+        plan: input.plan,
+        credential: netsuiteCredential(credentials.netsuite),
+        client: clients.netsuite,
+      });
+      return { rows: await execute(input.execution) };
+    },
     async preflight(input, context, credentials) {
       const enrichment = await advisoryEnrichment(
         input.request,

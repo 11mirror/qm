@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "classification": "reviewed-finance-capability-pack",
+  "capabilities": ["ap-gl-control-balance.json", "synthetic-inventory-velocity.json"],
+  "files": [
+    {
+      "path": "ap-gl-control-balance.json",
+      "size": 2048,
+      "sha256": "90a657abdda7ece991fdf665203cfb3a77ce22d1071405c9f025cf97794f82e0"
+    },
+    {
+      "path": "synthetic-inventory-velocity.json",
+      "size": 2749,
+      "sha256": "a0dec5e63b7af0da34e99a5ad9be02838eeed6e6d330863251d032cfdfbb2e6e"
+    }
+  ]
+}

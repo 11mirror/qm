@@ -1,26 +1,30 @@
 import type { SessionEntry } from "../types.ts";
+import type { DurableByteStore } from "../files/durable-byte-store.ts";
 import type { Harness, HarnessTurnInput, HarnessTurnResult } from "../harness/harness.ts";
 import { createPiHarness, type PiHarnessOptions } from "../harness/pi-harness.ts";
 import type { FinanceService } from "./finance.ts";
 import type { FinanceDiagnosticSink } from "./finance-failure.ts";
 import { createFinnyGoldenLoop, replayFinnyLedger, type FinnyGoldenLoopState } from "./golden-loop.ts";
 import { createFinnyFinanceTool } from "./native-finance-tool.ts";
-import { finnyWorkflowRunIdFromEntries, type FinnyRunStore } from "./run-store.ts";
+import { finnyWorkflowRunIdFromEntries, type FinnyMixedRunStore, type FinnyRunStore } from "./run-store.ts";
 import type { FinnyTraceBlocker } from "./trace.ts";
 import type { FinnyKnowledgeIndex } from "./knowledge-index.ts";
+import type { FinnyCapabilityCatalog } from "./capability-pack.ts";
 
 export interface FinnyPiProfileOptions {
   modelId: string;
-  runStore: FinnyRunStore;
+  runStore: FinnyRunStore | FinnyMixedRunStore;
   knowledgeIndex?: FinnyKnowledgeIndex | Promise<FinnyKnowledgeIndex>;
 }
 
 export type CreateFinnyPiHarnessOptions = Omit<PiHarnessOptions, "modelId" | "defaultModelId" | "nativeTools"> & {
   modelId: string;
   financeService: FinanceService;
-  runStore: FinnyRunStore;
+  runStore: FinnyRunStore | FinnyMixedRunStore;
+  evidenceBytes: DurableByteStore;
   diagnostics?: FinanceDiagnosticSink;
   knowledgeIndex?: FinnyKnowledgeIndex | Promise<FinnyKnowledgeIndex>;
+  capabilityCatalog: FinnyCapabilityCatalog | Promise<FinnyCapabilityCatalog>;
 };
 
 const FINNY_SYSTEM_PROMPT = `
@@ -247,14 +251,28 @@ export function withFinnyPiProfile(base: Harness, options: FinnyPiProfileOptions
 }
 
 export function createFinnyPiHarness(options: CreateFinnyPiHarnessOptions): Harness {
-  const { modelId, financeService, runStore, diagnostics, knowledgeIndex, ...piOptions } = options;
+  const {
+    modelId,
+    financeService,
+    runStore,
+    evidenceBytes,
+    diagnostics,
+    knowledgeIndex,
+    capabilityCatalog,
+    ...piOptions
+  } = options;
   const pi = createPiHarness({
     ...piOptions,
     modelId,
     defaultModelId: modelId,
     allowedToolNames: ["finance"],
     nativeTools: (turn, ref) => [
-      createFinnyFinanceTool(turn, ref, financeService, { runStore, ...(diagnostics ? { diagnostics } : {}) }),
+      createFinnyFinanceTool(turn, ref, financeService, {
+        runStore,
+        evidenceBytes,
+        capabilityCatalog,
+        ...(diagnostics ? { diagnostics } : {}),
+      }),
     ],
   });
   return withFinnyPiProfile(pi, { modelId, runStore, ...(knowledgeIndex ? { knowledgeIndex } : {}) });

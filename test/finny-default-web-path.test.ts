@@ -147,7 +147,8 @@ test("default QM web path publishes and verifies a host-classified finance artif
   });
   assert.equal(response.status, 200);
   const result = (await response.json()) as { reply?: string };
-  assert.equal(result.reply, "Verified AP detail is attached.");
+  assert.match(result.reply ?? "", /^Finny verified this finance result:/);
+  assert.doesNotMatch(result.reply ?? "", /Verified AP detail is attached/);
   assert.equal(sourceCalls, 2);
   const files = await built.files.listOwnedByScopes(["personal:internal:finny-default-web"]);
   assert.equal(files.files.length, 1);

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { FinnyVerificationPolicy } from "./accounting-validator.ts";
+import { FINNY_OPERATION_PRIMITIVES, type FinnyOperationPrimitive } from "./capability-pack.ts";
 export { FINANCE_RESOURCE_NAME } from "./finance.ts";
 
 export type FinnyDigest = `sha256:${string}`;
@@ -20,8 +21,10 @@ export type FinnyStage = (typeof FINNY_STAGES)[number];
 export const FINNY_EVENT_KINDS = [
   "clarify_completed",
   "preflight_completed",
+  "operation_plan_preflight_completed",
   "plan_approved",
   "plan_exempted",
+  "operation_completed",
   "source_collected",
   "artifact_classified",
   "artifact_produced",
@@ -61,6 +64,20 @@ export type FinnyHostEvent =
       approvalPolicyDigest?: FinnyDigest;
     })
   | (FinnyHostEventBase & {
+      kind: "operation_plan_preflight_completed";
+      preflightDigest: FinnyDigest;
+      planDigest: FinnyDigest;
+      catalogDigest: FinnyDigest;
+      manifestDigest: FinnyDigest;
+      capabilityId: string;
+      revisionId: string;
+      operationGraphDigest: FinnyDigest;
+      artifactPolicyDigest: FinnyDigest;
+      approvalPolicyDigest: FinnyDigest;
+      verificationPolicyDigest: FinnyDigest;
+      approvalRequired: boolean;
+    })
+  | (FinnyHostEventBase & {
       kind: "plan_approved";
       planDigest: FinnyDigest;
       approvalDigest: FinnyDigest;
@@ -69,6 +86,13 @@ export type FinnyHostEvent =
       kind: "plan_exempted";
       planDigest: FinnyDigest;
       approvalPolicyDigest: FinnyDigest;
+    })
+  | (FinnyHostEventBase & {
+      kind: "operation_completed";
+      operationId: string;
+      primitive: FinnyOperationPrimitive;
+      operationDigest: FinnyDigest;
+      resultDigest: FinnyDigest;
     })
   | (FinnyHostEventBase & {
       kind: "source_collected";
@@ -96,10 +120,15 @@ export const FINNY_EVIDENCE_ROLES = [
   "clarification",
   "preflight",
   "plan",
+  "catalog",
+  "capability_revision",
+  "operation_graph",
   "query",
   "verification_policy",
   "approval",
   "approval_policy",
+  "operation",
+  "operation_result",
   "source",
   "artifact_policy",
   "artifact",
@@ -132,6 +161,16 @@ export interface FinnyLedgerMetadata {
   approvalRequired?: boolean;
   artifactRequirement?: "required" | "optional";
   verificationPolicy?: FinnyVerificationPolicy;
+  operationId?: string;
+  primitive?: FinnyOperationPrimitive;
+  capabilityId?: string;
+  revisionId?: string;
+}
+
+export interface FinnyCompletedOperation {
+  primitive: FinnyOperationPrimitive;
+  operationDigest: FinnyDigest;
+  resultDigest: FinnyDigest;
 }
 
 export interface FinnyGoldenLoopState {
@@ -142,12 +181,18 @@ export interface FinnyGoldenLoopState {
   clarificationDigest?: FinnyDigest;
   preflightDigest?: FinnyDigest;
   planDigest?: FinnyDigest;
+  catalogDigest?: FinnyDigest;
+  manifestDigest?: FinnyDigest;
+  capabilityId?: string;
+  revisionId?: string;
+  operationGraphDigest?: FinnyDigest;
   queryDigest?: FinnyDigest;
   verificationPolicy?: FinnyVerificationPolicy;
   verificationPolicyDigest?: FinnyDigest;
   approvalDigest?: FinnyDigest;
   approvalRequired?: boolean;
   approvalPolicyDigest?: FinnyDigest;
+  completedOperations: Readonly<Record<string, FinnyCompletedOperation>>;
   sourceDigest?: FinnyDigest;
   artifactRequirement?: "required" | "optional";
   artifactPolicyDigest?: FinnyDigest;
@@ -178,6 +223,7 @@ export function createFinnyGoldenLoop(runId: string): FinnyGoldenLoopState {
     profile: "finny",
     harness: "pi",
     stage: "CLARIFY",
+    completedOperations: {},
     ledger: [],
   };
 }
@@ -237,6 +283,26 @@ function transition(state: FinnyGoldenLoopState, event: FinnyHostEvent): FinnyGo
         approvalRequired: event.approvalRequired ?? true,
         ...(event.approvalPolicyDigest ? { approvalPolicyDigest: event.approvalPolicyDigest } : {}),
       };
+    case "operation_plan_preflight_completed":
+      requireStage(state, event, "PREFLIGHT");
+      if (state.preflightDigest) invalidTransition(state, event);
+      if (!event.approvalRequired && !event.approvalPolicyDigest) {
+        throw new FinnyGoldenLoopError("invalid_event", "Approval exemption requires a policy digest");
+      }
+      return {
+        ...state,
+        preflightDigest: event.preflightDigest,
+        planDigest: event.planDigest,
+        catalogDigest: event.catalogDigest,
+        manifestDigest: event.manifestDigest,
+        capabilityId: event.capabilityId,
+        revisionId: event.revisionId,
+        operationGraphDigest: event.operationGraphDigest,
+        artifactPolicyDigest: event.artifactPolicyDigest,
+        approvalPolicyDigest: event.approvalPolicyDigest,
+        verificationPolicyDigest: event.verificationPolicyDigest,
+        approvalRequired: event.approvalRequired,
+      };
     case "plan_approved":
       requireStage(state, event, "PREFLIGHT");
       if (!state.planDigest || state.planDigest !== event.planDigest) {
@@ -258,6 +324,22 @@ function transition(state: FinnyGoldenLoopState, event: FinnyHostEvent): FinnyGo
         throw new FinnyGoldenLoopError("evidence_mismatch", "Plan exemption does not match host preflight policy");
       }
       return { ...state, stage: "PLAN_APPROVED" };
+    case "operation_completed":
+      requireStage(state, event, "PLAN_APPROVED");
+      if (Object.hasOwn(state.completedOperations, event.operationId)) {
+        throw new FinnyGoldenLoopError("evidence_mismatch", `Operation ${event.operationId} is already completed`);
+      }
+      return {
+        ...state,
+        completedOperations: {
+          ...state.completedOperations,
+          [event.operationId]: {
+            primitive: event.primitive,
+            operationDigest: event.operationDigest,
+            resultDigest: event.resultDigest,
+          },
+        },
+      };
     case "source_collected":
       requireStage(state, event, "PLAN_APPROVED");
       return { ...state, stage: "SOURCE", sourceDigest: event.sourceDigest };
@@ -319,6 +401,21 @@ function parseHostEvent(candidate: unknown): FinnyHostEvent {
       }
       if (record.approvalRequired === false) requireDigest(record.approvalPolicyDigest);
       break;
+    case "operation_plan_preflight_completed":
+      requireDigest(record.preflightDigest);
+      requireDigest(record.planDigest);
+      requireDigest(record.catalogDigest);
+      requireDigest(record.manifestDigest);
+      requireOperationId(record.capabilityId);
+      requireRevisionId(record.revisionId);
+      requireDigest(record.operationGraphDigest);
+      requireDigest(record.artifactPolicyDigest);
+      requireDigest(record.approvalPolicyDigest);
+      requireDigest(record.verificationPolicyDigest);
+      if (typeof record.approvalRequired !== "boolean") {
+        throw new FinnyGoldenLoopError("invalid_event", "approvalRequired must be boolean");
+      }
+      break;
     case "plan_approved":
       requireDigest(record.planDigest);
       requireDigest(record.approvalDigest);
@@ -326,6 +423,14 @@ function parseHostEvent(candidate: unknown): FinnyHostEvent {
     case "plan_exempted":
       requireDigest(record.planDigest);
       requireDigest(record.approvalPolicyDigest);
+      break;
+    case "operation_completed":
+      requireOperationId(record.operationId);
+      if (!FINNY_OPERATION_PRIMITIVES.some((primitive) => primitive === record.primitive)) {
+        throw new FinnyGoldenLoopError("invalid_event", "Operation primitive is invalid");
+      }
+      requireDigest(record.operationDigest);
+      requireDigest(record.resultDigest);
       break;
     case "source_collected":
       requireDigest(record.sourceDigest);
@@ -385,8 +490,13 @@ function metadataFor(
     toStage: next.stage,
     evidence: evidenceFor(event),
     ...(event.kind === "preflight_completed" ? { approvalRequired: event.approvalRequired ?? true } : {}),
+    ...(event.kind === "operation_plan_preflight_completed" ? { approvalRequired: event.approvalRequired } : {}),
     ...(event.kind === "preflight_completed" ? { verificationPolicy: event.verificationPolicy } : {}),
+    ...(event.kind === "operation_plan_preflight_completed"
+      ? { capabilityId: event.capabilityId, revisionId: event.revisionId }
+      : {}),
     ...(event.kind === "artifact_classified" ? { artifactRequirement: event.requirement } : {}),
+    ...(event.kind === "operation_completed" ? { operationId: event.operationId, primitive: event.primitive } : {}),
   };
 }
 
@@ -404,6 +514,17 @@ function evidenceFor(event: FinnyHostEvent): readonly FinnyLedgerEvidence[] {
           ? [{ role: "approval_policy" as const, digest: event.approvalPolicyDigest }]
           : []),
       ];
+    case "operation_plan_preflight_completed":
+      return [
+        { role: "preflight", digest: event.preflightDigest },
+        { role: "plan", digest: event.planDigest },
+        { role: "catalog", digest: event.catalogDigest },
+        { role: "capability_revision", digest: event.manifestDigest },
+        { role: "operation_graph", digest: event.operationGraphDigest },
+        { role: "artifact_policy", digest: event.artifactPolicyDigest },
+        { role: "approval_policy", digest: event.approvalPolicyDigest },
+        { role: "verification_policy", digest: event.verificationPolicyDigest },
+      ];
     case "plan_approved":
       return [
         { role: "plan", digest: event.planDigest },
@@ -413,6 +534,11 @@ function evidenceFor(event: FinnyHostEvent): readonly FinnyLedgerEvidence[] {
       return [
         { role: "plan", digest: event.planDigest },
         { role: "approval_policy", digest: event.approvalPolicyDigest },
+      ];
+    case "operation_completed":
+      return [
+        { role: "operation", digest: event.operationDigest },
+        { role: "operation_result", digest: event.resultDigest },
       ];
     case "source_collected":
       return [{ role: "source", digest: event.sourceDigest }];
@@ -448,6 +574,25 @@ function eventFromMetadata(metadata: FinnyLedgerMetadata): FinnyHostEvent {
         approvalRequired: metadata.approvalRequired ?? true,
         ...(metadata.approvalRequired === false ? { approvalPolicyDigest: evidence(metadata, "approval_policy") } : {}),
       };
+    case "operation_plan_preflight_completed":
+      if (!metadata.capabilityId || !metadata.revisionId || metadata.approvalRequired === undefined) {
+        throw new FinnyGoldenLoopError("invalid_event", "Operation plan preflight metadata is incomplete");
+      }
+      return {
+        ...common,
+        kind: metadata.eventKind,
+        preflightDigest: evidence(metadata, "preflight"),
+        planDigest: evidence(metadata, "plan"),
+        catalogDigest: evidence(metadata, "catalog"),
+        manifestDigest: evidence(metadata, "capability_revision"),
+        capabilityId: metadata.capabilityId,
+        revisionId: metadata.revisionId,
+        operationGraphDigest: evidence(metadata, "operation_graph"),
+        artifactPolicyDigest: evidence(metadata, "artifact_policy"),
+        approvalPolicyDigest: evidence(metadata, "approval_policy"),
+        verificationPolicyDigest: evidence(metadata, "verification_policy"),
+        approvalRequired: metadata.approvalRequired,
+      };
     case "plan_approved":
       return {
         ...common,
@@ -461,6 +606,18 @@ function eventFromMetadata(metadata: FinnyLedgerMetadata): FinnyHostEvent {
         kind: metadata.eventKind,
         planDigest: evidence(metadata, "plan"),
         approvalPolicyDigest: evidence(metadata, "approval_policy"),
+      };
+    case "operation_completed":
+      if (!metadata.operationId || !metadata.primitive) {
+        throw new FinnyGoldenLoopError("invalid_event", "Operation completion metadata is incomplete");
+      }
+      return {
+        ...common,
+        kind: metadata.eventKind,
+        operationId: metadata.operationId,
+        primitive: metadata.primitive,
+        operationDigest: evidence(metadata, "operation"),
+        resultDigest: evidence(metadata, "operation_result"),
       };
     case "source_collected":
       return { ...common, kind: metadata.eventKind, sourceDigest: evidence(metadata, "source") };
@@ -496,6 +653,18 @@ function evidence(metadata: FinnyLedgerMetadata, role: FinnyEvidenceRole): Finny
 function requireText(value: unknown, field: string): asserts value is string {
   if (typeof value !== "string" || value.length === 0) {
     throw new FinnyGoldenLoopError("invalid_event", `${field} is required`);
+  }
+}
+
+function requireOperationId(value: unknown): asserts value is string {
+  if (typeof value !== "string" || !/^[a-z][a-z0-9_]*$/.test(value)) {
+    throw new FinnyGoldenLoopError("invalid_event", "Operation ID is invalid");
+  }
+}
+
+function requireRevisionId(value: unknown): asserts value is string {
+  if (typeof value !== "string" || !/^[a-z][a-z0-9_]*\.[a-z0-9][a-z0-9._-]*$/.test(value)) {
+    throw new FinnyGoldenLoopError("invalid_event", "Revision ID is invalid");
   }
 }
 

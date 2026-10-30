@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "capabilityId": "ap_gl_control_balance",
+  "revisionId": "ap_gl_control_balance.2026-10-30",
+  "semanticCapability": "ap_gl_control_balance",
+  "semanticAliases": ["accounts_payable", "ap_balance", "supplier_exposure", "owe_suppliers"],
+  "dimensions": {
+    "required": ["entity", "period", "currency", "grain", "artifact"],
+    "supported": {
+      "entity": ["all"],
+      "period": ["current"],
+      "currency": ["source_base"],
+      "grain": ["total"],
+      "sources": ["netsuite"],
+      "accounting_book": ["primary"],
+      "artifact": ["optional", "required"]
+    },
+    "defaults": { "sources": ["netsuite"] }
+  },
+  "operations": [
+    {
+      "id": "ap_control_source",
+      "primitive": "suiteql_select",
+      "dependsOn": [],
+      "sql": "SELECT COALESCE(SUM(NVL(tal.credit, 0) - NVL(tal.debit, 0)), 0) AS total FROM TransactionAccountingLine tal WHERE tal.accounttype = :account_type AND tal.accountingbook = :accounting_book_id",
+      "parameters": ["account_type", "accounting_book_id"]
+    },
+    {
+      "id": "ap_control_repeat",
+      "primitive": "repeat_pull",
+      "dependsOn": ["ap_control_source"],
+      "operationId": "ap_control_source"
+    },
+    {
+      "id": "ap_control_reconciliation",
+      "primitive": "reconcile",
+      "dependsOn": ["ap_control_source", "ap_control_repeat"],
+      "leftField": "total",
+      "rightField": "total",
+      "tolerance": "0"
+    }
+  ],
+  "resultOperationId": "ap_control_source",
+  "parameterBindings": {
+    "account_type": { "source": "literal", "value": "AcctPay" },
+    "accounting_book_id": { "source": "literal", "value": 1 }
+  },
+  "artifactPolicy": {
+    "allowedFormats": ["json", "csv"],
+    "defaultFormat": "json",
+    "attachment": "when_requested"
+  },
+  "approvalPolicy": {
+    "mode": "before_source",
+    "binds": ["capability_revision", "dimensions", "operation_graph"]
+  },
+  "verificationPolicy": {
+    "requiredOperationIds": ["ap_control_repeat", "ap_control_reconciliation"],
+    "releaseGate": "delivery_eligible"
+  }
+}

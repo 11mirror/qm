@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { FinanceFailure, financeFailureFromUnknown } from "../src/finny/finance-failure.ts";
-import { safeFinnyTraceSnapshot } from "../src/finny/trace.ts";
+import { createFinnyGoldenLoop, digestFinnyEvidence } from "../src/finny/golden-loop.ts";
+import { createFinnyTraceSnapshot, safeFinnyTraceSnapshot } from "../src/finny/trace.ts";
+import { scopeId } from "../src/types.ts";
 
 test("finance failures accept only allowlisted typed causes and safe metadata", () => {
   const causes = [
@@ -146,4 +148,78 @@ test("trace v2 rejects untyped or malformed diagnostic metadata", () => {
     }),
     null,
   );
+});
+
+test("plan-native trace v3 exposes only plan authority and attestation state", () => {
+  const digest = (value: string) => digestFinnyEvidence(value);
+  const state = {
+    ...createFinnyGoldenLoop("workflow-1"),
+    stage: "VERIFIED" as const,
+    planDigest: digest("plan"),
+    catalogDigest: digest("catalog"),
+    capabilityId: "inventory_position",
+    revisionId: "inventory_position.v1",
+    operationGraphDigest: digest("graph"),
+    approvalRequired: false,
+    approvalPolicyDigest: digest("approval-policy"),
+    verificationPolicyDigest: digest("verification-policy"),
+    verificationDigest: digest("verification"),
+    completedOperations: {
+      inventory: {
+        primitive: "suiteql_select" as const,
+        operationDigest: digest("operation"),
+        resultDigest: digest("result"),
+      },
+    },
+  };
+
+  const trace = createFinnyTraceSnapshot(state, {
+    runId: "run-1",
+    session: {
+      id: "session-1",
+      type: "dm",
+      scopeId: scopeId("personal", "person-1"),
+      threadRef: "web:person-1:session-1",
+      createdAt: 1,
+    },
+    runtime: { modelId: "pi-model" },
+    surfaceName: "web",
+  });
+
+  assert.deepEqual(trace, {
+    schema: "finny.trace.v3",
+    workflowRunId: "workflow-1",
+    currentRunId: "run-1",
+    sessionId: "session-1",
+    profile: "finny",
+    harness: "pi",
+    modelId: "pi-model",
+    surface: "web",
+    stage: "VERIFIED",
+    outcome: "blocked",
+    transitionCount: 0,
+    plan: {
+      catalogDigest: digest("catalog"),
+      capabilityId: "inventory_position",
+      revisionId: "inventory_position.v1",
+      operationGraphDigest: digest("graph"),
+      planDigest: digest("plan"),
+    },
+    operations: [
+      {
+        operationId: "inventory",
+        primitive: "suiteql_select",
+        operationDigest: digest("operation"),
+        resultDigest: digest("result"),
+      },
+    ],
+    approval: { required: false, policyDigest: digest("approval-policy") },
+    verification: {
+      status: "passed",
+      policyDigest: digest("verification-policy"),
+      digest: digest("verification"),
+    },
+  });
+  assert.deepEqual(safeFinnyTraceSnapshot({ ...trace, query: "SELECT secret", credentials: "secret" }), trace);
+  assert.doesNotMatch(JSON.stringify(trace), /SELECT|credentials|secret/);
 });

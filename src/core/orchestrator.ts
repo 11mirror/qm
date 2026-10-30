@@ -1375,7 +1375,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const recordedTurn = recordedRunTurn?.turn ?? null;
       if (recordedTurn?.answer) {
         const recordedAnswer = recordedTurn.answer;
-        const mcpEvidenceRefs = mcpOutputEvidenceRefs(recordedRunTurn!.entries, recordedAnswer.text);
+        const reply = absoluteAppLinks(recordedAnswer.text, deps.publicWebUrl);
+        const mcpEvidenceRefs = mcpOutputEvidenceRefs(recordedRunTurn!.entries, reply);
         deps.auditLog.record({
           at: Date.now(),
           principalId: actor.id,
@@ -1391,7 +1392,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? {
               status: "ok",
               sessionId: session.id,
-              reply: absoluteAppLinks(recordedAnswer.text, deps.publicWebUrl),
+              reply,
               sourceUserSeq: recordedTurn.userSeq,
               sourceAssistantEntrySeq: recordedAnswer.seq,
               ...(mcpEvidenceRefs.length ? { mcpEvidenceRefs } : {}),

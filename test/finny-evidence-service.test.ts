@@ -1,11 +1,22 @@
 import assert from "node:assert/strict";
+import { Readable } from "node:stream";
 import test from "node:test";
 
 import { createEvidenceBackedFinanceService } from "../src/finny/evidence-backed-finance-service.ts";
 import type { FinanceExecutionContext, FinanceService } from "../src/finny/finance.ts";
-import { digestFinnyEvidence } from "../src/finny/golden-loop.ts";
+import {
+  applyFinnyHostEvent,
+  createFinnyGoldenLoop,
+  digestFinnyEvidence,
+  replayFinnyLedger,
+  type FinnyHostEvent,
+} from "../src/finny/golden-loop.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
+import type { FinnyCapabilityDescriptor } from "../src/finny/capability-pack.ts";
+import { compileFinnyOperationPlan, type FinnyOperationPlan } from "../src/finny/operation-compiler.ts";
+import { createFinnyRunStore, type FinnyRunV2Checkpoint } from "../src/finny/run-store.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
 const digest = (value: string) => digestFinnyEvidence(value);
 const context = {
@@ -54,6 +65,240 @@ async function withCustodiedQuery(
   await service.preflight({ request: "finance request", clarificationDigest: digest("clarify"), query }, sourceContext);
   return { ...sourceContext, approvedQueryDigest: digest(`finny-query:v1:${query}`) };
 }
+
+const syntheticDescriptor: FinnyCapabilityDescriptor = {
+  schemaVersion: 1,
+  capabilityId: "synthetic_velocity",
+  revisionId: "synthetic_velocity.v1",
+  semanticCapability: "synthetic_velocity",
+  semanticAliases: [],
+  dimensions: { required: [], supported: {}, defaults: {} },
+  operations: [
+    {
+      id: "synthetic_source",
+      primitive: "suiteql_select",
+      dependsOn: [],
+      sql: "SELECT total FROM synthetic_velocity",
+      parameters: [],
+    },
+    { id: "delivered", primitive: "project", dependsOn: ["synthetic_source"], fields: ["total"] },
+    {
+      id: "repeated_source",
+      primitive: "repeat_pull",
+      dependsOn: ["synthetic_source"],
+      operationId: "synthetic_source",
+    },
+    { id: "repeated", primitive: "project", dependsOn: ["repeated_source"], fields: ["total"] },
+    {
+      id: "reconciled",
+      primitive: "reconcile",
+      dependsOn: ["delivered", "repeated"],
+      leftField: "total",
+      rightField: "total",
+      tolerance: "0",
+    },
+  ],
+  resultOperationId: "delivered",
+  parameterBindings: {},
+  artifactPolicy: { allowedFormats: ["json"], defaultFormat: "json", attachment: "when_requested" },
+  approvalPolicy: { mode: "none", binds: ["capability_revision", "dimensions", "operation_graph"] },
+  verificationPolicy: { requiredOperationIds: ["reconciled"], releaseGate: "delivery_eligible" },
+};
+
+function syntheticPlan(): FinnyOperationPlan {
+  return compileFinnyOperationPlan({
+    descriptor: syntheticDescriptor,
+    manifestDigest: digest("synthetic-manifest"),
+    catalogDigest: digest("synthetic-catalog"),
+    semanticCapability: "synthetic_velocity",
+    dimensions: {},
+  });
+}
+
+function hostEvent(event: Record<string, unknown>): FinnyHostEvent {
+  return { authority: "qm-host", occurredAt: "2026-10-30T10:00:00.000Z", ...event } as FinnyHostEvent;
+}
+
+async function approvedPlanRun(plan: FinnyOperationPlan) {
+  const runStore = createFinnyRunStore<FinnyRunV2Checkpoint>(createMemoryMap<FinnyRunV2Checkpoint>());
+  await runStore.initialize({
+    schema: "finny.run.v2",
+    runId: context.runId,
+    requestDigest: digest("synthetic-request"),
+    sessionId: "session-evidence",
+    scopeId: context.scopeId,
+    plan: {
+      catalogDigest: plan.catalogDigest,
+      capabilityId: plan.capabilityId,
+      revisionId: plan.revisionId,
+      operationGraphDigest: plan.operationGraphDigest,
+      planDigest: plan.planDigest,
+    },
+  });
+  let state = createFinnyGoldenLoop(context.runId);
+  state = applyFinnyHostEvent(
+    state,
+    hostEvent({ eventId: "synthetic:clarify", kind: "clarify_completed", evidenceDigest: digest("clarification") }),
+  );
+  state = applyFinnyHostEvent(
+    state,
+    hostEvent({
+      eventId: "synthetic:preflight",
+      kind: "operation_plan_preflight_completed",
+      preflightDigest: digest("preflight"),
+      planDigest: plan.planDigest,
+      catalogDigest: plan.catalogDigest,
+      manifestDigest: plan.manifestDigest,
+      capabilityId: plan.capabilityId,
+      revisionId: plan.revisionId,
+      operationGraphDigest: plan.operationGraphDigest,
+      artifactPolicyDigest: plan.artifactPolicyDigest,
+      approvalPolicyDigest: plan.approvalPolicyDigest,
+      verificationPolicyDigest: plan.verificationPolicyDigest,
+      approvalRequired: false,
+    }),
+  );
+  state = applyFinnyHostEvent(
+    state,
+    hostEvent({
+      eventId: "synthetic:exempted",
+      kind: "plan_exempted",
+      planDigest: plan.planDigest,
+      approvalPolicyDigest: plan.approvalPolicyDigest,
+    }),
+  );
+  for (const event of state.ledger) await runStore.checkpoint(context.runId, event);
+  return runStore;
+}
+
+function planDelegate(totalForCall: (call: number) => string = () => "42"): {
+  service: FinanceService;
+  operationCalls: () => number;
+  legacySourceCalls: () => number;
+} {
+  let operations = 0;
+  let legacy = 0;
+  return {
+    operationCalls: () => operations,
+    legacySourceCalls: () => legacy,
+    service: {
+      ...delegate(() => []).service,
+      async source() {
+        legacy += 1;
+        return { records: [], sourceDigest: digest("legacy") };
+      },
+      async executeOperation() {
+        operations += 1;
+        return { rows: [{ total: totalForCall(operations), hidden: operations }] };
+      },
+    },
+  };
+}
+
+test("plan-native source delivers only the declared result and verifies custodied required operations", async () => {
+  const plan = syntheticPlan();
+  const runStore = await approvedPlanRun(plan);
+  const bytes = createMemoryDurableByteStore();
+  const delegated = planDelegate();
+  const service = createEvidenceBackedFinanceService({
+    delegate: delegated.service,
+    files: createMemoryFileArtifactStore(bytes),
+    evidenceBytes: bytes,
+    runStore,
+  });
+
+  const sourced = await service.sourcePlan!({ plan }, context);
+  const artifact = await service.artifact({ sourceDigest: sourced.sourceDigest, requirement: "required" }, context);
+  const verified = await service.verify(
+    {
+      sourceDigest: sourced.sourceDigest,
+      artifactDigest: artifact.artifactDigest,
+      requirement: artifact.requirement,
+    },
+    context,
+  );
+
+  assert.deepEqual(sourced.records, [{ total: "42" }]);
+  assert.equal(artifact.requirement, "required");
+  assert.match(artifact.reference ?? "", /\.json$/);
+  assert.equal((await service.artifact({ sourceDigest: sourced.sourceDigest }, context)).requirement, "optional");
+  assert.equal(verified.passed, true);
+  assert.equal(delegated.operationCalls(), 2);
+  assert.equal(delegated.legacySourceCalls(), 0);
+  assert.deepEqual((await service.recoverSource!({ sourceDigest: sourced.sourceDigest }, context)).records, [
+    { total: "42" },
+  ]);
+});
+
+test("plan-native verification rejects a required reconciliation that did not reconcile", async () => {
+  const plan = syntheticPlan();
+  const runStore = await approvedPlanRun(plan);
+  const bytes = createMemoryDurableByteStore();
+  const delegated = planDelegate((call) => (call === 1 ? "42" : "43"));
+  const service = createEvidenceBackedFinanceService({
+    delegate: delegated.service,
+    files: createMemoryFileArtifactStore(bytes),
+    evidenceBytes: bytes,
+    runStore,
+  });
+
+  const sourced = await service.sourcePlan!({ plan }, context);
+  const verified = await service.verify({ sourceDigest: sourced.sourceDigest, requirement: "optional" }, context);
+
+  assert.equal(verified.passed, false);
+  assert.equal(delegated.legacySourceCalls(), 0);
+});
+
+test("plan-native verification fails closed when a required custodied result is missing", async () => {
+  const plan = syntheticPlan();
+  const runStore = await approvedPlanRun(plan);
+  const bytes = createMemoryDurableByteStore();
+  const service = createEvidenceBackedFinanceService({
+    delegate: planDelegate().service,
+    files: createMemoryFileArtifactStore(bytes),
+    evidenceBytes: bytes,
+    runStore,
+  });
+  const sourced = await service.sourcePlan!({ plan }, context);
+  const checkpoint = await runStore.load(context.runId);
+  const state = replayFinnyLedger(context.runId, checkpoint!.ledger);
+  await bytes.delete(`files/${state.completedOperations.reconciled!.resultDigest.slice("sha256:".length)}`);
+
+  await assert.rejects(
+    service.verify({ sourceDigest: sourced.sourceDigest, requirement: "optional" }, context),
+    /result bytes.*unavailable/i,
+  );
+});
+
+test("plan-native verification fails closed when a required custodied result is corrupt", async () => {
+  const plan = syntheticPlan();
+  const runStore = await approvedPlanRun(plan);
+  const backing = createMemoryDurableByteStore();
+  const corruption: { blobKey?: string } = {};
+  const bytes = {
+    ...backing,
+    async open(blobKey: string) {
+      const opened = await backing.open(blobKey);
+      if (!opened || blobKey !== corruption.blobKey) return opened;
+      return { sizeBytes: opened.sizeBytes, stream: Readable.from(Buffer.alloc(opened.sizeBytes, 32)) };
+    },
+  };
+  const service = createEvidenceBackedFinanceService({
+    delegate: planDelegate().service,
+    files: createMemoryFileArtifactStore(bytes),
+    evidenceBytes: bytes,
+    runStore,
+  });
+  const sourced = await service.sourcePlan!({ plan }, context);
+  const checkpoint = await runStore.load(context.runId);
+  const state = replayFinnyLedger(context.runId, checkpoint!.ledger);
+  corruption.blobKey = `files/${state.completedOperations.reconciled!.resultDigest.slice("sha256:".length)}`;
+
+  await assert.rejects(
+    service.verify({ sourceDigest: sourced.sourceDigest, requirement: "optional" }, context),
+    /result digest/i,
+  );
+});
 
 test("host persists source evidence and requires an artifact above ten rows", async () => {
   const evidenceBytes = createMemoryDurableByteStore();

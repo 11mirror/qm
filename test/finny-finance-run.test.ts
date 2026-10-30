@@ -2,16 +2,24 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { toolCallApprovalKey } from "../src/core/approval-id.ts";
+import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import type { FinnyCapabilityCatalog, FinnyCapabilityDescriptor } from "../src/finny/capability-pack.ts";
+import { compileFinnyControllerRequest } from "../src/finny/controller-compiler.ts";
 import type { FinanceService } from "../src/finny/finance.ts";
-import { digestFinnyEvidence, replayFinnyLedger } from "../src/finny/golden-loop.ts";
+import { applyFinnyHostEvent, digestFinnyEvidence, replayFinnyLedger } from "../src/finny/golden-loop.ts";
 import {
   createFinnyFinanceTool as createDurableFinnyFinanceTool,
   type FinnyFinanceToolOptions,
 } from "../src/finny/native-finance-tool.ts";
 import { FINNY_AP_GL_CONTROL_BALANCE_QUERY } from "../src/finny/reviewed-query.ts";
-import { createFinnyRunStore, type FinnyRunCheckpoint, type FinnyRunStore } from "../src/finny/run-store.ts";
+import {
+  createFinnyRunStore,
+  type FinnyRunCheckpoint,
+  type FinnyRunStore,
+  type FinnyRunV2Checkpoint,
+} from "../src/finny/run-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
 const digest = (value: string) => digestFinnyEvidence(value);
@@ -735,4 +743,378 @@ test("unexpected checkpoint failures are durably correlated without entering the
     diagnostics[0]?.failure.diagnosticId,
   );
   assert.doesNotMatch(JSON.stringify(result), /hunter2|password|database/);
+});
+
+const planNativeBase = {
+  schemaVersion: 1 as const,
+  dimensions: {
+    required: ["entity", "period", "currency", "grain", "artifact"],
+    supported: {
+      entity: ["all"],
+      period: ["current"],
+      currency: ["source_base"],
+      grain: ["total"],
+      sources: ["netsuite"],
+      artifact: ["optional", "required"],
+    },
+    defaults: { sources: ["netsuite"] },
+  },
+  parameterBindings: {},
+  artifactPolicy: {
+    allowedFormats: ["json" as const],
+    defaultFormat: "json" as const,
+    attachment: "when_requested" as const,
+  },
+  approvalPolicy: {
+    mode: "none" as const,
+    binds: ["capability_revision" as const, "dimensions" as const, "operation_graph" as const],
+  },
+  verificationPolicy: { requiredOperationIds: [], releaseGate: "delivery_eligible" as const },
+};
+
+const planNativeAp: FinnyCapabilityDescriptor = {
+  ...planNativeBase,
+  capabilityId: "ap_balance",
+  revisionId: "ap_balance.2026-10-30",
+  semanticCapability: "ap_balance",
+  semanticAliases: ["accounts_payable"],
+  operations: [
+    {
+      id: "ap_source",
+      primitive: "suiteql_select",
+      dependsOn: [],
+      sql: "SELECT total FROM ap_balance",
+      parameters: [],
+    },
+  ],
+  resultOperationId: "ap_source",
+};
+
+const planNativeInventory: FinnyCapabilityDescriptor = {
+  ...planNativeBase,
+  capabilityId: "inventory_velocity",
+  revisionId: "inventory_velocity.2026-10-30",
+  semanticCapability: "inventory_velocity",
+  semanticAliases: ["stock_efficiency"],
+  operations: [
+    {
+      id: "inventory_source",
+      primitive: "suiteql_select",
+      dependsOn: [],
+      sql: "SELECT amount FROM inventory_velocity",
+      parameters: [],
+    },
+    {
+      id: "inventory_total",
+      primitive: "aggregate",
+      dependsOn: ["inventory_source"],
+      groupBy: [],
+      metrics: [{ id: "velocity", operator: "sum", field: "amount" }],
+    },
+  ],
+  resultOperationId: "inventory_total",
+};
+
+const planNativeCatalog: FinnyCapabilityCatalog = {
+  manifestDigest: digest("plan-native-manifest"),
+  catalogDigest: digest("plan-native-catalog"),
+  capabilities: new Map([
+    [planNativeAp.semanticCapability, planNativeAp],
+    [planNativeInventory.semanticCapability, planNativeInventory],
+  ]),
+  aliases: new Map([
+    ["accounts_payable", planNativeAp.semanticCapability],
+    ["stock_efficiency", planNativeInventory.semanticCapability],
+  ]),
+};
+
+function planNativeService(
+  runStore: ReturnType<typeof createFinnyRunStore<FinnyRunV2Checkpoint>>,
+  calls: string[],
+  failArtifact = false,
+): FinanceService {
+  const legacy = async (): Promise<never> => {
+    calls.push("legacy");
+    throw new Error("legacy finance path must not run");
+  };
+  return {
+    async clarify() {
+      calls.push("clarify");
+      return { clarification: "reviewed", evidenceDigest: digest("plan-native-clarification") };
+    },
+    preflight: legacy,
+    plan: legacy,
+    source: legacy,
+    async artifact() {
+      calls.push("artifact");
+      if (failArtifact) throw new Error("stop after plan source");
+      return { requirement: "optional", policyDigest: digest("artifact-policy") };
+    },
+    async verify() {
+      calls.push("verify");
+      return { passed: true, verificationDigest: digest("verification") };
+    },
+    async recoverSource() {
+      calls.push("recoverSource");
+      return { records: [{ operation: "recovered_result" }] };
+    },
+    async preflightPlan({ plan }) {
+      calls.push(`preflightPlan:${plan.capabilityId}`);
+      return {
+        planSummary: plan.semanticCapability,
+        preflightDigest: digest(`preflight:${plan.planDigest}`),
+        approvalRequired: true,
+        approvalPolicyDigest: digest("untrusted-service-policy"),
+      };
+    },
+    async sourcePlan({ plan }) {
+      calls.push(`sourcePlan:${plan.capabilityId}`);
+      const checkpoint = await runStore.load(plan.capabilityId === "ap_balance" ? "run-ap" : "run-inventory");
+      if (!checkpoint) throw new Error("plan run is unavailable");
+      let state = replayFinnyLedger(checkpoint.runId, checkpoint.ledger);
+      for (const operation of plan.operations.filter(
+        (candidate) => candidate.id === plan.operations[0]!.id || candidate.id === plan.resultOperationId,
+      )) {
+        const next = applyFinnyHostEvent(state, {
+          authority: "qm-host",
+          eventId: `${checkpoint.runId}:operation:${operation.id}`,
+          occurredAt: "2026-10-30T10:00:00.000Z",
+          kind: "operation_completed",
+          operationId: operation.id,
+          primitive: operation.primitive,
+          operationDigest: digest(`operation:${plan.planDigest}:${operation.id}`),
+          resultDigest: digest(`result:${plan.planDigest}:${operation.id}`),
+        });
+        await runStore.checkpoint(checkpoint.runId, next.ledger.at(-1)!);
+        state = next;
+      }
+      return {
+        records: [{ operation: plan.resultOperationId }],
+        sourceDigest: digest(`source:${plan.planDigest}:${plan.resultOperationId}`),
+      };
+    },
+  };
+}
+
+test("plan-native AP and unrelated capabilities share one controller path without query authority", async () => {
+  for (const scenario of [
+    { runId: "run-ap", request: "AP balance", resultOperationId: "ap_source", capabilityId: "ap_balance" },
+    {
+      runId: "run-inventory",
+      request: "inventory velocity",
+      resultOperationId: "inventory_total",
+      capabilityId: "inventory_velocity",
+    },
+  ]) {
+    const runStore = createFinnyRunStore<FinnyRunV2Checkpoint>(createMemoryMap<FinnyRunV2Checkpoint>());
+    const calls: string[] = [];
+    const harnessTurn = turn();
+    harnessTurn.runId = scenario.runId;
+    harnessTurn.input = scenario.request;
+    const tool = createFinnyFinanceTool(harnessTurn, {} as ToolContextRef, planNativeService(runStore, calls), {
+      runStore,
+      evidenceBytes: createMemoryDurableByteStore(),
+      capabilityCatalog: planNativeCatalog,
+      now: () => "2026-10-30T10:00:00.000Z",
+    });
+
+    const result = await tool.execute("plan-native", { request: scenario.request }, undefined, undefined, {} as never);
+    const checkpoint = await runStore.load(scenario.runId);
+    const state = replayFinnyLedger(scenario.runId, checkpoint!.ledger);
+    const operationIndex = checkpoint!.ledger.findIndex((entry) => entry.eventKind === "operation_completed");
+    const sourceIndex = checkpoint!.ledger.findIndex((entry) => entry.eventKind === "source_collected");
+
+    assert.equal((result as { isError?: boolean }).isError, undefined);
+    assert.equal(checkpoint!.schema, "finny.run.v2");
+    assert.equal(checkpoint!.plan.capabilityId, scenario.capabilityId);
+    assert.equal("artifactRequest" in checkpoint!, false);
+    assert.equal(state.queryDigest, undefined);
+    assert.equal(
+      checkpoint!.ledger.some((entry) => entry.evidence.some((item) => item.role === "query")),
+      false,
+    );
+    assert.equal(state.approvalRequired, false);
+    assert.ok(operationIndex >= 0 && operationIndex < sourceIndex);
+    assert.match(
+      result.content[0]?.type === "text" ? result.content[0].text : "",
+      new RegExp(scenario.resultOperationId),
+    );
+    assert.deepEqual(calls, [
+      "clarify",
+      `preflightPlan:${scenario.capabilityId}`,
+      `sourcePlan:${scenario.capabilityId}`,
+      "artifact",
+      "verify",
+    ]);
+  }
+});
+
+test("plan-native resume recompiles the exact catalog binding and skips completed plan stages", async () => {
+  const runStore = createFinnyRunStore<FinnyRunV2Checkpoint>(createMemoryMap<FinnyRunV2Checkpoint>());
+  const evidenceBytes = createMemoryDurableByteStore();
+  const firstCalls: string[] = [];
+  const firstTurn = turn();
+  firstTurn.runId = "run-ap";
+  firstTurn.input = "AP balance";
+  const first = createFinnyFinanceTool(firstTurn, {} as ToolContextRef, planNativeService(runStore, firstCalls, true), {
+    runStore,
+    evidenceBytes,
+    capabilityCatalog: planNativeCatalog,
+  });
+  await first.execute("plan-native-interrupted", { request: "AP balance" }, undefined, undefined, {} as never);
+  assert.equal(replayFinnyLedger("run-ap", (await runStore.load("run-ap"))!.ledger).stage, "SOURCE");
+
+  const resumedCalls: string[] = [];
+  const resumedTurn = turn([
+    {
+      type: "tool_result",
+      payload: { finnyWorkflowRunId: "run-ap" },
+      scopeLabel: "personal:actor-1",
+      seq: 1,
+      createdAt: 1,
+    },
+  ] as HarnessTurnInput["history"]);
+  resumedTurn.runId = "run-ap-resume";
+  resumedTurn.input = "AP balance";
+  const resumed = createFinnyFinanceTool(resumedTurn, {} as ToolContextRef, planNativeService(runStore, resumedCalls), {
+    runStore,
+    evidenceBytes,
+    capabilityCatalog: planNativeCatalog,
+  });
+
+  const result = await resumed.execute(
+    "plan-native-resume",
+    { request: "AP balance" },
+    undefined,
+    undefined,
+    {} as never,
+  );
+
+  assert.equal((result as { isError?: boolean }).isError, undefined);
+  assert.deepEqual(resumedCalls, ["artifact", "verify", "recoverSource"]);
+});
+
+test("plan-native resume rejects a changed catalog binding before source or delivery", async () => {
+  const runStore = createFinnyRunStore<FinnyRunV2Checkpoint>(createMemoryMap<FinnyRunV2Checkpoint>());
+  const evidenceBytes = createMemoryDurableByteStore();
+  const firstTurn = turn();
+  firstTurn.runId = "run-ap";
+  firstTurn.input = "AP balance";
+  const first = createFinnyFinanceTool(firstTurn, {} as ToolContextRef, planNativeService(runStore, [], true), {
+    runStore,
+    evidenceBytes,
+    capabilityCatalog: planNativeCatalog,
+  });
+  await first.execute("plan-native-original", { request: "AP balance" }, undefined, undefined, {} as never);
+
+  const changedAp: FinnyCapabilityDescriptor = {
+    ...planNativeAp,
+    revisionId: "ap_balance.2026-10-31",
+    operations: [
+      {
+        id: "ap_source",
+        primitive: "suiteql_select",
+        dependsOn: [],
+        sql: "SELECT changed_total FROM ap_balance",
+        parameters: [],
+      },
+    ],
+  };
+  const changedCatalog: FinnyCapabilityCatalog = {
+    ...planNativeCatalog,
+    catalogDigest: digest("changed-plan-native-catalog"),
+    capabilities: new Map([
+      [changedAp.semanticCapability, changedAp],
+      [planNativeInventory.semanticCapability, planNativeInventory],
+    ]),
+  };
+  const calls: string[] = [];
+  const resumedTurn = turn([
+    {
+      type: "tool_result",
+      payload: { finnyWorkflowRunId: "run-ap" },
+      scopeLabel: "personal:actor-1",
+      seq: 1,
+      createdAt: 1,
+    },
+  ] as HarnessTurnInput["history"]);
+  resumedTurn.runId = "run-ap-resume";
+  resumedTurn.input = "AP balance";
+  const resumed = createFinnyFinanceTool(resumedTurn, {} as ToolContextRef, planNativeService(runStore, calls), {
+    runStore,
+    evidenceBytes,
+    capabilityCatalog: changedCatalog,
+  });
+
+  const result = await resumed.execute(
+    "plan-native-changed",
+    { request: "AP balance" },
+    undefined,
+    undefined,
+    {} as never,
+  );
+
+  assert.equal((result as { isError?: boolean }).isError, true);
+  assert.deepEqual(calls, []);
+  assert.equal(replayFinnyLedger("run-ap", (await runStore.load("run-ap"))!.ledger).stage, "SOURCE");
+});
+
+test("plan-native approval binds every compiled plan authority field", async () => {
+  const approvalCapability: FinnyCapabilityDescriptor = {
+    ...planNativeAp,
+    approvalPolicy: { ...planNativeAp.approvalPolicy, mode: "before_source" },
+  };
+  const catalog: FinnyCapabilityCatalog = {
+    ...planNativeCatalog,
+    catalogDigest: digest("approval-catalog"),
+    capabilities: new Map([
+      [approvalCapability.semanticCapability, approvalCapability],
+      [planNativeInventory.semanticCapability, planNativeInventory],
+    ]),
+  };
+  const compiled = compileFinnyControllerRequest("AP balance", catalog);
+  assert.equal(compiled.status, "compiled");
+  if (compiled.status !== "compiled") throw new Error("plan did not compile");
+  const runStore = createFinnyRunStore<FinnyRunV2Checkpoint>(createMemoryMap<FinnyRunV2Checkpoint>());
+  const pendingApprovals: NonNullable<ToolContextRef["pendingApprovals"]> = [];
+  const approvedToolCalls = new Map<string, string>();
+  const ref = { pendingApprovals, approvedToolCalls } as ToolContextRef;
+  const harnessTurn = turn();
+  harnessTurn.runId = "run-ap";
+  harnessTurn.input = "AP balance";
+  const tool = createFinnyFinanceTool(harnessTurn, ref, planNativeService(runStore, []), {
+    runStore,
+    evidenceBytes: createMemoryDurableByteStore(),
+    capabilityCatalog: catalog,
+  });
+
+  const result = await tool.execute("approval", { request: "AP balance" }, undefined, undefined, {} as never);
+
+  assert.equal((result as { terminate?: boolean }).terminate, true);
+  assert.equal(pendingApprovals.length, 1);
+  const expectedApprovalKey = toolCallApprovalKey("finance", {
+    request: "AP balance",
+    schema: compiled.plan.schema,
+    planDigest: compiled.plan.planDigest,
+    catalogDigest: compiled.plan.catalogDigest,
+    manifestDigest: compiled.plan.manifestDigest,
+    capabilityId: compiled.plan.capabilityId,
+    revisionId: compiled.plan.revisionId,
+    semanticCapability: compiled.plan.semanticCapability,
+    dimensionsDigest: compiled.plan.dimensionsDigest,
+    operationGraphDigest: compiled.plan.operationGraphDigest,
+    resultOperationId: compiled.plan.resultOperationId,
+    artifactPolicyDigest: compiled.plan.artifactPolicyDigest,
+    approvalPolicyDigest: compiled.plan.approvalPolicyDigest,
+    verificationPolicyDigest: compiled.plan.verificationPolicyDigest,
+  });
+  assert.equal(pendingApprovals[0]!.approvalKey, expectedApprovalKey);
+
+  approvedToolCalls.set("approved", expectedApprovalKey);
+  const approved = await tool.execute("approved", { request: "AP balance" }, undefined, undefined, {} as never);
+  const state = replayFinnyLedger("run-ap", (await runStore.load("run-ap"))!.ledger);
+
+  assert.equal((approved as { isError?: boolean }).isError, undefined);
+  assert.equal(state.stage, "DELIVERY_ELIGIBLE");
+  assert.equal(state.approvalDigest, digest(`finny-human-approval:v1:${expectedApprovalKey}`));
 });

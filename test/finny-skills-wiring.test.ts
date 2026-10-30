@@ -11,9 +11,7 @@ import { buildApp } from "../src/wiring.ts";
 import { finnyTestStores } from "./support/finny-test-stores.ts";
 import { testConfig } from "./support/test-config.ts";
 
-test("FINNY_SKILLS_DIR installs reviewed Finny skills into QM's durable skill store", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "finny-skills-wire-"));
-  const skillsDir = join(root, "skills");
+function writeFinnySkills(skillsDir: string): { capabilityPath: string; capability: string } {
   const skillDir = join(skillsDir, "finance-proof");
   mkdirSync(skillDir, { recursive: true });
   const body = `---\nname: finance-proof\ndescription: Require cited finance evidence.\n---\n\nOnly use host-verified evidence.\n`;
@@ -31,6 +29,48 @@ test("FINNY_SKILLS_DIR installs reviewed Finny skills into QM's durable skill st
       ],
     }),
   );
+  const capabilitiesDir = join(skillsDir, "capabilities");
+  mkdirSync(capabilitiesDir);
+  const capabilityPath = join(capabilitiesDir, "synthetic-balance.json");
+  const capability = JSON.stringify({
+    schemaVersion: 1,
+    capabilityId: "synthetic_balance",
+    revisionId: "synthetic_balance.v1",
+    semanticCapability: "synthetic_balance",
+    semanticAliases: [],
+    dimensions: { required: [], supported: {}, defaults: {} },
+    operations: [
+      { id: "synthetic_source", dependsOn: [], primitive: "suiteql_select", sql: "SELECT 1 AS value", parameters: [] },
+    ],
+    resultOperationId: "synthetic_source",
+    parameterBindings: {},
+    artifactPolicy: { allowedFormats: ["json"], defaultFormat: "json", attachment: "never" },
+    approvalPolicy: { mode: "none", binds: [] },
+    verificationPolicy: { requiredOperationIds: [], releaseGate: "delivery_eligible" },
+  });
+  writeFileSync(capabilityPath, capability);
+  writeFileSync(
+    join(capabilitiesDir, "manifest.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      classification: "reviewed-finance-capability-pack",
+      capabilities: ["synthetic-balance.json"],
+      files: [
+        {
+          path: "synthetic-balance.json",
+          size: Buffer.byteLength(capability),
+          sha256: createHash("sha256").update(capability).digest("hex"),
+        },
+      ],
+    }),
+  );
+  return { capabilityPath, capability };
+}
+
+test("FINNY_SKILLS_DIR installs reviewed Finny skills into QM's durable skill store", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "finny-skills-wire-"));
+  const skillsDir = join(root, "skills");
+  writeFinnySkills(skillsDir);
   const built = buildApp(
     testConfig({
       dataDir: join(root, "data"),
@@ -55,4 +95,24 @@ test("FINNY_SKILLS_DIR installs reviewed Finny skills into QM's durable skill st
   assert.equal(installed.status, "published");
   assert.equal(installed.createdBy, "system:finny-skills");
   assert.deepEqual(installed.approvals, ["system:finny-skills-reviewer"]);
+});
+
+test("Finny readiness rejects a capability pack whose reviewed digest does not match", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "finny-capability-wire-"));
+  const skillsDir = join(root, "skills");
+  const { capabilityPath, capability } = writeFinnySkills(skillsDir);
+  writeFileSync(capabilityPath, `${capability} `);
+  const built = buildApp(
+    testConfig({
+      dataDir: join(root, "data"),
+      harness: "pi",
+      modelId: "gpt-5.6-sol",
+      finnyProfile: { id: "finny", modelId: "gpt-5.6-sol", providerTimeoutMs: 120_000, skillsDir },
+      pluginSkillDirs: [],
+    }),
+    finnyTestStores(),
+  );
+  t.after(() => built.runtime.stop());
+
+  await assert.rejects(built.checkReadiness(AbortSignal.timeout(5_000)), /capability (?:size|digest) mismatch/i);
 });

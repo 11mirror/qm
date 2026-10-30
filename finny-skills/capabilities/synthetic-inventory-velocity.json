@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "capabilityId": "synthetic_inventory_velocity",
+  "revisionId": "synthetic_inventory_velocity.2026-10-30",
+  "semanticCapability": "synthetic_inventory_velocity",
+  "semanticAliases": ["inventory_velocity", "stock_efficiency"],
+  "dimensions": {
+    "required": ["entity", "period", "currency", "grain", "artifact"],
+    "supported": {
+      "entity": ["named"],
+      "period": ["as_of"],
+      "currency": ["source_base"],
+      "grain": ["total"],
+      "sources": ["netsuite"],
+      "accounting_book": ["primary"],
+      "artifact": ["optional", "required"]
+    },
+    "defaults": { "sources": ["netsuite"] }
+  },
+  "operations": [
+    {
+      "id": "synthetic_inventory_source",
+      "primitive": "suiteql_select",
+      "dependsOn": [],
+      "sql": "SELECT amount FROM synthetic_inventory WHERE entity = :entity_name AND posted_at <= :cutoff_date AND accounting_book = :accounting_book",
+      "parameters": ["entity_name", "cutoff_date", "accounting_book"]
+    },
+    {
+      "id": "synthetic_inventory_total",
+      "primitive": "aggregate",
+      "dependsOn": ["synthetic_inventory_source"],
+      "groupBy": [],
+      "metrics": [{ "id": "inventory_value", "operator": "sum", "field": "amount" }]
+    },
+    {
+      "id": "synthetic_inventory_repeat",
+      "primitive": "repeat_pull",
+      "dependsOn": ["synthetic_inventory_source"],
+      "operationId": "synthetic_inventory_source"
+    },
+    {
+      "id": "synthetic_inventory_repeat_total",
+      "primitive": "aggregate",
+      "dependsOn": ["synthetic_inventory_repeat"],
+      "groupBy": [],
+      "metrics": [{ "id": "inventory_value", "operator": "sum", "field": "amount" }]
+    },
+    {
+      "id": "synthetic_inventory_reconciliation",
+      "primitive": "reconcile",
+      "dependsOn": ["synthetic_inventory_total", "synthetic_inventory_repeat_total"],
+      "leftField": "inventory_value",
+      "rightField": "inventory_value",
+      "tolerance": "0"
+    }
+  ],
+  "resultOperationId": "synthetic_inventory_total",
+  "parameterBindings": {
+    "entity_name": { "source": "dimension", "path": ["entity", "name"] },
+    "cutoff_date": { "source": "dimension", "path": ["period", "date"] },
+    "accounting_book": { "source": "literal", "value": "primary" }
+  },
+  "artifactPolicy": {
+    "allowedFormats": ["json", "csv"],
+    "defaultFormat": "csv",
+    "attachment": "when_requested"
+  },
+  "approvalPolicy": {
+    "mode": "before_source",
+    "binds": ["capability_revision", "dimensions", "operation_graph"]
+  },
+  "verificationPolicy": {
+    "requiredOperationIds": [
+      "synthetic_inventory_repeat",
+      "synthetic_inventory_repeat_total",
+      "synthetic_inventory_reconciliation"
+    ],
+    "releaseGate": "delivery_eligible"
+  }
+}

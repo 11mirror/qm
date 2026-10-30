@@ -1,4 +1,4 @@
-import type { FinanceService } from "./finance.ts";
+import { finnyApprovalPolicyDigest, type FinanceService } from "./finance.ts";
 import { digestFinnyEvidence } from "./golden-loop.ts";
 
 const blocked = (capability: string): never => {
@@ -29,6 +29,30 @@ export function createUnavailableFinanceService(): FinanceService {
         preflightDigest: digestFinnyEvidence(`preflight:${plan}`),
         planDigest: digestFinnyEvidence(`plan:${plan}`),
       };
+    },
+    async preflightPlan(input, context) {
+      const approvalPolicyDigest = finnyApprovalPolicyDigest(input.plan);
+      const evidence = JSON.stringify({
+        runId: context.runId,
+        actorId: context.actorId,
+        request: input.request,
+        clarificationDigest: input.clarificationDigest,
+        plan: input.plan,
+        approvalPolicyDigest,
+        access: "read-only",
+      });
+      return {
+        planSummary: "Reviewed operation plan; an approved native source adapter is required for external execution.",
+        preflightDigest: digestFinnyEvidence(`operation-plan-preflight:${evidence}`),
+        approvalRequired: input.plan.approvalPolicy.mode !== "none",
+        approvalPolicyDigest,
+      };
+    },
+    async executeOperation() {
+      return blocked("operation execution");
+    },
+    async sourcePlan() {
+      return blocked("operation plan source");
     },
     async plan(input, context) {
       return {

@@ -204,3 +204,85 @@ test("a host policy exemption advances a read-only plan without fabricating huma
   assert.equal(state.approvalRequired, false);
   assert.equal(replayFinnyLedger("run-read-only", state.ledger).stage, "PLAN_APPROVED");
 });
+
+test("operation completions checkpoint inside the approved plan stage and replay deterministically", () => {
+  let state = flow.slice(0, 3).reduce(applyFinnyHostEvent, createFinnyGoldenLoop("run-operations"));
+  const operationDigest = evidence("operation-source");
+  const resultDigest = evidence("operation-result");
+  state = applyFinnyHostEvent(state, {
+    authority: "qm-host",
+    eventId: "run-operations:operation:source",
+    occurredAt: at(4),
+    kind: "operation_completed",
+    operationId: "source",
+    primitive: "suiteql_select",
+    operationDigest,
+    resultDigest,
+  });
+
+  assert.equal(state.stage, "PLAN_APPROVED");
+  assert.deepEqual(state.completedOperations, {
+    source: { primitive: "suiteql_select", operationDigest, resultDigest },
+  });
+  assert.deepEqual(replayFinnyLedger("run-operations", state.ledger), state);
+  assert.throws(
+    () =>
+      applyFinnyHostEvent(state, {
+        authority: "qm-host",
+        eventId: "run-operations:operation:other",
+        occurredAt: at(5),
+        kind: "operation_completed",
+        operationId: "source",
+        primitive: "suiteql_select",
+        operationDigest,
+        resultDigest: evidence("changed-result"),
+      }),
+    /already completed/i,
+  );
+});
+
+test("plan-native preflight binds reviewed capability and policy authority without a query", () => {
+  let state = applyFinnyHostEvent(createFinnyGoldenLoop("run-plan-native"), flow[0]!);
+  const catalogDigest = evidence("catalog");
+  const manifestDigest = evidence("manifest");
+  const operationGraphDigest = evidence("operation-graph");
+  const planDigest = evidence("operation-plan");
+  const artifactPolicyDigest = evidence("artifact-policy");
+  const approvalPolicyDigest = evidence("approval-policy");
+  const verificationPolicyDigest = evidence("verification-policy");
+  state = applyFinnyHostEvent(state, {
+    authority: "qm-host",
+    eventId: "run-plan-native:preflight",
+    occurredAt: at(2),
+    kind: "operation_plan_preflight_completed",
+    preflightDigest: evidence("preflight"),
+    planDigest,
+    catalogDigest,
+    manifestDigest,
+    capabilityId: "synthetic_inventory_velocity",
+    revisionId: "synthetic_inventory_velocity.2026-10-30",
+    operationGraphDigest,
+    artifactPolicyDigest,
+    approvalPolicyDigest,
+    verificationPolicyDigest,
+    approvalRequired: false,
+  });
+  state = applyFinnyHostEvent(state, {
+    authority: "qm-host",
+    eventId: "run-plan-native:exemption",
+    occurredAt: at(3),
+    kind: "plan_exempted",
+    planDigest,
+    approvalPolicyDigest,
+  });
+
+  assert.equal(state.queryDigest, undefined);
+  assert.equal(state.catalogDigest, catalogDigest);
+  assert.equal(state.manifestDigest, manifestDigest);
+  assert.equal(state.capabilityId, "synthetic_inventory_velocity");
+  assert.equal(state.revisionId, "synthetic_inventory_velocity.2026-10-30");
+  assert.equal(state.operationGraphDigest, operationGraphDigest);
+  assert.equal(state.artifactPolicyDigest, artifactPolicyDigest);
+  assert.equal(state.verificationPolicyDigest, verificationPolicyDigest);
+  assert.deepEqual(replayFinnyLedger("run-plan-native", state.ledger), state);
+});

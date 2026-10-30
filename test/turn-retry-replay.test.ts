@@ -52,7 +52,11 @@ function fakeSandbox(): Sandbox {
   };
 }
 
-function buildScenario(interruptAfterToolResult = false, includeOutputEvidence = false) {
+function buildScenario(
+  interruptAfterToolResult = false,
+  includeOutputEvidence = false,
+  options: { reply?: string; publicWebUrl?: string } = {},
+) {
   const turns: string[] = [];
   const continued: Array<boolean | undefined> = [];
   const environments: Array<string | undefined> = [];
@@ -92,7 +96,9 @@ function buildScenario(interruptAfterToolResult = false, includeOutputEvidence =
                 ? {
                     mcpServer: "finance",
                     outputReceipt: "signed-output-receipt",
-                    outputSha256: createHash("sha256").update("it runs on this conversation's computer").digest("hex"),
+                    outputSha256: createHash("sha256")
+                      .update(options.reply ?? "it runs on this conversation's computer")
+                      .digest("hex"),
                     contextSha256: "a".repeat(64),
                   }
                 : {}),
@@ -101,7 +107,7 @@ function buildScenario(interruptAfterToolResult = false, includeOutputEvidence =
           });
           throw new Error("interrupted after recording a tool result");
         }
-        const reply = "it runs on this conversation's computer";
+        const reply = options.reply ?? "it runs on this conversation's computer";
         await turn.emit({
           type: "assistant",
           payload: { text: reply },
@@ -143,6 +149,7 @@ function buildScenario(interruptAfterToolResult = false, includeOutputEvidence =
     }),
     acl,
     deliveries: createDeliveryStore(),
+    ...(options.publicWebUrl ? { publicWebUrl: options.publicWebUrl } : {}),
   });
   const input = (text: string, extra: Partial<OrchestratorInput> = {}): OrchestratorInput => ({
     surface: "web",
@@ -319,6 +326,37 @@ test("an answered retry retains MCP evidence from its durable turn", async () =>
       contextSha256: "a".repeat(64),
     },
   ]);
+});
+
+test("an answered retry never attaches evidence for pre-rewrite link bytes", async () => {
+  const storedReply = "see [artifact](/d/finance/report)";
+  const { orchestrator, sessions, runs, input } = buildScenario(false, false, {
+    reply: storedReply,
+    publicWebUrl: "https://qm.example.com",
+  });
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  const marker = await seedTurn(sessions, [
+    { type: "user", payload: { text: ASK, runId: run.id } },
+    {
+      type: "tool_result",
+      payload: {
+        tool: "execute",
+        callId: "c1",
+        result: "a.txt",
+        mcpServer: "finance",
+        outputReceipt: "signed-output-receipt",
+        outputSha256: createHash("sha256").update(storedReply).digest("hex"),
+        contextSha256: "a".repeat(64),
+      },
+    },
+    { type: "assistant", payload: { text: storedReply } },
+  ]);
+  await runs.noteTurnUserSeq(run.id, marker);
+
+  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+
+  assert.equal(retry.reply, "see [artifact](https://qm.example.com/d/finance/report)");
+  assert.equal(retry.mcpEvidenceRefs, undefined);
 });
 
 test("a turn that recorded no reply replays as silent, not as an empty answer", async () => {

@@ -1,8 +1,15 @@
 import type { FinnyDigest } from "./golden-loop.ts";
 import type { ScopeId } from "../types.ts";
 import type { FinnyVerificationPolicy } from "./accounting-validator.ts";
+import type { FinnyOperationPlan } from "./operation-compiler.ts";
+import type { FinnyOperationRow } from "./operation-executor.ts";
+import type { FinnyOperationRunnerContext } from "./operation-runner.ts";
 
 export const FINANCE_RESOURCE_NAME = "finance" as const;
+
+export function finnyApprovalPolicyDigest(plan: Pick<FinnyOperationPlan, "approvalPolicyDigest">): FinnyDigest {
+  return plan.approvalPolicyDigest;
+}
 
 export interface FinanceExecutionContext {
   runId: string;
@@ -77,6 +84,32 @@ export interface FinanceActionOutputMap {
   };
 }
 
+export interface FinancePlanPreflightInput {
+  request: string;
+  clarificationDigest: FinnyDigest;
+  plan: FinnyOperationPlan;
+}
+
+export interface FinancePlanPreflightOutput {
+  planSummary: string;
+  preflightDigest: FinnyDigest;
+  approvalRequired: boolean;
+  approvalPolicyDigest: FinnyDigest;
+}
+
+export interface FinanceOperationInput {
+  plan: FinnyOperationPlan;
+  execution: FinnyOperationRunnerContext;
+}
+
+export interface FinanceOperationOutput {
+  rows: readonly FinnyOperationRow[];
+}
+
+export interface FinancePlanSourceInput {
+  plan: FinnyOperationPlan;
+}
+
 export const FINANCE_ACTIONS = ["clarify", "preflight", "plan", "source", "artifact", "verify"] as const;
 
 export type FinanceAction = (typeof FINANCE_ACTIONS)[number];
@@ -111,4 +144,13 @@ export interface FinanceService {
     input: Pick<FinanceActionInputMap["artifact"], "sourceDigest">,
     context: FinanceExecutionContext,
   ): Promise<Pick<FinanceActionOutputMap["source"], "records">>;
+  preflightPlan?(
+    input: FinancePlanPreflightInput,
+    context: FinanceExecutionContext,
+  ): Promise<FinancePlanPreflightOutput>;
+  executeOperation?(input: FinanceOperationInput, context: FinanceExecutionContext): Promise<FinanceOperationOutput>;
+  sourcePlan?(
+    input: FinancePlanSourceInput,
+    context: FinanceExecutionContext,
+  ): Promise<FinanceActionOutputMap["source"]>;
 }

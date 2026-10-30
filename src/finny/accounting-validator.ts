@@ -1,3 +1,10 @@
+import {
+  addFinnyDecimal as addDecimal,
+  equalFinnyDecimal as decimalEqual,
+  parseFinnyDecimal as parseDecimal,
+  type FinnyDecimal as Decimal,
+} from "./decimal.ts";
+
 export type FinnyVerificationPolicy =
   "repeatable_read" | "single_numeric_total" | "balanced_debits_credits" | "balance_sheet_equation";
 
@@ -103,11 +110,6 @@ function validateEquation(
   );
 }
 
-interface Decimal {
-  coefficient: bigint;
-  scale: number;
-}
-
 function sumFields(
   records: readonly unknown[],
   fieldNames: readonly string[],
@@ -133,46 +135,6 @@ function sumFields(
     }
   }
   return { total, found, valid };
-}
-
-function parseDecimal(value: unknown): Decimal | undefined {
-  if (typeof value !== "string" && typeof value !== "number") return undefined;
-  if (typeof value === "number" && !Number.isFinite(value)) return undefined;
-  let rendered = String(value).trim();
-  let negativeParentheses = false;
-  if (rendered.startsWith("(") && rendered.endsWith(")")) {
-    negativeParentheses = true;
-    rendered = rendered.slice(1, -1).trim();
-  }
-  if (/^\d{1,3}(?:,\d{3})+(?:\.\d+)?$/.test(rendered)) rendered = rendered.replaceAll(",", "");
-  const match = rendered.match(/^([+-]?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/);
-  if (!match) return undefined;
-  const [, sign, whole, fraction = "", exponentText = "0"] = match;
-  const exponent = Number(exponentText);
-  if (!Number.isSafeInteger(exponent) || Math.abs(exponent) > 1_000) return undefined;
-  let coefficient = BigInt(`${whole}${fraction}`);
-  let scale = fraction.length - exponent;
-  if (scale < 0) {
-    coefficient *= 10n ** BigInt(-scale);
-    scale = 0;
-  }
-  const negativeSign = sign === "-";
-  if (negativeSign !== negativeParentheses) coefficient = -coefficient;
-  return { coefficient, scale };
-}
-
-function addDecimal(left: Decimal, right: Decimal): Decimal {
-  const scale = Math.max(left.scale, right.scale);
-  return {
-    coefficient:
-      left.coefficient * 10n ** BigInt(scale - left.scale) + right.coefficient * 10n ** BigInt(scale - right.scale),
-    scale,
-  };
-}
-
-function decimalEqual(left: Decimal, right: Decimal): boolean {
-  const aligned = addDecimal(left, { coefficient: -right.coefficient, scale: right.scale });
-  return aligned.coefficient === 0n;
 }
 
 function normalizeField(value: string): string {

@@ -8,12 +8,29 @@ import type {
   FinanceExecutionContext,
   FinanceService,
 } from "./finance.ts";
-import { digestFinnyEvidence, type FinnyDigest } from "./golden-loop.ts";
+import { digestFinnyEvidence, replayFinnyLedger, type FinnyDigest, type FinnyGoldenLoopState } from "./golden-loop.ts";
+import { digestFinnyCompiledOperation, runFinnyDurableOperationPlan } from "./durable-operation-runner.ts";
+import type { FinnyOperationPlan } from "./operation-compiler.ts";
+import {
+  loadFinnyOperationPlan,
+  loadFinnyOperationResult,
+  storeFinnyOperationPlan,
+  type FinnyOperationResultEnvelope,
+} from "./operation-custody.ts";
+import { digestFinnyOperationRows } from "./operation-runner.ts";
+import type { FinnyRunV2Checkpoint, FinnyStoredRunCheckpoint } from "./run-store.ts";
+
+export interface EvidenceBackedRunStore {
+  withRunLock<T>(runId: string, work: () => Promise<T>): Promise<T>;
+  checkpoint(runId: string, metadata: FinnyGoldenLoopState["ledger"][number]): Promise<FinnyStoredRunCheckpoint>;
+  load(runId: string): Promise<FinnyStoredRunCheckpoint | null>;
+}
 
 interface EvidenceBackedFinanceServiceOptions {
   delegate: FinanceService;
   files: FileArtifactStore;
   evidenceBytes: DurableByteStore;
+  runStore?: EvidenceBackedRunStore;
   artifactThresholdRows?: number;
 }
 
@@ -25,6 +42,17 @@ interface SourceEnvelope {
   verificationPolicy: FinnyVerificationPolicy;
   records: readonly unknown[];
 }
+
+interface PlanSourceEnvelope {
+  schema: "finny.source.v2";
+  runId: string;
+  planDigest: FinnyDigest;
+  resultOperationId: string;
+  resultDigest: FinnyDigest;
+  records: readonly unknown[];
+}
+
+type StoredSourceEnvelope = SourceEnvelope | PlanSourceEnvelope;
 
 export function createEvidenceBackedFinanceService(options: EvidenceBackedFinanceServiceOptions): FinanceService {
   const threshold = options.artifactThresholdRows ?? 10;
@@ -65,18 +93,54 @@ export function createEvidenceBackedFinanceService(options: EvidenceBackedFinanc
     return { records: output.records, sourceDigest };
   };
 
+  const sourcePlan: NonNullable<FinanceService["sourcePlan"]> = async (input, context) => {
+    if (!options.runStore) throw new Error("Finny plan-native source requires a durable v2 run store");
+    if (!options.delegate.executeOperation)
+      throw new Error("Finny plan-native source requires an external operation executor");
+    const reference = await storeFinnyOperationPlan(options.evidenceBytes, input.plan);
+    const plan = await loadFinnyOperationPlan(options.evidenceBytes, reference);
+    const targetOperationIds = [...new Set([plan.resultOperationId, ...plan.verificationPolicy.requiredOperationIds])];
+    const runStore = v2RunStore(options.runStore);
+    const results = await runFinnyDurableOperationPlan({
+      runId: context.runId,
+      plan,
+      targetOperationIds,
+      runStore,
+      resultBytes: options.evidenceBytes,
+      executeExternal: async (execution) =>
+        (await options.delegate.executeOperation!({ plan, execution }, context)).rows,
+    });
+    const result = results[plan.resultOperationId];
+    if (!result) throw new Error("Finny plan result operation is unavailable");
+    const checkpoint = await runStore.load(context.runId);
+    if (!checkpoint) throw new Error("Finny plan checkpoint is unavailable");
+    const state = replayFinnyLedger(context.runId, checkpoint.ledger);
+    const resultDigest = state.completedOperations[plan.resultOperationId]?.resultDigest;
+    if (!resultDigest) throw new Error("Finny plan result custody is unavailable");
+    const envelope: PlanSourceEnvelope = {
+      schema: "finny.source.v2",
+      runId: context.runId,
+      planDigest: plan.planDigest,
+      resultOperationId: plan.resultOperationId,
+      resultDigest,
+      records: result.rows,
+    };
+    const bytes = Buffer.from(canonicalJson(envelope), "utf8");
+    const sourceDigest = digestFinnyEvidence(bytes);
+    const stored = await options.evidenceBytes.put(bytes);
+    if (stored.sha256 !== digestHex(sourceDigest)) throw new Error("Durable finance source evidence digest mismatch");
+    return { records: result.rows, sourceDigest };
+  };
+
   const artifact = async (
     input: FinanceActionInputMap["artifact"],
     context: FinanceExecutionContext,
   ): Promise<FinanceActionOutputMap["artifact"]> => {
     const evidence = await loadEvidence(options.evidenceBytes, context, input.sourceDigest);
-    const requirement =
-      input.requirement === "required" || evidence.records.length > threshold ? "required" : "optional";
-    const policyDigest = digestFinnyEvidence(
-      `finny-artifact-policy:v2:requested:${input.requirement ?? "optional"}:rows>${threshold}:${requirement}:${evidence.records.length}`,
-    );
+    const decision = await artifactDecision(options.evidenceBytes, evidence, input.requirement, threshold);
+    const { requirement, policyDigest } = decision;
     if (requirement === "optional") return { requirement, policyDigest };
-    const report = buildReport(evidence.records);
+    const report = buildReport(evidence.records, decision.format);
     const artifactDigest = digestFinnyEvidence(report.bytes);
     const id = reportArtifactId(context.runId, input.sourceDigest, artifactDigest);
     const name = `finny-report-${id.slice(0, 12)}.${report.extension}`;
@@ -107,7 +171,11 @@ export function createEvidenceBackedFinanceService(options: EvidenceBackedFinanc
   ): Promise<FinanceActionOutputMap["verify"]> => {
     const evidence = await loadEvidence(options.evidenceBytes, context, input.sourceDigest);
     const required = input.requirement === "required";
-    const expectedArtifactDigest = required ? digestFinnyEvidence(buildReport(evidence.records).bytes) : undefined;
+    const decision = await artifactDecision(options.evidenceBytes, evidence, input.requirement, threshold);
+    const artifactPolicyMatches = evidence.schema === "finny.source.v1" || input.requirement === decision.requirement;
+    const expectedArtifactDigest = required
+      ? digestFinnyEvidence(buildReport(evidence.records, decision.format).bytes)
+      : undefined;
     const expectedArtifactId = expectedArtifactDigest
       ? reportArtifactId(context.runId, input.sourceDigest, expectedArtifactDigest)
       : undefined;
@@ -122,12 +190,33 @@ export function createEvidenceBackedFinanceService(options: EvidenceBackedFinanc
       openedArtifactDigest = digestFinnyEvidence(Buffer.concat(chunks));
     }
     const artifactMatches =
-      !required ||
-      (expectedArtifactDigest !== undefined &&
-        input.artifactDigest === expectedArtifactDigest &&
-        openedArtifact?.artifact.ownerScopeId === context.scopeId &&
-        openedArtifact.artifact.sha256 === digestHex(expectedArtifactDigest) &&
-        openedArtifactDigest === expectedArtifactDigest);
+      artifactPolicyMatches &&
+      (!required ||
+        (expectedArtifactDigest !== undefined &&
+          input.artifactDigest === expectedArtifactDigest &&
+          openedArtifact?.artifact.ownerScopeId === context.scopeId &&
+          openedArtifact.artifact.sha256 === digestHex(expectedArtifactDigest) &&
+          openedArtifactDigest === expectedArtifactDigest));
+    if (evidence.schema === "finny.source.v2") {
+      const verified = await verifyPlanEvidence(options, context, evidence);
+      return {
+        passed: artifactMatches && verified.reconciled,
+        verificationDigest: digestFinnyEvidence(
+          canonicalJson({
+            schema: "finny.verification.v2",
+            sourceDigest: input.sourceDigest,
+            artifactDigest: input.artifactDigest ?? null,
+            requirement: input.requirement ?? null,
+            rowCount: evidence.records.length,
+            artifactMatches,
+            artifactPolicyDigest: decision.policyDigest,
+            authority: verified.authority,
+            results: verified.results,
+            reconciled: verified.reconciled,
+          }),
+        ),
+      };
+    }
     const repeated = await options.delegate.source({ planDigest: evidence.planDigest, query: evidence.query }, context);
     const sourceMatches = canonicalJson(repeated.records) === canonicalJson(evidence.records);
     const accounting = validateFinnyAccounting(evidence.records, evidence.verificationPolicy);
@@ -142,6 +231,7 @@ export function createEvidenceBackedFinanceService(options: EvidenceBackedFinanc
           requirement: input.requirement ?? null,
           rowCount: evidence.records.length,
           artifactMatches,
+          artifactPolicyDigest: decision.policyDigest,
           sourceMatches,
           accounting,
         }),
@@ -158,9 +248,16 @@ export function createEvidenceBackedFinanceService(options: EvidenceBackedFinanc
 
   return {
     clarify: (input, context) => options.delegate.clarify(input, context),
+    ...(options.delegate.preflightPlan
+      ? { preflightPlan: (input, context) => options.delegate.preflightPlan!(input, context) }
+      : {}),
     preflight,
     plan: (input, context) => options.delegate.plan(input, context),
     source,
+    sourcePlan,
+    ...(options.delegate.executeOperation
+      ? { executeOperation: (input, context) => options.delegate.executeOperation!(input, context) }
+      : {}),
     artifact,
     verify,
     recoverSource,
@@ -171,7 +268,7 @@ async function loadEvidence(
   evidenceBytes: DurableByteStore,
   context: FinanceExecutionContext,
   sourceDigest: FinnyDigest,
-): Promise<SourceEnvelope> {
+): Promise<StoredSourceEnvelope> {
   const blobKey = `files/${digestHex(sourceDigest)}`;
   const opened = await evidenceBytes.open(blobKey);
   if (!opened) throw new Error("Durable finance source evidence is unavailable");
@@ -188,7 +285,8 @@ async function loadEvidence(
   } catch {
     throw new Error("Durable finance source evidence is invalid");
   }
-  if (!isSourceEnvelope(parsed, context.runId)) throw new Error("Durable finance source evidence is invalid");
+  if (!isSourceEnvelope(parsed, context.runId) && !isPlanSourceEnvelope(parsed, context.runId))
+    throw new Error("Durable finance source evidence is invalid");
   return parsed;
 }
 
@@ -232,6 +330,171 @@ function isSourceEnvelope(value: unknown, runId: string): value is SourceEnvelop
   );
 }
 
+function isPlanSourceEnvelope(value: unknown, runId: string): value is PlanSourceEnvelope {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    record.schema === "finny.source.v2" &&
+    record.runId === runId &&
+    typeof record.planDigest === "string" &&
+    /^sha256:[a-f0-9]{64}$/.test(record.planDigest) &&
+    typeof record.resultOperationId === "string" &&
+    /^[a-z][a-z0-9_]*$/.test(record.resultOperationId) &&
+    typeof record.resultDigest === "string" &&
+    /^sha256:[a-f0-9]{64}$/.test(record.resultDigest) &&
+    Array.isArray(record.records)
+  );
+}
+
+function operationClosure(plan: FinnyOperationPlan, targetOperationIds: readonly string[]): Set<string> {
+  const operations = new Map(plan.operations.map((operation) => [operation.id, operation]));
+  const closure = new Set<string>();
+  const visit = (operationId: string): void => {
+    if (closure.has(operationId)) return;
+    const operation = operations.get(operationId);
+    if (!operation) throw new Error(`Finny verification operation ${operationId} is unavailable`);
+    closure.add(operationId);
+    for (const dependency of operation.dependsOn) visit(dependency);
+  };
+  for (const operationId of targetOperationIds) visit(operationId);
+  return closure;
+}
+
+function assertCheckpointPlan(
+  checkpoint: FinnyRunV2Checkpoint,
+  state: FinnyGoldenLoopState,
+  plan: FinnyOperationPlan,
+  context: FinanceExecutionContext,
+): void {
+  if (
+    checkpoint.schema !== "finny.run.v2" ||
+    checkpoint.runId !== context.runId ||
+    checkpoint.scopeId !== context.scopeId ||
+    checkpoint.plan.planDigest !== plan.planDigest ||
+    checkpoint.plan.catalogDigest !== plan.catalogDigest ||
+    checkpoint.plan.capabilityId !== plan.capabilityId ||
+    checkpoint.plan.revisionId !== plan.revisionId ||
+    checkpoint.plan.operationGraphDigest !== plan.operationGraphDigest ||
+    state.planDigest !== plan.planDigest ||
+    state.catalogDigest !== plan.catalogDigest ||
+    state.manifestDigest !== plan.manifestDigest ||
+    state.capabilityId !== plan.capabilityId ||
+    state.revisionId !== plan.revisionId ||
+    state.operationGraphDigest !== plan.operationGraphDigest
+  )
+    throw new Error("Finny plan verification authority does not match the durable checkpoint");
+}
+
+function requireV2Checkpoint(checkpoint: FinnyStoredRunCheckpoint): FinnyRunV2Checkpoint {
+  if (!("schema" in checkpoint) || checkpoint.schema !== "finny.run.v2")
+    throw new Error(`Finny run ${checkpoint.runId} is not bound to a v2 operation plan`);
+  return checkpoint;
+}
+
+function v2RunStore(runStore: EvidenceBackedRunStore): {
+  withRunLock<T>(runId: string, work: () => Promise<T>): Promise<T>;
+  checkpoint(runId: string, metadata: FinnyGoldenLoopState["ledger"][number]): Promise<FinnyRunV2Checkpoint>;
+  load(runId: string): Promise<FinnyRunV2Checkpoint | null>;
+} {
+  return {
+    withRunLock: (runId, work) => runStore.withRunLock(runId, work),
+    checkpoint: async (runId, metadata) => requireV2Checkpoint(await runStore.checkpoint(runId, metadata)),
+    load: async (runId) => {
+      const checkpoint = await runStore.load(runId);
+      return checkpoint ? requireV2Checkpoint(checkpoint) : null;
+    },
+  };
+}
+
+async function verifyPlanEvidence(
+  options: EvidenceBackedFinanceServiceOptions,
+  context: FinanceExecutionContext,
+  evidence: PlanSourceEnvelope,
+): Promise<{
+  authority: Record<string, unknown>;
+  results: readonly Record<string, unknown>[];
+  reconciled: boolean;
+}> {
+  if (!options.runStore) throw new Error("Finny plan-native verification requires a durable v2 run store");
+  const plan = await loadFinnyOperationPlan(options.evidenceBytes, {
+    blobKey: `files/${digestHex(evidence.planDigest)}`,
+    planDigest: evidence.planDigest,
+  });
+  if (plan.resultOperationId !== evidence.resultOperationId)
+    throw new Error("Finny source result operation does not match the custodied plan");
+  const checkpoint = await v2RunStore(options.runStore).load(context.runId);
+  if (!checkpoint) throw new Error("Finny plan checkpoint is unavailable");
+  const state = replayFinnyLedger(context.runId, checkpoint.ledger);
+  assertCheckpointPlan(checkpoint, state, plan, context);
+  const targets = [...new Set([plan.resultOperationId, ...plan.verificationPolicy.requiredOperationIds])];
+  const closure = operationClosure(plan, targets);
+  const custodyDigests: Record<string, FinnyDigest> = {};
+  const envelopes = new Map<string, FinnyOperationResultEnvelope>();
+  const results: Record<string, unknown>[] = [];
+  for (const [ordinal, operation] of plan.operations.entries()) {
+    if (!closure.has(operation.id)) continue;
+    const completed = state.completedOperations[operation.id];
+    if (!completed) throw new Error(`Finny required operation result ${operation.id} is unavailable`);
+    const operationDigest = digestFinnyCompiledOperation(plan.planDigest, ordinal, operation);
+    if (completed.primitive !== operation.primitive || completed.operationDigest !== operationDigest)
+      throw new Error(`Finny required operation result ${operation.id} does not match the custodied plan`);
+    const dependencyResults = operation.dependsOn.map((operationId) => {
+      const resultDigest = custodyDigests[operationId];
+      if (!resultDigest) throw new Error(`Finny operation result dependency ${operationId} is unavailable`);
+      return { operationId, resultDigest };
+    });
+    const envelope = await loadFinnyOperationResult(options.evidenceBytes, {
+      runId: context.runId,
+      planDigest: plan.planDigest,
+      operationId: operation.id,
+      operationDigest,
+      dependencyResults,
+      resultDigest: completed.resultDigest,
+    });
+    custodyDigests[operation.id] = completed.resultDigest;
+    envelopes.set(operation.id, envelope);
+    results.push({
+      operationId: operation.id,
+      primitive: operation.primitive,
+      operationDigest,
+      resultDigest: completed.resultDigest,
+      dependencyResults,
+      outputDigest: digestFinnyOperationRows(envelope.output),
+    });
+  }
+  const delivered = envelopes.get(plan.resultOperationId);
+  if (
+    !delivered ||
+    custodyDigests[plan.resultOperationId] !== evidence.resultDigest ||
+    canonicalJson(delivered.output) !== canonicalJson(evidence.records)
+  )
+    throw new Error("Finny delivered result does not match its durable custody");
+  const reconcileOperations = plan.operations.filter(
+    (operation) => closure.has(operation.id) && operation.primitive === "reconcile",
+  );
+  const reconciled = reconcileOperations.every((operation) => {
+    const rows = envelopes.get(operation.id)?.output;
+    return Boolean(rows?.length) && rows!.every((row) => row.reconciled === true);
+  });
+  return {
+    authority: {
+      planDigest: plan.planDigest,
+      manifestDigest: plan.manifestDigest,
+      catalogDigest: plan.catalogDigest,
+      capabilityId: plan.capabilityId,
+      revisionId: plan.revisionId,
+      operationGraphDigest: plan.operationGraphDigest,
+      resultOperationId: plan.resultOperationId,
+      requiredOperationIds: plan.verificationPolicy.requiredOperationIds,
+      artifactPolicyDigest: plan.artifactPolicyDigest,
+      approvalPolicyDigest: plan.approvalPolicyDigest,
+      verificationPolicyDigest: plan.verificationPolicyDigest,
+    },
+    results,
+    reconciled,
+  };
+}
+
 function isVerificationPolicy(value: unknown): value is FinnyVerificationPolicy {
   return (
     value === "repeatable_read" ||
@@ -267,12 +530,67 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(normalize(value));
 }
 
-function buildReport(records: readonly unknown[]): {
+async function artifactDecision(
+  evidenceBytes: DurableByteStore,
+  evidence: StoredSourceEnvelope,
+  requested: "required" | "optional" | undefined,
+  threshold: number,
+): Promise<{
+  requirement: "required" | "optional";
+  policyDigest: FinnyDigest;
+  format?: "json" | "csv";
+}> {
+  if (evidence.schema === "finny.source.v1") {
+    const requirement = requested === "required" || evidence.records.length > threshold ? "required" : "optional";
+    return {
+      requirement,
+      policyDigest: digestFinnyEvidence(
+        `finny-artifact-policy:v2:requested:${requested ?? "optional"}:rows>${threshold}:${requirement}:${evidence.records.length}`,
+      ),
+    };
+  }
+  const plan = await loadFinnyOperationPlan(evidenceBytes, {
+    blobKey: `files/${digestHex(evidence.planDigest)}`,
+    planDigest: evidence.planDigest,
+  });
+  if (plan.resultOperationId !== evidence.resultOperationId)
+    throw new Error("Finny source result operation does not match the custodied plan");
+  if (
+    !Array.isArray(plan.artifactPolicy.allowedFormats) ||
+    !plan.artifactPolicy.allowedFormats.includes(plan.artifactPolicy.defaultFormat) ||
+    !["json", "csv"].includes(plan.artifactPolicy.defaultFormat) ||
+    !["never", "when_requested", "always"].includes(plan.artifactPolicy.attachment)
+  )
+    throw new Error("Finny custodied artifact policy is invalid");
+  const attachment = plan.artifactPolicy.attachment;
+  const requirement =
+    attachment === "always" || (attachment === "when_requested" && requested === "required") ? "required" : "optional";
+  const format = plan.artifactPolicy.defaultFormat;
+  return {
+    requirement,
+    format,
+    policyDigest: digestFinnyEvidence(
+      canonicalJson({
+        schema: "finny.artifact_policy.v3",
+        planDigest: plan.planDigest,
+        artifactPolicyDigest: plan.artifactPolicyDigest,
+        requested: requested ?? "optional",
+        requirement,
+        format,
+      }),
+    ),
+  };
+}
+
+function buildReport(
+  records: readonly unknown[],
+  format?: "json" | "csv",
+): {
   bytes: Buffer;
   extension: "csv" | "json";
   mimetype: "text/csv" | "application/json";
 } {
-  if (records.every(isFlatRecord)) {
+  if (format !== "json" && records.every(isFlatRecord)) {
     const columns = [...new Set(records.flatMap((record) => Object.keys(record)))].sort();
     if (columns.length) {
       const lines = [
@@ -282,6 +600,7 @@ function buildReport(records: readonly unknown[]): {
       return { bytes: Buffer.from(`${lines.join("\n")}\n`, "utf8"), extension: "csv", mimetype: "text/csv" };
     }
   }
+  if (format === "csv") throw new Error("Finance report rows are incompatible with the reviewed CSV format");
   const body = canonicalJson({ schema: "finny.report.v1", records });
   return { bytes: Buffer.from(`${body}\n`, "utf8"), extension: "json", mimetype: "application/json" };
 }
