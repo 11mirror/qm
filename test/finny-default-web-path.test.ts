@@ -3,6 +3,7 @@ import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { createServer } from "../src/api/server.ts";
@@ -15,7 +16,18 @@ import { testConfig } from "./support/test-config.ts";
 
 const SECRET = "finny-default-web-secret".repeat(2);
 const MODEL = "gpt-5.6-sol";
+const SKILLS_DIR = fileURLToPath(new URL("../finny-skills", import.meta.url));
 const digest = (value: string) => digestFinnyEvidence(value);
+const AP_CANDIDATE = {
+  capabilityId: "ap_gl_control_balance",
+  dimensions: {
+    entity: "all",
+    period: "current",
+    currency: "source_base",
+    grain: "total",
+    artifact: "required",
+  },
+};
 
 function sendModelItem(res: ServerResponse, item: Record<string, unknown>, serial: number): void {
   const send = (type: string, data: object) =>
@@ -38,7 +50,7 @@ function sendModelItem(res: ServerResponse, item: Record<string, unknown>, seria
   res.end();
 }
 
-test("default QM web path publishes and verifies a host-classified finance artifact", async (t) => {
+test("default QM web path requires reviewed-plan approval before provider execution", async (t) => {
   let step = 0;
   let sourceCalls = 0;
   const upstream = createHttpServer(async (req, res) => {
@@ -50,7 +62,7 @@ test("default QM web path publishes and verifies a host-classified finance artif
       return;
     }
     JSON.parse(raw);
-    const actions = [() => ({ request: "What is our AP balance?" })];
+    const actions = [() => AP_CANDIDATE];
     const action = actions[step]?.();
     step += 1;
     const item = action
@@ -77,30 +89,25 @@ test("default QM web path publishes and verifies a host-classified finance artif
     upstream.close();
   });
 
-  const policyDigest = digest("read-only-policy");
   const atomicFetch: AtomicFetchAdapter = {
-    async preflight() {
+    async preflightPlan({ plan }) {
       return {
-        planSummary: "read AP detail",
-        preflightDigest: digest("preflight"),
-        planDigest: digest("plan"),
-        approvalRequired: false,
-        approvalPolicyDigest: policyDigest,
+        planSummary: plan.semanticCapability,
+        preflightDigest: digest(`preflight:${plan.planDigest}`),
+        approvalRequired: true,
+        approvalPolicyDigest: plan.approvalPolicyDigest,
       };
     },
-    async source() {
+    async executeOperation() {
       sourceCalls += 1;
-      return {
-        records: Array.from({ length: 11 }, (_, index) => ({ id: index + 1, amount: index + 10 })),
-        sourceDigest: digest(`upstream-${sourceCalls}`),
-      };
+      return { rows: Array.from({ length: 11 }, (_, index) => ({ id: index + 1, amount: index + 10 })) };
     },
   };
   const built = buildApp(
     testConfig({
       harness: "pi",
       modelId: MODEL,
-      finnyProfile: { id: "finny", modelId: MODEL, providerTimeoutMs: 120_000 },
+      finnyProfile: { id: "finny", modelId: MODEL, providerTimeoutMs: 120_000, skillsDir: SKILLS_DIR },
       securityScreen: "off",
       modelGateway: {
         url: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`,
@@ -147,10 +154,9 @@ test("default QM web path publishes and verifies a host-classified finance artif
   });
   assert.equal(response.status, 200);
   const result = (await response.json()) as { reply?: string };
-  assert.match(result.reply ?? "", /^Finny verified this finance result:/);
+  assert.match(result.reply ?? "", /blocked at PREFLIGHT/i);
   assert.doesNotMatch(result.reply ?? "", /Verified AP detail is attached/);
-  assert.equal(sourceCalls, 2);
+  assert.equal(sourceCalls, 0);
   const files = await built.files.listOwnedByScopes(["personal:internal:finny-default-web"]);
-  assert.equal(files.files.length, 1);
-  assert.equal(files.files[0]?.mimetype, "text/csv");
+  assert.equal(files.files.length, 0);
 });

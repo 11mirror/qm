@@ -45,7 +45,7 @@ const context = {
 test("unavailable service safely preflights plan authority without exposing a query", async () => {
   const service = createUnavailableFinanceService();
 
-  const result = await service.preflightPlan!(
+  const result = await service.preflightPlan(
     { request: "reviewed balance", clarificationDigest: digest("clarify"), plan },
     context,
   );
@@ -61,7 +61,7 @@ test("unavailable service blocks plan execution and source custody", async () =>
   const service = createUnavailableFinanceService();
 
   await assert.rejects(
-    service.executeOperation!(
+    service.executeOperation(
       {
         plan,
         execution: { operation: plan.operations[0]!, dependencyResultSets: {}, dependencyDigests: {} },
@@ -70,5 +70,5 @@ test("unavailable service blocks plan execution and source custody", async () =>
     ),
     /blocked_external.*operation/i,
   );
-  await assert.rejects(service.sourcePlan!({ plan }, context), /blocked_external.*source/i);
+  await assert.rejects(service.sourcePlan({ plan }, context), /blocked_external.*source/i);
 });

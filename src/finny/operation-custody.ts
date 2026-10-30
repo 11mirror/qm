@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { DurableByteStore } from "../files/durable-byte-store.ts";
+import { canonicalFinnyJson } from "./canonical-json.ts";
 import { collectBytes } from "../util/bytes.ts";
 import { decodeFinnyOperationPlan, encodeFinnyOperationPlan, type FinnyOperationPlan } from "./operation-compiler.ts";
 import type { FinnyOperationRow } from "./operation-executor.ts";
@@ -61,20 +62,6 @@ function plainRecord(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value) as unknown;
   return prototype === Object.prototype || prototype === null;
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (plainRecord(value))
-    return `{${Object.entries(value)
-      .sort(([left], [right]) => {
-        if (left < right) return -1;
-        if (left > right) return 1;
-        return 0;
-      })
-      .map(([key, nested]) => `${JSON.stringify(key)}:${canonicalJson(nested)}`)
-      .join(",")}}`;
-  return JSON.stringify(value);
 }
 
 function bytesDigest(bytes: Uint8Array): FinnyCustodyDigest {
@@ -207,7 +194,7 @@ export async function loadFinnyOperationPlan(
 
 export function encodeFinnyOperationResult(input: FinnyOperationResultInput): EncodedFinnyOperationResult {
   const envelope = normalizedEnvelope({ schema: "finny.operation_result.v1", ...input });
-  const bytes = Buffer.from(canonicalJson(envelope), "utf8");
+  const bytes = Buffer.from(canonicalFinnyJson(envelope, "Finny operation result output is invalid"), "utf8");
   return Object.freeze({ bytes, resultDigest: bytesDigest(bytes) });
 }
 
@@ -224,7 +211,11 @@ export function decodeFinnyOperationResult(
     throw new Error("Finny operation result is invalid");
   }
   const envelope = normalizedEnvelope(parsed);
-  if (Buffer.from(canonicalJson(envelope), "utf8").compare(Buffer.from(bytes)) !== 0)
+  if (
+    Buffer.from(canonicalFinnyJson(envelope, "Finny operation result output is invalid"), "utf8").compare(
+      Buffer.from(bytes),
+    ) !== 0
+  )
     throw new Error("Finny operation result encoding is invalid");
   if (
     envelope.runId !== expected.runId ||

@@ -6,7 +6,7 @@ Source branch: `codex/qm-host-attestation`
 
 ## Executive status
 
-The host-attested finance harness is now general and plan-native when a reviewed capability catalog is configured. The production path resolves a catalog capability, compiles its complete operation graph, executes and checkpoints each primitive durably, verifies the graph's required controls, and releases only the designated result. AP and an unrelated inventory capability prove that this is not a report-by-report TypeScript controller.
+The host-attested finance harness is now general and plan-native. Finny requires a reviewed capability catalog, accepts only its strict typed intent candidates, derives request identity solely from trusted turn text, and requires human approval before source work. The production path compiles the complete operation graph, executes and checkpoints each primitive durably, verifies a result-connected independent repeat/reconciliation control, and releases only the designated result. AP and an unrelated inventory capability prove that this is not a report-by-report TypeScript controller.
 
 The harness is still not live-validated with a real authenticated Pi model. The running development environment has no usable model credential, no deployment-owned NetSuite binding, no Slack pool slot, and no Firefox acceptance surface. The user-facing finance product is additionally blocked on finance-reviewed AR semantics.
 
@@ -16,7 +16,7 @@ Observed acceptance failure:
 
 `Example Manufacturing` and the cutoff above are synthetic acceptance fixtures.
 
-Finance IR now preserves the AR measure, named entity, and historical cutoff. The compiler still returns `schema_mapping_required` and makes no source call because the executable registry has no finance-reviewed NetSuite field, join, currency, book, entity, or cutoff semantics for this request family. This is safe fail-closed behavior, but it does not meet the product requirement.
+The installed capability catalog has no reviewed AR intent contract or NetSuite field, currency, book, entity, cutoff, or migration semantics for this request family. An AR proposal therefore fails before any source call. This is safe fail-closed behavior, but it does not meet the product requirement.
 
 Do not report this build as “live Pi works” or “the finance product works.” Report it as: **the general plan-native harness is implemented and locally verified; real Pi authentication, AR capability authority, and live provider/surface acceptance are incomplete**.
 
@@ -24,7 +24,7 @@ Do not report this build as “live Pi works” or “the finance product works.
 
 The implementation inventory and source links are in [Finny Pi harness implementation status](finny-implementation-status.md).
 
-The architectural change is real: Pi sees one `finance({request})` operation, while the host compiles and drives the Golden Loop. Seven internal `FinanceService` stages remain as host and compatibility-test seams; they are not model-visible.
+The architectural change is real: Pi sees one `finance({capabilityId, dimensions, artifactFormat?})` operation, while the host compiles and drives the Golden Loop. The typed candidate is untrusted until the host validates it against the exact reviewed descriptor and a human approves the complete plan; request identity still comes only from trusted turn text. The plan-only `FinanceService` has no query-era compatibility stages.
 
 The build contains reviewed knowledge and capability-pack loading, catalog-driven intent resolution, deterministic operation-plan compilation, exact approval binding, durable per-operation result custody, crash-resumable stage checkpoints, credential rebinding, repeat-pull/reconciliation verification, artifact publication, safe plan-native trace APIs, typed provider diagnostics, Slack delivery attestation, and bounded autoresearch scaffolding.
 
@@ -33,10 +33,12 @@ The build contains reviewed knowledge and capability-pack loading, catalog-drive
 Knowledge and execution authority are separate:
 
 1. The skill bundle contains deployment-provided finance knowledge and task rules.
-2. Finance IR represents request dimensions.
-3. The compiler executes only registry entries backed by reviewed schema authority and deterministic queries.
+2. The capability descriptor defines a strict typed intent and supported dimensions.
+3. The compiler executes only exact capability IDs backed by reviewed schema authority and deterministic queries.
 
-The bundled compatibility pack contains current aggregate AP and an unrelated inventory capability. Both traverse the same primitives and controller. Skill prose is not sufficient authority to invent SuiteQL or NetSuite mappings; AR must arrive as reviewed deployment-owned capability data, not another host code path.
+The bundled pack contains current aggregate AP and an unrelated inventory capability. Both traverse the same three primitives and controller. Skill prose is not sufficient authority to invent SuiteQL or NetSuite mappings; AR must arrive as reviewed deployment-owned capability and typed-intent data, not another host code path.
+
+`FINNY_SKILLS_DIR` is an operator-controlled deployment trust root. The capability manifest binds exact bytes and detects mutation, but its self-declared classification is not a signature and does not make an untrusted writable directory reviewed.
 
 ## P0 blockers
 
@@ -70,7 +72,7 @@ The source implementation requires Postgres-backed sessions and runs, a stable `
 
 The current development environment has no deployment-owned NetSuite binding or usable model credential. Bind a read-only credential in a safe non-production account, then prove the real 401, 429, timeout, 5xx, pagination, and successful SuiteQL paths without reading or logging secret values.
 
-The supported configuration matrix is documented in [Finny Pi harness implementation status](finny-implementation-status.md#configuration-contract). In short, Finny uses the existing `PI_MODEL` setting as its sole pinned model owner, requires the Pi harness plus Postgres session/run stores and a stable connector secret, requires a positive provider timeout, and optionally accepts a reviewed skills directory.
+The supported configuration matrix is documented in [Finny Pi harness implementation status](finny-implementation-status.md#configuration-contract). In short, Finny uses the existing `PI_MODEL` setting as its sole pinned model owner and requires the Pi harness, a reviewed skills directory, Postgres session/run stores, a stable connector secret, and a positive provider timeout.
 
 ### 4. Prove a live desktop acceptance matrix
 
@@ -127,7 +129,7 @@ Re-run after every capability change; historical counts are not evidence for new
 4. Bind deployment-owned read-only NetSuite credentials through QM and validate AR for a synthetic entity fixture against finance-owned expected data.
 5. Run the installed-desktop matrix, including restart and provider failures.
 6. Prove Slack parity and attestation in Firefox.
-7. Remove the compatibility registry after downstream deployments supply reviewed catalogs; never use model-generated SQL.
+7. Expand capabilities deliberately through reviewed pack data; never use model-generated SQL.
 
 ## Definition of done
 

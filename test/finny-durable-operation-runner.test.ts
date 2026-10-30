@@ -35,14 +35,8 @@ const descriptor: FinnyCapabilityDescriptor = {
       sql: "SELECT entity, amount FROM balance WHERE entity = :entity_id",
       parameters: ["entity_id"],
     },
-    {
-      id: "selected",
-      primitive: "project",
-      dependsOn: ["source"],
-      fields: ["entity", "amount"],
-    },
   ],
-  resultOperationId: "selected",
+  resultOperationId: "source",
   parameterBindings: {
     entity_id: { source: "dimension", path: ["entity", "name"] },
   },
@@ -84,7 +78,7 @@ function hostEvent(event: Record<string, unknown>): FinnyHostEvent {
 
 async function approvedRun(plan: FinnyOperationPlan) {
   const runId = "run-durable";
-  const runStore = createFinnyRunStore<FinnyRunV2Checkpoint>(createMemoryMap<FinnyRunV2Checkpoint>());
+  const runStore = createFinnyRunStore(createMemoryMap<FinnyRunV2Checkpoint>());
   await runStore.initialize({
     schema: "finny.run.v2",
     runId,
@@ -142,18 +136,24 @@ async function approvedRun(plan: FinnyOperationPlan) {
 test("persists canonical operation results before ledger completion and resumes without execution", async () => {
   const plan = compiledPlan();
   const { runId, runStore } = await approvedRun(plan);
+  const operationRunStore = new Proxy(runStore, {
+    get(target, property, receiver) {
+      if (property === "withRunLock") throw new Error("operation runner reacquired the workflow lock");
+      return Reflect.get(target, property, receiver) as unknown;
+    },
+  });
   const bytes = createMemoryDurableByteStore();
   let calls = 0;
   const executeExternal = async () => {
     calls += 1;
-    return [{ entity: "MTPL", amount: "10", ignored: true }];
+    return [{ entity: "MTPL", amount: "10" }];
   };
 
   const first = await runFinnyDurableOperationPlan({
     runId,
     plan,
-    targetOperationIds: ["selected"],
-    runStore,
+    targetOperationIds: ["source"],
+    runStore: operationRunStore,
     resultBytes: bytes,
     executeExternal,
   });
@@ -161,22 +161,21 @@ test("persists canonical operation results before ledger completion and resumes 
   const state = replayFinnyLedger(runId, checkpoint!.ledger);
 
   assert.equal(calls, 1);
-  assert.deepEqual(first.selected?.rows, [{ entity: "MTPL", amount: "10" }]);
-  assert.deepEqual(Object.keys(state.completedOperations), ["source", "selected"]);
-  assert.equal(checkpoint!.ledger.at(-2)?.eventId, `${runId}:operation:source`);
-  assert.equal(checkpoint!.ledger.at(-1)?.eventId, `${runId}:operation:selected`);
+  assert.deepEqual(first.source?.rows, [{ entity: "MTPL", amount: "10" }]);
+  assert.deepEqual(Object.keys(state.completedOperations), ["source"]);
+  assert.equal(checkpoint!.ledger.at(-1)?.eventId, `${runId}:operation:source`);
 
   const resumed = await runFinnyDurableOperationPlan({
     runId,
     plan,
-    targetOperationIds: ["selected"],
-    runStore,
+    targetOperationIds: ["source"],
+    runStore: operationRunStore,
     resultBytes: bytes,
     executeExternal,
   });
 
   assert.equal(calls, 1);
-  assert.deepEqual(resumed.selected, first.selected);
+  assert.deepEqual(resumed.source, first.source);
 });
 
 test("re-executes after a crash between result persistence and ledger completion", async () => {
@@ -336,7 +335,7 @@ test("requires an approved checkpoint bound to the exact plan", async () => {
     /plan.*digest|plan binding/i,
   );
 
-  const pendingStore = createFinnyRunStore<FinnyRunV2Checkpoint>(createMemoryMap<FinnyRunV2Checkpoint>());
+  const pendingStore = createFinnyRunStore(createMemoryMap<FinnyRunV2Checkpoint>());
   await pendingStore.initialize({
     schema: "finny.run.v2",
     runId: "run-pending",

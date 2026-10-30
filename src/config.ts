@@ -77,7 +77,7 @@ export interface Config {
     id: "finny";
     modelId: string;
     providerTimeoutMs: number;
-    skillsDir?: string;
+    skillsDir: string;
   };
   securityPosture: SecurityPosture;
   sharingPosture: SharingPosture;
@@ -1104,13 +1104,14 @@ function finnyProfileEnvStrict(env: NodeJS.ProcessEnv, harness: Config["harness"
     throw new Error(`FINNY_PROFILE=${JSON.stringify(env.FINNY_PROFILE)} is not recognized — use finny or unset it.`);
   if (harness !== "pi") throw new Error("FINNY_PROFILE=finny requires harness=pi");
   if (!modelId) throw new Error("FINNY_PROFILE=finny requires a pinned PI_MODEL");
+  if (!skillsDir) throw new Error("FINNY_PROFILE=finny requires FINNY_SKILLS_DIR");
   if (!Number.isSafeInteger(providerTimeoutMs) || providerTimeoutMs! <= 0)
     throw new Error("FINNY_PROFILE=finny requires a positive integer FINNY_PROVIDER_TIMEOUT_MS");
   return {
     id: "finny",
     modelId,
     providerTimeoutMs: providerTimeoutMs!,
-    ...(skillsDir ? { skillsDir: resolve(skillsDir) } : {}),
+    skillsDir: resolve(skillsDir),
   };
 }
 

@@ -1,52 +1,42 @@
 import type { FinnyCapabilityCatalog, FinnyCapabilityDescriptor } from "./capability-pack.ts";
-import { resolveFinnyIntent, type FinnyIntentResolution, type FinnyResolvedDimensions } from "./intent-resolver.ts";
+import {
+  resolveFinnyIntent,
+  type FinnyIntentCandidate,
+  type FinnyIntentResolution,
+  type FinnyResolvedDimensions,
+} from "./intent-resolver.ts";
 import { compileFinnyOperationPlan, type FinnyOperationPlan } from "./operation-compiler.ts";
 
 export type FinnyControllerCompilation =
   | {
       status: "compiled";
-      request: string;
+      capabilityId: string;
       semanticCapability: string;
       dimensions: FinnyResolvedDimensions;
+      artifactFormat?: FinnyCapabilityDescriptor["artifactPolicy"]["allowedFormats"][number];
       plan: FinnyOperationPlan;
     }
   | Exclude<FinnyIntentResolution, { status: "resolved" }>;
 
-function declaredDimensions(
-  descriptor: FinnyCapabilityDescriptor,
-  dimensions: FinnyResolvedDimensions,
-): Record<string, unknown> {
-  const source = dimensions as unknown as Record<string, unknown>;
-  const names = new Set([...descriptor.dimensions.required, ...Object.keys(descriptor.dimensions.supported)]);
-  return Object.fromEntries(
-    [...names]
-      .sort()
-      .filter((name) => Object.hasOwn(source, name) || Object.hasOwn(descriptor.dimensions.defaults, name))
-      .map((name) => {
-        const value = source[name];
-        const useDefault = value === undefined || (Array.isArray(value) && value.length === 0);
-        return [name, useDefault ? descriptor.dimensions.defaults[name] : value];
-      }),
-  );
-}
-
 export function compileFinnyControllerRequest(
-  request: string,
+  candidate: FinnyIntentCandidate,
   catalog: FinnyCapabilityCatalog,
 ): FinnyControllerCompilation {
-  const resolution = resolveFinnyIntent(request, catalog);
+  const resolution = resolveFinnyIntent(candidate, catalog);
   if (resolution.status !== "resolved") return resolution;
   return {
     status: "compiled",
-    request: resolution.request,
+    capabilityId: resolution.capabilityId,
     semanticCapability: resolution.semanticCapability,
     dimensions: resolution.dimensions,
+    ...(resolution.artifactFormat ? { artifactFormat: resolution.artifactFormat } : {}),
     plan: compileFinnyOperationPlan({
       descriptor: resolution.capability,
       manifestDigest: catalog.manifestDigest,
       catalogDigest: catalog.catalogDigest,
       semanticCapability: resolution.semanticCapability,
-      dimensions: declaredDimensions(resolution.capability, resolution.dimensions),
+      dimensions: resolution.dimensions,
+      ...(resolution.artifactFormat ? { artifactFormat: resolution.artifactFormat } : {}),
     }),
   };
 }

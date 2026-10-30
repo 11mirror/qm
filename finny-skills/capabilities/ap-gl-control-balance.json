@@ -4,6 +4,16 @@
   "revisionId": "ap_gl_control_balance.2026-10-30",
   "semanticCapability": "ap_gl_control_balance",
   "semanticAliases": ["accounts_payable", "ap_balance", "supplier_exposure", "owe_suppliers"],
+  "intent": {
+    "dimensions": {
+      "entity": { "type": "enum", "values": ["all"] },
+      "period": { "type": "enum", "values": ["current"] },
+      "currency": { "type": "enum", "values": ["source_base"] },
+      "grain": { "type": "enum", "values": ["total"] },
+      "sources": { "type": "string_list", "values": ["netsuite"] },
+      "artifact": { "type": "enum", "values": ["optional", "required"] }
+    }
+  },
   "dimensions": {
     "required": ["entity", "period", "currency", "grain", "artifact"],
     "supported": {

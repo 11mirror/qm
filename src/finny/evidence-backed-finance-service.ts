@@ -1,7 +1,7 @@
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import { artifactPath, fileArtifactId } from "../files/file-artifact-store.ts";
 import type { DurableByteStore } from "../files/durable-byte-store.ts";
-import { validateFinnyAccounting, type FinnyVerificationPolicy } from "./accounting-validator.ts";
+import { canonicalFinnyJson as canonicalJson } from "./canonical-json.ts";
 import type {
   FinanceActionInputMap,
   FinanceActionOutputMap,
@@ -18,12 +18,11 @@ import {
   type FinnyOperationResultEnvelope,
 } from "./operation-custody.ts";
 import { digestFinnyOperationRows } from "./operation-runner.ts";
-import type { FinnyRunV2Checkpoint, FinnyStoredRunCheckpoint } from "./run-store.ts";
+import type { FinnyRunV2Checkpoint } from "./run-store.ts";
 
 export interface EvidenceBackedRunStore {
-  withRunLock<T>(runId: string, work: () => Promise<T>): Promise<T>;
-  checkpoint(runId: string, metadata: FinnyGoldenLoopState["ledger"][number]): Promise<FinnyStoredRunCheckpoint>;
-  load(runId: string): Promise<FinnyStoredRunCheckpoint | null>;
+  checkpoint(runId: string, metadata: FinnyGoldenLoopState["ledger"][number]): Promise<FinnyRunV2Checkpoint>;
+  load(runId: string): Promise<FinnyRunV2Checkpoint | null>;
 }
 
 interface EvidenceBackedFinanceServiceOptions {
@@ -31,16 +30,6 @@ interface EvidenceBackedFinanceServiceOptions {
   files: FileArtifactStore;
   evidenceBytes: DurableByteStore;
   runStore?: EvidenceBackedRunStore;
-  artifactThresholdRows?: number;
-}
-
-interface SourceEnvelope {
-  schema: "finny.source.v1";
-  runId: string;
-  planDigest: FinnyDigest;
-  query: string;
-  verificationPolicy: FinnyVerificationPolicy;
-  records: readonly unknown[];
 }
 
 interface PlanSourceEnvelope {
@@ -52,55 +41,15 @@ interface PlanSourceEnvelope {
   records: readonly unknown[];
 }
 
-type StoredSourceEnvelope = SourceEnvelope | PlanSourceEnvelope;
+type StoredSourceEnvelope = PlanSourceEnvelope;
 
 export function createEvidenceBackedFinanceService(options: EvidenceBackedFinanceServiceOptions): FinanceService {
-  const threshold = options.artifactThresholdRows ?? 10;
-  if (!Number.isInteger(threshold) || threshold < 0) throw new Error("Artifact row threshold is invalid");
-
-  const preflight = async (
-    input: FinanceActionInputMap["preflight"],
-    context: FinanceExecutionContext,
-  ): Promise<FinanceActionOutputMap["preflight"]> => {
-    const query = input.query;
-    const output = await options.delegate.preflight({ ...input, query }, context);
-    const bytes = Buffer.from(`finny-query:v1:${query}`, "utf8");
-    const queryDigest = digestFinnyEvidence(bytes);
-    const stored = await options.evidenceBytes.put(bytes);
-    if (stored.sha256 !== digestHex(queryDigest)) throw new Error("Durable finance query digest mismatch");
-    return { ...output, queryDigest };
-  };
-
-  const source = async (
-    input: FinanceActionInputMap["source"],
-    context: FinanceExecutionContext,
-  ): Promise<FinanceActionOutputMap["source"]> => {
-    if (!context.approvedQueryDigest) throw new Error("Approved finance query custody is unavailable");
-    const query = await loadApprovedQuery(options.evidenceBytes, context.approvedQueryDigest);
-    const output = await options.delegate.source({ planDigest: input.planDigest, query }, context);
-    const envelope: SourceEnvelope = {
-      schema: "finny.source.v1",
-      runId: context.runId,
-      planDigest: input.planDigest,
-      query,
-      verificationPolicy: context.verificationPolicy ?? "repeatable_read",
-      records: output.records,
-    };
-    const bytes = Buffer.from(canonicalJson(envelope), "utf8");
-    const sourceDigest = digestFinnyEvidence(bytes);
-    const stored = await options.evidenceBytes.put(bytes);
-    if (stored.sha256 !== digestHex(sourceDigest)) throw new Error("Durable finance source evidence digest mismatch");
-    return { records: output.records, sourceDigest };
-  };
-
-  const sourcePlan: NonNullable<FinanceService["sourcePlan"]> = async (input, context) => {
+  const sourcePlan: FinanceService["sourcePlan"] = async (input, context) => {
     if (!options.runStore) throw new Error("Finny plan-native source requires a durable v2 run store");
-    if (!options.delegate.executeOperation)
-      throw new Error("Finny plan-native source requires an external operation executor");
     const reference = await storeFinnyOperationPlan(options.evidenceBytes, input.plan);
     const plan = await loadFinnyOperationPlan(options.evidenceBytes, reference);
     const targetOperationIds = [...new Set([plan.resultOperationId, ...plan.verificationPolicy.requiredOperationIds])];
-    const runStore = v2RunStore(options.runStore);
+    const runStore = options.runStore;
     const results = await runFinnyDurableOperationPlan({
       runId: context.runId,
       plan,
@@ -108,7 +57,7 @@ export function createEvidenceBackedFinanceService(options: EvidenceBackedFinanc
       runStore,
       resultBytes: options.evidenceBytes,
       executeExternal: async (execution) =>
-        (await options.delegate.executeOperation!({ plan, execution }, context)).rows,
+        (await options.delegate.executeOperation({ plan, execution }, context)).rows,
     });
     const result = results[plan.resultOperationId];
     if (!result) throw new Error("Finny plan result operation is unavailable");
@@ -137,7 +86,7 @@ export function createEvidenceBackedFinanceService(options: EvidenceBackedFinanc
     context: FinanceExecutionContext,
   ): Promise<FinanceActionOutputMap["artifact"]> => {
     const evidence = await loadEvidence(options.evidenceBytes, context, input.sourceDigest);
-    const decision = await artifactDecision(options.evidenceBytes, evidence, input.requirement, threshold);
+    const decision = await artifactDecision(options.evidenceBytes, evidence, input.requirement);
     const { requirement, policyDigest } = decision;
     if (requirement === "optional") return { requirement, policyDigest };
     const report = buildReport(evidence.records, decision.format);
@@ -171,8 +120,8 @@ export function createEvidenceBackedFinanceService(options: EvidenceBackedFinanc
   ): Promise<FinanceActionOutputMap["verify"]> => {
     const evidence = await loadEvidence(options.evidenceBytes, context, input.sourceDigest);
     const required = input.requirement === "required";
-    const decision = await artifactDecision(options.evidenceBytes, evidence, input.requirement, threshold);
-    const artifactPolicyMatches = evidence.schema === "finny.source.v1" || input.requirement === decision.requirement;
+    const decision = await artifactDecision(options.evidenceBytes, evidence, input.requirement);
+    const artifactPolicyMatches = input.requirement === decision.requirement;
     const expectedArtifactDigest = required
       ? digestFinnyEvidence(buildReport(evidence.records, decision.format).bytes)
       : undefined;
@@ -197,43 +146,21 @@ export function createEvidenceBackedFinanceService(options: EvidenceBackedFinanc
           openedArtifact?.artifact.ownerScopeId === context.scopeId &&
           openedArtifact.artifact.sha256 === digestHex(expectedArtifactDigest) &&
           openedArtifactDigest === expectedArtifactDigest));
-    if (evidence.schema === "finny.source.v2") {
-      const verified = await verifyPlanEvidence(options, context, evidence);
-      return {
-        passed: artifactMatches && verified.reconciled,
-        verificationDigest: digestFinnyEvidence(
-          canonicalJson({
-            schema: "finny.verification.v2",
-            sourceDigest: input.sourceDigest,
-            artifactDigest: input.artifactDigest ?? null,
-            requirement: input.requirement ?? null,
-            rowCount: evidence.records.length,
-            artifactMatches,
-            artifactPolicyDigest: decision.policyDigest,
-            authority: verified.authority,
-            results: verified.results,
-            reconciled: verified.reconciled,
-          }),
-        ),
-      };
-    }
-    const repeated = await options.delegate.source({ planDigest: evidence.planDigest, query: evidence.query }, context);
-    const sourceMatches = canonicalJson(repeated.records) === canonicalJson(evidence.records);
-    const accounting = validateFinnyAccounting(evidence.records, evidence.verificationPolicy);
-    const passed = artifactMatches && sourceMatches && accounting.passed;
+    const verified = await verifyPlanEvidence(options, context, evidence);
     return {
-      passed,
+      passed: artifactMatches && verified.reconciled,
       verificationDigest: digestFinnyEvidence(
         canonicalJson({
-          schema: "finny.verification.v1",
+          schema: "finny.verification.v2",
           sourceDigest: input.sourceDigest,
           artifactDigest: input.artifactDigest ?? null,
           requirement: input.requirement ?? null,
           rowCount: evidence.records.length,
           artifactMatches,
           artifactPolicyDigest: decision.policyDigest,
-          sourceMatches,
-          accounting,
+          authority: verified.authority,
+          results: verified.results,
+          reconciled: verified.reconciled,
         }),
       ),
     };
@@ -248,16 +175,9 @@ export function createEvidenceBackedFinanceService(options: EvidenceBackedFinanc
 
   return {
     clarify: (input, context) => options.delegate.clarify(input, context),
-    ...(options.delegate.preflightPlan
-      ? { preflightPlan: (input, context) => options.delegate.preflightPlan!(input, context) }
-      : {}),
-    preflight,
-    plan: (input, context) => options.delegate.plan(input, context),
-    source,
+    preflightPlan: (input, context) => options.delegate.preflightPlan(input, context),
     sourcePlan,
-    ...(options.delegate.executeOperation
-      ? { executeOperation: (input, context) => options.delegate.executeOperation!(input, context) }
-      : {}),
+    executeOperation: (input, context) => options.delegate.executeOperation(input, context),
     artifact,
     verify,
     recoverSource,
@@ -285,26 +205,8 @@ async function loadEvidence(
   } catch {
     throw new Error("Durable finance source evidence is invalid");
   }
-  if (!isSourceEnvelope(parsed, context.runId) && !isPlanSourceEnvelope(parsed, context.runId))
-    throw new Error("Durable finance source evidence is invalid");
+  if (!isPlanSourceEnvelope(parsed, context.runId)) throw new Error("Durable finance source evidence is invalid");
   return parsed;
-}
-
-async function loadApprovedQuery(evidenceBytes: DurableByteStore, queryDigest: FinnyDigest): Promise<string> {
-  const blobKey = `files/${digestHex(queryDigest)}`;
-  const opened = await evidenceBytes.open(blobKey);
-  if (!opened) throw new Error("Approved finance query custody is unavailable");
-  const chunks: Buffer[] = [];
-  for await (const chunk of opened.stream) {
-    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    chunks.push(bytes);
-  }
-  const bytes = Buffer.concat(chunks);
-  if (digestFinnyEvidence(bytes) !== queryDigest) throw new Error("Durable finance query digest mismatch");
-  const prefix = "finny-query:v1:";
-  const value = bytes.toString("utf8");
-  if (!value.startsWith(prefix) || value.length === prefix.length) throw new Error("Approved finance query is invalid");
-  return value.slice(prefix.length);
 }
 
 function reportArtifactId(runId: string, sourceDigest: FinnyDigest, artifactDigest: FinnyDigest): string {
@@ -313,21 +215,6 @@ function reportArtifactId(runId: string, sourceDigest: FinnyDigest, artifactDige
 
 function digestHex(digest: FinnyDigest): string {
   return digest.slice("sha256:".length);
-}
-
-function isSourceEnvelope(value: unknown, runId: string): value is SourceEnvelope {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  return (
-    record.schema === "finny.source.v1" &&
-    record.runId === runId &&
-    typeof record.planDigest === "string" &&
-    /^sha256:[a-f0-9]{64}$/.test(record.planDigest) &&
-    typeof record.query === "string" &&
-    record.query.length > 0 &&
-    isVerificationPolicy(record.verificationPolicy) &&
-    Array.isArray(record.records)
-  );
 }
 
 function isPlanSourceEnvelope(value: unknown, runId: string): value is PlanSourceEnvelope {
@@ -385,27 +272,6 @@ function assertCheckpointPlan(
     throw new Error("Finny plan verification authority does not match the durable checkpoint");
 }
 
-function requireV2Checkpoint(checkpoint: FinnyStoredRunCheckpoint): FinnyRunV2Checkpoint {
-  if (!("schema" in checkpoint) || checkpoint.schema !== "finny.run.v2")
-    throw new Error(`Finny run ${checkpoint.runId} is not bound to a v2 operation plan`);
-  return checkpoint;
-}
-
-function v2RunStore(runStore: EvidenceBackedRunStore): {
-  withRunLock<T>(runId: string, work: () => Promise<T>): Promise<T>;
-  checkpoint(runId: string, metadata: FinnyGoldenLoopState["ledger"][number]): Promise<FinnyRunV2Checkpoint>;
-  load(runId: string): Promise<FinnyRunV2Checkpoint | null>;
-} {
-  return {
-    withRunLock: (runId, work) => runStore.withRunLock(runId, work),
-    checkpoint: async (runId, metadata) => requireV2Checkpoint(await runStore.checkpoint(runId, metadata)),
-    load: async (runId) => {
-      const checkpoint = await runStore.load(runId);
-      return checkpoint ? requireV2Checkpoint(checkpoint) : null;
-    },
-  };
-}
-
 async function verifyPlanEvidence(
   options: EvidenceBackedFinanceServiceOptions,
   context: FinanceExecutionContext,
@@ -422,7 +288,7 @@ async function verifyPlanEvidence(
   });
   if (plan.resultOperationId !== evidence.resultOperationId)
     throw new Error("Finny source result operation does not match the custodied plan");
-  const checkpoint = await v2RunStore(options.runStore).load(context.runId);
+  const checkpoint = await options.runStore.load(context.runId);
   if (!checkpoint) throw new Error("Finny plan checkpoint is unavailable");
   const state = replayFinnyLedger(context.runId, checkpoint.ledger);
   assertCheckpointPlan(checkpoint, state, plan, context);
@@ -469,13 +335,17 @@ async function verifyPlanEvidence(
     canonicalJson(delivered.output) !== canonicalJson(evidence.records)
   )
     throw new Error("Finny delivered result does not match its durable custody");
+  const requiredOperationIds = new Set(plan.verificationPolicy.requiredOperationIds);
   const reconcileOperations = plan.operations.filter(
-    (operation) => closure.has(operation.id) && operation.primitive === "reconcile",
+    (operation) =>
+      requiredOperationIds.has(operation.id) && closure.has(operation.id) && operation.primitive === "reconcile",
   );
-  const reconciled = reconcileOperations.every((operation) => {
-    const rows = envelopes.get(operation.id)?.output;
-    return Boolean(rows?.length) && rows!.every((row) => row.reconciled === true);
-  });
+  const reconciled =
+    reconcileOperations.length > 0 &&
+    reconcileOperations.every((operation) => {
+      const rows = envelopes.get(operation.id)?.output;
+      return Boolean(rows?.length) && rows!.every((row) => row.reconciled === true);
+    });
   return {
     authority: {
       planDigest: plan.planDigest,
@@ -495,60 +365,15 @@ async function verifyPlanEvidence(
   };
 }
 
-function isVerificationPolicy(value: unknown): value is FinnyVerificationPolicy {
-  return (
-    value === "repeatable_read" ||
-    value === "single_numeric_total" ||
-    value === "balanced_debits_credits" ||
-    value === "balance_sheet_equation"
-  );
-}
-
-function canonicalJson(value: unknown): string {
-  const seen = new Set<object>();
-  const normalize = (candidate: unknown): unknown => {
-    if (candidate === null || typeof candidate === "string" || typeof candidate === "boolean") return candidate;
-    if (typeof candidate === "number") {
-      if (!Number.isFinite(candidate)) throw new Error("Finance evidence contains a non-finite number");
-      return candidate;
-    }
-    if (Array.isArray(candidate)) return candidate.map(normalize);
-    if (candidate && typeof candidate === "object") {
-      if (seen.has(candidate)) throw new Error("Finance evidence contains a cycle");
-      seen.add(candidate);
-      const normalized: Record<string, unknown> = {};
-      for (const key of Object.keys(candidate).sort()) {
-        const nested = (candidate as Record<string, unknown>)[key];
-        if (nested === undefined) throw new Error("Finance evidence contains undefined data");
-        normalized[key] = normalize(nested);
-      }
-      seen.delete(candidate);
-      return normalized;
-    }
-    throw new Error("Finance evidence contains unsupported data");
-  };
-  return JSON.stringify(normalize(value));
-}
-
 async function artifactDecision(
   evidenceBytes: DurableByteStore,
   evidence: StoredSourceEnvelope,
   requested: "required" | "optional" | undefined,
-  threshold: number,
 ): Promise<{
   requirement: "required" | "optional";
   policyDigest: FinnyDigest;
   format?: "json" | "csv";
 }> {
-  if (evidence.schema === "finny.source.v1") {
-    const requirement = requested === "required" || evidence.records.length > threshold ? "required" : "optional";
-    return {
-      requirement,
-      policyDigest: digestFinnyEvidence(
-        `finny-artifact-policy:v2:requested:${requested ?? "optional"}:rows>${threshold}:${requirement}:${evidence.records.length}`,
-      ),
-    };
-  }
   const plan = await loadFinnyOperationPlan(evidenceBytes, {
     blobKey: `files/${digestHex(evidence.planDigest)}`,
     planDigest: evidence.planDigest,
@@ -613,6 +438,17 @@ function isFlatRecord(value: unknown): value is Record<string, string | number |
 }
 
 function csvCell(value: string | number | boolean | null | undefined): string {
-  const rendered = value == null ? "" : String(value);
+  const rendered = neutralizeSpreadsheetFormula(value == null ? "" : String(value));
   return /[",\r\n]/.test(rendered) ? `"${rendered.replaceAll('"', '""')}"` : rendered;
+}
+
+function neutralizeSpreadsheetFormula(value: string): string {
+  let offset = 0;
+  while (offset < value.length) {
+    const codePoint = value.codePointAt(offset)!;
+    const character = String.fromCodePoint(codePoint);
+    if (codePoint > 32 && (codePoint < 127 || codePoint > 159) && character.trim().length) break;
+    offset += character.length;
+  }
+  return ["=", "+", "-", "@"].includes(value[offset] ?? "") ? `'${value}` : value;
 }

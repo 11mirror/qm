@@ -38,15 +38,36 @@ function writeFinnySkills(skillsDir: string): { capabilityPath: string; capabili
     revisionId: "synthetic_balance.v1",
     semanticCapability: "synthetic_balance",
     semanticAliases: [],
+    intent: { dimensions: {} },
     dimensions: { required: [], supported: {}, defaults: {} },
     operations: [
       { id: "synthetic_source", dependsOn: [], primitive: "suiteql_select", sql: "SELECT 1 AS value", parameters: [] },
+      {
+        id: "synthetic_repeat",
+        dependsOn: ["synthetic_source"],
+        primitive: "repeat_pull",
+        operationId: "synthetic_source",
+      },
+      {
+        id: "synthetic_reconciliation",
+        dependsOn: ["synthetic_source", "synthetic_repeat"],
+        primitive: "reconcile",
+        leftField: "value",
+        rightField: "value",
+        tolerance: "0",
+      },
     ],
     resultOperationId: "synthetic_source",
     parameterBindings: {},
     artifactPolicy: { allowedFormats: ["json"], defaultFormat: "json", attachment: "never" },
-    approvalPolicy: { mode: "none", binds: [] },
-    verificationPolicy: { requiredOperationIds: [], releaseGate: "delivery_eligible" },
+    approvalPolicy: {
+      mode: "before_source",
+      binds: ["capability_revision", "dimensions", "operation_graph"],
+    },
+    verificationPolicy: {
+      requiredOperationIds: ["synthetic_repeat", "synthetic_reconciliation"],
+      releaseGate: "delivery_eligible",
+    },
   });
   writeFileSync(capabilityPath, capability);
   writeFileSync(

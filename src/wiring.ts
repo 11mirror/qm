@@ -337,12 +337,7 @@ import { createFinnyHindsightClient, createFinnyNetSuiteClient } from "./finny/p
 import { createDefaultFinnyFinanceService } from "./finny/default-finance-service.ts";
 import { loadFinnyKnowledgeIndex } from "./finny/knowledge-index.ts";
 import { loadFinnyCapabilityPack } from "./finny/capability-pack.ts";
-import {
-  createFinnyRunStore,
-  type FinnyMixedRunStore,
-  type FinnyRunStore,
-  type FinnyStoredRunCheckpoint,
-} from "./finny/run-store.ts";
+import { createFinnyRunStore, type FinnyRunStore, type FinnyRunV2Checkpoint } from "./finny/run-store.ts";
 import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Harness } from "./harness/harness.ts";
@@ -604,7 +599,7 @@ export function buildApp(
     harnesses?: Partial<Record<HarnessId, Harness>>;
     finnyFinanceService?: FinanceService;
     finnyAtomicFetchAdapter?: AtomicFetchAdapter;
-    finnyRunStore?: FinnyRunStore | FinnyMixedRunStore;
+    finnyRunStore?: FinnyRunStore;
     finnyEvidenceBytes?: DurableByteStore;
   } = {},
 ): BuiltApp {
@@ -694,7 +689,7 @@ export function buildApp(
     : createMemoryAdvisoryLock();
   const finnyRunStore = config.finnyProfile
     ? (overrides.finnyRunStore ??
-      createFinnyRunStore(artifactMap<FinnyStoredRunCheckpoint>("finny_runs"), undefined, advisoryLock))
+      createFinnyRunStore(artifactMap<FinnyRunV2Checkpoint>("finny_runs"), undefined, advisoryLock))
     : undefined;
   const principalLinks = createPrincipalLinkService(artifactMap<PrincipalLink>("principal_links"), advisoryLock);
   installPrincipalLinks(principalLinks);

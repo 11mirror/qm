@@ -108,6 +108,20 @@ function buildScenario(
           throw new Error("interrupted after recording a tool result");
         }
         const reply = options.reply ?? "it runs on this conversation's computer";
+        if (includeOutputEvidence && !interruptAfterToolResult)
+          await turn.emit({
+            type: "tool_result",
+            payload: {
+              tool: "execute",
+              callId: "c1",
+              result: "a.txt",
+              mcpServer: "finance",
+              outputReceipt: "signed-output-receipt",
+              outputSha256: createHash("sha256").update(reply).digest("hex"),
+              contextSha256: "a".repeat(64),
+            },
+            scopeLabel: turn.scopeLabel,
+          });
         await turn.emit({
           type: "assistant",
           payload: { text: reply },
@@ -328,7 +342,7 @@ test("an answered retry retains MCP evidence from its durable turn", async () =>
   ]);
 });
 
-test("an answered retry never attaches evidence for pre-rewrite link bytes", async () => {
+test("an answered retry preserves the signed delivery bytes and their MCP evidence", async () => {
   const storedReply = "see [artifact](/d/finance/report)";
   const { orchestrator, sessions, runs, input } = buildScenario(false, false, {
     reply: storedReply,
@@ -355,8 +369,40 @@ test("an answered retry never attaches evidence for pre-rewrite link bytes", asy
 
   const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
 
-  assert.equal(retry.reply, "see [artifact](https://qm.example.com/d/finance/report)");
-  assert.equal(retry.mcpEvidenceRefs, undefined);
+  assert.equal(retry.reply, storedReply);
+  assert.deepEqual(retry.mcpEvidenceRefs, [
+    {
+      serverId: "finance",
+      callId: "c1",
+      outputReceipt: "signed-output-receipt",
+      outputReceiptSha256: createHash("sha256").update("signed-output-receipt").digest("hex"),
+      outputSha256: createHash("sha256").update(storedReply).digest("hex"),
+      contextSha256: "a".repeat(64),
+    },
+  ]);
+});
+
+test("a completed turn preserves signed delivery bytes before selecting MCP evidence", async () => {
+  const reply = "see [artifact](/d/finance/report)";
+  const { orchestrator, runs, input } = buildScenario(false, true, {
+    reply,
+    publicWebUrl: "https://qm.example.com",
+  });
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+
+  const result = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 1 }));
+
+  assert.equal(result.reply, reply);
+  assert.deepEqual(result.mcpEvidenceRefs, [
+    {
+      serverId: "finance",
+      callId: "c1",
+      outputReceipt: "signed-output-receipt",
+      outputReceiptSha256: createHash("sha256").update("signed-output-receipt").digest("hex"),
+      outputSha256: createHash("sha256").update(reply).digest("hex"),
+      contextSha256: "a".repeat(64),
+    },
+  ]);
 });
 
 test("a turn that recorded no reply replays as silent, not as an empty answer", async () => {

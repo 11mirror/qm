@@ -1,16 +1,7 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { isDeepStrictEqual } from "node:util";
 import { replayFinnyLedger, type FinnyDigest, type FinnyLedgerMetadata } from "./golden-loop.ts";
-
-export interface FinnyRunBinding {
-  runId: string;
-  requestDigest: FinnyDigest;
-  sessionId: string;
-  scopeId: string;
-  artifactRequest: "required" | "optional";
-}
 
 export interface FinnyRunPlanBinding {
   catalogDigest: FinnyDigest;
@@ -29,29 +20,17 @@ export interface FinnyRunV2Binding {
   plan: FinnyRunPlanBinding;
 }
 
-export interface FinnyRunCheckpoint extends FinnyRunBinding {
-  ledger: readonly FinnyLedgerMetadata[];
-  artifactReference?: string;
-  updatedAt: string;
-}
-
 export interface FinnyRunV2Checkpoint extends FinnyRunV2Binding {
   ledger: readonly FinnyLedgerMetadata[];
   artifactReference?: string;
   updatedAt: string;
 }
 
-export type FinnyStoredRunCheckpoint = FinnyRunCheckpoint | FinnyRunV2Checkpoint;
-type AnyFinnyRunBinding = FinnyRunBinding | FinnyRunV2Binding;
-type BindingFor<Checkpoint extends FinnyStoredRunCheckpoint> = Checkpoint extends FinnyRunV2Checkpoint
-  ? FinnyRunV2Binding
-  : FinnyRunBinding;
-
-export interface FinnyRunStoreFor<Checkpoint extends FinnyStoredRunCheckpoint> {
+export interface FinnyRunStore {
   withRunLock<T>(runId: string, work: () => Promise<T>): Promise<T>;
-  initialize(binding: BindingFor<Checkpoint>): Promise<Checkpoint>;
-  checkpoint(runId: string, metadata: FinnyLedgerMetadata, artifactReference?: string): Promise<Checkpoint>;
-  load(runId: string): Promise<Checkpoint | null>;
+  initialize(binding: FinnyRunV2Binding): Promise<FinnyRunV2Checkpoint>;
+  checkpoint(runId: string, metadata: FinnyLedgerMetadata, artifactReference?: string): Promise<FinnyRunV2Checkpoint>;
+  load(runId: string): Promise<FinnyRunV2Checkpoint | null>;
 }
 
 export function finnyWorkflowRunIdFromEntries(
@@ -65,20 +44,11 @@ export function finnyWorkflowRunIdFromEntries(
   return undefined;
 }
 
-function assertArtifactRequest(runId: string, value: unknown): asserts value is "required" | "optional" {
-  if (value !== "required" && value !== "optional")
-    throw new Error(`Finny run ${runId} has an invalid artifact request`);
-}
-
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
 const PLAN_KEYS = ["capabilityId", "catalogDigest", "operationGraphDigest", "planDigest", "revisionId"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function isV2(value: AnyFinnyRunBinding | FinnyStoredRunCheckpoint): value is FinnyRunV2Binding {
-  return "schema" in value;
 }
 
 function assertPlanIdentity(runId: string, value: unknown): asserts value is FinnyRunPlanBinding {
@@ -98,20 +68,15 @@ function assertPlanIdentity(runId: string, value: unknown): asserts value is Fin
     throw new Error(`Finny run ${runId} has an invalid plan identity`);
 }
 
-function assertSchema(checkpoint: FinnyStoredRunCheckpoint): void {
+function assertSchema(checkpoint: FinnyRunV2Checkpoint): void {
   const record = checkpoint as unknown as Record<string, unknown>;
-  if (Object.hasOwn(record, "schema") && record.schema !== "finny.run.v2")
-    throw new Error(`Finny run ${checkpoint.runId} has an invalid schema`);
-  if (!Object.hasOwn(record, "schema") && Object.hasOwn(record, "plan"))
-    throw new Error(`Finny run ${checkpoint.runId} has an invalid schema`);
-  if (record.schema === "finny.run.v2") {
-    if (Object.hasOwn(record, "artifactRequest"))
-      throw new Error(`Finny run ${checkpoint.runId} has a duplicated artifact request`);
-    assertPlanIdentity(checkpoint.runId, record.plan);
-  }
+  if (record.schema !== "finny.run.v2") throw new Error(`Finny run ${checkpoint.runId} has an invalid schema`);
+  if (Object.hasOwn(record, "artifactRequest"))
+    throw new Error(`Finny run ${checkpoint.runId} has a duplicated artifact request`);
+  assertPlanIdentity(checkpoint.runId, record.plan);
 }
 
-function assertBinding(checkpoint: FinnyStoredRunCheckpoint, binding: AnyFinnyRunBinding): void {
+function assertBinding(checkpoint: FinnyRunV2Checkpoint, binding: FinnyRunV2Binding): void {
   assertSchema(checkpoint);
   if (
     checkpoint.runId !== binding.runId ||
@@ -121,91 +86,47 @@ function assertBinding(checkpoint: FinnyStoredRunCheckpoint, binding: AnyFinnyRu
   ) {
     throw new Error(`Finny run ${binding.runId} has a conflicting binding`);
   }
-  if (isV2(binding)) {
-    if (!isV2(checkpoint)) throw new Error(`Finny run ${binding.runId} has a conflicting schema`);
-    assertPlanIdentity(binding.runId, binding.plan);
-    if (!isDeepStrictEqual(checkpoint.plan, binding.plan))
-      throw new Error(`Finny run ${binding.runId} has a conflicting plan binding`);
-  } else {
-    if (isV2(checkpoint)) throw new Error(`Finny run ${binding.runId} has a conflicting schema`);
-    assertArtifactRequest(checkpoint.runId, checkpoint.artifactRequest);
-    assertArtifactRequest(binding.runId, binding.artifactRequest);
-    if (checkpoint.artifactRequest !== binding.artifactRequest)
-      throw new Error(`Finny run ${binding.runId} has a conflicting artifact request`);
-  }
+  if (binding.schema !== "finny.run.v2") throw new Error(`Finny run ${binding.runId} has a conflicting schema`);
+  assertPlanIdentity(binding.runId, binding.plan);
+  if (!isDeepStrictEqual(checkpoint.plan, binding.plan))
+    throw new Error(`Finny run ${binding.runId} has a conflicting plan binding`);
 }
 
-function replay(checkpoint: FinnyStoredRunCheckpoint): void {
+function replay(checkpoint: FinnyRunV2Checkpoint): void {
   assertSchema(checkpoint);
-  if (!isV2(checkpoint)) assertArtifactRequest(checkpoint.runId, checkpoint.artifactRequest);
   replayFinnyLedger(checkpoint.runId, checkpoint.ledger);
 }
 
 export function createFinnyRunStore(
-  backing: DurableMap<FinnyRunCheckpoint>,
-  now?: () => string,
-  lock?: AdvisoryLock,
-): FinnyRunStore;
-export function createFinnyRunStore<Stored extends FinnyStoredRunCheckpoint>(
-  backing: DurableMap<Stored>,
-  now?: () => string,
-  lock?: AdvisoryLock,
-): FinnyRunStoreFor<Stored>;
-export function createFinnyRunStore<Stored extends FinnyStoredRunCheckpoint>(
-  backing: DurableMap<Stored>,
+  backing: DurableMap<FinnyRunV2Checkpoint>,
   now: () => string = () => new Date().toISOString(),
   lock: AdvisoryLock = createMemoryAdvisoryLock(),
-): FinnyRunStoreFor<Stored> {
+): FinnyRunStore {
   if (!backing.update) throw new Error("Finny run checkpoints require atomic updates");
-  const heldRuns = new AsyncLocalStorage<{
-    active: boolean;
-    runIds: ReadonlySet<string>;
-    pending: Set<Promise<unknown>>;
-  }>();
-
   return {
     withRunLock<T>(runId: string, work: () => Promise<T>): Promise<T> {
-      const held = heldRuns.getStore();
-      if (held?.active && held.runIds.has(runId)) {
-        const nested = Promise.resolve().then(work);
-        held.pending.add(nested);
-        void nested.then(
-          () => held.pending.delete(nested),
-          () => held.pending.delete(nested),
-        );
-        return nested;
-      }
-      return lock.withLock(`finny-run:${runId}`, () => {
-        const scope = {
-          active: true,
-          runIds: new Set([...(held?.runIds ?? []), runId]),
-          pending: new Set<Promise<unknown>>(),
-        };
-        return heldRuns.run(scope, async () => {
-          try {
-            return await work();
-          } finally {
-            while (scope.pending.size) await Promise.allSettled(scope.pending);
-            scope.active = false;
-          }
-        });
-      });
+      return lock.withLock(`finny-run:${runId}`, work);
     },
 
-    async initialize(binding: BindingFor<Stored>): Promise<Stored> {
-      if (isV2(binding)) assertPlanIdentity(binding.runId, binding.plan);
+    async initialize(binding: FinnyRunV2Binding): Promise<FinnyRunV2Checkpoint> {
+      assertPlanIdentity(binding.runId, binding.plan);
       const initial = {
         ...binding,
         ledger: [],
         updatedAt: now(),
-      } as unknown as Stored;
+      } satisfies FinnyRunV2Checkpoint;
+      assertSchema(initial);
       const checkpoint = await backing.putIfAbsent(binding.runId, initial);
       assertBinding(checkpoint, binding);
       replay(checkpoint);
       return checkpoint;
     },
 
-    async checkpoint(runId: string, metadata: FinnyLedgerMetadata, artifactReference?: string): Promise<Stored> {
+    async checkpoint(
+      runId: string,
+      metadata: FinnyLedgerMetadata,
+      artifactReference?: string,
+    ): Promise<FinnyRunV2Checkpoint> {
       const checkpoint = await backing.update!(runId, (current) => {
         replay(current);
         const existing = current.ledger.find((entry) => entry.eventId === metadata.eventId);
@@ -229,14 +150,10 @@ export function createFinnyRunStore<Stored extends FinnyStoredRunCheckpoint>(
       return checkpoint;
     },
 
-    async load(runId: string): Promise<Stored | null> {
+    async load(runId: string): Promise<FinnyRunV2Checkpoint | null> {
       const checkpoint = await backing.get(runId);
       if (checkpoint) replay(checkpoint);
       return checkpoint;
     },
   };
 }
-
-export type FinnyRunStore = FinnyRunStoreFor<FinnyRunCheckpoint>;
-export type FinnyRunV2Store = FinnyRunStoreFor<FinnyRunV2Checkpoint>;
-export type FinnyMixedRunStore = FinnyRunStoreFor<FinnyStoredRunCheckpoint>;

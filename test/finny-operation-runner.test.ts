@@ -40,75 +40,6 @@ const source: FinnyCompiledOperation = {
   sql: "SELECT entity, amount FROM transactions",
   parameters: [],
 };
-const selected: FinnyCompiledOperation = {
-  id: "selected",
-  primitive: "project",
-  dependsOn: ["source"],
-  fields: ["entity", "amount"],
-};
-const totals: FinnyCompiledOperation = {
-  id: "totals",
-  primitive: "aggregate",
-  dependsOn: ["selected"],
-  groupBy: ["entity"],
-  metrics: [{ id: "amount", operator: "sum", field: "amount" }],
-};
-
-test("runs only the requested target dependency closure in plan order", async () => {
-  const externalIds: string[] = [];
-  const completedIds: string[] = [];
-  const result = await runFinnyOperationPlan({
-    plan: plan([
-      source,
-      selected,
-      totals,
-      {
-        id: "unrelated",
-        primitive: "suiteql_select",
-        dependsOn: [],
-        sql: "SELECT amount FROM unrelated",
-        parameters: [],
-      },
-    ]),
-    targetOperationIds: ["selected"],
-    executeExternal: async ({ operation }) => {
-      externalIds.push(operation.id);
-      return [{ entity: "MTPL", amount: "10", ignored: true }];
-    },
-    onCompleted: async ({ operation }) => {
-      completedIds.push(operation.id);
-    },
-  });
-
-  assert.deepEqual(externalIds, ["source"]);
-  assert.deepEqual(completedIds, ["source", "selected"]);
-  assert.deepEqual(Object.keys(result), ["source", "selected"]);
-  assert.deepEqual(result.selected?.rows, [{ entity: "MTPL", amount: "10" }]);
-});
-
-test("reuses a verified derived dependency without requiring its source", async () => {
-  const selectedRows = verified([
-    { entity: "MTPL", amount: "10" },
-    { entity: "MTPL", amount: "20" },
-  ]);
-  const completedIds: string[] = [];
-  const result = await runFinnyOperationPlan({
-    plan: plan([source, selected, totals]),
-    targetOperationIds: ["totals"],
-    restoredResultSets: { selected: selectedRows },
-    executeExternal: async () => {
-      throw new Error("source must not execute");
-    },
-    onCompleted: async ({ operation }) => {
-      completedIds.push(operation.id);
-    },
-  });
-
-  assert.deepEqual(completedIds, ["totals"]);
-  assert.deepEqual(result.totals?.rows, [{ entity: "MTPL", amount: "30" }]);
-  assert.equal(result.selected?.digest, selectedRows.digest);
-});
-
 test("forces a repeat pull and its downstream verification fresh while retaining its source", async () => {
   const repeat: FinnyCompiledOperation = {
     id: "repeat",
@@ -161,8 +92,8 @@ test("rejects a corrupt restored result before executing any operation", async (
   let invoked = false;
   await assert.rejects(
     runFinnyOperationPlan({
-      plan: plan([source, selected]),
-      targetOperationIds: ["selected"],
+      plan: plan([source]),
+      targetOperationIds: ["source"],
       restoredResultSets: {
         source: { rows: [{ entity: "MTPL", amount: "10" }], digest: `sha256:${"0".repeat(64)}` },
       },
@@ -184,17 +115,17 @@ test("fails closed for invalid targets, forced nodes, and unresolved dependencie
   );
   await assert.rejects(
     runFinnyOperationPlan({
-      plan: plan([source, selected]),
+      plan: plan([source, { id: "repeat", primitive: "repeat_pull", dependsOn: ["source"], operationId: "source" }]),
       targetOperationIds: ["source"],
-      forceFreshOperationIds: ["selected"],
+      forceFreshOperationIds: ["repeat"],
       executeExternal,
     }),
-    /forced.*selected.*closure/i,
+    /forced.*repeat.*closure/i,
   );
   await assert.rejects(
     runFinnyOperationPlan({
-      plan: plan([{ ...selected, dependsOn: ["missing"] }]),
-      targetOperationIds: ["selected"],
+      plan: plan([{ id: "repeat", primitive: "repeat_pull", dependsOn: ["missing"], operationId: "missing" }]),
+      targetOperationIds: ["repeat"],
       executeExternal,
     }),
     /dependency missing/i,

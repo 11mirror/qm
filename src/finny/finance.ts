@@ -1,6 +1,5 @@
 import type { FinnyDigest } from "./golden-loop.ts";
 import type { ScopeId } from "../types.ts";
-import type { FinnyVerificationPolicy } from "./accounting-validator.ts";
 import type { FinnyOperationPlan } from "./operation-compiler.ts";
 import type { FinnyOperationRow } from "./operation-executor.ts";
 import type { FinnyOperationRunnerContext } from "./operation-runner.ts";
@@ -17,25 +16,11 @@ export interface FinanceExecutionContext {
   scopeId: ScopeId;
   credentialHandles: readonly string[];
   requestText?: string;
-  verificationPolicy?: FinnyVerificationPolicy;
-  approvedQueryDigest?: FinnyDigest;
 }
 
 export interface FinanceActionInputMap {
   clarify: {
     request: string;
-  };
-  preflight: {
-    request: string;
-    clarificationDigest: FinnyDigest;
-    query: string;
-  };
-  plan: {
-    planDigest: FinnyDigest;
-  };
-  source: {
-    planDigest: FinnyDigest;
-    query?: string;
   };
   artifact: {
     sourceDigest: FinnyDigest;
@@ -52,21 +37,6 @@ export interface FinanceActionOutputMap {
   clarify: {
     clarification: string;
     evidenceDigest: FinnyDigest;
-  };
-  preflight: {
-    planSummary: string;
-    preflightDigest: FinnyDigest;
-    planDigest: FinnyDigest;
-    queryDigest?: FinnyDigest;
-    verificationPolicyDigest?: FinnyDigest;
-    approvalRequired?: boolean;
-    approvalPolicyDigest?: FinnyDigest;
-    verificationPolicy?: FinnyVerificationPolicy;
-  };
-  plan: {
-    decision: "approved" | "exempt" | "rejected";
-    approvalDigest?: FinnyDigest;
-    approvalPolicyDigest?: FinnyDigest;
   };
   source: {
     records: readonly unknown[];
@@ -123,15 +93,6 @@ export interface FinanceService {
     input: FinanceActionInputMap["clarify"],
     context: FinanceExecutionContext,
   ): Promise<FinanceActionOutputMap["clarify"]>;
-  preflight(
-    input: FinanceActionInputMap["preflight"],
-    context: FinanceExecutionContext,
-  ): Promise<FinanceActionOutputMap["preflight"]>;
-  plan(input: FinanceActionInputMap["plan"], context: FinanceExecutionContext): Promise<FinanceActionOutputMap["plan"]>;
-  source(
-    input: FinanceActionInputMap["source"],
-    context: FinanceExecutionContext,
-  ): Promise<FinanceActionOutputMap["source"]>;
   artifact(
     input: FinanceActionInputMap["artifact"],
     context: FinanceExecutionContext,
@@ -140,16 +101,16 @@ export interface FinanceService {
     input: FinanceActionInputMap["verify"],
     context: FinanceExecutionContext,
   ): Promise<FinanceActionOutputMap["verify"]>;
-  recoverSource?(
+  recoverSource(
     input: Pick<FinanceActionInputMap["artifact"], "sourceDigest">,
     context: FinanceExecutionContext,
   ): Promise<Pick<FinanceActionOutputMap["source"], "records">>;
-  preflightPlan?(
+  preflightPlan(
     input: FinancePlanPreflightInput,
     context: FinanceExecutionContext,
   ): Promise<FinancePlanPreflightOutput>;
-  executeOperation?(input: FinanceOperationInput, context: FinanceExecutionContext): Promise<FinanceOperationOutput>;
-  sourcePlan?(
+  executeOperation(input: FinanceOperationInput, context: FinanceExecutionContext): Promise<FinanceOperationOutput>;
+  sourcePlan(
     input: FinancePlanSourceInput,
     context: FinanceExecutionContext,
   ): Promise<FinanceActionOutputMap["source"]>;

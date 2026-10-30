@@ -4,250 +4,166 @@ import { test } from "node:test";
 import type { FinnyCapabilityCatalog, FinnyCapabilityDescriptor } from "../src/finny/capability-pack.ts";
 import { resolveFinnyIntent } from "../src/finny/intent-resolver.ts";
 
-function descriptor(
-  semanticCapability: string,
-  semanticAliases: readonly string[],
-  dimensions: FinnyCapabilityDescriptor["dimensions"] = {
-    required: ["entity", "period", "currency", "grain", "artifact"],
-    supported: {
-      entity: ["all", "named"],
-      period: ["current", "as_of", "range"],
-      currency: ["source_base", "specified"],
-      grain: ["total", "vendor", "entity", "monthly", "transaction"],
-      sources: ["netsuite", "legacy"],
-      migration_markers: ["migration"],
-      artifact: ["optional", "required"],
-    },
-    defaults: {},
-  },
-): FinnyCapabilityDescriptor {
+function descriptor(): FinnyCapabilityDescriptor {
   return {
     schemaVersion: 1,
-    capabilityId: semanticCapability,
-    revisionId: `${semanticCapability}.2026-10-30`,
-    semanticCapability,
-    semanticAliases: [...semanticAliases],
-    dimensions,
+    capabilityId: "working_capital_velocity",
+    revisionId: "working_capital_velocity.2026-10-30",
+    semanticCapability: "working_capital_velocity",
+    semanticAliases: ["stock_efficiency"],
+    intent: {
+      dimensions: {
+        entity: { type: "string" },
+        period: { type: "date" },
+        currency: { type: "enum", values: ["source_base", "USD"] },
+        sources: { type: "string_list", values: ["netsuite", "legacy"] },
+        artifact: { type: "enum", values: ["optional", "required"] },
+      },
+    },
+    dimensions: {
+      required: ["entity", "period", "currency", "artifact"],
+      supported: {
+        entity: ["named"],
+        period: ["as_of"],
+        currency: ["source_base", "specified"],
+        sources: ["netsuite", "legacy"],
+        artifact: ["optional", "required"],
+      },
+      defaults: { currency: "source_base", sources: ["netsuite"], artifact: "optional" },
+    },
     operations: [
       {
         id: "source",
         primitive: "suiteql_select",
         dependsOn: [],
-        sql: "SELECT amount FROM reviewed_source",
-        parameters: [],
+        sql: "SELECT amount FROM reviewed_source WHERE entity = :entity AND posted_at <= :period",
+        parameters: ["entity", "period"],
+      },
+      { id: "repeat", primitive: "repeat_pull", dependsOn: ["source"], operationId: "source" },
+      {
+        id: "reconciliation",
+        primitive: "reconcile",
+        dependsOn: ["source", "repeat"],
+        leftField: "amount",
+        rightField: "amount",
+        tolerance: "0",
       },
     ],
     resultOperationId: "source",
-    parameterBindings: {},
-    artifactPolicy: {
-      allowedFormats: ["json", "csv"],
-      defaultFormat: "json",
-      attachment: "when_requested",
+    parameterBindings: {
+      entity: { source: "dimension", path: ["entity"] },
+      period: { source: "dimension", path: ["period"] },
     },
-    approvalPolicy: { mode: "none", binds: [] },
-    verificationPolicy: { requiredOperationIds: ["source"], releaseGate: "delivery_eligible" },
+    artifactPolicy: { allowedFormats: ["json", "csv"], defaultFormat: "json", attachment: "when_requested" },
+    approvalPolicy: {
+      mode: "before_source",
+      binds: ["capability_revision", "dimensions", "operation_graph"],
+    },
+    verificationPolicy: {
+      requiredOperationIds: ["repeat", "reconciliation"],
+      releaseGate: "delivery_eligible",
+    },
   };
 }
 
-function catalog(...capabilities: FinnyCapabilityDescriptor[]): FinnyCapabilityCatalog {
+function catalog(capability = descriptor()): FinnyCapabilityCatalog {
   return {
     manifestDigest: `sha256:${"1".repeat(64)}`,
     catalogDigest: `sha256:${"2".repeat(64)}`,
-    capabilities: new Map(capabilities.map((capability) => [capability.semanticCapability, capability])),
-    aliases: new Map(
-      capabilities.flatMap((capability) =>
-        capability.semanticAliases.map((alias) => [alias, capability.semanticCapability] as const),
-      ),
-    ),
+    capabilities: new Map([[capability.semanticCapability, capability]]),
+    aliases: new Map(capability.semanticAliases.map((alias) => [alias, capability.semanticCapability])),
   };
 }
 
-test("a synthetic reviewed measure resolves through catalog data without a measure branch", () => {
+test("a typed candidate resolves by exact capability identity and applies descriptor defaults", () => {
   const result = resolveFinnyIntent(
-    "Please show stock efficiency for MTPL as at 19-Oct-2026 in USD by entity from NetSuite and legacy including migration as a CSV file",
-    catalog(descriptor("working_capital_velocity", ["stock_efficiency"])),
+    {
+      capabilityId: "working_capital_velocity",
+      dimensions: { entity: "MTPL", period: "2026-10-19", currency: "USD", artifact: "required" },
+      artifactFormat: "csv",
+    },
+    catalog(),
   );
 
   assert.equal(result.status, "resolved");
   if (result.status !== "resolved") return;
   assert.equal(result.semanticCapability, "working_capital_velocity");
   assert.deepEqual(result.dimensions, {
-    entity: { kind: "named", name: "MTPL" },
-    period: { kind: "as_of", date: "2026-10-19" },
-    currency: { kind: "specified", code: "USD" },
-    grain: "entity",
-    sources: ["netsuite", "legacy"],
-    migration_markers: ["migration"],
     artifact: "required",
+    currency: "USD",
+    entity: "MTPL",
+    period: "2026-10-19",
+    sources: ["netsuite"],
   });
+  assert.equal(result.artifactFormat, "csv");
 });
 
-test("AP-like and AR-like aliases are resolved by the same catalog-driven path", () => {
-  const financeCatalog = catalog(
-    descriptor("supplier_exposure", ["accounts_payable", "ap_balance", "owe_suppliers"]),
-    descriptor("customer_exposure", ["accounts_receivable", "open_ar"]),
-  );
-
-  const payable = resolveFinnyIntent("How much do we owe suppliers?", financeCatalog);
-  assert.equal(payable.status, "resolved");
-  if (payable.status === "resolved") assert.equal(payable.semanticCapability, "supplier_exposure");
-
-  const receivable = resolveFinnyIntent("Open AR for MTPL as of 2026-10-19", financeCatalog);
-  assert.equal(receivable.status, "resolved");
-  if (receivable.status === "resolved") {
-    assert.equal(receivable.semanticCapability, "customer_exposure");
-    assert.deepEqual(receivable.dimensions.entity, { kind: "named", name: "MTPL" });
-    assert.deepEqual(receivable.dimensions.period, { kind: "as_of", date: "2026-10-19" });
+test("aliases and semantic names cannot substitute for the exact capability ID", () => {
+  for (const capabilityId of ["stock_efficiency", "working_capital_velocity_alias"]) {
+    const result = resolveFinnyIntent({ capabilityId, dimensions: {} }, catalog());
+    assert.equal(result.status, "invalid_candidate");
+    if (result.status === "invalid_candidate") assert.deepEqual(result.issues, ["capabilityId.unknown"]);
   }
 });
 
-test("no-match and multi-capability requests are typed unsupported results", () => {
-  const financeCatalog = catalog(
-    descriptor("supplier_exposure", ["ap_balance"]),
-    descriptor("customer_exposure", ["open_ar"]),
-  );
-
-  assert.deepEqual(resolveFinnyIntent("show cash position", financeCatalog), {
-    status: "unsupported_template",
-    request: "show cash position",
-    reason: "no_capability_match",
-    candidates: [],
-  });
-  assert.deepEqual(resolveFinnyIntent("compare AP balance with open AR", financeCatalog), {
-    status: "unsupported_template",
-    request: "compare AP balance with open AR",
-    reason: "ambiguous_capability_match",
-    candidates: ["customer_exposure", "supplier_exposure"],
-  });
-});
-
-test("malformed dates, conflicting dates, and unreviewed qualifiers fail closed", () => {
-  const financeCatalog = catalog(descriptor("customer_exposure", ["open_ar"]));
+test("candidate dimensions reject extra keys, wrong types, invalid dates, and unreviewed values", () => {
   const cases = [
-    ["Open AR for MTPL as at 31-Feb-2026", "dimensions.period"],
-    ["Open AR as of 2026-10-18 as of 2026-10-19", "dimensions.period"],
-    ["Open AR excluding intercompany", "qualifiers"],
-    ["Open AR for current period", "dimensions.entity"],
-    ["Open AR in", "qualifiers"],
-    ["Open AR legacy", "qualifiers"],
-    ["Open AR migration", "qualifiers"],
+    [{ entity: "MTPL", period: "2026-10-19", extra: "x" }, "dimensions.extra.undeclared"],
+    [{ entity: ["MTPL"], period: "2026-10-19" }, "dimensions.entity.type"],
+    [{ entity: "MTPL", period: "2026-02-31" }, "dimensions.period.date"],
+    [{ entity: "MTPL", period: "2026-10-19", currency: "EUR" }, "dimensions.currency.value"],
+    [{ entity: "MTPL", period: "2026-10-19", sources: ["netsuite", "warehouse"] }, "dimensions.sources.value"],
   ] as const;
 
-  for (const [request, missing] of cases) {
-    const result = resolveFinnyIntent(request, financeCatalog);
-    assert.equal(result.status, "schema_mapping_required", request);
-    if (result.status === "schema_mapping_required") assert.ok(result.missingMappings.includes(missing), request);
+  for (const [dimensions, issue] of cases) {
+    const result = resolveFinnyIntent({ capabilityId: "working_capital_velocity", dimensions }, catalog());
+    assert.equal(result.status, "invalid_candidate");
+    if (result.status === "invalid_candidate") assert.ok(result.issues.includes(issue), issue);
   }
 });
 
-test("descriptor declarations reject unsupported kinds and unresolved required dimensions", () => {
-  const financeCatalog = catalog(
-    descriptor("customer_exposure", ["open_ar"], {
-      required: ["entity", "period", "accounting_book"],
-      supported: {
-        entity: ["named"],
-        period: ["current"],
-        currency: ["source_base"],
-        grain: ["total"],
-        sources: ["netsuite"],
-        migration_markers: ["migration"],
-        artifact: ["optional"],
+test("candidate shape rejects every model-supplied authority field", () => {
+  for (const authority of ["sql", "operations", "policies", "digests", "revisionId"] as const) {
+    const result = resolveFinnyIntent(
+      {
+        capabilityId: "working_capital_velocity",
+        dimensions: { entity: "MTPL", period: "2026-10-19" },
+        [authority]: authority,
       },
-      defaults: {},
-    }),
-  );
-
-  const result = resolveFinnyIntent("Open AR for MTPL as at 19-Oct-2026", financeCatalog);
-  assert.equal(result.status, "schema_mapping_required");
-  if (result.status !== "schema_mapping_required") return;
-  assert.equal(result.semanticCapability, "customer_exposure");
-  assert.deepEqual(result.missingMappings, ["dimensions.accounting_book", "dimensions.period.as_of"]);
+      catalog(),
+    );
+    assert.equal(result.status, "invalid_candidate");
+    if (result.status === "invalid_candidate") assert.deepEqual(result.issues, [`candidate.${authority}.undeclared`]);
+  }
 });
 
-test("defaults are rejected instead of being widened to unsupported pack values", () => {
-  const financeCatalog = catalog(
-    descriptor("customer_exposure", ["open_ar"], {
-      required: ["entity", "period", "currency", "grain", "sources", "artifact"],
-      supported: {
-        entity: ["named"],
-        period: ["as_of"],
-        currency: ["specified"],
-        grain: ["vendor"],
-        sources: ["legacy", "archive"],
-        migration_markers: ["migration"],
-        artifact: ["required"],
-      },
-      defaults: {},
-    }),
+test("required dimensions and artifact formats fail closed", () => {
+  const missing = resolveFinnyIntent(
+    { capabilityId: "working_capital_velocity", dimensions: { period: "2026-10-19" } },
+    catalog(),
   );
+  assert.equal(missing.status, "invalid_candidate");
+  if (missing.status === "invalid_candidate") assert.deepEqual(missing.issues, ["dimensions.entity.required"]);
 
-  const result = resolveFinnyIntent("Open AR", financeCatalog);
-  assert.equal(result.status, "schema_mapping_required");
-  if (result.status !== "schema_mapping_required") return;
-  assert.deepEqual(result.missingMappings, [
-    "dimensions.artifact.optional",
-    "dimensions.currency.source_base",
-    "dimensions.entity.all",
-    "dimensions.grain.total",
-    "dimensions.period.current",
-    "dimensions.sources",
-  ]);
+  const format = resolveFinnyIntent(
+    {
+      capabilityId: "working_capital_velocity",
+      dimensions: { entity: "MTPL", period: "2026-10-19" },
+      artifactFormat: "pdf" as "csv",
+    },
+    catalog(),
+  );
+  assert.equal(format.status, "invalid_candidate");
+  if (format.status === "invalid_candidate") assert.deepEqual(format.issues, ["artifactFormat.invalid"]);
 });
 
-test("pack source and migration values require explicit generic qualifiers", () => {
-  const financeCatalog = catalog(
-    descriptor("customer_exposure", ["open_ar"], {
-      required: ["entity", "period", "currency", "grain", "sources", "migration_markers", "artifact"],
-      supported: {
-        entity: ["all", "named"],
-        period: ["current", "as_of"],
-        currency: ["source_base", "specified"],
-        grain: ["total"],
-        sources: ["ledger_alpha", "ledger_beta"],
-        migration_markers: ["opening_migration"],
-        artifact: ["optional"],
-      },
-      defaults: {},
-    }),
-  );
-
+test("model-derived candidates require a before-source approval descriptor", () => {
+  const capability = descriptor();
   const result = resolveFinnyIntent(
-    "Please show open AR from ledger alpha and ledger beta including opening migration",
-    financeCatalog,
+    { capabilityId: capability.capabilityId, dimensions: { entity: "MTPL", period: "2026-10-19" } },
+    catalog({ ...capability, approvalPolicy: { mode: "none", binds: [] } }),
   );
-  assert.equal(result.status, "resolved");
-  if (result.status !== "resolved") return;
-  assert.deepEqual(result.dimensions.sources, ["ledger_alpha", "ledger_beta"]);
-  assert.deepEqual(result.dimensions.migration_markers, ["opening_migration"]);
-});
 
-test("range periods reject reversed boundaries and preserve valid ISO dates", () => {
-  const financeCatalog = catalog(descriptor("cash_movement", ["cash_flow"]));
-  const valid = resolveFinnyIntent("Cash flow from 2026-10-01 to 2026-10-19", financeCatalog);
-  assert.equal(valid.status, "resolved");
-  if (valid.status === "resolved")
-    assert.deepEqual(valid.dimensions.period, { kind: "range", start: "2026-10-01", end: "2026-10-19" });
-
-  const reversed = resolveFinnyIntent("Cash flow from 2026-10-19 to 2026-10-01", financeCatalog);
-  assert.equal(reversed.status, "schema_mapping_required");
-  if (reversed.status === "schema_mapping_required") assert.deepEqual(reversed.missingMappings, ["dimensions.period"]);
-});
-
-test("reviewed request framing and source-base currency do not become loose qualifiers", () => {
-  const result = resolveFinnyIntent(
-    "Please show the open AR in source currency",
-    catalog(descriptor("customer_exposure", ["open_ar"])),
-  );
-  assert.equal(result.status, "resolved");
-  if (result.status === "resolved") assert.deepEqual(result.dimensions.currency, { kind: "source_base" });
-});
-
-test("an artifact request cannot override a capability that never attaches artifacts", () => {
-  const capability = descriptor("customer_exposure", ["open_ar"]);
-  const result = resolveFinnyIntent(
-    "Open AR as a CSV file",
-    catalog({ ...capability, artifactPolicy: { ...capability.artifactPolicy, attachment: "never" } }),
-  );
-  assert.equal(result.status, "schema_mapping_required");
-  if (result.status === "schema_mapping_required") assert.deepEqual(result.missingMappings, ["artifact.attachment"]);
+  assert.equal(result.status, "invalid_candidate");
+  if (result.status === "invalid_candidate") assert.deepEqual(result.issues, ["capability.approval_policy"]);
 });

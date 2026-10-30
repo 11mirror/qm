@@ -10,7 +10,7 @@ import {
   type FinnyLedgerMetadata,
 } from "../src/finny/golden-loop.ts";
 import { createFinnyPiHarness, withFinnyPiProfile } from "../src/finny/pi-profile.ts";
-import { createFinnyRunStore, type FinnyRunCheckpoint, type FinnyRunStore } from "../src/finny/run-store.ts";
+import { createFinnyRunStore, type FinnyRunStore, type FinnyRunV2Checkpoint } from "../src/finny/run-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createUnavailableFinanceService } from "../src/finny/unavailable-finance-service.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
@@ -41,16 +41,23 @@ function completedLedger() {
 }
 
 function testRunStore(): FinnyRunStore {
-  return createFinnyRunStore(createMemoryMap<FinnyRunCheckpoint>());
+  return createFinnyRunStore(createMemoryMap<FinnyRunV2Checkpoint>());
 }
 
 async function persistLedger(runStore: FinnyRunStore, ledger: readonly FinnyLedgerMetadata[]): Promise<void> {
   await runStore.initialize({
+    schema: "finny.run.v2",
     runId: "run-1",
     requestDigest: d("request"),
     sessionId: "session-1",
     scopeId: "personal:actor-1",
-    artifactRequest: "optional",
+    plan: {
+      catalogDigest: d("catalog"),
+      capabilityId: "test-capability",
+      revisionId: "test-revision",
+      operationGraphDigest: d("operation-graph"),
+      planDigest: d("plan"),
+    },
   });
   for (const metadata of ledger) await runStore.checkpoint("run-1", metadata);
 }
@@ -363,7 +370,7 @@ test("the Finny factory remains the standard Pi harness and pins its model", () 
   const harness = createFinnyPiHarness({
     modelId: "gpt-5.6-sol",
     financeService: createUnavailableFinanceService(),
-    runStore: createFinnyRunStore(createMemoryMap<FinnyRunCheckpoint>()),
+    runStore: createFinnyRunStore(createMemoryMap<FinnyRunV2Checkpoint>()),
     evidenceBytes: createMemoryDurableByteStore(),
     capabilityCatalog: {
       manifestDigest: `sha256:${"a".repeat(64)}`,

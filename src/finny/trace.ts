@@ -282,9 +282,7 @@ function safeFinnyTraceSnapshotV3(value: unknown): FinnyTraceSnapshotV3 | null {
     const primitive = operation && text(operation.primitive);
     const operationDigest = operation && safeDigest(operation.operationDigest);
     const resultDigest = operation && safeDigest(operation.resultDigest);
-    const knownPrimitive =
-      primitive &&
-      ["suiteql_select", "project", "filter", "aggregate", "join", "reconcile", "repeat_pull"].includes(primitive);
+    const knownPrimitive = primitive && ["suiteql_select", "repeat_pull", "reconcile"].includes(primitive);
     return operationId && knownPrimitive && operationDigest && resultDigest
       ? { operationId, primitive: primitive as FinnyCompletedOperation["primitive"], operationDigest, resultDigest }
       : null;

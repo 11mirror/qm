@@ -31,21 +31,8 @@ const descriptor: FinnyCapabilityDescriptor = {
       id: "inventory_source",
       primitive: "suiteql_select",
       dependsOn: [],
-      sql: "SELECT amount FROM synthetic_inventory WHERE entity = :entity_id AND posted_at <= :period_end",
+      sql: "SELECT SUM(amount) AS inventory_value FROM synthetic_inventory WHERE entity = :entity_id AND posted_at <= :period_end",
       parameters: ["entity_id", "period_end"],
-    },
-    {
-      id: "reviewed_rows",
-      primitive: "filter",
-      dependsOn: ["inventory_source"],
-      predicates: [{ field: "status", operator: "eq", parameter: "review_status" }],
-    },
-    {
-      id: "inventory_total",
-      primitive: "aggregate",
-      dependsOn: ["reviewed_rows"],
-      groupBy: [],
-      metrics: [{ id: "inventory_value", operator: "sum", field: "amount" }],
     },
     {
       id: "repeat_inventory",
@@ -56,17 +43,16 @@ const descriptor: FinnyCapabilityDescriptor = {
     {
       id: "inventory_reconciliation",
       primitive: "reconcile",
-      dependsOn: ["inventory_total", "repeat_inventory"],
+      dependsOn: ["inventory_source", "repeat_inventory"],
       leftField: "inventory_value",
       rightField: "inventory_value",
       tolerance: "0",
     },
   ],
-  resultOperationId: "inventory_total",
+  resultOperationId: "inventory_source",
   parameterBindings: {
     entity_id: { source: "dimension", path: ["entity", "name"] },
     period_end: { source: "dimension", path: ["period", "date"] },
-    review_status: { source: "literal", value: "reviewed" },
   },
   artifactPolicy: {
     allowedFormats: ["json", "csv"],
@@ -105,11 +91,11 @@ test("the host compiles every reviewed operation into one immutable ordered plan
   assert.equal(plan.revisionId, "working_capital_velocity.2026-10-30");
   assert.equal(plan.manifestDigest, input.manifestDigest);
   assert.equal(plan.catalogDigest, input.catalogDigest);
-  assert.equal(plan.resultOperationId, "inventory_total");
+  assert.equal(plan.resultOperationId, "inventory_source");
   assert.match(plan.dimensionsDigest, /^sha256:[a-f0-9]{64}$/);
   assert.deepEqual(
     plan.operations.map((operation) => operation.id),
-    ["inventory_source", "reviewed_rows", "inventory_total", "repeat_inventory", "inventory_reconciliation"],
+    ["inventory_source", "repeat_inventory", "inventory_reconciliation"],
   );
   assert.equal(plan.operations[0]?.primitive, "suiteql_select");
   assert.deepEqual(plan.operations.slice(1), descriptor.operations.slice(1));
@@ -170,53 +156,9 @@ test("SuiteQL rendering escapes hostile strings and renders scalar types without
   if (source?.primitive !== "suiteql_select") assert.fail("expected a SuiteQL operation");
   assert.equal(
     source.sql,
-    "SELECT amount FROM synthetic_inventory WHERE entity = 'synthetic'' OR 1=1 --' AND posted_at <= '2026-10-19'' OR posted_at IS NOT NULL --' AND amount >= 10.5 AND active = TRUE AND parent IS NULL",
+    "SELECT SUM(amount) AS inventory_value FROM synthetic_inventory WHERE entity = 'synthetic'' OR 1=1 --' AND posted_at <= '2026-10-19'' OR posted_at IS NOT NULL --' AND amount >= 10.5 AND active = TRUE AND parent IS NULL",
   );
   assert.deepEqual(source.parameters, ["entity_id", "period_end", "minimum_amount", "active", "parent_id"]);
-});
-
-test("filter in binds reviewed dimension arrays while SuiteQL remains scalar-only", () => {
-  const filterDescriptor: FinnyCapabilityDescriptor = {
-    ...descriptor,
-    operations: descriptor.operations.map((operation) =>
-      operation.id === "reviewed_rows" && operation.primitive === "filter"
-        ? { ...operation, predicates: [{ field: "source", operator: "in", parameter: "selected_sources" }] }
-        : operation,
-    ),
-    parameterBindings: {
-      entity_id: descriptor.parameterBindings.entity_id!,
-      period_end: descriptor.parameterBindings.period_end!,
-      selected_sources: { source: "dimension", path: ["sources"] },
-    },
-  };
-  const plan = compileFinnyOperationPlan({
-    ...input,
-    descriptor: filterDescriptor,
-    dimensions: { ...input.dimensions, sources: ["netsuite"] },
-  });
-  assert.deepEqual(plan.parameterValues.selected_sources, ["netsuite"]);
-
-  const invalidSuiteql: FinnyCapabilityDescriptor = {
-    ...filterDescriptor,
-    operations: filterDescriptor.operations.map((operation) =>
-      operation.primitive === "suiteql_select"
-        ? {
-            ...operation,
-            sql: `${operation.sql} AND source = :selected_sources`,
-            parameters: [...operation.parameters, "selected_sources"],
-          }
-        : operation,
-    ),
-  };
-  assert.throws(
-    () =>
-      compileFinnyOperationPlan({
-        ...input,
-        descriptor: invalidSuiteql,
-        dimensions: { ...input.dimensions, sources: ["netsuite"] },
-      }),
-    /scalar/i,
-  );
 });
 
 test("dimension, parameter, and operation graph changes alter the bound digests", () => {
@@ -240,8 +182,8 @@ test("dimension, parameter, and operation graph changes alter the bound digests"
     descriptor: {
       ...descriptor,
       operations: descriptor.operations.map((operation) =>
-        operation.id === "inventory_total" && operation.primitive === "aggregate"
-          ? { ...operation, metrics: [{ ...operation.metrics[0]!, field: "base_amount" }] }
+        operation.primitive === "suiteql_select"
+          ? { ...operation, sql: operation.sql.replace("amount", "base_amount") }
           : operation,
       ),
     },
@@ -252,7 +194,7 @@ test("dimension, parameter, and operation graph changes alter the bound digests"
       ...descriptor,
       parameterBindings: {
         ...descriptor.parameterBindings,
-        review_status: { source: "literal", value: "approved" },
+        entity_id: { source: "literal", value: "synthetic_entity" },
       },
     },
   });
@@ -329,12 +271,11 @@ test("compilation fails closed on semantic, dimension, and parameter ambiguity",
         descriptor: {
           ...descriptor,
           parameterBindings: {
-            entity_id: descriptor.parameterBindings.entity_id!,
             period_end: descriptor.parameterBindings.period_end!,
           },
         },
       },
-      /review_status.*required/i,
+      /entity_id.*required/i,
     ],
     [
       "extra binding",

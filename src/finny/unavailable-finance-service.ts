@@ -15,21 +15,6 @@ export function createUnavailableFinanceService(): FinanceService {
         ),
       };
     },
-    async preflight(input, context) {
-      const plan = JSON.stringify({
-        runId: context.runId,
-        actorId: context.actorId,
-        mode: "read-only",
-        request: input.request,
-        query: input.query,
-        clarificationDigest: input.clarificationDigest,
-      });
-      return {
-        planSummary: "Read-only finance source request; an approved native source adapter is required.",
-        preflightDigest: digestFinnyEvidence(`preflight:${plan}`),
-        planDigest: digestFinnyEvidence(`plan:${plan}`),
-      };
-    },
     async preflightPlan(input, context) {
       const approvalPolicyDigest = finnyApprovalPolicyDigest(input.plan);
       const evidence = JSON.stringify({
@@ -54,14 +39,8 @@ export function createUnavailableFinanceService(): FinanceService {
     async sourcePlan() {
       return blocked("operation plan source");
     },
-    async plan(input, context) {
-      return {
-        decision: "approved",
-        approvalDigest: digestFinnyEvidence(`host-approval:${context.runId}:${context.actorId}:${input.planDigest}`),
-      };
-    },
-    async source() {
-      return blocked("finance source");
+    async recoverSource() {
+      return blocked("operation plan source recovery");
     },
     async artifact() {
       return blocked("finance artifact");

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { DurableByteStore } from "../files/durable-byte-store.ts";
+import { canonicalFinnyJson } from "./canonical-json.ts";
 import { applyFinnyHostEvent, replayFinnyLedger, type FinnyDigest, type FinnyGoldenLoopState } from "./golden-loop.ts";
 import type { FinnyCompiledOperation, FinnyOperationPlan } from "./operation-compiler.ts";
 import { loadFinnyOperationResult, storeFinnyOperationResult } from "./operation-custody.ts";
@@ -13,7 +14,6 @@ import {
 import type { FinnyRunV2Checkpoint } from "./run-store.ts";
 
 interface FinnyDurableOperationRunStore {
-  withRunLock<T>(runId: string, work: () => Promise<T>): Promise<T>;
   checkpoint(runId: string, metadata: FinnyGoldenLoopState["ledger"][number]): Promise<FinnyRunV2Checkpoint>;
   load(runId: string): Promise<FinnyRunV2Checkpoint | null>;
 }
@@ -27,32 +27,12 @@ export interface FinnyDurableOperationRunnerInput {
   readonly executeExternal: FinnyOperationRunnerInput["executeExternal"];
 }
 
-function plainRecord(value: unknown): value is Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value) as unknown;
-  return prototype === Object.prototype || prototype === null;
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (plainRecord(value))
-    return `{${Object.entries(value)
-      .sort(([left], [right]) => {
-        if (left < right) return -1;
-        if (left > right) return 1;
-        return 0;
-      })
-      .map(([key, nested]) => `${JSON.stringify(key)}:${canonicalJson(nested)}`)
-      .join(",")}}`;
-  return JSON.stringify(value);
-}
-
 export function digestFinnyCompiledOperation(
   planDigest: FinnyDigest,
   ordinal: number,
   operation: FinnyCompiledOperation,
 ): FinnyDigest {
-  const binding = canonicalJson({ operation, ordinal, planDigest });
+  const binding = canonicalFinnyJson({ operation, ordinal, planDigest });
   return `sha256:${createHash("sha256").update(binding).digest("hex")}`;
 }
 
@@ -132,52 +112,50 @@ async function restoredResults(
 export async function runFinnyDurableOperationPlan(
   input: FinnyDurableOperationRunnerInput,
 ): Promise<FinnyVerifiedOperationResultSets> {
-  return input.runStore.withRunLock(input.runId, async () => {
-    const checkpoint = await input.runStore.load(input.runId);
-    if (!checkpoint) throw new Error(`Finny run ${input.runId} is not initialized`);
-    let state = replayFinnyLedger(input.runId, checkpoint.ledger);
-    assertPlanBinding(checkpoint, state, input.plan);
-    const restored = await restoredResults(input.runId, input.plan, state, input.resultBytes);
-    const custodyDigests: Record<string, FinnyDigest> = { ...restored.custodyDigests };
-    const ordinals = new Map(input.plan.operations.map((operation, ordinal) => [operation.id, ordinal]));
+  const checkpoint = await input.runStore.load(input.runId);
+  if (!checkpoint) throw new Error(`Finny run ${input.runId} is not initialized`);
+  let state = replayFinnyLedger(input.runId, checkpoint.ledger);
+  assertPlanBinding(checkpoint, state, input.plan);
+  const restored = await restoredResults(input.runId, input.plan, state, input.resultBytes);
+  const custodyDigests: Record<string, FinnyDigest> = { ...restored.custodyDigests };
+  const ordinals = new Map(input.plan.operations.map((operation, ordinal) => [operation.id, ordinal]));
 
-    return runFinnyOperationPlan({
-      plan: input.plan,
-      targetOperationIds: input.targetOperationIds,
-      restoredResultSets: restored.restored,
-      executeExternal: input.executeExternal,
-      onCompleted: async ({ operation, rows }) => {
-        const ordinal = ordinals.get(operation.id);
-        if (ordinal === undefined) throw new Error(`Finny operation ${operation.id} has no plan ordinal`);
-        const operationDigest = digestFinnyCompiledOperation(input.plan.planDigest, ordinal, operation);
-        const dependencyResults = operation.dependsOn.map((operationId) => {
-          const resultDigest = custodyDigests[operationId];
-          if (!resultDigest)
-            throw new Error(`Finny operation ${operation.id} dependency ${operationId} has no durable result`);
-          return { operationId, resultDigest };
-        });
-        const stored = await storeFinnyOperationResult(input.resultBytes, {
-          runId: input.runId,
-          planDigest: input.plan.planDigest,
-          operationId: operation.id,
-          operationDigest,
-          dependencyResults,
-          output: rows,
-        });
-        const next = applyFinnyHostEvent(state, {
-          authority: "qm-host",
-          eventId: `${input.runId}:operation:${operation.id}`,
-          occurredAt: new Date().toISOString(),
-          kind: "operation_completed",
-          operationId: operation.id,
-          primitive: operation.primitive,
-          operationDigest,
-          resultDigest: stored.resultDigest,
-        });
-        await input.runStore.checkpoint(input.runId, next.ledger.at(-1)!);
-        state = next;
-        custodyDigests[operation.id] = stored.resultDigest;
-      },
-    });
+  return runFinnyOperationPlan({
+    plan: input.plan,
+    targetOperationIds: input.targetOperationIds,
+    restoredResultSets: restored.restored,
+    executeExternal: input.executeExternal,
+    onCompleted: async ({ operation, rows }) => {
+      const ordinal = ordinals.get(operation.id);
+      if (ordinal === undefined) throw new Error(`Finny operation ${operation.id} has no plan ordinal`);
+      const operationDigest = digestFinnyCompiledOperation(input.plan.planDigest, ordinal, operation);
+      const dependencyResults = operation.dependsOn.map((operationId) => {
+        const resultDigest = custodyDigests[operationId];
+        if (!resultDigest)
+          throw new Error(`Finny operation ${operation.id} dependency ${operationId} has no durable result`);
+        return { operationId, resultDigest };
+      });
+      const stored = await storeFinnyOperationResult(input.resultBytes, {
+        runId: input.runId,
+        planDigest: input.plan.planDigest,
+        operationId: operation.id,
+        operationDigest,
+        dependencyResults,
+        output: rows,
+      });
+      const next = applyFinnyHostEvent(state, {
+        authority: "qm-host",
+        eventId: `${input.runId}:operation:${operation.id}`,
+        occurredAt: new Date().toISOString(),
+        kind: "operation_completed",
+        operationId: operation.id,
+        primitive: operation.primitive,
+        operationDigest,
+        resultDigest: stored.resultDigest,
+      });
+      await input.runStore.checkpoint(input.runId, next.ledger.at(-1)!);
+      state = next;
+      custodyDigests[operation.id] = stored.resultDigest;
+    },
   });
 }

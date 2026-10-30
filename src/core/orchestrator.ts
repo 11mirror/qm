@@ -285,6 +285,18 @@ export function mcpOutputEvidenceRefs(entries: readonly SessionEntry[], delivery
   return refs;
 }
 
+function deliveryWithMcpEvidence(
+  entries: readonly SessionEntry[],
+  text: string,
+  publicWebUrl: string | undefined,
+): { text: string; refs: McpOutputEvidenceRef[] } {
+  const canonicalText = absoluteAppLinks(text, publicWebUrl);
+  const canonicalRefs = mcpOutputEvidenceRefs(entries, canonicalText);
+  if (canonicalText === text || canonicalRefs.length) return { text: canonicalText, refs: canonicalRefs };
+  const refs = mcpOutputEvidenceRefs(entries, text);
+  return refs.length ? { text, refs } : { text: canonicalText, refs: [] };
+}
+
 export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   if (deps.sessions.leaseTtlMs < MIN_SESSION_LEASE_TTL_MS) {
     throw new Error(
@@ -1375,8 +1387,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const recordedTurn = recordedRunTurn?.turn ?? null;
       if (recordedTurn?.answer) {
         const recordedAnswer = recordedTurn.answer;
-        const reply = absoluteAppLinks(recordedAnswer.text, deps.publicWebUrl);
-        const mcpEvidenceRefs = mcpOutputEvidenceRefs(recordedRunTurn!.entries, reply);
+        const delivery = deliveryWithMcpEvidence(recordedRunTurn!.entries, recordedAnswer.text, deps.publicWebUrl);
         deps.auditLog.record({
           at: Date.now(),
           principalId: actor.id,
@@ -1392,10 +1403,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? {
               status: "ok",
               sessionId: session.id,
-              reply,
+              reply: delivery.text,
               sourceUserSeq: recordedTurn.userSeq,
               sourceAssistantEntrySeq: recordedAnswer.seq,
-              ...(mcpEvidenceRefs.length ? { mcpEvidenceRefs } : {}),
+              ...(delivery.refs.length ? { mcpEvidenceRefs: delivery.refs } : {}),
             }
           : { status: "silent", sessionId: session.id };
       }
@@ -3803,7 +3814,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await mirrored;
           return {
             ...segment,
-            ...(segment.reply ? { reply: absoluteAppLinks(segment.reply, deps.publicWebUrl) } : {}),
+            ...(segment.reply
+              ? { reply: deliveryWithMcpEvidence(turnEvidenceEntries(), segment.reply, deps.publicWebUrl).text }
+              : {}),
           };
         };
         let result = await runHarnessTurn(turnInput, {

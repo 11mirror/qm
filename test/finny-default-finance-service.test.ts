@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ServiceCredentialReader } from "../src/credentials/keychain.ts";
-import type { AtomicFetchAdapter } from "../src/finny/credential-brokered-finance-service.ts";
+import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
+import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
+import type { FinnyCapabilityDescriptor } from "../src/finny/capability-pack.ts";
 import { createDefaultFinnyFinanceService } from "../src/finny/default-finance-service.ts";
 import type { FinanceExecutionContext } from "../src/finny/finance.ts";
 import {
@@ -11,17 +13,13 @@ import {
   digestFinnyEvidence,
   type FinnyHostEvent,
 } from "../src/finny/golden-loop.ts";
-import { FINNY_AP_GL_CONTROL_BALANCE_QUERY } from "../src/finny/reviewed-query.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
-import type { FinnyCapabilityDescriptor } from "../src/finny/capability-pack.ts";
 import { compileFinnyOperationPlan } from "../src/finny/operation-compiler.ts";
-import { createFinnyRunStore, type FinnyRunV2Checkpoint } from "../src/finny/run-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createFinnyRunStore, type FinnyRunV2Checkpoint } from "../src/finny/run-store.ts";
 
 const digest = (value: string) => digestFinnyEvidence(value);
 
-test("default Finny service passes durable v2 custody through plan-native source execution", async () => {
+test("default Finny service brokers exact operation execution into durable v2 custody", async () => {
   const descriptor: FinnyCapabilityDescriptor = {
     schemaVersion: 1,
     capabilityId: "synthetic_default",
@@ -31,24 +29,33 @@ test("default Finny service passes durable v2 custody through plan-native source
     dimensions: { required: [], supported: {}, defaults: {} },
     operations: [
       {
-        id: "synthetic_source",
+        id: "source",
         primitive: "suiteql_select",
         dependsOn: [],
         sql: "SELECT value FROM synthetic_default",
         parameters: [],
       },
+      { id: "repeat", primitive: "repeat_pull", dependsOn: ["source"], operationId: "source" },
+      {
+        id: "reconcile",
+        primitive: "reconcile",
+        dependsOn: ["source", "repeat"],
+        leftField: "value",
+        rightField: "value",
+        tolerance: "0",
+      },
     ],
-    resultOperationId: "synthetic_source",
+    resultOperationId: "source",
     parameterBindings: {},
     artifactPolicy: { allowedFormats: ["json"], defaultFormat: "json", attachment: "never" },
     approvalPolicy: { mode: "none", binds: ["capability_revision", "dimensions", "operation_graph"] },
-    verificationPolicy: { requiredOperationIds: [], releaseGate: "delivery_eligible" },
+    verificationPolicy: { requiredOperationIds: ["reconcile"], releaseGate: "delivery_eligible" },
   };
   const plan = compileFinnyOperationPlan({
     descriptor,
-    manifestDigest: digest("default-manifest"),
-    catalogDigest: digest("default-catalog"),
-    semanticCapability: "synthetic_default",
+    manifestDigest: digest("manifest"),
+    catalogDigest: digest("catalog"),
+    semanticCapability: descriptor.semanticCapability,
     dimensions: {},
   });
   const context: FinanceExecutionContext = {
@@ -57,11 +64,11 @@ test("default Finny service passes durable v2 custody through plan-native source
     scopeId: "personal:actor-default",
     credentialHandles: [],
   };
-  const runStore = createFinnyRunStore<FinnyRunV2Checkpoint>(createMemoryMap<FinnyRunV2Checkpoint>());
+  const runStore = createFinnyRunStore(createMemoryMap<FinnyRunV2Checkpoint>());
   await runStore.initialize({
     schema: "finny.run.v2",
     runId: context.runId,
-    requestDigest: digest("default-request"),
+    requestDigest: digest("request"),
     sessionId: "session-default",
     scopeId: context.scopeId,
     plan: {
@@ -77,12 +84,12 @@ test("default Finny service passes durable v2 custody through plan-native source
   let state = createFinnyGoldenLoop(context.runId);
   state = applyFinnyHostEvent(
     state,
-    event({ eventId: "default:clarify", kind: "clarify_completed", evidenceDigest: digest("clarify") }),
+    event({ eventId: "clarify", kind: "clarify_completed", evidenceDigest: digest("clarify") }),
   );
   state = applyFinnyHostEvent(
     state,
     event({
-      eventId: "default:preflight",
+      eventId: "preflight",
       kind: "operation_plan_preflight_completed",
       preflightDigest: digest("preflight"),
       planDigest: plan.planDigest,
@@ -100,7 +107,7 @@ test("default Finny service passes durable v2 custody through plan-native source
   state = applyFinnyHostEvent(
     state,
     event({
-      eventId: "default:exempted",
+      eventId: "exempt",
       kind: "plan_exempted",
       planDigest: plan.planDigest,
       approvalPolicyDigest: plan.approvalPolicyDigest,
@@ -120,9 +127,8 @@ test("default Finny service passes durable v2 custody through plan-native source
       };
     },
   };
-  let operationCalls = 0;
-  let legacyCalls = 0;
   const bytes = createMemoryDurableByteStore();
+  let operationCalls = 0;
   const service = createDefaultFinnyFinanceService({
     credentialReader: credentials,
     orgScopeId: "org:test",
@@ -130,158 +136,25 @@ test("default Finny service passes durable v2 custody through plan-native source
     evidenceBytes: bytes,
     runStore,
     atomicFetch: {
-      async preflight() {
-        throw new Error("legacy preflight must not run");
-      },
-      async source() {
-        legacyCalls += 1;
-        throw new Error("legacy source must not run");
+      async preflightPlan(input) {
+        return {
+          planSummary: input.plan.semanticCapability,
+          preflightDigest: digest("preflight"),
+          approvalRequired: false,
+          approvalPolicyDigest: input.plan.approvalPolicyDigest,
+        };
       },
       async executeOperation() {
         operationCalls += 1;
-        return { rows: [{ value: "reviewed" }] };
+        return { rows: [{ value: "42" }] };
       },
     },
   });
 
-  const sourced = await service.sourcePlan!({ plan }, context);
+  const sourced = await service.sourcePlan({ plan }, context);
+  const verified = await service.verify({ sourceDigest: sourced.sourceDigest, requirement: "optional" }, context);
 
-  assert.deepEqual(sourced.records, [{ value: "reviewed" }]);
-  assert.equal(operationCalls, 1);
-  assert.equal(legacyCalls, 0);
-});
-
-test("default Finny service composes credential brokering with durable host evidence", async () => {
-  const credentials: ServiceCredentialReader = {
-    async getServiceCredentialSecret(_scope, slug) {
-      return {
-        slug,
-        name: slug,
-        secret: `${slug}-secret`,
-        delivery: "broker",
-        host: `${slug}.internal`,
-        deployments: false,
-        enabled: true,
-      };
-    },
-  };
-  let sourceCalls = 0;
-  const sourceQueries: string[] = [];
-  const atomicFetch: AtomicFetchAdapter = {
-    async preflight(input) {
-      assert.equal(input.query, FINNY_AP_GL_CONTROL_BALANCE_QUERY);
-      return {
-        planSummary: "read-only",
-        preflightDigest: digest("preflight"),
-        planDigest: digest("plan"),
-      };
-    },
-    async source(input) {
-      sourceCalls += 1;
-      sourceQueries.push(input.query ?? "");
-      return {
-        records: Array.from({ length: 11 }, (_, index) => ({ id: index + 1 })),
-        sourceDigest: digest(`upstream-${sourceCalls}`),
-      };
-    },
-  };
-  const bytes = createMemoryDurableByteStore();
-  const service = createDefaultFinnyFinanceService({
-    credentialReader: credentials,
-    orgScopeId: "org:test",
-    files: createMemoryFileArtifactStore(bytes),
-    evidenceBytes: bytes,
-    atomicFetch,
-  });
-  const context: FinanceExecutionContext = {
-    runId: "run-default",
-    actorId: "actor-default",
-    scopeId: "personal:actor-default",
-    credentialHandles: [],
-  };
-
-  const clarified = await service.clarify({ request: "AP balance" }, context);
-  const preflight = await service.preflight(
-    {
-      request: "AP balance",
-      clarificationDigest: clarified.evidenceDigest,
-      query: FINNY_AP_GL_CONTROL_BALANCE_QUERY,
-    },
-    context,
-  );
-  const planned = await service.plan({ planDigest: preflight.planDigest }, context);
-  const sourced = await service.source(
-    { planDigest: preflight.planDigest },
-    { ...context, approvedQueryDigest: preflight.queryDigest },
-  );
-  const artifact = await service.artifact({ sourceDigest: sourced.sourceDigest }, context);
-  const verified = await service.verify(
-    {
-      sourceDigest: sourced.sourceDigest,
-      artifactDigest: artifact.artifactDigest,
-      requirement: artifact.requirement,
-    },
-    context,
-  );
-
-  assert.equal(planned.decision, "approved");
-  assert.equal(artifact.requirement, "required");
+  assert.deepEqual(sourced.records, [{ value: "42" }]);
+  assert.equal(operationCalls, 2);
   assert.equal(verified.passed, true);
-  assert.equal(sourceCalls, 2);
-  assert.deepEqual(sourceQueries, [FINNY_AP_GL_CONTROL_BALANCE_QUERY, FINNY_AP_GL_CONTROL_BALANCE_QUERY]);
-});
-
-test("default Finny service preserves the exact host-compiled query for non-AP capabilities", async () => {
-  const credentials: ServiceCredentialReader = {
-    async getServiceCredentialSecret(_scope, slug) {
-      return {
-        slug,
-        name: slug,
-        secret: `${slug}-secret`,
-        delivery: "broker",
-        host: `${slug}.internal`,
-        deployments: false,
-        enabled: true,
-      };
-    },
-  };
-  const reviewedQuery =
-    "SELECT total FROM reviewed_open_ar WHERE subsidiary_id = 7 AND cutoff_date = DATE '2025-09-15'";
-  const observedQueries: string[] = [];
-  const bytes = createMemoryDurableByteStore();
-  const service = createDefaultFinnyFinanceService({
-    credentialReader: credentials,
-    orgScopeId: "org:test",
-    files: createMemoryFileArtifactStore(bytes),
-    evidenceBytes: bytes,
-    atomicFetch: {
-      async preflight(input) {
-        observedQueries.push(input.query);
-        return {
-          planSummary: "read-only open AR",
-          preflightDigest: digest("ar-preflight"),
-          planDigest: digest("ar-plan"),
-        };
-      },
-      async source() {
-        throw new Error("source is outside this preflight test");
-      },
-    },
-  });
-
-  await service.preflight(
-    {
-      request: "open AR for Example Manufacturing as at 15-Sep-2025",
-      clarificationDigest: digest("clarify"),
-      query: reviewedQuery,
-    },
-    {
-      runId: "run-ar-preflight",
-      actorId: "actor-default",
-      scopeId: "personal:actor-default",
-      credentialHandles: [],
-    },
-  );
-
-  assert.deepEqual(observedQueries, [reviewedQuery]);
 });

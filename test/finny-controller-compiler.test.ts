@@ -4,34 +4,50 @@ import test from "node:test";
 
 import { loadFinnyCapabilityPack } from "../src/finny/capability-pack.ts";
 import { compileFinnyControllerRequest } from "../src/finny/controller-compiler.ts";
-import { FINNY_AP_GL_CONTROL_BALANCE_QUERY } from "../src/finny/reviewed-query.ts";
 
 const catalog = loadFinnyCapabilityPack(resolve("finny-skills/capabilities"));
 
-test("AP compatibility compiles through the reviewed capability pack", async () => {
-  const result = compileFinnyControllerRequest("What is our AP balance?", await catalog);
+test("an AP typed candidate compiles through the reviewed capability pack", async () => {
+  const result = compileFinnyControllerRequest(
+    {
+      capabilityId: "ap_gl_control_balance",
+      dimensions: { entity: "all", period: "current", currency: "source_base", grain: "total", artifact: "optional" },
+    },
+    await catalog,
+  );
 
   assert.equal(result.status, "compiled");
   if (result.status !== "compiled") return;
   assert.equal(result.plan.capabilityId, "ap_gl_control_balance");
-  assert.match(result.plan.manifestDigest, /^sha256:[a-f0-9]{64}$/);
   assert.equal(result.plan.resultOperationId, "ap_control_source");
   assert.deepEqual(result.plan.dimensions, {
     artifact: "optional",
-    currency: { kind: "source_base" },
-    entity: { kind: "all" },
+    currency: "source_base",
+    entity: "all",
     grain: "total",
-    period: { kind: "current" },
+    period: "current",
     sources: ["netsuite"],
   });
   assert.equal(result.plan.operations[0]?.primitive, "suiteql_select");
   if (result.plan.operations[0]?.primitive !== "suiteql_select") return;
-  assert.equal(result.plan.operations[0].sql, FINNY_AP_GL_CONTROL_BALANCE_QUERY);
+  assert.equal(
+    result.plan.operations[0].sql,
+    "SELECT COALESCE(SUM(NVL(tal.credit, 0) - NVL(tal.debit, 0)), 0) AS total FROM TransactionAccountingLine tal WHERE tal.accounttype = 'AcctPay' AND tal.accountingbook = 1",
+  );
 });
 
-test("an unrelated reviewed measure compiles without a measure-specific code path", async () => {
+test("an unrelated typed candidate compiles without a measure-specific code path", async () => {
   const result = compileFinnyControllerRequest(
-    "Inventory velocity for Example Manufacturing as at 19-Oct-2026",
+    {
+      capabilityId: "synthetic_inventory_velocity",
+      dimensions: {
+        entity: "Example Manufacturing",
+        period: "2026-10-19",
+        currency: "source_base",
+        grain: "total",
+        artifact: "optional",
+      },
+    },
     await catalog,
   );
 
@@ -43,13 +59,26 @@ test("an unrelated reviewed measure compiles without a measure-specific code pat
   assert.equal(result.plan.parameterValues.accounting_book, "primary");
 });
 
-test("unsupported and unresolved requests remain typed failures", async () => {
-  const financeCatalog = await catalog;
-
-  assert.equal(compileFinnyControllerRequest("show cash position", financeCatalog).status, "unsupported_template");
-  const unresolved = compileFinnyControllerRequest(
-    "Compare AP balance with inventory velocity for Example Manufacturing as at 19-Oct-2026",
-    financeCatalog,
+test("a reviewed requested artifact format becomes the effective plan format", async () => {
+  const result = compileFinnyControllerRequest(
+    {
+      capabilityId: "ap_gl_control_balance",
+      dimensions: { entity: "all", period: "current", currency: "source_base", grain: "total", artifact: "required" },
+      artifactFormat: "csv",
+    },
+    await catalog,
   );
-  assert.equal(unresolved.status, "unsupported_template");
+
+  assert.equal(result.status, "compiled");
+  if (result.status !== "compiled") return;
+  assert.equal(result.plan.artifactPolicy.defaultFormat, "csv");
+  assert.equal(result.plan.dimensions.artifact, "required");
+});
+
+test("invalid candidates remain typed failures", async () => {
+  const result = compileFinnyControllerRequest(
+    { capabilityId: "ap_balance", dimensions: { entity: "all" } },
+    await catalog,
+  );
+  assert.equal(result.status, "invalid_candidate");
 });

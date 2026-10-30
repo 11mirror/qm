@@ -5,13 +5,13 @@
   "files": [
     {
       "path": "ap-gl-control-balance.json",
-      "size": 2048,
-      "sha256": "90a657abdda7ece991fdf665203cfb3a77ce22d1071405c9f025cf97794f82e0"
+      "size": 2469,
+      "sha256": "264830b92007b6e2de669a342132671ef5417936dd5ac9a0e5b67a4f4c767719"
     },
     {
       "path": "synthetic-inventory-velocity.json",
-      "size": 2749,
-      "sha256": "a0dec5e63b7af0da34e99a5ad9be02838eeed6e6d330863251d032cfdfbb2e6e"
+      "size": 2527,
+      "sha256": "13e87f3ea4b4ccdbf4713b8843210ed4b305901bcd12c068b3dc37d2638d1330"
     }
   ]
 }

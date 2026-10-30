@@ -5,13 +5,10 @@ import type {
   FinnyCapabilityOperation,
   FinnySuiteqlSelectOperation,
 } from "./capability-pack.ts";
+import { canonicalFinnyJson } from "./canonical-json.ts";
 
 export type FinnyOperationScalar = string | number | boolean | null;
-export type FinnyOperationParameter = FinnyOperationScalar | readonly FinnyOperationScalar[];
-
-function isParameterArray(value: FinnyOperationParameter): value is readonly FinnyOperationScalar[] {
-  return Array.isArray(value);
-}
+export type FinnyOperationParameter = FinnyOperationScalar;
 
 type DeepReadonly<T> = T extends readonly (infer Item)[]
   ? readonly DeepReadonly<Item>[]
@@ -25,6 +22,7 @@ export interface FinnyOperationCompilerInput {
   catalogDigest: `sha256:${string}`;
   semanticCapability: string;
   dimensions: Readonly<Record<string, unknown>>;
+  artifactFormat?: FinnyCapabilityDescriptor["artifactPolicy"]["allowedFormats"][number];
 }
 
 export type FinnyCompiledSuiteqlOperation = DeepReadonly<Omit<FinnySuiteqlSelectOperation, "sql"> & { sql: string }>;
@@ -76,21 +74,8 @@ const PLAN_KEYS = new Set([
   "verificationPolicyDigest",
 ]);
 
-function canonicalJson(value: unknown): string {
-  return JSON.stringify(value, (_key, nested: unknown) => {
-    if (!nested || typeof nested !== "object" || Array.isArray(nested)) return nested;
-    return Object.fromEntries(
-      Object.entries(nested).sort(([left], [right]) => {
-        if (left < right) return -1;
-        if (left > right) return 1;
-        return 0;
-      }),
-    );
-  });
-}
-
 function digest(value: unknown): `sha256:${string}` {
-  return `sha256:${createHash("sha256").update(canonicalJson(value)).digest("hex")}`;
+  return `sha256:${createHash("sha256").update(canonicalFinnyJson(value)).digest("hex")}`;
 }
 
 function bytesDigest(value: Uint8Array): `sha256:${string}` {
@@ -175,23 +160,12 @@ function dimensionChoices(value: unknown): string[] | undefined {
   return undefined;
 }
 
-type ParameterUsage = "suiteql" | "filter_scalar" | "filter_array";
-
-function parameterUsages(operations: readonly FinnyCapabilityOperation[]): Map<string, Set<ParameterUsage>> {
-  const usages = new Map<string, Set<ParameterUsage>>();
-  const add = (name: string, usage: ParameterUsage) => {
-    const existing = usages.get(name);
-    if (existing) existing.add(usage);
-    else usages.set(name, new Set([usage]));
-  };
+function parameterNames(operations: readonly FinnyCapabilityOperation[]): Set<string> {
+  const names = new Set<string>();
   for (const operation of operations) {
-    if (operation.primitive === "suiteql_select")
-      for (const parameter of operation.parameters) add(parameter, "suiteql");
-    if (operation.primitive === "filter")
-      for (const predicate of operation.predicates)
-        add(predicate.parameter, predicate.operator === "in" ? "filter_array" : "filter_scalar");
+    if (operation.primitive === "suiteql_select") for (const parameter of operation.parameters) names.add(parameter);
   }
-  return usages;
+  return names;
 }
 
 function scalarParameter(name: string, value: unknown): FinnyOperationScalar {
@@ -204,33 +178,22 @@ function scalarParameter(name: string, value: unknown): FinnyOperationScalar {
   throw new Error(`Finny parameter ${name} must be a scalar string, number, boolean, or null`);
 }
 
-function compiledParameter(name: string, value: unknown, usages: ReadonlySet<ParameterUsage>): FinnyOperationParameter {
-  if (usages.has("filter_array")) {
-    if (usages.size !== 1) throw new Error(`Finny parameter ${name} cannot be both an array and a scalar`);
-    if (!Array.isArray(value) || value.length === 0)
-      throw new Error(`Finny parameter ${name} must be a reviewed non-empty array`);
-    return value.map((entry) => scalarParameter(name, entry));
-  }
-  if (Array.isArray(value)) throw new Error(`Finny parameter ${name} must be a scalar`);
-  return scalarParameter(name, value);
-}
-
 function compileParameters(
   descriptor: FinnyCapabilityDescriptor,
   dimensions: Readonly<Record<string, unknown>>,
 ): Record<string, FinnyOperationParameter> {
-  const required = parameterUsages(descriptor.operations);
+  const required = parameterNames(descriptor.operations);
   const bindings = descriptor.parameterBindings;
-  for (const name of required.keys())
+  for (const name of required)
     if (!Object.hasOwn(bindings, name)) throw new Error(`Finny parameter binding ${name} is required`);
   for (const name of Object.keys(bindings))
     if (!required.has(name)) throw new Error(`Finny parameter binding ${name} is unexpected`);
 
   const result: Record<string, FinnyOperationParameter> = {};
-  for (const name of [...required.keys()].sort()) {
+  for (const name of [...required].sort()) {
     const binding = bindings[name]!;
     const value = binding.source === "literal" ? binding.value : dimensionBinding(name, binding.path, dimensions);
-    result[name] = compiledParameter(name, value, required.get(name)!);
+    result[name] = scalarParameter(name, value);
   }
   return result;
 }
@@ -288,7 +251,6 @@ function renderSuiteql(
       const name = match[1]!;
       if (!Object.hasOwn(values, name)) throw new Error(`Finny parameter ${name} is required`);
       const value = values[name]!;
-      if (isParameterArray(value)) throw new Error(`Finny parameter ${name} must be a scalar`);
       rendered += sqlLiteral(name, value);
       index += match[0].length;
       continue;
@@ -315,6 +277,8 @@ export function compileFinnyOperationPlan(input: FinnyOperationCompilerInput): F
   if (!DIGEST.test(input.catalogDigest)) throw new Error("Finny catalog digest is invalid");
   if (input.semanticCapability !== input.descriptor.semanticCapability)
     throw new Error("Finny semantic capability does not match the reviewed descriptor");
+  if (input.artifactFormat && !input.descriptor.artifactPolicy.allowedFormats.includes(input.artifactFormat))
+    throw new Error(`Finny artifact format ${input.artifactFormat} is unsupported`);
 
   const dimensions = compileDimensions(input.descriptor, input.dimensions);
   const dimensionsDigest = digest(dimensions);
@@ -324,7 +288,10 @@ export function compileFinnyOperationPlan(input: FinnyOperationCompilerInput): F
     operations: input.descriptor.operations,
     parameterBindings: input.descriptor.parameterBindings,
   });
-  const artifactPolicy = clone(input.descriptor.artifactPolicy);
+  const artifactPolicy = {
+    ...clone(input.descriptor.artifactPolicy),
+    defaultFormat: input.artifactFormat ?? input.descriptor.artifactPolicy.defaultFormat,
+  };
   const approvalPolicy = clone(input.descriptor.approvalPolicy);
   const verificationPolicy = clone(input.descriptor.verificationPolicy);
   const unsigned = {
@@ -352,7 +319,7 @@ export function compileFinnyOperationPlan(input: FinnyOperationCompilerInput): F
 
 export function encodeFinnyOperationPlan(plan: FinnyOperationPlan): Buffer {
   const { planDigest, ...unsigned } = plan;
-  const bytes = Buffer.from(canonicalJson(unsigned), "utf8");
+  const bytes = Buffer.from(canonicalFinnyJson(unsigned), "utf8");
   if (bytesDigest(bytes) !== planDigest) throw new Error("Finny operation plan digest does not match its bytes");
   return bytes;
 }
@@ -402,12 +369,7 @@ function assertDecodedPlan(record: Record<string, unknown>): asserts record is O
     digest(record.verificationPolicy) !== record.verificationPolicyDigest
   )
     throw new Error("Finny operation plan is invalid");
-  for (const [name, value] of Object.entries(record.parameterValues)) {
-    if (Array.isArray(value)) {
-      if (value.length === 0) throw new Error("Finny operation plan is invalid");
-      for (const entry of value) scalarParameter(name, entry);
-    } else scalarParameter(name, value);
-  }
+  for (const [name, value] of Object.entries(record.parameterValues)) scalarParameter(name, value);
   const operationIds = new Set<string>();
   for (const candidate of record.operations) {
     if (!plainRecord(candidate)) throw new Error("Finny operation plan is invalid");
@@ -419,7 +381,7 @@ function assertDecodedPlan(record: Record<string, unknown>): asserts record is O
       !IDENTIFIER.test(id) ||
       operationIds.has(id) ||
       typeof primitive !== "string" ||
-      !["suiteql_select", "project", "filter", "aggregate", "join", "reconcile", "repeat_pull"].includes(primitive) ||
+      !["suiteql_select", "repeat_pull", "reconcile"].includes(primitive) ||
       !Array.isArray(dependsOn) ||
       dependsOn.some((dependency) => typeof dependency !== "string" || !operationIds.has(dependency))
     )
@@ -439,7 +401,7 @@ export function decodeFinnyOperationPlan(bytes: Uint8Array, expectedDigest: `sha
     throw new Error("Finny operation plan is invalid");
   }
   const record = operationPlanRecord(parsed);
-  if (Buffer.from(canonicalJson(record), "utf8").compare(Buffer.from(bytes)) !== 0)
+  if (Buffer.from(canonicalFinnyJson(record), "utf8").compare(Buffer.from(bytes)) !== 0)
     throw new Error("Finny operation plan encoding is invalid");
   assertDecodedPlan(record);
   return deepFreeze({ ...record, planDigest: expectedDigest });

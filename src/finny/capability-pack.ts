@@ -3,15 +3,7 @@ import { readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, resolve, sep } from "node:path";
 import { z } from "zod";
 
-export const FINNY_OPERATION_PRIMITIVES = Object.freeze([
-  "suiteql_select",
-  "project",
-  "filter",
-  "aggregate",
-  "join",
-  "reconcile",
-  "repeat_pull",
-] as const);
+export const FINNY_OPERATION_PRIMITIVES = Object.freeze(["suiteql_select", "repeat_pull", "reconcile"] as const);
 
 export type FinnyOperationPrimitive = (typeof FINNY_OPERATION_PRIMITIVES)[number];
 
@@ -31,49 +23,6 @@ const SuiteqlSelectOperation = z
     parameters: IdentifierList,
   })
   .strict();
-const ProjectOperation = z
-  .object({ ...OperationBase, primitive: z.literal("project"), fields: IdentifierList.min(1) })
-  .strict();
-const FilterOperation = z
-  .object({
-    ...OperationBase,
-    primitive: z.literal("filter"),
-    predicates: z
-      .array(
-        z
-          .object({
-            field: Identifier,
-            operator: z.enum(["eq", "neq", "in", "lte", "gte"]),
-            parameter: Identifier,
-          })
-          .strict(),
-      )
-      .min(1),
-  })
-  .strict();
-const AggregateOperation = z
-  .object({
-    ...OperationBase,
-    primitive: z.literal("aggregate"),
-    groupBy: IdentifierList,
-    metrics: z
-      .array(z.object({ id: Identifier, operator: z.enum(["sum", "count", "min", "max"]), field: Identifier }).strict())
-      .min(1)
-      .superRefine((metrics, context) => {
-        if (new Set(metrics.map((metric) => metric.id)).size !== metrics.length)
-          context.addIssue({ code: "custom", message: "duplicate metric IDs" });
-      }),
-  })
-  .strict();
-const JoinOperation = z
-  .object({
-    ...OperationBase,
-    primitive: z.literal("join"),
-    kind: z.enum(["inner", "left"]),
-    leftKey: Identifier,
-    rightKey: Identifier,
-  })
-  .strict();
 const ReconcileOperation = z
   .object({
     ...OperationBase,
@@ -88,19 +37,11 @@ const RepeatPullOperation = z
   .strict();
 const CapabilityOperation = z.discriminatedUnion("primitive", [
   SuiteqlSelectOperation,
-  ProjectOperation,
-  FilterOperation,
-  AggregateOperation,
-  JoinOperation,
-  ReconcileOperation,
   RepeatPullOperation,
+  ReconcileOperation,
 ]);
 
 export type FinnySuiteqlSelectOperation = z.infer<typeof SuiteqlSelectOperation>;
-export type FinnyProjectOperation = z.infer<typeof ProjectOperation>;
-export type FinnyFilterOperation = z.infer<typeof FilterOperation>;
-export type FinnyAggregateOperation = z.infer<typeof AggregateOperation>;
-export type FinnyJoinOperation = z.infer<typeof JoinOperation>;
 export type FinnyReconcileOperation = z.infer<typeof ReconcileOperation>;
 export type FinnyRepeatPullOperation = z.infer<typeof RepeatPullOperation>;
 export type FinnyCapabilityOperation = z.infer<typeof CapabilityOperation>;
@@ -138,6 +79,20 @@ const ParameterBinding = z.discriminatedUnion("source", [
 
 export type FinnyParameterBinding = z.infer<typeof ParameterBinding>;
 
+const IntentValue = z
+  .string()
+  .min(1)
+  .refine((value) => value === value.trim() && !value.includes("\0"));
+const IntentDimension = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("enum"), values: z.array(IntentValue).min(1) }).strict(),
+  z.object({ type: z.literal("string") }).strict(),
+  z.object({ type: z.literal("date") }).strict(),
+  z.object({ type: z.literal("string_list"), values: z.array(IntentValue).min(1).optional() }).strict(),
+]);
+const IntentSchema = z.object({ dimensions: z.record(Identifier, IntentDimension) }).strict();
+
+export type FinnyIntentDimension = z.infer<typeof IntentDimension>;
+
 const CapabilityDescriptor = z
   .object({
     schemaVersion: z.literal(1),
@@ -145,6 +100,7 @@ const CapabilityDescriptor = z
     revisionId: z.string().regex(/^[a-z][a-z0-9_]*\.[a-z0-9][a-z0-9._-]*$/),
     semanticCapability: Identifier,
     semanticAliases: IdentifierList,
+    intent: IntentSchema.optional(),
     dimensions: z
       .object({
         required: IdentifierList,
@@ -338,12 +294,12 @@ function validateSql(operation: FinnySuiteqlSelectOperation): void {
 function validateDescriptor(descriptor: FinnyCapabilityDescriptor): void {
   if (descriptor.semanticAliases.includes(descriptor.semanticCapability))
     throw new Error(`Finny capability ${descriptor.capabilityId} aliases its own semantic capability`);
+  if (!descriptor.intent) throw new Error(`Finny capability ${descriptor.capabilityId} has no reviewed intent schema`);
   if (!descriptor.artifactPolicy.allowedFormats.includes(descriptor.artifactPolicy.defaultFormat))
     throw new Error(`Finny capability ${descriptor.capabilityId} default artifact format is not allowed`);
-  if (
-    descriptor.approvalPolicy.mode !== "none" &&
-    REQUIRED_APPROVAL_BINDINGS.some((binding) => !descriptor.approvalPolicy.binds.includes(binding))
-  )
+  if (descriptor.approvalPolicy.mode !== "before_source")
+    throw new Error(`Finny capability ${descriptor.capabilityId} requires approval before source execution`);
+  if (REQUIRED_APPROVAL_BINDINGS.some((binding) => !descriptor.approvalPolicy.binds.includes(binding)))
     throw new Error(`Finny capability ${descriptor.capabilityId} approval does not bind the complete reviewed plan`);
 
   const prior = new Map<string, FinnyCapabilityOperation>();
@@ -357,9 +313,7 @@ function validateDescriptor(descriptor: FinnyCapabilityDescriptor): void {
       validateSql(operation);
       for (const parameter of operation.parameters) parameterNames.add(parameter);
     }
-    if (operation.primitive === "filter")
-      for (const predicate of operation.predicates) parameterNames.add(predicate.parameter);
-    if ((operation.primitive === "join" || operation.primitive === "reconcile") && operation.dependsOn.length !== 2)
+    if (operation.primitive === "reconcile" && operation.dependsOn.length !== 2)
       throw new Error(`Finny capability operation ${operation.id} dependencies are invalid`);
     if (operation.primitive === "repeat_pull") {
       const repeated = prior.get(operation.operationId);
@@ -376,13 +330,27 @@ function validateDescriptor(descriptor: FinnyCapabilityDescriptor): void {
   )
     throw new Error(`Finny capability ${descriptor.capabilityId} parameter bindings do not match operations`);
   const dimensionNames = new Set([...descriptor.dimensions.required, ...Object.keys(descriptor.dimensions.supported)]);
+  for (const dimension of descriptor.dimensions.required)
+    if (!descriptor.intent.dimensions[dimension])
+      throw new Error(`Finny required dimension ${dimension} has no intent declaration`);
   for (const [name, value] of Object.entries(descriptor.dimensions.defaults)) {
     const supported = descriptor.dimensions.supported[name];
-    if (!dimensionNames.has(name) || !supported) throw new Error(`Finny dimension default ${name} is undeclared`);
+    const intent = descriptor.intent.dimensions[name];
+    if (!dimensionNames.has(name) || !supported || !intent)
+      throw new Error(`Finny dimension default ${name} is undeclared`);
     const values = Array.isArray(value) ? value : [value];
     if (values.some((entry) => !supported.includes(entry)))
       throw new Error(`Finny dimension default ${name} is unsupported`);
+    if (intent.type === "string_list" && !Array.isArray(value))
+      throw new Error(`Finny dimension default ${name} has an invalid intent type`);
+    if (intent.type !== "string_list" && Array.isArray(value))
+      throw new Error(`Finny dimension default ${name} has an invalid intent type`);
+    const intentValues = "values" in intent ? intent.values : undefined;
+    if (intentValues && values.some((entry) => !intentValues.includes(entry)))
+      throw new Error(`Finny dimension default ${name} is outside its intent declaration`);
   }
+  for (const dimension of Object.keys(descriptor.intent.dimensions))
+    if (!dimensionNames.has(dimension)) throw new Error(`Finny intent dimension ${dimension} is undeclared`);
   for (const [name, binding] of Object.entries(descriptor.parameterBindings))
     if (binding.source === "dimension" && !dimensionNames.has(binding.path[0]!))
       throw new Error(`Finny parameter binding ${name} has an undeclared dimension root`);
@@ -391,6 +359,40 @@ function validateDescriptor(descriptor: FinnyCapabilityDescriptor): void {
     throw new Error(`Finny capability ${descriptor.capabilityId} result operation is invalid`);
   for (const operationId of descriptor.verificationPolicy.requiredOperationIds)
     if (!prior.has(operationId)) throw new Error(`Finny verification operation ${operationId} is invalid`);
+  const resultClosure = dependencyClosure(prior, descriptor.resultOperationId);
+  const requiredOperationIds = new Set(descriptor.verificationPolicy.requiredOperationIds);
+  const independentRepeats = descriptor.operations.filter(
+    (operation) =>
+      operation.primitive === "repeat_pull" &&
+      requiredOperationIds.has(operation.id) &&
+      resultClosure.has(operation.operationId) &&
+      !resultClosure.has(operation.id),
+  );
+  if (!independentRepeats.length)
+    throw new Error(`Finny capability ${descriptor.capabilityId} verification requires a result-connected repeat pull`);
+  const hasReconciliationControl = descriptor.operations.some(
+    (operation) =>
+      operation.primitive === "reconcile" &&
+      requiredOperationIds.has(operation.id) &&
+      dependencyClosure(prior, operation.id).has(descriptor.resultOperationId) &&
+      independentRepeats.some((repeat) => dependencyClosure(prior, operation.id).has(repeat.id)),
+  );
+  if (!hasReconciliationControl)
+    throw new Error(`Finny capability ${descriptor.capabilityId} verification requires a reconciliation control path`);
+}
+
+function dependencyClosure(
+  operations: ReadonlyMap<string, FinnyCapabilityOperation>,
+  operationId: string,
+): Set<string> {
+  const closure = new Set<string>();
+  const visit = (id: string): void => {
+    if (closure.has(id)) return;
+    closure.add(id);
+    for (const dependency of operations.get(id)?.dependsOn ?? []) visit(dependency);
+  };
+  visit(operationId);
+  return closure;
 }
 
 function parseManifest(value: unknown): CapabilityManifest {

@@ -3,11 +3,12 @@ import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 import { createServer } from "../src/api/server.ts";
 import type { FinanceService } from "../src/finny/finance.ts";
-import { digestFinnyEvidence } from "../src/finny/golden-loop.ts";
+import { applyFinnyHostEvent, digestFinnyEvidence, replayFinnyLedger } from "../src/finny/golden-loop.ts";
 import { createUnavailableFinanceService } from "../src/finny/unavailable-finance-service.ts";
 import { buildApp } from "../src/wiring.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
@@ -16,7 +17,18 @@ import { testConfig } from "./support/test-config.ts";
 
 const SECRET = "finny-web-source-secret".repeat(2);
 const MODEL = "gpt-5.6-sol";
+const SKILLS_DIR = fileURLToPath(new URL("../finny-skills", import.meta.url));
 const digest = (value: string) => digestFinnyEvidence(value);
+const AP_CANDIDATE = {
+  capabilityId: "ap_gl_control_balance",
+  dimensions: {
+    entity: "all",
+    period: "current",
+    currency: "source_base",
+    grain: "total",
+    artifact: "optional",
+  },
+};
 
 function sendResponse(res: ServerResponse, body: Record<string, unknown>): void {
   const toolResult = Array.isArray(body.input)
@@ -33,7 +45,7 @@ function sendResponse(res: ServerResponse, body: Record<string, unknown>): void 
           id: "fc_finny_clarify",
           call_id: "call_finny_clarify",
           name: "finance",
-          arguments: JSON.stringify({ request: "What is the AP balance?" }),
+          arguments: JSON.stringify(AP_CANDIDATE),
           status: "completed",
         }
       : {
@@ -81,7 +93,7 @@ test("QM web ingress runs the Pi-native finance tool and host-blocks an unverifi
     testConfig({
       harness: "pi",
       modelId: MODEL,
-      finnyProfile: { id: "finny", modelId: MODEL, providerTimeoutMs: 120_000 },
+      finnyProfile: { id: "finny", modelId: MODEL, providerTimeoutMs: 120_000, skillsDir: SKILLS_DIR },
       securityScreen: "off",
       modelGateway: {
         url: `http://127.0.0.1:${upstreamAddress.port}`,
@@ -143,7 +155,7 @@ test("QM web ingress runs the Pi-native finance tool and host-blocks an unverifi
   const events = await fetch(base + eventsPath, { headers: signedHeaders(SECRET, "GET", eventsPath) });
   assert.equal(events.status, 200);
   const wire = await events.text();
-  assert.match(wire, /"schema":"finny\.trace\.v2"/);
+  assert.match(wire, /"schema":"finny\.trace\.v3"/);
   assert.match(wire, /"harness":"pi"/);
   assert.match(wire, /"stage":"PREFLIGHT"/);
   assert.match(wire, /"outcome":"blocked"/);
@@ -153,7 +165,7 @@ test("QM web ingress runs the Pi-native finance tool and host-blocks an unverifi
   const traceResponse = await fetch(base + tracePath, { headers: signedHeaders(SECRET, "GET", tracePath) });
   assert.equal(traceResponse.status, 200);
   const trace = (await traceResponse.json()) as { trace?: Record<string, unknown> };
-  assert.equal(trace.trace?.schema, "finny.trace.v2");
+  assert.equal(trace.trace?.schema, "finny.trace.v3");
   assert.equal(trace.trace?.currentRunId, recorded!.id);
   assert.equal(trace.trace?.harness, "pi");
   assert.equal(trace.trace?.modelId, MODEL);
@@ -165,7 +177,7 @@ test("QM web ingress runs the Pi-native finance tool and host-blocks an unverifi
 test("QM web approval resumes the same Pi-native Golden Loop and releases only verified web output", async (t) => {
   let actionIndex = 0;
   let callSerial = 0;
-  const actions = [{ request: "What is the AP balance?" }, { request: "What is the AP balance?" }];
+  const actions = [AP_CANDIDATE, AP_CANDIDATE];
   const upstream = createHttpServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += String(chunk);
@@ -219,17 +231,42 @@ test("QM web approval resumes the same Pi-native Golden Loop and releases only v
     upstream.closeAllConnections();
     upstream.close();
   });
+  const stores = finnyTestStores();
   const service: FinanceService = {
     async clarify() {
       return { clarification: "entity and period pinned", evidenceDigest: digest("clarified") };
     },
-    async preflight() {
-      return { planSummary: "read AP", preflightDigest: digest("preflight"), planDigest: digest("plan") };
+    async preflightPlan({ plan }) {
+      return {
+        planSummary: plan.semanticCapability,
+        preflightDigest: digest(`preflight:${plan.planDigest}`),
+        approvalRequired: true,
+        approvalPolicyDigest: plan.approvalPolicyDigest,
+      };
     },
-    async plan() {
-      return { decision: "approved", approvalDigest: digest("approval") };
+    async executeOperation() {
+      throw new Error("sourcePlan owns test operation custody");
     },
-    async source() {
+    async recoverSource() {
+      return { records: [{ total: 42 }] };
+    },
+    async sourcePlan({ plan }, context) {
+      const checkpoint = await stores.finnyRunStore.load(context.runId);
+      if (!checkpoint) throw new Error("Finny run checkpoint is unavailable");
+      let state = replayFinnyLedger(context.runId, checkpoint.ledger);
+      for (const operation of plan.operations) {
+        state = applyFinnyHostEvent(state, {
+          authority: "qm-host",
+          eventId: `${context.runId}:operation:${operation.id}`,
+          occurredAt: "2026-10-30T10:00:00.000Z",
+          kind: "operation_completed",
+          operationId: operation.id,
+          primitive: operation.primitive,
+          operationDigest: digest(`operation:${plan.planDigest}:${operation.id}`),
+          resultDigest: digest(`result:${plan.planDigest}:${operation.id}`),
+        });
+        await stores.finnyRunStore.checkpoint(context.runId, state.ledger.at(-1)!);
+      }
       return { records: [{ total: 42 }], sourceDigest: digest("source") };
     },
     async artifact() {
@@ -243,7 +280,7 @@ test("QM web approval resumes the same Pi-native Golden Loop and releases only v
     testConfig({
       harness: "pi",
       modelId: MODEL,
-      finnyProfile: { id: "finny", modelId: MODEL, providerTimeoutMs: 120_000 },
+      finnyProfile: { id: "finny", modelId: MODEL, providerTimeoutMs: 120_000, skillsDir: SKILLS_DIR },
       securityScreen: "off",
       modelGateway: {
         url: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`,
@@ -252,7 +289,7 @@ test("QM web approval resumes the same Pi-native Golden Loop and releases only v
         models: { [MODEL]: MODEL },
       },
     }),
-    { finnyFinanceService: service, ...finnyTestStores() },
+    { finnyFinanceService: service, ...stores },
   );
   t.after(() => built.runtime.stop());
   const core = createServer(built.app, { signingSecret: SECRET, runs: built.runs, sessions: built.sessions });

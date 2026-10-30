@@ -1,7 +1,5 @@
 import type { AtomicFetchAdapter, FinnyAdvisoryEnrichment } from "./credential-brokered-finance-service.ts";
 import { isDeepStrictEqual } from "node:util";
-import { selectFinnyVerificationPolicy } from "./accounting-validator.ts";
-import { isReviewedFinnyQuery } from "./capability-registry.ts";
 import { digestFinnyEvidence } from "./golden-loop.ts";
 import {
   FinanceFailure,
@@ -121,63 +119,6 @@ export function createFinnyAtomicFetchAdapter(clients: FinnyAtomicFetchClients) 
       });
       return { rows: await execute(input.execution) };
     },
-    async preflight(input, context, credentials) {
-      const enrichment = await advisoryEnrichment(
-        input.request,
-        credentials.hindsight,
-        clients.hindsight,
-        context,
-        clients.diagnostics,
-        credentials.hindsightFailure,
-      );
-      const evidence = JSON.stringify({
-        runId: context.runId,
-        actorId: context.actorId,
-        request: input.request,
-        query: input.query,
-        clarificationDigest: input.clarificationDigest,
-        enrichment,
-        access: "read-only",
-      });
-      return {
-        planSummary:
-          enrichment.state === "available"
-            ? "Read-only Hindsight enrichment followed by a reviewed NetSuite SuiteQL source query."
-            : "Reviewed read-only NetSuite SuiteQL source query; optional Hindsight enrichment omitted.",
-        preflightDigest: digestFinnyEvidence(`preflight:${evidence}`),
-        planDigest: digestFinnyEvidence(`plan:${evidence}`),
-        approvalRequired: true,
-        verificationPolicy: selectFinnyVerificationPolicy(context.requestText ?? input.request),
-        enrichment,
-      };
-    },
-    async source(input, context, credentials) {
-      const query = input.query;
-      if (!query) throw new Error("Approved SuiteQL query is unavailable");
-      assertReadOnlySuiteQl(query);
-      const netsuite = netsuiteCredential(credentials.netsuite);
-      const [enrichment, records] = await Promise.all([
-        advisoryEnrichment(
-          query,
-          credentials.hindsight,
-          clients.hindsight,
-          context,
-          clients.diagnostics,
-          credentials.hindsightFailure,
-        ),
-        clients.netsuite.suiteql(query, netsuite),
-      ]);
-      if (!Array.isArray(records)) throw new Error("NetSuite result is invalid");
-      const evidence = JSON.stringify({
-        runId: context.runId,
-        actorId: context.actorId,
-        planDigest: input.planDigest,
-        queryDigest: digestFinnyEvidence(query),
-        enrichment,
-        records,
-      });
-      return { records, sourceDigest: digestFinnyEvidence(evidence), enrichment };
-    },
   } satisfies AtomicFetchAdapter;
 }
 
@@ -222,10 +163,6 @@ async function advisoryEnrichment(
       failure: failure.toSafeMetadata(),
     };
   }
-}
-
-export function assertReadOnlySuiteQl(query: string): void {
-  if (!isReviewedFinnyQuery(query)) throw new Error("Only an exact reviewed read-only SuiteQL query is allowed");
 }
 
 function hindsightCredential(secret: string): FinnyHindsightCredential {

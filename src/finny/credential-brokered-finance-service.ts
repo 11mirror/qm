@@ -1,8 +1,6 @@
 import type { ServiceCredentialReader } from "../credentials/keychain.ts";
 import type { ScopeId } from "../types.ts";
 import type {
-  FinanceActionInputMap,
-  FinanceActionOutputMap,
   FinanceExecutionContext,
   FinanceOperationInput,
   FinanceOperationOutput,
@@ -32,7 +30,7 @@ export type FinnyAdvisoryEnrichment =
   | {
       provider: "hindsight";
       state: "available";
-      evidenceDigest: FinanceActionOutputMap["preflight"]["preflightDigest"];
+      evidenceDigest: FinancePlanPreflightOutput["preflightDigest"];
     }
   | {
       provider: "hindsight";
@@ -42,22 +40,12 @@ export type FinnyAdvisoryEnrichment =
     };
 
 export interface AtomicFetchAdapter {
-  preflight(
-    input: FinanceActionInputMap["preflight"],
-    context: AtomicFetchContext,
-    credentials: { hindsight?: string; hindsightFailure?: FinanceFailureMetadata },
-  ): Promise<FinanceActionOutputMap["preflight"] & { enrichment?: FinnyAdvisoryEnrichment }>;
-  source(
-    input: FinanceActionInputMap["source"],
-    context: AtomicFetchContext,
-    credentials: { hindsight?: string; hindsightFailure?: FinanceFailureMetadata; netsuite: string },
-  ): Promise<FinanceActionOutputMap["source"] & { enrichment?: FinnyAdvisoryEnrichment }>;
-  preflightPlan?(
+  preflightPlan(
     input: FinancePlanPreflightInput,
     context: AtomicFetchContext,
     credentials: { hindsight?: string; hindsightFailure?: FinanceFailureMetadata },
   ): Promise<FinancePlanPreflightOutput & { enrichment?: FinnyAdvisoryEnrichment }>;
-  executeOperation?(
+  executeOperation(
     input: FinanceOperationInput,
     context: AtomicFetchContext,
     credentials: { netsuite: string },
@@ -199,64 +187,24 @@ export function createBrokeredFinanceService(options: BrokeredFinanceServiceOpti
   return {
     clarify: (input, context) => options.delegate.clarify(input, context),
     preflightPlan: async (input, context) => {
-      if (!options.atomicFetch.preflightPlan)
-        throw new FinanceFailure("provider_unavailable", {
-          retryable: false,
-          dependency: "finance-provider",
-          message: "blocked_external: operation plan preflight is unavailable",
-        });
       const hindsight = await credential(options.credentialSlugs.hindsight, false, context);
       return run("operation plan preflight", [hindsight.secret], context, () =>
-        options.atomicFetch.preflightPlan!(input, safeContext(context), {
+        options.atomicFetch.preflightPlan(input, safeContext(context), {
           hindsight: hindsight.secret,
           hindsightFailure: hindsight.failure,
         }),
       );
     },
     executeOperation: async (input, context) => {
-      if (!options.atomicFetch.executeOperation)
-        throw new FinanceFailure("provider_unavailable", {
-          retryable: false,
-          dependency: "finance-provider",
-          message: "blocked_external: operation execution is unavailable",
-        });
       const netsuite = await credential(options.credentialSlugs.netsuite, true, context);
       return run("operation execution", [netsuite.secret], context, () =>
-        options.atomicFetch.executeOperation!(input, safeContext(context), { netsuite: netsuite.secret! }),
+        options.atomicFetch.executeOperation(input, safeContext(context), { netsuite: netsuite.secret! }),
       );
     },
     sourcePlan: async (input, context) => {
-      if (!options.delegate.sourcePlan)
-        throw new FinanceFailure("provider_unavailable", {
-          retryable: false,
-          dependency: "finance-provider",
-          message: "blocked_external: operation plan source custody is unavailable",
-        });
       return options.delegate.sourcePlan(input, context);
     },
-    preflight: async (input, context) => {
-      const hindsight = await credential(options.credentialSlugs.hindsight, false, context);
-      return run("atomic preflight", [hindsight.secret], context, () =>
-        options.atomicFetch.preflight(input, safeContext(context), {
-          hindsight: hindsight.secret,
-          hindsightFailure: hindsight.failure,
-        }),
-      );
-    },
-    plan: (input, context) => options.delegate.plan(input, context),
-    source: async (input, context) => {
-      const [hindsight, netsuite] = await Promise.all([
-        credential(options.credentialSlugs.hindsight, false, context),
-        credential(options.credentialSlugs.netsuite, true, context),
-      ]);
-      return run("atomic source fetch", [hindsight.secret, netsuite.secret], context, () =>
-        options.atomicFetch.source(input, safeContext(context), {
-          hindsight: hindsight.secret,
-          hindsightFailure: hindsight.failure,
-          netsuite: netsuite.secret!,
-        }),
-      );
-    },
+    recoverSource: (input, context) => options.delegate.recoverSource(input, context),
     artifact: (input, context) => options.delegate.artifact(input, context),
     verify: (input, context) => options.delegate.verify(input, context),
   };

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { FinnyCompiledOperation, FinnyOperationPlan } from "./operation-compiler.ts";
+import { canonicalFinnyJson } from "./canonical-json.ts";
 import {
   executeFinnyDerivedOperation,
   type FinnyDerivedOperation,
@@ -86,23 +87,9 @@ function normalizeRows(operationId: string, rows: unknown): readonly FinnyOperat
   return normalized;
 }
 
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (plainRecord(value))
-    return `{${Object.entries(value)
-      .sort(([left], [right]) => {
-        if (left < right) return -1;
-        if (left > right) return 1;
-        return 0;
-      })
-      .map(([key, nested]) => `${JSON.stringify(key)}:${canonicalJson(nested)}`)
-      .join(",")}}`;
-  return JSON.stringify(value);
-}
-
 export function digestFinnyOperationRows(rows: readonly FinnyOperationRow[]): FinnyOperationResultDigest {
   const normalized = normalizeRows("result_digest", rows);
-  return `sha256:${createHash("sha256").update(canonicalJson(normalized)).digest("hex")}`;
+  return `sha256:${createHash("sha256").update(canonicalFinnyJson(normalized)).digest("hex")}`;
 }
 
 function operationsById(operations: readonly FinnyCompiledOperation[]): ReadonlyMap<string, FinnyCompiledOperation> {

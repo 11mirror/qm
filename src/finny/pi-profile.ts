@@ -6,21 +6,21 @@ import type { FinanceService } from "./finance.ts";
 import type { FinanceDiagnosticSink } from "./finance-failure.ts";
 import { createFinnyGoldenLoop, replayFinnyLedger, type FinnyGoldenLoopState } from "./golden-loop.ts";
 import { createFinnyFinanceTool } from "./native-finance-tool.ts";
-import { finnyWorkflowRunIdFromEntries, type FinnyMixedRunStore, type FinnyRunStore } from "./run-store.ts";
+import { finnyWorkflowRunIdFromEntries, type FinnyRunStore } from "./run-store.ts";
 import type { FinnyTraceBlocker } from "./trace.ts";
 import type { FinnyKnowledgeIndex } from "./knowledge-index.ts";
 import type { FinnyCapabilityCatalog } from "./capability-pack.ts";
 
 export interface FinnyPiProfileOptions {
   modelId: string;
-  runStore: FinnyRunStore | FinnyMixedRunStore;
+  runStore: FinnyRunStore;
   knowledgeIndex?: FinnyKnowledgeIndex | Promise<FinnyKnowledgeIndex>;
 }
 
 export type CreateFinnyPiHarnessOptions = Omit<PiHarnessOptions, "modelId" | "defaultModelId" | "nativeTools"> & {
   modelId: string;
   financeService: FinanceService;
-  runStore: FinnyRunStore | FinnyMixedRunStore;
+  runStore: FinnyRunStore;
   evidenceBytes: DurableByteStore;
   diagnostics?: FinanceDiagnosticSink;
   knowledgeIndex?: FinnyKnowledgeIndex | Promise<FinnyKnowledgeIndex>;

@@ -5,12 +5,15 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
-import { loadFinnyCapabilityPack } from "../src/finny/capability-pack.ts";
+import { FINNY_OPERATION_PRIMITIVES, loadFinnyCapabilityPack } from "../src/finny/capability-pack.ts";
 import { resolveFinnyIntent } from "../src/finny/intent-resolver.ts";
 import { loadFinnyKnowledgeIndex } from "../src/finny/knowledge-index.ts";
-import { FINNY_AP_GL_CONTROL_BALANCE_QUERY } from "../src/finny/reviewed-query.ts";
 
 const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
+
+test("reviewed capability packs expose only provider pulls and reconciliation", () => {
+  assert.deepEqual(FINNY_OPERATION_PRIMITIVES, ["suiteql_select", "repeat_pull", "reconcile"]);
+});
 
 function syntheticCapability(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -19,6 +22,13 @@ function syntheticCapability(overrides: Record<string, unknown> = {}): Record<st
     revisionId: "working_capital_velocity.2026-10-30",
     semanticCapability: "working_capital_velocity",
     semanticAliases: ["inventory_velocity", "stock_efficiency"],
+    intent: {
+      dimensions: {
+        entity: { type: "string" },
+        period: { type: "date" },
+        accounting_book: { type: "enum", values: ["primary"] },
+      },
+    },
     dimensions: {
       required: ["entity", "period", "accounting_book"],
       supported: {
@@ -33,15 +43,8 @@ function syntheticCapability(overrides: Record<string, unknown> = {}): Record<st
         id: "inventory_source",
         primitive: "suiteql_select",
         dependsOn: [],
-        sql: "WITH inventory AS (SELECT amount FROM synthetic_inventory WHERE entity = :entity_id AND posted_at <= :period_end) SELECT amount FROM inventory",
+        sql: "WITH inventory AS (SELECT amount FROM synthetic_inventory WHERE entity = :entity_id AND posted_at <= :period_end) SELECT SUM(amount) AS inventory_value FROM inventory",
         parameters: ["entity_id", "period_end"],
-      },
-      {
-        id: "inventory_total",
-        primitive: "aggregate",
-        dependsOn: ["inventory_source"],
-        groupBy: [],
-        metrics: [{ id: "inventory_value", operator: "sum", field: "amount" }],
       },
       {
         id: "repeat_inventory",
@@ -52,13 +55,13 @@ function syntheticCapability(overrides: Record<string, unknown> = {}): Record<st
       {
         id: "inventory_reconciliation",
         primitive: "reconcile",
-        dependsOn: ["inventory_total", "repeat_inventory"],
+        dependsOn: ["inventory_source", "repeat_inventory"],
         leftField: "inventory_value",
         rightField: "inventory_value",
         tolerance: "0",
       },
     ],
-    resultOperationId: "inventory_total",
+    resultOperationId: "inventory_source",
     parameterBindings: {
       entity_id: { source: "dimension", path: ["entity"] },
       period_end: { source: "dimension", path: ["period"] },
@@ -130,8 +133,8 @@ test("the reviewed capability sub-bundle coexists with knowledge and adds measur
   assert.equal(payableSource?.primitive, "suiteql_select");
   if (payableSource?.primitive === "suiteql_select") {
     assert.equal(
-      payableSource.sql.replace(":account_type", "'AcctPay'").replace(":accounting_book_id", "1"),
-      FINNY_AP_GL_CONTROL_BALANCE_QUERY,
+      payableSource.sql,
+      "SELECT COALESCE(SUM(NVL(tal.credit, 0) - NVL(tal.debit, 0)), 0) AS total FROM TransactionAccountingLine tal WHERE tal.accounttype = :account_type AND tal.accountingbook = :accounting_book_id",
     );
   }
   assert.deepEqual(payable?.parameterBindings, {
@@ -143,11 +146,23 @@ test("the reviewed capability sub-bundle coexists with knowledge and adds measur
   assert.equal(synthetic?.operations[0]?.primitive, "suiteql_select");
   assert.deepEqual(synthetic?.parameterBindings.entity_name, {
     source: "dimension",
-    path: ["entity", "name"],
+    path: ["entity"],
   });
   assert.equal(catalog.aliases.get("stock_efficiency"), "synthetic_inventory_velocity");
   assert.notEqual(catalog.manifestDigest, knowledge.bundleDigest);
-  const payableIntent = resolveFinnyIntent("How much do we owe suppliers?", catalog);
+  const payableIntent = resolveFinnyIntent(
+    {
+      capabilityId: "ap_gl_control_balance",
+      dimensions: {
+        entity: "all",
+        period: "current",
+        currency: "source_base",
+        grain: "total",
+        artifact: "optional",
+      },
+    },
+    catalog,
+  );
   assert.equal(payableIntent.status, "resolved");
   if (payableIntent.status === "resolved") assert.equal(payableIntent.capability, payable);
 });
@@ -185,6 +200,28 @@ test("capability loading rejects unreviewed, unknown, and model-authority fields
       manifest: {},
     },
     {
+      name: "missing intent schema",
+      descriptor: syntheticCapability({ intent: undefined }),
+      manifest: {},
+    },
+    {
+      name: "intent schema authority",
+      descriptor: syntheticCapability({
+        intent: { dimensions: { entity: { type: "string", sql: "SELECT 1" } } },
+      }),
+      manifest: {},
+    },
+    {
+      name: "missing source approval",
+      descriptor: syntheticCapability({
+        approvalPolicy: {
+          mode: "none",
+          binds: ["capability_revision", "dimensions", "operation_graph"],
+        },
+      }),
+      manifest: {},
+    },
+    {
       name: "unknown primitive",
       descriptor: syntheticCapability({
         operations: [{ id: "shell", primitive: "model_generated_sql", dependsOn: [] }],
@@ -200,7 +237,7 @@ test("capability loading rejects unreviewed, unknown, and model-authority fields
         [{ path: "capabilities/measure.json", value: item.descriptor }],
         item.manifest,
       );
-      await assert.rejects(loadFinnyCapabilityPack(root), /invalid|reviewed|unknown/i);
+      await assert.rejects(loadFinnyCapabilityPack(root), /invalid|reviewed|unknown|requires approval/i);
     });
   }
 });
@@ -295,7 +332,7 @@ test("capability loading rejects duplicate identities and invalid operation grap
             sql: "SELECT amount FROM synthetic_table WHERE entity = :entity_id",
             parameters: ["entity_id"],
           },
-          { id: "source", primitive: "project", dependsOn: ["source"], fields: ["amount"] },
+          { id: "source", primitive: "repeat_pull", dependsOn: ["source"], operationId: "source" },
         ],
       }),
     },
@@ -307,7 +344,7 @@ test("capability loading rejects duplicate identities and invalid operation grap
       path: "capabilities/measure.json",
       value: syntheticCapability({
         operations: [
-          { id: "projection", primitive: "project", dependsOn: ["source"], fields: ["amount"] },
+          { id: "repeat", primitive: "repeat_pull", dependsOn: ["source"], operationId: "source" },
           {
             id: "source",
             primitive: "suiteql_select",
@@ -366,11 +403,119 @@ test("operation parameters require one reviewed dimension or literal binding", a
   }
 });
 
+test("capability verification requires an independent result-connected repeat and reconciliation control", async (t) => {
+  const cases = [
+    {
+      name: "empty verification",
+      descriptor: syntheticCapability({
+        verificationPolicy: { requiredOperationIds: [], releaseGate: "delivery_eligible" },
+      }),
+    },
+    {
+      name: "repeat is not required",
+      descriptor: syntheticCapability({
+        verificationPolicy: {
+          requiredOperationIds: ["inventory_reconciliation"],
+          releaseGate: "delivery_eligible",
+        },
+      }),
+    },
+    {
+      name: "repeat is disconnected from the result",
+      descriptor: syntheticCapability({
+        operations: [
+          {
+            id: "inventory_source",
+            primitive: "suiteql_select",
+            dependsOn: [],
+            sql: "WITH inventory AS (SELECT amount FROM synthetic_inventory WHERE entity = :entity_id AND posted_at <= :period_end) SELECT SUM(amount) AS inventory_value FROM inventory",
+            parameters: ["entity_id", "period_end"],
+          },
+          {
+            id: "unrelated_source",
+            primitive: "suiteql_select",
+            dependsOn: [],
+            sql: "SELECT amount FROM synthetic_inventory WHERE entity = :entity_id AND posted_at <= :period_end",
+            parameters: ["entity_id", "period_end"],
+          },
+          {
+            id: "unrelated_repeat",
+            primitive: "repeat_pull",
+            dependsOn: ["unrelated_source"],
+            operationId: "unrelated_source",
+          },
+          {
+            id: "inventory_reconciliation",
+            primitive: "reconcile",
+            dependsOn: ["inventory_source", "unrelated_repeat"],
+            leftField: "inventory_value",
+            rightField: "inventory_value",
+            tolerance: "0",
+          },
+        ],
+        verificationPolicy: {
+          requiredOperationIds: ["unrelated_repeat", "inventory_reconciliation"],
+          releaseGate: "delivery_eligible",
+        },
+      }),
+    },
+    {
+      name: "reconciliation is disconnected from the result",
+      descriptor: syntheticCapability({
+        operations: [
+          {
+            id: "inventory_source",
+            primitive: "suiteql_select",
+            dependsOn: [],
+            sql: "WITH inventory AS (SELECT amount FROM synthetic_inventory WHERE entity = :entity_id AND posted_at <= :period_end) SELECT SUM(amount) AS inventory_value FROM inventory",
+            parameters: ["entity_id", "period_end"],
+          },
+          {
+            id: "repeat_inventory",
+            primitive: "repeat_pull",
+            dependsOn: ["inventory_source"],
+            operationId: "inventory_source",
+          },
+          {
+            id: "unrelated_source",
+            primitive: "suiteql_select",
+            dependsOn: [],
+            sql: "SELECT SUM(amount) AS inventory_value FROM unrelated_inventory WHERE entity = :entity_id",
+            parameters: ["entity_id"],
+          },
+          {
+            id: "unrelated_repeat",
+            primitive: "repeat_pull",
+            dependsOn: ["unrelated_source"],
+            operationId: "unrelated_source",
+          },
+          {
+            id: "inventory_reconciliation",
+            primitive: "reconcile",
+            dependsOn: ["unrelated_source", "unrelated_repeat"],
+            leftField: "inventory_value",
+            rightField: "inventory_value",
+            tolerance: "0",
+          },
+        ],
+      }),
+    },
+  ];
+
+  for (const item of cases) {
+    await t.test(item.name, async (subtest) => {
+      const root = await writePack(subtest, [{ path: "capabilities/measure.json", value: item.descriptor }]);
+      await assert.rejects(loadFinnyCapabilityPack(root), /verification.*repeat|verification.*reconciliation/i);
+    });
+  }
+});
+
 test("dimension defaults must be declared and reviewed", async (t) => {
   const undeclared = await writePack(t, [
     {
       path: "capabilities/measure.json",
       value: syntheticCapability({
+        intent: { dimensions: { entity: { type: "string" } } },
         dimensions: {
           required: ["entity"],
           supported: { entity: ["named"] },
@@ -385,6 +530,12 @@ test("dimension defaults must be declared and reviewed", async (t) => {
     {
       path: "capabilities/measure.json",
       value: syntheticCapability({
+        intent: {
+          dimensions: {
+            entity: { type: "string" },
+            sources: { type: "string_list", values: ["netsuite"] },
+          },
+        },
         dimensions: {
           required: ["entity"],
           supported: { entity: ["named"], sources: ["netsuite"] },
