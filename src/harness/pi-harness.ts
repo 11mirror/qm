@@ -885,6 +885,7 @@ export function refusalFallbackModelId(
   configuredId?: string,
   usable: (id: string) => boolean = () => true,
 ): string | undefined {
+  if (configuredId === fromId) return undefined;
   if (configuredId && configuredId !== fromId && usable(configuredId)) return configuredId;
   return REFUSAL_FALLBACK_MODEL_IDS.find((id) => id !== fromId);
 }

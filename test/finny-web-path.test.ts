@@ -13,6 +13,7 @@ import { createUnavailableFinanceService } from "../src/finny/unavailable-financ
 import { buildApp } from "../src/wiring.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { finnyTestStores } from "./support/finny-test-stores.ts";
+import { createMockHarness } from "./support/mock-harness.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const SECRET = "finny-web-source-secret".repeat(2);
@@ -340,4 +341,124 @@ test("QM web approval resumes the same Pi-native Golden Loop and releases only v
   assert.equal(trace.trace.stage, "DELIVERY_ELIGIBLE");
   assert.equal(trace.trace.outcome, "web_only_unattested");
   assert.equal(trace.trace.harness, "pi");
+});
+
+test("Finny rejects a runtime-pinned Claude choice before the Claude adapter runs", async () => {
+  let claudeCalls = 0;
+  const claude = createMockHarness();
+  const runClaudeTurn = claude.turns.runTurn;
+  claude.turns.runTurn = async (input) => {
+    claudeCalls += 1;
+    return runClaudeTurn(input);
+  };
+  const built = buildApp(
+    testConfig({
+      harness: "pi",
+      modelId: MODEL,
+      finnyProfile: { id: "finny", modelId: MODEL, providerTimeoutMs: 120_000, skillsDir: SKILLS_DIR },
+    }),
+    { harnesses: { claude }, ...finnyTestStores() },
+  );
+  await built.config.setApprovedHarnesses(["pi", "claude"]);
+  await built.userModelCredentials.setOAuth("finny-pinned", "anthropic", {
+    accessToken: "personal-claude-oauth",
+    expiresAt: Date.now() + 3_600_000,
+  });
+  await built.config.setPersonalModelAuth("finny-pinned", true, "anthropic");
+  const submitted = await built.app.turn({
+    surface: "web",
+    actor: { externalId: "finny-pinned" },
+    conversation: { kind: "dm", threadRef: "finny-runtime-pinned-claude" },
+    text: "What is the AP balance?",
+    model: "claude-sonnet-5",
+    harness: "claude",
+    liveActor: true,
+    async: true,
+  });
+  assert.ok(submitted.runId, JSON.stringify(submitted));
+  built.runtime.start();
+  try {
+    const finished = await built.runs.waitFor(submitted.runId!, 5_000);
+    assert.equal(finished.status, "failed");
+    assert.match(JSON.stringify(finished), /Finny requires pi\/gpt-5\.6-sol/);
+    assert.equal(claudeCalls, 0);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("Finny rejects a stored Claude runtime before the Claude adapter runs", async () => {
+  let claudeCalls = 0;
+  const claude = createMockHarness();
+  claude.turns.runTurn = async () => {
+    claudeCalls += 1;
+    return { reply: "wrong adapter" };
+  };
+  const built = buildApp(
+    testConfig({
+      anthropicApiKey: "company-anthropic",
+      harness: "pi",
+      modelId: MODEL,
+      finnyProfile: { id: "finny", modelId: MODEL, providerTimeoutMs: 120_000, skillsDir: SKILLS_DIR },
+    }),
+    { harnesses: { claude }, ...finnyTestStores() },
+  );
+  await built.config.setApprovedHarnesses(["pi", "claude"]);
+  await built.config.setRuntimeSelection("personal:finny-stored", {
+    harnessId: "claude",
+    modelId: "claude-sonnet-5",
+  });
+  const submitted = await built.app.turn({
+    surface: "web",
+    actor: { externalId: "finny-stored" },
+    conversation: { kind: "dm", threadRef: "finny-stored-claude" },
+    text: "What is the AP balance?",
+    liveActor: true,
+    async: true,
+  });
+  assert.ok(submitted.runId, JSON.stringify(submitted));
+  built.runtime.start();
+  try {
+    const finished = await built.runs.waitFor(submitted.runId!, 5_000);
+    assert.equal(finished.status, "failed");
+    assert.match(JSON.stringify(finished), /Finny requires pi\/gpt-5\.6-sol/);
+    assert.equal(claudeCalls, 0);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("ordinary runtime-pinned Claude routing still reaches the Claude adapter", async () => {
+  let claudeCalls = 0;
+  const claude = createMockHarness();
+  claude.turns.runTurn = async () => {
+    claudeCalls += 1;
+    return { reply: "ordinary Claude reply" };
+  };
+  const built = buildApp(testConfig({ harness: "pi", modelId: MODEL }), { harnesses: { claude } });
+  await built.config.setApprovedHarnesses(["pi", "claude"]);
+  await built.userModelCredentials.setOAuth("ordinary-pinned", "anthropic", {
+    accessToken: "personal-claude-oauth",
+    expiresAt: Date.now() + 3_600_000,
+  });
+  await built.config.setPersonalModelAuth("ordinary-pinned", true, "anthropic");
+  const submitted = await built.app.turn({
+    surface: "web",
+    actor: { externalId: "ordinary-pinned" },
+    conversation: { kind: "dm", threadRef: "ordinary-runtime-pinned-claude" },
+    text: "hello",
+    model: "claude-sonnet-5",
+    harness: "claude",
+    liveActor: true,
+    async: true,
+  });
+  assert.ok(submitted.runId, JSON.stringify(submitted));
+  built.runtime.start();
+  try {
+    const finished = await built.runs.waitFor(submitted.runId!, 5_000);
+    assert.equal(finished.status, "done", JSON.stringify(finished.result));
+    assert.equal(claudeCalls, 1);
+  } finally {
+    await built.runtime.stop();
+  }
 });

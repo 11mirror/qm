@@ -165,9 +165,15 @@ function renderVerifiedRelease(release: VerifiedFinnyRelease): string {
 export function withFinnyPiProfile(base: Harness, options: FinnyPiProfileOptions): Harness {
   if (base.profile.id !== "pi") throw new Error("Finny profile requires harness=pi");
   if (!options.modelId.trim()) throw new Error("Finny profile requires a pinned model");
+  const models = { ...base.models };
+  delete models.pickAckEmoji;
+  if (base.models.screenSecurity) {
+    models.screenSecurity = (input) => base.models.screenSecurity!({ ...input, modelId: options.modelId });
+  }
 
   return {
     ...base,
+    models,
     turns: {
       ...base.turns,
       async runTurn(turn: HarnessTurnInput): Promise<HarnessTurnResult> {
@@ -266,6 +272,10 @@ export function createFinnyPiHarness(options: CreateFinnyPiHarnessOptions): Harn
     ...piOptions,
     modelId,
     defaultModelId: modelId,
+    detectModelId: modelId,
+    titleModelId: modelId,
+    judgeModelId: modelId,
+    resolveFallbackRuntime: () => ({ modelId }),
     allowedToolNames: ["finance"],
     nativeTools: (turn, ref) => [
       createFinnyFinanceTool(turn, ref, financeService, {

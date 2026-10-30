@@ -382,3 +382,71 @@ test("the Finny factory remains the standard Pi harness and pins its model", () 
   assert.equal(harness.profile.id, "pi");
   assert.equal(harness.profile.toolTransport, "in-process");
 });
+
+test("the Finny factory uses its pinned model for every available Pi model operation", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const models: string[] = [];
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    models.push(String((JSON.parse(String(init?.body)) as { model?: unknown }).model));
+    return new Response(JSON.stringify({ error: { message: "offline Finny model test" } }), { status: 401 });
+  }) as typeof fetch;
+  const harness = createFinnyPiHarness({
+    modelId: "claude-opus-5",
+    detectModelId: "claude-sonnet-5",
+    titleModelId: "claude-sonnet-5",
+    judgeModelId: "claude-sonnet-5",
+    resolveFallbackRuntime: () => ({ modelId: "claude-sonnet-5" }),
+    financeService: createUnavailableFinanceService(),
+    runStore: createFinnyRunStore(createMemoryMap<FinnyRunV2Checkpoint>()),
+    evidenceBytes: createMemoryDurableByteStore(),
+    capabilityCatalog: {
+      manifestDigest: `sha256:${"a".repeat(64)}`,
+      catalogDigest: `sha256:${"b".repeat(64)}`,
+      capabilities: new Map(),
+      aliases: new Map(),
+    },
+    modelGateway: {
+      url: "https://gateway.invalid",
+      apiKey: "gateway-key",
+      apiKeyHeader: "api-key",
+      models: {
+        "claude-opus-5": "finny-pinned",
+        "claude-sonnet-5": "forbidden-override",
+      },
+    },
+  });
+  const attempts = [
+    harness.models.shouldRespond!({
+      session: { id: "finny-model-test" } as HarnessTurnInput["session"],
+      message: "hello",
+      recentContext: "",
+      systemPrompt: "system",
+      history: [],
+      recordModelCall: () => {},
+    }),
+    harness.models.compactHistory!({
+      session: { id: "finny-model-test" } as HarnessTurnInput["session"],
+      history: [],
+      recordModelCall: () => {},
+    }),
+    harness.models.oneShot!("system", "prompt"),
+    harness.models.judge!("system", "prompt"),
+    harness.models.screenSecurity!({
+      payload: "payload",
+      modelId: "claude-sonnet-5",
+      signal: new AbortController().signal,
+      recordModelCall: () => {},
+    }),
+    harness.models.generateTitle!("User: title this"),
+    harness.models.summarizeApproval!("command", "reason"),
+  ];
+
+  await Promise.allSettled(attempts);
+
+  assert.equal(harness.models.pickAckEmoji, undefined);
+  assert.equal(models.length, attempts.length);
+  assert.deepEqual(new Set(models), new Set(["finny-pinned"]));
+});

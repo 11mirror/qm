@@ -341,6 +341,7 @@ import { createFinnyRunStore, type FinnyRunStore, type FinnyRunV2Checkpoint } fr
 import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Harness } from "./harness/harness.ts";
+import { NonRetryableTurnError } from "./core/turn-error.ts";
 import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
 import { createMemoryStrategy } from "./memory/strategy.ts";
 import { createOrchestrator, egressClaimAllowingControlPlane, type OrchestratorDeps } from "./core/orchestrator.ts";
@@ -1672,6 +1673,11 @@ export function buildApp(
       }
       return resolve(input.runtime);
     });
+    if (
+      config.finnyProfile &&
+      (routed.choice.harnessId !== "pi" || routed.choice.modelId !== config.finnyProfile.modelId)
+    )
+      throw new NonRetryableTurnError(`Finny requires pi/${config.finnyProfile.modelId}`);
     if (routed.routedBy) routedBy(routed.routedBy);
     return routed.choice;
   });

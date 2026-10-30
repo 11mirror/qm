@@ -1047,7 +1047,7 @@ test("refusal fallback drawdown: Fable -> Opus, Opus -> Sonnet, never the refuse
   assert.equal(refusalFallbackModelId("claude-fable-5"), "claude-opus-5");
   assert.equal(refusalFallbackModelId("claude-opus-5"), "claude-sonnet-5");
   assert.equal(refusalFallbackModelId("claude-opus-5", "gpt-6-sol"), "gpt-6-sol");
-  assert.equal(refusalFallbackModelId("gpt-6-sol", "gpt-6-sol"), "claude-opus-5");
+  assert.equal(refusalFallbackModelId("gpt-6-sol", "gpt-6-sol"), undefined);
   assert.equal(
     refusalFallbackModelId("claude-opus-5", "not-a-pi-model", (id) => id !== "not-a-pi-model"),
     "claude-sonnet-5",
