@@ -343,6 +343,7 @@ export interface NativeToolDefinition extends ToolDefinition {
   needsApproval?: boolean | ((params: unknown) => boolean | Promise<boolean>);
   approvalReason?: string;
   approvalKeyParams?(params: unknown): unknown;
+  approvalCommand?(params: unknown): string;
   recordCallSummary?(params: unknown): Record<string, unknown>;
   recordResultSummary?(
     result: { content: Array<{ type: string; text?: string }>; details?: unknown },
@@ -4421,6 +4422,7 @@ interface ToolApprovalDeclaration {
   needsApproval?: boolean | ((params: unknown) => boolean | Promise<boolean>);
   approvalReason?: string;
   approvalKeyParams?(params: unknown): unknown;
+  approvalCommand?(params: unknown): string;
 }
 
 async function declaredApprovalReason(tool: ToolApprovalDeclaration, params: unknown): Promise<string | undefined> {
@@ -4487,7 +4489,14 @@ function withToolApprovalGate(
       }
       const approvalParams = declaredReason ? (tool.approvalKeyParams?.(params) ?? params) : params;
       const callKey = declaredReason ? toolCallApprovalKey(approvalIdentity, approvalParams) : undefined;
-      if (callKey && canonicalJson(params ?? {}).length > APPROVAL_ARGS_MAX_CHARS) {
+      const approvalCommand = declaredReason
+        ? (tool.approvalCommand?.(params) ?? approvalCallText(commandLabel, params))
+        : commandLabel;
+      if (
+        callKey &&
+        (canonicalJson(params ?? {}).length > APPROVAL_ARGS_MAX_CHARS ||
+          approvalCommand.length > APPROVAL_ARGS_MAX_CHARS)
+      ) {
         const reason = `the arguments are too long to show on an approval card (over ${APPROVAL_ARGS_MAX_CHARS} characters); split the work into smaller calls`;
         await rec.recordCall(callId, { tool: tool.name, blocked: "approval_args_too_long" });
         return rec.recordResult(
@@ -4502,7 +4511,7 @@ function withToolApprovalGate(
         ref.pendingApprovals?.push(
           callKey
             ? {
-                command: approvalCallText(commandLabel, params),
+                command: approvalCommand,
                 reason,
                 kind: "approval",
                 approvalKey: callKey,

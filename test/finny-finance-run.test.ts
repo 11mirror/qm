@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { toolCallApprovalKey } from "../src/core/approval-id.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import type { ToolContextRef } from "../src/harness/agent-tools.ts";
+import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import type { FinnyCapabilityCatalog, FinnyCapabilityDescriptor } from "../src/finny/capability-pack.ts";
 import { compileFinnyControllerRequest } from "../src/finny/controller-compiler.ts";
@@ -596,6 +596,53 @@ test("resumed approval displays the same exact custodied plan summary", async ()
   assert.equal(resumedApproval?.summary, firstApproval.summary);
   assert.equal(resumedApproval?.command, firstApproval.command);
   assert.equal(resumedApproval?.approvalKey, firstApproval.approvalKey);
+});
+
+test("generic approval after a preflight crash displays and binds the exact custodied plan", async () => {
+  const runStore = createFinnyRunStore(createMemoryMap<FinnyRunV2Checkpoint>());
+  const evidenceBytes = createMemoryDurableByteStore();
+  const firstTurn = turn();
+  firstTurn.runId = "run-ap";
+  firstTurn.input = "AP balance";
+  const firstRef = approvalRef();
+  const first = createFinnyFinanceTool(firstTurn, firstRef, planNativeService(runStore, []), {
+    runStore,
+    evidenceBytes,
+    capabilityCatalog: planNativeCatalog,
+  });
+  await first.execute("approval-first", apCandidate, undefined, undefined, {} as never);
+  const firstApproval = firstRef.pendingApprovals?.at(-1);
+  assert.ok(firstApproval?.summary);
+
+  const resumedTurn = turn([
+    {
+      type: "tool_result",
+      payload: { finnyWorkflowRunId: "run-ap" },
+      scopeLabel: "personal:actor-1",
+      seq: 1,
+      createdAt: 1,
+    },
+  ] as HarnessTurnInput["history"]);
+  resumedTurn.runId = "run-ap-resume";
+  resumedTurn.input = "AP balance";
+  const resumedRef: ToolContextRef = {
+    current: null,
+    pendingApprovals: [],
+    toolApprovalGate: () => false,
+  };
+  const resumed = createFinnyFinanceTool(resumedTurn, resumedRef, planNativeService(runStore, []), {
+    runStore,
+    evidenceBytes,
+    capabilityCatalog: planNativeCatalog,
+  });
+  const finance = createAgentTools(resumedRef, { nativeTools: [resumed] }).find((tool) => tool.name === "finance");
+  if (!finance) throw new Error("finance tool is unavailable");
+
+  await finance.execute("approval-resumed", apCandidate, undefined, undefined, {} as never);
+
+  const approval = resumedRef.pendingApprovals?.at(-1);
+  assert.equal(approval?.command, firstApproval.summary);
+  assert.equal(approval?.approvalKey, toolCallApprovalKey("finance", resumed.approvalKeyParams?.(apCandidate)));
 });
 
 test("plan-native approval resume ignores unrelated catalog digest changes", async () => {

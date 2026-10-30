@@ -602,6 +602,10 @@ export function createFinnyFinanceTool(
       if (!approvalOperationPlan) throw new Error("Finny approval requires a compiled operation plan");
       return planApprovalBinding(approvalOperationPlan);
     },
+    approvalCommand: () => {
+      if (!approvalOperationPlan) throw new Error("Finny approval requires a compiled operation plan");
+      return planApprovalSummary(approvalOperationPlan);
+    },
     recordCallSummary: () => ({
       action: "run",
       profile: "finny",
