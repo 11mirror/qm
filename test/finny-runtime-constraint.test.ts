@@ -106,3 +106,26 @@ test("Finny Slack resolution ignores stored runtimes and refuses nonmatching dis
     await s.built.runtime.stop();
   }
 });
+
+test("Finny steering uses the deployment account despite a durable personal selection", async () => {
+  const s = setup();
+  try {
+    await s.built.config.setPersonalModelAuth("alice", true, "openai");
+    const submitted = await s.built.app.turn({
+      surface: "web",
+      actor: { externalId: "alice" },
+      conversation: { kind: "dm", threadRef: "web:alice:finny-steer" },
+      text: "start",
+      liveActor: true,
+      async: true,
+    });
+    assert.ok(submitted.runId, JSON.stringify(submitted));
+    assert.equal((await s.built.runs.get(submitted.runId!))?.request.modelAccount, "company");
+    assert.deepEqual(await s.built.app.signalRun(submitted.runId!, { kind: "steer", text: "continue" }, "alice"), {
+      accepted: true,
+    });
+  } finally {
+    await s.close();
+    await s.built.runtime.stop();
+  }
+});

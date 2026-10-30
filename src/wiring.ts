@@ -2298,6 +2298,7 @@ export function buildApp(
     identity,
     resolution,
     config: configStore,
+    ...(runtimeDeps.runtimeConstraint ? { runtimeConstraint: runtimeDeps.runtimeConstraint } : {}),
     defaultHarness: fallbackHarness,
     defaultTurnWallClockMs: config.turnWallClockMs,
     userModelCredentials,

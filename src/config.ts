@@ -1093,8 +1093,6 @@ function finnyProfileEnvStrict(env: NodeJS.ProcessEnv, harness: Config["harness"
   const requested = env.FINNY_PROFILE?.trim();
   const modelId = env.PI_MODEL?.trim();
   const skillsDir = env.FINNY_SKILLS_DIR?.trim();
-  if (env.FINNY_PROVIDER_TIMEOUT_MS !== undefined)
-    throw new Error("FINNY_PROVIDER_TIMEOUT_MS is not supported; provider deadlines are fixed by QM");
   if (!requested) {
     if (skillsDir) throw new Error("FINNY_SKILLS_DIR requires FINNY_PROFILE=finny");
     return undefined;

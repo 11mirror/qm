@@ -910,12 +910,9 @@ export function createTurnMethods(
       }
       if (signal.kind === "steer") {
         const principal = viewer ?? signal.request?.actor.externalId ?? run.request.actor.id;
-        const account = principal ? await deps.config.getModelAccountDurable(principal) : undefined;
-        if (
-          !account ||
-          run.request.modelAccount !== account ||
-          (account !== "company" && run.request.actor.id !== principal)
-        ) {
+        const account = deps.runtimeConstraint ? "company" : await deps.config.getModelAccountDurable(principal);
+        const runAccount = deps.runtimeConstraint ? "company" : run.request.modelAccount;
+        if (!account || runAccount !== account || (account !== "company" && run.request.actor.id !== principal)) {
           return { accepted: false, reason: "account_changed: send a new message to use your selected AI account" };
         }
       }

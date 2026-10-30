@@ -3146,9 +3146,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           let userHarnessOverride: string | undefined;
           let claudeOauthToken: string | undefined;
           const userCredStore = external ? undefined : deps.userModelCredentials;
-          const account = external
-            ? "company"
-            : (input.modelAccount ?? (await deps.config?.getModelAccountDurable(actor.id)) ?? "company");
+          const account =
+            deps.runtimeConstraint || external
+              ? "company"
+              : (input.modelAccount ?? (await deps.config?.getModelAccountDurable(actor.id)) ?? "company");
           if (userCredStore && humanInput && account !== "company") {
             const [anthCred, oaiCred] = await Promise.all([
               account === "openai" ? null : userCredStore.get(actor.id, "anthropic"),
@@ -3192,8 +3193,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           (keys?.[CODEX_SUBSCRIPTION_PROVIDER] ? codexSubscriptionModelId(requested) : requested) === routed;
         if (input.harness && !isHarnessId(input.harness))
           throw new NonRetryableTurnError(`runtime ${input.harness} is not approved`);
-        const inputHarness = input.harness && isHarnessId(input.harness) ? input.harness : undefined;
-        const requestedModel = input.model ?? purposeDefault?.modelId;
+        const inputHarness =
+          deps.runtimeConstraint?.harnessId ??
+          (input.harness && isHarnessId(input.harness) ? input.harness : undefined);
+        const requestedModel = deps.runtimeConstraint?.modelId ?? input.model ?? purposeDefault?.modelId;
         let { userProviderKeys, userModelOverride, userHarnessOverride, claudeOauthToken } = await loadRuntimeAuth({});
         if (
           (input.surface === "web" || purposeDefault) &&
@@ -3203,7 +3206,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               (inputHarness ?? purposeDefault?.harnessId) !== userHarnessOverride))
         )
           throw new NonRetryableTurnError("Your connected AI account cannot serve this model on that harness.");
-        const effectiveModel = userModelOverride ?? input.model;
+        const effectiveModel = userModelOverride ?? deps.runtimeConstraint?.modelId ?? input.model;
         const effectiveHarness = userHarnessOverride ?? inputHarness;
         if (userHarnessOverride) {
           let authLabel = "api-key";
@@ -3231,6 +3234,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ? recoveredRuntime(filterHistory(await deps.sessions.getEntries(session.id)), input.runId, actor.id)
             : undefined;
         const checkRuntimeAuth = async (choice: RuntimeChoice): Promise<string | null> => {
+          if (
+            deps.runtimeConstraint &&
+            (choice.harnessId !== deps.runtimeConstraint.harnessId || choice.modelId !== deps.runtimeConstraint.modelId)
+          )
+            return `Runtime is constrained to ${deps.runtimeConstraint.harnessId}/${deps.runtimeConstraint.modelId}.`;
           try {
             const auth = await loadRuntimeAuth(choice);
             if (
@@ -3253,7 +3261,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             await loadRuntimeAuth(choice));
           requestedRuntime = userModelOverride ? { ...choice, modelId: userModelOverride } : choice;
         };
-        if (restoredRuntime) await adoptRuntime(restoredRuntime.choice, restoredRuntime.lifetime);
+        if (restoredRuntime && !deps.runtimeConstraint)
+          await adoptRuntime(restoredRuntime.choice, restoredRuntime.lifetime);
         if (automatedTurn && input.model && inputHarness) {
           const error = await deps.validateScheduledRuntime?.(
             scopeId,
@@ -3501,7 +3510,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             },
             ...(userProviderKeys ? { providerKeys: userProviderKeys } : {}),
             ...(claudeOauthToken ? { claudeOauthToken } : {}),
-            ...(userHarnessOverride && !purposeDefault && !restoredRuntime && runtimeHandoffs === 0
+            ...(deps.runtimeConstraint ||
+            (userHarnessOverride && !purposeDefault && !restoredRuntime && runtimeHandoffs === 0)
               ? { runtimePinned: true }
               : {}),
             mcpHostContextBase: {

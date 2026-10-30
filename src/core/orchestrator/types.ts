@@ -44,7 +44,7 @@ import type { SecurityScreener } from "../../security/security-screener.ts";
 import type { RateLimiter } from "../../ratelimit/rate-limiter.ts";
 import type { BudgetTracker } from "../../ratelimit/budget.ts";
 import type { ControlService } from "../../api/control-service.ts";
-import type { Harness } from "../../harness/harness.ts";
+import type { Harness, RuntimeChoice } from "../../harness/harness.ts";
 import type { AdminService } from "../../admin/admin-service.ts";
 import type { ErrorLog } from "../../admin/error-log.ts";
 import type { RunSignalStore } from "../../runs/run-signal-store.ts";
@@ -119,6 +119,7 @@ export interface OrchestratorDeps {
   identity: IdentityService;
   resolution: ResolutionService;
   config?: ScopedConfigStore;
+  runtimeConstraint?: Pick<RuntimeChoice, "harnessId" | "modelId">;
   /** The deployment's fallback harness (wiring's config.harness) — used when no org runtime selection exists. */
   defaultHarness?: string;
   defaultTurnWallClockMs?: number;

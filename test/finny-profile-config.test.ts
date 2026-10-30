@@ -80,7 +80,6 @@ test("Finny profile rejects unpinned or incompatible runtime configuration", () 
       }),
     /CONNECTOR_SECRET_KEY/,
   );
-  assert.throws(() => loadConfig({ FINNY_PROVIDER_TIMEOUT_MS: "120000" }), /FINNY_PROVIDER_TIMEOUT_MS.*not supported/i);
   assert.throws(
     () =>
       loadConfig({

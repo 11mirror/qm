@@ -458,7 +458,7 @@ test("Finny ignores a stored Claude runtime and runs the pinned Pi model", async
 });
 
 for (const provider of ["anthropic", "openai"] as const) {
-  test(`Finny ignores stored personal ${provider} auth and runs the pinned deployment model`, async (t) => {
+  test(`Finny recovers a persisted personal ${provider} run onto the pinned deployment model`, async (t) => {
     let claudeCalls = 0;
     let gatewayCalls = 0;
     const claude = createMockHarness();
@@ -526,10 +526,22 @@ for (const provider of ["anthropic", "openai"] as const) {
       async: true,
     });
     assert.ok(submitted.runId, JSON.stringify(submitted));
-    assert.equal((await built.runs.get(submitted.runId!))?.request.modelAccount, "company");
+    const queued = await built.runs.get(submitted.runId!);
+    assert.ok(queued);
+    assert.equal(queued.request.modelAccount, "company");
+    assert.equal(await built.runs.withdraw(queued.id, { unstartedOnly: true }), true);
+    const persisted = await built.runs.enqueue({
+      sessionId: queued.sessionId,
+      request: {
+        ...queued.request,
+        modelAccount: provider,
+        harness: provider === "anthropic" ? "claude" : "pi",
+        model: provider === "anthropic" ? "claude-sonnet-5" : "codex/gpt-5.6-terra",
+      },
+    });
     built.runtime.start();
     try {
-      const finished = await built.runs.waitFor(submitted.runId!, 5_000);
+      const finished = await built.runs.waitFor(persisted.run.id, 5_000);
       assert.equal(finished.status, "done", JSON.stringify(finished.result));
       assert.match(finished.result?.reply ?? "", /Finny release is blocked at CLARIFY/);
       assert.equal(finished.result?.runtime?.harnessId, "pi");

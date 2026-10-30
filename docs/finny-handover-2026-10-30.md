@@ -54,7 +54,7 @@ AP and an unrelated inventory measure provide local structural evidence today. A
 
 ### 3. Prove deployment-owned credentials and provider behavior live
 
-The source implementation requires Postgres-backed sessions and runs plus a stable `CONNECTOR_SECRET_KEY`. Restart tests prove that opaque credential bindings survive process replacement, and typed provider failures retain safe status/cause diagnostics without upstream bodies or secrets. Each provider request receives a fresh deadline sourced from QM's default executable-operation budget so a stalled dependency cannot hold the serialized run indefinitely; `FINNY_PROVIDER_TIMEOUT_MS` is unsupported.
+The source implementation requires Postgres-backed sessions and runs plus a stable `CONNECTOR_SECRET_KEY`. Restart tests prove that opaque credential bindings survive process replacement, and typed provider failures retain safe status/cause diagnostics without upstream bodies or secrets. Each provider request receives a fresh deadline sourced from QM's default executable-operation budget so a stalled dependency cannot hold the serialized run indefinitely.
 
 The current development environment has no deployment-owned NetSuite binding or usable model credential. Bind a read-only credential in a safe non-production account, then prove the real 401, 429, timeout, 5xx, pagination, and successful SuiteQL paths without reading or logging secret values.
 
