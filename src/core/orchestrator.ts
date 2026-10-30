@@ -1933,8 +1933,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ? renderSandboxProviders(
             turnSandboxResources.profiles().map((profile) => profile.name),
             turnSandboxResources.defaultBackend(),
+            true,
+            turnSandboxResources
+              .profiles()
+              .filter((profile) => profile.egressEnforcement === "domain")
+              .map((profile) => profile.name),
           )
-        : renderSandboxProviders([scopeProfile.backend], scopeProfile.backend, false);
+        : renderSandboxProviders(
+            [scopeProfile.backend],
+            scopeProfile.backend,
+            false,
+            scopeProfile.egressEnforcement === "domain" ? [scopeProfile.backend] : [],
+          );
 
       const {
         provision,

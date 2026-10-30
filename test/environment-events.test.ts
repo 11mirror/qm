@@ -55,6 +55,15 @@ test("sandbox providers render the default first, and point at sandbox list only
   assert.equal(renderSandboxProviders([]), "");
 });
 
+test("sandbox providers name which computers sit behind the egress proxy and which clients fail there", () => {
+  const line = renderSandboxProviders(["sprites", "e2b", "modal"], "sprites", true, ["modal", "sprites"]);
+  assert.match(line, /\nComputers on modal, sprites reach the network only through the egress proxy/);
+  assert.match(line, /urllib/);
+  assert.doesNotMatch(line.split("\n")[2] ?? "", /e2b/);
+  assert.doesNotMatch(renderSandboxProviders(["sprites", "e2b"], "e2b", true, ["modal"]), /egress proxy/);
+  assert.doesNotMatch(renderSandboxProviders(["e2b"], "e2b"), /egress proxy/);
+});
+
 test("the local time names the user's zone", () => {
   const line = currentTimeBlock("America/Los_Angeles", Date.parse("2026-03-08T10:00:00Z"));
   assert.match(line, /2026-03-08 03:00/);

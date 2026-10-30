@@ -4,7 +4,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { parseScopeId, type CommandPolicy, type EgressPolicy, type ScopeId } from "../types.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
-import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus } from "./sandbox.ts";
+import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus, EgressEnforcement } from "./sandbox.ts";
 import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
 
 export interface SandboxResource {
@@ -42,6 +42,7 @@ export interface SandboxDefault {
 interface SandboxProviderProfile {
   name: SandboxBackendName;
   spec?: AgentComputerSpec;
+  egressEnforcement?: EgressEnforcement;
   actions: string[];
 }
 
@@ -172,6 +173,7 @@ export function createSandboxResources(opts: {
       .map(([name, backend]) => ({
         name,
         ...(backend.profile.spec ? { spec: backend.profile.spec } : {}),
+        ...(backend.profile.egressEnforcement ? { egressEnforcement: backend.profile.egressEnforcement } : {}),
         actions: actionsFor(backend),
       }));
   return {

@@ -4,13 +4,22 @@ import type { SessionEntry } from "../types.ts";
 export const memberLabel = (m: { principalId: string; displayName: string; slackId?: string }): string =>
   `${m.displayName} (${[m.principalId, m.slackId].filter(Boolean).join(", ")})`;
 
-export function renderSandboxProviders(names: readonly string[], defaultName?: string, listable = true): string {
+export function renderSandboxProviders(
+  names: readonly string[],
+  defaultName?: string,
+  listable = true,
+  proxied: readonly string[] = [],
+): string {
   if (!names.length) return "";
   const listed = [
     ...names.filter((name) => name === defaultName).map((name) => `${name} (default)`),
     ...names.filter((name) => name !== defaultName).toSorted(),
   ];
-  return `## Sandboxes\n${listed.join(", ")}.${listable ? " `sandbox list` for details." : ""}`;
+  const behindProxy = names.filter((name) => proxied.includes(name)).toSorted();
+  const network = behindProxy.length
+    ? `\nComputers on ${behindProxy.join(", ")} reach the network only through the egress proxy in $HTTPS_PROXY. If that is an https:// URL, clients that cannot speak TLS to a proxy fail (Python's urllib and http.client, with errors like BadStatusLine or RemoteDisconnected); curl, git, Python requests, and Node with NODE_USE_ENV_PROXY=1 work.`
+    : "";
+  return `## Sandboxes\n${listed.join(", ")}.${listable ? " `sandbox list` for details." : ""}${network}`;
 }
 
 interface RosterSnapshot {
