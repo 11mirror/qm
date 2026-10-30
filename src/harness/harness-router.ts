@@ -322,6 +322,14 @@ export function createHarnessRouter(
         const dispatched: HarnessTurnInput = {
           ...input,
           runtime: choice,
+          ...(input.mcpHostContextBase
+            ? {
+                mcpHostContext: {
+                  ...input.mcpHostContextBase,
+                  runtime: { harnessId: choice.harnessId, modelId: choice.modelId },
+                },
+              }
+            : {}),
           tools: input.runtimeControl
             ? { ...input.tools, runtime: (request, signal) => input.runtimeControl!(choice, request, signal) }
             : input.tools,

@@ -3,6 +3,7 @@ import { LRUCache } from "lru-cache";
 import { reasoningKey } from "../../runs/run-stream-events.ts";
 import { REASONING_MAX_BLOCKS } from "../../runs/turn-stream.ts";
 import type { SessionEntry } from "../../types.ts";
+import { safeFinnyTraceSnapshot } from "../../finny/trace.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 const HEARTBEAT_MS = 15_000;
@@ -23,6 +24,7 @@ function toolEvent(entry: SessionEntry): { id: string; data: Record<string, unkn
       },
     };
   }
+  const finnyTrace = payload.tool === "finance" ? safeFinnyTraceSnapshot(payload.finnyTrace) : null;
   return {
     id: `tool:${callId}:result`,
     data: {
@@ -30,6 +32,7 @@ function toolEvent(entry: SessionEntry): { id: string; data: Record<string, unkn
       toolCallId: callId,
       content: String(payload.result ?? ""),
       isError: payload.isError === true,
+      ...(finnyTrace ? { finnyTrace } : {}),
     },
   };
 }

@@ -129,7 +129,23 @@ export function clampLimit(limit?: number): number {
   return Math.min(Math.floor(limit), MAX_LIMIT);
 }
 
-export function createMemoryFileArtifactStore(byteStore: DurableByteStore): FileArtifactStore {
+export interface CreatorByteStoreRoute {
+  store: DurableByteStore;
+}
+
+export function creatorByteStore(
+  fallback: DurableByteStore,
+  routes: Readonly<Record<string, CreatorByteStoreRoute>>,
+  createdBy: string,
+): DurableByteStore {
+  const route = routes[createdBy];
+  return route ? route.store : fallback;
+}
+
+export function createMemoryFileArtifactStore(
+  byteStore: DurableByteStore,
+  creatorByteStores: Readonly<Record<string, CreatorByteStoreRoute>> = {},
+): FileArtifactStore {
   const rows = new Map<string, FileArtifact>();
   const deleted = new Set<string>();
 
@@ -177,7 +193,7 @@ export function createMemoryFileArtifactStore(byteStore: DurableByteStore): File
     async put(input) {
       const existing = rows.get(input.id);
       if (existing) return { artifact: existing, created: false };
-      const { blobKey, sizeBytes, sha256 } = await byteStore.put(
+      const { blobKey, sizeBytes, sha256 } = await creatorByteStore(byteStore, creatorByteStores, input.createdBy).put(
         input.data,
         input.maxBytes != null ? { maxBytes: input.maxBytes } : {},
       );
@@ -227,7 +243,7 @@ export function createMemoryFileArtifactStore(byteStore: DurableByteStore): File
     async open(id) {
       const r = rows.get(id);
       if (!r || !r.enabled || !r.blobKey) return null;
-      const bytes = await byteStore.open(r.blobKey);
+      const bytes = await creatorByteStore(byteStore, creatorByteStores, r.createdBy).open(r.blobKey);
       if (!bytes) return null;
       return { artifact: r, sizeBytes: bytes.sizeBytes, stream: bytes.stream };
     },

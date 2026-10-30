@@ -220,6 +220,7 @@ function fakeSandbox(): Sandbox {
 function buildScenario() {
   const received: Array<{
     input: string;
+    trustedInput?: string;
     continueTurn?: boolean;
     resumeToolCall?: ResumableToolCall;
     historyTypes: string[];
@@ -236,6 +237,7 @@ function buildScenario() {
       async runTurn(turn) {
         received.push({
           input: turn.input,
+          ...(turn.trustedInput ? { trustedInput: turn.trustedInput } : {}),
           ...(turn.continueTurn ? { continueTurn: true } : {}),
           ...(turn.resumeToolCall ? { resumeToolCall: turn.resumeToolCall } : {}),
           historyTypes: turn.history.map((e) => e.type),
@@ -325,16 +327,37 @@ test("a retry whose dangling call was marked retry-safe re-runs it silently inst
   });
   await runs.noteTurnUserSeq(run.id, userSeq);
 
-  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+  const retry = await orchestrator.handleTurn(input("transient retry payload", { runId: run.id, attempt: 2 }));
   assert.equal(retry.status, "ok");
   assert.equal(received.length, 1);
   const turn = received[0]!;
   assert.deepEqual(turn.resumeToolCall, { callId: "c-budget", tool: "history", input: { query: "budget" } });
   assert.equal(turn.continueTurn, true, "the harness continues the recorded turn instead of re-sending the request");
+  assert.equal(turn.trustedInput, ASK, "the harness receives the durable original request independently of input");
 
   const entries = await sessions.getEntries(sessionId);
   const types = entries.map((e) => e.type);
   assert.deepEqual(types, ["user", "tool_call", "tool_result", "user", "assistant"]);
+});
+
+test("a compacted retry preserves the durable original request for host policy", async () => {
+  const { orchestrator, sessions, runs, received, input } = buildScenario();
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  const { userSeq } = await seedDeadAttempt(sessions, {
+    tool: "history",
+    query: "budget",
+    callId: "c-budget",
+    retrySafe: true,
+    rerun: { tool: "history", input: { query: "budget" } },
+    padding: "x".repeat(10_000_000),
+  });
+  await runs.noteTurnUserSeq(run.id, userSeq);
+
+  const retry = await orchestrator.handleTurn(input("transient retry payload", { runId: run.id, attempt: 2 }));
+
+  assert.equal(retry.status, "ok");
+  assert.equal(received.length, 1);
+  assert.equal(received[0]?.trustedInput, ASK);
 });
 
 for (const [label, payload] of [

@@ -297,6 +297,73 @@ test("run events replay a run's recorded tool calls and results on first connect
   }
 });
 
+test("run events expose only the allowlisted Finny trace fields to the web operator", async () => {
+  const finny = toolEntry(2, "tool_result", {
+    tool: "finance",
+    callId: "finny-1",
+    isError: false,
+    result: "finance result",
+    credentialHandle: "must-not-leak",
+    finnyTrace: {
+      schema: "finny.trace.v2",
+      workflowRunId: "workflow-1",
+      currentRunId: "run",
+      sessionId: "session",
+      profile: "finny",
+      harness: "pi",
+      modelId: "gpt-5.6-sol",
+      surface: "web",
+      stage: "PLAN_APPROVED",
+      outcome: "blocked",
+      transitionCount: 1,
+      rawPayload: "must-not-leak",
+      latestTransition: {
+        eventId: "call:plan-exemption",
+        eventKind: "plan_exempted",
+        occurredAt: "2026-10-30T10:00:00.000Z",
+        fromStage: "PREFLIGHT",
+        toStage: "PLAN_APPROVED",
+        evidence: [{ role: "approval_policy", digest: `sha256:${"a".repeat(64)}` }],
+        secret: "must-not-leak",
+      },
+    },
+  });
+  const stream = await streamToolRun([finny], { status: "done" });
+  try {
+    await stream.consume;
+    assert.deepEqual(toolFrames(stream.wire())[0]!.data, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "finny-1",
+      content: "finance result",
+      isError: false,
+      finnyTrace: {
+        schema: "finny.trace.v2",
+        workflowRunId: "workflow-1",
+        currentRunId: "run",
+        sessionId: "session",
+        profile: "finny",
+        harness: "pi",
+        modelId: "gpt-5.6-sol",
+        surface: "web",
+        stage: "PLAN_APPROVED",
+        outcome: "blocked",
+        transitionCount: 1,
+        latestTransition: {
+          eventId: "call:plan-exemption",
+          eventKind: "plan_exempted",
+          occurredAt: "2026-10-30T10:00:00.000Z",
+          fromStage: "PREFLIGHT",
+          toStage: "PLAN_APPROVED",
+          evidence: [{ role: "approval_policy", digest: `sha256:${"a".repeat(64)}` }],
+        },
+      },
+    });
+    assert.doesNotMatch(stream.wire(), /must-not-leak/);
+  } finally {
+    await stream.close();
+  }
+});
+
 test("run events forward tool entries recorded after connect on refresh, exactly once each", async () => {
   const entries = [lookup];
   const stream = await streamToolRun(entries, { status: "running" });

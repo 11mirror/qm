@@ -63,6 +63,36 @@ export async function exerciseDeliveryStore(store: DeliveryStore): Promise<void>
   );
   await store.ack(sourced.id, 333);
 
+  const mcpSourced = await store.enqueue({
+    destination: { type: "slack", target: "C-mcp" },
+    text: "from MCP call",
+    idempotencyKey: "mcp-delivery",
+    provenance: {
+      trigger: "conversation",
+      surface: "slack",
+      fireKey: "mcp-delivery",
+      sourceScopeId: "personal:U-carol",
+      sourceThreadRef: "dm:U-carol",
+      mcpEvidenceRefs: [
+        {
+          serverId: "finny",
+          callId: "call-finance",
+          outputReceipt: "receipt",
+          outputReceiptSha256: "a".repeat(64),
+          outputSha256: "b".repeat(64),
+          contextSha256: "c".repeat(64),
+        },
+      ],
+    },
+  });
+  assert.deepEqual(
+    (await store.listByMcpCall("finny", "call-finance", "c".repeat(64))).map((delivery) => delivery.id),
+    [mcpSourced.id],
+  );
+  assert.deepEqual(await store.listByMcpCall("finny", "missing", "c".repeat(64)), []);
+  assert.deepEqual(await store.listByMcpCall("finny", "call-finance", "d".repeat(64)), []);
+  await store.ack(mcpSourced.id, 334);
+
   const slackPending = await store.pending("slack");
   assert.deepEqual(
     slackPending.map((p) => p.id),
@@ -77,12 +107,97 @@ export async function exerciseDeliveryStore(store: DeliveryStore): Promise<void>
   assert.equal((await store.get(d.id))?.text, "hello");
   assert.equal(await store.get("nope"), null);
 
-  await store.ack(d.id, 123, 88);
+  await store.ack(d.id, 123, { slackApiMs: 88 });
   assert.equal((await store.pending("slack")).length, 0, "acked deliveries leave the pending queue");
   const acked = await store.get(d.id);
   assert.equal(acked?.deliveredAt, 123);
   assert.equal(acked?.deliverLatencyMs, Math.max(0, 123 - acked!.createdAt), "deliver latency is delivered − created");
   assert.equal(acked?.slackApiMs, 88, "slack api round-trip recorded from the ack");
+
+  const evidenced = await store.enqueue({
+    destination: { type: "slack", target: "C-evidence:171.001" },
+    text: "signed delivery evidence",
+    idempotencyKey: "delivery-evidence",
+  });
+  const providerReceipt = {
+    provider: "slack" as const,
+    action: "post" as const,
+    channelId: "C-evidence",
+    messageTs: "171.002",
+    threadTs: "171.001",
+    renderedBodySha256: "a".repeat(64),
+  };
+  await store.ack(evidenced.id, 124, { slackApiMs: 89, providerReceipt });
+  assert.deepEqual((await store.get(evidenced.id))?.providerReceipt, providerReceipt, "provider evidence survives ack");
+  assert.equal((await store.get(evidenced.id))?.slackApiMs, 89);
+
+  const lateEvidence = await store.enqueue({
+    destination: { type: "slack", target: "C-evidence:171.001" },
+    text: "late receipt",
+    idempotencyKey: "late-evidence",
+  });
+  await store.ack(lateEvidence.id, 125);
+  await assert.rejects(store.ack(lateEvidence.id, 126, { providerReceipt }), /provider receipt/i);
+  assert.equal((await store.get(lateEvidence.id))?.providerReceipt, undefined, "a receipt cannot enrich a prior ack");
+  assert.equal((await store.get(lateEvidence.id))?.deliveredAt, 125);
+
+  for (const forged of [
+    { ...providerReceipt, channelId: "C-other" },
+    { ...providerReceipt, threadTs: "171.999" },
+    { ...providerReceipt, action: "update" as const },
+    { ...providerReceipt, renderedBodySha256: "not-a-digest" },
+  ]) {
+    const candidate = await store.enqueue({
+      destination: { type: "slack", target: "C-evidence:171.001" },
+      text: "forged receipt",
+      idempotencyKey: `forged-${forged.channelId}-${forged.threadTs}-${forged.action}`,
+    });
+    await assert.rejects(store.ack(candidate.id, 127, { providerReceipt: forged }), /provider receipt/i);
+    assert.equal((await store.get(candidate.id))?.deliveredAt, null);
+    assert.equal((await store.get(candidate.id))?.providerReceipt, undefined);
+    await store.ack(candidate.id, 128);
+  }
+
+  const workspaceBound = await store.enqueue({
+    destination: {
+      type: "slack",
+      target: "C-evidence:171.001",
+      slackAccountId: "account-1",
+      slackTeamId: "team-1",
+    },
+    text: "workspace receipt",
+    idempotencyKey: "workspace-evidence",
+  });
+  await assert.rejects(store.ack(workspaceBound.id, 128, { providerReceipt }), /provider receipt/i);
+  assert.equal((await store.get(workspaceBound.id))?.deliveredAt, null);
+  await store.ack(workspaceBound.id, 129);
+
+  const attachmentBound = await store.enqueue({
+    destination: { type: "slack", target: "C-evidence:171.001" },
+    text: "report attached",
+    attachments: [
+      { name: "a.csv", mimetype: "text/csv", sizeBytes: 10, blobId: "a" },
+      { name: "b.csv", mimetype: "text/csv", sizeBytes: 11, blobId: "b" },
+    ],
+    idempotencyKey: "attachment-evidence",
+  });
+  await assert.rejects(
+    store.ack(attachmentBound.id, 129, {
+      providerReceipt: { ...providerReceipt, files: [{ id: "F1", sha256: "b".repeat(64) }] } as never,
+    }),
+    /provider receipt/i,
+  );
+  assert.equal((await store.get(attachmentBound.id))?.deliveredAt, null);
+  await store.ack(attachmentBound.id, 130);
+
+  const principal = await store.enqueue({
+    destination: { type: "principal", target: "U-evidence" },
+    text: "not a strong v1 destination",
+    idempotencyKey: "principal-evidence",
+  });
+  await assert.rejects(store.ack(principal.id, 130, { providerReceipt }), /provider receipt/i);
+  assert.equal((await store.get(principal.id))?.deliveredAt, null);
+  await store.ack(principal.id, 131);
 
   await store.ack(d.id, 456);
   assert.equal((await store.get(d.id))?.deliveredAt, 123, "a second ack does not overwrite the first");

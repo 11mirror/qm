@@ -11,6 +11,12 @@ export type McpServerAuthMode = "none" | "bearer" | "client-credentials" | "oaut
 
 export type McpApprovalPolicy = "annotations" | "all" | "none";
 
+export interface RetiredMcpAttestationKey {
+  publicKey: string;
+  keyId: string;
+  retiredAt: number;
+}
+
 export interface McpServer {
   id: string;
   name: string;
@@ -35,6 +41,14 @@ export interface McpServer {
   approval?: McpApprovalPolicy;
   catalog?: boolean;
   attestActor?: boolean;
+  attestContext?: boolean;
+  attestationPrivateKey?: string;
+  attestationPublicKey?: string;
+  attestationKeyId?: string;
+  pendingAttestationPrivateKey?: string;
+  pendingAttestationPublicKey?: string;
+  pendingAttestationKeyId?: string;
+  retiredAttestationKeys?: RetiredMcpAttestationKey[];
   readOnly: boolean;
   enabled: boolean;
   updatedAt: number;

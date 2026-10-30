@@ -30,6 +30,7 @@ import type {
   CommandRule,
   ConversationKind,
   GrantedHandle,
+  McpHostContext,
   Permission,
   Principal,
   ScopeId,
@@ -62,7 +63,7 @@ import { errMessage, withCleanup } from "../util/errors.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
-import type { McpToolService } from "../mcp/mcp-tool-service.ts";
+import type { McpToolCallResult, McpToolService } from "../mcp/mcp-tool-service.ts";
 import type { ReachResolution } from "../resolution/scope-reach.ts";
 import type {
   ControlService,
@@ -245,7 +246,12 @@ export interface ToolContext extends SurfaceToolDeps {
   memoryDelete(ids: string[]): Promise<true | null>;
   history(q: string, limit?: number): Promise<string[]>;
   historyOpen(seq: number): Promise<string | null>;
-  callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string>;
+  callMcpTool(
+    name: string,
+    args: Record<string, unknown>,
+    approval?: string,
+    invocation?: { callId: string; context: McpHostContext },
+  ): Promise<McpToolCallResult>;
   mcpToolNeedsApproval(name: string, args: Record<string, unknown>): Promise<boolean>;
   awaitClientResult(
     callId: string,
@@ -1181,9 +1187,14 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return deps.sessionHistory.open(seq);
     },
 
-    async callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string> {
+    async callMcpTool(
+      name: string,
+      args: Record<string, unknown>,
+      approval?: string,
+      invocation?: { callId: string; context: McpHostContext },
+    ): Promise<McpToolCallResult> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.call(name, args, deps.createdBy, approval);
+      return deps.mcp.call(name, args, deps.createdBy, approval, invocation);
     },
 
     async mcpToolNeedsApproval(name: string, args: Record<string, unknown>): Promise<boolean> {

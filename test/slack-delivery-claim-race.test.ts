@@ -335,7 +335,7 @@ test("a transient post error is retried, never dropped", async () => {
   );
 });
 
-test("a redeployed poller finds a finalized-in-place reply by its marker and re-posts nothing", async () => {
+test("a redeployed poller does not ack an edited attachment reply without identified file evidence", async () => {
   const { store, makePoller } = harness();
   const marker = { event_type: "qm_delivery", event_payload: { idempotency_key: "run:R1" } };
   const posts: unknown[] = [];
@@ -390,10 +390,10 @@ test("a redeployed poller finds a finalized-in-place reply by its marker and re-
     `the probe window must reach back to the edited task message, scanned from: ${scans.join(", ")}`,
   );
   assert.deepEqual(posts, [], "the live handler's finalized reply is found by its marker — never re-posted");
-  assert.equal((await store.pending("slack")).length, 0, "the delivery is acked");
+  assert.equal((await store.pending("slack")).length, 1, "the delivery remains pending without file evidence");
 });
 
-test("an in-place recovery of a marked task-list reply does not replay attachments", async () => {
+test("an edited attachment reply without a file-message marker stays pending without replay", async () => {
   const { store, makePoller } = harness();
   const marker = { event_type: "qm_delivery", event_payload: { idempotency_key: "run:R2" } };
   const posts: unknown[] = [];
@@ -444,8 +444,8 @@ test("an in-place recovery of a marked task-list reply does not replay attachmen
   });
   d.createdAt = Date.now() - 60_000;
   await makePoller().pollDeliveries(client);
-  assert.equal(updates.length, 1, "the recovered reply is finalized in place");
+  assert.equal(updates.length, 0, "the incomplete recovery is not presented as finalized");
   assert.deepEqual(posts, [], "no fallback post");
   assert.deepEqual(uploads, [], "attachments behind a delivered marker are not replayed");
-  assert.equal((await store.pending("slack")).length, 0, "the delivery is acked");
+  assert.equal((await store.pending("slack")).length, 1, "the delivery remains pending without file evidence");
 });

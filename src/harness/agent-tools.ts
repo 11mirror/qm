@@ -13,7 +13,7 @@ import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent
 import { Type, type TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
-import type { ClientToolDeclaration, CronFireLogEntry, EntryType, ScopeId } from "../types.ts";
+import type { ClientToolDeclaration, CronFireLogEntry, EntryType, McpHostContext, ScopeId } from "../types.ts";
 import type { ToolContext, PublishInput, PublishAudienceDescriptor } from "../tools/primitives.ts";
 import { tracePhase, type Phase } from "../../plugins/chassis/src/error-reporting.ts";
 import { NeedsApproval, CommandDenied } from "../tools/primitives.ts";
@@ -89,6 +89,7 @@ export interface ToolContextRef {
   runtimeHandoff?: HarnessHandoff;
   runtimeRunId?: string;
   runtimeActorId?: string;
+  mcpHostContext?: McpHostContext;
   runtimeMutationPending?: boolean;
   runtimeInFlight?: Set<Promise<unknown>>;
   current: ToolContext | null;
@@ -335,6 +336,18 @@ export interface AgentToolsOptions {
   delegateWork?: boolean;
   surfaceName?: string;
   clientTools?: readonly ClientToolDeclaration[];
+  nativeTools?: readonly NativeToolDefinition[];
+}
+
+export interface NativeToolDefinition extends ToolDefinition {
+  needsApproval?: boolean | ((params: unknown) => boolean | Promise<boolean>);
+  approvalReason?: string;
+  approvalKeyParams?(params: unknown): unknown;
+  recordCallSummary?(params: unknown): Record<string, unknown>;
+  recordResultSummary?(
+    result: { content: Array<{ type: string; text?: string }>; details?: unknown },
+    params: unknown,
+  ): Record<string, unknown>;
 }
 
 export type CoreToolOptions = Omit<
@@ -452,6 +465,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           .filter((c, i) => c.type !== "text" || i === firstText);
       }
       let persistedSummary = summary;
+      const durableEvidence = {
+        ...(typeof summary.outputReceipt === "string" ? { outputReceipt: summary.outputReceipt } : {}),
+        ...(typeof summary.outputSha256 === "string" ? { outputSha256: summary.outputSha256 } : {}),
+        ...(typeof summary.contextSha256 === "string" ? { contextSha256: summary.contextSha256 } : {}),
+      };
       const tool = String(summary.tool ?? "");
       const provenance =
         screenAs?.provenance ??
@@ -488,6 +506,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           persistedSummary = {
             tool: summary.tool,
             ...(summary.action ? { action: summary.action } : {}),
+            ...durableEvidence,
             quarantined: true,
             quarantineReason: "screen_verdict",
             ...(screen.reason ? { securityReason: screen.reason } : {}),
@@ -516,6 +535,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           persistedSummary = {
             tool: summary.tool,
             ...(summary.action ? { action: summary.action } : {}),
+            ...durableEvidence,
             ...(originalTool === "execute" ? { code: summary.code, timedOut: summary.timedOut } : {}),
             unscreened: true,
           };
@@ -3935,11 +3955,18 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             d.name,
             (params ?? {}) as Record<string, unknown>,
             ref.approvedToolCalls?.get(callId),
+            ref.mcpHostContext ? { callId, context: ref.mcpHostContext } : undefined,
           );
           return recordExternalResult(
             callId,
-            { tool: d.name, mcpServer: d.serverId },
-            text(out || "[empty result]"),
+            {
+              tool: d.name,
+              mcpServer: d.serverId,
+              ...(out.outputReceipt ? { outputReceipt: out.outputReceipt } : {}),
+              ...(out.outputSha256 ? { outputSha256: out.outputSha256 } : {}),
+              ...(out.contextSha256 ? { contextSha256: out.contextSha256 } : {}),
+            },
+            text(out.text || "[empty result]"),
             `mcp server ${d.serverId}`,
           );
         } catch (error) {
@@ -4060,6 +4087,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         },
       }),
     );
+
+  const injectedNativeTools = [...(opts?.nativeTools ?? [])];
 
   const context = defineTool({
     name: "context",
@@ -4185,11 +4214,53 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ...clientTools,
   ];
   const searchable = deferredMcpTools(opts?.mcpTools, opts?.readOnly);
+  const builtInNames = new Set(tools.slice(0, tools.length - clientTools.length).map((tool) => tool.name));
+  const clientNames = new Set(clientTools.map((tool) => tool.name));
+  const mcpNames = new Set((opts?.mcpTools ?? []).map((tool) => tool.name));
+  const injectedNativeNames = new Set<string>();
+  for (const tool of injectedNativeTools) {
+    let source: "built-in" | "client" | "MCP" | "another native" | undefined;
+    if (builtInNames.has(tool.name)) source = "built-in";
+    else if (clientNames.has(tool.name)) source = "client";
+    else if (mcpNames.has(tool.name)) source = "MCP";
+    else if (injectedNativeNames.has(tool.name)) source = "another native";
+    if (source) throw new Error(`Native tool name collision: ${tool.name} conflicts with ${source} tool`);
+    injectedNativeNames.add(tool.name);
+  }
+  const recordedNativeTools = injectedNativeTools.map((tool) => {
+    const inner = tool.execute.bind(tool);
+    return {
+      ...tool,
+      async execute(callId: string, params: unknown, ...rest: unknown[]) {
+        const callSummary = tool.recordCallSummary?.(params) ?? { args: params };
+        await recordCall(callId, { ...callSummary, tool: tool.name });
+        try {
+          const ret = await (
+            inner as (
+              callId: string,
+              params: unknown,
+              ...rest: unknown[]
+            ) => Promise<{
+              content: Array<{ type: string; text?: string }>;
+              details?: unknown;
+              isError?: boolean;
+            }>
+          )(callId, params, ...rest);
+          const resultSummary = tool.recordResultSummary?.(ret, params) ?? {};
+          return recordResult(callId, { ...resultSummary, tool: tool.name }, ret, ret.isError === true);
+        } catch (error) {
+          await recordResult(callId, { tool: tool.name, failed: true }, text(`[error] ${errMessage(error)}`), true);
+          throw error;
+        }
+      },
+    } as ToolDefinition;
+  });
+  tools.push(...recordedNativeTools);
   const deferredNames = new Set(searchable.map((d) => d.name));
-  const nativeNames = new Set(tools.map((t) => t.name));
+  const catalogNames = new Set(tools.map((t) => t.name));
   const inlineTools = mcpCandidates.filter((t) => {
     if (deferredNames.has(t.name)) return false;
-    if (!nativeNames.has(t.name)) return true;
+    if (!catalogNames.has(t.name)) return true;
     console.warn(`[mcp] ${t.name} is hidden because a built-in tool has the same name`);
     return false;
   });
@@ -4280,7 +4351,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const active = opts?.readOnly
     ? tools.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name) || inline.has(t.name) || connectorTools.includes(t))
     : tools;
-  const clientNames = new Set(clientTools.map((tool) => tool.name));
   return active.map((tool) => {
     const wrapped = withRuntimeBarrier(
       withToolSpan(withToolApprovalGate(validateSandboxTool(tool), ref, { recordCall, recordResult }), ref),
@@ -4350,6 +4420,7 @@ const APPROVAL_ARGS_MAX_CHARS = 16_000;
 interface ToolApprovalDeclaration {
   needsApproval?: boolean | ((params: unknown) => boolean | Promise<boolean>);
   approvalReason?: string;
+  approvalKeyParams?(params: unknown): unknown;
 }
 
 async function declaredApprovalReason(tool: ToolApprovalDeclaration, params: unknown): Promise<string | undefined> {
@@ -4414,7 +4485,8 @@ function withToolApprovalGate(
           true,
         );
       }
-      const callKey = declaredReason ? toolCallApprovalKey(approvalIdentity, params) : undefined;
+      const approvalParams = declaredReason ? (tool.approvalKeyParams?.(params) ?? params) : params;
+      const callKey = declaredReason ? toolCallApprovalKey(approvalIdentity, approvalParams) : undefined;
       if (callKey && canonicalJson(params ?? {}).length > APPROVAL_ARGS_MAX_CHARS) {
         const reason = `the arguments are too long to show on an approval card (over ${APPROVAL_ARGS_MAX_CHARS} characters); split the work into smaller calls`;
         await rec.recordCall(callId, { tool: tool.name, blocked: "approval_args_too_long" });

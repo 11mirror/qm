@@ -1,6 +1,8 @@
 import { sleep } from "./util.ts";
 import { channelShareTs, parseUploadedFileIds, slackErrorCode } from "./payloads.ts";
 import { BlobTooLargeError } from "../persistence/blob-transfer.ts";
+import { createHash } from "node:crypto";
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
 
 export interface IncomingAttachment {
   name: string;
@@ -162,17 +164,24 @@ export interface UploadClient {
   files: { uploadV2(args: any): Promise<unknown>; info(args: { file: string }): Promise<unknown> };
 }
 
-async function waitForShareCommit(client: UploadClient, channel: string, fileId: string): Promise<string | undefined> {
-  for (let i = 0; i < 60; i++) {
+async function waitForShareCommit(
+  client: UploadClient,
+  channel: string,
+  fileId: string,
+  threadTs: string | undefined,
+  attempts: number,
+  intervalMs: number,
+): Promise<string | undefined> {
+  for (let i = 0; i < attempts; i++) {
     let info: unknown;
     try {
       info = await client.files.info({ file: fileId });
     } catch {
       return undefined;
     }
-    const ts = channelShareTs(info, channel);
+    const ts = channelShareTs(info, channel, threadTs);
     if (ts) return ts;
-    await sleep(250);
+    if (i + 1 < attempts) await sleep(intervalMs);
   }
   return undefined;
 }
@@ -188,8 +197,16 @@ export async function uploadAttachments(
   threadTs: string | undefined,
   attachments: readonly OutgoingAttachment[],
   blobs: BlobSource,
-  opts: { initialComment?: string } = {},
-): Promise<{ uploaded: boolean; messageTs?: string }> {
+  opts: { initialComment?: string; shareCommitAttempts?: number; shareCommitIntervalMs?: number } = {},
+): Promise<
+  | { uploaded: false; files: [] }
+  | {
+      uploaded: true;
+      files: Array<{ id: string; sha256: string }>;
+      messageTs?: string;
+      renderedBodySha256: string;
+    }
+> {
   const fileUploads: Array<{ filename: string; file: Buffer }> = [];
   for (const a of attachments) {
     let file: Buffer;
@@ -201,19 +218,52 @@ export async function uploadAttachments(
     }
     if (file.length > 0) fileUploads.push({ filename: a.name, file });
   }
-  if (!fileUploads.length) return { uploaded: false };
-  const res = await client.files.uploadV2({
+  if (!fileUploads.length) return { uploaded: false, files: [] };
+  const uploadArgs = {
     channel_id: channel,
     ...(threadTs ? { thread_ts: threadTs } : {}),
     ...(opts.initialComment ? { initial_comment: opts.initialComment } : {}),
     file_uploads: fileUploads,
-  });
+  };
+  const fileDigests = fileUploads.map(({ filename, file }) => ({
+    filename,
+    sha256: createHash("sha256").update(file).digest("hex"),
+  }));
+  const res = await client.files.uploadV2(uploadArgs);
   let messageTs: string | undefined;
-  for (const fileId of parseUploadedFileIds(res)) {
-    const sharedTs = await waitForShareCommit(client, channel, fileId);
-    messageTs ??= sharedTs;
+  const fileIds = parseUploadedFileIds(res);
+  const files: Array<{ id: string; sha256: string }> = [];
+  for (const [index, fileId] of fileIds.entries()) {
+    const upload = fileUploads[index];
+    if (!upload) break;
+    const sharedTs = await waitForShareCommit(
+      client,
+      channel,
+      fileId,
+      threadTs,
+      opts.shareCommitAttempts ?? 60,
+      opts.shareCommitIntervalMs ?? 250,
+    );
+    if (sharedTs) {
+      messageTs ??= sharedTs;
+      files.push({ id: fileId, sha256: fileDigests[index]!.sha256 });
+    }
   }
-  return { uploaded: true, ...(messageTs ? { messageTs } : {}) };
+  return {
+    uploaded: true,
+    files,
+    ...(messageTs ? { messageTs } : {}),
+    renderedBodySha256: createHash("sha256")
+      .update(
+        canonicalJson({
+          channel_id: channel,
+          ...(threadTs ? { thread_ts: threadTs } : {}),
+          ...(opts.initialComment ? { initial_comment: opts.initialComment } : {}),
+          file_uploads: fileDigests,
+        }),
+      )
+      .digest("hex"),
+  };
 }
 
 export function uploadFailureNote(err: unknown): string {

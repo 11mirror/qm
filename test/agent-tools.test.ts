@@ -359,7 +359,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
       return { ok: true, orders: orders ?? "" };
     },
     async callMcpTool() {
-      return "";
+      return { text: "" };
     },
     async mcpToolNeedsApproval() {
       return false;
@@ -4428,7 +4428,7 @@ test("an MCP tool that needs approval is not called until its exact arguments ar
       ...fakeToolContext(),
       callMcpTool: async (_name, args) => {
         calls.push(args);
-        return "deleted";
+        return { text: "deleted" };
       },
     },
     pendingApprovals: [],
@@ -4506,7 +4506,7 @@ test("a catalog tool asks per call and forwards the approval only on the approve
       mcpToolNeedsApproval: async (_name, args) => args.operation === "invoke" && args.tool === "send-message",
       callMcpTool: async (_name, args, approval) => {
         calls.push([args, approval]);
-        return "ok";
+        return { text: "ok" };
       },
     },
     pendingApprovals: [],
@@ -4541,7 +4541,7 @@ test("a failing approval check returns its error to the model and offers no card
       },
       callMcpTool: async () => {
         ran = true;
-        return "ok";
+        return { text: "ok" };
       },
     },
     pendingApprovals: [],
@@ -4589,7 +4589,7 @@ test("a tool that needs approval fails closed without an approval gate", async (
       ...fakeToolContext(),
       callMcpTool: async () => {
         called = true;
-        return "";
+        return { text: "" };
       },
     },
   };
@@ -4705,17 +4705,30 @@ test("tool_search ranks name matches first, lists every tool for an empty query 
   assert.equal(textOut(await call(readOnlySearch, { query: "*" })), "- shop get_cart: Show the cart contents.");
 });
 
-test("mcp_call runs a connector tool named by server and tool, still takes the old single name, and records both alike", async () => {
+test("mcp_call binds the actual call id and trusted host context to each connector invocation", async () => {
   const emitted: Emitted[] = [];
-  const calls: Array<[string, Record<string, unknown>]> = [];
+  const hostContext = {
+    actorId: "U1",
+    scopeId: "personal:U1",
+    session: { id: "session-1", threadRef: "dm:U1:1" },
+    surface: "slack",
+    runtime: { harnessId: "pi", modelId: "gpt-6.1-sol" },
+  };
+  const calls: Array<[string, Record<string, unknown>, unknown]> = [];
   const ref: ToolContextRef = {
     current: {
       ...fakeToolContext(),
-      callMcpTool: async (name, args) => {
-        calls.push([name, args]);
-        return "added";
+      callMcpTool: async (name, args, _approval, invocation) => {
+        calls.push([name, args, invocation]);
+        return {
+          text: "added",
+          outputReceipt: "signed-output-receipt",
+          outputSha256: "279b8a60f444fa8b6275687ce7e44363d97f72f88e4a3285baf0d9ed812e4061",
+          contextSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        };
       },
     },
+    mcpHostContext: hostContext,
     emit: (e) => {
       emitted.push(e as Emitted);
     },
@@ -4729,10 +4742,13 @@ test("mcp_call runs a connector tool named by server and tool, still takes the o
     retrySafe: false,
   });
   assert.match(textOut(paired), /added/);
+  assert.doesNotMatch(JSON.stringify(paired), /signed-output-receipt/);
+  assert.doesNotMatch(JSON.stringify(paired), /279b8a60f444fa8b/);
+  assert.doesNotMatch(JSON.stringify(paired), /aaaaaaaaaaaaaaaa/);
   assert.match(textOut(await callWith(mcpCall, "c2", { tool: "shop_add_to_cart", args: { id: "y" } })), /added/);
   assert.deepEqual(calls, [
-    ["shop_add_to_cart", { id: "x" }],
-    ["shop_add_to_cart", { id: "y" }],
+    ["shop_add_to_cart", { id: "x" }, { callId: "c1", context: hostContext }],
+    ["shop_add_to_cart", { id: "y" }, { callId: "c2", context: hostContext }],
   ]);
   for (const [callId, args] of [
     ["c1", { id: "x" }],
@@ -4744,6 +4760,29 @@ test("mcp_call runs a connector tool named by server and tool, still takes the o
     assert.deepEqual(recorded.args, args);
   }
   assert.equal(emitted.find((e) => e.type === "tool_call" && e.payload.callId === "c1")!.payload.retrySafe, false);
+  for (const callId of ["c1", "c2"]) {
+    const result = emitted.find((e) => e.type === "tool_result" && e.payload.callId === callId)!.payload;
+    assert.equal(result.result, "added");
+    assert.equal(result.outputReceipt, "signed-output-receipt");
+    assert.equal(result.outputSha256, "279b8a60f444fa8b6275687ce7e44363d97f72f88e4a3285baf0d9ed812e4061");
+    assert.equal(result.contextSha256, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  }
+  const history: SessionEntry[] = [
+    { type: "user" as const, payload: { text: "add it" } },
+    ...emitted.map((entry) => ({ type: entry.type, payload: entry.payload })),
+  ].map((entry, index) => ({
+    ...entry,
+    sessionId: "session-1",
+    seq: index + 1,
+    parentSeq: null,
+    scopeLabel: "personal:U1",
+    createdAt: index + 1,
+  }));
+  const replayed = reconstructMessagesFromHistory(history).filter((message) => message.role === "toolResult");
+  assert.equal(replayed.length, 2);
+  assert.doesNotMatch(JSON.stringify(replayed), /signed-output-receipt/);
+  assert.doesNotMatch(JSON.stringify(replayed), /279b8a60f444fa8b/);
+  assert.doesNotMatch(JSON.stringify(replayed), /aaaaaaaaaaaaaaaa/);
   assert.equal(
     textOut(await callWith(mcpCall, "c3", { server: "shop", tool: "refund", args: {} })),
     '[error] unknown tool "refund" on server "shop"; use tool_search to find connector tools.',
@@ -4765,7 +4804,7 @@ test("an approval asked through either mcp_call form shows the same card and let
       ...fakeToolContext(),
       callMcpTool: async (_name, args, approval) => {
         calls.push([args, approval]);
-        return "deleted";
+        return { text: "deleted" };
       },
     },
     pendingApprovals: [],

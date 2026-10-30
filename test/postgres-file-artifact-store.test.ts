@@ -1,7 +1,7 @@
 import { assertDocumentListing, assertSharedRecordIdentity } from "./support/file-document-listing.ts";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
+import { createMemoryDurableByteStore, createNamespacedDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { fileArtifactId, type PutFileInput } from "../src/files/file-artifact-store.ts";
 import { scopeId } from "../src/types.ts";
@@ -177,6 +177,20 @@ test("pg open round-trips bytes; delete removes the ROW only", { skip }, async (
   await store.delete("o1");
   assert.equal(await store.get("o1"), null, "row gone");
   assert.ok(await store.open("i1"), "shared bytes survive (no inline byte delete)");
+});
+
+test("pg creator custody routes Finny artifacts only to namespaced bytes", { skip }, async () => {
+  const ordinaryBytes = createMemoryDurableByteStore();
+  const finnyBytes = createNamespacedDurableByteStore(createMemoryDurableByteStore(), "finny");
+  const store = createPostgresFileArtifactStore(URL!, ordinaryBytes, {
+    "system:finny": { store: finnyBytes },
+  });
+  const current = await store.put(
+    put({ id: "current-finny", createdBy: "system:finny", path: "p/current", data: Buffer.from("current") }),
+  );
+  assert.match(current.artifact.blobKey!, /^files\/finny\/[a-f0-9]{64}$/);
+  assert.equal(await ordinaryBytes.open(current.artifact.blobKey!), null);
+  assert.ok(await finnyBytes.open(current.artifact.blobKey!));
 });
 
 test("pg rows survive across store instances (no per-process cache to diverge)", { skip }, async () => {

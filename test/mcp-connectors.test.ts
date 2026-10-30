@@ -12,6 +12,10 @@ import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { settle } from "./support/settle.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createHash, createHmac } from "node:crypto";
+import { canonicalJson } from "../cli/src/canonical-json.ts";
+import type { McpHostContext } from "../src/types.ts";
+import { generateMcpAttestationKeyPair, verifyMcpAttestation } from "../src/mcp/mcp-attestation.ts";
 
 function server(partial?: Partial<McpServer>): McpServer {
   return {
@@ -161,8 +165,149 @@ test("tool service exposes namespaced tools and calls through", async (t) => {
   assert.deepEqual(defs.map((d) => d.name).sort(), ["crm_query", "crm_update"]);
   assert.ok(defs.every((d) => d.readOnly && d.serverAbout === "CRM records"));
   const out = await service.call("crm_query", { q: "hello" }, "internal:U1");
-  assert.equal(out, "ran query");
+  assert.equal(out.text, "ran query");
   service.close();
+});
+
+test("attested catalog calls bind host context, arguments, and output without changing legacy calls", async (t) => {
+  const keys = generateMcpAttestationKeyPair();
+  const pendingKeys = generateMcpAttestationKeyPair();
+  const mcp = await startMcpTestServer(t, {
+    tools: [{ name: "balance", description: "Read a balance", inputSchema: { type: "object" } }],
+    call: (_name, args) => ({ content: [{ type: "text", text: `balance ${JSON.stringify(args)}` }] }),
+  });
+  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000, now: () => 1_800_000_000_000 });
+  t.after(() => service.close());
+  await store.put(
+    server({
+      id: "finance",
+      name: "Finance",
+      url: mcp.url,
+      auth: "bearer",
+      bearerToken: "transport-secret",
+      credentialScope: "shared",
+      catalog: true,
+      attestActor: true,
+      attestContext: true,
+      ...keys,
+      pendingAttestationPrivateKey: pendingKeys.attestationPrivateKey,
+      pendingAttestationPublicKey: pendingKeys.attestationPublicKey,
+      pendingAttestationKeyId: pendingKeys.attestationKeyId,
+    }),
+  );
+  await service.refresh();
+  assert.equal(
+    (await service.call("finance", { operation: "search" }, "internal:alice")).text,
+    "- balance: Read a balance",
+  );
+  assert.equal(mcp.requests.find((request) => request.rpc === "tools/list")?.context, undefined);
+  await assert.rejects(
+    service.call("finance", { operation: "invoke", tool: "balance", arguments: {} }, "internal:alice"),
+    /requires complete host context/,
+  );
+  const context: McpHostContext = {
+    actorId: "internal:alice",
+    scopeId: "default-org:finance",
+    session: { id: "session-7", threadRef: "slack:T1:C1:171.25" },
+    surface: "slack",
+    slackSource: {
+      accountId: "A1",
+      teamId: "T1",
+      userId: "U1",
+      replyThreadTs: "171.25",
+      externalPolicyNamespace: "example-finance",
+    },
+    runId: "run-8",
+    attempt: 2,
+    runtime: { harnessId: "pi", modelId: "anthropic/claude-sonnet" },
+  };
+  const args = { z: 2, a: 1 };
+  const output = await service.call(
+    "finance",
+    { operation: "invoke", tool: "balance", arguments: args },
+    "internal:alice",
+    "tool-call:approved",
+    { callId: "call-9", context },
+  );
+  const requestsWithContext = mcp.requests.filter((entry) => entry.context);
+  assert.equal(requestsWithContext.length, 1);
+  const request = requestsWithContext[0]!;
+  assert.equal(request.rpc, "tools/call");
+  assert.ok(request.context);
+  const claims = (await verifyMcpAttestation(request.context, keys.attestationPublicKey, "call-context")) as Record<
+    string,
+    unknown
+  >;
+  assert.equal(await verifyMcpAttestation(request.context, pendingKeys.attestationPublicKey, "call-context"), null);
+  assert.deepEqual(claims, {
+    kind: "qm.mcp-call-context",
+    version: 1,
+    actorId: "internal:alice",
+    scopeId: "default-org:finance",
+    sessionId: "session-7",
+    threadRef: "slack:T1:C1:171.25",
+    surface: "slack",
+    slackSource: {
+      accountId: "A1",
+      teamId: "T1",
+      userId: "U1",
+    },
+    runId: "run-8",
+    attempt: 2,
+    runtime: { harnessId: "pi", modelId: "anthropic/claude-sonnet" },
+    serverId: "finance",
+    toolName: "balance",
+    argumentsSha256: createHash("sha256").update(canonicalJson(args)).digest("hex"),
+    callId: "call-9",
+    approvalKey: "tool-call:approved",
+    issuedAt: 1_800_000_000_000,
+    expiresAt: 1_800_000_060_000,
+    nonce: claims.nonce,
+  });
+  assert.equal(typeof claims.nonce, "string");
+  assert.equal(output.text, 'balance {"z":2,"a":1}');
+  assert.ok(output.outputReceipt);
+  assert.equal(output.contextSha256, createHash("sha256").update(request.context).digest("hex"));
+  assert.equal(output.outputSha256, createHash("sha256").update('balance {"z":2,"a":1}').digest("hex"));
+  assert.doesNotMatch(output.text, /eyJ|qm-output-receipt/);
+  const receipt = (await verifyMcpAttestation(
+    output.outputReceipt,
+    keys.attestationPublicKey,
+    "output-receipt",
+  )) as Record<string, unknown>;
+  assert.deepEqual(receipt, {
+    kind: "qm.mcp-output-receipt",
+    version: 1,
+    serverId: "finance",
+    toolName: "balance",
+    argumentsSha256: claims.argumentsSha256,
+    callId: "call-9",
+    contextSha256: createHash("sha256").update(request.context).digest("hex"),
+    outputSha256: createHash("sha256").update('balance {"z":2,"a":1}').digest("hex"),
+    issuedAt: 1_800_000_000_000,
+    nonce: receipt.nonce,
+  });
+  assert.equal(typeof receipt.nonce, "string");
+  assert.equal(Object.hasOwn(receipt, "slackSource"), false);
+  assert.doesNotMatch(JSON.stringify(receipt), /externalPolicyNamespace|replyThreadTs|example-finance/);
+  assert.doesNotMatch(JSON.stringify(claims) + JSON.stringify(receipt), /transport-secret|PRIVATE KEY|balance \{/);
+  assert.equal(await verifyMcpAttestation(request.context, keys.attestationPublicKey, "output-receipt"), null);
+  for (const [type, typ, payload] of [
+    ["call-context", "qm-mcp-call-context+jws", { ...claims, callId: "forged" }],
+    ["output-receipt", "qm-mcp-output-receipt+jws", { ...receipt, outputSha256: "forged" }],
+  ] as const) {
+    const protectedHeader = Buffer.from(JSON.stringify({ alg: "HS256", kid: keys.attestationKeyId, typ })).toString(
+      "base64url",
+    );
+    const forgedPayload = Buffer.from(JSON.stringify(payload)).toString("base64url");
+    const forgedInput = `${protectedHeader}.${forgedPayload}`;
+    const forgedSignature = createHmac("sha256", keys.attestationPublicKey).update(forgedInput).digest("base64url");
+    assert.equal(
+      await verifyMcpAttestation(`${forgedInput}.${forgedSignature}`, keys.attestationPublicKey, type),
+      null,
+    );
+  }
 });
 
 test("destructive annotations mark MCP tools for approval unless the server overrides the policy", async (t) => {
@@ -209,11 +354,11 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
   );
   assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 0, "a catalog is listed per person on use");
   assert.equal(
-    await service.call("records", { operation: "search", query: "message" }, "alice@example.com"),
+    (await service.call("records", { operation: "search", query: "message" }, "alice@example.com")).text,
     "- send-message (needs approval): Send a message to a contact",
   );
   assert.match(
-    await service.call("records", { operation: "describe", tool: "send-message" }, "alice@example.com"),
+    (await service.call("records", { operation: "describe", tool: "send-message" }, "alice@example.com")).text,
     /"needsApproval":true/,
   );
   assert.equal(
@@ -235,12 +380,14 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
     "an approval-requiring tool never goes out without an approval",
   );
   assert.equal(
-    await service.call(
-      "records",
-      { operation: "invoke", tool: "send-message", arguments: { to: "x" } },
-      "alice@example.com",
-      "tool-call:abc",
-    ),
+    (
+      await service.call(
+        "records",
+        { operation: "invoke", tool: "send-message", arguments: { to: "x" } },
+        "alice@example.com",
+        "tool-call:abc",
+      )
+    ).text,
     'send-message {"to":"x"}',
   );
   assert.deepEqual(
@@ -250,7 +397,16 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
   assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 1, "the catalog is cached per person");
   await service.call("records", { operation: "search" }, "bob@example.com");
   assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 2, "each person gets their own catalog");
-  assert.ok(mcp.requests.every((r) => r.actor === "alice@example.com" || r.actor === "bob@example.com"));
+  assert.ok(
+    mcp.requests
+      .filter((request) => request.rpc === "tools/list" || request.rpc === "tools/call")
+      .every((request) => request.actor === "alice@example.com" || request.actor === "bob@example.com"),
+  );
+  assert.ok(
+    mcp.requests
+      .filter((request) => request.rpc !== "tools/list" && request.rpc !== "tools/call")
+      .every((request) => request.actor === undefined),
+  );
   await assert.rejects(service.call("records", { operation: "search" }), /needs a signed-in person/);
   await service.refresh();
   const lists = mcp.requests.filter((r) => r.rpc === "tools/list").length;
@@ -326,8 +482,8 @@ test("per-user calls resolve only the caller's fresh token while discovery uses 
   assert.ok(authFor("tools/list").every((auth) => auth === "Bearer catalog-only"));
   assert.deepEqual(
     await Promise.all([
-      service.call("crm_query", { q: "alice" }, "internal:alice"),
-      service.call("crm_query", { q: "bob" }, "internal:bob"),
+      service.call("crm_query", { q: "alice" }, "internal:alice").then((result) => result.text),
+      service.call("crm_query", { q: "bob" }, "internal:bob").then((result) => result.text),
     ]),
     ["alice", "bob"],
   );
@@ -367,7 +523,7 @@ test("per-user mode fails closed without a keychain and shared mode preserves ex
   assert.equal(mcp.requests.length, count);
   await store.put(server({ url: mcp.url, auth: "bearer", bearerToken: "shared-token", credentialScope: "shared" }));
   await service.refresh();
-  assert.equal(await service.call("crm_query", {}), "ran query");
+  assert.equal((await service.call("crm_query", {})).text, "ran query");
 });
 
 test("MCP HTTP transport refuses redirects before sending a user token to another endpoint", async (t) => {
@@ -416,7 +572,7 @@ test("per-user connectors select an explicit account slot without falling back t
     }),
   );
   await service.refresh();
-  assert.equal(await service.call("crm_query", {}, "internal:alice"), "ran query");
+  assert.equal((await service.call("crm_query", {}, "internal:alice")).text, "ran query");
   await users.deleteConnectorToken(host, "internal:alice", "company");
   await assert.rejects(service.call("crm_query", {}, "internal:alice"), /Connect your account/);
 });
@@ -450,7 +606,7 @@ test("background MCP refresh contains registry failures at startup, on change, a
     service.toolDefs().map((tool) => tool.name),
     ["crm_query", "crm_update"],
   );
-  assert.equal(await service.call("crm_query", {}), "ran query");
+  assert.equal((await service.call("crm_query", {})).text, "ran query");
 });
 
 test("optional intent and locale parameters are left out of the schema the model sees, required ones are kept", async (t) => {
@@ -494,6 +650,6 @@ test("optional intent and locale parameters are left out of the schema the model
   assert.deepEqual(Object.keys(schemas.crm_search!.properties as object), ["query"]);
   assert.deepEqual(schemas.crm_search!.required, ["query"]);
   assert.deepEqual(Object.keys(schemas.crm_translate!.properties as object), ["text", "locale"]);
-  assert.equal(await service.call("crm_search", { query: "tacos" }), "ok");
+  assert.equal((await service.call("crm_search", { query: "tacos" })).text, "ok");
   assert.deepEqual(sent, [{ query: "tacos" }]);
 });

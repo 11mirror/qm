@@ -5,6 +5,7 @@ import type { DurableByteStore } from "./durable-byte-store.ts";
 import {
   FileArtifactDeletedError,
   clampLimit,
+  creatorByteStore,
   decodeCursor,
   encodeCursor,
   type FileArtifact,
@@ -14,6 +15,7 @@ import {
   type FilePage,
   type FileSource,
   type ListOwnedOptions,
+  type CreatorByteStoreRoute,
 } from "./file-artifact-store.ts";
 
 const SCHEMA = [
@@ -66,6 +68,7 @@ function rowToArtifact(r: Record<string, unknown>): FileArtifact {
 export function createPostgresFileArtifactStore(
   connectionString: string,
   byteStore: DurableByteStore,
+  creatorByteStores: Readonly<Record<string, CreatorByteStoreRoute>> = {},
 ): FileArtifactStore {
   const { q, query, pool } = createPgPool(connectionString, [
     { id: "files/artifacts/0001", statements: SCHEMA },
@@ -140,7 +143,7 @@ export function createPostgresFileArtifactStore(
       const existing = await getRow(input.id);
       if (existing) return { artifact: existing, created: false };
 
-      const { blobKey, sizeBytes, sha256 } = await byteStore.put(
+      const { blobKey, sizeBytes, sha256 } = await creatorByteStore(byteStore, creatorByteStores, input.createdBy).put(
         input.data,
         input.maxBytes != null ? { maxBytes: input.maxBytes } : {},
       );
@@ -200,7 +203,7 @@ export function createPostgresFileArtifactStore(
     async open(id) {
       const r = await getRow(id);
       if (!r || !r.enabled || !r.blobKey) return null;
-      const bytes = await byteStore.open(r.blobKey);
+      const bytes = await creatorByteStore(byteStore, creatorByteStores, r.createdBy).open(r.blobKey);
       if (!bytes) return null;
       return { artifact: r, sizeBytes: bytes.sizeBytes, stream: bytes.stream };
     },

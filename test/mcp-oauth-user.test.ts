@@ -115,13 +115,13 @@ test("oauth-user tools offer a sign-in link until the caller connects, then use 
   );
   assert.equal(mcp.requests.length, 0, "no unauthenticated discovery");
   assert.match(
-    await service.call("orders_sign_in", {}, "internal:alice"),
+    (await service.call("orders_sign_in", {}, "internal:alice")).text,
     /\[Connect Orders\]\(https:\/\/qm\.example\/connect\/orders\/self-connect\)/,
   );
 
   tokens.set("internal:alice", "alice-token");
   assert.match(
-    await service.call("orders_sign_in", {}, "internal:alice"),
+    (await service.call("orders_sign_in", {}, "internal:alice")).text,
     /Tools now available on server "orders": search$/,
   );
   assert.deepEqual(
@@ -140,8 +140,8 @@ test("oauth-user tools offer a sign-in link until the caller connects, then use 
   );
   assert.equal((await store.get("orders"))!.about, "Look up past orders.");
   assert.equal((await service.toolDefsFor("internal:alice"))[0]!.serverAbout, "Look up past orders.");
-  assert.equal(await service.call("orders_search", { q: "tacos" }, "internal:alice"), "found tacos");
-  assert.match(await service.call("orders_search", { q: "x" }, "internal:bob"), /Connect Orders/);
+  assert.equal((await service.call("orders_search", { q: "tacos" }, "internal:alice")).text, "found tacos");
+  assert.match((await service.call("orders_search", { q: "x" }, "internal:bob")).text, /Connect Orders/);
   assert.deepEqual(auth(), ["Bearer alice-token", "Bearer alice-token"]);
 });
 

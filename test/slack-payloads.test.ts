@@ -232,6 +232,22 @@ test("channelShareTs merges public and private shares for the channel", () => {
   assert.equal(channelShareTs({ file: { shares: { public: { C1: [{}] } } } }, "C1"), undefined);
 });
 
+test("channelShareTs requires the exact requested thread", () => {
+  const res = {
+    file: {
+      shares: {
+        private: {
+          C1: [{ ts: "1.1", thread_ts: "root-1" }, { ts: "2.2", thread_ts: "root-2" }, { ts: "3.3" }],
+        },
+      },
+    },
+  };
+  assert.equal(channelShareTs(res, "C1", "root-1"), "1.1");
+  assert.equal(channelShareTs(res, "C1", "root-2"), "2.2");
+  assert.equal(channelShareTs(res, "C1", "missing"), undefined);
+  assert.equal(channelShareTs(res, "C1"), "3.3");
+});
+
 test("channelShareTs throws loudly on a malformed shares entry", () => {
   assert.throws(() => channelShareTs({ file: { shares: { public: { C1: { not: "a list" } } } } }, "C1"), TypeError);
 });

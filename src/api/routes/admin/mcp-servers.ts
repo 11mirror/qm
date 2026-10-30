@@ -15,6 +15,7 @@ import { discoverOAuth, httpsUrl, parseScopes, type DiscoveredOAuth } from "../.
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { generateMcpAttestationKeyPair, type McpAttestationKeyPair } from "../../../mcp/mcp-attestation.ts";
 
 const AUTH_MODES: McpServerAuthMode[] = ["none", "bearer", "client-credentials", "oauth-user"];
 const APPROVAL_POLICIES: McpApprovalPolicy[] = ["annotations", "all", "none"];
@@ -24,12 +25,23 @@ async function actor(ctx: ApiCtx) {
   return authorizeAdmin(ctx, scope);
 }
 
-function redact(server: McpServer): Omit<McpServer, "bearerToken" | "clientSecret"> & {
+function redact(server: McpServer): Omit<
+  McpServer,
+  "bearerToken" | "clientSecret" | "attestationPrivateKey" | "pendingAttestationPrivateKey"
+> & {
   hasBearerToken: boolean;
   hasClientSecret: boolean;
+  hasAttestationPrivateKey: boolean;
+  hasPendingAttestationPrivateKey: boolean;
 } {
-  const { bearerToken, clientSecret, ...rest } = server;
-  return { ...rest, hasBearerToken: !!bearerToken, hasClientSecret: !!clientSecret };
+  const { bearerToken, clientSecret, attestationPrivateKey, pendingAttestationPrivateKey, ...rest } = server;
+  return {
+    ...rest,
+    hasBearerToken: !!bearerToken,
+    hasClientSecret: !!clientSecret,
+    hasAttestationPrivateKey: !!attestationPrivateKey,
+    hasPendingAttestationPrivateKey: !!pendingAttestationPrivateKey,
+  };
 }
 
 export async function getMcpServers(ctx: ApiCtx): Promise<void> {
@@ -66,7 +78,13 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
       message: "id must be 2-40 chars: lowercase letters, digits, hyphens, starting with a letter",
     });
   }
-  const b = ctx.body as Partial<McpServer> & { validate?: boolean };
+  const b = ctx.body as Partial<McpServer> & {
+    validate?: boolean;
+    rotateAttestationKey?: boolean;
+    prepareAttestationKey?: boolean;
+    activateAttestationKeyId?: string;
+    attestationSecret?: unknown;
+  };
   const url = typeof b.url === "string" ? b.url.trim() : "";
   let parsed: URL;
   try {
@@ -98,6 +116,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   const oauthUser = auth === "oauth-user";
   const catalog = (b.catalog ?? existing?.catalog) === true;
   const attestActor = (b.attestActor ?? existing?.attestActor) === true;
+  const attestContext = (b.attestContext ?? existing?.attestContext) === true;
   if ((catalog || attestActor) && oauthUser) {
     return sendJson(ctx.res, 400, {
       error: "bad_request",
@@ -120,6 +139,107 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
       message:
         "attestActor requires catalog, shared credentials, and bearer or client-credentials auth, so only QM can assert the person",
     });
+  }
+  if (b.attestationSecret !== undefined) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: "attestationSecret is not supported; QM generates an Ed25519 keypair for attestContext",
+    });
+  }
+  if (
+    b.attestationPrivateKey !== undefined ||
+    b.attestationPublicKey !== undefined ||
+    b.attestationKeyId !== undefined ||
+    b.pendingAttestationPrivateKey !== undefined ||
+    b.pendingAttestationPublicKey !== undefined ||
+    b.pendingAttestationKeyId !== undefined ||
+    b.retiredAttestationKeys !== undefined
+  ) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: "attestation keys are generated and rotated by QM",
+    });
+  }
+  if (b.rotateAttestationKey !== undefined) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: "rotateAttestationKey is not supported; prepare and activate attestation keys separately",
+    });
+  }
+  if (b.prepareAttestationKey !== undefined && typeof b.prepareAttestationKey !== "boolean") {
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "prepareAttestationKey must be boolean" });
+  }
+  if (
+    b.activateAttestationKeyId !== undefined &&
+    (typeof b.activateAttestationKeyId !== "string" || !b.activateAttestationKeyId.trim())
+  ) {
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "activateAttestationKeyId must be nonblank" });
+  }
+  if (b.prepareAttestationKey && b.activateAttestationKeyId !== undefined) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: "prepareAttestationKey and activateAttestationKeyId are separate operations",
+    });
+  }
+  if ((b.prepareAttestationKey || b.activateAttestationKeyId !== undefined) && !attestContext) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: "attestation key preparation and activation require attestContext",
+    });
+  }
+  if (
+    attestContext &&
+    (!catalog || !attestActor || credentialScope !== "shared" || (auth !== "bearer" && auth !== "client-credentials"))
+  ) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: "attestContext requires catalog, attestActor, shared credentials, and bearer or client-credentials auth",
+    });
+  }
+  let attestationKeys: McpAttestationKeyPair | undefined;
+  let pendingAttestationKeys: McpAttestationKeyPair | undefined;
+  let retiredAttestationKeys = existing?.retiredAttestationKeys;
+  if (attestContext) {
+    attestationKeys =
+      existing?.attestationPrivateKey && existing.attestationPublicKey && existing.attestationKeyId
+        ? {
+            attestationPrivateKey: existing.attestationPrivateKey,
+            attestationPublicKey: existing.attestationPublicKey,
+            attestationKeyId: existing.attestationKeyId,
+          }
+        : generateMcpAttestationKeyPair();
+    if (
+      existing?.pendingAttestationPrivateKey &&
+      existing.pendingAttestationPublicKey &&
+      existing.pendingAttestationKeyId
+    ) {
+      pendingAttestationKeys = {
+        attestationPrivateKey: existing.pendingAttestationPrivateKey,
+        attestationPublicKey: existing.pendingAttestationPublicKey,
+        attestationKeyId: existing.pendingAttestationKeyId,
+      };
+    }
+    if (b.prepareAttestationKey && !pendingAttestationKeys) {
+      pendingAttestationKeys = generateMcpAttestationKeyPair();
+    }
+    if (b.activateAttestationKeyId !== undefined) {
+      if (!pendingAttestationKeys || b.activateAttestationKeyId !== pendingAttestationKeys.attestationKeyId) {
+        return sendJson(ctx.res, 400, {
+          error: "bad_request",
+          message: "activateAttestationKeyId must match the prepared pending key",
+        });
+      }
+      retiredAttestationKeys = [
+        {
+          publicKey: attestationKeys.attestationPublicKey,
+          keyId: attestationKeys.attestationKeyId,
+          retiredAt: Date.now(),
+        },
+        ...(retiredAttestationKeys ?? []),
+      ];
+      attestationKeys = pendingAttestationKeys;
+      pendingAttestationKeys = undefined;
+    }
   }
   const credentialHost = b.credentialHost ?? existing?.credentialHost ?? (oauthUser ? parsed.hostname : undefined);
   if (
@@ -201,6 +321,20 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     ...(approval === "annotations" ? {} : { approval }),
     ...(catalog ? { catalog } : {}),
     ...(attestActor ? { attestActor } : {}),
+    ...(attestContext
+      ? {
+          attestContext,
+          ...attestationKeys,
+          ...(pendingAttestationKeys
+            ? {
+                pendingAttestationPrivateKey: pendingAttestationKeys.attestationPrivateKey,
+                pendingAttestationPublicKey: pendingAttestationKeys.attestationPublicKey,
+                pendingAttestationKeyId: pendingAttestationKeys.attestationKeyId,
+              }
+            : {}),
+          ...(retiredAttestationKeys?.length ? { retiredAttestationKeys } : {}),
+        }
+      : {}),
     readOnly: b.readOnly !== false,
     enabled: b.enabled !== false,
     updatedAt: Date.now(),

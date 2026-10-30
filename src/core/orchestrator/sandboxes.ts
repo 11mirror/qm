@@ -4,6 +4,7 @@ import { personalScope } from "../../types.ts";
 import { intersectEgressPolicies } from "../../resolution/egress-policy.ts";
 import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
 import { type SandboxHandle, supportsProcessSessions, SandboxProvisionCleanupError } from "../../sandbox/sandbox.ts";
+import { NoDefaultSandboxError } from "../../sandbox/sandbox-routing.ts";
 import {
   accessConversationSandbox,
   type SandboxAccessPlan,
@@ -272,7 +273,16 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     if (!shipsFiles) return { content: render(), sourceScopeId: resolution.skill.scopeId };
     const access = sandboxId !== undefined ? await accessResource(sandboxId) : undefined;
     if (access?.crossScope) return { content: render(skillsRoot(resolution)), sourceScopeId: resolution.skill.scopeId };
-    const handle = access ? await provisionResource(access) : await provision();
+    let handle: SandboxHandle;
+    try {
+      handle = access ? await provisionResource(access) : await provision();
+    } catch (error) {
+      if (sandboxId !== undefined || !(error instanceof NoDefaultSandboxError)) throw error;
+      return {
+        content: file === "SKILL.md" ? renderSkillBody(resolution) : rehomeSkillPaths(resolution, asset!, "skills"),
+        sourceScopeId: resolution.skill.scopeId,
+      };
+    }
     await materializeSkillTree(handle, resolution);
     const root = `${handle.rootDir}/${skillsRoot(resolution)}`;
     const pack = packRoot(root, resolution);

@@ -107,6 +107,7 @@ import {
   createAgentTools,
   endedOnPurpose,
   pauseStampAfterToolCall,
+  type NativeToolDefinition,
   type ToolContextRef,
 } from "./agent-tools.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
@@ -171,6 +172,10 @@ export interface PiHarnessOptions {
   backgroundJobTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
   signals?: RunSignalStore;
+  allowedToolNames?: readonly string[];
+  nativeTools?:
+    | readonly NativeToolDefinition[]
+    | ((turn: HarnessTurnInput, ref: ToolContextRef) => readonly NativeToolDefinition[]);
 }
 
 export function piHarnessConfigOptions(config: Config): PiHarnessOptions {
@@ -1246,7 +1251,7 @@ async function recordOneShotCall(
       step,
       model: model.id,
       truncated: false,
-      usage: piUsageToCallUsage(call.usage, model, false, (call as { serviceTier?: string }).serviceTier),
+      usage: piUsageToCallUsage(call.usage, model, false, undefined),
     });
   } catch (e) {
     swallow("pi: one-shot request record", e);
@@ -1500,7 +1505,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
   const signals = opts?.signals;
   function createTurnTools(ref: ToolContextRef, turn: HarnessTurnInput): ToolDefinition[] {
-    return createAgentTools(ref, {
+    const nativeTools = typeof opts?.nativeTools === "function" ? opts.nativeTools(turn, ref) : opts?.nativeTools;
+    const tools = createAgentTools(ref, {
       sessionTools: Boolean(turn.tools.sessionSyscalls),
       delegateWork: turn.delegateWork === true,
       reachExec,
@@ -1510,6 +1516,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       ...(turn.surfaceTools ? { surfaceTools: true } : {}),
       ...(turn.surfaceName ? { surfaceName: turn.surfaceName } : {}),
       ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
+      ...(nativeTools?.length ? { nativeTools } : {}),
       ...(turn.readOnly ? { readOnly: true } : {}),
       ...(opts?.execTimeoutMs !== undefined ? { execTimeoutMs: opts.execTimeoutMs } : {}),
       ...(opts?.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: opts.execTimeoutCeilingMs } : {}),
@@ -1517,6 +1524,9 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       ...(opts?.backgroundJobTtlMaxMs !== undefined ? { backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs } : {}),
       sandboxResources: opts?.sandboxResources,
     });
+    if (!opts?.allowedToolNames) return tools;
+    const allowed = new Set(opts.allowedToolNames);
+    return tools.filter((tool) => allowed.has(tool.name));
   }
   async function createTurnSession(
     model: Model<Api>,
@@ -1670,6 +1680,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           runtimeInFlight: new Set(),
           runtimeRunId: dispatched.runId,
           runtimeActorId: dispatched.runtimeActorId,
+          mcpHostContext: dispatched.mcpHostContext,
           pendingApprovals: [],
           pausedOnApproval: undefined,
           silentRequested: false,
@@ -1985,6 +1996,12 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             await entry.agentSession.setModel(
               withRequestHeaders(fallback, !turnModelGateway?.models[fallbackId], wantFast),
             );
+            if (entry.ref.mcpHostContext) {
+              entry.ref.mcpHostContext = Object.freeze({
+                ...entry.ref.mcpHostContext,
+                runtime: Object.freeze({ ...entry.ref.mcpHostContext.runtime, modelId: fallbackId }),
+              });
+            }
             entry.ref.fast = wantFast;
             entry.ref.effortLevel =
               custom?.effortLevel ?? turn.runtime?.effortLevel ?? defaultInteractiveThinkingLevel(fallback);

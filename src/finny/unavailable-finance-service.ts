@@ -1,0 +1,49 @@
+import type { FinanceService } from "./finance.ts";
+import { digestFinnyEvidence } from "./golden-loop.ts";
+
+const blocked = (capability: string): never => {
+  throw new Error(`blocked_external: no reviewed ${capability} adapter is registered`);
+};
+
+export function createUnavailableFinanceService(): FinanceService {
+  return {
+    async clarify(input, context) {
+      return {
+        clarification: "The host recorded the requested finance scope; no source data has been fetched.",
+        evidenceDigest: digestFinnyEvidence(
+          JSON.stringify({ runId: context.runId, actorId: context.actorId, request: input.request }),
+        ),
+      };
+    },
+    async preflight(input, context) {
+      const plan = JSON.stringify({
+        runId: context.runId,
+        actorId: context.actorId,
+        mode: "read-only",
+        request: input.request,
+        query: input.query,
+        clarificationDigest: input.clarificationDigest,
+      });
+      return {
+        planSummary: "Read-only finance source request; an approved native source adapter is required.",
+        preflightDigest: digestFinnyEvidence(`preflight:${plan}`),
+        planDigest: digestFinnyEvidence(`plan:${plan}`),
+      };
+    },
+    async plan(input, context) {
+      return {
+        decision: "approved",
+        approvalDigest: digestFinnyEvidence(`host-approval:${context.runId}:${context.actorId}:${input.planDigest}`),
+      };
+    },
+    async source() {
+      return blocked("finance source");
+    },
+    async artifact() {
+      return blocked("finance artifact");
+    },
+    async verify() {
+      return blocked("independent finance verifier");
+    },
+  };
+}

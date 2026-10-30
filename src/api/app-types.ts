@@ -76,6 +76,7 @@ import type {
   CronFireNote,
   Delivery,
   Destination,
+  SlackDeliveryProviderReceipt,
   SurfaceContextQuery,
   SurfaceContextRequest,
   SurfaceContextResult,
@@ -481,6 +482,8 @@ export interface App {
   setWebhookEnabled(id: string, enabled: boolean): Promise<void>;
   updateWebhook(id: string, patch: { action: string }): Promise<Webhook | null>;
   pendingDeliveries(type: string, claimMs?: number): Promise<Delivery[]>;
+  getDelivery(id: string): Promise<Delivery | null>;
+  listDeliveriesByMcpCall(serverId: string, callId: string, contextSha256: string): Promise<Delivery[]>;
   enqueueDelivery(input: {
     destination: Destination;
     text: string;
@@ -516,7 +519,10 @@ export interface App {
     container: string,
     opts?: { reason?: "messages" | "scheduled" },
   ): Promise<AmbientDecision>;
-  ackDelivery(id: string, slackApiMs?: number): Promise<void>;
+  ackDelivery(
+    id: string,
+    details?: { slackApiMs?: number; providerReceipt?: SlackDeliveryProviderReceipt },
+  ): Promise<void>;
   ackDeliveryByKey(idempotencyKey: string): Promise<void>;
   setRunDeliveryState(runId: string, state: RunDeliveryState): Promise<boolean>;
   upsertDirectory(members: DirectoryMember[], syncedAt?: number): Promise<boolean>;

@@ -64,6 +64,21 @@ test("runResultDelivery maps ok-with-reply to a recovery delivery keyed by run",
   });
 });
 
+test("runResultDelivery preserves durable MCP output evidence in recovery provenance", () => {
+  const mcpEvidenceRefs = [
+    {
+      serverId: "netsuite",
+      callId: "call-1",
+      outputReceiptSha256: "217b6c4aa3de9fd078288928585620140b863ad258b65cbbc5a255450222a5d8",
+    },
+  ];
+
+  const d = runResultDelivery(run({ result: { status: "ok", reply: "the reply", mcpEvidenceRefs } as TurnResult }));
+
+  assert.deepEqual(d?.provenance.mcpEvidenceRefs, mcpEvidenceRefs);
+  assert.doesNotMatch(JSON.stringify(d), /signed-output-receipt|plain tool output/);
+});
+
 test("runResultDelivery carries the reply's attachments so recovery can replay the files", () => {
   const atts = [{ name: "report.csv", mimetype: "text/csv", sizeBytes: 42, blobId: "blob-1" }];
   const d = runResultDelivery(run({ result: { status: "ok", reply: "here's the file", attachments: atts } }));
@@ -257,7 +272,18 @@ test("sweep enqueues the recovery delivery for a terminal run whose outbox row n
   const deliveries = createDeliveryStore();
   const bypassed = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
   const claimed = await runs.claim("w1", 5_000);
-  await runs.complete(bypassed.id, claimed?.leaseToken ?? "", { status: "ok", reply: "lost on the way out" });
+  const mcpEvidenceRefs = [
+    {
+      serverId: "netsuite",
+      callId: "call-1",
+      outputReceiptSha256: "217b6c4aa3de9fd078288928585620140b863ad258b65cbbc5a255450222a5d8",
+    },
+  ];
+  await runs.complete(bypassed.id, claimed?.leaseToken ?? "", {
+    status: "ok",
+    reply: "lost on the way out",
+    mcpEvidenceRefs,
+  });
   const recovery = wireRunResultDeliveries(runs, deliveries);
   assert.deepEqual(await deliveries.pending("slack"), [], "wired after the fact: nothing enqueued");
 
@@ -267,6 +293,7 @@ test("sweep enqueues the recovery delivery for a terminal run whose outbox row n
     pending.map((d) => [d.idempotencyKey, d.text]),
     [[`run:${bypassed.id}`, "lost on the way out"]],
   );
+  assert.deepEqual(pending[0]?.provenance?.mcpEvidenceRefs, mcpEvidenceRefs);
   assert.equal(await recovery.sweep(Date.now() + 120_000), 0, "a second sweep finds the row and leaves it alone");
 });
 

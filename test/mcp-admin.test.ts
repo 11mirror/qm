@@ -121,6 +121,179 @@ test("MCP admin validates and preserves credential scope, without returning secr
     200,
   );
   assert.deepEqual([(await store.get("crm"))?.catalog, (await store.get("crm"))?.attestActor], [true, true]);
+  for (const invalid of [
+    { attestContext: true },
+    {
+      catalog: true,
+      attestActor: true,
+      attestContext: true,
+      attestationSecret: "operator-supplied-secret",
+      auth: "bearer",
+      bearerToken: "t",
+    },
+    {
+      catalog: true,
+      attestActor: true,
+      attestContext: true,
+      attestationPrivateKey: "operator-supplied-private-key",
+      auth: "bearer",
+      bearerToken: "t",
+    },
+  ]) {
+    assert.equal((await put(invalid)).status, 400);
+  }
+  const attested = await put({
+    catalog: true,
+    attestActor: true,
+    attestContext: true,
+    auth: "bearer",
+    bearerToken: "t",
+    credentialScope: "shared",
+  });
+  assert.equal(attested.status, 200);
+  const attestedBody = await attested.text();
+  assert.doesNotMatch(attestedBody, /PRIVATE KEY/);
+  const attestedServer = JSON.parse(attestedBody).server;
+  assert.equal(attestedServer.hasAttestationPrivateKey, true);
+  assert.match(attestedServer.attestationPublicKey, /BEGIN PUBLIC KEY/);
+  assert.equal(typeof attestedServer.attestationKeyId, "string");
+  assert.match((await store.get("crm"))?.attestationPrivateKey ?? "", /BEGIN PRIVATE KEY/);
+  const publicKey = (await store.get("crm"))?.attestationPublicKey;
+  const keyId = (await store.get("crm"))?.attestationKeyId;
+  const listed = await fetch(url.replace("/crm", ""), { headers: ADMIN });
+  assert.doesNotMatch(await listed.text(), /PRIVATE KEY/);
+  assert.equal(
+    (
+      await put({
+        catalog: true,
+        attestActor: true,
+        attestContext: true,
+        rotateAttestationKey: true,
+        auth: "bearer",
+        bearerToken: "t",
+        credentialScope: "shared",
+      })
+    ).status,
+    400,
+  );
+  const prepared = await put({
+    catalog: true,
+    attestActor: true,
+    attestContext: true,
+    prepareAttestationKey: true,
+    auth: "bearer",
+    bearerToken: "t",
+    credentialScope: "shared",
+  });
+  assert.equal(prepared.status, 200);
+  const preparedBody = await prepared.text();
+  assert.doesNotMatch(preparedBody, /PRIVATE KEY/);
+  const preparedServer = JSON.parse(preparedBody).server;
+  const afterPrepare = await store.get("crm");
+  assert.equal(afterPrepare?.attestationPublicKey, publicKey);
+  assert.equal(afterPrepare?.attestationKeyId, keyId);
+  assert.notEqual(afterPrepare?.pendingAttestationPublicKey, publicKey);
+  assert.notEqual(afterPrepare?.pendingAttestationKeyId, keyId);
+  assert.match(afterPrepare?.pendingAttestationPrivateKey ?? "", /BEGIN PRIVATE KEY/);
+  assert.equal(preparedServer.pendingAttestationPublicKey, afterPrepare?.pendingAttestationPublicKey);
+  assert.equal(preparedServer.pendingAttestationKeyId, afterPrepare?.pendingAttestationKeyId);
+  assert.equal(preparedServer.hasPendingAttestationPrivateKey, true);
+  const preparedAgain = await put({
+    catalog: true,
+    attestActor: true,
+    attestContext: true,
+    prepareAttestationKey: true,
+    auth: "bearer",
+    bearerToken: "t",
+    credentialScope: "shared",
+  });
+  assert.equal(preparedAgain.status, 200);
+  assert.equal((await store.get("crm"))?.pendingAttestationKeyId, afterPrepare?.pendingAttestationKeyId);
+  const preparedListed = await fetch(url.replace("/crm", ""), { headers: ADMIN });
+  const preparedListedText = await preparedListed.text();
+  assert.doesNotMatch(preparedListedText, /PRIVATE KEY/);
+  assert.equal(
+    JSON.parse(preparedListedText).servers[0].pendingAttestationKeyId,
+    afterPrepare?.pendingAttestationKeyId,
+  );
+  assert.equal(
+    (
+      await put({
+        catalog: true,
+        attestActor: true,
+        attestContext: true,
+        activateAttestationKeyId: "wrong-key-id",
+        auth: "bearer",
+        bearerToken: "t",
+        credentialScope: "shared",
+      })
+    ).status,
+    400,
+  );
+  assert.equal((await store.get("crm"))?.attestationKeyId, keyId);
+  const activated = await put({
+    catalog: true,
+    attestActor: true,
+    attestContext: true,
+    activateAttestationKeyId: afterPrepare?.pendingAttestationKeyId,
+    auth: "bearer",
+    bearerToken: "t",
+    credentialScope: "shared",
+  });
+  assert.equal(activated.status, 200);
+  assert.doesNotMatch(await activated.text(), /PRIVATE KEY/);
+  const afterActivate = await store.get("crm");
+  assert.equal(afterActivate?.attestationPublicKey, afterPrepare?.pendingAttestationPublicKey);
+  assert.equal(afterActivate?.attestationKeyId, afterPrepare?.pendingAttestationKeyId);
+  assert.equal(afterActivate?.retiredAttestationKeys?.length, 1);
+  assert.equal(afterActivate?.retiredAttestationKeys?.[0]?.publicKey, publicKey);
+  assert.equal(afterActivate?.retiredAttestationKeys?.[0]?.keyId, keyId);
+  assert.equal(typeof afterActivate?.retiredAttestationKeys?.[0]?.retiredAt, "number");
+  assert.equal(JSON.stringify(afterActivate?.retiredAttestationKeys).includes("PRIVATE KEY"), false);
+  assert.equal(afterActivate?.pendingAttestationPrivateKey, undefined);
+  assert.equal(afterActivate?.pendingAttestationPublicKey, undefined);
+  assert.equal(afterActivate?.pendingAttestationKeyId, undefined);
+  for (let i = 0; i < 3; i++) {
+    assert.equal(
+      (
+        await put({
+          catalog: true,
+          attestActor: true,
+          attestContext: true,
+          prepareAttestationKey: true,
+          auth: "bearer",
+          bearerToken: "t",
+          credentialScope: "shared",
+        })
+      ).status,
+      200,
+    );
+    const pendingKeyId = (await store.get("crm"))?.pendingAttestationKeyId;
+    assert.equal(
+      (
+        await put({
+          catalog: true,
+          attestActor: true,
+          attestContext: true,
+          activateAttestationKeyId: pendingKeyId,
+          auth: "bearer",
+          bearerToken: "t",
+          credentialScope: "shared",
+        })
+      ).status,
+      200,
+    );
+  }
+  const retiredHistory = (await store.get("crm"))?.retiredAttestationKeys;
+  assert.equal(retiredHistory?.length, 4);
+  assert.equal(
+    retiredHistory?.some((key) => key.keyId === keyId),
+    true,
+  );
+  const retiredListed = await fetch(url.replace("/crm", ""), { headers: ADMIN });
+  const retiredListedText = await retiredListed.text();
+  assert.doesNotMatch(retiredListedText, /PRIVATE KEY/);
+  assert.deepEqual(JSON.parse(retiredListedText).servers[0].retiredAttestationKeys, retiredHistory);
 });
 
 test("production wiring never uses operator fallback tokens for per-user MCP calls", async (t) => {
@@ -161,7 +334,7 @@ test("production wiring never uses operator fallback tokens for per-user MCP cal
   await built.connectorTokens.setConnectorToken("accounts.example.com", "internal:alice", {
     accessToken: "alice-only",
   });
-  assert.equal(await built.mcpToolService.call("crm_identity", {}, "internal:alice"), "Bearer alice-only");
+  assert.equal((await built.mcpToolService.call("crm_identity", {}, "internal:alice")).text, "Bearer alice-only");
   assert.equal(calls(), 1);
 });
 

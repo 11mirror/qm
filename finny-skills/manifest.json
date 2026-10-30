@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "root": "synthetic",
+    "revision": "public-synthetic-v1"
+  },
+  "classification": "public-synthetic",
+  "skills": ["finance-proof"],
+  "files": [
+    {
+      "path": "finance-proof/SKILL.md",
+      "size": 334,
+      "sha256": "335990c4a27f8f11bab83776e696599ba142826acbfd1e31f1153ba720169c0f"
+    }
+  ]
+}

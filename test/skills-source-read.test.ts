@@ -219,6 +219,56 @@ test("a body read avoids sandbox work and a file request materializes that skill
   );
 });
 
+test("skills with supporting files remain readable when the scope has no default sandbox", async () => {
+  const { createTurnSandboxes } = await import("../src/core/orchestrator/sandboxes.ts");
+  const { NoDefaultSandboxError } = await import("../src/sandbox/sandbox-routing.ts");
+  type TurnSandboxContext = import("../src/core/orchestrator/sandboxes.ts").TurnSandboxContext;
+  type SkillResolution = import("../src/skills/skill-store.ts").SkillResolution;
+  const resolution = {
+    skill: {
+      id: "finny-skill",
+      version: 1,
+      scopeId: "org:default-org",
+      manifest: {
+        name: "synthetic-intent-policy",
+        body: "READ THE BODY",
+        files: [{ path: "references/intent-contract.md", content: "READ THE REFERENCE" }],
+      },
+    },
+    shadowed: [],
+  } as unknown as SkillResolution;
+  const turn = createTurnSandboxes({
+    deps: {
+      skills: { recordUse: async () => {} },
+      sandbox: {
+        provision: async () => {
+          throw new NoDefaultSandboxError();
+        },
+      },
+    },
+    input: { origin: { kind: "human" } },
+    actor: { id: "U1" },
+    session: { id: "s" },
+    resolution: { layers: [{ scopeId: "personal:U1", mountPath: "", mode: "rw" }] },
+    scopeId: "personal:U1",
+    memoryScopeId: "personal:U1",
+    turnSessionDir: "turn/s",
+    turnFilesDir: "turn/s/t",
+    connectorEnv: {},
+    visibleSkillsForTurn: async () => [resolution],
+    perf: { credsMs: 0 },
+  } as unknown as TurnSandboxContext);
+
+  assert.deepEqual(await turn.useSkill("synthetic-intent-policy", "SKILL.md"), {
+    content: "READ THE BODY",
+    sourceScopeId: "org:default-org",
+  });
+  assert.deepEqual(await turn.useSkill("synthetic-intent-policy", "references/intent-contract.md"), {
+    content: "READ THE REFERENCE",
+    sourceScopeId: "org:default-org",
+  });
+});
+
 test("pack assets run from the skills root and stay across turns", async (t) => {
   const { computeBundleHash } = await import("../src/skills/skill-bundle-store.ts");
   const b = await fixture(t);

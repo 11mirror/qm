@@ -7,6 +7,7 @@ import { join } from "node:path";
 import {
   createMemoryDurableByteStore,
   createLocalDurableByteStore,
+  createNamespacedDurableByteStore,
   ByteSourceTooLargeError,
   type DurableByteStore,
 } from "../src/files/durable-byte-store.ts";
@@ -135,6 +136,26 @@ test("put + open round-trips binary through the artifact store", async () => {
   assert.equal(artifact.blobKey, `files/${artifact.sha256}`);
   const back = await drain(store, artifact.id);
   assert.deepEqual(back, PNG);
+});
+
+test("creator-specific byte custody leaves ordinary files in the configured store", async () => {
+  const ordinaryBytes = createMemoryDurableByteStore();
+  const finnyBytes = createNamespacedDurableByteStore(createMemoryDurableByteStore(), "finny");
+  const store = createMemoryFileArtifactStore(ordinaryBytes, {
+    "system:finny": { store: finnyBytes },
+  });
+  const ordinary = await store.put(put({ id: "ordinary", data: Buffer.from("ordinary") }));
+  const finny = await store.put(
+    put({ id: "finny", createdBy: "system:finny", path: "artifacts/finny.csv", data: Buffer.from("finny") }),
+  );
+
+  assert.ok(await ordinaryBytes.open(ordinary.artifact.blobKey!));
+  assert.equal(await finnyBytes.open(ordinary.artifact.blobKey!), null);
+  assert.match(finny.artifact.blobKey!, /^files\/finny\/[a-f0-9]{64}$/);
+  assert.ok(await finnyBytes.open(finny.artifact.blobKey!));
+  assert.equal(await ordinaryBytes.open(finny.artifact.blobKey!), null);
+  assert.deepEqual(await drain(store, ordinary.artifact.id), Buffer.from("ordinary"));
+  assert.deepEqual(await drain(store, finny.artifact.id), Buffer.from("finny"));
 });
 
 test("listOwnedByScopes: recency DESC, scope-filtered, keyset-paginated", async () => {

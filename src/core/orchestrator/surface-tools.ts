@@ -66,7 +66,7 @@ export interface SurfaceToolsContext {
   fileRegistration: ArtifactRegistration;
   openStored?: OpenStoredFile;
   provision: (sandboxId?: string) => Promise<SandboxHandle>;
-  postProvenance: (deliveryKey: string) => DeliveryProvenance;
+  postProvenance: (deliveryKey: string, deliveryText: string) => DeliveryProvenance;
   postKeys: TurnPostKeys;
   spine: SpineState;
 }
@@ -173,7 +173,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         text: postText,
         ...(attachments?.length ? { attachments } : {}),
         idempotencyKey,
-        provenance: postProvenance(idempotencyKey),
+        provenance: postProvenance(idempotencyKey, postText),
       });
       spine.surfaceOutboundCount += 1;
       if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);

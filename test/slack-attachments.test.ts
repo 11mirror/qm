@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { canonicalJson } from "../cli/src/canonical-json.ts";
 import {
   isOversize,
   attachmentFromBytes,
@@ -190,6 +192,8 @@ const noArtifacts = async (): Promise<Buffer> => {
   throw new Error("no artifact fallback in this test");
 };
 
+const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
+
 test("uploadAttachments fetches each blob and calls files.uploadV2 with the right args", async () => {
   const calls: Record<string, unknown>[] = [];
   const client = {
@@ -226,7 +230,7 @@ test("uploadAttachments batches mixed files with commentary into one Slack messa
         calls.push(args);
         return { files: [{ files: [{ id: "F1" }, { id: "F2" }, { id: "F3" }] }] };
       },
-      info: async () => ({ file: { shares: { private: { C1: [{ ts: "123.456" }] } } } }),
+      info: async () => ({ file: { shares: { private: { C1: [{ ts: "123.456", thread_ts: "123.45" }] } } } }),
     },
   };
   const attachments = [
@@ -240,7 +244,27 @@ test("uploadAttachments batches mixed files with commentary into one Slack messa
     initialComment: "two screenshots and the notes",
   });
 
-  assert.deepEqual(uploaded, { uploaded: true, messageTs: "123.456" });
+  assert.deepEqual(uploaded, {
+    uploaded: true,
+    files: [
+      { id: "F1", sha256: sha256("B1") },
+      { id: "F2", sha256: sha256("B2") },
+      { id: "F3", sha256: sha256("B3") },
+    ],
+    messageTs: "123.456",
+    renderedBodySha256: sha256(
+      canonicalJson({
+        channel_id: "C1",
+        thread_ts: "123.45",
+        initial_comment: "two screenshots and the notes",
+        file_uploads: [
+          { filename: "first.png", sha256: sha256("B1") },
+          { filename: "second.jpg", sha256: sha256("B2") },
+          { filename: "notes.pdf", sha256: sha256("B3") },
+        ],
+      }),
+    ),
+  });
   assert.equal(calls.length, 1, "one composed post should make one Slack upload call");
   assert.equal(calls[0]!.channel_id, "C1");
   assert.equal(calls[0]!.thread_ts, "123.45");
@@ -318,7 +342,7 @@ test("uploadAttachments skips a 0-byte blob (Slack rejects a zero-length upload)
     [{ name: "empty.png", mimetype: "image/png", sizeBytes: 0, blobId: "B" }],
     blobs,
   );
-  assert.deepEqual(uploaded, { uploaded: false });
+  assert.deepEqual(uploaded, { uploaded: false, files: [] });
   assert.equal(calls.length, 0);
 });
 
@@ -344,6 +368,59 @@ test("uploadAttachments waits for the file's channel share to commit before reso
     blobs,
   );
   assert.ok(infoCalls >= 3, `expected polling until the share committed, got ${infoCalls}`);
+});
+
+test("uploadAttachments excludes files whose channel share never commits", async () => {
+  let infoCalls = 0;
+  const client = {
+    files: {
+      uploadV2: async () => ({ files: [{ files: [{ id: "F1" }] }] }),
+      info: async () => {
+        infoCalls++;
+        return { file: { shares: {} } };
+      },
+    },
+  };
+  const blobs = { readBlob: async () => Buffer.from("exact bytes"), readFileArtifact: noArtifacts };
+  const uploaded = await uploadAttachments(
+    client,
+    "C1",
+    undefined,
+    [{ name: "f.txt", mimetype: "text/plain", sizeBytes: 11, blobId: "B" }],
+    blobs,
+    { shareCommitAttempts: 2, shareCommitIntervalMs: 0 },
+  );
+  assert.equal(infoCalls, 2);
+  assert.equal(uploaded.uploaded, true);
+  if (!uploaded.uploaded) return;
+  assert.deepEqual(uploaded.files, []);
+  assert.equal(uploaded.messageTs, undefined);
+});
+
+test("uploadAttachments returns evidence only for files with individually confirmed channel shares", async () => {
+  const client = {
+    files: {
+      uploadV2: async () => ({ files: [{ files: [{ id: "F1" }, { id: "F2" }] }] }),
+      info: async ({ file }: { file: string }) =>
+        file === "F1" ? { file: { shares: { private: { C1: [{ ts: "123.456" }] } } } } : { file: { shares: {} } },
+    },
+  };
+  const blobs = { readBlob: async (id: string) => Buffer.from(id), readFileArtifact: noArtifacts };
+  const uploaded = await uploadAttachments(
+    client,
+    "C1",
+    undefined,
+    [
+      { name: "one.txt", mimetype: "text/plain", sizeBytes: 2, blobId: "B1" },
+      { name: "two.txt", mimetype: "text/plain", sizeBytes: 2, blobId: "B2" },
+    ],
+    blobs,
+    { shareCommitAttempts: 1, shareCommitIntervalMs: 0 },
+  );
+  assert.equal(uploaded.uploaded, true);
+  if (!uploaded.uploaded) return;
+  assert.deepEqual(uploaded.files, [{ id: "F1", sha256: sha256("B1") }]);
+  assert.equal(uploaded.messageTs, "123.456");
 });
 
 test("uploadFailureNote blames files:write only for permission-class errors", () => {

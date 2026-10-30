@@ -229,14 +229,22 @@ test("a turn on a later day is prompted under that day's marker and replays it b
 });
 
 test("connector tool_search and mcp_call calls replay byte-for-byte on the next turn", async () => {
-  const calls: Array<[string, unknown]> = [];
+  const hostContext = {
+    actorId: "U1",
+    scopeId: "personal:U1",
+    session: { id: "fidelity", threadRef: "dm:U1:fidelity" },
+    surface: "slack",
+    runtime: { harnessId: "pi", modelId: "gpt-5.4" },
+  };
+  const calls: Array<[string, unknown, unknown]> = [];
   const overrides: Partial<HarnessTurnInput> = {
     tools: {
-      async callMcpTool(name: string, args: unknown) {
-        calls.push([name, args]);
+      async callMcpTool(name: string, args: unknown, _approval: string | undefined, invocation: unknown) {
+        calls.push([name, args, invocation]);
         return '{"stores":["Burrito Barn"]}';
       },
     } as unknown as ToolContext,
+    mcpHostContext: hostContext,
     mcpTools: [
       {
         name: "shop_find_stores",
@@ -265,7 +273,7 @@ test("connector tool_search and mcp_call calls replay byte-for-byte on the next 
     [() => anthropicSse(step1, "tool_use"), () => anthropicSse([{ type: "text", text: "Burrito Barn." }], "end_turn")],
     overrides,
   );
-  assert.deepEqual(calls, [["shop_find_stores", { query: "burrito" }]]);
+  assert.deepEqual(calls, [["shop_find_stores", { query: "burrito" }, { callId: "toolu_2", context: hostContext }]]);
   const second = await runTurn(
     "thanks",
     forModelContext(first.emitted),
@@ -275,6 +283,70 @@ test("connector tool_search and mcp_call calls replay byte-for-byte on the next 
   const before = withoutCacheControl(first.bodies[1]!.messages) as unknown[];
   const after = withoutCacheControl(second.bodies[0]!.messages) as unknown[];
   assert.equal(JSON.stringify(after.slice(0, before.length)), JSON.stringify(before));
+});
+
+test("a connector call after refusal fallback attests the model that actually serves it", async () => {
+  const originalContext = Object.freeze({
+    actorId: "U1",
+    scopeId: "personal:U1",
+    session: Object.freeze({ id: "fidelity", threadRef: "dm:U1:fidelity" }),
+    surface: "slack",
+    runtime: Object.freeze({ harnessId: "pi", modelId: "claude-sonnet-5" }),
+  });
+  const invocations: unknown[] = [];
+  const overrides: Partial<HarnessTurnInput> = {
+    runtime: { modelId: "claude-sonnet-5" },
+    mcpHostContext: originalContext,
+    tools: {
+      async callMcpTool(_name: string, _args: unknown, _approval: string | undefined, invocation: unknown) {
+        invocations.push(invocation);
+        return "fallback result";
+      },
+    } as unknown as ToolContext,
+    mcpTools: [
+      {
+        name: "shop_find_stores",
+        serverId: "shop",
+        serverName: "Shop",
+        remoteName: "find_stores",
+        description: "Find nearby stores.",
+        inputSchema: { type: "object", properties: {} },
+        readOnly: true,
+        needsApproval: false,
+      },
+    ],
+  };
+
+  await runTurn(
+    "find a store",
+    [],
+    [
+      () => anthropicSse([], "refusal"),
+      () =>
+        anthropicSse(
+          [
+            {
+              type: "tool_use",
+              id: "toolu_fallback",
+              name: "mcp_call",
+              input: { tool: "shop_find_stores", args: {} },
+            },
+          ],
+          "tool_use",
+        ),
+      () => anthropicSse([{ type: "text", text: "Recovered." }], "end_turn"),
+    ],
+    overrides,
+  );
+
+  assert.equal(originalContext.runtime.modelId, "claude-sonnet-5");
+  assert.equal(invocations.length, 1);
+  const invocation = invocations[0] as { callId: string; context: typeof originalContext };
+  assert.equal(invocation.callId, "toolu_fallback");
+  assert.equal(invocation.context.runtime.modelId, "claude-opus-5");
+  assert.notEqual(invocation.context, originalContext);
+  assert.equal(Object.isFrozen(invocation.context), true);
+  assert.equal(Object.isFrozen(invocation.context.runtime), true);
 });
 
 test("the next turn's OpenAI Responses request replays the previous turn's reasoning items, messages and calls exactly", async () => {

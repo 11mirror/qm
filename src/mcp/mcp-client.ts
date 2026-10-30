@@ -53,12 +53,27 @@ export function createMcpClient(opts: { url: string; auth: McpAuth }): McpClient
     op: string,
     work: (client: Client) => Promise<T>,
     extraHeaders: Record<string, string> = {},
+    headerMethod?: "tools/list" | "tools/call",
   ): Promise<T> {
-    const headers = { ...extraHeaders, ...(auth.mode === "bearer" ? { authorization: `Bearer ${auth.token}` } : {}) };
+    const headers = auth.mode === "bearer" ? { authorization: `Bearer ${auth.token}` } : {};
     const transport = new StreamableHTTPClientTransport(endpoint, {
       ...(authProvider ? { authProvider } : {}),
       ...(Object.keys(headers).length ? { requestInit: { headers } } : {}),
-      fetch: (url, init) => fetch(url, { ...init, redirect: "error" }),
+      fetch: (url, init) => {
+        const requestHeaders = new Headers(init?.headers);
+        let method: unknown;
+        if (typeof init?.body === "string") {
+          try {
+            method = (JSON.parse(init.body) as { method?: unknown }).method;
+          } catch {
+            method = undefined;
+          }
+        }
+        if (headerMethod && method === headerMethod) {
+          for (const [name, value] of Object.entries(extraHeaders)) requestHeaders.set(name, value);
+        }
+        return fetch(url, { ...init, headers: requestHeaders, redirect: "error" });
+      },
     });
     const client = new Client({ name: "qm", version: "1.0.0" });
     try {
@@ -98,12 +113,14 @@ export function createMcpClient(opts: { url: string; auth: McpAuth }): McpClient
           };
         },
         opts?.headers,
+        "tools/list",
       ),
     async callTool(name, args, headers) {
       const result = (await session(
         "tools/call",
         (client) => client.callTool({ name, arguments: args }, undefined, { timeout: CALL_TIMEOUT_MS }),
         headers,
+        "tools/call",
       )) as CallToolResult;
       if (result.isError) throw new Error(`mcp tool ${name} error: ${mcpResultText(result) || "(no detail)"}`);
       return result;

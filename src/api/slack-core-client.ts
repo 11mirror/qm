@@ -25,6 +25,7 @@ import type {
   Delivery,
   PendingApproval,
   ScopeId,
+  SlackDeliveryProviderReceipt,
   SurfaceContextRequest,
   SurfaceContextResult,
   TurnRequest,
@@ -109,7 +110,10 @@ export interface SlackCoreClient {
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
   pushDirectory(body: DirectoryPush): Promise<boolean>;
   claimDeliveries(type: string, claimMs: number): Promise<Delivery[]>;
-  ackDelivery(id: string, body?: { recipientThreadRef?: string; slackApiMs?: number }): Promise<void>;
+  ackDelivery(
+    id: string,
+    body?: { recipientThreadRef?: string; slackApiMs?: number; providerReceipt?: SlackDeliveryProviderReceipt },
+  ): Promise<void>;
   reportSlowDeliveryDrain?(info: { durationMs: number; rows: number }): Promise<void>;
   reportDeliveryUndeliverable?(id: string, reason: string): Promise<void>;
 
@@ -459,7 +463,10 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
 
     async ackDelivery(id, body) {
       if (body?.recipientThreadRef) await deps.app.recordPrincipalDelivery(id, body.recipientThreadRef);
-      await deps.app.ackDelivery(id, body?.slackApiMs);
+      await deps.app.ackDelivery(id, {
+        ...(body?.slackApiMs !== undefined ? { slackApiMs: body.slackApiMs } : {}),
+        ...(body?.providerReceipt ? { providerReceipt: body.providerReceipt } : {}),
+      });
     },
 
     async reportDeliveryUndeliverable(id, reason) {

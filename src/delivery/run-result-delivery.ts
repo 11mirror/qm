@@ -61,6 +61,7 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
     ...(run.result?.sourceAssistantEntrySeq !== undefined
       ? { sourceAssistantEntrySeq: run.result.sourceAssistantEntrySeq }
       : {}),
+    ...(run.result?.mcpEvidenceRefs?.length ? { mcpEvidenceRefs: run.result.mcpEvidenceRefs } : {}),
   });
   if (
     surface === "slack" &&

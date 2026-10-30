@@ -30,6 +30,7 @@ import type {
   DeliveryProvenance,
   Destination,
   EntryType,
+  McpOutputEvidenceRef,
   ScopeId,
   SessionEntry,
   SessionType,
@@ -141,6 +142,7 @@ import {
 } from "./attachments.ts";
 import { parseRef } from "../acl/resource-ref.ts";
 import {
+  entriesForTurn,
   findTrailingPartialTurn,
   resumeStrategy,
   runtimeSwitchNote,
@@ -170,7 +172,7 @@ import { personKey, rosterIds, samePerson } from "../directory/person.ts";
 import type { FeatureName } from "../feature-flags.ts";
 import { sleep } from "../util/async.ts";
 import { hashId } from "../util/crypto.ts";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import type { SkillResolution } from "../skills/skill-store.ts";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
@@ -248,6 +250,40 @@ const DEFAULT_APPROVAL_SUMMARY_TIMEOUT_MS = 6_000;
 
 const INSTANCE_CACHE_MAX_ENTRIES = 5_000;
 const DIRECTORY_INDEX_CACHE_MAX_ENTRIES = 100;
+
+export function mcpOutputEvidenceRefs(entries: readonly SessionEntry[], deliveryText: string): McpOutputEvidenceRef[] {
+  const refs: McpOutputEvidenceRef[] = [];
+  const seen = new Set<string>();
+  const deliveryTextSha256 = createHash("sha256").update(deliveryText).digest("hex");
+  for (const entry of entries) {
+    if (entry.type !== "tool_result" || !isObj(entry.payload)) continue;
+    if (entry.payload.quarantined === true || entry.payload.isError === true) continue;
+    const serverId = entry.payload.mcpServer;
+    const callId = entry.payload.callId;
+    const outputReceipt = entry.payload.outputReceipt;
+    const outputSha256 = entry.payload.outputSha256;
+    const contextSha256 = entry.payload.contextSha256;
+    if (
+      typeof serverId !== "string" ||
+      !serverId.trim() ||
+      typeof callId !== "string" ||
+      !callId.trim() ||
+      typeof outputReceipt !== "string" ||
+      !outputReceipt ||
+      typeof outputSha256 !== "string" ||
+      outputSha256 !== deliveryTextSha256 ||
+      typeof contextSha256 !== "string" ||
+      !/^[a-f0-9]{64}$/.test(contextSha256)
+    )
+      continue;
+    const outputReceiptSha256 = createHash("sha256").update(outputReceipt).digest("hex");
+    const key = JSON.stringify([serverId, callId, contextSha256, outputReceiptSha256]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    refs.push({ serverId, callId, contextSha256, outputReceipt, outputReceiptSha256, outputSha256 });
+  }
+  return refs;
+}
 
 export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   if (deps.sessions.leaseTtlMs < MIN_SESSION_LEASE_TTL_MS) {
@@ -1325,20 +1361,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       };
 
       const isRetry = (input.attempt ?? 1) > 1;
-      const recordedTurnForRun = async (): Promise<RecordedTurn | null> => {
+      const recordedTurnForRun = async (): Promise<{ turn: RecordedTurn; entries: SessionEntry[] } | null> => {
         if (!input.runId || !deps.runs) return null;
         const seq = (await deps.runs.get(input.runId))?.turnUserSeq;
         if (seq == null) return null;
         const entries = await deps.sessions.getEntries(session.id);
         if (!entries.some((entry) => entry.seq === seq)) return null;
-        return turnAtSeq(
-          entries.filter((entry) => entry.seq >= seq),
-          seq,
-        );
+        const turnEntries = entriesForTurn(entries, seq);
+        const turn = turnAtSeq(turnEntries, seq);
+        return turn ? { turn, entries: turnEntries } : null;
       };
-      const recordedTurn = isRetry ? await recordedTurnForRun() : null;
+      const recordedRunTurn = isRetry ? await recordedTurnForRun() : null;
+      const recordedTurn = recordedRunTurn?.turn ?? null;
       if (recordedTurn?.answer) {
         const recordedAnswer = recordedTurn.answer;
+        const mcpEvidenceRefs = mcpOutputEvidenceRefs(recordedRunTurn!.entries, recordedAnswer.text);
         deps.auditLog.record({
           at: Date.now(),
           principalId: actor.id,
@@ -1357,6 +1394,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               reply: absoluteAppLinks(recordedAnswer.text, deps.publicWebUrl),
               sourceUserSeq: recordedTurn.userSeq,
               sourceAssistantEntrySeq: recordedAnswer.seq,
+              ...(mcpEvidenceRefs.length ? { mcpEvidenceRefs } : {}),
             }
           : { status: "silent", sessionId: session.id };
       }
@@ -2540,7 +2578,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               e,
             ),
         };
-        const postProvenance = (deliveryKey: string): DeliveryProvenance =>
+        const emittedEntries: SessionEntry[] = [];
+        let durableTurnEntries: SessionEntry[] = [];
+        const turnEvidenceEntries = () => [...durableTurnEntries, ...emittedEntries];
+        const postProvenance = (deliveryKey: string, deliveryText: string): DeliveryProvenance =>
           turnDeliveryProvenance({
             origin: input.origin,
             surface: input.surface,
@@ -2548,6 +2589,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             sourceScopeId: scopeId as ScopeId,
             sourceThreadRef: session.threadRef,
             sourceSessionId: session.id,
+            mcpEvidenceRefs: mcpOutputEvidenceRefs(turnEvidenceEntries(), deliveryText),
           });
         const earlyTaskAck =
           input.surface === "slack" &&
@@ -2578,7 +2620,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             destination: defaultDestination,
             text: ack,
             idempotencyKey: ackKey,
-            provenance: postProvenance(ackKey),
+            provenance: postProvenance(ackKey, ack),
           })
             .then(() => deps.turnStream?.markSurfacePosted(runId))
             .catch(swallowAs("orchestrator: first-block ack", undefined));
@@ -2836,6 +2878,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         let visibleHistory = filterHistory(forModelContext(rawEntries));
         const recalled = await context.recallMemory(memoryRecallQuery(input.text, visibleHistory), memoryView.loaded);
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.runId)) : null;
+        if (partial) durableTurnEntries = entriesForTurn(rawEntries, partial.userSeq);
+        const durablePartialUserEntry = partial ? await deps.sessions.getEntry(session.id, partial.userSeq) : undefined;
         let resumePlan = partial ? resumeStrategy(visibleHistory, partial) : null;
         if (partial && resumePlan?.kind === "settle") {
           const settle = resumePlan;
@@ -3020,6 +3064,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
         let turnInput = baseText;
         const continueTurn = !!partial && history.some((entry) => entry.seq === partial.userSeq) && !releasedToolOutput;
+        let trustedTurnInput = turnInput;
+        if (partial)
+          trustedTurnInput =
+            durablePartialUserEntry?.type === "user" &&
+            isObj(durablePartialUserEntry.payload) &&
+            typeof durablePartialUserEntry.payload.text === "string"
+              ? durablePartialUserEntry.payload.text
+              : "";
         if (partial) spine.turnUserEntrySeq = partial.userSeq;
         if (releasedToolOutput) {
           turnInput = `The human released quarantined tool output recorded in the conversation. Continue the original task using that output. The tool action already ran; do not repeat it. Original task: ${baseText}`;
@@ -3046,7 +3098,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
         const turnStart = Date.now();
         let dispatchTrace: DispatchTrace | undefined;
-        const emittedEntries: SessionEntry[] = [];
         let turnRuntime: TurnRuntime | undefined;
         const syntheticPrompt = syntheticInput || partial || approvalReplay || !!releasedToolOutput;
         failureUserPayload =
@@ -3439,6 +3490,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(userHarnessOverride && !purposeDefault && !restoredRuntime && runtimeHandoffs === 0
               ? { runtimePinned: true }
               : {}),
+            mcpHostContextBase: {
+              actorId: actor.id,
+              scopeId,
+              session: { id: session.id, threadRef: session.threadRef },
+              surface: surfaceName,
+              ...(input.slackSource ? { slackSource: input.slackSource } : {}),
+              ...(input.runId ? { runId: input.runId } : {}),
+              ...(input.attempt !== undefined ? { attempt: input.attempt } : {}),
+            },
             runtimeActorId: actor.id,
             onRuntime: (reported: TurnRuntime) => {
               const runtime: TurnRuntime = agentSwitch ? { ...reported, change: { agent: agentSwitch } } : reported;
@@ -3473,6 +3533,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(silentResume ? { continueTurn: true, resumeUserSeq: partial!.userSeq } : {}),
             ...(input.shutdown ? { shutdown: input.shutdown } : {}),
             input: continueTurn && !continuation && !silentResume ? "" : harnessInput,
+            trustedInput: trustedTurnInput,
             ...(!partial && messageTs ? { triggerTs: messageTs } : {}),
             ...(!partial && entryTs ? { entryTs } : {}),
             ...(environment ? { environment } : {}),
@@ -3772,7 +3833,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 destination: defaultDestination,
                 text: primaryReply,
                 idempotencyKey: directKey,
-                provenance: postProvenance(directKey),
+                provenance: postProvenance(directKey, primaryReply),
               });
               spine.surfaceOutboundCount += 1;
               if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
@@ -3797,7 +3858,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     destination: defaultDestination,
                     text: fallback,
                     idempotencyKey: fallbackKey,
-                    provenance: postProvenance(fallbackKey),
+                    provenance: postProvenance(fallbackKey, fallback),
                   });
                   spine.surfaceOutboundCount += 1;
                   if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
@@ -3989,6 +4050,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           };
         }
 
+        const mcpEvidenceRefs = mcpOutputEvidenceRefs(
+          turnEvidenceEntries(),
+          finalResult.status === "ok" ? (finalResult.reply ?? "") : "",
+        );
+        if (mcpEvidenceRefs.length) finalResult = { ...finalResult, mcpEvidenceRefs };
         if (turnRuntime) finalResult = { ...finalResult, runtime: turnRuntime };
         await fallbackTitleWrite;
 

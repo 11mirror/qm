@@ -14,6 +14,10 @@ import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
+import type { McpHostContext } from "../types.ts";
+import { createHash, randomUUID } from "node:crypto";
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
+import { mintMcpAttestation } from "./mcp-attestation.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
 const CATALOG_TTL_MS = 60_000;
@@ -22,6 +26,7 @@ const CATALOG_MAX_TOOLS = 5_000;
 const CATALOG_SEARCH_LIMIT = 50;
 const CATALOG_OPERATIONS = ["search", "describe", "invoke"];
 const DROPPED_OPTIONAL_PARAMS = ["intent", "locale"];
+const ATTESTATION_TTL_MS = 60_000;
 
 function modelInputSchema(schema: Record<string, unknown>): Record<string, unknown> {
   const properties = schema.properties;
@@ -82,12 +87,40 @@ export interface McpToolService {
   toolDefs(): McpToolDescriptor[];
   toolDefsFor(principalId?: string): Promise<McpToolDescriptor[]>;
   /** Call a namespaced tool. Returns the tool's text output (clamped). */
-  call(name: string, args: Record<string, unknown>, principalId?: string, approval?: string): Promise<string>;
+  call(
+    name: string,
+    args: Record<string, unknown>,
+    principalId?: string,
+    approval?: string,
+    invocation?: McpInvocation,
+  ): Promise<McpToolCallResult>;
   needsApproval(name: string, args: Record<string, unknown>, principalId?: string): Promise<boolean>;
   /** Force a registry re-read + tools/list refresh (admin save path, tests). */
   refresh(): Promise<void>;
   probe(server: McpServer, principalId?: string): Promise<McpListing>;
   close(): void;
+}
+
+export interface McpToolCallResult {
+  text: string;
+  outputReceipt?: string;
+  outputSha256?: string;
+  contextSha256?: string;
+}
+
+export interface McpInvocation {
+  callId: string;
+  context: McpHostContext;
+}
+
+interface AttestedCall {
+  token: string;
+  claims: {
+    serverId: string;
+    toolName: string;
+    argumentsSha256: string;
+    callId: string;
+  };
 }
 
 class SignInRequired extends Error {}
@@ -142,6 +175,33 @@ function headersFor(server: McpServer, principalId: string | undefined, approval
   return { "x-qm-actor": principalId, ...(approval ? { "x-qm-approval": approval } : {}) };
 }
 
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function completeHostContext(invocation: McpInvocation | undefined, principalId: string | undefined): McpInvocation {
+  const value = invocation;
+  const context = value?.context;
+  const slackComplete =
+    context?.surface !== "slack" ||
+    Boolean(context.slackSource?.accountId && context.slackSource.teamId && context.slackSource.userId);
+  if (
+    !value?.callId ||
+    !context?.actorId ||
+    context.actorId !== principalId ||
+    !context.scopeId ||
+    !context.session?.id ||
+    !context.session.threadRef ||
+    !context.surface ||
+    !context.runtime?.harnessId ||
+    !context.runtime.modelId ||
+    !slackComplete
+  ) {
+    throw new Error("attested MCP call requires complete host context matching the initiating person");
+  }
+  return value;
+}
+
 function catalogSearch(server: McpServer, tools: RemoteTool[], query: string): string {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   const hits = tools.filter((t) => {
@@ -178,6 +238,95 @@ export function createMcpToolService(opts: {
   let snapshot: McpToolDescriptor[] = [];
   let perUserServers = new Map<string, McpServer>();
   const catalogs = new LRUCache<string, Promise<RemoteTool[]>>({ max: CATALOG_CACHE_MAX, ttl: CATALOG_TTL_MS });
+
+  async function attestedHeaders(
+    server: McpServer,
+    toolName: string,
+    args: Record<string, unknown>,
+    principalId: string | undefined,
+    approval: string | undefined,
+    invocation: McpInvocation | undefined,
+  ): Promise<{ headers: Record<string, string>; attested?: AttestedCall }> {
+    const headers = headersFor(server, principalId, approval);
+    if (!server.attestContext) return { headers };
+    if (
+      !server.catalog ||
+      !server.attestActor ||
+      (server.credentialScope ?? "shared") !== "shared" ||
+      (server.auth !== "bearer" && server.auth !== "client-credentials")
+    ) {
+      throw new Error(`MCP server ${server.id} has an invalid attestation configuration`);
+    }
+    if (!server.attestationPrivateKey || !server.attestationPublicKey || !server.attestationKeyId) {
+      throw new Error(`MCP server ${server.id} has no attestation keypair`);
+    }
+    const complete = completeHostContext(invocation, principalId);
+    const issuedAt = now();
+    const argumentsSha256 = sha256(canonicalJson(args));
+    const claims = {
+      kind: "qm.mcp-call-context",
+      version: 1,
+      actorId: complete.context.actorId,
+      scopeId: complete.context.scopeId,
+      sessionId: complete.context.session.id,
+      threadRef: complete.context.session.threadRef,
+      surface: complete.context.surface,
+      ...(complete.context.slackSource
+        ? {
+            slackSource: {
+              accountId: complete.context.slackSource.accountId,
+              teamId: complete.context.slackSource.teamId,
+              userId: complete.context.slackSource.userId,
+            },
+          }
+        : {}),
+      ...(complete.context.runId ? { runId: complete.context.runId } : {}),
+      ...(complete.context.attempt !== undefined ? { attempt: complete.context.attempt } : {}),
+      runtime: complete.context.runtime,
+      serverId: server.id,
+      toolName,
+      argumentsSha256,
+      callId: complete.callId,
+      ...(approval ? { approvalKey: approval } : {}),
+      issuedAt,
+      expiresAt: issuedAt + ATTESTATION_TTL_MS,
+      nonce: randomUUID(),
+    };
+    const token = await mintMcpAttestation(claims, server.attestationPrivateKey, "call-context");
+    return {
+      headers: { ...headers, "x-qm-context": token },
+      attested: {
+        token,
+        claims: { serverId: server.id, toolName, argumentsSha256, callId: complete.callId },
+      },
+    };
+  }
+
+  async function withOutputReceipt(
+    server: McpServer,
+    output: string,
+    call: AttestedCall | undefined,
+  ): Promise<McpToolCallResult> {
+    if (!call) return { text: output };
+    if (!server.attestationPrivateKey) throw new Error(`MCP server ${server.id} has no attestation private key`);
+    const issuedAt = now();
+    const outputSha256 = sha256(output);
+    const contextSha256 = sha256(call.token);
+    const receipt = await mintMcpAttestation(
+      {
+        kind: "qm.mcp-output-receipt",
+        version: 1,
+        ...call.claims,
+        contextSha256,
+        outputSha256,
+        issuedAt,
+        nonce: randomUUID(),
+      },
+      server.attestationPrivateKey,
+      "output-receipt",
+    );
+    return { text: output, outputReceipt: receipt, outputSha256, contextSha256 };
+  }
 
   function signInMessage(server: McpServer): string {
     const url = opts.signInUrl?.(server.id);
@@ -252,19 +401,22 @@ export function createMcpToolService(opts: {
     args: Record<string, unknown>,
     principalId: string | undefined,
     approval: string | undefined,
-  ): Promise<string> {
+    invocation: McpInvocation | undefined,
+  ): Promise<McpToolCallResult> {
     if (args.operation === "search") {
       const query = typeof args.query === "string" ? args.query : "";
-      return catalogSearch(server, await catalogTools(server, principalId), query);
+      return { text: catalogSearch(server, await catalogTools(server, principalId), query) };
     }
     const entry = await catalogEntry(server, principalId, args.tool);
     if (args.operation === "describe") {
-      return JSON.stringify({
-        name: entry.name,
-        description: entry.description,
-        needsApproval: mcpToolNeedsApproval(server, entry.annotations),
-        parameters: modelInputSchema(entry.inputSchema),
-      });
+      return {
+        text: JSON.stringify({
+          name: entry.name,
+          description: entry.description,
+          needsApproval: mcpToolNeedsApproval(server, entry.annotations),
+          parameters: modelInputSchema(entry.inputSchema),
+        }),
+      };
     }
     if (args.operation !== "invoke") throw new Error(`operation must be one of ${CATALOG_OPERATIONS.join(", ")}`);
     const input = args.arguments ?? {};
@@ -272,13 +424,17 @@ export function createMcpToolService(opts: {
     if (mcpToolNeedsApproval(server, entry.annotations) && !approval)
       throw new Error(`${entry.name} needs the person's approval; call it again so they get an approval card.`);
     const client = await callerClient(server, principalId);
-    const result = await client.callTool(
+    const call = await attestedHeaders(
+      server,
       entry.name,
       input as Record<string, unknown>,
-      headersFor(server, principalId, approval),
+      principalId,
+      approval,
+      invocation,
     );
+    const result = await client.callTool(entry.name, input as Record<string, unknown>, call.headers);
     record("call", `${server.id}/${entry.name}`, approval ? "ok approved" : "ok", principalId);
-    return resultText(result);
+    return withOutputReceipt(server, resultText(result), call.attested);
   }
 
   async function refresh(): Promise<void> {
@@ -387,13 +543,13 @@ export function createMcpToolService(opts: {
         throw e;
       }
     },
-    async call(name, args, principalId, approval) {
+    async call(name, args, principalId, approval, invocation) {
       const def = snapshot.find((t) => t.name === name);
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       const server = await opts.servers.get(def.serverId);
       if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
       try {
-        if (def.catalog) return await callCatalog(server, args, principalId, approval);
+        if (def.catalog) return await callCatalog(server, args, principalId, approval, invocation);
         const client = await callerClient(server, principalId);
         if (def.signIn) {
           const { tools, about } = await client.listTools();
@@ -401,15 +557,18 @@ export function createMcpToolService(opts: {
           if (current) await opts.servers.put({ ...current, tools, about: about ?? current.about });
           await refresh();
           record("call", `${def.serverId}/sign_in`, `ok tools=${tools.length}`, principalId);
-          return `Signed in to ${server.name}. Tools now available on server "${server.id}": ${tools.map((t) => t.name).join(", ")}`;
+          return {
+            text: `Signed in to ${server.name}. Tools now available on server "${server.id}": ${tools.map((t) => t.name).join(", ")}`,
+          };
         }
-        const result = await client.callTool(def.remoteName, args, headersFor(server, principalId, approval));
+        const call = await attestedHeaders(server, def.remoteName, args, principalId, approval, invocation);
+        const result = await client.callTool(def.remoteName, args, call.headers);
         record("call", `${def.serverId}/${def.remoteName}`, approval ? "ok approved" : "ok", principalId);
-        return resultText(result);
+        return withOutputReceipt(server, resultText(result), call.attested);
       } catch (e) {
         if (e instanceof SignInRequired) {
           record("call", callResource(def, args), "sign-in required", principalId);
-          return e.message;
+          return { text: e.message };
         }
         record("call", callResource(def, args), `error: ${errMessage(e)}`, principalId);
         throw e;

@@ -1,11 +1,26 @@
 import { fromJSONSchema, z, ZodObject } from "zod";
-import type { ClientToolDeclaration, TurnOrigin, TurnRequest } from "../../types.ts";
+import type { ClientToolDeclaration, Delivery, TurnOrigin, TurnRequest } from "../../types.ts";
 import { resolveTurnOrigin } from "../../core/turn-origin.ts";
 import { renderSurfaceBriefing } from "../../core/orchestrator/prompt-blocks.ts";
 import { samePerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
+import { deliveryAttestationEvidence } from "../../delivery/delivery-attestation.ts";
+import { mintMcpAttestation, verifyMcpAttestation } from "../../mcp/mcp-attestation.ts";
+import { constantTimeEqual } from "../../util/crypto.ts";
+import { createHash } from "node:crypto";
+import { safeFinnyTraceSnapshot } from "../../finny/trace.ts";
+
+const UNREGISTERED_CONNECTOR_TOKEN = "qm-unregistered-connector-token".repeat(2);
+
+function connectorAuthorizationMatches(authorization: string | undefined, token: string): boolean {
+  const actual = createHash("sha256")
+    .update(authorization ?? "")
+    .digest("hex");
+  const expected = createHash("sha256").update(`Bearer ${token}`).digest("hex");
+  return constantTimeEqual(actual, expected);
+}
 
 function isTurnRequest(body: unknown): body is TurnRequest {
   return (
@@ -256,6 +271,20 @@ async function getRun(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, run);
 }
 
+async function getFinnyTrace(ctx: ApiCtx): Promise<void> {
+  const { res, app, actor } = ctx;
+  const id = ctx.params.id!;
+  if (!(await app.getRun(id, actor?.p))) return sendJson(res, 404, { error: "not_found" });
+  const entries = await app.getRunToolEntries(id, actor?.p);
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index]!;
+    if (entry.type !== "tool_result" || !isObj(entry.payload) || entry.payload.tool !== "finance") continue;
+    const trace = safeFinnyTraceSnapshot(entry.payload.finnyTrace);
+    if (trace) return sendJson(res, 200, { trace });
+  }
+  return sendJson(res, 404, { error: "finny_trace_not_found" });
+}
+
 async function getActiveRunForThread(ctx: ApiCtx): Promise<void> {
   const { res, app, url, actor } = ctx;
   const threadRef = url.searchParams.get("threadRef") ?? "";
@@ -299,9 +328,85 @@ async function ackDelivery(ctx: ApiCtx): Promise<void> {
     isObj(body) && typeof body.slackApiMs === "number" && Number.isFinite(body.slackApiMs) && body.slackApiMs >= 0
       ? body.slackApiMs
       : undefined;
+  if (isObj(body) && body.providerReceipt !== undefined)
+    return sendJson(res, 400, { error: "bad_request", message: "providerReceipt is accepted only from Slack core" });
   if (recipientThreadRef) await app.recordPrincipalDelivery(id, recipientThreadRef);
-  await app.ackDelivery(id, slackApiMs);
+  await app.ackDelivery(id, slackApiMs === undefined ? undefined : { slackApiMs });
   return sendJson(res, 200, { ok: true });
+}
+
+async function getDeliveryAttestation(ctx: ApiCtx): Promise<void> {
+  const { req, res, app, deps, url } = ctx;
+  const serverId = url.searchParams.get("serverId")?.trim();
+  const server = serverId && deps.mcpServers ? await deps.mcpServers.get(serverId) : null;
+  const bearerToken = server?.bearerToken;
+  const attestationPrivateKey = server?.attestationPrivateKey;
+  const attestationKeyId = server?.attestationKeyId;
+  const eligible = Boolean(
+    server?.enabled &&
+    server.auth === "bearer" &&
+    server.credentialScope === "shared" &&
+    bearerToken &&
+    server.attestContext &&
+    attestationPrivateKey &&
+    server.attestationPublicKey &&
+    attestationKeyId,
+  );
+  const authorized = connectorAuthorizationMatches(
+    req.headers.authorization,
+    eligible && bearerToken ? bearerToken : UNREGISTERED_CONNECTOR_TOKEN,
+  );
+  if (!server || !eligible || !authorized || !attestationPrivateKey || !attestationKeyId)
+    return sendJson(res, 401, { error: "unauthorized" });
+  const callId = url.searchParams.get("callId")?.trim();
+  const contextSha256 = url.searchParams.get("contextSha256")?.trim();
+  let deliveries: Array<Delivery | null>;
+  if (ctx.params.id) deliveries = [await app.getDelivery(ctx.params.id)];
+  else if (callId && contextSha256) deliveries = await app.listDeliveriesByMcpCall(server.id, callId, contextSha256);
+  else deliveries = [];
+  if (!deliveries.some(Boolean)) return sendJson(res, 404, { error: "not_found" });
+  const verificationKeys = [
+    server.attestationPublicKey!,
+    ...(server.retiredAttestationKeys ?? []).map((key) => key.publicKey),
+  ];
+  for (const delivery of deliveries) {
+    if (!delivery) continue;
+    const evidence = deliveryAttestationEvidence(delivery, {
+      issuedAt: Date.now(),
+      audienceServerId: server.id,
+      attestationKeyId,
+    });
+    if (!evidence) continue;
+    let valid = true;
+    for (let i = 0; i < evidence.outputReceipts.length; i++) {
+      const ref = (evidence.claims.mcpEvidenceRefs as Array<Record<string, unknown>>)[i]!;
+      let receiptClaims: Record<string, unknown> | null = null;
+      for (const publicKey of verificationKeys) {
+        const verified = await verifyMcpAttestation(evidence.outputReceipts[i]!, publicKey, "output-receipt");
+        if (verified && typeof verified === "object" && !Array.isArray(verified)) {
+          receiptClaims = verified as Record<string, unknown>;
+          break;
+        }
+      }
+      if (
+        !receiptClaims ||
+        receiptClaims.version !== 1 ||
+        receiptClaims.serverId !== ref.serverId ||
+        receiptClaims.callId !== ref.callId ||
+        receiptClaims.contextSha256 !== ref.contextSha256 ||
+        receiptClaims.outputSha256 !== ref.outputSha256
+      ) {
+        valid = false;
+        break;
+      }
+    }
+    if (!valid) continue;
+    return sendJson(res, 200, {
+      attestation: await mintMcpAttestation(evidence.claims, attestationPrivateKey, "delivery-receipt"),
+      outputReceipts: evidence.outputReceipts,
+    });
+  }
+  return sendJson(res, 409, { error: "delivery_evidence_incomplete" });
 }
 
 async function ackDeliveryByKey(ctx: ApiCtx): Promise<void> {
@@ -326,9 +431,12 @@ export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/runs/:id/signal", auth: "source", maxBodyBytes: 6_000_000, handle: postRunSignal },
   { method: "PATCH", path: "/v1/runs/:id/input", auth: "source", handle: patchQueuedRun },
   { method: "POST", path: "/v1/runs/:id/withdraw", auth: "source", handle: postRunWithdraw },
+  { method: "GET", path: "/v1/runs/:id/finny-trace", actor: "person", auth: "source", handle: getFinnyTrace },
   { method: "GET", path: "/v1/runs/:id", actor: "person", auth: "source", handle: getRun },
   { method: "GET", path: "/v1/runs", actor: "person", auth: "source", handle: getActiveRunForThread },
   { method: "GET", path: "/v1/deliveries", auth: "source", handle: listDeliveries },
+  { method: "GET", path: "/v1/deliveries/attestation", auth: "public", handle: getDeliveryAttestation },
+  { method: "GET", path: "/v1/deliveries/:id/attestation", auth: "public", handle: getDeliveryAttestation },
   { method: "POST", path: "/v1/deliveries/:id/ack", actor: "system", auth: "source", handle: ackDelivery },
   { method: "POST", path: "/v1/deliveries/ack-by-key", actor: "system", auth: "source", handle: ackDeliveryByKey },
 ];

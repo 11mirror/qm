@@ -220,10 +220,16 @@ import {
 } from "./persistence/blob-transfer.ts";
 import {
   createLocalDurableByteStore,
+  createNamespacedDurableByteStore,
+  createPostgresDurableByteStore,
   createS3DurableByteStore,
   type DurableByteStore,
 } from "./files/durable-byte-store.ts";
-import { createMemoryFileArtifactStore, type FileArtifactStore } from "./files/file-artifact-store.ts";
+import {
+  createMemoryFileArtifactStore,
+  type CreatorByteStoreRoute,
+  type FileArtifactStore,
+} from "./files/file-artifact-store.ts";
 import { createPostgresFileArtifactStore } from "./files/postgres-file-artifact-store.ts";
 import { createAwsSandbox, type StoredMicrovm } from "./sandbox/aws-sandbox.ts";
 import { createLocalSandbox } from "./sandbox/local-sandbox.ts";
@@ -323,6 +329,14 @@ import {
 import { keychainHarnessAuthEnv } from "./credentials/harness-auth-env.ts";
 import { createClaudeHarness, claudeHarnessConfigOptions } from "./harness/claude-harness.ts";
 import { createPiHarness, piHarnessConfigOptions, type ProviderKeys } from "./harness/pi-harness.ts";
+import { createFinnyPiHarness } from "./finny/pi-profile.ts";
+import type { FinanceService } from "./finny/finance.ts";
+import type { AtomicFetchAdapter } from "./finny/credential-brokered-finance-service.ts";
+import { createFinnyAtomicFetchAdapter } from "./finny/provider-adapter.ts";
+import { createFinnyHindsightClient, createFinnyNetSuiteClient } from "./finny/provider-clients.ts";
+import { createDefaultFinnyFinanceService } from "./finny/default-finance-service.ts";
+import { loadFinnyKnowledgeIndex } from "./finny/knowledge-index.ts";
+import { createFinnyRunStore, type FinnyRunCheckpoint, type FinnyRunStore } from "./finny/run-store.ts";
 import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Harness } from "./harness/harness.ts";
@@ -582,8 +596,16 @@ export function buildApp(
     modelCredentialFetch?: typeof fetch;
     modelVerificationProbe?: typeof probeModel;
     harnesses?: Partial<Record<HarnessId, Harness>>;
+    finnyFinanceService?: FinanceService;
+    finnyAtomicFetchAdapter?: AtomicFetchAdapter;
+    finnyRunStore?: FinnyRunStore;
+    finnyEvidenceBytes?: DurableByteStore;
   } = {},
 ): BuiltApp {
+  if (config.finnyProfile && overrides.harnesses?.pi)
+    throw new Error("FINNY_PROFILE=finny cannot use a raw Pi harness override; inject finnyFinanceService instead");
+  if (overrides.finnyFinanceService && overrides.finnyAtomicFetchAdapter)
+    throw new Error("Finny accepts either a complete finance service or a provider adapter, not both");
   let backgroundAdmission = () => !config.backgroundDeploymentId;
   let backgroundActive = () => false;
   const admittedWork = createAdmittedWork({
@@ -664,6 +686,10 @@ export function buildApp(
   const advisoryLock: AdvisoryLock = pgArtifactMap
     ? createPostgresAdvisoryLock(pgArtifactMap.pool)
     : createMemoryAdvisoryLock();
+  const finnyRunStore = config.finnyProfile
+    ? (overrides.finnyRunStore ??
+      createFinnyRunStore(artifactMap<FinnyRunCheckpoint>("finny_runs"), undefined, advisoryLock))
+    : undefined;
   const principalLinks = createPrincipalLinkService(artifactMap<PrincipalLink>("principal_links"), advisoryLock);
   installPrincipalLinks(principalLinks);
   const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"), {
@@ -742,7 +768,17 @@ export function buildApp(
   if (config.seedSkills) {
     const installCatalogs = async (): Promise<void> => {
       await installSeedSkills(skills, { dir: config.skillsSeedDir, scopeId: orgScope, respectArchived: true });
+      if (config.finnyProfile?.skillsDir) {
+        await installSeedSkills(skills, {
+          dir: config.finnyProfile.skillsDir,
+          scopeId: orgScope,
+          createdBy: "system:finny-skills",
+          reviewer: "system:finny-skills-reviewer",
+          respectArchived: true,
+        });
+      }
       for (const dir of config.pluginSkillDirs) {
+        if (config.finnyProfile?.skillsDir && resolve(dir) === resolve(config.finnyProfile.skillsDir)) continue;
         if (layerSkillsDir && resolve(dir) === layerSkillsDir) continue;
         await installSeedSkills(skills, {
           dir,
@@ -763,6 +799,10 @@ export function buildApp(
       (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
     );
   }
+  const finnyKnowledgeIndex = config.finnyProfile?.skillsDir
+    ? skillsReady.then(() => loadFinnyKnowledgeIndex(config.finnyProfile!.skillsDir!))
+    : undefined;
+  if (finnyKnowledgeIndex) skillsReady = finnyKnowledgeIndex.then(() => undefined);
   const rateLimitOpts = { maxPerWindow: config.rateLimitPerWindow, windowMs: config.rateLimitWindowMs };
   const rateLimiter = config.databaseUrl
     ? createPostgresRateLimiter(config.databaseUrl, rateLimitOpts)
@@ -811,9 +851,22 @@ export function buildApp(
           ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
         })
       : createLocalDurableByteStore(join(config.dataDir, "docstore"));
+  let finnyEvidenceBytes: DurableByteStore | undefined;
+  if (config.finnyProfile) {
+    finnyEvidenceBytes =
+      overrides.finnyEvidenceBytes ??
+      createPostgresDurableByteStore(requireDbUrl("FINNY_PROFILE"), "finny_evidence_bytes");
+  }
+  const finnyFileBytes: Readonly<Record<string, CreatorByteStoreRoute>> = finnyEvidenceBytes
+    ? {
+        "system:finny": {
+          store: createNamespacedDurableByteStore(finnyEvidenceBytes, "finny"),
+        },
+      }
+    : {};
   const files: FileArtifactStore = config.databaseUrl
-    ? createPostgresFileArtifactStore(config.databaseUrl, fileBytes)
-    : createMemoryFileArtifactStore(fileBytes);
+    ? createPostgresFileArtifactStore(config.databaseUrl, fileBytes, finnyFileBytes)
+    : createMemoryFileArtifactStore(fileBytes, finnyFileBytes);
   const fileUploads =
     config.databaseUrl && config.snapshotStore === "s3" && config.s3Bucket
       ? createDirectFileUploads({
@@ -1466,6 +1519,16 @@ export function buildApp(
     return resolveModel(subscription) ? subscription : id;
   };
   const runtimeOrgScope = scopeId("org", config.orgId);
+  const finnyDiagnostics = {
+    record(event: import("./finny/finance-failure.ts").FinanceDiagnosticEvent) {
+      errors.record({
+        category: "finny",
+        code: event.failure.cause,
+        message: `${event.operation} failed for run ${event.runId}; diagnostic ${event.failure.diagnosticId}${event.failure.providerStatus ? `; provider status ${event.failure.providerStatus}` : ""}`,
+        scopeLabel: runtimeOrgScope,
+      });
+    },
+  };
   const orgBaseModelId = (): string | undefined =>
     configStore.getRuntimeSelection(runtimeOrgScope)?.modelId ?? configStore.getBaseModel(runtimeOrgScope) ?? undefined;
   const defaultForHarness = (harness: string) =>
@@ -1481,15 +1544,45 @@ export function buildApp(
     [
       "pi",
       overrides.harnesses?.pi ??
-        createPiHarness({
-          ...piHarnessConfigOptions(config),
-          modelGateway: gatewayTransport,
-          resolveBaseModelId: () => orgBaseModelId() ?? defaultForHarness("pi"),
-          resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
-          resolveProviderKeys: resolvePiProviderKeys,
-          ...(directProviderAvailability.codexOAuth ? { companyModelId } : {}),
-          signals: runSignals,
-        }),
+        (config.finnyProfile
+          ? createFinnyPiHarness({
+              ...piHarnessConfigOptions(config),
+              modelId: config.finnyProfile.modelId,
+              ...(finnyKnowledgeIndex ? { knowledgeIndex: finnyKnowledgeIndex } : {}),
+              runStore: finnyRunStore!,
+              diagnostics: finnyDiagnostics,
+              financeService:
+                overrides.finnyFinanceService ??
+                createDefaultFinnyFinanceService({
+                  credentialReader: serviceCreds,
+                  orgScopeId: runtimeOrgScope,
+                  files,
+                  evidenceBytes: finnyEvidenceBytes!,
+                  diagnostics: finnyDiagnostics,
+                  atomicFetch:
+                    overrides.finnyAtomicFetchAdapter ??
+                    createFinnyAtomicFetchAdapter({
+                      hindsight: createFinnyHindsightClient({ timeoutMs: config.finnyProfile.providerTimeoutMs }),
+                      netsuite: createFinnyNetSuiteClient({ timeoutMs: config.finnyProfile.providerTimeoutMs }),
+                      diagnostics: finnyDiagnostics,
+                    }),
+                }),
+              modelGateway: gatewayTransport,
+              resolveBaseModelId: () => config.finnyProfile!.modelId,
+              resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
+              resolveProviderKeys: resolvePiProviderKeys,
+              ...(directProviderAvailability.codexOAuth ? { companyModelId } : {}),
+              signals: runSignals,
+            })
+          : createPiHarness({
+              ...piHarnessConfigOptions(config),
+              modelGateway: gatewayTransport,
+              resolveBaseModelId: () => orgBaseModelId() ?? defaultForHarness("pi"),
+              resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
+              resolveProviderKeys: resolvePiProviderKeys,
+              ...(directProviderAvailability.codexOAuth ? { companyModelId } : {}),
+              signals: runSignals,
+            })),
     ],
     [
       "claude",
@@ -3080,6 +3173,7 @@ export function buildApp(
   return {
     app,
     checkReadiness: async (signal) => {
+      await skillsReady;
       await pgArtifactMap?.pool.q("SELECT 1", [], { signal });
     },
     ...(screenSecurity ? { screenSecurity } : {}),

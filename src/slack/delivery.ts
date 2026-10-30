@@ -434,12 +434,42 @@ export interface PostVerifyClient {
   };
 }
 
+async function findThreadFiles(
+  client: PostVerifyClient,
+  channel: string,
+  root: string,
+  oldest: string,
+): Promise<Array<{ id: string; name: string }>> {
+  const files = new Map<string, { id: string; name: string }>();
+  let cursor: string | undefined;
+  do {
+    const page = (await client.conversations.replies({
+      channel,
+      ts: root,
+      limit: 100,
+      include_all_metadata: true,
+      oldest,
+      inclusive: true,
+      ...(cursor ? { cursor } : {}),
+    })) as {
+      messages?: Array<{ files?: Array<{ id?: string; name?: string }> }>;
+      response_metadata?: { next_cursor?: string };
+    };
+    for (const file of (page.messages ?? []).flatMap((message) => message.files ?? [])) {
+      if (file.id && file.name) files.set(file.id, { id: file.id, name: file.name });
+    }
+    cursor = page.response_metadata?.next_cursor?.trim() || undefined;
+  } while (cursor);
+  return [...files.values()];
+}
+
 export async function findPostedByKey(
   client: PostVerifyClient,
   args: PostMessageArgs,
   idempotencyKey: string,
   oldest: string,
-): Promise<{ ts: string; channel: string } | undefined> {
+  recoverFiles = false,
+): Promise<{ ts: string; channel: string; files?: Array<{ id: string; name: string }> } | undefined> {
   const channel = args.channel;
   let cursor: string | undefined;
   do {
@@ -464,7 +494,11 @@ export async function findPostedByKey(
     const hit = (page.messages ?? []).find(
       (m) => m.metadata?.event_type === "qm_delivery" && m.metadata.event_payload?.idempotency_key === idempotencyKey,
     );
-    if (hit?.ts) return { ts: String(hit.ts), channel };
+    if (hit?.ts) {
+      const root = args.thread_ts ?? String(hit.ts);
+      const files = recoverFiles ? await findThreadFiles(client, channel, root, oldest) : undefined;
+      return { ts: String(hit.ts), channel, ...(files ? { files } : {}) };
+    }
     cursor = page.response_metadata?.next_cursor?.trim() || undefined;
   } while (cursor);
   return undefined;
@@ -501,8 +535,20 @@ export async function postWithVerify(
   client: PostVerifyClient,
   args: PostMessageArgs,
   idempotencyKey: string,
-  opts?: { attempts?: number; verifyFirst?: boolean; verifyOldest?: string; verifyBestEffort?: boolean },
-): Promise<{ ts: string | undefined; channel: string; reused?: boolean; parts?: PostedPart[] }> {
+  opts?: {
+    attempts?: number;
+    verifyFirst?: boolean;
+    verifyOldest?: string;
+    verifyBestEffort?: boolean;
+    recoverFiles?: boolean;
+  },
+): Promise<{
+  ts: string | undefined;
+  channel: string;
+  reused?: boolean;
+  parts?: PostedPart[];
+  files?: Array<{ id: string; name: string }>;
+}> {
   const fullText = typeof args.text === "string" ? args.text : "";
   const batches: PostMessageArgs[] = [];
   if (Array.isArray(args.blocks) && args.blocks.length > 50) {
@@ -549,8 +595,10 @@ export async function postWithVerify(
   args.metadata = deliveryMetadata(idempotencyKey);
   if (opts?.verifyFirst) {
     const found = opts.verifyBestEffort
-      ? await findPostedByKey(client, args, idempotencyKey, verifyOldest).catch(swallowAs("slack: part verify", null))
-      : await findPostedByKey(client, args, idempotencyKey, verifyOldest);
+      ? await findPostedByKey(client, args, idempotencyKey, verifyOldest, opts.recoverFiles).catch(
+          swallowAs("slack: part verify", null),
+        )
+      : await findPostedByKey(client, args, idempotencyKey, verifyOldest, opts.recoverFiles);
     if (found) return { ...found, reused: true };
   }
   let lastErr: unknown;
@@ -567,16 +615,16 @@ export async function postWithVerify(
         await sleep(retryAfter * 1000);
 
         try {
-          const found = await findPostedByKey(client, args, idempotencyKey, verifyOldest);
+          const found = await findPostedByKey(client, args, idempotencyKey, verifyOldest, opts?.recoverFiles);
           if (found) return { ...found, reused: true };
         } catch {
           /* verification is best-effort on this path */
         }
         continue;
       }
-      let found: { ts: string; channel: string } | undefined;
+      let found: { ts: string; channel: string; files?: Array<{ id: string; name: string }> } | undefined;
       try {
-        found = await findPostedByKey(client, args, idempotencyKey, verifyOldest);
+        found = await findPostedByKey(client, args, idempotencyKey, verifyOldest, opts?.recoverFiles);
       } catch {
         throw err;
       }

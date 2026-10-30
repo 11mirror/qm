@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,7 +52,7 @@ function fakeSandbox(): Sandbox {
   };
 }
 
-function buildScenario(interruptAfterToolResult = false) {
+function buildScenario(interruptAfterToolResult = false, includeOutputEvidence = false) {
   const turns: string[] = [];
   const continued: Array<boolean | undefined> = [];
   const environments: Array<string | undefined> = [];
@@ -83,7 +84,19 @@ function buildScenario(interruptAfterToolResult = false) {
           });
           await turn.emit({
             type: "tool_result",
-            payload: { tool: "execute", callId: "c1", result: "a.txt" },
+            payload: {
+              tool: "execute",
+              callId: "c1",
+              result: "a.txt",
+              ...(includeOutputEvidence
+                ? {
+                    mcpServer: "finance",
+                    outputReceipt: "signed-output-receipt",
+                    outputSha256: createHash("sha256").update("it runs on this conversation's computer").digest("hex"),
+                    contextSha256: "a".repeat(64),
+                  }
+                : {}),
+            },
             scopeLabel: turn.scopeLabel,
           });
           throw new Error("interrupted after recording a tool result");
@@ -271,6 +284,43 @@ test("a steer mid-turn does not make an answered turn look unanswered", async ()
   assert.equal((await asks()).length, 1, "the ask is not appended again");
 });
 
+test("an answered retry retains MCP evidence from its durable turn", async () => {
+  const { orchestrator, sessions, runs, input } = buildScenario();
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  const reply = "it runs on this conversation's computer";
+  const marker = await seedTurn(sessions, [
+    { type: "user", payload: { text: ASK, runId: run.id } },
+    {
+      type: "tool_result",
+      payload: {
+        tool: "execute",
+        callId: "c1",
+        result: "a.txt",
+        mcpServer: "finance",
+        outputReceipt: "signed-output-receipt",
+        outputSha256: createHash("sha256").update(reply).digest("hex"),
+        contextSha256: "a".repeat(64),
+      },
+    },
+    { type: "assistant", payload: { text: reply } },
+  ]);
+  await runs.noteTurnUserSeq(run.id, marker);
+
+  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+
+  assert.equal(retry.reply, reply);
+  assert.deepEqual(retry.mcpEvidenceRefs, [
+    {
+      serverId: "finance",
+      callId: "c1",
+      outputReceipt: "signed-output-receipt",
+      outputReceiptSha256: createHash("sha256").update("signed-output-receipt").digest("hex"),
+      outputSha256: createHash("sha256").update(reply).digest("hex"),
+      contextSha256: "a".repeat(64),
+    },
+  ]);
+});
+
 test("a turn that recorded no reply replays as silent, not as an empty answer", async () => {
   const { orchestrator, sessions, runs, turns, input } = buildScenario();
   const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
@@ -300,6 +350,28 @@ test("a resume whose recorded work ends at a tool result asks the harness to con
   assert.doesNotMatch(environments[1]!, /## Where you are|Environment changes/);
   assert.equal(turns[1], ASK, "only the original request travels, as the harness's fallback");
   assert.equal((await asks()).length, 1);
+});
+
+test("a resumed turn retains durable MCP evidence recorded before the interrupted attempt", async () => {
+  const { orchestrator, runs, input } = buildScenario(true, true);
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  await assert.rejects(
+    orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 1 })),
+    /interrupted after recording a tool result/,
+  );
+
+  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+
+  assert.deepEqual(retry.mcpEvidenceRefs, [
+    {
+      serverId: "finance",
+      callId: "c1",
+      outputReceipt: "signed-output-receipt",
+      outputReceiptSha256: createHash("sha256").update("signed-output-receipt").digest("hex"),
+      outputSha256: createHash("sha256").update("it runs on this conversation's computer").digest("hex"),
+      contextSha256: "a".repeat(64),
+    },
+  ]);
 });
 
 test("a resume whose last tool call has no recorded result settles it and continues the assistant turn", async () => {

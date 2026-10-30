@@ -181,12 +181,16 @@ export function parseUploadedFileIds(res: unknown): string[] {
   return r.file ? fileIdsOf([r.file]) : fileIdsOf(r.files);
 }
 
-export function channelShareTs(res: unknown, channel: string): string | undefined {
+export function channelShareTs(res: unknown, channel: string, threadTs?: string): string | undefined {
   const shares = rec(rec(rec(res)?.file)?.shares) ?? {};
   for (const list of [rec(shares.public)?.[channel], rec(shares.private)?.[channel]]) {
     if (list == null) continue;
     if (!Array.isArray(list)) throw new TypeError("malformed file.shares entry (expected an array)");
-    const ts = list.map((s) => coerced(rec(s)?.ts)).find((value) => value !== undefined);
+    const ts = list
+      .map((share) => rec(share))
+      .filter((share) => coerced(share?.thread_ts) === threadTs)
+      .map((share) => coerced(share?.ts))
+      .find((value) => value !== undefined);
     if (ts) return ts;
   }
   return undefined;

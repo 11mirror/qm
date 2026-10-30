@@ -1,6 +1,15 @@
 import { randomUUID } from "node:crypto";
-import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment, ScopeId } from "../types.ts";
+import type {
+  Delivery,
+  DeliveryProvenance,
+  Destination,
+  McpOutputEvidenceRef,
+  OutgoingAttachment,
+  ScopeId,
+  SlackDeliveryProviderReceipt,
+} from "../types.ts";
 import type { TurnOrigin } from "../core/turn-origin.ts";
+import { validateSlackProviderReceipt } from "./delivery-attestation.ts";
 
 export const DELIVERY_MAX_AGE_MS = 6 * 3_600_000;
 
@@ -20,6 +29,7 @@ export function turnDeliveryProvenance(input: {
   sourceSessionId?: string;
   sourceUserSeq?: number;
   sourceAssistantEntrySeq?: number;
+  mcpEvidenceRefs?: McpOutputEvidenceRef[];
 }): DeliveryProvenance {
   return {
     trigger: input.origin.kind === "automation" ? (input.surface ?? "wake") : "conversation",
@@ -30,6 +40,7 @@ export function turnDeliveryProvenance(input: {
     ...(input.sourceSessionId !== undefined ? { sourceSessionId: input.sourceSessionId } : {}),
     ...(input.sourceUserSeq !== undefined ? { sourceUserSeq: input.sourceUserSeq } : {}),
     ...(input.sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq: input.sourceAssistantEntrySeq } : {}),
+    ...(input.mcpEvidenceRefs?.length ? { mcpEvidenceRefs: input.mcpEvidenceRefs.map((ref) => ({ ...ref })) } : {}),
   };
 }
 
@@ -45,10 +56,15 @@ export interface DeliveryStore {
   pending(type: string): Promise<Delivery[]>;
   claimPending(type: string, ttlMs: number): Promise<Delivery[]>;
   listShadow(opts?: { limit?: number }): Promise<Delivery[]>;
-  ack(id: string, at: number, slackApiMs?: number): Promise<void>;
+  ack(
+    id: string,
+    at: number,
+    details?: { slackApiMs?: number; providerReceipt?: SlackDeliveryProviderReceipt },
+  ): Promise<void>;
   ackByKey(idempotencyKey: string, at: number): Promise<void>;
   setEditRefByKey(idempotencyKey: string, editRef: string): Promise<void>;
   get(id: string): Promise<Delivery | null>;
+  listByMcpCall(serverId: string, callId: string, contextSha256: string): Promise<Delivery[]>;
   existingKeys(idempotencyKeys: string[]): Promise<Set<string>>;
   recordRecipientThread(id: string, recipientThreadRef: string, at: number): Promise<void>;
   listByRecipientThread(recipientThreadRef: string, opts?: { limit?: number }): Promise<Delivery[]>;
@@ -142,14 +158,22 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
         .sort((a, b) => b.createdAt - a.createdAt)
         .slice(0, limit);
     },
-    async ack(id, at, slackApiMs) {
+    async ack(id, at, details) {
       const d = deliveries.get(id);
-      if (d && d.deliveredAt === null) {
-        d.deliveredAt = at;
-        delete d.expiredAt;
-        d.deliverLatencyMs = Math.max(0, at - d.createdAt);
-        if (slackApiMs !== undefined) d.slackApiMs = slackApiMs;
+      const slackApiMs = details?.slackApiMs;
+      const providerReceipt = details?.providerReceipt;
+      if (!d) return;
+      if (d.deliveredAt !== null) {
+        if (providerReceipt) throw new Error("Slack provider receipt cannot be added after delivery acknowledgement");
+        return;
       }
+      const validatedReceipt = providerReceipt ? validateSlackProviderReceipt(d, providerReceipt) : undefined;
+      if (providerReceipt && !validatedReceipt) throw new Error("invalid Slack provider receipt for delivery");
+      d.deliveredAt = at;
+      delete d.expiredAt;
+      d.deliverLatencyMs = Math.max(0, at - d.createdAt);
+      if (slackApiMs !== undefined) d.slackApiMs = slackApiMs;
+      if (validatedReceipt) d.providerReceipt = validatedReceipt;
     },
     async ackByKey(idempotencyKey, at) {
       const existingId = byKey.get(idempotencyKey);
@@ -179,6 +203,15 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
     },
     async get(id) {
       return deliveries.get(id) ?? null;
+    },
+    async listByMcpCall(serverId, callId, contextSha256) {
+      return [...deliveries.values()]
+        .filter((delivery) =>
+          delivery.provenance?.mcpEvidenceRefs?.some(
+            (ref) => ref.serverId === serverId && ref.callId === callId && ref.contextSha256 === contextSha256,
+          ),
+        )
+        .sort((a, b) => b.createdAt - a.createdAt);
     },
     async existingKeys(idempotencyKeys) {
       return new Set(idempotencyKeys.filter((key) => byKey.has(key)));

@@ -29,6 +29,7 @@ function harness(opts: { thread?: Array<Record<string, unknown>>; errors?: Recor
     },
   };
   const acknowledgements: string[] = [];
+  const acknowledgementBodies: unknown[] = [];
   const checkpoints: Array<[string, string]> = [];
   const queue: unknown[] = [];
   const core = {
@@ -37,8 +38,9 @@ function harness(opts: { thread?: Array<Record<string, unknown>>; errors?: Recor
     },
     holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
     claimDeliveries: async () => queue.splice(0),
-    ackDelivery: async (id: string) => {
+    ackDelivery: async (id: string, body: unknown) => {
       acknowledgements.push(id);
+      acknowledgementBodies.push(body);
     },
   };
   const poller = createDeliveryPoller({
@@ -50,6 +52,7 @@ function harness(opts: { thread?: Array<Record<string, unknown>>; errors?: Recor
   return {
     calls,
     acknowledgements,
+    acknowledgementBodies,
     checkpoints,
     methods: () => calls.map((c) => c.method),
     deliver: async (row: {
@@ -163,6 +166,7 @@ test("a delete refused for a reason other than a missing message still acks but 
     const h = harness({ errors: { "chat.delete": "cant_delete_message" } });
     await h.deliver({ destination: { delete: { messageTs: "100.500" } }, ageMs: RECOVERED_AGE_MS });
     assert.deepEqual(h.acknowledgements, ["D1"]);
+    assert.equal((h.acknowledgementBodies[0] as { providerReceipt?: unknown }).providerReceipt, undefined);
     assert.equal(errors.length, 1);
     assert.match(errors[0]!, /cant_delete_message/);
   } finally {

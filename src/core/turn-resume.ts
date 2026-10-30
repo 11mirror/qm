@@ -66,14 +66,26 @@ function isSteerEntry(e: SessionEntry): boolean {
   return (e.payload as { steered?: unknown } | null)?.steered === true;
 }
 
+export function entriesForTurn(entries: readonly SessionEntry[], userSeq: number): SessionEntry[] {
+  const start = entries.findIndex((entry) => entry.seq === userSeq);
+  if (start < 0) return [];
+  const anchor = entries[start]!;
+  const turn = [anchor];
+  for (let i = start + 1; i < entries.length; i++) {
+    const entry = entries[i]!;
+    if (entry.type !== "user" && differentTurn(entry, anchor)) continue;
+    if (entry.type === "user" && !isSteerEntry(entry) && !isOverheardEntry(entry) && !isResumeNote(entry)) break;
+    turn.push(entry);
+  }
+  return turn;
+}
+
 export function turnAtSeq(entries: readonly SessionEntry[], userSeq: number): RecordedTurn | null {
-  const start = entries.findIndex((e) => e.seq === userSeq);
-  if (start < 0) return null;
+  const turn = entriesForTurn(entries, userSeq);
+  if (!turn.length) return null;
   let workEntries = 0;
   let answer: RecordedTurn["answer"];
-  for (let i = start + 1; i < entries.length; i++) {
-    const e = entries[i]!;
-    if (e.type !== "user" && differentTurn(e, entries[start]!)) continue;
+  for (const e of turn.slice(1)) {
     if (e.type === "assistant") {
       answer = { seq: e.seq, text: entryText(e) };
       continue;
@@ -82,13 +94,7 @@ export function turnAtSeq(entries: readonly SessionEntry[], userSeq: number): Re
       workEntries += 1;
       continue;
     }
-    if (e.type !== "user") continue;
-    if (isSteerEntry(e)) {
-      workEntries += 1;
-      continue;
-    }
-    if (isOverheardEntry(e) || isResumeNote(e)) continue;
-    break;
+    if (e.type === "user" && isSteerEntry(e)) workEntries += 1;
   }
   return { userSeq, workEntries, ...(answer ? { answer } : {}) };
 }

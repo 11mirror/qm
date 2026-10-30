@@ -19,6 +19,7 @@ interface McpRequest {
   authorization?: string;
   actor?: string;
   approval?: string;
+  context?: string;
 }
 
 export interface McpTestServer {
@@ -132,6 +133,7 @@ export async function startMcpTestServer(
       ...(authorization ? { authorization } : {}),
       ...(typeof req.headers["x-qm-actor"] === "string" ? { actor: req.headers["x-qm-actor"] } : {}),
       ...(typeof req.headers["x-qm-approval"] === "string" ? { approval: req.headers["x-qm-approval"] } : {}),
+      ...(typeof req.headers["x-qm-context"] === "string" ? { context: req.headers["x-qm-context"] } : {}),
     });
     if (!authorized(authorization)) {
       return json(res, 401, { error: "unauthorized" }, { "www-authenticate": 'Bearer error="invalid_token"' });

@@ -243,6 +243,15 @@ export interface CandidateDestination extends Destination {
 
 export type BackgroundWakeTrigger = "cron" | "webhook" | "monitor" | (string & {});
 
+export interface McpOutputEvidenceRef {
+  serverId: string;
+  callId: string;
+  outputReceipt?: string;
+  outputReceiptSha256: string;
+  outputSha256?: string;
+  contextSha256?: string;
+}
+
 export interface DeliveryProvenance {
   sourceTitle?: string;
   trigger: BackgroundWakeTrigger;
@@ -253,6 +262,7 @@ export interface DeliveryProvenance {
   sourceSessionId?: string;
   sourceUserSeq?: number;
   sourceAssistantEntrySeq?: number;
+  mcpEvidenceRefs?: McpOutputEvidenceRef[];
 }
 
 export interface CronSchedule {
@@ -510,6 +520,18 @@ export interface ShipGrant {
   revocationHistory?: Array<{ revokedAt: number; revokedBy: string }>;
 }
 
+export interface SlackDeliveryProviderReceipt {
+  provider: "slack";
+  action: "post" | "update" | "attachments";
+  channelId: string;
+  messageTs: string;
+  threadTs?: string;
+  slackAccountId?: string;
+  slackTeamId?: string;
+  renderedBodySha256: string;
+  files?: Array<{ id: string; sha256: string }>;
+}
+
 export interface Delivery {
   id: string;
   destination: Destination;
@@ -524,6 +546,7 @@ export interface Delivery {
   recipientThreadRef?: string;
   deliverLatencyMs?: number;
   slackApiMs?: number;
+  providerReceipt?: SlackDeliveryProviderReceipt;
 }
 
 export interface SurfaceContextQuery {
@@ -740,6 +763,26 @@ export interface TurnRequest {
   surfaceBriefing?: SurfaceBriefing;
 }
 
+export interface McpHostContextBase {
+  readonly actorId: string;
+  readonly scopeId: ScopeId;
+  readonly session: {
+    readonly id: string;
+    readonly threadRef: string;
+  };
+  readonly surface: string;
+  readonly slackSource?: Readonly<NonNullable<TurnRequest["slackSource"]>>;
+  readonly runId?: string;
+  readonly attempt?: number;
+}
+
+export interface McpHostContext extends McpHostContextBase {
+  readonly runtime: {
+    readonly harnessId: string;
+    readonly modelId: string;
+  };
+}
+
 export interface ActorAssertion {
   externalId: string;
   isExternalGuest?: boolean;
@@ -819,4 +862,5 @@ export interface TurnResult {
   sourceUserSeq?: number;
   sourceAssistantEntrySeq?: number;
   runtime?: TurnRuntime;
+  mcpEvidenceRefs?: McpOutputEvidenceRef[];
 }

@@ -81,6 +81,8 @@ export function createMessagingMethods(
   | "setWebhookEnabled"
   | "updateWebhook"
   | "pendingDeliveries"
+  | "getDelivery"
+  | "listDeliveriesByMcpCall"
   | "enqueueDelivery"
   | "ingestSurfaceEvents"
   | "searchSurface"
@@ -309,6 +311,12 @@ export function createMessagingMethods(
     pendingDeliveries(type, claimMs) {
       return claimMs && claimMs > 0 ? deps.deliveries.claimPending(type, claimMs) : deps.deliveries.pending(type);
     },
+    getDelivery(id) {
+      return deps.deliveries.get(id);
+    },
+    listDeliveriesByMcpCall(serverId, callId, contextSha256) {
+      return deps.deliveries.listByMcpCall(serverId, callId, contextSha256);
+    },
     async enqueueDelivery(input) {
       await deps.deliveries.enqueue(input);
     },
@@ -413,8 +421,8 @@ export function createMessagingMethods(
       );
       return merged != null;
     },
-    async ackDelivery(id, slackApiMs) {
-      await deps.deliveries.ack(id, Date.now(), slackApiMs);
+    async ackDelivery(id, details) {
+      await deps.deliveries.ack(id, Date.now(), details);
     },
     async ackDeliveryByKey(idempotencyKey) {
       await deps.deliveries.ackByKey(idempotencyKey, Date.now());

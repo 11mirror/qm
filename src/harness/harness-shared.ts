@@ -103,6 +103,7 @@ export function harnessToolContext(turn: HarnessTurnInput): ToolContextRef {
     current: turn.tools,
     runtimeRunId: turn.runId,
     runtimeActorId: turn.runtimeActorId,
+    mcpHostContext: turn.mcpHostContext,
     pendingApprovals: [],
     pausedOnApproval: false,
     silentRequested: false,

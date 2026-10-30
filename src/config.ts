@@ -73,6 +73,12 @@ export interface Config {
   databasePoolMax?: number;
   databaseDirectPoolMax?: number;
   harness: "pi" | "claude";
+  finnyProfile?: {
+    id: "finny";
+    modelId: string;
+    providerTimeoutMs: number;
+    skillsDir?: string;
+  };
   securityPosture: SecurityPosture;
   sharingPosture: SharingPosture;
   legacySandboxScopeDefaults?: LegacySandboxScopeDefaults;
@@ -214,6 +220,7 @@ export interface Config {
 
 export function configuredModelForHarness(config: Config, harness: string): string | undefined {
   if (harness === "claude") return config.claudeModel;
+  if (harness === "pi" && config.finnyProfile) return config.finnyProfile.modelId;
   if (
     harness === "pi" &&
     !config.modelId &&
@@ -1083,6 +1090,30 @@ function harnessEnvStrict(value: string | undefined): Config["harness"] {
   throw new Error(`HARNESS=${JSON.stringify(value)} is not recognized — use pi or claude, or unset it.`);
 }
 
+function finnyProfileEnvStrict(env: NodeJS.ProcessEnv, harness: Config["harness"]): Config["finnyProfile"] {
+  const requested = env.FINNY_PROFILE?.trim();
+  const modelId = env.PI_MODEL?.trim();
+  const skillsDir = env.FINNY_SKILLS_DIR?.trim();
+  const providerTimeoutMs = numEnvStrict("FINNY_PROVIDER_TIMEOUT_MS", env.FINNY_PROVIDER_TIMEOUT_MS);
+  if (!requested) {
+    if (skillsDir || providerTimeoutMs !== undefined)
+      throw new Error("FINNY_SKILLS_DIR and FINNY_PROVIDER_TIMEOUT_MS require FINNY_PROFILE=finny");
+    return undefined;
+  }
+  if (requested !== "finny")
+    throw new Error(`FINNY_PROFILE=${JSON.stringify(env.FINNY_PROFILE)} is not recognized — use finny or unset it.`);
+  if (harness !== "pi") throw new Error("FINNY_PROFILE=finny requires harness=pi");
+  if (!modelId) throw new Error("FINNY_PROFILE=finny requires a pinned PI_MODEL");
+  if (!Number.isSafeInteger(providerTimeoutMs) || providerTimeoutMs! <= 0)
+    throw new Error("FINNY_PROFILE=finny requires a positive integer FINNY_PROVIDER_TIMEOUT_MS");
+  return {
+    id: "finny",
+    modelId,
+    providerTimeoutMs: providerTimeoutMs!,
+    ...(skillsDir ? { skillsDir: resolve(skillsDir) } : {}),
+  };
+}
+
 export function enabledSandboxBackends(config: Config): Array<Config["sandboxBackend"]> {
   const credentialed: Record<Config["sandboxBackend"], boolean> = {
     local: Boolean(config.localSandbox?.image),
@@ -1302,6 +1333,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     env.SWARM_DEFAULTS === undefined ? undefined : JSON.parse(env.SWARM_DEFAULTS),
   );
   const harness = harnessEnvStrict(env.HARNESS);
+  const finnyProfile = finnyProfileEnvStrict(env, harness);
   const codexAuthCredential = env.CODEX_AUTH_CREDENTIAL?.trim() || undefined;
   const claudeAuthCredential = env.CLAUDE_AUTH_CREDENTIAL?.trim() || undefined;
   const codexAuthFile = codexAuthCredential ? undefined : codexAuthFileForEnv(env);
@@ -1328,6 +1360,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   const modelProvider = modelProviderEnvStrict(env);
   const { sessionStore, runStore } = resolveStoreKinds(env);
+  if (
+    finnyProfile &&
+    (!env.DATABASE_URL?.trim() ||
+      sessionStore !== "postgres" ||
+      runStore !== "postgres" ||
+      !env.CONNECTOR_SECRET_KEY?.trim())
+  ) {
+    throw new Error(
+      "FINNY_PROFILE=finny requires DATABASE_URL, SESSION_STORE=postgres, RUN_STORE=postgres, and CONNECTOR_SECRET_KEY so credentials, diagnostics, and stage checkpoints survive restarts",
+    );
+  }
   if (env.E2B_API_KEY && !env.E2B_SNAPSHOT_S3_BUCKET) {
     console.warn(
       "[config] e2b sandbox backend enabled without E2B_SNAPSHOT_S3_BUCKET — provider pause preserves the machine, but there are no home snapshots, so a sandbox the provider loses comes back with an empty home; set E2B_SNAPSHOT_S3_BUCKET for durable portable recovery.",
@@ -1588,6 +1631,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.DATABASE_CA_CERT ? { databaseCaCert: env.DATABASE_CA_CERT } : {}),
     ...(env.DATABASE_CA_CERT_FILE ? { databaseCaCertFile: env.DATABASE_CA_CERT_FILE } : {}),
     harness,
+    ...(finnyProfile ? { finnyProfile } : {}),
     securityPosture: securityPostureEnvStrict(env.HARNESS_SECURITY_POSTURE),
     sharingPosture: sharingPostureEnvStrict(env.HARNESS_SHARING_POSTURE),
     securityScreen,

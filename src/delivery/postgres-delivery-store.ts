@@ -1,8 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { createPgPool } from "../persistence/pg-pool.ts";
-import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
+import type {
+  Delivery,
+  DeliveryProvenance,
+  Destination,
+  OutgoingAttachment,
+  SlackDeliveryProviderReceipt,
+} from "../types.ts";
 import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
 import { pgTextSafe } from "../util/text.ts";
+import { validateSlackProviderReceipt } from "./delivery-attestation.ts";
 
 const NOW_MS_SQL = "(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT";
 function rowToDelivery(r: Record<string, unknown>): Delivery {
@@ -20,6 +27,7 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
     ...(r.recipient_thread_ref != null ? { recipientThreadRef: r.recipient_thread_ref as string } : {}),
     ...(r.deliver_latency_ms != null ? { deliverLatencyMs: Number(r.deliver_latency_ms) } : {}),
     ...(r.slack_api_ms != null ? { slackApiMs: Number(r.slack_api_ms) } : {}),
+    ...(r.provider_receipt != null ? { providerReceipt: r.provider_receipt as SlackDeliveryProviderReceipt } : {}),
   };
 }
 
@@ -72,6 +80,18 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       statements: [
         `SET LOCAL lock_timeout = '3s'`,
         `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS source_cron_id TEXT`,
+      ],
+    },
+    {
+      id: "delivery/store/0007",
+      statements: [`ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS provider_receipt JSONB`],
+    },
+    {
+      id: "delivery/store/0009",
+      statements: [
+        `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_deliveries_mcp_evidence
+        ON deliveries USING GIN ((provenance->'mcpEvidenceRefs'))
+        WHERE provenance ? 'mcpEvidenceRefs'`,
       ],
     },
   ]);
@@ -170,7 +190,41 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       );
       return rows.map(rowToDelivery);
     },
-    async ack(id, at, slackApiMs) {
+    async ack(id, at, details) {
+      const slackApiMs = details?.slackApiMs;
+      const providerReceipt = details?.providerReceipt;
+      if (providerReceipt) {
+        const rows = await q("SELECT * FROM deliveries WHERE id = $1", [id]);
+        if (!rows[0]) return;
+        const delivery = rowToDelivery(rows[0]);
+        if (delivery.deliveredAt !== null)
+          throw new Error("Slack provider receipt cannot be added after delivery acknowledgement");
+        const validatedReceipt = validateSlackProviderReceipt(delivery, providerReceipt);
+        if (!validatedReceipt) throw new Error("invalid Slack provider receipt for delivery");
+        const result = await query(
+          `UPDATE deliveries
+              SET delivered_at = $2,
+                  expired_at = NULL,
+                  deliver_latency_ms = GREATEST(0, $2 - created_at),
+                  slack_api_ms = $3,
+                  provider_receipt = $4::jsonb
+            WHERE id = $1 AND delivered_at IS NULL
+              AND destination = $5::jsonb
+              AND attachments IS NOT DISTINCT FROM $6::jsonb
+              AND text = $7`,
+          [
+            id,
+            at,
+            slackApiMs ?? null,
+            JSON.stringify(validatedReceipt),
+            JSON.stringify(delivery.destination),
+            delivery.attachments ? JSON.stringify(delivery.attachments) : null,
+            delivery.text,
+          ],
+        );
+        if (result.rowCount !== 1) throw new Error("delivery changed before Slack provider receipt was persisted");
+        return;
+      }
       await query(
         `UPDATE deliveries
             SET delivered_at = $2,
@@ -201,6 +255,16 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     async get(id) {
       const rows = await q("SELECT * FROM deliveries WHERE id = $1", [id]);
       return rows[0] ? rowToDelivery(rows[0]) : null;
+    },
+    async listByMcpCall(serverId, callId, contextSha256) {
+      const rows = await q(
+        `SELECT * FROM deliveries
+          WHERE provenance ? 'mcpEvidenceRefs'
+            AND provenance->'mcpEvidenceRefs' @> $1::jsonb
+          ORDER BY created_at DESC`,
+        [JSON.stringify([{ serverId, callId, contextSha256 }])],
+      );
+      return rows.map(rowToDelivery);
     },
     async existingKeys(idempotencyKeys) {
       if (!idempotencyKeys.length) return new Set();

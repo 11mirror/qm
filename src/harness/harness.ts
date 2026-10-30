@@ -6,6 +6,8 @@ import type {
   AttachmentMeta,
   ClientToolDeclaration,
   ConversationTurn,
+  McpHostContext,
+  McpHostContextBase,
   ScopeId,
   Session,
   SessionEntry,
@@ -82,11 +84,14 @@ export interface HarnessTurnInput {
   loadImage?: ReplayImageLoader;
   session: Session;
   runId?: string;
+  mcpHostContextBase?: McpHostContextBase;
+  mcpHostContext?: McpHostContext;
   cancel?: AbortSignal;
   continueTurn?: boolean;
   resumeUserSeq?: number;
   shutdown?: AbortSignal;
   input: string;
+  trustedInput?: string;
   triggerTs?: string;
   entryTs?: string;
   environment?: string;

@@ -17,6 +17,7 @@ import {
 import { swallowAs } from "../util/errors.ts";
 import { asChunks, collectBytes, type ByteSource } from "../util/bytes.ts";
 import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
 
 export type { ByteSource } from "../util/bytes.ts";
 
@@ -74,6 +75,72 @@ export function createMemoryDurableByteStore(): DurableByteStore {
     },
     async delete(blobKey) {
       blobs.delete(blobKey);
+    },
+  };
+}
+
+export function createNamespacedDurableByteStore(delegate: DurableByteStore, namespace: string): DurableByteStore {
+  if (!/^[a-z0-9][a-z0-9_-]*$/i.test(namespace)) throw new Error(`invalid byte store namespace: ${namespace}`);
+  const prefix = `files/${namespace}/`;
+  const toNamespaced = (blobKey: string) => `${prefix}${blobKey.slice("files/".length)}`;
+  const toDelegate = (blobKey: string): string | undefined => {
+    if (!blobKey.startsWith(prefix)) return undefined;
+    const digest = blobKey.slice(prefix.length);
+    return /^[0-9a-f]{64}$/.test(digest) ? `files/${digest}` : undefined;
+  };
+  return {
+    async put(source, opts) {
+      const stored = await delegate.put(source, opts);
+      if (!/^files\/[0-9a-f]{64}$/.test(stored.blobKey))
+        throw new Error("Namespaced byte store requires content-addressed delegate keys");
+      return { ...stored, blobKey: toNamespaced(stored.blobKey) };
+    },
+    async open(blobKey) {
+      const delegated = toDelegate(blobKey);
+      return delegated ? delegate.open(delegated) : null;
+    },
+    async delete(blobKey) {
+      const delegated = toDelegate(blobKey);
+      if (delegated) await delegate.delete(delegated);
+    },
+  };
+}
+
+export function createPostgresDurableByteStore(connectionString: string, table = "durable_bytes"): DurableByteStore {
+  if (!/^[a-z_][a-z0-9_]*$/i.test(table)) throw new Error(`invalid table name: ${table}`);
+  const pg = createPgPool(connectionString);
+  const migration = {
+    id: `durable-byte/${table}/0001`,
+    statements: [`CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, data BYTEA NOT NULL)`],
+  };
+  pg.registerMigration(migration);
+  let ready: Promise<void> | undefined;
+  const ensureReady = () =>
+    (ready ??= pg.migrate(migration).catch((error) => {
+      ready = undefined;
+      throw error;
+    }));
+
+  return {
+    async put(source, opts) {
+      const { data, sha256 } = await collect(source, opts?.maxBytes);
+      const blobKey = keyFor(sha256);
+      await ensureReady();
+      await pg.query(`INSERT INTO ${table} (id, data) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`, [blobKey, data]);
+      return { blobKey, sizeBytes: data.length, sha256 };
+    },
+    async open(blobKey) {
+      if (!BLOB_KEY.test(blobKey)) return null;
+      await ensureReady();
+      const result = await pg.query(`SELECT data FROM ${table} WHERE id = $1`, [blobKey]);
+      const data = result.rows[0]?.data;
+      if (!Buffer.isBuffer(data)) return null;
+      return { sizeBytes: data.length, stream: Readable.from(data) };
+    },
+    async delete(blobKey) {
+      if (!BLOB_KEY.test(blobKey)) return;
+      await ensureReady();
+      await pg.query(`DELETE FROM ${table} WHERE id = $1`, [blobKey]);
     },
   };
 }
