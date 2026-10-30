@@ -1929,15 +1929,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               )),
           })
         : deps.sandboxResources;
+      const providerProfiles = turnSandboxResources?.profiles() ?? [];
       turnContextBlocks["Sandboxes"] = turnSandboxResources
         ? renderSandboxProviders(
-            turnSandboxResources.profiles().map((profile) => profile.name),
+            providerProfiles.map((profile) => profile.name),
             turnSandboxResources.defaultBackend(),
             true,
-            turnSandboxResources
-              .profiles()
-              .filter((profile) => profile.egressEnforcement === "domain")
-              .map((profile) => profile.name),
+            providerProfiles.filter((profile) => profile.egressEnforcement === "domain").map((profile) => profile.name),
           )
         : renderSandboxProviders(
             [scopeProfile.backend],
