@@ -13,7 +13,7 @@ import { settle } from "./support/settle.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createHash, createHmac } from "node:crypto";
-import { canonicalJson } from "../cli/src/canonical-json.ts";
+import { canonicalJson } from "../src/util/canonical-json.ts";
 import type { McpHostContext } from "../src/types.ts";
 import { generateMcpAttestationKeyPair, verifyMcpAttestation } from "../src/mcp/mcp-attestation.ts";
 

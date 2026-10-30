@@ -13,6 +13,7 @@ import {
 } from "../model/pi-models.ts";
 import type { ScopeId, SessionEntry } from "../types.ts";
 import type { Harness, HarnessTurnInput, HarnessTurnResult, RuntimeChoice } from "./harness.ts";
+import type { RuntimeConstraint } from "./runtime-types.ts";
 import { NON_INTERACTIVE_THINKING_LEVEL, NON_INTERACTIVE_FAST_MODE } from "../core/turn-options.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { createGrindMeter, meterGrindSpend } from "./grind.ts";
@@ -285,7 +286,7 @@ export function createHarnessRouter(
   adapters: ReadonlyMap<HarnessId, Harness>,
   utility: Harness,
   resolve: (input: HarnessTurnInput, routedBy: (ruleId: string) => void) => RuntimeChoice | Promise<RuntimeChoice>,
-  constraints?: { screenSecurity?: Pick<RuntimeChoice, "harnessId" | "modelId"> },
+  constraints?: { screenSecurity?: RuntimeConstraint },
 ): Harness {
   const lastHarness = new Map<string, HarnessId>();
   return {

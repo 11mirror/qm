@@ -110,20 +110,34 @@ test("Finny Slack resolution ignores stored runtimes and refuses nonmatching dis
 test("Finny steering uses the deployment account despite a durable personal selection", async () => {
   const s = setup();
   try {
-    await s.built.config.setPersonalModelAuth("alice", true, "openai");
     const submitted = await s.built.app.turn({
-      surface: "web",
+      surface: "slack",
       actor: { externalId: "alice" },
-      conversation: { kind: "dm", threadRef: "web:alice:finny-steer" },
+      conversation: { kind: "dm", threadRef: "dm:D1:finny-steer" },
       text: "start",
       liveActor: true,
       async: true,
     });
     assert.ok(submitted.runId, JSON.stringify(submitted));
-    assert.equal((await s.built.runs.get(submitted.runId!))?.request.modelAccount, "company");
-    assert.deepEqual(await s.built.app.signalRun(submitted.runId!, { kind: "steer", text: "continue" }, "alice"), {
-      accepted: true,
+    const queued = await s.built.runs.get(submitted.runId!);
+    assert.ok(queued);
+    assert.equal(await s.built.runs.withdraw(queued.id, { unstartedOnly: true }), true);
+    const persisted = await s.built.runs.enqueue({
+      sessionId: queued.sessionId,
+      request: { ...queued.request, modelAccount: "openai" },
     });
+
+    const followup = await s.built.app.turn({
+      surface: "slack",
+      actor: { externalId: "alice" },
+      conversation: { kind: "dm", threadRef: "dm:D1:finny-steer" },
+      text: "continue",
+      liveActor: true,
+      async: true,
+    });
+    assert.equal(followup.runId, persisted.run.id);
+    assert.equal(followup.steered, true);
+    assert.equal((await s.built.signals.takePending(persisted.run.id))[0]?.text, "continue");
   } finally {
     await s.close();
     await s.built.runtime.stop();

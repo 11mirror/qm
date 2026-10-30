@@ -3,13 +3,8 @@ import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { memoryForRequest } from "./memory-access.ts";
 import type { MemoryEdit, MemoryService } from "../../memory/memory-service.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
-import {
-  runtimeConstraintError,
-  runtimeFallback,
-  runtimeConfigBody,
-  userRuntimeConfigBody,
-  webuiModelEnabled,
-} from "../runtime-config.ts";
+import { runtimeFallback, runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
+import { runtimeConstraintError } from "../../harness/runtime-types.ts";
 import { canReadNotebook, searchAcrossScopes } from "../../memory/cross-scope.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
 import type { Grant, PendingApproval, ScopeId, Session } from "../../types.ts";

@@ -16,7 +16,7 @@ import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpL
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
 import type { McpHostContext } from "../types.ts";
 import { createHash, randomUUID } from "node:crypto";
-import { canonicalJson } from "../../cli/src/canonical-json.ts";
+import { canonicalJson } from "../util/canonical-json.ts";
 import { mintMcpAttestation } from "./mcp-attestation.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { DurableByteStore } from "../files/durable-byte-store.ts";
-import { canonicalFinnyJson } from "./canonical-json.ts";
+import { strictCanonicalJson as canonicalFinnyJson } from "../util/canonical-json.ts";
 import { applyFinnyHostEvent, replayFinnyLedger, type FinnyDigest, type FinnyGoldenLoopState } from "./golden-loop.ts";
 import type { FinnyCompiledOperation, FinnyOperationPlan } from "./operation-compiler.ts";
 import { loadFinnyOperationResult, storeFinnyOperationResult } from "./operation-custody.ts";

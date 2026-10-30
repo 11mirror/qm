@@ -1,5 +1,5 @@
 import type { LedgerEvent, LedgerEventOp } from "./ledger-events.ts";
-import { canonicalJson } from "../../cli/src/canonical-json.ts";
+import { canonicalJson } from "../util/canonical-json.ts";
 import { wireMentionKeys } from "../slack/mrkdwn.ts";
 import type {
   LoopItem,

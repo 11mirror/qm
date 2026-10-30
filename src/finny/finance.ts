@@ -2,10 +2,10 @@ import { createHash } from "node:crypto";
 
 import type { FinnyDigest } from "./golden-loop.ts";
 import type { ScopeId } from "../types.ts";
+import { strictCanonicalJson as canonicalFinnyJson } from "../util/canonical-json.ts";
 import type { FinnyOperationPlan } from "./operation-compiler.ts";
 import type { FinnyOperationRow } from "./operation-executor.ts";
 import type { FinnyOperationRunnerContext } from "./operation-runner.ts";
-import { canonicalFinnyJson } from "./canonical-json.ts";
 
 export const FINANCE_RESOURCE_NAME = "finance" as const;
 

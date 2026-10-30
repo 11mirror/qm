@@ -1,6 +1,20 @@
 import type { RuntimeChoice } from "./harness.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 
+export type RuntimeConstraint = Pick<RuntimeChoice, "harnessId" | "modelId">;
+
+export function runtimeConstraintError(
+  constraint: RuntimeConstraint,
+  choice: Partial<RuntimeChoice>,
+): "runtime_constraint_mismatch" | null {
+  if (
+    (choice.harnessId !== undefined && choice.harnessId !== constraint.harnessId) ||
+    (choice.modelId !== undefined && choice.modelId !== constraint.modelId)
+  )
+    return "runtime_constraint_mismatch";
+  return null;
+}
+
 export interface RuntimeRequest {
   action: "get" | "set" | "inherit";
   model?: string;

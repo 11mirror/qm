@@ -37,7 +37,7 @@ import { cleanAgentReplyForSlack, stripSlackDirectives } from "./messaging.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { slackErrorCode } from "./payloads.ts";
 import { createHash } from "node:crypto";
-import { canonicalJson } from "../../cli/src/canonical-json.ts";
+import { canonicalJson } from "../util/canonical-json.ts";
 
 const DELIVERY_CLAIM_MS = 15_000;
 const SLOW_DRAIN_ALARM_MS = 120_000;

@@ -5,7 +5,7 @@ import type {
   FinnyCapabilityOperation,
   FinnySuiteqlSelectOperation,
 } from "./capability-pack.ts";
-import { canonicalFinnyJson } from "./canonical-json.ts";
+import { strictCanonicalJson as canonicalFinnyJson } from "../util/canonical-json.ts";
 
 export type FinnyOperationScalar = string | number | boolean | null;
 export type FinnyOperationParameter = FinnyOperationScalar;

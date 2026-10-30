@@ -2,7 +2,7 @@ import type { TraceCarrier } from "../../../plugins/chassis/src/error-reporting.
 import type { GoalCreateInput } from "../../harness/goal.ts";
 import type { RunStop } from "../../runs/run-store.ts";
 import type { ExternalSlackPolicies } from "../../resolution/external-slack.ts";
-import type { RuntimeService } from "../../harness/runtime-types.ts";
+import type { RuntimeConstraint, RuntimeService } from "../../harness/runtime-types.ts";
 import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
 import type { AwsRoleBroker } from "../../auth/aws-role-broker.ts";
 import type {
@@ -119,7 +119,7 @@ export interface OrchestratorDeps {
   identity: IdentityService;
   resolution: ResolutionService;
   config?: ScopedConfigStore;
-  runtimeConstraint?: Pick<RuntimeChoice, "harnessId" | "modelId">;
+  runtimeConstraint?: RuntimeConstraint;
   /** The deployment's fallback harness (wiring's config.harness) — used when no org runtime selection exists. */
   defaultHarness?: string;
   defaultTurnWallClockMs?: number;

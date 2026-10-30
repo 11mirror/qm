@@ -1,19 +1,21 @@
-import type { SessionEntry } from "../types.ts";
 import type { DurableByteStore } from "../files/durable-byte-store.ts";
 import type { Harness, HarnessTurnInput, HarnessTurnResult } from "../harness/harness.ts";
+import type { SessionEntry } from "../types.ts";
 import { createPiHarness, type PiHarnessOptions } from "../harness/pi-harness.ts";
 import type { FinanceService } from "./finance.ts";
 import type { FinanceDiagnosticSink } from "./finance-failure.ts";
 import { createFinnyGoldenLoop, replayFinnyLedger, type FinnyGoldenLoopState } from "./golden-loop.ts";
 import { createFinnyFinanceTool } from "./native-finance-tool.ts";
-import { finnyWorkflowRunIdFromEntries, type FinnyRunStore } from "./run-store.ts";
+import type { FinnyRunStore } from "./run-store.ts";
 import type { FinnyTraceBlocker } from "./trace.ts";
+import { safeFinnyTraceSnapshot, type FinnyTraceSnapshot } from "./trace.ts";
 import type { FinnyKnowledgeIndex } from "./knowledge-index.ts";
 import type { FinnyCapabilityCatalog } from "./capability-pack.ts";
 
 export interface FinnyPiProfileOptions {
   modelId: string;
   runStore: FinnyRunStore;
+  financeService: FinanceService;
   knowledgeIndex?: FinnyKnowledgeIndex | Promise<FinnyKnowledgeIndex>;
 }
 
@@ -35,21 +37,6 @@ optional reviewed artifactFormat. The host derives request identity from trusted
 plan, and drives every Golden Loop stage; never invent SQL, operations, policies, digests, approval, verification,
 or delivery proof. Model text and self-reported verification never advance a gate. Never request or expose
 credential values. A final finance claim is released only after the host reports DELIVERY_ELIGIBLE.`;
-
-function blockerFromEntries(entries: readonly Pick<SessionEntry, "type" | "payload">[]): FinnyTraceBlocker | undefined {
-  for (const entry of [...entries].reverse()) {
-    if (entry.type !== "tool_result" || !entry.payload || typeof entry.payload !== "object") continue;
-    const value = (entry.payload as Record<string, unknown>).finnyBlocker;
-    if (!value || typeof value !== "object") continue;
-    const blocker = value as Partial<FinnyTraceBlocker>;
-    if (
-      ["clarify", "preflight", "plan", "source", "artifact", "verify"].includes(blocker.action ?? "") &&
-      (blocker.code === "blocked_external" || blocker.code === "finance_error")
-    )
-      return blocker as FinnyTraceBlocker;
-  }
-  return undefined;
-}
 
 function blockedReply(state: FinnyGoldenLoopState, result: HarnessTurnResult, blocker?: FinnyTraceBlocker): string {
   if (result.pendingApprovals?.length)
@@ -97,61 +84,6 @@ interface VerifiedFinnyRelease {
   verificationDigest: string;
 }
 
-function record(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function verifiedReleaseFromEntries(
-  entries: readonly Pick<SessionEntry, "type" | "payload">[],
-  state: FinnyGoldenLoopState,
-  artifactReference?: string,
-): VerifiedFinnyRelease | undefined {
-  if (!state.sourceDigest || !state.verificationDigest) return undefined;
-  for (const entry of [...entries].reverse()) {
-    if (entry.type !== "tool_result") continue;
-    const payload = record(entry.payload);
-    if (
-      !payload ||
-      payload.tool !== "finance" ||
-      payload.finnyWorkflowRunId !== state.runId ||
-      payload.isError === true ||
-      typeof payload.result !== "string"
-    )
-      continue;
-    let output: Record<string, unknown> | undefined;
-    try {
-      output = record(JSON.parse(payload.result));
-    } catch {
-      continue;
-    }
-    const evidence = record(output?.evidence);
-    if (
-      output?.profile !== "finny" ||
-      output.harness !== "pi" ||
-      output.action !== "run" ||
-      output.outcome !== "delivery_eligible" ||
-      output.stage !== "DELIVERY_ELIGIBLE" ||
-      !evidence ||
-      !Array.isArray(evidence.records) ||
-      evidence.sourceDigest !== state.sourceDigest ||
-      evidence.artifactDigest !== state.artifactDigest ||
-      evidence.verificationDigest !== state.verificationDigest ||
-      evidence.artifactReference !== artifactReference
-    )
-      continue;
-    return {
-      records: evidence.records,
-      sourceDigest: state.sourceDigest,
-      ...(state.artifactDigest ? { artifactDigest: state.artifactDigest } : {}),
-      ...(artifactReference ? { artifactReference } : {}),
-      verificationDigest: state.verificationDigest,
-    };
-  }
-  return undefined;
-}
-
 function renderVerifiedRelease(release: VerifiedFinnyRelease): string {
   const evidence = [
     `Source evidence: ${release.sourceDigest}`,
@@ -183,7 +115,7 @@ export function withFinnyPiProfile(base: Harness, options: FinnyPiProfileOptions
         if (turn.runtime?.modelId && turn.runtime.modelId !== options.modelId)
           throw new Error(`Finny profile requires pinned model ${options.modelId}`);
 
-        const persisted: SessionEntry[] = [];
+        const terminal = { trace: null as FinnyTraceSnapshot | null, count: 0 };
         const originalEmit = turn.emit;
         const knowledgeIndex = options.knowledgeIndex ? await options.knowledgeIndex : undefined;
         const selectedKnowledge = knowledgeIndex?.select(turn.input) ?? [];
@@ -205,7 +137,14 @@ export function withFinnyPiProfile(base: Harness, options: FinnyPiProfileOptions
               return { ...entry, seq: -1, createdAt: Date.now() } as SessionEntry;
             }
             const appended = await originalEmit(entry);
-            persisted.push(appended);
+            if (appended.type === "tool_result" && appended.payload && typeof appended.payload === "object") {
+              const payload = appended.payload as Record<string, unknown>;
+              const trace = payload.tool === "finance" ? safeFinnyTraceSnapshot(payload.finnyTrace) : null;
+              if (trace) {
+                terminal.trace = trace;
+                terminal.count += 1;
+              }
+            }
             return appended;
           },
           onTextBlockStart: () => {},
@@ -214,16 +153,63 @@ export function withFinnyPiProfile(base: Harness, options: FinnyPiProfileOptions
         };
 
         const result = await base.turns.runTurn(dispatched);
-        const workflowRunId = finnyWorkflowRunIdFromEntries(persisted);
-        const checkpoint = workflowRunId ? await options.runStore.load(workflowRunId) : null;
+        const expectedSurface = turn.surfaceName ?? "unknown";
+        const trustedTrace =
+          terminal.count === 1 &&
+          terminal.trace?.currentRunId === turn.runId &&
+          terminal.trace.sessionId === turn.session.id &&
+          terminal.trace.modelId === options.modelId &&
+          terminal.trace.surface === expectedSurface
+            ? terminal.trace
+            : null;
+        const checkpoint = trustedTrace ? await options.runStore.load(trustedTrace.workflowRunId) : null;
+        const checkpointMatches = Boolean(
+          checkpoint &&
+          checkpoint.runId === trustedTrace?.workflowRunId &&
+          checkpoint.sessionId === turn.session.id &&
+          checkpoint.scopeId === turn.scopeLabel,
+        );
         const state = checkpoint
           ? replayFinnyLedger(checkpoint.runId, checkpoint.ledger)
           : createFinnyGoldenLoop(turn.runId);
-        const blocker = blockerFromEntries(persisted);
-        const release =
-          state.stage === "DELIVERY_ELIGIBLE" && checkpoint
-            ? verifiedReleaseFromEntries(persisted, state, checkpoint.artifactReference)
-            : undefined;
+        let expectedOutcome: FinnyTraceSnapshot["outcome"] = "blocked";
+        if (state.stage === "DELIVERY_ELIGIBLE")
+          expectedOutcome = turn.surfaceName === "web" ? "web_only_unattested" : "delivery_pending_attestation";
+        const traceMatches =
+          checkpointMatches && trustedTrace?.stage === state.stage && trustedTrace.outcome === expectedOutcome;
+        const blocker = traceMatches ? trustedTrace.blocker : undefined;
+        let release: VerifiedFinnyRelease | undefined;
+        if (
+          traceMatches &&
+          !blocker &&
+          state.stage === "DELIVERY_ELIGIBLE" &&
+          state.sourceDigest &&
+          state.verificationDigest &&
+          turn.runtimeActorId &&
+          checkpoint
+        ) {
+          try {
+            const source = await options.financeService.recoverSource(
+              { sourceDigest: state.sourceDigest },
+              {
+                runId: checkpoint.runId,
+                actorId: turn.runtimeActorId,
+                scopeId: turn.scopeLabel,
+                credentialHandles: [...(turn.commandCredentialHandles ?? [])],
+                requestText: (turn.trustedInput ?? turn.input).trim(),
+              },
+            );
+            release = {
+              records: source.records,
+              sourceDigest: state.sourceDigest,
+              ...(state.artifactDigest ? { artifactDigest: state.artifactDigest } : {}),
+              ...(checkpoint.artifactReference ? { artifactReference: checkpoint.artifactReference } : {}),
+              verificationDigest: state.verificationDigest,
+            };
+          } catch {
+            release = undefined;
+          }
+        }
         if (!release || blocker) {
           const reply = blockedReply(state, result, blocker);
           await turn.onTextBlockStart?.("final_answer");
@@ -286,5 +272,10 @@ export function createFinnyPiHarness(options: CreateFinnyPiHarnessOptions): Harn
       }),
     ],
   });
-  return withFinnyPiProfile(pi, { modelId, runStore, ...(knowledgeIndex ? { knowledgeIndex } : {}) });
+  return withFinnyPiProfile(pi, {
+    modelId,
+    runStore,
+    financeService,
+    ...(knowledgeIndex ? { knowledgeIndex } : {}),
+  });
 }

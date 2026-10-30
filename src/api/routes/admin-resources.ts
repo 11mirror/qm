@@ -4,7 +4,7 @@ import { parseAckEmoji } from "../../slack/config.ts";
 import { orgId as configOrgId } from "../../config.ts";
 import type { ServerDeps } from "../deps.ts";
 import type { ApiCtx } from "./route.ts";
-import { runtimeConstraintError } from "../runtime-config.ts";
+import { runtimeConstraintError } from "../../harness/runtime-types.ts";
 import { parseCommandPolicy } from "../../policy/command-policy.ts";
 import { parseScopeId, scopeId, type CommandPolicy, type Grant, type ScopeId } from "../../types.ts";
 import {

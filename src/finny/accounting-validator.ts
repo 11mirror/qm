@@ -115,7 +115,7 @@ function sumFields(
   fieldNames: readonly string[],
 ): { total: Decimal; found: boolean; valid: boolean } {
   const fields = new Set(fieldNames);
-  let total: Decimal = { coefficient: 0n, scale: 0 };
+  let total: Decimal = parseDecimal(0)!;
   let found = false;
   let valid = records.length > 0;
   for (const record of records) {
@@ -126,7 +126,7 @@ function sumFields(
     for (const [key, value] of Object.entries(record)) {
       if (!fields.has(normalizeField(key))) continue;
       found = true;
-      const decimal = value === null || value === "" ? { coefficient: 0n, scale: 0 } : parseDecimal(value);
+      const decimal = value === null || value === "" ? parseDecimal(0)! : parseDecimal(value);
       if (!decimal) {
         valid = false;
         continue;

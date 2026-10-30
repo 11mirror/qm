@@ -178,6 +178,7 @@ import type { SkillResolution } from "../skills/skill-store.ts";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
 import { codexSubscriptionModelId, isHarnessId, CODEX_SUBSCRIPTION_PROVIDER } from "../model/pi-models.ts";
 import type { ProviderKeys } from "../harness/pi-harness.ts";
+import { runtimeConstraintError } from "../harness/runtime-types.ts";
 import { resolveIndividualAuthRouting } from "./individual-auth-routing.ts";
 import { createSessionTitles } from "./session-title.ts";
 import {
@@ -3191,7 +3192,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         };
         const servesModel = (requested: string, routed: string | undefined, keys: ProviderKeys | undefined) =>
           (keys?.[CODEX_SUBSCRIPTION_PROVIDER] ? codexSubscriptionModelId(requested) : requested) === routed;
-        if (input.harness && !isHarnessId(input.harness))
+        if (!deps.runtimeConstraint && input.harness && !isHarnessId(input.harness))
           throw new NonRetryableTurnError(`runtime ${input.harness} is not approved`);
         const inputHarness =
           deps.runtimeConstraint?.harnessId ??
@@ -3234,10 +3235,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ? recoveredRuntime(filterHistory(await deps.sessions.getEntries(session.id)), input.runId, actor.id)
             : undefined;
         const checkRuntimeAuth = async (choice: RuntimeChoice): Promise<string | null> => {
-          if (
-            deps.runtimeConstraint &&
-            (choice.harnessId !== deps.runtimeConstraint.harnessId || choice.modelId !== deps.runtimeConstraint.modelId)
-          )
+          if (deps.runtimeConstraint && runtimeConstraintError(deps.runtimeConstraint, choice))
             return `Runtime is constrained to ${deps.runtimeConstraint.harnessId}/${deps.runtimeConstraint.modelId}.`;
           try {
             const auth = await loadRuntimeAuth(choice);
@@ -3263,7 +3261,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         };
         if (restoredRuntime && !deps.runtimeConstraint)
           await adoptRuntime(restoredRuntime.choice, restoredRuntime.lifetime);
-        if (automatedTurn && input.model && inputHarness) {
+        if (!deps.runtimeConstraint && automatedTurn && input.model && inputHarness) {
           const error = await deps.validateScheduledRuntime?.(
             scopeId,
             {

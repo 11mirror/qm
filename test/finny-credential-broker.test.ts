@@ -9,7 +9,12 @@ import type { FinnyOperationPlan } from "../src/finny/operation-compiler.ts";
 import { createFinnyAtomicFetchAdapter } from "../src/finny/provider-adapter.ts";
 
 const digest = (value: string) => digestFinnyEvidence(value);
-const context = { runId: "run-1", actorId: "actor-1", scopeId: "personal:actor-1", credentialHandles: [] };
+const context = {
+  runId: "run-1",
+  actorId: "actor-1",
+  scopeId: "personal:actor-1",
+  credentialHandles: ["finny-netsuite"],
+};
 
 function plan(): FinnyOperationPlan {
   return {
@@ -158,6 +163,59 @@ test("NetSuite is required only at external execution", async () => {
     ),
     /credential.*finny-netsuite/i,
   );
+});
+
+test("broker refuses execution without the exact host-authorized NetSuite handle", async (t) => {
+  const operationPlan = plan();
+  for (const credentialHandles of [[], ["finny-hindsight"]]) {
+    await t.test(credentialHandles.length === 0 ? "denied by scope ACL" : "denied by external policy", async () => {
+      let reads = 0;
+      let providerCalls = 0;
+      const service = createBrokeredFinanceService({
+        delegate: delegate(),
+        credentialReader: {
+          async getServiceCredentialSecret() {
+            reads += 1;
+            return {
+              slug: "finny-netsuite",
+              name: "finny-netsuite",
+              secret: "ns-secret",
+              delivery: "broker",
+              host: "netsuite.internal",
+              deployments: false,
+              enabled: true,
+            };
+          },
+        },
+        orgScopeId: "org:test",
+        credentialSlugs: { netsuite: "finny-netsuite" },
+        atomicFetch: {
+          async executeOperation() {
+            providerCalls += 1;
+            return { rows: [{ value: 42 }] };
+          },
+        },
+      });
+
+      await assert.rejects(
+        service.executeOperation(
+          {
+            plan: operationPlan,
+            execution: { operation: operationPlan.operations[0]!, dependencyResultSets: {}, dependencyDigests: {} },
+          },
+          { ...context, credentialHandles },
+        ),
+        (error: unknown) =>
+          error instanceof Error &&
+          "causeCode" in error &&
+          error.causeCode === "policy_block" &&
+          "dependency" in error &&
+          error.dependency === "finny-netsuite",
+      );
+      assert.equal(reads, 0);
+      assert.equal(providerCalls, 0);
+    });
+  }
 });
 
 test("v2 source custody delegates without reading credentials", async () => {

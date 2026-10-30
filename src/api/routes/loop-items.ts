@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Cron, Loop, LoopItem, LoopSourcePayload } from "../../types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
-import { canonicalJson } from "../../../cli/src/canonical-json.ts";
+import { canonicalJson } from "../../util/canonical-json.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";

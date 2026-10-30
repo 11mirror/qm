@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { FinnyCompiledOperation, FinnyOperationPlan } from "./operation-compiler.ts";
-import { canonicalFinnyJson } from "./canonical-json.ts";
+import { strictCanonicalJson as canonicalFinnyJson } from "../util/canonical-json.ts";
 import {
   executeFinnyDerivedOperation,
   type FinnyDerivedOperation,

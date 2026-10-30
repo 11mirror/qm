@@ -53,7 +53,7 @@ function dependencyRows(
 function total(operationId: string, rows: readonly FinnyOperationRow[], name: string): FinnyDecimal {
   return rows.reduce<FinnyDecimal>(
     (sum, row) => addFinnyDecimal(sum, requireDecimal(operationId, name, field(operationId, row, name))),
-    { coefficient: 0n, scale: 0 },
+    parseFinnyDecimal(0)!,
   );
 }
 

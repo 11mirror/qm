@@ -62,7 +62,7 @@ test("default Finny service brokers exact operation execution into durable v2 cu
     runId: "run-default-plan",
     actorId: "actor-default",
     scopeId: "personal:actor-default",
-    credentialHandles: [],
+    credentialHandles: ["finny-netsuite"],
   };
   const runStore = createFinnyRunStore(createMemoryMap<FinnyRunV2Checkpoint>());
   await runStore.initialize({

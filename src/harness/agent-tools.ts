@@ -1,5 +1,5 @@
 import { toolCallApprovalKey } from "../core/approval-id.ts";
-import { canonicalJson } from "../../cli/src/canonical-json.ts";
+import { canonicalJson } from "../util/canonical-json.ts";
 import { adminOperations } from "../tools/admin.ts";
 import { parkIfOverCap } from "../sessions/tool-output.ts";
 import { handbackStop } from "../runs/run-store.ts";

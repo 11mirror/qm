@@ -7,11 +7,22 @@ import {
   type PersistedBaseModel,
 } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice, resolveRuntimeChoiceDurable } from "../src/harness/harness-router.ts";
+import { runtimeConstraintError } from "../src/harness/runtime-types.ts";
 import { registerOpenRouterCatalogModel } from "../src/model/pi-models.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
 const ORG = "org:default-org" as const;
 const PERSONAL = "personal:alice" as const;
+
+test("runtime constraints reject only explicit harness or model mismatches", () => {
+  const constraint = { harnessId: "pi" as const, modelId: "gpt-5.6-sol" };
+
+  assert.equal(runtimeConstraintError(constraint, {}), null);
+  assert.equal(runtimeConstraintError(constraint, { harnessId: "pi" }), null);
+  assert.equal(runtimeConstraintError(constraint, { modelId: "gpt-5.6-sol" }), null);
+  assert.equal(runtimeConstraintError(constraint, { harnessId: "claude" }), "runtime_constraint_mismatch");
+  assert.equal(runtimeConstraintError(constraint, { modelId: "claude-opus-5" }), "runtime_constraint_mismatch");
+});
 
 test("runtime selection is sparse, revisioned, and acknowledges a changed org default", async () => {
   const config = createMemoryConfigStore("default-org");

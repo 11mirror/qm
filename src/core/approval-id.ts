@@ -1,4 +1,4 @@
-import { canonicalJson } from "../../cli/src/canonical-json.ts";
+import { canonicalJson } from "../util/canonical-json.ts";
 import { hashId } from "../util/crypto.ts";
 
 export function commandApprovalId(sessionId: string, command: string, approvalKey?: string): string {

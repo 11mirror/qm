@@ -43,6 +43,34 @@ test("reconcile compares reviewed pull totals using exact decimals and an inclus
   ]);
 });
 
+test("reconcile accepts combined accounting, grouping, and exponent notation", () => {
+  const result = executeFinnyOperationPlan({
+    plan: plan(operations),
+    resultSets: {
+      first: [{ total: "(1,234.50e2)" }],
+      second: [{ total: "-123450" }],
+    },
+  });
+
+  assert.deepEqual(result.check, [
+    { left: "-123450", right: "-123450", difference: "0", tolerance: "0.01", reconciled: true },
+  ]);
+});
+
+test("reconcile rejects exponents beyond the exact-decimal bound", () => {
+  assert.throws(
+    () =>
+      executeFinnyOperationPlan({
+        plan: plan(operations),
+        resultSets: {
+          first: [{ total: "1e1001" }],
+          second: [{ total: "1" }],
+        },
+      }),
+    /check.*total.*decimal/i,
+  );
+});
+
 test("the derived seam executes only reconciliation from its exact dependencies", () => {
   const operation = operations[2]!;
   if (operation.primitive !== "reconcile") assert.fail("expected reconciliation");

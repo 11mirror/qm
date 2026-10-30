@@ -46,7 +46,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import { swallowAs } from "../util/errors.ts";
 import { resolveRuntimeChoiceDurable } from "../harness/harness-router.ts";
 import type { RuntimeChoice } from "../harness/harness.ts";
-import type { RuntimeConstraint } from "./runtime-config.ts";
+import type { RuntimeConstraint } from "../harness/runtime-types.ts";
 import { modelDisplayName } from "../model/pi-models.ts";
 import type { ConversationEvent } from "../loops/sources/adapter.ts";
 import { slackConversationRef } from "../loops/sources/slack.ts";

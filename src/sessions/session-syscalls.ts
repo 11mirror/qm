@@ -11,7 +11,7 @@ import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advi
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
-import { canonicalJson } from "../../cli/src/canonical-json.ts";
+import { canonicalJson } from "../util/canonical-json.ts";
 import type { CoreSearch } from "../search/core-search.ts";
 import type { ScopeId, Session, SessionEntry, SpawnMeta } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";

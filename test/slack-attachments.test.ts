@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { canonicalJson } from "../cli/src/canonical-json.ts";
+import { canonicalJson } from "../src/util/canonical-json.ts";
 import {
   isOversize,
   attachmentFromBytes,

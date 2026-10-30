@@ -91,6 +91,13 @@ function outputContainsSecret(output: unknown, secrets: readonly string[]): bool
 
 export function createBrokeredFinanceService(options: BrokeredFinanceServiceOptions): FinanceService {
   const credential = async (slug: string, context: FinanceExecutionContext): Promise<string> => {
+    if (!context.credentialHandles.includes(slug)) {
+      throw new FinanceFailure("policy_block", {
+        retryable: false,
+        dependency: slug,
+        message: `Finance execution is not authorized to use ${slug}`,
+      });
+    }
     try {
       const stored = await options.credentialReader.getServiceCredentialSecret(options.orgScopeId, slug);
       if (stored?.enabled && stored.secret) return stored.secret;

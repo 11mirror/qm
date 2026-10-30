@@ -32,6 +32,20 @@ function normalize(value: unknown, ancestors: Set<object>, invalid: string): unk
   return normalized;
 }
 
-export function canonicalFinnyJson(value: unknown, invalid = "Finny canonical value is invalid"): string {
+export function strictCanonicalJson(value: unknown, invalid = "Canonical value is invalid"): string {
   return JSON.stringify(normalize(value, new Set(), invalid));
+}
+
+export function canonicalJson(value: unknown): string {
+  if (value === undefined) return "";
+  return JSON.stringify(value, (_key, nested) => {
+    if (!nested || typeof nested !== "object" || Array.isArray(nested)) return nested;
+    return Object.fromEntries(
+      Object.entries(nested as Record<string, unknown>).sort(([left], [right]) => {
+        if (left < right) return -1;
+        if (left > right) return 1;
+        return 0;
+      }),
+    );
+  });
 }

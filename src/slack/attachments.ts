@@ -2,7 +2,7 @@ import { sleep } from "./util.ts";
 import { channelShareTs, parseUploadedFileIds, slackErrorCode } from "./payloads.ts";
 import { BlobTooLargeError } from "../persistence/blob-transfer.ts";
 import { createHash } from "node:crypto";
-import { canonicalJson } from "../../cli/src/canonical-json.ts";
+import { canonicalJson } from "../util/canonical-json.ts";
 
 export interface IncomingAttachment {
   name: string;

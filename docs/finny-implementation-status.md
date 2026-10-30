@@ -48,6 +48,7 @@ Lanes A, B, and C run in parallel. Lane D is the convergence point. Lanes F and 
 - Each operation result is stored as a canonical `finny.operation_result.v1` envelope before its stable `operation_completed` checkpoint. Resume validates custody and dependencies, skips committed operations, and reruns an operation only when no stable completion event exists.
 - Reviewed finance knowledge is loaded from the content-addressed `finny-skills` bundle with ranked section retrieval, provenance, and no silent default truncation.
 - NetSuite credentials are read through QM service-credential custody; values are not placed in prompts, traces, or durable summaries. Approval preflight is local and reads no provider credential.
+- NetSuite custody is reachable only when the host-attested execution context contains the exact authorized credential handle; denied scope or external-service policy stops before credential reads or provider calls.
 - Finny requires Postgres-backed sessions and runs plus a stable `CONNECTOR_SECRET_KEY`. Credentials, safe diagnostics, full Golden Loop checkpoints, and private query/source evidence survive process restarts.
 - Stable workflow event IDs, a shared per-run advisory lock, and deterministic artifact identities prevent overlapping workers from duplicating stage work; a resumed run starts at its first incomplete stage.
 - Typed failures distinguish unsupported capability, missing schema mapping, credential/configuration faults, provider faults, verification failure, and policy blocks.
@@ -56,6 +57,8 @@ Lanes A, B, and C run in parallel. Lane D is the convergence point. Lanes F and 
 - Finny-created artifact bytes use namespaced durable custody.
 - Slack acknowledgements retain provider receipts that bind exact rendered content and uploaded file digests to delivery attestation, including reconstruction from the posted Slack thread after a process restart loses the original acknowledgement.
 - Safe trace v3 exposes plan authority, ordered operation-result digests, approval state, and verification state without SQL, parameters, records, or credentials. Trace v2 remains readable for compatibility. `/v1/finny/health` and bounded offline autoresearch scaffolding are implemented.
+- The Pi release wrapper consumes one validated screened trace, checks it against the durable checkpoint, and recovers result records from durable evidence custody; it does not reconstruct authority or release data by scraping transcript strings.
+- Financial comparisons use the pinned `bignumber.js` implementation through narrow Finny parsing/rendering wrappers, and all core canonical JSON callers share `src/util/canonical-json.ts`.
 
 ## Configuration contract
 
@@ -84,7 +87,7 @@ Key source links:
 
 ## Verified boundary
 
-The 322-test affected harness gate passes for one model-visible call, reviewed plan compilation, AP and unrelated inventory traversal through the same production path, exact approval binding, stable workflow identity across resume, changed-catalog rejection, per-operation result recovery, runtime and deployment-auth constraint propagation across admission, recovery, and steering, typed terminal failures, and safe plan-native trace exposure. Typecheck, ESLint, formatting, and diff checks pass. A fresh independent review of the current head is still required before merge.
+The 427-test affected harness gate passes for one model-visible call, reviewed plan compilation, AP and unrelated inventory traversal through the same production path, exact approval binding, stable workflow identity across resume, changed-catalog rejection, per-operation result recovery, runtime and deployment-auth constraint propagation across admission, recovery, and steering, credential-handle authorization, typed terminal release recovery, exact decimal controls, typed terminal failures, and safe plan-native trace exposure. Typecheck, ESLint, formatting, and diff checks pass. A fresh independent review of the current head is still required before merge.
 
 No SQL schema or index changed. Persisted/API shapes added by this work are `finny.run.v2` with catalog/capability/revision/graph/plan binding, `finny.operation_result.v1` with dependency and output custody, `finny.source.v2` with the designated result only, and `finny.trace.v3` with safe plan and attestation metadata. Query-era v1 run/source contracts were removed before deployment; trace v2 remains readable for existing safe diagnostics. No live stored field is migrated or dropped.
 

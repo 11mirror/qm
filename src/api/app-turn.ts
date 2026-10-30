@@ -505,10 +505,11 @@ export function createTurnMethods(
           (origin.kind === "human" || (origin.kind === "ambient" && origin.live === true)) &&
           !(origin.kind === "human" && isHalt(req.text));
         if (live && redeliveryKey && live.dedupKey === redeliveryKey) return { status: "silent" };
+        const liveModelAccount = deps.runtimeConstraint ? "company" : live?.request.modelAccount;
         const sameAccount =
-          live?.request.modelAccount !== undefined &&
-          live.request.modelAccount === input.modelAccount &&
-          (input.modelAccount === "company" || live.request.actor.id === actor.id);
+          liveModelAccount !== undefined &&
+          liveModelAccount === input.modelAccount &&
+          (input.modelAccount === "company" || live?.request.actor.id === actor.id);
         const cancel = origin.kind === "human" && isHalt(req.text);
         if (live && !isTerminal(live.status) && !personIntoAutomation && (cancel || sameAccount)) {
           const targetRun = live;

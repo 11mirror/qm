@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { canonicalJson } from "../../cli/src/canonical-json.ts";
+import { canonicalJson } from "../util/canonical-json.ts";
 import { parseDeliveryTarget } from "../slack/delivery.ts";
 import type { Delivery, SlackDeliveryProviderReceipt } from "../types.ts";
 

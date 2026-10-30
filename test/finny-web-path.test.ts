@@ -458,7 +458,27 @@ test("Finny ignores a stored Claude runtime and runs the pinned Pi model", async
 });
 
 for (const provider of ["anthropic", "openai"] as const) {
-  test(`Finny recovers a persisted personal ${provider} run onto the pinned deployment model`, async (t) => {
+  const recovery =
+    provider === "anthropic"
+      ? {
+          label: "triggered automation with stale Claude metadata",
+          request: {
+            origin: { kind: "automation" as const },
+            triggered: true,
+            modelAccount: provider,
+            harness: "claude" as const,
+            model: "claude-sonnet-5",
+          },
+        }
+      : {
+          label: "persisted personal run with an unknown retired harness",
+          request: {
+            modelAccount: provider,
+            harness: "retired-harness" as never,
+            model: "retired-model",
+          },
+        };
+  test(`Finny recovers a ${recovery.label} onto the pinned deployment model`, async (t) => {
     let claudeCalls = 0;
     let gatewayCalls = 0;
     const claude = createMockHarness();
@@ -534,9 +554,7 @@ for (const provider of ["anthropic", "openai"] as const) {
       sessionId: queued.sessionId,
       request: {
         ...queued.request,
-        modelAccount: provider,
-        harness: provider === "anthropic" ? "claude" : "pi",
-        model: provider === "anthropic" ? "claude-sonnet-5" : "codex/gpt-5.6-terra",
+        ...recovery.request,
       },
     });
     built.runtime.start();

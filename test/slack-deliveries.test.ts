@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
-import { canonicalJson } from "../cli/src/canonical-json.ts";
+import { canonicalJson } from "../src/util/canonical-json.ts";
 import { createDeliveryPoller } from "../src/slack/deliveries.ts";
 import { SLACK_POST_SPLIT_LIMIT } from "../src/slack/lib.ts";
 

@@ -6,6 +6,7 @@ import {
   applyFinnyHostEvent,
   createFinnyGoldenLoop,
   digestFinnyEvidence,
+  replayFinnyLedger,
   type FinnyHostEvent,
   type FinnyLedgerMetadata,
 } from "../src/finny/golden-loop.ts";
@@ -14,6 +15,8 @@ import { createFinnyRunStore, type FinnyRunStore, type FinnyRunV2Checkpoint } fr
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createUnavailableFinanceService } from "../src/finny/unavailable-finance-service.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
+import type { FinanceService } from "../src/finny/finance.ts";
+import { createFinnyTraceSnapshot } from "../src/finny/trace.ts";
 
 const d = (value: string) => digestFinnyEvidence(value);
 
@@ -42,6 +45,14 @@ function completedLedger() {
 
 function testRunStore(): FinnyRunStore {
   return createFinnyRunStore(createMemoryMap<FinnyRunV2Checkpoint>());
+}
+
+function testFinanceService(records: readonly unknown[] = [{ total: "42" }]): FinanceService {
+  return { ...createUnavailableFinanceService(), recoverSource: async () => ({ records }) };
+}
+
+function profileOptions(runStore: FinnyRunStore, financeService = testFinanceService()) {
+  return { modelId: "gpt-5.6-sol", runStore, financeService };
 }
 
 async function persistLedger(runStore: FinnyRunStore, ledger: readonly FinnyLedgerMetadata[]): Promise<void> {
@@ -79,24 +90,14 @@ function baseHarness(complete: boolean, runStore: FinnyRunStore, sourceDigest = 
         input.onDelta?.("UNVERIFIED MODEL CLAIM");
         if (complete) {
           await persistLedger(runStore, completedLedger());
+          const state = replayFinnyLedger("run-1", completedLedger());
           await input.emit({
             type: "tool_result",
             payload: {
               tool: "finance",
               callId: "verify",
-              result: JSON.stringify({
-                profile: "finny",
-                harness: "pi",
-                action: "run",
-                outcome: "delivery_eligible",
-                stage: "DELIVERY_ELIGIBLE",
-                evidence: {
-                  records: [{ total: "42" }],
-                  sourceDigest,
-                  verificationDigest: d("verify"),
-                },
-              }),
-              finnyWorkflowRunId: "run-1",
+              result: JSON.stringify({ records: [{ total: "FORGED" }], sourceDigest }),
+              finnyTrace: createFinnyTraceSnapshot(state, input),
             },
             scopeLabel: input.scopeLabel,
           });
@@ -138,7 +139,7 @@ test("Finny suppresses model claims and emits a host-authored block before verif
   const events: Array<{ type: string; payload: unknown }> = [];
   const deltas: string[] = [];
   const runStore = testRunStore();
-  const harness = withFinnyPiProfile(baseHarness(false, runStore), { modelId: "gpt-5.6-sol", runStore });
+  const harness = withFinnyPiProfile(baseHarness(false, runStore), profileOptions(runStore));
 
   const result = await harness.turns.runTurn(turn(events, deltas));
 
@@ -162,21 +163,20 @@ test("Finny reports the safe host blocker that stopped an approved finance plan"
         tool: "finance",
         callId: "source",
         result: "[error] blocked_external",
-        finnyWorkflowRunId: "run-1",
-        finnyBlocker: {
+        finnyTrace: createFinnyTraceSnapshot(replayFinnyLedger("run-1", approved), input, {
           action: "source",
           code: "blocked_external",
           cause: "provider_timeout",
           retryable: true,
           dependency: "netsuite",
           diagnosticId: "diag-source-timeout",
-        },
+        }),
       },
       scopeLabel: input.scopeLabel,
     });
     return { reply: "MODEL SHOULD NOT ESCAPE" };
   };
-  const harness = withFinnyPiProfile(base, { modelId: "gpt-5.6-sol", runStore });
+  const harness = withFinnyPiProfile(base, profileOptions(runStore));
 
   const result = await harness.turns.runTurn(turn(events, deltas));
 
@@ -201,20 +201,19 @@ test("Finny does not misreport an unsupported request as an external outage", as
         tool: "finance",
         callId: "preflight",
         result: "[error] finance_error",
-        finnyWorkflowRunId: "run-1",
-        finnyBlocker: {
+        finnyTrace: createFinnyTraceSnapshot(replayFinnyLedger("run-1", unsupported), input, {
           action: "preflight",
           code: "finance_error",
           cause: "unsupported_template",
           retryable: false,
           diagnosticId: "diag-unsupported",
-        },
+        }),
       },
       scopeLabel: input.scopeLabel,
     });
     return { reply: "MODEL SHOULD NOT ESCAPE" };
   };
-  const harness = withFinnyPiProfile(base, { modelId: "gpt-5.6-sol", runStore });
+  const harness = withFinnyPiProfile(base, profileOptions(runStore));
 
   const result = await harness.turns.runTurn(turn(events, deltas));
 
@@ -227,7 +226,7 @@ test("Finny releases only host-rendered verified records after delivery eligibil
   const events: Array<{ type: string; payload: unknown }> = [];
   const deltas: string[] = [];
   const runStore = testRunStore();
-  const harness = withFinnyPiProfile(baseHarness(true, runStore), { modelId: "gpt-5.6-sol", runStore });
+  const harness = withFinnyPiProfile(baseHarness(true, runStore), profileOptions(runStore));
 
   const result = await harness.turns.runTurn(turn(events, deltas));
 
@@ -240,20 +239,100 @@ test("Finny releases only host-rendered verified records after delivery eligibil
   assert.equal(deltas.join(""), result.reply);
 });
 
-test("Finny blocks delivery when persisted result evidence does not match the durable ledger", async () => {
+test("Finny ignores tool-result records and renders source recovered from durable evidence", async () => {
   const events: Array<{ type: string; payload: unknown }> = [];
   const deltas: string[] = [];
   const runStore = testRunStore();
-  const harness = withFinnyPiProfile(baseHarness(true, runStore, d("different source")), {
-    modelId: "gpt-5.6-sol",
-    runStore,
-  });
+  const harness = withFinnyPiProfile(
+    baseHarness(true, runStore, d("different source")),
+    profileOptions(runStore, testFinanceService([{ total: "RECOVERED" }])),
+  );
 
   const result = await harness.turns.runTurn(turn(events, deltas));
 
-  assert.match(result.reply, /verified result evidence is unavailable/i);
+  assert.match(result.reply, /RECOVERED/);
+  assert.doesNotMatch(result.reply, /FORGED/);
   assert.equal(JSON.stringify(events).includes("UNVERIFIED MODEL CLAIM"), false);
   assert.equal(deltas.join("").includes("UNVERIFIED MODEL CLAIM"), false);
+});
+
+test("Finny blocks a completed checkpoint when no screened terminal trace was emitted", async () => {
+  const runStore = testRunStore();
+  const base = baseHarness(false, runStore);
+  base.turns.runTurn = async () => {
+    await persistLedger(runStore, completedLedger());
+    return { reply: "MODEL CLAIM" };
+  };
+  const harness = withFinnyPiProfile(base, profileOptions(runStore));
+
+  const result = await harness.turns.runTurn(turn([], []));
+
+  assert.match(result.reply, /blocked/i);
+  assert.doesNotMatch(result.reply, /Finny verified/i);
+});
+
+test("Finny blocks when more than one screened terminal trace was emitted", async () => {
+  const runStore = testRunStore();
+  const base = baseHarness(false, runStore);
+  base.turns.runTurn = async (input) => {
+    await persistLedger(runStore, completedLedger());
+    const trace = createFinnyTraceSnapshot(replayFinnyLedger("run-1", completedLedger()), input);
+    for (const callId of ["first", "second"]) {
+      await input.emit({
+        type: "tool_result",
+        payload: { tool: "finance", callId, result: "screened", finnyTrace: trace },
+        scopeLabel: input.scopeLabel,
+      });
+    }
+    return { reply: "MODEL CLAIM" };
+  };
+  const harness = withFinnyPiProfile(base, profileOptions(runStore));
+
+  const result = await harness.turns.runTurn(turn([], []));
+
+  assert.match(result.reply, /blocked/i);
+});
+
+test("Finny blocks when the terminal trace does not match the trusted turn", async () => {
+  const runStore = testRunStore();
+  const base = baseHarness(false, runStore);
+  base.turns.runTurn = async (input) => {
+    await persistLedger(runStore, completedLedger());
+    const trace = createFinnyTraceSnapshot(replayFinnyLedger("run-1", completedLedger()), input);
+    await input.emit({
+      type: "tool_result",
+      payload: {
+        tool: "finance",
+        callId: "mismatch",
+        result: "screened",
+        finnyTrace: { ...trace, sessionId: "other" },
+      },
+      scopeLabel: input.scopeLabel,
+    });
+    return { reply: "MODEL CLAIM" };
+  };
+  const harness = withFinnyPiProfile(base, profileOptions(runStore));
+
+  const result = await harness.turns.runTurn(turn([], []));
+
+  assert.match(result.reply, /blocked/i);
+  assert.doesNotMatch(result.reply, /Finny verified/i);
+});
+
+test("Finny blocks when durable source recovery fails", async () => {
+  const runStore = testRunStore();
+  const financeService: FinanceService = {
+    ...createUnavailableFinanceService(),
+    recoverSource: async () => {
+      throw new Error("missing source evidence");
+    },
+  };
+  const harness = withFinnyPiProfile(baseHarness(true, runStore), profileOptions(runStore, financeService));
+
+  const result = await harness.turns.runTurn(turn([], []));
+
+  assert.match(result.reply, /verified result evidence is unavailable/i);
+  assert.doesNotMatch(result.reply, /missing source evidence/i);
 });
 
 test("Finny suppresses model output when an errored tool result carries a completed ledger", async () => {
@@ -270,20 +349,19 @@ test("Finny suppresses model output when an errored tool result carries a comple
         tool: "finance",
         callId: "release",
         result: "[error] finance_error",
-        finnyWorkflowRunId: "run-1",
-        finnyBlocker: {
+        finnyTrace: createFinnyTraceSnapshot(replayFinnyLedger("run-1", completedLedger()), input, {
           action: "source",
           code: "finance_error",
           cause: "internal_error",
           retryable: false,
           diagnosticId: "diag-recovery-failed",
-        },
+        }),
       },
       scopeLabel: input.scopeLabel,
     });
     return { reply: "MODEL CLAIM" };
   };
-  const harness = withFinnyPiProfile(base, { modelId: "gpt-5.6-sol", runStore });
+  const harness = withFinnyPiProfile(base, profileOptions(runStore));
 
   const result = await harness.turns.runTurn(turn(events, deltas));
 
@@ -294,7 +372,7 @@ test("Finny suppresses model output when an errored tool result carries a comple
 
 test("Finny refuses any runtime that is not the pinned Pi model", async () => {
   const runStore = testRunStore();
-  const harness = withFinnyPiProfile(baseHarness(false, runStore), { modelId: "gpt-5.6-sol", runStore });
+  const harness = withFinnyPiProfile(baseHarness(false, runStore), profileOptions(runStore));
   const wrongHarness = turn([], []);
   wrongHarness.runtime = { harnessId: "claude", modelId: "gpt-5.6-sol" };
   const wrongModel = turn([], []);
@@ -315,6 +393,7 @@ test("Finny injects bounded reviewed finance knowledge with provenance before Pi
   const harness = withFinnyPiProfile(base, {
     modelId: "gpt-5.6-sol",
     runStore,
+    financeService: testFinanceService(),
     knowledgeIndex: Promise.resolve({
       bundleDigest: `sha256:${"a".repeat(64)}`,
       fileCount: 1,
@@ -358,7 +437,7 @@ test("a completed prior task never authorizes an unverified task on a later run"
     },
   ] as HarnessTurnInput["history"];
   const runStore = testRunStore();
-  const harness = withFinnyPiProfile(baseHarness(false, runStore), { modelId: "gpt-5.6-sol", runStore });
+  const harness = withFinnyPiProfile(baseHarness(false, runStore), profileOptions(runStore));
 
   const result = await harness.turns.runTurn(next);
 

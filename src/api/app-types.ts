@@ -111,6 +111,7 @@ import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { Environment, EnvironmentAttachment, EnvironmentStore } from "../environments/environment-store.ts";
 import type { ModelProviderAvailability } from "../model/pi-models.ts";
 import type { RuntimeChoice } from "../harness/harness.ts";
+import type { RuntimeConstraint } from "../harness/runtime-types.ts";
 import { type ReachOpts, type ReachResolution, type ReachTarget } from "../reach/reach.ts";
 import { type Project, type ProjectStore } from "../projects/project-store.ts";
 import type { SearchHit } from "../search/core-search.ts";
@@ -726,7 +727,7 @@ export interface AppDeps {
   modelProviders?: ModelProviderAvailability;
   providerKeys?: ModelProviderAvailability;
   runtimeFallback?: RuntimeChoice;
-  runtimeConstraint?: Pick<RuntimeChoice, "harnessId" | "modelId">;
+  runtimeConstraint?: RuntimeConstraint;
 }
 
 export interface ContextSummary {

@@ -27,8 +27,7 @@ import {
 } from "../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../model/model-catalog.ts";
 import type { RuntimeChoice } from "../harness/harness.ts";
-
-export type RuntimeConstraint = Pick<RuntimeChoice, "harnessId" | "modelId">;
+import { runtimeConstraintError } from "../harness/runtime-types.ts";
 
 export type RuntimeDeps = Partial<
   Pick<
@@ -43,15 +42,6 @@ export type RuntimeDeps = Partial<
     | "runtimeConstraint"
   >
 > & { baseModelDefault?: string };
-
-export function runtimeConstraintError(constraint: RuntimeConstraint, choice: Partial<RuntimeChoice>): string | null {
-  if (
-    (choice.harnessId !== undefined && choice.harnessId !== constraint.harnessId) ||
-    (choice.modelId !== undefined && choice.modelId !== constraint.modelId)
-  )
-    return "runtime_constraint_mismatch";
-  return null;
-}
 
 export function runtimeFallback(ctx: { deps: RuntimeDeps }): { harnessId: HarnessId; modelId: string } {
   if (ctx.deps.runtimeConstraint) return ctx.deps.runtimeConstraint;

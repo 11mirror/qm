@@ -1,7 +1,7 @@
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import { artifactPath, fileArtifactId } from "../files/file-artifact-store.ts";
 import type { DurableByteStore } from "../files/durable-byte-store.ts";
-import { canonicalFinnyJson as canonicalJson } from "./canonical-json.ts";
+import { strictCanonicalJson as canonicalJson } from "../util/canonical-json.ts";
 import type {
   FinanceActionInputMap,
   FinanceActionOutputMap,
