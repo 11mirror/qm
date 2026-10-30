@@ -1341,7 +1341,7 @@ async function drive(
           retryable: [] as Attachment[],
         }
       : await latestUserTurn(agent);
-    if (!opener && !text.trim() && attachments.length === 0) {
+    if (!opener && ((!text.trim() && attachments.length === 0) || retryable.length > 0)) {
       work.status = "failed";
       work.finishedAt = Date.now();
       notify();
