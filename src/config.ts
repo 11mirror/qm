@@ -1508,6 +1508,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     "model",
     "proxy",
   ] as const);
+  if (finnyProfile && securityScreenClassifier !== "model")
+    throw new Error("FINNY_PROFILE=finny requires SECURITY_SCREEN_CLASSIFIER=model");
   const proxyProvider = env.SECURITY_SCREEN_PROXY_PROVIDER?.trim();
   const proxyEndpoint = env.SECURITY_SCREEN_PROXY_ENDPOINT?.trim();
   const proxyToken = env.SECURITY_SCREEN_PROXY_TOKEN?.trim();

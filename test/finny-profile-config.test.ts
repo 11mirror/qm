@@ -81,4 +81,20 @@ test("Finny profile rejects unpinned or incompatible runtime configuration", () 
     /CONNECTOR_SECRET_KEY/,
   );
   assert.throws(() => loadConfig({ FINNY_PROVIDER_TIMEOUT_MS: "120000" }), /FINNY_PROVIDER_TIMEOUT_MS.*not supported/i);
+  assert.throws(
+    () =>
+      loadConfig({
+        DATABASE_URL: "postgres://localhost/finny_test",
+        FINNY_PROFILE: "finny",
+        PI_MODEL: "gpt-5.6-sol",
+        FINNY_SKILLS_DIR: "/tmp/reviewed-finny-skills",
+        SESSION_STORE: "postgres",
+        CONNECTOR_SECRET_KEY: "stable-finny-connector-key",
+        SECURITY_SCREEN_CLASSIFIER: "proxy",
+        SECURITY_SCREEN_PROXY_PROVIDER: "reviewer",
+        SECURITY_SCREEN_PROXY_ENDPOINT: "https://screen.example.test/classify",
+        SECURITY_SCREEN_PROXY_TOKEN: "screen-token",
+      }),
+    /FINNY_PROFILE=finny.*SECURITY_SCREEN_CLASSIFIER=model/i,
+  );
 });

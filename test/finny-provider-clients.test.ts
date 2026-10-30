@@ -8,6 +8,7 @@ import {
   createNetSuiteOAuthHeader,
 } from "../src/finny/provider-clients.ts";
 import { FinanceFailure } from "../src/finny/finance-failure.ts";
+import { CONFIG_DEFAULTS } from "../src/config.ts";
 
 test("NetSuite OAuth signing matches Oracle's REST web services example", () => {
   const header = createNetSuiteOAuthHeader({
@@ -130,6 +131,35 @@ test("every Hindsight request receives a fresh provider deadline", async () => {
   });
   assert.ok(signals.every((signal) => signal instanceof AbortSignal));
   assert.notEqual(signals[0], signals[1]);
+});
+
+test("provider deadline uses the platform execution budget and fails closed", async (t) => {
+  const timeout = new DOMException("private timeout detail", "TimeoutError");
+  t.mock.method(AbortSignal, "timeout", (milliseconds: number) => {
+    assert.equal(milliseconds, CONFIG_DEFAULTS.execTimeoutDefaultSec * 1000);
+    return AbortSignal.abort(timeout);
+  });
+  const client = createFinnyNetSuiteClient({
+    fetch: async (_input, init) => {
+      init?.signal?.throwIfAborted();
+      throw new Error("unreachable");
+    },
+  });
+  await assert.rejects(
+    client.suiteql("SELECT id FROM transaction", {
+      accountId: "123456",
+      consumerKey: "key",
+      consumerSecret: "secret",
+      tokenId: "token",
+      tokenSecret: "token-secret",
+    }),
+    (error: Error) =>
+      error instanceof FinanceFailure &&
+      error.causeCode === "provider_timeout" &&
+      error.retryable &&
+      error.dependency === "netsuite" &&
+      !error.message.includes("private"),
+  );
 });
 
 test("NetSuite pagination continues until the provider reports completion", async () => {

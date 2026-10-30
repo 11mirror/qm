@@ -9,6 +9,7 @@ import OAuth from "oauth-1.0a";
 
 import type { FinnyNetSuiteClient, FinnyNetSuiteCredential } from "./provider-adapter.ts";
 import { FinanceFailure, type FinanceFailureCause } from "./finance-failure.ts";
+import { CONFIG_DEFAULTS } from "../config.ts";
 
 export interface FinnyHindsightCredential {
   apiUrl: string;
@@ -40,7 +41,7 @@ export interface NetSuiteOAuthHeaderInput {
 }
 
 type ProviderDependency = "hindsight" | "netsuite";
-const PROVIDER_TIMEOUT_MS = 120_000;
+const PROVIDER_TIMEOUT_MS = CONFIG_DEFAULTS.execTimeoutDefaultSec * 1000;
 
 export function createFinnyHindsightClient(options: HindsightProviderClientOptions = {}): FinnyHindsightClient {
   const clientFactory = options.clientFactory ?? ((clientOptions) => new HindsightClient(clientOptions));

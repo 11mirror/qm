@@ -61,11 +61,11 @@ Lanes A, B, and C run in parallel. Lane D is the convergence point. Lanes F and 
 
 Finny is opt-in. `FINNY_PROFILE=finny` selects the profile and requires `HARNESS=pi` or the default Pi harness. `PI_MODEL` is the single model setting for both the Finny profile and Pi; it must be set to the pinned deployment model. There is no Finny-specific model override or precedence rule.
 
-Provider deadlines are fixed by QM and refreshed independently for every Hindsight request and NetSuite page request. `FINNY_PROVIDER_TIMEOUT_MS` is unsupported. `FINNY_SKILLS_DIR` is required for the Finny profile, resolves to an absolute path, and supplies both reviewed knowledge and the manifest-digested capability catalog under `capabilities/`. Every Finny run uses the plan-native controller and durable evidence custody.
+Provider deadlines use QM's existing default executable-operation budget and refresh independently for every Hindsight request and NetSuite page request. `FINNY_PROVIDER_TIMEOUT_MS` is unsupported. `FINNY_SKILLS_DIR` is required for the Finny profile, resolves to an absolute path, and supplies both reviewed knowledge and the manifest-digested capability catalog under `capabilities/`. Every Finny run uses the plan-native controller and durable evidence custody.
 
 The operator-controlled `FINNY_SKILLS_DIR` deployment is the capability-review trust root. Manifest sizes and hashes provide content identity and mutation detection inside that trusted deployment; they do not authenticate an untrusted directory or replace human review, signing, or deployment access control.
 
-The profile accepts only durable runtime combinations: `DATABASE_URL` must be present, `SESSION_STORE` and `RUN_STORE` must both resolve to `postgres`, and `CONNECTOR_SECRET_KEY` must be stable across process replacements. `FINNY_SKILLS_DIR` is rejected unless the Finny profile is selected, and `FINNY_PROVIDER_TIMEOUT_MS` is always rejected. With `FINNY_PROFILE` unset, the existing Pi configuration remains unchanged and `PI_MODEL` retains its normal meaning.
+The profile accepts only durable runtime combinations: `DATABASE_URL` must be present, `SESSION_STORE` and `RUN_STORE` must both resolve to `postgres`, `CONNECTOR_SECRET_KEY` must be stable across process replacements, and model-based security screening must remain selected. Proxy security screening, `FINNY_SKILLS_DIR` without the Finny profile, and `FINNY_PROVIDER_TIMEOUT_MS` are rejected. With `FINNY_PROFILE` unset, the existing Pi configuration remains unchanged and `PI_MODEL` retains its normal meaning.
 
 Key source links:
 
@@ -84,7 +84,7 @@ Key source links:
 
 ## Verified boundary
 
-The 318-test affected harness gate passes for one model-visible call, reviewed plan compilation, AP and unrelated inventory traversal through the same production path, exact approval binding, stable workflow identity across resume, changed-catalog rejection, per-operation result recovery, runtime constraint propagation, typed terminal failures, and safe plan-native trace exposure. Typecheck, ESLint, formatting, and diff checks pass. A fresh independent review of the current head is still required before merge.
+The 321-test affected harness gate passes for one model-visible call, reviewed plan compilation, AP and unrelated inventory traversal through the same production path, exact approval binding, stable workflow identity across resume, changed-catalog rejection, per-operation result recovery, runtime and deployment-auth constraint propagation, typed terminal failures, and safe plan-native trace exposure. Typecheck, ESLint, formatting, and diff checks pass. A fresh independent review of the current head is still required before merge.
 
 No SQL schema or index changed. Persisted/API shapes added by this work are `finny.run.v2` with catalog/capability/revision/graph/plan binding, `finny.operation_result.v1` with dependency and output custody, `finny.source.v2` with the designated result only, and `finny.trace.v3` with safe plan and attestation metadata. Query-era v1 run/source contracts were removed before deployment; trace v2 remains readable for existing safe diagnostics. No live stored field is migrated or dropped.
 

@@ -457,6 +457,91 @@ test("Finny ignores a stored Claude runtime and runs the pinned Pi model", async
   }
 });
 
+for (const provider of ["anthropic", "openai"] as const) {
+  test(`Finny ignores stored personal ${provider} auth and runs the pinned deployment model`, async (t) => {
+    let claudeCalls = 0;
+    let gatewayCalls = 0;
+    const claude = createMockHarness();
+    claude.turns.runTurn = async () => {
+      claudeCalls += 1;
+      return { reply: "wrong adapter" };
+    };
+    const upstream = createHttpServer(async (req, res) => {
+      for await (const _chunk of req) void _chunk;
+      gatewayCalls += 1;
+      const item = {
+        type: "message",
+        id: `msg_finny_personal_${provider}`,
+        role: "assistant",
+        content: [{ type: "output_text", text: `Pinned ${provider} deployment reply`, annotations: [] }],
+        status: "completed",
+      };
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(
+        `event: response.created\ndata: ${JSON.stringify({ type: "response.created", response: { id: `resp_finny_personal_${provider}`, model: MODEL, status: "in_progress", output: [] } })}\n\n`,
+      );
+      res.write(
+        `event: response.output_item.added\ndata: ${JSON.stringify({ type: "response.output_item.added", output_index: 0, item })}\n\n`,
+      );
+      res.write(
+        `event: response.output_item.done\ndata: ${JSON.stringify({ type: "response.output_item.done", output_index: 0, item })}\n\n`,
+      );
+      res.write(
+        `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { id: `resp_finny_personal_${provider}`, model: MODEL, status: "completed", output: [item], usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } } })}\n\n`,
+      );
+      res.end();
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    t.after(() => {
+      upstream.closeAllConnections();
+      upstream.close();
+    });
+    const actor = `finny-personal-${provider}`;
+    const threadRef = `finny-personal-${provider}-deployment`;
+    const built = buildApp(
+      testConfig({
+        harness: "pi",
+        modelId: MODEL,
+        finnyProfile: { id: "finny", modelId: MODEL, skillsDir: SKILLS_DIR },
+        modelGateway: {
+          url: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`,
+          apiKey: "gateway-test-key",
+          apiKeyHeader: "x-gateway-key",
+          models: { [MODEL]: MODEL },
+        },
+      }),
+      { harnesses: { claude }, ...finnyTestStores() },
+    );
+    await built.userModelCredentials.setOAuth(actor, provider, {
+      accessToken: `personal-${provider}-oauth`,
+      expiresAt: Date.now() + 3_600_000,
+    });
+    await built.config.setPersonalModelAuth(actor, true, provider);
+    const submitted = await built.app.turn({
+      surface: "web",
+      actor: { externalId: actor },
+      conversation: { kind: "dm", threadRef },
+      text: "Say hello.",
+      liveActor: true,
+      async: true,
+    });
+    assert.ok(submitted.runId, JSON.stringify(submitted));
+    assert.equal((await built.runs.get(submitted.runId!))?.request.modelAccount, "company");
+    built.runtime.start();
+    try {
+      const finished = await built.runs.waitFor(submitted.runId!, 5_000);
+      assert.equal(finished.status, "done", JSON.stringify(finished.result));
+      assert.match(finished.result?.reply ?? "", /Finny release is blocked at CLARIFY/);
+      assert.equal(finished.result?.runtime?.harnessId, "pi");
+      assert.equal(finished.result?.runtime?.modelId, MODEL);
+      assert.ok(gatewayCalls > 0);
+      assert.equal(claudeCalls, 0);
+    } finally {
+      await built.runtime.stop();
+    }
+  });
+}
+
 test("ordinary runtime-pinned Claude routing still reaches the Claude adapter", async () => {
   let claudeCalls = 0;
   const claude = createMockHarness();

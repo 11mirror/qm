@@ -209,7 +209,11 @@ export function createTurnMethods(
         (sameApprovedMessage && approvedRequest && isSessionTurn(approvedRequest));
 
       const modelAccount =
-        !req.externalSlack && deps.userModelCredentials && origin.kind === "human" && !sessionTurn
+        !deps.runtimeConstraint &&
+        !req.externalSlack &&
+        deps.userModelCredentials &&
+        origin.kind === "human" &&
+        !sessionTurn
           ? await deps.config.getModelAccountDurable(actor.id)
           : "company";
       const individualAuth = modelAccount !== "company";
