@@ -76,7 +76,6 @@ export interface Config {
   finnyProfile?: {
     id: "finny";
     modelId: string;
-    providerTimeoutMs: number;
     skillsDir: string;
   };
   securityPosture: SecurityPosture;
@@ -1094,10 +1093,10 @@ function finnyProfileEnvStrict(env: NodeJS.ProcessEnv, harness: Config["harness"
   const requested = env.FINNY_PROFILE?.trim();
   const modelId = env.PI_MODEL?.trim();
   const skillsDir = env.FINNY_SKILLS_DIR?.trim();
-  const providerTimeoutMs = numEnvStrict("FINNY_PROVIDER_TIMEOUT_MS", env.FINNY_PROVIDER_TIMEOUT_MS);
+  if (env.FINNY_PROVIDER_TIMEOUT_MS !== undefined)
+    throw new Error("FINNY_PROVIDER_TIMEOUT_MS is not supported; provider deadlines are fixed by QM");
   if (!requested) {
-    if (skillsDir || providerTimeoutMs !== undefined)
-      throw new Error("FINNY_SKILLS_DIR and FINNY_PROVIDER_TIMEOUT_MS require FINNY_PROFILE=finny");
+    if (skillsDir) throw new Error("FINNY_SKILLS_DIR requires FINNY_PROFILE=finny");
     return undefined;
   }
   if (requested !== "finny")
@@ -1105,12 +1104,9 @@ function finnyProfileEnvStrict(env: NodeJS.ProcessEnv, harness: Config["harness"
   if (harness !== "pi") throw new Error("FINNY_PROFILE=finny requires harness=pi");
   if (!modelId) throw new Error("FINNY_PROFILE=finny requires a pinned PI_MODEL");
   if (!skillsDir) throw new Error("FINNY_PROFILE=finny requires FINNY_SKILLS_DIR");
-  if (!Number.isSafeInteger(providerTimeoutMs) || providerTimeoutMs! <= 0)
-    throw new Error("FINNY_PROFILE=finny requires a positive integer FINNY_PROVIDER_TIMEOUT_MS");
   return {
     id: "finny",
     modelId,
-    providerTimeoutMs: providerTimeoutMs!,
     skillsDir: resolve(skillsDir),
   };
 }

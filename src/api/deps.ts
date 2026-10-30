@@ -81,6 +81,7 @@ import type { BudgetTracker } from "../ratelimit/budget.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { AppPageViewLog } from "../deploy/page-views.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
+import type { RuntimeChoice } from "../harness/harness.ts";
 
 import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
 
@@ -147,6 +148,7 @@ export interface ServerDeps {
   refreshCustomProviders?: () => Promise<void>;
   brandingDefault?: OrgBranding;
   harnessId?: string;
+  runtimeConstraint?: Pick<RuntimeChoice, "harnessId" | "modelId">;
   harnessCarriedModelAuth?: ModelProvider;
   admin?: AdminService;
   inviteMailer?: Mailer;

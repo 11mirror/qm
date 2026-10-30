@@ -10,7 +10,6 @@ test("Finny profile is opt-in and pins the Pi runtime and model", () => {
     DATABASE_URL: "postgres://localhost/finny_test",
     FINNY_PROFILE: "finny",
     PI_MODEL: "gpt-5.6-sol",
-    FINNY_PROVIDER_TIMEOUT_MS: "120000",
     FINNY_SKILLS_DIR: "/tmp/reviewed-finny-skills",
     SESSION_STORE: "postgres",
     CONNECTOR_SECRET_KEY: "stable-finny-connector-key",
@@ -20,7 +19,6 @@ test("Finny profile is opt-in and pins the Pi runtime and model", () => {
   assert.deepEqual(config.finnyProfile, {
     id: "finny",
     modelId: "gpt-5.6-sol",
-    providerTimeoutMs: 120_000,
     skillsDir: "/tmp/reviewed-finny-skills",
   });
   assert.equal(
@@ -43,7 +41,6 @@ test("Finny profile rejects unpinned or incompatible runtime configuration", () 
         DATABASE_URL: "postgres://localhost/finny_test",
         FINNY_PROFILE: "finny",
         PI_MODEL: "gpt-5.6-sol",
-        FINNY_PROVIDER_TIMEOUT_MS: "120000",
         SESSION_STORE: "postgres",
         CONNECTOR_SECRET_KEY: "stable-finny-connector-key",
       }),
@@ -54,7 +51,6 @@ test("Finny profile rejects unpinned or incompatible runtime configuration", () 
       loadConfig({
         FINNY_PROFILE: "finny",
         PI_MODEL: "gpt-5.6-sol",
-        FINNY_PROVIDER_TIMEOUT_MS: "120000",
         FINNY_SKILLS_DIR: "/tmp/reviewed-finny-skills",
       }),
     /DATABASE_URL.*SESSION_STORE=postgres.*RUN_STORE=postgres/,
@@ -65,7 +61,6 @@ test("Finny profile rejects unpinned or incompatible runtime configuration", () 
         DATABASE_URL: "postgres://localhost/finny_test",
         FINNY_PROFILE: "finny",
         PI_MODEL: "gpt-5.6-sol",
-        FINNY_PROVIDER_TIMEOUT_MS: "120000",
         FINNY_SKILLS_DIR: "/tmp/reviewed-finny-skills",
         SESSION_STORE: "postgres",
         RUN_STORE: "memory",
@@ -79,23 +74,11 @@ test("Finny profile rejects unpinned or incompatible runtime configuration", () 
         DATABASE_URL: "postgres://localhost/finny_test",
         FINNY_PROFILE: "finny",
         PI_MODEL: "gpt-5.6-sol",
-        FINNY_PROVIDER_TIMEOUT_MS: "120000",
         FINNY_SKILLS_DIR: "/tmp/reviewed-finny-skills",
         SESSION_STORE: "postgres",
         RUN_STORE: "postgres",
       }),
     /CONNECTOR_SECRET_KEY/,
   );
-  assert.throws(
-    () =>
-      loadConfig({
-        DATABASE_URL: "postgres://localhost/finny_test",
-        FINNY_PROFILE: "finny",
-        PI_MODEL: "gpt-5.6-sol",
-        FINNY_SKILLS_DIR: "/tmp/reviewed-finny-skills",
-        SESSION_STORE: "postgres",
-        CONNECTOR_SECRET_KEY: "stable-finny-connector-key",
-      }),
-    /FINNY_PROVIDER_TIMEOUT_MS/,
-  );
+  assert.throws(() => loadConfig({ FINNY_PROVIDER_TIMEOUT_MS: "120000" }), /FINNY_PROVIDER_TIMEOUT_MS.*not supported/i);
 });

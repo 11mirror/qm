@@ -20,20 +20,15 @@ export interface FinnyHindsightClient {
   recall(query: string, credential: FinnyHindsightCredential): Promise<unknown>;
 }
 
-interface ProviderClientOptions {
+interface NetSuiteClientOptions {
   fetch?: typeof fetch;
-  timeoutMs?: number;
-}
-
-interface HindsightProviderClientOptions {
-  timeoutMs?: number;
-  clientFactory?: (options: HindsightClientOptions) => Pick<HindsightClient, "recall">;
-}
-
-interface NetSuiteClientOptions extends ProviderClientOptions {
   now?: () => number;
   nonce?: () => string;
   pageSize?: number;
+}
+
+interface HindsightProviderClientOptions {
+  clientFactory?: (options: HindsightClientOptions) => Pick<HindsightClient, "recall">;
 }
 
 export interface NetSuiteOAuthHeaderInput {
@@ -45,6 +40,7 @@ export interface NetSuiteOAuthHeaderInput {
 }
 
 type ProviderDependency = "hindsight" | "netsuite";
+const PROVIDER_TIMEOUT_MS = 120_000;
 
 export function createFinnyHindsightClient(options: HindsightProviderClientOptions = {}): FinnyHindsightClient {
   const clientFactory = options.clientFactory ?? ((clientOptions) => new HindsightClient(clientOptions));
@@ -58,13 +54,13 @@ export function createFinnyHindsightClient(options: HindsightProviderClientOptio
         maxAttempts: 1,
       });
       for (const bankId of credential.bankIds) {
-        const signal = providerSignal(options.timeoutMs);
+        const signal = providerSignal();
         let payload: RecallResponse;
         try {
           payload = await client.recall(bankId, query, {
             types: ["observation"],
             budget: "mid",
-            ...(signal ? { signal } : {}),
+            signal,
           });
         } catch (error) {
           if (error instanceof FinanceFailure) throw error;
@@ -95,7 +91,7 @@ export function createFinnyNetSuiteClient(options: NetSuiteClientOptions = {}): 
       const rows: unknown[] = [];
       let offset = 0;
       while (true) {
-        const signal = providerSignal(options.timeoutMs);
+        const signal = providerSignal();
         const url = `${endpoint}?limit=${pageSize}&offset=${offset}`;
         const authorization = createNetSuiteOAuthHeader({
           method: "POST",
@@ -115,7 +111,7 @@ export function createFinnyNetSuiteClient(options: NetSuiteClientOptions = {}): 
               prefer: "transient",
             },
             body: JSON.stringify({ q: query }),
-            ...(signal ? { signal } : {}),
+            signal,
           },
           "NetSuite SuiteQL",
           "netsuite",
@@ -239,8 +235,6 @@ function boundedInteger(value: number, minimum: number, maximum: number, name: s
   return value;
 }
 
-function providerSignal(timeoutMs: number | undefined): AbortSignal | undefined {
-  if (timeoutMs === undefined) return undefined;
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("Provider timeout is invalid");
-  return AbortSignal.timeout(timeoutMs);
+function providerSignal(): AbortSignal {
+  return AbortSignal.timeout(PROVIDER_TIMEOUT_MS);
 }

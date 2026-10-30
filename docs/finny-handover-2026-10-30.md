@@ -54,11 +54,11 @@ AP and an unrelated inventory measure provide local structural evidence today. A
 
 ### 3. Prove deployment-owned credentials and provider behavior live
 
-The source implementation requires Postgres-backed sessions and runs, a stable `CONNECTOR_SECRET_KEY`, and an operator-selected positive `FINNY_PROVIDER_TIMEOUT_MS`. Restart tests prove that opaque credential bindings survive process replacement, and typed provider failures retain safe status/cause diagnostics without upstream bodies or secrets. Each provider request receives a fresh configured deadline so a stalled dependency cannot hold the serialized run indefinitely.
+The source implementation requires Postgres-backed sessions and runs plus a stable `CONNECTOR_SECRET_KEY`. Restart tests prove that opaque credential bindings survive process replacement, and typed provider failures retain safe status/cause diagnostics without upstream bodies or secrets. Each provider request receives a fresh fixed QM deadline so a stalled dependency cannot hold the serialized run indefinitely; `FINNY_PROVIDER_TIMEOUT_MS` is unsupported.
 
 The current development environment has no deployment-owned NetSuite binding or usable model credential. Bind a read-only credential in a safe non-production account, then prove the real 401, 429, timeout, 5xx, pagination, and successful SuiteQL paths without reading or logging secret values.
 
-The supported configuration matrix is documented in [Finny Pi harness implementation status](finny-implementation-status.md#configuration-contract). In short, Finny uses the existing `PI_MODEL` setting as its sole pinned model owner and requires the Pi harness, a reviewed skills directory, Postgres session/run stores, a stable connector secret, and a positive provider timeout.
+The supported configuration matrix is documented in [Finny Pi harness implementation status](finny-implementation-status.md#configuration-contract). In short, Finny uses the existing `PI_MODEL` setting as its sole pinned model owner and requires the Pi harness, a reviewed skills directory, Postgres session/run stores, and a stable connector secret. Provider deadlines are fixed by QM rather than operator configuration.
 
 ### 4. Prove a live desktop acceptance matrix
 

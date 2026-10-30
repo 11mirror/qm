@@ -4,6 +4,7 @@ import { parseAckEmoji } from "../../slack/config.ts";
 import { orgId as configOrgId } from "../../config.ts";
 import type { ServerDeps } from "../deps.ts";
 import type { ApiCtx } from "./route.ts";
+import { runtimeConstraintError } from "../runtime-config.ts";
 import { parseCommandPolicy } from "../../policy/command-policy.ts";
 import { parseScopeId, scopeId, type CommandPolicy, type Grant, type ScopeId } from "../../types.ts";
 import {
@@ -534,6 +535,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (raw !== undefined && raw !== null && typeof raw !== "string")
         return { error: "base-model requires { modelId: string } (empty string clears the override)" };
       const modelId = typeof raw === "string" ? raw.trim() : "";
+      if (modelId && ctx.deps.runtimeConstraint && runtimeConstraintError(ctx.deps.runtimeConstraint, { modelId }))
+        return { error: "runtime_constraint_mismatch" };
       if (modelId && !resolveModel(modelId)) return { error: `unknown model id: ${modelId}` };
       const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
       const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
@@ -615,6 +618,14 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const modelId = (ctx.body as { modelId?: unknown }).modelId;
       const effortLevel = (ctx.body as { effortLevel?: unknown }).effortLevel ?? (purpose ? undefined : "auto");
       const fastMode = (ctx.body as { fastMode?: unknown }).fastMode ?? (purpose ? undefined : false);
+      if (
+        ctx.deps.runtimeConstraint &&
+        runtimeConstraintError(ctx.deps.runtimeConstraint, {
+          ...(typeof harnessId === "string" && isHarnessId(harnessId) ? { harnessId } : {}),
+          ...(typeof modelId === "string" ? { modelId } : {}),
+        })
+      )
+        return { error: "runtime_constraint_mismatch" };
       if (!isHarnessId(harnessId)) return { error: `runtime requires harnessId (${HARNESS_IDS.join(" | ")})` };
       const approved = (await ctx.deps.config!.getApprovedHarnessesDurable()) ?? [ctx.deps.harnessId ?? "pi"];
       if (!approved.includes(harnessId)) return { error: `harness ${harnessId} is not approved` };

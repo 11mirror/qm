@@ -39,6 +39,7 @@ Lanes A, B, and C run in parallel. Lane D is the convergence point. Lanes F and 
 ## Implemented
 
 - The Finny profile uses QM's Pi harness and exposes only the native `finance` tool.
+- The Finny profile constrains web, Slack, cron, subagent, decision-rule, security-screen, fallback, and admin runtime paths to the same pinned Pi model; stale stored choices are ignored and conflicting new choices are rejected before persistence or dispatch.
 - The model-visible finance input is `{capabilityId, dimensions, artifactFormat?}`; free-form request text is never model-supplied tool authority.
 - The host owns typed-intent validation, capability compilation, Golden Loop transitions, approval, source custody, artifact policy, verification, and release.
 - A separate reviewed capability sub-bundle defines semantic aliases, dimension support, a fixed operation graph, host-owned parameter bindings, artifact policy, approval policy, and verification policy. The production controller resolves and executes AP and an unrelated synthetic measure through the same data-driven path.
@@ -51,7 +52,7 @@ Lanes A, B, and C run in parallel. Lane D is the convergence point. Lanes F and 
 - Stable workflow event IDs, a shared per-run advisory lock, and deterministic artifact identities prevent overlapping workers from duplicating stage work; a resumed run starts at its first incomplete stage.
 - Typed failures distinguish unsupported capability, missing schema mapping, credential/configuration faults, provider faults, verification failure, and policy blocks.
 - Provider HTTP and transport failures retain allowlisted cause, retryability, dependency, and status metadata in durable diagnostics without copying upstream bodies or credential material.
-- Finny startup requires an operator-selected positive `FINNY_PROVIDER_TIMEOUT_MS`; every live provider request receives a fresh deadline so a stalled dependency cannot hold the durable run lock indefinitely.
+- Every live provider request receives a fresh fixed deadline so a stalled dependency cannot hold the durable run lock indefinitely.
 - Finny-created artifact bytes use namespaced durable custody.
 - Slack acknowledgements retain provider receipts that bind exact rendered content and uploaded file digests to delivery attestation, including reconstruction from the posted Slack thread after a process restart loses the original acknowledgement.
 - Safe trace v3 exposes plan authority, ordered operation-result digests, approval state, and verification state without SQL, parameters, records, or credentials. Trace v2 remains readable for compatibility. `/v1/finny/health` and bounded offline autoresearch scaffolding are implemented.
@@ -60,11 +61,11 @@ Lanes A, B, and C run in parallel. Lane D is the convergence point. Lanes F and 
 
 Finny is opt-in. `FINNY_PROFILE=finny` selects the profile and requires `HARNESS=pi` or the default Pi harness. `PI_MODEL` is the single model setting for both the Finny profile and Pi; it must be set to the pinned deployment model. There is no Finny-specific model override or precedence rule.
 
-`FINNY_PROVIDER_TIMEOUT_MS` is required and must be a positive integer. It applies independently to each NetSuite page request. `FINNY_SKILLS_DIR` is required for the Finny profile, resolves to an absolute path, and supplies both reviewed knowledge and the manifest-digested capability catalog under `capabilities/`. Every Finny run uses the plan-native controller and durable evidence custody.
+Provider deadlines are fixed by QM and refreshed independently for every Hindsight request and NetSuite page request. `FINNY_PROVIDER_TIMEOUT_MS` is unsupported. `FINNY_SKILLS_DIR` is required for the Finny profile, resolves to an absolute path, and supplies both reviewed knowledge and the manifest-digested capability catalog under `capabilities/`. Every Finny run uses the plan-native controller and durable evidence custody.
 
 The operator-controlled `FINNY_SKILLS_DIR` deployment is the capability-review trust root. Manifest sizes and hashes provide content identity and mutation detection inside that trusted deployment; they do not authenticate an untrusted directory or replace human review, signing, or deployment access control.
 
-The profile accepts only durable runtime combinations: `DATABASE_URL` must be present, `SESSION_STORE` and `RUN_STORE` must both resolve to `postgres`, and `CONNECTOR_SECRET_KEY` must be stable across process replacements. `FINNY_SKILLS_DIR` and `FINNY_PROVIDER_TIMEOUT_MS` are rejected unless the Finny profile is selected. With `FINNY_PROFILE` unset, the existing Pi configuration remains unchanged and `PI_MODEL` retains its normal meaning.
+The profile accepts only durable runtime combinations: `DATABASE_URL` must be present, `SESSION_STORE` and `RUN_STORE` must both resolve to `postgres`, and `CONNECTOR_SECRET_KEY` must be stable across process replacements. `FINNY_SKILLS_DIR` is rejected unless the Finny profile is selected, and `FINNY_PROVIDER_TIMEOUT_MS` is always rejected. With `FINNY_PROFILE` unset, the existing Pi configuration remains unchanged and `PI_MODEL` retains its normal meaning.
 
 Key source links:
 
@@ -83,7 +84,7 @@ Key source links:
 
 ## Verified boundary
 
-Focused tests pass for one model-visible call, reviewed plan compilation, AP and unrelated inventory traversal through the same production path, exact approval binding, stable workflow identity across resume, changed-catalog rejection, per-operation result recovery, typed terminal failures, and safe plan-native trace exposure. A fresh independent review of the current head is still required before merge.
+The 318-test affected harness gate passes for one model-visible call, reviewed plan compilation, AP and unrelated inventory traversal through the same production path, exact approval binding, stable workflow identity across resume, changed-catalog rejection, per-operation result recovery, runtime constraint propagation, typed terminal failures, and safe plan-native trace exposure. Typecheck, ESLint, formatting, and diff checks pass. A fresh independent review of the current head is still required before merge.
 
 No SQL schema or index changed. Persisted/API shapes added by this work are `finny.run.v2` with catalog/capability/revision/graph/plan binding, `finny.operation_result.v1` with dependency and output custody, `finny.source.v2` with the designated result only, and `finny.trace.v3` with safe plan and attestation metadata. Query-era v1 run/source contracts were removed before deployment; trace v2 remains readable for existing safe diagnostics. No live stored field is migrated or dropped.
 

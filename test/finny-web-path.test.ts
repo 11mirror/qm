@@ -94,7 +94,7 @@ test("QM web ingress runs the Pi-native finance tool and host-blocks an unverifi
     testConfig({
       harness: "pi",
       modelId: MODEL,
-      finnyProfile: { id: "finny", modelId: MODEL, providerTimeoutMs: 120_000, skillsDir: SKILLS_DIR },
+      finnyProfile: { id: "finny", modelId: MODEL, skillsDir: SKILLS_DIR },
       securityScreen: "off",
       modelGateway: {
         url: `http://127.0.0.1:${upstreamAddress.port}`,
@@ -273,7 +273,7 @@ test("QM web approval resumes the same Pi-native Golden Loop and releases only v
     testConfig({
       harness: "pi",
       modelId: MODEL,
-      finnyProfile: { id: "finny", modelId: MODEL, providerTimeoutMs: 120_000, skillsDir: SKILLS_DIR },
+      finnyProfile: { id: "finny", modelId: MODEL, skillsDir: SKILLS_DIR },
       securityScreen: "off",
       modelGateway: {
         url: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`,
@@ -355,7 +355,7 @@ test("Finny rejects a runtime-pinned Claude choice before the Claude adapter run
     testConfig({
       harness: "pi",
       modelId: MODEL,
-      finnyProfile: { id: "finny", modelId: MODEL, providerTimeoutMs: 120_000, skillsDir: SKILLS_DIR },
+      finnyProfile: { id: "finny", modelId: MODEL, skillsDir: SKILLS_DIR },
     }),
     { harnesses: { claude }, ...finnyTestStores() },
   );
@@ -375,31 +375,59 @@ test("Finny rejects a runtime-pinned Claude choice before the Claude adapter run
     liveActor: true,
     async: true,
   });
-  assert.ok(submitted.runId, JSON.stringify(submitted));
-  built.runtime.start();
-  try {
-    const finished = await built.runs.waitFor(submitted.runId!, 5_000);
-    assert.equal(finished.status, "failed");
-    assert.match(JSON.stringify(finished), /Finny requires pi\/gpt-5\.6-sol/);
-    assert.equal(claudeCalls, 0);
-  } finally {
-    await built.runtime.stop();
-  }
+  assert.deepEqual(submitted, { status: "refused", reason: "runtime_constraint_mismatch" });
+  assert.equal(await built.runs.latestForThread("finny-runtime-pinned-claude"), null);
+  assert.equal(claudeCalls, 0);
 });
 
-test("Finny rejects a stored Claude runtime before the Claude adapter runs", async () => {
+test("Finny ignores a stored Claude runtime and runs the pinned Pi model", async (t) => {
   let claudeCalls = 0;
   const claude = createMockHarness();
   claude.turns.runTurn = async () => {
     claudeCalls += 1;
     return { reply: "wrong adapter" };
   };
+  const upstream = createHttpServer(async (req, res) => {
+    for await (const _chunk of req) void _chunk;
+    const item = {
+      type: "message",
+      id: "msg_finny_pinned",
+      role: "assistant",
+      content: [{ type: "output_text", text: "Pinned Pi reply", annotations: [] }],
+      status: "completed",
+    };
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(
+      `event: response.created\ndata: ${JSON.stringify({ type: "response.created", response: { id: "resp_finny_pinned", model: MODEL, status: "in_progress", output: [] } })}\n\n`,
+    );
+    res.write(
+      `event: response.output_item.added\ndata: ${JSON.stringify({ type: "response.output_item.added", output_index: 0, item })}\n\n`,
+    );
+    res.write(
+      `event: response.output_item.done\ndata: ${JSON.stringify({ type: "response.output_item.done", output_index: 0, item })}\n\n`,
+    );
+    res.write(
+      `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { id: "resp_finny_pinned", model: MODEL, status: "completed", output: [item], usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } } })}\n\n`,
+    );
+    res.end();
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  t.after(() => {
+    upstream.closeAllConnections();
+    upstream.close();
+  });
   const built = buildApp(
     testConfig({
       anthropicApiKey: "company-anthropic",
       harness: "pi",
       modelId: MODEL,
-      finnyProfile: { id: "finny", modelId: MODEL, providerTimeoutMs: 120_000, skillsDir: SKILLS_DIR },
+      finnyProfile: { id: "finny", modelId: MODEL, skillsDir: SKILLS_DIR },
+      modelGateway: {
+        url: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`,
+        apiKey: "gateway-test-key",
+        apiKeyHeader: "x-gateway-key",
+        models: { [MODEL]: MODEL },
+      },
     }),
     { harnesses: { claude }, ...finnyTestStores() },
   );
@@ -412,7 +440,7 @@ test("Finny rejects a stored Claude runtime before the Claude adapter runs", asy
     surface: "web",
     actor: { externalId: "finny-stored" },
     conversation: { kind: "dm", threadRef: "finny-stored-claude" },
-    text: "What is the AP balance?",
+    text: "Say hello.",
     liveActor: true,
     async: true,
   });
@@ -420,8 +448,9 @@ test("Finny rejects a stored Claude runtime before the Claude adapter runs", asy
   built.runtime.start();
   try {
     const finished = await built.runs.waitFor(submitted.runId!, 5_000);
-    assert.equal(finished.status, "failed");
-    assert.match(JSON.stringify(finished), /Finny requires pi\/gpt-5\.6-sol/);
+    assert.equal(finished.status, "done");
+    assert.equal(finished.result?.runtime?.harnessId, "pi");
+    assert.equal(finished.result?.runtime?.modelId, MODEL);
     assert.equal(claudeCalls, 0);
   } finally {
     await built.runtime.stop();

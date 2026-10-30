@@ -214,7 +214,7 @@ export function createTurnMethods(
           : "company";
       const individualAuth = modelAccount !== "company";
       const runtimePurpose = turnRuntimePurpose(req, isSubagentThreadRef(req.conversation.threadRef));
-      if (req.triggered && (req.model || req.harness)) {
+      if ((req.triggered || deps.runtimeConstraint) && (req.model || req.harness)) {
         if (req.harness && !isHarnessId(req.harness)) return { status: "refused", reason: "harness_not_approved" };
         const error = await requestedRuntimeError(
           { deps },
@@ -247,10 +247,11 @@ export function createTurnMethods(
         const org = scopeId("org", orgIdOf());
         const targetScope = conversationScope(req.conversation, actor.id);
         const fallbackHarness = harnessIdOrPi(deps.harnessId);
-        const runtimeFallback = deps.runtimeFallback ?? {
-          harnessId: fallbackHarness,
-          modelId: defaultModelForHarness(fallbackHarness),
-        };
+        const runtimeFallback = deps.runtimeConstraint ??
+          deps.runtimeFallback ?? {
+            harnessId: fallbackHarness,
+            modelId: defaultModelForHarness(fallbackHarness),
+          };
         if (individualAuth && (req.model || req.harness)) {
           const available = await userRuntimeConfigBody({ deps }, targetScope, actor.id);
           const harness = req.harness ?? available.effective.harnessId;
@@ -272,25 +273,34 @@ export function createTurnMethods(
           let orgRuntime;
           let runtime;
           try {
-            const orgModel =
-              storedOrgRuntime?.modelId ?? (await deps.config.getBaseModelOwnDurable(org)) ?? runtimeFallback.modelId;
-            orgRuntime = modelUnavailableReason(orgModel)
-              ? { harnessId: storedOrgRuntime?.harnessId ?? runtimeFallback.harnessId, modelId: orgModel }
-              : await resolveRuntimeChoiceDurable(deps.config, org, org, runtimeFallback);
-            runtime = await resolveRuntimeChoiceDurable(
-              deps.config,
-              org,
-              targetScope,
-              runtimeFallback,
-              {
-                ...(req.harness && isHarnessId(req.harness) ? { harnessId: req.harness } : {}),
-                ...(req.model ? { modelId: req.model } : {}),
+            if (deps.runtimeConstraint) {
+              orgRuntime = deps.runtimeConstraint;
+              runtime = {
+                ...deps.runtimeConstraint,
                 ...(req.thinkingLevel ? { effortLevel: req.thinkingLevel } : {}),
                 ...(typeof req.fastMode === "boolean" ? { fastMode: req.fastMode } : {}),
-              },
-              undefined,
-              runtimePurpose,
-            );
+              };
+            } else {
+              const orgModel =
+                storedOrgRuntime?.modelId ?? (await deps.config.getBaseModelOwnDurable(org)) ?? runtimeFallback.modelId;
+              orgRuntime = modelUnavailableReason(orgModel)
+                ? { harnessId: storedOrgRuntime?.harnessId ?? runtimeFallback.harnessId, modelId: orgModel }
+                : await resolveRuntimeChoiceDurable(deps.config, org, org, runtimeFallback);
+              runtime = await resolveRuntimeChoiceDurable(
+                deps.config,
+                org,
+                targetScope,
+                runtimeFallback,
+                {
+                  ...(req.harness && isHarnessId(req.harness) ? { harnessId: req.harness } : {}),
+                  ...(req.model ? { modelId: req.model } : {}),
+                  ...(req.thinkingLevel ? { effortLevel: req.thinkingLevel } : {}),
+                  ...(typeof req.fastMode === "boolean" ? { fastMode: req.fastMode } : {}),
+                },
+                undefined,
+                runtimePurpose,
+              );
+            }
           } catch (error) {
             swallow("turn: runtime resolution", error);
             return { status: "refused", reason: `I couldn't set up that runtime choice — ${GENERIC_FAILURE_CLAUSE}` };
@@ -304,7 +314,7 @@ export function createTurnMethods(
           } else if (deps.providerKeys) {
             providers = modelProviderAvailabilityFor(runtime.harnessId, configuredKeys);
           }
-          if (providers && !modelServiceable(runtime.modelId, providers)) {
+          if (!deps.runtimeConstraint && providers && !modelServiceable(runtime.modelId, providers)) {
             return {
               status: "refused",
               reason: "that model isn't available on this deployment (its provider isn't configured)",

@@ -62,14 +62,19 @@ test("Hindsight client recalls only from the credential-bound banks", async () =
       maxAttempts: 1,
     },
   ]);
-  assert.deepEqual(requests[0], {
-    bankId: "finance/shared",
-    query: "open AP",
-    options: {
-      types: ["observation"],
-      budget: "mid",
+  assert.deepEqual(
+    { ...requests[0], options: { ...requests[0]?.options, signal: undefined } },
+    {
+      bankId: "finance/shared",
+      query: "open AP",
+      options: {
+        types: ["observation"],
+        budget: "mid",
+        signal: undefined,
+      },
     },
-  });
+  );
+  assert.ok(requests[0]?.options?.signal instanceof AbortSignal);
 });
 
 test("NetSuite client posts read-only SuiteQL with a signed transient request", async () => {
@@ -104,13 +109,12 @@ test("NetSuite client posts read-only SuiteQL with a signed transient request", 
   assert.equal(headers.get("prefer"), "transient");
   assert.match(headers.get("authorization") ?? "", /^OAuth realm="123456_SB1"/);
   assert.deepEqual(JSON.parse(String(requests[0]?.init?.body)), { q: "SELECT id FROM transaction" });
-  assert.equal(requests[0]?.init?.signal, undefined);
+  assert.ok(requests[0]?.init?.signal instanceof AbortSignal);
 });
 
-test("provider timeout is applied only when the caller supplies one", async () => {
+test("every Hindsight request receives a fresh provider deadline", async () => {
   const signals: Array<AbortSignal | null | undefined> = [];
   const client = createFinnyHindsightClient({
-    timeoutMs: 1_000,
     clientFactory: () => ({
       recall: async (_bankId, _query, options) => {
         signals.push(options?.signal);
@@ -130,11 +134,13 @@ test("provider timeout is applied only when the caller supplies one", async () =
 
 test("NetSuite pagination continues until the provider reports completion", async () => {
   let calls = 0;
+  const signals: Array<AbortSignal | null | undefined> = [];
   const client = createFinnyNetSuiteClient({
     pageSize: 2,
     nonce: () => `nonce-${calls}`,
-    fetch: async () => {
+    fetch: async (_input, init) => {
       calls += 1;
+      signals.push(init?.signal);
       return new Response(
         JSON.stringify({
           items: [{ id: String(calls * 2 - 1) }, { id: String(calls * 2) }],
@@ -154,6 +160,8 @@ test("NetSuite pagination continues until the provider reports completion", asyn
   });
   assert.deepEqual(rows, [{ id: "1" }, { id: "2" }, { id: "3" }, { id: "4" }]);
   assert.equal(calls, 2);
+  assert.ok(signals.every((signal) => signal instanceof AbortSignal));
+  assert.notEqual(signals[0], signals[1]);
 });
 
 test("provider clients fail closed without returning upstream error bodies", async () => {

@@ -28,7 +28,7 @@ import {
 import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../model/model-catalog.ts";
 import type { RuntimeChoice } from "../harness/harness.ts";
 
-type RuntimeConstraint = Pick<RuntimeChoice, "harnessId" | "modelId">;
+export type RuntimeConstraint = Pick<RuntimeChoice, "harnessId" | "modelId">;
 
 export type RuntimeDeps = Partial<
   Pick<
@@ -40,10 +40,11 @@ export type RuntimeDeps = Partial<
     | "modelCredentialFetch"
     | "refreshModels"
     | "userModelCredentials"
+    | "runtimeConstraint"
   >
-> & { baseModelDefault?: string; runtimeConstraint?: RuntimeConstraint };
+> & { baseModelDefault?: string };
 
-function runtimeConstraintError(constraint: RuntimeConstraint, choice: Partial<RuntimeChoice>): string | null {
+export function runtimeConstraintError(constraint: RuntimeConstraint, choice: Partial<RuntimeChoice>): string | null {
   if (
     (choice.harnessId !== undefined && choice.harnessId !== constraint.harnessId) ||
     (choice.modelId !== undefined && choice.modelId !== constraint.modelId)

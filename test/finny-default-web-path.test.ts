@@ -59,7 +59,21 @@ test("default QM web path requires reviewed-plan approval before provider execut
       res.end("{}");
       return;
     }
-    JSON.parse(raw);
+    const request = JSON.parse(raw) as { tools?: Array<{ name?: string }> };
+    if (!request.tools?.some((tool) => tool.name === "finance")) {
+      sendModelItem(
+        res,
+        {
+          type: "message",
+          id: "msg_title",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Check AP balance", annotations: [] }],
+          status: "completed",
+        },
+        0,
+      );
+      return;
+    }
     const actions = [() => AP_CANDIDATE];
     const action = actions[step]?.();
     step += 1;
@@ -97,7 +111,7 @@ test("default QM web path requires reviewed-plan approval before provider execut
     testConfig({
       harness: "pi",
       modelId: MODEL,
-      finnyProfile: { id: "finny", modelId: MODEL, providerTimeoutMs: 120_000, skillsDir: SKILLS_DIR },
+      finnyProfile: { id: "finny", modelId: MODEL, skillsDir: SKILLS_DIR },
       securityScreen: "off",
       modelGateway: {
         url: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`,

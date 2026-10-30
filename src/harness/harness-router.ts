@@ -285,6 +285,7 @@ export function createHarnessRouter(
   adapters: ReadonlyMap<HarnessId, Harness>,
   utility: Harness,
   resolve: (input: HarnessTurnInput, routedBy: (ruleId: string) => void) => RuntimeChoice | Promise<RuntimeChoice>,
+  constraints?: { screenSecurity?: Pick<RuntimeChoice, "harnessId" | "modelId"> },
 ): Harness {
   const lastHarness = new Map<string, HarnessId>();
   return {
@@ -292,8 +293,11 @@ export function createHarnessRouter(
     models: {
       ...utility.models,
       async screenSecurity(input) {
-        const adapter = input.harnessId && isHarnessId(input.harnessId) ? adapters.get(input.harnessId) : utility;
-        return adapter?.models.screenSecurity?.(input);
+        const runtime = constraints?.screenSecurity;
+        let adapter: Harness | undefined = utility;
+        if (runtime) adapter = adapters.get(runtime.harnessId);
+        else if (input.harnessId && isHarnessId(input.harnessId)) adapter = adapters.get(input.harnessId);
+        return adapter?.models.screenSecurity?.(runtime ? { ...input, ...runtime } : input);
       },
     },
     tools: utility.tools,

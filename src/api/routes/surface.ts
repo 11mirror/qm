@@ -3,7 +3,13 @@ import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { memoryForRequest } from "./memory-access.ts";
 import type { MemoryEdit, MemoryService } from "../../memory/memory-service.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
-import { runtimeFallback, runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
+import {
+  runtimeConstraintError,
+  runtimeFallback,
+  runtimeConfigBody,
+  userRuntimeConfigBody,
+  webuiModelEnabled,
+} from "../runtime-config.ts";
 import { canReadNotebook, searchAcrossScopes } from "../../memory/cross-scope.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
 import type { Grant, PendingApproval, ScopeId, Session } from "../../types.ts";
@@ -1321,6 +1327,14 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
   } else {
     const harnessId = ctx.body.harnessId;
     const modelId = ctx.body.modelId;
+    if (
+      ctx.deps.runtimeConstraint &&
+      runtimeConstraintError(ctx.deps.runtimeConstraint, {
+        ...(typeof harnessId === "string" && isHarnessId(harnessId) ? { harnessId } : {}),
+        ...(typeof modelId === "string" ? { modelId } : {}),
+      })
+    )
+      return sendJson(ctx.res, 400, { error: "runtime_constraint_mismatch" });
     const fallback = runtimeFallback(ctx);
     const approved = (await config.getApprovedHarnessesDurable()) ?? [fallback.harnessId];
     if (!isHarnessId(harnessId) || !approved.includes(harnessId))

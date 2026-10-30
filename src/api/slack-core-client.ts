@@ -46,6 +46,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import { swallowAs } from "../util/errors.ts";
 import { resolveRuntimeChoiceDurable } from "../harness/harness-router.ts";
 import type { RuntimeChoice } from "../harness/harness.ts";
+import type { RuntimeConstraint } from "./runtime-config.ts";
 import { modelDisplayName } from "../model/pi-models.ts";
 import type { ConversationEvent } from "../loops/sources/adapter.ts";
 import { slackConversationRef } from "../loops/sources/slack.ts";
@@ -160,6 +161,7 @@ export interface SlackCoreClientDeps {
   app: App;
   config: ScopedConfigStore;
   runtimeFallback: RuntimeChoice;
+  runtimeConstraint?: RuntimeConstraint;
   blobTransfer: BlobTransferStore;
   deliveries: DeliveryStore;
   errors?: ErrorLog;
@@ -220,7 +222,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
 
     async surfaceHeaderFacts(scope) {
       const [choice, branding] = await Promise.all([
-        resolveRuntimeChoiceDurable(deps.config, orgScope, scope, deps.runtimeFallback),
+        deps.runtimeConstraint ?? resolveRuntimeChoiceDurable(deps.config, orgScope, scope, deps.runtimeFallback),
         resolveBranding(deps.config, orgScope, deps.brandingDefault),
       ]);
       return {

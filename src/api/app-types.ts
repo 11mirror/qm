@@ -726,6 +726,7 @@ export interface AppDeps {
   modelProviders?: ModelProviderAvailability;
   providerKeys?: ModelProviderAvailability;
   runtimeFallback?: RuntimeChoice;
+  runtimeConstraint?: Pick<RuntimeChoice, "harnessId" | "modelId">;
 }
 
 export interface ContextSummary {

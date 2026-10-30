@@ -585,6 +585,7 @@ export interface BuiltApp {
   sessionShareBytes: DurableByteStore;
   skillSyncEngine: SkillSyncEngine;
   slackCore: SlackCoreClient;
+  runtimeConstraint?: RuntimeDeps["runtimeConstraint"];
 }
 
 const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
@@ -1572,7 +1573,7 @@ export function buildApp(
                   atomicFetch:
                     overrides.finnyAtomicFetchAdapter ??
                     createFinnyAtomicFetchAdapter({
-                      netsuite: createFinnyNetSuiteClient({ timeoutMs: config.finnyProfile.providerTimeoutMs }),
+                      netsuite: createFinnyNetSuiteClient(),
                     }),
                 }),
               modelGateway: gatewayTransport,
@@ -1645,42 +1646,54 @@ export function buildApp(
     if (!(await modelCredentials.availability()).openrouter) return undefined;
     return selectableModelCatalog(overrides.modelCredentialFetch);
   };
-  const harness = createHarnessRouter(adapters, adapters.get(fallbackHarness)!, async (input, routedBy) => {
-    const resolve = (requested: typeof input.runtime) =>
-      resolveRuntimeChoiceDurable(
-        configStore,
-        runtimeOrgScope,
-        input.scopeLabel,
-        fallback,
-        requested,
-        hydrateModelCatalog,
-        input.runtimePurpose,
+  const harness = createHarnessRouter(
+    adapters,
+    adapters.get(fallbackHarness)!,
+    async (input, routedBy) => {
+      const resolve = (requested: typeof input.runtime) => {
+        if (config.finnyProfile)
+          return Promise.resolve({
+            ...requested,
+            harnessId: "pi" as const,
+            modelId: config.finnyProfile.modelId,
+          });
+        return resolveRuntimeChoiceDurable(
+          configStore,
+          runtimeOrgScope,
+          input.scopeLabel,
+          fallback,
+          requested,
+          hydrateModelCatalog,
+          input.runtimePurpose,
+        );
+      };
+      const decision = await tracePhase("turn.decision", () =>
+        decide("turn_start", turnStartState(input), {
+          ...(input.runtimeActorId ? { actorId: input.runtimeActorId } : {}),
+          scopeLabel: input.scopeLabel,
+          sessionId: input.session.id,
+          ...(input.runId ? { runId: input.runId } : {}),
+          ...(input.cancel ? { cancel: input.cancel } : {}),
+        }),
       );
-    const decision = await tracePhase("turn.decision", () =>
-      decide("turn_start", turnStartState(input), {
-        ...(input.runtimeActorId ? { actorId: input.runtimeActorId } : {}),
-        scopeLabel: input.scopeLabel,
-        sessionId: input.session.id,
-        ...(input.runId ? { runId: input.runId } : {}),
-        ...(input.cancel ? { cancel: input.cancel } : {}),
-      }),
-    );
-    const routed = await routeTurnRuntime(decision, resolve, async () => {
-      if (input.runtimePinned && input.runtime?.harnessId && input.runtime.modelId) {
-        if (!modelSupportedByHarness(input.runtime.modelId, input.runtime.harnessId))
-          throw new Error(`Unsupported model: ${input.runtime.modelId}`);
-        return { ...input.runtime, harnessId: input.runtime.harnessId, modelId: input.runtime.modelId };
-      }
-      return resolve(input.runtime);
-    });
-    if (
-      config.finnyProfile &&
-      (routed.choice.harnessId !== "pi" || routed.choice.modelId !== config.finnyProfile.modelId)
-    )
-      throw new NonRetryableTurnError(`Finny requires pi/${config.finnyProfile.modelId}`);
-    if (routed.routedBy) routedBy(routed.routedBy);
-    return routed.choice;
-  });
+      const routed = await routeTurnRuntime(decision, resolve, async () => {
+        if (input.runtimePinned && input.runtime?.harnessId && input.runtime.modelId) {
+          if (!modelSupportedByHarness(input.runtime.modelId, input.runtime.harnessId))
+            throw new Error(`Unsupported model: ${input.runtime.modelId}`);
+          return { ...input.runtime, harnessId: input.runtime.harnessId, modelId: input.runtime.modelId };
+        }
+        return resolve(input.runtime);
+      });
+      if (
+        config.finnyProfile &&
+        (routed.choice.harnessId !== "pi" || routed.choice.modelId !== config.finnyProfile.modelId)
+      )
+        throw new NonRetryableTurnError(`Finny requires pi/${config.finnyProfile.modelId}`);
+      if (routed.routedBy) routedBy(routed.routedBy);
+      return routed.choice;
+    },
+    config.finnyProfile ? { screenSecurity: { harnessId: "pi", modelId: config.finnyProfile.modelId } } : undefined,
+  );
 
   if (config.securityScreen === "off" || config.securityScreenClassifier !== "model") {
     delete harness.models.screenSecurity;
@@ -2549,6 +2562,7 @@ export function buildApp(
     judgeModelId,
     harnessId: config.harness,
     runtimeFallback: fallback,
+    ...(runtimeDeps.runtimeConstraint ? { runtimeConstraint: runtimeDeps.runtimeConstraint } : {}),
     providerKeys,
     modelProviders: modelProviderAvailabilityFor(config.harness, providerKeys),
     runWaitMs: config.runWaitMs,
@@ -2584,6 +2598,7 @@ export function buildApp(
     stagedEnvelopes: artifactMap<StagedEnvelope>("slack_staged_envelopes"),
     config: configStore,
     runtimeFallback: fallback,
+    ...(runtimeDeps.runtimeConstraint ? { runtimeConstraint: runtimeDeps.runtimeConstraint } : {}),
     blobTransfer,
     deliveries,
     errors,
@@ -3292,6 +3307,7 @@ export function buildApp(
         : createLocalDurableByteStore(join(config.dataDir, "session-shares")),
     skillSyncEngine,
     slackCore,
+    ...(runtimeDeps.runtimeConstraint ? { runtimeConstraint: runtimeDeps.runtimeConstraint } : {}),
   };
 }
 
@@ -3326,6 +3342,7 @@ export function serverDeps(
     ...(built.replayDedupe ? { replayDedupe: built.replayDedupe } : {}),
     ...(built.brokerSessions ? { brokerSessions: built.brokerSessions } : {}),
     config: built.config,
+    ...(built.runtimeConstraint ? { runtimeConstraint: built.runtimeConstraint } : {}),
     ...(built.screenSecurity ? { screenSecurity: built.screenSecurity } : {}),
     ...(configuredModel ? { baseModelDefault: configuredModel } : {}),
     modelProviders: modelProviderAvailabilityFor(config.harness, providerKeysPresent(config)),
