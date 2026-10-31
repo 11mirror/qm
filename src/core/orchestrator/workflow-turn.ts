@@ -5,6 +5,7 @@ import type { ObservedWorkflowSkill, WorkflowDefinition } from "../../sessions/w
 import { activeWorkflowReviewAssignment } from "../../sessions/workflow-review.ts";
 import type { Lease, SessionStore } from "../../sessions/session-store.ts";
 import type { ScopeId, Session, TurnRuntime } from "../../types.ts";
+import type { SkillResolution } from "../../skills/skill-store.ts";
 
 export async function createWorkflowTurnContext(input: {
   sessions: Pick<SessionStore, "get" | "getEntries" | "appendMany">;
@@ -15,6 +16,8 @@ export async function createWorkflowTurnContext(input: {
   if (input.lease.sessionId !== input.session.id)
     throw new Error("workflow context lease does not match the turn session");
   const rootSessionId = input.session.parentSessionId ?? input.session.id;
+  const rootSession = input.session.parentSessionId ? await input.sessions.get(rootSessionId) : input.session;
+  if (!rootSession) throw new Error("workflow root session does not exist");
   const entries = await input.sessions.getEntries(rootSessionId, {
     tools: ["workflow_definition", "workflow_gate", "workflow_reviewer_assignment"],
   });
@@ -42,12 +45,17 @@ export async function createWorkflowTurnContext(input: {
         definitions,
         entries,
       });
+  const requiredSkills = () => review?.step.requiredSkills ?? producerRequirements;
+  const authorizedSkillNames = () => [...new Set(requiredSkills().map((requirement) => requirement.skillName))];
   return {
     review,
+    authorizedSkillNames,
+    filterSkills: (skills: readonly SkillResolution[]) => {
+      const authorized = new Set(authorizedSkillNames());
+      return skills.filter((entry) => entry.skill && authorized.has(entry.skill.manifest.name));
+    },
     authorizeSkillRead: async (skill: ObservedWorkflowSkill) =>
-      (review?.step.requiredSkills ?? producerRequirements).some((requirement) =>
-        workflowSkillSatisfies(skill, requirement),
-      ),
+      requiredSkills().some((requirement) => workflowSkillSatisfies(skill, requirement)),
     control(control: {
       lease: Lease;
       scopeLabel: ScopeId;
@@ -68,7 +76,12 @@ export async function createWorkflowTurnContext(input: {
           Promise.all(
             ids.map(async (id) => {
               const artifact = await control.files.get(id);
-              if (!artifact || !artifact.sha256 || !(await control.mayReadArtifact(artifact, true)))
+              if (
+                !artifact ||
+                !artifact.sha256 ||
+                artifact.createdAt < rootSession.createdAt ||
+                !(await control.mayReadArtifact(artifact, true))
+              )
                 throw new Error(`workflow evidence ${id} is not an accessible durable artifact`);
               return { id: artifact.id, digest: artifact.sha256 };
             }),

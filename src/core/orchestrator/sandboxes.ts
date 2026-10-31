@@ -51,6 +51,7 @@ export interface TurnSandboxContext {
   egressTokenForPolicy?: (policy: Resolution["egress"]) => Promise<string | undefined>;
   openResourceAccess?: boolean;
   visibleSkillsForTurn: (sources?: readonly string[]) => Promise<SkillResolution[]>;
+  filterVisibleSkills?: (skills: readonly SkillResolution[]) => Promise<readonly SkillResolution[]>;
   authorizeSkillRead?: (skill: ObservedWorkflowSkill) => Promise<boolean | undefined>;
 }
 
@@ -72,6 +73,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     egressTokenForPolicy,
     openResourceAccess,
     visibleSkillsForTurn,
+    filterVisibleSkills,
     authorizeSkillRead,
   } = ctx;
 
@@ -286,6 +288,12 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       file === "SKILL.md"
         ? renderSkillBody(resolution, root)
         : rehomeSkillPaths(resolution, asset!, root ?? skillsRoot(resolution));
+    const materializedContentDigests =
+      file === "SKILL.md"
+        ? (resolution.skill.manifest.files ?? []).map((item) =>
+            createHash("sha256").update(item.content).digest("hex"),
+          )
+        : [];
     const result = (content: string, bundles: NonNullable<SkillResolution["screenedBundles"]>): SkillResult => {
       const bundle = resolution.skill!.pack
         ? bundles.find((candidate) => candidate.packId === resolution.skill!.pack!.packId)
@@ -297,6 +305,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           skillId: resolution.skill!.id,
           skillVersion: resolution.skill!.version,
           contentDigest,
+          ...(materializedContentDigests.length > 0 ? { materializedContentDigests } : {}),
           ...(resolution.skill!.pack
             ? {
                 pack: {
@@ -488,7 +497,10 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     }
   };
   const pruneSkills = async (handle: SandboxHandle): Promise<void> => {
-    const visible = (await visibleSkillsForTurn()).flatMap((r) => (r.skill ? [r.skill, ...r.shadowed] : []));
+    const resolved = await visibleSkillsForTurn();
+    const visible = (filterVisibleSkills ? await filterVisibleSkills(resolved) : resolved).flatMap((r) =>
+      r.skill ? [r.skill, ...r.shadowed] : [],
+    );
     const keep = new Set(visible.map((skill) => hashId([skill.id, String(skill.version)], 16)));
     const stale = new Set<string>();
     const listed = await deps.sandbox

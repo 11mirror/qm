@@ -1,7 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { activeWorkflowSkillRequirements, evaluateWorkflowGate } from "../src/sessions/workflow-gate.ts";
+import {
+  activeWorkflowSkillRequirements,
+  evaluateWorkflowGate,
+  observedWorkflowSkills,
+} from "../src/sessions/workflow-gate.ts";
 import { scopeId } from "../src/types.ts";
 
 const scope = scopeId("personal", "finance-mvp");
@@ -352,6 +356,37 @@ test("a registered workflow may bind a skill by stable name and exact content di
   assert.equal(result.observedSkills[0]?.skillId, "runtime-generated-id");
 });
 
+test("a skill body read observes every materialized manifest asset digest", () => {
+  const entries = [
+    {
+      sessionId: "finance-router-assets",
+      seq: 1,
+      parentSeq: null,
+      type: "tool_result",
+      payload: {
+        tool: "skills",
+        action: "read",
+        name: "finance-router",
+        found: true,
+        provenance: {
+          skillId: "router-id",
+          skillVersion: 3,
+          contentDigest: "body-digest",
+          materializedContentDigests: ["asset-one", "asset-two"],
+        },
+      },
+      scopeLabel: scope,
+      createdAt: 1,
+    },
+  ] as const;
+
+  assert.deepEqual(observedWorkflowSkills(entries), [
+    { name: "finance-router", skillId: "router-id", skillVersion: 3, contentDigest: "body-digest" },
+    { name: "finance-router", skillId: "router-id", skillVersion: 3, contentDigest: "asset-one" },
+    { name: "finance-router", skillId: "router-id", skillVersion: 3, contentDigest: "asset-two" },
+  ]);
+});
+
 test("a stage rejects full skill bodies outside its registered role allowlist", async () => {
   const sessions = createMemorySessionStore();
   const session = await sessions.getOrCreateByThread("finance-stage-allowlist", "dm", scope);
@@ -435,5 +470,57 @@ test("the host exposes only the next durable workflow stage's skills", async () 
   assert.deepEqual(
     await activeWorkflowSkillRequirements({ sessions, sessionId: session.id, definitions: [definition] }),
     [{ skillName: "netsuite-readonly" }],
+  );
+});
+
+test("a gate evaluates skill reads after its accepted predecessor", async () => {
+  const sessions = createMemorySessionStore();
+  const session = await sessions.getOrCreateByThread("finance-stage-skills", "dm", scope);
+  const { lease } = await sessions.acquireLease(session.id, "turn");
+  assert.ok(lease);
+  const definition = {
+    id: "stage-skills",
+    version: 1,
+    steps: [
+      { id: "request", role: "producer", requiredSkills: [{ skillName: "harness" }] },
+      { id: "route", role: "producer", after: "request", requiredSkills: [{ skillName: "router" }] },
+    ],
+  } as const;
+  const readSkill = async (callId: string, name: string) =>
+    sessions.appendMany(lease, [
+      {
+        type: "tool_result",
+        payload: {
+          tool: "skills",
+          callId,
+          action: "read",
+          name,
+          found: true,
+          provenance: { skillId: name, skillVersion: 1, contentDigest: name },
+        },
+        scopeLabel: scope,
+      },
+    ]);
+  await readSkill("harness", "harness");
+  const request = await evaluateWorkflowGate({
+    sessions,
+    lease,
+    scopeLabel: scope,
+    definition,
+    submission: { step: "request", decision: "pass", subject: session.id },
+  });
+  assert.equal(request.accepted, true);
+  await readSkill("router", "router");
+  const route = await evaluateWorkflowGate({
+    sessions,
+    lease,
+    scopeLabel: scope,
+    definition,
+    submission: { step: "route", decision: "pass", subject: session.id },
+  });
+  assert.equal(route.accepted, true);
+  assert.deepEqual(
+    route.observedSkills.map((skill) => skill.name),
+    ["router"],
   );
 });

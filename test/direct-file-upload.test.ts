@@ -8,6 +8,7 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { scopeId } from "../src/types.ts";
 
 const checksum = (text: string) => createHash("sha256").update(text).digest("base64");
+const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 function fixture() {
   const rows = new Map<string, FileUpload>();
   const store: FileUploadStore = {
@@ -100,6 +101,7 @@ function fixture() {
     mimetype: "text/plain",
     sizeBytes: 3,
     checksums: [checksum("abc")],
+    sha256: digest("abc"),
   };
   const uploadParts = (row: FileUpload) => {
     parts = row.checksums.map((c, i) => ({
@@ -187,7 +189,7 @@ test("completion recovers a lost S3 response and is idempotent", async () => {
   f.loseResponse();
   const file = await f.service.complete(row.id);
   assert.equal(file.sizeBytes, 3);
-  assert.equal(file.sha256, null);
+  assert.equal(file.sha256, digest("abc"));
   assert.equal(file.blobKey, `files/uploads/${row.id}`);
   assert.equal((await f.service.complete(row.id)).id, file.id);
   assert.equal(f.calls.filter((c) => c.name === "CompleteMultipartUploadCommand").length, 1);

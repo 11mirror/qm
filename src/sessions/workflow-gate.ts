@@ -61,30 +61,35 @@ export interface WorkflowGateResult {
   outputEvidence: WorkflowEvidence[];
 }
 
-function observedSkill(entry: SessionEntry): ObservedWorkflowSkill | null {
-  if (entry.type !== "tool_result" || !entry.payload || typeof entry.payload !== "object") return null;
+function observedSkills(entry: SessionEntry): ObservedWorkflowSkill[] {
+  if (entry.type !== "tool_result" || !entry.payload || typeof entry.payload !== "object") return [];
   const payload = entry.payload as Record<string, unknown>;
-  if (payload.tool !== "skills" || payload.action !== "read" || payload.found !== true) return null;
-  if (!payload.provenance || typeof payload.provenance !== "object") return null;
+  if (payload.tool !== "skills" || payload.action !== "read" || payload.found !== true) return [];
+  if (!payload.provenance || typeof payload.provenance !== "object") return [];
   const provenance = payload.provenance as Record<string, unknown>;
   if (
     typeof provenance.skillId !== "string" ||
     typeof provenance.skillVersion !== "number" ||
     typeof provenance.contentDigest !== "string"
   )
-    return null;
-  return {
+    return [];
+  const base = {
     ...(typeof payload.name === "string" ? { name: payload.name } : {}),
     skillId: provenance.skillId,
     skillVersion: provenance.skillVersion,
-    contentDigest: provenance.contentDigest,
   };
+  const materializedContentDigests = Array.isArray(provenance.materializedContentDigests)
+    ? provenance.materializedContentDigests.filter((digest): digest is string => typeof digest === "string")
+    : [];
+  return [provenance.contentDigest, ...materializedContentDigests].map((contentDigest) => ({
+    ...base,
+    contentDigest,
+  }));
 }
 
 export function observedWorkflowSkills(entries: readonly SessionEntry[]): ObservedWorkflowSkill[] {
   return entries
-    .map(observedSkill)
-    .filter((skill): skill is ObservedWorkflowSkill => skill !== null)
+    .flatMap(observedSkills)
     .filter(
       (skill, index, all) =>
         all.findIndex(
@@ -186,18 +191,27 @@ export async function evaluateWorkflowGate(input: {
 }): Promise<WorkflowGateResult> {
   const step = input.definition.steps.find((candidate) => candidate.id === input.submission.step);
   if (!step) throw new Error(`workflow ${input.definition.id} has no step ${input.submission.step}`);
-  const entries = await input.sessions.getEntries(input.lease.sessionId, { tools: ["workflow_gate"] });
+  const gateEntries = await input.sessions.getEntries(input.lease.sessionId, { tools: ["workflow_gate"] });
+  const passedEntries = gateEntries
+    .map((entry) => ({ entry, gate: acceptedWorkflowGate(entry) }))
+    .filter((item): item is { entry: SessionEntry; gate: WorkflowGateResult } => item.gate !== null)
+    .filter(
+      (item) => item.gate.workflowId === input.definition.id && item.gate.workflowVersion === input.definition.version,
+    );
+  const predecessorEntry = step.after ? passedEntries.findLast((item) => item.gate.step === step.after) : undefined;
   const skillEntries = await input.sessions.getEntries(
     input.lease.sessionId,
     input.lease.turnId ? { turnId: input.lease.turnId } : { tools: ["skills"] },
   );
-  const observedSkills = [...(input.observedSkills ?? observedWorkflowSkills(skillEntries))];
+  const observedSkills = [
+    ...(input.observedSkills ??
+      observedWorkflowSkills(
+        predecessorEntry ? skillEntries.filter((entry) => entry.seq > predecessorEntry.entry.seq) : skillEntries,
+      )),
+  ];
   const missingSkills = missingWorkflowSkills(observedSkills, step.requiredSkills);
   const unexpectedSkills = unexpectedWorkflowSkills(observedSkills, step.requiredSkills);
-  const passed = entries
-    .map(acceptedWorkflowGate)
-    .filter((gate): gate is WorkflowGateResult => gate !== null)
-    .filter((gate) => gate.workflowId === input.definition.id && gate.workflowVersion === input.definition.version);
+  const passed = passedEntries.map((item) => item.gate);
   const predecessor = step.after ? passed.findLast((gate) => gate.step === step.after) : undefined;
   const separated = step.separateFrom ? passed.findLast((gate) => gate.step === step.separateFrom) : undefined;
   const evidenceSource = step.evidenceFrom ? passed.findLast((gate) => gate.step === step.evidenceFrom) : undefined;

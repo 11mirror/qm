@@ -27,6 +27,7 @@ const MAX_DIRECT_FILE_BYTES = 100 * 1024 ** 3;
 const UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
 const URL_TTL_SECONDS = 15 * 60;
 const SHA256_BASE64 = /^[A-Za-z0-9+/]{43}=$/;
+const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 export function multipartChecksum(checksums: string[]): string {
   return `${createHash("sha256")
@@ -37,6 +38,7 @@ export function multipartChecksum(checksums: string[]): string {
 export interface DirectFileUploads {
   begin(
     input: Pick<FileUpload, "actorId" | "scopeId" | "name" | "mimetype" | "sizeBytes" | "checksums"> & {
+      sha256: string;
       requestId?: string;
     },
   ): Promise<FileUpload>;
@@ -142,6 +144,8 @@ export function createDirectFileUploads(options: {
         )
       )
         throw new FileUploadError("checksums must contain one base64 SHA-256 per 64 MiB part");
+      if (typeof input.sha256 !== "string" || !SHA256_HEX.test(input.sha256))
+        throw new FileUploadError("sha256 must be 64 lowercase hex characters");
       if (
         input.requestId !== undefined &&
         (typeof input.requestId !== "string" || !/^[0-9a-f]{32}$/.test(input.requestId))
@@ -167,6 +171,7 @@ export function createDirectFileUploads(options: {
         existing.name === row.name &&
         existing.mimetype === row.mimetype &&
         existing.sizeBytes === row.sizeBytes &&
+        existing.sha256 === row.sha256 &&
         JSON.stringify(existing.checksums) === JSON.stringify(row.checksums);
       const existing = await store.get(id);
       if (existing) {
@@ -291,7 +296,7 @@ export function createDirectFileUploads(options: {
           mimetype: row.mimetype,
           blobKey: `files/uploads/${id}`,
           sizeBytes: row.sizeBytes,
-          sha256: null,
+          sha256: row.sha256 ?? null,
           direction: "out",
           createdInScope: row.scopeId,
           createdAt: row.createdAt,

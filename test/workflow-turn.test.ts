@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createWorkflowTurnContext } from "../src/core/orchestrator/workflow-turn.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { scopeId } from "../src/types.ts";
+import type { SkillResolution } from "../src/skills/skill-store.ts";
 
 test("workflow turn context authorizes only the active stage skills", async () => {
   const sessions = createMemorySessionStore();
@@ -46,6 +47,12 @@ test("workflow turn context authorizes only the active stage skills", async () =
     }),
     false,
   );
+  assert.deepEqual(context?.authorizedSkillNames(), ["finance-router"]);
+  const listed = [
+    { skill: { manifest: { name: "finance-router" } } },
+    { skill: { manifest: { name: "unrelated" } } },
+  ] as SkillResolution[];
+  assert.deepEqual(context?.filterSkills(listed), [listed[0]]);
 });
 
 test("workflow turn context reuses stage state across skill reads", async () => {
@@ -139,6 +146,67 @@ test("workflow turn context refreshes stage skills after an accepted transition"
   await workflow({ action: "advance", workflowId: "finance", step: "evidence", decision: "pass" });
 
   assert.equal(await context.authorizeSkillRead(skill), true);
+});
+
+test("workflow evidence cannot predate the root producer session", async () => {
+  const sessions = createMemorySessionStore();
+  const scope = scopeId("personal", "workflow-fresh-evidence");
+  const session = await sessions.getOrCreateByThread("workflow-fresh-evidence", "dm", scope);
+  const attempt = await sessions.acquireLease(session.id, "turn");
+  assert.ok(attempt.lease);
+  const context = await createWorkflowTurnContext({
+    sessions,
+    session,
+    lease: attempt.lease,
+    configured: [{ id: "finance", version: 1, steps: [{ id: "request", role: "producer", requiredSkills: [] }] }],
+  });
+  assert.ok(context);
+  let createdAt = session.createdAt - 1;
+  const workflow = context.control({
+    lease: attempt.lease,
+    scopeLabel: scope,
+    strictReadOnly: false,
+    runtime: () => ({ harnessId: "pi", modelId: "gpt-5.4" }),
+    files: {
+      get: async (id) => ({
+        id,
+        ownerScopeId: scope,
+        createdBy: "producer",
+        name: "request.json",
+        path: `artifacts/${id}/request.json`,
+        mimetype: "application/json",
+        sizeBytes: 1,
+        blobKey: id,
+        sha256: "a".repeat(64),
+        direction: "out",
+        source: "live",
+        createdAt,
+        updatedAt: createdAt,
+        enabled: true,
+      }),
+    },
+    mayReadArtifact: async () => true,
+  });
+  assert.ok(workflow);
+  await assert.rejects(
+    workflow({
+      action: "advance",
+      workflowId: "finance",
+      step: "request",
+      decision: "pass",
+      outputEvidence: [{ id: "old" }],
+    }),
+    /not an accessible durable artifact/,
+  );
+  createdAt = session.createdAt;
+  const result = await workflow({
+    action: "advance",
+    workflowId: "finance",
+    step: "request",
+    decision: "pass",
+    outputEvidence: [{ id: "fresh" }],
+  });
+  assert.equal((result as { accepted: boolean }).accepted, true);
 });
 
 test("workflow turn context requires the active session lease", async () => {

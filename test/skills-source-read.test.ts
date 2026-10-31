@@ -2,6 +2,7 @@ import "./support/auto-fake-sprites.ts";
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { hashId } from "../src/util/crypto.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
@@ -119,6 +120,7 @@ test("a body read avoids sandbox work and a file request materializes that skill
   type TurnSandboxContext = import("../src/core/orchestrator/sandboxes.ts").TurnSandboxContext;
   type SkillResolution = import("../src/skills/skill-store.ts").SkillResolution;
   const files = new Map<string, string>();
+  const removed: string[] = [];
   let provisions = 0;
   const sandboxIds: Array<string | undefined> = [];
   let resolution = {
@@ -156,8 +158,13 @@ test("a body read avoids sandbox work and a file request materializes that skill
           provisions++;
           return { ...handle, id: options?.sandboxId ?? handle.id };
         },
-        listDir: async () => [],
-        removeDir: async () => {},
+        listDir: async () => [
+          `.agent-skills/s/${hashId(["s", "1"], 16)}`,
+          `.agent-skills/s/${hashId(["other", "1"], 16)}`,
+        ],
+        removeDir: async (_handle: unknown, path: string) => {
+          removed.push(path);
+        },
         readFile: async (_handle: unknown, path: string) => files.get(path) ?? null,
         writeFile: async (_handle: unknown, path: string, content: string) => {
           files.set(path, content);
@@ -174,6 +181,8 @@ test("a body read avoids sandbox work and a file request materializes that skill
     turnFilesDir: "turn/s/t",
     connectorEnv: {},
     visibleSkillsForTurn: async () => visible,
+    filterVisibleSkills: async (skills: SkillResolution[]) =>
+      skills.filter((entry) => entry.skill?.manifest.name === "source-helper"),
     authorizeSkillRead: async () => authorized,
     perf: { credsMs: 0 },
   } as unknown as TurnSandboxContext);
@@ -198,6 +207,8 @@ test("a body read avoids sandbox work and a file request materializes that skill
   await turn.provision();
   assert.equal(provisions, 1);
   assert.equal(files.size, 0);
+  assert.ok(removed.includes(`.agent-skills/s/${hashId(["other", "1"], 16)}`));
+  assert.ok(!removed.includes(`.agent-skills/s/${hashId(["s", "1"], 16)}`));
   resolution = structuredClone(resolution);
   resolution.skill!.manifest.files![0]!.content = "v2";
   visible[0] = resolution;
@@ -226,6 +237,7 @@ test("a body read avoids sandbox work and a file request materializes that skill
     skillId: "s",
     skillVersion: 1,
     contentDigest: createHash("sha256").update("BODY").digest("hex"),
+    materializedContentDigests: [createHash("sha256").update("v2").digest("hex")],
     pack: {
       packId: "pack",
       commit: "c",

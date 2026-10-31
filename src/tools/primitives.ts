@@ -166,6 +166,7 @@ export interface SkillResult {
     skillId: string;
     skillVersion: number;
     contentDigest: string;
+    materializedContentDigests?: string[];
     pack?: {
       packId: string;
       commit: string;

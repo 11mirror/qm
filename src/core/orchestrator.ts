@@ -1966,6 +1966,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         egressTokenForPolicy,
         openResourceAccess: !external && (liveAuthorTurn || openAutomationKeychain),
         visibleSkillsForTurn,
+        filterVisibleSkills: async (skills) => (workflowTurn ? workflowTurn.filterSkills(skills) : skills),
         authorizeSkillRead: async (skill) => workflowTurn?.authorizeSkillRead(skill),
       });
       const leaseStart = Date.now();
@@ -1997,6 +1998,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           lease,
           configured: deps.workflowDefinitions ?? [],
         });
+        if (workflowTurn) {
+          turnContextBlocks["Skills"] = skillsIndex(workflowTurn.filterSkills(nativeSkills));
+        }
         if (!ambientTurn) assignSessionTitle();
         revisionAnchor = trackRevisions ? await revisionAnchorAt(deps.sessions, session.id) : undefined;
       } catch (error) {
@@ -2688,7 +2692,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           provisionResource,
           accessSandboxResource: accessResource,
           useSkill,
-          listSkills: (source) => visibleSkillsForTurn(source ? [source] : [scopeId, resolution.orgScopeId]),
+          listSkills: async (source) => {
+            const visible = await visibleSkillsForTurn(source ? [source] : [scopeId, resolution.orgScopeId]);
+            return workflowTurn ? workflowTurn.filterSkills(visible) : visible;
+          },
           ...(reachAvailable
             ? {
                 reach: {
@@ -2743,7 +2750,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(deps.apiBaseUrl && connectorEnv.AGENT_API_TOKEN
             ? {
                 admin: {
-                  call: createAdminCall(deps.apiBaseUrl, connectorEnv.AGENT_API_TOKEN),
+                  call: createAdminCall(
+                    deps.apiBaseUrl,
+                    connectorEnv.AGENT_API_TOKEN,
+                    (action) => !workflowTurn || !["skills", "skill", "archive_skill"].includes(action),
+                  ),
                   operationsAvailable:
                     actorIsOrgAdmin || Boolean(controlClaims?.grants?.some((grant) => grant.startsWith("admin."))),
                 },

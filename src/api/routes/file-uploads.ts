@@ -93,6 +93,7 @@ const beginUpload = uploadRoute(async (ctx, uploads, actorId) => {
     mimetype: typeof body.mimetype === "string" ? body.mimetype : "",
     sizeBytes: body.sizeBytes as number,
     checksums: body.checksums as string[],
+    sha256: body.sha256 as string,
     ...(body.requestId != null ? { requestId: body.requestId as string } : {}),
   });
   audit(deps, { principalId: actorId, action: "file.upload.begin", resource: upload.id, scopeLabel: targetScope });
