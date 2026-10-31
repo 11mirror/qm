@@ -1455,7 +1455,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       }
       if (opts?.tools !== undefined) {
         params.push(opts.tools);
-        sql += ` AND i.body ->> 'tool' = ANY($${params.length}::text[])`;
+        sql += ` AND i.tool = ANY($${params.length}::text[])`;
       }
       sql += " ORDER BY i.seq DESC";
       if (opts?.limit !== undefined) {
