@@ -1034,7 +1034,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       });
       const signal = ref.abortSignal;
       signal?.throwIfAborted();
-      const { content, sourceScopeId, dir, packDir } = await tc.skill(p.name, {
+      const { content, sourceScopeId, dir, packDir, provenance } = await tc.skill(p.name, {
         ...(p.path ? { path: p.path } : {}),
         ...(p.source ? { source: p.source } : {}),
         ...(p.sandbox_id !== undefined ? { sandboxId: p.sandbox_id } : {}),
@@ -1057,6 +1057,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           found: content !== null,
           ...(content !== null ? { bytes: content.length, sourceScopeId } : {}),
           ...(dir ? { dir } : {}),
+          ...(provenance ? { provenance } : {}),
         },
         text(content === null ? `[no such skill file: ${p.name}/${p.path ?? "SKILL.md"}]` : `${where}${content}`),
         content === null,

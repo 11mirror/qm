@@ -162,6 +162,17 @@ export interface SkillResult {
   sourceScopeId: ScopeId | null;
   dir?: string;
   packDir?: string;
+  provenance?: {
+    skillId: string;
+    skillVersion: number;
+    contentDigest: string;
+    pack?: {
+      packId: string;
+      commit: string;
+      bundleCommit?: string;
+      bundleDigest?: string;
+    };
+  };
 }
 
 interface ReachedProvenance {

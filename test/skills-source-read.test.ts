@@ -1,6 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
@@ -180,7 +181,9 @@ test("a body read avoids sandbox work and a file request materializes that skill
   bodyOnly.skill!.manifest.files = [];
   delete bodyOnly.skill!.pack;
   visible.push(bodyOnly);
-  assert.deepEqual(await turn.useSkill("body-only", "SKILL.md"), { content: "BODY", sourceScopeId: "personal:U1" });
+  const body = await turn.useSkill("body-only", "SKILL.md");
+  assert.equal(body.content, "BODY");
+  assert.equal(body.sourceScopeId, "personal:U1");
   await assert.rejects(turn.useSkill("source-helper", "SKILL.md", ""), /non-empty/);
   await assert.rejects(turn.useSkill("source-helper", "SKILL.md", "missing"), /sandbox not found/);
   assert.equal(provisions, 0);
@@ -211,6 +214,17 @@ test("a body read avoids sandbox work and a file request materializes that skill
   const onResource = await turn.useSkill("source-helper", "SKILL.md", "resource-1");
   assert.equal(onResource.dir, loaded.dir);
   assert.equal(onResource.packDir, `/workspace/${root}/.packs/pack`);
+  assert.deepEqual(onResource.provenance, {
+    skillId: "s",
+    skillVersion: 1,
+    contentDigest: createHash("sha256").update("BODY").digest("hex"),
+    pack: {
+      packId: "pack",
+      commit: "c",
+      bundleCommit: "c",
+      bundleDigest: "pack-hash",
+    },
+  });
   assert.deepEqual(sandboxIds, [undefined, "box", "resource-1"]);
   assert.equal(files.get(`${root}/.packs/pack/lib.txt`), "PACK_RESOURCE");
   assert.equal(

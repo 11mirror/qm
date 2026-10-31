@@ -1,4 +1,5 @@
 import { hashId } from "../../util/crypto.ts";
+import { createHash } from "node:crypto";
 import type { Principal, Resolution, ScopeId, Session } from "../../types.ts";
 import { personalScope } from "../../types.ts";
 import { intersectEgressPolicies } from "../../resolution/egress-policy.ts";
@@ -221,11 +222,14 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const skillsRoot = (r: SkillResolution) =>
     `${SKILLS_ROOT}/${turnSessionDir.split("/").at(-1)}/${hashId([r.skill!.id, String(r.skill!.version)], 16)}`;
   const laidTrees = new Set<string>();
-  const materializeSkillTree = async (handle: SandboxHandle, r: SkillResolution): Promise<void> => {
+  const materializeSkillTree = async (
+    handle: SandboxHandle,
+    r: SkillResolution,
+    bundles: NonNullable<SkillResolution["screenedBundles"]>,
+  ): Promise<void> => {
     const treeKey = `${handle.resourceId ?? handle.id}:${skillDir(skillsRoot(r), r)}`;
     if (laidTrees.has(treeKey)) return;
     try {
-      const bundles = r.screenedBundles ?? (deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [r]) : []);
       await laySkillTree(deps.sandbox, handle, skillsRoot(r), r, bundles);
       laidTrees.add(treeKey);
     } catch (err) {
@@ -269,16 +273,43 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       file === "SKILL.md"
         ? renderSkillBody(resolution, root)
         : rehomeSkillPaths(resolution, asset!, root ?? skillsRoot(resolution));
-    if (!shipsFiles) return { content: render(), sourceScopeId: resolution.skill.scopeId };
+    const contentDigest = createHash("sha256")
+      .update(file === "SKILL.md" ? resolution.skill.manifest.body : asset!)
+      .digest("hex");
+    const result = (content: string, bundles: NonNullable<SkillResolution["screenedBundles"]>): SkillResult => {
+      const bundle = resolution.skill!.pack
+        ? bundles.find((candidate) => candidate.packId === resolution.skill!.pack!.packId)
+        : undefined;
+      return {
+        content,
+        sourceScopeId: resolution.skill!.scopeId,
+        provenance: {
+          skillId: resolution.skill!.id,
+          skillVersion: resolution.skill!.version,
+          contentDigest,
+          ...(resolution.skill!.pack
+            ? {
+                pack: {
+                  packId: resolution.skill!.pack.packId,
+                  commit: resolution.skill!.pack.commit,
+                  ...(bundle ? { bundleCommit: bundle.commit, bundleDigest: bundle.hash } : {}),
+                },
+              }
+            : {}),
+        },
+      };
+    };
+    const bundles =
+      resolution.screenedBundles ?? (deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [resolution]) : []);
+    if (!shipsFiles) return result(render(), bundles);
     const access = sandboxId !== undefined ? await accessResource(sandboxId) : undefined;
-    if (access?.crossScope) return { content: render(skillsRoot(resolution)), sourceScopeId: resolution.skill.scopeId };
+    if (access?.crossScope) return result(render(skillsRoot(resolution)), bundles);
     const handle = access ? await provisionResource(access) : await provision();
-    await materializeSkillTree(handle, resolution);
+    await materializeSkillTree(handle, resolution, bundles);
     const root = `${handle.rootDir}/${skillsRoot(resolution)}`;
     const pack = packRoot(root, resolution);
     return {
-      content: render(root),
-      sourceScopeId: resolution.skill.scopeId,
+      ...result(render(root), bundles),
       dir: skillDir(root, resolution),
       ...(pack ? { packDir: pack } : {}),
     };
