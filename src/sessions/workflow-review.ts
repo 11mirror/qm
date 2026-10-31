@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ScopeId, SessionEntry } from "../types.ts";
+import type { ScopeId, SessionEntry, TurnRuntime } from "../types.ts";
 import type { Lease, SessionStore } from "./session-store.ts";
 import {
   evaluateWorkflowGate,
@@ -27,6 +27,7 @@ export interface WorkflowReviewReceipt {
   observedSkills: ObservedWorkflowSkill[];
   missingSkills: WorkflowSkillRequirement[];
   unexpectedSkills: ObservedWorkflowSkill[];
+  runtime: TurnRuntime;
 }
 
 interface WorkflowReviewerAssignment {
@@ -34,6 +35,11 @@ interface WorkflowReviewerAssignment {
   workflowVersion: number;
   step: string;
   reviewerSessionId: string;
+  runtime: TurnRuntime;
+}
+
+function matchingRuntime(actual: TurnRuntime, expected: TurnRuntime): boolean {
+  return actual.harnessId === expected.harnessId && actual.modelId === expected.modelId;
 }
 
 function reviewReceipt(entry: SessionEntry): WorkflowReviewReceipt | null {
@@ -47,7 +53,9 @@ function reviewReceipt(entry: SessionEntry): WorkflowReviewReceipt | null {
     typeof payload.step !== "string" ||
     (payload.decision !== "pass" && payload.decision !== "reject") ||
     typeof payload.subject !== "string" ||
-    !Array.isArray(payload.observedSkills)
+    !Array.isArray(payload.observedSkills) ||
+    !payload.runtime ||
+    typeof payload.runtime !== "object"
   )
     return null;
   return payload as unknown as WorkflowReviewReceipt;
@@ -61,7 +69,9 @@ function reviewerAssignment(entry: SessionEntry): WorkflowReviewerAssignment | n
     typeof payload.workflowId !== "string" ||
     typeof payload.workflowVersion !== "number" ||
     typeof payload.step !== "string" ||
-    typeof payload.reviewerSessionId !== "string"
+    typeof payload.reviewerSessionId !== "string" ||
+    !payload.runtime ||
+    typeof payload.runtime !== "object"
   )
     return null;
   return payload as unknown as WorkflowReviewerAssignment;
@@ -81,11 +91,14 @@ export async function assignWorkflowReviewer(input: {
   const reviewer = await input.sessions.get(input.reviewerSessionId);
   if (!reviewer || reviewer.parentSessionId !== input.parentSessionId)
     throw new Error("reviewer must be a direct child of the producer session");
+  if (!reviewer.spawnMeta?.harness || !reviewer.spawnMeta.model)
+    throw new Error("reviewer must be assigned an explicit harness and model");
   const assignment = {
     workflowId: input.definition.id,
     workflowVersion: input.definition.version,
     step: input.step,
     reviewerSessionId: reviewer.id,
+    runtime: { harnessId: reviewer.spawnMeta.harness, modelId: reviewer.spawnMeta.model },
   };
   const callId = `workflow-reviewer-assignment-${randomUUID()}`;
   await input.sessions.appendMany(input.lease, [
@@ -108,6 +121,7 @@ export async function recordWorkflowReview(input: {
   lease: Lease;
   scopeLabel: ScopeId;
   definition: WorkflowDefinition;
+  runtime: TurnRuntime | undefined;
   submission: {
     step: string;
     decision: "pass" | "reject";
@@ -118,6 +132,7 @@ export async function recordWorkflowReview(input: {
 }): Promise<WorkflowReviewReceipt> {
   const step = input.definition.steps.find((candidate) => candidate.id === input.submission.step);
   if (!step) throw new Error(`workflow ${input.definition.id} has no step ${input.submission.step}`);
+  if (!input.runtime) throw new Error("review submission requires a host-reported runtime");
   const entries = await input.sessions.getEntries(input.lease.sessionId, {
     ...(input.lease.turnId ? { turnId: input.lease.turnId } : {}),
   });
@@ -138,6 +153,7 @@ export async function recordWorkflowReview(input: {
     observedSkills,
     missingSkills,
     unexpectedSkills,
+    runtime: input.runtime,
   };
   const callId = `workflow-review-${randomUUID()}`;
   await input.sessions.appendMany(input.lease, [
@@ -212,6 +228,8 @@ export async function importWorkflowReview(input: {
         candidate.step === input.reviewStep,
     );
   if (!receipt) throw new Error("reviewer has no valid durable receipt for this workflow step");
+  if (!matchingRuntime(receipt.runtime, assignment.runtime))
+    throw new Error("reviewer runtime does not match the durable assignment");
   return evaluateWorkflowGate({
     sessions: input.sessions,
     lease: input.lease,

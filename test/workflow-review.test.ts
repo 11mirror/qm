@@ -26,6 +26,13 @@ test("the parent imports the child reviewer receipt instead of a producer-suppli
   const parent = await sessions.getOrCreateByThread("parent", "dm", scope);
   const child = await sessions.getOrCreateByThread("child", "dm", scope);
   await sessions.setParentSession(child.id, parent.id);
+  await sessions.setSpawnMeta(child.id, {
+    surface: "web",
+    actor: { id: "reviewer", type: "internal" },
+    conversation: { kind: "dm", threadRef: child.threadRef, audience: [] },
+    harness: "pi",
+    model: "gpt-5.4",
+  });
   const parentAttempt = await sessions.acquireLease(parent.id, "turn");
   assert.ok(parentAttempt.lease);
   const parentLease = {
@@ -87,6 +94,7 @@ test("the parent imports the child reviewer receipt instead of a producer-suppli
     lease: childLease,
     scopeLabel: scope,
     definition,
+    runtime: { harnessId: "pi", modelId: "gpt-5.4" },
     submission: {
       step: "auditor-1-pass",
       decision: "reject",
@@ -118,6 +126,71 @@ test("the parent imports the child reviewer receipt instead of a producer-suppli
   assert.deepEqual(imported.observedSkills, [
     { name: "finance-audit", skillId: "finance-audit", skillVersion: 2, contentDigest: "audit-digest" },
   ]);
+});
+
+test("a reviewer receipt from a different host runtime cannot satisfy the assignment", async () => {
+  const sessions = createMemorySessionStore();
+  const parent = await sessions.getOrCreateByThread("runtime-parent", "dm", scope);
+  const child = await sessions.getOrCreateByThread("runtime-child", "dm", scope);
+  await sessions.setParentSession(child.id, parent.id);
+  await sessions.setSpawnMeta(child.id, {
+    surface: "web",
+    actor: { id: "reviewer", type: "internal" },
+    conversation: { kind: "dm", threadRef: child.threadRef, audience: [] },
+    harness: "pi",
+    model: "gpt-5.4",
+  });
+  const parentAttempt = await sessions.acquireLease(parent.id, "turn");
+  assert.ok(parentAttempt.lease);
+  await assignWorkflowReviewer({
+    sessions,
+    lease: parentAttempt.lease,
+    scopeLabel: scope,
+    parentSessionId: parent.id,
+    reviewerSessionId: child.id,
+    definition,
+    step: "auditor-1-pass",
+  });
+  await sessions.releaseLease(parentAttempt.lease);
+  const childAttempt = await sessions.acquireLease(child.id, "turn");
+  assert.ok(childAttempt.lease);
+  await sessions.appendMany(childAttempt.lease, [
+    {
+      type: "tool_result",
+      payload: {
+        tool: "skills",
+        callId: "runtime-audit-skill",
+        action: "read",
+        found: true,
+        name: "finance-audit",
+        provenance: { skillId: "finance-audit", skillVersion: 2, contentDigest: "audit-digest" },
+      },
+      scopeLabel: scope,
+    },
+  ]);
+  await recordWorkflowReview({
+    sessions,
+    lease: childAttempt.lease,
+    scopeLabel: scope,
+    definition,
+    runtime: { harnessId: "pi", modelId: "gpt-5-mini" },
+    submission: { step: "auditor-1-pass", decision: "pass" },
+  });
+  await sessions.releaseLease(childAttempt.lease);
+  const importAttempt = await sessions.acquireLease(parent.id, "turn");
+  assert.ok(importAttempt.lease);
+  await assert.rejects(
+    importWorkflowReview({
+      sessions,
+      lease: importAttempt.lease,
+      scopeLabel: scope,
+      parentSessionId: parent.id,
+      definition,
+      reviewerSessionId: child.id,
+      reviewStep: "auditor-1-pass",
+    }),
+    /reviewer runtime does not match the durable assignment/,
+  );
 });
 
 test("a sibling or unassigned session cannot be imported as the reviewer", async () => {

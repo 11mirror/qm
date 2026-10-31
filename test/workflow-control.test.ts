@@ -15,6 +15,7 @@ test("workflow control derives the producer identity from the host session", asy
     lease: attempt.lease,
     scopeLabel: scope,
     session,
+    runtime: () => ({ harnessId: "pi", modelId: "gpt-5.4" }),
     definitions: [
       {
         id: "finance",
@@ -63,6 +64,7 @@ test("a human approval step cannot be advanced through the ordinary producer act
     lease: attempt.lease,
     scopeLabel: scope,
     session,
+    runtime: () => ({ harnessId: "pi", modelId: "gpt-5.4" }),
     definitions: [
       {
         id: "approval",

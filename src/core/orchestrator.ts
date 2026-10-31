@@ -2642,6 +2642,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
 
         const canInstallCanvas = deps.installSharedCanvas && liveTurn && actorFeatures.has("ui_canvas");
+        let turnRuntime: TurnRuntime | undefined;
         const baseTools = createToolContext({
           desktopClientId: desktopClientForTurn(input),
           ...(canInstallCanvas
@@ -2661,6 +2662,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   scopeLabel: scopeId,
                   session,
                   definitions: deps.workflowDefinitions,
+                  runtime: () => turnRuntime,
                 }),
               }
             : {}),
@@ -3059,7 +3061,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const turnStart = Date.now();
         let dispatchTrace: DispatchTrace | undefined;
         const emittedEntries: SessionEntry[] = [];
-        let turnRuntime: TurnRuntime | undefined;
         const syntheticPrompt = syntheticInput || partial || approvalReplay || !!releasedToolOutput;
         failureUserPayload =
           !syntheticPrompt && (input.text.trim() || inboundIssues.length)

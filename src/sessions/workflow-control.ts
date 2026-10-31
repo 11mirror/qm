@@ -1,5 +1,5 @@
 import type { WorkflowToolInput } from "../tools/primitives.ts";
-import type { ScopeId, Session } from "../types.ts";
+import type { ScopeId, Session, TurnRuntime } from "../types.ts";
 import type { Lease, SessionStore } from "./session-store.ts";
 import type { WorkflowDefinition } from "./workflow-gate.ts";
 import { assignWorkflowReviewer, importWorkflowReview, recordWorkflowReview } from "./workflow-review.ts";
@@ -15,6 +15,7 @@ export function createWorkflowControl(input: {
   scopeLabel: ScopeId;
   session: Session;
   definitions: readonly WorkflowDefinition[];
+  runtime: () => TurnRuntime | undefined;
 }): (request: WorkflowToolInput) => Promise<unknown> {
   return async (request) => {
     const definition = input.definitions.find((candidate) => candidate.id === request.workflowId);
@@ -49,6 +50,7 @@ export function createWorkflowControl(input: {
         lease: input.lease,
         scopeLabel: input.scopeLabel,
         definition,
+        runtime: input.runtime(),
         submission: {
           step,
           decision: request.decision,
