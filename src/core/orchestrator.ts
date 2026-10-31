@@ -122,9 +122,7 @@ import { artifactImageLoader } from "../harness/replay-images.ts";
 import { principalEntitledToScope } from "../resolution/context-filter.ts";
 import { openSessionEntry, searchSessionEntries } from "../sessions/history-search.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
-import { createWorkflowControl, workflowDefinitionsForSession } from "../sessions/workflow-control.ts";
-import { activeWorkflowReviewAssignment } from "../sessions/workflow-review.ts";
-import { activeWorkflowSkillRequirements, workflowSkillSatisfies } from "../sessions/workflow-gate.ts";
+import { createWorkflowTurnContext } from "./orchestrator/workflow-turn.ts";
 import { defaultPublishAudience } from "../resolution/publish-audience.ts";
 import {
   INBOX_DIR,
@@ -1939,20 +1937,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           )
         : renderSandboxProviders([scopeProfile.backend], scopeProfile.backend, false);
 
-      const workflowDefinitions = await workflowDefinitionsForSession({
+      const workflowTurn = await createWorkflowTurnContext({
         sessions: deps.sessions,
-        sessionId: session.parentSessionId ?? session.id,
+        session,
         configured: deps.workflowDefinitions ?? [],
       });
-      const activeWorkflowReview =
-        session.parentSessionId && workflowDefinitions.length
-          ? await activeWorkflowReviewAssignment({
-              sessions: deps.sessions,
-              parentSessionId: session.parentSessionId,
-              reviewerSessionId: session.id,
-              definitions: workflowDefinitions,
-            })
-          : undefined;
       const {
         provision,
         provisionScratch,
@@ -1981,21 +1970,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         egressTokenForPolicy,
         openResourceAccess: !external && (liveAuthorTurn || openAutomationKeychain),
         visibleSkillsForTurn,
-        ...(workflowDefinitions.length
-          ? {
-              authorizeSkillRead: async (skill: import("../sessions/workflow-gate.ts").ObservedWorkflowSkill) =>
-                (
-                  activeWorkflowReview?.step.requiredSkills ??
-                  (session.parentSessionId
-                    ? []
-                    : await activeWorkflowSkillRequirements({
-                        sessions: deps.sessions,
-                        sessionId: session.id,
-                        definitions: workflowDefinitions,
-                      }))
-                ).some((requirement) => workflowSkillSatisfies(skill, requirement)),
-            }
-          : {}),
+        ...(workflowTurn ? { authorizeSkillRead: workflowTurn.authorizeSkillRead } : {}),
       });
       const leaseStart = Date.now();
       const acquired = await acquireTurnLeaseOrRefuse({
@@ -2674,6 +2649,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         const canInstallCanvas = deps.installSharedCanvas && liveTurn && actorFeatures.has("ui_canvas");
         let turnRuntime: TurnRuntime | undefined;
+        const workflow = workflowTurn?.control({
+          lease,
+          scopeLabel: scopeId,
+          strictReadOnly,
+          runtime: () => turnRuntime,
+          files: deps.files,
+          mayReadArtifact,
+        });
         const baseTools = createToolContext({
           desktopClientId: desktopClientForTurn(input),
           ...(canInstallCanvas
@@ -2685,27 +2668,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   }),
               }
             : {}),
-          ...(workflowDefinitions.length && ((!session.parentSessionId && !strictReadOnly) || activeWorkflowReview)
-            ? {
-                workflow: createWorkflowControl({
-                  sessions: deps.sessions,
-                  lease,
-                  scopeLabel: scopeId,
-                  session,
-                  definitions: workflowDefinitions,
-                  runtime: () => turnRuntime,
-                  resolveEvidence: async (ids) =>
-                    Promise.all(
-                      ids.map(async (id) => {
-                        const artifact = await deps.files.get(id);
-                        if (!artifact || !artifact.sha256 || !(await mayReadArtifact(artifact, true)))
-                          throw new Error(`workflow evidence ${id} is not an accessible durable artifact`);
-                        return { id: artifact.id, digest: artifact.sha256 };
-                      }),
-                    ),
-                }),
-              }
-            : {}),
+          ...(workflow ? { workflow } : {}),
           sandbox: deps.sandbox,
           sandboxResources: turnSandboxResources,
           invalidateProvision,
