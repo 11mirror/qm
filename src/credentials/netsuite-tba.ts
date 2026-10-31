@@ -11,16 +11,20 @@ export interface NetSuiteTbaCredentials {
   tokenSecret: string;
 }
 
+export class InvalidNetSuiteCredentialError extends Error {
+  override name = "InvalidNetSuiteCredentialError";
+}
+
 export function parseNetSuiteTbaSecret(secret: string): NetSuiteTbaCredentials {
   const parsed: unknown = JSON.parse(secret);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid NetSuite credential");
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new InvalidNetSuiteCredentialError();
   const record = parsed as Record<string, unknown>;
   if (
     Object.keys(record).length !== fields.length ||
     fields.some((field) => typeof record[field] !== "string" || !(record[field] as string).trim()) ||
     Object.keys(record).some((field) => !fields.includes(field as (typeof fields)[number]))
   ) {
-    throw new Error("invalid NetSuite credential");
+    throw new InvalidNetSuiteCredentialError();
   }
   return record as unknown as NetSuiteTbaCredentials;
 }

@@ -1,7 +1,11 @@
 import { isComposioHost } from "../credentials/keychain.ts";
 import { errMessage } from "../util/errors.ts";
 import { randomBytes } from "node:crypto";
-import { netSuiteTbaAuthorization, parseNetSuiteTbaSecret } from "../credentials/netsuite-tba.ts";
+import {
+  InvalidNetSuiteCredentialError,
+  netSuiteTbaAuthorization,
+  parseNetSuiteTbaSecret,
+} from "../credentials/netsuite-tba.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
@@ -283,7 +287,7 @@ export async function brokerCredentialCall(opts: {
   } catch (err) {
     let detail = "signing_failed";
     if (err instanceof SyntaxError) detail = "invalid_json";
-    else if (errMessage(err) === "invalid NetSuite credential") detail = "invalid_shape";
+    else if (err instanceof InvalidNetSuiteCredentialError) detail = "invalid_shape";
     opts.audit?.({
       principalId: claims.actorId,
       action: "credential.broker.invalid_injection",
