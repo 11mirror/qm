@@ -55,6 +55,35 @@ test("an ordinary writable child cannot be assigned as a workflow reviewer", asy
   );
 });
 
+test("a producer stage cannot be assigned to a child reviewer", async () => {
+  const sessions = createMemorySessionStore();
+  const parent = await sessions.getOrCreateByThread("producer-parent", "dm", scope);
+  const child = await sessions.getOrCreateByThread("producer-child", "dm", scope);
+  await sessions.setParentSession(child.id, parent.id);
+  await sessions.setSpawnMeta(child.id, {
+    surface: "web",
+    actor: { id: "reviewer", type: "internal" },
+    conversation: { kind: "dm", threadRef: child.threadRef, audience: [] },
+    harness: "pi",
+    model: "gpt-5.4",
+    readOnly: true,
+  });
+  const attempt = await sessions.acquireLease(parent.id, "turn");
+  assert.ok(attempt.lease);
+  await assert.rejects(
+    assignWorkflowReviewer({
+      sessions,
+      lease: attempt.lease,
+      scopeLabel: scope,
+      parentSessionId: parent.id,
+      reviewerSessionId: child.id,
+      definition,
+      step: "raw-evidence-ready",
+    }),
+    /review stage/,
+  );
+});
+
 test("the parent imports the child reviewer receipt instead of a producer-supplied decision", async () => {
   const sessions = createMemorySessionStore();
   const parent = await sessions.getOrCreateByThread("parent", "dm", scope);

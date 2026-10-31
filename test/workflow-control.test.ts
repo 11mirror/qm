@@ -107,6 +107,65 @@ test("a human approval step cannot be advanced through the ordinary producer act
   );
 });
 
+test("workflow status reports a valid rejection without marking an invalid attempt rejected", async () => {
+  const sessions = createMemorySessionStore();
+  const scope = scopeId("personal", "workflow-rejection");
+  const session = await sessions.getOrCreateByThread("rejection", "dm", scope);
+  const attempt = await sessions.acquireLease(session.id, "turn");
+  assert.ok(attempt.lease);
+  const control = createWorkflowControl({
+    sessions,
+    lease: attempt.lease,
+    scopeLabel: scope,
+    session,
+    runtime: () => ({ harnessId: "pi", modelId: "gpt-5.4" }),
+    resolveEvidence: async () => [],
+    definitions: [
+      {
+        id: "rejection",
+        version: 1,
+        steps: [{ id: "review", role: "reviewer", requiredSkills: [] }],
+      },
+    ],
+  });
+  await control({ action: "advance", workflowId: "rejection", step: "review", decision: "reject" });
+  assert.deepEqual(await control({ action: "status", workflowId: "rejection" }), {
+    workflowId: "rejection",
+    workflowVersion: 1,
+    steps: [{ step: "review", role: "reviewer", state: "rejected", decision: "reject", subject: session.id }],
+  });
+});
+
+test("the producer cannot directly advance a separated review stage", async () => {
+  const sessions = createMemorySessionStore();
+  const scope = scopeId("personal", "workflow-review-owner");
+  const session = await sessions.getOrCreateByThread("review-owner", "dm", scope);
+  const attempt = await sessions.acquireLease(session.id, "turn");
+  assert.ok(attempt.lease);
+  const control = createWorkflowControl({
+    sessions,
+    lease: attempt.lease,
+    scopeLabel: scope,
+    session,
+    runtime: () => ({ harnessId: "pi", modelId: "gpt-5.4" }),
+    resolveEvidence: async () => [],
+    definitions: [
+      {
+        id: "review-owner",
+        version: 1,
+        steps: [
+          { id: "raw", role: "producer", requiredSkills: [] },
+          { id: "audit", role: "auditor", after: "raw", separateFrom: "raw", requiredSkills: [] },
+        ],
+      },
+    ],
+  });
+  await assert.rejects(
+    control({ action: "advance", workflowId: "review-owner", step: "audit", decision: "pass" }),
+    /reviewer receipt/,
+  );
+});
+
 test("workflow control replaces model evidence claims with durable artifact digests", async () => {
   const sessions = createMemorySessionStore();
   const scope = scopeId("personal", "workflow-evidence");

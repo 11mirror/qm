@@ -91,8 +91,9 @@ export async function assignWorkflowReviewer(input: {
   definition: WorkflowDefinition;
   step: string;
 }): Promise<WorkflowReviewerAssignment> {
-  if (!input.definition.steps.some((step) => step.id === input.step))
-    throw new Error(`workflow ${input.definition.id} has no step ${input.step}`);
+  const step = input.definition.steps.find((candidate) => candidate.id === input.step);
+  if (!step) throw new Error(`workflow ${input.definition.id} has no step ${input.step}`);
+  if (!step.separateFrom) throw new Error(`workflow step ${input.step} is not a separated review stage`);
   const reviewer = await input.sessions.get(input.reviewerSessionId);
   if (!reviewer || reviewer.parentSessionId !== input.parentSessionId)
     throw new Error("reviewer must be a direct child of the producer session");

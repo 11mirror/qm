@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createWorkflowTurnContext } from "../src/core/orchestrator/workflow-turn.ts";
+import {
+  authorizeWorkflowSkillForSession,
+  createWorkflowTurnContext,
+} from "../src/core/orchestrator/workflow-turn.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { scopeId } from "../src/types.ts";
 import type { SkillResolution } from "../src/skills/skill-store.ts";
@@ -53,6 +56,19 @@ test("workflow turn context authorizes only the active stage skills", async () =
     { skill: { manifest: { name: "unrelated" } } },
   ] as SkillResolution[];
   assert.deepEqual(context?.filterSkills(listed), [listed[0]]);
+  assert.equal(
+    await authorizeWorkflowSkillForSession({
+      sessions,
+      sessionId: session.id,
+      skill: {
+        name: "other",
+        skillId: "other-id",
+        skillVersion: 1,
+        contentDigest: "b".repeat(64),
+      },
+    }),
+    false,
+  );
 });
 
 test("workflow turn context exposes a stage skill bound by stable ID", async () => {

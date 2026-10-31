@@ -37,14 +37,15 @@ export async function workflowDefinitionsForSession(input: {
   return durable ? [durable] : input.configured;
 }
 
-async function ensureWorkflowDefinition(input: {
+export async function ensureWorkflowDefinition(input: {
   sessions: Pick<SessionStore, "getEntries" | "appendMany">;
   lease: Lease;
   scopeLabel: ScopeId;
   definition: WorkflowDefinition;
+  entries?: readonly SessionEntry[];
 }): Promise<void> {
   if (
-    (await input.sessions.getEntries(input.lease.sessionId, { tools: ["workflow_definition"] })).some(
+    (input.entries ?? (await input.sessions.getEntries(input.lease.sessionId, { tools: ["workflow_definition"] }))).some(
       durableWorkflowDefinition,
     )
   )
@@ -102,7 +103,8 @@ export function createWorkflowControl(input: {
               payload.workflowVersion === definition.version &&
               payload.step === step.id,
           );
-          const gate = gates.findLast((payload) => payload.accepted === true) ?? gates.at(-1);
+          const passed = gates.findLast((payload) => payload.accepted === true);
+          const gate = passed ?? gates.at(-1);
           const assignment = payloads.findLast(
             (payload) =>
               payload.tool === "workflow_reviewer_assignment" &&
@@ -111,7 +113,17 @@ export function createWorkflowControl(input: {
               payload.step === step.id,
           );
           let state = assignment ? "assigned" : "pending";
-          if (gate?.accepted === true) state = gate.decision === "reject" ? "rejected" : "passed";
+          if (passed) state = "passed";
+          else if (
+            gate?.decision === "reject" &&
+            Array.isArray(gate.blockers) &&
+            gate.blockers.length === 0 &&
+            Array.isArray(gate.missingSkills) &&
+            gate.missingSkills.length === 0 &&
+            Array.isArray(gate.unexpectedSkills) &&
+            gate.unexpectedSkills.length === 0
+          )
+            state = "rejected";
           return {
             step: step.id,
             role: step.role,
@@ -175,6 +187,8 @@ export function createWorkflowControl(input: {
         step,
       });
     }
+    if (configuredStep.separateFrom && !request.reviewerSessionId)
+      throw new Error(`workflow step ${step} requires a reviewer receipt`);
     if (configuredStep.humanApproval && request.action !== "approve")
       throw new Error(`workflow step ${step} requires the approval action`);
     if (!configuredStep.humanApproval && request.action === "approve")

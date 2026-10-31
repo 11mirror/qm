@@ -1,11 +1,53 @@
 import type { FileArtifact, FileArtifactStore } from "../../files/file-artifact-store.ts";
-import { createWorkflowControl, workflowDefinitionsForSession } from "../../sessions/workflow-control.ts";
+import {
+  createWorkflowControl,
+  ensureWorkflowDefinition,
+  workflowDefinitionsForSession,
+} from "../../sessions/workflow-control.ts";
 import { activeWorkflowSkillRequirements, workflowSkillSatisfies } from "../../sessions/workflow-gate.ts";
 import type { ObservedWorkflowSkill, WorkflowDefinition } from "../../sessions/workflow-gate.ts";
 import { activeWorkflowReviewAssignment } from "../../sessions/workflow-review.ts";
 import type { Lease, SessionStore } from "../../sessions/session-store.ts";
 import type { ScopeId, Session, TurnRuntime } from "../../types.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
+
+export async function authorizeWorkflowSkillForSession(input: {
+  sessions: Pick<SessionStore, "get" | "getEntries">;
+  sessionId: string;
+  skill: ObservedWorkflowSkill;
+}): Promise<boolean | undefined> {
+  const session = await input.sessions.get(input.sessionId);
+  if (!session) return false;
+  const rootSessionId = session.parentSessionId ?? session.id;
+  const entries = await input.sessions.getEntries(rootSessionId, {
+    tools: ["workflow_definition", "workflow_gate", "workflow_reviewer_assignment"],
+  });
+  const definitions = await workflowDefinitionsForSession({
+    sessions: input.sessions,
+    sessionId: rootSessionId,
+    configured: [],
+    entries,
+  });
+  if (!definitions.length) return undefined;
+  const review = session.parentSessionId
+    ? await activeWorkflowReviewAssignment({
+        sessions: input.sessions,
+        parentSessionId: session.parentSessionId,
+        reviewerSessionId: session.id,
+        definitions,
+        entries,
+      })
+    : undefined;
+  let requirements = review?.step.requiredSkills ?? [];
+  if (!review && !session.parentSessionId)
+    requirements = await activeWorkflowSkillRequirements({
+      sessions: input.sessions,
+      sessionId: session.id,
+      definitions,
+      entries,
+    });
+  return requirements.some((requirement) => workflowSkillSatisfies(input.skill, requirement));
+}
 
 export async function createWorkflowTurnContext(input: {
   sessions: Pick<SessionStore, "get" | "getEntries" | "appendMany">;
@@ -28,6 +70,13 @@ export async function createWorkflowTurnContext(input: {
     entries,
   });
   if (!definitions.length) return undefined;
+  await ensureWorkflowDefinition({
+    sessions: input.sessions,
+    lease: input.lease,
+    scopeLabel: input.session.scopeId,
+    definition: definitions[0]!,
+    entries,
+  });
   const review = input.session.parentSessionId
     ? await activeWorkflowReviewAssignment({
         sessions: input.sessions,
