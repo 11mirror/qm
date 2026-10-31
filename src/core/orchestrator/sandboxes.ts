@@ -497,6 +497,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     }
   };
   const pruneSkills = async (handle: SandboxHandle): Promise<void> => {
+    const conversation = turnSessionDir.split("/").at(-1);
     const resolved = await visibleSkillsForTurn();
     const visible = (filterVisibleSkills ? await filterVisibleSkills(resolved) : resolved).flatMap((r) =>
       r.skill ? [r.skill, ...r.shadowed] : [],
@@ -507,9 +508,9 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       .listDir(handle, SKILLS_ROOT)
       .catch(swallowAs("orchestrator: list skills to prune", [] as string[]));
     for (const path of listed) {
-      const [root, conversation, identity] = path.split("/");
-      if (root === SKILLS_ROOT && conversation && identity && !keep.has(identity))
-        stale.add(`${SKILLS_ROOT}/${conversation}/${identity}`);
+      const [root, candidate, identity] = path.split("/");
+      if (root === SKILLS_ROOT && candidate === conversation && identity && !keep.has(identity))
+        stale.add(`${SKILLS_ROOT}/${candidate}/${identity}`);
     }
     await Promise.all(
       [...stale].map((dir) =>

@@ -161,6 +161,7 @@ test("a body read avoids sandbox work and a file request materializes that skill
         listDir: async () => [
           `.agent-skills/s/${hashId(["s", "1"], 16)}`,
           `.agent-skills/s/${hashId(["other", "1"], 16)}`,
+          `.agent-skills/other-session/${hashId(["other", "1"], 16)}`,
         ],
         removeDir: async (_handle: unknown, path: string) => {
           removed.push(path);
@@ -209,6 +210,7 @@ test("a body read avoids sandbox work and a file request materializes that skill
   assert.equal(files.size, 0);
   assert.ok(removed.includes(`.agent-skills/s/${hashId(["other", "1"], 16)}`));
   assert.ok(!removed.includes(`.agent-skills/s/${hashId(["s", "1"], 16)}`));
+  assert.ok(!removed.includes(`.agent-skills/other-session/${hashId(["other", "1"], 16)}`));
   resolution = structuredClone(resolution);
   resolution.skill!.manifest.files![0]!.content = "v2";
   visible[0] = resolution;
