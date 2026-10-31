@@ -123,6 +123,8 @@ import { principalEntitledToScope } from "../resolution/context-filter.ts";
 import { openSessionEntry, searchSessionEntries } from "../sessions/history-search.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
 import { createWorkflowControl } from "../sessions/workflow-control.ts";
+import { activeWorkflowReviewAssignment } from "../sessions/workflow-review.ts";
+import { activeWorkflowSkillRequirements, workflowSkillSatisfies } from "../sessions/workflow-gate.ts";
 import { defaultPublishAudience } from "../resolution/publish-audience.ts";
 import {
   INBOX_DIR,
@@ -1937,6 +1939,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           )
         : renderSandboxProviders([scopeProfile.backend], scopeProfile.backend, false);
 
+      const activeWorkflowReview =
+        session.parentSessionId && deps.workflowDefinitions?.length
+          ? await activeWorkflowReviewAssignment({
+              sessions: deps.sessions,
+              parentSessionId: session.parentSessionId,
+              reviewerSessionId: session.id,
+              definitions: deps.workflowDefinitions,
+            })
+          : undefined;
       const {
         provision,
         provisionScratch,
@@ -1965,6 +1976,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         egressTokenForPolicy,
         openResourceAccess: !external && (liveAuthorTurn || openAutomationKeychain),
         visibleSkillsForTurn,
+        ...(deps.workflowDefinitions?.length
+          ? {
+              authorizeSkillRead: async (skill: import("../sessions/workflow-gate.ts").ObservedWorkflowSkill) =>
+                (
+                  activeWorkflowReview?.step.requiredSkills ??
+                  (session.parentSessionId
+                    ? []
+                    : await activeWorkflowSkillRequirements({
+                        sessions: deps.sessions,
+                        sessionId: session.id,
+                        definitions: deps.workflowDefinitions!,
+                      }))
+                ).some((requirement) => workflowSkillSatisfies(skill, requirement)),
+            }
+          : {}),
       });
       const leaseStart = Date.now();
       const acquired = await acquireTurnLeaseOrRefuse({
@@ -2654,7 +2680,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   }),
               }
             : {}),
-          ...(deps.workflowDefinitions?.length
+          ...(deps.workflowDefinitions?.length &&
+          ((!session.parentSessionId && !strictReadOnly) || activeWorkflowReview)
             ? {
                 workflow: createWorkflowControl({
                   sessions: deps.sessions,
@@ -2663,6 +2690,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   session,
                   definitions: deps.workflowDefinitions,
                   runtime: () => turnRuntime,
+                  resolveEvidence: async (ids) =>
+                    Promise.all(
+                      ids.map(async (id) => {
+                        const artifact = await deps.files.get(id);
+                        if (!artifact || !artifact.sha256 || !(await mayReadArtifact(artifact, true)))
+                          throw new Error(`workflow evidence ${id} is not an accessible durable artifact`);
+                        return { id: artifact.id, digest: artifact.sha256 };
+                      }),
+                    ),
                 }),
               }
             : {}),

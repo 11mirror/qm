@@ -335,6 +335,7 @@ export interface AgentToolsOptions {
   delegateWork?: boolean;
   surfaceName?: string;
   clientTools?: readonly ClientToolDeclaration[];
+  workflowReview?: boolean;
 }
 
 export type CoreToolOptions = Omit<
@@ -4180,12 +4181,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       step: Type.Optional(Type.String({ minLength: 1 })),
       decision: Type.Optional(Type.Union([Type.Literal("pass"), Type.Literal("reject")])),
       reviewerSessionId: Type.Optional(Type.String({ minLength: 1 })),
-      inputEvidence: Type.Optional(
-        Type.Array(Type.Object({ id: Type.String({ minLength: 1 }), digest: Type.String({ minLength: 1 }) })),
-      ),
-      outputEvidence: Type.Optional(
-        Type.Array(Type.Object({ id: Type.String({ minLength: 1 }), digest: Type.String({ minLength: 1 }) })),
-      ),
+      inputEvidence: Type.Optional(Type.Array(Type.Object({ id: Type.String({ minLength: 1 }) }))),
+      outputEvidence: Type.Optional(Type.Array(Type.Object({ id: Type.String({ minLength: 1 }) }))),
       findings: Type.Optional(Type.Array(Type.String())),
     }),
     async execute(callId, raw) {
@@ -4197,7 +4194,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       return recordCoreAuthoredResult(callId, { tool: "workflow", action: input.action }, text(JSON.stringify(result)));
     },
   }) as ActionScopedTool;
-  workflow.readOnlyActions = ["review_submit", "status"];
+  workflow.readOnlyActions = opts?.workflowReview ? ["review_submit", "status"] : [];
   Object.assign(workflow, {
     needsApproval: (params: unknown) => isObj(params) && params.action === "approve",
     approvalReason: "approve the exact workflow plan before source execution",
@@ -4212,7 +4209,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         read: skill,
         ...(controlTools ? { share: sharingTool("skill"), move: sharingTool("skill", true) } : {}),
       }),
-      readOnlyActions: ["read"],
+      readOnlyActions: opts?.workflowReview ? ["read"] : [],
     },
     {
       ...resourceTool("files", {

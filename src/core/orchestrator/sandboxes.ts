@@ -30,6 +30,7 @@ import { sleep } from "../../util/async.ts";
 import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
 import { loadActiveBundles } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
+import type { ObservedWorkflowSkill } from "../../sessions/workflow-gate.ts";
 
 const TURN_FILES_MAX_AGE_MS = 24 * 60 * 60_000;
 
@@ -50,6 +51,7 @@ export interface TurnSandboxContext {
   egressTokenForPolicy?: (policy: Resolution["egress"]) => Promise<string | undefined>;
   openResourceAccess?: boolean;
   visibleSkillsForTurn: (sources?: readonly string[]) => Promise<SkillResolution[]>;
+  authorizeSkillRead?: (skill: ObservedWorkflowSkill) => Promise<boolean>;
 }
 
 export function createTurnSandboxes(ctx: TurnSandboxContext) {
@@ -70,6 +72,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     egressTokenForPolicy,
     openResourceAccess,
     visibleSkillsForTurn,
+    authorizeSkillRead,
   } = ctx;
 
   const box: {
@@ -258,7 +261,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       (r) => r.skill?.manifest.name === name,
     );
     if (!resolution?.skill) return missing;
-    const shipsFiles = (resolution.skill.manifest.files?.length ?? 0) > 0 || resolution.skill.pack !== undefined;
     const asset = resolution.skill.manifest.files?.find((f) => {
       try {
         return safeSkillFilePath(f.path) === file;
@@ -267,15 +269,26 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       }
     })?.content;
     if (file !== "SKILL.md" && asset === undefined) return missing;
+    const contentDigest = createHash("sha256")
+      .update(file === "SKILL.md" ? resolution.skill.manifest.body : asset!)
+      .digest("hex");
+    if (
+      authorizeSkillRead &&
+      !(await authorizeSkillRead({
+        name,
+        skillId: resolution.skill.id,
+        skillVersion: resolution.skill.version,
+        contentDigest,
+      }))
+    )
+      return missing;
+    const shipsFiles = (resolution.skill.manifest.files?.length ?? 0) > 0 || resolution.skill.pack !== undefined;
     if (deps.skills)
       void deps.skills.recordUse(resolution.skill.id).catch((e) => swallow("orchestrator: skill recordUse", e));
     const render = (root?: string) =>
       file === "SKILL.md"
         ? renderSkillBody(resolution, root)
         : rehomeSkillPaths(resolution, asset!, root ?? skillsRoot(resolution));
-    const contentDigest = createHash("sha256")
-      .update(file === "SKILL.md" ? resolution.skill.manifest.body : asset!)
-      .digest("hex");
     const result = (content: string, bundles: NonNullable<SkillResolution["screenedBundles"]>): SkillResult => {
       const bundle = resolution.skill!.pack
         ? bundles.find((candidate) => candidate.packId === resolution.skill!.pack!.packId)

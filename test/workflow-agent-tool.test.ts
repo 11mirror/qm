@@ -25,7 +25,7 @@ test("the workflow tool delegates only structured gate actions to the host", asy
     workflowId: "finance",
     step: "raw-evidence-ready",
     decision: "pass",
-    outputEvidence: [{ id: "raw", digest: "sha256:current" }],
+    outputEvidence: [{ id: "raw" }],
   });
 
   assert.deepEqual(received, [
@@ -34,7 +34,7 @@ test("the workflow tool delegates only structured gate actions to the host", asy
       workflowId: "finance",
       step: "raw-evidence-ready",
       decision: "pass",
-      outputEvidence: [{ id: "raw", digest: "sha256:current" }],
+      outputEvidence: [{ id: "raw" }],
     },
   ]);
 });
@@ -44,7 +44,7 @@ test("read-only reviewers can read skills and submit reviews but cannot advance 
     workflow: async () => ({ valid: true }),
     skill: async () => ({ content: "audit", sourceScopeId: null }),
   } as unknown as ToolContext;
-  const tools = createAgentTools({ current: context }, { readOnly: true });
+  const tools = createAgentTools({ current: context }, { readOnly: true, workflowReview: true });
   const skills = tools.find((tool) => tool.name === "skills");
   const workflow = tools.find((tool) => tool.name === "workflow");
   assert.ok(skills);

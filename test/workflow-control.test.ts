@@ -16,6 +16,7 @@ test("workflow control derives the producer identity from the host session", asy
     scopeLabel: scope,
     session,
     runtime: () => ({ harnessId: "pi", modelId: "gpt-5.4" }),
+    resolveEvidence: async (ids) => ids.map((id) => ({ id, digest: `host:${id}` })),
     definitions: [
       {
         id: "finance",
@@ -65,6 +66,7 @@ test("a human approval step cannot be advanced through the ordinary producer act
     scopeLabel: scope,
     session,
     runtime: () => ({ harnessId: "pi", modelId: "gpt-5.4" }),
+    resolveEvidence: async (ids) => ids.map((id) => ({ id, digest: `host:${id}` })),
     definitions: [
       {
         id: "approval",
@@ -82,5 +84,52 @@ test("a human approval step cannot be advanced through the ordinary producer act
       decision: "pass",
     }),
     /requires the approval action/,
+  );
+});
+
+test("workflow control replaces model evidence claims with durable artifact digests", async () => {
+  const sessions = createMemorySessionStore();
+  const scope = scopeId("personal", "workflow-evidence");
+  const session = await sessions.getOrCreateByThread("evidence", "dm", scope);
+  const attempt = await sessions.acquireLease(session.id, "turn");
+  assert.ok(attempt.lease);
+  const control = createWorkflowControl({
+    sessions,
+    lease: attempt.lease,
+    scopeLabel: scope,
+    session,
+    runtime: () => ({ harnessId: "pi", modelId: "gpt-5.4" }),
+    resolveEvidence: async (ids) => {
+      if (ids.includes("unknown")) throw new Error("workflow evidence unknown is not an accessible durable artifact");
+      return ids.map((id) => ({ id, digest: `host:${id}` }));
+    },
+    definitions: [
+      {
+        id: "evidence",
+        version: 1,
+        steps: [{ id: "RAW_EVIDENCE_READY", role: "producer", requiredSkills: [] }],
+      },
+    ],
+  });
+
+  const result = await control({
+    action: "advance",
+    workflowId: "evidence",
+    step: "RAW_EVIDENCE_READY",
+    decision: "pass",
+    outputEvidence: [{ id: "raw-workbook" }],
+  });
+  assert.deepEqual((result as { outputEvidence: unknown }).outputEvidence, [
+    { id: "raw-workbook", digest: "host:raw-workbook" },
+  ]);
+  await assert.rejects(
+    control({
+      action: "advance",
+      workflowId: "evidence",
+      step: "RAW_EVIDENCE_READY",
+      decision: "pass",
+      outputEvidence: [{ id: "unknown" }],
+    }),
+    /not an accessible durable artifact/,
   );
 });

@@ -28,9 +28,11 @@ export interface WorkflowReviewReceipt {
   missingSkills: WorkflowSkillRequirement[];
   unexpectedSkills: ObservedWorkflowSkill[];
   runtime: TurnRuntime;
+  assignmentId: string;
 }
 
-interface WorkflowReviewerAssignment {
+export interface WorkflowReviewerAssignment {
+  assignmentId: string;
   workflowId: string;
   workflowVersion: number;
   step: string;
@@ -53,6 +55,7 @@ function reviewReceipt(entry: SessionEntry): WorkflowReviewReceipt | null {
     typeof payload.step !== "string" ||
     (payload.decision !== "pass" && payload.decision !== "reject") ||
     typeof payload.subject !== "string" ||
+    typeof payload.assignmentId !== "string" ||
     !Array.isArray(payload.observedSkills) ||
     !payload.runtime ||
     typeof payload.runtime !== "object"
@@ -70,6 +73,7 @@ function reviewerAssignment(entry: SessionEntry): WorkflowReviewerAssignment | n
     typeof payload.workflowVersion !== "number" ||
     typeof payload.step !== "string" ||
     typeof payload.reviewerSessionId !== "string" ||
+    typeof payload.assignmentId !== "string" ||
     !payload.runtime ||
     typeof payload.runtime !== "object"
   )
@@ -94,6 +98,7 @@ export async function assignWorkflowReviewer(input: {
   if (!reviewer.spawnMeta?.harness || !reviewer.spawnMeta.model)
     throw new Error("reviewer must be assigned an explicit harness and model");
   const assignment = {
+    assignmentId: randomUUID(),
     workflowId: input.definition.id,
     workflowVersion: input.definition.version,
     step: input.step,
@@ -122,6 +127,7 @@ export async function recordWorkflowReview(input: {
   scopeLabel: ScopeId;
   definition: WorkflowDefinition;
   runtime: TurnRuntime | undefined;
+  assignment: WorkflowReviewerAssignment;
   submission: {
     step: string;
     decision: "pass" | "reject";
@@ -133,6 +139,8 @@ export async function recordWorkflowReview(input: {
   const step = input.definition.steps.find((candidate) => candidate.id === input.submission.step);
   if (!step) throw new Error(`workflow ${input.definition.id} has no step ${input.submission.step}`);
   if (!input.runtime) throw new Error("review submission requires a host-reported runtime");
+  if (input.assignment.step !== step.id || input.assignment.reviewerSessionId !== input.lease.sessionId)
+    throw new Error("review submission does not match its durable assignment");
   const entries = await input.sessions.getEntries(input.lease.sessionId, {
     ...(input.lease.turnId ? { turnId: input.lease.turnId } : {}),
   });
@@ -154,6 +162,7 @@ export async function recordWorkflowReview(input: {
     missingSkills,
     unexpectedSkills,
     runtime: input.runtime,
+    assignmentId: input.assignment.assignmentId,
   };
   const callId = `workflow-review-${randomUUID()}`;
   await input.sessions.appendMany(input.lease, [
@@ -206,17 +215,13 @@ export async function importWorkflowReview(input: {
   const reviewer = await input.sessions.get(input.reviewerSessionId);
   if (!reviewer || reviewer.parentSessionId !== input.parentSessionId)
     throw new Error("reviewer must be a direct child of the producer session");
-  const parentEntries = await input.sessions.getEntries(input.parentSessionId);
-  const assignment = parentEntries
-    .map(reviewerAssignment)
-    .filter((candidate): candidate is WorkflowReviewerAssignment => candidate !== null)
-    .findLast(
-      (candidate) =>
-        candidate.workflowId === input.definition.id &&
-        candidate.workflowVersion === input.definition.version &&
-        candidate.step === input.reviewStep &&
-        candidate.reviewerSessionId === reviewer.id,
-    );
+  const assignment = await assignedWorkflowReview({
+    sessions: input.sessions,
+    parentSessionId: input.parentSessionId,
+    reviewerSessionId: reviewer.id,
+    definition: input.definition,
+    step: input.reviewStep,
+  });
   if (!assignment) throw new Error("reviewer is not assigned to this workflow step");
   const receipt = (await input.sessions.getEntries(reviewer.id))
     .map(reviewReceipt)
@@ -228,6 +233,8 @@ export async function importWorkflowReview(input: {
         candidate.step === input.reviewStep,
     );
   if (!receipt) throw new Error("reviewer has no valid durable receipt for this workflow step");
+  if (receipt.assignmentId !== assignment.assignmentId)
+    throw new Error("reviewer receipt does not match the durable assignment");
   if (!matchingRuntime(receipt.runtime, assignment.runtime))
     throw new Error("reviewer runtime does not match the durable assignment");
   return evaluateWorkflowGate({
@@ -244,4 +251,51 @@ export async function importWorkflowReview(input: {
       outputEvidence: receipt.outputEvidence,
     },
   });
+}
+
+export async function assignedWorkflowReview(input: {
+  sessions: Pick<SessionStore, "getEntries">;
+  parentSessionId: string;
+  reviewerSessionId: string;
+  definition: WorkflowDefinition;
+  step: string;
+}): Promise<WorkflowReviewerAssignment | undefined> {
+  return (await input.sessions.getEntries(input.parentSessionId))
+    .map(reviewerAssignment)
+    .filter((candidate): candidate is WorkflowReviewerAssignment => candidate !== null)
+    .findLast(
+      (candidate) =>
+        candidate.workflowId === input.definition.id &&
+        candidate.workflowVersion === input.definition.version &&
+        candidate.step === input.step &&
+        candidate.reviewerSessionId === input.reviewerSessionId,
+    );
+}
+
+export async function activeWorkflowReviewAssignment(input: {
+  sessions: Pick<SessionStore, "getEntries">;
+  parentSessionId: string;
+  reviewerSessionId: string;
+  definitions: readonly WorkflowDefinition[];
+}): Promise<
+  | {
+      assignment: WorkflowReviewerAssignment;
+      definition: WorkflowDefinition;
+      step: WorkflowDefinition["steps"][number];
+    }
+  | undefined
+> {
+  const assignments = (await input.sessions.getEntries(input.parentSessionId))
+    .map(reviewerAssignment)
+    .filter((candidate): candidate is WorkflowReviewerAssignment => candidate !== null);
+  for (let index = assignments.length - 1; index >= 0; index -= 1) {
+    const assignment = assignments[index]!;
+    if (assignment.reviewerSessionId !== input.reviewerSessionId) continue;
+    const definition = input.definitions.find(
+      (candidate) => candidate.id === assignment.workflowId && candidate.version === assignment.workflowVersion,
+    );
+    const step = definition?.steps.find((candidate) => candidate.id === assignment.step);
+    if (definition && step) return { assignment, definition, step };
+  }
+  return undefined;
 }

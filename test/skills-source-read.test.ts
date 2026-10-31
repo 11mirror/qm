@@ -139,6 +139,7 @@ test("a body read avoids sandbox work and a file request materializes that skill
   unrelated.skill!.manifest.name = "unrelated";
   unrelated.skill!.pack = { packId: "other-pack", commit: "c", upstreamName: "unrelated" };
   const visible = [resolution, unrelated];
+  let authorized = true;
   const handle = { id: "box", rootDir: "/workspace" };
   const turn = createTurnSandboxes({
     deps: {
@@ -173,6 +174,7 @@ test("a body read avoids sandbox work and a file request materializes that skill
     turnFilesDir: "turn/s/t",
     connectorEnv: {},
     visibleSkillsForTurn: async () => visible,
+    authorizeSkillRead: async () => authorized,
     perf: { credsMs: 0 },
   } as unknown as TurnSandboxContext);
   const bodyOnly = structuredClone(unrelated);
@@ -181,6 +183,12 @@ test("a body read avoids sandbox work and a file request materializes that skill
   bodyOnly.skill!.manifest.files = [];
   delete bodyOnly.skill!.pack;
   visible.push(bodyOnly);
+  authorized = false;
+  const denied = await turn.useSkill("source-helper", "references/example.txt");
+  assert.equal(denied.content, null);
+  assert.equal(provisions, 0);
+  assert.equal(files.size, 0);
+  authorized = true;
   const body = await turn.useSkill("body-only", "SKILL.md");
   assert.equal(body.content, "BODY");
   assert.equal(body.sourceScopeId, "personal:U1");

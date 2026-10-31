@@ -2,7 +2,12 @@ import type { WorkflowToolInput } from "../tools/primitives.ts";
 import type { ScopeId, Session, TurnRuntime } from "../types.ts";
 import type { Lease, SessionStore } from "./session-store.ts";
 import type { WorkflowDefinition } from "./workflow-gate.ts";
-import { assignWorkflowReviewer, importWorkflowReview, recordWorkflowReview } from "./workflow-review.ts";
+import {
+  assignedWorkflowReview,
+  assignWorkflowReviewer,
+  importWorkflowReview,
+  recordWorkflowReview,
+} from "./workflow-review.ts";
 
 function required(value: string | undefined, label: string): string {
   if (!value) throw new Error(`${label} is required`);
@@ -16,6 +21,7 @@ export function createWorkflowControl(input: {
   session: Session;
   definitions: readonly WorkflowDefinition[];
   runtime: () => TurnRuntime | undefined;
+  resolveEvidence: (ids: readonly string[]) => Promise<import("./workflow-gate.ts").WorkflowEvidence[]>;
 }): (request: WorkflowToolInput) => Promise<unknown> {
   return async (request) => {
     const definition = input.definitions.find((candidate) => candidate.id === request.workflowId);
@@ -45,17 +51,28 @@ export function createWorkflowControl(input: {
     if (request.action === "review_submit") {
       if (!input.session.parentSessionId) throw new Error("review submission requires an isolated child session");
       if (!request.decision) throw new Error("decision is required");
+      const assignment = await assignedWorkflowReview({
+        sessions: input.sessions,
+        parentSessionId: input.session.parentSessionId,
+        reviewerSessionId: input.session.id,
+        definition,
+        step,
+      });
+      if (!assignment) throw new Error("reviewer is not assigned to this workflow step");
+      const inputEvidence = await input.resolveEvidence((request.inputEvidence ?? []).map((evidence) => evidence.id));
+      const outputEvidence = await input.resolveEvidence((request.outputEvidence ?? []).map((evidence) => evidence.id));
       return recordWorkflowReview({
         sessions: input.sessions,
         lease: input.lease,
         scopeLabel: input.scopeLabel,
         definition,
         runtime: input.runtime(),
+        assignment,
         submission: {
           step,
           decision: request.decision,
-          inputEvidence: request.inputEvidence,
-          outputEvidence: request.outputEvidence,
+          inputEvidence,
+          outputEvidence,
           findings: request.findings,
         },
       });
@@ -77,6 +94,8 @@ export function createWorkflowControl(input: {
     if (!configuredStep.humanApproval && request.action === "approve")
       throw new Error(`workflow step ${step} does not accept the approval action`);
     if (!request.reviewerSessionId && !request.decision) throw new Error("decision is required");
+    const inputEvidence = await input.resolveEvidence((request.inputEvidence ?? []).map((evidence) => evidence.id));
+    const outputEvidence = await input.resolveEvidence((request.outputEvidence ?? []).map((evidence) => evidence.id));
     return importWorkflowReview({
       sessions: input.sessions,
       lease: input.lease,
@@ -89,8 +108,8 @@ export function createWorkflowControl(input: {
             producerSubmission: {
               step,
               decision: request.decision!,
-              inputEvidence: request.inputEvidence,
-              outputEvidence: request.outputEvidence,
+              inputEvidence,
+              outputEvidence,
             },
           }),
     });

@@ -102,7 +102,7 @@ export function missingWorkflowSkills(
   observed: readonly ObservedWorkflowSkill[],
   required: readonly WorkflowSkillRequirement[],
 ): WorkflowSkillRequirement[] {
-  return required.filter((requirement) => !observed.some((skill) => satisfies(skill, requirement)));
+  return required.filter((requirement) => !observed.some((skill) => workflowSkillSatisfies(skill, requirement)));
 }
 
 export function unexpectedWorkflowSkills(
@@ -119,13 +119,38 @@ export function unexpectedWorkflowSkills(
   );
 }
 
-function satisfies(observed: ObservedWorkflowSkill, required: WorkflowSkillRequirement): boolean {
+export function workflowSkillSatisfies(observed: ObservedWorkflowSkill, required: WorkflowSkillRequirement): boolean {
   return (
     (required.skillId === undefined || observed.skillId === required.skillId) &&
     (required.skillName === undefined || observed.name === required.skillName) &&
     (required.contentDigest === undefined || observed.contentDigest === required.contentDigest) &&
     (required.minimumVersion === undefined || observed.skillVersion >= required.minimumVersion)
   );
+}
+
+export async function activeWorkflowSkillRequirements(input: {
+  sessions: Pick<SessionStore, "getEntries">;
+  sessionId: string;
+  definitions: readonly WorkflowDefinition[];
+}): Promise<readonly WorkflowSkillRequirement[]> {
+  const passed = (await input.sessions.getEntries(input.sessionId))
+    .map(acceptedGate)
+    .filter((gate): gate is WorkflowGateResult => gate !== null);
+  const latest = passed.findLast((gate) =>
+    input.definitions.some(
+      (definition) => definition.id === gate.workflowId && definition.version === gate.workflowVersion,
+    ),
+  );
+  if (!latest) return input.definitions.flatMap((definition) => definition.steps[0]?.requiredSkills ?? []);
+  const definition = input.definitions.find(
+    (candidate) => candidate.id === latest.workflowId && candidate.version === latest.workflowVersion,
+  );
+  const passedSteps = new Set(
+    passed
+      .filter((gate) => gate.workflowId === latest.workflowId && gate.workflowVersion === latest.workflowVersion)
+      .map((gate) => gate.step),
+  );
+  return definition?.steps.find((step) => !passedSteps.has(step.id))?.requiredSkills ?? [];
 }
 
 function acceptedGate(entry: SessionEntry): WorkflowGateResult | null {
@@ -181,11 +206,16 @@ export async function evaluateWorkflowGate(input: {
   const blockers = [
     ...(alreadyPassed ? [`step ${step.id} has already passed`] : []),
     ...(step.after && !predecessor ? [`required predecessor ${step.after} has not passed`] : []),
+    ...(step.separateFrom && !separated ? [`required separation gate ${step.separateFrom} has not passed`] : []),
     ...(step.separateFrom && separated?.subject === input.submission.subject
       ? [`subject must differ from ${step.separateFrom}`]
       : []),
+    ...(step.evidenceFrom && !evidenceSource ? [`required evidence gate ${step.evidenceFrom} has not passed`] : []),
     ...(step.evidenceFrom && evidenceSource && !sameEvidence(evidenceSource.outputEvidence, inputEvidence)
       ? [`evidence does not match ${step.evidenceFrom}`]
+      : []),
+    ...(step.evidenceFrom && evidenceSource?.outputEvidence.length === 0
+      ? [`required evidence gate ${step.evidenceFrom} has no evidence`]
       : []),
   ];
   const result: WorkflowGateResult = {

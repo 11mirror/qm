@@ -209,8 +209,8 @@ export interface WorkflowToolInput {
   step?: string;
   decision?: "pass" | "reject";
   reviewerSessionId?: string;
-  inputEvidence?: Array<{ id: string; digest: string }>;
-  outputEvidence?: Array<{ id: string; digest: string }>;
+  inputEvidence?: Array<{ id: string }>;
+  outputEvidence?: Array<{ id: string }>;
   findings?: string[];
 }
 

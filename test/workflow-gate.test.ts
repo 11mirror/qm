@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { evaluateWorkflowGate } from "../src/sessions/workflow-gate.ts";
+import { activeWorkflowSkillRequirements, evaluateWorkflowGate } from "../src/sessions/workflow-gate.ts";
 import { scopeId } from "../src/types.ts";
 
 const scope = scopeId("personal", "finance-mvp");
@@ -214,6 +214,41 @@ test("a workflow rejects skipped gates and same-subject review", async () => {
   assert.deepEqual(replayed.blockers, ["step auditor-1-pass has already passed"]);
 });
 
+test("separation and evidence references fail closed even when they are not the predecessor", async () => {
+  const sessions = createMemorySessionStore();
+  const session = await sessions.getOrCreateByThread("finance-missing-references", "dm", scope);
+  const { lease } = await sessions.acquireLease(session.id, "turn");
+  assert.ok(lease);
+  const result = await evaluateWorkflowGate({
+    sessions,
+    lease,
+    scopeLabel: scope,
+    definition: {
+      id: "missing-references",
+      version: 1,
+      steps: [
+        { id: "evidence", role: "producer", requiredSkills: [] },
+        { id: "ready", role: "producer", requiredSkills: [] },
+        {
+          id: "review",
+          role: "reviewer",
+          after: "ready",
+          separateFrom: "evidence",
+          evidenceFrom: "evidence",
+          requiredSkills: [],
+        },
+      ],
+    },
+    submission: { step: "review", decision: "pass", subject: "reviewer" },
+  });
+  assert.equal(result.accepted, false);
+  assert.deepEqual(result.blockers, [
+    "required predecessor ready has not passed",
+    "required separation gate evidence has not passed",
+    "required evidence gate evidence has not passed",
+  ]);
+});
+
 test("a skill read from an earlier turn cannot satisfy the current gate", async () => {
   const sessions = createMemorySessionStore();
   const session = await sessions.getOrCreateByThread("finance-current-turn", "dm", scope);
@@ -371,5 +406,36 @@ test("a stage rejects full skill bodies outside its registered role allowlist", 
   assert.deepEqual(
     result.unexpectedSkills.map((skill) => skill.name),
     ["month-end-close"],
+  );
+});
+
+test("the host exposes only the next durable workflow stage's skills", async () => {
+  const sessions = createMemorySessionStore();
+  const session = await sessions.getOrCreateByThread("finance-active-skills", "dm", scope);
+  const { lease } = await sessions.acquireLease(session.id, "turn");
+  assert.ok(lease);
+  const definition = {
+    id: "active-skills",
+    version: 1,
+    steps: [
+      { id: "route", role: "producer", requiredSkills: [{ skillName: "finance-router" }] },
+      { id: "source", role: "producer", after: "route", requiredSkills: [{ skillName: "netsuite-readonly" }] },
+    ],
+  } as const;
+  assert.deepEqual(
+    await activeWorkflowSkillRequirements({ sessions, sessionId: session.id, definitions: [definition] }),
+    [{ skillName: "finance-router" }],
+  );
+  await evaluateWorkflowGate({
+    sessions,
+    lease,
+    scopeLabel: scope,
+    definition,
+    observedSkills: [{ name: "finance-router", skillId: "router", skillVersion: 1, contentDigest: "router" }],
+    submission: { step: "route", decision: "pass", subject: session.id },
+  });
+  assert.deepEqual(
+    await activeWorkflowSkillRequirements({ sessions, sessionId: session.id, definitions: [definition] }),
+    [{ skillName: "netsuite-readonly" }],
   );
 });

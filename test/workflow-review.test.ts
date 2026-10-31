@@ -53,7 +53,7 @@ test("the parent imports the child reviewer receipt instead of a producer-suppli
     },
   });
   assert.equal(produced.accepted, true);
-  await assignWorkflowReviewer({
+  const assignment = await assignWorkflowReviewer({
     sessions,
     lease: parentLease,
     scopeLabel: scope,
@@ -95,6 +95,7 @@ test("the parent imports the child reviewer receipt instead of a producer-suppli
     scopeLabel: scope,
     definition,
     runtime: { harnessId: "pi", modelId: "gpt-5.4" },
+    assignment,
     submission: {
       step: "auditor-1-pass",
       decision: "reject",
@@ -126,6 +127,28 @@ test("the parent imports the child reviewer receipt instead of a producer-suppli
   assert.deepEqual(imported.observedSkills, [
     { name: "finance-audit", skillId: "finance-audit", skillVersion: 2, contentDigest: "audit-digest" },
   ]);
+  const reassignment = await assignWorkflowReviewer({
+    sessions,
+    lease: importAttempt.lease,
+    scopeLabel: scope,
+    parentSessionId: parent.id,
+    reviewerSessionId: child.id,
+    definition,
+    step: "auditor-1-pass",
+  });
+  assert.notEqual(reassignment.assignmentId, assignment.assignmentId);
+  await assert.rejects(
+    importWorkflowReview({
+      sessions,
+      lease: importAttempt.lease,
+      scopeLabel: scope,
+      parentSessionId: parent.id,
+      definition,
+      reviewerSessionId: child.id,
+      reviewStep: "auditor-1-pass",
+    }),
+    /reviewer receipt does not match the durable assignment/,
+  );
 });
 
 test("a reviewer receipt from a different host runtime cannot satisfy the assignment", async () => {
@@ -142,7 +165,7 @@ test("a reviewer receipt from a different host runtime cannot satisfy the assign
   });
   const parentAttempt = await sessions.acquireLease(parent.id, "turn");
   assert.ok(parentAttempt.lease);
-  await assignWorkflowReviewer({
+  const assignment = await assignWorkflowReviewer({
     sessions,
     lease: parentAttempt.lease,
     scopeLabel: scope,
@@ -174,6 +197,7 @@ test("a reviewer receipt from a different host runtime cannot satisfy the assign
     scopeLabel: scope,
     definition,
     runtime: { harnessId: "pi", modelId: "gpt-5-mini" },
+    assignment,
     submission: { step: "auditor-1-pass", decision: "pass" },
   });
   await sessions.releaseLease(childAttempt.lease);
