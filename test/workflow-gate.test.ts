@@ -32,7 +32,6 @@ test("a gate derives required skill use from the durable tape instead of produce
       step: "auditor-1",
       decision: "pass",
       subject: "reviewer-run-1",
-      claimedSkills: [{ skillId: "netsuite-readonly-finance", contentDigest: "approved-digest" }],
     },
   });
 
@@ -79,7 +78,6 @@ test("a gate derives required skill use from the durable tape instead of produce
       step: "auditor-1",
       decision: "pass",
       subject: "reviewer-run-1",
-      claimedSkills: [],
     },
   });
 

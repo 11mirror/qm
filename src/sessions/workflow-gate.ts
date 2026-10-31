@@ -29,7 +29,6 @@ export interface WorkflowGateSubmission {
   step: string;
   decision: "pass" | "reject";
   subject: string;
-  claimedSkills?: readonly WorkflowSkillRequirement[];
   inputEvidence?: readonly WorkflowEvidence[];
   outputEvidence?: readonly WorkflowEvidence[];
 }
