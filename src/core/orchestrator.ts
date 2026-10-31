@@ -122,6 +122,7 @@ import { artifactImageLoader } from "../harness/replay-images.ts";
 import { principalEntitledToScope } from "../resolution/context-filter.ts";
 import { openSessionEntry, searchSessionEntries } from "../sessions/history-search.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
+import { createWorkflowControl } from "../sessions/workflow-control.ts";
 import { defaultPublishAudience } from "../resolution/publish-audience.ts";
 import {
   INBOX_DIR,
@@ -2650,6 +2651,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     threadRef: conversation.threadRef,
                     sessionId: session.id,
                   }),
+              }
+            : {}),
+          ...(deps.workflowDefinitions?.length
+            ? {
+                workflow: createWorkflowControl({
+                  sessions: deps.sessions,
+                  lease,
+                  scopeLabel: scopeId,
+                  session,
+                  definitions: deps.workflowDefinitions,
+                }),
               }
             : {}),
           sandbox: deps.sandbox,

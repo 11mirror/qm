@@ -1,0 +1,69 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { createAgentTools } from "../src/harness/agent-tools.ts";
+import type { ToolContext } from "../src/tools/primitives.ts";
+
+async function invoke(tool: ReturnType<typeof createAgentTools>[number], params: unknown) {
+  return tool.execute("workflow-call", params, undefined, undefined, {} as never);
+}
+
+test("the workflow tool delegates only structured gate actions to the host", async () => {
+  const received: unknown[] = [];
+  const ref = {
+    current: {
+      workflow: async (input: unknown) => {
+        received.push(input);
+        return { accepted: true };
+      },
+    } as ToolContext,
+  };
+  const workflow = createAgentTools(ref).find((tool) => tool.name === "workflow");
+  assert.ok(workflow);
+
+  await invoke(workflow, {
+    action: "advance",
+    workflowId: "finance",
+    step: "raw-evidence-ready",
+    decision: "pass",
+    outputEvidence: [{ id: "raw", digest: "sha256:current" }],
+  });
+
+  assert.deepEqual(received, [
+    {
+      action: "advance",
+      workflowId: "finance",
+      step: "raw-evidence-ready",
+      decision: "pass",
+      outputEvidence: [{ id: "raw", digest: "sha256:current" }],
+    },
+  ]);
+});
+
+test("read-only reviewers can read skills and submit reviews but cannot advance workflows", async () => {
+  const context = {
+    workflow: async () => ({ valid: true }),
+    skill: async () => ({ content: "audit", sourceScopeId: null }),
+  } as unknown as ToolContext;
+  const tools = createAgentTools({ current: context }, { readOnly: true });
+  const skills = tools.find((tool) => tool.name === "skills");
+  const workflow = tools.find((tool) => tool.name === "workflow");
+  assert.ok(skills);
+  assert.ok(workflow);
+
+  await invoke(skills, { action: "read", name: "finance-audit" });
+  await invoke(workflow, {
+    action: "review_submit",
+    workflowId: "finance",
+    step: "auditor-1-pass",
+    decision: "pass",
+  });
+  await assert.rejects(
+    invoke(workflow, {
+      action: "advance",
+      workflowId: "finance",
+      step: "auditor-1-pass",
+      decision: "pass",
+    }),
+    /unavailable in a read-only turn/,
+  );
+});

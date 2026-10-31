@@ -77,6 +77,28 @@ function observedSkill(entry: SessionEntry): ObservedWorkflowSkill | null {
   };
 }
 
+export function observedWorkflowSkills(entries: readonly SessionEntry[]): ObservedWorkflowSkill[] {
+  return entries
+    .map(observedSkill)
+    .filter((skill): skill is ObservedWorkflowSkill => skill !== null)
+    .filter(
+      (skill, index, all) =>
+        all.findIndex(
+          (candidate) =>
+            candidate.skillId === skill.skillId &&
+            candidate.skillVersion === skill.skillVersion &&
+            candidate.contentDigest === skill.contentDigest,
+        ) === index,
+    );
+}
+
+export function missingWorkflowSkills(
+  observed: readonly ObservedWorkflowSkill[],
+  required: readonly WorkflowSkillRequirement[],
+): WorkflowSkillRequirement[] {
+  return required.filter((requirement) => !observed.some((skill) => satisfies(skill, requirement)));
+}
+
 function satisfies(observed: ObservedWorkflowSkill, required: WorkflowSkillRequirement): boolean {
   return (
     observed.skillId === required.skillId &&
@@ -114,6 +136,7 @@ export async function evaluateWorkflowGate(input: {
   scopeLabel: ScopeId;
   definition: WorkflowDefinition;
   submission: WorkflowGateSubmission;
+  observedSkills?: readonly ObservedWorkflowSkill[];
 }): Promise<WorkflowGateResult> {
   const step = input.definition.steps.find((candidate) => candidate.id === input.submission.step);
   if (!step) throw new Error(`workflow ${input.definition.id} has no step ${input.submission.step}`);
@@ -121,21 +144,8 @@ export async function evaluateWorkflowGate(input: {
   const skillEntries = input.lease.turnId
     ? await input.sessions.getEntries(input.lease.sessionId, { turnId: input.lease.turnId })
     : entries;
-  const observedSkills = skillEntries
-    .map(observedSkill)
-    .filter((skill): skill is ObservedWorkflowSkill => skill !== null)
-    .filter(
-      (skill, index, all) =>
-        all.findIndex(
-          (candidate) =>
-            candidate.skillId === skill.skillId &&
-            candidate.skillVersion === skill.skillVersion &&
-            candidate.contentDigest === skill.contentDigest,
-        ) === index,
-    );
-  const missingSkills = step.requiredSkills.filter(
-    (required) => !observedSkills.some((observed) => satisfies(observed, required)),
-  );
+  const observedSkills = [...(input.observedSkills ?? observedWorkflowSkills(skillEntries))];
+  const missingSkills = missingWorkflowSkills(observedSkills, step.requiredSkills);
   const passed = entries
     .map(acceptedGate)
     .filter((gate): gate is WorkflowGateResult => gate !== null)
