@@ -74,6 +74,7 @@ test("workflow turn context reuses stage state across skill reads", async () => 
     ],
   });
   const readsAtTurnStart = historyReads;
+  assert.equal(readsAtTurnStart, 1);
   const skill = {
     name: "finance-router",
     skillId: "finance-router-id",

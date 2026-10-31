@@ -11,10 +11,13 @@ export async function createWorkflowTurnContext(input: {
   session: Session;
   configured: readonly WorkflowDefinition[];
 }) {
+  const rootSessionId = input.session.parentSessionId ?? input.session.id;
+  const entries = await input.sessions.getEntries(rootSessionId);
   const definitions = await workflowDefinitionsForSession({
     sessions: input.sessions,
-    sessionId: input.session.parentSessionId ?? input.session.id,
+    sessionId: rootSessionId,
     configured: input.configured,
+    entries,
   });
   if (!definitions.length) return undefined;
   const review = input.session.parentSessionId
@@ -23,6 +26,7 @@ export async function createWorkflowTurnContext(input: {
         parentSessionId: input.session.parentSessionId,
         reviewerSessionId: input.session.id,
         definitions,
+        entries,
       })
     : undefined;
   let producerRequirements = input.session.parentSessionId
@@ -31,6 +35,7 @@ export async function createWorkflowTurnContext(input: {
         sessions: input.sessions,
         sessionId: input.session.id,
         definitions,
+        entries,
       });
   return {
     review,

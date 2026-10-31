@@ -27,8 +27,11 @@ export async function workflowDefinitionsForSession(input: {
   sessions: Pick<SessionStore, "getEntries">;
   sessionId: string;
   configured: readonly WorkflowDefinition[];
+  entries?: readonly SessionEntry[];
 }): Promise<readonly WorkflowDefinition[]> {
-  const durable = (await input.sessions.getEntries(input.sessionId)).map(durableWorkflowDefinition).find(Boolean);
+  const durable = (input.entries ?? (await input.sessions.getEntries(input.sessionId)))
+    .map(durableWorkflowDefinition)
+    .find(Boolean);
   return durable ? [durable] : input.configured;
 }
 

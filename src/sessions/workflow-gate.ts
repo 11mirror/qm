@@ -131,8 +131,9 @@ export async function activeWorkflowSkillRequirements(input: {
   sessions: Pick<SessionStore, "getEntries">;
   sessionId: string;
   definitions: readonly WorkflowDefinition[];
+  entries?: readonly SessionEntry[];
 }): Promise<readonly WorkflowSkillRequirement[]> {
-  const passed = (await input.sessions.getEntries(input.sessionId))
+  const passed = (input.entries ?? (await input.sessions.getEntries(input.sessionId)))
     .map(acceptedWorkflowGate)
     .filter((gate): gate is WorkflowGateResult => gate !== null);
   const latest = passed.findLast((gate) =>

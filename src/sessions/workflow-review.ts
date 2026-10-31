@@ -278,6 +278,7 @@ export async function activeWorkflowReviewAssignment(input: {
   parentSessionId: string;
   reviewerSessionId: string;
   definitions: readonly WorkflowDefinition[];
+  entries?: readonly SessionEntry[];
 }): Promise<
   | {
       assignment: WorkflowReviewerAssignment;
@@ -286,7 +287,7 @@ export async function activeWorkflowReviewAssignment(input: {
     }
   | undefined
 > {
-  const entries = await input.sessions.getEntries(input.parentSessionId);
+  const entries = input.entries ?? (await input.sessions.getEntries(input.parentSessionId));
   const assignments = entries
     .map(reviewerAssignment)
     .filter((candidate): candidate is WorkflowReviewerAssignment => candidate !== null);
