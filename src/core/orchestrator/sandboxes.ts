@@ -51,7 +51,7 @@ export interface TurnSandboxContext {
   egressTokenForPolicy?: (policy: Resolution["egress"]) => Promise<string | undefined>;
   openResourceAccess?: boolean;
   visibleSkillsForTurn: (sources?: readonly string[]) => Promise<SkillResolution[]>;
-  authorizeSkillRead?: (skill: ObservedWorkflowSkill) => Promise<boolean>;
+  authorizeSkillRead?: (skill: ObservedWorkflowSkill) => Promise<boolean | undefined>;
 }
 
 export function createTurnSandboxes(ctx: TurnSandboxContext) {
@@ -272,16 +272,13 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     const contentDigest = createHash("sha256")
       .update(file === "SKILL.md" ? resolution.skill.manifest.body : asset!)
       .digest("hex");
-    if (
-      authorizeSkillRead &&
-      !(await authorizeSkillRead({
-        name,
-        skillId: resolution.skill.id,
-        skillVersion: resolution.skill.version,
-        contentDigest,
-      }))
-    )
-      return missing;
+    const authorized = await authorizeSkillRead?.({
+      name,
+      skillId: resolution.skill.id,
+      skillVersion: resolution.skill.version,
+      contentDigest,
+    });
+    if (authorized === false) return missing;
     const shipsFiles = (resolution.skill.manifest.files?.length ?? 0) > 0 || resolution.skill.pack !== undefined;
     if (deps.skills)
       void deps.skills.recordUse(resolution.skill.id).catch((e) => swallow("orchestrator: skill recordUse", e));

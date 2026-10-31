@@ -1937,26 +1937,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           )
         : renderSandboxProviders([scopeProfile.backend], scopeProfile.backend, false);
 
-      const leaseStart = Date.now();
-      const acquired = await acquireTurnLeaseOrRefuse({
-        sessionId: session.id,
-        site: "turn",
-        scopeId,
-        automated: automatedTurn,
-        ...(input.runId ? { runId: input.runId } : {}),
-        ...(input.surface ? { surface: input.surface } : {}),
-      });
-      if (!acquired.lease) return acquired.refusal;
-      const lease = acquired.lease;
-      const workflowTurn = await createWorkflowTurnContext({
-        sessions: deps.sessions,
-        session,
-        lease,
-        configured: deps.workflowDefinitions ?? [],
-      }).catch(async (error) => {
-        await deps.sessions.releaseLease(lease);
-        throw error;
-      });
+      let workflowTurn: Awaited<ReturnType<typeof createWorkflowTurnContext>>;
       const {
         provision,
         provisionScratch,
@@ -1985,11 +1966,45 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         egressTokenForPolicy,
         openResourceAccess: !external && (liveAuthorTurn || openAutomationKeychain),
         visibleSkillsForTurn,
-        ...(workflowTurn ? { authorizeSkillRead: workflowTurn.authorizeSkillRead } : {}),
+        authorizeSkillRead: async (skill) => workflowTurn?.authorizeSkillRead(skill),
       });
-      if (!ambientTurn) assignSessionTitle();
+      const leaseStart = Date.now();
+      const acquired = await acquireTurnLeaseOrRefuse({
+        sessionId: session.id,
+        site: "turn",
+        scopeId,
+        automated: automatedTurn,
+        ...(input.runId ? { runId: input.runId } : {}),
+        ...(input.surface ? { surface: input.surface } : {}),
+      });
+      if (!acquired.lease) return acquired.refusal;
+      const lease = acquired.lease;
+      let leaseReleased = false;
+      let turnProgress = 0;
+      const turnAbort = new AbortController();
+      if (input.cancel?.aborted) turnAbort.abort();
+      else input.cancel?.addEventListener("abort", () => turnAbort.abort(), { once: true });
+      const stopLeaseKeepalive = startLeaseKeepalive(deps.sessions, lease, leaseKeepaliveMs, () => leaseReleased, {
+        progress: () => turnProgress,
+        onStalled: () => turnAbort.abort(),
+      });
       const trackRevisions = input.surface === "slack" && Boolean(deps.surfaceCache);
-      const revisionAnchor = trackRevisions ? await revisionAnchorAt(deps.sessions, session.id) : undefined;
+      let revisionAnchor: number | undefined;
+      try {
+        workflowTurn = await createWorkflowTurnContext({
+          sessions: deps.sessions,
+          session,
+          lease,
+          configured: deps.workflowDefinitions ?? [],
+        });
+        if (!ambientTurn) assignSessionTitle();
+        revisionAnchor = trackRevisions ? await revisionAnchorAt(deps.sessions, session.id) : undefined;
+      } catch (error) {
+        stopLeaseKeepalive();
+        leaseReleased = true;
+        await deps.sessions.releaseLease(lease).catch(swallowAs("orchestrator: setup lease release", undefined));
+        throw error;
+      }
       const catchUpMessageRevisions = async (): Promise<void> => {
         if (!trackRevisions || !deps.surfaceCache) return;
         await reconcileMessageRevisions({
@@ -2003,16 +2018,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }).catch(swallowAs("orchestrator: message revision catch-up", undefined));
       };
       let tailOwnsCleanup = false;
-      let leaseReleased = false;
       let contextRecovered = false;
-      let turnProgress = 0;
-      const turnAbort = new AbortController();
-      if (input.cancel?.aborted) turnAbort.abort();
-      else input.cancel?.addEventListener("abort", () => turnAbort.abort(), { once: true });
-      const stopLeaseKeepalive = startLeaseKeepalive(deps.sessions, lease, leaseKeepaliveMs, () => leaseReleased, {
-        progress: () => turnProgress,
-        onStalled: () => turnAbort.abort(),
-      });
       let failureUserPayload: Record<string, unknown> | undefined;
       try {
         await withManagedRosterVersion(async () => {
