@@ -299,8 +299,10 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         },
       };
     };
-    const bundles =
-      resolution.screenedBundles ?? (deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [resolution]) : []);
+    const bundles = resolution.skill.pack
+      ? (resolution.screenedBundles ??
+        (deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [resolution]) : []))
+      : [];
     if (!shipsFiles) return result(render(), bundles);
     const access = sandboxId !== undefined ? await accessResource(sandboxId) : undefined;
     if (access?.crossScope) return result(render(skillsRoot(resolution)), bundles);

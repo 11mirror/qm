@@ -280,7 +280,15 @@ export async function brokerCredentialCall(opts: {
           callerHeaders(body.headers),
         )
       : brokerRequestHeaders(rec, callerHeaders(body.headers));
-  } catch {
+  } catch (err) {
+    opts.audit?.({
+      principalId: claims.actorId,
+      action: "credential.broker.invalid_injection",
+      resource: slug,
+      scopeLabel: claims.scopeId,
+      status: "error",
+      detail: errMessage(err),
+    });
     return deny(503, "invalid_injection", "credential injection configuration is invalid", rec.host);
   }
   if (rec.injection?.actor) headers["x-qm-actor"] = claims.actorId;
