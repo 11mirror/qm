@@ -71,6 +71,48 @@ test("happy path: injects the secret as Bearer, never exposes it in the result",
   assert.doesNotMatch(JSON.stringify(used), /tweets\/search|ai|super-secret/);
 });
 
+test("NetSuite TBA signs each broker request without exposing the structured credential", async () => {
+  const cap = captureFetch();
+  const secret = JSON.stringify({
+    accountId: "1234567_SB1",
+    consumerKey: "consumer key",
+    consumerSecret: "consumer secret",
+    tokenId: "token id",
+    tokenSecret: "token secret",
+  });
+  const result = await brokerCredentialCall({
+    claims: claims(["netsuite"]),
+    body: {
+      credential: "netsuite",
+      method: "POST",
+      url: "https://1234567-sb1.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql?limit=1000&offset=0",
+      headers: { "Content-Type": "application/json", Prefer: "respond-async" },
+      body: JSON.stringify({ q: "SELECT id FROM subsidiary FETCH FIRST 1 ROWS ONLY" }),
+    },
+    orgScopeId: "org:default-org",
+    reader: reader({
+      slug: "netsuite",
+      secret,
+      host: "1234567-sb1.suitetalk.api.netsuite.com",
+      injection: { signer: "netsuite-tba", headers: { Prefer: "transient" } },
+      allowedMethods: ["POST"],
+      allowedPathPrefixes: ["/services/rest/query/v1/suiteql"],
+    }),
+    fetchImpl: cap.fetch,
+    nonce: () => "nonce/value",
+    now: () => 1_704_164_645_000,
+  });
+
+  assert.equal(result.status, 200);
+  assert.equal(cap.calls.length, 1);
+  assert.equal(
+    cap.calls[0]!.headers.Authorization,
+    'OAuth realm="1234567_SB1", oauth_consumer_key="consumer%20key", oauth_nonce="nonce%2Fvalue", oauth_signature="XnIFWKUYVi1AOJiiD4UKpdK9efFodlKSff6i7tpt2Rs%3D", oauth_signature_method="HMAC-SHA256", oauth_timestamp="1704164645", oauth_token="token%20id", oauth_version="1.0"',
+  );
+  assert.equal(cap.calls[0]!.headers.Prefer, "transient");
+  assert.doesNotMatch(JSON.stringify(cap.calls), /consumer secret|token secret/);
+});
+
 test("an env-delivery record is refused exactly like a missing credential — the broker door does not serve sandbox-env material", async () => {
   const cap = captureFetch();
   const r = await brokerCredentialCall(

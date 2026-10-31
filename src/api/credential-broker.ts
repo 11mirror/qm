@@ -1,5 +1,7 @@
 import { isComposioHost } from "../credentials/keychain.ts";
 import { errMessage } from "../util/errors.ts";
+import { randomBytes } from "node:crypto";
+import { netSuiteTbaAuthorization, parseNetSuiteTbaSecret } from "../credentials/netsuite-tba.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
@@ -57,7 +59,7 @@ export interface BrokerResult {
   json: unknown;
 }
 
-const ALLOWED_CALLER_HEADERS = new Set(["accept", "accept-language", "content-type", "user-agent"]);
+const ALLOWED_CALLER_HEADERS = new Set(["accept", "accept-language", "content-type", "prefer", "user-agent"]);
 
 const MAX_RESPONSE_BYTES = 5_000_000;
 
@@ -124,7 +126,13 @@ export function brokerRequestHeaders(
   rec: DecryptedServiceCredential,
   caller: Record<string, string>,
 ): Record<string, string> {
-  const injected = credentialRequestHeaders(rec);
+  return mergeCredentialHeaders(credentialRequestHeaders(rec), caller);
+}
+
+function mergeCredentialHeaders(
+  injected: Record<string, string>,
+  caller: Record<string, string>,
+): Record<string, string> {
   const owned = new Set(Object.keys(injected).map((name) => name.toLowerCase()));
   const headers: Record<string, string> = {};
   for (const [name, value] of Object.entries(caller)) if (!owned.has(name.toLowerCase())) headers[name] = value;
@@ -169,6 +177,8 @@ export async function brokerCredentialCall(opts: {
   fetchImpl: BrokerFetch;
   usage?: CredentialUsageSink;
   audit?: BrokerAudit;
+  nonce?: () => string;
+  now?: () => number;
 }): Promise<BrokerResult> {
   const { claims, body, orgScopeId, reader, fetchImpl } = opts;
   const slug = typeof body.credential === "string" ? body.credential : "";
@@ -253,7 +263,26 @@ export async function brokerCredentialCall(opts: {
       );
   }
 
-  const headers = brokerRequestHeaders(rec, callerHeaders(body.headers));
+  let headers: Record<string, string>;
+  try {
+    headers = rec.injection?.signer
+      ? mergeCredentialHeaders(
+          {
+            ...rec.injection.headers,
+            Authorization: netSuiteTbaAuthorization(
+              parseNetSuiteTbaSecret(rec.secret),
+              parsed.toString(),
+              method,
+              (opts.nonce ?? (() => randomBytes(16).toString("hex")))(),
+              (opts.now ?? Date.now)(),
+            ),
+          },
+          callerHeaders(body.headers),
+        )
+      : brokerRequestHeaders(rec, callerHeaders(body.headers));
+  } catch {
+    return deny(503, "invalid_injection", "credential injection configuration is invalid", rec.host);
+  }
   if (rec.injection?.actor) headers["x-qm-actor"] = claims.actorId;
 
   let resp: BrokerFetchResponse;

@@ -33,6 +33,7 @@ export interface CredentialInjection {
   scheme?: string;
   actor?: boolean;
   headers?: Record<string, string>;
+  signer?: "netsuite-tba";
 }
 
 const DEFAULT_AUTH_HEADER = "Authorization";
@@ -88,6 +89,12 @@ export function credentialInjectionError(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (!value || typeof value !== "object" || Array.isArray(value)) return "injection must be an object";
   const injection = value as CredentialInjection;
+  if (injection.signer !== undefined && injection.signer !== "netsuite-tba") return "unsupported credential signer";
+  if (
+    injection.signer &&
+    (injection.header !== undefined || injection.scheme !== undefined || injection.actor === true)
+  )
+    return "credential signer cannot be combined with header, scheme, or actor injection";
   if (injection.actor !== undefined && typeof injection.actor !== "boolean") return "injection.actor must be boolean";
   if (
     injection.header !== undefined &&
