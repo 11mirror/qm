@@ -4218,6 +4218,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(controlTools ? { share: sharingTool("file") } : {}),
         ...(ref.current?.installSharedCanvas ? { install_canvas: installCanvas } : {}),
       }),
+      readOnlyActions: opts?.workflowReview ? ["read"] : [],
       needsApproval: (params: unknown) => isObj(params) && params.action === "install_canvas",
       approvalReason: "install an always-on canvas someone shared with you; its code runs in your QM web UI",
     },

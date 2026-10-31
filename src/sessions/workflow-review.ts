@@ -96,6 +96,7 @@ export async function assignWorkflowReviewer(input: {
   const reviewer = await input.sessions.get(input.reviewerSessionId);
   if (!reviewer || reviewer.parentSessionId !== input.parentSessionId)
     throw new Error("reviewer must be a direct child of the producer session");
+  if (reviewer.spawnMeta?.readOnly !== true) throw new Error("reviewer must be a read-only child session");
   if (!reviewer.spawnMeta?.harness || !reviewer.spawnMeta.model)
     throw new Error("reviewer must be assigned an explicit harness and model");
   const assignment = {

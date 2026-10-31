@@ -43,14 +43,22 @@ test("read-only reviewers can read skills and submit reviews but cannot advance 
   const context = {
     workflow: async () => ({ valid: true }),
     skill: async () => ({ content: "audit", sourceScopeId: null }),
+    read: async () => ({ content: "evidence", sourceScopeId: null }),
   } as unknown as ToolContext;
   const tools = createAgentTools({ current: context }, { readOnly: true, workflowReview: true });
   const skills = tools.find((tool) => tool.name === "skills");
+  const files = tools.find((tool) => tool.name === "files");
   const workflow = tools.find((tool) => tool.name === "workflow");
   assert.ok(skills);
+  assert.ok(files);
   assert.ok(workflow);
 
   await invoke(skills, { action: "read", name: "finance-audit" });
+  await invoke(files, { action: "read", path: "shared/evidence.json" });
+  await assert.rejects(
+    invoke(files, { action: "write", path: "shared/evidence.json", data: "changed" }),
+    /unavailable in a read-only turn/,
+  );
   await invoke(workflow, {
     action: "review_submit",
     workflowId: "finance",

@@ -295,7 +295,7 @@ export function createDirectFileUploads(options: {
       if (current.state !== "completing" && current.state !== "complete")
         throw new FileUploadError("upload cannot be published", 409);
       const sha256 = await objectDigest(row);
-      if (sha256 !== row.sha256) {
+      if (row.sha256 !== undefined && sha256 !== row.sha256) {
         await store.transition(id, ["completing"], "failed");
         await client
           .send(new DeleteObjectCommand(target(row)))

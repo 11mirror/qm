@@ -48,6 +48,13 @@ test("workflow control derives the producer identity from the host session", asy
     inputEvidence: [],
     outputEvidence: [],
   });
+  const retry = await control({
+    action: "advance",
+    workflowId: "finance",
+    step: "request-bound",
+    decision: "pass",
+  });
+  assert.equal((retry as { accepted: boolean }).accepted, false);
   assert.deepEqual(await control({ action: "status", workflowId: "finance" }), {
     workflowId: "finance",
     workflowVersion: 1,

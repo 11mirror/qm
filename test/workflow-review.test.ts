@@ -27,6 +27,34 @@ const definition = {
   ],
 } as const;
 
+test("an ordinary writable child cannot be assigned as a workflow reviewer", async () => {
+  const sessions = createMemorySessionStore();
+  const parent = await sessions.getOrCreateByThread("writable-parent", "dm", scope);
+  const child = await sessions.getOrCreateByThread("writable-child", "dm", scope);
+  await sessions.setParentSession(child.id, parent.id);
+  await sessions.setSpawnMeta(child.id, {
+    surface: "web",
+    actor: { id: "reviewer", type: "internal" },
+    conversation: { kind: "dm", threadRef: child.threadRef, audience: [] },
+    harness: "pi",
+    model: "gpt-5.4",
+  });
+  const attempt = await sessions.acquireLease(parent.id, "turn");
+  assert.ok(attempt.lease);
+  await assert.rejects(
+    assignWorkflowReviewer({
+      sessions,
+      lease: attempt.lease,
+      scopeLabel: scope,
+      parentSessionId: parent.id,
+      reviewerSessionId: child.id,
+      definition,
+      step: "auditor-1-pass",
+    }),
+    /read-only/,
+  );
+});
+
 test("the parent imports the child reviewer receipt instead of a producer-supplied decision", async () => {
   const sessions = createMemorySessionStore();
   const parent = await sessions.getOrCreateByThread("parent", "dm", scope);
@@ -38,6 +66,7 @@ test("the parent imports the child reviewer receipt instead of a producer-suppli
     conversation: { kind: "dm", threadRef: child.threadRef, audience: [] },
     harness: "pi",
     model: "gpt-5.4",
+    readOnly: true,
   });
   const parentAttempt = await sessions.acquireLease(parent.id, "turn");
   assert.ok(parentAttempt.lease);
@@ -168,6 +197,7 @@ test("a reviewer receipt from a different host runtime cannot satisfy the assign
     conversation: { kind: "dm", threadRef: child.threadRef, audience: [] },
     harness: "pi",
     model: "gpt-5.4",
+    readOnly: true,
   });
   const parentAttempt = await sessions.acquireLease(parent.id, "turn");
   assert.ok(parentAttempt.lease);
@@ -277,6 +307,7 @@ test("a completed review step revokes the child assignment", async () => {
     conversation: { kind: "dm", threadRef: child.threadRef, audience: [] },
     harness: "pi",
     model: "gpt-5.4",
+    readOnly: true,
   });
   const attempt = await sessions.acquireLease(parent.id, "turn");
   assert.ok(attempt.lease);
@@ -338,6 +369,7 @@ test("reassigning a step revokes the prior reviewer", async () => {
       conversation: { kind: "dm", threadRef: reviewer.threadRef, audience: [] },
       harness: "pi",
       model: "gpt-5.4",
+      readOnly: true,
     });
   const attempt = await sessions.acquireLease(parent.id, "turn");
   assert.ok(attempt.lease);

@@ -242,6 +242,17 @@ test("completion rejects a client digest that does not match the uploaded bytes"
   assert.ok(f.calls.some((call) => call.name === "DeleteObjectCommand"));
 });
 
+test("completion resumes a legacy upload manifest without a whole-object digest", async () => {
+  const f = fixture();
+  const row = await f.service.begin(f.input);
+  delete f.rows.get(row.id)!.sha256;
+  f.uploadParts(row);
+  const artifact = await f.service.complete(row.id);
+  assert.equal(artifact.sha256, digest("abc"));
+  assert.equal((await f.store.get(row.id))!.state, "complete");
+  assert.ok(!f.calls.some((call) => call.name === "DeleteObjectCommand"));
+});
+
 test("expiry prevents signing and sweeper aborts without publishing", async () => {
   const f = fixture();
   const row = await f.service.begin(f.input);

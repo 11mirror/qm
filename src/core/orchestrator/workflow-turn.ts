@@ -50,10 +50,16 @@ export async function createWorkflowTurnContext(input: {
   return {
     review,
     authorizedSkillNames,
-    filterSkills: (skills: readonly SkillResolution[]) => {
-      const authorized = new Set(authorizedSkillNames());
-      return skills.filter((entry) => entry.skill && authorized.has(entry.skill.manifest.name));
-    },
+    filterSkills: (skills: readonly SkillResolution[]) =>
+      skills.filter(
+        (entry) =>
+          entry.skill &&
+          requiredSkills().some(
+            (requirement) =>
+              (requirement.skillId === undefined || requirement.skillId === entry.skill!.id) &&
+              (requirement.skillName === undefined || requirement.skillName === entry.skill!.manifest.name),
+          ),
+      ),
     authorizeSkillRead: async (skill: ObservedWorkflowSkill) =>
       requiredSkills().some((requirement) => workflowSkillSatisfies(skill, requirement)),
     control(control: {

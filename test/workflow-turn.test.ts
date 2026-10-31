@@ -55,6 +55,36 @@ test("workflow turn context authorizes only the active stage skills", async () =
   assert.deepEqual(context?.filterSkills(listed), [listed[0]]);
 });
 
+test("workflow turn context exposes a stage skill bound by stable ID", async () => {
+  const sessions = createMemorySessionStore();
+  const session = await sessions.getOrCreateByThread("workflow-turn-id", "dm", scopeId("personal", "workflow-turn"));
+  const attempt = await sessions.acquireLease(session.id, "turn");
+  assert.ok(attempt.lease);
+  const context = await createWorkflowTurnContext({
+    sessions,
+    session,
+    lease: attempt.lease,
+    configured: [
+      {
+        id: "finance",
+        version: 1,
+        steps: [
+          {
+            id: "evidence",
+            role: "producer",
+            requiredSkills: [{ skillId: "finance-router-id", contentDigest: "a".repeat(64) }],
+          },
+        ],
+      },
+    ],
+  });
+  const listed = [
+    { skill: { id: "finance-router-id", manifest: { name: "finance-router" } } },
+    { skill: { id: "unrelated-id", manifest: { name: "finance-router" } } },
+  ] as SkillResolution[];
+  assert.deepEqual(context?.filterSkills(listed), [listed[0]]);
+});
+
 test("workflow turn context reuses stage state across skill reads", async () => {
   const store = createMemorySessionStore();
   const session = await store.getOrCreateByThread("workflow-turn-cache", "dm", scopeId("personal", "workflow-turn"));

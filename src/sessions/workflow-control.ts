@@ -95,13 +95,14 @@ export function createWorkflowControl(input: {
         workflowId: definition.id,
         workflowVersion: definition.version,
         steps: definition.steps.map((step) => {
-          const gate = payloads.findLast(
+          const gates = payloads.filter(
             (payload) =>
               payload.tool === "workflow_gate" &&
               payload.workflowId === definition.id &&
               payload.workflowVersion === definition.version &&
               payload.step === step.id,
           );
+          const gate = gates.findLast((payload) => payload.accepted === true) ?? gates.at(-1);
           const assignment = payloads.findLast(
             (payload) =>
               payload.tool === "workflow_reviewer_assignment" &&
@@ -110,8 +111,7 @@ export function createWorkflowControl(input: {
               payload.step === step.id,
           );
           let state = assignment ? "assigned" : "pending";
-          if (gate?.decision === "reject") state = "rejected";
-          if (gate?.accepted === true) state = "passed";
+          if (gate?.accepted === true) state = gate.decision === "reject" ? "rejected" : "passed";
           return {
             step: step.id,
             role: step.role,
