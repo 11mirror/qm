@@ -116,7 +116,7 @@ test("the parent imports the child reviewer receipt instead of a producer-suppli
   assert.equal(imported.accepted, false);
   assert.equal(imported.subject, child.id);
   assert.deepEqual(imported.observedSkills, [
-    { skillId: "finance-audit", skillVersion: 2, contentDigest: "audit-digest" },
+    { name: "finance-audit", skillId: "finance-audit", skillVersion: 2, contentDigest: "audit-digest" },
   ]);
 });
 

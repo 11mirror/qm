@@ -39,6 +39,8 @@ export function createWorkflowControl(input: {
       };
     }
     const step = required(request.step, "step");
+    const configuredStep = definition.steps.find((candidate) => candidate.id === step);
+    if (!configuredStep) throw new Error(`workflow ${definition.id} has no step ${step}`);
     if (request.action === "review_submit") {
       if (!input.session.parentSessionId) throw new Error("review submission requires an isolated child session");
       if (!request.decision) throw new Error("decision is required");
@@ -68,6 +70,10 @@ export function createWorkflowControl(input: {
         step,
       });
     }
+    if (configuredStep.humanApproval && request.action !== "approve")
+      throw new Error(`workflow step ${step} requires the approval action`);
+    if (!configuredStep.humanApproval && request.action === "approve")
+      throw new Error(`workflow step ${step} does not accept the approval action`);
     if (!request.reviewerSessionId && !request.decision) throw new Error("decision is required");
     return importWorkflowReview({
       sessions: input.sessions,

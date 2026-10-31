@@ -86,6 +86,7 @@ test("a gate derives required skill use from the durable tape instead of produce
   assert.equal(accepted.accepted, true);
   assert.deepEqual(accepted.observedSkills, [
     {
+      name: "netsuite-readonly-finance",
       skillId: "netsuite-readonly-finance",
       skillVersion: 7,
       contentDigest: "approved-digest",
@@ -269,4 +270,106 @@ test("a skill read from an earlier turn cannot satisfy the current gate", async 
 
   assert.equal(result.accepted, false);
   assert.deepEqual(result.observedSkills, []);
+});
+
+test("a registered workflow may bind a skill by stable name and exact content digest", async () => {
+  const sessions = createMemorySessionStore();
+  const session = await sessions.getOrCreateByThread("finance-skill-name", "dm", scope);
+  const { lease } = await sessions.acquireLease(session.id, "turn");
+  assert.ok(lease);
+  await sessions.appendMany(lease, [
+    {
+      type: "tool_call",
+      payload: { tool: "skills", callId: "named-read", action: "read", name: "finance-audit" },
+      scopeLabel: scope,
+    },
+    {
+      type: "tool_result",
+      payload: {
+        tool: "skills",
+        callId: "named-read",
+        action: "read",
+        name: "finance-audit",
+        found: true,
+        provenance: { skillId: "runtime-generated-id", skillVersion: 4, contentDigest: "pinned-digest" },
+      },
+      scopeLabel: scope,
+    },
+  ]);
+
+  const result = await evaluateWorkflowGate({
+    sessions,
+    lease,
+    scopeLabel: scope,
+    definition: {
+      id: "stable-name",
+      version: 1,
+      steps: [
+        {
+          id: "audit",
+          role: "auditor",
+          requiredSkills: [{ skillName: "finance-audit", contentDigest: "pinned-digest" }],
+        },
+      ],
+    },
+    submission: { step: "audit", decision: "pass", subject: "auditor" },
+  });
+
+  assert.equal(result.accepted, true);
+  assert.equal(result.observedSkills[0]?.skillId, "runtime-generated-id");
+});
+
+test("a stage rejects full skill bodies outside its registered role allowlist", async () => {
+  const sessions = createMemorySessionStore();
+  const session = await sessions.getOrCreateByThread("finance-stage-allowlist", "dm", scope);
+  const { lease } = await sessions.acquireLease(session.id, "turn");
+  assert.ok(lease);
+  for (const [callId, name, digest] of [
+    ["required", "finance-audit", "required-digest"],
+    ["extra", "month-end-close", "extra-digest"],
+  ]) {
+    await sessions.appendMany(lease, [
+      {
+        type: "tool_call",
+        payload: { tool: "skills", callId, action: "read", name },
+        scopeLabel: scope,
+      },
+      {
+        type: "tool_result",
+        payload: {
+          tool: "skills",
+          callId,
+          action: "read",
+          name,
+          found: true,
+          provenance: { skillId: `${name}-id`, skillVersion: 1, contentDigest: digest },
+        },
+        scopeLabel: scope,
+      },
+    ]);
+  }
+
+  const result = await evaluateWorkflowGate({
+    sessions,
+    lease,
+    scopeLabel: scope,
+    definition: {
+      id: "stage-allowlist",
+      version: 1,
+      steps: [
+        {
+          id: "audit",
+          role: "auditor",
+          requiredSkills: [{ skillName: "finance-audit", contentDigest: "required-digest" }],
+        },
+      ],
+    },
+    submission: { step: "audit", decision: "pass", subject: "auditor" },
+  });
+
+  assert.equal(result.accepted, false);
+  assert.deepEqual(
+    result.unexpectedSkills.map((skill) => skill.name),
+    ["month-end-close"],
+  );
 });

@@ -67,3 +67,28 @@ test("read-only reviewers can read skills and submit reviews but cannot advance 
     /unavailable in a read-only turn/,
   );
 });
+
+test("the approval action pauses for a person before it reaches workflow control", async () => {
+  const received: unknown[] = [];
+  const ref = {
+    current: {
+      workflow: async (input: unknown) => {
+        received.push(input);
+        return { accepted: true };
+      },
+    } as ToolContext,
+    pendingApprovals: [],
+  };
+  const workflow = createAgentTools(ref).find((tool) => tool.name === "workflow");
+  assert.ok(workflow);
+
+  await invoke(workflow, {
+    action: "approve",
+    workflowId: "finance",
+    step: "PLAN_APPROVED",
+    decision: "pass",
+  });
+
+  assert.deepEqual(received, []);
+  assert.equal(ref.pendingApprovals.length, 1);
+});

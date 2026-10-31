@@ -3,7 +3,8 @@ import type { ScopeId, SessionEntry } from "../types.ts";
 import type { Lease, SessionStore } from "./session-store.ts";
 
 export interface WorkflowSkillRequirement {
-  skillId: string;
+  skillId?: string;
+  skillName?: string;
   contentDigest?: string;
   minimumVersion?: number;
 }
@@ -11,6 +12,7 @@ export interface WorkflowSkillRequirement {
 export interface WorkflowGateStep {
   id: string;
   role: string;
+  humanApproval?: boolean;
   after?: string;
   separateFrom?: string;
   evidenceFrom?: string;
@@ -38,6 +40,7 @@ export interface WorkflowEvidence {
 }
 
 export interface ObservedWorkflowSkill {
+  name?: string;
   skillId: string;
   skillVersion: number;
   contentDigest: string;
@@ -53,6 +56,7 @@ export interface WorkflowGateResult {
   subject: string;
   observedSkills: ObservedWorkflowSkill[];
   missingSkills: WorkflowSkillRequirement[];
+  unexpectedSkills: ObservedWorkflowSkill[];
   blockers: string[];
   inputEvidence: WorkflowEvidence[];
   outputEvidence: WorkflowEvidence[];
@@ -71,6 +75,7 @@ function observedSkill(entry: SessionEntry): ObservedWorkflowSkill | null {
   )
     return null;
   return {
+    ...(typeof payload.name === "string" ? { name: payload.name } : {}),
     skillId: provenance.skillId,
     skillVersion: provenance.skillVersion,
     contentDigest: provenance.contentDigest,
@@ -86,6 +91,7 @@ export function observedWorkflowSkills(entries: readonly SessionEntry[]): Observ
         all.findIndex(
           (candidate) =>
             candidate.skillId === skill.skillId &&
+            candidate.name === skill.name &&
             candidate.skillVersion === skill.skillVersion &&
             candidate.contentDigest === skill.contentDigest,
         ) === index,
@@ -99,9 +105,24 @@ export function missingWorkflowSkills(
   return required.filter((requirement) => !observed.some((skill) => satisfies(skill, requirement)));
 }
 
+export function unexpectedWorkflowSkills(
+  observed: readonly ObservedWorkflowSkill[],
+  allowed: readonly WorkflowSkillRequirement[],
+): ObservedWorkflowSkill[] {
+  return observed.filter(
+    (skill) =>
+      !allowed.some(
+        (requirement) =>
+          (requirement.skillId === undefined || requirement.skillId === skill.skillId) &&
+          (requirement.skillName === undefined || requirement.skillName === skill.name),
+      ),
+  );
+}
+
 function satisfies(observed: ObservedWorkflowSkill, required: WorkflowSkillRequirement): boolean {
   return (
-    observed.skillId === required.skillId &&
+    (required.skillId === undefined || observed.skillId === required.skillId) &&
+    (required.skillName === undefined || observed.name === required.skillName) &&
     (required.contentDigest === undefined || observed.contentDigest === required.contentDigest) &&
     (required.minimumVersion === undefined || observed.skillVersion >= required.minimumVersion)
   );
@@ -146,6 +167,7 @@ export async function evaluateWorkflowGate(input: {
     : entries;
   const observedSkills = [...(input.observedSkills ?? observedWorkflowSkills(skillEntries))];
   const missingSkills = missingWorkflowSkills(observedSkills, step.requiredSkills);
+  const unexpectedSkills = unexpectedWorkflowSkills(observedSkills, step.requiredSkills);
   const passed = entries
     .map(acceptedGate)
     .filter((gate): gate is WorkflowGateResult => gate !== null)
@@ -167,7 +189,11 @@ export async function evaluateWorkflowGate(input: {
       : []),
   ];
   const result: WorkflowGateResult = {
-    accepted: input.submission.decision === "pass" && missingSkills.length === 0 && blockers.length === 0,
+    accepted:
+      input.submission.decision === "pass" &&
+      missingSkills.length === 0 &&
+      unexpectedSkills.length === 0 &&
+      blockers.length === 0,
     workflowId: input.definition.id,
     workflowVersion: input.definition.version,
     step: step.id,
@@ -176,6 +202,7 @@ export async function evaluateWorkflowGate(input: {
     subject: input.submission.subject,
     observedSkills,
     missingSkills: [...missingSkills],
+    unexpectedSkills,
     blockers,
     inputEvidence,
     outputEvidence,

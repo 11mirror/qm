@@ -5,6 +5,7 @@ import {
   evaluateWorkflowGate,
   missingWorkflowSkills,
   observedWorkflowSkills,
+  unexpectedWorkflowSkills,
   type ObservedWorkflowSkill,
   type WorkflowDefinition,
   type WorkflowEvidence,
@@ -25,6 +26,7 @@ export interface WorkflowReviewReceipt {
   findings: string[];
   observedSkills: ObservedWorkflowSkill[];
   missingSkills: WorkflowSkillRequirement[];
+  unexpectedSkills: ObservedWorkflowSkill[];
 }
 
 interface WorkflowReviewerAssignment {
@@ -121,8 +123,9 @@ export async function recordWorkflowReview(input: {
   });
   const observedSkills = observedWorkflowSkills(entries);
   const missingSkills = missingWorkflowSkills(observedSkills, step.requiredSkills);
+  const unexpectedSkills = unexpectedWorkflowSkills(observedSkills, step.requiredSkills);
   const receipt: WorkflowReviewReceipt = {
-    valid: missingSkills.length === 0,
+    valid: missingSkills.length === 0 && unexpectedSkills.length === 0,
     workflowId: input.definition.id,
     workflowVersion: input.definition.version,
     step: step.id,
@@ -134,6 +137,7 @@ export async function recordWorkflowReview(input: {
     findings: [...(input.submission.findings ?? [])],
     observedSkills,
     missingSkills,
+    unexpectedSkills,
   };
   const callId = `workflow-review-${randomUUID()}`;
   await input.sessions.appendMany(input.lease, [

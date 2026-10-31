@@ -204,7 +204,7 @@ export type AttachResult = { ok: true; files: AttachedFileMeta[]; staged: number
 export type AttachFiles = (files: readonly OutboundFile[], sandboxId?: string) => Promise<AttachResult>;
 
 export interface WorkflowToolInput {
-  action: "advance" | "assign_reviewer" | "review_submit" | "status";
+  action: "advance" | "approve" | "assign_reviewer" | "review_submit" | "status";
   workflowId: string;
   step?: string;
   decision?: "pass" | "reject";

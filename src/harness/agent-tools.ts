@@ -4171,6 +4171,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("advance"),
+        Type.Literal("approve"),
         Type.Literal("assign_reviewer"),
         Type.Literal("review_submit"),
         Type.Literal("status"),
@@ -4197,6 +4198,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   }) as ActionScopedTool;
   workflow.readOnlyActions = ["review_submit", "status"];
+  Object.assign(workflow, {
+    needsApproval: (params: unknown) => isObj(params) && params.action === "approve",
+    approvalReason: "approve the exact workflow plan before source execution",
+  });
 
   const tools = [
     ...(!delegateWork ? [execute] : []),

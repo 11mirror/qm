@@ -41,6 +41,7 @@ test("workflow control derives the producer identity from the host session", asy
     subject: session.id,
     observedSkills: [],
     missingSkills: [],
+    unexpectedSkills: [],
     blockers: [],
     inputEvidence: [],
     outputEvidence: [],
@@ -48,5 +49,36 @@ test("workflow control derives the producer identity from the host session", asy
   await assert.rejects(
     control({ action: "advance", workflowId: "unknown", step: "request-bound", decision: "pass" }),
     /workflow unknown is not registered/,
+  );
+});
+
+test("a human approval step cannot be advanced through the ordinary producer action", async () => {
+  const sessions = createMemorySessionStore();
+  const scope = scopeId("personal", "workflow-approval");
+  const session = await sessions.getOrCreateByThread("approval", "dm", scope);
+  const attempt = await sessions.acquireLease(session.id, "turn");
+  assert.ok(attempt.lease);
+  const control = createWorkflowControl({
+    sessions,
+    lease: attempt.lease,
+    scopeLabel: scope,
+    session,
+    definitions: [
+      {
+        id: "approval",
+        version: 1,
+        steps: [{ id: "PLAN_APPROVED", role: "producer", humanApproval: true, requiredSkills: [] }],
+      },
+    ],
+  });
+
+  await assert.rejects(
+    control({
+      action: "advance",
+      workflowId: "approval",
+      step: "PLAN_APPROVED",
+      decision: "pass",
+    }),
+    /requires the approval action/,
   );
 });

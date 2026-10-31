@@ -20,8 +20,12 @@ function requirement(value: unknown, label: string): WorkflowSkillRequirement {
   const minimumVersion = item.minimumVersion;
   if (minimumVersion !== undefined && (!Number.isSafeInteger(minimumVersion) || Number(minimumVersion) < 1))
     throw new Error(`${label}.minimumVersion must be a positive integer`);
+  const skillId = item.skillId === undefined ? undefined : text(item.skillId, `${label}.skillId`);
+  const skillName = item.skillName === undefined ? undefined : text(item.skillName, `${label}.skillName`);
+  if (!skillId && !skillName) throw new Error(`${label} must include skillId or skillName`);
   return {
-    skillId: text(item.skillId, `${label}.skillId`),
+    ...(skillId ? { skillId } : {}),
+    ...(skillName ? { skillName } : {}),
     ...(contentDigest ? { contentDigest } : {}),
     ...(minimumVersion !== undefined ? { minimumVersion: Number(minimumVersion) } : {}),
   };
@@ -47,6 +51,7 @@ function definition(value: unknown, index: number): WorkflowDefinition {
     const step: WorkflowGateStep = {
       id: stepId,
       role: text(raw.role, `workflow ${id} step ${stepId}.role`),
+      ...(raw.humanApproval === true ? { humanApproval: true } : {}),
       ...(typeof raw.after === "string" ? { after: raw.after } : {}),
       ...(typeof raw.separateFrom === "string" ? { separateFrom: raw.separateFrom } : {}),
       ...(typeof raw.evidenceFrom === "string" ? { evidenceFrom: raw.evidenceFrom } : {}),
