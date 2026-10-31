@@ -126,7 +126,7 @@ test("NetSuite signer failures retain a sanitized audit cause without exposing i
     orgScopeId: "org:default-org",
     reader: reader({
       slug: "netsuite",
-      secret: "not-json",
+      secret: 'not-json-consumerSecret-"recognizable-tokenSecret"',
       host: "1234567-sb1.suitetalk.api.netsuite.com",
       injection: { signer: "netsuite-tba" },
       allowedMethods: ["POST"],
@@ -144,8 +144,8 @@ test("NetSuite signer failures retain a sanitized audit cause without exposing i
   assert.equal(cap.calls.length, 0);
   const diagnostic = audit.find((entry) => entry.action === "credential.broker.invalid_injection");
   assert.ok(diagnostic);
-  assert.match(diagnostic.detail ?? "", /JSON/);
-  assert.doesNotMatch(JSON.stringify(audit), /consumerSecret|tokenSecret/);
+  assert.equal(diagnostic.detail, "invalid_json");
+  assert.doesNotMatch(JSON.stringify(audit), /consumerSecret|tokenSecret|recognizable/);
 });
 
 test("an env-delivery record is refused exactly like a missing credential — the broker door does not serve sandbox-env material", async () => {

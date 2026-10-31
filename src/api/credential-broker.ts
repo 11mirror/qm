@@ -281,13 +281,16 @@ export async function brokerCredentialCall(opts: {
         )
       : brokerRequestHeaders(rec, callerHeaders(body.headers));
   } catch (err) {
+    let detail = "signing_failed";
+    if (err instanceof SyntaxError) detail = "invalid_json";
+    else if (errMessage(err) === "invalid NetSuite credential") detail = "invalid_shape";
     opts.audit?.({
       principalId: claims.actorId,
       action: "credential.broker.invalid_injection",
       resource: slug,
       scopeLabel: claims.scopeId,
       status: "error",
-      detail: errMessage(err),
+      detail,
     });
     return deny(503, "invalid_injection", "credential injection configuration is invalid", rec.host);
   }
