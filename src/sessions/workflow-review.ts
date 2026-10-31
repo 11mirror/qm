@@ -224,7 +224,7 @@ export async function importWorkflowReview(input: {
     step: input.reviewStep,
   });
   if (!assignment) throw new Error("reviewer is not assigned to this workflow step");
-  const receipt = (await input.sessions.getEntries(reviewer.id))
+  const receipt = (await input.sessions.getEntries(reviewer.id, { tools: ["workflow_review"] }))
     .map(reviewReceipt)
     .filter((candidate): candidate is WorkflowReviewReceipt => candidate !== null)
     .findLast(
@@ -261,7 +261,9 @@ export async function assignedWorkflowReview(input: {
   definition: WorkflowDefinition;
   step: string;
 }): Promise<WorkflowReviewerAssignment | undefined> {
-  const assignment = (await input.sessions.getEntries(input.parentSessionId))
+  const assignment = (
+    await input.sessions.getEntries(input.parentSessionId, { tools: ["workflow_reviewer_assignment"] })
+  )
     .map(reviewerAssignment)
     .filter((candidate): candidate is WorkflowReviewerAssignment => candidate !== null)
     .findLast(
@@ -287,7 +289,11 @@ export async function activeWorkflowReviewAssignment(input: {
     }
   | undefined
 > {
-  const entries = input.entries ?? (await input.sessions.getEntries(input.parentSessionId));
+  const entries =
+    input.entries ??
+    (await input.sessions.getEntries(input.parentSessionId, {
+      tools: ["workflow_gate", "workflow_reviewer_assignment"],
+    }));
   const assignments = entries
     .map(reviewerAssignment)
     .filter((candidate): candidate is WorkflowReviewerAssignment => candidate !== null);

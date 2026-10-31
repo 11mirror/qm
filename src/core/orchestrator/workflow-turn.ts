@@ -12,7 +12,9 @@ export async function createWorkflowTurnContext(input: {
   configured: readonly WorkflowDefinition[];
 }) {
   const rootSessionId = input.session.parentSessionId ?? input.session.id;
-  const entries = await input.sessions.getEntries(rootSessionId);
+  const entries = await input.sessions.getEntries(rootSessionId, {
+    tools: ["workflow_definition", "workflow_gate", "workflow_reviewer_assignment"],
+  });
   const definitions = await workflowDefinitionsForSession({
     sessions: input.sessions,
     sessionId: rootSessionId,

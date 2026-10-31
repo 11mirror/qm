@@ -133,7 +133,7 @@ export async function activeWorkflowSkillRequirements(input: {
   definitions: readonly WorkflowDefinition[];
   entries?: readonly SessionEntry[];
 }): Promise<readonly WorkflowSkillRequirement[]> {
-  const passed = (input.entries ?? (await input.sessions.getEntries(input.sessionId)))
+  const passed = (input.entries ?? (await input.sessions.getEntries(input.sessionId, { tools: ["workflow_gate"] })))
     .map(acceptedWorkflowGate)
     .filter((gate): gate is WorkflowGateResult => gate !== null);
   const latest = passed.findLast((gate) =>
@@ -186,10 +186,11 @@ export async function evaluateWorkflowGate(input: {
 }): Promise<WorkflowGateResult> {
   const step = input.definition.steps.find((candidate) => candidate.id === input.submission.step);
   if (!step) throw new Error(`workflow ${input.definition.id} has no step ${input.submission.step}`);
-  const entries = await input.sessions.getEntries(input.lease.sessionId);
-  const skillEntries = input.lease.turnId
-    ? await input.sessions.getEntries(input.lease.sessionId, { turnId: input.lease.turnId })
-    : entries;
+  const entries = await input.sessions.getEntries(input.lease.sessionId, { tools: ["workflow_gate"] });
+  const skillEntries = await input.sessions.getEntries(
+    input.lease.sessionId,
+    input.lease.turnId ? { turnId: input.lease.turnId } : { tools: ["skills"] },
+  );
   const observedSkills = [...(input.observedSkills ?? observedWorkflowSkills(skillEntries))];
   const missingSkills = missingWorkflowSkills(observedSkills, step.requiredSkills);
   const unexpectedSkills = unexpectedWorkflowSkills(observedSkills, step.requiredSkills);

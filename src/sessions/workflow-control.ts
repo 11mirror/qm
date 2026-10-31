@@ -29,7 +29,9 @@ export async function workflowDefinitionsForSession(input: {
   configured: readonly WorkflowDefinition[];
   entries?: readonly SessionEntry[];
 }): Promise<readonly WorkflowDefinition[]> {
-  const durable = (input.entries ?? (await input.sessions.getEntries(input.sessionId)))
+  const durable = (
+    input.entries ?? (await input.sessions.getEntries(input.sessionId, { tools: ["workflow_definition"] }))
+  )
     .map(durableWorkflowDefinition)
     .find(Boolean);
   return durable ? [durable] : input.configured;
@@ -41,7 +43,12 @@ async function ensureWorkflowDefinition(input: {
   scopeLabel: ScopeId;
   definition: WorkflowDefinition;
 }): Promise<void> {
-  if ((await input.sessions.getEntries(input.lease.sessionId)).some(durableWorkflowDefinition)) return;
+  if (
+    (await input.sessions.getEntries(input.lease.sessionId, { tools: ["workflow_definition"] })).some(
+      durableWorkflowDefinition,
+    )
+  )
+    return;
   const callId = `workflow-definition-${randomUUID()}`;
   await input.sessions.appendMany(input.lease, [
     {
@@ -78,7 +85,9 @@ export function createWorkflowControl(input: {
     if (!definition) throw new Error(`workflow ${request.workflowId} is not registered`);
     const rootSessionId = input.session.parentSessionId ?? input.session.id;
     if (request.action === "status") {
-      const entries = await input.sessions.getEntries(rootSessionId);
+      const entries = await input.sessions.getEntries(rootSessionId, {
+        tools: ["workflow_gate", "workflow_reviewer_assignment"],
+      });
       const payloads = entries
         .filter((entry) => entry.type === "tool_result" && entry.payload && typeof entry.payload === "object")
         .map((entry) => entry.payload as Record<string, unknown>);
