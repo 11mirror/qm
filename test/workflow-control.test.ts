@@ -48,6 +48,19 @@ test("workflow control derives the producer identity from the host session", asy
     inputEvidence: [],
     outputEvidence: [],
   });
+  assert.deepEqual(await control({ action: "status", workflowId: "finance" }), {
+    workflowId: "finance",
+    workflowVersion: 1,
+    steps: [
+      {
+        step: "request-bound",
+        role: "producer",
+        state: "passed",
+        decision: "pass",
+        subject: session.id,
+      },
+    ],
+  });
   await assert.rejects(
     control({ action: "advance", workflowId: "unknown", step: "request-bound", decision: "pass" }),
     /workflow unknown is not registered/,

@@ -25,19 +25,19 @@ export async function createWorkflowTurnContext(input: {
         definitions,
       })
     : undefined;
+  let producerRequirements = input.session.parentSessionId
+    ? []
+    : await activeWorkflowSkillRequirements({
+        sessions: input.sessions,
+        sessionId: input.session.id,
+        definitions,
+      });
   return {
     review,
     authorizeSkillRead: async (skill: ObservedWorkflowSkill) =>
-      (
-        review?.step.requiredSkills ??
-        (input.session.parentSessionId
-          ? []
-          : await activeWorkflowSkillRequirements({
-              sessions: input.sessions,
-              sessionId: input.session.id,
-              definitions,
-            }))
-      ).some((requirement) => workflowSkillSatisfies(skill, requirement)),
+      (review?.step.requiredSkills ?? producerRequirements).some((requirement) =>
+        workflowSkillSatisfies(skill, requirement),
+      ),
     control(control: {
       lease: Lease;
       scopeLabel: ScopeId;
@@ -47,7 +47,7 @@ export async function createWorkflowTurnContext(input: {
       mayReadArtifact: (artifact: FileArtifact, fresh?: boolean) => Promise<boolean>;
     }) {
       if ((input.session.parentSessionId || control.strictReadOnly) && !review) return undefined;
-      return createWorkflowControl({
+      const workflow = createWorkflowControl({
         sessions: input.sessions,
         lease: control.lease,
         scopeLabel: control.scopeLabel,
@@ -64,6 +64,21 @@ export async function createWorkflowTurnContext(input: {
             }),
           ),
       });
+      return async (request: Parameters<typeof workflow>[0]) => {
+        const result = await workflow(request);
+        if (
+          !input.session.parentSessionId &&
+          result &&
+          typeof result === "object" &&
+          (result as { accepted?: boolean }).accepted === true
+        )
+          producerRequirements = await activeWorkflowSkillRequirements({
+            sessions: input.sessions,
+            sessionId: input.session.id,
+            definitions,
+          });
+        return result;
+      };
     },
   };
 }

@@ -76,20 +76,41 @@ export function createWorkflowControl(input: {
     const rootSessionId = input.session.parentSessionId ?? input.session.id;
     if (request.action === "status") {
       const entries = await input.sessions.getEntries(rootSessionId);
+      const payloads = entries
+        .filter((entry) => entry.type === "tool_result" && entry.payload && typeof entry.payload === "object")
+        .map((entry) => entry.payload as Record<string, unknown>);
       return {
         workflowId: definition.id,
         workflowVersion: definition.version,
-        entries: entries
-          .filter(
-            (entry) =>
-              entry.type === "tool_result" &&
-              entry.payload &&
-              typeof entry.payload === "object" &&
-              ["workflow_gate", "workflow_reviewer_assignment"].includes(
-                String((entry.payload as Record<string, unknown>).tool),
-              ),
-          )
-          .map((entry) => entry.payload),
+        steps: definition.steps.map((step) => {
+          const gate = payloads.findLast(
+            (payload) =>
+              payload.tool === "workflow_gate" &&
+              payload.workflowId === definition.id &&
+              payload.workflowVersion === definition.version &&
+              payload.step === step.id,
+          );
+          const assignment = payloads.findLast(
+            (payload) =>
+              payload.tool === "workflow_reviewer_assignment" &&
+              payload.workflowId === definition.id &&
+              payload.workflowVersion === definition.version &&
+              payload.step === step.id,
+          );
+          let state = assignment ? "assigned" : "pending";
+          if (gate?.decision === "reject") state = "rejected";
+          if (gate?.accepted === true) state = "passed";
+          return {
+            step: step.id,
+            role: step.role,
+            state,
+            ...(gate?.decision === "pass" || gate?.decision === "reject" ? { decision: gate.decision } : {}),
+            ...(typeof gate?.subject === "string" ? { subject: gate.subject } : {}),
+            ...(typeof assignment?.reviewerSessionId === "string"
+              ? { reviewerSessionId: assignment.reviewerSessionId }
+              : {}),
+          };
+        }),
       };
     }
     const step = required(request.step, "step");
