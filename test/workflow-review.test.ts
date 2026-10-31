@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import {
   activeWorkflowReviewAssignment,
+  assignedWorkflowReview,
   assignWorkflowReviewer,
   importWorkflowReview,
   recordWorkflowReview,
@@ -320,5 +321,66 @@ test("a completed review step revokes the child assignment", async () => {
       definitions: [definition],
     }),
     undefined,
+  );
+});
+
+test("reassigning a step revokes the prior reviewer", async () => {
+  const sessions = createMemorySessionStore();
+  const parent = await sessions.getOrCreateByThread("reassigned-parent", "dm", scope);
+  const first = await sessions.getOrCreateByThread("reassigned-first", "dm", scope);
+  const second = await sessions.getOrCreateByThread("reassigned-second", "dm", scope);
+  await sessions.setParentSession(first.id, parent.id);
+  await sessions.setParentSession(second.id, parent.id);
+  for (const reviewer of [first, second])
+    await sessions.setSpawnMeta(reviewer.id, {
+      surface: "web",
+      actor: { id: reviewer.id, type: "internal" },
+      conversation: { kind: "dm", threadRef: reviewer.threadRef, audience: [] },
+      harness: "pi",
+      model: "gpt-5.4",
+    });
+  const attempt = await sessions.acquireLease(parent.id, "turn");
+  assert.ok(attempt.lease);
+  for (const reviewer of [first, second])
+    await assignWorkflowReviewer({
+      sessions,
+      lease: attempt.lease,
+      scopeLabel: scope,
+      parentSessionId: parent.id,
+      reviewerSessionId: reviewer.id,
+      definition,
+      step: "auditor-1-pass",
+    });
+
+  assert.equal(
+    await assignedWorkflowReview({
+      sessions,
+      parentSessionId: parent.id,
+      reviewerSessionId: first.id,
+      definition,
+      step: "auditor-1-pass",
+    }),
+    undefined,
+  );
+  assert.equal(
+    await activeWorkflowReviewAssignment({
+      sessions,
+      parentSessionId: parent.id,
+      reviewerSessionId: first.id,
+      definitions: [definition],
+    }),
+    undefined,
+  );
+  assert.equal(
+    (
+      await assignedWorkflowReview({
+        sessions,
+        parentSessionId: parent.id,
+        reviewerSessionId: second.id,
+        definition,
+        step: "auditor-1-pass",
+      })
+    )?.reviewerSessionId,
+    second.id,
   );
 });

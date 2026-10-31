@@ -261,16 +261,16 @@ export async function assignedWorkflowReview(input: {
   definition: WorkflowDefinition;
   step: string;
 }): Promise<WorkflowReviewerAssignment | undefined> {
-  return (await input.sessions.getEntries(input.parentSessionId))
+  const assignment = (await input.sessions.getEntries(input.parentSessionId))
     .map(reviewerAssignment)
     .filter((candidate): candidate is WorkflowReviewerAssignment => candidate !== null)
     .findLast(
       (candidate) =>
         candidate.workflowId === input.definition.id &&
         candidate.workflowVersion === input.definition.version &&
-        candidate.step === input.step &&
-        candidate.reviewerSessionId === input.reviewerSessionId,
+        candidate.step === input.step,
     );
+  return assignment?.reviewerSessionId === input.reviewerSessionId ? assignment : undefined;
 }
 
 export async function activeWorkflowReviewAssignment(input: {
@@ -293,8 +293,12 @@ export async function activeWorkflowReviewAssignment(input: {
   const completed = entries
     .map(acceptedWorkflowGate)
     .filter((candidate): candidate is WorkflowGateResult => candidate !== null);
+  const seenSteps = new Set<string>();
   for (let index = assignments.length - 1; index >= 0; index -= 1) {
     const assignment = assignments[index]!;
+    const assignmentStep = `${assignment.workflowId}:${assignment.workflowVersion}:${assignment.step}`;
+    if (seenSteps.has(assignmentStep)) continue;
+    seenSteps.add(assignmentStep);
     if (assignment.reviewerSessionId !== input.reviewerSessionId) continue;
     const definition = input.definitions.find(
       (candidate) => candidate.id === assignment.workflowId && candidate.version === assignment.workflowVersion,
