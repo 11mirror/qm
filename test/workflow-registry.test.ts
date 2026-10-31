@@ -59,3 +59,18 @@ test("workflow definitions reject forward references and duplicate ids", () => {
 
   assert.throws(() => loadWorkflowDefinitions(dir), /must reference an earlier step/);
 });
+
+test("workflow definitions reject multiple active workflows", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-workflows-multiple-"));
+  writeFileSync(
+    join(dir, "workflow-gates.json"),
+    JSON.stringify({
+      workflows: [
+        { id: "finance", version: 1, steps: [{ id: "evidence", role: "producer", requiredSkills: [] }] },
+        { id: "treasury", version: 1, steps: [{ id: "evidence", role: "producer", requiredSkills: [] }] },
+      ],
+    }),
+  );
+
+  assert.throws(() => loadWorkflowDefinitions(dir), /supports exactly one active workflow/);
+});

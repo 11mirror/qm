@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ScopeId, SessionEntry, TurnRuntime } from "../types.ts";
 import type { Lease, SessionStore } from "./session-store.ts";
 import {
+  acceptedWorkflowGate,
   evaluateWorkflowGate,
   missingWorkflowSkills,
   observedWorkflowSkills,
@@ -285,9 +286,13 @@ export async function activeWorkflowReviewAssignment(input: {
     }
   | undefined
 > {
-  const assignments = (await input.sessions.getEntries(input.parentSessionId))
+  const entries = await input.sessions.getEntries(input.parentSessionId);
+  const assignments = entries
     .map(reviewerAssignment)
     .filter((candidate): candidate is WorkflowReviewerAssignment => candidate !== null);
+  const completed = entries
+    .map(acceptedWorkflowGate)
+    .filter((candidate): candidate is WorkflowGateResult => candidate !== null);
   for (let index = assignments.length - 1; index >= 0; index -= 1) {
     const assignment = assignments[index]!;
     if (assignment.reviewerSessionId !== input.reviewerSessionId) continue;
@@ -295,7 +300,17 @@ export async function activeWorkflowReviewAssignment(input: {
       (candidate) => candidate.id === assignment.workflowId && candidate.version === assignment.workflowVersion,
     );
     const step = definition?.steps.find((candidate) => candidate.id === assignment.step);
-    if (definition && step) return { assignment, definition, step };
+    if (
+      definition &&
+      step &&
+      !completed.some(
+        (gate) =>
+          gate.workflowId === assignment.workflowId &&
+          gate.workflowVersion === assignment.workflowVersion &&
+          gate.step === assignment.step,
+      )
+    )
+      return { assignment, definition, step };
   }
   return undefined;
 }

@@ -72,6 +72,7 @@ export function loadWorkflowDefinitions(deploymentLayerDir?: string): WorkflowDe
   const root = record(JSON.parse(readFileSync(path, "utf8")), "workflow-gates.json");
   if (!Array.isArray(root.workflows)) throw new Error("workflow-gates.json workflows must be an array");
   const workflows = root.workflows.map(definition);
+  if (workflows.length > 1) throw new Error("workflow-gates.json supports exactly one active workflow");
   const ids = new Set<string>();
   for (const workflow of workflows) {
     if (ids.has(workflow.id)) throw new Error(`workflow-gates.json contains duplicate workflow ${workflow.id}`);

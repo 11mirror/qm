@@ -1,7 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { assignWorkflowReviewer, importWorkflowReview, recordWorkflowReview } from "../src/sessions/workflow-review.ts";
+import {
+  activeWorkflowReviewAssignment,
+  assignWorkflowReviewer,
+  importWorkflowReview,
+  recordWorkflowReview,
+} from "../src/sessions/workflow-review.ts";
 import { scopeId } from "../src/types.ts";
 
 const scope = scopeId("personal", "finance-review");
@@ -257,5 +262,63 @@ test("a direct child without a durable assignment cannot be imported", async () 
       reviewStep: "auditor-1-pass",
     }),
     /reviewer is not assigned to this workflow step/,
+  );
+});
+
+test("a completed review step revokes the child assignment", async () => {
+  const sessions = createMemorySessionStore();
+  const parent = await sessions.getOrCreateByThread("completed-parent", "dm", scope);
+  const child = await sessions.getOrCreateByThread("completed-child", "dm", scope);
+  await sessions.setParentSession(child.id, parent.id);
+  await sessions.setSpawnMeta(child.id, {
+    surface: "web",
+    actor: { id: "reviewer", type: "internal" },
+    conversation: { kind: "dm", threadRef: child.threadRef, audience: [] },
+    harness: "pi",
+    model: "gpt-5.4",
+  });
+  const attempt = await sessions.acquireLease(parent.id, "turn");
+  assert.ok(attempt.lease);
+  await assignWorkflowReviewer({
+    sessions,
+    lease: attempt.lease,
+    scopeLabel: scope,
+    parentSessionId: parent.id,
+    reviewerSessionId: child.id,
+    definition,
+    step: "auditor-1-pass",
+  });
+  assert.ok(
+    await activeWorkflowReviewAssignment({
+      sessions,
+      parentSessionId: parent.id,
+      reviewerSessionId: child.id,
+      definitions: [definition],
+    }),
+  );
+  await sessions.appendMany(attempt.lease, [
+    {
+      type: "tool_result",
+      payload: {
+        tool: "workflow_gate",
+        callId: "completed-review-step",
+        accepted: true,
+        workflowId: definition.id,
+        workflowVersion: definition.version,
+        step: "auditor-1-pass",
+        subject: child.id,
+      },
+      scopeLabel: scope,
+    },
+  ]);
+
+  assert.equal(
+    await activeWorkflowReviewAssignment({
+      sessions,
+      parentSessionId: parent.id,
+      reviewerSessionId: child.id,
+      definitions: [definition],
+    }),
+    undefined,
   );
 });

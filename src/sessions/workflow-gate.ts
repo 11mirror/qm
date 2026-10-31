@@ -134,14 +134,14 @@ export async function activeWorkflowSkillRequirements(input: {
   definitions: readonly WorkflowDefinition[];
 }): Promise<readonly WorkflowSkillRequirement[]> {
   const passed = (await input.sessions.getEntries(input.sessionId))
-    .map(acceptedGate)
+    .map(acceptedWorkflowGate)
     .filter((gate): gate is WorkflowGateResult => gate !== null);
   const latest = passed.findLast((gate) =>
     input.definitions.some(
       (definition) => definition.id === gate.workflowId && definition.version === gate.workflowVersion,
     ),
   );
-  if (!latest) return input.definitions.flatMap((definition) => definition.steps[0]?.requiredSkills ?? []);
+  if (!latest) return input.definitions.length === 1 ? (input.definitions[0]?.steps[0]?.requiredSkills ?? []) : [];
   const definition = input.definitions.find(
     (candidate) => candidate.id === latest.workflowId && candidate.version === latest.workflowVersion,
   );
@@ -153,7 +153,7 @@ export async function activeWorkflowSkillRequirements(input: {
   return definition?.steps.find((step) => !passedSteps.has(step.id))?.requiredSkills ?? [];
 }
 
-function acceptedGate(entry: SessionEntry): WorkflowGateResult | null {
+export function acceptedWorkflowGate(entry: SessionEntry): WorkflowGateResult | null {
   if (entry.type !== "tool_result" || !entry.payload || typeof entry.payload !== "object") return null;
   const payload = entry.payload as Record<string, unknown>;
   if (payload.tool !== "workflow_gate" || payload.accepted !== true) return null;
@@ -194,7 +194,7 @@ export async function evaluateWorkflowGate(input: {
   const missingSkills = missingWorkflowSkills(observedSkills, step.requiredSkills);
   const unexpectedSkills = unexpectedWorkflowSkills(observedSkills, step.requiredSkills);
   const passed = entries
-    .map(acceptedGate)
+    .map(acceptedWorkflowGate)
     .filter((gate): gate is WorkflowGateResult => gate !== null)
     .filter((gate) => gate.workflowId === input.definition.id && gate.workflowVersion === input.definition.version);
   const predecessor = step.after ? passed.findLast((gate) => gate.step === step.after) : undefined;
