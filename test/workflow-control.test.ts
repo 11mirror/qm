@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { createWorkflowControl } from "../src/sessions/workflow-control.ts";
+import { createWorkflowControl, workflowDefinitionsForSession } from "../src/sessions/workflow-control.ts";
 import { scopeId } from "../src/types.ts";
 
 test("workflow control derives the producer identity from the host session", async () => {
@@ -132,4 +132,45 @@ test("workflow control replaces model evidence claims with durable artifact dige
     }),
     /not an accessible durable artifact/,
   );
+});
+
+test("an in-flight workflow keeps its durable definition across deployment changes", async () => {
+  const sessions = createMemorySessionStore();
+  const scope = scopeId("personal", "workflow-snapshot");
+  const session = await sessions.getOrCreateByThread("snapshot", "dm", scope);
+  const attempt = await sessions.acquireLease(session.id, "turn");
+  assert.ok(attempt.lease);
+  const original = {
+    id: "finance",
+    version: 1,
+    steps: [{ id: "request-bound", role: "producer", requiredSkills: [] }],
+  } as const;
+  const control = createWorkflowControl({
+    sessions,
+    lease: attempt.lease,
+    scopeLabel: scope,
+    session,
+    runtime: () => ({ harnessId: "pi", modelId: "gpt-5.4" }),
+    resolveEvidence: async () => [],
+    definitions: [original],
+  });
+  await control({ action: "advance", workflowId: "finance", step: "request-bound", decision: "pass" });
+
+  assert.deepEqual(
+    await workflowDefinitionsForSession({
+      sessions,
+      sessionId: session.id,
+      configured: [
+        {
+          id: "finance",
+          version: 1,
+          steps: [{ id: "changed", role: "producer", requiredSkills: [] }],
+        },
+      ],
+    }),
+    [original],
+  );
+  assert.deepEqual(await workflowDefinitionsForSession({ sessions, sessionId: session.id, configured: [] }), [
+    original,
+  ]);
 });

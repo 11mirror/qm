@@ -1,5 +1,6 @@
 import type { WorkflowToolInput } from "../tools/primitives.ts";
-import type { ScopeId, Session, TurnRuntime } from "../types.ts";
+import { randomUUID } from "node:crypto";
+import type { ScopeId, Session, SessionEntry, TurnRuntime } from "../types.ts";
 import type { Lease, SessionStore } from "./session-store.ts";
 import type { WorkflowDefinition } from "./workflow-gate.ts";
 import {
@@ -12,6 +13,52 @@ import {
 function required(value: string | undefined, label: string): string {
   if (!value) throw new Error(`${label} is required`);
   return value;
+}
+
+function durableWorkflowDefinition(entry: SessionEntry): WorkflowDefinition | undefined {
+  if (entry.type !== "tool_result" || !entry.payload || typeof entry.payload !== "object") return undefined;
+  const payload = entry.payload as Record<string, unknown>;
+  if (payload.tool !== "workflow_definition" || !payload.definition || typeof payload.definition !== "object")
+    return undefined;
+  return payload.definition as WorkflowDefinition;
+}
+
+export async function workflowDefinitionsForSession(input: {
+  sessions: Pick<SessionStore, "getEntries">;
+  sessionId: string;
+  configured: readonly WorkflowDefinition[];
+}): Promise<readonly WorkflowDefinition[]> {
+  const durable = (await input.sessions.getEntries(input.sessionId)).map(durableWorkflowDefinition).find(Boolean);
+  return durable ? [durable] : input.configured;
+}
+
+async function ensureWorkflowDefinition(input: {
+  sessions: Pick<SessionStore, "getEntries" | "appendMany">;
+  lease: Lease;
+  scopeLabel: ScopeId;
+  definition: WorkflowDefinition;
+}): Promise<void> {
+  if ((await input.sessions.getEntries(input.lease.sessionId)).some(durableWorkflowDefinition)) return;
+  const callId = `workflow-definition-${randomUUID()}`;
+  await input.sessions.appendMany(input.lease, [
+    {
+      type: "tool_call",
+      payload: { tool: "workflow_definition", callId, action: "start", workflowId: input.definition.id },
+      scopeLabel: input.scopeLabel,
+    },
+    {
+      type: "tool_result",
+      payload: {
+        tool: "workflow_definition",
+        callId,
+        workflowId: input.definition.id,
+        workflowVersion: input.definition.version,
+        definition: input.definition,
+        result: JSON.stringify(input.definition),
+      },
+      scopeLabel: input.scopeLabel,
+    },
+  ]);
 }
 
 export function createWorkflowControl(input: {
@@ -78,6 +125,12 @@ export function createWorkflowControl(input: {
       });
     }
     if (input.session.parentSessionId) throw new Error("only the producer session can mutate workflow state");
+    await ensureWorkflowDefinition({
+      sessions: input.sessions,
+      lease: input.lease,
+      scopeLabel: input.scopeLabel,
+      definition,
+    });
     if (request.action === "assign_reviewer") {
       return assignWorkflowReviewer({
         sessions: input.sessions,

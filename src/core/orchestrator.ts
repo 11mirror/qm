@@ -122,7 +122,7 @@ import { artifactImageLoader } from "../harness/replay-images.ts";
 import { principalEntitledToScope } from "../resolution/context-filter.ts";
 import { openSessionEntry, searchSessionEntries } from "../sessions/history-search.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
-import { createWorkflowControl } from "../sessions/workflow-control.ts";
+import { createWorkflowControl, workflowDefinitionsForSession } from "../sessions/workflow-control.ts";
 import { activeWorkflowReviewAssignment } from "../sessions/workflow-review.ts";
 import { activeWorkflowSkillRequirements, workflowSkillSatisfies } from "../sessions/workflow-gate.ts";
 import { defaultPublishAudience } from "../resolution/publish-audience.ts";
@@ -1939,13 +1939,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           )
         : renderSandboxProviders([scopeProfile.backend], scopeProfile.backend, false);
 
+      const workflowDefinitions = await workflowDefinitionsForSession({
+        sessions: deps.sessions,
+        sessionId: session.parentSessionId ?? session.id,
+        configured: deps.workflowDefinitions ?? [],
+      });
       const activeWorkflowReview =
-        session.parentSessionId && deps.workflowDefinitions?.length
+        session.parentSessionId && workflowDefinitions.length
           ? await activeWorkflowReviewAssignment({
               sessions: deps.sessions,
               parentSessionId: session.parentSessionId,
               reviewerSessionId: session.id,
-              definitions: deps.workflowDefinitions,
+              definitions: workflowDefinitions,
             })
           : undefined;
       const {
@@ -1976,7 +1981,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         egressTokenForPolicy,
         openResourceAccess: !external && (liveAuthorTurn || openAutomationKeychain),
         visibleSkillsForTurn,
-        ...(deps.workflowDefinitions?.length
+        ...(workflowDefinitions.length
           ? {
               authorizeSkillRead: async (skill: import("../sessions/workflow-gate.ts").ObservedWorkflowSkill) =>
                 (
@@ -1986,7 +1991,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     : await activeWorkflowSkillRequirements({
                         sessions: deps.sessions,
                         sessionId: session.id,
-                        definitions: deps.workflowDefinitions!,
+                        definitions: workflowDefinitions,
                       }))
                 ).some((requirement) => workflowSkillSatisfies(skill, requirement)),
             }
@@ -2680,15 +2685,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   }),
               }
             : {}),
-          ...(deps.workflowDefinitions?.length &&
-          ((!session.parentSessionId && !strictReadOnly) || activeWorkflowReview)
+          ...(workflowDefinitions.length && ((!session.parentSessionId && !strictReadOnly) || activeWorkflowReview)
             ? {
                 workflow: createWorkflowControl({
                   sessions: deps.sessions,
                   lease,
                   scopeLabel: scopeId,
                   session,
-                  definitions: deps.workflowDefinitions,
+                  definitions: workflowDefinitions,
                   runtime: () => turnRuntime,
                   resolveEvidence: async (ids) =>
                     Promise.all(
