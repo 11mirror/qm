@@ -1937,10 +1937,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           )
         : renderSandboxProviders([scopeProfile.backend], scopeProfile.backend, false);
 
+      const leaseStart = Date.now();
+      const acquired = await acquireTurnLeaseOrRefuse({
+        sessionId: session.id,
+        site: "turn",
+        scopeId,
+        automated: automatedTurn,
+        ...(input.runId ? { runId: input.runId } : {}),
+        ...(input.surface ? { surface: input.surface } : {}),
+      });
+      if (!acquired.lease) return acquired.refusal;
+      const lease = acquired.lease;
       const workflowTurn = await createWorkflowTurnContext({
         sessions: deps.sessions,
         session,
+        lease,
         configured: deps.workflowDefinitions ?? [],
+      }).catch(async (error) => {
+        await deps.sessions.releaseLease(lease);
+        throw error;
       });
       const {
         provision,
@@ -1972,17 +1987,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         visibleSkillsForTurn,
         ...(workflowTurn ? { authorizeSkillRead: workflowTurn.authorizeSkillRead } : {}),
       });
-      const leaseStart = Date.now();
-      const acquired = await acquireTurnLeaseOrRefuse({
-        sessionId: session.id,
-        site: "turn",
-        scopeId,
-        automated: automatedTurn,
-        ...(input.runId ? { runId: input.runId } : {}),
-        ...(input.surface ? { surface: input.surface } : {}),
-      });
-      if (!acquired.lease) return acquired.refusal;
-      const lease = acquired.lease;
       if (!ambientTurn) assignSessionTitle();
       const trackRevisions = input.surface === "slack" && Boolean(deps.surfaceCache);
       const revisionAnchor = trackRevisions ? await revisionAnchorAt(deps.sessions, session.id) : undefined;

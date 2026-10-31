@@ -9,8 +9,11 @@ import type { ScopeId, Session, TurnRuntime } from "../../types.ts";
 export async function createWorkflowTurnContext(input: {
   sessions: Pick<SessionStore, "get" | "getEntries" | "appendMany">;
   session: Session;
+  lease: Lease;
   configured: readonly WorkflowDefinition[];
 }) {
+  if (input.lease.sessionId !== input.session.id)
+    throw new Error("workflow context lease does not match the turn session");
   const rootSessionId = input.session.parentSessionId ?? input.session.id;
   const entries = await input.sessions.getEntries(rootSessionId, {
     tools: ["workflow_definition", "workflow_gate", "workflow_reviewer_assignment"],

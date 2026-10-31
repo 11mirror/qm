@@ -7,9 +7,12 @@ import { scopeId } from "../src/types.ts";
 test("workflow turn context authorizes only the active stage skills", async () => {
   const sessions = createMemorySessionStore();
   const session = await sessions.getOrCreateByThread("workflow-turn", "dm", scopeId("personal", "workflow-turn"));
+  const attempt = await sessions.acquireLease(session.id, "turn");
+  assert.ok(attempt.lease);
   const context = await createWorkflowTurnContext({
     sessions,
     session,
+    lease: attempt.lease,
     configured: [
       {
         id: "finance",
@@ -48,6 +51,8 @@ test("workflow turn context authorizes only the active stage skills", async () =
 test("workflow turn context reuses stage state across skill reads", async () => {
   const store = createMemorySessionStore();
   const session = await store.getOrCreateByThread("workflow-turn-cache", "dm", scopeId("personal", "workflow-turn"));
+  const attempt = await store.acquireLease(session.id, "turn");
+  assert.ok(attempt.lease);
   let historyReads = 0;
   const sessions = {
     ...store,
@@ -59,6 +64,7 @@ test("workflow turn context reuses stage state across skill reads", async () => 
   const context = await createWorkflowTurnContext({
     sessions,
     session,
+    lease: attempt.lease,
     configured: [
       {
         id: "finance",
@@ -91,9 +97,12 @@ test("workflow turn context refreshes stage skills after an accepted transition"
   const sessions = createMemorySessionStore();
   const scope = scopeId("personal", "workflow-turn-refresh");
   const session = await sessions.getOrCreateByThread("workflow-turn-refresh", "dm", scope);
+  const attempt = await sessions.acquireLease(session.id, "turn");
+  assert.ok(attempt.lease);
   const context = await createWorkflowTurnContext({
     sessions,
     session,
+    lease: attempt.lease,
     configured: [
       {
         id: "finance",
@@ -118,8 +127,6 @@ test("workflow turn context refreshes stage skills after an accepted transition"
     contentDigest: "c".repeat(64),
   };
   assert.equal(await context.authorizeSkillRead(skill), false);
-  const attempt = await sessions.acquireLease(session.id, "turn");
-  assert.ok(attempt.lease);
   const workflow = context.control({
     lease: attempt.lease,
     scopeLabel: scope,
@@ -132,4 +139,18 @@ test("workflow turn context refreshes stage skills after an accepted transition"
   await workflow({ action: "advance", workflowId: "finance", step: "evidence", decision: "pass" });
 
   assert.equal(await context.authorizeSkillRead(skill), true);
+});
+
+test("workflow turn context requires the active session lease", async () => {
+  const sessions = createMemorySessionStore();
+  const scope = scopeId("personal", "workflow-turn-lease");
+  const session = await sessions.getOrCreateByThread("workflow-turn-lease", "dm", scope);
+  const other = await sessions.getOrCreateByThread("workflow-turn-other", "dm", scope);
+  const attempt = await sessions.acquireLease(other.id, "turn");
+  assert.ok(attempt.lease);
+
+  await assert.rejects(
+    createWorkflowTurnContext({ sessions, session, lease: attempt.lease, configured: [] }),
+    /workflow context lease does not match the turn session/,
+  );
 });
