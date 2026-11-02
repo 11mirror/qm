@@ -324,6 +324,7 @@ import {
 import { keychainHarnessAuthEnv } from "./credentials/harness-auth-env.ts";
 import { createClaudeHarness, claudeHarnessConfigOptions } from "./harness/claude-harness.ts";
 import { createPiHarness, piHarnessConfigOptions, type ProviderKeys } from "./harness/pi-harness.ts";
+import { createUltimateHarness } from "./harness/ultimate-harness.ts";
 import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Harness } from "./harness/harness.ts";
@@ -336,7 +337,9 @@ import {
   CREDENTIAL_BROKER_AUD,
   DEPLOYMENT_CREDENTIAL_TTL_MS,
   EGRESS_PROXY_AUD,
+  SANDBOX_MODEL_AUD,
 } from "./auth/capability-token.ts";
+import { sandboxModelOpenAiBaseUrl } from "./api/contract.ts";
 import { createControlService } from "./api/control-service.ts";
 import { createMemoryRunStore } from "./runs/memory-run-store.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
@@ -1507,6 +1510,34 @@ export function buildApp(
               }
             : {}),
           signals: runSignals,
+        }),
+    ],
+    [
+      "ultimate",
+      overrides.harnesses?.ultimate ??
+        createUltimateHarness({
+          baseUrl: config.ultimateUrl ?? "http://127.0.0.1:4747",
+          projectRoot: process.cwd(),
+          model: (modelId) => ({ provider: "qm", modelId }),
+          modelBroker: async (input) => {
+            const secret = config.capabilitySecret ?? config.signingSecret;
+            if (!secret) throw new Error("cannot broker model capability without signing secret");
+            const token = await mintCapabilityToken(
+              {
+                actorId: input.runtimeActorId ?? "system:ultimate-turn",
+                scopeId: input.scopeLabel ?? scopeId("org", config.orgId),
+                aud: SANDBOX_MODEL_AUD,
+                exp: Date.now() + CAPABILITY_TTL_MS,
+              },
+              secret,
+              config.capabilityTokenCompression,
+            );
+            return {
+              baseUrl: sandboxModelOpenAiBaseUrl(config.apiBaseUrl ?? "http://127.0.0.1:4000"),
+              token,
+              modelId: input.runtime?.modelId ?? "gpt-6.1-sol",
+            };
+          },
         }),
     ],
   ]);

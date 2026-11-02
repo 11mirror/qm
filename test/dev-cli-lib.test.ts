@@ -369,6 +369,20 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   assert.equal(claude.harness, "claude");
   assert.equal(claude.env.HARNESS, "claude");
 
+  const ultimate = await assembleEnv({
+    worktree,
+    callerEnv: { HARNESS: "ultimate", OPENAI_API_KEY: "sk-openai" },
+    log,
+    probeLoginShell: async () => "",
+  });
+  assert.equal(ultimate.harness, "ultimate");
+  assert.equal(ultimate.env.MODEL_GATEWAY_URL, "https://api.openai.com/v1");
+  assert.equal(ultimate.env.MODEL_GATEWAY_API_KEY, "Bearer sk-openai");
+  assert.equal(ultimate.env.MODEL_GATEWAY_API_KEY_HEADER, "Authorization");
+  assert.match(ultimate.env.MODEL_GATEWAY_MODELS!, /(?:^|,)gpt-5\.6-luna=gpt-5\.6-luna(?:,|$)/);
+  assert.match(ultimate.env.MODEL_GATEWAY_MODELS!, /(?:^|,)gpt-6\.1-sol=gpt-6\.1-sol(?:,|$)/);
+  assert.match(ultimate.env.MODEL_GATEWAY_MODELS!, /(?:^|,)gpt-6\.1-sol-ultrafast=gpt-6\.1-sol(?:,|$)/);
+
   const fromLiveEnv = await assembleEnv({
     worktree,
     callerEnv: {},
@@ -464,9 +478,9 @@ test("harness config is strict and a ChatGPT auth file feeds the company subscri
     /CODEX_AUTH_FILE is unusable/,
   );
   rmSync(source, { recursive: true, force: true });
-  assert.throws(() => loadConfig({ HARNESS: "bogus" }), /use pi or claude/);
-  assert.throws(() => loadConfig({ HARNESS: "PI" }), /use pi or claude/);
-  assert.throws(() => loadConfig({ HARNESS: "opencode" }), /use pi or claude/);
+  assert.throws(() => loadConfig({ HARNESS: "bogus" }), /use pi, claude, or ultimate/);
+  assert.throws(() => loadConfig({ HARNESS: "PI" }), /use pi, claude, or ultimate/);
+  assert.throws(() => loadConfig({ HARNESS: "opencode" }), /use pi, claude, or ultimate/);
 });
 
 test("envSha is order-independent and value-sensitive", () => {
