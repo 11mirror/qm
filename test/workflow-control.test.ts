@@ -1,0 +1,255 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
+import { createWorkflowControl, workflowDefinitionsForSession } from "../src/sessions/workflow-control.ts";
+import { scopeId } from "../src/types.ts";
+
+test("workflow control derives the producer identity from the host session", async () => {
+  const sessions = createMemorySessionStore();
+  const scope = scopeId("personal", "workflow-control");
+  const session = await sessions.getOrCreateByThread("control", "dm", scope);
+  const attempt = await sessions.acquireLease(session.id, "turn");
+  assert.ok(attempt.lease);
+  const control = createWorkflowControl({
+    sessions,
+    lease: attempt.lease,
+    scopeLabel: scope,
+    session,
+    runtime: () => ({ harnessId: "pi", modelId: "gpt-5.4" }),
+    resolveEvidence: async (ids) => ids.map((id) => ({ id, digest: `host:${id}` })),
+    definitions: [
+      {
+        id: "finance",
+        version: 1,
+        steps: [{ id: "request-bound", role: "producer", requiredSkills: [] }],
+      },
+    ],
+  });
+
+  const result = await control({
+    action: "advance",
+    workflowId: "finance",
+    step: "request-bound",
+    decision: "pass",
+  });
+
+  assert.deepEqual(result, {
+    accepted: true,
+    workflowId: "finance",
+    workflowVersion: 1,
+    step: "request-bound",
+    role: "producer",
+    decision: "pass",
+    subject: session.id,
+    observedSkills: [],
+    missingSkills: [],
+    unexpectedSkills: [],
+    blockers: [],
+    inputEvidence: [],
+    outputEvidence: [],
+  });
+  const retry = await control({
+    action: "advance",
+    workflowId: "finance",
+    step: "request-bound",
+    decision: "pass",
+  });
+  assert.equal((retry as { accepted: boolean }).accepted, false);
+  assert.deepEqual(await control({ action: "status", workflowId: "finance" }), {
+    workflowId: "finance",
+    workflowVersion: 1,
+    steps: [
+      {
+        step: "request-bound",
+        role: "producer",
+        state: "passed",
+        decision: "pass",
+        subject: session.id,
+      },
+    ],
+  });
+  await assert.rejects(
+    control({ action: "advance", workflowId: "unknown", step: "request-bound", decision: "pass" }),
+    /workflow unknown is not registered/,
+  );
+});
+
+test("a human approval step cannot be advanced through the ordinary producer action", async () => {
+  const sessions = createMemorySessionStore();
+  const scope = scopeId("personal", "workflow-approval");
+  const session = await sessions.getOrCreateByThread("approval", "dm", scope);
+  const attempt = await sessions.acquireLease(session.id, "turn");
+  assert.ok(attempt.lease);
+  const control = createWorkflowControl({
+    sessions,
+    lease: attempt.lease,
+    scopeLabel: scope,
+    session,
+    runtime: () => ({ harnessId: "pi", modelId: "gpt-5.4" }),
+    resolveEvidence: async (ids) => ids.map((id) => ({ id, digest: `host:${id}` })),
+    definitions: [
+      {
+        id: "approval",
+        version: 1,
+        steps: [{ id: "PLAN_APPROVED", role: "producer", humanApproval: true, requiredSkills: [] }],
+      },
+    ],
+  });
+
+  await assert.rejects(
+    control({
+      action: "advance",
+      workflowId: "approval",
+      step: "PLAN_APPROVED",
+      decision: "pass",
+    }),
+    /requires the approval action/,
+  );
+});
+
+test("workflow status reports a valid rejection without marking an invalid attempt rejected", async () => {
+  const sessions = createMemorySessionStore();
+  const scope = scopeId("personal", "workflow-rejection");
+  const session = await sessions.getOrCreateByThread("rejection", "dm", scope);
+  const attempt = await sessions.acquireLease(session.id, "turn");
+  assert.ok(attempt.lease);
+  const control = createWorkflowControl({
+    sessions,
+    lease: attempt.lease,
+    scopeLabel: scope,
+    session,
+    runtime: () => ({ harnessId: "pi", modelId: "gpt-5.4" }),
+    resolveEvidence: async () => [],
+    definitions: [
+      {
+        id: "rejection",
+        version: 1,
+        steps: [{ id: "review", role: "reviewer", requiredSkills: [] }],
+      },
+    ],
+  });
+  await control({ action: "advance", workflowId: "rejection", step: "review", decision: "reject" });
+  assert.deepEqual(await control({ action: "status", workflowId: "rejection" }), {
+    workflowId: "rejection",
+    workflowVersion: 1,
+    steps: [{ step: "review", role: "reviewer", state: "rejected", decision: "reject", subject: session.id }],
+  });
+});
+
+test("the producer cannot directly advance a separated review stage", async () => {
+  const sessions = createMemorySessionStore();
+  const scope = scopeId("personal", "workflow-review-owner");
+  const session = await sessions.getOrCreateByThread("review-owner", "dm", scope);
+  const attempt = await sessions.acquireLease(session.id, "turn");
+  assert.ok(attempt.lease);
+  const control = createWorkflowControl({
+    sessions,
+    lease: attempt.lease,
+    scopeLabel: scope,
+    session,
+    runtime: () => ({ harnessId: "pi", modelId: "gpt-5.4" }),
+    resolveEvidence: async () => [],
+    definitions: [
+      {
+        id: "review-owner",
+        version: 1,
+        steps: [
+          { id: "raw", role: "producer", requiredSkills: [] },
+          { id: "audit", role: "auditor", after: "raw", separateFrom: "raw", requiredSkills: [] },
+        ],
+      },
+    ],
+  });
+  await assert.rejects(
+    control({ action: "advance", workflowId: "review-owner", step: "audit", decision: "pass" }),
+    /reviewer receipt/,
+  );
+});
+
+test("workflow control replaces model evidence claims with durable artifact digests", async () => {
+  const sessions = createMemorySessionStore();
+  const scope = scopeId("personal", "workflow-evidence");
+  const session = await sessions.getOrCreateByThread("evidence", "dm", scope);
+  const attempt = await sessions.acquireLease(session.id, "turn");
+  assert.ok(attempt.lease);
+  const control = createWorkflowControl({
+    sessions,
+    lease: attempt.lease,
+    scopeLabel: scope,
+    session,
+    runtime: () => ({ harnessId: "pi", modelId: "gpt-5.4" }),
+    resolveEvidence: async (ids) => {
+      if (ids.includes("unknown")) throw new Error("workflow evidence unknown is not an accessible durable artifact");
+      return ids.map((id) => ({ id, digest: `host:${id}` }));
+    },
+    definitions: [
+      {
+        id: "evidence",
+        version: 1,
+        steps: [{ id: "RAW_EVIDENCE_READY", role: "producer", requiredSkills: [] }],
+      },
+    ],
+  });
+
+  const result = await control({
+    action: "advance",
+    workflowId: "evidence",
+    step: "RAW_EVIDENCE_READY",
+    decision: "pass",
+    outputEvidence: [{ id: "raw-workbook" }],
+  });
+  assert.deepEqual((result as { outputEvidence: unknown }).outputEvidence, [
+    { id: "raw-workbook", digest: "host:raw-workbook" },
+  ]);
+  await assert.rejects(
+    control({
+      action: "advance",
+      workflowId: "evidence",
+      step: "RAW_EVIDENCE_READY",
+      decision: "pass",
+      outputEvidence: [{ id: "unknown" }],
+    }),
+    /not an accessible durable artifact/,
+  );
+});
+
+test("an in-flight workflow keeps its durable definition across deployment changes", async () => {
+  const sessions = createMemorySessionStore();
+  const scope = scopeId("personal", "workflow-snapshot");
+  const session = await sessions.getOrCreateByThread("snapshot", "dm", scope);
+  const attempt = await sessions.acquireLease(session.id, "turn");
+  assert.ok(attempt.lease);
+  const original = {
+    id: "finance",
+    version: 1,
+    steps: [{ id: "request-bound", role: "producer", requiredSkills: [] }],
+  } as const;
+  const control = createWorkflowControl({
+    sessions,
+    lease: attempt.lease,
+    scopeLabel: scope,
+    session,
+    runtime: () => ({ harnessId: "pi", modelId: "gpt-5.4" }),
+    resolveEvidence: async () => [],
+    definitions: [original],
+  });
+  await control({ action: "advance", workflowId: "finance", step: "request-bound", decision: "pass" });
+
+  assert.deepEqual(
+    await workflowDefinitionsForSession({
+      sessions,
+      sessionId: session.id,
+      configured: [
+        {
+          id: "finance",
+          version: 1,
+          steps: [{ id: "changed", role: "producer", requiredSkills: [] }],
+        },
+      ],
+    }),
+    [original],
+  );
+  assert.deepEqual(await workflowDefinitionsForSession({ sessions, sessionId: session.id, configured: [] }), [
+    original,
+  ]);
+});

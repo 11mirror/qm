@@ -315,6 +315,7 @@ import { createMemorySessionStore } from "./sessions/memory-session-store.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
 import { createMemoryToolOutputStore, createPostgresToolOutputStore } from "./sessions/tool-output.ts";
 import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
+import { loadWorkflowDefinitions } from "./sessions/workflow-registry.ts";
 import {
   fileCompanyChatGPTAuth,
   keychainCompanyChatGPTAuth,
@@ -323,6 +324,7 @@ import {
 import { keychainHarnessAuthEnv } from "./credentials/harness-auth-env.ts";
 import { createClaudeHarness, claudeHarnessConfigOptions } from "./harness/claude-harness.ts";
 import { createPiHarness, piHarnessConfigOptions, type ProviderKeys } from "./harness/pi-harness.ts";
+import { createUltimateHarness } from "./harness/ultimate-harness.ts";
 import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Harness } from "./harness/harness.ts";
@@ -335,7 +337,9 @@ import {
   CREDENTIAL_BROKER_AUD,
   DEPLOYMENT_CREDENTIAL_TTL_MS,
   EGRESS_PROXY_AUD,
+  SANDBOX_MODEL_AUD,
 } from "./auth/capability-token.ts";
+import { sandboxModelOpenAiBaseUrl } from "./api/contract.ts";
 import { createControlService } from "./api/control-service.ts";
 import { createMemoryRunStore } from "./runs/memory-run-store.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
@@ -702,6 +706,7 @@ export function buildApp(
   const deploymentLayer = config.deploymentLayerDir
     ? loadDeploymentLayer(config.deploymentLayerDir)
     : emptyDeploymentLayer();
+  const workflowDefinitions = loadWorkflowDefinitions(config.deploymentLayerDir);
   const layerSkillsDir = config.deploymentLayerDir ? resolve(deploymentLayer.dir, "skills") : undefined;
   const brokeredTools = deploymentLayer.brokeredTools;
   const orgScope = scopeId("org", config.orgId);
@@ -1507,6 +1512,34 @@ export function buildApp(
           signals: runSignals,
         }),
     ],
+    [
+      "ultimate",
+      overrides.harnesses?.ultimate ??
+        createUltimateHarness({
+          baseUrl: config.ultimateUrl ?? "http://127.0.0.1:4747",
+          projectRoot: process.cwd(),
+          model: (modelId) => ({ provider: "qm", modelId }),
+          modelBroker: async (input) => {
+            const secret = config.capabilitySecret ?? config.signingSecret;
+            if (!secret) throw new Error("cannot broker model capability without signing secret");
+            const token = await mintCapabilityToken(
+              {
+                actorId: input.runtimeActorId ?? "system:ultimate-turn",
+                scopeId: input.scopeLabel ?? scopeId("org", config.orgId),
+                aud: SANDBOX_MODEL_AUD,
+                exp: Date.now() + CAPABILITY_TTL_MS,
+              },
+              secret,
+              config.capabilityTokenCompression,
+            );
+            return {
+              baseUrl: sandboxModelOpenAiBaseUrl(config.apiBaseUrl ?? "http://127.0.0.1:4000"),
+              token,
+              modelId: input.runtime?.modelId ?? "gpt-6.1-sol",
+            };
+          },
+        }),
+    ],
   ]);
   const fallbackHarness = config.harness as HarnessId;
   const fallback = {
@@ -2181,6 +2214,7 @@ export function buildApp(
     userModelCredentials,
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     sessions,
+    ...(workflowDefinitions.length ? { workflowDefinitions } : {}),
     workspace,
     files,
     toolOutput,

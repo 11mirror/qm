@@ -6,13 +6,14 @@ import { readEnvFile } from "../../../cli/src/util.ts";
 import { bestEffort, sha256Hex } from "./util.ts";
 import { run } from "./proc.ts";
 import { codexAuthFileForEnv, readCodexOAuthAuthFile } from "../../../src/model/chatgpt-auth-file.ts";
+import { modelRequestOverrides, resolveModel, selectableBaseModels } from "../../../src/model/pi-models.ts";
 
 export interface AssembledEnv {
   env: Record<string, string>;
   anthropicKeySource: string;
   openaiKeySource: string;
   codexAuthSource: string;
-  harness: "pi" | "claude";
+  harness: "pi" | "claude" | "ultimate";
   liveEnvFile: string;
   warnings: string[];
 }
@@ -136,10 +137,24 @@ export async function assembleEnv(opts: {
     codexAuthSource = codexAuthCandidate;
   }
 
-  let harness: "pi" | "claude";
-  if (opts.callerEnv.HARNESS === "claude") {
-    harness = "claude";
+  let harness: "pi" | "claude" | "ultimate";
+  if (opts.callerEnv.HARNESS === "claude" || opts.callerEnv.HARNESS === "ultimate") {
+    harness = opts.callerEnv.HARNESS;
     env.HARNESS = harness;
+    if (harness === "ultimate") {
+      if (!env.OPENAI_API_KEY)
+        throw new Error("HARNESS=ultimate requires the existing OPENAI_API_KEY for QM brokerage");
+      env.MODEL_GATEWAY_URL = "https://api.openai.com/v1";
+      env.MODEL_GATEWAY_API_KEY = `Bearer ${env.OPENAI_API_KEY}`;
+      env.MODEL_GATEWAY_API_KEY_HEADER = "Authorization";
+      env.MODEL_GATEWAY_MODELS ||= selectableBaseModels()
+        .flatMap(({ id }) => {
+          if (resolveModel(id)?.provider !== "openai") return [];
+          return [`${id}=${modelRequestOverrides(id)?.model ?? id}`];
+        })
+        .join(",");
+      env.ULTIMATE_URL = opts.callerEnv.ULTIMATE_URL || env.ULTIMATE_URL || "http://127.0.0.1:4747";
+    }
   } else if (env.ANTHROPIC_API_KEY || env.OPENAI_API_KEY || codexOAuthConfigured) {
     harness = "pi";
     env.HARNESS = harness;
