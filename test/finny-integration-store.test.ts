@@ -180,6 +180,30 @@ test("startup recovery finds approved jobs whose producer dispatch is incomplete
   );
   assert.deepEqual(await runtime.currentBinding(producerSessionId), originalProducer);
   const factory = createFinnyToolServiceFactory({ runtime } as any);
+  const laterParentRunId = randomUUID();
+  assert.ok(
+    await factory.forTurn({
+      actor: { id: "U1", type: "internal" },
+      scopeId: job.scopeId,
+      sessionId: parentSessionId,
+      runId: laterParentRunId,
+      originThreadRef: job.originThreadRef,
+      destination: { type: "slack", target: "C1:100.1", threadTs: "100.1" },
+      parent: true,
+      parentBinding: {
+        schema: "finny-parent-binding.v1",
+        sessionId: parentSessionId,
+        runId: laterParentRunId,
+        scopeId: job.scopeId,
+        context: {
+          actor: { id: "U1", type: "internal" },
+          conversation: { kind: "dm", threadRef: "dm:D1:100.1", audience: [{ id: "U1", type: "internal" }] },
+          surface: "slack",
+        },
+      },
+    }),
+  );
+  assert.equal((await runtime.currentBinding(parentSessionId))?.runId, laterParentRunId);
   assert.equal(
     await factory.forTurn({
       actor: { id: "U1", type: "internal" },
