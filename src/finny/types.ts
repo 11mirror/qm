@@ -143,6 +143,7 @@ export const FINNY_JOB_EVENT_TYPES = [
   "evidence_invalidated",
   "rework_cancelled",
   "verification_reopened",
+  "plan_amended",
 ] as const;
 
 export type FinnyJobEventType = (typeof FINNY_JOB_EVENT_TYPES)[number];
@@ -213,6 +214,10 @@ export interface FinnyJobEventPayloads {
     evaluator: FinnyEvaluatorRef;
     previousRequiredGenerations: Record<FinnyCheckId, number>;
     requiredGenerations: Record<FinnyCheckId, number>;
+  };
+  plan_amended: {
+    previousPlanDigest: string;
+    newPlanDigest: string;
   };
 }
 

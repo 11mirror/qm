@@ -83,6 +83,15 @@ export interface RecordFinnyApprovalInput {
   decidedAt: number;
 }
 
+export interface RecordFinnyPlanAmendmentInput {
+  scopeId: string;
+  jobId: string;
+  plan: FinnyPlanPresentation;
+  requestId: string;
+  idempotencyKey: string;
+  createdAt: number;
+}
+
 export interface RecordFinnyAttestationInput {
   id: string;
   scopeId: string;
@@ -168,6 +177,7 @@ export interface FinnyStore {
   createJob(input: CreateFinnyJobInput): Promise<FinnyJob>;
   createApprovalRequest(input: CreateFinnyApprovalRequestInput): Promise<void>;
   createClarificationRequest(input: CreateFinnyClarificationRequestInput): Promise<FinnyClarificationRequest>;
+  recordPlanAmendment(input: RecordFinnyPlanAmendmentInput): Promise<FinnyEventResult<FinnyJobEvent<"plan_amended">>>;
   getJob(scopeId: string, jobId: string): Promise<FinnyJob | null>;
   getApprovalRequest(requestId: string): Promise<FinnyApprovalRequest | null>;
   getClarificationRequest(requestId: string): Promise<FinnyClarificationRequest | null>;

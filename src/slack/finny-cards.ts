@@ -134,7 +134,12 @@ export function finnyPlanCard(input: FinnyPlanCardInput): FinnySlackCard {
     {
       type: "actions",
       elements: [
-        button("Approve", FINNY_PLAN_ACTION_IDS.approve, value, "primary"),
+        button(
+          input.title.startsWith("[Amended Scope]") ? "Approve Scope Change" : "Approve",
+          FINNY_PLAN_ACTION_IDS.approve,
+          value,
+          "primary",
+        ),
         button("Reject", FINNY_PLAN_ACTION_IDS.reject, value, "danger"),
         button("Request change", FINNY_PLAN_ACTION_IDS.requestChange, value),
       ],

@@ -28,6 +28,7 @@ import type {
   FinnyReceiptSigner,
   FinnyStore,
   RecordFinnyApprovalInput,
+  RecordFinnyPlanAmendmentInput,
   RecordFinnyClarificationDecisionInput,
   RecordFinnyArtifactReadyInput,
   RecordFinnyAuditBlockInput,
@@ -210,7 +211,8 @@ const EVALUATOR_AUTHORITY_SCHEMA = [
   `ALTER TABLE finny_job_events DROP CONSTRAINT IF EXISTS finny_job_events_event_type_check`,
   `ALTER TABLE finny_job_events ADD CONSTRAINT finny_job_events_event_type_check CHECK (event_type IN (
      'artifact_ready','audit_blocked','audit_passed','rework_requested','escalated',
-     'evaluator_revision_activated','evidence_invalidated','rework_cancelled','verification_reopened'
+     'evaluator_revision_activated','evidence_invalidated','rework_cancelled','verification_reopened',
+     'plan_amended'
    ))`,
 ];
 
@@ -722,6 +724,62 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
           input.decidedAt,
         ]);
         return rowToJob(updated.rows[0]);
+      });
+    },
+    async recordPlanAmendment(input: RecordFinnyPlanAmendmentInput) {
+      return withPgTransaction(await pool(), async (db) => {
+        const job = await lockedJob(db, input.scopeId, input.jobId);
+        if (job.finalized_at !== null) throw new Error("Finny job is already finalized");
+        const replay = await eventsForIdempotency(db, input.idempotencyKey);
+        if (replay.length) {
+          assertEventReplayJob(replay, input.jobId);
+          const first = replay[0];
+          if (
+            !first ||
+            first.type !== "plan_amended" ||
+            first.payload.newPlanDigest !== canonicalFinnyPlanDigest(input.plan)
+          ) {
+            throw new Error("Finny plan amendment idempotency key was reused");
+          }
+          return { events: [first as FinnyJobEvent<"plan_amended">], job: rowToJob(job), deduped: true };
+        }
+        const previousPlanDigest = job.plan_digest as string;
+        const newPlanDigest = canonicalFinnyPlanDigest(input.plan);
+        const nextHead = Number(job.event_head) + 1;
+        const event = await insertEvent(
+          db,
+          input.jobId,
+          "plan_amended",
+          { previousPlanDigest, newPlanDigest },
+          input.idempotencyKey,
+          0,
+          input.createdAt,
+        );
+        const updated = await db.query(
+          `UPDATE finny_jobs SET
+             plan_presentation=$2, plan_digest=$3,
+             pending_rework_seq=NULL, unresolved_escalation_seq=NULL,
+             event_head=$4, updated_at=$5
+           WHERE id=$1 RETURNING *`,
+          [input.jobId, JSON.stringify(input.plan), newPlanDigest, nextHead, input.createdAt],
+        );
+        await db.query(
+          `INSERT INTO finny_approval_requests(
+             request_id, scope_id, job_id, plan_digest, origin_thread_ref, authorized_actor_id, ready_at, created_at
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$7)
+           ON CONFLICT (request_id) DO UPDATE SET
+             plan_digest=EXCLUDED.plan_digest, ready_at=EXCLUDED.ready_at, decided_at=NULL`,
+          [
+            input.requestId,
+            input.scopeId,
+            input.jobId,
+            newPlanDigest,
+            job.origin_thread_ref,
+            job.approval_actor_id ?? "U1",
+            input.createdAt,
+          ],
+        );
+        return { events: [event], job: rowToJob(updated.rows[0]), deduped: false };
       });
     },
     async recordAttestation(input: RecordFinnyAttestationInput) {
