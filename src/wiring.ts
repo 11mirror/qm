@@ -2214,7 +2214,7 @@ export function buildApp(
               instruction:
                 role === "producer"
                   ? `Produce or reuse the approved workbook in the persistent sandbox following the resolved domain skill (such as sharechat-ap-outstanding-workbook). Persist it by POSTing JSON {name,mimetype,dataBase64} to $AGENT_API_URL/v1/files/upload with x-agent-capability: $AGENT_API_TOKEN. Then call finny_artifact_ready with the returned immutable file.id as provisionalRevision and file.sha256 as artifactDigest.`
-                  : `Execute Finny Auditor checklist: invoke deterministic_audit once for the mandatory spreadsheet checks (formula.recalculate, summary.crossfoot, artifact.structure), then independently audit every remaining required check (${Object.keys(job.policy.requiredGenerations).join(", ")}) and report immutable Files evidence through Finny.`,
+                  : `Execute Finny Auditor checklist: invoke finny(action="deterministic_audit", idempotencyKey="...") once for the mandatory spreadsheet checks (formula.recalculate, summary.crossfoot, artifact.structure). For each remaining required check (${Object.keys(job.policy.requiredGenerations).join(", ")}), independently audit it and call finny(action="pass", checkId="...", generation=N, evidenceFileId="...", idempotencyKey="...") or finny(action="block", ...). Upload evidence files via files write or $AGENT_API_URL/v1/files/upload to obtain evidenceFileId. Do not look for separate finny_pass or JobBook tools — all actions (deterministic_audit, pass, block, status) are actions on your callable 'finny' tool.`,
             });
           },
         },
