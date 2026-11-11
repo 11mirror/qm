@@ -191,13 +191,14 @@ export function createFinnyToolServiceFactory(deps: {
           scopeId: turn.scopeId,
           principalId: turn.actor.id,
         });
-      } else if (!current && deps.runtime.bindingForSession && deps.runtime.claimWorkerTurn) {
-        const historical = await deps.runtime.bindingForSession(turn.sessionId);
+      } else if (deps.runtime.claimWorkerTurn && deps.runtime.bindingForSession) {
+        const historical = current ?? (await deps.runtime.bindingForSession(turn.sessionId));
         if (
           historical &&
           historical.active &&
           historical.scopeId === turn.scopeId &&
-          (historical.role === "producer" || historical.role === "auditor")
+          (historical.role === "producer" || historical.role === "auditor") &&
+          (historical.runId !== turn.runId || !current)
         ) {
           const ttl = deps.config.workerGrantTtlMs ?? 3_600_000;
           current = await deps.runtime.claimWorkerTurn({
