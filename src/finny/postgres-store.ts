@@ -211,6 +211,14 @@ const EVALUATOR_AUTHORITY_SCHEMA = [
   `ALTER TABLE finny_job_events DROP CONSTRAINT IF EXISTS finny_job_events_event_type_check`,
   `ALTER TABLE finny_job_events ADD CONSTRAINT finny_job_events_event_type_check CHECK (event_type IN (
      'artifact_ready','audit_blocked','audit_passed','rework_requested','escalated',
+     'evaluator_revision_activated','evidence_invalidated','rework_cancelled','verification_reopened'
+   ))`,
+];
+
+const PLAN_AMENDMENT_SCHEMA = [
+  `ALTER TABLE finny_job_events DROP CONSTRAINT IF EXISTS finny_job_events_event_type_check`,
+  `ALTER TABLE finny_job_events ADD CONSTRAINT finny_job_events_event_type_check CHECK (event_type IN (
+     'artifact_ready','audit_blocked','audit_passed','rework_requested','escalated',
      'evaluator_revision_activated','evidence_invalidated','rework_cancelled','verification_reopened',
      'plan_amended'
    ))`,
@@ -466,6 +474,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
     { id: "finny/store/0006-approval-readiness-repair", statements: APPROVAL_READINESS_REPAIR_SCHEMA },
     { id: "finny/store/0007-evaluator-authority", statements: EVALUATOR_AUTHORITY_SCHEMA },
     { id: "finny/store/0008-deterministic-attestation", statements: DETERMINISTIC_ATTESTATION_SCHEMA },
+    { id: "finny/store/0009-plan-amendment-events", statements: PLAN_AMENDMENT_SCHEMA },
   ]);
   return {
     async createJob(input: CreateFinnyJobInput) {
