@@ -19,30 +19,29 @@ Read [the protocol](references/protocol.md) before starting a producer or Audito
 
 ## Mandatory step boundary
 
-Before every action, read the authoritative QM JobBook and verify the current job, event sequence, role, run, policy, artifact, status, and next allowed action. After every completed step, write the outcome and immutable evidence references to the authoritative JobBook, then read it again before the next action.
+Before every action, check the authoritative QM state via native `finny_status` (or `finny` tool action="status") and verify the current job, event sequence, role, run, policy, artifact, status, and next allowed action. After every completed step, submit the outcome through QM's native tools (`finny_artifact_ready`, `finny_pass`, `finny_block`), then verify state before the next action.
 
-Stop if the JobBook cannot be read, its sequence regresses, the role or run changes unexpectedly, or the proposed action is not allowed by the current authoritative state. Never use a `finny-job-state.v1` session entry as authority.
-
+Stop if the authoritative status cannot be read, its sequence regresses, the role or run changes unexpectedly, or the proposed action is not allowed by the current authoritative state. Never use an unverified session entry as authority.
 ## Producer
 
 1. Accept only a current producer grant whose scope, job, run, role, policy version, and artifact binding exactly match the authoritative job. A pending artifact binding must be replaced by a fresh artifact-bound grant before evidence submission.
-2. Read the JobBook immediately before each source read, transformation, calculation, upload, or rework step.
+2. Check status via `finny_status` immediately before each source read, transformation, calculation, upload, or rework step.
 3. Record source lineage, assumptions, transformations, control totals, exceptions, and the exact output bytes needed for independent review.
 4. Upload the provisional artifact through QM and use the returned immutable digest. Never certify mutable paths, workbook names, URLs, or locally recomputed digests as identity.
-5. Write the completed step and artifact digest to the JobBook. Do not submit Auditor evidence or request finalization with a producer grant.
+5. Call `finny_artifact_ready` with the artifact digest. Do not submit Auditor evidence or request finalization with a producer grant.
 
 ## Auditor
 
 1. Accept only a current Auditor grant whose scope, job, run, role, policy version, artifact digest, and required check generation exactly match the authoritative job.
 2. Be independent of the producer. Read immutable artifact bytes and typed evidence, not the producer's conclusion or session summary.
 3. Execute every check assigned by QM at its exact current generation. Reuse digest-bound evidence only when QM says it remains valid.
-4. Submit `PASS` only with compact evidence that proves the check against the exact artifact digest. Submit `BLOCK` with the failed invariant, evidence digest, and smallest required correction.
-5. Write each submission result and authoritative event sequence to the JobBook. Never sign, mint, or assemble a final receipt.
+4. Submit `finny_pass` with compact evidence that proves the check against the exact artifact digest. Submit `finny_block` with the failed invariant, evidence digest, and smallest required correction.
+5. Verify each submission result and authoritative event sequence through `finny_status`. Never sign, mint, or assemble a final receipt.
 
 ## BLOCK and rework
 
-A current `BLOCK` stops certification and delivery. QM starts versioned producer rework and a new independent audit cycle. The producer reads the new JobBook state and grant, changes the artifact, uploads new immutable bytes, and records the new digest. The Auditor reads the updated state and evaluates only current required generations. Continue until QM reports all current checks passing or QM escalates under its configured policy. Never hide a BLOCK, reuse stale evidence, or treat lineage-only changes as financial recomputation unless QM invalidates those checks.
+A current `BLOCK` stops certification and delivery. QM starts versioned producer rework and a new independent audit cycle. The producer reads the new status and grant via `finny_status`, changes the artifact, uploads new immutable bytes, and records the new digest with `finny_artifact_ready`. The Auditor reads the updated state and evaluates only current required generations. Continue until QM reports all current checks passing or QM escalates under its configured policy. Never hide a BLOCK, reuse stale evidence, or treat lineage-only changes as financial recomputation unless QM invalidates those checks.
 
 ## Finalization
 
-Request finalization only through QM with the current job and idempotency key. QM alone re-reads approval, latest evidence, generations, ledger head, artifact digest, provisional revision, and later BLOCK events and signs the receipt. Deliver only the exact revision named by the returned receipt. Record the receipt reference and delivery outcome in the JobBook without storing credentials, grant tokens, connector tokens, raw secrets, or signed authorization material.
+Request finalization only through QM with `finny_finalize` using the current job and idempotency key. QM alone re-reads approval, latest evidence, generations, ledger head, artifact digest, provisional revision, and later BLOCK events and signs the receipt. Deliver only the exact revision named by the returned receipt. Record the receipt reference and delivery outcome without storing credentials, grant tokens, connector tokens, raw secrets, or signed authorization material.
