@@ -207,8 +207,87 @@ export function parseGenerativeUISpec(content: string): GenerativeUISpec | null 
     const trimmed = content.trim();
     if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
     const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-    if (parsed.schema !== "generative-ui.v1" || !Array.isArray(parsed.elements)) return null;
 
+    // Support official json-render / Chat SDK schema ({ root: "card", elements: { ... } })
+    if (
+      typeof parsed.root === "string" &&
+      parsed.elements &&
+      typeof parsed.elements === "object" &&
+      !Array.isArray(parsed.elements)
+    ) {
+      const rawMap = parsed.elements as Record<string, Record<string, unknown>>;
+      const rootEl = rawMap[parsed.root];
+      if (!rootEl) return null;
+
+      const elements: GenerativeUIElement[] = [];
+      const rootProps = (rootEl.props ?? {}) as Record<string, unknown>;
+      const fallbackText =
+        typeof rootProps.title === "string" ? (rootProps.title as string) : undefined;
+
+      if (rootProps.title) {
+        elements.push({ type: "header", text: String(rootProps.title) });
+      }
+      if (rootProps.subtitle) {
+        elements.push({ type: "section", text: String(rootProps.subtitle) });
+      }
+
+      const walkChildren = (childrenKeys: unknown[]) => {
+        if (!Array.isArray(childrenKeys)) return;
+        for (const key of childrenKeys) {
+          const child = rawMap[String(key)];
+          if (!child) continue;
+          const type = String(child.type);
+          const props = (child.props ?? {}) as Record<string, unknown>;
+
+          if (type === "Text" && typeof props.content === "string") {
+            elements.push({ type: "section", text: props.content });
+          } else if (type === "Divider") {
+            elements.push({ type: "divider" });
+          } else if (type === "Section") {
+            walkChildren(child.children as unknown[]);
+          } else if (type === "Fields" && Array.isArray(child.children)) {
+            const fields: Array<{ title: string; value: string }> = [];
+            for (const fKey of child.children as unknown[]) {
+              const fChild = rawMap[String(fKey)];
+              if (fChild && fChild.type === "Field" && fChild.props) {
+                const fp = fChild.props as Record<string, unknown>;
+                fields.push({ title: String(fp.label ?? ""), value: String(fp.value ?? "") });
+              }
+            }
+            if (fields.length) elements.push({ type: "fields", fields });
+          } else if (type === "Table" && Array.isArray(props.headers) && Array.isArray(props.rows)) {
+            const headers = props.headers.map(String);
+            const rows = (props.rows as unknown[][]).map((r) => r.map((c) => (c == null ? "" : String(c))));
+            elements.push({ type: "table", headers, rows });
+          } else if (type === "Actions" && Array.isArray(child.children)) {
+            const buttons: ActionButton[] = [];
+            for (const bKey of child.children as unknown[]) {
+              const bChild = rawMap[String(bKey)];
+              if (bChild && (bChild.type === "Button" || bChild.type === "LinkButton") && bChild.props) {
+                const bp = bChild.props as Record<string, unknown>;
+                buttons.push({
+                  label: String(bp.label ?? ""),
+                  actionId: String(bp.id ?? bp.url ?? "action"),
+                  value: String(bp.value ?? bp.url ?? ""),
+                  ...(bp.style === "primary" || bp.style === "danger" ? { style: bp.style } : {}),
+                });
+              }
+            }
+            if (buttons.length) elements.push({ type: "actions", buttons });
+          }
+        }
+      };
+
+      walkChildren(rootEl.children as unknown[]);
+      if (elements.length > 0) {
+        return {
+          ...(fallbackText ? { fallbackText } : {}),
+          elements,
+        };
+      }
+    }
+
+    if (parsed.schema !== "generative-ui.v1" || !Array.isArray(parsed.elements)) return null;
     const validatedElements: GenerativeUIElement[] = [];
     for (const raw of parsed.elements) {
       if (!raw || typeof raw !== "object") continue;
