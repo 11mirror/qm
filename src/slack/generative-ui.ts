@@ -67,10 +67,23 @@ export interface GenerativeUISpec {
   elements: GenerativeUIElement[];
 }
 
+export const SLACK_CARD_LIMITS = {
+  tables: 1,
+  charts: 2,
+  fields: 10,
+  tableRows: 100,
+  tableColumns: 10,
+  chartTitle: 150,
+  chartLabel: 100,
+  chartSeries: 10,
+  chartPoints: 30,
+  maxBlocks: 50,
+};
+
 const SLACK_HEADER_TEXT_MAX = 150;
 const SLACK_SECTION_TEXT_MAX = 3000;
 const SLACK_BUTTON_TEXT_MAX = 75;
-const SLACK_BLOCKS_MAX = 50;
+const SLACK_BLOCKS_MAX = SLACK_CARD_LIMITS.maxBlocks;
 export function renderGenerativeUI(spec: GenerativeUISpec): {
   text: string;
   blocks: Array<Record<string, unknown>>;
