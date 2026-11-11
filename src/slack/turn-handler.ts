@@ -373,8 +373,10 @@ export function createTurnHandler(deps: {
       (ack ??= createAckPresenter({
         taskManaged,
         postAck: async (text) => {
-          const rendered = toSlackMrkdwn(text);
-          const ts = await postReply(rendered, undefined, statusKey());
+          const genSpec = parseGenerativeUISpec(text);
+          const genCard = genSpec ? renderGenerativeUI(genSpec) : null;
+          const rendered = genCard ? genCard.text : toSlackMrkdwn(text);
+          const ts = await postReply(rendered, genCard?.blocks, statusKey());
           if (ts && queuedRunId && !inc.unprompted) {
             try {
               await core.reportRunEditRef(queuedRunId, ts);
