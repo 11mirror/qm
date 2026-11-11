@@ -33,7 +33,7 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
         PORT: String(i.ports.core),
         ...(i.databaseUrl ? { DATABASE_URL: i.databaseUrl } : {}),
         ...(i.adminGrantsSeed ? { ADMIN_GRANTS: i.adminGrantsSeed } : {}),
-        PUBLIC_WEB_URL: web ? publicUrl : "",
+        PUBLIC_WEB_URL: web ? publicUrl : i.baseEnv.PUBLIC_WEB_URL || publicUrl,
         ...(web
           ? {
               PUBLIC_PORT: String(i.ports.portal),
