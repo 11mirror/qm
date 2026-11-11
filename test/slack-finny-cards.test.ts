@@ -55,6 +55,21 @@ test("finnyPlanCard presents the T2 plan and explicit decisions", () => {
   assert.doesNotMatch(JSON.stringify(actions), /digest|thread|caller|actor/i);
 });
 
+test("finnyPlanCard presents 'Approve Scope Change' button for amended scope plans", () => {
+  const card = finnyPlanCard({
+    requestId: "req_opaque_amend_1",
+    title: "[Amended Scope] October close with Dual-View normalization",
+    summary: "Include unearned subscription revenue normalization.",
+    phases: [{ name: "Dual-View calculations", owner: "Producer", dependencies: [] }],
+    certification: "Independent Auditor PASS on all required checks",
+    deliverable: "Dual-view Q3 workbook",
+    destination: "#finance-ops in this thread",
+  });
+  const actions = actionsOf(card).elements;
+  assert.equal(actions[0]?.text.text, "Approve Scope Change");
+  assert.equal(actions[0]?.action_id, FINNY_PLAN_ACTION_IDS.approve);
+});
+
 test("finnyPlanCard clips Block Kit text without splitting a surrogate pair", () => {
   const card = finnyPlanCard({
     requestId: "r1",

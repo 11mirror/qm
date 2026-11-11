@@ -11,6 +11,11 @@ import { text, type ToolKit } from "./kit.ts";
 
 export interface FinnyToolService {
   createPlan(plan: FinnyPlanPresentation, materialClarification?: FinnyMaterialClarification): Promise<string>;
+  amendPlan(
+    jobId: string,
+    plan: FinnyPlanPresentation,
+    materialClarification?: FinnyMaterialClarification,
+  ): Promise<string>;
   status(jobId: string): Promise<string>;
   artifactReady(input: {
     artifactDigest: string;
@@ -92,6 +97,19 @@ export function finnyTools(kit: ToolKit) {
     execute: (callId, params) =>
       run(callId, "create_plan", { title: params.plan.title }, () =>
         ref.current!.finny!.createPlan(params.plan, params.materialClarification),
+      ),
+  });
+  const amendPlan = defineTool({
+    name: "finny_amend_plan",
+    label: "Amend Finny plan",
+    description: "Amend an in-flight Finny plan when scope shifts. Requires human scope change approval.",
+    parameters: Type.Object(
+      { jobId: string(), plan, materialClarification: Type.Optional(materialClarification) },
+      { additionalProperties: false },
+    ),
+    execute: (callId, params) =>
+      run(callId, "amend_plan", { jobId: params.jobId, title: params.plan.title }, () =>
+        ref.current!.finny!.amendPlan(params.jobId, params.plan, params.materialClarification),
       ),
   });
   const status = defineTool({
@@ -188,6 +206,7 @@ export function finnyTools(kit: ToolKit) {
   });
   const tool = resourceTool("finny", {
     create_plan: createPlan,
+    amend_plan: amendPlan,
     status,
     artifact_ready: artifactReady,
     pass,
@@ -211,6 +230,7 @@ export function finnyTools(kit: ToolKit) {
   );
   const actionFields = {
     create_plan: ["plan"],
+    amend_plan: ["jobId", "plan"],
     status: ["jobId"],
     artifact_ready: ["artifactDigest", "provisionalRevision", "idempotencyKey"],
     pass: ["checkId", "generation", "evidenceFileId", "idempotencyKey"],
@@ -237,7 +257,8 @@ export function finnyTools(kit: ToolKit) {
         anyOf: contentFields
           .filter(
             (field) =>
-              !required.includes(field as never) && !(action === "create_plan" && field === "materialClarification"),
+              !required.includes(field as never) &&
+              !((action === "create_plan" || action === "amend_plan") && field === "materialClarification"),
           )
           .map((field) => ({ required: [field] })),
       },

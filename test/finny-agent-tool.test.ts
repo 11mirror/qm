@@ -11,6 +11,9 @@ const service = {
   async createPlan() {
     return "plan created";
   },
+  async amendPlan() {
+    return "plan amended";
+  },
   async status() {
     return "awaiting approval";
   },
@@ -70,6 +73,20 @@ test("finny schema accepts only narrow content and evidence actions", () => {
   const schema = finnyTool().parameters;
   const valid = [
     { action: "create_plan", plan },
+    { action: "amend_plan", jobId: "job-1", plan },
+    {
+      action: "amend_plan",
+      jobId: "job-1",
+      plan: { ...plan, clarifications: [{ question: "Basis?", answer: "Contracts" }] },
+      materialClarification: {
+        question: "Basis?",
+        options: [
+          { id: "contracts", label: "Contracts" },
+          { id: "invoices", label: "Invoices", description: "Use issued invoices" },
+        ],
+        recommendedOptionId: "contracts",
+      },
+    },
     {
       action: "create_plan",
       plan: { ...plan, clarifications: [{ question: "Basis?", answer: "Contracts" }] },
@@ -167,6 +184,10 @@ test("finny forwards only narrow inputs and returns concise bound-service text",
     async createPlan(input) {
       calls.push(["create_plan", input]);
       return "created job-1";
+    },
+    async amendPlan(jobId, input) {
+      calls.push(["amend_plan", { jobId, input }]);
+      return "amended job-1";
     },
     async status(input) {
       calls.push(["status", input]);

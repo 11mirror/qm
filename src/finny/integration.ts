@@ -9,7 +9,7 @@ import type { FinnyFinalizer } from "./finalizer.ts";
 import type { FinnyRuntimeStore } from "./runtime-postgres-store.ts";
 import type { FinnyStore } from "./store.ts";
 import { initialFinnyPolicy } from "./policy.ts";
-import { assertFinnyMaterialClarificationMatchesPlan } from "./plan.ts";
+import { assertFinnyMaterialClarificationMatchesPlan, canonicalFinnyPlanDigest } from "./plan.ts";
 import type { FinnyArtifactProposal } from "./integration-postgres-store.ts";
 import type {
   FinnyCheckId,
@@ -155,8 +155,9 @@ export function finnySlackAuthority(
 
 export function createFinnyToolServiceFactory(deps: {
   config: Omit<FinnyIntegrationConfig, "signingSecret">;
-  jobs: Pick<FinnyStore, "createJob" | "getJob">;
-  runtime: Pick<FinnyRuntimeStore, "currentBinding" | "claimParentTurn"> & Partial<Pick<FinnyRuntimeStore, "claimWorkerTurn" | "bindingForSession">>;
+  jobs: Pick<FinnyStore, "createJob" | "getJob" | "recordPlanAmendment">;
+  runtime: Pick<FinnyRuntimeStore, "currentBinding" | "claimParentTurn"> &
+    Partial<Pick<FinnyRuntimeStore, "claimWorkerTurn" | "bindingForSession">>;
   integration: FinnyIntegrationStore;
   deliveries: Pick<DeliveryStore, "enqueue">;
   coordinator: FinnyCoordinatorPort;
@@ -283,6 +284,35 @@ export function createFinnyToolServiceFactory(deps: {
           return clarification
             ? `Finny plan ${jobId} is awaiting clarification.`
             : `Finny plan ${jobId} is awaiting approval.`;
+        },
+        async amendPlan(
+          jobId: string,
+          planPresentation: FinnyPlanPresentation,
+          materialClarification?: FinnyMaterialClarification,
+        ): Promise<string> {
+          const job = await deps.jobs.getJob(turn.scopeId, jobId);
+          if (!job) throw new Error("Finny job is unavailable");
+          if (materialClarification)
+            assertFinnyMaterialClarificationMatchesPlan(planPresentation, materialClarification);
+          const requestId = id();
+          const now = Date.now();
+          await deps.jobs.recordPlanAmendment({
+            scopeId: turn.scopeId,
+            jobId,
+            plan: planPresentation,
+            requestId,
+            idempotencyKey: `finny-amend:${jobId}:${canonicalFinnyPlanDigest(planPresentation)}`,
+            createdAt: now,
+          });
+          await deps.deliveries.enqueue({
+            destination: {
+              ...turn.destination,
+              finnyPlanRequestId: requestId,
+            },
+            text: `[Amended Scope] ${planPresentation.title}`,
+            idempotencyKey: `finny-plan-amendment:${requestId}`,
+          });
+          return `Finny plan ${jobId} amendment is awaiting scope change approval.`;
         },
         async status(jobId: string): Promise<string> {
           if (!current || current.jobId !== jobId) throw new Error("Finny status requires the bound job");
@@ -628,10 +658,7 @@ export function finnyFinalDelivery(
       },
       {
         type: "context",
-        elements: [
-          `Receipt: \`${receipt.token}\``,
-          `Job ID: \`${job.id}\``,
-        ],
+        elements: [`Receipt: \`${receipt.token}\``, `Job ID: \`${job.id}\``],
       },
     ],
   };

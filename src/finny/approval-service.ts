@@ -125,8 +125,7 @@ export function createFinnyApprovalService(deps: {
           },
         };
       }
-      if (request.readyAt === undefined || request.decidedAt !== undefined || request.job.approval !== undefined)
-        return { kind: "gone" };
+      if (request.readyAt === undefined || request.decidedAt !== undefined) return { kind: "gone" };
       if (input.decision.kind !== "plan") throw new Error("Finny decision does not match the request");
       const actor = deps.identity.resolve(input.actor);
       if (!deps.identity.isInternal(actor) || actor.id !== request.authorizedActorId)

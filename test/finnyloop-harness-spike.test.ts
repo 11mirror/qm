@@ -59,6 +59,9 @@ test("Spike 2: Preflight harness calls finny_create_plan and enters human approv
       async getJob() {
         return null;
       },
+      async recordPlanAmendment() {
+        return {} as never;
+      },
     },
     runtime: {
       async currentBinding() {
@@ -171,6 +174,9 @@ test("Spike 3: Auditor executes deterministic audit and passes with valid eviden
           policy: initialFinnyPolicy(evaluator),
           requiredGenerations: { "formula.recalculate": 1, "summary.crossfoot": 1 },
         } as unknown as FinnyJob;
+      },
+      async recordPlanAmendment() {
+        return {} as never;
       },
     },
     runtime: {
