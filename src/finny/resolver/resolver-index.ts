@@ -108,6 +108,7 @@ export function createFinanceResolverIndex(baseDir = process.cwd()): FinanceReso
             "Account 606702 FX exclusion: must enforce AND a.acctnumber NOT IN ('606702')",
             "Point-in-time DPD Aging: evaluate (cutoff_date - duedate), never use live daysoverduesearch",
             "Separate MSME vendor tracking via custentity_sc_acl_msme",
+            "NetSuite SuiteQL does not expose 'AccountingPeriod' table or direct REST GET access. Cumulative posting period boundaries must be verified from transaction.postingperiod and trandate actuals (WHERE posting='T' AND type='Journal'), and primary book is established by default accountingbook=1.",
           ],
           guidance:
             "Accounts Payable query detected. Preflight must present plan with sharechat-ap-outstanding-workbook as Producer and verify against NetSuite AP controls.",
