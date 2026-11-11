@@ -593,15 +593,51 @@ export function finnyFinalDelivery(
   const artifactUrl = `${publicWebUrl.replace(/\/$/, "")}/v1/files/${encodeURIComponent(
     receipt.payload.provisionalRevision,
   )}/content`;
-  return {
-    destination: parent.destination,
-    text: [
+  const artifactLink = `<${artifactUrl}|Open final artifact>`;
+  const spec = {
+    schema: "generative-ui.v1",
+    fallbackText: [
       `*${job.plan.title} — Finny certification complete*`,
-      `*Artifact:* <${artifactUrl}|Open final artifact>`,
+      `*Artifact:* ${artifactLink}`,
       `*Artifact digest:* \`${receipt.payload.artifactDigest}\``,
       `*Certification:* ${job.plan.certification}`,
       `*Approval receipt:* \`${receipt.token}\``,
     ].join("\n"),
+    elements: [
+      {
+        type: "header",
+        text: "Finny Certification Complete",
+      },
+      {
+        type: "section",
+        text: `*${job.plan.title}*\nAll governance checks passed and independent audit verified.`,
+      },
+      {
+        type: "divider",
+      },
+      {
+        type: "fields",
+        fields: [
+          { title: "Artifact Link", value: artifactLink },
+          { title: "Artifact Digest", value: `\`${receipt.payload.artifactDigest}\`` },
+        ],
+      },
+      {
+        type: "section",
+        text: `*Certification Scope & Rules:*\n${job.plan.certification}`,
+      },
+      {
+        type: "context",
+        elements: [
+          `Receipt: \`${receipt.token}\``,
+          `Job ID: \`${job.id}\``,
+        ],
+      },
+    ],
+  };
+  return {
+    destination: parent.destination,
+    text: JSON.stringify(spec),
     idempotencyKey: `finny-final:${job.id}:${receipt.payload.ledgerHead}`,
   };
 }
