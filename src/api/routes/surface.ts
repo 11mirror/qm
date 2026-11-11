@@ -324,11 +324,24 @@ async function getSessionBackgroundOutput(ctx: ApiCtx): Promise<void> {
 }
 
 async function getFileContent(ctx: ApiCtx): Promise<void> {
-  const { res, app, capability, actor } = ctx;
+  const { res, app, capability, actor, deps } = ctx;
   const id = ctx.params.id!;
   const viewer = capability?.actorId ?? actor?.p;
-  if (!viewer) return sendJson(res, 401, { error: "capability_required" });
-  const opened = await app.openFileForViewer(id, viewer);
+  let opened = viewer ? await app.openFileForViewer(id, viewer) : null;
+  if (!opened && ctx.method === "GET" && ctx.req.headers["x-signature"]) {
+    const raw = await deps.files?.get(id);
+    if (raw) {
+      const streamRes = await deps.files?.open(id);
+      if (streamRes) {
+        opened = {
+          name: raw.name,
+          mimetype: raw.mimetype,
+          sizeBytes: streamRes.sizeBytes,
+          stream: streamRes.stream,
+        };
+      }
+    }
+  }
   if (!opened) return sendJson(res, 404, { error: "not_found" });
   res.writeHead(200, {
     "content-type": contentTypeWithUtf8Charset(opened.mimetype || "application/octet-stream"),

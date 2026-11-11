@@ -1245,6 +1245,28 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     );
   }
 
+  const fileContentMatch = /^\/v1\/files\/([^/]+)\/content$/.exec(pathname);
+  if (method === "GET" && fileContentMatch) {
+    const session = currentSession(req);
+    const principal = session?.sub ?? LOCAL_AUTH_PRINCIPAL;
+    const pathWithNonce = withSourceAuthNonce(pathname, CORE_SIGNING_SECRET);
+    const signed = signedHeaders(CORE_SIGNING_SECRET, "GET", pathWithNonce, "");
+    const extraHeaders: Record<string, string> = { ...signed };
+    if (principal && PORTAL_IDENTITY_SECRET) {
+      extraHeaders[PORTAL_IDENTITY_HEADER] = await mintPortalIdentity(
+        { p: principal, exp: Date.now() + 60_000 },
+        PORTAL_IDENTITY_SECRET,
+      );
+    }
+    return proxyToUpstream(
+      req,
+      res,
+      { baseUrl: CORE, path: pathWithNonce, search: "" },
+      ["accept", "accept-encoding", "range", "if-none-match"],
+      extraHeaders,
+    );
+  }
+
   if (pathname.startsWith("/v1/") && hasAgentCapability(req)) {
     return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, FORWARD_AGENT_API_HEADERS);
   }
