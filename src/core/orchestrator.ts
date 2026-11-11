@@ -1179,7 +1179,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (otherSkillSources.length)
         systemPrompt += `\n\nAdditional skill sources: ${otherSkillSources.join(", ")}. Use skills list/search with source to discover their authorized skills; read with the same source.`;
       const isFinanceTurn =
-        deps.finnyTools && !conversation.threadRef.includes("subagent") && isFinancialQuery(input.text);
+        deps.finnyTools &&
+        !conversation.threadRef.includes("subagent") &&
+        (isFinancialQuery(input.text) ||
+          input.text.includes('name="Finny Auditor"') ||
+          input.text.includes('name="Finny Producer"') ||
+          input.text.includes("Finny"));
       const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders, appConnections);
       if (isFinanceTurn) {
         const resolver = createFinanceResolverIndex();
