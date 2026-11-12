@@ -322,17 +322,24 @@ export function parseGenerativeUISpec(content: string): GenerativeUISpec | null 
       const el = raw as Record<string, unknown>;
       if (el.type === "header" && typeof el.text === "string" && el.text.trim()) {
         validatedElements.push({ type: "header", text: el.text });
-      } else if (el.type === "section" && typeof el.text === "string" && el.text.trim()) {
-        validatedElements.push({ type: "section", text: el.text });
+      } else if (
+        (el.type === "section" || el.type === "text") &&
+        typeof (el.text ?? el.content) === "string" &&
+        String(el.text ?? el.content).trim()
+      ) {
+        validatedElements.push({ type: "section", text: String(el.text ?? el.content) });
       } else if (el.type === "divider") {
         validatedElements.push({ type: "divider" });
       } else if (el.type === "fields" && Array.isArray(el.fields)) {
         const fields = el.fields
-          .filter(
-            (f): f is { title: string; value: string } =>
-              !!f && typeof f.title === "string" && typeof f.value === "string",
-          )
-          .map((f) => ({ title: f.title, value: f.value }));
+          .map((f) => {
+            if (!f || typeof f !== "object") return null;
+            const rec = f as Record<string, unknown>;
+            const title = String(rec.title ?? rec.label ?? rec.name ?? "").trim();
+            const value = rec.value !== null && rec.value !== undefined ? String(rec.value).trim() : "";
+            return title && value ? { title, value } : null;
+          })
+          .filter((f): f is { title: string; value: string } => f !== null);
         if (fields.length > 0) validatedElements.push({ type: "fields", fields });
       } else if (el.type === "actions" && Array.isArray(el.buttons)) {
         const buttons = el.buttons
@@ -350,8 +357,9 @@ export function parseGenerativeUISpec(content: string): GenerativeUISpec | null 
       } else if (el.type === "context" && Array.isArray(el.elements)) {
         const elements = el.elements.filter((item): item is string => typeof item === "string" && !!item.trim());
         if (elements.length > 0) validatedElements.push({ type: "context", elements });
-      } else if (el.type === "table" && Array.isArray(el.headers) && Array.isArray(el.rows)) {
-        const headers = el.headers.filter((h): h is string => typeof h === "string");
+      } else if (el.type === "table" && Array.isArray(el.headers ?? el.columns) && Array.isArray(el.rows)) {
+        const rawHeaders = (el.headers ?? el.columns) as unknown[];
+        const headers = rawHeaders.map((h) => (h === null || h === undefined ? "" : String(h)));
         const rows = el.rows
           .filter((r): r is unknown[] => Array.isArray(r))
           .map((r) => r.map((c) => (c === null || c === undefined ? "" : String(c))));
