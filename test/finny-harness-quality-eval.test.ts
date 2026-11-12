@@ -99,3 +99,43 @@ test("Finny Harness Coordinator Chatter Suppression Eval: fails if uncertified i
     "Coordinator guidance must forbid outputting provisional numbers",
   );
 });
+
+test("Finny Harness UI Model Dialect Eval: parses label, columns, and text synonyms into complete cards", () => {
+  const modelEmittedPayload = JSON.stringify({
+    schema: "generative-ui.v1",
+    fallbackText: "MTPL negative net worth hypothesis as of 31-Mar-2026",
+    elements: [
+      {
+        type: "header",
+        text: "Why group net worth is negative at 31-Mar-2026 — working hypothesis",
+      },
+      {
+        type: "fields",
+        fields: [
+          { label: "Equity-classified balances", value: "₹3,228 cr" },
+          { name: "Bank balances", value: "₹1,118 cr" },
+        ],
+      },
+      {
+        type: "table",
+        columns: ["Bucket", "GL", "₹ cr", "Nature"],
+        rows: [["Securities premium", "304101", "7,275 Cr", "Cash raised"]],
+      },
+      {
+        type: "text",
+        text: "The hypothesis explains that post-FY22 funding arrived as debt.",
+      },
+    ],
+  });
+
+  const spec = parseGenerativeUISpec(modelEmittedPayload);
+  assert.ok(spec !== null, "Spec must parse successfully");
+  assert.equal(spec.elements.length, 4, "All 4 elements (header, fields, table, section) must survive validation");
+
+  const card = renderGenerativeUI(spec);
+  assert.equal(card.blocks.length, 4, "Must render exactly 4 Block Kit blocks");
+  assert.equal(card.blocks[0]?.type, "header");
+  assert.equal(card.blocks[1]?.type, "section"); // fields block
+  assert.equal(card.blocks[2]?.type, "section"); // table block
+  assert.equal(card.blocks[3]?.type, "section"); // text/section block
+});
