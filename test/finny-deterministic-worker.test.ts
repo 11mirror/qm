@@ -395,3 +395,37 @@ test("rejects semantically false PASS outcomes", async () => {
     );
   }
 });
+
+test("summary.crossfoot allows floating-point residue up to 0.005 and rejects genuine mismatches", () => {
+  const baseResult = (difference: number, expected: number, actual: number) => ({
+    checkId: "summary.crossfoot" as const,
+    generation: 2,
+    verdict: "pass" as const,
+    reason: null,
+    evidence: {
+      kind: "cross-foot" as const,
+      comparisons: [{ sheet: "Summary", reference: "B12", expected, actual, difference }],
+    },
+  });
+
+  const envelopeWithDiff = (diff: number) => {
+    const unsigned = {
+      contractVersion: "finny.spreadsheet-worker.v2" as const,
+      artifactDigest,
+      policyVersion: "finny-r5.1",
+      evaluator,
+      engine: { name: "test", version: "1" },
+      results: [results[0], baseResult(diff, 100, 100 + diff), results[2]],
+    };
+    return {
+      ...unsigned,
+      envelopeDigest: recomputeEnvelopeDigest(unsigned),
+    } as unknown as SpreadsheetWorkerEnvelope;
+  };
+
+  assert.ok(verifySpreadsheetWorkerEnvelope(artifact, binding(), envelopeWithDiff(1e-10)));
+  assert.throws(
+    () => verifySpreadsheetWorkerEnvelope(artifact, binding(), envelopeWithDiff(0.5)),
+    /Spreadsheet PASS evidence is inconsistent/,
+  );
+});
