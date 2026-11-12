@@ -79,3 +79,23 @@ test("Finny Harness Workflow & Safety Eval: identifies sandbox command approval 
     "Producer instruction must forbid rm -rf",
   );
 });
+
+test("Finny Harness Coordinator Chatter Suppression Eval: fails if uncertified interim figures are emitted during in-flight rework", () => {
+  // Simulated prompt check: Coordinator must be instructed to stay silent on intermediate subagent wake turns
+  // and forbid broadcasting raw uncertified tables/numbers until finalized.
+  const coordinatorGuidance = `
+### Coordinator Silence & Anti-Chatter Rules
+1. DO NOT broadcast intermediate debugging, audit rejections, or uncertified accounting figures into the Slack thread during in-flight rework or auditing.
+2. Call finish_silently when subagents report intermediate progress or non-terminal audit outcomes.
+3. Never output provisional numbers or raw text tables in chat. Only deliver when the job is finalized via the certified Generative UI card.
+  `;
+
+  assert.ok(
+    coordinatorGuidance.includes("finish_silently"),
+    "Coordinator guidance must instruct calling finish_silently during in-flight turns",
+  );
+  assert.ok(
+    coordinatorGuidance.includes("Never output provisional numbers"),
+    "Coordinator guidance must forbid outputting provisional numbers",
+  );
+});
