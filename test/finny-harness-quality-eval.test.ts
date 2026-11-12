@@ -139,3 +139,65 @@ test("Finny Harness UI Model Dialect Eval: parses label, columns, and text synon
   assert.equal(card.blocks[2]?.type, "section"); // table block
   assert.equal(card.blocks[3]?.type, "section"); // text/section block
 });
+
+test("Finny Harness UI Chat SDK Eval: converts official @json-render/chat component tree into Block Kit blocks", () => {
+  const chatSdkTree = JSON.stringify({
+    root: "main-card",
+    elements: {
+      "main-card": {
+        type: "Card",
+        props: { title: "MTPL Net Worth Analysis", subtitle: "Consolidated as of 31-Mar-2026" },
+        children: ["summary-text", "kpi-fields", "divider-1", "breakdown-table", "card-actions"],
+      },
+      "summary-text": {
+        type: "Text",
+        props: { content: "Lifetime burn exceeds paid-in capital by ~₹6,100 Cr." },
+      },
+      "kpi-fields": {
+        type: "Fields",
+        children: ["field-1", "field-2"],
+      },
+      "field-1": {
+        type: "Field",
+        props: { title: "Equity Raised", value: "₹3,228 Cr" },
+      },
+      "field-2": {
+        type: "Field",
+        props: { label: "Debentures / OCDs", value: "₹5,972 Cr" },
+      },
+      "divider-1": {
+        type: "Divider",
+      },
+      "breakdown-table": {
+        type: "Table",
+        props: {
+          headers: ["Instrument", "Amount", "Classification"],
+          rows: [["Securities Premium", "₹7,275 Cr", "Equity"]],
+        },
+      },
+      "card-actions": {
+        type: "Actions",
+        children: ["btn-1"],
+      },
+      "btn-1": {
+        type: "Button",
+        props: { label: "Download NetSuite Extract", id: "download_netsuite", style: "primary" },
+      },
+    },
+  });
+
+  const spec = parseGenerativeUISpec(chatSdkTree);
+  assert.ok(spec !== null, "Official Chat SDK spec must parse successfully");
+  assert.equal(spec.fallbackText, "MTPL Net Worth Analysis");
+
+  const card = renderGenerativeUI(spec);
+  assert.ok(card.blocks.length >= 5, "Card must render header, subtitle, text, fields, divider, table, actions");
+  assert.equal(card.blocks[0]?.type, "header");
+  const fieldSection = card.blocks.find((b) => Array.isArray(b.fields));
+  assert.ok(fieldSection && typeof fieldSection === "object" && "fields" in fieldSection);
+  const fieldItems = Array.isArray(fieldSection.fields) ? fieldSection.fields : [];
+  assert.ok(fieldItems[0] && typeof fieldItems[0] === "object" && "text" in fieldItems[0]);
+  assert.ok(fieldItems[1] && typeof fieldItems[1] === "object" && "text" in fieldItems[1]);
+  assert.match(String(fieldItems[0].text), /Equity Raised/);
+  assert.match(String(fieldItems[1].text), /Debentures \/ OCDs/);
+});
