@@ -264,48 +264,60 @@ export function parseGenerativeUISpec(content: string): GenerativeUISpec | null 
         for (const key of childrenKeys) {
           const child = rawMap[String(key)];
           if (!child) continue;
-          const type = String(child.type);
+          const rawType = String(child.type ?? "").toLowerCase();
           const props = (child.props ?? {}) as Record<string, unknown>;
 
-          if (type === "Text" && typeof props.content === "string") {
-            elements.push({ type: "section", text: props.content });
-          } else if (type === "Divider") {
+          if (rawType === "text" || rawType === "section") {
+            const text = String(props.content ?? props.text ?? "");
+            if (text.trim()) elements.push({ type: "section", text });
+          } else if (rawType === "divider") {
             elements.push({ type: "divider" });
-          } else if (type === "Section") {
+          } else if (rawType === "card" && props.title) {
+            elements.push({ type: "header", text: String(props.title) });
+            if (props.subtitle) elements.push({ type: "section", text: String(props.subtitle) });
             walkChildren(child.children as unknown[]);
-          } else if (type === "Fields" && Array.isArray(child.children)) {
+          } else if (rawType === "fields" && Array.isArray(child.children)) {
             const fields: Array<{ title: string; value: string }> = [];
             for (const fKey of child.children as unknown[]) {
               const fChild = rawMap[String(fKey)];
-              if (fChild && fChild.type === "Field" && fChild.props) {
+              if (fChild && String(fChild.type ?? "").toLowerCase() === "field" && fChild.props) {
                 const fp = fChild.props as Record<string, unknown>;
-                fields.push({ title: String(fp.label ?? ""), value: String(fp.value ?? "") });
+                const title = String(fp.title ?? fp.label ?? fp.name ?? "").trim();
+                const value = String(fp.value ?? "").trim();
+                if (title && value) fields.push({ title, value });
               }
             }
             if (fields.length) elements.push({ type: "fields", fields });
-          } else if (type === "Table" && Array.isArray(props.headers) && Array.isArray(props.rows)) {
-            const headers = props.headers.map(String);
+          } else if (
+            rawType === "table" &&
+            Array.isArray(props.headers ?? props.columns) &&
+            Array.isArray(props.rows)
+          ) {
+            const rawHeaders = (props.headers ?? props.columns) as unknown[];
+            const headers = rawHeaders.map((h) => (h == null ? "" : String(h)));
             const rows = (props.rows as unknown[][]).map((r) => r.map((c) => (c == null ? "" : String(c))));
-            elements.push({ type: "table", headers, rows });
-          } else if (type === "Actions" && Array.isArray(child.children)) {
+            if (headers.length && rows.length) elements.push({ type: "table", headers, rows });
+          } else if (rawType === "actions" && Array.isArray(child.children)) {
             const buttons: ActionButton[] = [];
             for (const bKey of child.children as unknown[]) {
               const bChild = rawMap[String(bKey)];
-              if (bChild && (bChild.type === "Button" || bChild.type === "LinkButton") && bChild.props) {
+              const bType = String(bChild?.type ?? "").toLowerCase();
+              if (bChild && (bType === "button" || bType === "linkbutton") && bChild.props) {
                 const bp = bChild.props as Record<string, unknown>;
                 buttons.push({
-                  label: String(bp.label ?? ""),
-                  actionId: String(bp.id ?? bp.url ?? "action"),
+                  label: String(bp.label ?? bp.text ?? ""),
+                  actionId: String(bp.id ?? bp.actionId ?? bp.url ?? "action"),
                   value: String(bp.value ?? bp.url ?? ""),
                   ...(bp.style === "primary" || bp.style === "danger" ? { style: bp.style } : {}),
                 });
               }
             }
             if (buttons.length) elements.push({ type: "actions", buttons });
+          } else if (Array.isArray(child.children)) {
+            walkChildren(child.children as unknown[]);
           }
         }
       };
-
       walkChildren(rootEl.children as unknown[]);
       if (elements.length > 0) {
         return {
