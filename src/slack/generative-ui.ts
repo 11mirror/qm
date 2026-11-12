@@ -215,12 +215,28 @@ export function renderGenerativeUI(spec: GenerativeUISpec): {
     blocks,
   };
 }
+function extractJsonCandidate(content: string): string | null {
+  let trimmed = content.trim();
+  if (trimmed.startsWith("```")) {
+    const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
+    if (match?.[1]) trimmed = match[1].trim();
+  }
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) return trimmed;
+  const fencedMatch = /```(?:json)?\s*(\{[\s\S]*?\})\s*```/i.exec(content);
+  if (fencedMatch?.[1]) return fencedMatch[1].trim();
+  const firstBrace = content.indexOf("{");
+  const lastBrace = content.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    return content.slice(firstBrace, lastBrace + 1).trim();
+  }
+  return null;
+}
+
 export function parseGenerativeUISpec(content: string): GenerativeUISpec | null {
   try {
-    const trimmed = content.trim();
-    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
-    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-
+    const candidate = extractJsonCandidate(content);
+    if (!candidate) return null;
+    const parsed = JSON.parse(candidate) as Record<string, unknown>;
     // Support official json-render / Chat SDK schema ({ root: "card", elements: { ... } })
     if (
       typeof parsed.root === "string" &&
@@ -234,8 +250,7 @@ export function parseGenerativeUISpec(content: string): GenerativeUISpec | null 
 
       const elements: GenerativeUIElement[] = [];
       const rootProps = (rootEl.props ?? {}) as Record<string, unknown>;
-      const fallbackText =
-        typeof rootProps.title === "string" ? (rootProps.title as string) : undefined;
+      const fallbackText = typeof rootProps.title === "string" ? (rootProps.title as string) : undefined;
 
       if (rootProps.title) {
         elements.push({ type: "header", text: String(rootProps.title) });
