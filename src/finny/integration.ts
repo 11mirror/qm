@@ -657,6 +657,17 @@ export function finnyFinalDelivery(
         text: `*Certification Scope & Rules:*\n${job.plan.certification}`,
       },
       {
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            text: "Download Workbook (.xlsx)",
+            url: artifactUrl,
+            style: "primary",
+          },
+        ],
+      },
+      {
         type: "context",
         elements: [`Receipt: \`${receipt.token}\``, `Job ID: \`${job.id}\``],
       },

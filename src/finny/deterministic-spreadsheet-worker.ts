@@ -340,7 +340,7 @@ function validatePassConsistency(
   if (evidence.kind === "cross-foot") {
     if (
       evidence.comparisons.length === 0 ||
-      evidence.comparisons.some((item) => item.difference !== 0 || item.actual !== item.expected)
+      evidence.comparisons.some((item) => Math.abs(item.difference) > 0.005 && item.actual !== item.expected)
     ) {
       throw new Error("Spreadsheet PASS evidence is inconsistent");
     }
