@@ -9,7 +9,10 @@ export type GenerativeUIElement =
   | ActionsElement
   | ContextElement
   | TableElement
-  | ProgressCardElement;
+  | ProgressCardElement
+  | ProvenanceElement
+  | MetricElement
+  | CalloutElement;
 
 export interface HeaderElement {
   type: "header";
@@ -60,6 +63,31 @@ export interface ProgressCardElement {
   status: "queued" | "in_progress" | "complete" | "failed";
   step?: string;
   percentage?: number;
+}
+
+export interface ProvenanceItem {
+  metric: string;
+  source: string;
+  rule: string;
+  status?: string;
+}
+
+export interface ProvenanceElement {
+  type: "provenance";
+  items: ProvenanceItem[];
+}
+
+export interface MetricElement {
+  type: "metric";
+  label: string;
+  value: string;
+  delta?: string;
+}
+
+export interface CalloutElement {
+  type: "callout";
+  text: string;
+  level?: "info" | "warning" | "success";
 }
 
 export interface GenerativeUISpec {
@@ -206,6 +234,44 @@ export function renderGenerativeUI(spec: GenerativeUISpec): {
         });
         break;
       }
+      case "metric": {
+        const deltaStr = element.delta ? `  ·  *${escapeSlackText(element.delta)}*` : "";
+        const raw = `*${escapeSlackText(element.label)}*\n>*${toSlackMrkdwn(element.value)}*${deltaStr}`;
+        const text = raw.length <= SLACK_SECTION_TEXT_MAX ? raw : clip(raw, SLACK_SECTION_TEXT_MAX - 1);
+        blocks.push({
+          type: "section",
+          text: { type: "mrkdwn", text },
+        });
+        break;
+      }
+      case "callout": {
+        let icon = "ℹ️";
+        if (element.level === "warning") icon = "⚠️";
+        else if (element.level === "success") icon = "✅";
+        const raw = `>${icon} ${toSlackMrkdwn(element.text)}`;
+        const text = raw.length <= SLACK_SECTION_TEXT_MAX ? raw : clip(raw, SLACK_SECTION_TEXT_MAX - 1);
+        blocks.push({
+          type: "section",
+          text: { type: "mrkdwn", text },
+        });
+        break;
+      }
+      case "provenance": {
+        blocks.push({
+          type: "header",
+          text: { type: "plain_text", text: "Every Answer, Traceable", emoji: true },
+        });
+        for (const item of element.items.slice(0, 10)) {
+          const statusIcon = item.status ? `  ·  \`${escapeSlackText(item.status)}\`` : "  ·  `Verified ✓`";
+          const raw = `• *${escapeSlackText(item.metric)}*\n    \`${escapeSlackText(item.source)}\`  ·  _${escapeSlackText(item.rule)}_${statusIcon}`;
+          const text = raw.length <= SLACK_SECTION_TEXT_MAX ? raw : clip(raw, SLACK_SECTION_TEXT_MAX - 1);
+          blocks.push({
+            type: "section",
+            text: { type: "mrkdwn", text },
+          });
+        }
+        break;
+      }
     }
   }
 
@@ -313,6 +379,31 @@ export function parseGenerativeUISpec(content: string): GenerativeUISpec | null 
               }
             }
             if (buttons.length) elements.push({ type: "actions", buttons });
+          } else if (rawType === "metric" && props.label && props.value) {
+            elements.push({
+              type: "metric",
+              label: String(props.label),
+              value: String(props.value),
+              ...(props.delta ? { delta: String(props.delta) } : {}),
+            });
+          } else if (rawType === "callout" && (props.text || props.content)) {
+            const level = props.level === "warning" || props.level === "success" ? props.level : "info";
+            elements.push({
+              type: "callout",
+              text: String(props.text ?? props.content),
+              level,
+            });
+          } else if (rawType === "provenance" && Array.isArray(props.items)) {
+            const items = (props.items as unknown[])
+              .filter((it): it is Record<string, unknown> => !!it && typeof it === "object")
+              .map((it) => ({
+                metric: String(it.metric ?? it.name ?? it.title ?? ""),
+                source: String(it.source ?? it.gl ?? it.account ?? ""),
+                rule: String(it.rule ?? it.formula ?? it.derivation ?? ""),
+                ...(it.status ? { status: String(it.status) } : {}),
+              }))
+              .filter((it) => it.metric && it.source && it.rule);
+            if (items.length) elements.push({ type: "provenance", items });
           } else if (Array.isArray(child.children)) {
             walkChildren(child.children as unknown[]);
           }
@@ -390,6 +481,31 @@ export function parseGenerativeUISpec(content: string): GenerativeUISpec | null 
           ...(percentage !== undefined ? { percentage } : {}),
           ...(step ? { step } : {}),
         });
+      } else if (el.type === "metric" && typeof el.label === "string" && typeof el.value === "string") {
+        validatedElements.push({
+          type: "metric",
+          label: el.label,
+          value: el.value,
+          ...(typeof el.delta === "string" ? { delta: el.delta } : {}),
+        });
+      } else if (el.type === "callout" && typeof (el.text ?? el.content) === "string") {
+        const level = el.level === "warning" || el.level === "success" ? el.level : "info";
+        validatedElements.push({
+          type: "callout",
+          text: String(el.text ?? el.content),
+          level,
+        });
+      } else if (el.type === "provenance" && Array.isArray(el.items)) {
+        const items = el.items
+          .filter((it): it is Record<string, unknown> => !!it && typeof it === "object")
+          .map((it) => ({
+            metric: String(it.metric ?? it.name ?? it.title ?? ""),
+            source: String(it.source ?? it.gl ?? it.account ?? ""),
+            rule: String(it.rule ?? it.formula ?? it.derivation ?? ""),
+            ...(it.status ? { status: String(it.status) } : {}),
+          }))
+          .filter((it) => it.metric && it.source && it.rule);
+        if (items.length) validatedElements.push({ type: "provenance", items });
       }
     }
 

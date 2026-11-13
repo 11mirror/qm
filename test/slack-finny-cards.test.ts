@@ -9,6 +9,7 @@ import {
   finnyPlanCard,
   finnyResultCard,
 } from "../src/slack/finny-cards.ts";
+import { renderGenerativeUI } from "../src/slack/generative-ui.ts";
 
 function actionsOf(card: { blocks: Array<Record<string, unknown>> }) {
   return card.blocks.find((block) => block.type === "actions") as {
@@ -68,6 +69,32 @@ test("finnyPlanCard presents 'Approve Scope Change' button for amended scope pla
   const actions = actionsOf(card).elements;
   assert.equal(actions[0]?.text.text, "Approve Scope Change");
   assert.equal(actions[0]?.action_id, FINNY_PLAN_ACTION_IDS.approve);
+});
+
+test("renderGenerativeUI renders metric, callout, and provenance blocks", () => {
+  const spec = {
+    schema: "generative-ui.v1" as const,
+    fallbackText: "Adjusted EBITDA Q3",
+    elements: [
+      { type: "header" as const, text: "Q3 Close Adjusted EBITDA" },
+      { type: "metric" as const, label: "Adjusted EBITDA", value: "$38.4m", delta: "+11% YoY" },
+      { type: "callout" as const, text: "Net of late credit notes ($3.2m)", level: "warning" as const },
+      {
+        type: "provenance" as const,
+        items: [
+          { metric: "Revenue", source: "GL 411001", rule: "As-booked net of credits", status: "Verified Q3 close" },
+        ],
+      },
+    ],
+  };
+
+  const card = renderGenerativeUI(spec);
+  assert.equal(card.blocks.length, 5);
+  assert.equal(card.blocks[0]?.type, "header");
+  assert.equal(card.blocks[1]?.type, "section"); // metric
+  assert.equal(card.blocks[2]?.type, "section"); // callout
+  assert.equal(card.blocks[3]?.type, "header"); // Every Answer, Traceable header
+  assert.equal(card.blocks[4]?.type, "section"); // provenance item
 });
 
 test("finnyPlanCard clips Block Kit text without splitting a surrogate pair", () => {
