@@ -80,6 +80,7 @@ export {
   decodeTs,
   REACTION_INSTRUCTION,
   REACTION_DETECT_GUIDANCE,
+  SLACK_CARD_INSTRUCTION,
   MAX_REACTIONS_PER_TURN,
   normalizeReaction,
   normalizeReactions,
