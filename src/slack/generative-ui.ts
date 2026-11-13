@@ -112,10 +112,16 @@ const SLACK_HEADER_TEXT_MAX = 150;
 const SLACK_SECTION_TEXT_MAX = 3000;
 const SLACK_BUTTON_TEXT_MAX = 75;
 const SLACK_BLOCKS_MAX = SLACK_CARD_LIMITS.maxBlocks;
-export function renderGenerativeUI(spec: GenerativeUISpec): {
+export interface RenderedGenerativeUI {
   text: string;
   blocks: Array<Record<string, unknown>>;
-} {
+  attachments?: Array<{
+    color?: string;
+    blocks: Array<Record<string, unknown>>;
+  }>;
+}
+
+export function renderGenerativeUI(spec: GenerativeUISpec): RenderedGenerativeUI {
   const blocks: Array<Record<string, unknown>> = [];
 
   for (const element of spec.elements) {
@@ -276,11 +282,22 @@ export function renderGenerativeUI(spec: GenerativeUISpec): {
   }
 
   const fallback = spec.fallbackText || "Slack card update";
+  const hasProvenance = spec.elements.some((e) => e.type === "provenance");
+  const hasWarning = spec.elements.some((e) => e.type === "callout" && e.level === "warning");
+  const color = hasWarning ? "#F59E0B" : hasProvenance ? "#10B981" : "#3B82F6";
+
   return {
     text: fallback,
     blocks,
+    attachments: [
+      {
+        color,
+        blocks,
+      },
+    ],
   };
 }
+
 function extractJsonCandidate(content: string): string | null {
   let trimmed = content.trim();
   if (trimmed.startsWith("```")) {

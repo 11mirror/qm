@@ -236,10 +236,12 @@ export function createTurnHandler(deps: {
       msg: string,
       blocks?: Array<Record<string, unknown>>,
       idempotencyKey?: string,
+      attachments?: Array<Record<string, unknown>>,
     ): Promise<string | undefined> => {
       const replyArgs = (text: string, withBlocks: boolean): Record<string, unknown> => ({
         ...slackReplyArgs(inc.channel, text, replyThreadTs, { threadOnly: inc.kind === "channel", unfurlLinks: false }),
-        ...(withBlocks && blocks ? { blocks } : {}),
+        ...(withBlocks && blocks && !attachments ? { blocks } : {}),
+        ...(withBlocks && attachments ? { attachments } : {}),
       });
       if (idempotencyKey) {
         const res = await postWithVerify(client, replyArgs(msg, true) as PostMessageArgs, idempotencyKey);
@@ -651,7 +653,7 @@ export function createTurnHandler(deps: {
         const editNote = replyEditNote(result.retracted);
         const noteBlocks =
           genCard?.blocks ?? (editNote ? blocksWithContext(postText, [plainContext(editNote)]) : undefined);
-        if (postText) await postReply(postText, noteBlocks, runKey);
+        if (postText) await postReply(postText, noteBlocks, runKey, genCard?.attachments);
         if (uploadError) await postReply(uploadFailureNote(uploadError));
         const { directives, dropped } = resolveReactionTargets(reactions, allowedTs);
         if (dropped) console.error(`[slack-plugin] dropped ${dropped} reaction(s) with an unresolvable message id`);
