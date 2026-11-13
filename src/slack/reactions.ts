@@ -58,8 +58,9 @@ export const SLACK_CARD_INSTRUCTION =
   "When presenting structured data, reports, tables, metric overviews, or summaries on Slack, " +
   'format the output as an inline Generative UI card using the schema: `{"schema":"generative-ui.v1","fallbackText":"...","elements":[...]}` ' +
   'or Chat SDK json-render format `{"root":"card-1","elements":{...}}`. ' +
-  "Slack renders this natively inside a framed, bordered card. Include header, metric callouts (`metric`), " +
-  "compact tables with 2-4 columns (`table`), callouts (`callout`), and audit provenance (`provenance`) when reporting numbers.";
+  "Slack renders this natively inside a framed, bordered card. Keep inline tables compact (3–5 rows max); " +
+  "if displaying more than 5 items, summarize or use 2-column fields (`fields`), as Slack automatically collapses long tables. " +
+  "Include header, metric callouts (`metric`), compact tables (`table`), callouts (`callout`), and audit provenance (`provenance`) when reporting numbers.";
 export const MAX_REACTIONS_PER_TURN = 5;
 
 const SKIN_TONE_BY_MODIFIER: Record<string, string> = {
