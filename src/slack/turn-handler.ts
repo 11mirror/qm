@@ -21,6 +21,7 @@ import {
   DEFAULT_ACK_REACTIONS,
   REACTION_DETECT_GUIDANCE,
   REACTION_INSTRUCTION,
+  SLACK_CARD_INSTRUCTION,
   botIdentityArgs,
   buildReactionTurnText,
   createAckPresenter,
@@ -320,7 +321,7 @@ export function createTurnHandler(deps: {
         ? {
             location: "a direct message with the user",
             details: { channel: inc.channel, ...(inc.threadTs ? { thread_ts: inc.threadTs } : {}) },
-            instructions: REACTION_INSTRUCTION,
+            instructions: `${REACTION_INSTRUCTION}\n\n${SLACK_CARD_INSTRUCTION}`,
             reactionGuidance: REACTION_DETECT_GUIDANCE,
             ...(ids.botHandle ? { botHandle: ids.botHandle } : {}),
           }
@@ -333,8 +334,7 @@ export function createTurnHandler(deps: {
                 : {}),
               ...(replyThreadTs ? { thread_ts: replyThreadTs } : {}),
             },
-            instructions: `${REACTION_INSTRUCTION}\n\n${HANDOFF_INSTRUCTION}`,
-            reactionGuidance: REACTION_DETECT_GUIDANCE,
+            instructions: `${REACTION_INSTRUCTION}\n\n${HANDOFF_INSTRUCTION}\n\n${SLACK_CARD_INSTRUCTION}`,
             ...(ids.botHandle ? { botHandle: ids.botHandle } : {}),
           };
 
