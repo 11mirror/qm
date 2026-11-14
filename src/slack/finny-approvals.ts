@@ -35,9 +35,10 @@ export interface FinnyApprovalDecisionInput {
   requestId: string;
   decision: FinnySlackDecision;
   actor: ActorAssertion;
-  slack: { channel: string; messageTs: string; threadTs?: string };
+  slack?: { channel: string; messageTs: string; threadTs?: string };
+  surface?: string;
+  originThreadRef?: string;
 }
-
 export type FinnyApprovalOutcome =
   | { kind: "decision"; card: FinnyDecisionCardInput }
   | { kind: "result"; card: FinnyResultCardInput }

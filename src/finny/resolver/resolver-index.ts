@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { swallow } from "../../util/errors.ts";
 
 export interface ResolvedFinanceIntent {
   readonly matched: boolean;
@@ -12,9 +13,12 @@ export interface ResolvedFinanceIntent {
 
 export interface FinanceResolverIndex {
   resolve(query: string): ResolvedFinanceIntent;
+  resolveAsync?(
+    query: string,
+    oneShot?: (systemPrompt: string, prompt: string) => Promise<string | undefined>,
+  ): Promise<ResolvedFinanceIntent>;
   getRawContent(): string;
 }
-
 const AP_PATTERNS = [
   /\bap\b/i,
   /\baccounts?\s+payable\b/i,
@@ -47,16 +51,31 @@ const GL_PATTERNS = [
   /\bebitda\b/i,
 ];
 
+const MIS_PATTERNS = [
+  /\bnet\s*worth\b/i,
+  /\bfinancial\s+statement\b/i,
+  /\bfinal\s+statement\b/i,
+  /\bloss\s+bridge\b/i,
+  /\baudited\b/i,
+  /\bconsolidation\b/i,
+  /\bconsolidated\b/i,
+  /\bdebentures?\b/i,
+  /\bsolvency\b/i,
+  /\bfinancials?\b/i,
+];
+
 const FINANCE_KEYWORDS = [
   ...AP_PATTERNS,
   ...AR_PATTERNS,
   ...GL_PATTERNS,
+  ...MIS_PATTERNS,
   /\bworkbook\b/i,
+  /\bworksheet\b/i,
   /\bspreadsheet\b/i,
+  /\bexcel\b/i,
   /\bfinancial\s+reconcil/i,
   /\bclosing\b/i,
 ];
-
 export function isFinancialQuery(text: string): boolean {
   return FINANCE_KEYWORDS.some((regex) => regex.test(text));
 }
@@ -68,7 +87,6 @@ function loadResolverContent(baseDir: string): string {
   const candidates = [
     join(baseDir, "work/qm-finance-skill-pack/skills/finance-router/references/resolver.md"),
     join(baseDir, "skills-seed/finnyloop/references/resolver.md"),
-    process.env.FINNY_RESOLVER_SCHEMA_PATH,
   ];
 
   const loaded: string[] = [];
@@ -76,12 +94,11 @@ function loadResolverContent(baseDir: string): string {
     if (path && existsSync(path)) {
       try {
         loaded.push(readFileSync(path, "utf8"));
-      } catch {
-        // Continue if path is unreadable
+      } catch (e) {
+        swallow("loadResolverContent", e);
       }
     }
   }
-
   cachedContent = loaded.join("\n\n");
   return cachedContent;
 }
@@ -160,6 +177,44 @@ export function createFinanceResolverIndex(baseDir = process.cwd()): FinanceReso
         mandatoryInvariants: [],
         guidance: "Not classified as a finance query.",
       };
+    },
+    async resolveAsync(
+      query: string,
+      oneShot?: (systemPrompt: string, prompt: string) => Promise<string | undefined>,
+    ): Promise<ResolvedFinanceIntent> {
+      const initial = this.resolve(query);
+      if (initial.matched) return initial;
+      if (!oneShot) return initial;
+      try {
+        const systemPrompt =
+          'You are a high-speed intent decomposer for a finance copilot. Determine if the user query asks for financial accounting, reconciliation, balance analysis, P&L, net worth, statements, ledger transactions, or spreadsheet workbook preparation.\nReply ONLY with valid JSON: {"matched": boolean, "category": "accounts_payable"|"accounts_receivable"|"general_ledger"|"mis_close"|null, "intentName": string|null}';
+        const raw = await oneShot(systemPrompt, query);
+        if (!raw) return initial;
+        const parsed = JSON.parse(raw) as { matched?: boolean; category?: string; intentName?: string };
+        if (parsed.matched) {
+          const category =
+            parsed.category === "accounts_payable" ||
+            parsed.category === "accounts_receivable" ||
+            parsed.category === "general_ledger" ||
+            parsed.category === "mis_close"
+              ? parsed.category
+              : "mis_close";
+          let producerSkill = "sharechat-monthly-mis";
+          if (category === "accounts_payable") producerSkill = "sharechat-ap-outstanding-workbook";
+          else if (category === "accounts_receivable") producerSkill = "sharechat-ar-collection";
+          return {
+            matched: true,
+            category,
+            producerSkill,
+            intentName: parsed.intentName ?? "financial_analysis",
+            mandatoryInvariants: ["Deterministic formula recalculation and summary crossfoot required"],
+            guidance: "LLM classified as financial query. Route through FinnyLoop preflight plan approval.",
+          };
+        }
+      } catch (e) {
+        swallow("resolveAsync", e);
+      }
+      return initial;
     },
   };
 }

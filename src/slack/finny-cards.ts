@@ -256,3 +256,61 @@ export function finnyResultCard(input: FinnyResultCardInput): FinnySlackCard {
     blocks,
   };
 }
+export type FinnyJobStage =
+  "plan_approved" | "producer_running" | "artifact_ready" | "auditing" | "certified_pass" | "audit_blocked";
+
+export interface FinnyJobStatusCardInput {
+  title: string;
+  stage: FinnyJobStage;
+  detail?: string;
+}
+
+const STAGE_PRESENTATION: Record<FinnyJobStage, { label: string; icon: string; meter: string }> = {
+  plan_approved: {
+    label: "Plan Approved",
+    icon: "📋",
+    meter: "▶️ `[1/4 Plan Approved]` ➔ `[2/4 Producer: Dispatched]` ➔ `[3/4 Auditor: Pending]` ➔ `[4/4 Certification]`",
+  },
+  producer_running: {
+    label: "Producer Building",
+    icon: "⚙️",
+    meter:
+      "`[1/4 Approved]` ➔ ▶️ `[2/4 Producer: Extracting & Compiling]` ➔ `[3/4 Auditor: Pending]` ➔ `[4/4 Certification]`",
+  },
+  artifact_ready: {
+    label: "Artifact Ready",
+    icon: "📦",
+    meter: "`[1/4 Approved]` ➔ `[2/4 Producer: Done]` ➔ ▶️ `[3/4 Auditor: Artifact Received]` ➔ `[4/4 Certification]`",
+  },
+  auditing: {
+    label: "Auditor Verifying",
+    icon: "🔍",
+    meter:
+      "`[1/4 Approved]` ➔ `[2/4 Producer: Done]` ➔ ▶️ `[3/4 Auditor: Recalculating & Checking]` ➔ `[4/4 Certification]`",
+  },
+  certified_pass: {
+    label: "Certified PASS",
+    icon: "✅",
+    meter: "`[1/4 Approved]` ➔ `[2/4 Producer: Done]` ➔ `[3/4 Auditor: PASS]` ➔ ▶️ `[4/4 Final Certification Ready]`",
+  },
+  audit_blocked: {
+    label: "Audit Blocked - Reworking",
+    icon: "⚠️",
+    meter: "`[1/4 Approved]` ➔ 🔄 `[2/4 Producer: Rework Triggered]` ➔ `[3/4 Auditor: Blocked]` ➔ `[4/4 Pending]`",
+  },
+};
+
+export function finnyJobStatusCard(input: FinnyJobStatusCardInput): FinnySlackCard {
+  required(input.title, "title");
+  const presentation = STAGE_PRESENTATION[input.stage];
+  const blocks = [
+    header(`Finny JobBook · ${presentation.label}`),
+    section(`${presentation.icon} *${escaped(input.title)}*`),
+    section(presentation.meter),
+    ...(input.detail ? [section(escaped(input.detail))] : []),
+  ];
+  return {
+    text: `${presentation.icon} [Finny JobBook: ${presentation.label}] ${input.title}`,
+    blocks,
+  };
+}

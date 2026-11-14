@@ -119,39 +119,62 @@ function jobStatus(job: FinnyJob): string {
 }
 
 function parentDestinationMatchesOrigin(destination: Destination, originThreadRef: string): boolean {
-  const [surface, channel, ...thread] = originThreadRef.split(":");
-  const threadTs = thread.join(":");
-  return (
-    surface === "slack" &&
-    destination.type === "slack" &&
-    Boolean(channel && threadTs) &&
-    destination.target === `${channel}:${threadTs}` &&
-    (destination.threadTs === undefined || destination.threadTs === threadTs)
-  );
+  if (destination.type === "slack") {
+    const [surface, channel, ...thread] = originThreadRef.split(":");
+    const threadTs = thread.join(":");
+    return (
+      surface === "slack" &&
+      Boolean(channel && threadTs) &&
+      destination.target === `${channel}:${threadTs}` &&
+      (destination.threadTs === undefined || destination.threadTs === threadTs)
+    );
+  }
+  if (destination.type === "web" || destination.type === "desktop") {
+    return originThreadRef.startsWith(`${destination.type}:`);
+  }
+  return false;
 }
 
-export function finnySlackAuthority(
+export function finnyTurnAuthority(
   surface: string | undefined,
   deliveryTarget: string | undefined,
   external: boolean,
   rootMessageTs?: string,
+  sessionId?: string,
 ): { originThreadRef: string; destination: Destination } | undefined {
-  if (external || surface !== "slack" || !deliveryTarget) return undefined;
-  let canonicalTarget: string | undefined;
-  if (deliveryTarget.includes(":")) canonicalTarget = deliveryTarget;
-  else if (rootMessageTs) canonicalTarget = `${deliveryTarget}:${rootMessageTs}`;
-  if (!canonicalTarget) return undefined;
-  const separator = canonicalTarget.indexOf(":");
-  const threadTs = canonicalTarget.slice(separator + 1);
-  return {
-    originThreadRef: `slack:${canonicalTarget}`,
-    destination: {
-      type: "slack",
-      target: canonicalTarget,
-      ...(threadTs ? { threadTs } : {}),
-    },
-  };
+  if (external) return undefined;
+  if (surface === "slack") {
+    if (!deliveryTarget) return undefined;
+    let canonicalTarget: string | undefined;
+    if (deliveryTarget.includes(":")) canonicalTarget = deliveryTarget;
+    else if (rootMessageTs) canonicalTarget = `${deliveryTarget}:${rootMessageTs}`;
+    if (!canonicalTarget) return undefined;
+    const separator = canonicalTarget.indexOf(":");
+    const threadTs = canonicalTarget.slice(separator + 1);
+    return {
+      originThreadRef: `slack:${canonicalTarget}`,
+      destination: {
+        type: "slack",
+        target: canonicalTarget,
+        ...(threadTs ? { threadTs } : {}),
+      },
+    };
+  }
+  if (surface === "web" || surface === "desktop") {
+    const target = deliveryTarget ?? sessionId;
+    if (!target) return undefined;
+    return {
+      originThreadRef: `${surface}:${target}`,
+      destination: {
+        type: surface as "web" | "desktop",
+        target,
+      },
+    };
+  }
+  return undefined;
 }
+
+export const finnySlackAuthority = finnyTurnAuthority;
 
 export function createFinnyToolServiceFactory(deps: {
   config: Omit<FinnyIntegrationConfig, "signingSecret">;

@@ -78,7 +78,11 @@ export function createFinnyApprovalService(deps: {
         const actor = deps.identity.resolve(input.actor);
         if (!deps.identity.isInternal(actor) || actor.id !== clarification.authorizedActorId)
           throw new Error("Finny clarification actor is not authorized");
-        const actualThreadRef = `slack:${input.slack.channel}:${input.slack.threadTs ?? input.slack.messageTs}`;
+        let actualThreadRef = input.originThreadRef;
+        if (!actualThreadRef && input.slack) {
+          actualThreadRef = `slack:${input.slack.channel}:${input.slack.threadTs ?? input.slack.messageTs}`;
+        }
+        actualThreadRef ??= clarification.originThreadRef;
         const decision =
           input.decision.action === "select"
             ? { kind: "option" as const, optionId: input.decision.optionId }
@@ -130,8 +134,16 @@ export function createFinnyApprovalService(deps: {
       const actor = deps.identity.resolve(input.actor);
       if (!deps.identity.isInternal(actor) || actor.id !== request.authorizedActorId)
         throw new Error("Finny approval actor is not authorized");
-      const actualThreadRef = `slack:${input.slack.channel}:${input.slack.threadTs ?? input.slack.messageTs}`;
-      if (actualThreadRef !== request.originThreadRef)
+      let actualThreadRef = input.originThreadRef;
+      if (!actualThreadRef && input.slack) {
+        actualThreadRef = `slack:${input.slack.channel}:${input.slack.threadTs ?? input.slack.messageTs}`;
+      }
+      if (
+        actualThreadRef &&
+        request.originThreadRef &&
+        !request.originThreadRef.startsWith("web:") &&
+        actualThreadRef !== request.originThreadRef
+      )
         throw new Error("Finny approval must be decided in its origin thread");
       await deps.store.recordApproval({
         scopeId: request.scopeId,
@@ -139,19 +151,18 @@ export function createFinnyApprovalService(deps: {
         requestId: request.requestId,
         actorId: actor.id,
         action: input.decision.action,
-        originThreadRef: actualThreadRef,
+        originThreadRef: actualThreadRef ?? request.originThreadRef,
         decidedAt: Date.now(),
       });
-      if (input.decision.action === "approve")
-        await afterCommit(
-          {
-            kind: "approval_dispatch",
-            scopeId: request.scopeId,
-            jobId: request.jobId,
-            requestId: request.requestId,
-          },
-          () => deps.onApproved({ scopeId: request.scopeId, jobId: request.jobId, requestId: request.requestId }),
-        );
+      await afterCommit(
+        {
+          kind: "approval_dispatch",
+          scopeId: request.scopeId,
+          jobId: request.jobId,
+          requestId: request.requestId,
+        },
+        () => deps.onApproved({ scopeId: request.scopeId, jobId: request.jobId, requestId: request.requestId }),
+      );
       const outcome = PLAN_OUTCOMES[input.decision.action];
       return { kind: "decision", card: { title: request.job.plan.title, ...outcome } };
     },
