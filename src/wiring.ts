@@ -2347,7 +2347,37 @@ export function buildApp(
       if (!parent) throw new Error("Finny escalation has no bound destination");
       await deliveries.enqueue({
         destination: parent.destination,
-        text: `Finny job ${job.id} reached its configured rework limit and requires human review.`,
+        text: JSON.stringify({
+          root: "card",
+          elements: {
+            card: {
+              type: "card",
+              props: {
+                title: "Finny Audit Blocked — Human Review Required",
+                subtitle: `Job ${job.id} stopped at rework safety limit`,
+              },
+              children: ["status", "findings", "action"],
+            },
+            status: {
+              type: "text",
+              props: {
+                content: `⚠️ *Audit Blocked:* The workbook produced by Finny Producer failed verification by Finny Auditor. Rework cycles exhausted.`,
+              },
+            },
+            findings: {
+              type: "text",
+              props: {
+                content: `*Details:* Invariants or currency totals did not crossfoot to zero. Please review the findings or submit an amended plan.`,
+              },
+            },
+            action: {
+              type: "text",
+              props: {
+                content: `_Status recorded in JobBook ledger._`,
+              },
+            },
+          },
+        }),
         idempotencyKey: `finny-escalation:${job.id}:${job.unresolvedEscalationSequence}`,
       });
       await finnyRuntime.retireJob(job.scopeId, job.id);

@@ -993,14 +993,31 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         !external && deps.sessionSyscalls && (delegationEnabled || actorFeatures.has("persistent_subagents"))
           ? deps.sessionSyscalls
           : undefined;
-      const delegateWork = requiresDelegation(input, delegationEnabled);
+      const resolver = createFinanceResolverIndex();
+      let resolvedIntent = resolver.resolve(input.text);
+      if (
+        !resolvedIntent.matched &&
+        deps.finnyTools &&
+        !conversation.threadRef.includes("subagent") &&
+        deps.agent.oneShot
+      ) {
+        resolvedIntent =
+          (await resolver.resolveAsync?.(input.text, (sys, prompt) => deps.agent.oneShot!(sys, prompt, "detect"))) ??
+          resolvedIntent;
+      }
+      const isFinanceCoordinator =
+        Boolean(deps.finnyTools) &&
+        !conversation.threadRef.includes("subagent") &&
+        (resolvedIntent.matched ||
+          isFinancialQuery(input.text) ||
+          input.text.includes('name="Finny Auditor"') ||
+          input.text.includes('name="Finny Producer"') ||
+          input.text.includes("Finny"));
+      const delegateWork = requiresDelegation(input, delegationEnabled) || isFinanceCoordinator;
       let modeFrame = applyPromptVars(frameMd, frameVars);
       if (delegateWork)
         modeFrame +=
           "\n\nKeep this conversation responsive. You cannot execute commands yourself. Delegate all substantial work (research, coding, computation, or multi-step investigations) with subagents open and a short colleague-to-colleague brief. Handle quick answers, status requests, and coordination yourself. Do not substitute other tools for command execution or do substantial work inline. After dispatching, end this turn promptly; subagent completion durably wakes you to collect and report the result. Do not wait or poll for subagents. Relay new user instructions to the appropriate subagent with subagents send_message. Describe progress and results naturally without explaining the delegation machinery.";
-      if (modeName === "mode-conversation" && input.proactiveOpener) {
-        modeFrame += "\nNo one has written yet; open the conversation yourself per the onboarding note below.";
-      }
       const sharedCore = applyPromptVars(SHARED_CORE_MD, {
         botName,
         botHandle,
@@ -1178,18 +1195,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         .sort();
       if (otherSkillSources.length)
         systemPrompt += `\n\nAdditional skill sources: ${otherSkillSources.join(", ")}. Use skills list/search with source to discover their authorized skills; read with the same source.`;
-      const isFinanceTurn =
-        deps.finnyTools &&
-        !conversation.threadRef.includes("subagent") &&
-        (isFinancialQuery(input.text) ||
-          input.text.includes('name="Finny Auditor"') ||
-          input.text.includes('name="Finny Producer"') ||
-          input.text.includes("Finny"));
+      const isFinanceTurn = isFinanceCoordinator;
       const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders, appConnections);
       if (isFinanceTurn) {
-        const resolver = createFinanceResolverIndex();
-        const resolvedIntent = resolver.resolve(input.text);
-        systemPrompt += `\n\n## Mandatory FinnyLoop Governance Harness\nThis turn matches a financial workbook/reconciliation intent (${resolvedIntent.intentName ?? "financial"}). All financial calculations, NetSuite balance queries, and Excel workbook production MUST flow through the FinnyLoop governance lifecycle. Do NOT execute domain skills directly or attach unverified workbooks. You must first call finny_create_plan to present the plan for human approval via Slack Block Kit cards.\n\n### Plan Presentation Requirements\nThe plan MUST be explicit, thorough, and transparent about the accounting logic and NetSuite fields:\n1. Specify the exact NetSuite tables and fields used (e.g. transaction, transactionline, entity, duedate, createddate, base_amount, custentity_sc_acl_msme).\n2. Detail the exact calculation and aging formula (e.g. DPD = cutoff_date - duedate, exclusion of non-cash FX account 606702, cumulative posting period cutoffs).\n3. State all scoping filters (subsidiary=1 MTPL, currency_id=1 INR, posting='T', voided='F', specific vendor IDs).\n4. Itemize the verification criteria for Auditor independent tie-out.\nRequired invariants: ${resolvedIntent.mandatoryInvariants.join("; ")}.\n\n### In-Flight Silence & Anti-Chatter Rules\n1. During in-flight production, audit, or rework cycles, DO NOT broadcast raw stream-of-consciousness explanations, intermediate audit blocks, or uncertified accounting figures into the Slack thread.\n2. When subagents report internal progress or intermediate rework (such as subagent wakes), invoke finish_silently to complete the turn cleanly without spamming conversational updates.\n3. NEVER output provisional numbers or text tables in chat. Only deliver when the job is finalized.\n4. If an in-flight job is blocked or escalated, output ONLY a clean, structured notification or use finny_amend_plan for scope amendments.\n\n### Financial Data Presentation & Provenance\nFollow the surface card design guidelines: format outputs as bordered Generative UI cards with header, KPI metrics, compact tables (2-4 columns), callouts for caveats, and mandatory audit provenance blocks linking figures to GL accounts.`;
+        systemPrompt += `\n\n## Mandatory FinnyLoop Governance Harness\nThis turn matches a financial workbook/reconciliation intent (${resolvedIntent.intentName ?? "financial"}). All financial calculations, NetSuite balance queries, and Excel workbook production MUST flow through the FinnyLoop governance lifecycle. Do NOT execute domain skills directly or attach unverified workbooks. You must first call finny_create_plan to present the plan for human approval via interactive approval cards (in this chat or via Slack).\n\n### Plan Presentation Requirements\nThe plan MUST be explicit, thorough, and transparent about the accounting logic and NetSuite fields:\n1. Specify the exact NetSuite tables and fields used (e.g. transaction, transactionline, entity, duedate, createddate, base_amount, custom fields)\n2. State the primary accounting book (accountingbook=1)\n3. Define filtering criteria and account exclusions explicitly\n4. Break down the plan into discrete stages: Data Extraction -> Balance Calculation -> Workbook Synthesis -> Verification\n5. Specify output artifacts and files with explicit formats\n6. Require human approval via interactive card before any write, execution, or delivery step`;
       }
       turnContextBlocks["Skills"] = skillsIndex(nativeSkills);
       const transferId = turnFileId(input.runId, input.attempt);
@@ -2579,21 +2588,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         const liveNote = async () =>
           (await turnSessionSyscalls?.liveSubagents?.().catch(swallowAs("live note", ""))) ?? "";
-        const finnySlack = finnySlackAuthority(
+        const finnyAuth = finnySlackAuthority(
           input.surface,
           input.deliveryTarget,
           external || conversation.audience.some((participant) => participant.type === "guest"),
           input.origin.kind === "human" ? input.origin.messageTs : undefined,
+          session.id,
         );
         const finny =
-          deps.finnyTools && input.runId && finnySlack
+          deps.finnyTools && input.runId && finnyAuth
             ? await deps.finnyTools.forTurn({
                 actor,
                 scopeId,
                 sessionId: session.id,
                 runId: input.runId,
-                originThreadRef: finnySlack.originThreadRef,
-                destination: finnySlack.destination,
+                originThreadRef: finnyAuth.originThreadRef,
+                destination: finnyAuth.destination,
                 parent: !session.parentSessionId,
                 parentBinding: {
                   schema: "finny-parent-binding.v1",

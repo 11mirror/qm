@@ -8,6 +8,7 @@ import {
   finnyDecisionCard,
   finnyPlanCard,
   finnyResultCard,
+  finnyJobStatusCard,
 } from "../src/slack/finny-cards.ts";
 import { renderGenerativeUI } from "../src/slack/generative-ui.ts";
 
@@ -256,4 +257,33 @@ test("decision and result helpers produce scan-friendly immutable cards", () => 
     result.blocks.some((block) => block.type === "actions"),
     false,
   );
+});
+
+test("finnyJobStatusCard renders all JobBook stage transitions with visual meter", () => {
+  const cardApproved = finnyJobStatusCard({
+    title: "Consolidated Net Worth Schedule",
+    stage: "plan_approved",
+  });
+  assert.match(cardApproved.text, /Plan Approved/);
+  assert.match(JSON.stringify(cardApproved.blocks), /1\/4 Plan Approved/);
+
+  const cardProducer = finnyJobStatusCard({
+    title: "Consolidated Net Worth Schedule",
+    stage: "producer_running",
+    detail: "Extracting transaction lines from NetSuite",
+  });
+  assert.match(cardProducer.text, /Producer Building/);
+  assert.match(JSON.stringify(cardProducer.blocks), /Extracting transaction lines/);
+
+  const cardAuditing = finnyJobStatusCard({
+    title: "Consolidated Net Worth Schedule",
+    stage: "auditing",
+  });
+  assert.match(cardAuditing.text, /Auditor Verifying/);
+
+  const cardPass = finnyJobStatusCard({
+    title: "Consolidated Net Worth Schedule",
+    stage: "certified_pass",
+  });
+  assert.match(cardPass.text, /Certified PASS/);
 });
