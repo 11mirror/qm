@@ -82,7 +82,7 @@ export interface McpToolDescriptor {
 export interface McpToolService {
   /** Current snapshot of injectable tools across enabled servers. */
   toolDefs(): McpToolDescriptor[];
-  toolDefsFor(principalId?: string): Promise<McpToolDescriptor[]>;
+  toolDefsFor(principalId?: string, opts?: { surface?: string }): Promise<McpToolDescriptor[]>;
   /** Call a namespaced tool. Returns the tool's text output (clamped). */
   call(name: string, args: Record<string, unknown>, principalId?: string, approval?: string): Promise<string>;
   needsApproval(name: string, args: Record<string, unknown>, principalId?: string): Promise<boolean>;
@@ -351,8 +351,13 @@ export function createMcpToolService(opts: {
     return Boolean(status?.connected && !status.needsReconnect);
   }
 
-  async function toolDefsFor(principalId?: string): Promise<McpToolDescriptor[]> {
-    const current = snapshot;
+  async function toolDefsFor(principalId?: string, filterOpts?: { surface?: string }): Promise<McpToolDescriptor[]> {
+    let current = snapshot;
+    if (filterOpts?.surface === "slack") {
+      const servers = await opts.servers.list().catch(() => []);
+      const personalServerIds = new Set(servers.filter((s) => s.credentialAccountType === "personal").map((s) => s.id));
+      current = current.filter((t) => !personalServerIds.has(t.serverId));
+    }
     const gated = perUserServers;
     if (!gated.size) return current;
     const withTools = new Set(current.filter((t) => gated.has(t.serverId) && !t.signIn).map((t) => t.serverId));
