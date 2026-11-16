@@ -1,5 +1,6 @@
 import "./marked-dedupe.ts";
 import "./mermaid-block.ts";
+import "./generative-card.ts";
 import "./draft-card.ts";
 import { MarkdownBlock } from "@mariozechner/mini-lit/dist/MarkdownBlock.js";
 import "@mariozechner/mini-lit/dist/CodeBlock.js";
@@ -57,7 +58,9 @@ export class StableMarkdown extends ReactiveElement {
           result.push(node as Text);
       } else if (
         node.nodeType !== Node.ELEMENT_NODE ||
-        !["code-block", "qm-mermaid", "qm-draft", "svg", "style", "script"].includes((node as Element).localName)
+        !["code-block", "qm-mermaid", "qm-draft", "qm-gen-card", "svg", "style", "script"].includes(
+          (node as Element).localName,
+        )
       )
         node.childNodes.forEach(visit);
     };
@@ -172,6 +175,17 @@ export class StableMarkdown extends ReactiveElement {
           code.replaceWith(card);
           continue;
         }
+        if (language === "generative-ui" || language === "json-render" || language === "openui") {
+          const gen = document.createElement("qm-gen-card");
+          gen.setAttribute(
+            "spec",
+            new TextDecoder().decode(
+              Uint8Array.from(atob(code.getAttribute("code") ?? ""), (character) => character.charCodeAt(0)),
+            ),
+          );
+          code.replaceWith(gen);
+          continue;
+        }
         if (language !== "mermaid") continue;
         const diagram = document.createElement("qm-mermaid");
         diagram.setAttribute(
@@ -188,8 +202,8 @@ export class StableMarkdown extends ReactiveElement {
       morphdom(this, target, {
         childrenOnly: true,
         onBeforeElUpdated: (current, next) => {
-          if (["code-block", "qm-mermaid", "qm-draft"].includes(current.localName)) {
-            for (const name of ["code", "language", "pending", "text"]) {
+          if (["code-block", "qm-mermaid", "qm-draft", "qm-gen-card"].includes(current.localName)) {
+            for (const name of ["code", "language", "pending", "text", "spec"]) {
               const value = next.getAttribute(name);
               if (value !== current.getAttribute(name)) {
                 if (value === null) current.removeAttribute(name);

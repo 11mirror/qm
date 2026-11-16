@@ -98,6 +98,10 @@ export function finnyTools(kit: ToolKit) {
       await recordCall(callId, { tool: "finny", action: "create_plan", title: params.plan.title });
       const result = await ref.current!.finny!.createPlan(params.plan, params.materialClarification);
       if (opts?.surfaceName === "web") {
+        const detail = JSON.stringify({
+          plan: params.plan,
+          ...(params.materialClarification ? { materialClarification: params.materialClarification } : {}),
+        });
         return blockOnApproval(
           callId,
           {
@@ -107,6 +111,8 @@ export function finnyTools(kit: ToolKit) {
             approvalReason: "Finny Governance Plan Approval",
             kind: "approval",
             grantModes: { session: false, always: false },
+            summaryDetail: detail,
+            summary: params.plan.summary,
           },
           params.plan.summary,
           { tool: "finny", action: "create_plan", title: params.plan.title },

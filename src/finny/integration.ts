@@ -175,6 +175,9 @@ export function finnyTurnAuthority(
 }
 
 export const finnySlackAuthority = finnyTurnAuthority;
+export interface FinnyToolServiceFactory {
+  forTurn(turn: FinnyTurnBinding): Promise<FinnyToolService | undefined>;
+}
 
 export function createFinnyToolServiceFactory(deps: {
   config: Omit<FinnyIntegrationConfig, "signingSecret">;

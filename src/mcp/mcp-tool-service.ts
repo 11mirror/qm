@@ -355,7 +355,17 @@ export function createMcpToolService(opts: {
     let current = snapshot;
     if (filterOpts?.surface === "slack") {
       const servers = await opts.servers.list().catch(() => []);
-      const personalServerIds = new Set(servers.filter((s) => s.credentialAccountType === "personal").map((s) => s.id));
+      const personalServerIds = new Set(
+        servers
+          .filter(
+            (s) =>
+              s.credentialAccountType === "personal" ||
+              s.credentialScope === "per-user" ||
+              s.id.toLowerCase().includes("personal") ||
+              s.id.toLowerCase().includes("zoho"),
+          )
+          .map((s) => s.id),
+      );
       current = current.filter((t) => !personalServerIds.has(t.serverId));
     }
     const gated = perUserServers;

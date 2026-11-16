@@ -17,7 +17,7 @@ export interface SpecInputs {
 }
 
 export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
-  const watchArgs = i.watch ? ["--watch"] : [];
+  const watchArgs = i.watch ? ["--watch-path=src"] : [];
   const base = { ...i.baseEnv, ...i.sandboxEnv };
   const orgId = i.baseEnv.DEV_INSTANCE_ORG_ID || "acme";
   const web = i.web !== false;

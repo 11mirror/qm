@@ -3169,6 +3169,207 @@ qm-markdown .tok-in {
   color: var(--destructive);
   border: 1px solid color-mix(in srgb, var(--destructive) 30%, transparent);
 }
+.approval-reason-badge.finny-badge {
+  background: color-mix(in srgb, var(--cta) 15%, var(--background));
+  color: var(--cta);
+  border-color: color-mix(in srgb, var(--cta) 35%, transparent);
+}
+.finny-plan-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+.finny-plan-summary {
+  font-size: var(--font-13);
+  color: var(--foreground);
+  line-height: 1.45;
+}
+.finny-plan-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted-foreground);
+  margin-top: 4px;
+}
+.finny-plan-phases {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--surface) 60%, var(--background));
+}
+.finny-plan-phase {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.phase-idx {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--border);
+  font-size: 10px;
+  font-weight: 600;
+}
+.phase-name {
+  font-weight: 500;
+  color: var(--foreground);
+  flex: 1;
+}
+.phase-owner {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+}
+.finny-plan-details-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+  font-size: 12px;
+  color: var(--foreground);
+  padding: 6px 0;
+}
+.finny-clarification-box {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.clarification-question {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.clarification-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.clarification-option {
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+.clarification-option.recommended {
+  border-color: var(--cta);
+  background: color-mix(in srgb, var(--cta) 8%, var(--background));
+}
+.recommended-tag {
+  font-size: 10px;
+  background: var(--cta);
+  color: var(--cta-foreground);
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: 6px;
+}
+.gen-card-frame {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  margin: 10px 0;
+}
+.gen-card-header h3 {
+  margin: 0;
+  font-size: var(--font-15);
+  font-weight: 600;
+  color: var(--foreground);
+}
+.gen-card-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--surface) 80%, var(--background));
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+.gen-metric-label {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+.gen-metric-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--foreground);
+}
+.gen-metric-change {
+  font-size: 11px;
+  color: var(--cta);
+  font-weight: 500;
+}
+.gen-card-callout {
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--cta) 10%, var(--background));
+  border-left: 3px solid var(--cta);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-13);
+  color: var(--foreground);
+}
+.gen-card-callout p {
+  margin: 4px 0 0;
+}
+.gen-card-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.gen-card-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  text-align: left;
+}
+.gen-card-table th,
+.gen-card-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.gen-card-table th {
+  background: color-mix(in srgb, var(--surface) 90%, var(--background));
+  font-weight: 600;
+  color: var(--muted-foreground);
+}
+.gen-card-provenance {
+  border-top: 1px dashed var(--border);
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.gen-provenance-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  letter-spacing: 0.5px;
+}
+.gen-provenance-item {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--foreground);
+}
+.prov-source {
+  font-family: var(--font-mono);
+  color: var(--muted-foreground);
+}
 .approval-why {
   font-size: var(--font-13);
   color: var(--foreground);

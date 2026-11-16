@@ -953,18 +953,18 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
                 ?disabled=${ctx.chat.state.resolvingApprovals.has(a.requestId)}
                 @click=${() => decide({ requestId: a.requestId, approved: false })}
               >
-                Deny
+                ${a.reason === "Finny Governance Plan Approval" ? "Reject Plan" : "Deny"}
               </button>
               <button
-                class="approval-btn"
+                class="approval-btn primary"
                 type="button"
                 ?disabled=${ctx.chat.state.resolvingApprovals.has(a.requestId)}
                 @click=${() => decide({ requestId: a.requestId, approved: true, scope: "once" })}
               >
-                Allow once
+                ${a.reason === "Finny Governance Plan Approval" ? "Approve Plan" : "Allow once"}
               </button>
               ${
-                a.grantModes?.session === false
+                a.reason === "Finny Governance Plan Approval" || a.grantModes?.session === false
                   ? nothing
                   : html`<button
                       class="approval-btn primary"
@@ -976,7 +976,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
                     </button>`
               }
               ${
-                a.grantModes?.always === false
+                a.reason === "Finny Governance Plan Approval" || a.grantModes?.always === false
                   ? nothing
                   : html`<button
                       class="approval-btn"

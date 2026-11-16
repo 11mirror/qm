@@ -41,6 +41,7 @@ export interface ToolContextRef {
     purpose?: string;
     approvalKey?: string;
     summary?: string;
+    summaryDetail?: string;
     grantModes?: { session: boolean; always: boolean };
   }>;
   pausedOnApproval?: boolean;

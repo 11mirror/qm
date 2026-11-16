@@ -3215,7 +3215,96 @@ export function createChatSurface(
     })}`;
   }
 
+  function parseFinnyPlanDetail(detail?: string): {
+    plan?: {
+      title: string;
+      summary?: string;
+      phases: Array<{ name: string; owner: string; dependencies: string[] }>;
+      certification: string;
+      deliverable: string;
+      destination: string;
+      clarifications?: Array<{ question: string; answer: string }>;
+    };
+    materialClarification?: {
+      question: string;
+      options: Array<{ id: string; label: string; description?: string }>;
+      recommendedOptionId: string;
+    };
+  } | null {
+    if (!detail) return null;
+    try {
+      const parsed = JSON.parse(detail);
+      if (parsed && typeof parsed === "object" && parsed.plan && Array.isArray(parsed.plan.phases)) return parsed;
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  function finnyPlanCardView(
+    a: PendingApproval,
+    finnyData: NonNullable<ReturnType<typeof parseFinnyPlanDetail>>,
+  ): TemplateResult {
+    const { plan, materialClarification } = finnyData;
+    return html`
+      <div class="finny-plan-card">
+        <div class="approval-head">
+          <span class="approval-title">${plan?.title ?? a.command}</span>
+          <span class="approval-reason-badge finny-badge">Finny Plan Approval</span>
+        </div>
+        ${plan?.summary ? html`<div class="finny-plan-summary">${plan.summary}</div>` : nothing}
+        ${
+          plan?.phases?.length
+            ? html`
+                <div class="finny-plan-section-title">Phases</div>
+                <div class="finny-plan-phases">
+                  ${plan.phases.map(
+              (p, idx) => html`
+                <div class="finny-plan-phase">
+                  <span class="phase-idx">${idx + 1}</span>
+                  <span class="phase-name">${p.name}</span>
+                  <span class="phase-owner">${p.owner}</span>
+                </div>
+              `,
+            )}
+                </div>
+              `
+            : nothing
+        }
+        <div class="finny-plan-details-grid">
+          ${plan?.certification ? html`<div class="finny-plan-detail"><strong>Certification:</strong> ${plan.certification}</div>` : nothing}
+          ${plan?.deliverable ? html`<div class="finny-plan-detail"><strong>Deliverable:</strong> ${plan.deliverable}</div>` : nothing}
+          ${plan?.destination ? html`<div class="finny-plan-detail"><strong>Destination:</strong> ${plan.destination}</div>` : nothing}
+        </div>
+        ${
+          materialClarification
+            ? html`
+                <div class="finny-clarification-box">
+                  <div class="clarification-question">${materialClarification.question}</div>
+                  <div class="clarification-options">
+                    ${materialClarification.options.map(
+                (opt) => html`
+                  <div
+                    class="clarification-option ${opt.id === materialClarification.recommendedOptionId ? "recommended" : ""}"
+                  >
+                    <strong>${opt.label}</strong>
+                    ${opt.id === materialClarification.recommendedOptionId ? html`<span class="recommended-tag">Recommended</span>` : nothing}
+                    ${opt.description ? html`<p>${opt.description}</p>` : nothing}
+                  </div>
+                `,
+              )}
+                  </div>
+                </div>
+              `
+            : nothing
+        }
+      </div>
+    `;
+  }
+
   function approvalSummaryView(a: PendingApproval, expanded = false): TemplateResult {
+    const finnyData = parseFinnyPlanDetail(a.summaryDetail);
+    if (finnyData?.plan) return finnyPlanCardView(a, finnyData);
     const summary = firstLine(a.command, 80);
     const truncated = a.command.includes("\n") || a.command.length > 80;
     return html`

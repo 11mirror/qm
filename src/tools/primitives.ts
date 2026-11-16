@@ -133,6 +133,8 @@ export class NeedsApproval extends Error {
   matched?: string;
   approvalKey?: string;
   grantModes?: ApprovalGrantModes;
+  summaryDetail?: string;
+  summary?: string;
   constructor(
     command: string,
     reason: string,
@@ -140,6 +142,8 @@ export class NeedsApproval extends Error {
     matched?: string,
     approvalKey?: string,
     grantModes?: ApprovalGrantModes,
+    summaryDetail?: string,
+    summary?: string,
   ) {
     super(`command requires approval: ${command}`);
     this.name = "NeedsApproval";
@@ -149,6 +153,8 @@ export class NeedsApproval extends Error {
     this.matched = matched;
     this.approvalKey = approvalKey;
     this.grantModes = grantModes;
+    this.summaryDetail = summaryDetail;
+    this.summary = summary;
   }
 }
 

@@ -47,6 +47,8 @@ export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
       ...(purpose ? { purpose } : {}),
       ...(e.approvalKey ? { approvalKey: e.approvalKey } : {}),
       ...(e.grantModes ? { grantModes: e.grantModes } : {}),
+      ...(e.summaryDetail ? { summaryDetail: e.summaryDetail } : {}),
+      ...(e.summary ? { summary: e.summary } : {}),
     });
     ref.pausedOnApproval = true;
     return recordResult(

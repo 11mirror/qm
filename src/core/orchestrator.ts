@@ -2042,6 +2042,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               reason: "only the person who requested this command can approve or deny it",
             };
           }
+          if (deps.finnyApprovals && p.reason === "Finny Governance Plan Approval") {
+            await deps.finnyApprovals
+              .decide({
+                requestId: input.approval.requestId,
+                decision: { kind: "plan", action: input.approval.approved ? "approve" : "reject" },
+                actor: { externalId: actor.id, ...(actor.displayName ? { displayName: actor.displayName } : {}) },
+                surface: input.surface,
+                originThreadRef: conversation.threadRef,
+              })
+              .catch((e: unknown) => swallow("finny:web-approval", e));
+          }
           if (!input.approval.approved) {
             const messagePrefix = "security-screen-release:session_message_";
             if (p.approvalKey?.startsWith(messagePrefix))
