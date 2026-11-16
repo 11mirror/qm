@@ -75,7 +75,7 @@ const plan = Type.Object(
 );
 
 export function finnyTools(kit: ToolKit) {
-  const { ref, recordCall, recordResult, resourceTool } = kit;
+  const { ref, opts, recordCall, recordResult, resourceTool, blockOnApproval } = kit;
   const run = async (
     callId: string,
     action: string,
@@ -94,10 +94,33 @@ export function finnyTools(kit: ToolKit) {
       { plan, materialClarification: Type.Optional(materialClarification) },
       { additionalProperties: false },
     ),
-    execute: (callId, params) =>
-      run(callId, "create_plan", { title: params.plan.title }, () =>
-        ref.current!.finny!.createPlan(params.plan, params.materialClarification),
-      ),
+    execute: async (callId, params) => {
+      await recordCall(callId, { tool: "finny", action: "create_plan", title: params.plan.title });
+      const result = await ref.current!.finny!.createPlan(params.plan, params.materialClarification);
+      if (opts?.surfaceName === "web") {
+        return blockOnApproval(
+          callId,
+          {
+            name: "NeedsApproval",
+            message: result,
+            command: params.plan.title,
+            approvalReason: "Finny Governance Plan Approval",
+            kind: "approval",
+            grantModes: { session: false, always: false },
+          },
+          params.plan.summary,
+          { tool: "finny", action: "create_plan", title: params.plan.title },
+        );
+      }
+      return recordResult(
+        callId,
+        { tool: "finny", action: "create_plan", title: params.plan.title },
+        text(result),
+        false,
+        undefined,
+        true,
+      );
+    },
   });
   const amendPlan = defineTool({
     name: "finny_amend_plan",
