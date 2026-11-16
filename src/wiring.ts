@@ -2505,7 +2505,7 @@ export function buildApp(
     externalSlackPolicies: config.externalSlackPolicies,
     sessionSyscalls,
     ...(finnyTools ? { finnyTools } : {}),
-    refreshModels,
+    ...(finnyApprovals ? { finnyApprovals } : {}),
     identity,
     users,
     resolution,

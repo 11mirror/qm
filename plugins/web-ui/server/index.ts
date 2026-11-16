@@ -420,12 +420,20 @@ async function webTurnBase(
       },
     )}`;
   }
+  const cardInstruction =
+    "When presenting structured data, reports, tables, metric overviews, or summaries on Web Chat, " +
+    'format the output as an inline Generative UI card using the schema: `{"schema":"generative-ui.v1","fallbackText":"...","elements":[...]}` ' +
+    'or Chat SDK json-render format `{"root":"card-1","elements":{...}}`. ' +
+    "Include header, metric callouts (`metric`), compact tables (`table`), callouts (`callout`), and audit provenance (`provenance`) when reporting numbers.";
   return {
     surface: "web",
     actor: { externalId: user, ...(displayName ? { displayName } : {}) },
     conversation,
     origin: { kind: "human" },
     deliveryTarget: threadRef,
+    gatewayContext: {
+      instructions: cardInstruction,
+    },
     ...(inboxContext ? { conversationHeader: inboxContext } : {}),
     ...(appSlug
       ? {

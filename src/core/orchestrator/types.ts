@@ -68,8 +68,8 @@ import type { SwarmService, SwarmTurn } from "../../swarms/swarm-service.ts";
 import type { ChannelPolicyStore } from "../../surface-cache/channel-policy-store.ts";
 import type { SurfaceCache } from "../../surface-cache/types.ts";
 import type { SurfaceRegistry } from "../../surfaces/registry.ts";
-import type { createFinnyToolServiceFactory } from "../../finny/integration.ts";
-
+import type { FinnyToolServiceFactory } from "../../finny/integration.ts";
+import type { FinnyApprovalBridge } from "../../slack/finny-approvals.ts";
 export interface OrchestratorInput extends Omit<
   TurnRequest,
   "surface" | "actor" | "conversation" | "spawned" | "async"
@@ -117,7 +117,8 @@ export interface OrchestratorDeps {
   sessions: SessionStore;
   sessionStateBus?: SessionStateBus;
   sessionSyscalls?: SessionSyscallsFactory;
-  finnyTools?: ReturnType<typeof createFinnyToolServiceFactory>;
+  finnyTools?: FinnyToolServiceFactory;
+  finnyApprovals?: FinnyApprovalBridge;
   files: FileArtifactStore;
   toolOutput?: ToolOutputStore;
   sandbox: Sandbox;
