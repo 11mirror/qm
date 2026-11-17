@@ -247,7 +247,7 @@ test("clarification selection is bound to the exact actor, origin, and persisted
     card: {
       title: "Clarification recorded",
       status: "blocked",
-      summary: "Revision is required before this plan can be approved. Submit a revised plan to continue.",
+      summary: "Issued invoices was selected. Revise the existing plan to use this choice.",
     },
   });
   assert.deepEqual((await store.getClarificationRequest(requestId))?.decision, {
@@ -1000,7 +1000,7 @@ test("prior nonrecommended decision permanently blocks a later recommendation", 
       card: {
         title: "Clarification recorded",
         status: "blocked",
-        summary: "Revision is required before this plan can be approved. Submit a revised plan to continue.",
+        summary: "Signed contracts was selected. Revise the existing plan to use this choice.",
       },
     },
   );

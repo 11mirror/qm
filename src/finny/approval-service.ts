@@ -144,7 +144,9 @@ export function createFinnyApprovalService(deps: {
                 jobId: decided.request.jobId,
               }),
           );
-        let summary = "Revision is required before this plan can be approved. Submit a revised plan to continue.";
+        let summary = selectedOption
+          ? `${selectedOption.label} was selected. Revise the existing plan to use this choice.`
+          : "Revision is required before this plan can be approved. Submit a revised plan to continue.";
         if (decided.approvalReady) summary = `${selectedOption?.label}. The plan is ready for approval.`;
         else if (recommended && !decided.revisionRequired)
           summary = "Another material clarification remains unresolved.";

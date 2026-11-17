@@ -183,12 +183,24 @@ test("startup recovery finds approved jobs whose producer dispatch is incomplete
   assert.deepEqual(await integration.approvedIncomplete(), []);
   await q("UPDATE runs SET status='done',result=$2 WHERE id=$1", [
     producerRunId,
+    JSON.stringify({ status: "pending_approval", pendingApprovals: [] }),
+  ]);
+  assert.deepEqual(await integration.approvedIncomplete(), []);
+  await q("UPDATE runs SET result=$2 WHERE id=$1", [
+    producerRunId,
+    JSON.stringify({ status: "refused", reason: "human decision required" }),
+  ]);
+  assert.deepEqual(await integration.approvedIncomplete(), []);
+  await q("UPDATE runs SET status='done',result=$2 WHERE id=$1", [
+    producerRunId,
     JSON.stringify({ status: "ok", reply: "Finished without an artifact" }),
   ]);
-  assert.deepEqual(
-    (await integration.approvedIncomplete()).map((record) => record.jobId),
-    [job.id],
-  );
+  assert.deepEqual(await integration.approvedIncomplete(), [
+    {
+      ...(await integration.getParent(job.scopeId, job.id))!,
+      retryTerminalProducerRunId: producerRunId,
+    },
+  ]);
   await q("UPDATE runs SET status='running',result=NULL WHERE id=$1", [producerRunId]);
   const originalProducer = await runtime.currentBinding(producerSessionId);
   assert.equal(
@@ -364,6 +376,17 @@ test("material clarification keeps approval fail closed and restart recovery rel
         title: "Clarification recorded",
         status: "passed",
         summary: "Signed contracts. The plan is ready for approval.",
+      },
+      next: {
+        kind: "plan",
+        requestId: parent.requestId,
+        card: {
+          title: "Material basis",
+          phases: [{ name: "Build", owner: "Producer", dependencies: [] }],
+          certification: "Audit",
+          deliverable: "Book",
+          destination: "Thread",
+        },
       },
     },
   );

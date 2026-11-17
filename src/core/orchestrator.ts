@@ -2247,11 +2247,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   pendingApprovals: [projectedFinnyApproval],
                 };
               }
-              return {
-                status: "ok",
-                sessionId: session.id,
-                reply: finnyResolution.reply,
-              };
+              if (input.approval.approved && input.approval.optionId)
+                turnEvents.push(
+                  `The human selected a persisted Finny clarification option: ${finnyResolution.reply} Continue the original finance task now. Revise the existing Finny job with finny amend_plan and present its replacement plan for approval without asking the human to repeat this choice.`,
+                );
+              else
+                return {
+                  status: "ok",
+                  sessionId: session.id,
+                  reply: finnyResolution.reply,
+                };
             }
             turnEvents.push(
               p.kind === "input" || p.approvalKey?.startsWith("security-screen-release:")

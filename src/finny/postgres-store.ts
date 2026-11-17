@@ -799,6 +799,12 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
           [input.jobId, JSON.stringify(input.plan), newPlanDigest, nextHead, input.createdAt],
         );
         await db.query(
+          `UPDATE finny_approval_requests
+              SET decided_at=$3
+            WHERE scope_id=$1 AND job_id=$2 AND decided_at IS NULL`,
+          [input.scopeId, input.jobId, input.createdAt],
+        );
+        await db.query(
           `INSERT INTO finny_approval_requests(
              request_id, scope_id, job_id, plan_digest, origin_thread_ref, authorized_actor_id, ready_at, created_at
            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$7)

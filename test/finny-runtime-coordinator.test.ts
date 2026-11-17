@@ -492,6 +492,13 @@ test("a terminal Producer run receives a new idempotent grant generation", async
     dispatcher: {
       async dispatchPrivateIdempotent(message) {
         dispatched.push(message.idempotencyKey);
+        await runtime.advanceWorkerRun({
+          sessionId: message.sessionId,
+          expectedRunId: message.runId,
+          runId: "replacement-producer-run",
+          scopeId: job.scopeId,
+          expiresAt: Date.now() + 60_000,
+        });
       },
     },
     ...coreRuntimeAuthority(),
@@ -512,10 +519,16 @@ test("a terminal Producer run receives a new idempotent grant generation", async
     scopeId: job.scopeId,
     expiresAt: Date.now() + 60_000,
   });
-  await coordinator.afterApproved({ ...input, retryTerminalProducer: true });
+  const recovery = { ...input, retryTerminalProducerRunId: "terminal-producer-run" };
+  await coordinator.afterApproved(recovery);
+  await coordinator.afterApproved(recovery);
 
   assert.equal(dispatched.length, 1);
   assert.match(dispatched[0] ?? "", /:producer-retry:terminal-producer-run$/);
+  assert.equal(
+    (await runtime.currentRoleBinding(job.scopeId, job.id, "producer"))?.runId,
+    "replacement-producer-run",
+  );
 });
 
 test("an externally approved escalation stops worker actions instead of reworking", async () => {
@@ -1165,10 +1178,25 @@ test("Auditor admission recovers from committed artifact authority without resol
   await q(`CREATE TABLE runs(id TEXT PRIMARY KEY,status TEXT NOT NULL,last_stop TEXT,result TEXT)`);
   await q("INSERT INTO runs(id,status,last_stop,result) VALUES($1,'done',NULL,$2)", [
     "recovered-auditor-run",
+    JSON.stringify({ status: "pending_approval", pendingApprovals: [] }),
+  ]);
+  assert.deepEqual(await runtime.pendingRecoveries(), []);
+  await q("UPDATE runs SET result=$2 WHERE id=$1", [
+    "recovered-auditor-run",
+    JSON.stringify({ status: "refused", reason: "human decision required" }),
+  ]);
+  assert.deepEqual(await runtime.pendingRecoveries(), []);
+  await q("UPDATE runs SET result=$2 WHERE id=$1", [
+    "recovered-auditor-run",
     JSON.stringify({ status: "ok", reply: "Finished without completing every audit check" }),
   ]);
   const [terminalRecovery] = await runtime.pendingRecoveries();
-  assert.deepEqual(terminalRecovery, { kind: "artifact_ready", ...input, retryTerminalAuditor: true });
+  assert.deepEqual(terminalRecovery, {
+    kind: "artifact_ready",
+    ...input,
+    retryTerminalAuditorRunId: "recovered-auditor-run",
+  });
+  const retryDispatches: string[] = [];
   const retry = createFinnyRuntimeCoordinator({
     jobs,
     runtime,
@@ -1180,6 +1208,7 @@ test("Auditor admission recovers from committed artifact authority without resol
     },
     dispatcher: {
       async dispatchPrivateIdempotent(message) {
+        retryDispatches.push(message.idempotencyKey);
         const nextRunId = "recovered-auditor-retry-run";
         await runtime.advanceWorkerRun({
           sessionId: message.sessionId,
@@ -1207,6 +1236,8 @@ test("Auditor admission recovers from committed artifact authority without resol
     evidenceAuthority: coreRuntimeAuthority().evidenceAuthority,
   });
   await retry.artifactReady(terminalRecovery!);
+  await retry.artifactReady(terminalRecovery!);
+  assert.equal(retryDispatches.length, 1);
   assert.equal(
     (await runtime.currentRoleBinding(job.scopeId, job.id, "auditor"))?.runId,
     "recovered-auditor-retry-run",
@@ -1395,7 +1426,7 @@ test("restart replays artifact authority committed before the job event", async 
     authorityPayload: { artifactDigest: "artifact-sha256", provisionalRevision: "revision-1" },
   });
   assert.deepEqual(await runtime.pendingRecoveries(), [
-    { kind: "artifact_ready", ...input, retryTerminalAuditor: true },
+    { kind: "artifact_ready", ...input, retryTerminalAuditorRunId: "auditor-run" },
   ]);
   const coordinator = createFinnyRuntimeCoordinator({
     jobs,

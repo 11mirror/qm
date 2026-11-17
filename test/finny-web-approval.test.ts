@@ -157,7 +157,54 @@ test("a failed plan projection leaves the web clarification retryable", async ()
   assert.equal(recovered.pendingApprovals?.[0]?.reason, "Finny Governance Plan Approval");
 });
 
-test("a nonrecommended web Finny clarification choice requests revision instead of approving the old plan", async () => {
+test("a nonrecommended web Finny clarification choice resumes the coordinator with a revised approval", async () => {
+  let jobId = "";
+  let turns = 0;
+  const resumingAgent: Agent = {
+    async runTurn(turn) {
+      turns += 1;
+      if (turns === 1) {
+        const created = await turn.tools.finny!.createPlan(plan, {
+          question,
+          options: [
+            { id: "today", label: "2026-11-17" },
+            { id: "month-end", label: "2026-11-30" },
+          ],
+          recommendedOptionId: "today",
+        });
+        jobId = created.jobId;
+        return {
+          reply: "",
+          pausedOnApproval: true,
+          pendingApprovals: [
+            {
+              command: question,
+              reason: "Finny Governance Clarification",
+              approvalKey: `finny-clarification:${created.requestId}`,
+              summary: "Recommended: 2026-11-17",
+              grantModes: { session: false, always: false },
+            },
+          ],
+        };
+      }
+      assert.match(turn.environment ?? "", /2026-11-30/);
+      const revised = { ...plan, clarifications: [{ question, answer: "2026-11-30" }] };
+      const amended = await turn.tools.finny!.amendPlan(jobId, revised);
+      return {
+        reply: "",
+        pausedOnApproval: true,
+        pendingApprovals: [
+          {
+            command: revised.title,
+            reason: "Finny Governance Plan Approval",
+            approvalKey: `finny-plan:${amended.requestId}`,
+            summary: revised.summary,
+            grantModes: { session: false, always: false },
+          },
+        ],
+      };
+    },
+  };
   const built = buildApp(
     testConfig({
       finny: {
@@ -177,7 +224,7 @@ test("a nonrecommended web Finny clarification choice requests revision instead 
         maxEvidenceBytes: 4_194_304,
       } as never,
     }),
-    { agent, spreadsheetCalculationEngine: engine },
+    { agent: resumingAgent, spreadsheetCalculationEngine: engine },
   );
   const request = {
     surface: "web",
@@ -197,9 +244,10 @@ test("a nonrecommended web Finny clarification choice requests revision instead 
     } as never,
   });
 
-  assert.equal(result.status, "ok");
-  assert.match(result.reply ?? "", /revised plan/i);
-  assert.equal(result.pendingApprovals, undefined);
+  assert.equal(result.status, "pending_approval", JSON.stringify(await built.errors.list()));
+  assert.equal(result.pendingApprovals?.[0]?.reason, "Finny Governance Plan Approval");
+  assert.equal(result.pendingApprovals?.[0]?.command, plan.title);
+  assert.equal(turns, 2);
 });
 
 test("Other resolves a web Finny clarification without treating it as a denied command", async () => {

@@ -2306,7 +2306,7 @@ export function buildApp(
       scopeId: string;
       jobId: string;
       requestId: string;
-      retryTerminalProducer?: boolean;
+      retryTerminalProducerRunId?: string;
     }) => {
       const parent = await finnyIntegration.getParent(input.scopeId, input.jobId);
       if (!parent || parent.requestId !== input.requestId)
@@ -2318,7 +2318,9 @@ export function buildApp(
         parentSessionId: parent.binding.sessionId,
         parentRunId: parent.binding.runId,
         idempotencyKey: `finny:${input.jobId}:${input.requestId}:approved`,
-        ...(input.retryTerminalProducer ? { retryTerminalProducer: true } : {}),
+        ...(input.retryTerminalProducerRunId
+          ? { retryTerminalProducerRunId: input.retryTerminalProducerRunId }
+          : {}),
       });
     };
     const deliverPlanApproval = async (input: { scopeId: string; jobId: string }) => {
@@ -2482,7 +2484,9 @@ export function buildApp(
             scopeId: pending.scopeId,
             jobId: pending.jobId,
             requestId: pending.requestId,
-            retryTerminalProducer: true,
+            ...(pending.retryTerminalProducerRunId
+              ? { retryTerminalProducerRunId: pending.retryTerminalProducerRunId }
+              : {}),
           });
         });
       for (const pending of await finnyIntegration.approvedParents())

@@ -18,7 +18,7 @@ export interface FinnyToolService {
     jobId: string,
     plan: FinnyPlanPresentation,
     materialClarification?: FinnyMaterialClarification,
-  ): Promise<string>;
+  ): Promise<FinnyPlanCreation>;
   status(jobId: string): Promise<string>;
   artifactReady(input: {
     artifactDigest: string;
@@ -151,10 +151,40 @@ export function finnyTools(kit: ToolKit) {
       { jobId: string(), plan, materialClarification: Type.Optional(materialClarification) },
       { additionalProperties: false },
     ),
-    execute: (callId, params) =>
-      run(callId, "amend_plan", { jobId: params.jobId, title: params.plan.title }, () =>
-        ref.current!.finny!.amendPlan(params.jobId, params.plan, params.materialClarification),
-      ),
+    execute: async (callId, params) => {
+      await recordCall(callId, {
+        tool: "finny",
+        action: "amend_plan",
+        jobId: params.jobId,
+        title: params.plan.title,
+      });
+      const result = await ref.current!.finny!.amendPlan(params.jobId, params.plan, params.materialClarification);
+      if (opts?.surfaceName === "web")
+        return blockOnApproval(
+          callId,
+          {
+            name: "NeedsApproval",
+            message: result.message,
+            command: params.plan.title,
+            approvalReason: "Finny Governance Plan Approval",
+            approvalKey: `finny-plan:${result.requestId}`,
+            kind: "approval",
+            grantModes: { session: false, always: false },
+            summaryDetail: JSON.stringify({ plan: params.plan }),
+            summary: params.plan.summary,
+          },
+          params.plan.summary,
+          { tool: "finny", action: "amend_plan", jobId: params.jobId, title: params.plan.title },
+        );
+      return recordResult(
+        callId,
+        { tool: "finny", action: "amend_plan", jobId: params.jobId, title: params.plan.title },
+        text(result.message),
+        false,
+        undefined,
+        true,
+      );
+    },
   });
   const status = defineTool({
     name: "finny_status",

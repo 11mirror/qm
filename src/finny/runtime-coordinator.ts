@@ -40,7 +40,7 @@ interface RuntimeActorInput {
 
 interface ArtifactReadyRuntimeInput extends RuntimeActorInput {
   idempotencyKey: string;
-  retryTerminalAuditor?: boolean;
+  retryTerminalAuditorRunId?: string;
 }
 
 interface AuditPassedRuntimeInput extends RuntimeActorInput {
@@ -66,7 +66,7 @@ interface ApprovedRuntimeInput {
   parentSessionId: string;
   parentRunId: string;
   idempotencyKey: string;
-  retryTerminalProducer?: boolean;
+  retryTerminalProducerRunId?: string;
 }
 
 function opened(result: Awaited<ReturnType<SessionSyscalls["open"]>>, role: string) {
@@ -246,9 +246,9 @@ export function createFinnyRuntimeCoordinator(deps: {
       });
       const existingProducer = await deps.runtime.activeRoleBinding(input.scopeId, input.jobId, "producer");
       if (existingProducer) {
-        if (input.retryTerminalProducer) {
+        if (input.retryTerminalProducerRunId === existingProducer.runId) {
           await dispatch({
-            idempotencyKey: `${startupKey}:producer-retry:${existingProducer.runId}`,
+            idempotencyKey: `${startupKey}:producer-retry:${input.retryTerminalProducerRunId}`,
             scopeId: input.scopeId,
             jobId: input.jobId,
             sessionId: existingProducer.sessionId,
@@ -567,11 +567,12 @@ export function createFinnyRuntimeCoordinator(deps: {
       });
       if (!ready.deduped) deps.recoveryWake?.({ kind: "artifact_ready", ...input });
       const activeAuditor = await deps.runtime.activeRoleBinding(input.scopeId, input.jobId, "auditor");
-      if (input.retryTerminalAuditor && activeAuditor) {
+      if (input.retryTerminalAuditorRunId !== undefined) {
+        if (!activeAuditor || activeAuditor.runId !== input.retryTerminalAuditorRunId) return;
         const credentials = deps.workerPolicy.credentials(ready.job, "auditor");
         const task = deps.workerPolicy.task(ready.job, "auditor");
         await dispatch({
-          idempotencyKey: `${input.idempotencyKey}:auditor-retry:${activeAuditor.runId}`,
+          idempotencyKey: `finny:${input.jobId}:auditor-retry:${input.retryTerminalAuditorRunId}`,
           scopeId: input.scopeId,
           jobId: input.jobId,
           sessionId: activeAuditor.sessionId,

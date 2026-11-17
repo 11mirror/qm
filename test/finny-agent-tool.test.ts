@@ -12,7 +12,7 @@ const service = {
     return { message: "plan created", jobId: "job-1", requestId: "request-1", awaiting: "approval" as const };
   },
   async amendPlan() {
-    return "plan amended";
+    return { message: "plan amended", jobId: "job-1", requestId: "request-2", awaiting: "approval" as const };
   },
   async status() {
     return "awaiting approval";
@@ -192,7 +192,12 @@ test("finny forwards only narrow inputs and returns concise bound-service text",
     },
     async amendPlan(jobId, input) {
       calls.push(["amend_plan", { jobId, input }]);
-      return "amended job-1";
+      return {
+        message: "amended job-1",
+        jobId: "job-1",
+        requestId: "request-2",
+        awaiting: "approval",
+      };
     },
     async status(input) {
       calls.push(["status", input]);
@@ -319,6 +324,31 @@ test("web Finny approval retains the durable plan request identity", async () =>
   await execute(tool, "call-plan", { action: "create_plan", plan });
 
   assert.equal(pendingApprovals[0]?.approvalKey, "finny-plan:plan-request-1");
+});
+
+test("web Finny amendment presents its durable replacement approval", async () => {
+  const pendingApprovals: NonNullable<import("../src/agent/agent-tools.ts").ToolContextRef["pendingApprovals"]> = [];
+  const bound = {
+    ...service,
+    async amendPlan() {
+      return {
+        message: "Finny plan job-1 amendment is awaiting scope change approval.",
+        jobId: "job-1",
+        requestId: "amendment-request-1",
+        awaiting: "approval" as const,
+      };
+    },
+  } as unknown as FinnyToolService;
+  const tool = createAgentTools(
+    { current: { finny: bound } as unknown as ToolContext, pendingApprovals },
+    { surfaceName: "web" },
+  ).find((candidate) => candidate.name === "finny");
+  assert.ok(tool);
+
+  await execute(tool, "call-amendment", { action: "amend_plan", jobId: "job-1", plan });
+
+  assert.equal(pendingApprovals[0]?.approvalKey, "finny-plan:amendment-request-1");
+  assert.equal(pendingApprovals[0]?.command, plan.title);
 });
 
 test("web Finny clarification presents the durable question before plan approval", async () => {

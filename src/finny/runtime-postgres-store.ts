@@ -24,7 +24,7 @@ export interface FinnyArtifactReadyRecovery {
   scopeId: string;
   jobId: string;
   idempotencyKey: string;
-  retryTerminalAuditor?: boolean;
+  retryTerminalAuditorRunId?: string;
 }
 
 export interface FinnyAuditPassedRecovery {
@@ -607,29 +607,12 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                 AND auditor_binding.scope_id=actions.scope_id
                 AND auditor_binding.role='auditor'
                 AND auditor_binding.active=TRUE
-                AND auditor_binding.expires_at>$1
-                AND auditor_run.status NOT IN ('done','failed')
-           )`
-        : `EXISTS (
-             SELECT 1 FROM finny_runtime_bindings AS auditor_binding
-              WHERE auditor_binding.job_id=actions.job_id
-                AND auditor_binding.scope_id=actions.scope_id
-                AND auditor_binding.role='auditor'
-                AND auditor_binding.active=TRUE
-                AND auditor_binding.expires_at>$1
-           )`;
-      const retryTerminalAuditor = hasRuns
-        ? `EXISTS (
-             SELECT 1 FROM finny_runtime_bindings AS auditor_binding
-             LEFT JOIN runs AS auditor_run ON auditor_run.id=auditor_binding.run_id
-              WHERE auditor_binding.job_id=actions.job_id
-                AND auditor_binding.scope_id=actions.scope_id
-                AND auditor_binding.role='auditor'
-                AND auditor_binding.active=TRUE
                 AND (
-                  auditor_binding.expires_at<=$1
-                  OR auditor_run.id IS NULL
-                  OR auditor_run.status IN ('done','failed')
+                  (auditor_binding.expires_at>$1 AND auditor_run.status NOT IN ('done','failed'))
+                  OR (
+                    auditor_run.status='done'
+                    AND COALESCE(auditor_run.result::jsonb->>'status','') IN ('pending_approval','refused')
+                  )
                 )
            )`
         : `EXISTS (
@@ -638,12 +621,38 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                 AND auditor_binding.scope_id=actions.scope_id
                 AND auditor_binding.role='auditor'
                 AND auditor_binding.active=TRUE
-                AND auditor_binding.expires_at<=$1
+                AND auditor_binding.expires_at>$1
            )`;
+      const terminalAuditorRunId = hasRuns
+        ? `SELECT auditor_binding.run_id FROM finny_runtime_bindings AS auditor_binding
+             LEFT JOIN runs AS auditor_run ON auditor_run.id=auditor_binding.run_id
+              WHERE auditor_binding.job_id=actions.job_id
+                AND auditor_binding.scope_id=actions.scope_id
+                AND auditor_binding.role='auditor'
+                AND auditor_binding.active=TRUE
+                AND (
+                  auditor_run.id IS NULL
+                  OR auditor_run.status='failed'
+                  OR (
+                    auditor_run.status='done'
+                    AND COALESCE(auditor_run.result::jsonb->>'status','') NOT IN ('pending_approval','refused')
+                  )
+                  OR (auditor_binding.expires_at<=$1 AND auditor_run.status NOT IN ('done','failed'))
+                )
+              ORDER BY auditor_binding.epoch DESC
+              LIMIT 1`
+        : `SELECT auditor_binding.run_id FROM finny_runtime_bindings AS auditor_binding
+              WHERE auditor_binding.job_id=actions.job_id
+                AND auditor_binding.scope_id=actions.scope_id
+                AND auditor_binding.role='auditor'
+                AND auditor_binding.active=TRUE
+                AND auditor_binding.expires_at<=$1
+              ORDER BY auditor_binding.epoch DESC
+              LIMIT 1`;
       const rows = await q(
         `SELECT actions.kind,actions.session_id,actions.run_id,actions.scope_id,actions.job_id,
                 actions.idempotency_key,CASE WHEN actions.kind='artifact_ready' THEN events.payload ELSE actions.authority_payload->'recovery' END AS payload,
-                ${retryTerminalAuditor} AS retry_terminal_auditor
+                (${terminalAuditorRunId}) AS terminal_auditor_run_id
            FROM finny_runtime_actions AS actions
            JOIN finny_jobs AS jobs
              ON jobs.id=actions.job_id
@@ -727,7 +736,9 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
           return {
             kind: "artifact_ready" as const,
             ...base,
-            ...((row.retry_terminal_auditor as boolean) ? { retryTerminalAuditor: true } : {}),
+            ...(typeof row.terminal_auditor_run_id === "string"
+              ? { retryTerminalAuditorRunId: row.terminal_auditor_run_id }
+              : {}),
           };
         const payload = (row.payload ?? {}) as {
           artifactDigest: string;

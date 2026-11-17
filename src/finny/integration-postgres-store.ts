@@ -50,6 +50,10 @@ export interface FinnyIntegrationParentRecord {
   binding: FinnyParentBindingSnapshot;
 }
 
+export interface FinnyApprovedIncompleteRecord extends FinnyIntegrationParentRecord {
+  retryTerminalProducerRunId?: string;
+}
+
 export interface FinnyPendingClarificationCard extends FinnyIntegrationParentRecord {
   clarificationRequestId: string;
   question: string;
@@ -354,23 +358,28 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
       );
       return rows.map(parent);
     },
-    async approvedIncomplete(): Promise<FinnyIntegrationParentRecord[]> {
+    async approvedIncomplete(): Promise<FinnyApprovedIncompleteRecord[]> {
       const hasRuns = (await q("SELECT to_regclass('runs') IS NOT NULL AS exists"))[0]?.exists === true;
-      const terminalProducer = hasRuns
-        ? `OR EXISTS (
-             SELECT 1 FROM finny_runtime_bindings b
+      const terminalProducerRunId = hasRuns
+        ? `SELECT b.run_id FROM finny_runtime_bindings b
              LEFT JOIN runs r ON r.id=b.run_id
               WHERE b.job_id=i.job_id AND b.scope_id=i.scope_id
                 AND b.role='producer' AND b.active=TRUE
-                AND (b.expires_at<=$1 OR r.id IS NULL OR r.status IN ('done','failed'))
-           )`
-        : `OR EXISTS (
-             SELECT 1 FROM finny_runtime_bindings b
+                AND (
+                  r.id IS NULL
+                  OR r.status='failed'
+                  OR (r.status='done' AND COALESCE(r.result::jsonb->>'status','') NOT IN ('pending_approval','refused'))
+                  OR (b.expires_at<=$1 AND r.status NOT IN ('done','failed'))
+                )
+              ORDER BY b.epoch DESC
+              LIMIT 1`
+        : `SELECT b.run_id FROM finny_runtime_bindings b
               WHERE b.job_id=i.job_id AND b.scope_id=i.scope_id
                 AND b.role='producer' AND b.active=TRUE AND b.expires_at<=$1
-           )`;
+              ORDER BY b.epoch DESC
+              LIMIT 1`;
       const rows = await q(
-        `SELECT i.* FROM finny_integration_jobs i
+        `SELECT i.*,(${terminalProducerRunId}) AS terminal_producer_run_id FROM finny_integration_jobs i
          JOIN finny_jobs j ON j.id=i.job_id AND j.scope_id=i.scope_id
          WHERE j.approval_action='approve'
            AND j.approval_consumed_at IS NULL
@@ -381,12 +390,17 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
                WHERE b.job_id=i.job_id AND b.scope_id=i.scope_id
                  AND b.role='producer' AND b.active=TRUE
              )
-             ${terminalProducer}
+             OR (${terminalProducerRunId}) IS NOT NULL
            )
          ORDER BY j.approval_decided_at, i.job_id`,
         [Date.now()],
       );
-      return rows.map(parent);
+      return rows.map((row) => ({
+        ...parent(row),
+        ...(typeof row.terminal_producer_run_id === "string"
+          ? { retryTerminalProducerRunId: row.terminal_producer_run_id }
+          : {}),
+      }));
     },
   };
 }

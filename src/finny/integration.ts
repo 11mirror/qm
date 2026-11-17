@@ -321,7 +321,7 @@ export function createFinnyToolServiceFactory(deps: {
           jobId: string,
           planPresentation: FinnyPlanPresentation,
           materialClarification?: FinnyMaterialClarification,
-        ): Promise<string> {
+        ): Promise<FinnyPlanCreation> {
           const job = await deps.jobs.getJob(turn.scopeId, jobId);
           if (!job) throw new Error("Finny job is unavailable");
           if (materialClarification)
@@ -344,7 +344,12 @@ export function createFinnyToolServiceFactory(deps: {
             text: `[Amended Scope] ${planPresentation.title}`,
             idempotencyKey: `finny-plan-amendment:${requestId}`,
           });
-          return `Finny plan ${jobId} amendment is awaiting scope change approval.`;
+          return {
+            message: `Finny plan ${jobId} amendment is awaiting scope change approval.`,
+            jobId,
+            requestId,
+            awaiting: "approval",
+          };
         },
         async status(jobId: string): Promise<string> {
           const scopeId = current ? current.scopeId : turn.scopeId;
