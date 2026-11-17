@@ -7,6 +7,7 @@ Owner: Finny/QM working agents
 Implementation state: Phase 0 and Phase 1 implemented and verified on QM web and Slack; Phase 2 not started pending human review  
 Working branch: `codex/finny-phase-1-performance`  
 Working tree: `/Users/kalicharanshukla/.codex/worktrees/finny-architecture-audit/QM`
+Phase 0/1 implementation commit: `4e0fbbbb9`
 
 ## Implementation summary
 
