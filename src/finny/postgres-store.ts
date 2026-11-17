@@ -532,6 +532,30 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         job: rowToJob(row.job_row as Record<string, unknown>),
       } satisfies FinnyApprovalRequest;
     },
+    async getPendingApprovalRequestByThread(originThreadRef) {
+      const rows = await q(
+        `SELECT r.*, to_jsonb(j) AS job_row
+           FROM finny_approval_requests r
+           JOIN finny_jobs j ON j.id = r.job_id
+          WHERE r.origin_thread_ref = $1 AND r.decided_at IS NULL AND r.ready_at IS NOT NULL
+          ORDER BY r.created_at DESC
+          LIMIT 1`,
+        [originThreadRef],
+      );
+      const row = rows[0];
+      if (!row) return null;
+      return {
+        requestId: row.request_id as string,
+        scopeId: row.scope_id as string,
+        jobId: row.job_id as string,
+        planDigest: row.plan_digest as string,
+        originThreadRef: row.origin_thread_ref as string,
+        authorizedActorId: row.authorized_actor_id as string,
+        ...(row.ready_at !== null ? { readyAt: Number(row.ready_at) } : {}),
+        ...(row.decided_at !== null ? { decidedAt: Number(row.decided_at) } : {}),
+        job: rowToJob(row.job_row as Record<string, unknown>),
+      } satisfies FinnyApprovalRequest;
+    },
     async getClarificationRequest(requestId) {
       const rows = await q("SELECT * FROM finny_clarification_requests WHERE request_id=$1", [requestId]);
       return rows[0] ? rowToClarification(rows[0]) : null;

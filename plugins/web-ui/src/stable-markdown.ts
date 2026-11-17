@@ -197,6 +197,24 @@ export class StableMarkdown extends ReactiveElement {
         if (this.isStreaming) diagram.setAttribute("pending", "");
         code.replaceWith(diagram);
       }
+      for (const el of target.querySelectorAll("p, div")) {
+        const txt = el.textContent?.trim();
+        if (
+          txt &&
+          (txt.startsWith('{"schema":"generative-ui.v1"') ||
+            txt.startsWith('{"root":"card-') ||
+            txt.startsWith('{"schema":"openui.v1"'))
+        ) {
+          try {
+            JSON.parse(txt);
+            const gen = document.createElement("qm-gen-card");
+            gen.setAttribute("spec", txt);
+            el.replaceWith(gen);
+          } catch {
+            void 0;
+          }
+        }
+      }
       const animate = this.isStreaming && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
       this.prepareFades(target, animate);
       morphdom(this, target, {

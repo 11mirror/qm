@@ -180,6 +180,7 @@ export interface FinnyStore {
   recordPlanAmendment(input: RecordFinnyPlanAmendmentInput): Promise<FinnyEventResult<FinnyJobEvent<"plan_amended">>>;
   getJob(scopeId: string, jobId: string): Promise<FinnyJob | null>;
   getApprovalRequest(requestId: string): Promise<FinnyApprovalRequest | null>;
+  getPendingApprovalRequestByThread(originThreadRef: string): Promise<FinnyApprovalRequest | null>;
   getClarificationRequest(requestId: string): Promise<FinnyClarificationRequest | null>;
   claimWorkerRun(input: ClaimFinnyWorkerRunInput): Promise<void>;
   recordApproval(input: RecordFinnyApprovalInput): Promise<FinnyJob>;

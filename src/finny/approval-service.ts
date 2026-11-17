@@ -69,8 +69,16 @@ export function createFinnyApprovalService(deps: {
         },
       };
     },
+    async findPendingByThread(originThreadRef) {
+      const request = await deps.store.getPendingApprovalRequestByThread?.(originThreadRef);
+      if (!request) return null;
+      return this.pending(request.requestId);
+    },
     async decide(input) {
-      const request = await deps.store.getApprovalRequest(input.requestId);
+      let request = await deps.store.getApprovalRequest(input.requestId);
+      if (!request && input.originThreadRef && deps.store.getPendingApprovalRequestByThread) {
+        request = await deps.store.getPendingApprovalRequestByThread(input.originThreadRef);
+      }
       if (!request) {
         const clarification = await deps.store.getClarificationRequest(input.requestId);
         if (!clarification || clarification.decidedAt !== undefined) return { kind: "gone" };
@@ -151,7 +159,7 @@ export function createFinnyApprovalService(deps: {
         requestId: request.requestId,
         actorId: actor.id,
         action: input.decision.action,
-        originThreadRef: actualThreadRef ?? request.originThreadRef,
+        originThreadRef: request.originThreadRef,
         decidedAt: Date.now(),
       });
       await afterCommit(
