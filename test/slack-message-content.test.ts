@@ -132,11 +132,37 @@ test("slackMessageContent renders top-level blocks only when the message has no 
         { type: "mrkdwn", text: "via CI" },
       ],
     },
-    { type: "rich_text", elements: [{ type: "rich_text_section", elements: [{ type: "text", text: "shipped" }] }] },
+    { type: "divider" },
   ];
 
   assert.equal(slackMessageContent({ text: "", blocks }).text, "Deploy report\nshipped by <@U1>\n*env* prod\nvia CI");
   assert.equal(slackMessageContent({ text: "shipped", blocks }).text, "shipped");
+});
+
+test("slackMessageContent extracts rich_text including preformatted code blocks", () => {
+  const blocks = [
+    {
+      type: "rich_text",
+      elements: [
+        {
+          type: "rich_text_section",
+          elements: [{ type: "text", text: "Here is the SuiteQL query:" }],
+        },
+        {
+          type: "rich_text_preformatted",
+          elements: [
+            { type: "text", text: "SELECT id, trandate, foreignamountunpaid FROM transaction WHERE type = 'Journal'" },
+          ],
+        },
+      ],
+    },
+  ];
+
+  const result = slackMessageContent({ text: "", blocks });
+  assert.equal(
+    result.text,
+    "Here is the SuiteQL query:\n```\nSELECT id, trandate, foreignamountunpaid FROM transaction WHERE type = 'Journal'\n```",
+  );
 });
 
 test("slackMessageContent leaves link previews out of the text", () => {

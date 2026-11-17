@@ -11,6 +11,50 @@ const str = (value: unknown): string => (typeof value === "string" ? value : "")
 
 const textObject = (value: unknown): string => (isNode(value) ? str(value.text) : str(value));
 
+function richTextElementText(el: SlackNode): string {
+  switch (el.type) {
+    case "text":
+      return str(el.text);
+    case "link":
+      return str(el.text) || str(el.url);
+    case "user":
+      return `<@${str(el.user_id)}>`;
+    case "channel":
+      return `<#${str(el.channel_id)}>`;
+    case "usergroup":
+      return `<!subteam^${str(el.usergroup_id)}>`;
+    case "broadcast":
+      return `<!${str(el.range)}>`;
+    case "emoji":
+      return `:${str(el.name)}:`;
+    case "rich_text_section":
+      return nodes(el.elements).map(richTextElementText).join("");
+    case "rich_text_preformatted": {
+      const content = nodes(el.elements).map(richTextElementText).join("");
+      return `\`\`\`\n${content}\n\`\`\``;
+    }
+    case "rich_text_quote": {
+      const content = nodes(el.elements).map(richTextElementText).join("");
+      return content
+        .split("\n")
+        .map((line) => `> ${line}`)
+        .join("\n");
+    }
+    case "rich_text_list": {
+      const style = str(el.style);
+      const indent = typeof el.indent === "number" ? "  ".repeat(el.indent) : "";
+      return nodes(el.elements)
+        .map((item, idx) => {
+          const prefix = style === "ordered" ? `${idx + 1}. ` : "- ";
+          return `${indent}${prefix}${richTextElementText(item)}`;
+        })
+        .join("\n");
+    }
+    default:
+      return str(el.text);
+  }
+}
+
 function blockText(block: SlackNode): string {
   switch (block.type) {
     case "section":
@@ -20,6 +64,8 @@ function blockText(block: SlackNode): string {
     case "header":
     case "markdown":
       return textObject(block.text);
+    case "rich_text":
+      return nodes(block.elements).map(richTextElementText).join("\n");
     default:
       return "";
   }
