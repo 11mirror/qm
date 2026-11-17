@@ -94,10 +94,95 @@ test("approving a web Finny clarification immediately presents the durable plan 
 
   const result = await built.app.turn({
     ...request,
-    approval: { requestId: clarificationApproval!.requestId, approved: true, scope: "once" },
+    approval: { requestId: clarificationApproval!.requestId, approved: true, scope: "once", optionId: "today" } as never,
   });
 
   assert.equal(result.status, "pending_approval", JSON.stringify(await built.errors.list()));
   assert.equal(result.pendingApprovals?.[0]?.reason, "Finny Governance Plan Approval");
   assert.equal(result.pendingApprovals?.[0]?.command, plan.title);
+});
+
+test("a nonrecommended web Finny clarification choice requests revision instead of approving the old plan", async () => {
+  const built = buildApp(
+    testConfig({
+      finny: {
+        signingSecret: "finny-test-secret",
+        findingPolicy: { id: "test", maxFindings: 4, maxCodeLength: 40, maxMessageLength: 200 },
+        maxReworks: 2,
+        workerGrantTtlMs: 60_000,
+        spreadsheetEngine: {
+          url: "https://spreadsheet-engine.example/evaluate",
+          name: engine.name,
+          version: engine.version,
+          timeoutMs: 30_000,
+          maxResponseBytes: 1_048_576,
+          maxArtifactBytes: 52_428_800,
+          evaluator: engine.evaluator,
+        },
+        maxEvidenceBytes: 4_194_304,
+      } as never,
+    }),
+    { agent, spreadsheetCalculationEngine: engine },
+  );
+  const request = {
+    surface: "web",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm" as const, threadRef: "web:U1:finny-alternate-clarification" },
+    text: "Create an AP aging workbook",
+  };
+  const clarification = await built.app.turn(request);
+
+  const result = await built.app.turn({
+    ...request,
+    approval: {
+      requestId: clarification.pendingApprovals![0]!.requestId,
+      approved: true,
+      scope: "once",
+      optionId: "month-end",
+    } as never,
+  });
+
+  assert.equal(result.status, "ok");
+  assert.match(result.reply ?? "", /revised plan/i);
+  assert.equal(result.pendingApprovals, undefined);
+});
+
+test("Other resolves a web Finny clarification without treating it as a denied command", async () => {
+  const built = buildApp(
+    testConfig({
+      finny: {
+        signingSecret: "finny-test-secret",
+        findingPolicy: { id: "test", maxFindings: 4, maxCodeLength: 40, maxMessageLength: 200 },
+        maxReworks: 2,
+        workerGrantTtlMs: 60_000,
+        spreadsheetEngine: {
+          url: "https://spreadsheet-engine.example/evaluate",
+          name: engine.name,
+          version: engine.version,
+          timeoutMs: 30_000,
+          maxResponseBytes: 1_048_576,
+          maxArtifactBytes: 52_428_800,
+          evaluator: engine.evaluator,
+        },
+        maxEvidenceBytes: 4_194_304,
+      } as never,
+    }),
+    { agent, spreadsheetCalculationEngine: engine },
+  );
+  const request = {
+    surface: "web",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm" as const, threadRef: "web:U1:finny-other-clarification" },
+    text: "Create an AP aging workbook",
+  };
+  const clarification = await built.app.turn(request);
+
+  const result = await built.app.turn({
+    ...request,
+    approval: { requestId: clarification.pendingApprovals![0]!.requestId, approved: false },
+  });
+
+  assert.equal(result.status, "ok");
+  assert.match(result.reply ?? "", /revised plan/i);
+  assert.equal(result.refusalKind, undefined);
 });

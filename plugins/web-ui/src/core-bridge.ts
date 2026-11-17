@@ -534,6 +534,51 @@ export interface ApprovalDecision {
   requestId: string;
   approved: boolean;
   scope?: "once" | "session" | "always";
+  optionId?: string;
+}
+
+export interface FinnyClarificationChoice {
+  label: string;
+  recommended: boolean;
+  decision: ApprovalDecision;
+}
+
+export function finnyClarificationChoices(approval: PendingApproval): FinnyClarificationChoice[] {
+  if (approval.reason !== "Finny Governance Clarification" || !approval.summaryDetail) return [];
+  let detail: unknown;
+  try {
+    detail = JSON.parse(approval.summaryDetail);
+  } catch {
+    return [];
+  }
+  if (!detail || typeof detail !== "object" || !("materialClarification" in detail)) return [];
+  const clarification = detail.materialClarification;
+  if (!clarification || typeof clarification !== "object" || !("options" in clarification)) return [];
+  const options = clarification.options;
+  if (!Array.isArray(options)) return [];
+  const recommendedOptionId =
+    "recommendedOptionId" in clarification && typeof clarification.recommendedOptionId === "string"
+      ? clarification.recommendedOptionId
+      : "";
+  const choices = options.flatMap((option): FinnyClarificationChoice[] => {
+    if (
+      !option ||
+      typeof option !== "object" ||
+      !("id" in option) ||
+      typeof option.id !== "string" ||
+      !("label" in option) ||
+      typeof option.label !== "string"
+    )
+      return [];
+    return [
+      {
+        label: option.label,
+        recommended: option.id === recommendedOptionId,
+        decision: { requestId: approval.requestId, approved: true, optionId: option.id },
+      },
+    ];
+  });
+  return [...choices, { label: "Other", recommended: false, decision: { requestId: approval.requestId, approved: false } }];
 }
 export type AssistantWork = AssistantMessage & {
   persisted?: boolean;
@@ -1153,7 +1198,11 @@ export async function resolveApproval(decision: ApprovalDecision): Promise<strin
   }
   const submit = await api<{ runId?: string }>(`/api/approvals/${encodeURIComponent(decision.requestId)}`, {
     method: "POST",
-    body: JSON.stringify({ approved: decision.approved, ...(decision.scope ? { scope: decision.scope } : {}) }),
+    body: JSON.stringify({
+      approved: decision.approved,
+      ...(decision.scope ? { scope: decision.scope } : {}),
+      ...(decision.optionId ? { optionId: decision.optionId } : {}),
+    }),
   }).catch((err: unknown) => {
     if (err instanceof ApiError && err.status === 404) return null;
     throw err;

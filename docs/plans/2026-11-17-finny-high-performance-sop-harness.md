@@ -695,6 +695,60 @@ Exit criteria:
 - A material amendment cannot run under the previous approval.
 - The SOP remains finance-specific and does not become a second workflow engine.
 
+### Phase 1 web clarification decision shape review
+
+This is the complete human-readable review for the caller payload correction required by live Phase 1 QA. It is not the Phase 2 SOP schema.
+
+Old web approval request shape:
+
+```ts
+approval?: {
+  requestId: string;
+  approved: boolean;
+  scope?: "once" | "session" | "always";
+}
+```
+
+New web approval request shape:
+
+```ts
+approval?: {
+  requestId: string;
+  approved: boolean;
+  scope?: "once" | "session" | "always";
+  optionId?: string;
+}
+```
+
+`optionId` is required only when approving a `Finny Governance Clarification`. It must equal one option already bound to the durable clarification request. Selecting `Other` sends `approved: false` and records the existing `{ kind: "other" }` Finny clarification decision. Generic approvals and Finny plan approvals do not send `optionId`.
+
+Invented before request:
+
+```json
+{ "approval": { "requestId": "generic-approval-1", "approved": true, "scope": "once" } }
+```
+
+Invented clarification request after the change:
+
+```json
+{
+  "approval": {
+    "requestId": "generic-approval-1",
+    "approved": true,
+    "scope": "once",
+    "optionId": "month-end"
+  }
+}
+```
+
+Persistence and compatibility effects:
+
+- The approval turn request is already stored durably as part of the run request; `optionId` is added to that existing JSON payload and is not copied into another table.
+- The existing `finny_clarification_requests.decision` JSON field already stores `{ kind: "option", optionId }` or `{ kind: "other" }`; its shape, indexes, constraints, and representative rows do not change.
+- No database table, column, index, constraint, enum, configuration setting, API route, or response payload changes.
+- No migration or backfill is required. Current web code sends an option for every affirmative Finny clarification decision. An affirmative clarification request without `optionId` is rejected instead of guessing the recommendation; there is no dual-read compatibility path.
+- Existing pending clarification records remain usable because their durable options are unchanged and the new web renderer reads those options from the current pending approval.
+
 ### Phase 3 — Core-owned completion
 
 Status: Not started
@@ -1120,7 +1174,7 @@ Reason: Current QM has useful offline evidence conventions but no versioned fina
 | 2026-11-17 |  Phase 0 | Added a production-independent baseline analyzer for Producer/Auditor run counts, pre-artifact Auditor detection, query-to-certified-delivery time, and parent/Producer/Auditor tokens with fail-closed missing usage                               | [Analyzer and tests](#phase-0--baseline-and-completion-trace); paired web and Slack measurements are linked in the implementation summary                                                                                                                                                                  | Complete                                                                          | Evaluation lane   |
 | 2026-11-17 |  Phase 1 | Corrected Finny tool vocabulary, removed placeholder dispatch turns, opened Producer only after approval with its real task, opened Auditor only after artifact commit, and recovered terminal successful-but-incomplete workers from durable state | [Web evidence](#phase-01-live-measurement--qm-web): one Producer, one post-artifact Auditor, certified XLSX, 21.6% fewer tokens. [Slack evidence](#phase-01-live-measurement--slack): one Producer, one post-artifact Auditor, certified attached XLSX, 43.2% fewer tokens.                                    | Complete on web and Slack; latency improvement not yet proven                     | Integration owner |
 | 2026-11-17 |  Phase 1 | Preserved the durable Finny plan request identity across the generic web approval boundary after live QA exposed a false-success dispatch                                                                                                           | RED: web Finny tool test observed no durable `finny-plan:<requestId>` approval key. GREEN: the tool retains the request identity; the orchestrator decides that Finny request; the live Producer opened immediately after approval.                                                                            | Complete                                                                          | Integration owner |
-| 2026-11-17 |  Phase 1 | Closed the material-clarification handoff so the exact durable plan approval is projected immediately after the clarification decision instead of leaving the web conversation at an informational dead end                                           | RED: caller-visible Postgres regression returned `ok` with no next approval. GREEN: 7/7 affected files pass, typecheck and oxlint pass, and Chrome shows `Approve Plan` immediately after the recommended clarification is accepted. No database schema, persisted payload, or configuration changed.             | Complete                                                                          | Integration owner |
+| 2026-11-17 |  Phase 1 | Closed the material-clarification handoff so every persisted option and `Other` is actionable, the exact ready plan is projected immediately, and Finny translation stays outside the generic orchestrator                                                                           | RED: caller-visible Postgres tests proved the prior code ignored alternate options, treated `Other` as command denial, and returned no next approval. GREEN: affected core/web suites, typecheck, and oxlint pass. The approval-turn payload adds optional `optionId`; no database schema or configuration changed. | Complete; refreshed live Chrome evidence follows the reviewed commit              | Integration owner |
 | 2026-11-17 |  Phase 2 | User authorized task-level SOP implementation and verification as the next milestone after the Phase 1 PR is complete                                                                                                                               | This document remains the working contract; first record the complete human-readable old/new schema and migration review, then implement one finance-specific SOP persistence and execution slice.                                                                                                            | Queued                                                                            | Integration owner |
 
 ## Required human decisions for Phase 2 gates

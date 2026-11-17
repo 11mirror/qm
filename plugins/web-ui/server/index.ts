@@ -2628,11 +2628,17 @@ const apiRoutes: readonly WebRoute[] = [
       const { req, res, user } = c;
       const requestId = c.params.requestId!;
       if (!requestId || requestId.includes("/")) return json(res, 404, { error: "not_found" });
-      const p = await readJson<{ approved?: unknown; scope?: unknown; idempotencyKey?: unknown }>(req, res, false);
+      const p = await readJson<{
+        approved?: unknown;
+        scope?: unknown;
+        optionId?: unknown;
+        idempotencyKey?: unknown;
+      }>(req, res, false);
       if (!p) return;
       if (typeof p.approved !== "boolean") return json(res, 400, { error: "bad_request" });
       const approved = p.approved;
       const scope = p.scope === "once" || p.scope === "session" || p.scope === "always" ? p.scope : undefined;
+      const optionId = typeof p.optionId === "string" && p.optionId ? p.optionId : undefined;
       const idempotencyKey = namespacedSendKey(user, p.idempotencyKey);
 
       const fetched = await coreFetch("GET", `/v1/approvals/${encodeURIComponent(requestId)}`);
@@ -2673,7 +2679,7 @@ const apiRoutes: readonly WebRoute[] = [
         }
       }
 
-      const approval = { requestId, approved, ...(scope ? { scope } : {}) };
+      const approval = { requestId, approved, ...(scope ? { scope } : {}), ...(optionId ? { optionId } : {}) };
       const replay: Record<string, unknown> = { ...record.request, approval };
       delete replay.idempotencyKey;
       if (idempotencyKey) replay.idempotencyKey = idempotencyKey;

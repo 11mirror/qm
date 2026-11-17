@@ -409,7 +409,7 @@ export interface TurnRequest {
   displayText?: string;
   turnWallClockMs?: number;
   timezone?: string;
-  approval?: { requestId: string; approved: boolean; scope?: ApprovalScope };
+  approval?: { requestId: string; approved: boolean; scope?: ApprovalScope; optionId?: string };
   proactiveOpener?: boolean;
   analyticsSuppressed?: boolean;
   spawned?: boolean;

@@ -3250,8 +3250,10 @@ export function createChatSurface(
     return html`
       <div class="finny-plan-card">
         <div class="approval-head">
-          <span class="approval-title">${plan?.title ?? a.command}</span>
-          <span class="approval-reason-badge finny-badge">Finny Plan Approval</span>
+          <span class="approval-title">${materialClarification?.question ?? plan?.title ?? a.command}</span>
+          <span class="approval-reason-badge finny-badge"
+            >${materialClarification ? "Finny Clarification" : "Finny Plan Approval"}</span
+          >
         </div>
         ${plan?.summary ? html`<div class="finny-plan-summary">${plan.summary}</div>` : nothing}
         ${
