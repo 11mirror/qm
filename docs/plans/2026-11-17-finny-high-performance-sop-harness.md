@@ -8,6 +8,7 @@ Implementation state: Phase 0 and Phase 1 implemented and verified on QM web and
 Working branch: `codex/finny-phase-1-performance`  
 Working tree: `/Users/kalicharanshukla/.codex/worktrees/finny-architecture-audit/QM`
 Phase 0/1 implementation commit: `4e0fbbbb9`
+Review PR: [11mirror/qm#34](https://github.com/11mirror/qm/pull/34)
 
 ## Implementation summary
 
