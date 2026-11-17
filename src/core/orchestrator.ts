@@ -1199,7 +1199,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const isFinanceTurn = isFinanceCoordinator;
       const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders, appConnections);
       if (isFinanceTurn) {
-        systemPrompt += `\n\n## Mandatory FinnyLoop Governance Harness\nThis turn matches a financial workbook/reconciliation intent (${resolvedIntent.intentName ?? "financial"}). All financial calculations, ledger queries, and Excel workbook production MUST flow through the FinnyLoop governance lifecycle. Do NOT execute domain skills directly or attach unverified workbooks. You must first call finny_create_plan to present the plan for human approval via interactive approval cards (in this chat or via Slack).\n\n### Plan Presentation & SOP Requirements\nThe plan MUST represent an explicit, step-by-step Standard Operating Procedure (SOP) with accounting logic and data source fields:\n1. Specify the exact systems, tables, and fields used (e.g. NetSuite transaction, transactionline, previousaccountingperiod, Zoho Books, specific accounts, transaction types)\n2. State the accounting basis, cutoff date, and source scope explicitly\n3. Define filtering criteria, currency treatment, and account exclusions (e.g. FX netting, Account 606702, MSME tags)\n4. Break down the plan into discrete stages: Data Extraction -> Balance Calculation -> Workbook Synthesis -> Verification\n5. Specify output artifacts, sheet tabs, and reconciliation controls\n6. Clarification Gate: If ANY material parameters (accounting period, subsidiary, book currency, cutoff dates) are missing or ambiguous, present interactive question-answer clarification cards via materialClarification before submitting the plan for approval.\n7. Require human approval via interactive card before any write, execution, or delivery step`;
+        systemPrompt += `\n\n## Mandatory FinnyLoop Governance Harness\nThis turn matches a financial workbook/reconciliation intent (${resolvedIntent.intentName ?? "financial"}). All financial calculations, ledger queries, and Excel workbook production MUST flow through the FinnyLoop governance lifecycle. Do NOT execute domain skills directly or attach unverified workbooks. You must first call finny(action="create_plan", ...) to present the plan for human approval via interactive approval cards (in this chat or via Slack).\n\n### Plan Presentation & SOP Requirements\nThe plan MUST represent an explicit, step-by-step Standard Operating Procedure (SOP) with accounting logic and data source fields:\n1. Specify the exact systems, tables, and fields used (e.g. NetSuite transaction, transactionline, previousaccountingperiod, Zoho Books, specific accounts, transaction types)\n2. State the accounting basis, cutoff date, and source scope explicitly\n3. Define filtering criteria, currency treatment, and account exclusions (e.g. FX netting, Account 606702, MSME tags)\n4. Break down the plan into discrete stages: Data Extraction -> Balance Calculation -> Workbook Synthesis -> Verification\n5. Specify output artifacts, sheet tabs, and reconciliation controls\n6. Clarification Gate: If ANY material parameters (accounting period, subsidiary, book currency, cutoff dates) are missing or ambiguous, present interactive question-answer clarification cards via materialClarification before submitting the plan for approval.\n7. Require human approval via interactive card before any write, execution, or delivery step`;
       }
       turnContextBlocks["Skills"] = skillsIndex(nativeSkills);
       const transferId = turnFileId(input.runId, input.attempt);
@@ -2043,6 +2043,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             };
           }
           if (deps.finnyApprovals && p.reason === "Finny Governance Plan Approval") {
+            const finnyRequestId = p.approvalKey?.startsWith("finny-plan:")
+              ? p.approvalKey.slice("finny-plan:".length)
+              : input.approval.requestId;
             const threadCandidates = [
               conversation.threadRef,
               `web:${conversation.threadRef}`,
@@ -2051,7 +2054,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             for (const threadRef of threadCandidates) {
               const res = await deps.finnyApprovals
                 .decide({
-                  requestId: input.approval.requestId,
+                  requestId: finnyRequestId,
                   decision: { kind: "plan", action: input.approval.approved ? "approve" : "reject" },
                   actor: { externalId: actor.id, ...(actor.displayName ? { displayName: actor.displayName } : {}) },
                   surface: input.surface,
@@ -2209,7 +2212,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             });
             if (p.reason === "Finny Governance Plan Approval") {
               const title = p.command || "Finny Governance Plan";
-              const reply = `Finny plan "${title}" approved. Background Producer and Auditor workers have been dispatched to build, audit, and certify the workbook deliverable.`;
+              const reply = `Finny plan "${title}" approved. The Producer has started building the workbook; the Auditor will start after a valid artifact is committed.`;
               return {
                 status: "ok",
                 sessionId: session.id,

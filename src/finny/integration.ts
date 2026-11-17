@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type { FinnyToolService } from "../agent/agent-tools/finny.ts";
+import type { FinnyPlanCreation, FinnyToolService } from "../agent/agent-tools/finny.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import { parseScopeId, type Conversation, type Destination, type Principal } from "../types.ts";
@@ -258,7 +258,7 @@ export function createFinnyToolServiceFactory(deps: {
         async createPlan(
           planPresentation: FinnyPlanPresentation,
           materialClarification?: FinnyMaterialClarification,
-        ): Promise<string> {
+        ): Promise<FinnyPlanCreation> {
           if (current) throw new Error("Finny workers cannot create plans");
           if (materialClarification)
             assertFinnyMaterialClarificationMatchesPlan(planPresentation, materialClarification);
@@ -308,9 +308,14 @@ export function createFinnyToolServiceFactory(deps: {
               ? `finny-clarification:${clarification.requestId}`
               : `finny-plan:${requestId}`,
           });
-          return clarification
-            ? `Finny plan ${jobId} is awaiting clarification.`
-            : `Finny plan ${jobId} is awaiting approval.`;
+          return {
+            message: clarification
+              ? `Finny plan ${jobId} is awaiting clarification.`
+              : `Finny plan ${jobId} is awaiting approval.`,
+            jobId,
+            requestId,
+            awaiting: clarification ? ("clarification" as const) : ("approval" as const),
+          };
         },
         async amendPlan(
           jobId: string,

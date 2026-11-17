@@ -356,32 +356,35 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
     },
     async approvedIncomplete(): Promise<FinnyIntegrationParentRecord[]> {
       const hasRuns = (await q("SELECT to_regclass('runs') IS NOT NULL AS exists"))[0]?.exists === true;
-      const terminalProducerRetry = hasRuns
+      const terminalProducer = hasRuns
         ? `OR EXISTS (
              SELECT 1 FROM finny_runtime_bindings b
-             JOIN runs r ON r.id=b.run_id
+             LEFT JOIN runs r ON r.id=b.run_id
               WHERE b.job_id=i.job_id AND b.scope_id=i.scope_id
                 AND b.role='producer' AND b.active=TRUE
-                AND (
-                  r.status='failed'
-                  OR (r.status='done' AND (r.last_stop IS NOT NULL OR r.result LIKE '%"stopped":true%'))
-                )
+                AND (b.expires_at<=$1 OR r.id IS NULL OR r.status IN ('done','failed'))
            )`
-        : "";
+        : `OR EXISTS (
+             SELECT 1 FROM finny_runtime_bindings b
+              WHERE b.job_id=i.job_id AND b.scope_id=i.scope_id
+                AND b.role='producer' AND b.active=TRUE AND b.expires_at<=$1
+           )`;
       const rows = await q(
         `SELECT i.* FROM finny_integration_jobs i
          JOIN finny_jobs j ON j.id=i.job_id AND j.scope_id=i.scope_id
          WHERE j.approval_action='approve'
            AND j.approval_consumed_at IS NULL
+           AND j.artifact_digest IS NULL
            AND (
              NOT EXISTS (
-               SELECT 1 FROM finny_runtime_dispatches d
-               WHERE d.job_id=i.job_id AND d.scope_id=i.scope_id
-                 AND d.kind='producer_grant' AND d.delivered_at IS NOT NULL
+               SELECT 1 FROM finny_runtime_bindings b
+               WHERE b.job_id=i.job_id AND b.scope_id=i.scope_id
+                 AND b.role='producer' AND b.active=TRUE
              )
-             ${terminalProducerRetry}
+             ${terminalProducer}
            )
          ORDER BY j.approval_decided_at, i.job_id`,
+        [Date.now()],
       );
       return rows.map(parent);
     },

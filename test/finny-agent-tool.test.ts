@@ -9,7 +9,7 @@ import { Check } from "typebox/value";
 
 const service = {
   async createPlan() {
-    return "plan created";
+    return { message: "plan created", jobId: "job-1", requestId: "request-1", awaiting: "approval" as const };
   },
   async amendPlan() {
     return "plan amended";
@@ -183,7 +183,12 @@ test("finny forwards only narrow inputs and returns concise bound-service text",
   const bound: FinnyToolService = {
     async createPlan(input) {
       calls.push(["create_plan", input]);
-      return "created job-1";
+      return {
+        message: "created job-1",
+        jobId: "job-1",
+        requestId: "request-1",
+        awaiting: "approval",
+      };
     },
     async amendPlan(jobId, input) {
       calls.push(["amend_plan", { jobId, input }]);
@@ -290,6 +295,30 @@ test("finny forwards only narrow inputs and returns concise bound-service text",
     ["deterministic_audit", { idempotencyKey: "deterministic-1" }],
     ["finalize", { jobId: "job-1", idempotencyKey: "finalize-1" }],
   ]);
+});
+
+test("web Finny approval retains the durable plan request identity", async () => {
+  const pendingApprovals: NonNullable<import("../src/agent/agent-tools.ts").ToolContextRef["pendingApprovals"]> = [];
+  const bound = {
+    ...service,
+    async createPlan() {
+      return {
+        message: "Finny plan job-1 is awaiting approval.",
+        jobId: "job-1",
+        requestId: "plan-request-1",
+        awaiting: "approval" as const,
+      };
+    },
+  };
+  const tool = createAgentTools(
+    { current: { finny: bound } as unknown as ToolContext, pendingApprovals },
+    { surfaceName: "web" },
+  ).find((candidate) => candidate.name === "finny");
+  assert.ok(tool);
+
+  await execute(tool, "call-plan", { action: "create_plan", plan });
+
+  assert.equal(pendingApprovals[0]?.approvalKey, "finny-plan:plan-request-1");
 });
 
 test("tool context carries the injected bound Finny service", () => {

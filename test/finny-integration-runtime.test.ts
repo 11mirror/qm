@@ -68,7 +68,16 @@ test("restart reconstruction opens workers through real session syscalls as an a
       },
     },
   });
-  const opened = await api.open({ requestId: "producer", name: "Finny Producer", task: "Await dispatch" });
+  let boundRunId = "";
+  const opened = await api.open({
+    requestId: "producer",
+    name: "Finny Producer",
+    task: "Produce the approved artifact",
+    async beforeEnqueue(identity) {
+      assert.equal(await runs.get(identity.runId), null);
+      boundRunId = identity.runId;
+    },
+  });
   assert.ok(opened.ok, JSON.stringify(opened));
   const child = await sessions.get(opened.sessionId);
   assert.equal(child?.parentSessionId, room.id);
@@ -80,24 +89,7 @@ test("restart reconstruction opens workers through real session syscalls as an a
     threadTs: "100.1",
   });
   assert.deepEqual(run?.request.conversation.audience, [actor]);
-  let reservedRunId = "";
-  const dispatched = await api.write({
-    target: opened.sessionId,
-    requestId: "exact-grant",
-    text: "Produce the approved artifact",
-    wake: true,
-    interrupt: true,
-    async beforeEnqueue(binding) {
-      reservedRunId = binding.runId;
-      return { text: JSON.stringify({ task: "Produce the approved artifact", authority: "server-bound" }) };
-    },
-  });
-  assert.equal(dispatched.ok, true);
-  const queued = (await runs.list({ threadRef: child!.threadRef, limit: 5 })).find(
-    (candidate) => candidate.id === reservedRunId,
-  );
-  assert.ok(queued);
-  assert.match(queued.request.text, /server-bound/);
-  assert.doesNotMatch(queued.request.text, /token|secret/i);
-  assert.match(queued.request.displayText ?? "", /Produce the approved artifact/);
+  assert.equal(run?.id, boundRunId);
+  assert.match(run?.request.text ?? "", /Produce the approved artifact/);
+  assert.equal((await runs.list({ threadRef: child!.threadRef, limit: 5 })).length, 1);
 });

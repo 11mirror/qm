@@ -10,7 +10,10 @@ import {
 import { text, type ToolKit } from "./kit.ts";
 
 export interface FinnyToolService {
-  createPlan(plan: FinnyPlanPresentation, materialClarification?: FinnyMaterialClarification): Promise<string>;
+  createPlan(
+    plan: FinnyPlanPresentation,
+    materialClarification?: FinnyMaterialClarification,
+  ): Promise<FinnyPlanCreation>;
   amendPlan(
     jobId: string,
     plan: FinnyPlanPresentation,
@@ -37,6 +40,13 @@ export interface FinnyToolService {
     idempotencyKey: string;
   }): Promise<string>;
   finalize(input: { jobId: string; idempotencyKey: string }): Promise<string>;
+}
+
+export interface FinnyPlanCreation {
+  message: string;
+  jobId: string;
+  requestId: string;
+  awaiting: "approval" | "clarification";
 }
 
 const string = () => Type.String({ minLength: 1 });
@@ -97,7 +107,7 @@ export function finnyTools(kit: ToolKit) {
     execute: async (callId, params) => {
       await recordCall(callId, { tool: "finny", action: "create_plan", title: params.plan.title });
       const result = await ref.current!.finny!.createPlan(params.plan, params.materialClarification);
-      if (opts?.surfaceName === "web") {
+      if (opts?.surfaceName === "web" && result.awaiting === "approval") {
         const detail = JSON.stringify({
           plan: params.plan,
           ...(params.materialClarification ? { materialClarification: params.materialClarification } : {}),
@@ -106,9 +116,10 @@ export function finnyTools(kit: ToolKit) {
           callId,
           {
             name: "NeedsApproval",
-            message: result,
+            message: result.message,
             command: params.plan.title,
             approvalReason: "Finny Governance Plan Approval",
+            approvalKey: `finny-plan:${result.requestId}`,
             kind: "approval",
             grantModes: { session: false, always: false },
             summaryDetail: detail,
@@ -121,7 +132,7 @@ export function finnyTools(kit: ToolKit) {
       return recordResult(
         callId,
         { tool: "finny", action: "create_plan", title: params.plan.title },
-        text(result),
+        text(result.message),
         false,
         undefined,
         true,

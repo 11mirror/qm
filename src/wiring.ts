@@ -2213,8 +2213,8 @@ export function buildApp(
               artifactDigest: job.artifactDigest ?? null,
               instruction:
                 role === "producer"
-                  ? `Produce or reuse the approved workbook in the persistent sandbox following the resolved domain skill (such as sharechat-ap-outstanding-workbook). All spreadsheet calculations, crossfoots, and verifications MUST be performed using pure-Python openpyxl with pre-computed cached values. DO NOT call LibreOffice/soffice or run destructive commands (such as rm -rf). IMPORTANT: When writing formulas (such as TOTAL rows), compute formula row-ranges dynamically from data start to last data row (e.g. SUM(L3:L{last_row})); never hardcode row boundaries that omit the final data line. Persist it by POSTing JSON {name,mimetype,dataBase64} to $AGENT_API_URL/v1/files/upload with x-agent-capability: $AGENT_API_TOKEN. Then call finny_artifact_ready with the returned immutable file.id as provisionalRevision and file.sha256 as artifactDigest.`
-                  : `Execute Finny Auditor checklist: invoke finny(action="deterministic_audit", idempotencyKey="...") once for the mandatory spreadsheet checks (formula.recalculate, summary.crossfoot, artifact.structure). For each remaining required check (${Object.keys(job.policy.requiredGenerations).join(", ")}), independently audit it and call finny(action="pass", checkId="...", generation=N, evidenceFileId="...", idempotencyKey="...") or finny(action="block", ...). Upload evidence files via files write or $AGENT_API_URL/v1/files/upload to obtain evidenceFileId. Do not look for separate finny_pass or JobBook tools — all actions (deterministic_audit, pass, block, status) are actions on your callable 'finny' tool. Only server-dispatched auditor sessions carry the authoritative 'finny' tool; do not manually open ungranted subagents.`,
+                  ? `Produce or reuse the approved workbook in the persistent sandbox following the resolved domain skill (such as sharechat-ap-outstanding-workbook). All spreadsheet calculations, crossfoots, and verifications MUST be performed using pure-Python openpyxl with pre-computed cached values. DO NOT call LibreOffice/soffice or run destructive commands (such as rm -rf). IMPORTANT: When writing formulas (such as TOTAL rows), compute formula row-ranges dynamically from data start to last data row (e.g. SUM(L3:L{last_row})); never hardcode row boundaries that omit the final data line. Persist it by POSTing JSON {name,mimetype,dataBase64} to $AGENT_API_URL/v1/files/upload with x-agent-capability: $AGENT_API_TOKEN. Then call finny(action="artifact_ready", provisionalRevision="<immutable file.id>", artifactDigest="<file.sha256>", idempotencyKey="...").`
+                  : `Execute Finny Auditor checklist: invoke finny(action="deterministic_audit", idempotencyKey="...") once for the mandatory spreadsheet checks (formula.recalculate, summary.crossfoot, artifact.structure). For each remaining required check (${Object.keys(job.policy.requiredGenerations).join(", ")}), independently audit it and call finny(action="pass", checkId="...", generation=N, evidenceFileId="...", idempotencyKey="...") or finny(action="block", ...). Upload evidence files via files write or $AGENT_API_URL/v1/files/upload to obtain evidenceFileId. All actions (deterministic_audit, pass, block, status) use the callable 'finny' tool. Only server-dispatched auditor sessions carry the authoritative 'finny' tool; do not manually open ungranted subagents.`,
             });
           },
         },
@@ -2302,7 +2302,12 @@ export function buildApp(
       await recoveryRunning;
       await finnyRecoveryBus.close?.();
     };
-    const afterApproved = async (input: { scopeId: string; jobId: string; requestId: string }) => {
+    const afterApproved = async (input: {
+      scopeId: string;
+      jobId: string;
+      requestId: string;
+      retryTerminalProducer?: boolean;
+    }) => {
       const parent = await finnyIntegration.getParent(input.scopeId, input.jobId);
       if (!parent || parent.requestId !== input.requestId)
         throw new Error("Finny approval has no matching parent binding");
@@ -2313,6 +2318,7 @@ export function buildApp(
         parentSessionId: parent.binding.sessionId,
         parentRunId: parent.binding.runId,
         idempotencyKey: `finny:${input.jobId}:${input.requestId}:approved`,
+        ...(input.retryTerminalProducer ? { retryTerminalProducer: true } : {}),
       });
     };
     const deliverPlanApproval = async (input: { scopeId: string; jobId: string }) => {
@@ -2472,7 +2478,12 @@ export function buildApp(
         });
       for (const pending of await finnyIntegration.approvedIncomplete())
         await recoverOne("approved_dispatch", pending.scopeId, pending.jobId, async () => {
-          await afterApproved({ scopeId: pending.scopeId, jobId: pending.jobId, requestId: pending.requestId });
+          await afterApproved({
+            scopeId: pending.scopeId,
+            jobId: pending.jobId,
+            requestId: pending.requestId,
+            retryTerminalProducer: true,
+          });
         });
       for (const pending of await finnyIntegration.approvedParents())
         await recoverOne("approved_job", pending.scopeId, pending.jobId, async () => {

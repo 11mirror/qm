@@ -24,6 +24,7 @@ export interface FinnyArtifactReadyRecovery {
   scopeId: string;
   jobId: string;
   idempotencyKey: string;
+  retryTerminalAuditor?: boolean;
 }
 
 export interface FinnyAuditPassedRecovery {
@@ -172,12 +173,13 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
       await q(
         `INSERT INTO finny_runtime_bindings(session_id,run_id,scope_id,job_id,role,principal_id,epoch,created_at)
          VALUES($1,$2,$3,$4,'parent',$5,0,$6)
-         ON CONFLICT(session_id) DO UPDATE SET run_id=EXCLUDED.run_id
-         WHERE finny_runtime_bindings.scope_id=EXCLUDED.scope_id
-           AND finny_runtime_bindings.job_id=EXCLUDED.job_id
-           AND finny_runtime_bindings.role='parent'
-           AND finny_runtime_bindings.principal_id=EXCLUDED.principal_id`,
+         ON CONFLICT DO NOTHING`,
         [input.sessionId, input.runId, input.scopeId, input.jobId, input.principalId, Date.now()],
+      );
+      await q(
+        `UPDATE finny_runtime_bindings SET run_id=$2
+          WHERE session_id=$1 AND scope_id=$3 AND job_id=$4 AND role='parent' AND principal_id=$5`,
+        [input.sessionId, input.runId, input.scopeId, input.jobId, input.principalId],
       );
       const binding = await this.bindingForSession(input.sessionId);
       if (
@@ -597,26 +599,51 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
     },
     async pendingRecoveries(): Promise<FinnyRuntimeRecovery[]> {
       const hasRuns = (await q("SELECT to_regclass('runs') IS NOT NULL AS exists"))[0]?.exists === true;
-      const terminalAuditorRetry = hasRuns
-        ? `OR EXISTS (
+      const healthyAuditor = hasRuns
+        ? `EXISTS (
              SELECT 1 FROM finny_runtime_bindings AS auditor_binding
              JOIN runs AS auditor_run ON auditor_run.id=auditor_binding.run_id
               WHERE auditor_binding.job_id=actions.job_id
                 AND auditor_binding.scope_id=actions.scope_id
                 AND auditor_binding.role='auditor'
                 AND auditor_binding.active=TRUE
+                AND auditor_binding.expires_at>$1
+                AND auditor_run.status NOT IN ('done','failed')
+           )`
+        : `EXISTS (
+             SELECT 1 FROM finny_runtime_bindings AS auditor_binding
+              WHERE auditor_binding.job_id=actions.job_id
+                AND auditor_binding.scope_id=actions.scope_id
+                AND auditor_binding.role='auditor'
+                AND auditor_binding.active=TRUE
+                AND auditor_binding.expires_at>$1
+           )`;
+      const retryTerminalAuditor = hasRuns
+        ? `EXISTS (
+             SELECT 1 FROM finny_runtime_bindings AS auditor_binding
+             LEFT JOIN runs AS auditor_run ON auditor_run.id=auditor_binding.run_id
+              WHERE auditor_binding.job_id=actions.job_id
+                AND auditor_binding.scope_id=actions.scope_id
+                AND auditor_binding.role='auditor'
+                AND auditor_binding.active=TRUE
                 AND (
-                  auditor_run.status='failed'
-                  OR (auditor_run.status='done' AND (
-                    auditor_run.last_stop IS NOT NULL
-                    OR auditor_run.result LIKE '%"stopped":true%'
-                  ))
+                  auditor_binding.expires_at<=$1
+                  OR auditor_run.id IS NULL
+                  OR auditor_run.status IN ('done','failed')
                 )
            )`
-        : "";
+        : `EXISTS (
+             SELECT 1 FROM finny_runtime_bindings AS auditor_binding
+              WHERE auditor_binding.job_id=actions.job_id
+                AND auditor_binding.scope_id=actions.scope_id
+                AND auditor_binding.role='auditor'
+                AND auditor_binding.active=TRUE
+                AND auditor_binding.expires_at<=$1
+           )`;
       const rows = await q(
         `SELECT actions.kind,actions.session_id,actions.run_id,actions.scope_id,actions.job_id,
-                actions.idempotency_key,CASE WHEN actions.kind='artifact_ready' THEN events.payload ELSE actions.authority_payload->'recovery' END AS payload
+                actions.idempotency_key,CASE WHEN actions.kind='artifact_ready' THEN events.payload ELSE actions.authority_payload->'recovery' END AS payload,
+                ${retryTerminalAuditor} AS retry_terminal_auditor
            FROM finny_runtime_actions AS actions
            JOIN finny_jobs AS jobs
              ON jobs.id=actions.job_id
@@ -652,20 +679,7 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                   )
                 )
               )
-              AND (
-                NOT EXISTS (
-                  SELECT 1 FROM finny_runtime_dispatches AS auditor_dispatch
-                   WHERE auditor_dispatch.job_id=actions.job_id
-                     AND auditor_dispatch.scope_id=actions.scope_id
-                     AND auditor_dispatch.kind='auditor_grant'
-                     AND auditor_dispatch.delivered_at IS NOT NULL
-                     AND (
-                       auditor_dispatch.idempotency_key=actions.idempotency_key || ':auditor-grant'
-                       OR auditor_dispatch.idempotency_key LIKE actions.idempotency_key || ':auditor-grant:%'
-                     )
-                )
-                ${terminalAuditorRetry}
-              )
+              AND (events.seq IS NULL OR NOT (${healthyAuditor}))
             ) OR (
               actions.kind<>'artifact_ready'
               AND dispatches.idempotency_key IS NULL
@@ -699,6 +713,7 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
               )
             )
           ORDER BY actions.created_at,actions.idempotency_key`,
+        [Date.now()],
       );
       const actionRecoveries: FinnyRuntimeRecovery[] = rows.map((row) => {
         const base = {
@@ -708,7 +723,12 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
           jobId: row.job_id as string,
           idempotencyKey: row.idempotency_key as string,
         };
-        if (row.kind === "artifact_ready") return { kind: "artifact_ready" as const, ...base };
+        if (row.kind === "artifact_ready")
+          return {
+            kind: "artifact_ready" as const,
+            ...base,
+            ...((row.retry_terminal_auditor as boolean) ? { retryTerminalAuditor: true } : {}),
+          };
         const payload = (row.payload ?? {}) as {
           artifactDigest: string;
           checkId: FinnyCheckId;

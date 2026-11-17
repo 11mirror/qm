@@ -132,7 +132,7 @@ test("Spike 2: Preflight harness calls finny_create_plan and enters human approv
   };
 
   const planResponse = await service.createPlan(plan);
-  assert.match(planResponse, /is awaiting approval/);
+  assert.match(planResponse.message, /is awaiting approval/);
   assert.equal(deliveries.length, 1, "Should enqueue exactly one Slack Block Kit approval card");
   const dest = deliveries[0]?.destination;
   assert.ok(dest && typeof dest === "object" && "target" in dest);
@@ -436,7 +436,7 @@ test("Spike 5: finnyTurnAuthority and createPlan support web chat surface", asyn
   };
 
   const planResponse = await service.createPlan(plan);
-  assert.match(planResponse, /is awaiting approval/);
+  assert.match(planResponse.message, /is awaiting approval/);
   assert.equal(deliveries.length, 1);
   const dest = deliveries[0]?.destination;
   assert.ok(dest && typeof dest === "object" && "target" in dest);
