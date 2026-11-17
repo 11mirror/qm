@@ -321,6 +321,52 @@ test("web Finny approval retains the durable plan request identity", async () =>
   assert.equal(pendingApprovals[0]?.approvalKey, "finny-plan:plan-request-1");
 });
 
+test("web Finny clarification presents the durable question before plan approval", async () => {
+  const pendingApprovals: NonNullable<import("../src/agent/agent-tools.ts").ToolContextRef["pendingApprovals"]> = [];
+  const clarification = {
+    question: "Which accounting basis should be used?",
+    options: [
+      { id: "contracts", label: "Signed contracts" },
+      { id: "invoices", label: "Issued invoices" },
+    ],
+    recommendedOptionId: "contracts",
+  };
+  const bound = {
+    ...service,
+    async createPlan() {
+      return {
+        message: "Finny plan job-1 is awaiting clarification.",
+        jobId: "job-1",
+        requestId: "clarification-request-1",
+        awaiting: "clarification" as const,
+      };
+    },
+  };
+  const tool = createAgentTools(
+    { current: { finny: bound } as unknown as ToolContext, pendingApprovals },
+    { surfaceName: "web" },
+  ).find((candidate) => candidate.name === "finny");
+  assert.ok(tool);
+
+  await execute(tool, "call-clarification", {
+    action: "create_plan",
+    plan: { ...plan, clarifications: [{ question: clarification.question, answer: "Signed contracts" }] },
+    materialClarification: clarification,
+  });
+
+  assert.deepEqual(
+    pendingApprovals.map(({ command, reason, approvalKey, summary }) => ({ command, reason, approvalKey, summary })),
+    [
+      {
+        command: clarification.question,
+        reason: "Finny Governance Clarification",
+        approvalKey: "finny-clarification:clarification-request-1",
+        summary: "Recommended: Signed contracts",
+      },
+    ],
+  );
+});
+
 test("tool context carries the injected bound Finny service", () => {
   const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
   const toolContext = createToolContext({

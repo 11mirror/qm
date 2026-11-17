@@ -2042,9 +2042,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               reason: "only the person who requested this command can approve or deny it",
             };
           }
-          if (deps.finnyApprovals && p.reason === "Finny Governance Plan Approval") {
-            const finnyRequestId = p.approvalKey?.startsWith("finny-plan:")
-              ? p.approvalKey.slice("finny-plan:".length)
+          const finnyPlanApproval = p.reason === "Finny Governance Plan Approval";
+          const finnyClarification = p.reason === "Finny Governance Clarification";
+          if (deps.finnyApprovals && (finnyPlanApproval || finnyClarification)) {
+            const prefix = finnyClarification ? "finny-clarification:" : "finny-plan:";
+            const finnyRequestId = p.approvalKey?.startsWith(prefix)
+              ? p.approvalKey.slice(prefix.length)
               : input.approval.requestId;
             const threadCandidates = [
               conversation.threadRef,
@@ -2052,10 +2055,27 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               conversation.threadRef.replace(/^web:web:/, "web:"),
             ];
             for (const threadRef of threadCandidates) {
+              const pendingFinny = finnyClarification ? await deps.finnyApprovals.pending(finnyRequestId) : undefined;
+              if (finnyClarification && input.approval.approved && pendingFinny?.kind !== "clarification") continue;
+              const recommendedOptionId =
+                pendingFinny?.kind === "clarification" ? pendingFinny.card.recommendedOptionId : undefined;
+              const finnyDecision = (() => {
+                if (!finnyClarification)
+                  return {
+                    kind: "plan" as const,
+                    action: input.approval!.approved ? ("approve" as const) : ("reject" as const),
+                  };
+                if (!input.approval!.approved) return { kind: "clarification" as const, action: "other" as const };
+                return {
+                  kind: "clarification" as const,
+                  action: "select" as const,
+                  optionId: recommendedOptionId!,
+                };
+              })();
               const res = await deps.finnyApprovals
                 .decide({
                   requestId: finnyRequestId,
-                  decision: { kind: "plan", action: input.approval.approved ? "approve" : "reject" },
+                  decision: finnyDecision,
                   actor: { externalId: actor.id, ...(actor.displayName ? { displayName: actor.displayName } : {}) },
                   surface: input.surface,
                   originThreadRef: threadRef,
@@ -2210,13 +2230,20 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               resource: p.command,
               status: "ok",
             });
-            if (p.reason === "Finny Governance Plan Approval") {
+            if (finnyPlanApproval) {
               const title = p.command || "Finny Governance Plan";
               const reply = `Finny plan "${title}" approved. The Producer has started building the workbook; the Auditor will start after a valid artifact is committed.`;
               return {
                 status: "ok",
                 sessionId: session.id,
                 reply,
+              };
+            }
+            if (finnyClarification) {
+              return {
+                status: "ok",
+                sessionId: session.id,
+                reply: `Finny clarification recorded for "${p.command}". The plan is ready for approval.`,
               };
             }
             turnEvents.push(

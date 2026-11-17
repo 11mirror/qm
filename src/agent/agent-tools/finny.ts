@@ -107,25 +107,29 @@ export function finnyTools(kit: ToolKit) {
     execute: async (callId, params) => {
       await recordCall(callId, { tool: "finny", action: "create_plan", title: params.plan.title });
       const result = await ref.current!.finny!.createPlan(params.plan, params.materialClarification);
-      if (opts?.surfaceName === "web" && result.awaiting === "approval") {
+      if (opts?.surfaceName === "web") {
+        const clarification = result.awaiting === "clarification" ? params.materialClarification : undefined;
+        if (result.awaiting === "clarification" && !clarification)
+          throw new Error("Finny clarification response is missing its question");
+        const recommended = clarification?.options.find((option) => option.id === clarification.recommendedOptionId);
         const detail = JSON.stringify({
           plan: params.plan,
-          ...(params.materialClarification ? { materialClarification: params.materialClarification } : {}),
+          ...(clarification ? { materialClarification: clarification } : {}),
         });
         return blockOnApproval(
           callId,
           {
             name: "NeedsApproval",
             message: result.message,
-            command: params.plan.title,
-            approvalReason: "Finny Governance Plan Approval",
-            approvalKey: `finny-plan:${result.requestId}`,
+            command: clarification?.question ?? params.plan.title,
+            approvalReason: clarification ? "Finny Governance Clarification" : "Finny Governance Plan Approval",
+            approvalKey: `${clarification ? "finny-clarification" : "finny-plan"}:${result.requestId}`,
             kind: "approval",
             grantModes: { session: false, always: false },
             summaryDetail: detail,
-            summary: params.plan.summary,
+            summary: recommended ? `Recommended: ${recommended.label}` : params.plan.summary,
           },
-          params.plan.summary,
+          recommended ? `Recommended: ${recommended.label}` : params.plan.summary,
           { tool: "finny", action: "create_plan", title: params.plan.title },
         );
       }

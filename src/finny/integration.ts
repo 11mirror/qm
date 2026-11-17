@@ -313,7 +313,7 @@ export function createFinnyToolServiceFactory(deps: {
               ? `Finny plan ${jobId} is awaiting clarification.`
               : `Finny plan ${jobId} is awaiting approval.`,
             jobId,
-            requestId,
+            requestId: clarification?.requestId ?? requestId,
             awaiting: clarification ? ("clarification" as const) : ("approval" as const),
           };
         },

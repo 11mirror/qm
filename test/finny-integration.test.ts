@@ -227,7 +227,7 @@ test("material clarification is persisted before delivery while the plan card st
     {
       message: "Finny plan id-1 is awaiting clarification.",
       jobId: "id-1",
-      requestId: "id-2",
+      requestId: "id-3",
       awaiting: "clarification",
     },
   );
