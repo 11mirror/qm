@@ -154,7 +154,8 @@ export async function reconcileFinnyRuntimeRecoveries(deps: {
       scopeId: string;
       jobId: string;
       idempotencyKey: string;
-      forceNewAuditor?: boolean;
+      retryAuditorRunId?: string;
+      retryMissingAuditor?: boolean;
     }): Promise<void>;
   }>;
   recordError(error: unknown, recovery: FinnyRuntimeRecovery): Promise<void>;
@@ -463,7 +464,8 @@ export function createFinnyRuntimeCoordinator(deps: {
       scopeId: string;
       jobId: string;
       idempotencyKey: string;
-      forceNewAuditor?: boolean;
+      retryAuditorRunId?: string;
+      retryMissingAuditor?: boolean;
     }): Promise<void> {
       const job = await deps.jobs.getJob(input.scopeId, input.jobId);
       if (
@@ -477,14 +479,8 @@ export function createFinnyRuntimeCoordinator(deps: {
       }
       const dispatchPrefix = `${input.idempotencyKey}:auditor-reverify`;
       let auditor = await deps.runtime.currentRoleBinding(input.scopeId, input.jobId, "auditor");
-      if (auditor && input.forceNewAuditor) {
-        await deps.runtime.retireBinding({
-          sessionId: auditor.sessionId,
-          runId: auditor.runId,
-          role: "auditor",
-        });
-        auditor = null;
-      }
+      if (input.retryMissingAuditor && auditor) return;
+      if (input.retryAuditorRunId !== undefined && auditor?.runId !== input.retryAuditorRunId) return;
       if (!auditor) {
         const credentials = deps.workerPolicy.credentials(job, "auditor");
         const task = deps.workerPolicy.task(job, "auditor");
@@ -520,7 +516,9 @@ export function createFinnyRuntimeCoordinator(deps: {
         }
         return;
       }
-      const dispatchKey = `${dispatchPrefix}:${auditor.runId}`;
+      const dispatchKey = input.retryAuditorRunId
+        ? `${dispatchPrefix}:retry:${input.retryAuditorRunId}`
+        : `${dispatchPrefix}:${auditor.runId}`;
       if (await deps.runtime.isDispatched(dispatchKey)) return;
       const credentials = deps.workerPolicy.credentials(job, "auditor");
       const task = deps.workerPolicy.task(job, "auditor");

@@ -1761,6 +1761,7 @@ test("evaluator correction dispatches Auditor-only reverification for the unchan
       scopeId: job.scopeId,
       jobId: job.id,
       idempotencyKey: "evaluator-correction-r2",
+      retryAuditorRunId: "auditor-run",
     },
   ]);
   const delivered: Array<{ idempotencyKey: string; role: string }> = [];
@@ -2002,12 +2003,24 @@ test("fresh reverification admission preserves Auditor human-wait outcomes", asy
     idempotencyKey: "fresh-reverify-r4",
   });
   const runtime = createPostgresFinnyRuntimeStore(connectionString);
+  const recovery = (await runtime.pendingRecoveries()).find(
+    (item) => item.kind === "verification_reopened" && item.idempotencyKey === "fresh-reverify-r4",
+  );
+  assert.deepEqual(recovery, {
+    kind: "verification_reopened",
+    scopeId: job.scopeId,
+    jobId: job.id,
+    idempotencyKey: "fresh-reverify-r4",
+    retryMissingAuditor: true,
+  });
+  let openedAuditors = 0;
   const coordinator = createFinnyRuntimeCoordinator({
     jobs,
     runtime,
     grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
     sessions: {
       async open(input) {
+        openedAuditors += 1;
         const identity = {
           ok: true as const,
           sessionId: "fresh-reverify-auditor-session",
@@ -2025,11 +2038,9 @@ test("fresh reverification admission preserves Auditor human-wait outcomes", asy
     },
     ...coreRuntimeAuthority(),
   });
-  await coordinator.verificationReopened({
-    scopeId: job.scopeId,
-    jobId: job.id,
-    idempotencyKey: "fresh-reverify-r4",
-  });
+  await coordinator.verificationReopened(recovery!);
+  await coordinator.verificationReopened(recovery!);
+  assert.equal(openedAuditors, 1);
   await q("INSERT INTO runs(id,status,last_stop,result) VALUES($1,'done',NULL,$2)", [
     "fresh-reverify-auditor-run",
     JSON.stringify({ status: "pending_approval", pendingApprovals: [] }),
@@ -2056,7 +2067,7 @@ test("fresh reverification admission preserves Auditor human-wait outcomes", asy
   );
 });
 
-test("orphaned delivered reverification opens a replacement Auditor", async () => {
+test("orphaned delivered reverification retries its observed Auditor once", async () => {
   const { jobs, job, connectionString } = await approvedJob();
   const { q } = createPgPool(connectionString);
   await q(`CREATE TABLE runs(
@@ -2126,42 +2137,39 @@ test("orphaned delivered reverification opens a replacement Auditor", async () =
     scopeId: job.scopeId,
     jobId: job.id,
     idempotencyKey: "orphaned-reverify-r5",
-    forceNewAuditor: true,
+    retryAuditorRunId: "orphaned-auditor-run",
   });
-  let openedAuditors = 0;
-  const openedTasks: string[] = [];
+  let retryDispatches = 0;
   const replacementCoordinator = createFinnyRuntimeCoordinator({
     jobs,
     runtime,
     grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
     sessions: {
-      async open(input) {
-        openedAuditors += 1;
-        openedTasks.push(input.task);
-        const identity = {
-          ok: true as const,
-          sessionId: "replacement-auditor-session",
-          runId: "replacement-auditor-run",
-          title: "Finny Auditor",
-        };
-        await input.beforeEnqueue?.(identity);
-        return identity;
+      async open() {
+        throw new Error("orphaned Auditor retry must reuse its session");
       },
     },
     dispatcher: {
-      async dispatchPrivateIdempotent() {
-        throw new Error("replacement Auditor must start with its actionable task");
+      async dispatchPrivateIdempotent(message) {
+        retryDispatches += 1;
+        await runtime.advanceWorkerRun({
+          sessionId: message.sessionId,
+          expectedRunId: message.runId,
+          runId: "replacement-auditor-run",
+          scopeId: job.scopeId,
+          expiresAt: Date.now() + 60_000,
+        });
       },
     },
     ...coreRuntimeAuthority(),
   });
   await replacementCoordinator.verificationReopened(recovery!);
-  assert.equal(openedAuditors, 1);
-  assert.deepEqual(openedTasks, ["Audit the current artifact independently"]);
+  await replacementCoordinator.verificationReopened(recovery!);
+  assert.equal(retryDispatches, 1);
   assert.equal((await runtime.currentRoleBinding(job.scopeId, job.id, "auditor"))?.runId, "replacement-auditor-run");
 });
 
-test("terminal delivered reverification opens a replacement Auditor", async () => {
+test("terminal delivered reverification retries its observed Auditor", async () => {
   const { jobs, job, connectionString } = await approvedJob();
   const { q } = createPgPool(connectionString);
   await q(`CREATE TABLE runs(id TEXT PRIMARY KEY,status TEXT NOT NULL,last_stop TEXT,result TEXT)`);
@@ -2222,27 +2230,28 @@ test("terminal delivered reverification opens a replacement Auditor", async () =
   const recovery = (await runtime.pendingRecoveries()).find(
     (item) => item.kind === "verification_reopened" && item.idempotencyKey === "terminal-reverify-r6",
   );
-  assert.equal(recovery?.kind === "verification_reopened" && recovery.forceNewAuditor, true);
+  assert.equal(
+    recovery?.kind === "verification_reopened" && recovery.retryAuditorRunId,
+    "terminal-auditor-run",
+  );
   const replacement = createFinnyRuntimeCoordinator({
     jobs,
     runtime,
     grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
     sessions: {
-      async open(input) {
-        assert.equal(input.task, "Audit the current artifact independently");
-        const identity = {
-          ok: true as const,
-          sessionId: "terminal-replacement-session",
-          runId: "terminal-replacement-run",
-          title: "Finny Auditor",
-        };
-        await input.beforeEnqueue?.(identity);
-        return identity;
+      async open() {
+        throw new Error("terminal Auditor retry must reuse its session");
       },
     },
     dispatcher: {
-      async dispatchPrivateIdempotent() {
-        throw new Error("replacement Auditor must start with its actionable task");
+      async dispatchPrivateIdempotent(message) {
+        await runtime.advanceWorkerRun({
+          sessionId: message.sessionId,
+          expectedRunId: message.runId,
+          runId: "terminal-replacement-run",
+          scopeId: job.scopeId,
+          expiresAt: Date.now() + 60_000,
+        });
       },
     },
     ...coreRuntimeAuthority(),

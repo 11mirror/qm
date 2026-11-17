@@ -59,7 +59,8 @@ export interface FinnyVerificationReopenedRecovery {
   scopeId: string;
   jobId: string;
   idempotencyKey: string;
-  forceNewAuditor?: boolean;
+  retryAuditorRunId?: string;
+  retryMissingAuditor?: boolean;
 }
 
 export type FinnyRuntimeRecovery =
@@ -834,27 +835,18 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                 AND dispatch.idempotency_key LIKE events.idempotency_key || ':auditor-reverify:%'
            )
            ${staleReverificationBinding})`;
-      const forceNewReverificationSelect = hasRuns
-        ? `EXISTS (
-             SELECT 1 FROM finny_runtime_bindings AS stale_auditor
-             LEFT JOIN runs AS stale_run ON stale_run.id=stale_auditor.run_id
-              WHERE stale_auditor.job_id=jobs.id
-                AND stale_auditor.scope_id=jobs.scope_id
-                AND stale_auditor.role='auditor'
-                AND stale_auditor.active=TRUE
-                AND (
-                  stale_run.id IS NULL
-                  OR stale_run.status='failed'
-                  OR (stale_run.status='done' AND (
-                    stale_run.last_stop IS NOT NULL
-                    OR stale_run.result LIKE '%"stopped":true%'
-                  ))
-                )
-           )`
-        : "FALSE";
       const reopened = await q(
         `SELECT jobs.scope_id,jobs.id AS job_id,events.idempotency_key,
-                ${forceNewReverificationSelect} AS force_new_auditor
+                (
+                  SELECT recovery_auditor.run_id
+                    FROM finny_runtime_bindings AS recovery_auditor
+                   WHERE recovery_auditor.job_id=jobs.id
+                     AND recovery_auditor.scope_id=jobs.scope_id
+                     AND recovery_auditor.role='auditor'
+                     AND recovery_auditor.active=TRUE
+                   ORDER BY recovery_auditor.epoch DESC
+                   LIMIT 1
+                ) AS recovery_auditor_run_id
            FROM finny_job_events AS events
            JOIN finny_jobs AS jobs ON jobs.id=events.job_id
           WHERE events.event_type='verification_reopened'
@@ -884,7 +876,9 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
           scopeId: row.scope_id as string,
           jobId: row.job_id as string,
           idempotencyKey: row.idempotency_key as string,
-          ...((row.force_new_auditor as boolean) ? { forceNewAuditor: true } : {}),
+          ...(typeof row.recovery_auditor_run_id === "string"
+            ? { retryAuditorRunId: row.recovery_auditor_run_id }
+            : { retryMissingAuditor: true }),
         })),
       ];
     },
