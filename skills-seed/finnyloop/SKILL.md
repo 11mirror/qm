@@ -15,7 +15,8 @@ Read [the protocol](references/protocol.md) before starting a producer or Audito
 2. For material ambiguity, ask a focused question before creating a plan. Never infer approval.
 3. Present an explicit plan detailing exact data sources, NetSuite table joins, required fields (e.g., transaction.duedate, transactionline.amount, vendor.custentity_sc_acl_msme), calculation logic (e.g., cutoff aging formula, non-cash FX exclusions), scoping filters, phases, owners, dependencies, required checks, deliverable, and destination.
 4. Call `finny(action="create_plan", plan=..., materialClarification=...)` to register the plan and await human approval before starting production. Omit `materialClarification` when the plan has no material ambiguity.
-5. Spawn producer and independent Auditor runs through QM. Do not create role identity, issuer identity, check lists, generations, or grants in the skill.
+5. When supplying `materialClarification`, include exactly one `plan.clarifications` entry whose question is identical and whose answer is the recommended option's label.
+6. Spawn producer and independent Auditor runs through QM. Do not create role identity, issuer identity, check lists, generations, or grants in the skill.
 
 ## Mandatory step boundary
 
