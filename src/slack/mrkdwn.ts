@@ -71,7 +71,7 @@ export function isReservedMentionName(name: string): boolean {
   return RESERVED_MENTION_NAMES.has(name);
 }
 
-const MENTION_SEGMENT = String.raw`[\p{L}\p{N}](?:[\p{L}\p{N}_'-]*[\p{L}\p{N}])?`;
+const MENTION_SEGMENT = String.raw`[\p{L}\p{N}](?:[\p{L}\p{N}_-]*[\p{L}\p{N}])?`;
 const MENTION_WORD = String.raw`${MENTION_SEGMENT}(?:\.${MENTION_SEGMENT})*`;
 const PLAIN_MENTION = new RegExp(
   String.raw`(?<![\p{L}\p{N}<@])@(${MENTION_WORD}(?: ${MENTION_WORD}){0,2})(?![/@])`,
