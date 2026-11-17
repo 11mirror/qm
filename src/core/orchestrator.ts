@@ -2047,6 +2047,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             };
           }
           let finnyResolution: FinnyWebApprovalResolution | null = null;
+          let projectedFinnyApproval: PendingApproval | undefined;
           if (deps.finnyApprovals)
             finnyResolution = await decideFinnyWebApproval({
               bridge: deps.finnyApprovals,
@@ -2179,6 +2180,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }),
             );
             await mirrorRunActivity(decisionEntry);
+            if (finnyResolution?.kind === "clarification" && finnyResolution.next) {
+              const next = finnyResolution.next;
+              projectedFinnyApproval = await issueApproval(
+                commandApprovalId(session.id, next.command, next.approvalKey),
+                {
+                  sessionId: session.id,
+                  command: next.command,
+                  reason: next.reason,
+                  summary: next.summary,
+                  summaryDetail: next.summaryDetail,
+                  approvalKey: next.approvalKey,
+                  kind: "approval",
+                  grantModes: next.grantModes,
+                },
+              );
+            }
             await pending.delete(input.approval.requestId);
             const useKey = p.approvalKey ?? p.command;
             if (p.screenedOutput && quarantineRelease) {
@@ -2222,26 +2239,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               };
             }
             if (finnyResolution?.kind === "clarification") {
-              if (finnyResolution.next) {
-                const next = finnyResolution.next;
-                const approval = await issueApproval(
-                  commandApprovalId(session.id, next.command, next.approvalKey),
-                  {
-                    sessionId: session.id,
-                    command: next.command,
-                    reason: next.reason,
-                    summary: next.summary,
-                    summaryDetail: next.summaryDetail,
-                    approvalKey: next.approvalKey,
-                    kind: "approval",
-                    grantModes: next.grantModes,
-                  },
-                );
+              if (projectedFinnyApproval) {
                 return {
                   status: "pending_approval",
                   sessionId: session.id,
                   reason: "Finny plan approval is ready.",
-                  pendingApprovals: [approval],
+                  pendingApprovals: [projectedFinnyApproval],
                 };
               }
               return {
