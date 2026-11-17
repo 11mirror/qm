@@ -758,19 +758,27 @@ test("concurrent approved callbacks converge on one Producer admission", async (
   const { jobs, job, connectionString } = await approvedJob();
   const runtime = createPostgresFinnyRuntimeStore(connectionString);
   let opens = 0;
-  let admission: Promise<{ ok: true; sessionId: string; runId: string; title: string }> | undefined;
+  const requests: string[] = [];
+  const admissions = new Map<string, Promise<{ ok: true; sessionId: string; runId: string; title: string }>>();
   const coordinator = createFinnyRuntimeCoordinator({
     jobs,
     runtime,
     grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
     sessions: {
       async open(input) {
-        admission ??= (async () => {
-          opens += 1;
-          const identity = { sessionId: "producer-session", runId: "producer-run" };
-          await input.beforeEnqueue?.(identity);
-          return { ok: true as const, ...identity, title: input.name ?? "producer" };
-        })();
+        assert.ok(input.requestId);
+        const requestId = input.requestId;
+        requests.push(requestId);
+        let admission = admissions.get(requestId);
+        if (!admission) {
+          admission = (async () => {
+            opens += 1;
+            const identity = { sessionId: "producer-session", runId: "producer-run" };
+            await input.beforeEnqueue?.(identity);
+            return { ok: true as const, ...identity, title: input.name ?? "producer" };
+          })();
+          admissions.set(requestId, admission);
+        }
         return admission;
       },
     },
@@ -795,6 +803,8 @@ test("concurrent approved callbacks converge on one Producer admission", async (
   await Promise.all([coordinator.afterApproved(input), coordinator.afterApproved(input)]);
 
   assert.equal(opens, 1);
+  assert.equal(requests.length, 2);
+  assert.equal(new Set(requests).size, 1);
   assert.equal((await runtime.currentRoleBinding(job.scopeId, job.id, "producer"))?.runId, "producer-run");
   assert.equal(await runtime.currentRoleBinding(job.scopeId, job.id, "auditor"), null);
 });

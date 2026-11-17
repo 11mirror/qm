@@ -17,7 +17,6 @@ import {
   ApiError,
   editQueuedRun,
   approvalBlocksComposer,
-  finnyClarificationChoices,
   MAX_ATTACHMENT_BYTES,
   MAX_FILES_PER_MESSAGE,
   mintSendKey,
@@ -35,6 +34,7 @@ import {
   alwaysSteer,
   switchedDefault,
 } from "./core-bridge";
+import { finnyClarificationChoices } from "./finny-approval.ts";
 import { errMessage } from "../../chassis/src/errors";
 import { browserRenderableImage, fieldSelect } from "./ui";
 import { icon } from "./icons";

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { finnyClarificationChoices, type PendingApproval } from "../src/core-bridge.ts";
+import type { PendingApproval } from "../src/core-bridge.ts";
+import { finnyClarificationChoices } from "../src/finny-approval.ts";
 
 test("Finny clarification choices expose every persisted option plus Other", () => {
   const approval = {
