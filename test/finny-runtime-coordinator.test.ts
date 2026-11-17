@@ -1977,6 +1977,81 @@ test("expired delivered reverification grants return to recovery", async () => {
   );
 });
 
+test("fresh reverification admission preserves Auditor human-wait outcomes", async () => {
+  const { jobs, job, connectionString } = await approvedJob();
+  const { q } = createPgPool(connectionString);
+  await q(`CREATE TABLE runs(id TEXT PRIMARY KEY,status TEXT NOT NULL,last_stop TEXT,result TEXT)`);
+  await jobs.recordArtifactReady({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    artifactDigest: "artifact-sha256",
+    provisionalRevision: "revision-1",
+    idempotencyKey: "artifact-before-fresh-reverify",
+  });
+  const evaluator = {
+    ...TEST_FINNY_EVALUATOR,
+    revision: "test-r4-fresh",
+    buildDigest: "c".repeat(64),
+    configurationDigest: "d".repeat(64),
+  };
+  await jobs.recordEvaluatorCorrection({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    fromEvaluator: TEST_FINNY_EVALUATOR,
+    toEvaluator: evaluator,
+    idempotencyKey: "fresh-reverify-r4",
+  });
+  const runtime = createPostgresFinnyRuntimeStore(connectionString);
+  const coordinator = createFinnyRuntimeCoordinator({
+    jobs,
+    runtime,
+    grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
+    sessions: {
+      async open(input) {
+        const identity = {
+          ok: true as const,
+          sessionId: "fresh-reverify-auditor-session",
+          runId: "fresh-reverify-auditor-run",
+          title: "Finny Auditor",
+        };
+        await input.beforeEnqueue?.(identity);
+        return identity;
+      },
+    },
+    dispatcher: {
+      async dispatchPrivateIdempotent() {
+        throw new Error("fresh Auditor must start with its actionable task");
+      },
+    },
+    ...coreRuntimeAuthority(),
+  });
+  await coordinator.verificationReopened({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    idempotencyKey: "fresh-reverify-r4",
+  });
+  await q("INSERT INTO runs(id,status,last_stop,result) VALUES($1,'done',NULL,$2)", [
+    "fresh-reverify-auditor-run",
+    JSON.stringify({ status: "pending_approval", pendingApprovals: [] }),
+  ]);
+  assert.deepEqual(await runtime.pendingRecoveries(), []);
+  await q("UPDATE runs SET result=$2 WHERE id=$1", [
+    "fresh-reverify-auditor-run",
+    JSON.stringify({ status: "refused", reason: "human decision required" }),
+  ]);
+  assert.deepEqual(await runtime.pendingRecoveries(), []);
+  await q("UPDATE runs SET result=$2 WHERE id=$1", [
+    "fresh-reverify-auditor-run",
+    JSON.stringify({ status: "ok", reply: "Finished without completing every audit check" }),
+  ]);
+  assert.equal(
+    (await runtime.pendingRecoveries()).some(
+      (item) => item.kind === "verification_reopened" && item.idempotencyKey === "fresh-reverify-r4",
+    ),
+    true,
+  );
+});
+
 test("orphaned delivered reverification opens a replacement Auditor", async () => {
   const { jobs, job, connectionString } = await approvedJob();
   const { q } = createPgPool(connectionString);

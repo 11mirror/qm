@@ -369,6 +369,23 @@ test("an interrupt with text makes that text the target's next turn", async () =
   );
 });
 
+test("a rejected guarded interrupt leaves the current run healthy", async () => {
+  const r = await rig();
+  const child = await runningChild(r, r.room, "watch the deploy");
+  const out = await r.syscallsFor(r.room).write({
+    target: child.session.id,
+    interrupt: true,
+    text: "stale recovery",
+    async beforeEnqueue() {
+      throw new Error("worker binding advanced");
+    },
+  });
+
+  assert.deepEqual(out, { ok: false, message: "worker binding advanced" });
+  assert.deepEqual(await r.signals.pending(child.run.id), []);
+  assert.equal((await r.runs.get(child.run.id))?.status, "running");
+});
+
 test("a subagent's wake starts a turn in its top-level parent, or leaves mail while the parent is busy", async () => {
   const r = await rig();
   const child = await runningChild(r, r.room, "investigate");

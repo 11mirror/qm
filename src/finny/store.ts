@@ -88,6 +88,7 @@ export interface RecordFinnyPlanAmendmentInput {
   jobId: string;
   plan: FinnyPlanPresentation;
   requestId: string;
+  authorizedActorId: string;
   idempotencyKey: string;
   createdAt: number;
 }

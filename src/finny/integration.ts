@@ -333,6 +333,7 @@ export function createFinnyToolServiceFactory(deps: {
             jobId,
             plan: planPresentation,
             requestId,
+            authorizedActorId: turn.actor.id,
             idempotencyKey: `finny-amend:${jobId}:${canonicalFinnyPlanDigest(planPresentation)}`,
             createdAt: now,
           });

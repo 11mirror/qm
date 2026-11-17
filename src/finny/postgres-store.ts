@@ -804,6 +804,14 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
             WHERE scope_id=$1 AND job_id=$2 AND decided_at IS NULL`,
           [input.scopeId, input.jobId, input.createdAt],
         );
+        const parent = await db.query(
+          `UPDATE finny_integration_jobs
+              SET request_id=$3
+            WHERE scope_id=$1 AND job_id=$2 AND actor_id=$4
+            RETURNING actor_id`,
+          [input.scopeId, input.jobId, input.requestId, input.authorizedActorId],
+        );
+        if (parent.rowCount !== 1) throw new Error("Finny plan amendment has no matching approval parent");
         await db.query(
           `INSERT INTO finny_approval_requests(
              request_id, scope_id, job_id, plan_digest, origin_thread_ref, authorized_actor_id, ready_at, created_at
@@ -816,7 +824,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
             input.jobId,
             newPlanDigest,
             job.origin_thread_ref,
-            job.approval_actor_id ?? "U1",
+            input.authorizedActorId,
             input.createdAt,
           ],
         );

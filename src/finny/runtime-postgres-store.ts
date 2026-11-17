@@ -767,23 +767,6 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
           findings: payload.findings,
         };
       });
-      const terminalReverificationRetry = hasRuns
-        ? `OR EXISTS (
-             SELECT 1 FROM finny_runtime_bindings AS auditor_binding
-             JOIN runs AS auditor_run ON auditor_run.id=auditor_binding.run_id
-              WHERE auditor_binding.job_id=jobs.id
-                AND auditor_binding.scope_id=jobs.scope_id
-                AND auditor_binding.role='auditor'
-                AND auditor_binding.active=TRUE
-                AND (
-                  auditor_run.status='failed'
-                  OR (auditor_run.status='done' AND (
-                    auditor_run.last_stop IS NOT NULL
-                    OR auditor_run.result LIKE '%"stopped":true%'
-                  ))
-                )
-           )`
-        : "";
       const staleReverificationBinding = `
         OR NOT EXISTS (
           SELECT 1 FROM finny_runtime_bindings AS current_auditor
@@ -814,6 +797,40 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                )`
             : ""
         }`;
+      const reverificationRecoveryGate = hasRuns
+        ? `(NOT EXISTS (
+             SELECT 1 FROM finny_runtime_bindings AS current_auditor
+              WHERE current_auditor.job_id=jobs.id
+                AND current_auditor.scope_id=jobs.scope_id
+                AND current_auditor.role='auditor'
+                AND current_auditor.active=TRUE
+           )
+           OR EXISTS (
+             SELECT 1 FROM finny_runtime_bindings AS current_auditor
+             LEFT JOIN runs AS current_run ON current_run.id=current_auditor.run_id
+              WHERE current_auditor.job_id=jobs.id
+                AND current_auditor.scope_id=jobs.scope_id
+                AND current_auditor.role='auditor'
+                AND current_auditor.active=TRUE
+                AND (
+                  current_auditor.expires_at<=${Date.now()}
+                  OR current_run.id IS NULL
+                  OR current_run.status='failed'
+                  OR (
+                    current_run.status='done'
+                    AND COALESCE(current_run.result::jsonb->>'status','') NOT IN ('pending_approval','refused')
+                  )
+                )
+           ))`
+        : `(NOT EXISTS (
+             SELECT 1 FROM finny_runtime_dispatches AS dispatch
+              WHERE dispatch.job_id=jobs.id
+                AND dispatch.scope_id=jobs.scope_id
+                AND dispatch.kind='auditor_reverification'
+                AND dispatch.delivered_at IS NOT NULL
+                AND dispatch.idempotency_key LIKE events.idempotency_key || ':auditor-reverify:%'
+           )
+           ${staleReverificationBinding})`;
       const forceNewReverificationSelect = hasRuns
         ? `EXISTS (
              SELECT 1 FROM finny_runtime_bindings AS stale_auditor
@@ -854,18 +871,7 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                     AND (audit.payload->>'generation')::int=required.generation::int
                )
             )
-            AND (
-              NOT EXISTS (
-                SELECT 1 FROM finny_runtime_dispatches AS dispatch
-                 WHERE dispatch.job_id=jobs.id
-                   AND dispatch.scope_id=jobs.scope_id
-                   AND dispatch.kind='auditor_reverification'
-                   AND dispatch.delivered_at IS NOT NULL
-                   AND dispatch.idempotency_key LIKE events.idempotency_key || ':auditor-reverify:%'
-              )
-              ${terminalReverificationRetry}
-              ${staleReverificationBinding}
-            )
+            AND ${reverificationRecoveryGate}
           ORDER BY events.seq`,
       );
       return [

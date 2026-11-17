@@ -5,6 +5,7 @@ import type { Agent } from "../src/agent/agent.ts";
 import type { SpreadsheetCalculationEngine } from "../src/finny/deterministic-spreadsheet-worker.ts";
 import type { FinnyPlanPresentation } from "../src/finny/types.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { scopeId } from "../src/types.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -187,26 +188,28 @@ test("a nonrecommended web Finny clarification choice resumes the coordinator wi
           ],
         };
       }
-      assert.match(turn.environment ?? "", /2026-11-30/);
-      const revised = { ...plan, clarifications: [{ question, answer: "2026-11-30" }] };
-      const amended = await turn.tools.finny!.amendPlan(jobId, revised);
-      return {
-        reply: "",
-        pausedOnApproval: true,
-        pendingApprovals: [
-          {
-            command: revised.title,
-            reason: "Finny Governance Plan Approval",
-            approvalKey: `finny-plan:${amended.requestId}`,
-            summary: revised.summary,
-            grantModes: { session: false, always: false },
-          },
-        ],
-      };
+      if (turns === 2) {
+        assert.match(turn.environment ?? "", /2026-11-30/);
+        const revised = { ...plan, clarifications: [{ question, answer: "2026-11-30" }] };
+        const amended = await turn.tools.finny!.amendPlan(jobId, revised);
+        return {
+          reply: "",
+          pausedOnApproval: true,
+          pendingApprovals: [
+            {
+              command: revised.title,
+              reason: "Finny Governance Plan Approval",
+              approvalKey: `finny-plan:${amended.requestId}`,
+              summary: revised.summary,
+              grantModes: { session: false, always: false },
+            },
+          ],
+        };
+      }
+      return { reply: "Producer started" };
     },
   };
-  const built = buildApp(
-    testConfig({
+  const config = testConfig({
       finny: {
         signingSecret: "finny-test-secret",
         findingPolicy: { id: "test", maxFindings: 4, maxCodeLength: 40, maxMessageLength: 200 },
@@ -223,13 +226,13 @@ test("a nonrecommended web Finny clarification choice resumes the coordinator wi
         },
         maxEvidenceBytes: 4_194_304,
       } as never,
-    }),
-    { agent: resumingAgent, spreadsheetCalculationEngine: engine },
-  );
+    });
+  const built = buildApp(config, { agent: resumingAgent, spreadsheetCalculationEngine: engine });
+  await built.featureFlags.setEnabled("persistent_subagents", scopeId("personal", "approver-42"), true, "test");
   const request = {
     surface: "web",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm" as const, threadRef: "web:U1:finny-alternate-clarification" },
+    actor: { externalId: "approver-42" },
+    conversation: { kind: "dm" as const, threadRef: "web:approver-42:finny-alternate-clarification" },
     text: "Create an AP aging workbook",
   };
   const clarification = await built.app.turn(request);
@@ -248,6 +251,19 @@ test("a nonrecommended web Finny clarification choice resumes the coordinator wi
   assert.equal(result.pendingApprovals?.[0]?.reason, "Finny Governance Plan Approval");
   assert.equal(result.pendingApprovals?.[0]?.command, plan.title);
   assert.equal(turns, 2);
+
+  const approved = await built.app.turn({
+    ...request,
+    approval: { requestId: result.pendingApprovals![0]!.requestId, approved: true, scope: "once" } as never,
+  });
+  const db = createPgPool(config.databaseUrl!);
+  const bindings = await db.q(
+    "SELECT session_id FROM finny_runtime_bindings WHERE job_id=$1 AND role='producer'",
+    [jobId],
+  );
+
+  assert.equal(approved.status, "ok", JSON.stringify(await built.errors.list()));
+  assert.equal(bindings.length, 1, JSON.stringify(await built.errors.list()));
 });
 
 test("Other resolves a web Finny clarification without treating it as a denied command", async () => {

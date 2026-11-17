@@ -1002,6 +1002,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const dedupKey = input.requestId ? `subagent-followup:${messageId}` : undefined;
               const accepted = await acceptedFollowup(deps.runs, dedupKey, target, stamped, title);
               if (accepted) return accepted;
+              const queuedRunId = deterministicRunId(["session-followup-run", dedupKey ?? messageId]);
+              const preparedEnqueue = await input.beforeEnqueue?.({ sessionId: target.id, runId: queuedRunId });
               const stopped = input.interrupt
                 ? await stopSessionRuns(
                     deps,
@@ -1016,8 +1018,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               request.origin = sessionTurnOrigin(request.origin, stamped);
               request.sessionSenderId = binding.session.id;
               request.delegatingRunId = binding.request.runId;
-              const queuedRunId = deterministicRunId(["session-followup-run", dedupKey ?? messageId]);
-              const preparedEnqueue = await input.beforeEnqueue?.({ sessionId: target.id, runId: queuedRunId });
               const queuedText = preparedEnqueue?.text?.trim() || stamped;
               await deps.runs
                 .enqueue({
