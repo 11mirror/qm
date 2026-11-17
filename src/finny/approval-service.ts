@@ -24,6 +24,39 @@ export function createFinnyApprovalService(deps: {
     input: { kind: "approval_dispatch" | "clarification_delivery"; scopeId: string; jobId: string; requestId: string },
   ): Promise<void>;
 }): FinnyApprovalBridge {
+  const pending = async (requestId: string) => {
+    const request = await deps.store.getApprovalRequest(requestId);
+    if (!request) {
+      const clarification = await deps.store.getClarificationRequest(requestId);
+      if (!clarification || clarification.decidedAt !== undefined) return null;
+      return {
+        kind: "clarification" as const,
+        requestId,
+        card: {
+          question: clarification.question,
+          options: clarification.options,
+          recommendedOptionId: clarification.recommendedOptionId,
+        },
+      };
+    }
+    if (request.readyAt === undefined || request.decidedAt !== undefined || request.job.approval !== undefined)
+      return null;
+    if (request.planDigest !== request.job.planDigest || request.originThreadRef !== request.job.originThreadRef)
+      throw new Error("Finny approval request binding does not match the job");
+    const { title, summary, phases, certification, deliverable, destination } = request.job.plan;
+    return {
+      kind: "plan" as const,
+      requestId,
+      card: {
+        title,
+        ...(summary !== undefined ? { summary } : {}),
+        phases,
+        certification,
+        deliverable,
+        destination,
+      },
+    };
+  };
   const afterCommit = async (
     input: { kind: "approval_dispatch" | "clarification_delivery"; scopeId: string; jobId: string; requestId: string },
     action: () => Promise<void>,
@@ -36,43 +69,11 @@ export function createFinnyApprovalService(deps: {
     }
   };
   return {
-    async pending(requestId) {
-      const request = await deps.store.getApprovalRequest(requestId);
-      if (!request) {
-        const clarification = await deps.store.getClarificationRequest(requestId);
-        if (!clarification || clarification.decidedAt !== undefined) return null;
-        return {
-          kind: "clarification",
-          requestId,
-          card: {
-            question: clarification.question,
-            options: clarification.options,
-            recommendedOptionId: clarification.recommendedOptionId,
-          },
-        };
-      }
-      if (request.readyAt === undefined || request.decidedAt !== undefined || request.job.approval !== undefined)
-        return null;
-      if (request.planDigest !== request.job.planDigest || request.originThreadRef !== request.job.originThreadRef)
-        throw new Error("Finny approval request binding does not match the job");
-      const { title, summary, phases, certification, deliverable, destination } = request.job.plan;
-      return {
-        kind: "plan",
-        requestId,
-        card: {
-          title,
-          ...(summary !== undefined ? { summary } : {}),
-          phases,
-          certification,
-          deliverable,
-          destination,
-        },
-      };
-    },
+    pending,
     async findPendingByThread(originThreadRef) {
       const request = await deps.store.getPendingApprovalRequestByThread?.(originThreadRef);
       if (!request) return null;
-      return this.pending(request.requestId);
+      return pending(request.requestId);
     },
     async decide(input) {
       let request = await deps.store.getApprovalRequest(input.requestId);
@@ -128,6 +129,10 @@ export function createFinnyApprovalService(deps: {
         if (decided.approvalReady) summary = `${selectedOption?.label}. The plan is ready for approval.`;
         else if (recommended && !decided.revisionRequired)
           summary = "Another material clarification remains unresolved.";
+        const approval = decided.approvalReady
+          ? await deps.store.getPendingApprovalRequestByThread?.(decided.request.originThreadRef)
+          : undefined;
+        const next = approval ? await pending(approval.requestId) : null;
         return {
           kind: "result",
           card: {
@@ -135,6 +140,7 @@ export function createFinnyApprovalService(deps: {
             status: decided.approvalReady ? "passed" : "blocked",
             summary,
           },
+          ...(next?.kind === "plan" ? { next } : {}),
         };
       }
       if (request.readyAt === undefined || request.decidedAt !== undefined) return { kind: "gone" };

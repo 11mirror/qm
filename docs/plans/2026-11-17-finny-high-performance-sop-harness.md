@@ -4,7 +4,7 @@ Status: Active design and implementation tracker
 Created: 2026-11-17
 Last updated: 2026-11-17
 Owner: Finny/QM working agents
-Implementation state: Phase 0 and Phase 1 implemented and verified on QM web and Slack; Phase 2 not started pending human review
+Implementation state: Phase 0 and Phase 1 implemented and verified on QM web and Slack; Phase 2 authorized and queued after the Phase 1 PR is complete
 Working branch: `codex/finny-phase-1-performance`
 Working tree: `/Users/kalicharanshukla/.codex/worktrees/finny-architecture-audit/QM`
 Phase 0/1 implementation commit: `4e0fbbbb9`
@@ -21,12 +21,12 @@ This table is the quick handoff. Follow the links for design, implementation, an
 | Tool contract | Replaced imaginary standalone Finny tools with the real `finny(action="...")` contract | [Finny tool](../../src/agent/agent-tools/finny.ts), [seed skill](../../skills-seed/finnyloop/SKILL.md), and [Phase 1 details](#phase-1--remove-accidental-pi-work) |
 | Worker lifecycle | Approval now starts one actionable Producer; artifact commit starts one actionable Auditor | [Runtime coordinator](../../src/finny/runtime-coordinator.ts), [runtime store](../../src/finny/runtime-postgres-store.ts), and [lifecycle tests](../../test/finny-runtime-coordinator.test.ts) |
 | Durable recovery | Successful-but-incomplete terminal worker runs are reconciled from durable job state without placeholder turns | [Integration](../../src/finny/integration.ts), [integration store](../../src/finny/integration-postgres-store.ts), and [recovery tests](../../test/finny-integration-runtime.test.ts) |
-| Web approval | Preserved the durable Finny plan request identity across the generic web approval boundary | [Orchestrator](../../src/core/orchestrator.ts), [tool tests](../../test/finny-agent-tool.test.ts), and [web evidence](#phase-01-live-measurement--qm-web) |
+| Web approval | Preserved the durable Finny request identity and projects the ready plan immediately after a material clarification | [Orchestrator](../../src/core/orchestrator.ts), [approval service](../../src/finny/approval-service.ts), [regression test](../../test/finny-web-approval.test.ts), and [web evidence](#phase-01-live-measurement--qm-web) |
 | Live web result | Certified XLSX delivered with one Producer and one post-artifact Auditor; total tokens fell 21.6% in the paired run | [Web baseline and candidate](#phase-01-live-measurement--qm-web) |
 | Live Slack result | Certified XLSX attached in the 11mirror `finny-staging` DM with one Producer and one post-artifact Auditor; total tokens fell 43.2% | [Slack baseline and candidate](#phase-01-live-measurement--slack) |
-| Verification | 25/25 focused files, typecheck, focused ESLint/oxlint, diff checks, and FinnyLoop r5 eval pass | [Running implementation log](#running-implementation-log) and [r5 manifest](../../evals/finnyloop-r5/manifest.json) |
+| Verification | Phase 1 focused suites, typecheck, ESLint/oxlint, FinnyLoop r5, and real Chrome web plus Slack QA pass | [Running implementation log](#running-implementation-log) and [r5 manifest](../../evals/finnyloop-r5/manifest.json) |
 | Schema/config | No database schema, persisted payload, or configuration change in Phase 0/1 | [Phase 0/1 evidence](#phase-01-live-measurement--qm-web) |
-| Next gate | Review the paired results and proposed persisted SOP shape before Phase 2; do not claim a latency win from one pair | [Phase 2](#phase-2--durable-sop-creation-and-execution) and [human decisions](#required-human-decisions-before-phase-2) |
+| Next gate | Complete PR review, then implement and verify the first durable task-level SOP slice; do not claim a latency win from one pair | [Phase 2](#phase-2--durable-sop-creation-and-execution) and [human decisions](#required-human-decisions-for-phase-2-gates) |
 
 ## How to use this document
 
@@ -565,7 +565,7 @@ Integration order:
 7. Boot a production-shaped dev instance and verify Slack and QM app behavior with a real model and Postgres.
 8. Record measured baseline/candidate time and token results in this document before starting Phase 2.
 
-Phase 2 does not begin until Phase 1 exit criteria pass and the user reviews the measured result.
+Phase 2 begins after the Phase 1 PR state is complete. The user authorized SOP implementation and verification on 2026-11-17; persisted schema changes still require the complete before/after review described below to be recorded before code is written.
 
 ### Phase 0 — Baseline and completion trace
 
@@ -667,7 +667,7 @@ The Phase 1 Slack structural gate passed: the only Producer began after approval
 
 ### Phase 2 — Durable SOP creation and execution
 
-Status: Not started
+Status: Authorized; first implementation slice queued after Phase 1 PR completion
 
 Goal: Replace prose-only planning with a surviving, validated SOP contract.
 
@@ -1120,10 +1120,12 @@ Reason: Current QM has useful offline evidence conventions but no versioned fina
 | 2026-11-17 |  Phase 0 | Added a production-independent baseline analyzer for Producer/Auditor run counts, pre-artifact Auditor detection, query-to-certified-delivery time, and parent/Producer/Auditor tokens with fail-closed missing usage                               | [Analyzer and tests](#phase-0--baseline-and-completion-trace); paired web and Slack measurements are linked in the implementation summary                                                                                                                                                                  | Complete                                                                          | Evaluation lane   |
 | 2026-11-17 |  Phase 1 | Corrected Finny tool vocabulary, removed placeholder dispatch turns, opened Producer only after approval with its real task, opened Auditor only after artifact commit, and recovered terminal successful-but-incomplete workers from durable state | [Web evidence](#phase-01-live-measurement--qm-web): one Producer, one post-artifact Auditor, certified XLSX, 21.6% fewer tokens. [Slack evidence](#phase-01-live-measurement--slack): one Producer, one post-artifact Auditor, certified attached XLSX, 43.2% fewer tokens.                                    | Complete on web and Slack; latency improvement not yet proven                     | Integration owner |
 | 2026-11-17 |  Phase 1 | Preserved the durable Finny plan request identity across the generic web approval boundary after live QA exposed a false-success dispatch                                                                                                           | RED: web Finny tool test observed no durable `finny-plan:<requestId>` approval key. GREEN: the tool retains the request identity; the orchestrator decides that Finny request; the live Producer opened immediately after approval.                                                                            | Complete                                                                          | Integration owner |
+| 2026-11-17 |  Phase 1 | Closed the material-clarification handoff so the exact durable plan approval is projected immediately after the clarification decision instead of leaving the web conversation at an informational dead end                                           | RED: caller-visible Postgres regression returned `ok` with no next approval. GREEN: 7/7 affected files pass, typecheck and oxlint pass, and Chrome shows `Approve Plan` immediately after the recommended clarification is accepted. No database schema, persisted payload, or configuration changed.             | Complete                                                                          | Integration owner |
+| 2026-11-17 |  Phase 2 | User authorized task-level SOP implementation and verification as the next milestone after the Phase 1 PR is complete                                                                                                                               | This document remains the working contract; first record the complete human-readable old/new schema and migration review, then implement one finance-specific SOP persistence and execution slice.                                                                                                            | Queued                                                                            | Integration owner |
 
-## Required human decisions before Phase 2
+## Required human decisions for Phase 2 gates
 
-1. Approve or revise the proposed SOP, audit-attempt, certified-result, and clean-cutover schema shapes.
+1. SOP implementation is authorized. Before the persisted change is written, record and review the complete old/new SOP and job shapes, indexes, constraints, representative rows, migration, backfill, rollout, and compatibility effects. Audit-attempt and certified-result schema changes remain later gates.
 2. Approve the synthetic/de-identified AP aging corpus and independently calculated accounting gold.
 3. Approve which controlled NetSuite/test-source population may be used for Tier 4 live acceptance.
 4. Review the measured baseline and decide which existing defects are release blockers versus tracked debt.

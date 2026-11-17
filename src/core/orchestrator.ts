@@ -12,6 +12,7 @@ import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.
 import { startDispatchTrace, tracePhase, type DispatchTrace } from "../../plugins/chassis/src/error-reporting.ts";
 import { externalTools } from "./orchestrator/external-tools.ts";
 import { isBackendCredential } from "../credentials/keychain.ts";
+import type { FinnyPendingApproval } from "../slack/finny-approvals.ts";
 import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
@@ -2044,54 +2045,48 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
           const finnyPlanApproval = p.reason === "Finny Governance Plan Approval";
           const finnyClarification = p.reason === "Finny Governance Clarification";
+          let readyFinnyPlan: Extract<FinnyPendingApproval, { kind: "plan" }> | undefined;
           if (deps.finnyApprovals && (finnyPlanApproval || finnyClarification)) {
             const prefix = finnyClarification ? "finny-clarification:" : "finny-plan:";
             const finnyRequestId = p.approvalKey?.startsWith(prefix)
               ? p.approvalKey.slice(prefix.length)
               : input.approval.requestId;
-            const threadCandidates = [
-              conversation.threadRef,
-              `web:${conversation.threadRef}`,
-              conversation.threadRef.replace(/^web:web:/, "web:"),
-            ];
-            for (const threadRef of threadCandidates) {
-              const pendingFinny = finnyClarification ? await deps.finnyApprovals.pending(finnyRequestId) : undefined;
-              if (finnyClarification && input.approval.approved && pendingFinny?.kind !== "clarification") continue;
-              const recommendedOptionId =
-                pendingFinny?.kind === "clarification" ? pendingFinny.card.recommendedOptionId : undefined;
-              const finnyDecision = (() => {
-                if (!finnyClarification)
-                  return {
-                    kind: "plan" as const,
-                    action: input.approval!.approved ? ("approve" as const) : ("reject" as const),
-                  };
-                if (!input.approval!.approved) return { kind: "clarification" as const, action: "other" as const };
+            const pendingFinny = finnyClarification ? await deps.finnyApprovals.pending(finnyRequestId) : undefined;
+            if (finnyClarification && input.approval.approved && pendingFinny?.kind !== "clarification")
+              throw new Error("Finny clarification request is unavailable");
+            const recommendedOptionId =
+              pendingFinny?.kind === "clarification" ? pendingFinny.card.recommendedOptionId : undefined;
+            const finnyDecision = (() => {
+              if (!finnyClarification)
                 return {
-                  kind: "clarification" as const,
-                  action: "select" as const,
-                  optionId: recommendedOptionId!,
+                  kind: "plan" as const,
+                  action: input.approval!.approved ? ("approve" as const) : ("reject" as const),
                 };
-              })();
-              const res = await deps.finnyApprovals
-                .decide({
-                  requestId: finnyRequestId,
-                  decision: finnyDecision,
-                  actor: { externalId: actor.id, ...(actor.displayName ? { displayName: actor.displayName } : {}) },
-                  surface: input.surface,
-                  originThreadRef: threadRef,
-                })
-                .catch((e: unknown) => {
-                  deps.errors?.record({
-                    category: "finny",
-                    code: "web_approval_failed",
-                    message: errMessage(e),
-                    scopeLabel: scopeId,
-                    sessionId: session.id,
-                  });
-                  return undefined;
+              if (!input.approval!.approved) return { kind: "clarification" as const, action: "other" as const };
+              return {
+                kind: "clarification" as const,
+                action: "select" as const,
+                optionId: recommendedOptionId!,
+              };
+            })();
+            const res = await deps.finnyApprovals
+              .decide({
+                requestId: finnyRequestId,
+                decision: finnyDecision,
+                actor: { externalId: actor.id, ...(actor.displayName ? { displayName: actor.displayName } : {}) },
+                surface: input.surface,
+              })
+              .catch((e: unknown) => {
+                deps.errors?.record({
+                  category: "finny",
+                  code: "web_approval_failed",
+                  message: errMessage(e),
+                  scopeLabel: scopeId,
+                  sessionId: session.id,
                 });
-              if (res && res.kind !== "gone") break;
-            }
+                throw e;
+              });
+            if (finnyClarification && input.approval.approved && res.kind === "result") readyFinnyPlan = res.next;
           }
           if (!input.approval.approved) {
             const messagePrefix = "security-screen-release:session_message_";
@@ -2240,6 +2235,28 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               };
             }
             if (finnyClarification) {
+              if (readyFinnyPlan) {
+                const approvalKey = `finny-plan:${readyFinnyPlan.requestId}`;
+                const approval = await issueApproval(
+                  commandApprovalId(session.id, readyFinnyPlan.card.title, approvalKey),
+                  {
+                    sessionId: session.id,
+                    command: readyFinnyPlan.card.title,
+                    reason: "Finny Governance Plan Approval",
+                    summary: readyFinnyPlan.card.summary,
+                    summaryDetail: JSON.stringify({ plan: readyFinnyPlan.card }),
+                    approvalKey,
+                    kind: "approval",
+                    grantModes: { session: false, always: false },
+                  },
+                );
+                return {
+                  status: "pending_approval",
+                  sessionId: session.id,
+                  reason: "Finny plan approval is ready.",
+                  pendingApprovals: [approval],
+                };
+              }
               return {
                 status: "ok",
                 sessionId: session.id,
