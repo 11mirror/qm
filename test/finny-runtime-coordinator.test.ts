@@ -1936,6 +1936,7 @@ test("expired delivered reverification grants return to recovery", async () => {
     idempotencyKey: "expired-reverify-r4",
   });
   const runtime = createPostgresFinnyRuntimeStore(connectionString);
+  const dispatched: string[] = [];
   await runtime.bindInitial({
     scopeId: job.scopeId,
     jobId: job.id,
@@ -1960,7 +1961,19 @@ test("expired delivered reverification grants return to recovery", async () => {
         throw new Error("existing Auditor binding should be used");
       },
     },
-    dispatcher: { async dispatchPrivateIdempotent() {} },
+    dispatcher: {
+      async dispatchPrivateIdempotent(message) {
+        dispatched.push(message.idempotencyKey);
+        if (!message.idempotencyKey.includes(":retry:")) return;
+        await runtime.advanceWorkerRun({
+          sessionId: message.sessionId,
+          expectedRunId: message.runId,
+          runId: "expired-auditor-retry-run",
+          scopeId: job.scopeId,
+          expiresAt: Date.now() + 60_000,
+        });
+      },
+    },
     ...coreRuntimeAuthority(),
   });
   await coordinator.verificationReopened({
@@ -1970,11 +1983,16 @@ test("expired delivered reverification grants return to recovery", async () => {
   });
   const { q } = createPgPool(connectionString);
   await q("UPDATE finny_runtime_bindings SET expires_at=$2 WHERE run_id=$1", ["auditor-run", Date.now() - 1]);
+  const recovery = (await runtime.pendingRecoveries()).find(
+    (item) => item.kind === "verification_reopened" && item.idempotencyKey === "expired-reverify-r4",
+  );
+  assert.equal(recovery?.kind === "verification_reopened" && recovery.retryAuditorRunId, "auditor-run");
+  await coordinator.verificationReopened(recovery!);
+  await coordinator.verificationReopened(recovery!);
+  assert.equal(dispatched.filter((key) => key.includes(":retry:")).length, 1);
   assert.equal(
-    (await runtime.pendingRecoveries()).some(
-      (item) => item.kind === "verification_reopened" && item.idempotencyKey === "expired-reverify-r4",
-    ),
-    true,
+    (await runtime.activeRoleBinding(job.scopeId, job.id, "auditor"))?.runId,
+    "expired-auditor-retry-run",
   );
 });
 

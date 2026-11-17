@@ -889,16 +889,6 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
       );
       return rows[0]?.delivered === true;
     },
-    async hasDeliveredDispatch(prefix: string): Promise<boolean> {
-      const rows = await q(
-        `SELECT 1 FROM finny_runtime_dispatches
-          WHERE delivered_at IS NOT NULL
-            AND (idempotency_key=$1 OR idempotency_key LIKE $1 || ':%')
-          LIMIT 1`,
-        [prefix],
-      );
-      return rows.length > 0;
-    },
     async dispatchOnce(
       input: {
         idempotencyKey: string;

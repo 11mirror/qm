@@ -478,7 +478,7 @@ export function createFinnyRuntimeCoordinator(deps: {
         throw new Error("Finny reverification requires a current immutable artifact");
       }
       const dispatchPrefix = `${input.idempotencyKey}:auditor-reverify`;
-      let auditor = await deps.runtime.currentRoleBinding(input.scopeId, input.jobId, "auditor");
+      let auditor = await deps.runtime.activeRoleBinding(input.scopeId, input.jobId, "auditor");
       if (input.retryMissingAuditor && auditor) return;
       if (input.retryAuditorRunId !== undefined && auditor?.runId !== input.retryAuditorRunId) return;
       if (!auditor) {
