@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { createFinnyToolServiceFactory, finnySlackAuthority } from "../src/finny/integration.ts";
 import { channelThreadRef, dmThreadRef } from "../src/slack/message-gating.ts";
@@ -390,6 +391,71 @@ test("artifact binding resolves immutable bytes from Core file authority", async
       resolveFinnyFileArtifactProposal({ get: async () => ({ ...(await get()), sizeBytes: 6 }) } as any, proposal, 5),
     /artifact proposal.*byte limit/i,
   );
+});
+test("artifact proposal and evidence resolve across personal and org scopes", async () => {
+  const { resolveFinnyFileArtifactProposal, resolveFinnyEvidenceFile } = await import("../src/finny/integration.ts");
+  const proposal = {
+    scopeId: "org:sharechat",
+    jobId: "job-p2p",
+    sessionId: "session-p2p",
+    runId: "run-p2p",
+    artifactDigest: "sha-p2p",
+    provisionalRevision: "file-p2p",
+    idempotencyKey: "ready-p2p",
+  };
+  const personalArtifact = {
+    id: "file-p2p",
+    ownerScopeId: "personal:U_ACTOR",
+    createdInScope: "org:sharechat",
+    sha256: "sha-p2p",
+    sizeBytes: 10,
+    enabled: true,
+  };
+  const resolvedProposal = await resolveFinnyFileArtifactProposal(
+    { get: async () => personalArtifact } as any,
+    proposal,
+    100,
+  );
+  assert.deepEqual(resolvedProposal, {
+    artifactDigest: "sha-p2p",
+    provisionalRevision: "file-p2p",
+  });
+  const { Readable } = await import("node:stream");
+  const rawEvidence = new TextEncoder().encode("audit evidence notes");
+  const evidenceSha = createHash("sha256").update(rawEvidence).digest("hex");
+  const files = {
+    async open(id: string) {
+      if (id !== "evidence-1") return null;
+      return {
+        artifact: {
+          id: "evidence-1",
+          ownerScopeId: "personal:U_ACTOR",
+          createdInScope: "org:sharechat",
+          sha256: evidenceSha,
+          enabled: true,
+        },
+        sizeBytes: rawEvidence.length,
+        stream: Readable.from([rawEvidence]),
+      };
+    },
+  };
+  const evidence = await resolveFinnyEvidenceFile(
+    files as any,
+    {
+      job: {
+        id: "job-p2p",
+        scopeId: "org:sharechat",
+        artifactDigest: "sha-p2p",
+        provisionalRevision: "file-p2p",
+      } as any,
+      evidenceFileId: "evidence-1",
+      checkId: "financial.reconcile",
+      generation: 1,
+      verdict: "pass",
+    },
+    { maxArtifactBytes: 100, maxEvidenceBytes: 100 },
+  );
+  assert.equal(evidence.evidenceDigest, evidenceSha);
 });
 
 test("real Slack channel and DM refs derive authority from the exact delivery target", () => {

@@ -2898,8 +2898,9 @@ export function createChatSurface(
       syncSubagentRowsRefresh(null);
       return nothing;
     }
+    if (subagentUi.rowsRoot !== rootId) refreshTree(rootId);
     const rows = visibleSubagents(subagentRows(sessionsState.list, rootId), subagentUi.acknowledged);
-    syncSubagentRowsRefresh(rows.some((row) => row.state === "working") ? rootId : null);
+    syncSubagentRowsRefresh(rootId);
     pruneSubagentStops(rows);
     syncSubagentApprovals(rows);
     subagentUi.ticking = rows.some((row) => row.state === "working" || row.state === "waiting");
@@ -3259,14 +3260,14 @@ export function createChatSurface(
                 <div class="finny-plan-section-title">Phases</div>
                 <div class="finny-plan-phases">
                   ${plan.phases.map(
-              (p, idx) => html`
-                <div class="finny-plan-phase">
-                  <span class="phase-idx">${idx + 1}</span>
-                  <span class="phase-name">${p.name}</span>
-                  <span class="phase-owner">${p.owner}</span>
-                </div>
-              `,
-            )}
+                    (p, idx) => html`
+                      <div class="finny-plan-phase">
+                        <span class="phase-idx">${idx + 1}</span>
+                        <span class="phase-name">${p.name}</span>
+                        <span class="phase-owner">${p.owner}</span>
+                      </div>
+                    `,
+                  )}
                 </div>
               `
             : nothing
@@ -3283,16 +3284,16 @@ export function createChatSurface(
                   <div class="clarification-question">${materialClarification.question}</div>
                   <div class="clarification-options">
                     ${materialClarification.options.map(
-                (opt) => html`
-                  <div
-                    class="clarification-option ${opt.id === materialClarification.recommendedOptionId ? "recommended" : ""}"
-                  >
-                    <strong>${opt.label}</strong>
-                    ${opt.id === materialClarification.recommendedOptionId ? html`<span class="recommended-tag">Recommended</span>` : nothing}
-                    ${opt.description ? html`<p>${opt.description}</p>` : nothing}
-                  </div>
-                `,
-              )}
+                      (opt) => html`
+                        <div
+                          class="clarification-option ${opt.id === materialClarification.recommendedOptionId ? "recommended" : ""}"
+                        >
+                          <strong>${opt.label}</strong>
+                          ${opt.id === materialClarification.recommendedOptionId ? html`<span class="recommended-tag">Recommended</span>` : nothing}
+                          ${opt.description ? html`<p>${opt.description}</p>` : nothing}
+                        </div>
+                      `,
+                    )}
                   </div>
                 </div>
               `

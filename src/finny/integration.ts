@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { FinnyToolService } from "../agent/agent-tools/finny.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
-import type { Conversation, Destination, Principal } from "../types.ts";
+import { parseScopeId, type Conversation, type Destination, type Principal } from "../types.ts";
 import type { FinnyIntegrationConfig } from "./integration-config.ts";
 import type { FinnyFinalizer } from "./finalizer.ts";
 import type { FinnyRuntimeStore } from "./runtime-postgres-store.ts";
@@ -163,11 +163,12 @@ export function finnyTurnAuthority(
   if (surface === "web" || surface === "desktop") {
     const target = deliveryTarget ?? sessionId;
     if (!target) return undefined;
+    const originThreadRef = target.startsWith(`${surface}:`) ? target : `${surface}:${target}`;
     return {
-      originThreadRef: `${surface}:${target}`,
+      originThreadRef,
       destination: {
         type: surface as "web" | "desktop",
-        target,
+        target: target.replace(new RegExp(`^${surface}:`), ""),
       },
     };
   }
@@ -341,8 +342,8 @@ export function createFinnyToolServiceFactory(deps: {
           return `Finny plan ${jobId} amendment is awaiting scope change approval.`;
         },
         async status(jobId: string): Promise<string> {
-          if (!current || current.jobId !== jobId) throw new Error("Finny status requires the bound job");
-          const job = await deps.jobs.getJob(current.scopeId, jobId);
+          const scopeId = current ? current.scopeId : turn.scopeId;
+          const job = await deps.jobs.getJob(scopeId, jobId);
           if (!job) throw new Error("Finny job is unavailable in this scope");
           return JSON.stringify({
             jobId: job.id,
@@ -511,6 +512,22 @@ export function createFinnyToolServiceFactory(deps: {
 
 const deterministicChecks = new Set<FinnyCheckId>(SPREADSHEET_WORKER_CHECK_IDS);
 
+function matchesFinnyFileScope(
+  artifact: { ownerScopeId: string; createdInScope?: string },
+  targetScopeId: string,
+): boolean {
+  if (artifact.ownerScopeId === targetScopeId || artifact.createdInScope === targetScopeId) return true;
+  const targetKind = parseScopeId(targetScopeId).kind;
+  if (targetKind === "org") {
+    const ownerKind = parseScopeId(artifact.ownerScopeId).kind;
+    const createdKind = artifact.createdInScope ? parseScopeId(artifact.createdInScope).kind : null;
+    if (ownerKind === "personal" || ownerKind === "org" || createdKind === "personal" || createdKind === "org") {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function immutableScopedFileBytes(
   files: Pick<FileArtifactStore, "open">,
   scopeId: string,
@@ -522,7 +539,7 @@ async function immutableScopedFileBytes(
   if (
     !opened ||
     !opened.artifact.enabled ||
-    opened.artifact.ownerScopeId !== scopeId ||
+    !matchesFinnyFileScope(opened.artifact, scopeId) ||
     opened.artifact.id !== fileId
   ) {
     throw new Error(`Finny ${label} is not an enabled immutable scoped evidence file`);
@@ -625,7 +642,7 @@ export async function resolveFinnyFileArtifactProposal(
   if (
     !artifact ||
     !artifact.enabled ||
-    artifact.ownerScopeId !== proposal.scopeId ||
+    !matchesFinnyFileScope(artifact, proposal.scopeId) ||
     artifact.sha256 !== proposal.artifactDigest
   )
     throw new Error("Finny artifact proposal does not match an immutable file artifact");

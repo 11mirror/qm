@@ -46,6 +46,7 @@ export type FinnyApprovalOutcome =
 
 export interface FinnyApprovalBridge {
   pending(requestId: string): Promise<FinnyPendingApproval | null>;
+  findPendingByThread?(originThreadRef: string): Promise<FinnyPendingApproval | null>;
   decide(input: FinnyApprovalDecisionInput): Promise<FinnyApprovalOutcome>;
 }
 
