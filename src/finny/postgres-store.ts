@@ -300,6 +300,20 @@ function rowToJob(row: Record<string, unknown>): FinnyJob {
   };
 }
 
+function rowToApprovalRequest(row: Record<string, unknown>): FinnyApprovalRequest {
+  return {
+    requestId: row.request_id as string,
+    scopeId: row.scope_id as string,
+    jobId: row.job_id as string,
+    planDigest: row.plan_digest as string,
+    originThreadRef: row.origin_thread_ref as string,
+    authorizedActorId: row.authorized_actor_id as string,
+    ...(row.ready_at !== null ? { readyAt: Number(row.ready_at) } : {}),
+    ...(row.decided_at !== null ? { decidedAt: Number(row.decided_at) } : {}),
+    job: rowToJob(row.job_row as Record<string, unknown>),
+  };
+}
+
 function rowToAttestation(row: Record<string, unknown>): FinnyAttestation {
   return {
     seq: Number(row.seq),
@@ -519,18 +533,17 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         [requestId],
       );
       const row = rows[0];
-      if (!row) return null;
-      return {
-        requestId: row.request_id as string,
-        scopeId: row.scope_id as string,
-        jobId: row.job_id as string,
-        planDigest: row.plan_digest as string,
-        originThreadRef: row.origin_thread_ref as string,
-        authorizedActorId: row.authorized_actor_id as string,
-        ...(row.ready_at !== null ? { readyAt: Number(row.ready_at) } : {}),
-        ...(row.decided_at !== null ? { decidedAt: Number(row.decided_at) } : {}),
-        job: rowToJob(row.job_row as Record<string, unknown>),
-      } satisfies FinnyApprovalRequest;
+      return row ? rowToApprovalRequest(row) : null;
+    },
+    async getPendingApprovalRequestForJob(scopeId, jobId) {
+      const rows = await q(
+        `SELECT r.*, to_jsonb(j) AS job_row
+           FROM finny_approval_requests r
+           JOIN finny_jobs j ON j.id = r.job_id AND j.scope_id = r.scope_id
+          WHERE r.scope_id = $1 AND r.job_id = $2 AND r.decided_at IS NULL`,
+        [scopeId, jobId],
+      );
+      return rows[0] ? rowToApprovalRequest(rows[0]) : null;
     },
     async getPendingApprovalRequestByThread(originThreadRef) {
       const rows = await q(
@@ -543,18 +556,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         [originThreadRef],
       );
       const row = rows[0];
-      if (!row) return null;
-      return {
-        requestId: row.request_id as string,
-        scopeId: row.scope_id as string,
-        jobId: row.job_id as string,
-        planDigest: row.plan_digest as string,
-        originThreadRef: row.origin_thread_ref as string,
-        authorizedActorId: row.authorized_actor_id as string,
-        ...(row.ready_at !== null ? { readyAt: Number(row.ready_at) } : {}),
-        ...(row.decided_at !== null ? { decidedAt: Number(row.decided_at) } : {}),
-        job: rowToJob(row.job_row as Record<string, unknown>),
-      } satisfies FinnyApprovalRequest;
+      return row ? rowToApprovalRequest(row) : null;
     },
     async getClarificationRequest(requestId) {
       const rows = await q("SELECT * FROM finny_clarification_requests WHERE request_id=$1", [requestId]);

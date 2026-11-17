@@ -106,15 +106,14 @@ export function createFinnyApprovalService(deps: {
         const replay = clarification.decidedAt !== undefined;
         if (replay && JSON.stringify(clarification.decision) !== JSON.stringify(decision))
           throw new Error("Finny clarification request was already decided");
+        const exactApproval = replay
+          ? await deps.store.getPendingApprovalRequestForJob(clarification.scopeId, clarification.jobId)
+          : undefined;
         const decided = replay
           ? {
               request: clarification,
-              approvalReady:
-                clarification.decision?.kind === "option" &&
-                clarification.decision.optionId === clarification.recommendedOptionId,
-              revisionRequired:
-                clarification.decision?.kind !== "option" ||
-                clarification.decision.optionId !== clarification.recommendedOptionId,
+              approvalReady: exactApproval?.readyAt !== undefined,
+              revisionRequired: exactApproval?.readyAt === undefined,
             }
           : await deps.store.recordClarificationDecision({
               requestId: clarification.requestId,
@@ -150,7 +149,8 @@ export function createFinnyApprovalService(deps: {
         else if (recommended && !decided.revisionRequired)
           summary = "Another material clarification remains unresolved.";
         const approval = decided.approvalReady
-          ? await deps.store.getPendingApprovalRequestByThread?.(decided.request.originThreadRef)
+          ? (exactApproval ??
+            (await deps.store.getPendingApprovalRequestForJob(decided.request.scopeId, decided.request.jobId)))
           : undefined;
         const next = approval ? await pending(approval.requestId) : null;
         return {

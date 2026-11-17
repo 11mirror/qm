@@ -257,7 +257,8 @@ test("clarification selection is bound to the exact actor, origin, and persisted
 });
 
 test("replaying a committed recommended clarification recovers the pending plan approval", async () => {
-  const store = createPostgresFinnyStore(testDatabaseUrl());
+  const databaseUrl = testDatabaseUrl();
+  const store = createPostgresFinnyStore(databaseUrl);
   const jobId = randomUUID();
   const clarificationRequestId = randomUUID();
   const approvalRequestId = randomUUID();
@@ -302,6 +303,25 @@ test("replaying a committed recommended clarification recovers the pending plan 
   };
 
   const committed = await service.decide(input);
+  const newerJob = await store.createJob({
+    id: randomUUID(),
+    scopeId,
+    plan: { ...plan, title: "Unrelated newer plan" },
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
+    findingPolicy,
+    originThreadRef: "web:approver@example.com:finny-replay",
+  });
+  const newerApprovalRequestId = randomUUID();
+  await store.createApprovalRequest({
+    scopeId,
+    jobId: newerJob.id,
+    requestId: newerApprovalRequestId,
+    authorizedActorId: "approver@example.com",
+  });
+  await createPgPool(databaseUrl).q(
+    "UPDATE finny_approval_requests SET created_at=$2 WHERE request_id=$1",
+    [newerApprovalRequestId, Date.now() + 10_000],
+  );
   const recovered = await service.decide(input);
 
   assert.deepEqual(recovered, committed);
