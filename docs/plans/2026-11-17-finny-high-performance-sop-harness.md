@@ -1,11 +1,11 @@
 # Finny High-Performance SOP Harness
 
-Status: Active design and implementation tracker  
-Created: 2026-11-17  
-Last updated: 2026-11-17  
-Owner: Finny/QM working agents  
-Implementation state: Phase 0 and Phase 1 implemented and verified on QM web and Slack; Phase 2 not started pending human review  
-Working branch: `codex/finny-phase-1-performance`  
+Status: Active design and implementation tracker
+Created: 2026-11-17
+Last updated: 2026-11-17
+Owner: Finny/QM working agents
+Implementation state: Phase 0 and Phase 1 implemented and verified on QM web and Slack; Phase 2 not started pending human review
+Working branch: `codex/finny-phase-1-performance`
 Working tree: `/Users/kalicharanshukla/.codex/worktrees/finny-architecture-audit/QM`
 Phase 0/1 implementation commit: `4e0fbbbb9`
 Review PR: [11mirror/qm#34](https://github.com/11mirror/qm/pull/34)
@@ -614,9 +614,9 @@ Exit criteria:
 
 The paired production-shaped web runs used the exact same synthetic AP request, real model, durable Postgres, configured spreadsheet evaluator, and visible QM app. `persistent_subagents` was enabled for only the local QA principal before measurement. A preceding diagnostic candidate run is excluded because it included approximately 50 seconds of recovery after that required feature flag was discovered disabled.
 
-Baseline revision: `f2d342f93d7b4dfe157cf5ca831110b565f7603d`  
-Baseline job: `8c84e1b0-1143-45e2-b713-5e4a613d1b7a`  
-Candidate job: `f26a8b6e-077b-4632-830d-19193d881d63`  
+Baseline revision: `f2d342f93d7b4dfe157cf5ca831110b565f7603d`
+Baseline job: `8c84e1b0-1143-45e2-b713-5e4a613d1b7a`
+Candidate job: `f26a8b6e-077b-4632-830d-19193d881d63`
 Both results: certified XLSX and summary visibly delivered; all eight checks passed; no rework
 
 | Observation                           | Pre-change baseline | Phase 1 candidate | One-pair change |
@@ -643,8 +643,8 @@ The Phase 1 structural gate passed for the candidate: one Producer, no pre-artif
 
 The exact synthetic request was sent twice to the same `Finny staging` DM in the 11mirror workspace through Chrome: first against the pre-change staging checkout and then against the Phase 1 candidate. Both runs used the same model, approval path, real Postgres state, configured spreadsheet evaluator, and synthetic input. Both visibly attached a certified XLSX and summary with all eight checks passed and no rework.
 
-Baseline revision: `f2d342f93d7b4dfe157cf5ca831110b565f7603d`  
-Baseline job: `f6f18481-bd8d-4700-8e81-f32193492e7f`  
+Baseline revision: `f2d342f93d7b4dfe157cf5ca831110b565f7603d`
+Baseline job: `f6f18481-bd8d-4700-8e81-f32193492e7f`
 Candidate job: `a64e0f58-c5c7-460a-817d-a766739e8eb7`
 
 | Observation                        | Pre-change baseline | Phase 1 candidate | One-pair change |
@@ -802,8 +802,8 @@ Exit criteria:
 
 ## Finny High-Performance Eval v1
 
-Status: Design requires user corpus and baseline approval before implementation  
-Manifest schema: `finny-high-performance-eval.v1`  
+Status: Design requires user corpus and baseline approval before implementation
+Manifest schema: `finny-high-performance-eval.v1`
 Result schema: `finny-high-performance-eval-result.v1`
 
 ### Existing QM evaluation guidance
