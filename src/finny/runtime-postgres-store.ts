@@ -813,7 +813,10 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                 AND current_auditor.role='auditor'
                 AND current_auditor.active=TRUE
                 AND (
-                  current_auditor.expires_at<=${Date.now()}
+                  (
+                    current_auditor.expires_at<=${Date.now()}
+                    AND current_run.status NOT IN ('done','failed')
+                  )
                   OR current_run.id IS NULL
                   OR current_run.status='failed'
                   OR (

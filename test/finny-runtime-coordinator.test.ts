@@ -2034,6 +2034,10 @@ test("fresh reverification admission preserves Auditor human-wait outcomes", asy
     "fresh-reverify-auditor-run",
     JSON.stringify({ status: "pending_approval", pendingApprovals: [] }),
   ]);
+  await q("UPDATE finny_runtime_bindings SET expires_at=$2 WHERE run_id=$1", [
+    "fresh-reverify-auditor-run",
+    Date.now() - 1,
+  ]);
   assert.deepEqual(await runtime.pendingRecoveries(), []);
   await q("UPDATE runs SET result=$2 WHERE id=$1", [
     "fresh-reverify-auditor-run",
