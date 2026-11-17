@@ -77,12 +77,17 @@ export function createFinnyApprovalService(deps: {
     },
     async decide(input) {
       let request = await deps.store.getApprovalRequest(input.requestId);
-      if (!request && input.originThreadRef && deps.store.getPendingApprovalRequestByThread) {
+      if (
+        !request &&
+        input.decision.kind === "plan" &&
+        input.originThreadRef &&
+        deps.store.getPendingApprovalRequestByThread
+      ) {
         request = await deps.store.getPendingApprovalRequestByThread(input.originThreadRef);
       }
       if (!request) {
         const clarification = await deps.store.getClarificationRequest(input.requestId);
-        if (!clarification || clarification.decidedAt !== undefined) return { kind: "gone" };
+        if (!clarification) return { kind: "gone" };
         if (input.decision.kind !== "clarification") throw new Error("Finny decision does not match the request");
         const actor = deps.identity.resolve(input.actor);
         if (!deps.identity.isInternal(actor) || actor.id !== clarification.authorizedActorId)
@@ -96,13 +101,28 @@ export function createFinnyApprovalService(deps: {
           input.decision.action === "select"
             ? { kind: "option" as const, optionId: input.decision.optionId }
             : { kind: "other" as const };
-        const decided = await deps.store.recordClarificationDecision({
-          requestId: clarification.requestId,
-          actorId: actor.id,
-          originThreadRef: actualThreadRef,
-          decision,
-          decidedAt: Date.now(),
-        });
+        if (actualThreadRef !== clarification.originThreadRef)
+          throw new Error("Finny clarification must be decided in its origin thread");
+        const replay = clarification.decidedAt !== undefined;
+        if (replay && JSON.stringify(clarification.decision) !== JSON.stringify(decision))
+          throw new Error("Finny clarification request was already decided");
+        const decided = replay
+          ? {
+              request: clarification,
+              approvalReady:
+                clarification.decision?.kind === "option" &&
+                clarification.decision.optionId === clarification.recommendedOptionId,
+              revisionRequired:
+                clarification.decision?.kind !== "option" ||
+                clarification.decision.optionId !== clarification.recommendedOptionId,
+            }
+          : await deps.store.recordClarificationDecision({
+              requestId: clarification.requestId,
+              actorId: actor.id,
+              originThreadRef: actualThreadRef,
+              decision,
+              decidedAt: Date.now(),
+            });
         const decidedChoice = decided.request.decision;
         const selectedOption =
           decidedChoice?.kind === "option"
@@ -111,7 +131,7 @@ export function createFinnyApprovalService(deps: {
         const recommended = selectedOption?.id === decided.request.recommendedOptionId;
         if (decidedChoice?.kind === "option" && !selectedOption)
           throw new Error("Finny clarification option is not available");
-        if (decided.approvalReady && deps.onClarificationReady)
+        if (!replay && decided.approvalReady && deps.onClarificationReady)
           await afterCommit(
             {
               kind: "clarification_delivery",
