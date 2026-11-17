@@ -784,20 +784,7 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
              AND expired_auditor.active=TRUE
              AND expired_auditor.expires_at IS NOT NULL
              AND expired_auditor.expires_at <= ${Date.now()}
-        )
-        ${
-          hasRuns
-            ? `OR EXISTS (
-                 SELECT 1 FROM finny_runtime_bindings AS orphaned_auditor
-                 LEFT JOIN runs AS orphaned_run ON orphaned_run.id=orphaned_auditor.run_id
-                  WHERE orphaned_auditor.job_id=jobs.id
-                    AND orphaned_auditor.scope_id=jobs.scope_id
-                    AND orphaned_auditor.role='auditor'
-                    AND orphaned_auditor.active=TRUE
-                    AND orphaned_run.id IS NULL
-               )`
-            : ""
-        }`;
+        )`;
       const reverificationRecoveryGate = hasRuns
         ? `(NOT EXISTS (
              SELECT 1 FROM finny_runtime_bindings AS current_auditor
