@@ -71,7 +71,7 @@ export function isReservedMentionName(name: string): boolean {
   return RESERVED_MENTION_NAMES.has(name);
 }
 
-const MENTION_SEGMENT = String.raw`[\p{L}\p{N}](?:[\p{L}\p{N}_-]*[\p{L}\p{N}])?`;
+const MENTION_SEGMENT = String.raw`[\p{L}\p{N}](?:[\p{L}\p{N}_'’-]*[\p{L}\p{N}])?`;
 const MENTION_WORD = String.raw`${MENTION_SEGMENT}(?:\.${MENTION_SEGMENT})*`;
 const PLAIN_MENTION = new RegExp(
   String.raw`(?<![\p{L}\p{N}<@])@(${MENTION_WORD}(?: ${MENTION_WORD}){0,2})(?![/@])`,
@@ -85,11 +85,14 @@ function armUserMentions(text: string, wrap: (armed: string) => string = (s) => 
     for (let n = words.length; n >= 1; n--) {
       const candidate = words.slice(0, n).join(" ");
       const key = candidate.toLowerCase();
-      if (RESERVED_MENTION_NAMES.has(key)) continue;
-      const id = mentionIdByName.get(key);
+      const possessive = key.endsWith("'s") || key.endsWith("’s");
+      const resolvedName = possessive && !mentionIdByName.has(key) ? candidate.slice(0, -2) : candidate;
+      const resolvedKey = resolvedName.toLowerCase();
+      if (RESERVED_MENTION_NAMES.has(resolvedKey)) continue;
+      const id = mentionIdByName.get(resolvedKey);
       if (!id) continue;
       if (n < words.length && /^\p{Lu}/u.test(words[n] ?? "")) return match;
-      return `${wrap(`<@${id}>`)}${name.slice(candidate.length)}`;
+      return `${wrap(`<@${id}>`)}${name.slice(resolvedName.length)}`;
     }
     return match;
   });

@@ -178,6 +178,8 @@ test("armUserMentions: plain @name arms to <@id> via toSlackMrkdwn", () => {
       ["renée", "U999"],
       ["finny-freehand", "B777"],
       ["kalishukla", "U123"],
+      ["o", "U001"],
+      ["o'brien", "U002"],
     ]),
   );
   try {
@@ -198,6 +200,8 @@ test("armUserMentions: plain @name arms to <@id> via toSlackMrkdwn", () => {
     assert.equal(toSlackMrkdwn("hi @Ankit Torres"), "hi @Ankit Torres");
     assert.equal(toSlackMrkdwn("ping @finny-freehand to check"), "ping <@B777> to check");
     assert.equal(toSlackMrkdwn("waiting on @Kalishukla's go"), "waiting on <@U123>'s go");
+    assert.equal(toSlackMrkdwn("ask @O'Brien today"), "ask <@U002> today");
+    assert.equal(toSlackMrkdwn("ask @O'Brien's team"), "ask <@U002>'s team");
   } finally {
     setMentionIndex(new Map());
   }
