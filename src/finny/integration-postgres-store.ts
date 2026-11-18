@@ -3,6 +3,7 @@ import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { Destination } from "../types.ts";
 import type { FinnyParentBindingSnapshot } from "./integration.ts";
 import { assertFinnyMaterialClarificationMatchesSop } from "./plan.ts";
+import { terminalFinnyWorkerRunSql } from "./run-state.ts";
 import type { CreateFinnyClarificationRequestInput, CreateFinnyJobCommand } from "./store.ts";
 
 const SCHEMA = [
@@ -187,11 +188,7 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
           ],
         );
         if (clarification) {
-          assertFinnyMaterialClarificationMatchesSop(
-            job.sop_definition,
-            job.bound_inputs,
-            clarification,
-          );
+          assertFinnyMaterialClarificationMatchesSop(job.sop_definition, job.bound_inputs, clarification);
           const existingClarification = await db.query(
             "SELECT request_id FROM finny_clarification_requests WHERE job_id=$1",
             [input.jobId],
@@ -359,27 +356,24 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
       return ledgerHead === Number(job.ledger_head);
     },
     async finalizedParents(): Promise<FinnyIntegrationParentRecord[]> {
-      const hasDeliveries = (await q("SELECT to_regclass('deliveries') IS NOT NULL AS exists"))[0]?.exists === true;
-      const hasBindings =
-        (await q("SELECT to_regclass('finny_runtime_bindings') IS NOT NULL AS exists"))[0]?.exists === true;
       const rows = await q(
         `SELECT i.* FROM finny_integration_jobs i
          JOIN finny_jobs j ON j.id=i.job_id AND j.scope_id=i.scope_id
          WHERE j.final_receipt IS NOT NULL AND j.sop_version_id IS NOT NULL
            AND (
-             ${hasDeliveries ? `(NOT EXISTS (
+             (NOT EXISTS (
                SELECT 1 FROM deliveries d
                 WHERE d.idempotency_key='finny-final:' || j.id || ':' || j.ledger_head::text
              ) OR EXISTS (
                SELECT 1 FROM deliveries d
                 WHERE d.idempotency_key='finny-final:' || j.id || ':' || j.ledger_head::text
                   AND d.delivered_at IS NULL AND d.expired_at IS NOT NULL AND d.failed_reason IS NULL
-             ))` : "TRUE"}
-             OR ${hasBindings ? `EXISTS (
+             ))
+             OR EXISTS (
                SELECT 1 FROM finny_runtime_bindings b
                 WHERE b.scope_id=j.scope_id AND b.job_id=j.id
                   AND (b.role='parent' OR (b.active=TRUE AND b.role IN ('producer','auditor')))
-             )` : "FALSE"}
+             )
            )
          ORDER BY j.finalized_at, i.job_id`,
       );
@@ -395,23 +389,11 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
       return rows.map(parent);
     },
     async approvedIncomplete(): Promise<FinnyApprovedIncompleteRecord[]> {
-      const hasRuns = (await q("SELECT to_regclass('runs') IS NOT NULL AS exists"))[0]?.exists === true;
-      const terminalProducerRunId = hasRuns
-        ? `SELECT b.run_id FROM finny_runtime_bindings b
+      const terminalProducerRunId = `SELECT b.run_id FROM finny_runtime_bindings b
              LEFT JOIN runs r ON r.id=b.run_id
               WHERE b.job_id=i.job_id AND b.scope_id=i.scope_id
                 AND b.role='producer' AND b.active=TRUE
-                AND (
-                  r.id IS NULL
-                  OR r.status='failed'
-                  OR (r.status='done' AND COALESCE(r.result::jsonb->>'status','') NOT IN ('pending_approval','refused'))
-                  OR (b.expires_at<=$1 AND r.status NOT IN ('done','failed'))
-                )
-              ORDER BY b.epoch DESC
-              LIMIT 1`
-        : `SELECT b.run_id FROM finny_runtime_bindings b
-              WHERE b.job_id=i.job_id AND b.scope_id=i.scope_id
-                AND b.role='producer' AND b.active=TRUE AND b.expires_at<=$1
+                AND ${terminalFinnyWorkerRunSql("b", "r", "$1")}
               ORDER BY b.epoch DESC
               LIMIT 1`;
       const rows = await q(

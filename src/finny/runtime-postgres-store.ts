@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { createPostgresAdvisoryLock } from "../persistence/advisory-lock.ts";
+import { terminalFinnyWorkerRunSql } from "./run-state.ts";
 import type { FinnyAuditFinding, FinnyCheckId, FinnyWorkerRole } from "./types.ts";
 
 export type FinnyRuntimeRole = "parent" | FinnyWorkerRole;
@@ -52,6 +53,7 @@ export interface FinnyAuditBlockedRecovery {
   evidenceFileId: string;
   findings: FinnyAuditFinding[];
   idempotencyKey: string;
+  retryTerminalProducerRunId?: string;
 }
 
 export interface FinnyVerificationReopenedRecovery {
@@ -129,6 +131,24 @@ const EXPIRY_SCHEMA = [`ALTER TABLE finny_runtime_bindings ADD COLUMN IF NOT EXI
 const DISPATCH_CANCELLATION_SCHEMA = [
   `ALTER TABLE finny_runtime_dispatches ADD COLUMN IF NOT EXISTS cancelled_at BIGINT`,
 ];
+
+const CURRENT_ARTIFACT_NEEDS_AUDIT = `
+  jobs.finalized_at IS NULL
+  AND jobs.pending_rework_seq IS NULL
+  AND jobs.unresolved_escalation_seq IS NULL
+  AND jobs.artifact_digest IS NOT NULL
+  AND EXISTS (
+    SELECT 1
+      FROM jsonb_each_text(jobs.required_generations) AS required(check_id,generation)
+     WHERE NOT EXISTS (
+       SELECT 1 FROM finny_job_events AS audit
+        WHERE audit.job_id=jobs.id
+          AND audit.event_type='audit_passed'
+          AND audit.payload->>'artifactDigest'=jobs.artifact_digest
+          AND audit.payload->>'checkId'=required.check_id
+          AND (audit.payload->>'generation')::int=required.generation::int
+     )
+  )`;
 
 function rowToBinding(row: Record<string, unknown>): FinnyRuntimeBinding {
   return {
@@ -310,14 +330,35 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
       runId: string;
       scopeId: string;
       expiresAt: number;
+      observedTerminalRunId?: string;
     }): Promise<FinnyRuntimeBinding | null> {
       if (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= Date.now())
         throw new Error("Finny worker run expiry must be in the future");
       const rows = await q(
-        `UPDATE finny_runtime_bindings SET run_id=$3, expires_at=$5
-         WHERE session_id=$1 AND run_id IN ($2,$3) AND scope_id=$4 AND role IN ('producer','auditor') AND active=TRUE
+        `UPDATE finny_runtime_bindings AS b SET run_id=$3, expires_at=$5
+         WHERE b.session_id=$1 AND b.run_id IN ($2,$3) AND b.scope_id=$4
+           AND b.role IN ('producer','auditor') AND b.active=TRUE
+           AND (
+             $6::text IS NULL
+             OR (
+               b.run_id=$6
+               AND COALESCE((
+                 SELECT ${terminalFinnyWorkerRunSql("b", "r", "$7")}
+                   FROM runs AS r
+                  WHERE r.id=b.run_id
+               ), TRUE)
+             )
+           )
          RETURNING *`,
-        [input.sessionId, input.expectedRunId, input.runId, input.scopeId, input.expiresAt],
+        [
+          input.sessionId,
+          input.expectedRunId,
+          input.runId,
+          input.scopeId,
+          input.expiresAt,
+          input.observedTerminalRunId ?? null,
+          Date.now(),
+        ],
       );
       return rows[0] ? rowToBinding(rows[0]) : null;
     },
@@ -364,6 +405,15 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
         [scopeId, jobId, role],
       );
       return rows[0] ? rowToBinding(rows[0]) : null;
+    },
+    async currentArtifactNeedsAudit(scopeId: string, jobId: string): Promise<boolean> {
+      const rows = await q(
+        `SELECT (${CURRENT_ARTIFACT_NEEDS_AUDIT}) AS needed
+           FROM finny_jobs AS jobs
+          WHERE jobs.id=$1 AND jobs.scope_id=$2`,
+        [jobId, scopeId],
+      );
+      return rows[0]?.needed === true;
     },
     async bindAuditor(input: {
       scopeId: string;
@@ -599,61 +649,13 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
       });
     },
     async pendingRecoveries(): Promise<FinnyRuntimeRecovery[]> {
-      const hasRuns = (await q("SELECT to_regclass('runs') IS NOT NULL AS exists"))[0]?.exists === true;
-      const healthyAuditor = hasRuns
-        ? `EXISTS (
-             SELECT 1 FROM finny_runtime_bindings AS auditor_binding
-             JOIN runs AS auditor_run ON auditor_run.id=auditor_binding.run_id
-              WHERE auditor_binding.job_id=actions.job_id
-                AND auditor_binding.scope_id=actions.scope_id
-                AND auditor_binding.role='auditor'
-                AND auditor_binding.active=TRUE
-                AND (
-                  (auditor_binding.expires_at>$1 AND auditor_run.status NOT IN ('done','failed'))
-                  OR (
-                    auditor_run.status='done'
-                    AND COALESCE(auditor_run.result::jsonb->>'status','') IN ('pending_approval','refused')
-                  )
-                )
-           )`
-        : `EXISTS (
-             SELECT 1 FROM finny_runtime_bindings AS auditor_binding
-              WHERE auditor_binding.job_id=actions.job_id
-                AND auditor_binding.scope_id=actions.scope_id
-                AND auditor_binding.role='auditor'
-                AND auditor_binding.active=TRUE
-                AND auditor_binding.expires_at>$1
-           )`;
-      const terminalAuditorRunId = hasRuns
-        ? `SELECT auditor_binding.run_id FROM finny_runtime_bindings AS auditor_binding
-             LEFT JOIN runs AS auditor_run ON auditor_run.id=auditor_binding.run_id
-              WHERE auditor_binding.job_id=actions.job_id
-                AND auditor_binding.scope_id=actions.scope_id
-                AND auditor_binding.role='auditor'
-                AND auditor_binding.active=TRUE
-                AND (
-                  auditor_run.id IS NULL
-                  OR auditor_run.status='failed'
-                  OR (
-                    auditor_run.status='done'
-                    AND COALESCE(auditor_run.result::jsonb->>'status','') NOT IN ('pending_approval','refused')
-                  )
-                  OR (auditor_binding.expires_at<=$1 AND auditor_run.status NOT IN ('done','failed'))
-                )
-              ORDER BY auditor_binding.epoch DESC
-              LIMIT 1`
-        : `SELECT auditor_binding.run_id FROM finny_runtime_bindings AS auditor_binding
-              WHERE auditor_binding.job_id=actions.job_id
-                AND auditor_binding.scope_id=actions.scope_id
-                AND auditor_binding.role='auditor'
-                AND auditor_binding.active=TRUE
-                AND auditor_binding.expires_at<=$1
-              ORDER BY auditor_binding.epoch DESC
-              LIMIT 1`;
       const rows = await q(
         `SELECT actions.kind,actions.session_id,actions.run_id,actions.scope_id,actions.job_id,
                 actions.idempotency_key,CASE WHEN actions.kind='artifact_ready' THEN events.payload ELSE actions.authority_payload->'recovery' END AS payload,
-                (${terminalAuditorRunId}) AS terminal_auditor_run_id
+                CASE WHEN auditor_state.terminal THEN auditor_binding.run_id END AS terminal_auditor_run_id,
+                CASE WHEN producer_state.terminal AND (
+                  dispatches.delivered_at IS NOT NULL OR dispatches.run_id<>producer_binding.run_id
+                ) THEN producer_binding.run_id END AS terminal_producer_run_id
            FROM finny_runtime_actions AS actions
            JOIN finny_jobs AS jobs
              ON jobs.id=actions.job_id
@@ -663,40 +665,59 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
             AND events.idempotency_key=actions.idempotency_key
             AND events.event_index=0
             AND events.event_type=actions.kind
+      LEFT JOIN finny_runtime_bindings AS auditor_binding
+             ON actions.kind='artifact_ready'
+            AND auditor_binding.job_id=actions.job_id
+            AND auditor_binding.scope_id=actions.scope_id
+            AND auditor_binding.role='auditor'
+            AND auditor_binding.active=TRUE
+      LEFT JOIN runs AS auditor_run ON auditor_run.id=auditor_binding.run_id
+      LEFT JOIN LATERAL (
+             SELECT auditor_binding.run_id IS NOT NULL
+               AND ${terminalFinnyWorkerRunSql("auditor_binding", "auditor_run", "$1")} AS terminal
+           ) AS auditor_state ON TRUE
+      LEFT JOIN finny_runtime_bindings AS producer_binding
+             ON actions.kind='audit_blocked'
+            AND producer_binding.job_id=actions.job_id
+            AND producer_binding.scope_id=actions.scope_id
+            AND producer_binding.role='producer'
+            AND producer_binding.active=TRUE
+      LEFT JOIN runs AS producer_run ON producer_run.id=producer_binding.run_id
+      LEFT JOIN LATERAL (
+             SELECT producer_binding.run_id IS NOT NULL
+               AND ${terminalFinnyWorkerRunSql("producer_binding", "producer_run", "$1")} AS terminal
+           ) AS producer_state ON TRUE
       LEFT JOIN finny_runtime_dispatches AS dispatches
              ON dispatches.idempotency_key=actions.idempotency_key ||
-                CASE actions.kind WHEN 'artifact_ready' THEN ':auditor-grant' WHEN 'audit_blocked' THEN ':producer-rework' ELSE ':none' END
-            AND dispatches.delivered_at IS NOT NULL
+                CASE actions.kind WHEN 'audit_blocked' THEN ':producer-rework' ELSE ':none' END
           WHERE (
               actions.kind='artifact_ready'
               AND (
                 events.seq IS NULL OR (
-                  jobs.finalized_at IS NULL
-                  AND jobs.pending_rework_seq IS NULL
-                  AND jobs.unresolved_escalation_seq IS NULL
-                  AND jobs.artifact_digest IS NOT NULL
-                  AND EXISTS (
-                    SELECT 1
-                      FROM jsonb_each_text(jobs.required_generations) AS required(check_id,generation)
-                     WHERE NOT EXISTS (
-                       SELECT 1 FROM finny_job_events AS audit
-                        WHERE audit.job_id=actions.job_id
-                          AND audit.event_type='audit_passed'
-                          AND audit.payload->>'artifactDigest'=jobs.artifact_digest
-                          AND audit.payload->>'checkId'=required.check_id
-                          AND (audit.payload->>'generation')::int=required.generation::int
-                     )
-                  )
+                  actions.authority_payload->>'artifactDigest'=jobs.artifact_digest
+                  AND actions.authority_payload->>'provisionalRevision'=jobs.provisional_revision
+                  AND
+                  ${CURRENT_ARTIFACT_NEEDS_AUDIT}
                 )
               )
-              AND (events.seq IS NULL OR NOT (${healthyAuditor}))
-            ) OR (
-              actions.kind<>'artifact_ready'
-              AND dispatches.idempotency_key IS NULL
               AND (
-                (actions.kind='audit_passed' AND events.seq IS NULL) OR
-                (
-                  actions.kind='audit_blocked' AND (
+                events.seq IS NULL
+                OR auditor_state.terminal
+                OR auditor_binding.run_id IS NULL
+              )
+            ) OR (
+              (actions.kind='audit_passed' AND dispatches.delivered_at IS NULL AND events.seq IS NULL) OR
+              (
+                actions.kind='audit_blocked'
+                AND (
+                  dispatches.idempotency_key IS NULL
+                  OR (dispatches.delivered_at IS NULL AND dispatches.run_id=producer_binding.run_id)
+                  OR (
+                    producer_state.terminal
+                    AND (dispatches.delivered_at IS NOT NULL OR dispatches.run_id<>producer_binding.run_id)
+                  )
+                )
+                AND (
                   EXISTS (
                     SELECT 1 FROM finny_job_events AS transition
                      WHERE transition.job_id=actions.job_id
@@ -717,7 +738,6 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                        )
                   ) OR (
                     events.seq IS NULL AND actions.authority_payload->'resolution'->>'kind' IN ('rework','escalate')
-                  )
                   )
                 )
               )
@@ -766,27 +786,12 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
           generation: payload.generation,
           evidenceFileId: payload.evidenceFileId,
           findings: payload.findings,
+          ...(typeof row.terminal_producer_run_id === "string"
+            ? { retryTerminalProducerRunId: row.terminal_producer_run_id }
+            : {}),
         };
       });
-      const staleReverificationBinding = `
-        OR NOT EXISTS (
-          SELECT 1 FROM finny_runtime_bindings AS current_auditor
-           WHERE current_auditor.job_id=jobs.id
-             AND current_auditor.scope_id=jobs.scope_id
-             AND current_auditor.role='auditor'
-             AND current_auditor.active=TRUE
-        )
-        OR EXISTS (
-          SELECT 1 FROM finny_runtime_bindings AS expired_auditor
-           WHERE expired_auditor.job_id=jobs.id
-             AND expired_auditor.scope_id=jobs.scope_id
-             AND expired_auditor.role='auditor'
-             AND expired_auditor.active=TRUE
-             AND expired_auditor.expires_at IS NOT NULL
-             AND expired_auditor.expires_at <= ${Date.now()}
-        )`;
-      const reverificationRecoveryGate = hasRuns
-        ? `(NOT EXISTS (
+      const reverificationRecoveryGate = `(NOT EXISTS (
              SELECT 1 FROM finny_runtime_bindings AS current_auditor
               WHERE current_auditor.job_id=jobs.id
                 AND current_auditor.scope_id=jobs.scope_id
@@ -800,28 +805,8 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                 AND current_auditor.scope_id=jobs.scope_id
                 AND current_auditor.role='auditor'
                 AND current_auditor.active=TRUE
-                AND (
-                  (
-                    current_auditor.expires_at<=${Date.now()}
-                    AND current_run.status NOT IN ('done','failed')
-                  )
-                  OR current_run.id IS NULL
-                  OR current_run.status='failed'
-                  OR (
-                    current_run.status='done'
-                    AND COALESCE(current_run.result::jsonb->>'status','') NOT IN ('pending_approval','refused')
-                  )
-                )
-           ))`
-        : `(NOT EXISTS (
-             SELECT 1 FROM finny_runtime_dispatches AS dispatch
-              WHERE dispatch.job_id=jobs.id
-                AND dispatch.scope_id=jobs.scope_id
-                AND dispatch.kind='auditor_reverification'
-                AND dispatch.delivered_at IS NOT NULL
-                AND dispatch.idempotency_key LIKE events.idempotency_key || ':auditor-reverify:%'
-           )
-           ${staleReverificationBinding})`;
+                AND ${terminalFinnyWorkerRunSql("current_auditor", "current_run", "$1")}
+           ))`;
       const reopened = await q(
         `SELECT jobs.scope_id,jobs.id AS job_id,events.idempotency_key,
                 (
@@ -837,24 +822,10 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
            FROM finny_job_events AS events
            JOIN finny_jobs AS jobs ON jobs.id=events.job_id
           WHERE events.event_type='verification_reopened'
-            AND jobs.finalized_at IS NULL
-            AND jobs.pending_rework_seq IS NULL
-            AND jobs.unresolved_escalation_seq IS NULL
-            AND jobs.artifact_digest IS NOT NULL
-            AND EXISTS (
-              SELECT 1
-                FROM jsonb_each_text(jobs.required_generations) AS required(check_id,generation)
-               WHERE NOT EXISTS (
-                 SELECT 1 FROM finny_job_events AS audit
-                  WHERE audit.job_id=jobs.id
-                    AND audit.event_type='audit_passed'
-                    AND audit.payload->>'artifactDigest'=jobs.artifact_digest
-                    AND audit.payload->>'checkId'=required.check_id
-                    AND (audit.payload->>'generation')::int=required.generation::int
-               )
-            )
+            AND ${CURRENT_ARTIFACT_NEEDS_AUDIT}
             AND ${reverificationRecoveryGate}
           ORDER BY events.seq`,
+        [Date.now()],
       );
       return [
         ...actionRecoveries,
@@ -885,11 +856,12 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
         runId: string;
         kind: string;
         intent: string;
+        observedTerminalRunId?: string;
       },
       send: () => Promise<void>,
     ): Promise<void> {
       const intentDigest = createHash("sha256").update(input.intent).digest("base64url");
-      await dispatchLocks.withLock(`finny-runtime-dispatch:${input.idempotencyKey}`, async () => {
+      await dispatchLocks.withLock(`finny-runtime-dispatch-session:${input.sessionId}`, async () => {
         await q(
           `INSERT INTO finny_runtime_dispatches(
             idempotency_key,scope_id,job_id,session_id,run_id,kind,intent_digest,created_at
@@ -920,13 +892,24 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
             row.scope_id !== input.scopeId ||
             row.job_id !== input.jobId ||
             row.session_id !== input.sessionId ||
-            row.run_id !== input.runId ||
             row.kind !== input.kind ||
             row.intent_digest !== intentDigest
           ) {
             throw new Error("Finny runtime dispatch idempotency conflict");
           }
           if (row.delivered_at !== null || row.cancelled_at !== null) return;
+          if (row.run_id !== input.runId) throw new Error("Finny runtime dispatch idempotency conflict");
+          if (input.observedTerminalRunId !== undefined) {
+            const observed = await db.query(
+              `SELECT b.run_id,
+                      ${terminalFinnyWorkerRunSql("b", "r", "$3")} AS terminal
+                 FROM finny_runtime_bindings AS b
+            LEFT JOIN runs AS r ON r.id=b.run_id
+                WHERE b.session_id=$1 AND b.run_id=$2 AND b.active=TRUE`,
+              [input.sessionId, input.observedTerminalRunId, Date.now()],
+            );
+            if (observed.rows[0]?.terminal !== true) return;
+          }
           if (input.kind === "producer_rework" && jobs.rows[0].pending_rework_seq === null) {
             await db.query(
               "UPDATE finny_runtime_dispatches SET cancelled_at=$2 WHERE idempotency_key=$1 AND delivered_at IS NULL",

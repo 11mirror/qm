@@ -28,6 +28,7 @@ interface RuntimeDispatcher {
     role: FinnyWorkerRole;
     principalId: string;
     expiresAt: number;
+    observedTerminalRunId?: string;
   }): Promise<void>;
 }
 
@@ -58,6 +59,7 @@ interface AuditBlockedRuntimeInput extends RuntimeActorInput {
   evidenceFileId: string;
   findings: FinnyAuditFinding[];
   idempotencyKey: string;
+  retryTerminalProducerRunId?: string;
 }
 
 interface ApprovedRuntimeInput {
@@ -212,6 +214,7 @@ export function createFinnyRuntimeCoordinator(deps: {
     role: FinnyWorkerRole;
     principalId: string;
     expiresAt: number;
+    observedTerminalRunId?: string;
     guard?: () => Promise<boolean>;
   }): Promise<void> {
     await deps.runtime.dispatchOnce(input, async () => {
@@ -224,6 +227,7 @@ export function createFinnyRuntimeCoordinator(deps: {
         role: input.role,
         principalId: input.principalId,
         expiresAt: input.expiresAt,
+        observedTerminalRunId: input.observedTerminalRunId,
       });
     });
   }
@@ -260,6 +264,7 @@ export function createFinnyRuntimeCoordinator(deps: {
             role: "producer",
             principalId: producerCredentials.principalId,
             expiresAt: producerCredentials.expiresAt,
+            observedTerminalRunId: input.retryTerminalProducerRunId,
           });
         }
         return;
@@ -440,10 +445,14 @@ export function createFinnyRuntimeCoordinator(deps: {
       }
       const producer = await deps.runtime.activeRoleBinding(input.scopeId, input.jobId, "producer");
       if (!producer) throw new Error("Finny runtime has no current producer binding");
+      if (input.retryTerminalProducerRunId !== undefined && producer.runId !== input.retryTerminalProducerRunId) return;
       const message = JSON.stringify({ task: "Rework the blocked artifact", findings });
       const producerCredentials = deps.workerPolicy.credentials(blocked.job, "producer");
       await dispatch({
-        idempotencyKey: `${input.idempotencyKey}:producer-rework`,
+        idempotencyKey:
+          input.retryTerminalProducerRunId === undefined
+            ? `${input.idempotencyKey}:producer-rework`
+            : `${input.idempotencyKey}:producer-rework:retry:${input.retryTerminalProducerRunId}`,
         scopeId: input.scopeId,
         jobId: input.jobId,
         sessionId: producer.sessionId,
@@ -454,6 +463,7 @@ export function createFinnyRuntimeCoordinator(deps: {
         role: "producer",
         principalId: producerCredentials.principalId,
         expiresAt: producerCredentials.expiresAt,
+        observedTerminalRunId: input.retryTerminalProducerRunId,
         guard: async () => {
           const currentJob = await deps.jobs.getJob(input.scopeId, input.jobId);
           return currentJob?.pendingReworkSequence !== undefined;
@@ -534,6 +544,7 @@ export function createFinnyRuntimeCoordinator(deps: {
         role: "auditor",
         principalId: credentials.principalId,
         expiresAt: credentials.expiresAt,
+        observedTerminalRunId: input.retryAuditorRunId,
       });
     },
     async artifactReady(input: ArtifactReadyRuntimeInput): Promise<void> {
@@ -563,6 +574,11 @@ export function createFinnyRuntimeCoordinator(deps: {
         provisionalRevision: artifact.provisionalRevision,
         idempotencyKey: input.idempotencyKey,
       });
+      if (
+        ready.job.artifactDigest !== artifact.artifactDigest ||
+        ready.job.provisionalRevision !== artifact.provisionalRevision
+      )
+        return;
       if (!ready.deduped) deps.recoveryWake?.({ kind: "artifact_ready", ...input });
       const activeAuditor = await deps.runtime.activeRoleBinding(input.scopeId, input.jobId, "auditor");
       if (input.retryTerminalAuditorRunId !== undefined) {
@@ -581,13 +597,20 @@ export function createFinnyRuntimeCoordinator(deps: {
           role: "auditor",
           principalId: credentials.principalId,
           expiresAt: credentials.expiresAt,
+          observedTerminalRunId: input.retryTerminalAuditorRunId,
         });
         return;
       }
       let auditor = await deps.runtime.currentRoleBinding(input.scopeId, input.jobId, "auditor");
       if (!auditor) {
         const latestAuditor = await deps.runtime.latestRoleBinding(input.scopeId, input.jobId, "auditor");
-        if (ready.deduped && latestAuditor && !latestAuditor.active) return;
+        if (
+          ready.deduped &&
+          latestAuditor &&
+          !latestAuditor.active &&
+          !(await deps.runtime.currentArtifactNeedsAudit(input.scopeId, input.jobId))
+        )
+          return;
       }
       if (!auditor) {
         const auditorCredentials = deps.workerPolicy.credentials(ready.job, "auditor");
