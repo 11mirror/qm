@@ -1185,6 +1185,13 @@ test("Auditor admission recovers from committed artifact authority without resol
   await restarted.artifactReady(pending[0]!);
   assert.equal(openedAuditors, 1);
   assert.equal((await runtime.currentRoleBinding(job.scopeId, job.id, "auditor"))?.runId, "recovered-auditor-run");
+  assert.deepEqual(await runtime.pendingRecoveries(), [
+    {
+      kind: "artifact_ready",
+      ...input,
+      retryTerminalAuditorRunId: "recovered-auditor-run",
+    },
+  ]);
   const { q } = createPgPool(connectionString);
   await insertRun(q, "recovered-auditor-run", "done", { status: "pending_approval", pendingApprovals: [] });
   assert.deepEqual(await runtime.pendingRecoveries(), []);

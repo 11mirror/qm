@@ -213,6 +213,7 @@ export function createFinnyRuntimeCoordinator(deps: {
     role: FinnyWorkerRole;
     principalId: string;
     expiresAt: number;
+    observedTerminalRunId?: string;
     guard?: () => Promise<boolean>;
   }): Promise<void> {
     await deps.runtime.dispatchOnce(input, async () => {
@@ -261,6 +262,7 @@ export function createFinnyRuntimeCoordinator(deps: {
             role: "producer",
             principalId: producerCredentials.principalId,
             expiresAt: producerCredentials.expiresAt,
+            observedTerminalRunId: input.retryTerminalProducerRunId,
           });
         }
         return;
@@ -459,6 +461,7 @@ export function createFinnyRuntimeCoordinator(deps: {
         role: "producer",
         principalId: producerCredentials.principalId,
         expiresAt: producerCredentials.expiresAt,
+        observedTerminalRunId: input.retryTerminalProducerRunId,
         guard: async () => {
           const currentJob = await deps.jobs.getJob(input.scopeId, input.jobId);
           return currentJob?.pendingReworkSequence !== undefined;
@@ -539,6 +542,7 @@ export function createFinnyRuntimeCoordinator(deps: {
         role: "auditor",
         principalId: credentials.principalId,
         expiresAt: credentials.expiresAt,
+        observedTerminalRunId: input.retryAuditorRunId,
       });
     },
     async artifactReady(input: ArtifactReadyRuntimeInput): Promise<void> {
@@ -586,6 +590,7 @@ export function createFinnyRuntimeCoordinator(deps: {
           role: "auditor",
           principalId: credentials.principalId,
           expiresAt: credentials.expiresAt,
+          observedTerminalRunId: input.retryTerminalAuditorRunId,
         });
         return;
       }

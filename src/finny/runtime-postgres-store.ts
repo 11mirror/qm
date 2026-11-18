@@ -685,7 +685,11 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                   )
                 )
               )
-              AND (events.seq IS NULL OR NOT auditor_state.healthy)
+              AND (
+                events.seq IS NULL
+                OR auditor_state.terminal
+                OR NOT COALESCE(auditor_state.healthy,FALSE)
+              )
             ) OR (
               (actions.kind='audit_passed' AND dispatches.delivered_at IS NULL AND events.seq IS NULL) OR
               (
@@ -862,11 +866,12 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
         runId: string;
         kind: string;
         intent: string;
+        observedTerminalRunId?: string;
       },
       send: () => Promise<void>,
     ): Promise<void> {
       const intentDigest = createHash("sha256").update(input.intent).digest("base64url");
-      await dispatchLocks.withLock(`finny-runtime-dispatch:${input.idempotencyKey}`, async () => {
+      await dispatchLocks.withLock(`finny-runtime-dispatch-session:${input.sessionId}`, async () => {
         await q(
           `INSERT INTO finny_runtime_dispatches(
             idempotency_key,scope_id,job_id,session_id,run_id,kind,intent_digest,created_at
@@ -904,6 +909,31 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
             throw new Error("Finny runtime dispatch idempotency conflict");
           }
           if (row.delivered_at !== null || row.cancelled_at !== null) return;
+          if (input.observedTerminalRunId !== undefined) {
+            const observed = await db.query(
+              `SELECT b.run_id,
+                      (
+                        r.id IS NULL
+                        OR r.status='failed'
+                        OR (
+                          r.status='done'
+                          AND COALESCE(r.result::jsonb->>'status','') NOT IN ('pending_approval','refused')
+                        )
+                        OR (b.expires_at<=$3 AND r.status NOT IN ('done','failed'))
+                      ) AS terminal
+                 FROM finny_runtime_bindings AS b
+            LEFT JOIN runs AS r ON r.id=b.run_id
+                WHERE b.session_id=$1 AND b.run_id=$2 AND b.active=TRUE`,
+              [input.sessionId, input.observedTerminalRunId, Date.now()],
+            );
+            if (observed.rows[0]?.terminal !== true) {
+              await db.query(
+                "UPDATE finny_runtime_dispatches SET cancelled_at=$2 WHERE idempotency_key=$1 AND delivered_at IS NULL",
+                [input.idempotencyKey, Date.now()],
+              );
+              return;
+            }
+          }
           if (input.kind === "producer_rework" && jobs.rows[0].pending_rework_seq === null) {
             await db.query(
               "UPDATE finny_runtime_dispatches SET cancelled_at=$2 WHERE idempotency_key=$1 AND delivered_at IS NULL",
