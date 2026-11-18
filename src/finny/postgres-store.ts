@@ -1061,6 +1061,42 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
               WHERE scope_id=$1 AND job_id=$2 AND decided_at IS NULL`,
             [input.scopeId, input.jobId, input.createdAt],
           );
+        if (material && input.replacementApproval) {
+          const replacement = input.replacementApproval;
+          if (replacement.originThreadRef !== job.origin_thread_ref)
+            throw new Error("Finny amendment approval origin does not match the job");
+          const updated = await db.query(
+            `UPDATE finny_integration_jobs SET
+               request_id=$3, destination=$4, parent_binding=$5
+              WHERE scope_id=$1 AND job_id=$2 AND actor_id=$6 AND origin_thread_ref=$7
+              RETURNING job_id`,
+            [
+              input.scopeId,
+              input.jobId,
+              replacement.requestId,
+              replacement.destination,
+              replacement.binding,
+              replacement.actorId,
+              replacement.originThreadRef,
+            ],
+          );
+          if (updated.rowCount !== 1) throw new Error("Finny amendment has no matching approval parent");
+          await db.query(
+            `INSERT INTO finny_approval_requests(
+               request_id,scope_id,job_id,plan_digest,execution_digest,
+               origin_thread_ref,authorized_actor_id,ready_at,created_at
+             ) VALUES($1,$2,$3,NULL,$4,$5,$6,$7,$7)`,
+            [
+              replacement.requestId,
+              input.scopeId,
+              input.jobId,
+              newExecutionDigest,
+              replacement.originThreadRef,
+              replacement.actorId,
+              input.createdAt,
+            ],
+          );
+        }
         return {
           events: [event as FinnyJobEvent<"sop_amended">],
           job: rowToJob(await lockedJob(db, input.scopeId, input.jobId)),

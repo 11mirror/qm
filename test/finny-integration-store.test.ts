@@ -49,6 +49,30 @@ test("durably preserves exact parent binding, destination, and artifact proposal
   };
   await integration.createApprovalBoundParent(parent);
   assert.deepEqual(await integration.getParent(job.scopeId, job.id), parent);
+  assert.ok(job.sop);
+  assert.ok(job.sopBinding);
+  const replacementRequestId = randomUUID();
+  const amendment = await jobs.recordSopAmendment({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    sop: job.sop,
+    values: { ...job.sopBinding.values, cutoff: "2026-11-30" },
+    idempotencyKey: randomUUID(),
+    createdAt: Date.now(),
+    replacementApproval: {
+      requestId: replacementRequestId,
+      actorId: parent.actorId,
+      originThreadRef: parent.originThreadRef,
+      destination: parent.destination,
+      binding: parent.binding,
+    },
+  });
+  assert.equal(amendment.job.approval, undefined);
+  assert.deepEqual(await integration.getParent(job.scopeId, job.id), {
+    ...parent,
+    requestId: replacementRequestId,
+  });
+  assert.equal((await jobs.getPendingApprovalRequestForJob(job.scopeId, job.id))?.requestId, replacementRequestId);
   assert.deepEqual(
     (await integration.pendingApprovalCards()).map((record) => record.jobId),
     [job.id],

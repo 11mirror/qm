@@ -68,7 +68,6 @@ interface FinnyIntegrationStore {
     destination: Destination;
     binding: FinnyParentBindingSnapshot;
   }): Promise<void>;
-  replaceApprovalBoundParent(input: Parameters<FinnyIntegrationStore["createApprovalBoundParent"]>[0]): Promise<void>;
   saveArtifactProposal(input: {
     scopeId: string;
     jobId: string;
@@ -333,11 +332,10 @@ export function createFinnyToolServiceFactory(deps: {
           if (!job) throw new Error("Finny job is unavailable");
           if (!job.sopBinding) throw new Error("Finny job has no SOP binding");
           const newExecutionDigest = canonicalFinnyExecutionDigest(sop, values);
-          if (newExecutionDigest === job.sopBinding.executionDigest)
-            throw new Error("Finny non-material amendments do not require approval");
+          const material = newExecutionDigest !== job.sopBinding.executionDigest;
           if (materialClarification)
             assertFinnyMaterialClarificationMatchesSop(sop, values, materialClarification);
-          const requestId = id();
+          const requestId = material ? id() : undefined;
           const now = Date.now();
           const amendment = await deps.jobs.recordSopAmendment({
             scopeId: turn.scopeId,
@@ -346,29 +344,37 @@ export function createFinnyToolServiceFactory(deps: {
             values,
             idempotencyKey: `finny-amend:${jobId}:${newExecutionDigest}`,
             createdAt: now,
+            ...(requestId
+              ? {
+                  replacementApproval: {
+                    requestId,
+                    actorId: turn.actor.id,
+                    originThreadRef: turn.originThreadRef,
+                    destination: turn.destination,
+                    binding: turn.parentBinding,
+                  },
+                }
+              : {}),
           });
+          if (!material)
+            return {
+              message: `Finny plan ${jobId} amendment was recorded without changing its approved execution.`,
+              jobId,
+              awaiting: "none",
+            };
           if (amendment.job.approval) throw new Error("Finny material amendment retained its existing approval");
-          await deps.integration.replaceApprovalBoundParent({
-            scopeId: turn.scopeId,
-            jobId,
-            requestId,
-            actorId: turn.actor.id,
-            originThreadRef: turn.originThreadRef,
-            destination: turn.destination,
-            binding: turn.parentBinding,
-          });
           await deps.deliveries.enqueue({
             destination: {
               ...turn.destination,
-              finnyPlanRequestId: requestId,
+              finnyPlanRequestId: requestId!,
             },
             text: `[Amended Scope] ${sop.title}`,
-            idempotencyKey: `finny-plan-amendment:${requestId}`,
+            idempotencyKey: `finny-plan-amendment:${requestId!}`,
           });
           return {
             message: `Finny plan ${jobId} amendment is awaiting scope change approval.`,
             jobId,
-            requestId,
+            requestId: requestId!,
             awaiting: "approval",
           };
         },

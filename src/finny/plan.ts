@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { Check } from "typebox/value";
 import type {
   FinnyAuditEnvelope,
   FinnyJob,
@@ -8,6 +9,7 @@ import type {
   FinnySopVersion,
   FinnyWorkerRole,
 } from "./types.ts";
+import { FINNY_SOP_SCHEMA } from "./sop-schema.ts";
 
 function text(value: unknown, label: string): string {
   if (typeof value !== "string" || !value.trim()) throw new Error(`Finny plan ${label} is invalid`);
@@ -196,6 +198,7 @@ export function validateFinnySopVersion(value: unknown): FinnySopVersion {
   if (!controls.length) throw new Error("Finny SOP must declare a control");
   uniqueIds(controls, "control");
   const approval = exact(root.approval, ["required", "destination"], "approval");
+  if (!Check(FINNY_SOP_SCHEMA, value)) throw new Error("Finny SOP shape is invalid");
   return Object.freeze({
     schema: "finny.sop.v1",
     id: sopText(root.id, "ID"),

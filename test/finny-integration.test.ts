@@ -105,9 +105,6 @@ function harness(
       async createApprovalBoundParent(input: any) {
         calls.push(["createApprovalBoundParent", input]);
       },
-      async replaceApprovalBoundParent(input: any) {
-        calls.push(["replaceApprovalBoundParent", input]);
-      },
       async saveArtifactProposal(input: any) {
         calls.push(["saveArtifactProposal", input]);
       },
@@ -282,12 +279,17 @@ test("material clarification must match the immutable plan recommendation", asyn
   assert.equal(calls.length, 0);
 });
 
-test("amendment rejects non-material changes before mutating durable authority", async () => {
+test("non-material amendments record provenance without replacing approval", async () => {
   const { factory, calls } = harness();
   const service = await factory.forTurn(parent);
   assert.ok(service);
-  await assert.rejects(service.amendPlan("job-1", sop, { ...values, note: "display-only update" }), /non-material/i);
-  assert.equal(calls.some(([name]) => name === "recordSopAmendment"), false);
+  assert.deepEqual(await service.amendPlan("job-1", sop, { ...values, note: "display-only update" }), {
+    message: "Finny plan job-1 amendment was recorded without changing its approved execution.",
+    jobId: "job-1",
+    awaiting: "none",
+  });
+  assert.equal(calls.filter(([name]) => name === "recordSopAmendment").length, 1);
+  assert.equal(calls.some(([name]) => name === "enqueue"), false);
 });
 
 test("worker service derives job authority from exact current session and run", async () => {

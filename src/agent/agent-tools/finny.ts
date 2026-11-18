@@ -7,6 +7,7 @@ import {
   type FinnyMaterialClarification,
   type FinnySopVersion,
 } from "../../finny/types.ts";
+import { FINNY_SOP_SCHEMA, FINNY_SOP_VALUES_SCHEMA } from "../../finny/sop-schema.ts";
 import { text, type ToolKit } from "./kit.ts";
 
 export interface FinnyToolService {
@@ -47,8 +48,8 @@ export interface FinnyToolService {
 export interface FinnyPlanCreation {
   message: string;
   jobId: string;
-  requestId: string;
-  awaiting: "approval" | "clarification";
+  requestId?: string;
+  awaiting: "approval" | "clarification" | "none";
 }
 
 const string = () => Type.String({ minLength: 1 });
@@ -67,95 +68,8 @@ const materialClarification = Type.Object(
   { additionalProperties: false },
 );
 
-const sopInput = Type.Object(
-  {
-    id: string(),
-    label: string(),
-    from: Type.Union([Type.Literal("human"), Type.Literal("system")]),
-    type: Type.Union([
-      Type.Literal("date"),
-      Type.Literal("text"),
-      Type.Literal("currency"),
-      Type.Literal("entity"),
-      Type.Literal("boolean"),
-    ]),
-    required: Type.Boolean(),
-    material: Type.Boolean(),
-  },
-  { additionalProperties: false },
-);
-const sop = Type.Object(
-  {
-    schema: Type.Literal("finny.sop.v1"),
-    id: string(),
-    version: Type.Integer({ minimum: 1 }),
-    scopeId: string(),
-    title: string(),
-    intent: Type.Object(
-      {
-        domain: Type.Union([Type.Literal("ap"), Type.Literal("ar"), Type.Literal("gl"), Type.Literal("close")]),
-        description: string(),
-        searchTerms: Type.Array(string()),
-      },
-      { additionalProperties: false },
-    ),
-    objective: string(),
-    inputs: Type.Array(sopInput),
-    sources: Type.Array(
-      Type.Object(
-        {
-          id: string(),
-          system: string(),
-          object: string(),
-          fields: Type.Array(string()),
-          filter: string(),
-          asOfInput: Type.Optional(string()),
-        },
-        { additionalProperties: false },
-      ),
-      { minItems: 1 },
-    ),
-    steps: Type.Array(
-      Type.Object(
-        { id: string(), action: string(), reads: Type.Array(string()), writes: string() },
-        { additionalProperties: false },
-      ),
-      { minItems: 1 },
-    ),
-    controls: Type.Array(
-      Type.Object(
-        {
-          id: string(),
-          assertion: string(),
-          tolerance: Type.Optional(string()),
-          evidenceRefs: Type.Array(string()),
-          judgment: Type.Optional(
-            Type.Object({ question: string(), onlyWhen: string() }, { additionalProperties: false }),
-          ),
-        },
-        { additionalProperties: false },
-      ),
-      { minItems: 1 },
-    ),
-    outputs: Type.Array(
-      Type.Object(
-        {
-          id: string(),
-          kind: Type.Union([Type.Literal("xlsx"), Type.Literal("summary"), Type.Literal("app")]),
-          contract: Type.Record(Type.String(), Type.Unknown()),
-          rerun: Type.Optional(
-            Type.Object({ inputIds: Type.Array(string()) }, { additionalProperties: false }),
-          ),
-        },
-        { additionalProperties: false },
-      ),
-      { minItems: 2 },
-    ),
-    approval: Type.Object({ required: Type.Boolean(), destination: string() }, { additionalProperties: false }),
-  },
-  { additionalProperties: false },
-);
-const values = Type.Record(Type.String({ minLength: 1 }), Type.Union([string(), Type.Boolean()]));
+const sop = FINNY_SOP_SCHEMA;
+const values = FINNY_SOP_VALUES_SCHEMA;
 
 export function finnyTools(kit: ToolKit) {
   const { ref, opts, recordCall, recordResult, resourceTool, blockOnApproval } = kit;
@@ -238,7 +152,7 @@ export function finnyTools(kit: ToolKit) {
         params.values,
         params.materialClarification,
       );
-      if (opts?.surfaceName === "web")
+      if (opts?.surfaceName === "web" && result.awaiting !== "none")
         return blockOnApproval(
           callId,
           {
@@ -246,7 +160,7 @@ export function finnyTools(kit: ToolKit) {
             message: result.message,
             command: params.sop.title,
             approvalReason: "Finny Governance Plan Approval",
-            approvalKey: `finny-plan:${result.requestId}`,
+            approvalKey: `finny-plan:${result.requestId!}`,
             kind: "approval",
             grantModes: { session: false, always: false },
             summaryDetail: JSON.stringify({ sop: params.sop, values: params.values }),

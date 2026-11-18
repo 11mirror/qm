@@ -104,6 +104,10 @@ test("rejects SOPs without finance evidence, controls, workbook, and certified s
   };
   assert.throws(() => api.validateFinnySopVersion({ ...sop, controls: [] }), /control/i);
   assert.throws(
+    () => api.validateFinnySopVersion({ ...sop, outputs: [{ ...sop.outputs[0], contract: null }, sop.outputs[1]] }),
+    /shape|contract/i,
+  );
+  assert.throws(
     () => api.validateFinnySopVersion({ ...sop, outputs: sop.outputs.filter((output) => output.kind !== "xlsx") }),
     /xlsx|workbook/i,
   );

@@ -19,6 +19,7 @@ import type {
   FinnyVerdict,
   FinnyWorkerRole,
 } from "./types.ts";
+import type { Destination } from "../types.ts";
 
 export interface FinnyStoredSopVersion {
   versionId: string;
@@ -101,6 +102,13 @@ export interface RecordFinnySopAmendmentInput {
   values: Record<string, string | boolean>;
   idempotencyKey: string;
   createdAt: number;
+  replacementApproval?: {
+    requestId: string;
+    actorId: string;
+    originThreadRef: string;
+    destination: Destination;
+    binding: unknown;
+  };
 }
 
 export interface RecordFinnyAttestationInput {

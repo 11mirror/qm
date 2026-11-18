@@ -267,53 +267,6 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
         }
       });
     },
-    async replaceApprovalBoundParent(input: FinnyIntegrationParentRecord): Promise<void> {
-      await withPgTransaction(await pool(), async (db) => {
-        const jobResult = await db.query(
-          `SELECT * FROM finny_jobs WHERE id=$1 AND scope_id=$2 FOR UPDATE`,
-          [input.jobId, input.scopeId],
-        );
-        const job = jobResult.rows[0] as Record<string, unknown> | undefined;
-        if (
-          !job ||
-          job.execution_digest === null ||
-          job.origin_thread_ref !== input.originThreadRef ||
-          job.approval_decided_at !== null
-        )
-          throw new Error("Finny amendment approval parent does not match the job");
-        const updated = await db.query(
-          `UPDATE finny_integration_jobs SET
-             request_id=$3, destination=$4, parent_binding=$5
-            WHERE scope_id=$1 AND job_id=$2 AND actor_id=$6 AND origin_thread_ref=$7
-            RETURNING *`,
-          [
-            input.scopeId,
-            input.jobId,
-            input.requestId,
-            input.destination,
-            input.binding,
-            input.actorId,
-            input.originThreadRef,
-          ],
-        );
-        if (updated.rowCount !== 1) throw new Error("Finny amendment has no matching approval parent");
-        await db.query(
-          `INSERT INTO finny_approval_requests(
-             request_id,scope_id,job_id,plan_digest,execution_digest,
-             origin_thread_ref,authorized_actor_id,ready_at,created_at
-           ) VALUES($1,$2,$3,NULL,$4,$5,$6,$7,$7)`,
-          [
-            input.requestId,
-            input.scopeId,
-            input.jobId,
-            job.execution_digest,
-            input.originThreadRef,
-            input.actorId,
-            Date.now(),
-          ],
-        );
-      });
-    },
     async getParent(scopeId: string, jobId: string): Promise<FinnyIntegrationParentRecord | null> {
       const rows = await q("SELECT * FROM finny_integration_jobs WHERE scope_id=$1 AND job_id=$2", [scopeId, jobId]);
       return rows[0] ? parent(rows[0]) : null;
