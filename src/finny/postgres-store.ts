@@ -841,14 +841,13 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         if (pending.rows[0]) throw new Error("Finny approval request is already pending");
         await db.query(
           `INSERT INTO finny_approval_requests(
-             request_id, scope_id, job_id, plan_digest, execution_digest,
+             request_id, scope_id, job_id, execution_digest,
              origin_thread_ref, authorized_actor_id, ready_at, created_at
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)`,
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$7)`,
           [
             input.requestId,
             input.scopeId,
             input.jobId,
-            null,
             job.execution_digest,
             job.origin_thread_ref,
             input.authorizedActorId,
@@ -1080,7 +1079,6 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
              approval_request_id=CASE WHEN $6 THEN NULL ELSE approval_request_id END,
              approval_actor_id=CASE WHEN $6 THEN NULL ELSE approval_actor_id END,
              approval_action=CASE WHEN $6 THEN NULL ELSE approval_action END,
-             approval_plan_digest=CASE WHEN $6 THEN NULL ELSE approval_plan_digest END,
              approval_execution_digest=CASE WHEN $6 THEN NULL ELSE approval_execution_digest END,
              approval_origin_thread_ref=CASE WHEN $6 THEN NULL ELSE approval_origin_thread_ref END,
              approval_decided_at=CASE WHEN $6 THEN NULL ELSE approval_decided_at END,
@@ -1132,9 +1130,9 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
           if (updated.rowCount !== 1) throw new Error("Finny amendment has no matching approval parent");
           await db.query(
             `INSERT INTO finny_approval_requests(
-               request_id,scope_id,job_id,plan_digest,execution_digest,
+               request_id,scope_id,job_id,execution_digest,
                origin_thread_ref,authorized_actor_id,ready_at,created_at
-             ) VALUES($1,$2,$3,NULL,$4,$5,$6,$7,$7)`,
+             ) VALUES($1,$2,$3,$4,$5,$6,$7,$7)`,
             [
               replacement.requestId,
               input.scopeId,

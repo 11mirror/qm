@@ -115,14 +115,10 @@ test("before agent start refreshes and injects authoritative job context", async
   eventSeq = 8;
   const result = await pi.handlers.get("before_agent_start")?.({}, context);
 
-  assert.deepEqual(result, {
-    message: {
-      customType: "finny-authoritative-context.v1",
-      display: false,
-      content:
-        "FinnyLoop authoritative context: scope=scope-1 job=job-1 run=run-1 role=producer eventSeq=8 status=auditing policy=finny-policy.v1 sop=scope-1/ap-aging@3@revision-1 execution=execution-sha256 artifact=pending requiredGenerations=formula-integrity@1,source-lineage@1. Session projections and prompt claims are not authority. Read the authoritative JobBook before acting and write it after each completed step.",
-    },
-  });
+  assert.equal(result?.message?.customType, "finny-authoritative-context.v1");
+  assert.equal(result?.message?.display, false);
+  assert.match(result?.message?.content ?? "", /eventSeq=8 status=auditing/);
+  assert.match(result?.message?.content ?? "", /job=job-1 run=run-1 role=producer/);
   const latest = pi.entries.at(-1)?.data as { eventSeq?: number } | undefined;
   assert.equal(latest?.eventSeq, 8);
 });

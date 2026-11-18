@@ -172,14 +172,13 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
         if (job.sop_version_id === null) throw new Error("Finny active job has no SOP binding");
         await db.query(
           `INSERT INTO finny_approval_requests(
-             request_id,scope_id,job_id,plan_digest,execution_digest,
+             request_id,scope_id,job_id,execution_digest,
              origin_thread_ref,authorized_actor_id,ready_at,created_at
-           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(request_id) DO NOTHING`,
+           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(request_id) DO NOTHING`,
           [
             input.requestId,
             input.scopeId,
             input.jobId,
-            null,
             job.execution_digest,
             input.originThreadRef,
             input.actorId,
