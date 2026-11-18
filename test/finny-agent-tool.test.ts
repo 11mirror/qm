@@ -82,6 +82,26 @@ test("finny plan actions accept only strict SOP versions and bound values", () =
   assert.equal(Check(schema, { action: "create_plan", sop: { ...sop, nodes: [] }, values }), false);
 });
 
+test("worker Finny tools omit the SOP authoring schema", () => {
+  const worker = createAgentTools({
+    current: { finny: { ...service, role: "producer" } } as unknown as ToolContext,
+  }).find((candidate) => candidate.name === "finny");
+  assert.ok(worker);
+  const schema = worker.parameters as { properties: Record<string, unknown> };
+  assert.equal("sop" in schema.properties, false);
+  assert.equal("values" in schema.properties, false);
+  assert.equal(Check(worker.parameters, { action: "create_plan", sop, values }), false);
+  assert.equal(
+    Check(worker.parameters, {
+      action: "artifact_ready",
+      artifactDigest: "sha256:artifact",
+      provisionalRevision: "file-1",
+      idempotencyKey: "ready-1",
+    }),
+    true,
+  );
+});
+
 test("finny schema accepts only narrow content and evidence actions", () => {
   const schema = finnyTool().parameters;
   const valid = [

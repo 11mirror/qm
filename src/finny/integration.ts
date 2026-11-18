@@ -257,6 +257,7 @@ export function createFinnyToolServiceFactory(deps: {
         return job;
       };
       return {
+        role: current?.role ?? "parent",
         async createPlan(
           sop: FinnySopVersion,
           values: Record<string, string | boolean>,

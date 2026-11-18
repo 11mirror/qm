@@ -20,7 +20,11 @@ interface StoredSopVersion {
 interface SopStore {
   createSopVersion?: (sop: unknown) => Promise<StoredSopVersion>;
   getSopVersion?: (scopeId: string, versionId: string) => Promise<StoredSopVersion | null>;
-  searchSopVersions?: (scopeId: string, query: string) => Promise<StoredSopVersion[]>;
+  searchSopVersions?: (
+    scopeId: string,
+    query: string,
+    page?: { offset?: number; limit?: number },
+  ) => Promise<StoredSopVersion[]>;
   recordSopAmendment?: (input: {
     scopeId: string;
     jobId: string;
@@ -83,6 +87,16 @@ test("searches SOP versions only inside the requested scope", async () => {
   assert.deepEqual(await store.searchSopVersions!(sop.scopeId, "NetSuite vendor aging"), [expected]);
   assert.deepEqual(await store.searchSopVersions!(sop.scopeId, "customer collections"), []);
   await assert.rejects(store.searchSopVersions!(sop.scopeId, " "), /query/i);
+});
+
+test("pages SOP search before loading immutable definitions", async () => {
+  const store = createPostgresFinnyStore(testDatabaseUrl()) as ReturnType<typeof createPostgresFinnyStore> & SopStore;
+  const sop = finnySopFixture();
+  for (let version = 1; version <= 21; version += 1) await store.createSopVersion!({ ...sop, version });
+  assert.equal((await store.searchSopVersions!(sop.scopeId, "vendor aging")).length, 20);
+  const second = await store.searchSopVersions!(sop.scopeId, "vendor aging", { offset: 20, limit: 20 });
+  assert.equal(second.length, 1);
+  await assert.rejects(store.searchSopVersions!(sop.scopeId, "vendor aging", { limit: 0 }), /limit/i);
 });
 
 test("binds a job to its exact SOP version, values, digest, and revision across restarts", async () => {

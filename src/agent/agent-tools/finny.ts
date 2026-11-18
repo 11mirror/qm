@@ -11,6 +11,7 @@ import { FINNY_SOP_SCHEMA, FINNY_SOP_VALUES_SCHEMA } from "../../finny/sop-schem
 import { text, type ToolKit } from "./kit.ts";
 
 export interface FinnyToolService {
+  readonly role?: "parent" | "producer" | "auditor";
   createPlan(
     sop: FinnySopVersion,
     values: Record<string, string | boolean>,
@@ -74,6 +75,7 @@ const values = FINNY_SOP_VALUES_SCHEMA;
 
 export function finnyTools(kit: ToolKit) {
   const { ref, opts, recordCall, recordResult, resourceTool, blockOnApproval } = kit;
+  const authoring = (ref.current?.finny?.role ?? "parent") === "parent";
   const run = async (
     callId: string,
     action: string,
@@ -276,8 +278,7 @@ export function finnyTools(kit: ToolKit) {
       ),
   });
   const tool = resourceTool("finny", {
-    create_plan: createPlan,
-    amend_plan: amendPlan,
+    ...(authoring ? { create_plan: createPlan, amend_plan: amendPlan } : {}),
     status,
     artifact_ready: artifactReady,
     pass,
@@ -287,9 +288,7 @@ export function finnyTools(kit: ToolKit) {
   });
   const properties = Object.fromEntries(
     Object.entries({
-      sop,
-      values,
-      materialClarification,
+      ...(authoring ? { sop, values, materialClarification } : {}),
       jobId: string(),
       artifactDigest: string(),
       provisionalRevision: string(),
@@ -300,9 +299,8 @@ export function finnyTools(kit: ToolKit) {
       findings: Type.Array(finding, { minItems: 1 }),
     }).map(([key, schema]) => [key, Type.Optional(schema as TSchema)]),
   );
-  const actionFields = {
-    create_plan: ["sop", "values"],
-    amend_plan: ["jobId", "sop", "values"],
+  const actionFields: Record<string, readonly string[]> = {
+    ...(authoring ? { create_plan: ["sop", "values"], amend_plan: ["jobId", "sop", "values"] } : {}),
     status: ["jobId"],
     artifact_ready: ["artifactDigest", "provisionalRevision", "idempotencyKey"],
     pass: ["checkId", "generation", "evidenceFileId", "idempotencyKey"],
@@ -329,7 +327,7 @@ export function finnyTools(kit: ToolKit) {
         anyOf: contentFields
           .filter(
             (field) =>
-              !required.includes(field as never) &&
+              !required.includes(field) &&
               !((action === "create_plan" || action === "amend_plan") && field === "materialClarification"),
           )
           .map((field) => ({ required: [field] })),

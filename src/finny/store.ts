@@ -195,7 +195,11 @@ export interface ClaimFinnyWorkerRunInput {
 export interface FinnyStore {
   createSopVersion(sop: FinnySopVersion): Promise<FinnyStoredSopVersion>;
   getSopVersion(scopeId: string, versionId: string): Promise<FinnyStoredSopVersion | null>;
-  searchSopVersions(scopeId: string, query: string): Promise<FinnyStoredSopVersion[]>;
+  searchSopVersions(
+    scopeId: string,
+    query: string,
+    page?: { offset?: number; limit?: number },
+  ): Promise<FinnyStoredSopVersion[]>;
   createJob(input: CreateFinnyJobCommand): Promise<FinnyJob>;
   createApprovalRequest(input: CreateFinnyApprovalRequestInput): Promise<void>;
   createClarificationRequest(input: CreateFinnyClarificationRequestInput): Promise<FinnyClarificationRequest>;

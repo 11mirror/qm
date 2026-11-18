@@ -9,6 +9,7 @@ import { createPostgresFinnyRuntimeStore } from "../src/finny/runtime-postgres-s
 import { initialFinnyPolicy } from "../src/finny/policy.ts";
 import { finnySopPlanPresentation } from "../src/finny/plan.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { finnySopJobFields } from "./support/finny-sop-fixture.ts";
 
@@ -72,6 +73,70 @@ test("startup delivery recovery ignores finalized legacy jobs after SOP cutover"
     ],
   );
   assert.deepEqual(await integration.finalizedParents(), []);
+});
+
+test("startup recovery revisits finalized SOP jobs only for delivery or binding cleanup", async () => {
+  const url = testDatabaseUrl();
+  const jobs = createPostgresFinnyStore(url);
+  const integration = createPostgresFinnyIntegrationStore(url);
+  const runtime = createPostgresFinnyRuntimeStore(url);
+  const deliveries = createPostgresDeliveryStore(url);
+  const job = await jobs.createJob({
+    id: randomUUID(),
+    scopeId: "personal:U1",
+    ...finnySopJobFields("personal:U1"),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
+    findingPolicy: { id: "v1", maxFindings: 2, maxCodeLength: 20, maxMessageLength: 100 },
+    originThreadRef: "slack:C1:100.1",
+  });
+  const parent = {
+    scopeId: job.scopeId,
+    jobId: job.id,
+    requestId: randomUUID(),
+    actorId: "U1",
+    originThreadRef: job.originThreadRef,
+    destination: { type: "slack" as const, target: "C1:100.1", threadTs: "100.1" },
+    binding: {
+      schema: "finny-parent-binding.v1" as const,
+      sessionId: randomUUID(),
+      runId: randomUUID(),
+      scopeId: job.scopeId,
+      context: {
+        actor: { id: "U1", type: "internal" as const },
+        conversation: {
+          kind: "dm" as const,
+          threadRef: job.originThreadRef,
+          audience: [{ id: "U1", type: "internal" as const }],
+        },
+        surface: "slack",
+      },
+    },
+  };
+  await integration.createApprovalBoundParent(parent);
+  const { q } = createPgPool(url);
+  await q("UPDATE finny_jobs SET final_receipt=$2,finalized_at=$3,ledger_head=7 WHERE id=$1", [
+    job.id,
+    { token: "signed", payload: {} },
+    Date.now(),
+  ]);
+  await deliveries.enqueue({
+    destination: parent.destination,
+    text: "delivered",
+    idempotencyKey: `finny-final:${job.id}:7`,
+  });
+  await q("UPDATE deliveries SET delivered_at=$2 WHERE idempotency_key=$1", [
+    `finny-final:${job.id}:7`,
+    Date.now(),
+  ]);
+  await runtime.bindingForSession("missing");
+  assert.deepEqual(await integration.finalizedParents(), []);
+  await q(
+    `INSERT INTO finny_runtime_bindings(
+       session_id,run_id,scope_id,job_id,role,principal_id,epoch,created_at
+     ) VALUES($1,$2,$3,$4,'producer','finny-producer',1,$5)`,
+    [randomUUID(), randomUUID(), job.scopeId, job.id, Date.now()],
+  );
+  assert.deepEqual(await integration.finalizedParents(), [parent]);
 });
 
 test("durably preserves exact parent binding, destination, and artifact proposal idempotency", async () => {

@@ -713,18 +713,27 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
       ]);
       return rows[0] ? rowToSopVersion(rows[0]) : null;
     },
-    async searchSopVersions(scopeId: string, query: string) {
+    async searchSopVersions(scopeId: string, query: string, page = {}) {
       assertNonEmpty(scopeId, "SOP search scope");
       assertNonEmpty(query, "SOP search query");
-      const rows = await q(
-        `SELECT * FROM finny_sop_versions
+      const offset = page.offset ?? 0;
+      const limit = page.limit ?? 20;
+      if (!Number.isInteger(offset) || offset < 0) throw new Error("Finny SOP search offset must be non-negative");
+      if (!Number.isInteger(limit) || limit < 1) throw new Error("Finny SOP search limit must be positive");
+      const ranked = await q(
+        `SELECT version_id FROM finny_sop_versions
           WHERE scope_id=$1
             AND to_tsvector('simple', search_text) @@ plainto_tsquery('simple', $2)
           ORDER BY ts_rank(to_tsvector('simple', search_text), plainto_tsquery('simple', $2)) DESC,
-                   created_at DESC, version_id`,
-        [scopeId, query],
+                   created_at DESC, version_id
+          OFFSET $3 LIMIT $4`,
+        [scopeId, query, offset, limit],
       );
-      return rows.map(rowToSopVersion);
+      const ids = ranked.map((row) => row.version_id as string);
+      if (!ids.length) return [];
+      const rows = await q("SELECT * FROM finny_sop_versions WHERE scope_id=$1 AND version_id=ANY($2)", [scopeId, ids]);
+      const byId = new Map(rows.map((row) => [row.version_id as string, rowToSopVersion(row)]));
+      return ids.map((id) => byId.get(id)).filter((stored): stored is FinnyStoredSopVersion => stored !== undefined);
     },
     async createJob(input: CreateFinnyJobCommand) {
       assertFinnyPolicy(input.policy);
