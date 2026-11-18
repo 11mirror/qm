@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { certifiedResultDelivery, deliverPendingCertifiedResults } from "../src/finny/certified-delivery.ts";
+import {
+  CERTIFIED_RESULT_DELIVERY_BATCH_SIZE,
+  certifiedResultDelivery,
+  deliverPendingCertifiedResults,
+} from "../src/finny/certified-delivery.ts";
 import type { FinnyCertifiedResultRecord } from "../src/finny/certified-result.ts";
 import { parseGenerativeUISpec, renderGenerativeUI } from "../src/slack/generative-ui.ts";
 
 const result = {
   id: "result-1",
-  scopeId: "org:sharechat",
+  scopeId: "org:example",
   schema: "finny.result.v1" as const,
   jobId: "job-1",
   sopVersionId: "sop-1",
@@ -37,7 +41,7 @@ const result = {
       aud: "finny.final.delivery" as const,
       resultId: "result-1",
       jobId: "job-1",
-      scopeId: "org:sharechat",
+      scopeId: "org:example",
       sopVersionId: "sop-1",
       executionDigest: "execution-1",
       artifactFileId: "file-1",
@@ -200,4 +204,33 @@ test("recovers result-owned delivery intent without duplicating the visible resu
   assert.equal((await deliveries.pending("slack")).length, 1);
   assert.deepEqual(retired, [result.jobId]);
   assert.deepEqual(lifecycle, ["retired", "marked"]);
+});
+
+test("drains certified result backlogs in bounded batches", async () => {
+  const deliveries = createDeliveryStore();
+  const pending = Array.from({ length: CERTIFIED_RESULT_DELIVERY_BATCH_SIZE + 1 }, (_, index) => ({
+    ...result,
+    id: `result-${index}`,
+    jobId: `job-${index}`,
+    auditAttemptId: `attempt-${index}`,
+  }));
+  const requestedLimits: number[] = [];
+  const results = {
+    async pendingCertifiedResultDeliveries(limit: number) {
+      requestedLimits.push(limit);
+      return pending.slice(0, limit);
+    },
+    async markCertifiedResultDelivery(resultId: string) {
+      const index = pending.findIndex((entry) => entry.id === resultId);
+      assert.notEqual(index, -1);
+      pending.splice(index, 1);
+    },
+  };
+  await deliverPendingCertifiedResults(results, deliveries, "https://qm.example.test", async () => {});
+  assert.equal(pending.length, 1);
+  assert.equal((await deliveries.pending("slack")).length, CERTIFIED_RESULT_DELIVERY_BATCH_SIZE);
+  await deliverPendingCertifiedResults(results, deliveries, "https://qm.example.test", async () => {});
+  assert.equal(pending.length, 0);
+  assert.equal((await deliveries.pending("slack")).length, CERTIFIED_RESULT_DELIVERY_BATCH_SIZE + 1);
+  assert.deepEqual(requestedLimits, [CERTIFIED_RESULT_DELIVERY_BATCH_SIZE, CERTIFIED_RESULT_DELIVERY_BATCH_SIZE]);
 });

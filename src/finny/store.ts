@@ -231,6 +231,6 @@ export interface FinnyStore {
   ): Promise<FinnyCertifiedResultRecord>;
   getCertifiedResult(scopeId: string, resultId: string): Promise<FinnyCertifiedResultRecord | null>;
   getCertifiedResultById(resultId: string): Promise<FinnyCertifiedResultRecord | null>;
-  pendingCertifiedResultDeliveries(limit?: number): Promise<FinnyCertifiedResultRecord[]>;
+  pendingCertifiedResultDeliveries(limit: number): Promise<FinnyCertifiedResultRecord[]>;
   markCertifiedResultDelivery(resultId: string, deliveryId: string): Promise<void>;
 }

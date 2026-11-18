@@ -1992,13 +1992,12 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
       return rows[0] ? rowToCertifiedResult(rows[0]) : null;
     },
     async pendingCertifiedResultDeliveries(limit) {
-      if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) {
+      if (!Number.isSafeInteger(limit) || limit < 1) {
         throw new Error("Finny certified result delivery limit is invalid");
       }
-      const rows =
-        limit === undefined
-          ? await q("SELECT * FROM finny_results WHERE delivery_id IS NULL ORDER BY created_at,id")
-          : await q("SELECT * FROM finny_results WHERE delivery_id IS NULL ORDER BY created_at,id LIMIT $1", [limit]);
+      const rows = await q("SELECT * FROM finny_results WHERE delivery_id IS NULL ORDER BY created_at,id LIMIT $1", [
+        limit,
+      ]);
       return rows.map(rowToCertifiedResult);
     },
     async markCertifiedResultDelivery(resultId, deliveryId) {

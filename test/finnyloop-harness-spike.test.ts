@@ -189,7 +189,7 @@ test("Spike 3: Auditor executes deterministic audit and passes with valid eviden
           provisionalRevision: dummyFileId,
           sop: { ...finnySopFixture(), scopeId },
           sopBinding: {
-            versionId: "org%3Asharechat/sop.test@1",
+            versionId: "org%3Aexample/sop.test@1",
             values: {},
             executionDigest: "execution-digest",
             revision: 1,

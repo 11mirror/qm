@@ -45,7 +45,7 @@ test("certified result download authorizes personal and managed organization sco
   assert.deepEqual(personal.body, result);
   assert.match(personal.headers.get("content-disposition") ?? "", /finny-result-result-1\.json/);
   assert.equal((await request("U2", result)).status, 404);
-  const organization = { ...result, scopeId: "org:sharechat" };
+  const organization = { ...result, scopeId: "org:example" };
   assert.equal((await request("U1", organization, true)).status, 200);
   assert.equal((await request("U1", organization, false)).status, 404);
 });

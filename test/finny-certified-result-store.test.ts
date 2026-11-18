@@ -53,7 +53,7 @@ interface CertifiedResultStore {
   ) => Promise<StoredCertifiedResult>;
   getCertifiedResult?: (scopeId: string, resultId: string) => Promise<StoredCertifiedResult | null>;
   getCertifiedResultById?: (resultId: string) => Promise<StoredCertifiedResult | null>;
-  pendingCertifiedResultDeliveries?: () => Promise<StoredCertifiedResult[]>;
+  pendingCertifiedResultDeliveries?: (limit: number) => Promise<StoredCertifiedResult[]>;
   markCertifiedResultDelivery?: (resultId: string, deliveryId: string) => Promise<void>;
 }
 
@@ -465,9 +465,9 @@ test("stores delivery intent with the result before any generic delivery exists"
   const { q } = createPgPool(url);
   const rows = await q("SELECT destination,delivery_id FROM finny_results WHERE id=$1", [stored.id]);
   assert.deepEqual(rows, [{ destination, delivery_id: null }]);
-  assert.deepEqual(await authority.pendingCertifiedResultDeliveries!(), [stored]);
+  assert.deepEqual(await authority.pendingCertifiedResultDeliveries!(50), [stored]);
   await authority.markCertifiedResultDelivery!(stored.id, "delivery-1");
-  assert.deepEqual(await authority.pendingCertifiedResultDeliveries!(), []);
+  assert.deepEqual(await authority.pendingCertifiedResultDeliveries!(50), []);
   assert.equal((await authority.getCertifiedResult!(job.scopeId, stored.id))?.deliveryId, "delivery-1");
 });
 

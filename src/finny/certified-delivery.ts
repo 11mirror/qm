@@ -17,6 +17,8 @@ export interface DeliverableFinnyCertifiedResult extends FinnyCertifiedResult {
   createdAt: number;
 }
 
+export const CERTIFIED_RESULT_DELIVERY_BATCH_SIZE = 50;
+
 function deliveryDestination(value: Record<string, unknown>): Destination {
   if (typeof value.type !== "string" || typeof value.target !== "string" || !value.type || !value.target) {
     throw new Error("Finny certified result destination is invalid");
@@ -167,7 +169,7 @@ export async function deliverPendingCertifiedResults(
   publicWebUrl: string,
   afterEnqueue: (result: FinnyCertifiedResultRecord) => Promise<unknown>,
 ): Promise<void> {
-  for (const result of await results.pendingCertifiedResultDeliveries()) {
+  for (const result of await results.pendingCertifiedResultDeliveries(CERTIFIED_RESULT_DELIVERY_BATCH_SIZE)) {
     const delivery = await deliveries.enqueue(certifiedResultDelivery(deliverableResult(result), publicWebUrl));
     await afterEnqueue(result);
     await results.markCertifiedResultDelivery(result.id, delivery.id);
