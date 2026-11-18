@@ -46,7 +46,7 @@ export class GenerativeCard extends LitElement {
         return html`<div class="gen-card-header"><h3>${text}</h3></div>`;
       }
       case "section": {
-        return html`<div class="gen-card-section">${String(props.text ?? "")}</div>`;
+        return html`<div class="finny-plan-summary">${String(props.text ?? "")}</div>`;
       }
       case "metric": {
         const label = String(props.label ?? props.title ?? "");
@@ -72,19 +72,21 @@ export class GenerativeCard extends LitElement {
       }
       case "actions": {
         const buttons = Array.isArray(props.buttons) ? (props.buttons as Array<Record<string, unknown>>) : [];
-        return html`<div class="gen-card-actions">
+        return html`<div class="approval-actions">
           ${buttons.map((button) => {
             const label = String(button.label ?? "");
             const url = typeof button.url === "string" ? button.url : "";
             return url
-              ? html`<a class="gen-card-action" href=${url}>${label}</a>`
-              : html`<button class="gen-card-action" type="button" disabled>${label}</button>`;
+              ? html`<a class="btn primary" href=${url}>${label}</a>`
+              : html`<button class="btn" type="button" disabled>${label}</button>`;
           })}
         </div>`;
       }
       case "context": {
         const entries = Array.isArray(props.elements) ? props.elements : [];
-        return html`<div class="gen-card-context">${entries.map((entry) => html`<span>${String(entry)}</span>`)}</div>`;
+        return html`<div class="finny-plan-details-grid">
+          ${entries.map((entry) => html`<span class="finny-plan-detail">${String(entry)}</span>`)}
+        </div>`;
       }
       case "table": {
         const headers = Array.isArray(props.headers) ? (props.headers as string[]) : [];
