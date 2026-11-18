@@ -125,39 +125,6 @@ test("artifact_ready sets the first artifact only after approval", async () => {
   );
 });
 
-test("attestations require a current artifact", async () => {
-  const store = createPostgresFinnyStore(testDatabaseUrl());
-  const input = createInput();
-  await store.createJob(input);
-  await approve(store, input);
-  const submission = {
-    id: randomUUID(),
-    scopeId: input.scopeId,
-    jobId: input.id,
-    checkId: "lineage.binding" as const,
-    generation: 1,
-    verdict: "pass" as const,
-    evidenceDigest: "evidence-sha256",
-    artifactDigest: "artifact-sha256",
-    issuerPrincipalId: "U-auditor",
-    issuerRunId: "run-auditor-1",
-    idempotencyKey: randomUUID(),
-  };
-  await assert.rejects(store.recordAttestation(submission), /artifact/i);
-  await store.recordArtifactReady({
-    scopeId: input.scopeId,
-    jobId: input.id,
-    artifactDigest: submission.artifactDigest,
-    provisionalRevision: "delivery-revision-1",
-    idempotencyKey: randomUUID(),
-  });
-  const first = await store.recordAttestation(submission);
-  const duplicate = await store.recordAttestation(submission);
-  assert.equal(first.deduped, false);
-  assert.equal(duplicate.deduped, true);
-  assert.deepEqual(duplicate.attestation, first.attestation);
-});
-
 test("records one complete immutable audit attempt for the current artifact", async () => {
   const store = createPostgresFinnyStore(testDatabaseUrl());
   const input = createInput();

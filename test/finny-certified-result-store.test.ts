@@ -10,7 +10,7 @@ import {
 import { createPostgresFinnyStore } from "../src/finny/postgres-store.ts";
 import { initialFinnyPolicy } from "../src/finny/policy.ts";
 import type { FinnyJob } from "../src/finny/types.ts";
-import { TEST_FINNY_EVALUATOR, testDeterministicAuthority } from "./support/finny-fixture.ts";
+import { TEST_FINNY_EVALUATOR } from "./support/finny-fixture.ts";
 import { finnySopFixture } from "./support/finny-sop-fixture.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
@@ -423,29 +423,14 @@ test("certification rejects a missing or BLOCK atomic attempt", async () => {
 });
 
 test("certification rejects a PASS attempt after the job artifact changes", async () => {
-  const { store, job, auditAttemptId } = await resultJob();
-  await store.recordAuditBlock({
-    scopeId: job.scopeId,
-    jobId: job.id,
-    artifactDigest: job.artifactDigest!,
-    checkId: "summary.crossfoot",
-    generation: 1,
-    evidenceDigest: "evidence-before-artifact-replacement",
-    issuerPrincipalId: "finny-deterministic-spreadsheet-worker",
-    issuerRunId: "audit-run-2",
-    ...testDeterministicAuthority("summary.crossfoot", "block"),
-    findings: [{ code: "CROSSFOOT_MISMATCH", message: "Summary requires correction" }],
-    changeKinds: ["formula"],
-    resolution: { kind: "rework" },
-    idempotencyKey: randomUUID(),
-  });
-  await store.recordArtifactReady({
-    scopeId: job.scopeId,
-    jobId: job.id,
-    artifactDigest: "a".repeat(64),
-    provisionalRevision: "file-workbook-2",
-    idempotencyKey: randomUUID(),
-  });
+  const { url, store, job, auditAttemptId } = await resultJob();
+  const { q } = createPgPool(url);
+  await q(
+    `UPDATE finny_jobs
+        SET artifact_digest=$2,provisional_revision=$3,current_audit_attempt_id=NULL,updated_at=$4
+      WHERE id=$1`,
+    [job.id, "a".repeat(64), "file-workbook-2", Date.now()],
+  );
   const authority = resultAuthority(store);
   await assert.rejects(
     authority.certifyResult!(

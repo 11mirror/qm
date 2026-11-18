@@ -218,12 +218,6 @@ function harness(
       async artifactReady(input: any) {
         calls.push(["artifactReady", input]);
       },
-      async auditPassed(input: any) {
-        calls.push(["auditPassed", input]);
-      },
-      async auditBlocked(input: any) {
-        calls.push(["auditBlocked", input]);
-      },
       async auditAttemptRecorded(input: any) {
         calls.push(["auditAttemptRecorded", input]);
       },

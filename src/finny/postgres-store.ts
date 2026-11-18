@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
-import { assertFinnyAuditFindings, assertFinnyEscalationReason, assertFinnyFindingPolicy } from "./coordinator.ts";
+import { assertFinnyFindingPolicy } from "./coordinator.ts";
 import {
   assertFinnyCertifiedResultReferences,
   finnyCertifiedResultSearchText,
@@ -25,7 +25,6 @@ import {
   FINNY_DETERMINISTIC_CHECK_IDS,
   activateFinnyEvaluator,
   assertFinnyApprovedEvaluatorRef,
-  assertFinnyDeterministicAuthority,
   assertFinnyEvaluatorRef,
   assertFinnyPolicy,
   reviseFinnyPolicy,
@@ -36,7 +35,6 @@ import type {
   CreateFinnyApprovalRequestInput,
   CreateFinnyClarificationRequestInput,
   CreateFinnyJobCommand,
-  FinnyEventResult,
   FinnyApprovalRequest,
   FinnyStore,
   FinnyStoredSopVersion,
@@ -45,13 +43,9 @@ import type {
   RecordFinnySopAmendmentInput,
   RecordFinnyClarificationDecisionInput,
   RecordFinnyArtifactReadyInput,
-  RecordFinnyAuditBlockInput,
   RecordFinnyEvaluatorCorrectionInput,
-  RecordFinnyAuditPassedInput,
-  RecordFinnyAttestationInput,
 } from "./store.ts";
 import type {
-  FinnyAttestation,
   FinnyAuditAttempt,
   FinnyCheckId,
   FinnyClarificationRequest,
@@ -113,12 +107,6 @@ const SCHEMA = [
     ON finny_attestations(job_id, check_id, generation, seq DESC)`,
   `CREATE INDEX IF NOT EXISTS finny_attestations_job_sequence ON finny_attestations(job_id, seq)`,
 ];
-
-interface LegacyFinnyAuditMutations {
-  recordAttestation(input: RecordFinnyAttestationInput): Promise<{ attestation: FinnyAttestation; deduped: boolean }>;
-  recordAuditPassed(input: RecordFinnyAuditPassedInput): Promise<FinnyEventResult<FinnyJobEvent<"audit_passed">>>;
-  recordAuditBlock(input: RecordFinnyAuditBlockInput): Promise<FinnyEventResult>;
-}
 
 const EVENT_SCHEMA = [
   `ALTER TABLE finny_jobs ALTER COLUMN artifact_digest DROP NOT NULL`,
@@ -679,26 +667,6 @@ function rowToApprovalRequest(row: Record<string, unknown>): FinnyApprovalReques
   };
 }
 
-function rowToAttestation(row: Record<string, unknown>): FinnyAttestation {
-  return {
-    seq: Number(row.seq),
-    id: row.id as string,
-    jobId: row.job_id as string,
-    checkId: row.check_id as FinnyCheckId,
-    generation: Number(row.generation),
-    verdict: row.verdict as FinnyAttestation["verdict"],
-    evidenceDigest: row.evidence_digest as string,
-    artifactDigest: row.artifact_digest as string,
-    issuerPrincipalId: row.issuer_principal_id as string,
-    issuerRunId: row.issuer_run_id as string,
-    ...(row.deterministic_authority !== null
-      ? { deterministicAuthority: row.deterministic_authority as FinnyAttestation["deterministicAuthority"] }
-      : {}),
-    idempotencyKey: row.idempotency_key as string,
-    createdAt: Number(row.created_at),
-  };
-}
-
 function rowToAuditAttempt(row: Record<string, unknown>): FinnyAuditAttempt {
   return {
     id: row.id as string,
@@ -799,29 +767,6 @@ function assertNonEmpty(value: string, label: string): void {
   if (typeof value !== "string" || !value.trim()) throw new Error(`Finny ${label} is invalid`);
 }
 
-function assertCurrentAuditEvent(policy: FinnyPolicySnapshot, checkId: FinnyCheckId, generation: number): void {
-  assertFinnyPolicy(policy);
-  if (!Number.isSafeInteger(generation) || generation < 1) throw new Error("Finny audit generation is invalid");
-  const requiredGeneration = policy.requiredGenerations[checkId];
-  if (requiredGeneration === undefined) throw new Error("Finny audit is not for a required check");
-  if (requiredGeneration !== generation) throw new Error("Finny audit generation is not current");
-}
-
-function sameAttestation(row: FinnyAttestation, input: RecordFinnyAttestationInput): boolean {
-  return (
-    row.id === input.id &&
-    row.jobId === input.jobId &&
-    row.checkId === input.checkId &&
-    row.generation === input.generation &&
-    row.verdict === input.verdict &&
-    row.evidenceDigest === input.evidenceDigest &&
-    row.artifactDigest === input.artifactDigest &&
-    row.issuerPrincipalId === input.issuerPrincipalId &&
-    row.issuerRunId === input.issuerRunId &&
-    sameValue(row.deterministicAuthority, input.deterministicAuthority)
-  );
-}
-
 function sameAuditAttempt(row: FinnyAuditAttempt, input: RecordFinnyAuditAttemptInput): boolean {
   return (
     row.id === input.id &&
@@ -869,70 +814,6 @@ function assertApprovedSopControls(row: Record<string, unknown>, input: RecordFi
   }
 }
 
-function auditAttestationInput(
-  input: RecordFinnyAuditPassedInput | RecordFinnyAuditBlockInput,
-  verdict: "pass" | "block",
-): RecordFinnyAttestationInput {
-  const digest = createHash("sha256").update(input.idempotencyKey).digest("base64url");
-  return {
-    id: `finny-audit-${digest}`,
-    scopeId: input.scopeId,
-    jobId: input.jobId,
-    checkId: input.checkId,
-    generation: input.generation,
-    verdict,
-    evidenceDigest: input.evidenceDigest,
-    artifactDigest: input.artifactDigest,
-    issuerPrincipalId: input.issuerPrincipalId,
-    issuerRunId: input.issuerRunId,
-    ...(input.deterministicAuthority ? { deterministicAuthority: input.deterministicAuthority } : {}),
-    idempotencyKey: `finny-audit-${digest}`,
-  };
-}
-
-async function existingAuditAttestation(
-  db: PoolClient,
-  input: RecordFinnyAttestationInput,
-): Promise<FinnyAttestation | undefined> {
-  const result = await db.query("SELECT * FROM finny_attestations WHERE idempotency_key=$1", [input.idempotencyKey]);
-  const attestation = result.rows[0] ? rowToAttestation(result.rows[0]) : undefined;
-  if (attestation && !sameAttestation(attestation, input)) {
-    throw new Error("Finny audit outcome idempotency key was reused");
-  }
-  return attestation;
-}
-
-async function insertAuditAttestation(
-  db: PoolClient,
-  input: RecordFinnyAttestationInput,
-  createdAt: number,
-): Promise<FinnyAttestation> {
-  const inserted = await db.query(
-    `INSERT INTO finny_attestations(
-      id, job_id, check_id, generation, verdict, evidence_digest, artifact_digest,
-      issuer_principal_id, issuer_run_id, deterministic_authority, idempotency_key, created_at
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-    ON CONFLICT (idempotency_key) DO NOTHING RETURNING *`,
-    [
-      input.id,
-      input.jobId,
-      input.checkId,
-      input.generation,
-      input.verdict,
-      input.evidenceDigest,
-      input.artifactDigest,
-      input.issuerPrincipalId,
-      input.issuerRunId,
-      input.deterministicAuthority ? JSON.stringify(input.deterministicAuthority) : null,
-      input.idempotencyKey,
-      createdAt,
-    ],
-  );
-  const attestation = inserted.rows[0] ? rowToAttestation(inserted.rows[0]) : await existingAuditAttestation(db, input);
-  if (!attestation) throw new Error("Finny audit outcome attestation was not persisted");
-  return attestation;
-}
-
 async function lockedJob(db: PoolClient, scopeId: string, jobId: string): Promise<Record<string, unknown>> {
   const { rows } = await db.query(
     `SELECT jobs.*, versions.definition AS sop_definition
@@ -947,7 +828,7 @@ async function lockedJob(db: PoolClient, scopeId: string, jobId: string): Promis
   return rows[0] as Record<string, unknown>;
 }
 
-export function createPostgresFinnyStore(connectionString: string): FinnyStore & LegacyFinnyAuditMutations {
+export function createPostgresFinnyStore(connectionString: string): FinnyStore {
   const { q, pool } = createPgPool(connectionString, [
     { id: "finny/store/0001", statements: SCHEMA },
     { id: "finny/store/0002-events", statements: EVENT_SCHEMA },
@@ -1460,71 +1341,6 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore &
         };
       });
     },
-    async recordAttestation(input: RecordFinnyAttestationInput) {
-      return withPgTransaction(await pool(), async (db) => {
-        const job = await lockedJob(db, input.scopeId, input.jobId);
-        const replay = await db.query("SELECT * FROM finny_attestations WHERE idempotency_key = $1", [
-          input.idempotencyKey,
-        ]);
-        if (replay.rows[0]) {
-          const attestation = rowToAttestation(replay.rows[0]);
-          if (!sameAttestation(attestation, input)) throw new Error("Finny attestation idempotency key was reused");
-          return { attestation, deduped: true };
-        }
-        if (job.finalized_at !== null) throw new Error("Finny job is already finalized");
-        if (job.pending_rework_seq !== null) throw new Error("Finny job is awaiting a reworked artifact");
-        if (job.unresolved_escalation_seq !== null) throw new Error("Finny job has an unresolved escalation");
-        const policy: FinnyPolicySnapshot = {
-          policyVersion: job.policy_version as string,
-          evaluator: job.evaluator_ref as FinnyEvaluatorRef,
-          requiredGenerations: job.required_generations as Record<FinnyCheckId, number>,
-        };
-        assertFinnyPolicy(policy);
-        const requiredGeneration = policy.requiredGenerations[input.checkId];
-        if (requiredGeneration === undefined) throw new Error("Finny attestation is not for a required check");
-        if (input.generation !== requiredGeneration) throw new Error("Finny attestation generation is not current");
-        assertFinnyDeterministicAuthority(input.deterministicAuthority, input.checkId, input.verdict, policy.evaluator);
-        if (job.artifact_digest !== input.artifactDigest) throw new Error("Finny attestation artifact is not current");
-        const now = Date.now();
-        const inserted = await db.query(
-          `INSERT INTO finny_attestations(
-            id, job_id, check_id, generation, verdict, evidence_digest, artifact_digest,
-            issuer_principal_id, issuer_run_id, deterministic_authority, idempotency_key, created_at
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-          ON CONFLICT (idempotency_key) DO NOTHING
-          RETURNING *`,
-          [
-            input.id,
-            input.jobId,
-            input.checkId,
-            input.generation,
-            input.verdict,
-            input.evidenceDigest,
-            input.artifactDigest,
-            input.issuerPrincipalId,
-            input.issuerRunId,
-            input.deterministicAuthority ? JSON.stringify(input.deterministicAuthority) : null,
-            input.idempotencyKey,
-            now,
-          ],
-        );
-        if (!inserted.rows[0]) {
-          const existing = await db.query("SELECT * FROM finny_attestations WHERE idempotency_key = $1", [
-            input.idempotencyKey,
-          ]);
-          const attestation = rowToAttestation(existing.rows[0]);
-          if (!sameAttestation(attestation, input)) throw new Error("Finny attestation idempotency key was reused");
-          return { attestation, deduped: true };
-        }
-        const attestation = rowToAttestation(inserted.rows[0]);
-        await db.query("UPDATE finny_jobs SET ledger_head=$2, updated_at=$3 WHERE id=$1", [
-          input.jobId,
-          attestation.seq,
-          now,
-        ]);
-        return { attestation, deduped: false };
-      });
-    },
     async recordAuditAttempt(input: RecordFinnyAuditAttemptInput) {
       assertAuditAttemptInput(input);
       return withPgTransaction(await pool(), async (db) => {
@@ -1832,166 +1648,6 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore &
           ],
         );
         return { events: [event], job: updatedRowToJob(updated.rows[0], row), deduped: false };
-      });
-    },
-    async recordAuditPassed(input: RecordFinnyAuditPassedInput) {
-      return withPgTransaction(await pool(), async (db) => {
-        const row = await lockedJob(db, input.scopeId, input.jobId);
-        assertNonEmpty(input.idempotencyKey, "event idempotency key");
-        assertNonEmpty(input.artifactDigest, "audit artifact digest");
-        assertNonEmpty(input.evidenceDigest, "audit evidence digest");
-        assertNonEmpty(input.issuerPrincipalId, "audit issuer principal ID");
-        assertNonEmpty(input.issuerRunId, "audit issuer run ID");
-        const payload: FinnyJobEventPayloads["audit_passed"] = {
-          artifactDigest: input.artifactDigest,
-          checkId: input.checkId,
-          generation: input.generation,
-          evidenceDigest: input.evidenceDigest,
-          issuerPrincipalId: input.issuerPrincipalId,
-          issuerRunId: input.issuerRunId,
-          ...(input.deterministicAuthority ? { deterministicAuthority: input.deterministicAuthority } : {}),
-        };
-        const attestationInput = auditAttestationInput(input, "pass");
-        const existing = await eventsForIdempotency(db, input.idempotencyKey);
-        assertEventReplayJob(existing, input.jobId);
-        if (existing.length) {
-          const attestation = await existingAuditAttestation(db, attestationInput);
-          if (
-            existing.length !== 1 ||
-            existing[0]?.type !== "audit_passed" ||
-            !sameValue(existing[0].payload, payload) ||
-            !attestation
-          ) {
-            throw new Error("Finny event idempotency key was reused");
-          }
-          return { events: existing as FinnyJobEvent<"audit_passed">[], job: rowToJob(row), deduped: true };
-        }
-        if (await existingAuditAttestation(db, attestationInput)) {
-          throw new Error("Finny audit outcome idempotency key was reused");
-        }
-        if (row.finalized_at !== null) throw new Error("Finny job is already finalized");
-        if (row.unresolved_escalation_seq !== null) throw new Error("Finny job has an unresolved escalation");
-        if (row.pending_rework_seq !== null) throw new Error("Finny job is awaiting a reworked artifact");
-        const policy: FinnyPolicySnapshot = {
-          policyVersion: row.policy_version as string,
-          evaluator: row.evaluator_ref as FinnyEvaluatorRef,
-          requiredGenerations: row.required_generations as Record<FinnyCheckId, number>,
-        };
-        assertCurrentAuditEvent(policy, input.checkId, input.generation);
-        assertFinnyDeterministicAuthority(input.deterministicAuthority, input.checkId, "pass", policy.evaluator);
-        if (row.artifact_digest !== input.artifactDigest) throw new Error("Finny audit artifact is not current");
-        const now = Date.now();
-        const attestation = await insertAuditAttestation(db, attestationInput, now);
-        const event = await insertEvent(db, input.jobId, "audit_passed", payload, input.idempotencyKey, 0, now);
-        const updated = await db.query(
-          "UPDATE finny_jobs SET ledger_head=$2, event_head=$3, updated_at=$4 WHERE id=$1 RETURNING *",
-          [input.jobId, attestation.seq, event.seq, now],
-        );
-        return { events: [event], job: updatedRowToJob(updated.rows[0], row), deduped: false };
-      });
-    },
-    async recordAuditBlock(input: RecordFinnyAuditBlockInput) {
-      return withPgTransaction(await pool(), async (db) => {
-        const row = await lockedJob(db, input.scopeId, input.jobId);
-        assertNonEmpty(input.idempotencyKey, "event idempotency key");
-        assertNonEmpty(input.artifactDigest, "audit artifact digest");
-        assertNonEmpty(input.evidenceDigest, "audit evidence digest");
-        assertNonEmpty(input.issuerPrincipalId, "audit issuer principal ID");
-        assertNonEmpty(input.issuerRunId, "audit issuer run ID");
-        const blockedPayload: FinnyJobEventPayloads["audit_blocked"] = {
-          artifactDigest: input.artifactDigest,
-          checkId: input.checkId,
-          generation: input.generation,
-          evidenceDigest: input.evidenceDigest,
-          issuerPrincipalId: input.issuerPrincipalId,
-          issuerRunId: input.issuerRunId,
-          ...(input.deterministicAuthority ? { deterministicAuthority: input.deterministicAuthority } : {}),
-          findings: input.findings,
-          findingPolicy: row.finding_policy as FinnyFindingPolicy,
-          changeKinds: input.changeKinds,
-        };
-        const attestationInput = auditAttestationInput(input, "block");
-        const existing = await eventsForIdempotency(db, input.idempotencyKey);
-        assertEventReplayJob(existing, input.jobId);
-        if (existing.length) {
-          const transitionType = input.resolution.kind === "rework" ? "rework_requested" : "escalated";
-          const escalationMatches =
-            input.resolution.kind !== "escalate" ||
-            (existing[1]?.type === "escalated" && existing[1].payload.reason === input.resolution.reason);
-          const attestation = await existingAuditAttestation(db, attestationInput);
-          if (
-            existing.length !== 2 ||
-            existing[0]?.type !== "audit_blocked" ||
-            !sameValue(existing[0].payload, blockedPayload) ||
-            existing[1]?.type !== transitionType ||
-            !escalationMatches ||
-            !attestation
-          ) {
-            throw new Error("Finny event idempotency key was reused");
-          }
-          return { events: existing, job: rowToJob(row), deduped: true };
-        }
-        if (await existingAuditAttestation(db, attestationInput)) {
-          throw new Error("Finny audit outcome idempotency key was reused");
-        }
-        if (row.finalized_at !== null) throw new Error("Finny job is already finalized");
-        if (row.unresolved_escalation_seq !== null) throw new Error("Finny job has an unresolved escalation");
-        if (row.pending_rework_seq !== null) throw new Error("Finny job is awaiting a reworked artifact");
-        const policy: FinnyPolicySnapshot = {
-          policyVersion: row.policy_version as string,
-          evaluator: row.evaluator_ref as FinnyEvaluatorRef,
-          requiredGenerations: row.required_generations as Record<FinnyCheckId, number>,
-        };
-        assertCurrentAuditEvent(policy, input.checkId, input.generation);
-        assertFinnyDeterministicAuthority(input.deterministicAuthority, input.checkId, "block", policy.evaluator);
-        if (row.finding_policy === null) throw new Error("Finny finding policy is not configured");
-        assertFinnyAuditFindings(input.findings, row.finding_policy as FinnyFindingPolicy);
-        const revised = reviseFinnyPolicy(policy, input.changeKinds);
-        if (row.artifact_digest !== input.artifactDigest) throw new Error("Finny audit artifact is not current");
-        const now = Date.now();
-        const attestation = await insertAuditAttestation(db, attestationInput, now);
-        const blocked = await insertEvent(
-          db,
-          input.jobId,
-          "audit_blocked",
-          blockedPayload,
-          input.idempotencyKey,
-          0,
-          now,
-        );
-        if (input.resolution.kind === "rework") {
-          const requested = await insertEvent(
-            db,
-            input.jobId,
-            "rework_requested",
-            { blockedEventSequence: blocked.seq, requiredGenerations: revised.requiredGenerations },
-            input.idempotencyKey,
-            1,
-            now,
-          );
-          const updated = await db.query(
-            `UPDATE finny_jobs SET required_generations=$2, ledger_head=$3, event_head=$4,
-               pending_rework_seq=$4, updated_at=$5 WHERE id=$1 RETURNING *`,
-            [input.jobId, JSON.stringify(revised.requiredGenerations), attestation.seq, requested.seq, now],
-          );
-          return { events: [blocked, requested], job: updatedRowToJob(updated.rows[0], row), deduped: false };
-        }
-        assertFinnyEscalationReason(input.resolution.reason);
-        const escalated = await insertEvent(
-          db,
-          input.jobId,
-          "escalated",
-          { blockedEventSequence: blocked.seq, reason: input.resolution.reason },
-          input.idempotencyKey,
-          1,
-          now,
-        );
-        const updated = await db.query(
-          `UPDATE finny_jobs SET ledger_head=$2, event_head=$3, unresolved_escalation_seq=$3, updated_at=$4
-           WHERE id=$1 RETURNING *`,
-          [input.jobId, attestation.seq, escalated.seq, now],
-        );
-        return { events: [blocked, escalated], job: updatedRowToJob(updated.rows[0], row), deduped: false };
       });
     },
     async evaluatorCorrectionCandidates(approvedEvaluator: FinnyEvaluatorRef) {

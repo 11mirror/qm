@@ -13,12 +13,7 @@ import { deliverPendingCertifiedResults } from "./finny/certified-delivery.ts";
 import { createFinnyApprovalService } from "./finny/approval-service.ts";
 import { compileFinnyWorkerTask } from "./finny/plan.ts";
 import { createFinnyRuntimeCoordinator, reconcileFinnyRuntimeRecoveries } from "./finny/runtime-coordinator.ts";
-import {
-  createFinnyEscalationDecision,
-  createFinnyToolServiceFactory,
-  resolveFinnyEvidenceFile,
-  resolveFinnyFileArtifactProposal,
-} from "./finny/integration.ts";
+import { createFinnyToolServiceFactory, resolveFinnyFileArtifactProposal } from "./finny/integration.ts";
 import { reconstructFinnyParentSyscalls } from "./finny/integration-runtime.ts";
 import { createFinnyCurrentJobReader } from "./finny/runtime-reader.ts";
 import type { FinnyApprovalBridge } from "./slack/finny-approvals.ts";
@@ -2126,10 +2121,6 @@ export function buildApp(
       runtime: finnyRuntime,
       authenticateSession: async (sessionId) => Boolean(await sessions.get(sessionId)),
     });
-    const escalationDecision = createFinnyEscalationDecision({
-      jobs: finnyJobs,
-      maxReworks: config.finny.maxReworks,
-    });
     const coordinatorFor = async (scopeId: string, jobId: string) => {
       const parent = await finnyIntegration.getParent(scopeId, jobId);
       if (!parent) throw new Error("Finny parent binding is unavailable");
@@ -2177,13 +2168,6 @@ export function buildApp(
             if (!result.ok) throw new Error(`Finny private dispatch failed: ${result.message}`);
           },
         },
-        evidenceAuthority: {
-          resolve: (input) =>
-            resolveFinnyEvidenceFile(files, input, {
-              maxArtifactBytes: config.finny!.spreadsheetEngine.maxArtifactBytes,
-              maxEvidenceBytes: config.finny!.maxEvidenceBytes,
-            }),
-        },
         artifactBinding: {
           async resolve(input) {
             const proposal = await finnyIntegration.getArtifactProposal(input.idempotencyKey);
@@ -2209,7 +2193,6 @@ export function buildApp(
             return JSON.stringify(compileFinnyWorkerTask(job, role));
           },
         },
-        escalationDecision,
         recoveryWake: () => finnyRecoveryBus.emit({ at: Date.now() }),
       });
     };

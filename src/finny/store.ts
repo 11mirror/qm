@@ -1,23 +1,18 @@
 import type {
   FinnyApprovalAction,
-  FinnyAuditFinding,
-  FinnyChangeKind,
   FinnyAuditAttempt,
   FinnyAuditAttemptVerdict,
   FinnyAuditControlResult,
   FinnyAuditJudgmentAddendum,
-  FinnyCheckId,
   FinnyClarificationDecision,
   FinnyClarificationOption,
   FinnyClarificationRequest,
-  FinnyDeterministicEvidenceAuthority,
   FinnyJob,
   FinnyJobEvent,
   FinnyFindingPolicy,
   FinnyEvaluatorRef,
   FinnyPolicySnapshot,
   FinnySopVersion,
-  FinnyVerdict,
   FinnyWorkerRole,
 } from "./types.ts";
 import type { Destination } from "../types.ts";
@@ -149,29 +144,6 @@ export interface CompleteFinnyAuditJudgmentInput {
   requestDigest?: string;
   completedAt: number;
 }
-
-export interface RecordFinnyAttestationInput {
-  id: string;
-  scopeId: string;
-  jobId: string;
-  checkId: FinnyCheckId;
-  generation: number;
-  verdict: FinnyVerdict;
-  evidenceDigest: string;
-  artifactDigest: string;
-  issuerPrincipalId: string;
-  issuerRunId: string;
-  deterministicAuthority?: FinnyDeterministicEvidenceAuthority;
-  idempotencyKey: string;
-}
-
-export interface RecordFinnyAuditBlockInput extends Omit<RecordFinnyAttestationInput, "id" | "verdict"> {
-  findings: FinnyAuditFinding[];
-  changeKinds: FinnyChangeKind[];
-  resolution: { kind: "rework" } | { kind: "escalate"; reason: string };
-}
-
-export type RecordFinnyAuditPassedInput = Omit<RecordFinnyAttestationInput, "id" | "verdict">;
 
 export interface RecordFinnyArtifactReadyInput {
   scopeId: string;
