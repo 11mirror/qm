@@ -79,6 +79,14 @@ function finnyTool() {
   return tool;
 }
 
+function finnyToolForRole(role: "parent" | "producer" | "auditor") {
+  const tool = createAgentTools({
+    current: { finny: { ...service, role } } as unknown as ToolContext,
+  }).find((candidate) => candidate.name === "finny");
+  assert.ok(tool);
+  return tool;
+}
+
 test("finny plan actions accept only strict SOP versions and bound values", () => {
   const schema = finnyTool().parameters;
   assert.equal(Check(schema, { action: "create_plan", sop, values }), true);
@@ -109,7 +117,74 @@ test("worker Finny tools omit the SOP authoring schema", () => {
   );
 });
 
-test("finny schema accepts only narrow content and evidence actions", () => {
+test("Finny tools expose only role-owned actions and parameter fields", () => {
+  const parent = finnyToolForRole("parent");
+  const producer = finnyToolForRole("producer");
+  const auditor = finnyToolForRole("auditor");
+  const fields = (tool: typeof parent) =>
+    Object.keys((tool.parameters as { properties: Record<string, unknown> }).properties).sort();
+
+  assert.deepEqual(fields(parent), [
+    "action",
+    "idempotencyKey",
+    "jobId",
+    "materialClarification",
+    "retrySafe",
+    "sop",
+    "summary",
+    "values",
+  ]);
+  assert.deepEqual(fields(producer), [
+    "action",
+    "artifactDigest",
+    "idempotencyKey",
+    "jobId",
+    "provisionalRevision",
+    "retrySafe",
+  ]);
+  assert.deepEqual(fields(auditor), [
+    "action",
+    "controls",
+    "idempotencyKey",
+    "jobId",
+    "judgmentAnswers",
+    "retrySafe",
+    "triggeredJudgmentControlIds",
+  ]);
+
+  assert.equal(
+    Check(parent.parameters, {
+      action: "artifact_ready",
+      artifactDigest: "a",
+      provisionalRevision: "f",
+      idempotencyKey: "k",
+    }),
+    false,
+  );
+  assert.equal(Check(parent.parameters, { action: "deterministic_audit", idempotencyKey: "k", controls: [] }), false);
+  assert.equal(
+    Check(producer.parameters, { action: "finalize", jobId: "j", summary: certifiedSummary, idempotencyKey: "k" }),
+    false,
+  );
+  assert.equal(Check(producer.parameters, { action: "deterministic_audit", idempotencyKey: "k", controls: [] }), false);
+  assert.equal(
+    Check(auditor.parameters, {
+      action: "artifact_ready",
+      artifactDigest: "a",
+      provisionalRevision: "f",
+      idempotencyKey: "k",
+    }),
+    false,
+  );
+  assert.equal(
+    Check(auditor.parameters, { action: "finalize", jobId: "j", summary: certifiedSummary, idempotencyKey: "k" }),
+    false,
+  );
+  assert.ok(JSON.stringify(producer.parameters).length < JSON.stringify(parent.parameters).length);
+  assert.ok(JSON.stringify(auditor.parameters).length < JSON.stringify(parent.parameters).length);
+});
+
+test("parent Finny schema accepts only parent-owned actions", () => {
   const schema = finnyTool().parameters;
   const valid = [
     { action: "create_plan", sop, values },
@@ -142,17 +217,6 @@ test("finny schema accepts only narrow content and evidence actions", () => {
       },
     },
     { action: "status", jobId: "job-1" },
-    {
-      action: "artifact_ready",
-      artifactDigest: "sha256:artifact",
-      provisionalRevision: "revision-1",
-      idempotencyKey: "ready-1",
-    },
-    {
-      action: "deterministic_audit",
-      idempotencyKey: "deterministic-1",
-      controls: [{ id: "source-total", verdict: "pass", evidenceRefs: ["xlsx:Summary!B1"], repairActions: [] }],
-    },
     { action: "finalize", jobId: "job-1", summary: certifiedSummary, idempotencyKey: "finalize-1" },
   ];
   for (const input of valid) assert.ok(Check(schema, input), JSON.stringify(input));
@@ -231,7 +295,7 @@ const execute = async (tool: ReturnType<typeof finnyTool>, id: string, params: u
     params,
   );
 
-test("finny forwards only narrow inputs and returns concise bound-service text", async () => {
+test("role-owned Finny actions forward narrow inputs and return concise bound-service text", async () => {
   const calls: Array<[string, unknown]> = [];
   const bound: FinnyToolService = {
     async createPlan(input, boundValues) {
@@ -269,37 +333,49 @@ test("finny forwards only narrow inputs and returns concise bound-service text",
       return "job finalized";
     },
   };
-  const tool = createAgentTools({ current: { finny: bound } as unknown as ToolContext }).find(
-    (candidate) => candidate.name === "finny",
-  );
-  assert.ok(tool);
-  const inputs = [
-    { action: "create_plan", sop, values },
-    { action: "status", jobId: "job-1", retrySafe: true },
-    {
-      action: "artifact_ready",
-      artifactDigest: "sha256:artifact",
-      provisionalRevision: "revision-1",
-      idempotencyKey: "ready-1",
-      retrySafe: true,
-    },
-    {
-      action: "deterministic_audit",
-      idempotencyKey: "deterministic-1",
-      controls: [{ id: "source-total", verdict: "pass", evidenceRefs: ["xlsx:Summary!B1"], repairActions: [] }],
-      retrySafe: true,
-    },
-    {
-      action: "finalize",
-      jobId: "job-1",
-      summary: certifiedSummary,
-      idempotencyKey: "finalize-1",
-      retrySafe: true,
-    },
+  const tool = (role: "parent" | "producer" | "auditor") => {
+    const candidate = createAgentTools({
+      current: { finny: { ...bound, role } } as unknown as ToolContext,
+    }).find((entry) => entry.name === "finny");
+    assert.ok(candidate);
+    return candidate;
+  };
+  const inputs: Array<[ReturnType<typeof tool>, Record<string, unknown>]> = [
+    [tool("parent"), { action: "create_plan", sop, values }],
+    [tool("parent"), { action: "status", jobId: "job-1", retrySafe: true }],
+    [
+      tool("producer"),
+      {
+        action: "artifact_ready",
+        artifactDigest: "sha256:artifact",
+        provisionalRevision: "revision-1",
+        idempotencyKey: "ready-1",
+        retrySafe: true,
+      },
+    ],
+    [
+      tool("auditor"),
+      {
+        action: "deterministic_audit",
+        idempotencyKey: "deterministic-1",
+        controls: [{ id: "source-total", verdict: "pass", evidenceRefs: ["xlsx:Summary!B1"], repairActions: [] }],
+        retrySafe: true,
+      },
+    ],
+    [
+      tool("parent"),
+      {
+        action: "finalize",
+        jobId: "job-1",
+        summary: certifiedSummary,
+        idempotencyKey: "finalize-1",
+        retrySafe: true,
+      },
+    ],
   ];
   const replies = [];
-  for (const [index, input] of inputs.entries()) {
-    replies.push((await execute(tool, `call-${index}`, input)).content[0]?.text);
+  for (const [index, [roleTool, input]] of inputs.entries()) {
+    replies.push((await execute(roleTool, `call-${index}`, input)).content[0]?.text);
   }
   assert.deepEqual(replies, [
     "created job-1",

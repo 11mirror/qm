@@ -92,7 +92,10 @@ const judgmentAnswers = Type.Array(
 
 export function finnyTools(kit: ToolKit) {
   const { ref, opts, recordCall, recordResult, resourceTool, blockOnApproval } = kit;
-  const authoring = (ref.current?.finny?.role ?? "parent") === "parent";
+  const role = ref.current?.finny?.role ?? "parent";
+  const authoring = role === "parent";
+  const producing = role === "producer";
+  const auditing = role === "auditor";
   const run = async (
     callId: string,
     action: string,
@@ -264,29 +267,32 @@ export function finnyTools(kit: ToolKit) {
   const tool = resourceTool("finny", {
     ...(authoring ? { create_plan: createPlan, amend_plan: amendPlan } : {}),
     status,
-    artifact_ready: artifactReady,
-    deterministic_audit: deterministicAudit,
-    finalize,
+    ...(producing ? { artifact_ready: artifactReady } : {}),
+    ...(auditing ? { deterministic_audit: deterministicAudit } : {}),
+    ...(authoring ? { finalize } : {}),
   });
   const properties = Object.fromEntries(
     Object.entries({
       ...(authoring ? { sop, values, materialClarification } : {}),
       jobId: string(),
-      artifactDigest: string(),
-      provisionalRevision: string(),
       idempotencyKey: string(),
-      controls: auditControls,
-      triggeredJudgmentControlIds: Type.Array(string()),
-      judgmentAnswers,
-      summary: certifiedSummary,
+      ...(producing ? { artifactDigest: string(), provisionalRevision: string() } : {}),
+      ...(auditing
+        ? {
+            controls: auditControls,
+            triggeredJudgmentControlIds: Type.Array(string()),
+            judgmentAnswers,
+          }
+        : {}),
+      ...(authoring ? { summary: certifiedSummary } : {}),
     }).map(([key, schema]) => [key, Type.Optional(schema as TSchema)]),
   );
   const actionFields: Record<string, readonly string[]> = {
     ...(authoring ? { create_plan: ["sop", "values"], amend_plan: ["jobId", "sop", "values"] } : {}),
     status: ["jobId"],
-    artifact_ready: ["artifactDigest", "provisionalRevision", "idempotencyKey"],
-    deterministic_audit: ["idempotencyKey", "controls"],
-    finalize: ["jobId", "summary", "idempotencyKey"],
+    ...(producing ? { artifact_ready: ["artifactDigest", "provisionalRevision", "idempotencyKey"] } : {}),
+    ...(auditing ? { deterministic_audit: ["idempotencyKey", "controls"] } : {}),
+    ...(authoring ? { finalize: ["jobId", "summary", "idempotencyKey"] } : {}),
   } as const;
   const contentFields = Object.keys(properties);
   const parameters = Type.Object(
