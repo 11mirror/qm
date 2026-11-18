@@ -9,14 +9,17 @@ import type { FinnyFinalizer } from "./finalizer.ts";
 import type { FinnyRuntimeStore } from "./runtime-postgres-store.ts";
 import type { FinnyStore } from "./store.ts";
 import { initialFinnyPolicy } from "./policy.ts";
-import { assertFinnyMaterialClarificationMatchesPlan, canonicalFinnyPlanDigest } from "./plan.ts";
+import {
+  assertFinnyMaterialClarificationMatchesSop,
+  canonicalFinnyExecutionDigest,
+} from "./plan.ts";
 import type { FinnyArtifactProposal } from "./integration-postgres-store.ts";
 import type {
   FinnyCheckId,
   FinnyDeterministicEvidenceAuthority,
   FinnyJob,
   FinnyMaterialClarification,
-  FinnyPlanPresentation,
+  FinnySopVersion,
   FinnyVerdict,
 } from "./types.ts";
 import {
@@ -48,7 +51,7 @@ export interface FinnyTurnBinding {
 
 interface FinnyIntegrationStore {
   createPlanIntent(input: {
-    job: import("./store.ts").CreateFinnyJobInput;
+    job: import("./store.ts").CreateFinnyJobCommand;
     parent: Parameters<FinnyIntegrationStore["createApprovalBoundParent"]>[0];
     clarification?: import("./store.ts").CreateFinnyClarificationRequestInput;
   }): Promise<void>;
@@ -65,6 +68,7 @@ interface FinnyIntegrationStore {
     destination: Destination;
     binding: FinnyParentBindingSnapshot;
   }): Promise<void>;
+  replaceApprovalBoundParent(input: Parameters<FinnyIntegrationStore["createApprovalBoundParent"]>[0]): Promise<void>;
   saveArtifactProposal(input: {
     scopeId: string;
     jobId: string;
@@ -182,7 +186,7 @@ export interface FinnyToolServiceFactory {
 
 export function createFinnyToolServiceFactory(deps: {
   config: Omit<FinnyIntegrationConfig, "signingSecret">;
-  jobs: Pick<FinnyStore, "createJob" | "getJob" | "recordPlanAmendment">;
+  jobs: Pick<FinnyStore, "createJob" | "getJob" | "recordSopAmendment">;
   runtime: Pick<FinnyRuntimeStore, "currentBinding" | "claimParentTurn"> &
     Partial<Pick<FinnyRuntimeStore, "claimWorkerTurn" | "bindingForSession">>;
   integration: FinnyIntegrationStore;
@@ -256,18 +260,20 @@ export function createFinnyToolServiceFactory(deps: {
       };
       return {
         async createPlan(
-          planPresentation: FinnyPlanPresentation,
+          sop: FinnySopVersion,
+          values: Record<string, string | boolean>,
           materialClarification?: FinnyMaterialClarification,
         ): Promise<FinnyPlanCreation> {
           if (current) throw new Error("Finny workers cannot create plans");
           if (materialClarification)
-            assertFinnyMaterialClarificationMatchesPlan(planPresentation, materialClarification);
+            assertFinnyMaterialClarificationMatchesSop(sop, values, materialClarification);
           const jobId = id();
           const requestId = id();
           const jobInput = {
             id: jobId,
             scopeId: turn.scopeId,
-            plan: planPresentation,
+            sop,
+            values,
             policy: initialFinnyPolicy(deps.config.spreadsheetEngine.evaluator),
             findingPolicy: deps.config.findingPolicy,
             originThreadRef: turn.originThreadRef,
@@ -303,7 +309,7 @@ export function createFinnyToolServiceFactory(deps: {
               ...turn.destination,
               finnyPlanRequestId: clarification?.requestId ?? requestId,
             },
-            text: clarification?.question ?? job.plan.title,
+            text: clarification?.question ?? sop.title,
             idempotencyKey: clarification
               ? `finny-clarification:${clarification.requestId}`
               : `finny-plan:${requestId}`,
@@ -319,30 +325,41 @@ export function createFinnyToolServiceFactory(deps: {
         },
         async amendPlan(
           jobId: string,
-          planPresentation: FinnyPlanPresentation,
+          sop: FinnySopVersion,
+          values: Record<string, string | boolean>,
           materialClarification?: FinnyMaterialClarification,
         ): Promise<FinnyPlanCreation> {
           const job = await deps.jobs.getJob(turn.scopeId, jobId);
           if (!job) throw new Error("Finny job is unavailable");
           if (materialClarification)
-            assertFinnyMaterialClarificationMatchesPlan(planPresentation, materialClarification);
+            assertFinnyMaterialClarificationMatchesSop(sop, values, materialClarification);
           const requestId = id();
           const now = Date.now();
-          await deps.jobs.recordPlanAmendment({
+          const amendment = await deps.jobs.recordSopAmendment({
             scopeId: turn.scopeId,
             jobId,
-            plan: planPresentation,
-            requestId,
-            authorizedActorId: turn.actor.id,
-            idempotencyKey: `finny-amend:${jobId}:${canonicalFinnyPlanDigest(planPresentation)}`,
+            sop,
+            values,
+            idempotencyKey: `finny-amend:${jobId}:${canonicalFinnyExecutionDigest(sop, values)}`,
             createdAt: now,
+          });
+          if (amendment.job.approval)
+            throw new Error("Finny non-material amendment retained its existing approval");
+          await deps.integration.replaceApprovalBoundParent({
+            scopeId: turn.scopeId,
+            jobId,
+            requestId,
+            actorId: turn.actor.id,
+            originThreadRef: turn.originThreadRef,
+            destination: turn.destination,
+            binding: turn.parentBinding,
           });
           await deps.deliveries.enqueue({
             destination: {
               ...turn.destination,
               finnyPlanRequestId: requestId,
             },
-            text: `[Amended Scope] ${planPresentation.title}`,
+            text: `[Amended Scope] ${sop.title}`,
             idempotencyKey: `finny-plan-amendment:${requestId}`,
           });
           return {
@@ -678,13 +695,17 @@ export function finnyFinalDelivery(
     receipt.payload.provisionalRevision,
   )}/content`;
   const artifactLink = `<${artifactUrl}|Open final artifact>`;
+  const title = job.sop?.title ?? job.plan.title;
+  const certification = job.sop
+    ? job.sop.controls.map((control) => control.assertion).join("\n")
+    : job.plan.certification;
   const spec = {
     schema: "generative-ui.v1",
     fallbackText: [
-      `*${job.plan.title} — Finny certification complete*`,
+      `*${title} — Finny certification complete*`,
       `*Artifact:* ${artifactLink}`,
       `*Artifact digest:* \`${receipt.payload.artifactDigest}\``,
-      `*Certification:* ${job.plan.certification}`,
+      `*Certification:* ${certification}`,
       `*Approval receipt:* \`${receipt.token}\``,
     ].join("\n"),
     elements: [
@@ -694,7 +715,7 @@ export function finnyFinalDelivery(
       },
       {
         type: "section",
-        text: `*${job.plan.title}*\nAll governance checks passed and independent audit verified.`,
+        text: `*${title}*\nAll governance checks passed and independent audit verified.`,
       },
       {
         type: "divider",
@@ -708,7 +729,7 @@ export function finnyFinalDelivery(
       },
       {
         type: "section",
-        text: `*Certification Scope & Rules:*\n${job.plan.certification}`,
+        text: `*Certification Scope & Rules:*\n${certification}`,
       },
       {
         type: "actions",

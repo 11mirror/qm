@@ -6,6 +6,7 @@ import type { FinnyToolService } from "../src/agent/agent-tools/finny.ts";
 import { scopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { Check } from "typebox/value";
+import { finnySopFixture } from "./support/finny-sop-fixture.ts";
 
 const service = {
   async createPlan() {
@@ -62,6 +63,8 @@ const plan = {
   destination: "Finance leadership",
   clarifications: [{ question: "Currency?", answer: "INR" }],
 };
+const sop = finnySopFixture();
+const values = { cutoff: "2026-10-31", currency: "INR", note: "first run" };
 
 function finnyTool() {
   const tool = createAgentTools({ current: context() }).find((candidate) => candidate.name === "finny");
@@ -69,15 +72,25 @@ function finnyTool() {
   return tool;
 }
 
+test("finny plan actions accept only strict SOP versions and bound values", () => {
+  const schema = finnyTool().parameters;
+  assert.equal(Check(schema, { action: "create_plan", sop, values }), true);
+  assert.equal(Check(schema, { action: "amend_plan", jobId: "job-1", sop, values }), true);
+  assert.equal(Check(schema, { action: "create_plan", plan }), false);
+  assert.equal(Check(schema, { action: "create_plan", sop }), false);
+  assert.equal(Check(schema, { action: "create_plan", sop: { ...sop, nodes: [] }, values }), false);
+});
+
 test("finny schema accepts only narrow content and evidence actions", () => {
   const schema = finnyTool().parameters;
   const valid = [
-    { action: "create_plan", plan },
-    { action: "amend_plan", jobId: "job-1", plan },
+    { action: "create_plan", sop, values },
+    { action: "amend_plan", jobId: "job-1", sop, values },
     {
       action: "amend_plan",
       jobId: "job-1",
-      plan: { ...plan, clarifications: [{ question: "Basis?", answer: "Contracts" }] },
+      sop,
+      values,
       materialClarification: {
         question: "Basis?",
         options: [
@@ -89,7 +102,8 @@ test("finny schema accepts only narrow content and evidence actions", () => {
     },
     {
       action: "create_plan",
-      plan: { ...plan, clarifications: [{ question: "Basis?", answer: "Contracts" }] },
+      sop,
+      values,
       materialClarification: {
         question: "Basis?",
         options: [
@@ -156,12 +170,13 @@ test("finny schema rejects model-supplied authority and escalation fields", () =
   for (const field of forbidden) {
     assert.equal(Check(schema, { ...base, [field]: field === "requiredChecks" ? [] : "forbidden" }), false, field);
   }
-  assert.equal(Check(schema, { action: "create_plan", plan: { ...plan, scopeId: "org:acme" } }), false);
+  assert.equal(Check(schema, { action: "create_plan", sop: { ...sop, nodes: [] }, values }), false);
   assert.equal(Check(schema, { action: "deterministic_audit", idempotencyKey: "audit-1", verdict: "pass" }), false);
   assert.equal(
     Check(schema, {
       action: "create_plan",
-      plan,
+      sop,
+      values,
       materialClarification: {
         question: "Basis?",
         options: [{ id: "only", label: "Only" }],
@@ -181,8 +196,8 @@ const execute = async (tool: ReturnType<typeof finnyTool>, id: string, params: u
 test("finny forwards only narrow inputs and returns concise bound-service text", async () => {
   const calls: Array<[string, unknown]> = [];
   const bound: FinnyToolService = {
-    async createPlan(input) {
-      calls.push(["create_plan", input]);
+    async createPlan(input, boundValues) {
+      calls.push(["create_plan", { sop: input, values: boundValues }]);
       return {
         message: "created job-1",
         jobId: "job-1",
@@ -190,8 +205,8 @@ test("finny forwards only narrow inputs and returns concise bound-service text",
         awaiting: "approval",
       };
     },
-    async amendPlan(jobId, input) {
-      calls.push(["amend_plan", { jobId, input }]);
+    async amendPlan(jobId, input, boundValues) {
+      calls.push(["amend_plan", { jobId, sop: input, values: boundValues }]);
       return {
         message: "amended job-1",
         jobId: "job-1",
@@ -229,7 +244,7 @@ test("finny forwards only narrow inputs and returns concise bound-service text",
   );
   assert.ok(tool);
   const inputs = [
-    { action: "create_plan", plan },
+    { action: "create_plan", sop, values },
     { action: "status", jobId: "job-1", retrySafe: true },
     {
       action: "artifact_ready",
@@ -272,7 +287,7 @@ test("finny forwards only narrow inputs and returns concise bound-service text",
     "job finalized",
   ]);
   assert.deepEqual(calls, [
-    ["create_plan", plan],
+    ["create_plan", { sop, values }],
     ["status", "job-1"],
     [
       "artifact_ready",
@@ -321,7 +336,7 @@ test("web Finny approval retains the durable plan request identity", async () =>
   ).find((candidate) => candidate.name === "finny");
   assert.ok(tool);
 
-  await execute(tool, "call-plan", { action: "create_plan", plan });
+  await execute(tool, "call-plan", { action: "create_plan", sop, values });
 
   assert.equal(pendingApprovals[0]?.approvalKey, "finny-plan:plan-request-1");
 });
@@ -345,10 +360,10 @@ test("web Finny amendment presents its durable replacement approval", async () =
   ).find((candidate) => candidate.name === "finny");
   assert.ok(tool);
 
-  await execute(tool, "call-amendment", { action: "amend_plan", jobId: "job-1", plan });
+  await execute(tool, "call-amendment", { action: "amend_plan", jobId: "job-1", sop, values });
 
   assert.equal(pendingApprovals[0]?.approvalKey, "finny-plan:amendment-request-1");
-  assert.equal(pendingApprovals[0]?.command, plan.title);
+  assert.equal(pendingApprovals[0]?.command, sop.title);
 });
 
 test("web Finny clarification presents the durable question before plan approval", async () => {
@@ -380,7 +395,8 @@ test("web Finny clarification presents the durable question before plan approval
 
   await execute(tool, "call-clarification", {
     action: "create_plan",
-    plan: { ...plan, clarifications: [{ question: clarification.question, answer: "Signed contracts" }] },
+    sop,
+    values,
     materialClarification: clarification,
   });
 
@@ -417,8 +433,8 @@ test("tool context carries the injected bound Finny service", () => {
 
 test("finny retry annotations reject replaying non-idempotent plan creation", () => {
   const schema = finnyTool().parameters;
-  assert.ok(Check(schema, { action: "create_plan", plan, retrySafe: false }));
-  assert.equal(Check(schema, { action: "create_plan", plan, retrySafe: true }), false);
+  assert.ok(Check(schema, { action: "create_plan", sop, values, retrySafe: false }));
+  assert.equal(Check(schema, { action: "create_plan", sop, values, retrySafe: true }), false);
   assert.ok(Check(schema, { action: "status", jobId: "job-1", retrySafe: true }));
   assert.ok(
     Check(schema, {

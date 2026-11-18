@@ -814,8 +814,10 @@ ALTER TABLE finny_jobs ADD CONSTRAINT finny_jobs_binding_mode CHECK (
     execution_digest IS NULL AND sop_revision IS NULL
   ) OR (
     plan_presentation IS NULL AND plan_digest IS NULL AND
-    sop_version_id IS NOT NULL AND jsonb_typeof(bound_inputs) = 'object' AND
-    execution_digest <> '' AND sop_revision > 0
+    sop_version_id IS NOT NULL AND bound_inputs IS NOT NULL AND
+    jsonb_typeof(bound_inputs) = 'object' AND
+    execution_digest IS NOT NULL AND execution_digest <> '' AND
+    sop_revision IS NOT NULL AND sop_revision > 0
   )
 );
 ALTER TABLE finny_jobs ADD CONSTRAINT finny_jobs_approval_binding_mode CHECK (
@@ -838,7 +840,7 @@ ALTER TABLE finny_approval_requests ADD CONSTRAINT finny_approval_requests_bindi
   (
     plan_digest IS NOT NULL AND execution_digest IS NULL
   ) OR (
-    plan_digest IS NULL AND execution_digest <> ''
+    plan_digest IS NULL AND execution_digest IS NOT NULL AND execution_digest <> ''
   )
 );
 ```

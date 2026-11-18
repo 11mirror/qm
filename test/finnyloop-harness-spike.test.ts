@@ -5,11 +5,14 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { createFinnyToolServiceFactory, finnyTurnAuthority } from "../src/finny/integration.ts";
+import { canonicalFinnyExecutionDigest, finnySopVersionId } from "../src/finny/plan.ts";
 import { initialFinnyPolicy } from "../src/finny/policy.ts";
 import { uploadAttachments } from "../src/slack/attachments.ts";
-import type { FinnyPlanPresentation, FinnyJob, FinnyEvaluatorRef } from "../src/finny/types.ts";
+import type { FinnyJob, FinnyEvaluatorRef } from "../src/finny/types.ts";
+import type { CreateFinnyJobCommand } from "../src/finny/store.ts";
 import type { SpreadsheetWorkerResult } from "../src/finny/deterministic-spreadsheet-worker.ts";
 import type { OutgoingAttachment } from "../src/types.ts";
+import { finnySopFixture } from "./support/finny-sop-fixture.ts";
 
 const evaluator: FinnyEvaluatorRef = {
   id: "libreoffice-calc",
@@ -47,7 +50,20 @@ test("Spike 2: Preflight harness calls finny_create_plan and enters human approv
       maxEvidenceBytes: 100_000,
     },
     jobs: {
-      async createJob(input: { id: string; scopeId: string; plan: FinnyPlanPresentation }) {
+      async createJob(input: CreateFinnyJobCommand) {
+        if ("sop" in input)
+          return {
+            id: input.id,
+            scopeId: input.scopeId,
+            sop: input.sop,
+            sopBinding: {
+              versionId: finnySopVersionId(input.sop),
+              values: input.values,
+              executionDigest: canonicalFinnyExecutionDigest(input.sop, input.values),
+              revision: 1,
+            },
+            policy: initialFinnyPolicy(evaluator),
+          } as unknown as FinnyJob;
         return {
           id: input.id,
           scopeId: input.scopeId,
@@ -59,7 +75,7 @@ test("Spike 2: Preflight harness calls finny_create_plan and enters human approv
       async getJob() {
         return null;
       },
-      async recordPlanAmendment() {
+      async recordSopAmendment() {
         return {} as never;
       },
     },
@@ -119,19 +135,12 @@ test("Spike 2: Preflight harness calls finny_create_plan and enters human approv
   const service = await factory.forTurn(turn);
   assert.ok(service, "Service should be instantiated for valid parent turn");
 
-  const plan: FinnyPlanPresentation = {
+  const sop = {
+    ...finnySopFixture(),
+    scopeId: "org:sharechat",
     title: "Prepare AP Closing Liability | 4 Vendors x 4 Quarter-Ends",
-    phases: [
-      { name: "SuiteQL Extraction", owner: "Producer", dependencies: [] },
-      { name: "Deterministic Audit", owner: "LibreOffice Engine", dependencies: ["SuiteQL Extraction"] },
-    ],
-    certification: "All 8 Core checks PASS",
-    deliverable: "AP_Closing_Liability.xlsx",
-    destination: "slack:C123:1794000.123",
-    clarifications: [],
   };
-
-  const planResponse = await service.createPlan(plan);
+  const planResponse = await service.createPlan(sop, { cutoff: "2026-09-30", currency: "INR" });
   assert.match(planResponse.message, /is awaiting approval/);
   assert.equal(deliveries.length, 1, "Should enqueue exactly one Slack Block Kit approval card");
   const dest = deliveries[0]?.destination;
@@ -175,7 +184,7 @@ test("Spike 3: Auditor executes deterministic audit and passes with valid eviden
           requiredGenerations: { "formula.recalculate": 1, "summary.crossfoot": 1 },
         } as unknown as FinnyJob;
       },
-      async recordPlanAmendment() {
+      async recordSopAmendment() {
         return {} as never;
       },
     },
@@ -351,7 +360,20 @@ test("Spike 5: finnyTurnAuthority and createPlan support web chat surface", asyn
       findingPolicy: {} as never,
     },
     jobs: {
-      async createJob(input: { id: string; scopeId: string; plan: FinnyPlanPresentation }) {
+      async createJob(input: CreateFinnyJobCommand) {
+        if ("sop" in input)
+          return {
+            id: input.id,
+            scopeId: input.scopeId,
+            sop: input.sop,
+            sopBinding: {
+              versionId: finnySopVersionId(input.sop),
+              values: input.values,
+              executionDigest: canonicalFinnyExecutionDigest(input.sop, input.values),
+              revision: 1,
+            },
+            policy: initialFinnyPolicy(evaluator),
+          } as unknown as FinnyJob;
         return {
           id: input.id,
           scopeId: input.scopeId,
@@ -363,7 +385,7 @@ test("Spike 5: finnyTurnAuthority and createPlan support web chat surface", asyn
       async getJob() {
         return null;
       },
-      async recordPlanAmendment() {
+      async recordSopAmendment() {
         return {} as never;
       },
     },
@@ -423,19 +445,8 @@ test("Spike 5: finnyTurnAuthority and createPlan support web chat surface", asyn
   const service = await factory.forTurn(turn);
   assert.ok(service, "Service must be instantiated for web parent turn");
 
-  const plan: FinnyPlanPresentation = {
-    title: "Net Worth Schedule with Equity Bridge",
-    phases: [
-      { name: "Extraction", owner: "Producer", dependencies: [] },
-      { name: "Deterministic Audit", owner: "LibreOffice Engine", dependencies: ["Extraction"] },
-    ],
-    certification: "All 8 Core checks PASS",
-    deliverable: "MTPL_Net_Worth.xlsx",
-    destination: "web:sess-web-123",
-    clarifications: [],
-  };
-
-  const planResponse = await service.createPlan(plan);
+  const sop = { ...finnySopFixture(), scopeId: "org:sharechat", title: "Net Worth Schedule with Equity Bridge" };
+  const planResponse = await service.createPlan(sop, { cutoff: "2026-09-30", currency: "INR" });
   assert.match(planResponse.message, /is awaiting approval/);
   assert.equal(deliveries.length, 1);
   const dest = deliveries[0]?.destination;

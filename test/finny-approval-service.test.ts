@@ -9,6 +9,7 @@ import { initialFinnyPolicy } from "../src/finny/policy.ts";
 import { createPostgresFinnyStore } from "../src/finny/postgres-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { finnySopFixture } from "./support/finny-sop-fixture.ts";
 
 const plan = {
   title: "October close",
@@ -37,20 +38,22 @@ function internalIdentity() {
   };
 }
 
-test("pending loads the persisted plan presentation by opaque request ID", async () => {
+test("pending projects the exact persisted SOP binding by opaque request ID", async () => {
   const store = createPostgresFinnyStore(testDatabaseUrl());
   const jobId = randomUUID();
   const requestId = randomUUID();
+  const sop = finnySopFixture();
   await store.createJob({
     id: jobId,
-    scopeId: "personal:approver@example.com",
-    plan,
+    scopeId: sop.scopeId,
+    sop,
+    values: { cutoff: "2026-10-31", currency: "INR" },
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
   });
   await store.createApprovalRequest({
-    scopeId: "personal:approver@example.com",
+    scopeId: sop.scopeId,
     jobId,
     requestId,
     authorizedActorId: "approver@example.com",
@@ -65,12 +68,15 @@ test("pending loads the persisted plan presentation by opaque request ID", async
     kind: "plan",
     requestId,
     card: {
-      title: plan.title,
-      summary: plan.summary,
-      phases: plan.phases,
-      certification: plan.certification,
-      deliverable: plan.deliverable,
-      destination: plan.destination,
+      title: sop.title,
+      summary: sop.intent.description,
+      phases: [
+        { name: sop.steps[0].action, owner: "Producer", dependencies: [] },
+        { name: sop.steps[1].action, owner: "Producer", dependencies: [sop.steps[0].action] },
+      ],
+      certification: sop.controls.map((control) => control.assertion).join("\n"),
+      deliverable: "XLSX workbook, certified summary",
+      destination: sop.approval.destination,
     },
   });
 });

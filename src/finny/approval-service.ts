@@ -1,5 +1,6 @@
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { FinnyApprovalBridge } from "../slack/finny-approvals.ts";
+import { finnySopPlanPresentation } from "./plan.ts";
 import type { FinnyStore } from "./store.ts";
 
 const PLAN_OUTCOMES = {
@@ -41,9 +42,16 @@ export function createFinnyApprovalService(deps: {
     }
     if (request.readyAt === undefined || request.decidedAt !== undefined || request.job.approval !== undefined)
       return null;
-    if (request.planDigest !== request.job.planDigest || request.originThreadRef !== request.job.originThreadRef)
+    const plan =
+      request.job.sop && request.job.sopBinding
+        ? finnySopPlanPresentation(request.job.sop, request.job.sopBinding.values)
+        : request.job.plan;
+    const bindingMatches = request.job.sopBinding
+      ? request.executionDigest === request.job.sopBinding.executionDigest
+      : request.planDigest === request.job.planDigest;
+    if (!bindingMatches || request.originThreadRef !== request.job.originThreadRef)
       throw new Error("Finny approval request binding does not match the job");
-    const { title, summary, phases, certification, deliverable, destination } = request.job.plan;
+    const { title, summary, phases, certification, deliverable, destination } = plan;
     return {
       kind: "plan" as const,
       requestId,
@@ -200,7 +208,11 @@ export function createFinnyApprovalService(deps: {
         () => deps.onApproved({ scopeId: request.scopeId, jobId: request.jobId, requestId: request.requestId }),
       );
       const outcome = PLAN_OUTCOMES[input.decision.action];
-      return { kind: "decision", card: { title: request.job.plan.title, ...outcome } };
+      const title =
+        request.job.sop && request.job.sopBinding
+          ? finnySopPlanPresentation(request.job.sop, request.job.sopBinding.values).title
+          : request.job.plan.title;
+      return { kind: "decision", card: { title, ...outcome } };
     },
   };
 }

@@ -39,7 +39,8 @@ export interface FinnyApproval {
   requestId: string;
   actorId: string;
   action: FinnyApprovalAction;
-  planDigest: string;
+  planDigest?: string;
+  executionDigest?: string;
   originThreadRef: string;
   decidedAt: number;
   consumedAt?: number;
@@ -50,6 +51,8 @@ export interface FinnyJob {
   scopeId: string;
   plan: FinnyPlanPresentation;
   planDigest: string;
+  sop?: FinnySopVersion;
+  sopBinding?: FinnyJobSopBinding;
   artifactDigest?: string;
   policy: FinnyPolicySnapshot;
   findingPolicy?: FinnyFindingPolicy;
@@ -65,6 +68,13 @@ export interface FinnyJob {
   finalizedAt?: number;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface FinnyJobSopBinding {
+  versionId: string;
+  values: Record<string, string | boolean>;
+  executionDigest: string;
+  revision: number;
 }
 
 export interface FinnyDeterministicEvidenceAuthority {
@@ -144,6 +154,7 @@ export const FINNY_JOB_EVENT_TYPES = [
   "rework_cancelled",
   "verification_reopened",
   "plan_amended",
+  "sop_amended",
 ] as const;
 
 export type FinnyJobEventType = (typeof FINNY_JOB_EVENT_TYPES)[number];
@@ -219,6 +230,15 @@ export interface FinnyJobEventPayloads {
     previousPlanDigest: string;
     newPlanDigest: string;
   };
+  sop_amended: {
+    previousSopVersionId: string;
+    newSopVersionId: string;
+    previousValues: Record<string, string | boolean>;
+    newValues: Record<string, string | boolean>;
+    previousExecutionDigest: string;
+    newExecutionDigest: string;
+    revision: number;
+  };
 }
 
 export type FinnyJobEvent<T extends FinnyJobEventType = FinnyJobEventType> = {
@@ -252,6 +272,83 @@ export interface FinnyPlanPresentation {
   deliverable: string;
   destination: string;
   clarifications: FinnyPlanClarification[];
+}
+
+export type FinnySopDomain = "ap" | "ar" | "gl" | "close";
+export type FinnySopInputOrigin = "human" | "system";
+export type FinnySopInputType = "date" | "text" | "currency" | "entity" | "boolean";
+export type FinnySopOutputKind = "xlsx" | "summary" | "app";
+
+export interface FinnySopVersion {
+  schema: "finny.sop.v1";
+  id: string;
+  version: number;
+  scopeId: string;
+  title: string;
+  intent: {
+    domain: FinnySopDomain;
+    description: string;
+    searchTerms: readonly string[];
+  };
+  objective: string;
+  inputs: ReadonlyArray<{
+    id: string;
+    label: string;
+    from: FinnySopInputOrigin;
+    type: FinnySopInputType;
+    required: boolean;
+    material: boolean;
+  }>;
+  sources: ReadonlyArray<{
+    id: string;
+    system: string;
+    object: string;
+    fields: readonly string[];
+    filter: string;
+    asOfInput?: string;
+  }>;
+  steps: ReadonlyArray<{
+    id: string;
+    action: string;
+    reads: readonly string[];
+    writes: string;
+  }>;
+  controls: ReadonlyArray<{
+    id: string;
+    assertion: string;
+    tolerance?: string;
+    evidenceRefs: readonly string[];
+    judgment?: { question: string; onlyWhen: string };
+  }>;
+  outputs: ReadonlyArray<{
+    id: string;
+    kind: FinnySopOutputKind;
+    contract: Record<string, unknown>;
+    rerun?: { inputIds: readonly string[] };
+  }>;
+  approval: { required: boolean; destination: string };
+}
+
+export interface FinnyProducerTask {
+  schema: "finny.producer-task.v1";
+  sopVersion: Pick<FinnySopVersion, "id" | "version" | "scopeId">;
+  executionDigest: string;
+  objective: string;
+  boundInputs: Record<string, string | boolean>;
+  sources: FinnySopVersion["sources"];
+  steps: FinnySopVersion["steps"];
+  controls: FinnySopVersion["controls"];
+  outputs: FinnySopVersion["outputs"];
+}
+
+export interface FinnyAuditEnvelope {
+  schema: "finny.audit-envelope.v1";
+  sopVersion: Pick<FinnySopVersion, "id" | "version" | "scopeId">;
+  executionDigest: string;
+  boundInputs: Record<string, string | boolean>;
+  sources: FinnySopVersion["sources"];
+  controls: FinnySopVersion["controls"];
+  outputs: FinnySopVersion["outputs"];
 }
 
 export interface FinnyClarificationOption {

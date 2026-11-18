@@ -3,7 +3,9 @@ import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { createFinnyToolServiceFactory, finnySlackAuthority } from "../src/finny/integration.ts";
 import { channelThreadRef, dmThreadRef } from "../src/slack/message-gating.ts";
-import type { FinnyJob, FinnyPlanPresentation } from "../src/finny/types.ts";
+import { canonicalFinnyExecutionDigest, finnySopVersionId } from "../src/finny/plan.ts";
+import type { FinnyJob } from "../src/finny/types.ts";
+import { finnySopFixture } from "./support/finny-sop-fixture.ts";
 
 const evaluator = {
   id: "libreoffice-calc",
@@ -13,14 +15,8 @@ const evaluator = {
   configurationDigest: "b".repeat(64),
 } as const;
 
-const plan: FinnyPlanPresentation = {
-  title: "Close",
-  phases: [{ name: "Prepare", owner: "Producer", dependencies: [] }],
-  certification: "Independent audit",
-  deliverable: "Workbook",
-  destination: "Origin thread",
-  clarifications: [],
-};
+const sop = { ...finnySopFixture(), scopeId: "scope-1", title: "Close" };
+const values = { cutoff: "2026-10-31", currency: "INR", note: "first run" };
 
 function harness(
   binding: { role: "parent" | "producer" | "auditor" } | null = null,
@@ -30,10 +26,16 @@ function harness(
   const job = {
     id: "job-1",
     scopeId: "scope-1",
-    plan,
+    sop,
+    sopBinding: {
+      versionId: finnySopVersionId(sop),
+      values,
+      executionDigest: canonicalFinnyExecutionDigest(sop, values),
+      revision: 1,
+    },
     policy: { policyVersion: "v1", requiredGenerations: {} },
     ...options.job,
-  } as FinnyJob;
+  } as unknown as FinnyJob;
   const factory = createFinnyToolServiceFactory({
     config: {
       findingPolicy: { id: "bounds.v1", maxFindings: 4, maxCodeLength: 20, maxMessageLength: 200 },
@@ -57,6 +59,9 @@ function harness(
       },
       async getJob(scopeId: string, jobId: string) {
         return scopeId === "scope-1" && jobId === "job-1" ? job : null;
+      },
+      async recordSopAmendment() {
+        return { job, events: [], deduped: false };
       },
     },
     runtime: {
@@ -98,6 +103,9 @@ function harness(
       },
       async createApprovalBoundParent(input: any) {
         calls.push(["createApprovalBoundParent", input]);
+      },
+      async replaceApprovalBoundParent(input: any) {
+        calls.push(["replaceApprovalBoundParent", input]);
       },
       async saveArtifactProposal(input: any) {
         calls.push(["saveArtifactProposal", input]);
@@ -190,7 +198,7 @@ test("parent create_plan persists server authority before idempotent native plan
   const { factory, calls } = harness();
   const service = await factory.forTurn(parent);
   assert.ok(service);
-  assert.deepEqual(await service.createPlan(plan), {
+  assert.deepEqual(await service.createPlan(sop, values), {
     message: "Finny plan id-1 is awaiting approval.",
     jobId: "id-1",
     requestId: "id-2",
@@ -211,12 +219,9 @@ test("material clarification is persisted before delivery while the plan card st
   const { factory, calls } = harness();
   const service = await factory.forTurn(parent);
   assert.ok(service);
-  const clarifiedPlan = {
-    ...plan,
-    clarifications: [{ question: "Which basis?", answer: "Signed contracts" }],
-  };
+  const clarifiedValues = { ...values, currency: "Signed contracts" };
   assert.deepEqual(
-    await service.createPlan(clarifiedPlan, {
+    await service.createPlan(sop, clarifiedValues, {
       question: "Which basis?",
       options: [
         { id: "contracts", label: "Signed contracts" },
@@ -248,7 +253,7 @@ test("material clarification must match the immutable plan recommendation", asyn
   const service = await factory.forTurn(parent);
   assert.ok(service);
   await assert.rejects(
-    service.createPlan(plan, {
+    service.createPlan(sop, values, {
       question: "Which basis?",
       options: [
         { id: "contracts", label: "Signed contracts" },
@@ -260,13 +265,8 @@ test("material clarification must match the immutable plan recommendation", asyn
   );
   await assert.rejects(
     service.createPlan(
-      {
-        ...plan,
-        clarifications: [
-          { question: "Which basis?", answer: "Signed contracts" },
-          { question: "Which basis?", answer: "Issued invoices" },
-        ],
-      },
+      sop,
+      { ...values, cutoff: "Signed contracts", currency: "Signed contracts" },
       {
         question: "Which basis?",
         options: [
@@ -346,8 +346,14 @@ test("final delivery remains in the exact bound Slack thread with revision and s
   const job = {
     id: "job-1",
     originThreadRef: "slack:C1:100.1",
-    plan: { ...plan, title: "Pack", certification: "Certified" },
-  } as FinnyJob;
+    sop: { ...sop, title: "Pack" },
+    sopBinding: {
+      versionId: finnySopVersionId(sop),
+      values,
+      executionDigest: canonicalFinnyExecutionDigest(sop, values),
+      revision: 1,
+    },
+  } as unknown as FinnyJob;
   const delivery = finnyFinalDelivery(
     { originThreadRef: job.originThreadRef, destination: { type: "slack", target: "C1:100.1", threadTs: "100.1" } },
     job,
@@ -357,7 +363,7 @@ test("final delivery remains in the exact bound Slack thread with revision and s
   assert.deepEqual(delivery.destination, { type: "slack", target: "C1:100.1", threadTs: "100.1" });
   assert.match(delivery.text, /signed-receipt/);
   assert.match(delivery.text, /<https:\/\/qm\.example\/v1\/files\/r7\/content\|Open final artifact>/);
-  assert.match(delivery.text, /Certified/);
+  assert.match(delivery.text, /source control total/);
   assert.equal(delivery.idempotencyKey, "finny-final:job-1:9");
   assert.throws(
     () =>
