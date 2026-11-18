@@ -199,6 +199,46 @@ test("Core audit cutover refuses unfinished jobs with unmapped SOP controls", as
   await assert.rejects(cutover.searchSopVersions(sop.scopeId, "missing"), /unfinished jobs have unmapped SOP controls/i);
 });
 
+test("Core audit cutover preserves finalized jobs with historical SOP controls", async () => {
+  const url = testDatabaseUrl();
+  const store = createPostgresFinnyStore(url);
+  await store.searchSopVersions("personal:U2", "missing");
+  const db = createPgPool(url);
+  const sop = { ...legacySop(), scopeId: "personal:U2", version: 92 };
+  const versionId = "personal%3AU2/ap-aging@92";
+  const now = Date.now();
+  await db.q(
+    `INSERT INTO finny_sop_versions(
+       version_id,scope_id,sop_id,version,definition,definition_digest,search_text,created_at
+     ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [versionId, sop.scopeId, sop.id, sop.version, sop, "y".repeat(43), "historical AP aging", now],
+  );
+  const policy = initialFinnyPolicy(TEST_FINNY_EVALUATOR);
+  await db.q(
+    `INSERT INTO finny_jobs(
+       id,scope_id,sop_version_id,bound_inputs,execution_digest,sop_revision,
+       policy_version,evaluator_ref,required_generations,finding_policy,
+       origin_thread_ref,finalized_at,created_at,updated_at
+     ) VALUES($1,$2,$3,$4,$5,1,$6,$7,$8,$9,$10,$11,$11,$11)`,
+    [
+      randomUUID(),
+      sop.scopeId,
+      versionId,
+      { cutoff: "2026-10-31", currency: "INR" },
+      "historical-execution-digest",
+      policy.policyVersion,
+      policy.evaluator,
+      policy.requiredGenerations,
+      { id: "historical", maxFindings: 1, maxCodeLength: 1, maxMessageLength: 1 },
+      "slack:C2:1.1",
+      now,
+    ],
+  );
+  await db.q("DELETE FROM qm_schema_migrations WHERE id='finny/store/0019-core-audit-cutover'");
+  const cutover = createPostgresFinnyStore(url);
+  assert.deepEqual((await cutover.getSopVersion(sop.scopeId, versionId))?.sop, sop);
+});
+
 test("approval authorizes the exact current execution digest", async () => {
   const store = createPostgresFinnyStore(testDatabaseUrl());
   const input = sopJobInput();
