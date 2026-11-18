@@ -9,7 +9,7 @@ test("Finny clarification choices expose every persisted option plus Other", () 
     command: "Which cutoff?",
     reason: "Finny Governance Clarification",
     summaryDetail: JSON.stringify({
-      plan: { title: "AP aging", phases: [] },
+      sop: { title: "AP aging" },
       materialClarification: {
         question: "Which cutoff?",
         options: [

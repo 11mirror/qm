@@ -26,8 +26,24 @@ export interface FinnyClarificationChoice {
 export function parseFinnyPlanDetail(detail?: string): FinnyPlanDetail | null {
   if (!detail) return null;
   try {
-    const parsed = JSON.parse(detail);
-    if (parsed && typeof parsed === "object" && parsed.plan && Array.isArray(parsed.plan.phases)) return parsed;
+    const parsed = JSON.parse(detail) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object") return null;
+    const plan = parsed.plan as Record<string, unknown> | undefined;
+    const clarification = parsed.materialClarification as Record<string, unknown> | undefined;
+    const validPlan = plan && Array.isArray(plan.phases);
+    const validClarification =
+      clarification &&
+      typeof clarification.question === "string" &&
+      typeof clarification.recommendedOptionId === "string" &&
+      Array.isArray(clarification.options) &&
+      clarification.options.every(
+        (option) =>
+          option &&
+          typeof option === "object" &&
+          typeof (option as Record<string, unknown>).id === "string" &&
+          typeof (option as Record<string, unknown>).label === "string",
+      );
+    if (validPlan || validClarification) return parsed as FinnyPlanDetail;
   } catch {
     return null;
   }
