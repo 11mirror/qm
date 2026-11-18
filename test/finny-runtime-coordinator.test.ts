@@ -357,7 +357,7 @@ test("a BLOCK wakes the bound producer with policy-bounded findings", async () =
   assert.equal(await runtime.currentBinding("auditor-session"), null);
 });
 
-test("the next artifact creates a fresh independent Auditor run and grant", async () => {
+test("the next artifact recovers a fresh independent Auditor after admission interruption", async () => {
   const { jobs, job, connectionString } = await approvedJob();
   await jobs.recordArtifactReady({
     scopeId: job.scopeId,
@@ -392,12 +392,15 @@ test("the next artifact creates a fresh independent Auditor run and grant", asyn
     expiresAt: number;
   }> = [];
   const auditorTasks: string[] = [];
+  let admissionAttempts = 0;
   const coordinator = createFinnyRuntimeCoordinator({
     jobs,
     runtime,
     grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
     sessions: {
       async open(input) {
+        admissionAttempts += 1;
+        if (admissionAttempts === 1) throw new Error("replacement Auditor admission interrupted");
         assert.equal(input.name, "Finny Auditor");
         auditorTasks.push(input.task);
         const identity = { sessionId: "auditor-session-2", runId: "auditor-run-2" };
@@ -430,16 +433,19 @@ test("the next artifact creates a fresh independent Auditor run and grant", asyn
     idempotencyKey: "block-1",
   });
 
-  await coordinator.artifactReady({
+  const nextArtifact = {
     sessionId: "producer-session",
     runId: "producer-run",
     scopeId: job.scopeId,
     jobId: job.id,
     idempotencyKey: "artifact-2",
-  });
+  };
+  await assert.rejects(coordinator.artifactReady(nextArtifact), /replacement Auditor admission interrupted/);
+  await coordinator.artifactReady(nextArtifact);
 
   assert.equal((await runtime.currentBinding("auditor-session-2"))?.runId, "auditor-run-2");
   assert.equal((await runtime.currentBinding("auditor-session-2"))?.epoch, 2);
+  assert.equal(admissionAttempts, 2);
   assert.deepEqual(auditorTasks, ["Audit the current artifact independently"]);
   assert.equal(dispatched.length, 1);
 });
@@ -922,7 +928,7 @@ test("artifact readiness derives artifact and Auditor grant authority from Core 
   assert.equal(issuedPrincipal, "core-principal");
 });
 
-test("a completed artifact action replay does not create another Auditor", async () => {
+test("artifact action replay retains committed authority and recovers an unfinished audit", async () => {
   const { jobs, job, connectionString } = await approvedJob();
   const runtime = createPostgresFinnyRuntimeStore(connectionString);
   await runtime.bindInitial({
@@ -941,14 +947,18 @@ test("a completed artifact action replay does not create another Auditor", async
     auditorPrincipalId: "U1",
   });
   const delivered = new Set<string>();
+  let openedAuditors = 0;
   let resolvedArtifact = { artifactDigest: "artifact-sha256", provisionalRevision: "revision-1" };
   const coordinator = createFinnyRuntimeCoordinator({
     jobs,
     runtime,
     grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
     sessions: {
-      async open() {
-        throw new Error("unexpected open");
+      async open(openInput) {
+        openedAuditors += 1;
+        const identity = { sessionId: "replay-auditor-session", runId: "replay-auditor-run" };
+        await openInput.beforeEnqueue?.(identity);
+        return { ok: true as const, ...identity, title: openInput.name ?? "Finny Auditor" };
       },
     },
     dispatcher: {
@@ -978,6 +988,8 @@ test("a completed artifact action replay does not create another Auditor", async
   await coordinator.artifactReady(input);
 
   assert.deepEqual([...delivered], []);
+  assert.equal(openedAuditors, 1);
+  assert.equal((await jobs.getJob(job.scopeId, job.id))?.artifactDigest, "artifact-sha256");
 });
 
 test("audit outcomes derive issuer provenance from the authorized runtime binding", async () => {

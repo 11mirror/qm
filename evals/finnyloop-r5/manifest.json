@@ -301,7 +301,7 @@
         {
           "commandId": "finny-runtime-postgres",
           "file": "test/finny-runtime-coordinator.test.ts",
-          "name": "the next artifact creates a fresh independent Auditor run and grant"
+          "name": "the next artifact recovers a fresh independent Auditor after admission interruption"
         },
         {
           "commandId": "finny-runtime-postgres",
@@ -534,7 +534,7 @@
         {
           "commandId": "finny-runtime-postgres",
           "file": "test/finny-runtime-coordinator.test.ts",
-          "name": "a completed artifact action replay does not create another Auditor"
+          "name": "artifact action replay retains committed authority and recovers an unfinished audit"
         },
         {
           "commandId": "finny-runtime-postgres",

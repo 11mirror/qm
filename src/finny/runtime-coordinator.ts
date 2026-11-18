@@ -599,7 +599,13 @@ export function createFinnyRuntimeCoordinator(deps: {
       let auditor = await deps.runtime.currentRoleBinding(input.scopeId, input.jobId, "auditor");
       if (!auditor) {
         const latestAuditor = await deps.runtime.latestRoleBinding(input.scopeId, input.jobId, "auditor");
-        if (ready.deduped && latestAuditor && !latestAuditor.active) return;
+        if (
+          ready.deduped &&
+          latestAuditor &&
+          !latestAuditor.active &&
+          !(await deps.runtime.currentArtifactNeedsAudit(input.scopeId, input.jobId))
+        )
+          return;
       }
       if (!auditor) {
         const auditorCredentials = deps.workerPolicy.credentials(ready.job, "auditor");

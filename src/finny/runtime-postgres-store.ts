@@ -131,6 +131,24 @@ const DISPATCH_CANCELLATION_SCHEMA = [
   `ALTER TABLE finny_runtime_dispatches ADD COLUMN IF NOT EXISTS cancelled_at BIGINT`,
 ];
 
+const CURRENT_ARTIFACT_NEEDS_AUDIT = `
+  jobs.finalized_at IS NULL
+  AND jobs.pending_rework_seq IS NULL
+  AND jobs.unresolved_escalation_seq IS NULL
+  AND jobs.artifact_digest IS NOT NULL
+  AND EXISTS (
+    SELECT 1
+      FROM jsonb_each_text(jobs.required_generations) AS required(check_id,generation)
+     WHERE NOT EXISTS (
+       SELECT 1 FROM finny_job_events AS audit
+        WHERE audit.job_id=jobs.id
+          AND audit.event_type='audit_passed'
+          AND audit.payload->>'artifactDigest'=jobs.artifact_digest
+          AND audit.payload->>'checkId'=required.check_id
+          AND (audit.payload->>'generation')::int=required.generation::int
+     )
+  )`;
+
 function rowToBinding(row: Record<string, unknown>): FinnyRuntimeBinding {
   return {
     scopeId: row.scope_id as string,
@@ -393,6 +411,15 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
         [scopeId, jobId, role],
       );
       return rows[0] ? rowToBinding(rows[0]) : null;
+    },
+    async currentArtifactNeedsAudit(scopeId: string, jobId: string): Promise<boolean> {
+      const rows = await q(
+        `SELECT (${CURRENT_ARTIFACT_NEEDS_AUDIT}) AS needed
+           FROM finny_jobs AS jobs
+          WHERE jobs.id=$1 AND jobs.scope_id=$2`,
+        [jobId, scopeId],
+      );
+      return rows[0]?.needed === true;
     },
     async bindAuditor(input: {
       scopeId: string;
@@ -690,27 +717,12 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
            ) AS producer_state ON TRUE
       LEFT JOIN finny_runtime_dispatches AS dispatches
              ON dispatches.idempotency_key=actions.idempotency_key ||
-                CASE actions.kind WHEN 'artifact_ready' THEN ':auditor-grant' WHEN 'audit_blocked' THEN ':producer-rework' ELSE ':none' END
+                CASE actions.kind WHEN 'audit_blocked' THEN ':producer-rework' ELSE ':none' END
           WHERE (
               actions.kind='artifact_ready'
               AND (
                 events.seq IS NULL OR (
-                  jobs.finalized_at IS NULL
-                  AND jobs.pending_rework_seq IS NULL
-                  AND jobs.unresolved_escalation_seq IS NULL
-                  AND jobs.artifact_digest IS NOT NULL
-                  AND EXISTS (
-                    SELECT 1
-                      FROM jsonb_each_text(jobs.required_generations) AS required(check_id,generation)
-                     WHERE NOT EXISTS (
-                       SELECT 1 FROM finny_job_events AS audit
-                        WHERE audit.job_id=actions.job_id
-                          AND audit.event_type='audit_passed'
-                          AND audit.payload->>'artifactDigest'=jobs.artifact_digest
-                          AND audit.payload->>'checkId'=required.check_id
-                          AND (audit.payload->>'generation')::int=required.generation::int
-                     )
-                  )
+                  ${CURRENT_ARTIFACT_NEEDS_AUDIT}
                 )
               )
               AND (
