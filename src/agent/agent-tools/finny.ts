@@ -135,7 +135,8 @@ export function finnyTools(kit: ToolKit) {
   const amendPlan = defineTool({
     name: "finny_amend_plan",
     label: "Amend Finny plan",
-    description: "Amend an in-flight Finny plan when scope shifts. Requires human scope change approval.",
+    description:
+      "Amend an in-flight Finny plan. Material execution changes require human approval; non-material value changes retain the existing approval.",
     parameters: Type.Object(
       { jobId: string(), sop, values, materialClarification: Type.Optional(materialClarification) },
       { additionalProperties: false },
