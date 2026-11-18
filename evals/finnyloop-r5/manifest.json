@@ -69,6 +69,18 @@
       "args": ["--test", "test/finny-integration.test.ts"]
     },
     {
+      "id": "finny-agent-tool-offline",
+      "program": "node",
+      "requiresDatabase": false,
+      "args": ["--test", "test/finny-agent-tool.test.ts"]
+    },
+    {
+      "id": "finny-core-audit-offline",
+      "program": "node",
+      "requiresDatabase": false,
+      "args": ["--test", "test/finny-core-audit.test.ts"]
+    },
+    {
       "id": "finny-http-engine-offline",
       "program": "node",
       "requiresDatabase": false,
@@ -155,7 +167,7 @@
     },
     {
       "id": "worker-role-run-forgery",
-      "invariant": "Core-issued bindings reject stale producer runs, producer audit completion, and equal producer/Auditor identities.",
+      "invariant": "Core-issued bindings reject stale producer runs, Producer judgment actions, and equal Producer/Auditor identities.",
       "selectors": [
         {
           "commandId": "finny-runtime-postgres",
@@ -163,9 +175,9 @@
           "name": "rejects artifact readiness from a stale producer run"
         },
         {
-          "commandId": "finny-runtime-postgres",
-          "file": "test/finny-runtime-coordinator.test.ts",
-          "name": "rejects audit completion from the producer role"
+          "commandId": "finny-agent-tool-offline",
+          "file": "test/finny-agent-tool.test.ts",
+          "name": "Finny tools expose only role-owned actions and parameter fields"
         },
         {
           "commandId": "finny-grants-postgres",
@@ -255,7 +267,7 @@
     },
     {
       "id": "block-wakes-producer-and-rotates-auditor",
-      "invariant": "A BLOCK automatically wakes the bound producer once; the replacement artifact receives a fresh independent Auditor run and grant.",
+      "invariant": "An objective BLOCK wakes the bound Producer with exact repair context; Core re-audits a replacement and opens an Auditor only for pending judgment.",
       "selectors": [
         {
           "commandId": "finny-runtime-postgres",
@@ -265,33 +277,33 @@
         {
           "commandId": "finny-runtime-postgres",
           "file": "test/finny-runtime-coordinator.test.ts",
-          "name": "a BLOCK wakes the bound producer with policy-bounded findings"
+          "name": "atomic BLOCK dispatches only failed controls and repair context to the current Producer"
         },
         {
           "commandId": "finny-runtime-postgres",
           "file": "test/finny-runtime-coordinator.test.ts",
-          "name": "the next artifact recovers a fresh independent Auditor after admission interruption"
+          "name": "artifact readiness derives artifact and Auditor grant authority from Core dependencies"
         },
         {
           "commandId": "finny-runtime-postgres",
           "file": "test/finny-runtime-coordinator.test.ts",
-          "name": "replaying the same BLOCK is idempotent without duplicate producer wake"
+          "name": "artifact action replay retains committed authority and recovers an unfinished audit"
         },
         {
-          "commandId": "finny-integration-offline",
-          "file": "test/finny-integration.test.ts",
-          "name": "deterministic BLOCK preserves every result in one atomic audit attempt"
+          "commandId": "finny-core-audit-offline",
+          "file": "test/finny-core-audit.test.ts",
+          "name": "Core blocks objective failures and defers judgment-triggered failures"
         }
       ]
     },
     {
       "id": "configured-escalation-boundary",
-      "invariant": "Core follows the externally configured rework-or-stop decision and stops worker actions when escalation is approved.",
+      "invariant": "Core stops automatic rework after the externally configured maximum and escalates the job.",
       "selectors": [
         {
-          "commandId": "finny-runtime-postgres",
-          "file": "test/finny-runtime-coordinator.test.ts",
-          "name": "an externally approved escalation stops worker actions instead of reworking"
+          "commandId": "finny-integration-offline",
+          "file": "test/finny-integration.test.ts",
+          "name": "configured max reworks escalates after the authoritative rework limit"
         }
       ]
     },
@@ -315,9 +327,9 @@
           "name": "evidence authority derives immutable scoped file digests and verifies deterministic envelopes"
         },
         {
-          "commandId": "finny-integration-offline",
-          "file": "test/finny-integration.test.ts",
-          "name": "bound Auditor commits all deterministic results as one atomic audit attempt"
+          "commandId": "finny-core-audit-offline",
+          "file": "test/finny-core-audit.test.ts",
+          "name": "reads one immutable scoped XLSX byte stream for Core audit"
         },
         {
           "commandId": "finny-http-engine-offline",
@@ -493,7 +505,7 @@
         {
           "commandId": "finny-runtime-postgres",
           "file": "test/finny-runtime-coordinator.test.ts",
-          "name": "producer rework dispatch recovers from the committed BLOCK without repeating escalation judgment"
+          "name": "restart recovery returns an undispatched atomic BLOCK with its exact repair context"
         },
         {
           "commandId": "finny-runtime-postgres",
@@ -508,17 +520,7 @@
         {
           "commandId": "finny-runtime-postgres",
           "file": "test/finny-runtime-coordinator.test.ts",
-          "name": "restart replays BLOCK authority committed before the job event"
-        },
-        {
-          "commandId": "finny-runtime-postgres",
-          "file": "test/finny-runtime-coordinator.test.ts",
-          "name": "restart replays PASS authority committed before the job event"
-        },
-        {
-          "commandId": "finny-runtime-postgres",
-          "file": "test/finny-runtime-coordinator.test.ts",
-          "name": "restart replays escalation authority committed before the BLOCK event"
+          "name": "completed atomic PASS removes the current artifact from Auditor recovery"
         }
       ]
     }
