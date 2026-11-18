@@ -26,6 +26,7 @@ function harness(
     deterministicOutput?: unknown;
     amendmentPreviousExecutionDigest?: string;
     amendmentDeduped?: boolean;
+    amendmentApprovalDecidedAt?: number;
   } = {},
 ) {
   const calls: Array<[string, unknown]> = [];
@@ -67,6 +68,20 @@ function harness(
       },
       async getJob(scopeId: string, jobId: string) {
         return scopeId === "scope-1" && jobId === "job-1" ? job : null;
+      },
+      async getApprovalRequest(requestId: string) {
+        return {
+          requestId,
+          scopeId: job.scopeId,
+          jobId: job.id,
+          executionDigest: jobSopBinding.executionDigest,
+          originThreadRef: job.originThreadRef,
+          authorizedActorId: "actor-1",
+          ...(options.amendmentApprovalDecidedAt === undefined
+            ? {}
+            : { decidedAt: options.amendmentApprovalDecidedAt }),
+          job,
+        };
       },
       async recordSopAmendment(input: any) {
         calls.push(["recordSopAmendment", input]);
@@ -320,9 +335,6 @@ test("non-material amendments use distinct stable operations without replacing a
 test("material amendment replay returns settled state after its replacement approval", async () => {
   const revisedValues = { ...values, cutoff: "2026-11-30" };
   const operationId = "approved-amendment";
-  const requestId = `finny-amend-${createHash("sha256")
-    .update(`scope-1\0job-1\0${operationId}`)
-    .digest("base64url")}`;
   const { factory, calls } = harness(null, {
     job: {
       sopBinding: {
@@ -332,7 +344,7 @@ test("material amendment replay returns settled state after its replacement appr
         revision: 2,
       },
       approval: {
-        requestId,
+        requestId: "later-amendment-request",
         actorId: "actor-1",
         action: "approve",
         executionDigest: canonicalFinnyExecutionDigest(sop, revisedValues),
@@ -342,6 +354,7 @@ test("material amendment replay returns settled state after its replacement appr
     },
     amendmentPreviousExecutionDigest: canonicalFinnyExecutionDigest(sop, values),
     amendmentDeduped: true,
+    amendmentApprovalDecidedAt: Date.now(),
   });
   const service = await factory.forTurn(parent);
   assert.ok(service);

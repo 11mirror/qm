@@ -67,6 +67,9 @@ test("Spike 2: Preflight harness calls finny_create_plan and enters human approv
       async getJob() {
         return null;
       },
+      async getApprovalRequest() {
+        return null;
+      },
       async recordSopAmendment() {
         return {} as never;
       },
@@ -175,6 +178,9 @@ test("Spike 3: Auditor executes deterministic audit and passes with valid eviden
           policy: initialFinnyPolicy(evaluator),
           requiredGenerations: { "formula.recalculate": 1, "summary.crossfoot": 1 },
         } as unknown as FinnyJob;
+      },
+      async getApprovalRequest() {
+        return null;
       },
       async recordSopAmendment() {
         return {} as never;
@@ -367,6 +373,9 @@ test("Spike 5: finnyTurnAuthority and createPlan support web chat surface", asyn
         } as unknown as FinnyJob;
       },
       async getJob() {
+        return null;
+      },
+      async getApprovalRequest() {
         return null;
       },
       async recordSopAmendment() {

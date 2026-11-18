@@ -184,7 +184,7 @@ export interface FinnyToolServiceFactory {
 
 export function createFinnyToolServiceFactory(deps: {
   config: Omit<FinnyIntegrationConfig, "signingSecret">;
-  jobs: Pick<FinnyStore, "createJob" | "getJob" | "recordSopAmendment">;
+  jobs: Pick<FinnyStore, "createJob" | "getApprovalRequest" | "getJob" | "recordSopAmendment">;
   runtime: Pick<FinnyRuntimeStore, "currentBinding" | "claimParentTurn"> &
     Partial<Pick<FinnyRuntimeStore, "claimWorkerTurn" | "bindingForSession">>;
   integration: FinnyIntegrationStore;
@@ -362,16 +362,16 @@ export function createFinnyToolServiceFactory(deps: {
               jobId,
               awaiting: "none",
             };
-          if (
-            amendment.deduped &&
-            (amendment.job.approval?.requestId === requestId ||
-              amendment.job.sopBinding?.executionDigest !== event.payload.newExecutionDigest)
-          )
-            return {
-              message: `Finny plan ${jobId} amendment was already recorded and is no longer awaiting approval.`,
-              jobId,
-              awaiting: "none",
-            };
+          if (amendment.deduped) {
+            const replacement = await deps.jobs.getApprovalRequest(requestId);
+            if (!replacement) throw new Error("Finny amendment replacement approval is unavailable");
+            if (replacement.decidedAt !== undefined)
+              return {
+                message: `Finny plan ${jobId} amendment was already recorded and is no longer awaiting approval.`,
+                jobId,
+                awaiting: "none",
+              };
+          }
           if (amendment.job.approval) throw new Error("Finny material amendment retained its existing approval");
           await deps.deliveries.enqueue({
             destination: {
