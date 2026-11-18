@@ -65,7 +65,23 @@ export const FINNY_SOP_SCHEMA = Type.Object(
           assertion: text(),
           tolerance: Type.Optional(text()),
           evidenceRefs: Type.Array(text()),
-          judgment: Type.Optional(Type.Object({ question: text(), onlyWhen: text() }, { additionalProperties: false })),
+          deterministicCheckId: Type.Optional(
+            Type.Union([
+              Type.Literal("formula.recalculate"),
+              Type.Literal("summary.crossfoot"),
+              Type.Literal("artifact.structure"),
+            ]),
+          ),
+          judgment: Type.Optional(
+            Type.Object(
+              {
+                question: text(),
+                onlyWhen: text(),
+                triggerVerdict: Type.Optional(Type.Literal("block")),
+              },
+              { additionalProperties: false },
+            ),
+          ),
         },
         { additionalProperties: false },
       ),

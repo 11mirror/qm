@@ -325,60 +325,6 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
       );
       return rows.map(parent);
     },
-    async readyForFinalization(scopeId: string, jobId: string): Promise<boolean> {
-      const jobs = await q(
-        `SELECT required_generations,artifact_digest,ledger_head FROM finny_jobs
-         WHERE scope_id=$1 AND id=$2 AND approval_action='approve' AND approval_consumed_at IS NULL
-           AND pending_rework_seq IS NULL AND unresolved_escalation_seq IS NULL AND artifact_digest IS NOT NULL`,
-        [scopeId, jobId],
-      );
-      const job = jobs[0];
-      if (!job) return false;
-      const rows = await q(
-        `SELECT DISTINCT ON (check_id) check_id,generation,verdict,artifact_digest,seq
-         FROM finny_attestations WHERE job_id=$1 ORDER BY check_id,seq DESC`,
-        [jobId],
-      );
-      const required = job.required_generations as Record<string, number>;
-      const latest = new Map(rows.map((row) => [row.check_id as string, row]));
-      let ledgerHead = 0;
-      for (const [checkId, generation] of Object.entries(required)) {
-        const attestation = latest.get(checkId);
-        if (
-          !attestation ||
-          Number(attestation.generation) !== generation ||
-          attestation.verdict !== "pass" ||
-          attestation.artifact_digest !== job.artifact_digest
-        )
-          return false;
-        ledgerHead = Math.max(ledgerHead, Number(attestation.seq));
-      }
-      return ledgerHead === Number(job.ledger_head);
-    },
-    async finalizedParents(): Promise<FinnyIntegrationParentRecord[]> {
-      const rows = await q(
-        `SELECT i.* FROM finny_integration_jobs i
-         JOIN finny_jobs j ON j.id=i.job_id AND j.scope_id=i.scope_id
-         WHERE j.final_receipt IS NOT NULL AND j.sop_version_id IS NOT NULL
-           AND (
-             (NOT EXISTS (
-               SELECT 1 FROM deliveries d
-                WHERE d.idempotency_key='finny-final:' || j.id || ':' || j.ledger_head::text
-             ) OR EXISTS (
-               SELECT 1 FROM deliveries d
-                WHERE d.idempotency_key='finny-final:' || j.id || ':' || j.ledger_head::text
-                  AND d.delivered_at IS NULL AND d.expired_at IS NOT NULL AND d.failed_reason IS NULL
-             ))
-             OR EXISTS (
-               SELECT 1 FROM finny_runtime_bindings b
-                WHERE b.scope_id=j.scope_id AND b.job_id=j.id
-                  AND (b.role='parent' OR (b.active=TRUE AND b.role IN ('producer','auditor')))
-             )
-           )
-         ORDER BY j.finalized_at, i.job_id`,
-      );
-      return rows.map(parent);
-    },
     async approvedParents(): Promise<FinnyIntegrationParentRecord[]> {
       const rows = await q(
         `SELECT i.* FROM finny_integration_jobs i

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
-import { canonicalFinnyExecutionDigest } from "../src/finny/plan.ts";
+import { canonicalFinnyExecutionDigest, finnySopVersionId } from "../src/finny/plan.ts";
 import { initialFinnyPolicy } from "../src/finny/policy.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresFinnyStore } from "../src/finny/postgres-store.ts";
@@ -53,6 +53,21 @@ function sopJobInput() {
   };
 }
 
+function legacySop() {
+  const sop = finnySopFixture();
+  return {
+    ...sop,
+    controls: sop.controls.map((control) => {
+      const { deterministicCheckId: _, ...legacy } = control;
+      if (!("judgment" in legacy)) return legacy;
+      return {
+        ...legacy,
+        judgment: { question: legacy.judgment.question, onlyWhen: legacy.judgment.onlyWhen },
+      };
+    }),
+  };
+}
+
 test("persists immutable scope-bound SOP versions across store restarts", async () => {
   const url = testDatabaseUrl();
   const store = createPostgresFinnyStore(url) as ReturnType<typeof createPostgresFinnyStore> & SopStore;
@@ -67,12 +82,10 @@ test("persists immutable scope-bound SOP versions across store restarts", async 
   const restarted = createPostgresFinnyStore(url) as ReturnType<typeof createPostgresFinnyStore> & SopStore;
   assert.deepEqual(await restarted.getSopVersion!(sop.scopeId, created.versionId), created);
   assert.equal(await restarted.getSopVersion!("org:other", created.versionId), null);
-  await assert.rejects(
-    store.createSopVersion!({ ...sop, title: "Conflicting title" }),
-    /immutable|version|conflict/i,
-  );
+  await assert.rejects(store.createSopVersion!({ ...sop, title: "Conflicting title" }), /immutable|version|conflict/i);
   const { q } = createPgPool(url);
-  await assert.rejects(q("UPDATE finny_sop_versions SET search_text='changed' WHERE version_id=$1", [created.versionId]),
+  await assert.rejects(
+    q("UPDATE finny_sop_versions SET search_text='changed' WHERE version_id=$1", [created.versionId]),
     /immutable/i,
   );
   await assert.rejects(q("DELETE FROM finny_sop_versions WHERE version_id=$1", [created.versionId]), /immutable/i);
@@ -118,6 +131,114 @@ test("binds a job to its exact SOP version, values, digest, and revision across 
   assert.equal(await restarted.getJob("org:other", input.id), null);
 });
 
+test("reads historical SOP definitions but rejects them for new jobs", async () => {
+  const store = createPostgresFinnyStore(testDatabaseUrl());
+  const sop = legacySop();
+  const stored = await store.createSopVersion(sop as FinnySopVersion);
+  assert.deepEqual((await store.getSopVersion(sop.scopeId, stored.versionId))?.sop, sop);
+  const input = sopJobInput();
+  await assert.rejects(store.createJob({ ...input, sop } as never), /deterministic check binding/i);
+});
+
+test("rejects unmapped SOP amendments before persisting a new definition", async () => {
+  const store = createPostgresFinnyStore(testDatabaseUrl());
+  const input = sopJobInput();
+  await store.createJob(input);
+  const amendment = { ...legacySop(), version: 4 } as FinnySopVersion;
+  await assert.rejects(
+    store.recordSopAmendment({
+      scopeId: input.scopeId,
+      jobId: input.id,
+      sop: amendment,
+      values: input.values,
+      idempotencyKey: randomUUID(),
+      createdAt: Date.now(),
+    }),
+    /deterministic check binding/i,
+  );
+  assert.equal(await store.getSopVersion(input.scopeId, finnySopVersionId(amendment)), null);
+});
+
+test("Core audit cutover refuses unfinished jobs with unmapped SOP controls", async () => {
+  const url = testDatabaseUrl();
+  const store = createPostgresFinnyStore(url);
+  await store.searchSopVersions("personal:U1", "missing");
+  const db = createPgPool(url);
+  const sop = { ...legacySop(), scopeId: "personal:U1", version: 91 };
+  const versionId = "personal%3AU1/ap-aging@91";
+  const now = Date.now();
+  await db.q(
+    `INSERT INTO finny_sop_versions(
+       version_id,scope_id,sop_id,version,definition,definition_digest,search_text,created_at
+     ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [versionId, sop.scopeId, sop.id, sop.version, sop, "x".repeat(43), "legacy AP aging", now],
+  );
+  const policy = initialFinnyPolicy(TEST_FINNY_EVALUATOR);
+  await db.q(
+    `INSERT INTO finny_jobs(
+       id,scope_id,sop_version_id,bound_inputs,execution_digest,sop_revision,
+       policy_version,evaluator_ref,required_generations,finding_policy,
+       origin_thread_ref,created_at,updated_at
+     ) VALUES($1,$2,$3,$4,$5,1,$6,$7,$8,$9,$10,$11,$11)`,
+    [
+      randomUUID(),
+      sop.scopeId,
+      versionId,
+      { cutoff: "2026-10-31", currency: "INR" },
+      "legacy-execution-digest",
+      policy.policyVersion,
+      policy.evaluator,
+      policy.requiredGenerations,
+      { id: "legacy", maxFindings: 1, maxCodeLength: 1, maxMessageLength: 1 },
+      "slack:C1:1.1",
+      now,
+    ],
+  );
+  await db.q("DELETE FROM qm_schema_migrations WHERE id='finny/store/0019-core-audit-cutover'");
+  const cutover = createPostgresFinnyStore(url);
+  await assert.rejects(cutover.searchSopVersions(sop.scopeId, "missing"), /unfinished jobs have unmapped SOP controls/i);
+});
+
+test("Core audit cutover preserves finalized jobs with historical SOP controls", async () => {
+  const url = testDatabaseUrl();
+  const store = createPostgresFinnyStore(url);
+  await store.searchSopVersions("personal:U2", "missing");
+  const db = createPgPool(url);
+  const sop = { ...legacySop(), scopeId: "personal:U2", version: 92 };
+  const versionId = "personal%3AU2/ap-aging@92";
+  const now = Date.now();
+  await db.q(
+    `INSERT INTO finny_sop_versions(
+       version_id,scope_id,sop_id,version,definition,definition_digest,search_text,created_at
+     ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [versionId, sop.scopeId, sop.id, sop.version, sop, "y".repeat(43), "historical AP aging", now],
+  );
+  const policy = initialFinnyPolicy(TEST_FINNY_EVALUATOR);
+  await db.q(
+    `INSERT INTO finny_jobs(
+       id,scope_id,sop_version_id,bound_inputs,execution_digest,sop_revision,
+       policy_version,evaluator_ref,required_generations,finding_policy,
+       origin_thread_ref,finalized_at,created_at,updated_at
+     ) VALUES($1,$2,$3,$4,$5,1,$6,$7,$8,$9,$10,$11,$11,$11)`,
+    [
+      randomUUID(),
+      sop.scopeId,
+      versionId,
+      { cutoff: "2026-10-31", currency: "INR" },
+      "historical-execution-digest",
+      policy.policyVersion,
+      policy.evaluator,
+      policy.requiredGenerations,
+      { id: "historical", maxFindings: 1, maxCodeLength: 1, maxMessageLength: 1 },
+      "slack:C2:1.1",
+      now,
+    ],
+  );
+  await db.q("DELETE FROM qm_schema_migrations WHERE id='finny/store/0019-core-audit-cutover'");
+  const cutover = createPostgresFinnyStore(url);
+  assert.deepEqual((await cutover.getSopVersion(sop.scopeId, versionId))?.sop, sop);
+});
+
 test("approval authorizes the exact current execution digest", async () => {
   const store = createPostgresFinnyStore(testDatabaseUrl());
   const input = sopJobInput();
@@ -142,10 +263,7 @@ test("approval authorizes the exact current execution digest", async () => {
     originThreadRef: input.originThreadRef,
     decidedAt: Date.now(),
   });
-  assert.equal(
-    (approved.approval as unknown as { executionDigest: string }).executionDigest,
-    binding.executionDigest,
-  );
+  assert.equal((approved.approval as unknown as { executionDigest: string }).executionDigest, binding.executionDigest);
   assert.equal("planDigest" in (approved.approval as unknown as Record<string, unknown>), false);
 });
 
@@ -244,7 +362,14 @@ test("behavioral cutover refuses an unfinished legacy plan job", async () => {
     [
       randomUUID(),
       "personal:U1",
-      { title: "Legacy", phases: [], certification: "Legacy", deliverable: "Legacy", destination: "Legacy", clarifications: [] },
+      {
+        title: "Legacy",
+        phases: [],
+        certification: "Legacy",
+        deliverable: "Legacy",
+        destination: "Legacy",
+        clarifications: [],
+      },
       "legacy-digest",
       "legacy-policy",
       TEST_FINNY_EVALUATOR,
@@ -274,7 +399,14 @@ test("behavioral cutover permanently rejects new unfinished legacy jobs", async 
       [
         randomUUID(),
         "personal:U1",
-        { title: "Legacy", phases: [], certification: "Legacy", deliverable: "Legacy", destination: "Legacy", clarifications: [] },
+        {
+          title: "Legacy",
+          phases: [],
+          certification: "Legacy",
+          deliverable: "Legacy",
+          destination: "Legacy",
+          clarifications: [],
+        },
         "legacy-digest",
         "legacy-policy",
         TEST_FINNY_EVALUATOR,
@@ -297,10 +429,12 @@ test("behavioral cutover refuses a legacy plan intent awaiting job creation", as
     parent_input JSONB NOT NULL,
     created_at BIGINT NOT NULL
   )`);
-  await db.q(
-    "INSERT INTO finny_plan_intents(job_id,job_input,parent_input,created_at) VALUES($1,$2,$3,$4)",
-    [randomUUID(), { plan: { title: "Legacy" } }, {}, Date.now()],
-  );
+  await db.q("INSERT INTO finny_plan_intents(job_id,job_input,parent_input,created_at) VALUES($1,$2,$3,$4)", [
+    randomUUID(),
+    { plan: { title: "Legacy" } },
+    {},
+    Date.now(),
+  ]);
   const cutover = createPostgresFinnyStore(url);
   await assert.rejects(cutover.searchSopVersions("personal:U1", "missing"), /plan intents await job creation/i);
 });
@@ -314,17 +448,21 @@ test("behavioral cutover permanently rejects new legacy plan intents", async () 
     parent_input JSONB NOT NULL,
     created_at BIGINT NOT NULL
   )`);
-  await db.q(
-    "INSERT INTO finny_plan_intents(job_id,job_input,parent_input,created_at) VALUES($1,$2,$3,$4)",
-    [randomUUID(), { sop: { id: "current" } }, {}, Date.now()],
-  );
+  await db.q("INSERT INTO finny_plan_intents(job_id,job_input,parent_input,created_at) VALUES($1,$2,$3,$4)", [
+    randomUUID(),
+    { sop: { id: "current" } },
+    {},
+    Date.now(),
+  ]);
   const store = createPostgresFinnyStore(url);
   await store.searchSopVersions("personal:U1", "missing");
   await assert.rejects(
-    db.q(
-      "INSERT INTO finny_plan_intents(job_id,job_input,parent_input,created_at) VALUES($1,$2,$3,$4)",
-      [randomUUID(), { plan: { title: "Legacy" } }, {}, Date.now()],
-    ),
+    db.q("INSERT INTO finny_plan_intents(job_id,job_input,parent_input,created_at) VALUES($1,$2,$3,$4)", [
+      randomUUID(),
+      { plan: { title: "Legacy" } },
+      {},
+      Date.now(),
+    ]),
     /finny_plan_intents_sop_cutover_mode/i,
   );
 });
@@ -344,7 +482,14 @@ test("behavioral cutover refuses a finalized legacy receipt awaiting delivery", 
     [
       jobId,
       "personal:U1",
-      { title: "Legacy", phases: [], certification: "Legacy", deliverable: "Legacy", destination: "Legacy", clarifications: [] },
+      {
+        title: "Legacy",
+        phases: [],
+        certification: "Legacy",
+        deliverable: "Legacy",
+        destination: "Legacy",
+        clarifications: [],
+      },
       "legacy-digest",
       "legacy-policy",
       TEST_FINNY_EVALUATOR,
@@ -372,4 +517,17 @@ test("behavioral cutover refuses a finalized legacy receipt awaiting delivery", 
   await db.q("DELETE FROM qm_schema_migrations WHERE id='finny/store/0013-sop-cutover'");
   const cutover = createPostgresFinnyStore(url);
   await assert.rejects(cutover.searchSopVersions("personal:U1", "missing"), /final receipts await delivery/i);
+});
+
+test("audit-result cutover refuses unfinished work without an atomic audit attempt", async () => {
+  const url = testDatabaseUrl();
+  const store = createPostgresFinnyStore(url);
+  const input = sopJobInput();
+  await store.createSopVersion(input.sop);
+  const job = await store.createJob(input);
+  const db = createPgPool(url);
+  await db.q("UPDATE finny_jobs SET artifact_digest=$2,provisional_revision=1 WHERE id=$1", [job.id, "a".repeat(64)]);
+  await db.q("DELETE FROM qm_schema_migrations WHERE id='finny/store/0016-audit-result-cutover'");
+  const cutover = createPostgresFinnyStore(url);
+  await assert.rejects(cutover.searchSopVersions(input.scopeId, "missing"), /unfinished legacy audit work/i);
 });

@@ -2,15 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
-import { Readable } from "node:stream";
 import { createFinnyToolServiceFactory, finnyTurnAuthority } from "../src/finny/integration.ts";
 import { canonicalFinnyExecutionDigest, finnySopVersionId } from "../src/finny/plan.ts";
 import { initialFinnyPolicy } from "../src/finny/policy.ts";
 import { uploadAttachments } from "../src/slack/attachments.ts";
 import type { FinnyJob, FinnyEvaluatorRef } from "../src/finny/types.ts";
 import type { CreateFinnyJobCommand } from "../src/finny/store.ts";
-import type { SpreadsheetWorkerResult } from "../src/finny/deterministic-spreadsheet-worker.ts";
 import type { OutgoingAttachment } from "../src/types.ts";
 import { finnySopFixture } from "./support/finny-sop-fixture.ts";
 
@@ -73,6 +70,15 @@ test("Spike 2: Preflight harness calls finny_create_plan and enters human approv
       async recordSopAmendment() {
         return {} as never;
       },
+      async getAuditAttempt() {
+        return null;
+      },
+      async getAuditAttemptByOperation() {
+        return null;
+      },
+      async completeAuditJudgment() {
+        return {} as never;
+      },
     },
     runtime: {
       async currentBinding() {
@@ -97,20 +103,16 @@ test("Spike 2: Preflight harness calls finny_create_plan and enters human approv
         >[0];
       },
     } as unknown as Parameters<typeof createFinnyToolServiceFactory>[0]["deliveries"],
-    deliverFinal: async () => {},
+    certifyResult: async () => {},
+    deliverCertifiedResults: async () => {},
     coordinator: {} as unknown as Parameters<typeof createFinnyToolServiceFactory>[0]["coordinator"],
-    files: {} as unknown as Parameters<typeof createFinnyToolServiceFactory>[0]["files"],
-    deterministicSpreadsheetWorker: {} as unknown as Parameters<
-      typeof createFinnyToolServiceFactory
-    >[0]["deterministicSpreadsheetWorker"],
-    finalizer: {} as unknown as Parameters<typeof createFinnyToolServiceFactory>[0]["finalizer"],
   });
 
   const turn = {
-    scopeId: "org:sharechat",
+    scopeId: "org:example",
     sessionId: "sess-parent",
     runId: "run-parent",
-    actor: { id: "user-kali", type: "internal" as const },
+    actor: { id: "user-1", type: "internal" as const },
     originThreadRef: "slack:C123:1794000.123",
     destination: { type: "slack" as const, target: "C123:1794000.123", threadTs: "1794000.123" },
     parent: true,
@@ -118,9 +120,9 @@ test("Spike 2: Preflight harness calls finny_create_plan and enters human approv
       schema: "finny-parent-binding.v1" as const,
       sessionId: "sess-parent",
       runId: "run-parent",
-      scopeId: "org:sharechat",
+      scopeId: "org:example",
       context: {
-        actor: { id: "user-kali", type: "internal" as const },
+        actor: { id: "user-1", type: "internal" as const },
         conversation: { kind: "channel" as const, threadRef: "C123", audience: [] },
         surface: "slack",
       },
@@ -132,7 +134,7 @@ test("Spike 2: Preflight harness calls finny_create_plan and enters human approv
 
   const sop = {
     ...finnySopFixture(),
-    scopeId: "org:sharechat",
+    scopeId: "org:example",
     title: "Prepare AP Closing Liability | 4 Vendors x 4 Quarter-Ends",
   };
   const planResponse = await service.createPlan(sop, { cutoff: "2026-09-30", currency: "INR" });
@@ -143,12 +145,32 @@ test("Spike 2: Preflight harness calls finny_create_plan and enters human approv
   assert.equal(dest.target, "C123:1794000.123");
 });
 
-test("Spike 3: Auditor executes deterministic audit and passes with valid evidence envelope", async () => {
-  let auditExecuted = false;
-  const dummyPayload = Buffer.from("dummy-xlsx-content");
-  const dummyDigest = createHash("sha256").update(dummyPayload).digest("hex");
-  const dummyFileId = "file-artifact-rev1";
-
+test("Spike 3: Auditor completes only the pending judgment", async () => {
+  const artifactDigest = "c".repeat(64);
+  const pendingAttempt = {
+    id: "attempt-pending-judgment",
+    scopeId: "org:example",
+    jobId: "job-456",
+    artifactSha256: artifactDigest,
+    controls: [
+      { id: "source-total", verdict: "pass", evidenceRefs: ["xlsx:Summary!B1"], repairActions: [] },
+      {
+        id: "mapping-exception",
+        verdict: "block",
+        evidenceRefs: ["xlsx:Exceptions!A1"],
+        repairActions: [{ message: "Resolve the exception", workbookRefs: ["xlsx:Exceptions!A1"] }],
+      },
+    ],
+    judgmentQuestions: [
+      {
+        controlId: "mapping-exception",
+        question: "Is the remaining exception materially misleading?",
+        onlyWhen: "The deterministic exception count is non-zero.",
+      },
+    ],
+    verdict: "pending_judgment",
+  };
+  let completedAttemptId = "";
   const factory = createFinnyToolServiceFactory({
     config: {
       findingPolicy: { id: "p1", maxFindings: 5, maxCodeLength: 32, maxMessageLength: 500 },
@@ -173,8 +195,15 @@ test("Spike 3: Auditor executes deterministic audit and passes with valid eviden
         return {
           id: jobId,
           scopeId,
-          artifactDigest: dummyDigest,
-          provisionalRevision: dummyFileId,
+          artifactDigest,
+          currentAuditAttemptId: pendingAttempt.id,
+          sop: { ...finnySopFixture(), scopeId },
+          sopBinding: {
+            versionId: "org%3Aexample/sop.test@1",
+            values: {},
+            executionDigest: "execution-digest",
+            revision: 1,
+          },
           policy: initialFinnyPolicy(evaluator),
           requiredGenerations: { "formula.recalculate": 1, "summary.crossfoot": 1 },
         } as unknown as FinnyJob;
@@ -185,12 +214,33 @@ test("Spike 3: Auditor executes deterministic audit and passes with valid eviden
       async recordSopAmendment() {
         return {} as never;
       },
+      async getAuditAttempt() {
+        return pendingAttempt as never;
+      },
+      async getAuditAttemptByOperation() {
+        return null;
+      },
+      async completeAuditJudgment(input) {
+        completedAttemptId = input.attemptId;
+        return {
+          attempt: {
+            ...pendingAttempt,
+            controls: pendingAttempt.controls.map((control) =>
+              control.id === "mapping-exception" ? { ...control, verdict: "pass" } : control,
+            ),
+            verdict: "pass",
+          },
+          events: [],
+          job: {} as FinnyJob,
+          deduped: false,
+        } as never;
+      },
     },
     runtime: {
       async currentBinding(sessionId: string) {
         return {
           role: "auditor" as const,
-          scopeId: "org:sharechat",
+          scopeId: "org:example",
           jobId: "job-456",
           sessionId,
           runId: "run-auditor",
@@ -205,64 +255,15 @@ test("Spike 3: Auditor executes deterministic audit and passes with valid eviden
     },
     integration: {} as unknown as Parameters<typeof createFinnyToolServiceFactory>[0]["integration"],
     deliveries: {} as unknown as Parameters<typeof createFinnyToolServiceFactory>[0]["deliveries"],
-    deliverFinal: async () => {},
-    files: {
-      async open(fileId: string) {
-        if (fileId !== dummyFileId) return null;
-        return {
-          artifact: {
-            id: dummyFileId,
-            enabled: true,
-            ownerScopeId: "org:sharechat",
-            sha256: dummyDigest,
-            sizeBytes: dummyPayload.length,
-          } as unknown as Parameters<
-            NonNullable<Parameters<typeof createFinnyToolServiceFactory>[0]["files"]>["open"]
-          > extends [string]
-            ? never
-            : unknown,
-          sizeBytes: dummyPayload.length,
-          stream: Readable.from(dummyPayload),
-        };
-      },
-    } as unknown as Parameters<typeof createFinnyToolServiceFactory>[0]["files"],
-    deterministicSpreadsheetWorker: {
-      async run(input: { jobId: string; artifactBytes: Uint8Array }) {
-        auditExecuted = true;
-        assert.equal(input.jobId, "job-456");
-        assert.equal(Buffer.from(input.artifactBytes).toString(), "dummy-xlsx-content");
-        const results: readonly SpreadsheetWorkerResult[] = [
-          {
-            checkId: "formula.recalculate",
-            generation: 1,
-            verdict: "pass",
-            reason: null,
-            evidence: { kind: "formula-recalculation", cells: [] },
-          },
-          {
-            checkId: "summary.crossfoot",
-            generation: 1,
-            verdict: "pass",
-            reason: null,
-            evidence: { kind: "cross-foot", comparisons: [] },
-          },
-        ];
-        return {
-          evidenceFileId: "evidence-file-99",
-          results,
-        };
-      },
-    },
+    certifyResult: async () => {},
+    deliverCertifiedResults: async () => {},
     coordinator: {
-      async auditPassed(input: { checkId: string }) {
-        assert.ok(input.checkId === "formula.recalculate" || input.checkId === "summary.crossfoot");
-      },
+      async auditAttemptRecorded() {},
     } as unknown as Parameters<typeof createFinnyToolServiceFactory>[0]["coordinator"],
-    finalizer: {} as unknown as Parameters<typeof createFinnyToolServiceFactory>[0]["finalizer"],
   });
 
   const auditorTurn = {
-    scopeId: "org:sharechat",
+    scopeId: "org:example",
     sessionId: "sess-auditor",
     runId: "run-auditor",
     actor: { id: "auditor-agent", type: "internal" as const },
@@ -273,7 +274,7 @@ test("Spike 3: Auditor executes deterministic audit and passes with valid eviden
       schema: "finny-parent-binding.v1" as const,
       sessionId: "sess-parent",
       runId: "run-parent",
-      scopeId: "org:sharechat",
+      scopeId: "org:example",
       context: {
         actor: { id: "user-kali", type: "internal" as const },
         conversation: { kind: "channel" as const, threadRef: "C123", audience: [] },
@@ -285,11 +286,19 @@ test("Spike 3: Auditor executes deterministic audit and passes with valid eviden
   const service = await factory.forTurn(auditorTurn);
   assert.ok(service);
 
-  const auditResult = await service.deterministicAudit({
-    idempotencyKey: "spike-audit-key",
+  const auditResult = await service.completeJudgment({
+    idempotencyKey: "spike-judgment-key",
+    judgmentAnswers: [
+      {
+        controlId: "mapping-exception",
+        verdict: "pass",
+        evidenceRefs: ["xlsx:Exceptions!A1"],
+        rationale: "No material mapping exception remains.",
+      },
+    ],
   });
 
-  assert.ok(auditExecuted, "Deterministic calculation worker must be invoked");
+  assert.equal(completedAttemptId, pendingAttempt.id);
   assert.match(auditResult, /recorded 2 PASS results/);
 });
 test("Spike 4: Allows .xlsx delivery with audit warning in uploadAttachments", async () => {
@@ -338,7 +347,7 @@ test("Spike 5: finnyTurnAuthority and createPlan support web chat surface", asyn
   assert.ok(webAuth, "Must produce authority for web surface");
   assert.equal(webAuth.originThreadRef, "web:sess-web-123");
   assert.equal(webAuth.destination.type, "web");
-  assert.equal(webAuth.destination.target, "sess-web-123");
+  assert.equal(webAuth.destination.target, "web:sess-web-123");
 
   const deliveries: Array<Record<string, unknown>> = [];
   const factory = createFinnyToolServiceFactory({
@@ -381,6 +390,15 @@ test("Spike 5: finnyTurnAuthority and createPlan support web chat surface", asyn
       async recordSopAmendment() {
         return {} as never;
       },
+      async getAuditAttempt() {
+        return null;
+      },
+      async getAuditAttemptByOperation() {
+        return null;
+      },
+      async completeAuditJudgment() {
+        return {} as never;
+      },
     },
     runtime: {
       async currentBinding() {
@@ -405,17 +423,13 @@ test("Spike 5: finnyTurnAuthority and createPlan support web chat surface", asyn
         >[0];
       },
     } as unknown as Parameters<typeof createFinnyToolServiceFactory>[0]["deliveries"],
-    deliverFinal: async () => {},
+    certifyResult: async () => {},
+    deliverCertifiedResults: async () => {},
     coordinator: {} as unknown as Parameters<typeof createFinnyToolServiceFactory>[0]["coordinator"],
-    files: {} as unknown as Parameters<typeof createFinnyToolServiceFactory>[0]["files"],
-    deterministicSpreadsheetWorker: {} as unknown as Parameters<
-      typeof createFinnyToolServiceFactory
-    >[0]["deterministicSpreadsheetWorker"],
-    finalizer: {} as unknown as Parameters<typeof createFinnyToolServiceFactory>[0]["finalizer"],
   });
 
   const turn = {
-    scopeId: "org:sharechat",
+    scopeId: "org:example",
     sessionId: "sess-web-123",
     runId: "run-web-123",
     actor: { id: "user-kali", type: "internal" as const },
@@ -426,7 +440,7 @@ test("Spike 5: finnyTurnAuthority and createPlan support web chat surface", asyn
       schema: "finny-parent-binding.v1" as const,
       sessionId: "sess-web-123",
       runId: "run-web-123",
-      scopeId: "org:sharechat",
+      scopeId: "org:example",
       context: {
         actor: { id: "user-kali", type: "internal" as const },
         conversation: { kind: "dm" as const, threadRef: "web:sess-web-123", audience: [] },
@@ -438,11 +452,11 @@ test("Spike 5: finnyTurnAuthority and createPlan support web chat surface", asyn
   const service = await factory.forTurn(turn);
   assert.ok(service, "Service must be instantiated for web parent turn");
 
-  const sop = { ...finnySopFixture(), scopeId: "org:sharechat", title: "Net Worth Schedule with Equity Bridge" };
+  const sop = { ...finnySopFixture(), scopeId: "org:example", title: "Net Worth Schedule with Equity Bridge" };
   const planResponse = await service.createPlan(sop, { cutoff: "2026-09-30", currency: "INR" });
   assert.match(planResponse.message, /is awaiting approval/);
   assert.equal(deliveries.length, 1);
   const dest = deliveries[0]?.destination;
   assert.ok(dest && typeof dest === "object" && "target" in dest);
-  assert.equal(dest.target, "sess-web-123");
+  assert.equal(dest.target, "web:sess-web-123");
 });

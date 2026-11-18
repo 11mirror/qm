@@ -15,6 +15,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { randomUUID } from "node:crypto";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { certifiedResultDelivery } from "../src/finny/certified-delivery.ts";
 
 const THREAD = "web:alice@example.com:conv-1";
 const SCOPE = "personal:alice@example.com" as ScopeId;
@@ -102,6 +103,61 @@ test("the recorded entry renders through the transcript source", async () => {
     ["AgentMessage"],
   );
   assert.equal(projected[0]!.text, "cron reply body");
+});
+
+test("a certified web result survives reopening with figures and downloads", async () => {
+  const { sessions, deliveries } = wired();
+  const session = await webSession(sessions);
+  const delivery = certifiedResultDelivery(
+    {
+      id: "result-web-1",
+      scopeId: SCOPE,
+      schema: "finny.result.v1",
+      jobId: "job-web-1",
+      sopVersionId: "sop-1",
+      executionDigest: "execution-1",
+      artifact: {
+        fileId: "workbook-1",
+        sha256: "a".repeat(64),
+        mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      },
+      summary: {
+        period: "2026-10-31",
+        currency: "INR",
+        metrics: [{ id: "open-ap", label: "Open AP", value: "123456.78", detailRefs: ["xlsx:Summary!B7"] }],
+        exceptions: [],
+        caveats: [],
+      },
+      auditAttemptId: "audit-1",
+      receipt: {
+        token: "signed-receipt",
+        payload: {
+          aud: "finny.final.delivery",
+          resultId: "result-web-1",
+          jobId: "job-web-1",
+          scopeId: SCOPE,
+          sopVersionId: "sop-1",
+          executionDigest: "execution-1",
+          artifactFileId: "workbook-1",
+          artifactSha256: "a".repeat(64),
+          auditAttemptId: "audit-1",
+          approvalRequestId: "approval-1",
+          approvalActorId: "alice@example.com",
+          originThreadRef: THREAD,
+          issuedAt: 1,
+        },
+      },
+      destination: { type: "web", target: THREAD },
+      createdAt: 1,
+    },
+    "https://qm.example.test",
+  );
+  await deliveries.enqueue(delivery);
+  await deliveries.pending("web");
+  const reopened = await sessions.getItems(session.id);
+  assert.match(reopened.at(-1)?.text ?? "", /123456\.78/);
+  assert.match(reopened.at(-1)?.text ?? "", /api\/files\/workbook-1\/content/);
+  assert.match(reopened.at(-1)?.text ?? "", /api\/finny\/results\/result-web-1/);
 });
 
 test("repeated drains and a restarted decorator never duplicate the transcript entry", async () => {

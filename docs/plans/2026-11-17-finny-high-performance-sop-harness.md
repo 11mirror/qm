@@ -1726,3 +1726,9 @@ Reason: Current QM has useful offline evidence conventions but no versioned fina
 4. Pending before the versioned high-performance eval: approve the synthetic/de-identified corpus and independently calculated accounting gold.
 5. Pending before Tier 4: approve the controlled NetSuite/test-source population and cleanup.
 6. Pending before performance becomes a release gate: review paired baseline variance, classify existing defects, and approve any absolute SLA; otherwise comparisons remain variance-based.
+
+## Phase 4/5 implementation review
+
+Status: In progress on PR #38. The branch adds atomic audit attempts and typed certified-result delivery, but independent review remains authoritative and unresolved findings must be closed before merge. The finance corpus, accounting gold, controlled source population, and any performance SLA remain outside this approval.
+
+The review instance and its disposable database are isolated from existing user-owned instances and data. Repository configuration is unchanged.

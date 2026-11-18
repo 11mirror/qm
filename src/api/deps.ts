@@ -75,6 +75,7 @@ import type { BudgetTracker } from "../ratelimit/budget.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { AppPageViewLog } from "../deploy/page-views.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
+import type { FinnyCertifiedResultRecord } from "../finny/certified-result.ts";
 
 import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
 import type { ModelRoutes } from "../model/model-route.ts";
@@ -96,6 +97,7 @@ export interface ServerDeps {
   capabilityTokenCompression?: boolean;
   portalIdentitySecret?: string;
   requireSignedPortalIdentity?: boolean;
+  finnyResultReader?: { get(resultId: string): Promise<FinnyCertifiedResultRecord | null> };
   control: ControlService;
   replayDedupe?: ReplayDedupe;
   deploymentLiveSmoke?: { deploymentId: string; superseded(): boolean; run(): Promise<void> };

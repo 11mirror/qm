@@ -2,8 +2,17 @@ import { createHash, randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
-import { assertFinnyAuditFindings, assertFinnyEscalationReason, assertFinnyFindingPolicy } from "./coordinator.ts";
+import { assertFinnyFindingPolicy } from "./coordinator.ts";
 import {
+  assertFinnyCertifiedResultReferences,
+  finnyCertifiedResultSearchText,
+  validateFinnyCertifiedResult,
+  validateFinnyCertifiedResultDestination,
+  type FinnyCertifiedResultReceipt,
+  type FinnyCertifiedResultRecord,
+} from "./certified-result.ts";
+import {
+  assertFinnyCoreAuditableSop,
   assertFinnyMaterialClarificationMatchesSop,
   canonicalFinnySopDefinitionDigest,
   canonicalFinnyExecutionDigest,
@@ -17,37 +26,31 @@ import {
   FINNY_DETERMINISTIC_CHECK_IDS,
   activateFinnyEvaluator,
   assertFinnyApprovedEvaluatorRef,
-  assertFinnyDeterministicAuthority,
   assertFinnyEvaluatorRef,
   assertFinnyPolicy,
   reviseFinnyPolicy,
 } from "./policy.ts";
 import type {
   ClaimFinnyWorkerRunInput,
+  CompleteFinnyAuditJudgmentInput,
   CreateFinnyApprovalRequestInput,
   CreateFinnyClarificationRequestInput,
   CreateFinnyJobCommand,
-  FinalizeFinnyInput,
   FinnyApprovalRequest,
-  FinnyReceiptSigner,
   FinnyStore,
   FinnyStoredSopVersion,
   RecordFinnyApprovalInput,
+  RecordFinnyAuditAttemptInput,
   RecordFinnySopAmendmentInput,
   RecordFinnyClarificationDecisionInput,
   RecordFinnyArtifactReadyInput,
-  RecordFinnyAuditBlockInput,
   RecordFinnyEvaluatorCorrectionInput,
-  RecordFinnyAuditPassedInput,
-  RecordFinnyAttestationInput,
 } from "./store.ts";
 import type {
-  FinnyAttestation,
+  FinnyAuditAttempt,
   FinnyCheckId,
   FinnyClarificationRequest,
   FinnyEvaluatorRef,
-  FinnyFinalReceipt,
-  FinnyFinalReceiptPayload,
   FinnyJob,
   FinnyJobEvent,
   FinnyJobEventPayloads,
@@ -57,6 +60,7 @@ import type {
   FinnyPolicySnapshot,
   FinnySopVersion,
 } from "./types.ts";
+import { validateFinnyAuditAttemptInput } from "./audit-attempt.ts";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS finny_jobs(
@@ -367,6 +371,213 @@ const SOP_CUTOVER_SCHEMA = [
    $qm$`,
 ];
 
+const AUDIT_ATTEMPT_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS finny_audit_attempts(
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL REFERENCES finny_jobs(id) ON DELETE CASCADE,
+    scope_id TEXT NOT NULL CHECK (scope_id <> ''),
+    sop_version_id TEXT NOT NULL REFERENCES finny_sop_versions(version_id),
+    execution_digest TEXT NOT NULL CHECK (execution_digest <> ''),
+    artifact_file_id TEXT NOT NULL CHECK (artifact_file_id <> ''),
+    artifact_sha256 TEXT NOT NULL CHECK (artifact_sha256 ~ '^[a-f0-9]{64}$'),
+    artifact_mime TEXT NOT NULL CHECK (artifact_mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+    artifact_size_bytes BIGINT NOT NULL CHECK (artifact_size_bytes > 0),
+    evaluator_ref JSONB NOT NULL CHECK (jsonb_typeof(evaluator_ref) = 'object'),
+    controls JSONB NOT NULL CHECK (jsonb_typeof(controls) = 'array' AND jsonb_array_length(controls) > 0),
+    judgment_questions JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(judgment_questions) = 'array'),
+    judgment_addendum JSONB CHECK (judgment_addendum IS NULL OR jsonb_typeof(judgment_addendum) = 'object'),
+    verdict TEXT NOT NULL CHECK (verdict IN ('pass','block','pending_judgment')),
+    issuer_principal_id TEXT NOT NULL CHECK (issuer_principal_id <> ''),
+    issuer_run_id TEXT NOT NULL CHECK (issuer_run_id <> ''),
+    idempotency_key TEXT NOT NULL UNIQUE,
+    created_at BIGINT NOT NULL,
+    completed_at BIGINT,
+    UNIQUE(job_id, artifact_sha256),
+    CHECK ((verdict = 'pending_judgment') = (
+      judgment_addendum IS NULL AND jsonb_array_length(judgment_questions) > 0 AND completed_at IS NULL
+    )),
+    CHECK (verdict = 'pending_judgment' OR completed_at IS NOT NULL)
+  )`,
+  `CREATE INDEX IF NOT EXISTS finny_audit_attempts_job_created
+    ON finny_audit_attempts(job_id, created_at DESC, id DESC)`,
+  `CREATE INDEX IF NOT EXISTS finny_audit_attempts_scope_created
+    ON finny_audit_attempts(scope_id, created_at DESC, id DESC)`,
+  `CREATE INDEX IF NOT EXISTS finny_audit_attempts_pending_judgment
+    ON finny_audit_attempts(job_id, created_at DESC, id DESC) WHERE verdict='pending_judgment'`,
+  `ALTER TABLE finny_jobs ADD COLUMN IF NOT EXISTS current_audit_attempt_id TEXT UNIQUE`,
+  `ALTER TABLE finny_jobs ADD CONSTRAINT finny_jobs_current_audit_attempt_fk
+    FOREIGN KEY(current_audit_attempt_id) REFERENCES finny_audit_attempts(id)
+    DEFERRABLE INITIALLY DEFERRED`,
+  `ALTER TABLE finny_job_events DROP CONSTRAINT IF EXISTS finny_job_events_event_type_check`,
+  `ALTER TABLE finny_job_events ADD CONSTRAINT finny_job_events_event_type_check CHECK (event_type IN (
+    'artifact_ready','audit_blocked','audit_passed','rework_requested','escalated',
+    'evaluator_revision_activated','evidence_invalidated','rework_cancelled','verification_reopened',
+    'plan_amended','sop_amended','audit_attempt_recorded','audit_judgment_recorded'
+  ))`,
+];
+
+const CERTIFIED_RESULT_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS finny_results(
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL UNIQUE REFERENCES finny_jobs(id) ON DELETE CASCADE,
+    scope_id TEXT NOT NULL CHECK (scope_id <> ''),
+    schema TEXT NOT NULL CHECK (schema = 'finny.result.v1'),
+    sop_version_id TEXT NOT NULL REFERENCES finny_sop_versions(version_id),
+    execution_digest TEXT NOT NULL CHECK (execution_digest <> ''),
+    artifact_file_id TEXT NOT NULL CHECK (artifact_file_id <> ''),
+    artifact_sha256 TEXT NOT NULL CHECK (artifact_sha256 ~ '^[a-f0-9]{64}$'),
+    artifact_mime TEXT NOT NULL CHECK (artifact_mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+    summary JSONB NOT NULL CHECK (jsonb_typeof(summary) = 'object'),
+    audit_attempt_id TEXT NOT NULL UNIQUE REFERENCES finny_audit_attempts(id),
+    receipt JSONB NOT NULL CHECK (jsonb_typeof(receipt) = 'object'),
+    destination JSONB NOT NULL CHECK (jsonb_typeof(destination) = 'object' AND destination <> '{}'::jsonb),
+    delivery_id TEXT UNIQUE,
+    idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+    search_text TEXT NOT NULL,
+    created_at BIGINT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS finny_results_scope_created
+    ON finny_results(scope_id, created_at DESC, id DESC)`,
+  `CREATE INDEX IF NOT EXISTS finny_results_search
+    ON finny_results USING GIN(to_tsvector('simple', search_text))`,
+  `CREATE INDEX IF NOT EXISTS finny_results_pending_delivery
+    ON finny_results(created_at, id) WHERE delivery_id IS NULL`,
+  `ALTER TABLE finny_jobs ADD COLUMN IF NOT EXISTS result_id TEXT UNIQUE`,
+  `ALTER TABLE finny_jobs ADD CONSTRAINT finny_jobs_result_fk
+    FOREIGN KEY(result_id) REFERENCES finny_results(id)
+    DEFERRABLE INITIALLY DEFERRED`,
+  `DO $qm$
+   BEGIN
+     IF to_regclass('deliveries') IS NOT NULL THEN
+       ALTER TABLE finny_results DROP CONSTRAINT IF EXISTS finny_results_delivery_fk;
+       ALTER TABLE finny_results ADD CONSTRAINT finny_results_delivery_fk
+         FOREIGN KEY(delivery_id) REFERENCES deliveries(id);
+     END IF;
+   END
+   $qm$`,
+];
+
+const AUDIT_RESULT_CUTOVER_SCHEMA = [
+  `DO $qm$
+   BEGIN
+     IF EXISTS (
+       SELECT 1 FROM finny_jobs
+        WHERE finalized_at IS NULL
+          AND current_audit_attempt_id IS NULL
+          AND (
+            artifact_digest IS NOT NULL OR
+            pending_rework_seq IS NOT NULL OR
+            unresolved_escalation_seq IS NOT NULL OR
+            ledger_head > 0
+          )
+     ) THEN
+       RAISE EXCEPTION 'Finny audit cutover refused: unfinished legacy audit work exists';
+     END IF;
+   END
+   $qm$`,
+];
+
+const AUDIT_RESULT_RECOVERY_CUTOVER_SCHEMA = [
+  `DO $qm$
+   DECLARE
+     blocked BOOLEAN;
+   BEGIN
+     IF to_regclass('finny_runtime_actions') IS NOT NULL THEN
+       EXECUTE 'SELECT EXISTS (
+         SELECT 1
+           FROM finny_runtime_actions actions
+      LEFT JOIN finny_job_events events
+             ON events.job_id=actions.job_id
+            AND events.idempotency_key=actions.idempotency_key
+            AND events.event_index=0
+      LEFT JOIN finny_runtime_dispatches dispatches
+             ON dispatches.idempotency_key=actions.idempotency_key || '':producer-rework''
+          WHERE actions.kind IN (''audit_passed'',''audit_blocked'')
+            AND (
+              events.seq IS NULL OR (
+                actions.kind=''audit_blocked''
+                AND actions.authority_payload->''resolution''->>''kind''=''rework''
+                AND dispatches.delivered_at IS NULL
+                AND EXISTS (
+                  SELECT 1 FROM finny_job_events rework
+                   WHERE rework.job_id=actions.job_id
+                     AND rework.idempotency_key=actions.idempotency_key
+                     AND rework.event_index=1
+                     AND rework.event_type=''rework_requested''
+                     AND NOT EXISTS (
+                       SELECT 1 FROM finny_job_events later
+                        WHERE later.job_id=actions.job_id
+                          AND later.seq>rework.seq
+                          AND later.event_type IN (''rework_cancelled'',''artifact_ready'')
+                     )
+                )
+              )
+            )
+       )' INTO blocked;
+       IF blocked THEN
+         RAISE EXCEPTION 'Finny audit cutover refused: pending legacy runtime audit actions exist';
+       END IF;
+     END IF;
+
+     SELECT EXISTS (
+       SELECT 1 FROM finny_jobs WHERE final_receipt IS NOT NULL AND result_id IS NULL
+     ) INTO blocked;
+     IF blocked AND to_regclass('deliveries') IS NULL THEN
+       RAISE EXCEPTION 'Finny result cutover refused: legacy final receipts await delivery';
+     END IF;
+     IF blocked THEN
+       EXECUTE 'SELECT EXISTS (
+         SELECT 1
+           FROM finny_jobs jobs
+      LEFT JOIN deliveries delivery
+             ON delivery.idempotency_key=''finny-final:'' || jobs.id || '':'' || jobs.ledger_head::text
+          WHERE jobs.final_receipt IS NOT NULL
+            AND jobs.result_id IS NULL
+            AND delivery.delivered_at IS NULL
+       )' INTO blocked;
+       IF blocked THEN
+         RAISE EXCEPTION 'Finny result cutover refused: legacy final receipts await delivery';
+       END IF;
+     END IF;
+   END
+   $qm$`,
+];
+
+const AUDIT_ATTEMPT_EVALUATOR_IDENTITY_SCHEMA = [
+  `ALTER TABLE finny_audit_attempts
+     DROP CONSTRAINT IF EXISTS finny_audit_attempts_job_id_artifact_sha256_key`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS finny_audit_attempts_job_artifact_evaluator
+     ON finny_audit_attempts(job_id,artifact_sha256,evaluator_ref)`,
+];
+
+const CORE_AUDIT_CUTOVER_SCHEMA = [
+  `DO $qm$
+   BEGIN
+     IF EXISTS (
+       SELECT 1
+         FROM finny_jobs AS jobs
+         JOIN finny_sop_versions AS versions
+           ON versions.scope_id=jobs.scope_id AND versions.version_id=jobs.sop_version_id
+        WHERE jobs.finalized_at IS NULL
+          AND EXISTS (
+            SELECT 1
+              FROM jsonb_array_elements(versions.definition->'controls') AS control
+             WHERE control->>'deterministicCheckId' NOT IN (
+                     'formula.recalculate', 'summary.crossfoot', 'artifact.structure'
+                   )
+                OR control->>'deterministicCheckId' IS NULL
+                OR (
+                  control ? 'judgment'
+                  AND control->'judgment'->>'triggerVerdict' IS DISTINCT FROM 'block'
+                )
+          )
+     ) THEN
+       RAISE EXCEPTION 'Finny Core audit cutover refused: unfinished jobs have unmapped SOP controls';
+     END IF;
+   END
+   $qm$`,
+];
+
 function rowToSopVersion(row: Record<string, unknown>): FinnyStoredSopVersion {
   return {
     versionId: row.version_id as string,
@@ -439,6 +650,8 @@ function rowToJob(row: Record<string, unknown>): FinnyJob {
     ...(row.unresolved_escalation_seq !== null
       ? { unresolvedEscalationSequence: Number(row.unresolved_escalation_seq) }
       : {}),
+    ...(row.current_audit_attempt_id !== null ? { currentAuditAttemptId: row.current_audit_attempt_id as string } : {}),
+    ...(row.result_id !== null ? { resultId: row.result_id as string } : {}),
     ...(row.finalization_key !== null ? { finalizationKey: row.finalization_key as string } : {}),
     ...(row.final_receipt !== null ? { finalReceipt: row.final_receipt as FinnyJob["finalReceipt"] } : {}),
     ...(row.finalized_at !== null ? { finalizedAt: Number(row.finalized_at) } : {}),
@@ -483,21 +696,53 @@ function rowToApprovalRequest(row: Record<string, unknown>): FinnyApprovalReques
   };
 }
 
-function rowToAttestation(row: Record<string, unknown>): FinnyAttestation {
+function rowToAuditAttempt(row: Record<string, unknown>): FinnyAuditAttempt {
   return {
-    seq: Number(row.seq),
     id: row.id as string,
     jobId: row.job_id as string,
-    checkId: row.check_id as FinnyCheckId,
-    generation: Number(row.generation),
-    verdict: row.verdict as FinnyAttestation["verdict"],
-    evidenceDigest: row.evidence_digest as string,
-    artifactDigest: row.artifact_digest as string,
+    scopeId: row.scope_id as string,
+    sopVersionId: row.sop_version_id as string,
+    executionDigest: row.execution_digest as string,
+    artifactFileId: row.artifact_file_id as string,
+    artifactSha256: row.artifact_sha256 as string,
+    artifactMime: row.artifact_mime as FinnyAuditAttempt["artifactMime"],
+    artifactSizeBytes: Number(row.artifact_size_bytes),
+    evaluator: row.evaluator_ref as FinnyEvaluatorRef,
+    controls: row.controls as FinnyAuditAttempt["controls"],
+    judgmentQuestions: row.judgment_questions as unknown[],
+    ...(row.judgment_addendum !== null
+      ? { judgmentAddendum: row.judgment_addendum as NonNullable<FinnyAuditAttempt["judgmentAddendum"]> }
+      : {}),
+    verdict: row.verdict as FinnyAuditAttempt["verdict"],
     issuerPrincipalId: row.issuer_principal_id as string,
     issuerRunId: row.issuer_run_id as string,
-    ...(row.deterministic_authority !== null
-      ? { deterministicAuthority: row.deterministic_authority as FinnyAttestation["deterministicAuthority"] }
-      : {}),
+    idempotencyKey: row.idempotency_key as string,
+    createdAt: Number(row.created_at),
+    ...(row.completed_at !== null ? { completedAt: Number(row.completed_at) } : {}),
+  };
+}
+
+function rowToCertifiedResult(row: Record<string, unknown>): FinnyCertifiedResultRecord {
+  const result = validateFinnyCertifiedResult({
+    schema: row.schema,
+    jobId: row.job_id,
+    sopVersionId: row.sop_version_id,
+    executionDigest: row.execution_digest,
+    artifact: {
+      fileId: row.artifact_file_id,
+      sha256: row.artifact_sha256,
+      mime: row.artifact_mime,
+    },
+    summary: row.summary,
+    auditAttemptId: row.audit_attempt_id,
+  });
+  return {
+    id: row.id as string,
+    scopeId: row.scope_id as string,
+    ...result,
+    receipt: row.receipt as FinnyCertifiedResultReceipt,
+    destination: row.destination as Record<string, unknown>,
+    ...(row.delivery_id !== null ? { deliveryId: row.delivery_id as string } : {}),
     idempotencyKey: row.idempotency_key as string,
     createdAt: Number(row.created_at),
   };
@@ -551,91 +796,51 @@ function assertNonEmpty(value: string, label: string): void {
   if (typeof value !== "string" || !value.trim()) throw new Error(`Finny ${label} is invalid`);
 }
 
-function assertCurrentAuditEvent(policy: FinnyPolicySnapshot, checkId: FinnyCheckId, generation: number): void {
-  assertFinnyPolicy(policy);
-  if (!Number.isSafeInteger(generation) || generation < 1) throw new Error("Finny audit generation is invalid");
-  const requiredGeneration = policy.requiredGenerations[checkId];
-  if (requiredGeneration === undefined) throw new Error("Finny audit is not for a required check");
-  if (requiredGeneration !== generation) throw new Error("Finny audit generation is not current");
-}
-
-function sameAttestation(row: FinnyAttestation, input: RecordFinnyAttestationInput): boolean {
+function sameAuditAttempt(row: FinnyAuditAttempt, input: RecordFinnyAuditAttemptInput): boolean {
   return (
     row.id === input.id &&
     row.jobId === input.jobId &&
-    row.checkId === input.checkId &&
-    row.generation === input.generation &&
+    row.scopeId === input.scopeId &&
+    row.sopVersionId === input.sopVersionId &&
+    row.executionDigest === input.executionDigest &&
+    row.artifactFileId === input.artifactFileId &&
+    row.artifactSha256 === input.artifactSha256 &&
+    row.artifactMime === input.artifactMime &&
+    row.artifactSizeBytes === input.artifactSizeBytes &&
+    sameValue(row.evaluator, input.evaluator) &&
+    sameValue(row.controls, input.controls) &&
+    sameValue(row.judgmentQuestions, input.judgmentQuestions) &&
+    sameValue(row.judgmentAddendum, input.judgmentAddendum) &&
     row.verdict === input.verdict &&
-    row.evidenceDigest === input.evidenceDigest &&
-    row.artifactDigest === input.artifactDigest &&
     row.issuerPrincipalId === input.issuerPrincipalId &&
     row.issuerRunId === input.issuerRunId &&
-    sameValue(row.deterministicAuthority, input.deterministicAuthority)
+    row.idempotencyKey === input.idempotencyKey &&
+    (input.verdict === "pending_judgment" ? row.completedAt === undefined : row.completedAt !== undefined)
   );
 }
 
-function auditAttestationInput(
-  input: RecordFinnyAuditPassedInput | RecordFinnyAuditBlockInput,
-  verdict: "pass" | "block",
-): RecordFinnyAttestationInput {
-  const digest = createHash("sha256").update(input.idempotencyKey).digest("base64url");
-  return {
-    id: `finny-audit-${digest}`,
-    scopeId: input.scopeId,
-    jobId: input.jobId,
-    checkId: input.checkId,
-    generation: input.generation,
-    verdict,
-    evidenceDigest: input.evidenceDigest,
-    artifactDigest: input.artifactDigest,
-    issuerPrincipalId: input.issuerPrincipalId,
-    issuerRunId: input.issuerRunId,
-    ...(input.deterministicAuthority ? { deterministicAuthority: input.deterministicAuthority } : {}),
-    idempotencyKey: `finny-audit-${digest}`,
-  };
+function assertAuditAttemptInput(input: RecordFinnyAuditAttemptInput): void {
+  validateFinnyAuditAttemptInput(input);
 }
 
-async function existingAuditAttestation(
-  db: PoolClient,
-  input: RecordFinnyAttestationInput,
-): Promise<FinnyAttestation | undefined> {
-  const result = await db.query("SELECT * FROM finny_attestations WHERE idempotency_key=$1", [input.idempotencyKey]);
-  const attestation = result.rows[0] ? rowToAttestation(result.rows[0]) : undefined;
-  if (attestation && !sameAttestation(attestation, input)) {
-    throw new Error("Finny audit outcome idempotency key was reused");
+function assertApprovedSopControls(row: Record<string, unknown>, input: RecordFinnyAuditAttemptInput): void {
+  const sop = validateFinnySopVersion(row.sop_definition);
+  const controlsById = new Map(input.controls.map((control) => [control.id, control]));
+  if (sop.controls.some((control) => !controlsById.has(control.id))) {
+    throw new Error("Finny audit attempt is missing an approved SOP control");
   }
-  return attestation;
-}
-
-async function insertAuditAttestation(
-  db: PoolClient,
-  input: RecordFinnyAttestationInput,
-  createdAt: number,
-): Promise<FinnyAttestation> {
-  const inserted = await db.query(
-    `INSERT INTO finny_attestations(
-      id, job_id, check_id, generation, verdict, evidence_digest, artifact_digest,
-      issuer_principal_id, issuer_run_id, deterministic_authority, idempotency_key, created_at
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-    ON CONFLICT (idempotency_key) DO NOTHING RETURNING *`,
-    [
-      input.id,
-      input.jobId,
-      input.checkId,
-      input.generation,
-      input.verdict,
-      input.evidenceDigest,
-      input.artifactDigest,
-      input.issuerPrincipalId,
-      input.issuerRunId,
-      input.deterministicAuthority ? JSON.stringify(input.deterministicAuthority) : null,
-      input.idempotencyKey,
-      createdAt,
-    ],
-  );
-  const attestation = inserted.rows[0] ? rowToAttestation(inserted.rows[0]) : await existingAuditAttestation(db, input);
-  if (!attestation) throw new Error("Finny audit outcome attestation was not persisted");
-  return attestation;
+  const judgmentControlIds = new Set(sop.controls.filter((control) => control.judgment).map((control) => control.id));
+  const answers = input.judgmentAddendum?.answers ?? [];
+  if (input.verdict !== "pending_judgment") {
+    if (answers.some((answer) => !judgmentControlIds.has(answer.controlId))) {
+      throw new Error("Finny completed audit attempt has an unapproved judgment answer");
+    }
+    for (const answer of answers) {
+      if (controlsById.get(answer.controlId)?.verdict !== answer.verdict) {
+        throw new Error("Finny judgment answer disagrees with its SOP control");
+      }
+    }
+  }
 }
 
 async function lockedJob(db: PoolClient, scopeId: string, jobId: string): Promise<Record<string, unknown>> {
@@ -667,6 +872,12 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
     { id: "finny/store/0011-sop-job-bindings", statements: SOP_JOB_BINDING_SCHEMA },
     { id: "finny/store/0012-sop-amendment-events", statements: SOP_AMENDMENT_SCHEMA },
     { id: "finny/store/0013-sop-cutover", statements: SOP_CUTOVER_SCHEMA },
+    { id: "finny/store/0014-audit-attempts", statements: AUDIT_ATTEMPT_SCHEMA },
+    { id: "finny/store/0015-certified-results", statements: CERTIFIED_RESULT_SCHEMA },
+    { id: "finny/store/0016-audit-result-cutover", statements: AUDIT_RESULT_CUTOVER_SCHEMA },
+    { id: "finny/store/0017-audit-result-recovery-cutover", statements: AUDIT_RESULT_RECOVERY_CUTOVER_SCHEMA },
+    { id: "finny/store/0018-audit-attempt-evaluator-identity", statements: AUDIT_ATTEMPT_EVALUATOR_IDENTITY_SCHEMA },
+    { id: "finny/store/0019-core-audit-cutover", statements: CORE_AUDIT_CUTOVER_SCHEMA },
   ]);
   const createSopVersion = async (sopValue: FinnySopVersion): Promise<FinnyStoredSopVersion> => {
     const sop = validateFinnySopVersion(sopValue);
@@ -740,6 +951,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
       assertFinnyApprovedEvaluatorRef(input.policy.evaluator);
       assertFinnyFindingPolicy(input.findingPolicy);
       const sop = validateFinnySopVersion(input.sop);
+      assertFinnyCoreAuditableSop(sop);
       if (sop.scopeId !== input.scopeId) throw new Error("Finny SOP scope does not match the job");
       const stored = await createSopVersion(sop);
       const values = validateFinnySopValues(sop, input.values);
@@ -1024,6 +1236,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
     },
     async recordSopAmendment(input: RecordFinnySopAmendmentInput) {
       const sop = validateFinnySopVersion(input.sop);
+      assertFinnyCoreAuditableSop(sop);
       if (sop.scopeId !== input.scopeId) throw new Error("Finny SOP scope does not match the job");
       const stored = await createSopVersion(sop);
       const values = validateFinnySopValues(sop, input.values);
@@ -1160,69 +1373,237 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         };
       });
     },
-    async recordAttestation(input: RecordFinnyAttestationInput) {
+    async recordAuditAttempt(input: RecordFinnyAuditAttemptInput) {
+      assertAuditAttemptInput(input);
       return withPgTransaction(await pool(), async (db) => {
-        const job = await lockedJob(db, input.scopeId, input.jobId);
-        const replay = await db.query("SELECT * FROM finny_attestations WHERE idempotency_key = $1", [
+        const row = await lockedJob(db, input.scopeId, input.jobId);
+        assertApprovedSopControls(row, input);
+        const replay = await db.query("SELECT * FROM finny_audit_attempts WHERE idempotency_key=$1", [
           input.idempotencyKey,
         ]);
         if (replay.rows[0]) {
-          const attestation = rowToAttestation(replay.rows[0]);
-          if (!sameAttestation(attestation, input)) throw new Error("Finny attestation idempotency key was reused");
-          return { attestation, deduped: true };
+          const attempt = rowToAuditAttempt(replay.rows[0]);
+          const events = await eventsForIdempotency(db, input.idempotencyKey);
+          const expectedEvents = attempt.verdict === "block" ? 2 : 1;
+          if (
+            !sameAuditAttempt(attempt, input) ||
+            events.length !== expectedEvents ||
+            events[0]?.type !== "audit_attempt_recorded" ||
+            (attempt.verdict === "block" && events[1]?.type !== "rework_requested")
+          ) {
+            throw new Error("Finny audit attempt idempotency key was reused");
+          }
+          return {
+            attempt,
+            events,
+            job: rowToJob(row),
+            deduped: true,
+          };
         }
-        if (job.finalized_at !== null) throw new Error("Finny job is already finalized");
-        if (job.pending_rework_seq !== null) throw new Error("Finny job is awaiting a reworked artifact");
-        if (job.unresolved_escalation_seq !== null) throw new Error("Finny job has an unresolved escalation");
-        const policy: FinnyPolicySnapshot = {
-          policyVersion: job.policy_version as string,
-          evaluator: job.evaluator_ref as FinnyEvaluatorRef,
-          requiredGenerations: job.required_generations as Record<FinnyCheckId, number>,
-        };
-        assertFinnyPolicy(policy);
-        const requiredGeneration = policy.requiredGenerations[input.checkId];
-        if (requiredGeneration === undefined) throw new Error("Finny attestation is not for a required check");
-        if (input.generation !== requiredGeneration) throw new Error("Finny attestation generation is not current");
-        assertFinnyDeterministicAuthority(input.deterministicAuthority, input.checkId, input.verdict, policy.evaluator);
-        if (job.artifact_digest !== input.artifactDigest) throw new Error("Finny attestation artifact is not current");
-        const now = Date.now();
+        if (row.finalized_at !== null) throw new Error("Finny job is already finalized");
+        if (row.sop_version_id !== input.sopVersionId || row.execution_digest !== input.executionDigest) {
+          throw new Error("Finny audit attempt SOP binding is not current");
+        }
+        if (row.artifact_digest !== input.artifactSha256 || row.provisional_revision !== input.artifactFileId) {
+          throw new Error("Finny audit attempt artifact is not current");
+        }
+        if (!sameValue(row.evaluator_ref, input.evaluator)) throw new Error("Finny audit evaluator is not current");
+        const createdAt = Date.now();
         const inserted = await db.query(
-          `INSERT INTO finny_attestations(
-            id, job_id, check_id, generation, verdict, evidence_digest, artifact_digest,
-            issuer_principal_id, issuer_run_id, deterministic_authority, idempotency_key, created_at
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-          ON CONFLICT (idempotency_key) DO NOTHING
-          RETURNING *`,
+          `INSERT INTO finny_audit_attempts(
+             id,job_id,scope_id,sop_version_id,execution_digest,artifact_file_id,artifact_sha256,
+             artifact_mime,artifact_size_bytes,evaluator_ref,controls,judgment_questions,judgment_addendum,
+             verdict,issuer_principal_id,issuer_run_id,idempotency_key,created_at,completed_at
+           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+           RETURNING *`,
           [
             input.id,
             input.jobId,
-            input.checkId,
-            input.generation,
+            input.scopeId,
+            input.sopVersionId,
+            input.executionDigest,
+            input.artifactFileId,
+            input.artifactSha256,
+            input.artifactMime,
+            input.artifactSizeBytes,
+            JSON.stringify(input.evaluator),
+            JSON.stringify(input.controls),
+            JSON.stringify(input.judgmentQuestions),
+            input.judgmentAddendum ? JSON.stringify(input.judgmentAddendum) : null,
             input.verdict,
-            input.evidenceDigest,
-            input.artifactDigest,
             input.issuerPrincipalId,
             input.issuerRunId,
-            input.deterministicAuthority ? JSON.stringify(input.deterministicAuthority) : null,
             input.idempotencyKey,
-            now,
+            createdAt,
+            input.verdict === "pending_judgment" ? null : createdAt,
           ],
         );
-        if (!inserted.rows[0]) {
-          const existing = await db.query("SELECT * FROM finny_attestations WHERE idempotency_key = $1", [
-            input.idempotencyKey,
-          ]);
-          const attestation = rowToAttestation(existing.rows[0]);
-          if (!sameAttestation(attestation, input)) throw new Error("Finny attestation idempotency key was reused");
-          return { attestation, deduped: true };
-        }
-        const attestation = rowToAttestation(inserted.rows[0]);
-        await db.query("UPDATE finny_jobs SET ledger_head=$2, updated_at=$3 WHERE id=$1", [
+        const attempt = rowToAuditAttempt(inserted.rows[0]);
+        const payload: FinnyJobEventPayloads["audit_attempt_recorded"] = {
+          attemptId: attempt.id,
+          artifactDigest: attempt.artifactSha256,
+          verdict: attempt.verdict,
+          failedControlIds: attempt.controls
+            .filter((control) => control.verdict === "block")
+            .map((control) => control.id),
+          requestDigest: input.requestDigest ?? createHash("sha256").update(canonicalJson(input)).digest("hex"),
+        };
+        const event = await insertEvent(
+          db,
           input.jobId,
-          attestation.seq,
-          now,
+          "audit_attempt_recorded",
+          payload,
+          input.idempotencyKey,
+          0,
+          createdAt,
+        );
+        const rework =
+          attempt.verdict === "block"
+            ? await insertEvent(
+                db,
+                input.jobId,
+                "rework_requested",
+                {
+                  blockedEventSequence: event.seq,
+                  requiredGenerations: row.required_generations as Record<FinnyCheckId, number>,
+                },
+                input.idempotencyKey,
+                1,
+                createdAt,
+              )
+            : undefined;
+        const eventHead = rework?.seq ?? event.seq;
+        const updated = await db.query(
+          `UPDATE finny_jobs SET current_audit_attempt_id=$2,event_head=$3,
+             pending_rework_seq=$4,updated_at=$5
+            WHERE id=$1 RETURNING *`,
+          [input.jobId, attempt.id, eventHead, rework?.seq ?? null, createdAt],
+        );
+        return {
+          attempt,
+          events: rework ? [event, rework] : [event],
+          job: updatedRowToJob(updated.rows[0], row),
+          deduped: false,
+        };
+      });
+    },
+    async getAuditAttempt(scopeId: string, jobId: string, attemptId: string) {
+      const rows = await q("SELECT * FROM finny_audit_attempts WHERE scope_id=$1 AND job_id=$2 AND id=$3", [
+        scopeId,
+        jobId,
+        attemptId,
+      ]);
+      return rows[0] ? rowToAuditAttempt(rows[0]) : null;
+    },
+    async getAuditAttemptByOperation(scopeId: string, jobId: string, idempotencyKey: string) {
+      const rows = await q(
+        `SELECT attempts.*,events.payload->>'requestDigest' AS operation_request_digest
+           FROM finny_job_events events
+           JOIN finny_audit_attempts attempts ON attempts.id=events.payload->>'attemptId'
+          WHERE attempts.scope_id=$1 AND attempts.job_id=$2
+            AND events.idempotency_key=$3
+            AND events.event_type IN ('audit_attempt_recorded','audit_judgment_recorded')`,
+        [scopeId, jobId, idempotencyKey],
+      );
+      return rows[0]
+        ? { attempt: rowToAuditAttempt(rows[0]), requestDigest: rows[0].operation_request_digest as string }
+        : null;
+    },
+    async completeAuditJudgment(input: CompleteFinnyAuditJudgmentInput) {
+      return withPgTransaction(await pool(), async (db) => {
+        const row = await lockedJob(db, input.scopeId, input.jobId);
+        const replay = await eventsForIdempotency(db, input.idempotencyKey);
+        if (replay.length) {
+          const attemptResult = await db.query("SELECT * FROM finny_audit_attempts WHERE id=$1", [input.attemptId]);
+          const attempt = rowToAuditAttempt(attemptResult.rows[0]);
+          if (
+            replay.length < 1 ||
+            replay[0]?.type !== "audit_judgment_recorded" ||
+            attempt.verdict === "pending_judgment" ||
+            !sameValue(attempt.judgmentAddendum, input.judgmentAddendum)
+          ) {
+            throw new Error("Finny audit judgment idempotency key was reused");
+          }
+          return { attempt, events: replay, job: rowToJob(row), deduped: true };
+        }
+        if (row.current_audit_attempt_id !== input.attemptId) {
+          throw new Error("Finny audit judgment is not for the current attempt");
+        }
+        const attemptResult = await db.query("SELECT * FROM finny_audit_attempts WHERE id=$1 FOR UPDATE", [
+          input.attemptId,
         ]);
-        return { attestation, deduped: false };
+        const pending = rowToAuditAttempt(attemptResult.rows[0]);
+        if (pending.verdict !== "pending_judgment" || pending.completedAt !== undefined) {
+          throw new Error("Finny audit attempt is not awaiting judgment");
+        }
+        const questionIds = new Set(
+          pending.judgmentQuestions.map((question) => (question as { controlId?: unknown }).controlId),
+        );
+        const answers = input.judgmentAddendum.answers;
+        if (questionIds.size !== answers.length || answers.some((answer) => !questionIds.has(answer.controlId))) {
+          throw new Error("Finny audit judgment does not answer every pending control");
+        }
+        const controlsById = new Map(input.controls.map((control) => [control.id, control]));
+        if (
+          controlsById.size !== questionIds.size ||
+          [...questionIds].some((controlId) => !controlsById.has(controlId as string)) ||
+          answers.some((answer) => controlsById.get(answer.controlId)?.verdict !== answer.verdict)
+        ) {
+          throw new Error("Finny audit judgment controls do not match the pending attempt");
+        }
+        const controls = pending.controls.map((control) => controlsById.get(control.id) ?? control);
+        const verdict = controls.some((control) => control.verdict === "block") ? "block" : "pass";
+        const updatedAttempt = await db.query(
+          `UPDATE finny_audit_attempts
+              SET controls=$2,judgment_questions='[]'::jsonb,judgment_addendum=$3,verdict=$4,completed_at=$5
+            WHERE id=$1 RETURNING *`,
+          [
+            input.attemptId,
+            JSON.stringify(controls),
+            JSON.stringify(input.judgmentAddendum),
+            verdict,
+            input.completedAt,
+          ],
+        );
+        const attempt = rowToAuditAttempt(updatedAttempt.rows[0]);
+        const event = await insertEvent(
+          db,
+          input.jobId,
+          "audit_judgment_recorded",
+          {
+            attemptId: input.attemptId,
+            verdict,
+            requestDigest: input.requestDigest ?? createHash("sha256").update(canonicalJson(input)).digest("hex"),
+          },
+          input.idempotencyKey,
+          0,
+          input.completedAt,
+        );
+        const rework =
+          verdict === "block"
+            ? await insertEvent(
+                db,
+                input.jobId,
+                "rework_requested",
+                {
+                  blockedEventSequence: event.seq,
+                  requiredGenerations: row.required_generations as Record<FinnyCheckId, number>,
+                },
+                input.idempotencyKey,
+                1,
+                input.completedAt,
+              )
+            : undefined;
+        const updatedJob = await db.query(
+          `UPDATE finny_jobs SET event_head=$2,pending_rework_seq=$3,updated_at=$4 WHERE id=$1 RETURNING *`,
+          [input.jobId, rework?.seq ?? event.seq, rework?.seq ?? null, input.completedAt],
+        );
+        return {
+          attempt,
+          events: rework ? [event, rework] : [event],
+          job: updatedRowToJob(updatedJob.rows[0], row),
+          deduped: false,
+        };
       });
     },
     async recordArtifactReady(input: RecordFinnyArtifactReadyInput) {
@@ -1259,7 +1640,9 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         const changesArtifact =
           row.artifact_digest !== input.artifactDigest || row.provisional_revision !== input.provisionalRevision;
         if (artifactWasBound && changesArtifact) {
-          if (row.pending_rework_seq === null) throw new Error("Finny artifact replacement requires a rework request");
+          if (row.pending_rework_seq === null) {
+            throw new Error("Finny artifact replacement requires a rework request");
+          }
           const latest = await db.query(
             "SELECT event_type FROM finny_job_events WHERE job_id=$1 ORDER BY seq DESC LIMIT 1",
             [input.jobId],
@@ -1283,7 +1666,10 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         const event = await insertEvent(db, input.jobId, "artifact_ready", payload, input.idempotencyKey, 0, now);
         const updated = await db.query(
           `UPDATE finny_jobs SET artifact_digest=$2, provisional_revision=$3, event_head=$4,
-             required_generations=$5, pending_rework_seq=NULL, updated_at=$6 WHERE id=$1 RETURNING *`,
+             required_generations=$5, pending_rework_seq=NULL,
+             current_audit_attempt_id=CASE WHEN artifact_digest<>$2 OR provisional_revision<>$3 THEN NULL
+                                           ELSE current_audit_attempt_id END,
+             updated_at=$6 WHERE id=$1 RETURNING *`,
           [
             input.jobId,
             input.artifactDigest,
@@ -1294,166 +1680,6 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
           ],
         );
         return { events: [event], job: updatedRowToJob(updated.rows[0], row), deduped: false };
-      });
-    },
-    async recordAuditPassed(input: RecordFinnyAuditPassedInput) {
-      return withPgTransaction(await pool(), async (db) => {
-        const row = await lockedJob(db, input.scopeId, input.jobId);
-        assertNonEmpty(input.idempotencyKey, "event idempotency key");
-        assertNonEmpty(input.artifactDigest, "audit artifact digest");
-        assertNonEmpty(input.evidenceDigest, "audit evidence digest");
-        assertNonEmpty(input.issuerPrincipalId, "audit issuer principal ID");
-        assertNonEmpty(input.issuerRunId, "audit issuer run ID");
-        const payload: FinnyJobEventPayloads["audit_passed"] = {
-          artifactDigest: input.artifactDigest,
-          checkId: input.checkId,
-          generation: input.generation,
-          evidenceDigest: input.evidenceDigest,
-          issuerPrincipalId: input.issuerPrincipalId,
-          issuerRunId: input.issuerRunId,
-          ...(input.deterministicAuthority ? { deterministicAuthority: input.deterministicAuthority } : {}),
-        };
-        const attestationInput = auditAttestationInput(input, "pass");
-        const existing = await eventsForIdempotency(db, input.idempotencyKey);
-        assertEventReplayJob(existing, input.jobId);
-        if (existing.length) {
-          const attestation = await existingAuditAttestation(db, attestationInput);
-          if (
-            existing.length !== 1 ||
-            existing[0]?.type !== "audit_passed" ||
-            !sameValue(existing[0].payload, payload) ||
-            !attestation
-          ) {
-            throw new Error("Finny event idempotency key was reused");
-          }
-          return { events: existing as FinnyJobEvent<"audit_passed">[], job: rowToJob(row), deduped: true };
-        }
-        if (await existingAuditAttestation(db, attestationInput)) {
-          throw new Error("Finny audit outcome idempotency key was reused");
-        }
-        if (row.finalized_at !== null) throw new Error("Finny job is already finalized");
-        if (row.unresolved_escalation_seq !== null) throw new Error("Finny job has an unresolved escalation");
-        if (row.pending_rework_seq !== null) throw new Error("Finny job is awaiting a reworked artifact");
-        const policy: FinnyPolicySnapshot = {
-          policyVersion: row.policy_version as string,
-          evaluator: row.evaluator_ref as FinnyEvaluatorRef,
-          requiredGenerations: row.required_generations as Record<FinnyCheckId, number>,
-        };
-        assertCurrentAuditEvent(policy, input.checkId, input.generation);
-        assertFinnyDeterministicAuthority(input.deterministicAuthority, input.checkId, "pass", policy.evaluator);
-        if (row.artifact_digest !== input.artifactDigest) throw new Error("Finny audit artifact is not current");
-        const now = Date.now();
-        const attestation = await insertAuditAttestation(db, attestationInput, now);
-        const event = await insertEvent(db, input.jobId, "audit_passed", payload, input.idempotencyKey, 0, now);
-        const updated = await db.query(
-          "UPDATE finny_jobs SET ledger_head=$2, event_head=$3, updated_at=$4 WHERE id=$1 RETURNING *",
-          [input.jobId, attestation.seq, event.seq, now],
-        );
-        return { events: [event], job: updatedRowToJob(updated.rows[0], row), deduped: false };
-      });
-    },
-    async recordAuditBlock(input: RecordFinnyAuditBlockInput) {
-      return withPgTransaction(await pool(), async (db) => {
-        const row = await lockedJob(db, input.scopeId, input.jobId);
-        assertNonEmpty(input.idempotencyKey, "event idempotency key");
-        assertNonEmpty(input.artifactDigest, "audit artifact digest");
-        assertNonEmpty(input.evidenceDigest, "audit evidence digest");
-        assertNonEmpty(input.issuerPrincipalId, "audit issuer principal ID");
-        assertNonEmpty(input.issuerRunId, "audit issuer run ID");
-        const blockedPayload: FinnyJobEventPayloads["audit_blocked"] = {
-          artifactDigest: input.artifactDigest,
-          checkId: input.checkId,
-          generation: input.generation,
-          evidenceDigest: input.evidenceDigest,
-          issuerPrincipalId: input.issuerPrincipalId,
-          issuerRunId: input.issuerRunId,
-          ...(input.deterministicAuthority ? { deterministicAuthority: input.deterministicAuthority } : {}),
-          findings: input.findings,
-          findingPolicy: row.finding_policy as FinnyFindingPolicy,
-          changeKinds: input.changeKinds,
-        };
-        const attestationInput = auditAttestationInput(input, "block");
-        const existing = await eventsForIdempotency(db, input.idempotencyKey);
-        assertEventReplayJob(existing, input.jobId);
-        if (existing.length) {
-          const transitionType = input.resolution.kind === "rework" ? "rework_requested" : "escalated";
-          const escalationMatches =
-            input.resolution.kind !== "escalate" ||
-            (existing[1]?.type === "escalated" && existing[1].payload.reason === input.resolution.reason);
-          const attestation = await existingAuditAttestation(db, attestationInput);
-          if (
-            existing.length !== 2 ||
-            existing[0]?.type !== "audit_blocked" ||
-            !sameValue(existing[0].payload, blockedPayload) ||
-            existing[1]?.type !== transitionType ||
-            !escalationMatches ||
-            !attestation
-          ) {
-            throw new Error("Finny event idempotency key was reused");
-          }
-          return { events: existing, job: rowToJob(row), deduped: true };
-        }
-        if (await existingAuditAttestation(db, attestationInput)) {
-          throw new Error("Finny audit outcome idempotency key was reused");
-        }
-        if (row.finalized_at !== null) throw new Error("Finny job is already finalized");
-        if (row.unresolved_escalation_seq !== null) throw new Error("Finny job has an unresolved escalation");
-        if (row.pending_rework_seq !== null) throw new Error("Finny job is awaiting a reworked artifact");
-        const policy: FinnyPolicySnapshot = {
-          policyVersion: row.policy_version as string,
-          evaluator: row.evaluator_ref as FinnyEvaluatorRef,
-          requiredGenerations: row.required_generations as Record<FinnyCheckId, number>,
-        };
-        assertCurrentAuditEvent(policy, input.checkId, input.generation);
-        assertFinnyDeterministicAuthority(input.deterministicAuthority, input.checkId, "block", policy.evaluator);
-        if (row.finding_policy === null) throw new Error("Finny finding policy is not configured");
-        assertFinnyAuditFindings(input.findings, row.finding_policy as FinnyFindingPolicy);
-        const revised = reviseFinnyPolicy(policy, input.changeKinds);
-        if (row.artifact_digest !== input.artifactDigest) throw new Error("Finny audit artifact is not current");
-        const now = Date.now();
-        const attestation = await insertAuditAttestation(db, attestationInput, now);
-        const blocked = await insertEvent(
-          db,
-          input.jobId,
-          "audit_blocked",
-          blockedPayload,
-          input.idempotencyKey,
-          0,
-          now,
-        );
-        if (input.resolution.kind === "rework") {
-          const requested = await insertEvent(
-            db,
-            input.jobId,
-            "rework_requested",
-            { blockedEventSequence: blocked.seq, requiredGenerations: revised.requiredGenerations },
-            input.idempotencyKey,
-            1,
-            now,
-          );
-          const updated = await db.query(
-            `UPDATE finny_jobs SET required_generations=$2, ledger_head=$3, event_head=$4,
-               pending_rework_seq=$4, updated_at=$5 WHERE id=$1 RETURNING *`,
-            [input.jobId, JSON.stringify(revised.requiredGenerations), attestation.seq, requested.seq, now],
-          );
-          return { events: [blocked, requested], job: updatedRowToJob(updated.rows[0], row), deduped: false };
-        }
-        assertFinnyEscalationReason(input.resolution.reason);
-        const escalated = await insertEvent(
-          db,
-          input.jobId,
-          "escalated",
-          { blockedEventSequence: blocked.seq, reason: input.resolution.reason },
-          input.idempotencyKey,
-          1,
-          now,
-        );
-        const updated = await db.query(
-          `UPDATE finny_jobs SET ledger_head=$2, event_head=$3, unresolved_escalation_seq=$3, updated_at=$4
-           WHERE id=$1 RETURNING *`,
-          [input.jobId, attestation.seq, escalated.seq, now],
-        );
-        return { events: [blocked, escalated], job: updatedRowToJob(updated.rows[0], row), deduped: false };
       });
     },
     async evaluatorCorrectionCandidates(approvedEvaluator: FinnyEvaluatorRef) {
@@ -1470,15 +1696,28 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
             AND (
               jobs.pending_rework_seq IS NULL
               OR EXISTS (
-                SELECT 1 FROM finny_job_events AS rework
-                JOIN finny_job_events AS blocked
-                  ON blocked.job_id=rework.job_id
-                 AND blocked.seq=(rework.payload->>'blockedEventSequence')::bigint
-                 AND blocked.event_type='audit_blocked'
-                 AND blocked.payload->>'checkId' IN ('formula.recalculate','summary.crossfoot','artifact.structure')
-               WHERE rework.job_id=jobs.id
-                 AND rework.seq=jobs.pending_rework_seq
-                 AND rework.event_type='rework_requested'
+                SELECT 1
+                  FROM finny_job_events AS rework
+                  JOIN finny_job_events AS blocked
+                    ON blocked.job_id=rework.job_id
+                   AND blocked.seq=(rework.payload->>'blockedEventSequence')::bigint
+                   AND blocked.event_type='audit_attempt_recorded'
+                  JOIN finny_audit_attempts AS attempt
+                    ON attempt.id=jobs.current_audit_attempt_id
+                   AND attempt.id=blocked.payload->>'attemptId'
+                 WHERE rework.job_id=jobs.id
+                   AND rework.seq=jobs.pending_rework_seq
+                   AND rework.event_type='rework_requested'
+                   AND attempt.verdict='block'
+                   AND EXISTS (
+                     SELECT 1 FROM jsonb_array_elements(attempt.controls) AS control
+                      WHERE control->>'verdict'='block'
+                   )
+                   AND NOT EXISTS (
+                     SELECT 1 FROM jsonb_array_elements(attempt.controls) AS control
+                      WHERE control->>'verdict'='block'
+                        AND control->>'id' NOT IN ('formula.recalculate','summary.crossfoot','artifact.structure')
+                   )
               )
             )
           ORDER BY jobs.created_at,jobs.id`,
@@ -1547,19 +1786,29 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
             transition.payload.blockedEventSequence,
           ]);
           const blocked = blockedResult.rows[0] ? rowToEvent(blockedResult.rows[0]) : undefined;
-          if (
-            blocked?.type !== "audit_blocked" ||
-            blocked.payload.artifactDigest !== row.artifact_digest ||
-            !FINNY_DETERMINISTIC_CHECK_IDS.includes(
-              blocked.payload.checkId as (typeof FINNY_DETERMINISTIC_CHECK_IDS)[number],
-            )
-          ) {
-            throw new Error("Finny pending rework is non-deterministic or unrelated to evaluator correction");
+          let checkId: FinnyCheckId | undefined;
+          if (blocked?.type === "audit_attempt_recorded" && row.current_audit_attempt_id !== null) {
+            const attemptResult = await db.query("SELECT * FROM finny_audit_attempts WHERE id=$1", [
+              row.current_audit_attempt_id,
+            ]);
+            const attempt = attemptResult.rows[0] ? rowToAuditAttempt(attemptResult.rows[0]) : undefined;
+            const failed = attempt?.controls.filter((control) => control.verdict === "block") ?? [];
+            if (
+              attempt?.artifactSha256 === row.artifact_digest &&
+              failed.length > 0 &&
+              failed.every((control) =>
+                FINNY_DETERMINISTIC_CHECK_IDS.includes(control.id as (typeof FINNY_DETERMINISTIC_CHECK_IDS)[number]),
+              )
+            ) {
+              checkId = failed[0]!.id as FinnyCheckId;
+            }
           }
+          if (!checkId)
+            throw new Error("Finny pending rework is non-deterministic or unrelated to evaluator correction");
           cancelled = {
             reworkEventSequence: transition.seq,
-            blockedEventSequence: blocked.seq,
-            checkId: blocked.payload.checkId,
+            blockedEventSequence: blocked!.seq,
+            checkId,
           };
         }
 
@@ -1616,7 +1865,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         const eventHead = events.at(-1)!.seq;
         const updated = await db.query(
           `UPDATE finny_jobs SET evaluator_ref=$2, required_generations=$3,
-             pending_rework_seq=NULL, event_head=$4, updated_at=$5 WHERE id=$1 RETURNING *`,
+             pending_rework_seq=NULL,current_audit_attempt_id=NULL,event_head=$4,updated_at=$5 WHERE id=$1 RETURNING *`,
           [input.jobId, JSON.stringify(revised.evaluator), JSON.stringify(revised.requiredGenerations), eventHead, now],
         );
         return { events, job: updatedRowToJob(updated.rows[0], row), deduped: false };
@@ -1631,98 +1880,163 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
       ]);
       return rows.map(rowToEvent);
     },
-    async finalize(input: FinalizeFinnyInput, sign: FinnyReceiptSigner): Promise<FinnyFinalReceipt> {
+    async certifyResult(input, sign) {
+      const result = validateFinnyCertifiedResult(input.result);
+      const destination = validateFinnyCertifiedResultDestination(input.destination);
+      assertNonEmpty(input.idempotencyKey, "certified result idempotency key");
       return withPgTransaction(await pool(), async (db) => {
-        const row = await lockedJob(db, input.scopeId, input.jobId);
-        if (row.final_receipt !== null) {
-          if (row.finalization_key !== input.idempotencyKey) {
-            throw new Error("Finny job was finalized with a different idempotency key");
+        const row = await lockedJob(db, input.scopeId, result.jobId);
+        const replay = await db.query("SELECT * FROM finny_results WHERE idempotency_key=$1", [input.idempotencyKey]);
+        if (replay.rows[0]) {
+          const stored = rowToCertifiedResult(replay.rows[0]);
+          if (
+            stored.jobId !== result.jobId ||
+            stored.scopeId !== input.scopeId ||
+            !sameValue(
+              {
+                schema: stored.schema,
+                jobId: stored.jobId,
+                sopVersionId: stored.sopVersionId,
+                executionDigest: stored.executionDigest,
+                artifact: stored.artifact,
+                summary: stored.summary,
+                auditAttemptId: stored.auditAttemptId,
+              },
+              result,
+            ) ||
+            !sameValue(stored.destination, destination)
+          ) {
+            throw new Error("Finny certified result idempotency key was reused");
           }
-          return row.final_receipt as FinnyFinalReceipt;
+          return stored;
         }
+        if (row.result_id !== null) throw new Error("Finny job already has a certified result");
+        if (row.finalized_at !== null) throw new Error("Finny job is already finalized");
         if (row.pending_rework_seq !== null) throw new Error("Finny job is awaiting a reworked artifact");
         if (row.unresolved_escalation_seq !== null) throw new Error("Finny job has an unresolved escalation");
-        if (
-          typeof row.artifact_digest !== "string" ||
-          !row.artifact_digest ||
-          typeof row.provisional_revision !== "string" ||
-          !row.provisional_revision
-        ) {
-          throw new Error("Finny job does not have a bound artifact");
-        }
         if (
           row.approval_action !== "approve" ||
           row.approval_decided_at === null ||
           row.approval_consumed_at !== null ||
-          row.sop_version_id === null ||
           row.approval_execution_digest !== row.execution_digest ||
           row.approval_origin_thread_ref !== row.origin_thread_ref
         ) {
-          throw new Error("Finny job does not have an unconsumed bound approved decision");
+          throw new Error("Finny certified result requires an unconsumed bound approved decision");
         }
-        const policy: FinnyPolicySnapshot = {
-          policyVersion: row.policy_version as string,
-          evaluator: row.evaluator_ref as FinnyEvaluatorRef,
-          requiredGenerations: row.required_generations as Record<FinnyCheckId, number>,
-        };
-        assertFinnyPolicy(policy);
-        const attestations = await db.query(
-          `SELECT DISTINCT ON (check_id) * FROM finny_attestations
-           WHERE job_id=$1 ORDER BY check_id, seq DESC`,
-          [input.jobId],
-        );
-        const latest = new Map<FinnyCheckId, FinnyAttestation>();
-        let observedHead = 0;
-        for (const attestationRow of attestations.rows) {
-          const attestation = rowToAttestation(attestationRow);
-          latest.set(attestation.checkId, attestation);
-          observedHead = Math.max(observedHead, attestation.seq);
+        if (
+          result.sopVersionId !== row.sop_version_id ||
+          result.executionDigest !== row.execution_digest ||
+          result.artifact.fileId !== row.provisional_revision ||
+          result.artifact.sha256 !== row.artifact_digest ||
+          result.auditAttemptId !== row.current_audit_attempt_id
+        ) {
+          throw new Error("Finny certified result authority is not current");
         }
-        for (const checkId of Object.keys(policy.requiredGenerations) as FinnyCheckId[]) {
-          const attestation = latest.get(checkId);
-          if (!attestation) throw new Error(`Finny finalization is missing ${checkId}`);
-          if (attestation.generation !== policy.requiredGenerations[checkId]) {
-            throw new Error(`Finny finalization has a stale generation for ${checkId}`);
-          }
-          if (attestation.verdict === "block") throw new Error(`Finny finalization has a BLOCK for ${checkId}`);
-          assertFinnyDeterministicAuthority(
-            attestation.deterministicAuthority,
-            checkId,
-            attestation.verdict,
-            policy.evaluator,
-          );
-          if (attestation.artifactDigest !== row.artifact_digest) {
-            throw new Error(`Finny finalization has stale artifact evidence for ${checkId}`);
-          }
+        const attempts = await db.query("SELECT * FROM finny_audit_attempts WHERE id=$1 FOR SHARE", [
+          result.auditAttemptId,
+        ]);
+        const attemptRow = attempts.rows[0];
+        if (!attemptRow) throw new Error("Finny certified result audit attempt was not found");
+        const attempt = rowToAuditAttempt(attemptRow);
+        if (
+          attempt.verdict !== "pass" ||
+          attempt.completedAt === undefined ||
+          attempt.controls.some((control) => control.verdict !== "pass") ||
+          attempt.jobId !== result.jobId ||
+          attempt.scopeId !== input.scopeId ||
+          attempt.sopVersionId !== result.sopVersionId ||
+          attempt.executionDigest !== result.executionDigest ||
+          attempt.artifactFileId !== result.artifact.fileId ||
+          attempt.artifactSha256 !== result.artifact.sha256 ||
+          attempt.artifactMime !== result.artifact.mime
+        ) {
+          throw new Error("Finny certified result requires a matching current PASS audit attempt");
         }
-        if (observedHead !== Number(row.ledger_head)) throw new Error("Finny attestation ledger head is inconsistent");
-        const issuedAt = Date.now();
-        const payload: FinnyFinalReceiptPayload = {
-          aud: "finny.final.delivery",
-          jobId: input.jobId,
+        assertFinnyCertifiedResultReferences(result, attempt);
+        const createdAt = Date.now();
+        const resultId = createHash("sha256")
+          .update(`finny-result:${result.jobId}:${input.idempotencyKey}`)
+          .digest("hex");
+        const payload = {
+          aud: "finny.final.delivery" as const,
+          resultId,
+          jobId: result.jobId,
           scopeId: input.scopeId,
-          sopVersionId: row.sop_version_id as string,
-          sopRevision: Number(row.sop_revision),
-          executionDigest: row.execution_digest as string,
-          artifactDigest: row.artifact_digest as string,
-          policyVersion: policy.policyVersion,
-          evaluator: policy.evaluator,
-          requiredGenerations: policy.requiredGenerations,
-          ledgerHead: observedHead,
+          sopVersionId: result.sopVersionId,
+          executionDigest: result.executionDigest,
+          artifactFileId: result.artifact.fileId,
+          artifactSha256: result.artifact.sha256,
+          auditAttemptId: result.auditAttemptId,
           approvalRequestId: row.approval_request_id as string,
           approvalActorId: row.approval_actor_id as string,
           originThreadRef: row.origin_thread_ref as string,
-          provisionalRevision: row.provisional_revision as string,
-          issuedAt,
+          issuedAt: createdAt,
         };
-        const receipt: FinnyFinalReceipt = { payload, token: await sign(payload) };
-        await db.query(
-          `UPDATE finny_jobs SET finalization_key=$2, final_receipt=$3,
-             finalized_at=$4, approval_consumed_at=$4, updated_at=$4
-           WHERE id=$1`,
-          [input.jobId, input.idempotencyKey, JSON.stringify(receipt), issuedAt],
+        const receipt: FinnyCertifiedResultReceipt = { payload, token: await sign(payload) };
+        const inserted = await db.query(
+          `INSERT INTO finny_results(
+             id,job_id,scope_id,schema,sop_version_id,execution_digest,artifact_file_id,artifact_sha256,
+             artifact_mime,summary,audit_attempt_id,receipt,destination,idempotency_key,search_text,created_at
+           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+           RETURNING *`,
+          [
+            resultId,
+            result.jobId,
+            input.scopeId,
+            result.schema,
+            result.sopVersionId,
+            result.executionDigest,
+            result.artifact.fileId,
+            result.artifact.sha256,
+            result.artifact.mime,
+            JSON.stringify(result.summary),
+            result.auditAttemptId,
+            JSON.stringify(receipt),
+            JSON.stringify(destination),
+            input.idempotencyKey,
+            finnyCertifiedResultSearchText(result),
+            createdAt,
+          ],
         );
-        return receipt;
+        await db.query(
+          `UPDATE finny_jobs SET result_id=$2,finalization_key=$3,finalized_at=$4,
+             approval_consumed_at=$4,updated_at=$4 WHERE id=$1`,
+          [result.jobId, resultId, input.idempotencyKey, createdAt],
+        );
+        return rowToCertifiedResult(inserted.rows[0]);
+      });
+    },
+    async getCertifiedResult(scopeId, resultId) {
+      const rows = await q("SELECT * FROM finny_results WHERE id=$1 AND scope_id=$2", [resultId, scopeId]);
+      return rows[0] ? rowToCertifiedResult(rows[0]) : null;
+    },
+    async getCertifiedResultById(resultId) {
+      assertNonEmpty(resultId, "certified result ID");
+      const rows = await q("SELECT * FROM finny_results WHERE id=$1", [resultId]);
+      return rows[0] ? rowToCertifiedResult(rows[0]) : null;
+    },
+    async pendingCertifiedResultDeliveries(limit) {
+      if (!Number.isSafeInteger(limit) || limit < 1) {
+        throw new Error("Finny certified result delivery limit is invalid");
+      }
+      const rows = await q("SELECT * FROM finny_results WHERE delivery_id IS NULL ORDER BY created_at,id LIMIT $1", [
+        limit,
+      ]);
+      return rows.map(rowToCertifiedResult);
+    },
+    async markCertifiedResultDelivery(resultId, deliveryId) {
+      assertNonEmpty(resultId, "certified result ID");
+      assertNonEmpty(deliveryId, "certified result delivery ID");
+      await withPgTransaction(await pool(), async (db) => {
+        const updated = await db.query(
+          `UPDATE finny_results SET delivery_id=$2 WHERE id=$1 AND (delivery_id IS NULL OR delivery_id=$2)
+           RETURNING delivery_id`,
+          [resultId, deliveryId],
+        );
+        if (updated.rows[0]) return;
+        const existing = await db.query("SELECT delivery_id FROM finny_results WHERE id=$1", [resultId]);
+        if (!existing.rows[0]) throw new Error("Finny certified result was not found");
+        throw new Error("Finny certified result is bound to a different delivery");
       });
     },
   };

@@ -18,6 +18,10 @@ export const FINNY_CHECK_IDS = [
 ] as const;
 
 export type FinnyCheckId = (typeof FINNY_CHECK_IDS)[number];
+export type FinnyDeterministicCheckId = Extract<
+  FinnyCheckId,
+  "formula.recalculate" | "summary.crossfoot" | "artifact.structure"
+>;
 
 export const FINNY_CHANGE_KINDS = ["source_or_logic", "formula", "disclosure", "presentation", "lineage"] as const;
 
@@ -63,6 +67,8 @@ export interface FinnyJob {
   eventHead: number;
   pendingReworkSequence?: number;
   unresolvedEscalationSequence?: number;
+  currentAuditAttemptId?: string;
+  resultId?: string;
   finalizationKey?: string;
   finalReceipt?: FinnyFinalReceipt;
   finalizedAt?: number;
@@ -97,6 +103,56 @@ export interface FinnyAttestation {
   deterministicAuthority?: FinnyDeterministicEvidenceAuthority;
   idempotencyKey: string;
   createdAt: number;
+}
+
+export interface FinnyAuditRepairAction {
+  message: string;
+  workbookRefs: string[];
+}
+
+export interface FinnyAuditControlResult {
+  id: string;
+  verdict: FinnyVerdict;
+  evidenceRefs: string[];
+  repairActions: FinnyAuditRepairAction[];
+  deterministicAuthority?: FinnyDeterministicEvidenceAuthority;
+}
+
+export interface FinnyAuditJudgmentAnswer {
+  controlId: string;
+  verdict: FinnyVerdict;
+  evidenceRefs: string[];
+  rationale: string;
+}
+
+export interface FinnyAuditJudgmentAddendum {
+  issuerPrincipalId: string;
+  issuerRunId: string;
+  answers: FinnyAuditJudgmentAnswer[];
+}
+
+export type FinnyAuditAttemptVerdict = FinnyVerdict | "pending_judgment";
+
+export interface FinnyAuditAttempt {
+  id: string;
+  jobId: string;
+  scopeId: string;
+  sopVersionId: string;
+  executionDigest: string;
+  artifactFileId: string;
+  artifactSha256: string;
+  artifactMime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  artifactSizeBytes: number;
+  evaluator: FinnyEvaluatorRef;
+  controls: FinnyAuditControlResult[];
+  judgmentQuestions: unknown[];
+  judgmentAddendum?: FinnyAuditJudgmentAddendum;
+  verdict: FinnyAuditAttemptVerdict;
+  issuerPrincipalId: string;
+  issuerRunId: string;
+  idempotencyKey: string;
+  createdAt: number;
+  completedAt?: number;
 }
 
 interface FinnyFinalReceiptPayloadBase {
@@ -166,6 +222,8 @@ export const FINNY_JOB_EVENT_TYPES = [
   "verification_reopened",
   "plan_amended",
   "sop_amended",
+  "audit_attempt_recorded",
+  "audit_judgment_recorded",
 ] as const;
 
 export type FinnyJobEventType = (typeof FINNY_JOB_EVENT_TYPES)[number];
@@ -250,6 +308,18 @@ export interface FinnyJobEventPayloads {
     newExecutionDigest: string;
     revision: number;
   };
+  audit_attempt_recorded: {
+    attemptId: string;
+    artifactDigest: string;
+    verdict: FinnyAuditAttemptVerdict;
+    failedControlIds: string[];
+    requestDigest: string;
+  };
+  audit_judgment_recorded: {
+    attemptId: string;
+    verdict: FinnyVerdict;
+    requestDigest: string;
+  };
 }
 
 export type FinnyJobEvent<T extends FinnyJobEventType = FinnyJobEventType> = {
@@ -329,7 +399,8 @@ export interface FinnySopVersion {
     assertion: string;
     tolerance?: string;
     evidenceRefs: readonly string[];
-    judgment?: { question: string; onlyWhen: string };
+    deterministicCheckId?: FinnyDeterministicCheckId;
+    judgment?: { question: string; onlyWhen: string; triggerVerdict?: "block" };
   }>;
   outputs: ReadonlyArray<{
     id: string;

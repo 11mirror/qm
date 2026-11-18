@@ -138,6 +138,18 @@ export function validateFinnySopVersion(value: unknown): FinnySopVersion {
   });
 }
 
+export function assertFinnyCoreAuditableSop(value: unknown): asserts value is FinnySopVersion {
+  const sop = validateFinnySopVersion(value);
+  for (const control of sop.controls) {
+    if (!control.deterministicCheckId) {
+      throw new Error(`Finny SOP control ${control.id} has no deterministic check binding`);
+    }
+    if (control.judgment && control.judgment.triggerVerdict !== "block") {
+      throw new Error(`Finny SOP judgment control ${control.id} has no deterministic trigger verdict`);
+    }
+  }
+}
+
 export function validateFinnySopValues(
   sopValue: unknown,
   value: unknown,

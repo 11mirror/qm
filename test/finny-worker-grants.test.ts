@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { verifySignedPayload } from "../src/auth/signed-token.ts";
-import { FINNY_CHECK_IDS, initialFinnyPolicy } from "../src/finny/policy.ts";
+import { initialFinnyPolicy } from "../src/finny/policy.ts";
 import { createPostgresFinnyStore } from "../src/finny/postgres-store.ts";
 import { createFinnyWorkerGrants } from "../src/finny/worker-grants.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -70,7 +70,7 @@ test("refuses an Auditor evidence grant before artifact_ready", async () => {
   );
 });
 
-test("issues an artifact-bound Auditor grant after artifact_ready", async () => {
+test("issues an artifact-bound judgment-only Auditor grant after artifact_ready", async () => {
   const { store, job } = await approvedJob();
   await store.recordArtifactReady({
     scopeId: job.scopeId,
@@ -90,17 +90,7 @@ test("issues an artifact-bound Auditor grant after artifact_ready", async () => 
   });
   assert.equal(auditor.payload.role, "auditor");
   assert.equal(auditor.payload.artifactDigest, "artifact-sha256");
-  assert.deepEqual(auditor.payload.allowedChecks, FINNY_CHECK_IDS);
-  const accepted = await grants.submitAttestation(auditor.token, {
-    id: randomUUID(),
-    checkId: "lineage.binding",
-    generation: 1,
-    verdict: "pass",
-    evidenceDigest: `evidence-${randomUUID()}`,
-    idempotencyKey: randomUUID(),
-  });
-  assert.equal(accepted.attestation.artifactDigest, "artifact-sha256");
-  assert.equal(accepted.attestation.issuerRunId, "run-auditor");
+  assert.deepEqual(auditor.payload.allowedChecks, []);
 });
 
 test("producer and Auditor run identities must remain distinct", async () => {

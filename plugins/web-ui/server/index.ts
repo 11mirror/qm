@@ -2253,6 +2253,18 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "GET",
+    path: "/api/finny/results/:id",
+    handle: async (c) => {
+      const { res, user } = c;
+      return relayCore(
+        res,
+        "GET",
+        `/v1/finny/results/${encodeURIComponent(c.params.id!)}?viewer=${encodeURIComponent(user)}`,
+      );
+    },
+  },
+  {
+    method: "GET",
     path: "/api/files/:id/content",
     handle: serveFileContent,
   },

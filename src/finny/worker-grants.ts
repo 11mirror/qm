@@ -1,15 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
-import { isObj } from "../util/objects.ts";
+import { mintSignedPayload } from "../auth/signed-token.ts";
 import { FINNY_CHECK_IDS } from "./policy.ts";
 import type { FinnyStore } from "./store.ts";
-import type {
-  FinnyCheckId,
-  FinnyPolicySnapshot,
-  FinnyWorkerGrant,
-  FinnyWorkerGrantPayload,
-  FinnyWorkerRole,
-} from "./types.ts";
+import type { FinnyPolicySnapshot, FinnyWorkerGrant, FinnyWorkerGrantPayload, FinnyWorkerRole } from "./types.ts";
 
 export interface IssueFinnyWorkerInput {
   scopeId: string;
@@ -17,15 +10,6 @@ export interface IssueFinnyWorkerInput {
   principalId: string;
   runId: string;
   expiresAt: number;
-}
-
-export interface SubmitFinnyWorkerAttestationInput {
-  id: string;
-  checkId: FinnyCheckId;
-  generation: number;
-  verdict: "pass" | "block";
-  evidenceDigest: string;
-  idempotencyKey: string;
 }
 
 function policyDigest(policy: FinnyPolicySnapshot): string {
@@ -43,28 +27,6 @@ function policyDigest(policy: FinnyPolicySnapshot): string {
 
 function stringField(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
-}
-
-function parseGrant(value: unknown): FinnyWorkerGrantPayload | null {
-  if (!isObj(value) || value.aud !== "finny.worker") return null;
-  if (
-    !stringField(value.jti) ||
-    !stringField(value.scopeId) ||
-    !stringField(value.jobId) ||
-    !stringField(value.principalId) ||
-    !stringField(value.runId) ||
-    !stringField(value.policyDigest) ||
-    (value.role !== "producer" && value.role !== "auditor") ||
-    (value.artifactDigest !== undefined && !stringField(value.artifactDigest)) ||
-    (value.role === "auditor" && !stringField(value.artifactDigest)) ||
-    !Number.isSafeInteger(value.issuedAt) ||
-    !Number.isSafeInteger(value.expiresAt) ||
-    !Array.isArray(value.allowedChecks) ||
-    !value.allowedChecks.every((checkId) => FINNY_CHECK_IDS.includes(checkId as FinnyCheckId))
-  ) {
-    return null;
-  }
-  return value as unknown as FinnyWorkerGrantPayload;
 }
 
 export function createFinnyWorkerGrants(store: FinnyStore, secret: string, now: () => number = Date.now) {
@@ -98,7 +60,7 @@ export function createFinnyWorkerGrants(store: FinnyStore, secret: string, now: 
       runId: input.runId,
       ...(job.artifactDigest ? { artifactDigest: job.artifactDigest } : {}),
       policyDigest: policyDigest(job.policy),
-      allowedChecks: role === "auditor" ? [...FINNY_CHECK_IDS] : [],
+      allowedChecks: [],
       issuedAt: now(),
       expiresAt: input.expiresAt,
     };
@@ -108,33 +70,5 @@ export function createFinnyWorkerGrants(store: FinnyStore, secret: string, now: 
   return {
     issueProducer: (input: IssueFinnyWorkerInput) => issue(input, "producer"),
     issueAuditor: (input: IssueFinnyWorkerInput) => issue(input, "auditor"),
-
-    async submitAttestation(token: string, input: SubmitFinnyWorkerAttestationInput) {
-      const grant = parseGrant(await verifySignedPayload(token, secret));
-      if (!grant) throw new Error("Finny worker grant is invalid");
-      if (now() >= grant.expiresAt) throw new Error("Finny worker grant is expired");
-      if (grant.role !== "auditor" || !grant.artifactDigest) {
-        throw new Error("Finny attestation requires an Auditor grant");
-      }
-      if (!grant.allowedChecks.includes(input.checkId)) throw new Error("Finny worker grant does not allow this check");
-      const job = await store.getJob(grant.scopeId, grant.jobId);
-      if (
-        !job ||
-        job.artifactDigest !== grant.artifactDigest ||
-        policyDigest(job.policy) !== grant.policyDigest ||
-        job.approval?.action !== "approve" ||
-        job.approval.consumedAt !== undefined
-      ) {
-        throw new Error("Finny worker grant no longer matches the job");
-      }
-      return store.recordAttestation({
-        ...input,
-        scopeId: grant.scopeId,
-        jobId: grant.jobId,
-        artifactDigest: grant.artifactDigest,
-        issuerPrincipalId: grant.principalId,
-        issuerRunId: grant.runId,
-      });
-    },
   };
 }

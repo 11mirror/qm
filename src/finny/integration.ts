@@ -1,19 +1,17 @@
 import { createHash, randomUUID } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import type { FinnyPlanCreation, FinnyToolService } from "../agent/agent-tools/finny.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import { parseScopeId, type Conversation, type Destination, type Principal } from "../types.ts";
 import type { FinnyIntegrationConfig } from "./integration-config.ts";
-import type { FinnyFinalizer } from "./finalizer.ts";
 import type { FinnyRuntimeStore } from "./runtime-postgres-store.ts";
 import type { FinnyStore } from "./store.ts";
+import { FINNY_CERTIFIED_RESULT_SCHEMA, FINNY_XLSX_MIME, type FinnyCertifiedResult } from "./certified-result.ts";
 import { initialFinnyPolicy } from "./policy.ts";
-import {
-  assertFinnyMaterialClarificationMatchesSop,
-} from "./plan.ts";
+import { assertFinnyMaterialClarificationMatchesSop } from "./plan.ts";
 import type { FinnyArtifactProposal } from "./integration-postgres-store.ts";
 import type {
+  FinnyAuditControlResult,
   FinnyCheckId,
   FinnyDeterministicEvidenceAuthority,
   FinnyJob,
@@ -25,8 +23,6 @@ import {
   SPREADSHEET_WORKER_CHECK_IDS,
   SPREADSHEET_WORKER_PRINCIPAL_ID,
   verifySpreadsheetWorkerEnvelope,
-  type SpreadsheetWorkerBinding,
-  type SpreadsheetWorkerResult,
 } from "./deterministic-spreadsheet-worker.ts";
 
 export interface FinnyParentBindingSnapshot {
@@ -86,28 +82,13 @@ interface FinnyCoordinatorPort {
     jobId: string;
     idempotencyKey: string;
   }): Promise<void>;
-  auditPassed(input: {
-    sessionId: string;
-    runId: string;
+  auditAttemptRecorded(input: {
     scopeId: string;
     jobId: string;
+    attemptId: string;
     artifactDigest: string;
-    checkId: Parameters<FinnyToolService["pass"]>[0]["checkId"];
-    generation: number;
-    evidenceFileId: string;
-    idempotencyKey: string;
-  }): Promise<void>;
-  auditBlocked(input: {
-    sessionId: string;
-    runId: string;
-    scopeId: string;
-    jobId: string;
-    artifactDigest: string;
-    checkId: Parameters<FinnyToolService["block"]>[0]["checkId"];
-    generation: number;
-    evidenceFileId: string;
-    findings: Parameters<FinnyToolService["block"]>[0]["findings"];
-    idempotencyKey: string;
+    verdict: "pass" | "block" | "pending_judgment";
+    controls: FinnyAuditControlResult[];
   }): Promise<void>;
 }
 
@@ -135,6 +116,41 @@ function parentDestinationMatchesOrigin(destination: Destination, originThreadRe
     return originThreadRef.startsWith(`${destination.type}:`);
   }
   return false;
+}
+
+type FinnyJudgmentInput = Parameters<FinnyToolService["completeJudgment"]>[0];
+
+function judgmentQuestionControlIds(questions: unknown[]): string[] {
+  return questions.map((question) => {
+    if (!question || typeof question !== "object" || !("controlId" in question)) {
+      throw new Error("Finny pending judgment question is invalid");
+    }
+    const controlId = question.controlId;
+    if (typeof controlId !== "string" || !controlId) throw new Error("Finny pending judgment question is invalid");
+    return controlId;
+  });
+}
+
+function exactJudgmentAnswers(questions: unknown[], input: FinnyJudgmentInput) {
+  const questionIds = judgmentQuestionControlIds(questions);
+  const questionIdSet = new Set(questionIds);
+  const answerIds = input.judgmentAnswers.map((answer) => answer.controlId);
+  const answerIdSet = new Set(answerIds);
+  if (
+    questionIdSet.size !== questionIds.length ||
+    answerIdSet.size !== answerIds.length ||
+    answerIdSet.size !== questionIdSet.size ||
+    [...questionIdSet].some((controlId) => !answerIdSet.has(controlId))
+  ) {
+    throw new Error("Finny judgment must answer every pending judgment question exactly once");
+  }
+  return new Map(input.judgmentAnswers.map((answer) => [answer.controlId, answer]));
+}
+
+function auditAttemptResult(attempt: { controls: FinnyAuditControlResult[] }): string {
+  const blockedControlId = attempt.controls.find((control) => control.verdict === "block")?.id;
+  if (blockedControlId) return `Audit attempt recorded BLOCK for ${blockedControlId}.`;
+  return `Audit attempt recorded ${attempt.controls.length} PASS results.`;
 }
 
 export function finnyTurnAuthority(
@@ -170,7 +186,7 @@ export function finnyTurnAuthority(
       originThreadRef,
       destination: {
         type: surface as "web" | "desktop",
-        target: target.replace(new RegExp(`^${surface}:`), ""),
+        target: originThreadRef,
       },
     };
   }
@@ -184,24 +200,28 @@ export interface FinnyToolServiceFactory {
 
 export function createFinnyToolServiceFactory(deps: {
   config: Omit<FinnyIntegrationConfig, "signingSecret">;
-  jobs: Pick<FinnyStore, "createJob" | "getApprovalRequest" | "getJob" | "recordSopAmendment">;
+  jobs: Pick<
+    FinnyStore,
+    | "createJob"
+    | "getApprovalRequest"
+    | "getJob"
+    | "recordSopAmendment"
+    | "getAuditAttempt"
+    | "getAuditAttemptByOperation"
+    | "completeAuditJudgment"
+  >;
   runtime: Pick<FinnyRuntimeStore, "currentBinding" | "claimParentTurn"> &
     Partial<Pick<FinnyRuntimeStore, "claimWorkerTurn" | "bindingForSession">>;
   integration: FinnyIntegrationStore;
   deliveries: Pick<DeliveryStore, "enqueue">;
   coordinator: FinnyCoordinatorPort;
-  files: Pick<FileArtifactStore, "open">;
-  deterministicSpreadsheetWorker: {
-    run(input: {
-      scopeId: string;
-      jobId: string;
-      artifactBytes: Uint8Array;
-      evidenceFileId: string;
-      binding: SpreadsheetWorkerBinding;
-    }): Promise<{ evidenceFileId: string; results: readonly SpreadsheetWorkerResult[] }>;
-  };
-  finalizer: FinnyFinalizer;
-  deliverFinal(input: { job: FinnyJob; receipt: Awaited<ReturnType<FinnyFinalizer["finalize"]>> }): Promise<void>;
+  certifyResult(input: {
+    scopeId: string;
+    result: FinnyCertifiedResult;
+    destination: Destination;
+    idempotencyKey: string;
+  }): Promise<void>;
+  deliverCertifiedResults(): Promise<void>;
   ids?: () => string;
 }) {
   const id = deps.ids ?? randomUUID;
@@ -264,8 +284,7 @@ export function createFinnyToolServiceFactory(deps: {
           materialClarification?: FinnyMaterialClarification,
         ): Promise<FinnyPlanCreation> {
           if (current) throw new Error("Finny workers cannot create plans");
-          if (materialClarification)
-            assertFinnyMaterialClarificationMatchesSop(sop, values, materialClarification);
+          if (materialClarification) assertFinnyMaterialClarificationMatchesSop(sop, values, materialClarification);
           const jobId = id();
           const requestId = id();
           const jobInput = {
@@ -332,8 +351,7 @@ export function createFinnyToolServiceFactory(deps: {
           const job = await deps.jobs.getJob(turn.scopeId, jobId);
           if (!job) throw new Error("Finny job is unavailable");
           if (!job.sopBinding) throw new Error("Finny job has no SOP binding");
-          if (materialClarification)
-            assertFinnyMaterialClarificationMatchesSop(sop, values, materialClarification);
+          if (materialClarification) assertFinnyMaterialClarificationMatchesSop(sop, values, materialClarification);
           const amendmentId = operationId ?? id();
           const requestId = `finny-amend-${createHash("sha256")
             .update(`${turn.scopeId}\0${jobId}\0${amendmentId}`)
@@ -417,140 +435,95 @@ export function createFinnyToolServiceFactory(deps: {
           });
           return `Artifact ${input.artifactDigest} is queued for independent audit.`;
         },
-        async pass(input): Promise<string> {
+        async completeJudgment(input): Promise<string> {
           const job = await jobForWorker("auditor");
           if (!job.artifactDigest) throw new Error("Finny job has no current artifact");
-          await deps.coordinator.auditPassed({
-            scopeId: current!.scopeId,
-            jobId: job.id,
-            sessionId: turn.sessionId,
-            runId: turn.runId,
-            artifactDigest: job.artifactDigest,
-            ...input,
-          });
-          return `PASS recorded for ${input.checkId} generation ${input.generation}.`;
-        },
-        async block(input): Promise<string> {
-          const job = await jobForWorker("auditor");
-          if (!job.artifactDigest) throw new Error("Finny job has no current artifact");
-          await deps.coordinator.auditBlocked({
-            scopeId: current!.scopeId,
-            jobId: job.id,
-            sessionId: turn.sessionId,
-            runId: turn.runId,
-            artifactDigest: job.artifactDigest,
-            checkId: input.checkId,
-            generation: input.generation,
-            evidenceFileId: input.evidenceFileId,
-            findings: input.findings,
-            idempotencyKey: input.idempotencyKey,
-          });
-          return `BLOCK recorded for ${input.checkId} generation ${input.generation}.`;
-        },
-        async deterministicAudit(input): Promise<string> {
-          const job = await jobForWorker("auditor");
-          if (!job.artifactDigest || !job.provisionalRevision) throw new Error("Finny job has no current artifact");
-          const artifact = await immutableScopedFileBytes(
-            deps.files,
-            job.scopeId,
-            job.provisionalRevision,
-            "current artifact",
-            deps.config.spreadsheetEngine.maxArtifactBytes,
-          );
-          if (artifact.digest !== job.artifactDigest) throw new Error("Finny current artifact digest is invalid");
-          if (!isDeepStrictEqual(job.policy.evaluator, deps.config.spreadsheetEngine.evaluator)) {
-            throw new Error("Finny job requires a different approved spreadsheet evaluator");
-          }
-          const binding = {
-            artifactDigest: job.artifactDigest,
-            policyVersion: job.policy.policyVersion,
-            evaluator: job.policy.evaluator,
-            checks: SPREADSHEET_WORKER_CHECK_IDS.map((checkId) => ({
-              checkId,
-              generation: job.policy.requiredGenerations[checkId],
-            })),
-          };
-          const evidenceFileId = createHash("sha256")
-            .update(
-              JSON.stringify([
-                "finny-deterministic-evidence",
-                job.scopeId,
-                job.id,
-                job.artifactDigest,
-                job.policy.policyVersion,
-                binding.evaluator,
-                binding.checks,
-                input.idempotencyKey,
-              ]),
-            )
+          if (!job.currentAuditAttemptId) throw new Error("Finny job has no current audit attempt");
+          const requestDigest = createHash("sha256")
+            .update(JSON.stringify({ judgmentAnswers: input.judgmentAnswers }))
             .digest("hex");
-          const result = await deps.deterministicSpreadsheetWorker.run({
-            scopeId: job.scopeId,
-            jobId: job.id,
-            artifactBytes: artifact.bytes,
-            evidenceFileId,
-            binding,
-          });
-          const evaluatorError = result.results.find((check) => check.verdict === "error");
-          if (evaluatorError?.verdict === "error") {
-            throw new Error(
-              `Deterministic spreadsheet evaluator error for ${evaluatorError.checkId}: ${evaluatorError.reason.code}`,
-            );
-          }
-          let passes = 0;
-          for (const check of result.results) {
-            const idempotencyKey = `${input.idempotencyKey}:${check.checkId}:${check.generation}`;
-            if (check.verdict === "block") {
-              const policy = job.findingPolicy;
-              if (!policy) throw new Error("Finny job has no finding policy");
-              const references = check.reason.references.length
-                ? ` References: ${check.reason.references.join(", ")}.`
-                : "";
-              const findings = [
-                {
-                  code: check.reason.code.slice(0, policy.maxCodeLength),
-                  message: `${check.checkId} blocked by deterministic evaluator.${references}`.slice(
-                    0,
-                    policy.maxMessageLength,
-                  ),
-                },
-              ];
-              await deps.coordinator.auditBlocked({
-                scopeId: current!.scopeId,
-                jobId: job.id,
-                sessionId: turn.sessionId,
-                runId: turn.runId,
-                artifactDigest: job.artifactDigest,
-                checkId: check.checkId,
-                generation: check.generation,
-                evidenceFileId: result.evidenceFileId,
-                findings,
-                idempotencyKey,
-              });
-              return `Deterministic spreadsheet audit recorded BLOCK for ${check.checkId}.`;
+          const operation = await deps.jobs.getAuditAttemptByOperation(current!.scopeId, job.id, input.idempotencyKey);
+          if (operation) {
+            if (operation.requestDigest !== requestDigest) {
+              throw new Error("Finny judgment idempotency key was reused with different judgment content");
             }
-            await deps.coordinator.auditPassed({
+            const replayed = operation.attempt;
+            await deps.coordinator.auditAttemptRecorded({
               scopeId: current!.scopeId,
               jobId: job.id,
-              sessionId: turn.sessionId,
-              runId: turn.runId,
+              attemptId: replayed.id,
               artifactDigest: job.artifactDigest,
-              checkId: check.checkId,
-              generation: check.generation,
-              evidenceFileId: result.evidenceFileId,
-              idempotencyKey,
+              verdict: replayed.verdict,
+              controls: replayed.controls,
             });
-            passes += 1;
+            return auditAttemptResult(replayed);
           }
-          return `Deterministic spreadsheet audit recorded ${passes} PASS results.`;
+          const currentAttempt = await deps.jobs.getAuditAttempt(current!.scopeId, job.id, job.currentAuditAttemptId);
+          if (!currentAttempt || currentAttempt.verdict !== "pending_judgment") {
+            throw new Error("Finny current audit attempt is not pending judgment");
+          }
+          const answersById = exactJudgmentAnswers(currentAttempt.judgmentQuestions, input);
+          const controls = [...answersById].map(([controlId, answer]) => {
+            const stored = currentAttempt.controls.find((control) => control.id === controlId);
+            if (!stored) throw new Error(`Finny pending judgment control ${controlId} is unavailable`);
+            return {
+              ...stored,
+              verdict: answer.verdict,
+              evidenceRefs: [...new Set([...stored.evidenceRefs, ...answer.evidenceRefs])],
+              repairActions: answer.verdict === "pass" ? [] : stored.repairActions,
+            };
+          });
+          const completed = await deps.jobs.completeAuditJudgment({
+            scopeId: current!.scopeId,
+            jobId: job.id,
+            attemptId: currentAttempt.id,
+            controls,
+            judgmentAddendum: {
+              issuerPrincipalId: current!.principalId,
+              issuerRunId: turn.runId,
+              answers: input.judgmentAnswers,
+            },
+            idempotencyKey: input.idempotencyKey,
+            requestDigest,
+            completedAt: Date.now(),
+          });
+          await deps.coordinator.auditAttemptRecorded({
+            scopeId: current!.scopeId,
+            jobId: job.id,
+            attemptId: completed.attempt.id,
+            artifactDigest: job.artifactDigest,
+            verdict: completed.attempt.verdict,
+            controls: completed.attempt.controls,
+          });
+          return auditAttemptResult(completed.attempt);
         },
         async finalize(input): Promise<string> {
           if (current?.role !== "parent" || current.jobId !== input.jobId)
             throw new Error("Finny finalization requires the bound parent session");
           const job = await deps.jobs.getJob(turn.scopeId, input.jobId);
           if (!job) throw new Error("Finny job is unavailable in this scope");
-          const receipt = await deps.finalizer.finalize({ scopeId: turn.scopeId, ...input });
-          await deps.deliverFinal({ job, receipt });
+          if (!job.sopBinding || !job.artifactDigest || !job.provisionalRevision || !job.currentAuditAttemptId) {
+            throw new Error("Finny certification requires the current audited artifact");
+          }
+          await deps.certifyResult({
+            scopeId: turn.scopeId,
+            result: {
+              schema: FINNY_CERTIFIED_RESULT_SCHEMA,
+              jobId: job.id,
+              sopVersionId: job.sopBinding.versionId,
+              executionDigest: job.sopBinding.executionDigest,
+              artifact: {
+                fileId: job.provisionalRevision,
+                sha256: job.artifactDigest,
+                mime: FINNY_XLSX_MIME,
+              },
+              summary: input.summary,
+              auditAttemptId: job.currentAuditAttemptId,
+            },
+            destination: turn.destination,
+            idempotencyKey: input.idempotencyKey,
+          });
+          await deps.deliverCertifiedResults();
           return `Finny job ${job.id} finalized with signed receipt.`;
         },
       };
@@ -582,7 +555,7 @@ async function immutableScopedFileBytes(
   fileId: string,
   label: string,
   maxBytes: number,
-): Promise<{ bytes: Uint8Array; digest: string; createdBy: string }> {
+): Promise<{ bytes: Uint8Array; digest: string; createdBy: string; mime: string; sizeBytes: number }> {
   const opened = await files.open(fileId);
   if (
     !opened ||
@@ -611,7 +584,13 @@ async function immutableScopedFileBytes(
   if (bytes.byteLength !== opened.sizeBytes) throw new Error(`Finny ${label} byte length is invalid`);
   const digest = createHash("sha256").update(bytes).digest("hex");
   if (opened.artifact.sha256 !== digest) throw new Error(`Finny ${label} immutable digest is invalid`);
-  return { bytes, digest, createdBy: opened.artifact.createdBy };
+  return {
+    bytes,
+    digest,
+    createdBy: opened.artifact.createdBy,
+    mime: opened.artifact.mimetype,
+    sizeBytes: opened.sizeBytes,
+  };
 }
 
 export interface FinnyResolvedEvidenceAuthority {
@@ -698,80 +677,6 @@ export async function resolveFinnyFileArtifactProposal(
     throw new Error("Finny artifact proposal exceeds the configured byte limit");
   }
   return { artifactDigest: artifact.sha256, provisionalRevision: artifact.id };
-}
-
-export function finnyFinalDelivery(
-  parent: { originThreadRef: string; destination: Destination },
-  job: FinnyJob,
-  receipt: Awaited<ReturnType<FinnyFinalizer["finalize"]>>,
-  publicWebUrl: string,
-) {
-  if (
-    job.originThreadRef !== parent.originThreadRef ||
-    !parentDestinationMatchesOrigin(parent.destination, parent.originThreadRef)
-  )
-    throw new Error("Finny final delivery destination does not match the origin thread");
-  const artifactUrl = `${publicWebUrl.replace(/\/$/, "")}/v1/files/${encodeURIComponent(
-    receipt.payload.provisionalRevision,
-  )}/content`;
-  const artifactLink = `<${artifactUrl}|Open final artifact>`;
-  if (!job.sop || !job.sopBinding) throw new Error("Finny final delivery requires an SOP binding");
-  const title = job.sop.title;
-  const certification = job.sop.controls.map((control) => control.assertion).join("\n");
-  const spec = {
-    schema: "generative-ui.v1",
-    fallbackText: [
-      `*${title} — Finny certification complete*`,
-      `*Artifact:* ${artifactLink}`,
-      `*Artifact digest:* \`${receipt.payload.artifactDigest}\``,
-      `*Certification:* ${certification}`,
-      `*Approval receipt:* \`${receipt.token}\``,
-    ].join("\n"),
-    elements: [
-      {
-        type: "header",
-        text: "Finny Certification Complete",
-      },
-      {
-        type: "section",
-        text: `*${title}*\nAll governance checks passed and independent audit verified.`,
-      },
-      {
-        type: "divider",
-      },
-      {
-        type: "fields",
-        fields: [
-          { title: "Artifact Link", value: artifactLink },
-          { title: "Artifact Digest", value: `\`${receipt.payload.artifactDigest}\`` },
-        ],
-      },
-      {
-        type: "section",
-        text: `*Certification Scope & Rules:*\n${certification}`,
-      },
-      {
-        type: "actions",
-        elements: [
-          {
-            type: "button",
-            text: "Download Workbook (.xlsx)",
-            url: artifactUrl,
-            style: "primary",
-          },
-        ],
-      },
-      {
-        type: "context",
-        elements: [`Receipt: \`${receipt.token}\``, `Job ID: \`${job.id}\``],
-      },
-    ],
-  };
-  return {
-    destination: parent.destination,
-    text: JSON.stringify(spec),
-    idempotencyKey: `finny-final:${job.id}:${receipt.payload.ledgerHead}`,
-  };
 }
 
 export function createFinnyEscalationDecision(deps: { jobs: Pick<FinnyStore, "listEvents">; maxReworks: number }) {
