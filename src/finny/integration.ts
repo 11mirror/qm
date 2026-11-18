@@ -302,7 +302,7 @@ export function createFinnyToolServiceFactory(deps: {
             parent,
             ...(clarification ? { clarification } : {}),
           });
-          const job = await deps.jobs.createJob(jobInput);
+          await deps.jobs.createJob(jobInput);
           await deps.integration.completePlanIntent(parent, clarification);
           await deps.deliveries.enqueue({
             destination: {

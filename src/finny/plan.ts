@@ -363,9 +363,11 @@ export function finnySopPlanPresentation(sopValue: unknown, inputValues: unknown
     owner: "Producer",
     dependencies: index === 0 ? [] : [sop.steps[index - 1]!.action],
   }));
-  const outputNames = sop.outputs.map((output) =>
-    output.kind === "xlsx" ? "XLSX workbook" : output.kind === "summary" ? "certified summary" : "app",
-  );
+  const outputNames = sop.outputs.map((output) => {
+    if (output.kind === "xlsx") return "XLSX workbook";
+    if (output.kind === "summary") return "certified summary";
+    return "app";
+  });
   return validateFinnyPlanPresentation({
     title: sop.title,
     summary: sop.intent.description,
