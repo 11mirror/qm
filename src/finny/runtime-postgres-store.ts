@@ -600,43 +600,13 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
       });
     },
     async pendingRecoveries(): Promise<FinnyRuntimeRecovery[]> {
-      const healthyAuditor = `EXISTS (
-             SELECT 1 FROM finny_runtime_bindings AS auditor_binding
-             JOIN runs AS auditor_run ON auditor_run.id=auditor_binding.run_id
-              WHERE auditor_binding.job_id=actions.job_id
-                AND auditor_binding.scope_id=actions.scope_id
-                AND auditor_binding.role='auditor'
-                AND auditor_binding.active=TRUE
-                AND (
-                  (auditor_binding.expires_at>$1 AND auditor_run.status NOT IN ('done','failed'))
-                  OR (
-                    auditor_run.status='done'
-                    AND COALESCE(auditor_run.result::jsonb->>'status','') IN ('pending_approval','refused')
-                  )
-                )
-           )`;
-      const terminalAuditorRunId = `SELECT auditor_binding.run_id FROM finny_runtime_bindings AS auditor_binding
-             LEFT JOIN runs AS auditor_run ON auditor_run.id=auditor_binding.run_id
-              WHERE auditor_binding.job_id=actions.job_id
-                AND auditor_binding.scope_id=actions.scope_id
-                AND auditor_binding.role='auditor'
-                AND auditor_binding.active=TRUE
-                AND (
-                  auditor_run.id IS NULL
-                  OR auditor_run.status='failed'
-                  OR (
-                    auditor_run.status='done'
-                    AND COALESCE(auditor_run.result::jsonb->>'status','') NOT IN ('pending_approval','refused')
-                  )
-                  OR (auditor_binding.expires_at<=$1 AND auditor_run.status NOT IN ('done','failed'))
-                )
-              ORDER BY auditor_binding.epoch DESC
-              LIMIT 1`;
       const rows = await q(
         `SELECT actions.kind,actions.session_id,actions.run_id,actions.scope_id,actions.job_id,
                 actions.idempotency_key,CASE WHEN actions.kind='artifact_ready' THEN events.payload ELSE actions.authority_payload->'recovery' END AS payload,
-                (${terminalAuditorRunId}) AS terminal_auditor_run_id,
-                CASE WHEN dispatches.idempotency_key IS NOT NULL THEN terminal_producer.run_id END AS terminal_producer_run_id
+                CASE WHEN auditor_state.terminal THEN auditor_binding.run_id END AS terminal_auditor_run_id,
+                CASE WHEN producer_state.terminal AND (
+                  dispatches.delivered_at IS NOT NULL OR dispatches.run_id<>producer_binding.run_id
+                ) THEN producer_binding.run_id END AS terminal_producer_run_id
            FROM finny_runtime_actions AS actions
            JOIN finny_jobs AS jobs
              ON jobs.id=actions.job_id
@@ -646,31 +616,53 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
             AND events.idempotency_key=actions.idempotency_key
             AND events.event_index=0
             AND events.event_type=actions.kind
+      LEFT JOIN finny_runtime_bindings AS auditor_binding
+             ON actions.kind='artifact_ready'
+            AND auditor_binding.job_id=actions.job_id
+            AND auditor_binding.scope_id=actions.scope_id
+            AND auditor_binding.role='auditor'
+            AND auditor_binding.active=TRUE
+      LEFT JOIN runs AS auditor_run ON auditor_run.id=auditor_binding.run_id
+      LEFT JOIN LATERAL (
+             SELECT
+               auditor_binding.run_id IS NOT NULL AND (
+                 (auditor_binding.expires_at>$1 AND auditor_run.status NOT IN ('done','failed'))
+                 OR (
+                   auditor_run.status='done'
+                   AND COALESCE(auditor_run.result::jsonb->>'status','') IN ('pending_approval','refused')
+                 )
+               ) AS healthy,
+               auditor_binding.run_id IS NOT NULL AND (
+                 auditor_run.id IS NULL
+                 OR auditor_run.status='failed'
+                 OR (
+                   auditor_run.status='done'
+                   AND COALESCE(auditor_run.result::jsonb->>'status','') NOT IN ('pending_approval','refused')
+                 )
+                 OR (auditor_binding.expires_at<=$1 AND auditor_run.status NOT IN ('done','failed'))
+               ) AS terminal
+           ) AS auditor_state ON TRUE
+      LEFT JOIN finny_runtime_bindings AS producer_binding
+             ON actions.kind='audit_blocked'
+            AND producer_binding.job_id=actions.job_id
+            AND producer_binding.scope_id=actions.scope_id
+            AND producer_binding.role='producer'
+            AND producer_binding.active=TRUE
+      LEFT JOIN runs AS producer_run ON producer_run.id=producer_binding.run_id
+      LEFT JOIN LATERAL (
+             SELECT producer_binding.run_id IS NOT NULL AND (
+               producer_run.id IS NULL
+               OR producer_run.status='failed'
+               OR (
+                 producer_run.status='done'
+                 AND COALESCE(producer_run.result::jsonb->>'status','') NOT IN ('pending_approval','refused')
+               )
+               OR (producer_binding.expires_at<=$1 AND producer_run.status NOT IN ('done','failed'))
+             ) AS terminal
+           ) AS producer_state ON TRUE
       LEFT JOIN finny_runtime_dispatches AS dispatches
              ON dispatches.idempotency_key=actions.idempotency_key ||
                 CASE actions.kind WHEN 'artifact_ready' THEN ':auditor-grant' WHEN 'audit_blocked' THEN ':producer-rework' ELSE ':none' END
-            AND dispatches.delivered_at IS NOT NULL
-      LEFT JOIN LATERAL (
-             SELECT producer_binding.run_id
-               FROM finny_runtime_bindings AS producer_binding
-          LEFT JOIN runs AS producer_run ON producer_run.id=producer_binding.run_id
-              WHERE producer_binding.job_id=actions.job_id
-                AND producer_binding.scope_id=actions.scope_id
-                AND actions.kind='audit_blocked'
-                AND producer_binding.role='producer'
-                AND producer_binding.active=TRUE
-                AND (
-                  producer_run.id IS NULL
-                  OR producer_run.status='failed'
-                  OR (
-                    producer_run.status='done'
-                    AND COALESCE(producer_run.result::jsonb->>'status','') NOT IN ('pending_approval','refused')
-                  )
-                  OR (producer_binding.expires_at<=$1 AND producer_run.status NOT IN ('done','failed'))
-                )
-              ORDER BY producer_binding.epoch DESC
-              LIMIT 1
-           ) AS terminal_producer ON TRUE
           WHERE (
               actions.kind='artifact_ready'
               AND (
@@ -693,12 +685,19 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                   )
                 )
               )
-              AND (events.seq IS NULL OR NOT (${healthyAuditor}))
+              AND (events.seq IS NULL OR NOT auditor_state.healthy)
             ) OR (
-              (actions.kind='audit_passed' AND dispatches.idempotency_key IS NULL AND events.seq IS NULL) OR
+              (actions.kind='audit_passed' AND dispatches.delivered_at IS NULL AND events.seq IS NULL) OR
               (
                 actions.kind='audit_blocked'
-                AND (dispatches.idempotency_key IS NULL OR terminal_producer.run_id IS NOT NULL)
+                AND (
+                  dispatches.idempotency_key IS NULL
+                  OR (dispatches.delivered_at IS NULL AND dispatches.run_id=producer_binding.run_id)
+                  OR (
+                    producer_state.terminal
+                    AND (dispatches.delivered_at IS NOT NULL OR dispatches.run_id<>producer_binding.run_id)
+                  )
+                )
                 AND (
                   EXISTS (
                     SELECT 1 FROM finny_job_events AS transition

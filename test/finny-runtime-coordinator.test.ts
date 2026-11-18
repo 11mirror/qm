@@ -1322,7 +1322,7 @@ test("producer rework dispatch recovers from the committed BLOCK without repeati
   assert.deepEqual(wakes, ["block-crash-window"]);
   const pending = await runtime.pendingRecoveries();
   assert.deepEqual(pending, [{ kind: "audit_blocked", ...input }]);
-  const delivered: string[] = [];
+  const attempted: string[] = [];
   const restarted = createFinnyRuntimeCoordinator({
     jobs,
     runtime,
@@ -1335,7 +1335,16 @@ test("producer rework dispatch recovers from the committed BLOCK without repeati
     dispatcher: {
       async dispatchPrivateIdempotent(message) {
         assert.equal(message.message, acceptedMessage);
-        delivered.push(message.idempotencyKey);
+        attempted.push(message.idempotencyKey);
+        await runtime.advanceWorkerRun({
+          sessionId: message.sessionId,
+          expectedRunId: message.runId,
+          runId: "producer-rework-run",
+          scopeId: job.scopeId,
+          expiresAt: Date.now() + 60_000,
+        });
+        await insertRun(q, "producer-rework-run", "pending");
+        throw new Error("rework dispatch interrupted after run advance");
       },
     },
     escalationDecision: {
@@ -1345,19 +1354,19 @@ test("producer rework dispatch recovers from the committed BLOCK without repeati
     },
     ...coreRuntimeAuthority(),
   });
-  await restarted.auditBlocked(pending[0]!);
-  assert.deepEqual(delivered, ["block-crash-window:producer-rework"]);
+  await assert.rejects(restarted.auditBlocked(pending[0]!), /interrupted after run advance/);
+  assert.deepEqual(attempted, ["block-crash-window:producer-rework"]);
   assert.deepEqual(await runtime.pendingRecoveries(), []);
 
   await q("UPDATE runs SET status='done',result=$2 WHERE id=$1", [
-    "producer-run",
+    "producer-rework-run",
     JSON.stringify({ status: "ok", reply: "Finished without replacing the artifact" }),
   ]);
   const [terminalRecovery] = await runtime.pendingRecoveries();
   assert.deepEqual(terminalRecovery, {
     kind: "audit_blocked",
     ...input,
-    retryTerminalProducerRunId: "producer-run",
+    retryTerminalProducerRunId: "producer-rework-run",
   });
   const retryDispatches: string[] = [];
   const retry = createFinnyRuntimeCoordinator({
@@ -1391,7 +1400,7 @@ test("producer rework dispatch recovers from the committed BLOCK without repeati
   });
   await retry.auditBlocked(terminalRecovery!);
   await retry.auditBlocked(terminalRecovery!);
-  assert.deepEqual(retryDispatches, ["block-crash-window:producer-rework:retry:producer-run"]);
+  assert.deepEqual(retryDispatches, ["block-crash-window:producer-rework:retry:producer-rework-run"]);
   assert.deepEqual(await runtime.pendingRecoveries(), []);
 });
 
