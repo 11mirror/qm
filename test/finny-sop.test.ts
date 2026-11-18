@@ -20,6 +20,56 @@ test("accepts one strict finance SOP and rejects workflow-only executable fields
   );
 });
 
+test("accepts machine-readable deterministic control bindings", () => {
+  const bound = {
+    ...sop,
+    controls: [
+      { ...sop.controls[0], deterministicCheckId: "summary.crossfoot" },
+      {
+        ...sop.controls[1],
+        deterministicCheckId: "artifact.structure",
+        judgment: { ...sop.controls[1].judgment, triggerVerdict: "block" },
+      },
+    ],
+  };
+  assert.deepEqual(finnyPlan.validateFinnySopVersion(bound), bound);
+});
+
+test("requires deterministic bindings before an SOP can execute", () => {
+  const api = finnyPlan as unknown as {
+    assertFinnyCoreAuditableSop?: (value: unknown) => void;
+  };
+  assert.equal(typeof api.assertFinnyCoreAuditableSop, "function");
+  const legacy = {
+    ...sop,
+    controls: sop.controls.map((control) => {
+      const { deterministicCheckId: _, ...legacyControl } = control;
+      if (!("judgment" in legacyControl)) return legacyControl;
+      return {
+        ...legacyControl,
+        judgment: {
+          question: legacyControl.judgment.question,
+          onlyWhen: legacyControl.judgment.onlyWhen,
+        },
+      };
+    }),
+  };
+  assert.throws(() => api.assertFinnyCoreAuditableSop!(legacy), /deterministic check/i);
+  assert.doesNotThrow(() =>
+    api.assertFinnyCoreAuditableSop!({
+      ...sop,
+      controls: [
+        { ...sop.controls[0], deterministicCheckId: "summary.crossfoot" },
+        {
+          ...sop.controls[1],
+          deterministicCheckId: "artifact.structure",
+          judgment: { ...sop.controls[1].judgment, triggerVerdict: "block" },
+        },
+      ],
+    }),
+  );
+});
+
 test("matches both material boolean values to canonical Slack option IDs", () => {
   const booleanSop = {
     ...sop,

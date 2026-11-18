@@ -18,6 +18,10 @@ export const FINNY_CHECK_IDS = [
 ] as const;
 
 export type FinnyCheckId = (typeof FINNY_CHECK_IDS)[number];
+export type FinnyDeterministicCheckId = Extract<
+  FinnyCheckId,
+  "formula.recalculate" | "summary.crossfoot" | "artifact.structure"
+>;
 
 export const FINNY_CHANGE_KINDS = ["source_or_logic", "formula", "disclosure", "presentation", "lineage"] as const;
 
@@ -395,7 +399,8 @@ export interface FinnySopVersion {
     assertion: string;
     tolerance?: string;
     evidenceRefs: readonly string[];
-    judgment?: { question: string; onlyWhen: string };
+    deterministicCheckId?: FinnyDeterministicCheckId;
+    judgment?: { question: string; onlyWhen: string; triggerVerdict?: "block" };
   }>;
   outputs: ReadonlyArray<{
     id: string;

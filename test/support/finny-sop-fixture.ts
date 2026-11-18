@@ -53,14 +53,17 @@ export function finnySopFixture() {
         assertion: "Detail amount equals the source control total.",
         tolerance: "0.01",
         evidenceRefs: ["source_manifest", "workbook"],
+        deterministicCheckId: "summary.crossfoot",
       },
       {
         id: "mapping-exception",
         assertion: "No materially unmapped vendor classification remains.",
         evidenceRefs: ["workbook"],
+        deterministicCheckId: "artifact.structure",
         judgment: {
           question: "Are remaining unmapped classifications materially misleading?",
           onlyWhen: "Exceptions.material_count > 0",
+          triggerVerdict: "block",
         },
       },
     ],

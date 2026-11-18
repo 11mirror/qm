@@ -12,6 +12,7 @@ import {
   type FinnyCertifiedResultRecord,
 } from "./certified-result.ts";
 import {
+  assertFinnyCoreAuditableSop,
   assertFinnyMaterialClarificationMatchesSop,
   canonicalFinnySopDefinitionDigest,
   canonicalFinnyExecutionDigest,
@@ -549,6 +550,34 @@ const AUDIT_ATTEMPT_EVALUATOR_IDENTITY_SCHEMA = [
      ON finny_audit_attempts(job_id,artifact_sha256,evaluator_ref)`,
 ];
 
+const CORE_AUDIT_CUTOVER_SCHEMA = [
+  `DO $qm$
+   BEGIN
+     IF EXISTS (
+       SELECT 1
+         FROM finny_jobs AS jobs
+         JOIN finny_sop_versions AS versions
+           ON versions.scope_id=jobs.scope_id AND versions.version_id=jobs.sop_version_id
+        WHERE jobs.finalized_at IS NULL
+          AND EXISTS (
+            SELECT 1
+              FROM jsonb_array_elements(versions.definition->'controls') AS control
+             WHERE control->>'deterministicCheckId' NOT IN (
+                     'formula.recalculate', 'summary.crossfoot', 'artifact.structure'
+                   )
+                OR control->>'deterministicCheckId' IS NULL
+                OR (
+                  control ? 'judgment'
+                  AND control->'judgment'->>'triggerVerdict' IS DISTINCT FROM 'block'
+                )
+          )
+     ) THEN
+       RAISE EXCEPTION 'Finny Core audit cutover refused: unfinished jobs have unmapped SOP controls';
+     END IF;
+   END
+   $qm$`,
+];
+
 function rowToSopVersion(row: Record<string, unknown>): FinnyStoredSopVersion {
   return {
     versionId: row.version_id as string,
@@ -848,6 +877,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
     { id: "finny/store/0016-audit-result-cutover", statements: AUDIT_RESULT_CUTOVER_SCHEMA },
     { id: "finny/store/0017-audit-result-recovery-cutover", statements: AUDIT_RESULT_RECOVERY_CUTOVER_SCHEMA },
     { id: "finny/store/0018-audit-attempt-evaluator-identity", statements: AUDIT_ATTEMPT_EVALUATOR_IDENTITY_SCHEMA },
+    { id: "finny/store/0019-core-audit-cutover", statements: CORE_AUDIT_CUTOVER_SCHEMA },
   ]);
   const createSopVersion = async (sopValue: FinnySopVersion): Promise<FinnyStoredSopVersion> => {
     const sop = validateFinnySopVersion(sopValue);
@@ -921,6 +951,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
       assertFinnyApprovedEvaluatorRef(input.policy.evaluator);
       assertFinnyFindingPolicy(input.findingPolicy);
       const sop = validateFinnySopVersion(input.sop);
+      assertFinnyCoreAuditableSop(sop);
       if (sop.scopeId !== input.scopeId) throw new Error("Finny SOP scope does not match the job");
       const stored = await createSopVersion(sop);
       const values = validateFinnySopValues(sop, input.values);
@@ -1205,6 +1236,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
     },
     async recordSopAmendment(input: RecordFinnySopAmendmentInput) {
       const sop = validateFinnySopVersion(input.sop);
+      assertFinnyCoreAuditableSop(sop);
       if (sop.scopeId !== input.scopeId) throw new Error("Finny SOP scope does not match the job");
       const stored = await createSopVersion(sop);
       const values = validateFinnySopValues(sop, input.values);

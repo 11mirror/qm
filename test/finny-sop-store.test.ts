@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
-import { canonicalFinnyExecutionDigest } from "../src/finny/plan.ts";
+import { canonicalFinnyExecutionDigest, finnySopVersionId } from "../src/finny/plan.ts";
 import { initialFinnyPolicy } from "../src/finny/policy.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresFinnyStore } from "../src/finny/postgres-store.ts";
@@ -50,6 +50,21 @@ function sopJobInput() {
       maxMessageLength: 2_000,
     },
     originThreadRef: "slack:C1:100.1",
+  };
+}
+
+function legacySop() {
+  const sop = finnySopFixture();
+  return {
+    ...sop,
+    controls: sop.controls.map((control) => {
+      const { deterministicCheckId: _, ...legacy } = control;
+      if (!("judgment" in legacy)) return legacy;
+      return {
+        ...legacy,
+        judgment: { question: legacy.judgment.question, onlyWhen: legacy.judgment.onlyWhen },
+      };
+    }),
   };
 }
 
@@ -114,6 +129,74 @@ test("binds a job to its exact SOP version, values, digest, and revision across 
   const restarted = createPostgresFinnyStore(url);
   assert.deepEqual(await restarted.getJob(sop.scopeId, input.id), created);
   assert.equal(await restarted.getJob("org:other", input.id), null);
+});
+
+test("reads historical SOP definitions but rejects them for new jobs", async () => {
+  const store = createPostgresFinnyStore(testDatabaseUrl());
+  const sop = legacySop();
+  const stored = await store.createSopVersion(sop as FinnySopVersion);
+  assert.deepEqual((await store.getSopVersion(sop.scopeId, stored.versionId))?.sop, sop);
+  const input = sopJobInput();
+  await assert.rejects(store.createJob({ ...input, sop } as never), /deterministic check binding/i);
+});
+
+test("rejects unmapped SOP amendments before persisting a new definition", async () => {
+  const store = createPostgresFinnyStore(testDatabaseUrl());
+  const input = sopJobInput();
+  await store.createJob(input);
+  const amendment = { ...legacySop(), version: 4 } as FinnySopVersion;
+  await assert.rejects(
+    store.recordSopAmendment({
+      scopeId: input.scopeId,
+      jobId: input.id,
+      sop: amendment,
+      values: input.values,
+      idempotencyKey: randomUUID(),
+      createdAt: Date.now(),
+    }),
+    /deterministic check binding/i,
+  );
+  assert.equal(await store.getSopVersion(input.scopeId, finnySopVersionId(amendment)), null);
+});
+
+test("Core audit cutover refuses unfinished jobs with unmapped SOP controls", async () => {
+  const url = testDatabaseUrl();
+  const store = createPostgresFinnyStore(url);
+  await store.searchSopVersions("personal:U1", "missing");
+  const db = createPgPool(url);
+  const sop = { ...legacySop(), scopeId: "personal:U1", version: 91 };
+  const versionId = "personal%3AU1/ap-aging@91";
+  const now = Date.now();
+  await db.q(
+    `INSERT INTO finny_sop_versions(
+       version_id,scope_id,sop_id,version,definition,definition_digest,search_text,created_at
+     ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [versionId, sop.scopeId, sop.id, sop.version, sop, "x".repeat(43), "legacy AP aging", now],
+  );
+  const policy = initialFinnyPolicy(TEST_FINNY_EVALUATOR);
+  await db.q(
+    `INSERT INTO finny_jobs(
+       id,scope_id,sop_version_id,bound_inputs,execution_digest,sop_revision,
+       policy_version,evaluator_ref,required_generations,finding_policy,
+       origin_thread_ref,created_at,updated_at
+     ) VALUES($1,$2,$3,$4,$5,1,$6,$7,$8,$9,$10,$11,$11)`,
+    [
+      randomUUID(),
+      sop.scopeId,
+      versionId,
+      { cutoff: "2026-10-31", currency: "INR" },
+      "legacy-execution-digest",
+      policy.policyVersion,
+      policy.evaluator,
+      policy.requiredGenerations,
+      { id: "legacy", maxFindings: 1, maxCodeLength: 1, maxMessageLength: 1 },
+      "slack:C1:1.1",
+      now,
+    ],
+  );
+  await db.q("DELETE FROM qm_schema_migrations WHERE id='finny/store/0019-core-audit-cutover'");
+  const cutover = createPostgresFinnyStore(url);
+  await assert.rejects(cutover.searchSopVersions(sop.scopeId, "missing"), /unfinished jobs have unmapped SOP controls/i);
 });
 
 test("approval authorizes the exact current execution digest", async () => {
