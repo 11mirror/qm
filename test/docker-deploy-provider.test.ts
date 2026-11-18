@@ -1,10 +1,41 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:net";
 import { test } from "node:test";
 import { createDockerDeployProvider, dockerDaemonFailure } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import type { DockerExec } from "../src/sandbox/docker-exec.ts";
 import { scopeId } from "../src/types.ts";
 import { testDeployBackings } from "./support/test-database.ts";
+
+test("Docker deployments skip an externally occupied base port", async (t) => {
+  const occupied = createServer();
+  await new Promise<void>((resolve, reject) => {
+    occupied.once("error", reject);
+    occupied.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(() => new Promise<void>((resolve, reject) => occupied.close((e) => (e ? reject(e) : resolve()))));
+  const address = occupied.address();
+  assert.ok(address && typeof address !== "string");
+  const basePort = address.port;
+  const calls: string[][] = [];
+  const dockerExec: DockerExec = async (args) => {
+    calls.push(args);
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const store = createDeployStore(testDeployBackings());
+  const deployment = await store.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/occupied-port",
+  });
+  const provider = createDockerDeployProvider({ basePort, dockerExec });
+
+  const endpoint = await provider.apply(deployment, deployment.versions[0]!);
+
+  assert.deepEqual(endpoint, { host: "127.0.0.1", port: basePort + 1 });
+  assert.ok(calls.some((args) => args.includes(`127.0.0.1:${basePort + 1}:8080`)));
+});
 
 test("Docker deployments use isolated networks and remove them on destroy", async () => {
   const calls: string[][] = [];

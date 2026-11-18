@@ -1,3 +1,4 @@
+import { createServer } from "node:net";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
 import {
@@ -22,6 +23,14 @@ const APP_PORT = 8080;
 const APP_READY_WINDOW_SEC = 60;
 const RUN_TIMEOUT_MS = 300_000;
 const DAEMON_PROBE_TIMEOUT_MS = 10_000;
+
+async function portAvailable(port: number): Promise<boolean> {
+  const server = createServer();
+  return new Promise((resolve) => {
+    server.once("error", () => resolve(false));
+    server.listen(port, "127.0.0.1", () => server.close(() => resolve(true)));
+  });
+}
 
 export interface DockerDeployProviderOptions {
   image?: string;
@@ -55,12 +64,16 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
   let nextPort = opts.basePort ?? 9200;
   const ports = new Map<string, number>();
   const freed: number[] = [];
-  const allocPort = (n: string): number => {
+  const allocPort = async (n: string): Promise<number> => {
     const existing = ports.get(n);
     if (existing !== undefined) return existing;
-    const port = freed.pop() ?? nextPort++;
-    ports.set(n, port);
-    return port;
+    while (true) {
+      const port = freed.pop() ?? nextPort++;
+      if (await portAvailable(port)) {
+        ports.set(n, port);
+        return port;
+      }
+    }
   };
   const freePort = (n: string): void => {
     const p = ports.get(n);
@@ -87,7 +100,7 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
     async apply(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint> {
       const net = await ensureDockerNetwork(dexec, network(d));
       await dexec(["rm", "-f", name(d)]);
-      const hostPort = allocPort(name(d));
+      const hostPort = await allocPort(name(d));
       const envArgs = Object.entries(version.env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
       const r = await dexec(
         [
