@@ -250,7 +250,6 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
           request.job_id !== input.jobId ||
           request.authorized_actor_id !== input.actorId ||
           request.origin_thread_ref !== input.originThreadRef ||
-          request.plan_digest !== null ||
           request.execution_digest !== job.execution_digest ||
           (clarification ? request.ready_at !== null : request.ready_at === null)
         )

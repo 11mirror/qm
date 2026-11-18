@@ -987,22 +987,21 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         if (binding.origin_thread_ref !== input.originThreadRef)
           throw new Error("Finny approval must be decided in its origin thread");
         if (job.sop_version_id === null) throw new Error("Finny active job has no SOP binding");
-        const digestMatches = binding.execution_digest === job.execution_digest && binding.plan_digest === null;
+        const digestMatches = binding.execution_digest === job.execution_digest;
         if (!digestMatches || binding.origin_thread_ref !== job.origin_thread_ref) {
           throw new Error("Finny approval request binding does not match the job");
         }
         await db.query(
           `UPDATE finny_jobs SET
              approval_request_id=$2, approval_actor_id=$3, approval_action=$4,
-             approval_plan_digest=$5, approval_execution_digest=$6,
-             approval_origin_thread_ref=$7, approval_decided_at=$8, updated_at=$8
+             approval_execution_digest=$5,
+             approval_origin_thread_ref=$6, approval_decided_at=$7, updated_at=$7
            WHERE id=$1 RETURNING *`,
           [
             input.jobId,
             input.requestId,
             input.actorId,
             input.action,
-            binding.plan_digest,
             binding.execution_digest,
             binding.origin_thread_ref,
             input.decidedAt,
@@ -1650,7 +1649,6 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
           row.approval_consumed_at !== null ||
           row.sop_version_id === null ||
           row.approval_execution_digest !== row.execution_digest ||
-          row.approval_plan_digest !== null ||
           row.approval_origin_thread_ref !== row.origin_thread_ref
         ) {
           throw new Error("Finny job does not have an unconsumed bound approved decision");

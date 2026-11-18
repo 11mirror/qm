@@ -118,6 +118,7 @@ test("approval authorizes the exact current execution digest", async () => {
   });
   const request = await store.getApprovalRequest(requestId);
   assert.equal((request as unknown as { executionDigest: string }).executionDigest, binding.executionDigest);
+  assert.equal("planDigest" in (request as unknown as Record<string, unknown>), false);
   const approved = await store.recordApproval({
     scopeId: input.scopeId,
     jobId: input.id,
@@ -131,6 +132,7 @@ test("approval authorizes the exact current execution digest", async () => {
     (approved.approval as unknown as { executionDigest: string }).executionDigest,
     binding.executionDigest,
   );
+  assert.equal("planDigest" in (approved.approval as unknown as Record<string, unknown>), false);
 });
 
 test("records every SOP revision while invalidating approval only for material amendments", async () => {
