@@ -141,6 +141,12 @@ test("finny schema accepts only narrow content and evidence actions", () => {
   for (const input of valid) assert.ok(Check(schema, input), JSON.stringify(input));
 });
 
+test("artifact readiness tells the Producer to bind the immutable Files record", () => {
+  const description = finnyTool().description;
+  assert.match(description, /artifactDigest is the Files sha256/i);
+  assert.match(description, /provisionalRevision is the Files record ID/i);
+});
+
 test("finny schema rejects model-supplied authority and escalation fields", () => {
   const schema = finnyTool().parameters;
   const base = { action: "status", jobId: "job-1" };

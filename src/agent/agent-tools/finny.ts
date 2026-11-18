@@ -276,7 +276,8 @@ export function finnyTools(kit: ToolKit) {
   const artifactReady = defineTool({
     name: "finny_artifact_ready",
     label: "Finny artifact ready",
-    description: "Record the digest and provisional revision of the actual produced artifact.",
+    description:
+      "Bind the actual workbook already published to durable Files. artifactDigest is the Files sha256 and provisionalRevision is the Files record ID returned by the completed upload; neither value is an SOP revision, local path, or locally invented identifier.",
     parameters: Type.Object(
       { artifactDigest: string(), provisionalRevision: string(), idempotencyKey: string() },
       { additionalProperties: false },
