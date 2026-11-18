@@ -209,6 +209,7 @@ test("behavioral cutover refuses an unfinished legacy plan job", async () => {
   const store = createPostgresFinnyStore(url);
   await store.searchSopVersions("personal:U1", "missing");
   const db = createPgPool(url);
+  await db.q("ALTER TABLE finny_jobs DROP CONSTRAINT finny_jobs_sop_cutover_mode");
   const now = Date.now();
   await db.q(
     `INSERT INTO finny_jobs(
@@ -233,6 +234,35 @@ test("behavioral cutover refuses an unfinished legacy plan job", async () => {
   await assert.rejects(cutover.searchSopVersions("personal:U1", "missing"), /unfinished legacy Finny jobs/i);
 });
 
+test("behavioral cutover permanently rejects new unfinished legacy jobs", async () => {
+  const url = testDatabaseUrl();
+  const store = createPostgresFinnyStore(url);
+  await store.searchSopVersions("personal:U1", "missing");
+  const db = createPgPool(url);
+  const now = Date.now();
+  await assert.rejects(
+    db.q(
+      `INSERT INTO finny_jobs(
+         id,scope_id,plan_presentation,plan_digest,policy_version,evaluator_ref,required_generations,
+         finding_policy,origin_thread_ref,created_at,updated_at
+       ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)`,
+      [
+        randomUUID(),
+        "personal:U1",
+        { title: "Legacy", phases: [], certification: "Legacy", deliverable: "Legacy", destination: "Legacy", clarifications: [] },
+        "legacy-digest",
+        "legacy-policy",
+        TEST_FINNY_EVALUATOR,
+        {},
+        { id: "legacy", maxFindings: 1, maxCodeLength: 1, maxMessageLength: 1 },
+        "slack:C1:1.1",
+        now,
+      ],
+    ),
+    /finny_jobs_sop_cutover_mode/i,
+  );
+});
+
 test("behavioral cutover refuses a legacy plan intent awaiting job creation", async () => {
   const url = testDatabaseUrl();
   const db = createPgPool(url);
@@ -248,6 +278,30 @@ test("behavioral cutover refuses a legacy plan intent awaiting job creation", as
   );
   const cutover = createPostgresFinnyStore(url);
   await assert.rejects(cutover.searchSopVersions("personal:U1", "missing"), /plan intents await job creation/i);
+});
+
+test("behavioral cutover permanently rejects new legacy plan intents", async () => {
+  const url = testDatabaseUrl();
+  const db = createPgPool(url);
+  await db.q(`CREATE TABLE finny_plan_intents(
+    job_id TEXT PRIMARY KEY,
+    job_input JSONB NOT NULL,
+    parent_input JSONB NOT NULL,
+    created_at BIGINT NOT NULL
+  )`);
+  await db.q(
+    "INSERT INTO finny_plan_intents(job_id,job_input,parent_input,created_at) VALUES($1,$2,$3,$4)",
+    [randomUUID(), { sop: { id: "current" } }, {}, Date.now()],
+  );
+  const store = createPostgresFinnyStore(url);
+  await store.searchSopVersions("personal:U1", "missing");
+  await assert.rejects(
+    db.q(
+      "INSERT INTO finny_plan_intents(job_id,job_input,parent_input,created_at) VALUES($1,$2,$3,$4)",
+      [randomUUID(), { plan: { title: "Legacy" } }, {}, Date.now()],
+    ),
+    /finny_plan_intents_sop_cutover_mode/i,
+  );
 });
 
 test("behavioral cutover refuses a finalized legacy receipt awaiting delivery", async () => {

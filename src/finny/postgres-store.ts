@@ -353,6 +353,16 @@ const SOP_CUTOVER_SCHEMA = [
          RAISE EXCEPTION 'Finny SOP cutover refused: legacy Finny final receipts await delivery';
        END IF;
      END IF;
+
+     ALTER TABLE finny_jobs DROP CONSTRAINT IF EXISTS finny_jobs_sop_cutover_mode;
+     ALTER TABLE finny_jobs ADD CONSTRAINT finny_jobs_sop_cutover_mode
+       CHECK (sop_version_id IS NOT NULL OR finalized_at IS NOT NULL);
+     IF to_regclass('finny_plan_intents') IS NOT NULL THEN
+       EXECUTE 'ALTER TABLE finny_plan_intents
+         DROP CONSTRAINT IF EXISTS finny_plan_intents_sop_cutover_mode';
+       EXECUTE 'ALTER TABLE finny_plan_intents
+         ADD CONSTRAINT finny_plan_intents_sop_cutover_mode CHECK (job_input ? ''sop'')';
+     END IF;
    END
    $qm$`,
 ];

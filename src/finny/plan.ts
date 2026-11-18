@@ -146,13 +146,13 @@ export function validateFinnySopValues(
   const inputs = new Map(sop.inputs.map((input) => [input.id, input]));
   const unknown = Object.keys(values).find((key) => !inputs.has(key));
   if (unknown) throw new Error(`Finny SOP bound input ${unknown} is undeclared`);
-  const validated: Record<string, string | boolean> = {};
+  const validated = Object.create(null) as Record<string, string | boolean>;
   for (const input of sop.inputs) {
-    const bound = values[input.id];
-    if (bound === undefined) {
+    if (!Object.hasOwn(values, input.id)) {
       if (input.required) throw new Error(`Finny SOP required input ${input.id} is missing`);
       continue;
     }
+    const bound = values[input.id];
     if (input.type === "boolean") {
       if (typeof bound !== "boolean") throw new Error(`Finny SOP input ${input.id} must be boolean`);
     } else if (typeof bound !== "string" || !bound.trim()) {

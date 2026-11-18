@@ -82,6 +82,42 @@ test("execution digest changes only with executable meaning or material values",
   );
 });
 
+test("bound SOP values preserve declared object prototype keys", () => {
+  const prototypeKeySop = {
+    ...sop,
+    inputs: [
+      ...sop.inputs,
+      {
+        id: "__proto__",
+        label: "Prototype",
+        from: "human" as const,
+        type: "text" as const,
+        material: true,
+        required: true,
+      },
+      {
+        id: "constructor",
+        label: "Constructor",
+        from: "human" as const,
+        type: "text" as const,
+        material: true,
+        required: true,
+      },
+    ],
+  };
+  const values = JSON.parse(
+    '{"cutoff":"2026-10-31","currency":"INR","note":"first run","__proto__":"safe","constructor":"also-safe"}',
+  ) as Record<string, string | boolean>;
+  const validated = finnyPlan.validateFinnySopValues(prototypeKeySop, values);
+  assert.equal(Object.getPrototypeOf(validated), null);
+  assert.equal(validated.__proto__, "safe");
+  assert.equal(validated.constructor, "also-safe");
+  const missingConstructor = JSON.parse(
+    '{"cutoff":"2026-10-31","currency":"INR","note":"first run","__proto__":"safe"}',
+  );
+  assert.throws(() => finnyPlan.validateFinnySopValues(prototypeKeySop, missingConstructor), /constructor.*missing/i);
+});
+
 test("compiles Producer and audit envelopes from the same SOP version and execution digest", () => {
   const api = finnyPlan as unknown as {
     compileFinnyProducerTask?: (value: unknown, values: Record<string, string | boolean>) => Record<string, unknown>;
@@ -92,6 +128,7 @@ test("compiles Producer and audit envelopes from the same SOP version and execut
   const values = { cutoff: "2026-10-31", currency: "INR", note: "first run" };
   const producer = api.compileFinnyProducerTask!(sop, values);
   const audit = api.compileFinnyAuditEnvelope!(sop, values);
+  const boundInputs = Object.assign(Object.create(null) as Record<string, string>, values);
   assert.deepEqual(producer, {
     schema: "finny.producer-task.v1",
     sopVersion: {
@@ -101,7 +138,7 @@ test("compiles Producer and audit envelopes from the same SOP version and execut
     },
     executionDigest: producer.executionDigest,
     objective: sop.objective,
-    boundInputs: values,
+    boundInputs,
     sources: sop.sources,
     steps: sop.steps,
     controls: sop.controls,
@@ -111,7 +148,7 @@ test("compiles Producer and audit envelopes from the same SOP version and execut
     schema: "finny.audit-envelope.v1",
     sopVersion: producer.sopVersion,
     executionDigest: producer.executionDigest,
-    boundInputs: values,
+    boundInputs,
     sources: sop.sources,
     controls: sop.controls,
     outputs: sop.outputs,
