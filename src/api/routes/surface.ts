@@ -65,6 +65,18 @@ function isGrant(b: unknown): b is Grant {
   );
 }
 
+async function getFinnyCertifiedResult({ app, deps, params, res, url }: ApiCtx): Promise<void> {
+  const viewer = url.searchParams.get("viewer");
+  if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
+  const result = await deps.finnyResultReader?.get(params.id!);
+  if (!result) return sendJson(res, 404, { error: "not_found" });
+  const scope = parseScopeId(result.scopeId);
+  const allowed = scope.kind === "personal" ? scope.ref === viewer : await app.managesScope(viewer, result.scopeId);
+  if (!allowed) return sendJson(res, 404, { error: "not_found" });
+  res.setHeader("content-disposition", `attachment; filename="finny-result-${result.id}.json"`);
+  return sendJson(res, 200, result);
+}
+
 function sharedSkillCreateBlock(capability: ApiCtx["capability"]): string | null {
   if (!capability) return null;
   if (parseScopeId(capability.scopeId).kind === "personal") return null;
@@ -1580,6 +1592,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "GET", path: "/v1/skills/:id", auth: "either", handle: getSkillDetail },
   ]),
   ...withActor("query.viewer", [
+    { method: "GET", path: "/v1/finny/results/:id", auth: "source", handle: getFinnyCertifiedResult },
     { method: "GET", path: "/v1/sessions/:id/approvals", auth: "source", handle: listSessionApprovals },
     { method: "GET", path: "/v1/sessions/:id/background", auth: "source", handle: getSessionBackground },
     {

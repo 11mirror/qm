@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
 import type { SessionSyscalls } from "../sessions/session-syscalls.ts";
-import type { FinnyStore } from "./store.ts";
+import type { FinnyEventResult, FinnyStore, RecordFinnyAuditBlockInput, RecordFinnyAuditPassedInput } from "./store.ts";
 import type {
   FinnyAuditFinding,
+  FinnyAuditControlResult,
+  FinnyAuditAttemptVerdict,
   FinnyCheckId,
   FinnyDeterministicEvidenceAuthority,
   FinnyJob,
+  FinnyJobEvent,
   FinnyVerdict,
   FinnyWorkerGrant,
   FinnyWorkerRole,
@@ -17,6 +20,11 @@ import type { FinnyRuntimeRecovery, FinnyRuntimeStore } from "./runtime-postgres
 interface RuntimeGrants {
   issueProducer(input: IssueFinnyWorkerInput): Promise<FinnyWorkerGrant>;
   issueAuditor(input: IssueFinnyWorkerInput): Promise<FinnyWorkerGrant>;
+}
+
+interface LegacyFinnyAuditMutations {
+  recordAuditPassed(input: RecordFinnyAuditPassedInput): Promise<FinnyEventResult<FinnyJobEvent<"audit_passed">>>;
+  recordAuditBlock(input: RecordFinnyAuditBlockInput): Promise<FinnyEventResult>;
 }
 
 interface RuntimeDispatcher {
@@ -69,6 +77,15 @@ interface ApprovedRuntimeInput {
   parentRunId: string;
   idempotencyKey: string;
   retryTerminalProducerRunId?: string;
+}
+
+interface AuditAttemptRecordedRuntimeInput {
+  scopeId: string;
+  jobId: string;
+  attemptId: string;
+  artifactDigest: string;
+  verdict: FinnyAuditAttemptVerdict;
+  controls: FinnyAuditControlResult[];
 }
 
 function opened(result: Awaited<ReturnType<SessionSyscalls["open"]>>, role: string) {
@@ -150,8 +167,7 @@ export async function reconcileFinnyRuntimeRecoveries(deps: {
     jobId: string,
   ): Promise<{
     artifactReady(input: ArtifactReadyRuntimeInput): Promise<void>;
-    auditPassed(input: AuditPassedRuntimeInput): Promise<void>;
-    auditBlocked(input: AuditBlockedRuntimeInput): Promise<void>;
+    auditAttemptRecorded(input: AuditAttemptRecordedRuntimeInput): Promise<void>;
     verificationReopened(input: {
       scopeId: string;
       jobId: string;
@@ -166,9 +182,9 @@ export async function reconcileFinnyRuntimeRecoveries(deps: {
     try {
       const coordinator = await deps.coordinatorFor(recovery.scopeId, recovery.jobId);
       if (recovery.kind === "artifact_ready") await coordinator.artifactReady(recovery);
-      else if (recovery.kind === "audit_passed") await coordinator.auditPassed(recovery);
-      else if (recovery.kind === "audit_blocked") await coordinator.auditBlocked(recovery);
-      else await coordinator.verificationReopened(recovery);
+      else if (recovery.kind === "audit_attempt_recorded") {
+        await coordinator.auditAttemptRecorded(recovery);
+      } else await coordinator.verificationReopened(recovery);
     } catch (error) {
       await deps.recordError(error, recovery);
     }
@@ -176,7 +192,7 @@ export async function reconcileFinnyRuntimeRecoveries(deps: {
 }
 
 export function createFinnyRuntimeCoordinator(deps: {
-  jobs: FinnyStore;
+  jobs: FinnyStore & LegacyFinnyAuditMutations;
   runtime: FinnyRuntimeStore;
   grants: RuntimeGrants;
   sessions: Pick<SessionSyscalls, "open">;
@@ -300,6 +316,55 @@ export function createFinnyRuntimeCoordinator(deps: {
       const currentProducer = await deps.runtime.currentRoleBinding(input.scopeId, input.jobId, "producer");
       if (!currentProducer || currentProducer.sessionId !== producer.sessionId)
         throw new Error("Finny Producer runtime binding is unavailable");
+    },
+    async auditAttemptRecorded(input: AuditAttemptRecordedRuntimeInput): Promise<void> {
+      const job = await deps.jobs.getJob(input.scopeId, input.jobId);
+      if (
+        !job ||
+        job.currentAuditAttemptId !== input.attemptId ||
+        job.artifactDigest !== input.artifactDigest ||
+        job.finalizedAt !== undefined
+      ) {
+        throw new Error("Finny atomic audit attempt is not current");
+      }
+      if (input.verdict !== "block") return;
+      const failedControls = input.controls
+        .filter((control) => control.verdict === "block")
+        .map((control) => ({
+          id: control.id,
+          evidenceRefs: control.evidenceRefs,
+          repairActions: control.repairActions,
+        }));
+      if (!failedControls.length) throw new Error("Finny BLOCK audit attempt has no failed controls");
+      const auditor = await deps.runtime.activeRoleBinding(input.scopeId, input.jobId, "auditor");
+      if (auditor) {
+        await deps.runtime.retireBinding({
+          sessionId: auditor.sessionId,
+          runId: auditor.runId,
+          role: "auditor",
+        });
+      }
+      const producer = await deps.runtime.activeRoleBinding(input.scopeId, input.jobId, "producer");
+      if (!producer) throw new Error("Finny runtime has no current producer binding");
+      const message = JSON.stringify({ task: "Rework the blocked artifact", failedControls });
+      const credentials = deps.workerPolicy.credentials(job, "producer");
+      await dispatch({
+        idempotencyKey: `finny:${input.jobId}:audit-attempt:${input.attemptId}:producer-rework`,
+        scopeId: input.scopeId,
+        jobId: input.jobId,
+        sessionId: producer.sessionId,
+        runId: producer.runId,
+        kind: "producer_audit_attempt_rework",
+        intent: message,
+        message,
+        role: "producer",
+        principalId: credentials.principalId,
+        expiresAt: credentials.expiresAt,
+        guard: async () => {
+          const current = await deps.jobs.getJob(input.scopeId, input.jobId);
+          return current?.currentAuditAttemptId === input.attemptId && current.artifactDigest === input.artifactDigest;
+        },
+      });
     },
     async auditPassed(input: AuditPassedRuntimeInput): Promise<void> {
       const action = {

@@ -39,22 +39,16 @@
       "args": ["scripts/run-pg-tests.mjs", "test/finny-policy.test.ts"]
     },
     {
-      "id": "finny-events-postgres",
-      "program": "node",
-      "requiresDatabase": true,
-      "args": ["scripts/run-pg-tests.mjs", "test/finny-events.test.ts"]
-    },
-    {
       "id": "finny-runtime-postgres",
       "program": "node",
       "requiresDatabase": true,
       "args": ["scripts/run-pg-tests.mjs", "test/finny-runtime-coordinator.test.ts"]
     },
     {
-      "id": "finny-finalizer-postgres",
+      "id": "finny-certified-result-postgres",
       "program": "node",
       "requiresDatabase": true,
-      "args": ["scripts/run-pg-tests.mjs", "test/finny-finalizer.test.ts"]
+      "args": ["scripts/run-pg-tests.mjs", "test/finny-certified-result-store.test.ts"]
     },
     {
       "id": "finny-integration-postgres",
@@ -182,38 +176,23 @@
     },
     {
       "id": "artifact-replacement-without-rework",
-      "invariant": "Artifact bytes cannot be replaced unless an authoritative rework request is open, and re-audit waits for the replacement artifact.",
+      "invariant": "A corrected artifact replaces an authoritative BLOCK, clears its attempt, and receives a wholly new coherent audit.",
       "selectors": [
         {
-          "commandId": "finny-events-postgres",
-          "file": "test/finny-events.test.ts",
-          "name": "artifact replacement requires an authoritative rework request"
-        },
-        {
-          "commandId": "finny-events-postgres",
-          "file": "test/finny-events.test.ts",
-          "name": "re-audit waits for a new artifact to consume the rework request"
-        },
-        {
-          "commandId": "finny-events-postgres",
-          "file": "test/finny-events.test.ts",
-          "name": "replacement artifact bytes invalidate every required check before finalization"
-        },
-        {
-          "commandId": "finny-events-postgres",
-          "file": "test/finny-events.test.ts",
-          "name": "byte-identical rework preserves selective check invalidation"
+          "commandId": "finny-store-postgres",
+          "file": "test/finny-store.test.ts",
+          "name": "a corrected artifact clears the BLOCK attempt before a new coherent audit"
         }
       ]
     },
     {
       "id": "stale-generation",
-      "invariant": "Evidence below the exact Core-required check generation or bound to a substituted artifact/check/generation cannot advance audit state.",
+      "invariant": "An atomic attempt bound to stale scope, SOP, evaluator, or artifact authority cannot advance audit state.",
       "selectors": [
         {
-          "commandId": "finny-events-postgres",
-          "file": "test/finny-events.test.ts",
-          "name": "stale and wrong-scope audit events fail without changing authoritative state"
+          "commandId": "finny-store-postgres",
+          "file": "test/finny-store.test.ts",
+          "name": "records one complete immutable audit attempt for the current artifact"
         },
         {
           "commandId": "finny-worker-postgres",
@@ -224,17 +203,12 @@
     },
     {
       "id": "latest-block-after-pass",
-      "invariant": "The authoritative latest BLOCK defeats every earlier PASS and prevents finalization regardless of input ordering.",
+      "invariant": "A complete atomic BLOCK attempt prevents finalization.",
       "selectors": [
         {
-          "commandId": "finny-finalizer-postgres",
-          "file": "test/finny-finalizer.test.ts",
-          "name": "finalizer rejects missing evidence and the latest BLOCK"
-        },
-        {
-          "commandId": "finny-events-postgres",
-          "file": "test/finny-events.test.ts",
-          "name": "artifact and audit events expose the latest server sequence"
+          "commandId": "finny-certified-result-postgres",
+          "file": "test/finny-certified-result-store.test.ts",
+          "name": "certification rejects a missing or BLOCK atomic attempt"
         }
       ]
     },
@@ -243,9 +217,9 @@
       "invariant": "A single passing check or any incomplete result set cannot certify an artifact; every policy-required check must be current and passing.",
       "selectors": [
         {
-          "commandId": "finny-finalizer-postgres",
-          "file": "test/finny-finalizer.test.ts",
-          "name": "finalizer rejects missing evidence and the latest BLOCK"
+          "commandId": "finny-certified-result-postgres",
+          "file": "test/finny-certified-result-store.test.ts",
+          "name": "certification rejects a missing or BLOCK atomic attempt"
         },
         {
           "commandId": "finny-worker-postgres",
@@ -253,14 +227,9 @@
           "name": "rejects duplicate, unknown and missing result checks"
         },
         {
-          "commandId": "finny-policy-postgres",
-          "file": "test/finny-policy.test.ts",
-          "name": "initial policy requires every check at generation one"
-        },
-        {
-          "commandId": "finny-finalizer-postgres",
-          "file": "test/finny-finalizer.test.ts",
-          "name": "finalizer rejects current-generation PASS attestations bound to another artifact"
+          "commandId": "finny-certified-result-postgres",
+          "file": "test/finny-certified-result-store.test.ts",
+          "name": "certification rejects a PASS attempt after the job artifact changes"
         }
       ]
     },
@@ -311,24 +280,14 @@
         {
           "commandId": "finny-integration-offline",
           "file": "test/finny-integration.test.ts",
-          "name": "deterministic BLOCK uses Core findings and stops before stale remaining results"
+          "name": "deterministic BLOCK preserves every result in one atomic audit attempt"
         }
       ]
     },
     {
       "id": "configured-escalation-boundary",
-      "invariant": "Core follows the externally configured rework-or-stop decision, records escalation without an internal retry cap, and blocks delivery while escalation is unresolved.",
+      "invariant": "Core follows the externally configured rework-or-stop decision and stops worker actions when escalation is approved.",
       "selectors": [
-        {
-          "commandId": "finny-events-postgres",
-          "file": "test/finny-events.test.ts",
-          "name": "external escalation decisions are recorded without an internal retry cap"
-        },
-        {
-          "commandId": "finny-events-postgres",
-          "file": "test/finny-events.test.ts",
-          "name": "unresolved escalation blocks final delivery"
-        },
         {
           "commandId": "finny-runtime-postgres",
           "file": "test/finny-runtime-coordinator.test.ts",
@@ -358,7 +317,7 @@
         {
           "commandId": "finny-integration-offline",
           "file": "test/finny-integration.test.ts",
-          "name": "bound Auditor runs all current deterministic checks from one trusted evidence envelope"
+          "name": "bound Auditor commits all deterministic results as one atomic audit attempt"
         },
         {
           "commandId": "finny-http-engine-offline",
@@ -485,19 +444,9 @@
       "invariant": "Finalization returns one signed receipt per idempotency key bound exactly to scope, job, plan digest, artifact digest, and provisional revision; collisions or scope substitution fail.",
       "selectors": [
         {
-          "commandId": "finny-finalizer-postgres",
-          "file": "test/finny-finalizer.test.ts",
-          "name": "finalizer reads authoritative state and returns the same signed receipt for one idempotency key"
-        },
-        {
-          "commandId": "finny-finalizer-postgres",
-          "file": "test/finny-finalizer.test.ts",
-          "name": "finalizer rejects scope mismatch and a rejected artifact-free job"
-        },
-        {
-          "commandId": "finny-finalizer-postgres",
-          "file": "test/finny-finalizer.test.ts",
-          "name": "concurrent finalizers with the same key converge on one receipt"
+          "commandId": "finny-certified-result-postgres",
+          "file": "test/finny-certified-result-store.test.ts",
+          "name": "certification idempotently converges and rejects scope substitution"
         }
       ]
     },

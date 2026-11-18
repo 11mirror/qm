@@ -2,7 +2,13 @@ import { createHash } from "node:crypto";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { createPostgresAdvisoryLock } from "../persistence/advisory-lock.ts";
 import { terminalFinnyWorkerRunSql } from "./run-state.ts";
-import type { FinnyAuditFinding, FinnyCheckId, FinnyWorkerRole } from "./types.ts";
+import type {
+  FinnyAuditAttemptVerdict,
+  FinnyAuditControlResult,
+  FinnyAuditFinding,
+  FinnyCheckId,
+  FinnyWorkerRole,
+} from "./types.ts";
 
 export type FinnyRuntimeRole = "parent" | FinnyWorkerRole;
 
@@ -65,8 +71,23 @@ export interface FinnyVerificationReopenedRecovery {
   retryMissingAuditor?: boolean;
 }
 
+export interface FinnyAuditAttemptRecordedRecovery {
+  kind: "audit_attempt_recorded";
+  scopeId: string;
+  jobId: string;
+  attemptId: string;
+  artifactDigest: string;
+  verdict: FinnyAuditAttemptVerdict;
+  controls: FinnyAuditControlResult[];
+  idempotencyKey: string;
+}
+
 export type FinnyRuntimeRecovery =
-  FinnyArtifactReadyRecovery | FinnyAuditPassedRecovery | FinnyAuditBlockedRecovery | FinnyVerificationReopenedRecovery;
+  | FinnyArtifactReadyRecovery
+  | FinnyAuditPassedRecovery
+  | FinnyAuditBlockedRecovery
+  | FinnyVerificationReopenedRecovery
+  | FinnyAuditAttemptRecordedRecovery;
 
 export interface InitialFinnyRuntimeBindings {
   scopeId: string;
@@ -137,17 +158,15 @@ const CURRENT_ARTIFACT_NEEDS_AUDIT = `
   AND jobs.pending_rework_seq IS NULL
   AND jobs.unresolved_escalation_seq IS NULL
   AND jobs.artifact_digest IS NOT NULL
-  AND EXISTS (
-    SELECT 1
-      FROM jsonb_each_text(jobs.required_generations) AS required(check_id,generation)
-     WHERE NOT EXISTS (
-       SELECT 1 FROM finny_job_events AS audit
-        WHERE audit.job_id=jobs.id
-          AND audit.event_type='audit_passed'
-          AND audit.payload->>'artifactDigest'=jobs.artifact_digest
-          AND audit.payload->>'checkId'=required.check_id
-          AND (audit.payload->>'generation')::int=required.generation::int
-     )
+  AND (
+    jobs.current_audit_attempt_id IS NULL
+    OR EXISTS (
+      SELECT 1 FROM finny_audit_attempts AS attempt
+       WHERE attempt.id=jobs.current_audit_attempt_id
+         AND attempt.job_id=jobs.id
+         AND attempt.artifact_sha256=jobs.artifact_digest
+         AND attempt.verdict='pending_judgment'
+    )
   )`;
 
 function rowToBinding(row: Record<string, unknown>): FinnyRuntimeBinding {
@@ -651,11 +670,8 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
     async pendingRecoveries(): Promise<FinnyRuntimeRecovery[]> {
       const rows = await q(
         `SELECT actions.kind,actions.session_id,actions.run_id,actions.scope_id,actions.job_id,
-                actions.idempotency_key,CASE WHEN actions.kind='artifact_ready' THEN events.payload ELSE actions.authority_payload->'recovery' END AS payload,
-                CASE WHEN auditor_state.terminal THEN auditor_binding.run_id END AS terminal_auditor_run_id,
-                CASE WHEN producer_state.terminal AND (
-                  dispatches.delivered_at IS NOT NULL OR dispatches.run_id<>producer_binding.run_id
-                ) THEN producer_binding.run_id END AS terminal_producer_run_id
+                actions.idempotency_key,
+                CASE WHEN auditor_state.terminal THEN auditor_binding.run_id END AS terminal_auditor_run_id
            FROM finny_runtime_actions AS actions
            JOIN finny_jobs AS jobs
              ON jobs.id=actions.job_id
@@ -676,22 +692,7 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
              SELECT auditor_binding.run_id IS NOT NULL
                AND ${terminalFinnyWorkerRunSql("auditor_binding", "auditor_run", "$1")} AS terminal
            ) AS auditor_state ON TRUE
-      LEFT JOIN finny_runtime_bindings AS producer_binding
-             ON actions.kind='audit_blocked'
-            AND producer_binding.job_id=actions.job_id
-            AND producer_binding.scope_id=actions.scope_id
-            AND producer_binding.role='producer'
-            AND producer_binding.active=TRUE
-      LEFT JOIN runs AS producer_run ON producer_run.id=producer_binding.run_id
-      LEFT JOIN LATERAL (
-             SELECT producer_binding.run_id IS NOT NULL
-               AND ${terminalFinnyWorkerRunSql("producer_binding", "producer_run", "$1")} AS terminal
-           ) AS producer_state ON TRUE
-      LEFT JOIN finny_runtime_dispatches AS dispatches
-             ON dispatches.idempotency_key=actions.idempotency_key ||
-                CASE actions.kind WHEN 'audit_blocked' THEN ':producer-rework' ELSE ':none' END
-          WHERE (
-              actions.kind='artifact_ready'
+          WHERE actions.kind='artifact_ready'
               AND (
                 events.seq IS NULL OR (
                   actions.authority_payload->>'artifactDigest'=jobs.artifact_digest
@@ -704,43 +705,6 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                 events.seq IS NULL
                 OR auditor_state.terminal
                 OR auditor_binding.run_id IS NULL
-              )
-            ) OR (
-              (actions.kind='audit_passed' AND dispatches.delivered_at IS NULL AND events.seq IS NULL) OR
-              (
-                actions.kind='audit_blocked'
-                AND (
-                  dispatches.idempotency_key IS NULL
-                  OR (dispatches.delivered_at IS NULL AND dispatches.run_id=producer_binding.run_id)
-                  OR (
-                    producer_state.terminal
-                    AND (dispatches.delivered_at IS NOT NULL OR dispatches.run_id<>producer_binding.run_id)
-                  )
-                )
-                AND (
-                  EXISTS (
-                    SELECT 1 FROM finny_job_events AS transition
-                     WHERE transition.job_id=actions.job_id
-                       AND transition.idempotency_key=actions.idempotency_key
-                       AND transition.event_index=1
-                       AND transition.event_type='rework_requested'
-                       AND NOT EXISTS (
-                         SELECT 1 FROM finny_job_events AS cancelled
-                          WHERE cancelled.job_id=actions.job_id
-                            AND cancelled.event_type='rework_cancelled'
-                            AND (cancelled.payload->>'reworkEventSequence')::bigint=transition.seq
-                       )
-                       AND NOT EXISTS (
-                         SELECT 1 FROM finny_job_events AS artifact
-                          WHERE artifact.job_id=actions.job_id
-                            AND artifact.seq>transition.seq
-                            AND artifact.event_type='artifact_ready'
-                       )
-                  ) OR (
-                    events.seq IS NULL AND actions.authority_payload->'resolution'->>'kind' IN ('rework','escalate')
-                  )
-                )
-              )
             )
           ORDER BY actions.created_at,actions.idempotency_key`,
         [Date.now()],
@@ -753,41 +717,11 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
           jobId: row.job_id as string,
           idempotencyKey: row.idempotency_key as string,
         };
-        if (row.kind === "artifact_ready")
-          return {
-            kind: "artifact_ready" as const,
-            ...base,
-            ...(typeof row.terminal_auditor_run_id === "string"
-              ? { retryTerminalAuditorRunId: row.terminal_auditor_run_id }
-              : {}),
-          };
-        const payload = (row.payload ?? {}) as {
-          artifactDigest: string;
-          checkId: FinnyCheckId;
-          generation: number;
-          evidenceFileId: string;
-          findings: FinnyAuditFinding[];
-        };
-        if (row.kind === "audit_passed") {
-          return {
-            kind: "audit_passed" as const,
-            ...base,
-            artifactDigest: payload.artifactDigest,
-            checkId: payload.checkId,
-            generation: payload.generation,
-            evidenceFileId: payload.evidenceFileId,
-          };
-        }
         return {
-          kind: "audit_blocked" as const,
+          kind: "artifact_ready" as const,
           ...base,
-          artifactDigest: payload.artifactDigest,
-          checkId: payload.checkId,
-          generation: payload.generation,
-          evidenceFileId: payload.evidenceFileId,
-          findings: payload.findings,
-          ...(typeof row.terminal_producer_run_id === "string"
-            ? { retryTerminalProducerRunId: row.terminal_producer_run_id }
+          ...(typeof row.terminal_auditor_run_id === "string"
+            ? { retryTerminalAuditorRunId: row.terminal_auditor_run_id }
             : {}),
         };
       });
@@ -827,8 +761,36 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
           ORDER BY events.seq`,
         [Date.now()],
       );
+      const atomicBlocks = await q(
+        `SELECT attempts.id,attempts.scope_id,attempts.job_id,attempts.artifact_sha256,
+                attempts.verdict,attempts.controls,attempts.idempotency_key
+           FROM finny_audit_attempts AS attempts
+           JOIN finny_jobs AS jobs
+             ON jobs.id=attempts.job_id
+            AND jobs.scope_id=attempts.scope_id
+            AND jobs.current_audit_attempt_id=attempts.id
+      LEFT JOIN finny_runtime_dispatches AS dispatches
+             ON dispatches.idempotency_key='finny:' || attempts.job_id || ':audit-attempt:' ||
+                attempts.id || ':producer-rework'
+          WHERE jobs.finalized_at IS NULL
+            AND attempts.verdict='block'
+            AND attempts.artifact_sha256=jobs.artifact_digest
+            AND dispatches.delivered_at IS NULL
+            AND dispatches.cancelled_at IS NULL
+          ORDER BY attempts.created_at,attempts.id`,
+      );
       return [
         ...actionRecoveries,
+        ...atomicBlocks.map((row) => ({
+          kind: "audit_attempt_recorded" as const,
+          scopeId: row.scope_id as string,
+          jobId: row.job_id as string,
+          attemptId: row.id as string,
+          artifactDigest: row.artifact_sha256 as string,
+          verdict: row.verdict as FinnyAuditAttemptVerdict,
+          controls: row.controls as FinnyAuditControlResult[],
+          idempotencyKey: row.idempotency_key as string,
+        })),
         ...reopened.map((row) => ({
           kind: "verification_reopened" as const,
           scopeId: row.scope_id as string,

@@ -1,13 +1,13 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
 import {
-  FINNY_CHECK_IDS,
-  type FinnyAuditFinding,
-  type FinnyCheckId,
+  type FinnyAuditControlResult,
+  type FinnyAuditJudgmentAnswer,
   type FinnyMaterialClarification,
   type FinnySopVersion,
 } from "../../finny/types.ts";
 import { FINNY_SOP_SCHEMA, FINNY_SOP_VALUES_SCHEMA } from "../../finny/sop-schema.ts";
+import { FINNY_CERTIFIED_SUMMARY_SCHEMA, type FinnyCertifiedResult } from "../../finny/certified-result.ts";
 import { text, type ToolKit } from "./kit.ts";
 
 export interface FinnyToolService {
@@ -30,21 +30,13 @@ export interface FinnyToolService {
     provisionalRevision: string;
     idempotencyKey: string;
   }): Promise<string>;
-  pass(input: {
-    checkId: FinnyCheckId;
-    generation: number;
-    evidenceFileId: string;
+  deterministicAudit(input: {
     idempotencyKey: string;
+    controls: FinnyAuditControlResult[];
+    triggeredJudgmentControlIds?: string[];
+    judgmentAnswers?: FinnyAuditJudgmentAnswer[];
   }): Promise<string>;
-  deterministicAudit(input: { idempotencyKey: string }): Promise<string>;
-  block(input: {
-    checkId: FinnyCheckId;
-    generation: number;
-    evidenceFileId: string;
-    findings: FinnyAuditFinding[];
-    idempotencyKey: string;
-  }): Promise<string>;
-  finalize(input: { jobId: string; idempotencyKey: string }): Promise<string>;
+  finalize(input: { jobId: string; summary: FinnyCertifiedResult["summary"]; idempotencyKey: string }): Promise<string>;
 }
 
 export interface FinnyPlanCreation {
@@ -55,8 +47,6 @@ export interface FinnyPlanCreation {
 }
 
 const string = () => Type.String({ minLength: 1 });
-const checkId = Type.Union(FINNY_CHECK_IDS.map((value) => Type.Literal(value)));
-const finding = Type.Object({ code: string(), message: string() }, { additionalProperties: false });
 const clarificationOption = Type.Object(
   { id: string(), label: string(), description: Type.Optional(string()) },
   { additionalProperties: false },
@@ -72,6 +62,33 @@ const materialClarification = Type.Object(
 
 const sop = FINNY_SOP_SCHEMA;
 const values = FINNY_SOP_VALUES_SCHEMA;
+const certifiedSummary = FINNY_CERTIFIED_SUMMARY_SCHEMA;
+const evidenceRefs = Type.Array(string());
+const auditControls = Type.Array(
+  Type.Object(
+    {
+      id: string(),
+      verdict: Type.Union([Type.Literal("pass"), Type.Literal("block")]),
+      evidenceRefs,
+      repairActions: Type.Array(
+        Type.Object({ message: string(), workbookRefs: evidenceRefs }, { additionalProperties: false }),
+      ),
+    },
+    { additionalProperties: false },
+  ),
+  { minItems: 1 },
+);
+const judgmentAnswers = Type.Array(
+  Type.Object(
+    {
+      controlId: string(),
+      verdict: Type.Union([Type.Literal("pass"), Type.Literal("block")]),
+      evidenceRefs,
+      rationale: string(),
+    },
+    { additionalProperties: false },
+  ),
+);
 
 export function finnyTools(kit: ToolKit) {
   const { ref, opts, recordCall, recordResult, resourceTool, blockOnApproval } = kit;
@@ -210,79 +227,44 @@ export function finnyTools(kit: ToolKit) {
         }),
       ),
   });
-  const pass = defineTool({
-    name: "finny_pass",
-    label: "Finny audit pass",
-    description: "Submit digest-bound PASS evidence for one current check generation.",
-    parameters: Type.Object(
-      { checkId, generation: Type.Integer({ minimum: 1 }), evidenceFileId: string(), idempotencyKey: string() },
-      { additionalProperties: false },
-    ),
-    execute: (callId, params) =>
-      run(callId, "pass", { checkId: params.checkId, generation: params.generation }, () =>
-        ref.current!.finny!.pass({
-          checkId: params.checkId,
-          generation: params.generation,
-          evidenceFileId: params.evidenceFileId,
-          idempotencyKey: params.idempotencyKey,
-        }),
-      ),
-  });
-  const block = defineTool({
-    name: "finny_block",
-    label: "Finny audit block",
-    description: "Submit bounded findings for one current check generation. Core selects rework or escalation.",
+  const deterministicAudit = defineTool({
+    name: "finny_deterministic_audit",
+    label: "Finny deterministic audit",
+    description:
+      "Run Core-owned deterministic spreadsheet checks and atomically record every approved SOP control against the current bound artifact.",
     parameters: Type.Object(
       {
-        checkId,
-        generation: Type.Integer({ minimum: 1 }),
-        evidenceFileId: string(),
-        findings: Type.Array(finding, { minItems: 1 }),
         idempotencyKey: string(),
+        controls: auditControls,
+        triggeredJudgmentControlIds: Type.Optional(Type.Array(string())),
+        judgmentAnswers: Type.Optional(judgmentAnswers),
       },
       { additionalProperties: false },
     ),
     execute: (callId, params) =>
-      run(
-        callId,
-        "block",
-        { checkId: params.checkId, generation: params.generation, findingCount: params.findings.length },
-        () =>
-          ref.current!.finny!.block({
-            checkId: params.checkId,
-            generation: params.generation,
-            evidenceFileId: params.evidenceFileId,
-            findings: params.findings,
-            idempotencyKey: params.idempotencyKey,
-          }),
-      ),
-  });
-  const deterministicAudit = defineTool({
-    name: "finny_deterministic_audit",
-    label: "Finny deterministic audit",
-    description: "Run Core-owned deterministic spreadsheet checks against the current bound artifact.",
-    parameters: Type.Object({ idempotencyKey: string() }, { additionalProperties: false }),
-    execute: (callId, params) =>
-      run(callId, "deterministic_audit", {}, () =>
-        ref.current!.finny!.deterministicAudit({ idempotencyKey: params.idempotencyKey }),
-      ),
+      run(callId, "deterministic_audit", {}, () => ref.current!.finny!.deterministicAudit(params)),
   });
   const finalize = defineTool({
     name: "finny_finalize",
     label: "Finalize Finny job",
-    description: "Ask Core to finalize from authoritative job state using only the job and idempotency key.",
-    parameters: Type.Object({ jobId: string(), idempotencyKey: string() }, { additionalProperties: false }),
+    description: "Ask Core to certify the current audited workbook with its typed business summary.",
+    parameters: Type.Object(
+      { jobId: string(), summary: certifiedSummary, idempotencyKey: string() },
+      { additionalProperties: false },
+    ),
     execute: (callId, params) =>
       run(callId, "finalize", { jobId: params.jobId }, () =>
-        ref.current!.finny!.finalize({ jobId: params.jobId, idempotencyKey: params.idempotencyKey }),
+        ref.current!.finny!.finalize({
+          jobId: params.jobId,
+          summary: params.summary,
+          idempotencyKey: params.idempotencyKey,
+        }),
       ),
   });
   const tool = resourceTool("finny", {
     ...(authoring ? { create_plan: createPlan, amend_plan: amendPlan } : {}),
     status,
     artifact_ready: artifactReady,
-    pass,
-    block,
     deterministic_audit: deterministicAudit,
     finalize,
   });
@@ -293,20 +275,18 @@ export function finnyTools(kit: ToolKit) {
       artifactDigest: string(),
       provisionalRevision: string(),
       idempotencyKey: string(),
-      checkId,
-      generation: Type.Integer({ minimum: 1 }),
-      evidenceFileId: string(),
-      findings: Type.Array(finding, { minItems: 1 }),
+      controls: auditControls,
+      triggeredJudgmentControlIds: Type.Array(string()),
+      judgmentAnswers,
+      summary: certifiedSummary,
     }).map(([key, schema]) => [key, Type.Optional(schema as TSchema)]),
   );
   const actionFields: Record<string, readonly string[]> = {
     ...(authoring ? { create_plan: ["sop", "values"], amend_plan: ["jobId", "sop", "values"] } : {}),
     status: ["jobId"],
     artifact_ready: ["artifactDigest", "provisionalRevision", "idempotencyKey"],
-    pass: ["checkId", "generation", "evidenceFileId", "idempotencyKey"],
-    block: ["checkId", "generation", "evidenceFileId", "findings", "idempotencyKey"],
-    deterministic_audit: ["idempotencyKey"],
-    finalize: ["jobId", "idempotencyKey"],
+    deterministic_audit: ["idempotencyKey", "controls"],
+    finalize: ["jobId", "summary", "idempotencyKey"],
   } as const;
   const contentFields = Object.keys(properties);
   const parameters = Type.Object(

@@ -143,6 +143,237 @@ test("approval starts one actionable Producer run without creating an Auditor", 
   assert.equal(await runtime.currentRoleBinding(job.scopeId, job.id, "auditor"), null);
 });
 
+test("atomic BLOCK dispatches only failed controls and repair context to the current Producer", async () => {
+  const { jobs, job, connectionString } = await approvedJob();
+  const runtime = createPostgresFinnyRuntimeStore(connectionString);
+  await jobs.recordArtifactReady({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    artifactDigest: "a".repeat(64),
+    provisionalRevision: "artifact-file-1",
+    idempotencyKey: "artifact-ready-atomic-block",
+  });
+  const current = await jobs.getJob(job.scopeId, job.id);
+  assert.ok(current?.sopBinding);
+  const attemptId = randomUUID();
+  const controls = [
+    { id: "source-total", verdict: "pass" as const, evidenceRefs: ["evidence:source-total"], repairActions: [] },
+    { id: "mapping-exception", verdict: "pass" as const, evidenceRefs: ["xlsx:Exceptions!A1"], repairActions: [] },
+    { id: "formula.recalculate", verdict: "pass" as const, evidenceRefs: ["evidence:formula"], repairActions: [] },
+    {
+      id: "summary.crossfoot",
+      verdict: "block" as const,
+      evidenceRefs: ["xlsx:Summary!B7"],
+      repairActions: [{ message: "Correct the summary total", workbookRefs: ["xlsx:Summary!B7"] }],
+    },
+  ];
+  await jobs.recordAuditAttempt({
+    id: attemptId,
+    scopeId: job.scopeId,
+    jobId: job.id,
+    sopVersionId: current.sopBinding.versionId,
+    executionDigest: current.sopBinding.executionDigest,
+    artifactFileId: "artifact-file-1",
+    artifactSha256: "a".repeat(64),
+    artifactMime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    artifactSizeBytes: 4096,
+    evaluator: TEST_FINNY_EVALUATOR,
+    controls,
+    judgmentQuestions: [],
+    judgmentAddendum: {
+      issuerPrincipalId: "finny-deterministic-spreadsheet-worker",
+      issuerRunId: "core-audit-run",
+      answers: [
+        {
+          controlId: "mapping-exception",
+          verdict: "pass",
+          evidenceRefs: ["xlsx:Exceptions!A1"],
+          rationale: "No material exception remains.",
+        },
+      ],
+    },
+    verdict: "block",
+    issuerPrincipalId: "finny-deterministic-spreadsheet-worker",
+    issuerRunId: "core-audit-run",
+    idempotencyKey: "atomic-block-1",
+    completedAt: Date.now(),
+  });
+  await runtime.bindInitial({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    parentSessionId: "parent-session",
+    parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
+    producerSessionId: "producer-session",
+    producerRunId: "producer-run",
+    auditorSessionId: "auditor-session",
+    auditorRunId: "auditor-run",
+    producerPrincipalId: "U1",
+    auditorPrincipalId: "U1",
+  });
+  const dispatched: Array<{ role: string; message: string }> = [];
+  const coordinator = createFinnyRuntimeCoordinator({
+    jobs,
+    runtime,
+    grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
+    sessions: {
+      async open() {
+        throw new Error("unexpected Auditor open");
+      },
+    },
+    dispatcher: {
+      async dispatchPrivateIdempotent(input) {
+        dispatched.push(input);
+      },
+    },
+    ...coreRuntimeAuthority(),
+  });
+
+  await coordinator.auditAttemptRecorded({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    attemptId,
+    artifactDigest: "a".repeat(64),
+    verdict: "block",
+    controls,
+  });
+
+  assert.equal(dispatched.length, 1);
+  assert.equal(dispatched[0]?.role, "producer");
+  assert.deepEqual(JSON.parse(dispatched[0]!.message), {
+    task: "Rework the blocked artifact",
+    failedControls: [
+      {
+        id: "summary.crossfoot",
+        evidenceRefs: ["xlsx:Summary!B7"],
+        repairActions: [{ message: "Correct the summary total", workbookRefs: ["xlsx:Summary!B7"] }],
+      },
+    ],
+  });
+});
+
+test("completed atomic PASS removes the current artifact from Auditor recovery", async () => {
+  const { jobs, job, connectionString } = await approvedJob();
+  const runtime = createPostgresFinnyRuntimeStore(connectionString);
+  await jobs.recordArtifactReady({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    artifactDigest: "b".repeat(64),
+    provisionalRevision: "artifact-file-pass",
+    idempotencyKey: "artifact-ready-atomic-pass",
+  });
+  const current = await jobs.getJob(job.scopeId, job.id);
+  assert.ok(current?.sopBinding);
+  await jobs.recordAuditAttempt({
+    id: randomUUID(),
+    scopeId: job.scopeId,
+    jobId: job.id,
+    sopVersionId: current.sopBinding.versionId,
+    executionDigest: current.sopBinding.executionDigest,
+    artifactFileId: "artifact-file-pass",
+    artifactSha256: "b".repeat(64),
+    artifactMime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    artifactSizeBytes: 1024,
+    evaluator: TEST_FINNY_EVALUATOR,
+    controls: [
+      { id: "source-total", verdict: "pass", evidenceRefs: ["evidence:source-total"], repairActions: [] },
+      { id: "mapping-exception", verdict: "pass", evidenceRefs: ["xlsx:Exceptions!A1"], repairActions: [] },
+      { id: "formula.recalculate", verdict: "pass", evidenceRefs: ["evidence:formula"], repairActions: [] },
+    ],
+    judgmentQuestions: [],
+    judgmentAddendum: {
+      issuerPrincipalId: "finny-deterministic-spreadsheet-worker",
+      issuerRunId: "core-audit-run",
+      answers: [
+        {
+          controlId: "mapping-exception",
+          verdict: "pass",
+          evidenceRefs: ["xlsx:Exceptions!A1"],
+          rationale: "No material exception remains.",
+        },
+      ],
+    },
+    verdict: "pass",
+    issuerPrincipalId: "finny-deterministic-spreadsheet-worker",
+    issuerRunId: "core-audit-run",
+    idempotencyKey: "atomic-pass-1",
+    completedAt: Date.now(),
+  });
+
+  assert.equal(await runtime.currentArtifactNeedsAudit(job.scopeId, job.id), false);
+});
+
+test("restart recovery returns an undispatched atomic BLOCK with its exact repair context", async () => {
+  const { jobs, job, connectionString } = await approvedJob();
+  const runtime = createPostgresFinnyRuntimeStore(connectionString);
+  await jobs.recordArtifactReady({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    artifactDigest: "e".repeat(64),
+    provisionalRevision: "artifact-file-recovery",
+    idempotencyKey: "artifact-ready-atomic-recovery",
+  });
+  const current = await jobs.getJob(job.scopeId, job.id);
+  assert.ok(current?.sopBinding);
+  const attemptId = randomUUID();
+  const controls = [
+    { id: "source-total", verdict: "pass" as const, evidenceRefs: ["evidence:source-total"], repairActions: [] },
+    { id: "mapping-exception", verdict: "pass" as const, evidenceRefs: ["xlsx:Exceptions!A1"], repairActions: [] },
+    {
+      id: "artifact.structure",
+      verdict: "block" as const,
+      evidenceRefs: ["xlsx:Workbook"],
+      repairActions: [{ message: "Restore the Summary sheet", workbookRefs: ["xlsx:Summary"] }],
+    },
+  ];
+  await jobs.recordAuditAttempt({
+    id: attemptId,
+    scopeId: job.scopeId,
+    jobId: job.id,
+    sopVersionId: current.sopBinding.versionId,
+    executionDigest: current.sopBinding.executionDigest,
+    artifactFileId: "artifact-file-recovery",
+    artifactSha256: "e".repeat(64),
+    artifactMime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    artifactSizeBytes: 1024,
+    evaluator: TEST_FINNY_EVALUATOR,
+    controls,
+    judgmentQuestions: [],
+    judgmentAddendum: {
+      issuerPrincipalId: "finny-deterministic-spreadsheet-worker",
+      issuerRunId: "core-audit-run",
+      answers: [
+        {
+          controlId: "mapping-exception",
+          verdict: "pass",
+          evidenceRefs: ["xlsx:Exceptions!A1"],
+          rationale: "No material exception remains.",
+        },
+      ],
+    },
+    verdict: "block",
+    issuerPrincipalId: "finny-deterministic-spreadsheet-worker",
+    issuerRunId: "core-audit-run",
+    idempotencyKey: "atomic-block-recovery",
+    completedAt: Date.now(),
+  });
+
+  assert.deepEqual(await runtime.pendingRecoveries(), [
+    {
+      kind: "audit_attempt_recorded",
+      scopeId: job.scopeId,
+      jobId: job.id,
+      attemptId,
+      artifactDigest: "e".repeat(64),
+      verdict: "block",
+      controls,
+      idempotencyKey: "atomic-block-recovery",
+    },
+  ]);
+});
+
 test("parent binding refreshes its run only for the same job and principal", async () => {
   const { job, connectionString } = await approvedJob();
   const runtime = createPostgresFinnyRuntimeStore(connectionString);
@@ -1365,7 +1596,7 @@ test("producer rework dispatch recovers from the committed BLOCK without repeati
   await assert.rejects(first.auditBlocked(input), /rework dispatch interrupted/);
   assert.deepEqual(wakes, ["block-crash-window"]);
   const pending = await runtime.pendingRecoveries();
-  assert.deepEqual(pending, [{ kind: "audit_blocked", ...input }]);
+  assert.deepEqual(pending, []);
   const attempted: string[] = [];
   const restarted = createFinnyRuntimeCoordinator({
     jobs,
@@ -1398,7 +1629,7 @@ test("producer rework dispatch recovers from the committed BLOCK without repeati
     },
     ...coreRuntimeAuthority(),
   });
-  await assert.rejects(restarted.auditBlocked(pending[0]!), /interrupted after run advance/);
+  await assert.rejects(restarted.auditBlocked(input), /interrupted after run advance/);
   assert.deepEqual(attempted, ["block-crash-window:producer-rework"]);
   assert.deepEqual(await runtime.pendingRecoveries(), []);
 
@@ -1425,46 +1656,6 @@ test("producer rework dispatch recovers from the committed BLOCK without repeati
     "producer-rework-run",
     JSON.stringify({ status: "ok", reply: "Finished without replacing the artifact" }),
   ]);
-  const [terminalRecovery] = await runtime.pendingRecoveries();
-  assert.deepEqual(terminalRecovery, {
-    kind: "audit_blocked",
-    ...input,
-    retryTerminalProducerRunId: "producer-rework-run",
-  });
-  const retryDispatches: string[] = [];
-  const retry = createFinnyRuntimeCoordinator({
-    jobs,
-    runtime,
-    grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
-    sessions: {
-      async open() {
-        throw new Error("terminal Producer recovery must reuse its session");
-      },
-    },
-    dispatcher: {
-      async dispatchPrivateIdempotent(message) {
-        retryDispatches.push(message.idempotencyKey);
-        await runtime.advanceWorkerRun({
-          sessionId: message.sessionId,
-          expectedRunId: message.runId,
-          runId: "producer-rework-retry-run",
-          scopeId: job.scopeId,
-          expiresAt: Date.now() + 60_000,
-          observedTerminalRunId: message.observedTerminalRunId,
-        });
-        await insertRun(q, "producer-rework-retry-run", "pending");
-      },
-    },
-    escalationDecision: {
-      async decide() {
-        throw new Error("judgment must not be retried");
-      },
-    },
-    ...coreRuntimeAuthority(),
-  });
-  await retry.auditBlocked(terminalRecovery!);
-  await retry.auditBlocked(terminalRecovery!);
-  assert.deepEqual(retryDispatches, [retryKey]);
   assert.deepEqual(await runtime.pendingRecoveries(), []);
 });
 
@@ -1501,6 +1692,9 @@ test("runtime reconciliation records a poison recovery and continues with later 
       },
       async auditBlocked() {
         throw new Error("unexpected BLOCK recovery");
+      },
+      async auditAttemptRecorded() {
+        throw new Error("unexpected atomic audit recovery");
       },
       async verificationReopened() {
         throw new Error("unexpected reverification recovery");
@@ -1649,7 +1843,7 @@ test("restart replays BLOCK authority committed before the job event", async () 
     requestDigest: runtimeDigest(recovery),
     authorityPayload: { resolution: { kind: "rework" }, evidenceDigest: "verified-block-digest", recovery },
   });
-  assert.deepEqual(await runtime.pendingRecoveries(), [{ kind: "audit_blocked", ...input }]);
+  assert.deepEqual(await runtime.pendingRecoveries(), []);
   const delivered: string[] = [];
   const coordinator = createFinnyRuntimeCoordinator({
     jobs,
@@ -1725,7 +1919,7 @@ test("restart replays PASS authority committed before the job event", async () =
     requestDigest: runtimeDigest(recovery),
     authorityPayload: { evidenceDigest: "verified-pass-digest", recovery },
   });
-  assert.deepEqual(await runtime.pendingRecoveries(), [{ kind: "audit_passed", ...input }]);
+  assert.deepEqual(await runtime.pendingRecoveries(), []);
   const coordinator = createFinnyRuntimeCoordinator({
     jobs,
     runtime,
@@ -1802,7 +1996,7 @@ test("restart replays escalation authority committed before the BLOCK event", as
       recovery,
     },
   });
-  assert.deepEqual(await runtime.pendingRecoveries(), [{ kind: "audit_blocked", ...input }]);
+  assert.deepEqual(await runtime.pendingRecoveries(), []);
   const coordinator = createFinnyRuntimeCoordinator({
     jobs,
     runtime,

@@ -65,6 +65,13 @@ const plan = {
 };
 const sop = finnySopFixture();
 const values = { cutoff: "2026-10-31", currency: "INR", note: "first run" };
+const certifiedSummary = {
+  period: "2026-10-31",
+  currency: "INR",
+  metrics: [{ id: "open-ap", label: "Open AP", value: "12172560.00", detailRefs: ["xlsx:Summary!B7"] }],
+  exceptions: [],
+  caveats: [{ text: "FX translated at the approved cutoff rate", detailRefs: ["evidence:manifest#fx"] }],
+};
 
 function finnyTool() {
   const tool = createAgentTools({ current: context() }).find((candidate) => candidate.name === "finny");
@@ -142,24 +149,34 @@ test("finny schema accepts only narrow content and evidence actions", () => {
       idempotencyKey: "ready-1",
     },
     {
+      action: "deterministic_audit",
+      idempotencyKey: "deterministic-1",
+      controls: [{ id: "source-total", verdict: "pass", evidenceRefs: ["xlsx:Summary!B1"], repairActions: [] }],
+    },
+    { action: "finalize", jobId: "job-1", summary: certifiedSummary, idempotencyKey: "finalize-1" },
+  ];
+  for (const input of valid) assert.ok(Check(schema, input), JSON.stringify(input));
+  assert.equal(
+    Check(schema, {
       action: "pass",
       checkId: "financial.reconcile",
       generation: 1,
       evidenceFileId: "evidence-file-1",
       idempotencyKey: "pass-1",
-    },
-    {
+    }),
+    false,
+  );
+  assert.equal(
+    Check(schema, {
       action: "block",
       checkId: "formula.recalculate",
-      generation: 2,
+      generation: 1,
       evidenceFileId: "evidence-file-1",
       findings: [{ code: "FORMULA_ERROR", message: "Formula does not recalculate" }],
       idempotencyKey: "block-1",
-    },
-    { action: "deterministic_audit", idempotencyKey: "deterministic-1" },
-    { action: "finalize", jobId: "job-1", idempotencyKey: "finalize-1" },
-  ];
-  for (const input of valid) assert.ok(Check(schema, input), JSON.stringify(input));
+    }),
+    false,
+  );
 });
 
 test("finny schema rejects model-supplied authority and escalation fields", () => {
@@ -243,15 +260,7 @@ test("finny forwards only narrow inputs and returns concise bound-service text",
       calls.push(["artifact_ready", input]);
       return "artifact accepted";
     },
-    async pass(input) {
-      calls.push(["pass", input]);
-      return "check accepted";
-    },
-    async block(input) {
-      calls.push(["block", input]);
-      return "block accepted; Core selected rework";
-    },
-    async deterministicAudit(input: { idempotencyKey: string }) {
+    async deterministicAudit(input) {
       calls.push(["deterministic_audit", input]);
       return "deterministic audit accepted";
     },
@@ -275,24 +284,18 @@ test("finny forwards only narrow inputs and returns concise bound-service text",
       retrySafe: true,
     },
     {
-      action: "pass",
-      checkId: "financial.reconcile",
-      generation: 1,
-      evidenceFileId: "evidence-pass-file",
-      idempotencyKey: "pass-1",
+      action: "deterministic_audit",
+      idempotencyKey: "deterministic-1",
+      controls: [{ id: "source-total", verdict: "pass", evidenceRefs: ["xlsx:Summary!B1"], repairActions: [] }],
       retrySafe: true,
     },
     {
-      action: "block",
-      checkId: "formula.recalculate",
-      generation: 2,
-      evidenceFileId: "evidence-block-file",
-      findings: [{ code: "FORMULA_ERROR", message: "Formula does not recalculate" }],
-      idempotencyKey: "block-1",
+      action: "finalize",
+      jobId: "job-1",
+      summary: certifiedSummary,
+      idempotencyKey: "finalize-1",
       retrySafe: true,
     },
-    { action: "deterministic_audit", idempotencyKey: "deterministic-1", retrySafe: true },
-    { action: "finalize", jobId: "job-1", idempotencyKey: "finalize-1", retrySafe: true },
   ];
   const replies = [];
   for (const [index, input] of inputs.entries()) {
@@ -302,8 +305,6 @@ test("finny forwards only narrow inputs and returns concise bound-service text",
     "created job-1",
     "job-1 awaiting approval",
     "artifact accepted",
-    "check accepted",
-    "block accepted; Core selected rework",
     "deterministic audit accepted",
     "job finalized",
   ]);
@@ -315,26 +316,14 @@ test("finny forwards only narrow inputs and returns concise bound-service text",
       { artifactDigest: "sha256:artifact", provisionalRevision: "revision-1", idempotencyKey: "ready-1" },
     ],
     [
-      "pass",
+      "deterministic_audit",
       {
-        checkId: "financial.reconcile",
-        generation: 1,
-        evidenceFileId: "evidence-pass-file",
-        idempotencyKey: "pass-1",
+        action: "deterministic_audit",
+        idempotencyKey: "deterministic-1",
+        controls: [{ id: "source-total", verdict: "pass", evidenceRefs: ["xlsx:Summary!B1"], repairActions: [] }],
       },
     ],
-    [
-      "block",
-      {
-        checkId: "formula.recalculate",
-        generation: 2,
-        evidenceFileId: "evidence-block-file",
-        findings: [{ code: "FORMULA_ERROR", message: "Formula does not recalculate" }],
-        idempotencyKey: "block-1",
-      },
-    ],
-    ["deterministic_audit", { idempotencyKey: "deterministic-1" }],
-    ["finalize", { jobId: "job-1", idempotencyKey: "finalize-1" }],
+    ["finalize", { jobId: "job-1", summary: certifiedSummary, idempotencyKey: "finalize-1" }],
   ]);
 });
 
@@ -489,16 +478,7 @@ test("finny retry annotations reject replaying non-idempotent plan creation", ()
   assert.ok(Check(schema, { action: "create_plan", sop, values, retrySafe: false }));
   assert.equal(Check(schema, { action: "create_plan", sop, values, retrySafe: true }), false);
   assert.ok(Check(schema, { action: "status", jobId: "job-1", retrySafe: true }));
-  assert.ok(
-    Check(schema, {
-      action: "pass",
-      checkId: "financial.reconcile",
-      generation: 1,
-      evidenceFileId: "evidence-file-1",
-      idempotencyKey: "pass-1",
-      retrySafe: true,
-    }),
-  );
+  assert.equal(Check(schema, { action: "pass", retrySafe: true }), false);
 });
 
 test("finny refuses forbidden fields before invoking its bound service", async () => {

@@ -63,6 +63,8 @@ export interface FinnyJob {
   eventHead: number;
   pendingReworkSequence?: number;
   unresolvedEscalationSequence?: number;
+  currentAuditAttemptId?: string;
+  resultId?: string;
   finalizationKey?: string;
   finalReceipt?: FinnyFinalReceipt;
   finalizedAt?: number;
@@ -97,6 +99,56 @@ export interface FinnyAttestation {
   deterministicAuthority?: FinnyDeterministicEvidenceAuthority;
   idempotencyKey: string;
   createdAt: number;
+}
+
+export interface FinnyAuditRepairAction {
+  message: string;
+  workbookRefs: string[];
+}
+
+export interface FinnyAuditControlResult {
+  id: string;
+  verdict: FinnyVerdict;
+  evidenceRefs: string[];
+  repairActions: FinnyAuditRepairAction[];
+  deterministicAuthority?: FinnyDeterministicEvidenceAuthority;
+}
+
+export interface FinnyAuditJudgmentAnswer {
+  controlId: string;
+  verdict: FinnyVerdict;
+  evidenceRefs: string[];
+  rationale: string;
+}
+
+export interface FinnyAuditJudgmentAddendum {
+  issuerPrincipalId: string;
+  issuerRunId: string;
+  answers: FinnyAuditJudgmentAnswer[];
+}
+
+export type FinnyAuditAttemptVerdict = FinnyVerdict | "pending_judgment";
+
+export interface FinnyAuditAttempt {
+  id: string;
+  jobId: string;
+  scopeId: string;
+  sopVersionId: string;
+  executionDigest: string;
+  artifactFileId: string;
+  artifactSha256: string;
+  artifactMime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  artifactSizeBytes: number;
+  evaluator: FinnyEvaluatorRef;
+  controls: FinnyAuditControlResult[];
+  judgmentQuestions: unknown[];
+  judgmentAddendum?: FinnyAuditJudgmentAddendum;
+  verdict: FinnyAuditAttemptVerdict;
+  issuerPrincipalId: string;
+  issuerRunId: string;
+  idempotencyKey: string;
+  createdAt: number;
+  completedAt?: number;
 }
 
 interface FinnyFinalReceiptPayloadBase {
@@ -166,6 +218,8 @@ export const FINNY_JOB_EVENT_TYPES = [
   "verification_reopened",
   "plan_amended",
   "sop_amended",
+  "audit_attempt_recorded",
+  "audit_judgment_recorded",
 ] as const;
 
 export type FinnyJobEventType = (typeof FINNY_JOB_EVENT_TYPES)[number];
@@ -249,6 +303,18 @@ export interface FinnyJobEventPayloads {
     previousExecutionDigest: string;
     newExecutionDigest: string;
     revision: number;
+  };
+  audit_attempt_recorded: {
+    attemptId: string;
+    artifactDigest: string;
+    verdict: FinnyAuditAttemptVerdict;
+    failedControlIds: string[];
+    requestDigest: string;
+  };
+  audit_judgment_recorded: {
+    attemptId: string;
+    verdict: FinnyVerdict;
+    requestDigest: string;
   };
 }
 

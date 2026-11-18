@@ -91,16 +91,6 @@ test("issues an artifact-bound Auditor grant after artifact_ready", async () => 
   assert.equal(auditor.payload.role, "auditor");
   assert.equal(auditor.payload.artifactDigest, "artifact-sha256");
   assert.deepEqual(auditor.payload.allowedChecks, FINNY_CHECK_IDS);
-  const accepted = await grants.submitAttestation(auditor.token, {
-    id: randomUUID(),
-    checkId: "lineage.binding",
-    generation: 1,
-    verdict: "pass",
-    evidenceDigest: `evidence-${randomUUID()}`,
-    idempotencyKey: randomUUID(),
-  });
-  assert.equal(accepted.attestation.artifactDigest, "artifact-sha256");
-  assert.equal(accepted.attestation.issuerRunId, "run-auditor");
 });
 
 test("producer and Auditor run identities must remain distinct", async () => {

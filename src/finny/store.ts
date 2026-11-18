@@ -1,8 +1,11 @@
 import type {
   FinnyApprovalAction,
-  FinnyAttestation,
   FinnyAuditFinding,
   FinnyChangeKind,
+  FinnyAuditAttempt,
+  FinnyAuditAttemptVerdict,
+  FinnyAuditControlResult,
+  FinnyAuditJudgmentAddendum,
   FinnyCheckId,
   FinnyClarificationDecision,
   FinnyClarificationOption,
@@ -12,14 +15,17 @@ import type {
   FinnyJobEvent,
   FinnyFindingPolicy,
   FinnyEvaluatorRef,
-  FinnyFinalReceipt,
-  FinnyFinalReceiptPayload,
   FinnyPolicySnapshot,
   FinnySopVersion,
   FinnyVerdict,
   FinnyWorkerRole,
 } from "./types.ts";
 import type { Destination } from "../types.ts";
+import type {
+  FinnyCertifiedResult,
+  FinnyCertifiedResultReceiptPayload,
+  FinnyCertifiedResultRecord,
+} from "./certified-result.ts";
 
 export interface FinnyStoredSopVersion {
   versionId: string;
@@ -111,6 +117,39 @@ export interface RecordFinnySopAmendmentInput {
   };
 }
 
+export interface RecordFinnyAuditAttemptInput {
+  id: string;
+  scopeId: string;
+  jobId: string;
+  sopVersionId: string;
+  executionDigest: string;
+  artifactFileId: string;
+  artifactSha256: string;
+  artifactMime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  artifactSizeBytes: number;
+  evaluator: FinnyEvaluatorRef;
+  controls: FinnyAuditControlResult[];
+  judgmentQuestions: unknown[];
+  judgmentAddendum?: FinnyAuditJudgmentAddendum;
+  verdict: FinnyAuditAttemptVerdict;
+  issuerPrincipalId: string;
+  issuerRunId: string;
+  idempotencyKey: string;
+  requestDigest?: string;
+  completedAt?: number;
+}
+
+export interface CompleteFinnyAuditJudgmentInput {
+  scopeId: string;
+  jobId: string;
+  attemptId: string;
+  controls: FinnyAuditControlResult[];
+  judgmentAddendum: FinnyAuditJudgmentAddendum;
+  idempotencyKey: string;
+  requestDigest?: string;
+  completedAt: number;
+}
+
 export interface RecordFinnyAttestationInput {
   id: string;
   scopeId: string;
@@ -126,40 +165,19 @@ export interface RecordFinnyAttestationInput {
   idempotencyKey: string;
 }
 
-export interface RecordFinnyAuditBlockInput {
-  scopeId: string;
-  jobId: string;
-  checkId: FinnyCheckId;
-  generation: number;
-  artifactDigest: string;
-  evidenceDigest: string;
-  issuerPrincipalId: string;
-  issuerRunId: string;
-  deterministicAuthority?: FinnyDeterministicEvidenceAuthority;
+export interface RecordFinnyAuditBlockInput extends Omit<RecordFinnyAttestationInput, "id" | "verdict"> {
   findings: FinnyAuditFinding[];
   changeKinds: FinnyChangeKind[];
   resolution: { kind: "rework" } | { kind: "escalate"; reason: string };
-  idempotencyKey: string;
 }
+
+export type RecordFinnyAuditPassedInput = Omit<RecordFinnyAttestationInput, "id" | "verdict">;
 
 export interface RecordFinnyArtifactReadyInput {
   scopeId: string;
   jobId: string;
   artifactDigest: string;
   provisionalRevision: string;
-  idempotencyKey: string;
-}
-
-export interface RecordFinnyAuditPassedInput {
-  scopeId: string;
-  jobId: string;
-  checkId: FinnyCheckId;
-  generation: number;
-  artifactDigest: string;
-  evidenceDigest: string;
-  issuerPrincipalId: string;
-  issuerRunId: string;
-  deterministicAuthority?: FinnyDeterministicEvidenceAuthority;
   idempotencyKey: string;
 }
 
@@ -177,13 +195,14 @@ export interface RecordFinnyEvaluatorCorrectionInput {
   idempotencyKey: string;
 }
 
-export interface FinalizeFinnyInput {
+export interface CertifyFinnyResultInput {
   scopeId: string;
-  jobId: string;
+  result: FinnyCertifiedResult;
+  destination: Destination;
   idempotencyKey: string;
 }
 
-export type FinnyReceiptSigner = (payload: FinnyFinalReceiptPayload) => Promise<string>;
+export type FinnyCertifiedResultReceiptSigner = (payload: FinnyCertifiedResultReceiptPayload) => Promise<string>;
 
 export interface ClaimFinnyWorkerRunInput {
   scopeId: string;
@@ -212,12 +231,34 @@ export interface FinnyStore {
   claimWorkerRun(input: ClaimFinnyWorkerRunInput): Promise<void>;
   recordApproval(input: RecordFinnyApprovalInput): Promise<FinnyJob>;
   recordClarificationDecision(input: RecordFinnyClarificationDecisionInput): Promise<FinnyClarificationDecisionResult>;
-  recordAttestation(input: RecordFinnyAttestationInput): Promise<{ attestation: FinnyAttestation; deduped: boolean }>;
+  recordAuditAttempt(input: RecordFinnyAuditAttemptInput): Promise<{
+    attempt: FinnyAuditAttempt;
+    events: FinnyJobEvent[];
+    job: FinnyJob;
+    deduped: boolean;
+  }>;
+  getAuditAttempt(scopeId: string, jobId: string, attemptId: string): Promise<FinnyAuditAttempt | null>;
+  getAuditAttemptByOperation(
+    scopeId: string,
+    jobId: string,
+    idempotencyKey: string,
+  ): Promise<{ attempt: FinnyAuditAttempt; requestDigest: string } | null>;
+  completeAuditJudgment(input: CompleteFinnyAuditJudgmentInput): Promise<{
+    attempt: FinnyAuditAttempt;
+    events: FinnyJobEvent[];
+    job: FinnyJob;
+    deduped: boolean;
+  }>;
   recordArtifactReady(input: RecordFinnyArtifactReadyInput): Promise<FinnyEventResult<FinnyJobEvent<"artifact_ready">>>;
-  recordAuditPassed(input: RecordFinnyAuditPassedInput): Promise<FinnyEventResult<FinnyJobEvent<"audit_passed">>>;
-  recordAuditBlock(input: RecordFinnyAuditBlockInput): Promise<FinnyEventResult>;
   evaluatorCorrectionCandidates(approvedEvaluator: FinnyEvaluatorRef): Promise<FinnyJob[]>;
   recordEvaluatorCorrection(input: RecordFinnyEvaluatorCorrectionInput): Promise<FinnyEventResult>;
   listEvents(scopeId: string, jobId: string, afterSequence?: number): Promise<FinnyJobEvent[]>;
-  finalize(input: FinalizeFinnyInput, sign: FinnyReceiptSigner): Promise<FinnyFinalReceipt>;
+  certifyResult(
+    input: CertifyFinnyResultInput,
+    sign: FinnyCertifiedResultReceiptSigner,
+  ): Promise<FinnyCertifiedResultRecord>;
+  getCertifiedResult(scopeId: string, resultId: string): Promise<FinnyCertifiedResultRecord | null>;
+  getCertifiedResultById(resultId: string): Promise<FinnyCertifiedResultRecord | null>;
+  pendingCertifiedResultDeliveries(limit?: number): Promise<FinnyCertifiedResultRecord[]>;
+  markCertifiedResultDelivery(resultId: string, deliveryId: string): Promise<void>;
 }

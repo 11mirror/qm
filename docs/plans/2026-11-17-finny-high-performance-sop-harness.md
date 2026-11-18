@@ -15,22 +15,22 @@ Phase 2 merge: [11mirror/qm#35](https://github.com/11mirror/qm/pull/35), `897066
 
 This table is the quick handoff. Follow the links for design, implementation, and measured evidence.
 
-| Area                  | Done                                                                                                                                                                                                                                                                                                | Where and evidence                                                                                                                                                                                                        |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Research              | Audited downstream Finny, current upstream QM, Pi execution, and LoopForge SOP patterns                                                                                                                                                                                                             | [Evidence baseline](#evidence-baseline) and [architectural position](#architectural-position)                                                                                                                             |
-| Phase 0               | Added fail-closed measurement of worker turns, pre-artifact Auditor starts, certified-delivery time, and per-role tokens                                                                                                                                                                            | [Analyzer](../../evals/finny-high-performance-v1/baseline.mts), [tests](../../test/finny-phase0-baseline.test.ts), and [eval design](#finny-high-performance-eval-v1)                                                     |
-| Tool contract         | Replaced imaginary standalone Finny tools with the real `finny(action="...")` contract                                                                                                                                                                                                              | [Finny tool](../../src/agent/agent-tools/finny.ts), [seed skill](../../skills-seed/finnyloop/SKILL.md), and [Phase 1 details](#phase-1--remove-accidental-pi-work)                                                        |
-| Worker lifecycle      | Approval now starts one actionable Producer; artifact commit starts one actionable Auditor                                                                                                                                                                                                          | [Runtime coordinator](../../src/finny/runtime-coordinator.ts), [runtime store](../../src/finny/runtime-postgres-store.ts), and [lifecycle tests](../../test/finny-runtime-coordinator.test.ts)                            |
-| Durable recovery      | Successful-but-incomplete terminal worker runs are reconciled from durable job state without placeholder turns                                                                                                                                                                                      | [Integration](../../src/finny/integration.ts), [integration store](../../src/finny/integration-postgres-store.ts), and [recovery tests](../../test/finny-integration-runtime.test.ts)                                     |
-| Web approval          | Preserved the durable Finny request identity and projects the ready plan immediately after a material clarification                                                                                                                                                                                 | [Orchestrator](../../src/core/orchestrator.ts), [approval service](../../src/finny/approval-service.ts), [regression test](../../test/finny-web-approval.test.ts), and [web evidence](#phase-01-live-measurement--qm-web) |
-| Live web result       | Certified XLSX delivered with one Producer and one post-artifact Auditor; total tokens fell 21.6% in the paired run                                                                                                                                                                                 | [Web baseline and candidate](#phase-01-live-measurement--qm-web)                                                                                                                                                          |
-| Live Slack result     | Certified XLSX attached in the 11mirror `finny-staging` DM with one Producer and one post-artifact Auditor; total tokens fell 43.2%                                                                                                                                                                 | [Slack baseline and candidate](#phase-01-live-measurement--slack)                                                                                                                                                         |
-| Verification          | Phase 1 focused suites, typecheck, ESLint/oxlint, FinnyLoop r5, and real Chrome web plus Slack QA pass                                                                                                                                                                                              | [Running implementation log](#running-implementation-log) and [r5 manifest](../../evals/finnyloop-r5/manifest.json)                                                                                                       |
-| Schema/config         | No database schema, persisted payload, or configuration change in Phase 0/1                                                                                                                                                                                                                         | [Phase 0/1 evidence](#phase-01-live-measurement--qm-web)                                                                                                                                                                  |
-| Phase 2               | Immutable SOP authority, exact execution-digest approval, material and non-material amendments, role-specific compilation, default-paged search, action-filtered recovery, and web/Slack acceptance are merged                                                                                      | [Phase 2](#phase-2--durable-sop-creation-and-execution), [schema gate](#phase-2-sop-and-job-schema-gate), [PR #35](https://github.com/11mirror/qm/pull/35), and [running log](#running-implementation-log)                |
-| Current phase         | Phase 3 — Core-owned completion. Recovery always uses Core's typed durable run, delivery, and binding state. Crash convergence, duplicate-scan idempotency, poison isolation, representative backlog behavior, and production-shaped Slack recovery through certification and single delivery pass. | [Phase 3](#phase-3--core-owned-completion)                                                                                                                                                                                |
-| Next gates            | Keep Phase 4 audit-attempt and Phase 5 certified-result schemas, the corpus/gold, controlled source population, and any SLA behind their own human approvals; no later-phase implementation is authorized yet.                                                                                      | [Later phases](#phase-4--deterministic-audit-and-targeted-rework) and [human decisions](#required-human-decisions-for-later-gates)                                                                                        |
-| Next-session handover | Phase 3 is complete on the implementation head; use the handover and this tracker as the evidence baseline when a later gate is approved                                                                                                                                                            | [Finny Phase 3 core-owned completion handover](./2026-11-18-finny-phase-3-handover.md)                                                                                                                                    |
+| Area                  | Done                                                                                                                                                                                                                                    | Where and evidence                                                                                                                                                                                                        |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Research              | Audited downstream Finny, current upstream QM, Pi execution, and LoopForge SOP patterns                                                                                                                                                 | [Evidence baseline](#evidence-baseline) and [architectural position](#architectural-position)                                                                                                                             |
+| Phase 0               | Added fail-closed measurement of worker turns, pre-artifact Auditor starts, certified-delivery time, and per-role tokens                                                                                                                | [Analyzer](../../evals/finny-high-performance-v1/baseline.mts), [tests](../../test/finny-phase0-baseline.test.ts), and [eval design](#finny-high-performance-eval-v1)                                                     |
+| Tool contract         | Replaced imaginary standalone Finny tools with the real `finny(action="...")` contract                                                                                                                                                  | [Finny tool](../../src/agent/agent-tools/finny.ts), [seed skill](../../skills-seed/finnyloop/SKILL.md), and [Phase 1 details](#phase-1--remove-accidental-pi-work)                                                        |
+| Worker lifecycle      | Approval now starts one actionable Producer; artifact commit starts one actionable Auditor                                                                                                                                              | [Runtime coordinator](../../src/finny/runtime-coordinator.ts), [runtime store](../../src/finny/runtime-postgres-store.ts), and [lifecycle tests](../../test/finny-runtime-coordinator.test.ts)                            |
+| Durable recovery      | Successful-but-incomplete terminal worker runs are reconciled from durable job state without placeholder turns                                                                                                                          | [Integration](../../src/finny/integration.ts), [integration store](../../src/finny/integration-postgres-store.ts), and [recovery tests](../../test/finny-integration-runtime.test.ts)                                     |
+| Web approval          | Preserved the durable Finny request identity and projects the ready plan immediately after a material clarification                                                                                                                     | [Orchestrator](../../src/core/orchestrator.ts), [approval service](../../src/finny/approval-service.ts), [regression test](../../test/finny-web-approval.test.ts), and [web evidence](#phase-01-live-measurement--qm-web) |
+| Live web result       | Certified XLSX delivered with one Producer and one post-artifact Auditor; total tokens fell 21.6% in the paired run                                                                                                                     | [Web baseline and candidate](#phase-01-live-measurement--qm-web)                                                                                                                                                          |
+| Live Slack result     | Certified XLSX attached in the 11mirror `finny-staging` DM with one Producer and one post-artifact Auditor; total tokens fell 43.2%                                                                                                     | [Slack baseline and candidate](#phase-01-live-measurement--slack)                                                                                                                                                         |
+| Verification          | Phase 1 focused suites, typecheck, ESLint/oxlint, FinnyLoop r5, and real Chrome web plus Slack QA pass                                                                                                                                  | [Running implementation log](#running-implementation-log) and [r5 manifest](../../evals/finnyloop-r5/manifest.json)                                                                                                       |
+| Schema/config         | No database schema, persisted payload, or configuration change in Phase 0/1                                                                                                                                                             | [Phase 0/1 evidence](#phase-01-live-measurement--qm-web)                                                                                                                                                                  |
+| Phase 2               | Immutable SOP authority, exact execution-digest approval, material and non-material amendments, role-specific compilation, default-paged search, action-filtered recovery, and web/Slack acceptance are merged                          | [Phase 2](#phase-2--durable-sop-creation-and-execution), [schema gate](#phase-2-sop-and-job-schema-gate), [PR #35](https://github.com/11mirror/qm/pull/35), and [running log](#running-implementation-log)                |
+| Current phase         | Phase 4/5 implementation complete on the branch: atomic audit attempts, targeted rework, typed certified results, and result-owned durable delivery are implemented and locally verified. Phase 3 Core-owned recovery remains complete. | [Phase 4/5 schema gate](#phase-45-audit-result-and-delivery-schema-gate)                                                                                                                                                  |
+| Next gates            | Independent review and CI remain before merge. The corpus/gold, controlled source population, and any SLA remain behind separate human approvals.                                                                                       | [Phase 4/5 schema gate](#phase-45-audit-result-and-delivery-schema-gate), [later phases](#phase-4--deterministic-audit-and-targeted-rework), and [human decisions](#required-human-decisions-for-later-gates)             |
+| Next-session handover | Resolve review or CI findings, complete Slack QA when a second Slack pool app is available, and land through the merge queue. Keep the existing Sharechat/personal pool3 instance isolated.                                             | [Phase 4/5 schema gate](#phase-45-audit-result-and-delivery-schema-gate)                                                                                                                                                  |
 
 ## How to use this document
 
@@ -1205,7 +1205,7 @@ Persistence and compatibility effects:
 
 ### Phase 3 — Core-owned completion
 
-Status: Complete on the implementation head. The completion-path census, removal of non-Core recovery fallbacks, focused verification, backlog measurement, and production-shaped Slack recovery acceptance are complete. Phase 4 and Phase 5 remain behind their separate human gates.
+Status: Complete on the implementation head. The completion-path census, removal of non-Core recovery fallbacks, focused verification, backlog measurement, and production-shaped Slack recovery acceptance are complete. The later Phase 4/5 schema gate is now authorized separately below.
 
 Goal: Make durable job state, not a model's final prose or run status, own the next action.
 
@@ -1285,9 +1285,581 @@ Exit criteria:
 - Restarting Core converges to the same next action without duplicating work.
 - Poison jobs do not block recovery for unrelated jobs.
 
+### Phase 4/5 audit, result, and delivery schema gate
+
+Status: Implemented on the Phase 4/5 branch. The detailed proposal below records the human schema review that authorized implementation. Where it differs from the implemented contract recorded at the end of this gate, the implemented contract is authoritative. No live database has been migrated by this branch work.
+
+This gate authorizes the Phase 4 clean cutover from independently submitted check attestations to one immutable audit attempt per artifact and the Phase 5 cutover from receipt-derived presentation to one certified result with one durable delivery. It does not authorize the finance corpus, accounting gold, controlled live-source population, an absolute SLA, or changes to the parent → Producer → independent audit topology.
+
+#### Current TypeScript and API authority
+
+The current write API accepts one check at a time:
+
+```ts
+interface RecordFinnyAuditPassedInput {
+  scopeId: string;
+  jobId: string;
+  checkId: FinnyCheckId;
+  generation: number;
+  artifactDigest: string;
+  evidenceDigest: string;
+  issuerPrincipalId: string;
+  issuerRunId: string;
+  deterministicAuthority?: FinnyDeterministicEvidenceAuthority;
+  idempotencyKey: string;
+}
+
+interface RecordFinnyAuditBlockInput extends RecordFinnyAuditPassedInput {
+  findings: Array<{ code: string; message: string }>;
+  changeKinds: FinnyChangeKind[];
+  resolution: { kind: "rework" } | { kind: "escalate"; reason: string };
+}
+
+interface FinnyAttestation {
+  seq: number;
+  id: string;
+  jobId: string;
+  checkId: FinnyCheckId;
+  generation: number;
+  verdict: "pass" | "block";
+  evidenceDigest: string;
+  artifactDigest: string;
+  issuerPrincipalId: string;
+  issuerRunId: string;
+  deterministicAuthority?: FinnyDeterministicEvidenceAuthority;
+  idempotencyKey: string;
+  createdAt: number;
+}
+
+interface FinnyResultReceiptPayload {
+  aud: "finny.final.delivery";
+  resultId: string;
+  jobId: string;
+  scopeId: string;
+  sopVersionId: string;
+  sopRevision: number;
+  executionDigest: string;
+  artifactFileId: string;
+  artifactDigest: string;
+  auditAttemptId: string;
+  auditDigest: string;
+  approvalRequestId: string;
+  approvalActorId: string;
+  originThreadRef: string;
+  deliveryId: string;
+  issuedAt: number;
+}
+```
+
+Each submission also writes an `audit_passed` or `audit_blocked` job event. Finalization reads the latest attestation for each check, compares its generation with `finny_jobs.required_generations`, requires the current artifact and evaluator, signs `FinnyFinalReceipt`, and stores that receipt directly on the job. `finnyFinalDelivery` then reconstructs the summary from the SOP and derives `finny-final:<jobId>:<ledgerHead>`; no typed certified business summary or durable result owner exists.
+
+#### New TypeScript and API authority
+
+The cutover replaces the per-check write methods and finalization input with these complete public store shapes:
+
+```ts
+type FinnyDetailRef =
+  | { kind: "xlsx"; fileId: string; sheet: string; range: string }
+  | { kind: "evidence"; evidenceId: string; selector: string }
+  | { kind: "app"; fileId: string; view: string; parameters: Record<string, string> };
+
+interface FinnyAuditControlResult {
+  controlId: string;
+  verdict: "pass" | "block";
+  evidenceRefs: FinnyDetailRef[];
+  findings: Array<{ code: string; message: string; detailRefs: FinnyDetailRef[] }>;
+  repairActions: Array<{ instruction: string; detailRefs: FinnyDetailRef[] }>;
+}
+
+interface FinnyAuditJudgmentAddendum {
+  auditorPrincipalId: string;
+  auditorRunId: string;
+  questions: Array<{
+    controlId: string;
+    question: string;
+    verdict: "pass" | "block";
+    rationale: string;
+    evidenceRefs: FinnyDetailRef[];
+  }>;
+}
+
+interface FinnyAuditAttempt {
+  schema: "finny.audit-attempt.v1";
+  id: string;
+  jobId: string;
+  scopeId: string;
+  attempt: number;
+  sopVersionId: string;
+  sopRevision: number;
+  executionDigest: string;
+  artifact: {
+    fileId: string;
+    sha256: string;
+    mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  };
+  evaluator: FinnyEvaluatorRef;
+  evidenceManifest: Array<{ evidenceId: string; digest: string; mediaType: string }>;
+  controls: FinnyAuditControlResult[];
+  judgment?: FinnyAuditJudgmentAddendum;
+  verdict: "pass" | "block";
+  auditDigest: string;
+  createdAt: number;
+}
+
+interface RecordFinnyAuditAttemptInput {
+  scopeId: string;
+  jobId: string;
+  artifact: FinnyAuditAttempt["artifact"];
+  evaluator: FinnyEvaluatorRef;
+  evidenceManifest: FinnyAuditAttempt["evidenceManifest"];
+  controls: FinnyAuditControlResult[];
+  judgment?: FinnyAuditJudgmentAddendum;
+  idempotencyKey: string;
+  createdAt: number;
+}
+
+interface FinnyCertifiedMetric {
+  id: string;
+  label: string;
+  value: string;
+  detailRefs: FinnyDetailRef[];
+}
+
+interface FinnyCertifiedResult {
+  schema: "finny.result.v1";
+  id: string;
+  jobId: string;
+  scopeId: string;
+  sopVersionId: string;
+  sopRevision: number;
+  executionDigest: string;
+  artifact: FinnyAuditAttempt["artifact"];
+  summary: {
+    period: string;
+    currency: string;
+    metrics: FinnyCertifiedMetric[];
+    exceptions: Array<{ text: string; material: boolean; detailRefs: FinnyDetailRef[] }>;
+    caveats: Array<{ text: string; detailRefs: FinnyDetailRef[] }>;
+  };
+  auditAttemptId: string;
+  receipt: FinnyFinalReceipt;
+  deliveryId: string;
+  createdAt: number;
+}
+
+interface FinalizeFinnyResultInput {
+  scopeId: string;
+  jobId: string;
+  auditAttemptId: string;
+  summary: FinnyCertifiedResult["summary"];
+  destination: Destination;
+  idempotencyKey: string;
+}
+```
+
+`recordAuditAttempt` is the only audit write. Core validates that controls appear exactly once in SOP order, every required control is present, all references resolve to the bound artifact or evidence manifest, the aggregate verdict equals the control and judgment verdicts, and the optional judgment is issued by the current independent Auditor run. Core assigns `id`, `attempt`, `auditDigest`, SOP bindings, and artifact authority; callers cannot select them.
+
+`finalizeResult` is the only finalization write. It validates the summary against the SOP output contract, the PASS attempt against the current job binding, the XLSX artifact identity, approval, and destination. In one PostgreSQL transaction it inserts the delivery, result, job result reference, receipt, and finalization timestamp. Slack and web receive the same serialized certified result rather than independently rebuilding figures.
+
+#### Current PostgreSQL ownership
+
+Current audit authority is `finny_attestations(seq BIGSERIAL PRIMARY KEY, id UNIQUE, job_id REFERENCES finny_jobs ON DELETE CASCADE, check_id, generation, verdict, evidence_digest, artifact_digest, issuer_principal_id, issuer_run_id, deterministic_authority JSONB, idempotency_key UNIQUE, created_at)`. Its indexes are `(job_id, check_id, generation, seq DESC)` and `(job_id, seq)`.
+
+Current audit history is duplicated in `finny_job_events`: `audit_passed` and `audit_blocked` payloads repeat check, generation, artifact, evidence, issuer, deterministic authority, and BLOCK findings. `finny_jobs.required_generations`, `ledger_head`, `pending_rework_seq`, and `unresolved_escalation_seq` coordinate the per-check lifecycle.
+
+Current completion authority is `finny_jobs.finalization_key`, `final_receipt JSONB`, and `finalized_at`. The generic `deliveries` table owns the queued surface message, with primary key `id`, unique `idempotency_key`, JSONB `destination`, text, optional JSONB attachments and provenance, recipient thread, delivery/expiry/failure/claim timestamps, shadow flag, latency fields, and its existing pending, recipient, shadow, and provenance indexes. There is no foreign key from a job or receipt to the delivery row.
+
+#### New PostgreSQL shape
+
+```sql
+CREATE TABLE finny_audit_attempts(
+  id TEXT PRIMARY KEY CHECK (id <> ''),
+  scope_id TEXT NOT NULL CHECK (scope_id <> ''),
+  job_id TEXT NOT NULL REFERENCES finny_jobs(id),
+  attempt BIGINT NOT NULL CHECK (attempt > 0),
+  sop_version_id TEXT NOT NULL CHECK (sop_version_id <> ''),
+  sop_revision BIGINT NOT NULL CHECK (sop_revision > 0),
+  execution_digest TEXT NOT NULL CHECK (execution_digest <> ''),
+  artifact_file_id TEXT NOT NULL CHECK (artifact_file_id <> ''),
+  artifact_digest TEXT NOT NULL CHECK (artifact_digest <> ''),
+  artifact_mime TEXT NOT NULL CHECK (artifact_mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+  evaluator_ref JSONB NOT NULL CHECK (jsonb_typeof(evaluator_ref) = 'object'),
+  evidence_manifest JSONB NOT NULL CHECK (jsonb_typeof(evidence_manifest) = 'array'),
+  controls JSONB NOT NULL CHECK (jsonb_typeof(controls) = 'array' AND jsonb_array_length(controls) > 0),
+  judgment_addendum JSONB CHECK (judgment_addendum IS NULL OR jsonb_typeof(judgment_addendum) = 'object'),
+  verdict TEXT NOT NULL CHECK (verdict IN ('pass','block')),
+  audit_digest TEXT NOT NULL UNIQUE CHECK (audit_digest <> ''),
+  idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+  created_at BIGINT NOT NULL,
+  UNIQUE(job_id, attempt),
+  UNIQUE(job_id, artifact_digest),
+  FOREIGN KEY(scope_id, sop_version_id) REFERENCES finny_sop_versions(scope_id, version_id)
+);
+
+CREATE INDEX finny_audit_attempts_job_created
+  ON finny_audit_attempts(job_id, created_at DESC);
+CREATE INDEX finny_audit_attempts_scope_created
+  ON finny_audit_attempts(scope_id, created_at DESC);
+
+CREATE FUNCTION reject_finny_audit_attempt_mutation() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'Finny audit attempts are immutable';
+END;
+$$;
+
+CREATE TRIGGER finny_audit_attempts_immutable
+  BEFORE UPDATE OR DELETE ON finny_audit_attempts
+  FOR EACH ROW EXECUTE FUNCTION reject_finny_audit_attempt_mutation();
+
+CREATE TABLE finny_results(
+  id TEXT PRIMARY KEY CHECK (id <> ''),
+  scope_id TEXT NOT NULL CHECK (scope_id <> ''),
+  job_id TEXT NOT NULL UNIQUE REFERENCES finny_jobs(id),
+  sop_version_id TEXT NOT NULL CHECK (sop_version_id <> ''),
+  sop_revision BIGINT NOT NULL CHECK (sop_revision > 0),
+  execution_digest TEXT NOT NULL CHECK (execution_digest <> ''),
+  artifact_file_id TEXT NOT NULL CHECK (artifact_file_id <> ''),
+  artifact_digest TEXT NOT NULL CHECK (artifact_digest <> ''),
+  artifact_mime TEXT NOT NULL CHECK (artifact_mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+  summary JSONB NOT NULL CHECK (jsonb_typeof(summary) = 'object'),
+  search_text TEXT NOT NULL CHECK (search_text <> ''),
+  audit_attempt_id TEXT NOT NULL UNIQUE REFERENCES finny_audit_attempts(id),
+  receipt JSONB NOT NULL CHECK (jsonb_typeof(receipt) = 'object'),
+  delivery_id TEXT NOT NULL UNIQUE REFERENCES deliveries(id),
+  created_at BIGINT NOT NULL,
+  FOREIGN KEY(scope_id, sop_version_id) REFERENCES finny_sop_versions(scope_id, version_id)
+);
+
+CREATE INDEX finny_results_scope_created
+  ON finny_results(scope_id, created_at DESC);
+CREATE INDEX finny_results_search
+  ON finny_results USING GIN(to_tsvector('simple', search_text));
+
+CREATE FUNCTION reject_finny_result_mutation() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'Finny results are immutable';
+END;
+$$;
+
+CREATE TRIGGER finny_results_immutable
+  BEFORE UPDATE OR DELETE ON finny_results
+  FOR EACH ROW EXECUTE FUNCTION reject_finny_result_mutation();
+
+ALTER TABLE finny_jobs ADD COLUMN current_audit_attempt_id TEXT REFERENCES finny_audit_attempts(id);
+ALTER TABLE finny_jobs ADD COLUMN result_id TEXT UNIQUE REFERENCES finny_results(id);
+ALTER TABLE finny_jobs ADD CONSTRAINT finny_jobs_result_finalization_pair
+  CHECK ((result_id IS NULL) = (finalized_at IS NULL));
+```
+
+The migration then drops `finny_jobs.required_generations`, `ledger_head`, `pending_rework_seq`, `finalization_key`, and `final_receipt`; drops `finny_attestations`; and removes `audit_passed`, `audit_blocked`, `evidence_invalidated`, `rework_cancelled`, and `verification_reopened` from the job-event enum. It adds `audit_recorded` with `{ auditAttemptId, artifactDigest, verdict }` and retains `rework_requested` with `{ auditAttemptId }` or `escalated` with `{ auditAttemptId, reason }`. `current_audit_attempt_id` is cleared when a replacement artifact binds and set only when its complete immutable attempt is inserted. No per-check event or generation counter remains.
+
+JSON validation is not limited to `jsonb_typeof`: application validators enforce every field shown in the TypeScript shapes, reject unknown fields, require unique ordered control and metric IDs, validate `FinnyDetailRef` discriminants, require evidence IDs to exist in the manifest, require XLSX references to name the bound file, and require the result receipt, attempt, SOP, artifact, execution digest, scope, job, destination, and approval to agree. Canonical JSON digests cover the entire attempt except its assigned ID, idempotency key, and creation time.
+
+#### Evidence ownership
+
+The file artifact store remains the owner of immutable workbook and optional mini-app bytes. Existing evidence storage remains the owner of source extracts and deterministic evidence bodies. `finny_audit_attempts.evidence_manifest` stores only stable IDs, media types, and digests; control findings and repair actions point to those IDs or exact workbook locations. The attempt owns verdicts, linkage, and the complete audit envelope, not copied source data. `finny_results` owns the certified business summary and stable detail references, not workbook cells or evidence bodies. `deliveries` owns delivery lifecycle and surface payload. The signed receipt binds the result ID, PASS attempt ID, artifact, SOP revision, execution digest, approval, destination, and issue time.
+
+#### Invented before and after rows
+
+The following examples are invented and contain no client data.
+
+Before, one artifact is represented by eight rows like this and a receipt on the job:
+
+```json
+{
+  "finny_attestations": [
+    {
+      "seq": 41,
+      "id": "finny-audit-invented-1",
+      "job_id": "job-invented-ap",
+      "check_id": "summary.crossfoot",
+      "generation": 1,
+      "verdict": "pass",
+      "evidence_digest": "sha256:invented-evidence",
+      "artifact_digest": "sha256:invented-workbook",
+      "issuer_principal_id": "auditor-invented",
+      "issuer_run_id": "run-invented",
+      "deterministic_authority": { "reasonSchemaVersion": "finny.spreadsheet-worker.v2" },
+      "idempotency_key": "invented-check-key",
+      "created_at": 1795010000000
+    }
+  ],
+  "finny_jobs": {
+    "id": "job-invented-ap",
+    "required_generations": { "summary.crossfoot": 1 },
+    "ledger_head": 48,
+    "finalization_key": "invented-finalization",
+    "final_receipt": { "token": "invented-signed-token", "payload": { "ledgerHead": 48 } },
+    "finalized_at": 1795010100000
+  }
+}
+```
+
+After, one attempt, result, and delivery own the same completed work:
+
+```json
+{
+  "finny_audit_attempts": {
+    "id": "audit-invented-1",
+    "scope_id": "org:invented-company",
+    "job_id": "job-invented-ap",
+    "attempt": 1,
+    "sop_version_id": "sop.ap.aging.inr@1",
+    "sop_revision": 1,
+    "execution_digest": "sha256:invented-execution",
+    "artifact_file_id": "file-invented-workbook",
+    "artifact_digest": "sha256:invented-workbook",
+    "artifact_mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "evaluator_ref": {
+      "id": "spreadsheet",
+      "revision": "invented",
+      "buildDigest": "sha256:invented-build",
+      "contractVersion": "1",
+      "configurationDigest": "sha256:invented-config"
+    },
+    "evidence_manifest": [
+      { "evidenceId": "source-control-total", "digest": "sha256:invented-evidence", "mediaType": "application/json" }
+    ],
+    "controls": [
+      {
+        "controlId": "summary.crossfoot",
+        "verdict": "pass",
+        "evidenceRefs": [{ "kind": "xlsx", "fileId": "file-invented-workbook", "sheet": "Summary", "range": "B7" }],
+        "findings": [],
+        "repairActions": []
+      }
+    ],
+    "judgment_addendum": null,
+    "verdict": "pass",
+    "audit_digest": "sha256:invented-audit",
+    "idempotency_key": "invented-attempt-key",
+    "created_at": 1795010000000
+  },
+  "finny_results": {
+    "id": "result-invented-1",
+    "scope_id": "org:invented-company",
+    "job_id": "job-invented-ap",
+    "sop_version_id": "sop.ap.aging.inr@1",
+    "sop_revision": 1,
+    "execution_digest": "sha256:invented-execution",
+    "artifact_file_id": "file-invented-workbook",
+    "artifact_digest": "sha256:invented-workbook",
+    "artifact_mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "summary": {
+      "period": "2026-10-31",
+      "currency": "INR",
+      "metrics": [
+        {
+          "id": "total-ap",
+          "label": "Total AP",
+          "value": "125000.00",
+          "detailRefs": [{ "kind": "xlsx", "fileId": "file-invented-workbook", "sheet": "Summary", "range": "B7" }]
+        }
+      ],
+      "exceptions": [],
+      "caveats": []
+    },
+    "search_text": "invented AP aging INR 2026-10-31",
+    "audit_attempt_id": "audit-invented-1",
+    "receipt": {
+      "token": "invented-signed-token",
+      "payload": { "resultId": "result-invented-1", "auditAttemptId": "audit-invented-1" }
+    },
+    "delivery_id": "delivery-invented-1",
+    "created_at": 1795010100000
+  },
+  "deliveries": {
+    "id": "delivery-invented-1",
+    "idempotency_key": "finny-result:result-invented-1",
+    "destination": { "type": "slack", "channel": "invented-channel", "threadTs": "invented-thread" },
+    "text": "serialized finny.result.v1 projection",
+    "attachments": [{ "fileId": "file-invented-workbook" }],
+    "delivered_at": null
+  },
+  "finny_jobs": {
+    "id": "job-invented-ap",
+    "current_audit_attempt_id": "audit-invented-1",
+    "result_id": "result-invented-1",
+    "finalized_at": 1795010100000
+  }
+}
+```
+
+#### Migration, backfill, rollout, and rollback
+
+The migration is a clean cutover, not a dual-read period. It first creates the new tables and columns, then refuses to continue if an unfinished job has a current artifact or unresolved rework, escalation, evaluator correction, or audit dispatch. Operators either let those audits finish under the old release or explicitly restart them before the migration. Approved jobs with no artifact remain valid and begin under the new audit path after deployment.
+
+Finalized historical jobs, attestations, events, receipts, and delivery rows are retained in archival tables renamed `finny_attestations_history` and `finny_job_events_history`; they remain readable through the historical job view but are never treated as current authority. No `finny_results` row is fabricated for old jobs because the old system did not persist a typed summary. No audit attempt is synthesized from per-check rows because that would falsely claim one atomic verification. After retention export and the documented retention window, archival removal requires a separate operator action; the application never mutates those rows.
+
+The cutover transaction verifies that every newly finalized job has exactly one PASS attempt, result, delivery, and matching job reference before dropping old columns and write methods. Rollback before the destructive step is ordinary deployment rollback. After the clean cutover, rollback means restoring the pre-cutover database backup and release together; code does not dual-write old attestations or reconstruct generation state.
+
+New audit attempts and results follow the job's retention and are retained immutably with it. The foreign keys deliberately restrict deletion of a job, attempt, result, delivery, artifact, or evidence while a retained certified result references it. Any future purge policy requires a separately reviewed archival migration; there is no application delete path in this gate. Generic delivery retry and status retention behavior remains unchanged, but the referenced Finny delivery row cannot be purged independently. Historical signed receipts remain verifiable with their original payload contract.
+
+#### Authorization and surface compatibility
+
+All store reads require matching `scope_id`. Audit-attempt writes require the active Core deterministic stage and, when judgment exists, the current role-bound Auditor principal/run for the same job and artifact. Result finalization remains Core-only and requires the approved actor, origin thread, exact execution digest, current PASS attempt, and destination match. Detail references resolve through existing file/evidence authorization; a result never turns a private file ID into a public URL. Download URLs are generated at read time after authorization and are not persisted in the result or delivery.
+
+Slack and web render the same `finny.result.v1` projection. Surface adapters may change layout but cannot change figures, exceptions, caveats, artifact identity, audit verdict, or receipt. Old finalized jobs keep their historical receipt-based rendering. New callers must submit one complete audit attempt and typed summary; old per-check methods and payloads are removed and fail as unsupported rather than being translated.
+
+No environment variable, setting, feature flag, provider, model, default, precedence rule, or supported configuration combination is added or changed. The existing artifact byte limit, delivery lifecycle, destination authorization, SOP approval, evaluator authority, and runtime binding configuration remain in force.
+
+#### Implemented Phase 4/5 contract
+
+The implementation deliberately keeps finalized legacy receipts, attestations, and job events readable as historical authority. New agent-facing writes no longer expose `finny_pass` or `finny_block`: one `finny_deterministic_audit` call records the complete deterministic envelope, and `finny_finalize` requires the typed summary. Legacy store methods remain only for historical runtime recovery and are not a current agent write path.
+
+The exact new public shapes are:
+
+```ts
+interface FinnyAuditAttempt {
+  id: string;
+  jobId: string;
+  scopeId: string;
+  sopVersionId: string;
+  executionDigest: string;
+  artifactFileId: string;
+  artifactSha256: string;
+  artifactMime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  artifactSizeBytes: number;
+  evaluator: FinnyEvaluatorRef;
+  controls: Array<{
+    id: string;
+    verdict: "pass" | "block";
+    evidenceRefs: string[];
+    repairActions: Array<{ message: string; workbookRefs: string[] }>;
+    deterministicAuthority?: FinnyDeterministicEvidenceAuthority;
+  }>;
+  judgmentQuestions: unknown[];
+  judgmentAddendum?: FinnyAuditJudgmentAddendum;
+  verdict: "pass" | "block" | "pending_judgment";
+  issuerPrincipalId: string;
+  issuerRunId: string;
+  idempotencyKey: string;
+  createdAt: number;
+  completedAt?: number;
+}
+
+interface FinnyCertifiedResult {
+  schema: "finny.result.v1";
+  jobId: string;
+  sopVersionId: string;
+  executionDigest: string;
+  artifact: {
+    fileId: string;
+    sha256: string;
+    mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  };
+  summary: {
+    period: string;
+    currency: string;
+    metrics: Array<{ id: string; label: string; value: string; detailRefs: string[] }>;
+    exceptions: Array<{ text: string; material: boolean; detailRefs: string[] }>;
+    caveats: Array<{ text: string; detailRefs: string[] }>;
+  };
+  auditAttemptId: string;
+}
+```
+
+Summary detail references must use `xlsx:`, `evidence:`, or `app:` prefixes. The strict validator rejects unknown fields, a non-XLSX artifact, an invalid SHA-256, and duplicate metric IDs. Certification additionally checks every reference against the bound result authorities.
+
+Migrations `finny/store/0014-audit-attempts`, `0015-certified-results`, and `0016-audit-result-cutover` add these exact persisted shapes:
+
+```sql
+finny_audit_attempts(
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL REFERENCES finny_jobs(id) ON DELETE CASCADE,
+  scope_id TEXT NOT NULL,
+  sop_version_id TEXT NOT NULL REFERENCES finny_sop_versions(version_id),
+  execution_digest TEXT NOT NULL,
+  artifact_file_id TEXT NOT NULL,
+  artifact_sha256 TEXT NOT NULL CHECK (artifact_sha256 ~ '^[a-f0-9]{64}$'),
+  artifact_mime TEXT NOT NULL CHECK (artifact_mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+  artifact_size_bytes BIGINT NOT NULL CHECK (artifact_size_bytes > 0),
+  evaluator_ref JSONB NOT NULL,
+  controls JSONB NOT NULL,
+  judgment_questions JSONB NOT NULL DEFAULT '[]',
+  judgment_addendum JSONB,
+  verdict TEXT NOT NULL CHECK (verdict IN ('pass','block','pending_judgment')),
+  issuer_principal_id TEXT NOT NULL,
+  issuer_run_id TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  created_at BIGINT NOT NULL,
+  completed_at BIGINT,
+  UNIQUE(job_id, artifact_sha256)
+);
+
+finny_results(
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL UNIQUE REFERENCES finny_jobs(id) ON DELETE CASCADE,
+  scope_id TEXT NOT NULL,
+  schema TEXT NOT NULL CHECK (schema = 'finny.result.v1'),
+  sop_version_id TEXT NOT NULL REFERENCES finny_sop_versions(version_id),
+  execution_digest TEXT NOT NULL,
+  artifact_file_id TEXT NOT NULL,
+  artifact_sha256 TEXT NOT NULL CHECK (artifact_sha256 ~ '^[a-f0-9]{64}$'),
+  artifact_mime TEXT NOT NULL CHECK (artifact_mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+  summary JSONB NOT NULL,
+  audit_attempt_id TEXT NOT NULL UNIQUE REFERENCES finny_audit_attempts(id),
+  receipt JSONB NOT NULL,
+  destination JSONB NOT NULL,
+  delivery_id TEXT UNIQUE,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  search_text TEXT NOT NULL,
+  created_at BIGINT NOT NULL
+);
+```
+
+`finny_jobs.current_audit_attempt_id` and `finny_jobs.result_id` are unique foreign keys. Audit-attempt indexes cover `(job_id, created_at DESC, id DESC)`, `(scope_id, created_at DESC, id DESC)`, and pending judgment. Result indexes cover `(scope_id, created_at DESC, id DESC)`, full-text search, and the partial pending-delivery queue. When the generic `deliveries` table exists, `finny_results.delivery_id` references it.
+
+The result transaction writes the typed result, signed receipt, exact destination, result-owned idempotency key, job result reference, finalization time, and approval consumption together. `delivery_id` is intentionally nullable at that point: the stored destination is the durable delivery intent. Startup or inline recovery projects it to the generic outbox with `finny-result:<resultId>` and then binds the returned delivery ID. This closes the crash window without pretending a generic delivery exists before its own transaction commits.
+
+Invented representative rows:
+
+```json
+{
+  "finny_audit_attempts": {
+    "id": "audit-invented-1",
+    "job_id": "job-invented-1",
+    "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "controls": [
+      { "id": "summary.crossfoot", "verdict": "pass", "evidenceRefs": ["evidence:invented-1"], "repairActions": [] }
+    ],
+    "verdict": "pass",
+    "completed_at": 1795010000000
+  },
+  "finny_results": {
+    "id": "result-invented-1",
+    "job_id": "job-invented-1",
+    "schema": "finny.result.v1",
+    "summary": {
+      "period": "2026-10-31",
+      "currency": "INR",
+      "metrics": [
+        {
+          "id": "total-ap",
+          "label": "Total AP",
+          "value": "125000.00",
+          "detailRefs": ["xlsx:file-invented-1#Summary!B7"]
+        }
+      ],
+      "exceptions": [],
+      "caveats": []
+    },
+    "destination": { "type": "slack", "target": "invented-channel" },
+    "delivery_id": null,
+    "idempotency_key": "certify-invented-1"
+  }
+}
+```
+
+Migration `0016` refuses startup when unfinished legacy work has an artifact, pending rework, unresolved escalation, or nonzero ledger but no atomic current attempt. It does not synthesize an attempt or result, does not dual-read new authority from per-check rows, and does not modify historical finalized data. No backfill is performed because the old system never persisted a typed certified summary. Rollback before applying these migrations is an ordinary code rollback; after application, database and code must roll back together from the pre-migration backup.
+
+No repository setting or runtime configuration changed. `PUBLIC_WEB_URL` is an existing Finny prerequisite and is used to generate the authorized workbook link at delivery time. The finance corpus, accounting gold, controlled source population, and performance SLA remain unapproved.
+
 ### Phase 4 — Deterministic audit and targeted rework
 
-Status: Not started
+Status: Implemented and locally verified; independent review and CI pending
 
 Goal: Verify once, commit once, and return exact repair feedback.
 
@@ -1303,7 +1875,7 @@ Implementation units:
 - On BLOCK, return exact failed checks, affected workbook references, evidence, and required repair to the same Producer session.
 - Remove change-kind generation rules that promise evidence reuse when finalization forbids reuse across artifact digests.
 
-Human schema review checkpoint:
+Authorized schema contract:
 
 - Show old per-check events and the proposed atomic audit payload.
 - Show indexes, constraints, event semantics, evidence fields, and representative rows.
@@ -1318,7 +1890,7 @@ Exit criteria:
 
 ### Phase 5 — Certified output and durable delivery
 
-Status: Not started
+Status: Implemented and locally verified; independent review and CI pending
 
 Goal: Make completion mean the user received a clean workbook and useful certified summary.
 
@@ -1331,7 +1903,7 @@ Implementation units:
 - Deliver workbook, summary, exceptions, caveats, audit status, and receipt together.
 - Validate required delivery configuration at startup rather than after finalization.
 
-Human schema review checkpoint:
+Authorized schema contract:
 
 - Show the complete certified-summary and delivery payload shapes.
 - Explain storage, retention, migration, download authorization, and surface compatibility.
@@ -1679,50 +2251,52 @@ Reason: Current QM has useful offline evidence conventions but no versioned fina
 
 ## Running implementation log
 
-| Date       |    Phase | Change                                                                                                                                                                                                                                              | Evidence                                                                                                                                                                                                                                                                                                                                                          | Status                                                        | Owner             |
-| ---------- | -------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | ----------------- |
-| 2026-11-17 | Research | Audited current Finny lifecycle, latest upstream QM, Pi harness, and LoopForge                                                                                                                                                                      | Source review at downstream `f2d342f9`, upstream `b3ba0524`, LoopForge `86b0ee06`                                                                                                                                                                                                                                                                                 | Complete                                                      | Research agents   |
-| 2026-11-17 | Planning | Established phased high-performance SOP harness plan                                                                                                                                                                                                | This document                                                                                                                                                                                                                                                                                                                                                     | Complete                                                      | Primary agent     |
-| 2026-11-17 | Planning | Resolved SOP, approval, audit, result, baseline-fixture, and evaluation design decisions                                                                                                                                                            | This document and current QM eval audit                                                                                                                                                                                                                                                                                                                           | Complete pending human schema/corpus review                   | Primary agent     |
-| 2026-11-17 |  Phase 0 | Added a production-independent baseline analyzer for Producer/Auditor run counts, pre-artifact Auditor detection, query-to-certified-delivery time, and parent/Producer/Auditor tokens with fail-closed missing usage                               | [Analyzer and tests](#phase-0--baseline-and-completion-trace); paired web and Slack measurements are linked in the implementation summary                                                                                                                                                                                                                         | Complete                                                      | Evaluation lane   |
-| 2026-11-17 |  Phase 1 | Corrected Finny tool vocabulary, removed placeholder dispatch turns, opened Producer only after approval with its real task, opened Auditor only after artifact commit, and recovered terminal successful-but-incomplete workers from durable state | [Web evidence](#phase-01-live-measurement--qm-web): one Producer, one post-artifact Auditor, certified XLSX, 21.6% fewer tokens. [Slack evidence](#phase-01-live-measurement--slack): one Producer, one post-artifact Auditor, certified attached XLSX, 43.2% fewer tokens.                                                                                       | Complete on web and Slack; latency improvement not yet proven | Integration owner |
-| 2026-11-17 |  Phase 1 | Preserved the durable Finny plan request identity across the generic web approval boundary after live QA exposed a false-success dispatch                                                                                                           | RED: web Finny tool test observed no durable `finny-plan:<requestId>` approval key. GREEN: the tool retains the request identity; the orchestrator decides that Finny request; the live Producer opened immediately after approval.                                                                                                                               | Complete                                                      | Integration owner |
-| 2026-11-17 |  Phase 1 | Closed the material-clarification handoff so every persisted option and `Other` is actionable, the exact ready plan is projected immediately, and Finny translation stays outside the generic orchestrator                                          | RED: caller-visible Postgres tests proved the prior code ignored alternate options, treated `Other` as command denial, and returned no next approval. GREEN: affected core/web suites, typecheck, and oxlint pass. Chrome shows all options and `Other`; selecting a nonrecommended date records that exact choice and requires revision.                         | Complete                                                      | Integration owner |
-| 2026-11-17 |  Phase 1 | Exercised the `Other` clarification path against the running production-shaped web instance in Chrome                                                                                                                                               | Session `762bf470-2392-4f1e-8456-1446297f9c5a`: `Other` consumed the durable Finny clarification and returned `Revision is required before this plan can be approved. Submit a revised plan to continue.` The composer reopened for the revised input.                                                                                                            | Complete                                                      | Production QA     |
-| 2026-11-17 |  Phase 1 | Closed both clarification commit-to-projection crash windows without adding another recovery queue                                                                                                                                                  | RED: a committed clarification replay returned no usable result, and an injected plan-projection failure could delete the clarification approval before its replacement existed. GREEN: the service reconstructs the durable result idempotently and the orchestrator persists the replacement before deleting its predecessor.                                   | Complete; no schema or configuration change                   | Integration owner |
-| 2026-11-17 |  Phase 1 | Proved terminal successful-but-incomplete Producer recovery through the exact-head production-shaped web surface                                                                                                                                    | [Live terminal-run recovery](#phase-1-live-terminal-run-recovery--qm-web): first run `done`/`ok` with no artifact; durable `producer_retry` bound a new run in the same session; artifact, independent eight-check audit, receipt, workbook, and certified summary followed.                                                                                      | Complete                                                      | Production QA     |
-| 2026-11-17 |  Phase 1 | Bound clarification replay to its exact durable Finny job instead of the newest pending approval in the Slack or web thread                                                                                                                         | RED: a two-job Postgres regression reproduced clarification A displaying newer plan B. GREEN: replay resolves readiness and the replacement approval by `scope_id` plus `job_id`; affected approval, web, and store tests pass.                                                                                                                                   | Complete; no database schema or configuration change          | Integration owner |
-| 2026-11-17 |  Phase 1 | Made every persisted clarification option actionable without another human turn                                                                                                                                                                     | RED: a nonrecommended option ended with an instruction to repeat the choice. GREEN: the parent resumes with the exact recorded option, amends the existing job, withdraws the stale approval, and projects the durable replacement plan approval; `Other` still opens free-form revision.                                                                         | Complete; no database schema or configuration change          | Integration owner |
-| 2026-11-17 |  Phase 1 | Bound automatic worker recovery to the terminal run observed by the durable scan                                                                                                                                                                    | RED: replaying one stale Producer or Auditor recovery snapshot dispatched twice and could replace healthy work. GREEN: recovery carries the observed run ID and dispatches only while the active binding still matches it; the existing compare-and-swap advances the binding atomically.                                                                         | Complete; no database schema or configuration change          | Integration owner |
-| 2026-11-17 |  Phase 1 | Excluded human-wait and refused terminal outcomes from automatic Producer and Auditor recovery                                                                                                                                                      | RED: `done` runs returning `pending_approval` or `refused` were eligible for restart. GREEN: the durable recovery census distinguishes those outcomes from missing, failed, expired-live, and successful-but-incomplete work, with regressions for both roles.                                                                                                    | Complete; no database schema or configuration change          | Integration owner |
-| 2026-11-17 |  Phase 1 | Preserved the real actor and integration-parent request binding across an alternate-choice plan amendment                                                                                                                                           | RED: the replacement approval used a fallback actor and the original parent request ID, so approval could claim success without Producer dispatch. GREEN: amendment updates both bindings atomically; a non-default actor approves the replacement and opens one Producer for the same job.                                                                       | Complete; no database schema or configuration change          | Integration owner |
-| 2026-11-17 |  Phase 1 | Applied the durable run-outcome census to fresh Auditor reverification admission                                                                                                                                                                    | RED: a fresh reverification Auditor waiting on approval was selected for another wake because no delivery marker existed. GREEN: active run state preserves `pending_approval` and `refused` work even after binding expiry while retaining recovery for missing, failed, expired-live, and incomplete runs.                                                      | Complete; no database schema or configuration change          | Integration owner |
-| 2026-11-17 |  Phase 1 | Moved guarded admission validation ahead of worker interruption inside the shared session admission lock                                                                                                                                            | RED: a stale Finny dispatch could stop a healthy replacement before its compare-and-swap rejected the write. GREEN: `beforeEnqueue` runs under the admission lock before `stopSessionRuns`; a rejected guarded interrupt leaves the active run healthy.                                                                                                           | Complete; no database schema or configuration change          | Integration owner |
-| 2026-11-17 |  Phase 1 | Verified the complete alternate-choice flow on the exact-head production-shaped web instance in Chrome                                                                                                                                              | Session `fa96216e-87a4-4ca9-b2ed-c54b1aa74263`: the user selected `2026-11-30`; QM resumed the same parent without another human message, presented a replacement plan explicitly bound to the alternate cutoff, accepted approval, and visibly started one Producer subagent.                                                                                    | Complete                                                      | Production QA     |
-| 2026-11-17 |  Phase 1 | Bound reverification recovery to the exact Auditor run observed by the durable scan                                                                                                                                                                 | RED: replaying one orphaned, terminal, or expired reverification recovery could target a replacement or stall on an expired binding. GREEN: active bindings retry in the same session with an observed-run guard; missing bindings admit once; stale replay is ignored; the obsolete delivery-prefix lookup is removed.                                           | Complete; no database schema or configuration change          | Integration owner |
-| 2026-11-17 |  Phase 2 | User authorized task-level SOP implementation and verification as the next milestone after the Phase 1 PR is complete                                                                                                                               | This document remains the working contract; first record the complete human-readable old/new schema and migration review, then implement one finance-specific SOP persistence and execution slice.                                                                                                                                                                | Queued                                                        | Integration owner |
-| 2026-11-18 |  Phase 2 | Added the durable next-session implementation handover                                                                                                                                                                                              | [Handover](./2026-11-18-finny-sop-phase-2-handover.md) links the authoritative design, exact schema gate, TDD sequence, live/eval measurements, guardrails, and definition of done.                                                                                                                                                                               | Ready after Phase 1 PR completion                             | Integration owner |
-| 2026-11-18 |  Phase 2 | Recorded the complete old/new SOP and job schema review before implementation                                                                                                                                                                       | [Phase 2 SOP and job schema gate](#phase-2-sop-and-job-schema-gate) covers TypeScript, tool/API, PostgreSQL, field accounting, invented rows, canonicalization, migration, unfinished jobs, rollout, rollback, compatibility, and unchanged configuration.                                                                                                        | Awaiting human review; no persisted-shape code written        | Integration owner |
-| 2026-11-18 |  Phase 2 | Implemented immutable `finny.sop.v1` authority and cut active execution over to exact SOP bindings                                                                                                                                                  | Commits `cace9f55a` through `1857c698a`; approval binds the execution digest, material amendments invalidate approval with provenance, Producer and Auditor compile from the same version, and unfinished legacy jobs fail migration while finalized legacy history remains readable.                                                                             | Complete; approved schema live only in isolated QA PostgreSQL | Integration owner |
-| 2026-11-18 |  Phase 2 | Verified the affected implementation and clarified the artifact binding exposed by live acceptance                                                                                                                                                  | All 27 `test/finny*.test.ts` files pass, focused agent-tool tests pass, typecheck and FinnyLoop r5 pass, and changed implementation paths pass ESLint. Repository-wide ESLint still reports two unchanged baseline errors in `plugins/web-ui/src/generative-card.ts` and `src/slack/generative-ui.ts`.                                                            | Complete                                                      | Integration owner |
-| 2026-11-18 |  Phase 2 | Completed a real-model AP-aging approval, production, deterministic audit, targeted rework, certification, and delivery in Firefox                                                                                                                  | Web session `3a3fbec7-0d78-47d5-b22e-b726abe12af5`, job `b424e17b-9bba-459d-90df-001603898d51`, SOP `personal%3Akalicharanshukla/sop.ap.aging.inr@1`. The first artifact was blocked on `summary.crossfoot`; the replacement passed events 6–13 and delivered digest `0aa5b159…0eac7ec0`.                                                                         | Complete; diagnostic run, not a performance baseline          | Production QA     |
-| 2026-11-18 |  Phase 2 | Recorded diagnostic timing and model usage for the accepted web run                                                                                                                                                                                 | Job creation to finalization was 11m58s; approval to finalization was 11m14s; first artifact to finalization was 4m14s; replacement artifact to finalization was 2m15s. Parent, Producer, and two Auditor sessions used 250 uncached input, 71,996 output, 5,701,677 cache-read, and 540,443 cache-write tokens.                                                  | Complete; includes QA recovery and is not an SLA comparison   | Production QA     |
-| 2026-11-18 |  Phase 2 | Kept later authority gates closed                                                                                                                                                                                                                   | No `finny_audit_attempts` or `finny_results` schema was added. No repository configuration changed; `persistent_subagents` was enabled only in the isolated QA database to exercise the configured dev instance. The synthetic corpus and independent accounting gold remain unapproved.                                                                          | Complete                                                      | Integration owner |
-| 2026-11-18 |  Phase 2 | Completed exact-DM Slack acceptance and both amendment paths on the final implementation                                                                                                                                                            | Slack job `fa06a262-ae65-4ec1-9324-6982b7cd5328` passed clarification, approval, deterministic BLOCK, corrected artifact, certification, and one receipt delivery. Web job `d7e7740c-5bb1-4d78-90fb-45973a3b90b2` proved non-material approval retention and origin-bound material replacement request `finny-amend-haHvZP0HPPnJu8suSzs-8phln58LNjUYRP8ArOoB43Q`. | Complete                                                      | Production QA     |
-| 2026-11-18 |  Phase 2 | Closed performance and token review findings                                                                                                                                                                                                        | Worker tool schemas omit parent-only SOP authoring fields; SOP search pages IDs before definitions; final recovery ignores pending, delivered, and permanently failed deliveries while retaining retryable expiry and binding cleanup. Independent final reviews accepted Performance 96/100, Token performance 98/100, and production-like QA 98/100.            | Complete                                                      | Review owners     |
-| 2026-11-18 |  Phase 2 | Merged the complete SOP slice through the required merge path                                                                                                                                                                                       | [PR #35](https://github.com/11mirror/qm/pull/35) merged to `main` as `897066570`; the review instance was then stopped and its pool lease and ports were verified free while shared PostgreSQL data was preserved.                                                                                                                                                | Complete                                                      | Integration owner |
-| 2026-11-18 |  Phase 3 | Established the next implementation boundary                                                                                                                                                                                                        | Phase 1 already owns durable successful-but-incomplete recovery. The next session begins with a complete terminal/finalization/delivery path census, then closes only confirmed completion-authority gaps without entering the Phase 4 or Phase 5 schema gates. See the [Phase 3 handover](./2026-11-18-finny-phase-3-handover.md).                               | Next                                                          | Integration owner |
-| 2026-11-18 |  Phase 3 | Completed the terminal, finalization, restart, and delivery census and removed table-absence recovery lifecycles                                                                                                                                    | Review established that Core initializes typed durable run, delivery, and Finny binding state before recovery. Weaker Producer, Auditor, and final-delivery compatibility branches were deleted; tests now initialize the real stores and advance durable run identity on dispatch. The exact final-delivery key remains behind the Phase 5 delivery-intent gate. | Locally complete; independent review pending                  | Integration owner |
-| 2026-11-18 |  Phase 3 | Closed the delivered-rework terminal gap                                                                                                                                                                                                            | A Producer that terminates successfully without replacing a BLOCKed artifact is redispatched from the unresolved durable rework transition. The retry is fenced to the observed run, uses a distinct idempotency generation, and duplicate recovery scans dispatch once without repeating escalation judgment.                                                    | Locally complete; independent review pending                  | Integration owner |
-| 2026-11-18 |  Phase 3 | Verified crash convergence, duplicate recovery, poison isolation, and representative backlog behavior                                                                                                                                               | All 27 Finny suites pass. Real 250-job backlogs returned every recovery: Auditor median 17.4 ms; successful-but-incomplete Producer median 37.3 ms, each over five warm scans. No arbitrary cap, schema, persisted payload, or configuration changed; typecheck, lint, and FinnyLoop r5 pass.                                                                     | Complete locally; no SLA claimed                              | Integration owner |
-| 2026-11-18 |  Phase 3 | Booted isolated production-shaped web and Slack surfaces                                                                                                                                                                                            | Firefox rendered the QM portal. A pooled Slack app held one Socket Mode connection. Slack event-delivery acceptance remains pending because no canary channel was available; a pre-existing QA database that failed the Phase 2 legacy-job guard was left unchanged.                                                                                              | Web accepted; Slack recovery acceptance pending               | Production QA     |
-| 2026-11-18 |  Phase 3 | Completed production-shaped Slack crash recovery, certification, and single delivery                                                                                                                                                                | The interrupted Producer became terminal; restart admitted one replacement, bound the workbook, passed eight checks, finalized one receipt, and delivered the exact key once. The timing note separates the 17m31s diagnostic run from environment and model work.                                                                                                | Complete; diagnostic run, not an SLA baseline                 | Production QA     |
+| Date       |     Phase | Change                                                                                                                                                                                                                                              | Evidence                                                                                                                                                                                                                                                                                                                                                                                                              | Status                                                        | Owner             |
+| ---------- | --------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | ----------------- |
+| 2026-11-17 |  Research | Audited current Finny lifecycle, latest upstream QM, Pi harness, and LoopForge                                                                                                                                                                      | Source review at downstream `f2d342f9`, upstream `b3ba0524`, LoopForge `86b0ee06`                                                                                                                                                                                                                                                                                                                                     | Complete                                                      | Research agents   |
+| 2026-11-17 |  Planning | Established phased high-performance SOP harness plan                                                                                                                                                                                                | This document                                                                                                                                                                                                                                                                                                                                                                                                         | Complete                                                      | Primary agent     |
+| 2026-11-17 |  Planning | Resolved SOP, approval, audit, result, baseline-fixture, and evaluation design decisions                                                                                                                                                            | This document and current QM eval audit                                                                                                                                                                                                                                                                                                                                                                               | Complete pending human schema/corpus review                   | Primary agent     |
+| 2026-11-17 |   Phase 0 | Added a production-independent baseline analyzer for Producer/Auditor run counts, pre-artifact Auditor detection, query-to-certified-delivery time, and parent/Producer/Auditor tokens with fail-closed missing usage                               | [Analyzer and tests](#phase-0--baseline-and-completion-trace); paired web and Slack measurements are linked in the implementation summary                                                                                                                                                                                                                                                                             | Complete                                                      | Evaluation lane   |
+| 2026-11-17 |   Phase 1 | Corrected Finny tool vocabulary, removed placeholder dispatch turns, opened Producer only after approval with its real task, opened Auditor only after artifact commit, and recovered terminal successful-but-incomplete workers from durable state | [Web evidence](#phase-01-live-measurement--qm-web): one Producer, one post-artifact Auditor, certified XLSX, 21.6% fewer tokens. [Slack evidence](#phase-01-live-measurement--slack): one Producer, one post-artifact Auditor, certified attached XLSX, 43.2% fewer tokens.                                                                                                                                           | Complete on web and Slack; latency improvement not yet proven | Integration owner |
+| 2026-11-17 |   Phase 1 | Preserved the durable Finny plan request identity across the generic web approval boundary after live QA exposed a false-success dispatch                                                                                                           | RED: web Finny tool test observed no durable `finny-plan:<requestId>` approval key. GREEN: the tool retains the request identity; the orchestrator decides that Finny request; the live Producer opened immediately after approval.                                                                                                                                                                                   | Complete                                                      | Integration owner |
+| 2026-11-17 |   Phase 1 | Closed the material-clarification handoff so every persisted option and `Other` is actionable, the exact ready plan is projected immediately, and Finny translation stays outside the generic orchestrator                                          | RED: caller-visible Postgres tests proved the prior code ignored alternate options, treated `Other` as command denial, and returned no next approval. GREEN: affected core/web suites, typecheck, and oxlint pass. Chrome shows all options and `Other`; selecting a nonrecommended date records that exact choice and requires revision.                                                                             | Complete                                                      | Integration owner |
+| 2026-11-17 |   Phase 1 | Exercised the `Other` clarification path against the running production-shaped web instance in Chrome                                                                                                                                               | Session `762bf470-2392-4f1e-8456-1446297f9c5a`: `Other` consumed the durable Finny clarification and returned `Revision is required before this plan can be approved. Submit a revised plan to continue.` The composer reopened for the revised input.                                                                                                                                                                | Complete                                                      | Production QA     |
+| 2026-11-17 |   Phase 1 | Closed both clarification commit-to-projection crash windows without adding another recovery queue                                                                                                                                                  | RED: a committed clarification replay returned no usable result, and an injected plan-projection failure could delete the clarification approval before its replacement existed. GREEN: the service reconstructs the durable result idempotently and the orchestrator persists the replacement before deleting its predecessor.                                                                                       | Complete; no schema or configuration change                   | Integration owner |
+| 2026-11-17 |   Phase 1 | Proved terminal successful-but-incomplete Producer recovery through the exact-head production-shaped web surface                                                                                                                                    | [Live terminal-run recovery](#phase-1-live-terminal-run-recovery--qm-web): first run `done`/`ok` with no artifact; durable `producer_retry` bound a new run in the same session; artifact, independent eight-check audit, receipt, workbook, and certified summary followed.                                                                                                                                          | Complete                                                      | Production QA     |
+| 2026-11-17 |   Phase 1 | Bound clarification replay to its exact durable Finny job instead of the newest pending approval in the Slack or web thread                                                                                                                         | RED: a two-job Postgres regression reproduced clarification A displaying newer plan B. GREEN: replay resolves readiness and the replacement approval by `scope_id` plus `job_id`; affected approval, web, and store tests pass.                                                                                                                                                                                       | Complete; no database schema or configuration change          | Integration owner |
+| 2026-11-17 |   Phase 1 | Made every persisted clarification option actionable without another human turn                                                                                                                                                                     | RED: a nonrecommended option ended with an instruction to repeat the choice. GREEN: the parent resumes with the exact recorded option, amends the existing job, withdraws the stale approval, and projects the durable replacement plan approval; `Other` still opens free-form revision.                                                                                                                             | Complete; no database schema or configuration change          | Integration owner |
+| 2026-11-17 |   Phase 1 | Bound automatic worker recovery to the terminal run observed by the durable scan                                                                                                                                                                    | RED: replaying one stale Producer or Auditor recovery snapshot dispatched twice and could replace healthy work. GREEN: recovery carries the observed run ID and dispatches only while the active binding still matches it; the existing compare-and-swap advances the binding atomically.                                                                                                                             | Complete; no database schema or configuration change          | Integration owner |
+| 2026-11-17 |   Phase 1 | Excluded human-wait and refused terminal outcomes from automatic Producer and Auditor recovery                                                                                                                                                      | RED: `done` runs returning `pending_approval` or `refused` were eligible for restart. GREEN: the durable recovery census distinguishes those outcomes from missing, failed, expired-live, and successful-but-incomplete work, with regressions for both roles.                                                                                                                                                        | Complete; no database schema or configuration change          | Integration owner |
+| 2026-11-17 |   Phase 1 | Preserved the real actor and integration-parent request binding across an alternate-choice plan amendment                                                                                                                                           | RED: the replacement approval used a fallback actor and the original parent request ID, so approval could claim success without Producer dispatch. GREEN: amendment updates both bindings atomically; a non-default actor approves the replacement and opens one Producer for the same job.                                                                                                                           | Complete; no database schema or configuration change          | Integration owner |
+| 2026-11-17 |   Phase 1 | Applied the durable run-outcome census to fresh Auditor reverification admission                                                                                                                                                                    | RED: a fresh reverification Auditor waiting on approval was selected for another wake because no delivery marker existed. GREEN: active run state preserves `pending_approval` and `refused` work even after binding expiry while retaining recovery for missing, failed, expired-live, and incomplete runs.                                                                                                          | Complete; no database schema or configuration change          | Integration owner |
+| 2026-11-17 |   Phase 1 | Moved guarded admission validation ahead of worker interruption inside the shared session admission lock                                                                                                                                            | RED: a stale Finny dispatch could stop a healthy replacement before its compare-and-swap rejected the write. GREEN: `beforeEnqueue` runs under the admission lock before `stopSessionRuns`; a rejected guarded interrupt leaves the active run healthy.                                                                                                                                                               | Complete; no database schema or configuration change          | Integration owner |
+| 2026-11-17 |   Phase 1 | Verified the complete alternate-choice flow on the exact-head production-shaped web instance in Chrome                                                                                                                                              | Session `fa96216e-87a4-4ca9-b2ed-c54b1aa74263`: the user selected `2026-11-30`; QM resumed the same parent without another human message, presented a replacement plan explicitly bound to the alternate cutoff, accepted approval, and visibly started one Producer subagent.                                                                                                                                        | Complete                                                      | Production QA     |
+| 2026-11-17 |   Phase 1 | Bound reverification recovery to the exact Auditor run observed by the durable scan                                                                                                                                                                 | RED: replaying one orphaned, terminal, or expired reverification recovery could target a replacement or stall on an expired binding. GREEN: active bindings retry in the same session with an observed-run guard; missing bindings admit once; stale replay is ignored; the obsolete delivery-prefix lookup is removed.                                                                                               | Complete; no database schema or configuration change          | Integration owner |
+| 2026-11-17 |   Phase 2 | User authorized task-level SOP implementation and verification as the next milestone after the Phase 1 PR is complete                                                                                                                               | This document remains the working contract; first record the complete human-readable old/new schema and migration review, then implement one finance-specific SOP persistence and execution slice.                                                                                                                                                                                                                    | Queued                                                        | Integration owner |
+| 2026-11-18 |   Phase 2 | Added the durable next-session implementation handover                                                                                                                                                                                              | [Handover](./2026-11-18-finny-sop-phase-2-handover.md) links the authoritative design, exact schema gate, TDD sequence, live/eval measurements, guardrails, and definition of done.                                                                                                                                                                                                                                   | Ready after Phase 1 PR completion                             | Integration owner |
+| 2026-11-18 |   Phase 2 | Recorded the complete old/new SOP and job schema review before implementation                                                                                                                                                                       | [Phase 2 SOP and job schema gate](#phase-2-sop-and-job-schema-gate) covers TypeScript, tool/API, PostgreSQL, field accounting, invented rows, canonicalization, migration, unfinished jobs, rollout, rollback, compatibility, and unchanged configuration.                                                                                                                                                            | Awaiting human review; no persisted-shape code written        | Integration owner |
+| 2026-11-18 |   Phase 2 | Implemented immutable `finny.sop.v1` authority and cut active execution over to exact SOP bindings                                                                                                                                                  | Commits `cace9f55a` through `1857c698a`; approval binds the execution digest, material amendments invalidate approval with provenance, Producer and Auditor compile from the same version, and unfinished legacy jobs fail migration while finalized legacy history remains readable.                                                                                                                                 | Complete; approved schema live only in isolated QA PostgreSQL | Integration owner |
+| 2026-11-18 |   Phase 2 | Verified the affected implementation and clarified the artifact binding exposed by live acceptance                                                                                                                                                  | All 27 `test/finny*.test.ts` files pass, focused agent-tool tests pass, typecheck and FinnyLoop r5 pass, and changed implementation paths pass ESLint. Repository-wide ESLint still reports two unchanged baseline errors in `plugins/web-ui/src/generative-card.ts` and `src/slack/generative-ui.ts`.                                                                                                                | Complete                                                      | Integration owner |
+| 2026-11-18 |   Phase 2 | Completed a real-model AP-aging approval, production, deterministic audit, targeted rework, certification, and delivery in Firefox                                                                                                                  | Web session `3a3fbec7-0d78-47d5-b22e-b726abe12af5`, job `b424e17b-9bba-459d-90df-001603898d51`, SOP `personal%3Akalicharanshukla/sop.ap.aging.inr@1`. The first artifact was blocked on `summary.crossfoot`; the replacement passed events 6–13 and delivered digest `0aa5b159…0eac7ec0`.                                                                                                                             | Complete; diagnostic run, not a performance baseline          | Production QA     |
+| 2026-11-18 |   Phase 2 | Recorded diagnostic timing and model usage for the accepted web run                                                                                                                                                                                 | Job creation to finalization was 11m58s; approval to finalization was 11m14s; first artifact to finalization was 4m14s; replacement artifact to finalization was 2m15s. Parent, Producer, and two Auditor sessions used 250 uncached input, 71,996 output, 5,701,677 cache-read, and 540,443 cache-write tokens.                                                                                                      | Complete; includes QA recovery and is not an SLA comparison   | Production QA     |
+| 2026-11-18 |   Phase 2 | Kept later authority gates closed                                                                                                                                                                                                                   | No `finny_audit_attempts` or `finny_results` schema was added. No repository configuration changed; `persistent_subagents` was enabled only in the isolated QA database to exercise the configured dev instance. The synthetic corpus and independent accounting gold remain unapproved.                                                                                                                              | Complete                                                      | Integration owner |
+| 2026-11-18 |   Phase 2 | Completed exact-DM Slack acceptance and both amendment paths on the final implementation                                                                                                                                                            | Slack job `fa06a262-ae65-4ec1-9324-6982b7cd5328` passed clarification, approval, deterministic BLOCK, corrected artifact, certification, and one receipt delivery. Web job `d7e7740c-5bb1-4d78-90fb-45973a3b90b2` proved non-material approval retention and origin-bound material replacement request `finny-amend-haHvZP0HPPnJu8suSzs-8phln58LNjUYRP8ArOoB43Q`.                                                     | Complete                                                      | Production QA     |
+| 2026-11-18 |   Phase 2 | Closed performance and token review findings                                                                                                                                                                                                        | Worker tool schemas omit parent-only SOP authoring fields; SOP search pages IDs before definitions; final recovery ignores pending, delivered, and permanently failed deliveries while retaining retryable expiry and binding cleanup. Independent final reviews accepted Performance 96/100, Token performance 98/100, and production-like QA 98/100.                                                                | Complete                                                      | Review owners     |
+| 2026-11-18 |   Phase 2 | Merged the complete SOP slice through the required merge path                                                                                                                                                                                       | [PR #35](https://github.com/11mirror/qm/pull/35) merged to `main` as `897066570`; the review instance was then stopped and its pool lease and ports were verified free while shared PostgreSQL data was preserved.                                                                                                                                                                                                    | Complete                                                      | Integration owner |
+| 2026-11-18 |   Phase 3 | Established the next implementation boundary                                                                                                                                                                                                        | Phase 1 already owns durable successful-but-incomplete recovery. The next session begins with a complete terminal/finalization/delivery path census, then closes only confirmed completion-authority gaps without entering the Phase 4 or Phase 5 schema gates. See the [Phase 3 handover](./2026-11-18-finny-phase-3-handover.md).                                                                                   | Next                                                          | Integration owner |
+| 2026-11-18 |   Phase 3 | Completed the terminal, finalization, restart, and delivery census and removed table-absence recovery lifecycles                                                                                                                                    | Review established that Core initializes typed durable run, delivery, and Finny binding state before recovery. Weaker Producer, Auditor, and final-delivery compatibility branches were deleted; tests now initialize the real stores and advance durable run identity on dispatch. The exact final-delivery key remains behind the Phase 5 delivery-intent gate.                                                     | Locally complete; independent review pending                  | Integration owner |
+| 2026-11-18 |   Phase 3 | Closed the delivered-rework terminal gap                                                                                                                                                                                                            | A Producer that terminates successfully without replacing a BLOCKed artifact is redispatched from the unresolved durable rework transition. The retry is fenced to the observed run, uses a distinct idempotency generation, and duplicate recovery scans dispatch once without repeating escalation judgment.                                                                                                        | Locally complete; independent review pending                  | Integration owner |
+| 2026-11-18 |   Phase 3 | Verified crash convergence, duplicate recovery, poison isolation, and representative backlog behavior                                                                                                                                               | All 27 Finny suites pass. Real 250-job backlogs returned every recovery: Auditor median 17.4 ms; successful-but-incomplete Producer median 37.3 ms, each over five warm scans. No arbitrary cap, schema, persisted payload, or configuration changed; typecheck, lint, and FinnyLoop r5 pass.                                                                                                                         | Complete locally; no SLA claimed                              | Integration owner |
+| 2026-11-18 |   Phase 3 | Booted isolated production-shaped web and Slack surfaces                                                                                                                                                                                            | Firefox rendered the QM portal. A pooled Slack app held one Socket Mode connection. Slack event-delivery acceptance remains pending because no canary channel was available; a pre-existing QA database that failed the Phase 2 legacy-job guard was left unchanged.                                                                                                                                                  | Web accepted; Slack recovery acceptance pending               | Production QA     |
+| 2026-11-18 |   Phase 3 | Completed production-shaped Slack crash recovery, certification, and single delivery                                                                                                                                                                | The interrupted Producer became terminal; restart admitted one replacement, bound the workbook, passed eight checks, finalized one receipt, and delivered the exact key once. The timing note separates the 17m31s diagnostic run from environment and model work.                                                                                                                                                    | Complete; diagnostic run, not an SLA baseline                 | Production QA     |
+| 2026-11-18 | Phase 4/5 | Recorded and authorized the atomic audit-attempt, certified-result, and durable-delivery schema gate                                                                                                                                                | The gate specifies complete old/new TypeScript, API, PostgreSQL, keys, indexes, constraints, JSON fields, invented rows, evidence ownership, clean migration, retention, authorization, surface compatibility, and unchanged configuration. Implementation may proceed; no live schema change is claimed by this documentation commit.                                                                                | Authorized; implementation in progress                        | Integration owner |
+| 2026-11-18 | Phase 4/5 | Implemented and locally verified atomic audit, targeted rework, certified results, and result-owned delivery                                                                                                                                        | All 25 focused Finny/web test files, typecheck, changed-file lint, and FinnyLoop r5 pass. Chrome proved a live model response and durable Finny plan approval in the isolated personal scope. The existing pool3 Sharechat/personal instance stayed live and unchanged; branch Slack QA awaits another pooled Slack app. No repository configuration changed; schema migrations ran only in the isolated QA database. | Complete locally; independent review and CI pending           | Integration owner |
 
 ## Required human decisions for later gates
 
-1. Complete: the SOP/job schema was reviewed, approved, implemented, and merged in PR #35. This approval does not extend to audit-attempt or certified-result schemas.
-2. Pending before the Phase 4 atomic audit cutover: approve the complete old/new audit-attempt shape, evidence ownership, migration, and event semantics.
-3. Pending before the Phase 5 certified-result cutover: approve the complete certified-summary/result and durable-delivery shapes, storage, retention, authorization, migration, and surface compatibility.
+1. Complete: the SOP/job schema was reviewed, approved, implemented, and merged in PR #35.
+2. Complete on the branch: the Phase 4 atomic audit-attempt shape, evidence ownership, cutover refusal, event semantics, and targeted rework are implemented and locally verified.
+3. Complete on the branch: the Phase 5 certified-summary/result shape, result-owned durable delivery intent, startup recovery, authorization, and surface projection are implemented and locally verified.
 4. Pending before the versioned high-performance eval: approve the synthetic/de-identified corpus and independently calculated accounting gold.
 5. Pending before Tier 4: approve the controlled NetSuite/test-source population and cleanup.
 6. Pending before performance becomes a release gate: review paired baseline variance, classify existing defects, and approve any absolute SLA; otherwise comparisons remain variance-based.

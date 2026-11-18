@@ -37,6 +37,7 @@ export interface ActionButton {
   label: string;
   actionId: string;
   value: string;
+  url?: string;
   style?: "primary" | "danger";
 }
 
@@ -109,7 +110,7 @@ export const SLACK_CARD_LIMITS = {
 };
 
 const SLACK_HEADER_TEXT_MAX = 150;
-const SLACK_SECTION_TEXT_MAX = 3000;
+export const SLACK_SECTION_TEXT_MAX = 3000;
 const SLACK_BUTTON_TEXT_MAX = 75;
 const SLACK_BLOCKS_MAX = SLACK_CARD_LIMITS.maxBlocks;
 export interface RenderedGenerativeUI {
@@ -184,6 +185,7 @@ export function renderGenerativeUI(spec: GenerativeUISpec): RenderedGenerativeUI
             },
             action_id: actionId,
             value: btn.value,
+            ...(btn.url ? { url: btn.url } : {}),
             ...(btn.style ? { style: btn.style } : {}),
           };
         });
@@ -284,7 +286,9 @@ export function renderGenerativeUI(spec: GenerativeUISpec): RenderedGenerativeUI
   const fallback = spec.fallbackText || "Slack card update";
   const hasProvenance = spec.elements.some((e) => e.type === "provenance");
   const hasWarning = spec.elements.some((e) => e.type === "callout" && e.level === "warning");
-  const color = hasWarning ? "#F59E0B" : hasProvenance ? "#10B981" : "#3B82F6";
+  let color = "#3B82F6";
+  if (hasProvenance) color = "#10B981";
+  if (hasWarning) color = "#F59E0B";
 
   return {
     text: fallback,
@@ -391,6 +395,7 @@ export function parseGenerativeUISpec(content: string): GenerativeUISpec | null 
                   label: String(bp.label ?? bp.text ?? ""),
                   actionId: String(bp.id ?? bp.actionId ?? bp.url ?? "action"),
                   value: String(bp.value ?? bp.url ?? ""),
+                  ...(bp.url ? { url: String(bp.url) } : {}),
                   ...(bp.style === "primary" || bp.style === "danger" ? { style: bp.style } : {}),
                 });
               }
@@ -471,6 +476,7 @@ export function parseGenerativeUISpec(content: string): GenerativeUISpec | null 
             label: b.label,
             actionId: b.actionId,
             value: b.value,
+            ...(typeof b.url === "string" && b.url ? { url: b.url } : {}),
             ...(b.style === "primary" || b.style === "danger" ? { style: b.style } : {}),
           }));
         if (buttons.length > 0) validatedElements.push({ type: "actions", buttons });

@@ -17,6 +17,20 @@ const evaluator = {
 
 const sop = { ...finnySopFixture(), scopeId: "scope-1", title: "Close" };
 const values = { cutoff: "2026-10-31", currency: "INR", note: "first run" };
+const auditControls = sop.controls.map((control) => ({
+  id: control.id,
+  verdict: "pass" as const,
+  evidenceRefs: [...control.evidenceRefs],
+  repairActions: [],
+}));
+const judgmentAnswers = [
+  {
+    controlId: "mapping-exception",
+    verdict: "pass" as const,
+    evidenceRefs: ["xlsx:Exceptions!A1:D1"],
+    rationale: "No material unmapped classification remains.",
+  },
+];
 
 function harness(
   binding: { role: "parent" | "producer" | "auditor" } | null = null,
@@ -99,6 +113,56 @@ function harness(
           deduped: options.amendmentDeduped ?? false,
         };
       },
+      async recordAuditAttempt(input: any) {
+        calls.push(["recordAuditAttempt", input]);
+        return { attempt: input, events: [], job, deduped: false };
+      },
+      async getAuditAttempt(_scopeId: string, _jobId: string, attemptId: string) {
+        calls.push(["getAuditAttempt", attemptId]);
+        const pending = calls.find(
+          ([name, input]) => name === "recordAuditAttempt" && (input as any).id === attemptId,
+        )?.[1] as any;
+        return pending ?? null;
+      },
+      async getAuditAttemptByOperation(_scopeId: string, _jobId: string, idempotencyKey: string) {
+        const recorded = calls.find(
+          ([name, input]) => name === "recordAuditAttempt" && (input as any).idempotencyKey === idempotencyKey,
+        )?.[1] as any;
+        if (recorded) return { attempt: recorded, requestDigest: recorded.requestDigest };
+        const completed = calls.find(
+          ([name, input]) => name === "completeAuditJudgment" && (input as any).idempotencyKey === idempotencyKey,
+        )?.[1] as any;
+        if (!completed) return null;
+        const pending = calls.find(([name]) => name === "recordAuditAttempt")?.[1] as any;
+        const replacements = new Map(completed.controls.map((control: any) => [control.id, control]));
+        const controls = pending.controls.map((control: any) => replacements.get(control.id) ?? control);
+        return {
+          requestDigest: completed.requestDigest,
+          attempt: {
+            ...pending,
+            controls,
+            judgmentQuestions: [],
+            judgmentAddendum: completed.judgmentAddendum,
+            verdict: controls.some((control: any) => control.verdict === "block") ? "block" : "pass",
+            completedAt: completed.completedAt,
+          },
+        };
+      },
+      async completeAuditJudgment(input: any) {
+        calls.push(["completeAuditJudgment", input]);
+        const pending = calls.find(([name]) => name === "recordAuditAttempt")?.[1] as any;
+        const replacements = new Map(input.controls.map((control: any) => [control.id, control]));
+        const controls = pending.controls.map((control: any) => replacements.get(control.id) ?? control);
+        const attempt = {
+          ...pending,
+          controls,
+          judgmentQuestions: [],
+          judgmentAddendum: input.judgmentAddendum,
+          verdict: controls.some((control: any) => control.verdict === "block") ? "block" : "pass",
+          completedAt: input.completedAt,
+        };
+        return { attempt, events: [], job, deduped: false };
+      },
     },
     runtime: {
       async currentBinding() {
@@ -160,6 +224,9 @@ function harness(
       async auditBlocked(input: any) {
         calls.push(["auditBlocked", input]);
       },
+      async auditAttemptRecorded(input: any) {
+        calls.push(["auditAttemptRecorded", input]);
+      },
     },
     files: {
       async open(id: string) {
@@ -172,6 +239,7 @@ function harness(
             ownerScopeId: job.scopeId,
             sha256: job.artifactDigest,
             createdBy: "producer",
+            mimetype: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
           },
           sizeBytes: options.artifactBytes.byteLength,
           stream: Readable.from([options.artifactBytes]),
@@ -185,21 +253,18 @@ function harness(
         throw new Error("deterministic worker was not configured for this test");
       },
     },
-    finalizer: {
-      async finalize(input: any) {
-        calls.push(["finalize", input]);
-        return { token: "receipt", payload: { artifactDigest: "digest", provisionalRevision: "r1" } };
-      },
+    async certifyResult(input: any) {
+      calls.push(["certifyResult", input]);
     },
-    async deliverFinal(input: any) {
-      calls.push(["deliverFinal", input]);
+    async deliverCertifiedResults() {
+      calls.push(["deliverCertifiedResults", {}]);
     },
     ids: (() => {
       let n = 0;
       return () => `id-${++n}`;
     })(),
   } as any);
-  return { factory, calls };
+  return { factory, calls, job };
 }
 
 const parent = {
@@ -246,6 +311,36 @@ test("parent create_plan persists server authority before idempotent native plan
   const delivery: any = calls.find(([name]) => name === "enqueue")?.[1];
   assert.equal(delivery.destination.finnyPlanRequestId, "id-2");
   assert.equal(delivery.idempotencyKey, "finny-plan:id-2");
+});
+
+test("parent certification persists the typed result before projecting delivery", async () => {
+  const { factory, calls } = harness(
+    { role: "parent" },
+    {
+      job: {
+        artifactDigest: "a".repeat(64),
+        provisionalRevision: "file-1",
+        currentAuditAttemptId: "audit-1",
+      },
+    },
+  );
+  const service = await factory.forTurn(parent);
+  assert.ok(service);
+  const summary = {
+    period: "2026-10-31",
+    currency: "INR",
+    metrics: [{ id: "open-ap", label: "Open AP", value: "12172560.00", detailRefs: ["xlsx:Summary!B7"] }],
+    exceptions: [],
+    caveats: [],
+  };
+  await service.finalize({ jobId: "job-1", summary, idempotencyKey: "final-1" });
+  const certified = calls.find(([name]) => name === "certifyResult")?.[1] as any;
+  assert.equal(certified.result.auditAttemptId, "audit-1");
+  assert.deepEqual(certified.result.summary, summary);
+  assert.deepEqual(
+    calls.slice(-2).map(([name]) => name),
+    ["certifyResult", "deliverCertifiedResults"],
+  );
 });
 
 test("material clarification is persisted before delivery while the plan card stays withheld", async () => {
@@ -318,18 +413,24 @@ test("non-material amendments use distinct stable operations without replacing a
   const { factory, calls } = harness();
   const service = await factory.forTurn(parent);
   assert.ok(service);
-  assert.deepEqual(await service.amendPlan("job-1", sop, { ...values, note: "display-only update" }, undefined, "call-1"), {
-    message: "Finny plan job-1 amendment was recorded without changing its approved execution.",
-    jobId: "job-1",
-    awaiting: "none",
-  });
+  assert.deepEqual(
+    await service.amendPlan("job-1", sop, { ...values, note: "display-only update" }, undefined, "call-1"),
+    {
+      message: "Finny plan job-1 amendment was recorded without changing its approved execution.",
+      jobId: "job-1",
+      awaiting: "none",
+    },
+  );
   await service.amendPlan("job-1", sop, { ...values, note: "another display-only update" }, undefined, "call-2");
   await service.amendPlan("job-1", sop, { ...values, note: "display-only update" }, undefined, "call-1");
   const amendments = calls.filter(([name]) => name === "recordSopAmendment").map(([, input]) => input as any);
   assert.equal(amendments.length, 3);
   assert.notEqual(amendments[0]?.idempotencyKey, amendments[1]?.idempotencyKey);
   assert.equal(amendments[0]?.idempotencyKey, amendments[2]?.idempotencyKey);
-  assert.equal(calls.some(([name]) => name === "enqueue"), false);
+  assert.equal(
+    calls.some(([name]) => name === "enqueue"),
+    false,
+  );
 });
 
 test("material amendment replay returns settled state after its replacement approval", async () => {
@@ -363,7 +464,10 @@ test("material amendment replay returns settled state after its replacement appr
     jobId: "job-1",
     awaiting: "none",
   });
-  assert.equal(calls.some(([name]) => name === "enqueue"), false);
+  assert.equal(
+    calls.some(([name]) => name === "enqueue"),
+    false,
+  );
 });
 
 test("worker service derives job authority from exact current session and run", async () => {
@@ -387,10 +491,6 @@ test("worker service derives job authority from exact current session and run", 
   );
   const artifactReady = calls.find(([name]) => name === "artifactReady")?.[1] as { jobId?: string } | undefined;
   assert.equal(artifactReady?.jobId, "job-1");
-  await assert.rejects(
-    () => service.pass({ checkId: "artifact.integrity", generation: 1, evidenceFileId: "e", idempotencyKey: "p" }),
-    /Auditor/,
-  );
 });
 
 test("forged worker session or run receives no Finny service", async () => {
@@ -423,42 +523,6 @@ test("Slack parent service fails closed when destination does not match the orig
   assert.equal(
     await factory.forTurn({ ...parent, destination: { type: "slack", target: "C2:100.1", threadTs: "100.1" } }),
     undefined,
-  );
-});
-
-test("final delivery remains in the exact bound Slack thread with revision and signed receipt", async () => {
-  const { finnyFinalDelivery } = await import("../src/finny/integration.ts");
-  const job = {
-    id: "job-1",
-    originThreadRef: "slack:C1:100.1",
-    sop: { ...sop, title: "Pack" },
-    sopBinding: {
-      versionId: finnySopVersionId(sop),
-      values,
-      executionDigest: canonicalFinnyExecutionDigest(sop, values),
-      revision: 1,
-    },
-  } as unknown as FinnyJob;
-  const delivery = finnyFinalDelivery(
-    { originThreadRef: job.originThreadRef, destination: { type: "slack", target: "C1:100.1", threadTs: "100.1" } },
-    job,
-    { token: "signed-receipt", payload: { artifactDigest: "digest", provisionalRevision: "r7", ledgerHead: 9 } } as any,
-    "https://qm.example",
-  );
-  assert.deepEqual(delivery.destination, { type: "slack", target: "C1:100.1", threadTs: "100.1" });
-  assert.match(delivery.text, /signed-receipt/);
-  assert.match(delivery.text, /<https:\/\/qm\.example\/v1\/files\/r7\/content\|Open final artifact>/);
-  assert.match(delivery.text, /source control total/);
-  assert.equal(delivery.idempotencyKey, "finny-final:job-1:9");
-  assert.throws(
-    () =>
-      finnyFinalDelivery(
-        { originThreadRef: job.originThreadRef, destination: { type: "slack", target: "C2:100.1" } },
-        job,
-        { token: "x", payload: {} } as any,
-        "https://qm.example",
-      ),
-    /does not match/,
   );
 });
 
@@ -864,7 +928,7 @@ test("evidence authority derives immutable scoped file digests and verifies dete
   );
 });
 
-test("bound Auditor runs all current deterministic checks from one trusted evidence envelope", async () => {
+test("bound Auditor commits all deterministic results as one atomic audit attempt", async () => {
   const artifactBytes = new TextEncoder().encode("workbook");
   const { digestSpreadsheetArtifact } = await import("../src/finny/deterministic-spreadsheet-worker.ts");
   const { initialFinnyPolicy } = await import("../src/finny/policy.ts");
@@ -906,8 +970,13 @@ test("bound Auditor runs all current deterministic checks from one trusted evide
   const service = await factory.forTurn(parent);
   assert.ok(service);
   assert.equal(
-    await service.deterministicAudit({ idempotencyKey: "audit-1" }),
-    "Deterministic spreadsheet audit recorded 3 PASS results.",
+    await service.deterministicAudit({
+      idempotencyKey: "audit-1",
+      controls: auditControls,
+      triggeredJudgmentControlIds: ["mapping-exception"],
+      judgmentAnswers,
+    }),
+    "Audit attempt recorded 5 PASS results.",
   );
   const workerInput = calls.find(([name]) => name === "deterministicWorker")?.[1] as any;
   assert.deepEqual(Array.from(workerInput.artifactBytes), Array.from(artifactBytes));
@@ -916,27 +985,52 @@ test("bound Auditor runs all current deterministic checks from one trusted evide
     { checkId: "summary.crossfoot", generation: 1 },
     { checkId: "artifact.structure", generation: 1 },
   ]);
+  const attempt = calls.find(([name]) => name === "recordAuditAttempt")?.[1] as any;
+  assert.equal(calls.filter(([name]) => name === "auditAttemptRecorded").length, 1);
+  assert.equal(calls.filter(([name]) => name === "auditPassed").length, 0);
+  assert.equal(attempt.verdict, "pass");
+  assert.equal(attempt.artifactFileId, "artifact-file");
+  assert.equal(attempt.artifactSha256, digestSpreadsheetArtifact(artifactBytes));
+  assert.equal(attempt.artifactSizeBytes, artifactBytes.byteLength);
   assert.deepEqual(
-    calls.filter(([name]) => name === "auditPassed").map(([, value]) => value),
-    results.map((result) => ({
-      scopeId: "scope-1",
-      jobId: "job-1",
-      sessionId: "session-1",
-      runId: "run-1",
-      artifactDigest: digestSpreadsheetArtifact(artifactBytes),
-      checkId: result.checkId,
-      generation: 1,
-      evidenceFileId: "trusted-evidence",
-      idempotencyKey: `audit-1:${result.checkId}:1`,
-    })),
+    attempt.controls.map((control: any) => ({ id: control.id, verdict: control.verdict })),
+    [
+      { id: "source-total", verdict: "pass" },
+      { id: "mapping-exception", verdict: "pass" },
+      { id: "formula.recalculate", verdict: "pass" },
+      { id: "summary.crossfoot", verdict: "pass" },
+      { id: "artifact.structure", verdict: "pass" },
+    ],
   );
-  await service.deterministicAudit({ idempotencyKey: "audit-1" });
+  await service.deterministicAudit({
+    idempotencyKey: "audit-1",
+    controls: auditControls,
+    triggeredJudgmentControlIds: ["mapping-exception"],
+    judgmentAnswers,
+  });
   const workerInputs = calls.filter(([name]) => name === "deterministicWorker").map(([, value]) => value as any);
   assert.equal(typeof workerInputs[0]?.evidenceFileId, "string");
-  assert.equal(workerInputs[0]?.evidenceFileId, workerInputs[1]?.evidenceFileId);
+  assert.equal(workerInputs.length, 1);
+  await assert.rejects(
+    service.deterministicAudit({
+      idempotencyKey: "audit-1",
+      controls: auditControls.map((control) =>
+        control.id === "source-total"
+          ? {
+              ...control,
+              verdict: "block" as const,
+              repairActions: [{ message: "Changed result", workbookRefs: ["xlsx:Source!A1"] }],
+            }
+          : control,
+      ),
+      triggeredJudgmentControlIds: ["mapping-exception"],
+      judgmentAnswers,
+    }),
+    /idempotency key was reused with different audit content/,
+  );
 });
 
-test("deterministic BLOCK uses Core findings and stops before stale remaining results", async () => {
+test("deterministic BLOCK preserves every result in one atomic audit attempt", async () => {
   const artifactBytes = new TextEncoder().encode("blocked workbook");
   const { digestSpreadsheetArtifact } = await import("../src/finny/deterministic-spreadsheet-worker.ts");
   const { initialFinnyPolicy } = await import("../src/finny/policy.ts");
@@ -978,17 +1072,129 @@ test("deterministic BLOCK uses Core findings and stops before stale remaining re
   const service = await factory.forTurn(parent);
   assert.ok(service);
   assert.equal(
-    await service.deterministicAudit({ idempotencyKey: "audit-block" }),
+    await service.deterministicAudit({
+      idempotencyKey: "audit-block",
+      controls: auditControls,
+      triggeredJudgmentControlIds: ["mapping-exception"],
+      judgmentAnswers,
+    }),
     "Deterministic spreadsheet audit recorded BLOCK for formula.recalculate.",
   );
   assert.equal(calls.filter(([name]) => name === "auditPassed").length, 0);
-  const blocked = calls.find(([name]) => name === "auditBlocked")?.[1] as any;
-  assert.equal(blocked.checkId, "formula.recalculate");
-  assert.equal(blocked.evidenceFileId, "trusted-evidence");
-  assert.equal(blocked.idempotencyKey, "audit-block:formula.recalculate:1");
-  assert.equal(blocked.findings.length, 1);
-  assert.ok(blocked.findings[0].code.length <= 8);
-  assert.ok(blocked.findings[0].message.length <= 16);
+  assert.equal(calls.filter(([name]) => name === "auditBlocked").length, 0);
+  const attempt = calls.find(([name]) => name === "recordAuditAttempt")?.[1] as any;
+  assert.equal(calls.filter(([name]) => name === "auditAttemptRecorded").length, 1);
+  assert.equal(attempt.verdict, "block");
+  assert.deepEqual(
+    attempt.controls.map((control: any) => ({ id: control.id, verdict: control.verdict })),
+    [
+      { id: "source-total", verdict: "pass" },
+      { id: "mapping-exception", verdict: "pass" },
+      { id: "formula.recalculate", verdict: "block" },
+      { id: "summary.crossfoot", verdict: "pass" },
+      { id: "artifact.structure", verdict: "pass" },
+    ],
+  );
+  assert.deepEqual(attempt.controls[2].evidenceRefs, ["trusted-evidence", "Summary!B9"]);
+  assert.deepEqual(attempt.controls[2].repairActions[0].workbookRefs, ["Summary!B9"]);
+});
+
+test("audit remains pending until every approved judgment control has an answer", async () => {
+  const artifactBytes = new TextEncoder().encode("judgment workbook");
+  const { digestSpreadsheetArtifact } = await import("../src/finny/deterministic-spreadsheet-worker.ts");
+  const { initialFinnyPolicy } = await import("../src/finny/policy.ts");
+  const policy = initialFinnyPolicy(evaluator);
+  const results = [
+    {
+      checkId: "formula.recalculate" as const,
+      generation: 1,
+      verdict: "pass" as const,
+      evidence: { kind: "formula-recalculation" as const, cells: [] },
+    },
+    {
+      checkId: "summary.crossfoot" as const,
+      generation: 1,
+      verdict: "pass" as const,
+      evidence: { kind: "cross-foot" as const, comparisons: [] },
+    },
+    {
+      checkId: "artifact.structure" as const,
+      generation: 1,
+      verdict: "pass" as const,
+      evidence: { kind: "structure" as const, sheets: [] },
+    },
+  ];
+  const { factory, calls, job } = harness(
+    { role: "auditor" },
+    {
+      artifactBytes,
+      job: { artifactDigest: digestSpreadsheetArtifact(artifactBytes), provisionalRevision: "artifact-file", policy },
+      deterministicOutput: { evidenceFileId: "trusted-evidence", results },
+    },
+  );
+  const service = await factory.forTurn(parent);
+  assert.ok(service);
+  assert.match(
+    await service.deterministicAudit({
+      idempotencyKey: "audit-pending",
+      controls: auditControls,
+      triggeredJudgmentControlIds: ["mapping-exception"],
+    }),
+    /pending 1 judgment answer/,
+  );
+  const attempt = calls.find(([name]) => name === "recordAuditAttempt")?.[1] as any;
+  assert.equal(attempt.verdict, "pending_judgment");
+  assert.equal(attempt.completedAt, undefined);
+  assert.deepEqual(attempt.judgmentQuestions, [
+    {
+      controlId: "mapping-exception",
+      question: "Are remaining unmapped classifications materially misleading?",
+      onlyWhen: "Exceptions.material_count > 0",
+    },
+  ]);
+  job.currentAuditAttemptId = attempt.id;
+  const deterministicRuns = calls.filter(([name]) => name === "deterministicWorker").length;
+  const blockedControls = auditControls.map((control) =>
+    control.id === "mapping-exception"
+      ? {
+          ...control,
+          verdict: "block" as const,
+          repairActions: [{ message: "Resolve the material mapping exception", workbookRefs: ["xlsx:Exceptions!A2"] }],
+        }
+      : control,
+  );
+  const blockedJudgmentAnswers = [
+    {
+      controlId: "mapping-exception",
+      verdict: "block" as const,
+      evidenceRefs: ["xlsx:Exceptions!A2"],
+      rationale: "A material mapping exception remains.",
+    },
+  ];
+  assert.match(
+    await service.deterministicAudit({
+      idempotencyKey: "audit-judgment",
+      controls: blockedControls,
+      triggeredJudgmentControlIds: ["mapping-exception"],
+      judgmentAnswers: blockedJudgmentAnswers,
+    }),
+    /recorded BLOCK for mapping-exception/,
+  );
+  const completed = calls.find(([name]) => name === "completeAuditJudgment")?.[1] as any;
+  assert.equal(completed.attemptId, attempt.id);
+  assert.deepEqual(completed.judgmentAddendum.answers, blockedJudgmentAnswers);
+  assert.equal(calls.filter(([name]) => name === "deterministicWorker").length, deterministicRuns);
+  assert.match(
+    await service.deterministicAudit({
+      idempotencyKey: "audit-judgment",
+      controls: blockedControls,
+      triggeredJudgmentControlIds: ["mapping-exception"],
+      judgmentAnswers: blockedJudgmentAnswers,
+    }),
+    /recorded BLOCK for mapping-exception/,
+  );
+  assert.equal(calls.filter(([name]) => name === "completeAuditJudgment").length, 1);
+  assert.equal(calls.filter(([name]) => name === "deterministicWorker").length, deterministicRuns);
 });
 
 test("deterministic evaluator ERROR records neither PASS nor BLOCK", async () => {
@@ -1033,7 +1239,15 @@ test("deterministic evaluator ERROR records neither PASS nor BLOCK", async () =>
   );
   const service = await factory.forTurn(parent);
   assert.ok(service);
-  await assert.rejects(service.deterministicAudit({ idempotencyKey: "audit-error" }), /evaluator error.*formula/i);
+  await assert.rejects(
+    service.deterministicAudit({
+      idempotencyKey: "audit-error",
+      controls: auditControls,
+      triggeredJudgmentControlIds: ["mapping-exception"],
+      judgmentAnswers,
+    }),
+    /evaluator error.*formula.*evidence trusted-evidence/i,
+  );
   assert.equal(calls.filter(([name]) => name === "auditPassed").length, 0);
   assert.equal(calls.filter(([name]) => name === "auditBlocked").length, 0);
 });

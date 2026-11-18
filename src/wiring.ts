@@ -8,14 +8,14 @@ import { createHttpSpreadsheetCalculationEngine } from "./finny/http-spreadsheet
 import { createPostgresFinnyRuntimeStore } from "./finny/runtime-postgres-store.ts";
 import { createPostgresFinnyIntegrationStore } from "./finny/integration-postgres-store.ts";
 import { createFinnyWorkerGrants } from "./finny/worker-grants.ts";
-import { createSignedFinnyFinalizer } from "./finny/finalizer.ts";
+import { mintSignedPayload } from "./auth/signed-token.ts";
+import { deliverPendingCertifiedResults } from "./finny/certified-delivery.ts";
 import { createFinnyApprovalService } from "./finny/approval-service.ts";
 import { compileFinnyWorkerTask } from "./finny/plan.ts";
 import { createFinnyRuntimeCoordinator, reconcileFinnyRuntimeRecoveries } from "./finny/runtime-coordinator.ts";
 import {
   createFinnyEscalationDecision,
   createFinnyToolServiceFactory,
-  finnyFinalDelivery,
   resolveFinnyEvidenceFile,
   resolveFinnyFileArtifactProposal,
 } from "./finny/integration.ts";
@@ -547,6 +547,7 @@ export interface BuiltApp {
   skillSyncEngine: SkillSyncEngine;
   slackCore: SlackCoreClient;
   finnyCurrentJobReader?: ReturnType<typeof createFinnyCurrentJobReader>;
+  finnyResultReader?: NonNullable<ServerDeps["finnyResultReader"]>;
 }
 
 const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
@@ -1451,6 +1452,7 @@ export function buildApp(
     resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
   });
   let finnyCurrentJobReader: ReturnType<typeof createFinnyCurrentJobReader> | undefined;
+  let finnyResultReader: NonNullable<ServerDeps["finnyResultReader"]> | undefined;
   const finnyHostReader: FinnyJobReader = {
     readCurrentJob(input) {
       if (!finnyCurrentJobReader) throw new Error("Authoritative Finny job reader is unavailable");
@@ -2106,6 +2108,7 @@ export function buildApp(
   let closeFinnyRecovery: (() => Promise<void>) | undefined;
   if (config.finny) {
     const finnyJobs = createPostgresFinnyStore(config.databaseUrl!);
+    finnyResultReader = { get: (resultId) => finnyJobs.getCertifiedResultById(resultId) };
     const finnyRuntime = createPostgresFinnyRuntimeStore(config.databaseUrl!);
     const finnyIntegration = createPostgresFinnyIntegrationStore(config.databaseUrl!);
     const finnyRecoveryBus = createPostgresNotifyBus<{ at: number }>(
@@ -2118,7 +2121,6 @@ export function buildApp(
       engine: spreadsheetCalculationEngine!,
       files,
     });
-    const finnyFinalizer = createSignedFinnyFinalizer(finnyJobs, config.finny.signingSecret);
     finnyCurrentJobReader = createFinnyCurrentJobReader({
       jobs: finnyJobs,
       runtime: finnyRuntime,
@@ -2211,8 +2213,6 @@ export function buildApp(
         recoveryWake: () => finnyRecoveryBus.emit({ at: Date.now() }),
       });
     };
-    let afterRecoveredAuditPassed: (input: { scopeId: string; jobId: string }) => Promise<void> = async () => {};
-    let afterRecoveredAuditBlocked: (input: { scopeId: string; jobId: string }) => Promise<void> = async () => {};
     let recoveryRequested = false;
     let recoveryRunning: Promise<void> | undefined;
     const reconcileRuntime = async () => {
@@ -2226,14 +2226,7 @@ export function buildApp(
           const coordinator = await coordinatorFor(scopeId, jobId);
           return {
             artifactReady: (input) => coordinator.artifactReady(input),
-            auditPassed: async (input) => {
-              await coordinator.auditPassed(input);
-              await afterRecoveredAuditPassed(input);
-            },
-            auditBlocked: async (input) => {
-              await coordinator.auditBlocked(input);
-              await afterRecoveredAuditBlocked(input);
-            },
+            auditAttemptRecorded: (input) => coordinator.auditAttemptRecorded(input),
             verificationReopened: (input) => coordinator.verificationReopened(input),
           };
         },
@@ -2307,9 +2300,7 @@ export function buildApp(
         parentSessionId: parent.binding.sessionId,
         parentRunId: parent.binding.runId,
         idempotencyKey: `finny:${input.jobId}:${input.requestId}:approved`,
-        ...(input.retryTerminalProducerRunId
-          ? { retryTerminalProducerRunId: input.retryTerminalProducerRunId }
-          : {}),
+        ...(input.retryTerminalProducerRunId ? { retryTerminalProducerRunId: input.retryTerminalProducerRunId } : {}),
       });
     };
     const deliverPlanApproval = async (input: { scopeId: string; jobId: string }) => {
@@ -2379,33 +2370,6 @@ export function buildApp(
       });
       await finnyRuntime.retireJob(job.scopeId, job.id);
     };
-    const deliverFinal = async (
-      job: import("./finny/types.ts").FinnyJob,
-      receipt: import("./finny/types.ts").FinnyFinalReceipt,
-    ) => {
-      const parent = await finnyIntegration.getParent(job.scopeId, job.id);
-      if (!parent) throw new Error("Finny final delivery has no bound destination");
-      if (!config.publicWebUrl) throw new Error("Finny final delivery requires PUBLIC_WEB_URL");
-      await deliveries.enqueue(finnyFinalDelivery(parent, job, receipt, config.publicWebUrl));
-      await finnyRuntime.retireJob(job.scopeId, job.id);
-    };
-    const completeAuditPassed = async (input: { scopeId: string; jobId: string }) => {
-      if (!(await finnyIntegration.readyForFinalization(input.scopeId, input.jobId))) return;
-      const receipt = await finnyFinalizer.finalize({
-        scopeId: input.scopeId,
-        jobId: input.jobId,
-        idempotencyKey: `finny-auto-final:${input.jobId}`,
-      });
-      const job = await finnyJobs.getJob(input.scopeId, input.jobId);
-      if (!job) throw new Error("Finny finalized job is unavailable");
-      await deliverFinal(job, receipt);
-    };
-    const completeAuditBlocked = async (input: { scopeId: string; jobId: string }) => {
-      const job = await finnyJobs.getJob(input.scopeId, input.jobId);
-      if (job?.unresolvedEscalationSequence !== undefined) await deliverEscalation(job);
-    };
-    afterRecoveredAuditPassed = completeAuditPassed;
-    afterRecoveredAuditBlocked = completeAuditBlocked;
     finnyTools = createFinnyToolServiceFactory({
       config: config.finny,
       jobs: finnyJobs,
@@ -2418,18 +2382,18 @@ export function buildApp(
         async artifactReady(input) {
           await (await coordinatorFor(input.scopeId, input.jobId)).artifactReady(input);
         },
-        async auditPassed(input) {
-          await (await coordinatorFor(input.scopeId, input.jobId)).auditPassed(input);
-          await completeAuditPassed(input);
-        },
-        async auditBlocked(input) {
-          await (await coordinatorFor(input.scopeId, input.jobId)).auditBlocked(input);
-          await completeAuditBlocked(input);
+        async auditAttemptRecorded(input) {
+          await (await coordinatorFor(input.scopeId, input.jobId)).auditAttemptRecorded(input);
         },
       },
-      finalizer: finnyFinalizer,
-      async deliverFinal({ job, receipt }) {
-        await deliverFinal(job, receipt);
+      async certifyResult(input) {
+        await finnyJobs.certifyResult(input, (payload) => mintSignedPayload(payload, config.finny!.signingSecret));
+      },
+      async deliverCertifiedResults() {
+        if (!config.publicWebUrl) throw new Error("Finny certified result delivery requires PUBLIC_WEB_URL");
+        await deliverPendingCertifiedResults(finnyJobs, deliveries, config.publicWebUrl, (result) =>
+          finnyRuntime.retireJob(result.scopeId, result.jobId),
+        );
       },
     });
     const recoverOne = async (kind: string, scopeId: string, jobId: string, work: () => Promise<void>) => {
@@ -2449,6 +2413,10 @@ export function buildApp(
     };
     recoverFinny = async () => {
       await finnyJobs.getJob("__finny_schema__", "__finny_schema__");
+      if (config.publicWebUrl)
+        await deliverPendingCertifiedResults(finnyJobs, deliveries, config.publicWebUrl, (result) =>
+          finnyRuntime.retireJob(result.scopeId, result.jobId),
+        );
       for (const intent of await finnyIntegration.pendingPlanIntents())
         await recoverOne("plan_intent", intent.job.scopeId, intent.job.id, async () => {
           const existing = await finnyJobs.getJob(intent.job.scopeId, intent.job.id);
@@ -2483,19 +2451,6 @@ export function buildApp(
           const job = await finnyJobs.getJob(pending.scopeId, pending.jobId);
           if (!job) throw new Error("Finny approved recovery job is unavailable");
           if (job.unresolvedEscalationSequence !== undefined) await deliverEscalation(job);
-          else if (await finnyIntegration.readyForFinalization(job.scopeId, job.id)) {
-            const receipt = await finnyFinalizer.finalize({
-              scopeId: job.scopeId,
-              jobId: job.id,
-              idempotencyKey: `finny-auto-final:${job.id}`,
-            });
-            await deliverFinal(job, receipt);
-          }
-        });
-      for (const finalized of await finnyIntegration.finalizedParents())
-        await recoverOne("final_delivery", finalized.scopeId, finalized.jobId, async () => {
-          const job = await finnyJobs.getJob(finalized.scopeId, finalized.jobId);
-          if (job?.finalReceipt) await deliverFinal(job, job.finalReceipt);
         });
     };
     finnyRecoverySweeper.start();
@@ -3431,6 +3386,7 @@ export function buildApp(
     sessionStateBus,
     sessionSyscalls,
     ...(finnyCurrentJobReader ? { finnyCurrentJobReader } : {}),
+    ...(finnyResultReader ? { finnyResultReader } : {}),
     ledgerEventBus,
     surfaceCache,
     runtime,
@@ -3551,6 +3507,7 @@ export function serverDeps(
     capabilityTokenCompression: config.capabilityTokenCompression,
     ...(config.portalIdentitySecret ? { portalIdentitySecret: config.portalIdentitySecret } : {}),
     ...(config.requireSignedPortalIdentity ? { requireSignedPortalIdentity: true } : {}),
+    ...(built.finnyResultReader ? { finnyResultReader: built.finnyResultReader } : {}),
     replayDedupe: built.replayDedupe,
     ...(built.brokerSessions ? { brokerSessions: built.brokerSessions } : {}),
     config: built.config,
