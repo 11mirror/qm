@@ -1,19 +1,21 @@
 # Finny Phase 2 SOP Implementation Handover
 
-Status: Implemented and verified on the production-shaped QM web surface; independent PR review and Slack acceptance remain
+Status: Complete and superseded after [PR #35](https://github.com/11mirror/qm/pull/35) merged as `897066570`; continue with the [Phase 3 handover](./2026-11-18-finny-phase-3-handover.md)
 Date: 2026-11-18  
 Authoritative design and evidence: [Finny High-Performance SOP Harness](./2026-11-17-finny-high-performance-sop-harness.md)  
 Phase 1 review: [11mirror/qm#34](https://github.com/11mirror/qm/pull/34)
 
-## Outcome for the next session
+## Completed outcome
 
-The smallest durable, finance-specific task SOP slice is implemented and verified. The remaining handoff is independent review, Slack acceptance, and PR completion without expanding into the separately gated audit/result schemas or corpus.
+The smallest durable, finance-specific task SOP slice is implemented, independently reviewed, accepted on web and Slack, and merged. The separately gated audit/result schemas and corpus remain outside Phase 2.
 
 Phase 1 is complete at implementation commit `db90d6cf5`: Finny uses the real tool contract, opens the Producer only after approval, opens the Auditor only after an artifact, and recovers incomplete terminal work from durable job state. Do not redesign that topology.
 
-PR #34 merged through the required merge path as `7d40666e7`. Phase 2 continues on `codex/finny-sop-v1`. The user approved the complete schema review recorded in the [Phase 2 SOP and job schema gate](./2026-11-17-finny-high-performance-sop-harness.md#phase-2-sop-and-job-schema-gate), and the approved shape is implemented. Audit-attempt and certified-result shapes remain separate human gates.
+PR #34 merged through the required merge path as `7d40666e7`; PR #35 merged Phase 2 as `897066570`. The user approved the complete schema review recorded in the [Phase 2 SOP and job schema gate](./2026-11-17-finny-high-performance-sop-harness.md#phase-2-sop-and-job-schema-gate), and the approved shape is implemented. Audit-attempt and certified-result shapes remain separate human gates.
 
-## Start here
+## Historical Phase 2 execution checklist
+
+The checklist below is retained as implementation history. Do not use it to start new work; use the [Phase 3 handover](./2026-11-18-finny-phase-3-handover.md).
 
 1. Read `docs/SPEC.md`, `CODING_STANDARDS.md`, `REVIEW.md`, this handover, and the full high-performance plan.
 2. Confirm PR #34 is complete through the merge queue. Never bypass it with an admin merge.
@@ -136,4 +138,4 @@ Hard failures include wrong-scope SOP reuse, execution under a stale approval di
 
 ## Copyable next-session instruction
 
-Continue Finny Phase 2 from `docs/plans/2026-11-18-finny-sop-phase-2-handover.md`. Use `docs/plans/2026-11-17-finny-high-performance-sop-harness.md` as the running source of truth. Confirm PR #34 completed through the merge queue, branch from updated `main`, and keep the Mac caffeinated. First record and present the complete old/new SOP and job schema review. After that human gate, use test-driven development to implement and verify the smallest durable `finny.sop.v1` slice, update the running plan continuously with commits, tests, live evidence, token use, and timing, and release caffeine only after the agreed definition of done.
+Continue Finny from `docs/plans/2026-11-18-finny-phase-3-handover.md`. Use `docs/plans/2026-11-17-finny-high-performance-sop-harness.md` as the running source of truth, branch from updated `main`, and begin with the Phase 3 durable completion-path census.
