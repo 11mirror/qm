@@ -1770,14 +1770,6 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
             ) {
               checkId = failed[0]!.id as FinnyCheckId;
             }
-          } else if (
-            blocked?.type === "audit_blocked" &&
-            blocked.payload.artifactDigest === row.artifact_digest &&
-            FINNY_DETERMINISTIC_CHECK_IDS.includes(
-              blocked.payload.checkId as (typeof FINNY_DETERMINISTIC_CHECK_IDS)[number],
-            )
-          ) {
-            checkId = blocked.payload.checkId;
           }
           if (!checkId)
             throw new Error("Finny pending rework is non-deterministic or unrelated to evaluator correction");

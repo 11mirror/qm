@@ -2,13 +2,7 @@ import { createHash } from "node:crypto";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { createPostgresAdvisoryLock } from "../persistence/advisory-lock.ts";
 import { terminalFinnyWorkerRunSql } from "./run-state.ts";
-import type {
-  FinnyAuditAttemptVerdict,
-  FinnyAuditControlResult,
-  FinnyAuditFinding,
-  FinnyCheckId,
-  FinnyWorkerRole,
-} from "./types.ts";
+import type { FinnyAuditAttemptVerdict, FinnyAuditControlResult, FinnyWorkerRole } from "./types.ts";
 
 export type FinnyRuntimeRole = "parent" | FinnyWorkerRole;
 
@@ -34,34 +28,6 @@ export interface FinnyArtifactReadyRecovery {
   retryTerminalAuditorRunId?: string;
 }
 
-export interface FinnyAuditPassedRecovery {
-  kind: "audit_passed";
-  sessionId: string;
-  runId: string;
-  scopeId: string;
-  jobId: string;
-  artifactDigest: string;
-  checkId: FinnyCheckId;
-  generation: number;
-  evidenceFileId: string;
-  idempotencyKey: string;
-}
-
-export interface FinnyAuditBlockedRecovery {
-  kind: "audit_blocked";
-  sessionId: string;
-  runId: string;
-  scopeId: string;
-  jobId: string;
-  artifactDigest: string;
-  checkId: FinnyCheckId;
-  generation: number;
-  evidenceFileId: string;
-  findings: FinnyAuditFinding[];
-  idempotencyKey: string;
-  retryTerminalProducerRunId?: string;
-}
-
 export interface FinnyVerificationReopenedRecovery {
   kind: "verification_reopened";
   scopeId: string;
@@ -83,11 +49,7 @@ export interface FinnyAuditAttemptRecordedRecovery {
 }
 
 export type FinnyRuntimeRecovery =
-  | FinnyArtifactReadyRecovery
-  | FinnyAuditPassedRecovery
-  | FinnyAuditBlockedRecovery
-  | FinnyVerificationReopenedRecovery
-  | FinnyAuditAttemptRecordedRecovery;
+  FinnyArtifactReadyRecovery | FinnyVerificationReopenedRecovery | FinnyAuditAttemptRecordedRecovery;
 
 export interface InitialFinnyRuntimeBindings {
   scopeId: string;
