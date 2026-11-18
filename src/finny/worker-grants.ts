@@ -60,7 +60,7 @@ export function createFinnyWorkerGrants(store: FinnyStore, secret: string, now: 
       runId: input.runId,
       ...(job.artifactDigest ? { artifactDigest: job.artifactDigest } : {}),
       policyDigest: policyDigest(job.policy),
-      allowedChecks: role === "auditor" ? [...FINNY_CHECK_IDS] : [],
+      allowedChecks: [],
       issuedAt: now(),
       expiresAt: input.expiresAt,
     };

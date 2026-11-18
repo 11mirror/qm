@@ -7,6 +7,8 @@ import { createPostgresFinnyRuntimeStore, type FinnyRuntimeRecovery } from "../s
 import { initialFinnyPolicy } from "../src/finny/policy.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresFinnyStore } from "../src/finny/postgres-store.ts";
+import type { RecordFinnyAuditAttemptInput } from "../src/finny/store.ts";
+import type { FinnyJob } from "../src/finny/types.ts";
 import { createFinnyWorkerGrants } from "../src/finny/worker-grants.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import type { SessionOpenInput } from "../src/sessions/session-syscalls.ts";
@@ -66,15 +68,69 @@ function coreRuntimeAuthority() {
         if (input.idempotencyKey === "artifact-2") {
           return { artifactDigest: "artifact-v2", provisionalRevision: "revision-2" };
         }
-        return { artifactDigest: "artifact-sha256", provisionalRevision: "revision-1" };
+        return { artifactDigest: "a".repeat(64), provisionalRevision: "revision-1" };
       },
     },
     workerPolicy: {
       credentials() {
         return { principalId: "U1", expiresAt: Date.now() + 60_000 };
       },
-      task(_job: unknown, role: "producer" | "auditor") {
-        return role === "producer" ? "Create the approved workbook" : "Audit the current artifact independently";
+      producerTask() {
+        return "Create the approved workbook";
+      },
+    },
+    coreAudit: {
+      async run(job: FinnyJob, idempotencyKey: string): Promise<RecordFinnyAuditAttemptInput> {
+        assert.ok(job.artifactDigest);
+        assert.ok(job.provisionalRevision);
+        assert.ok(job.sopBinding);
+        return {
+          id: `core-attempt-${job.id}-${job.policy.evaluator.configurationDigest}`,
+          scopeId: job.scopeId,
+          jobId: job.id,
+          sopVersionId: job.sopBinding.versionId,
+          executionDigest: job.sopBinding.executionDigest,
+          artifactFileId: job.provisionalRevision,
+          artifactSha256: job.artifactDigest,
+          artifactMime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" as const,
+          artifactSizeBytes: 1024,
+          evaluator: job.policy.evaluator,
+          controls: [
+            {
+              id: "source-total",
+              verdict: "pass" as const,
+              evidenceRefs: ["xlsx:Summary!B7"],
+              repairActions: [],
+              deterministicAuthority: {
+                evaluator: job.policy.evaluator,
+                reasonSchemaVersion: "finny.spreadsheet-worker.v2",
+                reasonCode: "summary_crossfoot_match",
+              },
+            },
+            {
+              id: "mapping-exception",
+              verdict: "block" as const,
+              evidenceRefs: ["xlsx:Exceptions!A1"],
+              repairActions: [],
+              deterministicAuthority: {
+                evaluator: job.policy.evaluator,
+                reasonSchemaVersion: "finny.spreadsheet-worker.v2",
+                reasonCode: "mapping_exception_present",
+              },
+            },
+          ],
+          judgmentQuestions: [
+            {
+              controlId: "mapping-exception",
+              question: "Is this exception materially acceptable?",
+              onlyWhen: "The deterministic exception count is non-zero.",
+            },
+          ],
+          verdict: "pending_judgment" as const,
+          issuerPrincipalId: "finny-deterministic-spreadsheet-worker",
+          issuerRunId: "core-audit-run",
+          idempotencyKey,
+        };
       },
     },
   };
@@ -448,7 +504,7 @@ test("rejects artifact readiness from a stale producer run", async () => {
   assert.equal((await jobs.getJob(job.scopeId, job.id))?.artifactDigest, undefined);
 });
 
-test("artifact readiness starts one actionable Auditor run after committing the artifact", async () => {
+test("artifact readiness records a deterministic PASS without opening an Auditor", async () => {
   const { jobs, job, connectionString } = await approvedJob();
   const runtime = createPostgresFinnyRuntimeStore(connectionString);
   await runtime.bindParent({
@@ -488,6 +544,17 @@ test("artifact readiness starts one actionable Auditor run after committing the 
       },
     },
     ...coreRuntimeAuthority(),
+    coreAudit: {
+      async run(current, idempotencyKey) {
+        const pending = await coreRuntimeAuthority().coreAudit.run(current, idempotencyKey);
+        return {
+          ...pending,
+          controls: pending.controls.map((control) => ({ ...control, verdict: "pass" as const })),
+          judgmentQuestions: [],
+          verdict: "pass" as const,
+        };
+      },
+    },
   });
 
   await coordinator.artifactReady({
@@ -498,10 +565,10 @@ test("artifact readiness starts one actionable Auditor run after committing the 
     idempotencyKey: "artifact-1",
   });
 
-  assert.deepEqual(openTasks, ["Audit the current artifact independently"]);
+  assert.deepEqual(openTasks, []);
   assert.equal(dispatches, 0);
-  assert.equal((await runtime.currentBinding("auditor-session"))?.runId, "auditor-run");
-  assert.equal((await jobs.getJob(job.scopeId, job.id))?.artifactDigest, "artifact-sha256");
+  assert.equal(await runtime.currentBinding("auditor-session"), null);
+  assert.equal((await jobs.getJob(job.scopeId, job.id))?.artifactDigest, "a".repeat(64));
 });
 
 test("replaying approval reuses the active Producer admission", async () => {
@@ -737,6 +804,7 @@ test("artifact readiness derives artifact and Auditor grant authority from Core 
   await runtime.retireBinding({ sessionId: "auditor-session", runId: "auditor-run", role: "auditor" });
   const realGrants = createFinnyWorkerGrants(jobs, "runtime-test-secret");
   let issuedPrincipal = "";
+  let auditorTask = "";
   const coordinator = createFinnyRuntimeCoordinator({
     jobs,
     runtime,
@@ -749,6 +817,7 @@ test("artifact readiness derives artifact and Auditor grant authority from Core 
     },
     sessions: {
       async open(input) {
+        auditorTask = input.task;
         const identity = { sessionId: "core-auditor-session", runId: "core-auditor-run" };
         await input.beforeEnqueue?.(identity);
         return { ok: true as const, ...identity, title: input.name ?? "Finny Auditor" };
@@ -761,17 +830,18 @@ test("artifact readiness derives artifact and Auditor grant authority from Core 
     },
     artifactBinding: {
       async resolve() {
-        return { artifactDigest: "core-artifact", provisionalRevision: "core-revision" };
+        return { artifactDigest: "b".repeat(64), provisionalRevision: "core-revision" };
       },
     },
     workerPolicy: {
       credentials() {
         return { principalId: "core-principal", expiresAt: Date.now() + 60_000 };
       },
-      task(_job, role) {
-        return role === "producer" ? "Core producer task" : "Core Auditor task";
+      producerTask() {
+        return "Core producer task";
       },
     },
+    coreAudit: coreRuntimeAuthority().coreAudit,
   });
 
   await coordinator.artifactReady({
@@ -783,9 +853,32 @@ test("artifact readiness derives artifact and Auditor grant authority from Core 
   });
 
   const current = await jobs.getJob(job.scopeId, job.id);
-  assert.equal(current?.artifactDigest, "core-artifact");
+  assert.equal(current?.artifactDigest, "b".repeat(64));
   assert.equal(current?.provisionalRevision, "core-revision");
   assert.equal(issuedPrincipal, "core-principal");
+  const parsedTask = JSON.parse(auditorTask);
+  assert.deepEqual(Object.keys(parsedTask), [
+    "schema",
+    "jobId",
+    "attemptId",
+    "artifactDigest",
+    "executionDigest",
+    "evaluator",
+    "controls",
+    "questions",
+  ]);
+  assert.equal(parsedTask.schema, "finny.audit-judgment-task.v1");
+  assert.equal(parsedTask.artifactDigest, "b".repeat(64));
+  assert.deepEqual(parsedTask.questions, [
+    {
+      controlId: "mapping-exception",
+      question: "Is this exception materially acceptable?",
+      onlyWhen: "The deterministic exception count is non-zero.",
+    },
+  ]);
+  assert.equal("sop" in parsedTask, false);
+  assert.equal("steps" in parsedTask, false);
+  assert.equal("sources" in parsedTask, false);
 });
 
 test("artifact action replay retains committed authority and recovers an unfinished audit", async () => {
@@ -808,7 +901,8 @@ test("artifact action replay retains committed authority and recovers an unfinis
   });
   const delivered = new Set<string>();
   let openedAuditors = 0;
-  let resolvedArtifact = { artifactDigest: "artifact-sha256", provisionalRevision: "revision-1" };
+  let coreAuditRuns = 0;
+  let resolvedArtifact = { artifactDigest: "a".repeat(64), provisionalRevision: "revision-1" };
   const coordinator = createFinnyRuntimeCoordinator({
     jobs,
     runtime,
@@ -827,6 +921,12 @@ test("artifact action replay retains committed authority and recovers an unfinis
       },
     },
     workerPolicy: coreRuntimeAuthority().workerPolicy,
+    coreAudit: {
+      async run(current, idempotencyKey) {
+        coreAuditRuns += 1;
+        return coreRuntimeAuthority().coreAudit.run(current, idempotencyKey);
+      },
+    },
     artifactBinding: {
       async resolve() {
         return resolvedArtifact;
@@ -848,7 +948,8 @@ test("artifact action replay retains committed authority and recovers an unfinis
 
   assert.deepEqual([...delivered], []);
   assert.equal(openedAuditors, 1);
-  assert.equal((await jobs.getJob(job.scopeId, job.id))?.artifactDigest, "artifact-sha256");
+  assert.equal(coreAuditRuns, 1);
+  assert.equal((await jobs.getJob(job.scopeId, job.id))?.artifactDigest, "a".repeat(64));
 });
 
 test("Auditor admission recovers from committed artifact authority without resolving the proposal again", async () => {
@@ -926,6 +1027,7 @@ test("Auditor admission recovers from committed artifact authority without resol
       },
     },
     workerPolicy: coreRuntimeAuthority().workerPolicy,
+    coreAudit: coreRuntimeAuthority().coreAudit,
   });
   await restarted.artifactReady(pending[0]!);
   assert.equal(openedAuditors, 1);
@@ -992,6 +1094,7 @@ test("Auditor admission recovers from committed artifact authority without resol
       },
     },
     workerPolicy: coreRuntimeAuthority().workerPolicy,
+    coreAudit: coreRuntimeAuthority().coreAudit,
   });
   await retry.artifactReady(terminalRecovery!);
   await retry.artifactReady(terminalRecovery!);
@@ -1082,7 +1185,7 @@ test("restart replays artifact authority committed before the job event", async 
     kind: "artifact_ready",
     role: "producer",
     requestDigest: runtimeDigest({}),
-    authorityPayload: { artifactDigest: "artifact-sha256", provisionalRevision: "revision-1" },
+    authorityPayload: { artifactDigest: "a".repeat(64), provisionalRevision: "revision-1" },
   });
   assert.deepEqual(await runtime.pendingRecoveries(), [
     { kind: "artifact_ready", ...input, retryTerminalAuditorRunId: "auditor-run" },
@@ -1121,6 +1224,7 @@ test("restart replays artifact authority committed before the job event", async 
       },
     },
     workerPolicy: coreRuntimeAuthority().workerPolicy,
+    coreAudit: coreRuntimeAuthority().coreAudit,
   });
   const [recovery] = await runtime.pendingRecoveries();
   assert.equal(recovery?.kind, "artifact_ready");
@@ -1134,7 +1238,7 @@ test("expired delivered reverification grants return to recovery", async () => {
   await jobs.recordArtifactReady({
     scopeId: job.scopeId,
     jobId: job.id,
-    artifactDigest: "artifact-sha256",
+    artifactDigest: "a".repeat(64),
     provisionalRevision: "revision-1",
     idempotencyKey: "artifact-before-expired-reverify",
   });
@@ -1215,7 +1319,7 @@ test("fresh reverification admission preserves Auditor human-wait outcomes", asy
   await jobs.recordArtifactReady({
     scopeId: job.scopeId,
     jobId: job.id,
-    artifactDigest: "artifact-sha256",
+    artifactDigest: "a".repeat(64),
     provisionalRevision: "revision-1",
     idempotencyKey: "artifact-before-fresh-reverify",
   });
@@ -1302,7 +1406,7 @@ test("orphaned delivered reverification retries its observed Auditor once", asyn
   await jobs.recordArtifactReady({
     scopeId: job.scopeId,
     jobId: job.id,
-    artifactDigest: "artifact-sha256",
+    artifactDigest: "a".repeat(64),
     provisionalRevision: "revision-1",
     idempotencyKey: "artifact-before-orphaned-reverify",
   });
@@ -1399,7 +1503,7 @@ test("terminal delivered reverification retries its observed Auditor", async () 
   await jobs.recordArtifactReady({
     scopeId: job.scopeId,
     jobId: job.id,
-    artifactDigest: "artifact-sha256",
+    artifactDigest: "a".repeat(64),
     provisionalRevision: "revision-1",
     idempotencyKey: "artifact-before-terminal-reverify",
   });

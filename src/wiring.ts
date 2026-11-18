@@ -1,4 +1,5 @@
 import { createPostgresFinnyStore } from "./finny/postgres-store.ts";
+import { createFinnyCoreAuditStage, readFinnyCoreAuditArtifact } from "./finny/core-audit.ts";
 import { reconcileFinnyEvaluatorCorrections } from "./finny/evaluator-correction.ts";
 import {
   createPersistedDeterministicSpreadsheetWorker,
@@ -2116,6 +2117,9 @@ export function buildApp(
       engine: spreadsheetCalculationEngine!,
       files,
     });
+    const finnyCoreAudit = createFinnyCoreAuditStage({
+      runSpreadsheetWorker: (input) => deterministicSpreadsheetWorker.run(input),
+    });
     finnyCurrentJobReader = createFinnyCurrentJobReader({
       jobs: finnyJobs,
       runtime: finnyRuntime,
@@ -2189,8 +2193,25 @@ export function buildApp(
               expiresAt: Date.now() + config.finny!.workerGrantTtlMs,
             };
           },
-          task(job, role) {
-            return JSON.stringify(compileFinnyWorkerTask(job, role));
+          producerTask(job) {
+            return JSON.stringify(compileFinnyWorkerTask(job, "producer"));
+          },
+        },
+        coreAudit: {
+          async run(job, idempotencyKey) {
+            if (!job.provisionalRevision) throw new Error("Finny core audit requires an artifact file");
+            const artifact = await readFinnyCoreAuditArtifact(
+              files,
+              job.scopeId,
+              job.provisionalRevision,
+              config.finny!.spreadsheetEngine.maxArtifactBytes,
+            );
+            return finnyCoreAudit.run({
+              job,
+              artifact,
+              idempotencyKey,
+              issuerRunId: idempotencyKey,
+            });
           },
         },
         recoveryWake: () => finnyRecoveryBus.emit({ at: Date.now() }),
@@ -2359,8 +2380,6 @@ export function buildApp(
       runtime: finnyRuntime,
       integration: finnyIntegration,
       deliveries,
-      files,
-      deterministicSpreadsheetWorker,
       coordinator: {
         async artifactReady(input) {
           await (await coordinatorFor(input.scopeId, input.jobId)).artifactReady(input);
