@@ -14,20 +14,20 @@ Review PR: [11mirror/qm#34](https://github.com/11mirror/qm/pull/34)
 
 This table is the quick handoff. Follow the links for design, implementation, and measured evidence.
 
-| Area | Done | Where and evidence |
-| --- | --- | --- |
-| Research | Audited downstream Finny, current upstream QM, Pi execution, and LoopForge SOP patterns | [Evidence baseline](#evidence-baseline) and [architectural position](#architectural-position) |
-| Phase 0 | Added fail-closed measurement of worker turns, pre-artifact Auditor starts, certified-delivery time, and per-role tokens | [Analyzer](../../evals/finny-high-performance-v1/baseline.mts), [tests](../../test/finny-phase0-baseline.test.ts), and [eval design](#finny-high-performance-eval-v1) |
-| Tool contract | Replaced imaginary standalone Finny tools with the real `finny(action="...")` contract | [Finny tool](../../src/agent/agent-tools/finny.ts), [seed skill](../../skills-seed/finnyloop/SKILL.md), and [Phase 1 details](#phase-1--remove-accidental-pi-work) |
-| Worker lifecycle | Approval now starts one actionable Producer; artifact commit starts one actionable Auditor | [Runtime coordinator](../../src/finny/runtime-coordinator.ts), [runtime store](../../src/finny/runtime-postgres-store.ts), and [lifecycle tests](../../test/finny-runtime-coordinator.test.ts) |
-| Durable recovery | Successful-but-incomplete terminal worker runs are reconciled from durable job state without placeholder turns | [Integration](../../src/finny/integration.ts), [integration store](../../src/finny/integration-postgres-store.ts), and [recovery tests](../../test/finny-integration-runtime.test.ts) |
-| Web approval | Preserved the durable Finny request identity and projects the ready plan immediately after a material clarification | [Orchestrator](../../src/core/orchestrator.ts), [approval service](../../src/finny/approval-service.ts), [regression test](../../test/finny-web-approval.test.ts), and [web evidence](#phase-01-live-measurement--qm-web) |
-| Live web result | Certified XLSX delivered with one Producer and one post-artifact Auditor; total tokens fell 21.6% in the paired run | [Web baseline and candidate](#phase-01-live-measurement--qm-web) |
-| Live Slack result | Certified XLSX attached in the 11mirror `finny-staging` DM with one Producer and one post-artifact Auditor; total tokens fell 43.2% | [Slack baseline and candidate](#phase-01-live-measurement--slack) |
-| Verification | Phase 1 focused suites, typecheck, ESLint/oxlint, FinnyLoop r5, and real Chrome web plus Slack QA pass | [Running implementation log](#running-implementation-log) and [r5 manifest](../../evals/finnyloop-r5/manifest.json) |
-| Schema/config | No database schema, persisted payload, or configuration change in Phase 0/1 | [Phase 0/1 evidence](#phase-01-live-measurement--qm-web) |
-| Next gate | Complete PR review, then implement and verify the first durable task-level SOP slice; do not claim a latency win from one pair | [Phase 2](#phase-2--durable-sop-creation-and-execution) and [human decisions](#required-human-decisions-for-phase-2-gates) |
-| Next-session handover | Phase 2 execution order, guardrails, schema gate, verification, and definition of done | [Finny Phase 2 SOP implementation handover](./2026-11-18-finny-sop-phase-2-handover.md) |
+| Area                  | Done                                                                                                                                | Where and evidence                                                                                                                                                                                                        |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Research              | Audited downstream Finny, current upstream QM, Pi execution, and LoopForge SOP patterns                                             | [Evidence baseline](#evidence-baseline) and [architectural position](#architectural-position)                                                                                                                             |
+| Phase 0               | Added fail-closed measurement of worker turns, pre-artifact Auditor starts, certified-delivery time, and per-role tokens            | [Analyzer](../../evals/finny-high-performance-v1/baseline.mts), [tests](../../test/finny-phase0-baseline.test.ts), and [eval design](#finny-high-performance-eval-v1)                                                     |
+| Tool contract         | Replaced imaginary standalone Finny tools with the real `finny(action="...")` contract                                              | [Finny tool](../../src/agent/agent-tools/finny.ts), [seed skill](../../skills-seed/finnyloop/SKILL.md), and [Phase 1 details](#phase-1--remove-accidental-pi-work)                                                        |
+| Worker lifecycle      | Approval now starts one actionable Producer; artifact commit starts one actionable Auditor                                          | [Runtime coordinator](../../src/finny/runtime-coordinator.ts), [runtime store](../../src/finny/runtime-postgres-store.ts), and [lifecycle tests](../../test/finny-runtime-coordinator.test.ts)                            |
+| Durable recovery      | Successful-but-incomplete terminal worker runs are reconciled from durable job state without placeholder turns                      | [Integration](../../src/finny/integration.ts), [integration store](../../src/finny/integration-postgres-store.ts), and [recovery tests](../../test/finny-integration-runtime.test.ts)                                     |
+| Web approval          | Preserved the durable Finny request identity and projects the ready plan immediately after a material clarification                 | [Orchestrator](../../src/core/orchestrator.ts), [approval service](../../src/finny/approval-service.ts), [regression test](../../test/finny-web-approval.test.ts), and [web evidence](#phase-01-live-measurement--qm-web) |
+| Live web result       | Certified XLSX delivered with one Producer and one post-artifact Auditor; total tokens fell 21.6% in the paired run                 | [Web baseline and candidate](#phase-01-live-measurement--qm-web)                                                                                                                                                          |
+| Live Slack result     | Certified XLSX attached in the 11mirror `finny-staging` DM with one Producer and one post-artifact Auditor; total tokens fell 43.2% | [Slack baseline and candidate](#phase-01-live-measurement--slack)                                                                                                                                                         |
+| Verification          | Phase 1 focused suites, typecheck, ESLint/oxlint, FinnyLoop r5, and real Chrome web plus Slack QA pass                              | [Running implementation log](#running-implementation-log) and [r5 manifest](../../evals/finnyloop-r5/manifest.json)                                                                                                       |
+| Schema/config         | No database schema, persisted payload, or configuration change in Phase 0/1                                                         | [Phase 0/1 evidence](#phase-01-live-measurement--qm-web)                                                                                                                                                                  |
+| Next gate             | Complete PR review, then implement and verify the first durable task-level SOP slice; do not claim a latency win from one pair      | [Phase 2](#phase-2--durable-sop-creation-and-execution) and [human decisions](#required-human-decisions-for-phase-2-gates)                                                                                                |
+| Next-session handover | Phase 2 execution order, guardrails, schema gate, verification, and definition of done                                              | [Finny Phase 2 SOP implementation handover](./2026-11-18-finny-sop-phase-2-handover.md)                                                                                                                                   |
 
 ## How to use this document
 
@@ -517,6 +517,438 @@ This satisfies the requirement that agents can quickly see the latest SOP and ce
 
 The proposed cutover removes writable per-check attestations and generation counters only after human approval of the complete schema diff. Existing signed final receipts remain historical objects and are never rewritten. Before implementation, the schema review must choose whether unfinished old jobs are migrated into one-off SOP versions or closed before cutover. No dual-read compatibility layer is allowed by default.
 
+### Phase 2 SOP and job schema gate
+
+Status: Proposed on 2026-11-18 and awaiting human review. Nothing in this section is implemented or live.
+
+This review covers only immutable SOP versions, job bindings, approval bindings, amendment provenance, worker compilation inputs, and receipts. It does not authorize or define `finny_audit_attempts` or `finny_results`; those remain separate human gates.
+
+#### Current TypeScript authority
+
+The current persisted job contract is:
+
+```ts
+interface FinnyPlanPhase {
+  name: string;
+  owner: string;
+  dependencies: string[];
+}
+
+interface FinnyPlanClarification {
+  question: string;
+  answer: string;
+}
+
+interface FinnyPlanPresentation {
+  title: string;
+  summary?: string;
+  phases: FinnyPlanPhase[];
+  certification: string;
+  deliverable: string;
+  destination: string;
+  clarifications: FinnyPlanClarification[];
+}
+
+interface FinnyJob {
+  id: string;
+  scopeId: string;
+  plan: FinnyPlanPresentation;
+  planDigest: string;
+  artifactDigest?: string;
+  policy: FinnyPolicySnapshot;
+  findingPolicy?: FinnyFindingPolicy;
+  originThreadRef: string;
+  provisionalRevision?: string;
+  approval?: FinnyApproval;
+  ledgerHead: number;
+  eventHead: number;
+  pendingReworkSequence?: number;
+  unresolvedEscalationSequence?: number;
+  finalizationKey?: string;
+  finalReceipt?: FinnyFinalReceipt;
+  finalizedAt?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+```
+
+`canonicalFinnyPlanDigest` validates the presentation, serializes it with `JSON.stringify`, and hashes it with SHA-256 base64url. Every presentation field is material, object-key ordering is not independently canonicalized, the plan is overwritten on amendment, and no reusable immutable version exists.
+
+The current tool boundary uses `finny(action="create_plan", plan=...)` and `finny(action="amend_plan", jobId=..., plan=...)`. Both accept the exact presentation above plus an optional material clarification. `additionalProperties: false` is already enforced. Approval projections expose the whole presentation as `summaryDetail: JSON.stringify({ plan })`.
+
+#### Current PostgreSQL authority
+
+After migrations `finny/store/0001` through `finny/store/0009`, `finny_jobs` has the following complete shape:
+
+| Column                       | Current type and constraint                                             |
+| ---------------------------- | ----------------------------------------------------------------------- |
+| `id`                         | `TEXT PRIMARY KEY`                                                      |
+| `scope_id`                   | `TEXT NOT NULL CHECK (scope_id <> '')`                                  |
+| `plan_presentation`          | `JSONB NOT NULL CHECK (jsonb_typeof(plan_presentation) = 'object')`     |
+| `plan_digest`                | `TEXT NOT NULL CHECK (plan_digest <> '')`                               |
+| `artifact_digest`            | `TEXT`, empty string rejected, paired with `provisional_revision`       |
+| `policy_version`             | `TEXT NOT NULL CHECK (policy_version <> '')`                            |
+| `evaluator_ref`              | `JSONB NOT NULL CHECK (jsonb_typeof(evaluator_ref) = 'object')`         |
+| `required_generations`       | `JSONB NOT NULL CHECK (jsonb_typeof(required_generations) = 'object')`  |
+| `origin_thread_ref`          | `TEXT NOT NULL CHECK (origin_thread_ref <> '')`                         |
+| `provisional_revision`       | `TEXT`, empty string rejected, paired with `artifact_digest`            |
+| `approval_request_id`        | `TEXT`                                                                  |
+| `approval_actor_id`          | `TEXT`                                                                  |
+| `approval_action`            | `TEXT CHECK (approval_action IN ('approve','reject','request_change'))` |
+| `approval_plan_digest`       | `TEXT`                                                                  |
+| `approval_origin_thread_ref` | `TEXT`                                                                  |
+| `approval_decided_at`        | `BIGINT`                                                                |
+| `approval_consumed_at`       | `BIGINT`                                                                |
+| `ledger_head`                | `BIGINT NOT NULL DEFAULT 0 CHECK (ledger_head >= 0)`                    |
+| `event_head`                 | `BIGINT NOT NULL DEFAULT 0 CHECK (event_head >= 0)`                     |
+| `pending_rework_seq`         | `BIGINT CHECK (pending_rework_seq > 0)`                                 |
+| `unresolved_escalation_seq`  | `BIGINT CHECK (unresolved_escalation_seq > 0)`                          |
+| `finding_policy`             | `JSONB`, null or a JSON object                                          |
+| `finalization_key`           | `TEXT`                                                                  |
+| `final_receipt`              | `JSONB`                                                                 |
+| `finalized_at`               | `BIGINT`                                                                |
+| `created_at`                 | `BIGINT NOT NULL`                                                       |
+| `updated_at`                 | `BIGINT NOT NULL`                                                       |
+
+Its indexes and table checks are:
+
+- primary key on `id`;
+- unique partial index `finny_jobs_finalization_key` on non-null `finalization_key`;
+- index `finny_jobs_scope_created` on `(scope_id, created_at)`;
+- `finny_jobs_artifact_binding_pair`, requiring `artifact_digest` and `provisional_revision` to be both null or both present.
+
+`finny_approval_requests` currently has `request_id TEXT PRIMARY KEY`, non-empty `scope_id`, `job_id` referencing `finny_jobs(id) ON DELETE CASCADE`, non-empty `plan_digest`, non-empty `origin_thread_ref`, non-empty `authorized_actor_id`, nullable `ready_at` and `decided_at`, and non-null `created_at`. It has an index on `job_id` and a unique partial index on `job_id` where `decided_at IS NULL`.
+
+`finny_job_events` already owns amendment history. Its `plan_amended` payload contains only `previousPlanDigest` and `newPlanDigest`. `finny_plan_intents.job_input` durably copies `CreateFinnyJobInput`, and `finny_integration_jobs` durably binds the job, current approval request, actor, origin thread, destination, and parent binding. No other current table owns SOP content or job inputs.
+
+#### Proposed TypeScript authority
+
+The proposed validated SOP remains the previously approved minimal contract:
+
+```ts
+interface FinnySopVersion {
+  schema: "finny.sop.v1";
+  id: string;
+  version: number;
+  scopeId: string;
+  title: string;
+  intent: {
+    domain: "ap" | "ar" | "gl" | "close";
+    description: string;
+    searchTerms: string[];
+  };
+  objective: string;
+  inputs: Array<{
+    id: string;
+    label: string;
+    from: "human" | "system";
+    type: "date" | "text" | "currency" | "entity" | "boolean";
+    required: boolean;
+    material: boolean;
+  }>;
+  sources: Array<{
+    id: string;
+    system: string;
+    object: string;
+    fields: string[];
+    filter: string;
+    asOfInput?: string;
+  }>;
+  steps: Array<{
+    id: string;
+    action: string;
+    reads: string[];
+    writes: string;
+  }>;
+  controls: Array<{
+    id: string;
+    assertion: string;
+    tolerance?: string;
+    evidenceRefs: string[];
+    judgment?: { question: string; onlyWhen: string };
+  }>;
+  outputs: Array<{
+    id: string;
+    kind: "xlsx" | "summary" | "app";
+    contract: Record<string, unknown>;
+    rerun?: { inputIds: string[] };
+  }>;
+  approval: { required: boolean; destination: string };
+}
+
+interface FinnyJobSopBinding {
+  sopVersionId: string;
+  values: Record<string, string | boolean>;
+  executionDigest: string;
+  revision: number;
+}
+
+interface FinnyJob {
+  id: string;
+  scopeId: string;
+  sop: FinnySopVersion;
+  sopBinding: FinnyJobSopBinding;
+  artifactDigest?: string;
+  policy: FinnyPolicySnapshot;
+  findingPolicy?: FinnyFindingPolicy;
+  originThreadRef: string;
+  provisionalRevision?: string;
+  approval?: FinnyApproval;
+  ledgerHead: number;
+  eventHead: number;
+  pendingReworkSequence?: number;
+  unresolvedEscalationSequence?: number;
+  finalizationKey?: string;
+  finalReceipt?: FinnyFinalReceipt;
+  finalizedAt?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+```
+
+`FinnyApproval.planDigest` becomes `executionDigest` and adds `sopRevision`. A new receipt payload uses `sopVersionId`, `sopRevision`, and `executionDigest` instead of `planDigest`; existing signed receipts remain the legacy union member and are never rewritten. The `plan_amended` event becomes:
+
+```ts
+{
+  previousSopVersionId: string;
+  newSopVersionId: string;
+  previousValues: Record<string, string | boolean>;
+  newValues: Record<string, string | boolean>;
+  previousExecutionDigest: string;
+  newExecutionDigest: string;
+  revision: number;
+}
+```
+
+The event is the immutable revision provenance owner. The job row remains the current-state projection. This reuses the existing event ledger instead of adding a second job-revision table.
+
+The tool retains the existing action names to avoid another protocol migration. Its changed inputs are exactly:
+
+```ts
+type CreatePlanInput = {
+  action: "create_plan";
+  sop: FinnySopVersion;
+  values: Record<string, string | boolean>;
+  materialClarification?: FinnyMaterialClarification;
+};
+
+type AmendPlanInput = {
+  action: "amend_plan";
+  jobId: string;
+  sop: FinnySopVersion;
+  values: Record<string, string | boolean>;
+  materialClarification?: FinnyMaterialClarification;
+};
+```
+
+`plan` is removed. Core rejects unknown fields, duplicate IDs, missing required values, undeclared values, wrong value types, broken `asOfInput`, `reads`, `evidenceRefs`, and `rerun.inputIds` references, and any workflow-only field such as edges, nodes, nested SOPs, retries, model selection, or prompt authority. Approval projections expose `{ sopVersionId, executionDigest, sop, values }` from the durable row that will execute.
+
+#### Proposed PostgreSQL authority
+
+One new immutable table is added:
+
+```sql
+CREATE TABLE finny_sop_versions(
+  version_id TEXT PRIMARY KEY CHECK (version_id <> ''),
+  scope_id TEXT NOT NULL CHECK (scope_id <> ''),
+  sop_id TEXT NOT NULL CHECK (sop_id <> ''),
+  version BIGINT NOT NULL CHECK (version > 0),
+  definition JSONB NOT NULL CHECK (jsonb_typeof(definition) = 'object'),
+  definition_digest TEXT NOT NULL CHECK (definition_digest <> ''),
+  search_text TEXT NOT NULL CHECK (search_text <> ''),
+  created_at BIGINT NOT NULL,
+  UNIQUE(scope_id, version_id),
+  UNIQUE(scope_id, sop_id, version)
+);
+
+CREATE INDEX finny_sop_versions_scope_created
+  ON finny_sop_versions(scope_id, created_at DESC);
+
+CREATE INDEX finny_sop_versions_search
+  ON finny_sop_versions USING GIN(to_tsvector('simple', search_text));
+
+CREATE FUNCTION reject_finny_sop_version_mutation() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'Finny SOP versions are immutable';
+END;
+$$;
+
+CREATE TRIGGER finny_sop_versions_immutable
+  BEFORE UPDATE OR DELETE ON finny_sop_versions
+  FOR EACH ROW EXECUTE FUNCTION reject_finny_sop_version_mutation();
+```
+
+`version_id` is Core-assigned from the canonical scope, SOP ID, and version. `definition_digest` covers the complete canonical version, including display/search metadata. The application exposes no update or delete operation, and PostgreSQL rejects direct mutation. Migration tests prove attempts to update, delete, or replace an existing `(scope_id, sop_id, version)` fail. PostgreSQL foreign keys use `(scope_id, version_id)` so a job cannot bind a version from another organization.
+
+`finny_jobs` retains every lifecycle, policy, artifact, event, and finalization column listed above. Its plan authority changes as follows:
+
+| Current column              | Proposed treatment                                                                                            |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `plan_presentation`         | Retained nullable for finalized legacy history only; always null for SOP jobs and never read as SOP authority |
+| `plan_digest`               | Retained nullable for finalized legacy history only; always null for SOP jobs                                 |
+| `approval_plan_digest`      | Retained nullable only for historical legacy approvals                                                        |
+| `sop_version_id`            | Added `TEXT` and bound with `(scope_id, sop_version_id)` to `finny_sop_versions`                              |
+| `bound_inputs`              | Added `JSONB CHECK (bound_inputs IS NULL OR jsonb_typeof(bound_inputs) = 'object')`                           |
+| `execution_digest`          | Added `TEXT CHECK (execution_digest IS NULL OR execution_digest <> '')`                                       |
+| `sop_revision`              | Added `BIGINT CHECK (sop_revision IS NULL OR sop_revision > 0)`                                               |
+| `approval_execution_digest` | Added `TEXT` for the current approval snapshot                                                                |
+| `approval_sop_revision`     | Added `BIGINT CHECK (approval_sop_revision IS NULL OR approval_sop_revision > 0)`                             |
+
+The exact additive job migration is:
+
+```sql
+ALTER TABLE finny_jobs ALTER COLUMN plan_presentation DROP NOT NULL;
+ALTER TABLE finny_jobs ALTER COLUMN plan_digest DROP NOT NULL;
+ALTER TABLE finny_jobs ADD COLUMN sop_version_id TEXT;
+ALTER TABLE finny_jobs ADD COLUMN bound_inputs JSONB;
+ALTER TABLE finny_jobs ADD COLUMN execution_digest TEXT;
+ALTER TABLE finny_jobs ADD COLUMN sop_revision BIGINT;
+ALTER TABLE finny_jobs ADD COLUMN approval_execution_digest TEXT;
+ALTER TABLE finny_jobs ADD COLUMN approval_sop_revision BIGINT;
+ALTER TABLE finny_jobs ADD CONSTRAINT finny_jobs_sop_scope_fk
+  FOREIGN KEY(scope_id, sop_version_id)
+  REFERENCES finny_sop_versions(scope_id, version_id);
+ALTER TABLE finny_jobs ADD CONSTRAINT finny_jobs_binding_mode CHECK (
+  (
+    plan_presentation IS NOT NULL AND plan_digest IS NOT NULL AND
+    sop_version_id IS NULL AND bound_inputs IS NULL AND
+    execution_digest IS NULL AND sop_revision IS NULL
+  ) OR (
+    plan_presentation IS NULL AND plan_digest IS NULL AND
+    sop_version_id IS NOT NULL AND jsonb_typeof(bound_inputs) = 'object' AND
+    execution_digest <> '' AND sop_revision > 0
+  )
+);
+ALTER TABLE finny_jobs ADD CONSTRAINT finny_jobs_approval_binding_mode CHECK (
+  NOT (approval_plan_digest IS NOT NULL AND approval_execution_digest IS NOT NULL) AND
+  ((approval_execution_digest IS NULL) = (approval_sop_revision IS NULL)) AND
+  (approval_execution_digest IS NULL OR approval_execution_digest <> '') AND
+  (approval_sop_revision IS NULL OR approval_sop_revision > 0)
+);
+CREATE INDEX finny_jobs_sop_version
+  ON finny_jobs(scope_id, sop_version_id)
+  WHERE sop_version_id IS NOT NULL;
+```
+
+`finny_jobs_binding_mode` requires exactly one complete binding mode: either the retained legacy `plan_presentation` plus `plan_digest`, or `sop_version_id` plus object `bound_inputs`, non-empty `execution_digest`, and positive `sop_revision`. New writes may use only SOP mode. No runtime path falls back from a missing SOP binding to the legacy presentation. All existing job indexes and constraints remain unchanged.
+
+`finny_approval_requests` retains historical `plan_digest` as nullable and adds non-empty nullable `execution_digest` plus positive nullable `sop_revision`. Its exact additive migration is:
+
+```sql
+ALTER TABLE finny_approval_requests ALTER COLUMN plan_digest DROP NOT NULL;
+ALTER TABLE finny_approval_requests ADD COLUMN execution_digest TEXT;
+ALTER TABLE finny_approval_requests ADD COLUMN sop_revision BIGINT;
+ALTER TABLE finny_approval_requests ADD CONSTRAINT finny_approval_requests_binding_mode CHECK (
+  (
+    plan_digest IS NOT NULL AND execution_digest IS NULL AND sop_revision IS NULL
+  ) OR (
+    plan_digest IS NULL AND execution_digest <> '' AND sop_revision > 0
+  )
+);
+```
+
+Its existing primary key, foreign key, job index, and one-pending-request partial unique index remain unchanged. New requests use only execution mode. The current job approval snapshot is accepted only when request ID, actor, action, origin, execution digest, and SOP revision all match the current job binding.
+
+No execution-digest uniqueness constraint is added. Two jobs may legitimately execute the same SOP and material inputs, and successive revisions may retain the same digest when only explicitly non-material bound values change. Idempotency remains owned by request IDs and existing idempotency keys, not by the semantic digest.
+
+No setting, environment variable, flag, provider, default, precedence rule, or supported configuration combination changes.
+
+#### Canonicalization and materiality
+
+Core canonicalizes validated objects by schema order and recursively sorted keys inside output contracts. Array order remains material. `definition_digest` hashes the complete canonical SOP version. `execution_digest` hashes only:
+
+- `schema`, SOP ID, version, and scope;
+- objective;
+- every input declaration and every bound value whose declaration is material;
+- complete ordered sources, steps, controls, output contracts, rerun inputs, and approval destination.
+
+Title, intent description, intent search terms, input labels, and bound values explicitly declared non-material are excluded from `execution_digest`. They remain inside the immutable definition or current job binding and appear in receipts. Changing executable content creates a new SOP version. Changing material values creates a new job revision and invalidates approval. Changing only a non-material value creates a provenance event and job revision but preserves the execution digest and approval.
+
+#### Invented before and after rows
+
+These examples are invented and contain no client data.
+
+Before:
+
+```json
+{
+  "finny_jobs": {
+    "id": "job-ap-1",
+    "scope_id": "org:invented-media-company",
+    "plan_presentation": {
+      "title": "AP aging",
+      "phases": [{ "name": "Produce", "owner": "Producer", "dependencies": [] }],
+      "certification": "Eight checks pass",
+      "deliverable": "XLSX and summary",
+      "destination": "origin-thread",
+      "clarifications": [{ "question": "Cutoff?", "answer": "2026-10-31" }]
+    },
+    "plan_digest": "legacy-plan-digest",
+    "approval_plan_digest": "legacy-plan-digest"
+  },
+  "finny_approval_requests": {
+    "request_id": "approval-ap-1",
+    "job_id": "job-ap-1",
+    "plan_digest": "legacy-plan-digest"
+  }
+}
+```
+
+After:
+
+```json
+{
+  "finny_sop_versions": {
+    "version_id": "org:invented-media-company/ap-aging@3",
+    "scope_id": "org:invented-media-company",
+    "sop_id": "ap-aging",
+    "version": 3,
+    "definition_digest": "full-definition-digest",
+    "search_text": "AP aging accounts payable vendor aging MSME cutoff NetSuite transaction vendor"
+  },
+  "finny_jobs": {
+    "id": "job-ap-2",
+    "scope_id": "org:invented-media-company",
+    "plan_presentation": null,
+    "plan_digest": null,
+    "sop_version_id": "org:invented-media-company/ap-aging@3",
+    "bound_inputs": {
+      "cutoff": "2026-10-31",
+      "subsidiary": "India Media Pvt Ltd",
+      "currency": "INR"
+    },
+    "execution_digest": "approved-execution-digest",
+    "sop_revision": 1,
+    "approval_plan_digest": null,
+    "approval_execution_digest": "approved-execution-digest",
+    "approval_sop_revision": 1
+  },
+  "finny_approval_requests": {
+    "request_id": "approval-ap-2",
+    "job_id": "job-ap-2",
+    "plan_digest": null,
+    "execution_digest": "approved-execution-digest",
+    "sop_revision": 1
+  }
+}
+```
+
+#### Migration, unfinished jobs, rollout, and rollback
+
+The proposed cutover is intentionally fail-closed:
+
+1. Deploy the additive table, columns, indexes, foreign key, and binding-mode checks while existing code still writes legacy rows.
+2. Refuse the behavioral cutover if any legacy job is unfinished, meaning `finalized_at IS NULL`. Operators must let those jobs finish or explicitly cancel them through an approved product path. The migration does not invent AP/AR/GL/close semantics for an old presentation and does not silently close work.
+3. Preserve finalized legacy rows, approval requests, events, attestations, and signed receipts unchanged. They remain readable as historical records but are not reusable SOPs.
+4. Atomically switch job creation, amendment, approval rendering, Producer compilation, audit compilation, finalization, and recovery to SOP bindings. New writes use only SOP mode.
+5. Remove every runtime read of `plan_presentation`, `plan_digest`, and `approval_plan_digest` from active-job paths in the same release. There is no dual-read fallback.
+6. Keep the three legacy columns only for historical inspection during the rollback window. A later separately reviewed migration may archive or remove them.
+
+Rollback before step 4 drops only the additive objects. Rollback after step 4 reverts application code while retaining SOP rows and columns; it does not translate SOP jobs into lossy legacy presentations. Therefore application rollback after any SOP job is created requires first disabling new Finny job creation and completing or explicitly cancelling those SOP jobs. Existing finalized records and signed receipts are never rewritten in either direction.
+
+Compatibility effects are explicit: old callers sending `plan` are rejected after cutover; new callers must send `sop` and `values`. Existing finalized history remains readable. Existing unfinished jobs block the cutover instead of entering a mixed authority mode. Producer and audit topology, artifact binding, event sequencing, worker run fencing, and final delivery ownership do not change.
+
 ### First baseline fixture decision
 
 The first offline/replay fixture is the invented AP aging task above, expanded into a multi-currency population with partial payments, credits, one unmapped material vendor classification, cutoff-boundary transactions, and a repeatable workbook/mini-app output.
@@ -623,19 +1055,19 @@ Both results: certified XLSX and summary visibly delivered; all eight checks pas
 
 | Observation                           | Pre-change baseline | Phase 1 candidate | One-pair change |
 | ------------------------------------- | ------------------: | ----------------: | --------------: |
-| Query → certified visible delivery    |          192,417 ms |        214,741 ms |         +11.6% |
-| Query → human approval                |           39,735 ms |         34,527 ms |         -13.1% |
-| Approval → certified visible delivery |          152,682 ms |        180,214 ms |         +18.0% |
-| Query → valid artifact                |          112,222 ms |        136,515 ms |         +21.6% |
-| Artifact → certified visible delivery |           80,195 ms |         78,226 ms |          -2.5% |
+| Query → certified visible delivery    |          192,417 ms |        214,741 ms |          +11.6% |
+| Query → human approval                |           39,735 ms |         34,527 ms |          -13.1% |
+| Approval → certified visible delivery |          152,682 ms |        180,214 ms |          +18.0% |
+| Query → valid artifact                |          112,222 ms |        136,515 ms |          +21.6% |
+| Artifact → certified visible delivery |           80,195 ms |         78,226 ms |           -2.5% |
 | Producer runs                         |                   2 |                 1 |          -50.0% |
 | Auditor runs                          |                   2 |                 1 |          -50.0% |
-| Auditor runs before artifact          |                   1 |                 0 |          removed |
-| Total provider-reported tokens        |           1,169,154 |           916,153 |         -21.6% |
-| Parent tokens                         |             469,784 |           240,395 |         -48.8% |
-| Producer tokens                       |             211,722 |           378,200 |         +78.6% |
-| Auditor tokens                        |             487,648 |           297,558 |         -39.0% |
-| Estimated model cost                  |          USD 1.7172 |        USD 1.6499 |          -3.9% |
+| Auditor runs before artifact          |                   1 |                 0 |         removed |
+| Total provider-reported tokens        |           1,169,154 |           916,153 |          -21.6% |
+| Parent tokens                         |             469,784 |           240,395 |          -48.8% |
+| Producer tokens                       |             211,722 |           378,200 |          +78.6% |
+| Auditor tokens                        |             487,648 |           297,558 |          -39.0% |
+| Estimated model cost                  |          USD 1.7172 |        USD 1.6499 |           -3.9% |
 
 Token totals include uncached input, output, cache-read, and cache-write tokens reported for every attributable model request. Both runs were cache-heavy. One pair is evidence of structural turn removal and lower total tokens, but not proof of a latency improvement: the candidate was slower on this pair, and repeated interleaved trials are required to distinguish the code effect from model variance.
 
@@ -662,19 +1094,19 @@ Baseline revision: `f2d342f93d7b4dfe157cf5ca831110b565f7603d`
 Baseline job: `f6f18481-bd8d-4700-8e81-f32193492e7f`
 Candidate job: `a64e0f58-c5c7-460a-817d-a766739e8eb7`
 
-| Observation                        | Pre-change baseline | Phase 1 candidate | One-pair change |
-| ---------------------------------- | ------------------: | ----------------: | --------------: |
-| Query → certified visible delivery |          255,629 ms |        329,125 ms |         +28.8% |
-| Query → valid artifact             |          187,642 ms |        144,926 ms |         -22.8% |
-| Artifact → certified visible delivery |        67,987 ms |        144,199 ms |        +112.1% |
-| Producer runs                      |                   3 |                 1 |          -66.7% |
-| Auditor runs                       |                   4 |                 1 |          -75.0% |
-| Auditor runs before artifact       |          at least 1 |                 0 |          removed |
-| Total provider-reported tokens     |           1,903,582 |         1,081,287 |          -43.2% |
-| Parent tokens                      |             876,287 |           383,077 |          -56.3% |
-| Producer tokens                    |             507,412 |           291,697 |          -42.5% |
-| Auditor tokens                     |             519,883 |           406,513 |          -21.8% |
-| Estimated model cost               |          USD 3.4252 |        USD 1.7023 |          -50.3% |
+| Observation                           | Pre-change baseline | Phase 1 candidate | One-pair change |
+| ------------------------------------- | ------------------: | ----------------: | --------------: |
+| Query → certified visible delivery    |          255,629 ms |        329,125 ms |          +28.8% |
+| Query → valid artifact                |          187,642 ms |        144,926 ms |          -22.8% |
+| Artifact → certified visible delivery |           67,987 ms |        144,199 ms |         +112.1% |
+| Producer runs                         |                   3 |                 1 |          -66.7% |
+| Auditor runs                          |                   4 |                 1 |          -75.0% |
+| Auditor runs before artifact          |          at least 1 |                 0 |         removed |
+| Total provider-reported tokens        |           1,903,582 |         1,081,287 |          -43.2% |
+| Parent tokens                         |             876,287 |           383,077 |          -56.3% |
+| Producer tokens                       |             507,412 |           291,697 |          -42.5% |
+| Auditor tokens                        |             519,883 |           406,513 |          -21.8% |
+| Estimated model cost                  |          USD 3.4252 |        USD 1.7023 |          -50.3% |
 
 The candidate reached a valid artifact 42.7 seconds sooner and removed five of the seven pre-change worker runs, but its final parent continuation and attachment delivery took 76.2 seconds longer after artifact readiness. Overall visible delivery was therefore 73.5 seconds slower on this pair. Together with the web pair, this proves the intended topology and token reduction, but it does not yet prove lower wall-clock latency. Phase 2 planning must treat repeated interleaved web and Slack trials as the latency gate rather than optimizing from either single run.
 
@@ -1181,29 +1613,30 @@ Reason: Current QM has useful offline evidence conventions but no versioned fina
 
 ## Running implementation log
 
-| Date       |    Phase | Change                                                                                                                                                                                                                                              | Evidence                                                                                                                                                                                                                                                                                                       | Status                                                                            | Owner             |
-| ---------- | -------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ----------------- |
-| 2026-11-17 | Research | Audited current Finny lifecycle, latest upstream QM, Pi harness, and LoopForge                                                                                                                                                                      | Source review at downstream `f2d342f9`, upstream `b3ba0524`, LoopForge `86b0ee06`                                                                                                                                                                                                                              | Complete                                                                          | Research agents   |
-| 2026-11-17 | Planning | Established phased high-performance SOP harness plan                                                                                                                                                                                                | This document                                                                                                                                                                                                                                                                                                  | Complete                                                                          | Primary agent     |
-| 2026-11-17 | Planning | Resolved SOP, approval, audit, result, baseline-fixture, and evaluation design decisions                                                                                                                                                            | This document and current QM eval audit                                                                                                                                                                                                                                                                        | Complete pending human schema/corpus review                                       | Primary agent     |
-| 2026-11-17 |  Phase 0 | Added a production-independent baseline analyzer for Producer/Auditor run counts, pre-artifact Auditor detection, query-to-certified-delivery time, and parent/Producer/Auditor tokens with fail-closed missing usage                               | [Analyzer and tests](#phase-0--baseline-and-completion-trace); paired web and Slack measurements are linked in the implementation summary                                                                                                                                                                  | Complete                                                                          | Evaluation lane   |
-| 2026-11-17 |  Phase 1 | Corrected Finny tool vocabulary, removed placeholder dispatch turns, opened Producer only after approval with its real task, opened Auditor only after artifact commit, and recovered terminal successful-but-incomplete workers from durable state | [Web evidence](#phase-01-live-measurement--qm-web): one Producer, one post-artifact Auditor, certified XLSX, 21.6% fewer tokens. [Slack evidence](#phase-01-live-measurement--slack): one Producer, one post-artifact Auditor, certified attached XLSX, 43.2% fewer tokens.                                    | Complete on web and Slack; latency improvement not yet proven                     | Integration owner |
-| 2026-11-17 |  Phase 1 | Preserved the durable Finny plan request identity across the generic web approval boundary after live QA exposed a false-success dispatch                                                                                                           | RED: web Finny tool test observed no durable `finny-plan:<requestId>` approval key. GREEN: the tool retains the request identity; the orchestrator decides that Finny request; the live Producer opened immediately after approval.                                                                            | Complete                                                                          | Integration owner |
-| 2026-11-17 |  Phase 1 | Closed the material-clarification handoff so every persisted option and `Other` is actionable, the exact ready plan is projected immediately, and Finny translation stays outside the generic orchestrator                                                                           | RED: caller-visible Postgres tests proved the prior code ignored alternate options, treated `Other` as command denial, and returned no next approval. GREEN: affected core/web suites, typecheck, and oxlint pass. Chrome shows all options and `Other`; selecting a nonrecommended date records that exact choice and requires revision. | Complete                                                                          | Integration owner |
-| 2026-11-17 |  Phase 1 | Exercised the `Other` clarification path against the running production-shaped web instance in Chrome                                                                                                                        | Session `762bf470-2392-4f1e-8456-1446297f9c5a`: `Other` consumed the durable Finny clarification and returned `Revision is required before this plan can be approved. Submit a revised plan to continue.` The composer reopened for the revised input.                              | Complete                                                                          | Production QA     |
-| 2026-11-17 |  Phase 1 | Closed both clarification commit-to-projection crash windows without adding another recovery queue                                                                                                                            | RED: a committed clarification replay returned no usable result, and an injected plan-projection failure could delete the clarification approval before its replacement existed. GREEN: the service reconstructs the durable result idempotently and the orchestrator persists the replacement before deleting its predecessor. | Complete; no schema or configuration change                                        | Integration owner |
-| 2026-11-17 |  Phase 1 | Proved terminal successful-but-incomplete Producer recovery through the exact-head production-shaped web surface                                                                                                                | [Live terminal-run recovery](#phase-1-live-terminal-run-recovery--qm-web): first run `done`/`ok` with no artifact; durable `producer_retry` bound a new run in the same session; artifact, independent eight-check audit, receipt, workbook, and certified summary followed.             | Complete                                                                          | Production QA     |
-| 2026-11-17 |  Phase 1 | Bound clarification replay to its exact durable Finny job instead of the newest pending approval in the Slack or web thread                                                                                                     | RED: a two-job Postgres regression reproduced clarification A displaying newer plan B. GREEN: replay resolves readiness and the replacement approval by `scope_id` plus `job_id`; affected approval, web, and store tests pass.                                                        | Complete; no database schema or configuration change                              | Integration owner |
-| 2026-11-17 |  Phase 1 | Made every persisted clarification option actionable without another human turn                                                                                                                                                | RED: a nonrecommended option ended with an instruction to repeat the choice. GREEN: the parent resumes with the exact recorded option, amends the existing job, withdraws the stale approval, and projects the durable replacement plan approval; `Other` still opens free-form revision. | Complete; no database schema or configuration change                              | Integration owner |
-| 2026-11-17 |  Phase 1 | Bound automatic worker recovery to the terminal run observed by the durable scan                                                                                                                                                | RED: replaying one stale Producer or Auditor recovery snapshot dispatched twice and could replace healthy work. GREEN: recovery carries the observed run ID and dispatches only while the active binding still matches it; the existing compare-and-swap advances the binding atomically. | Complete; no database schema or configuration change                              | Integration owner |
-| 2026-11-17 |  Phase 1 | Excluded human-wait and refused terminal outcomes from automatic Producer and Auditor recovery                                                                                                                                  | RED: `done` runs returning `pending_approval` or `refused` were eligible for restart. GREEN: the durable recovery census distinguishes those outcomes from missing, failed, expired-live, and successful-but-incomplete work, with regressions for both roles.                         | Complete; no database schema or configuration change                              | Integration owner |
-| 2026-11-17 |  Phase 1 | Preserved the real actor and integration-parent request binding across an alternate-choice plan amendment                                                                                                                       | RED: the replacement approval used a fallback actor and the original parent request ID, so approval could claim success without Producer dispatch. GREEN: amendment updates both bindings atomically; a non-default actor approves the replacement and opens one Producer for the same job. | Complete; no database schema or configuration change                              | Integration owner |
-| 2026-11-17 |  Phase 1 | Applied the durable run-outcome census to fresh Auditor reverification admission                                                                                                                                                | RED: a fresh reverification Auditor waiting on approval was selected for another wake because no delivery marker existed. GREEN: active run state preserves `pending_approval` and `refused` work even after binding expiry while retaining recovery for missing, failed, expired-live, and incomplete runs. | Complete; no database schema or configuration change                              | Integration owner |
-| 2026-11-17 |  Phase 1 | Moved guarded admission validation ahead of worker interruption inside the shared session admission lock                                                                                                                        | RED: a stale Finny dispatch could stop a healthy replacement before its compare-and-swap rejected the write. GREEN: `beforeEnqueue` runs under the admission lock before `stopSessionRuns`; a rejected guarded interrupt leaves the active run healthy.                                | Complete; no database schema or configuration change                              | Integration owner |
-| 2026-11-17 |  Phase 1 | Verified the complete alternate-choice flow on the exact-head production-shaped web instance in Chrome                                                                                                                         | Session `fa96216e-87a4-4ca9-b2ed-c54b1aa74263`: the user selected `2026-11-30`; QM resumed the same parent without another human message, presented a replacement plan explicitly bound to the alternate cutoff, accepted approval, and visibly started one Producer subagent.             | Complete                                                                          | Production QA     |
-| 2026-11-17 |  Phase 1 | Bound reverification recovery to the exact Auditor run observed by the durable scan                                                                                                                                             | RED: replaying one orphaned, terminal, or expired reverification recovery could target a replacement or stall on an expired binding. GREEN: active bindings retry in the same session with an observed-run guard; missing bindings admit once; stale replay is ignored; the obsolete delivery-prefix lookup is removed. | Complete; no database schema or configuration change                              | Integration owner |
-| 2026-11-17 |  Phase 2 | User authorized task-level SOP implementation and verification as the next milestone after the Phase 1 PR is complete                                                                                                                               | This document remains the working contract; first record the complete human-readable old/new schema and migration review, then implement one finance-specific SOP persistence and execution slice.                                                                                                            | Queued                                                                            | Integration owner |
-| 2026-11-18 |  Phase 2 | Added the durable next-session implementation handover                                                                                                                                                                                              | [Handover](./2026-11-18-finny-sop-phase-2-handover.md) links the authoritative design, exact schema gate, TDD sequence, live/eval measurements, guardrails, and definition of done.                                                                                                                             | Ready after Phase 1 PR completion                                                  | Integration owner |
+| Date       |    Phase | Change                                                                                                                                                                                                                                              | Evidence                                                                                                                                                                                                                                                                                                                                  | Status                                                        | Owner             |
+| ---------- | -------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | ----------------- |
+| 2026-11-17 | Research | Audited current Finny lifecycle, latest upstream QM, Pi harness, and LoopForge                                                                                                                                                                      | Source review at downstream `f2d342f9`, upstream `b3ba0524`, LoopForge `86b0ee06`                                                                                                                                                                                                                                                         | Complete                                                      | Research agents   |
+| 2026-11-17 | Planning | Established phased high-performance SOP harness plan                                                                                                                                                                                                | This document                                                                                                                                                                                                                                                                                                                             | Complete                                                      | Primary agent     |
+| 2026-11-17 | Planning | Resolved SOP, approval, audit, result, baseline-fixture, and evaluation design decisions                                                                                                                                                            | This document and current QM eval audit                                                                                                                                                                                                                                                                                                   | Complete pending human schema/corpus review                   | Primary agent     |
+| 2026-11-17 |  Phase 0 | Added a production-independent baseline analyzer for Producer/Auditor run counts, pre-artifact Auditor detection, query-to-certified-delivery time, and parent/Producer/Auditor tokens with fail-closed missing usage                               | [Analyzer and tests](#phase-0--baseline-and-completion-trace); paired web and Slack measurements are linked in the implementation summary                                                                                                                                                                                                 | Complete                                                      | Evaluation lane   |
+| 2026-11-17 |  Phase 1 | Corrected Finny tool vocabulary, removed placeholder dispatch turns, opened Producer only after approval with its real task, opened Auditor only after artifact commit, and recovered terminal successful-but-incomplete workers from durable state | [Web evidence](#phase-01-live-measurement--qm-web): one Producer, one post-artifact Auditor, certified XLSX, 21.6% fewer tokens. [Slack evidence](#phase-01-live-measurement--slack): one Producer, one post-artifact Auditor, certified attached XLSX, 43.2% fewer tokens.                                                               | Complete on web and Slack; latency improvement not yet proven | Integration owner |
+| 2026-11-17 |  Phase 1 | Preserved the durable Finny plan request identity across the generic web approval boundary after live QA exposed a false-success dispatch                                                                                                           | RED: web Finny tool test observed no durable `finny-plan:<requestId>` approval key. GREEN: the tool retains the request identity; the orchestrator decides that Finny request; the live Producer opened immediately after approval.                                                                                                       | Complete                                                      | Integration owner |
+| 2026-11-17 |  Phase 1 | Closed the material-clarification handoff so every persisted option and `Other` is actionable, the exact ready plan is projected immediately, and Finny translation stays outside the generic orchestrator                                          | RED: caller-visible Postgres tests proved the prior code ignored alternate options, treated `Other` as command denial, and returned no next approval. GREEN: affected core/web suites, typecheck, and oxlint pass. Chrome shows all options and `Other`; selecting a nonrecommended date records that exact choice and requires revision. | Complete                                                      | Integration owner |
+| 2026-11-17 |  Phase 1 | Exercised the `Other` clarification path against the running production-shaped web instance in Chrome                                                                                                                                               | Session `762bf470-2392-4f1e-8456-1446297f9c5a`: `Other` consumed the durable Finny clarification and returned `Revision is required before this plan can be approved. Submit a revised plan to continue.` The composer reopened for the revised input.                                                                                    | Complete                                                      | Production QA     |
+| 2026-11-17 |  Phase 1 | Closed both clarification commit-to-projection crash windows without adding another recovery queue                                                                                                                                                  | RED: a committed clarification replay returned no usable result, and an injected plan-projection failure could delete the clarification approval before its replacement existed. GREEN: the service reconstructs the durable result idempotently and the orchestrator persists the replacement before deleting its predecessor.           | Complete; no schema or configuration change                   | Integration owner |
+| 2026-11-17 |  Phase 1 | Proved terminal successful-but-incomplete Producer recovery through the exact-head production-shaped web surface                                                                                                                                    | [Live terminal-run recovery](#phase-1-live-terminal-run-recovery--qm-web): first run `done`/`ok` with no artifact; durable `producer_retry` bound a new run in the same session; artifact, independent eight-check audit, receipt, workbook, and certified summary followed.                                                              | Complete                                                      | Production QA     |
+| 2026-11-17 |  Phase 1 | Bound clarification replay to its exact durable Finny job instead of the newest pending approval in the Slack or web thread                                                                                                                         | RED: a two-job Postgres regression reproduced clarification A displaying newer plan B. GREEN: replay resolves readiness and the replacement approval by `scope_id` plus `job_id`; affected approval, web, and store tests pass.                                                                                                           | Complete; no database schema or configuration change          | Integration owner |
+| 2026-11-17 |  Phase 1 | Made every persisted clarification option actionable without another human turn                                                                                                                                                                     | RED: a nonrecommended option ended with an instruction to repeat the choice. GREEN: the parent resumes with the exact recorded option, amends the existing job, withdraws the stale approval, and projects the durable replacement plan approval; `Other` still opens free-form revision.                                                 | Complete; no database schema or configuration change          | Integration owner |
+| 2026-11-17 |  Phase 1 | Bound automatic worker recovery to the terminal run observed by the durable scan                                                                                                                                                                    | RED: replaying one stale Producer or Auditor recovery snapshot dispatched twice and could replace healthy work. GREEN: recovery carries the observed run ID and dispatches only while the active binding still matches it; the existing compare-and-swap advances the binding atomically.                                                 | Complete; no database schema or configuration change          | Integration owner |
+| 2026-11-17 |  Phase 1 | Excluded human-wait and refused terminal outcomes from automatic Producer and Auditor recovery                                                                                                                                                      | RED: `done` runs returning `pending_approval` or `refused` were eligible for restart. GREEN: the durable recovery census distinguishes those outcomes from missing, failed, expired-live, and successful-but-incomplete work, with regressions for both roles.                                                                            | Complete; no database schema or configuration change          | Integration owner |
+| 2026-11-17 |  Phase 1 | Preserved the real actor and integration-parent request binding across an alternate-choice plan amendment                                                                                                                                           | RED: the replacement approval used a fallback actor and the original parent request ID, so approval could claim success without Producer dispatch. GREEN: amendment updates both bindings atomically; a non-default actor approves the replacement and opens one Producer for the same job.                                               | Complete; no database schema or configuration change          | Integration owner |
+| 2026-11-17 |  Phase 1 | Applied the durable run-outcome census to fresh Auditor reverification admission                                                                                                                                                                    | RED: a fresh reverification Auditor waiting on approval was selected for another wake because no delivery marker existed. GREEN: active run state preserves `pending_approval` and `refused` work even after binding expiry while retaining recovery for missing, failed, expired-live, and incomplete runs.                              | Complete; no database schema or configuration change          | Integration owner |
+| 2026-11-17 |  Phase 1 | Moved guarded admission validation ahead of worker interruption inside the shared session admission lock                                                                                                                                            | RED: a stale Finny dispatch could stop a healthy replacement before its compare-and-swap rejected the write. GREEN: `beforeEnqueue` runs under the admission lock before `stopSessionRuns`; a rejected guarded interrupt leaves the active run healthy.                                                                                   | Complete; no database schema or configuration change          | Integration owner |
+| 2026-11-17 |  Phase 1 | Verified the complete alternate-choice flow on the exact-head production-shaped web instance in Chrome                                                                                                                                              | Session `fa96216e-87a4-4ca9-b2ed-c54b1aa74263`: the user selected `2026-11-30`; QM resumed the same parent without another human message, presented a replacement plan explicitly bound to the alternate cutoff, accepted approval, and visibly started one Producer subagent.                                                            | Complete                                                      | Production QA     |
+| 2026-11-17 |  Phase 1 | Bound reverification recovery to the exact Auditor run observed by the durable scan                                                                                                                                                                 | RED: replaying one orphaned, terminal, or expired reverification recovery could target a replacement or stall on an expired binding. GREEN: active bindings retry in the same session with an observed-run guard; missing bindings admit once; stale replay is ignored; the obsolete delivery-prefix lookup is removed.                   | Complete; no database schema or configuration change          | Integration owner |
+| 2026-11-17 |  Phase 2 | User authorized task-level SOP implementation and verification as the next milestone after the Phase 1 PR is complete                                                                                                                               | This document remains the working contract; first record the complete human-readable old/new schema and migration review, then implement one finance-specific SOP persistence and execution slice.                                                                                                                                        | Queued                                                        | Integration owner |
+| 2026-11-18 |  Phase 2 | Added the durable next-session implementation handover                                                                                                                                                                                              | [Handover](./2026-11-18-finny-sop-phase-2-handover.md) links the authoritative design, exact schema gate, TDD sequence, live/eval measurements, guardrails, and definition of done.                                                                                                                                                       | Ready after Phase 1 PR completion                             | Integration owner |
+| 2026-11-18 |  Phase 2 | Recorded the complete old/new SOP and job schema review before implementation                                                                                                                                                                       | [Phase 2 SOP and job schema gate](#phase-2-sop-and-job-schema-gate) covers TypeScript, tool/API, PostgreSQL, field accounting, invented rows, canonicalization, migration, unfinished jobs, rollout, rollback, compatibility, and unchanged configuration.                                                                                | Awaiting human review; no persisted-shape code written        | Integration owner |
 
 ## Required human decisions for Phase 2 gates
 
