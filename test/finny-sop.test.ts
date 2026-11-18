@@ -11,10 +11,51 @@ test("accepts one strict finance SOP and rejects workflow-only executable fields
   };
   assert.equal(typeof api.validateFinnySopVersion, "function");
   assert.deepEqual(api.validateFinnySopVersion!(sop), sop);
+  const { sources: _sources, ...missingSources } = sop;
+  assert.throws(() => api.validateFinnySopVersion!(missingSources), /sources/i);
   assert.throws(() => api.validateFinnySopVersion!({ ...sop, title: "   " }), /shape|title/i);
   assert.throws(
     () => api.validateFinnySopVersion!({ ...sop, nodes: [{ id: "retry", retryBudget: 3 }] }),
     /unknown|nodes/i,
+  );
+});
+
+test("matches both material boolean values to canonical Slack option IDs", () => {
+  const booleanSop = {
+    ...sop,
+    inputs: [
+      ...sop.inputs,
+      {
+        id: "include_credits",
+        label: "Include vendor credits",
+        from: "human",
+        type: "boolean",
+        required: true,
+        material: true,
+      },
+    ],
+  } as const;
+  const clarification = (id: "true" | "false") => ({
+    question: "Include vendor credits?",
+    options: [
+      { id: "true", label: "Yes" },
+      { id: "false", label: "No" },
+    ],
+    recommendedOptionId: id,
+  });
+  assert.doesNotThrow(() =>
+    finnyPlan.assertFinnyMaterialClarificationMatchesSop(
+      booleanSop,
+      { cutoff: "2026-10-31", currency: "INR", include_credits: true },
+      clarification("true"),
+    ),
+  );
+  assert.doesNotThrow(() =>
+    finnyPlan.assertFinnyMaterialClarificationMatchesSop(
+      booleanSop,
+      { cutoff: "2026-10-31", currency: "INR", include_credits: false },
+      clarification("false"),
+    ),
   );
 });
 

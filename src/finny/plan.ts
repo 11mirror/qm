@@ -55,11 +55,12 @@ function canonicalDigest(value: unknown): string {
 export function validateFinnySopVersion(value: unknown): FinnySopVersion {
   const [error] = Errors(FINNY_SOP_SCHEMA, value);
   if (error) {
-    let detail = "";
-    if (error.keyword === "additionalProperties")
-      detail = `: unknown ${error.params.additionalProperties.join(", ")}`;
-    else if (error.instancePath) detail = ` at ${error.instancePath}`;
-    throw new Error(`Finny SOP shape is invalid${detail}`);
+    const path = error.instancePath || "/";
+    const evidence =
+      error.keyword === "additionalProperties"
+        ? `${error.message}: ${error.params.additionalProperties.join(", ")}`
+        : error.message;
+    throw new Error(`Finny SOP shape is invalid at ${path}: ${evidence}`);
   }
   const root = value as FinnySopVersion;
   const inputs = root.inputs.map((input) => Object.freeze({ ...input }));
@@ -362,10 +363,14 @@ export function assertFinnyMaterialClarificationMatchesSop(
   const validated = validateFinnyMaterialClarification(clarification);
   const recommended = validated.options.find((option) => option.id === validated.recommendedOptionId);
   const matches = sop.inputs.filter(
-    (input) =>
-      input.material &&
-      input.from === "human" &&
-      (values[input.id] === recommended?.id || values[input.id] === recommended?.label),
+    (input) => {
+      const bound = values[input.id];
+      return (
+        input.material &&
+        input.from === "human" &&
+        (String(bound) === recommended?.id || bound === recommended?.label)
+      );
+    },
   );
   if (matches.length !== 1)
     throw new Error("Finny clarification does not unambiguously match one material SOP input value");
