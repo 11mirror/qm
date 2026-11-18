@@ -257,7 +257,7 @@ interface FinnySopVersion {
     contract: Record<string, unknown>;
     rerun?: { inputIds: string[] };
   }>;
-  approval: { required: boolean; destination: string };
+  approval: { required: true; destination: string };
 }
 
 interface FinnyJobInputs {
@@ -674,7 +674,7 @@ interface FinnySopVersion {
     contract: Record<string, unknown>;
     rerun?: { inputIds: string[] };
   }>;
-  approval: { required: boolean; destination: string };
+  approval: { required: true; destination: string };
 }
 
 interface FinnyJobSopBinding {
