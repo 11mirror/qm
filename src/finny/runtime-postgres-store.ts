@@ -942,13 +942,13 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
             row.scope_id !== input.scopeId ||
             row.job_id !== input.jobId ||
             row.session_id !== input.sessionId ||
-            row.run_id !== input.runId ||
             row.kind !== input.kind ||
             row.intent_digest !== intentDigest
           ) {
             throw new Error("Finny runtime dispatch idempotency conflict");
           }
           if (row.delivered_at !== null || row.cancelled_at !== null) return;
+          if (row.run_id !== input.runId) throw new Error("Finny runtime dispatch idempotency conflict");
           if (input.observedTerminalRunId !== undefined) {
             const observed = await db.query(
               `SELECT b.run_id,

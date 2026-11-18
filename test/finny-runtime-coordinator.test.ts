@@ -771,6 +771,13 @@ test("replaying the same BLOCK is idempotent without duplicate producer wake", a
     dispatcher: {
       async dispatchPrivateIdempotent(message) {
         dispatched.push(message.idempotencyKey);
+        await runtime.advanceWorkerRun({
+          sessionId: message.sessionId,
+          expectedRunId: message.runId,
+          runId: "producer-rework-run",
+          scopeId: job.scopeId,
+          expiresAt: Date.now() + 60_000,
+        });
       },
     },
     escalationDecision: {
