@@ -109,10 +109,10 @@ test("Spike 2: Preflight harness calls finny_create_plan and enters human approv
   });
 
   const turn = {
-    scopeId: "org:sharechat",
+    scopeId: "org:example",
     sessionId: "sess-parent",
     runId: "run-parent",
-    actor: { id: "user-kali", type: "internal" as const },
+    actor: { id: "user-1", type: "internal" as const },
     originThreadRef: "slack:C123:1794000.123",
     destination: { type: "slack" as const, target: "C123:1794000.123", threadTs: "1794000.123" },
     parent: true,
@@ -120,9 +120,9 @@ test("Spike 2: Preflight harness calls finny_create_plan and enters human approv
       schema: "finny-parent-binding.v1" as const,
       sessionId: "sess-parent",
       runId: "run-parent",
-      scopeId: "org:sharechat",
+      scopeId: "org:example",
       context: {
-        actor: { id: "user-kali", type: "internal" as const },
+        actor: { id: "user-1", type: "internal" as const },
         conversation: { kind: "channel" as const, threadRef: "C123", audience: [] },
         surface: "slack",
       },
@@ -134,7 +134,7 @@ test("Spike 2: Preflight harness calls finny_create_plan and enters human approv
 
   const sop = {
     ...finnySopFixture(),
-    scopeId: "org:sharechat",
+    scopeId: "org:example",
     title: "Prepare AP Closing Liability | 4 Vendors x 4 Quarter-Ends",
   };
   const planResponse = await service.createPlan(sop, { cutoff: "2026-09-30", currency: "INR" });
@@ -149,7 +149,7 @@ test("Spike 3: Auditor completes only the pending judgment", async () => {
   const artifactDigest = "c".repeat(64);
   const pendingAttempt = {
     id: "attempt-pending-judgment",
-    scopeId: "org:sharechat",
+    scopeId: "org:example",
     jobId: "job-456",
     artifactSha256: artifactDigest,
     controls: [
@@ -240,7 +240,7 @@ test("Spike 3: Auditor completes only the pending judgment", async () => {
       async currentBinding(sessionId: string) {
         return {
           role: "auditor" as const,
-          scopeId: "org:sharechat",
+          scopeId: "org:example",
           jobId: "job-456",
           sessionId,
           runId: "run-auditor",
@@ -263,7 +263,7 @@ test("Spike 3: Auditor completes only the pending judgment", async () => {
   });
 
   const auditorTurn = {
-    scopeId: "org:sharechat",
+    scopeId: "org:example",
     sessionId: "sess-auditor",
     runId: "run-auditor",
     actor: { id: "auditor-agent", type: "internal" as const },
@@ -274,7 +274,7 @@ test("Spike 3: Auditor completes only the pending judgment", async () => {
       schema: "finny-parent-binding.v1" as const,
       sessionId: "sess-parent",
       runId: "run-parent",
-      scopeId: "org:sharechat",
+      scopeId: "org:example",
       context: {
         actor: { id: "user-kali", type: "internal" as const },
         conversation: { kind: "channel" as const, threadRef: "C123", audience: [] },
@@ -429,7 +429,7 @@ test("Spike 5: finnyTurnAuthority and createPlan support web chat surface", asyn
   });
 
   const turn = {
-    scopeId: "org:sharechat",
+    scopeId: "org:example",
     sessionId: "sess-web-123",
     runId: "run-web-123",
     actor: { id: "user-kali", type: "internal" as const },
@@ -440,7 +440,7 @@ test("Spike 5: finnyTurnAuthority and createPlan support web chat surface", asyn
       schema: "finny-parent-binding.v1" as const,
       sessionId: "sess-web-123",
       runId: "run-web-123",
-      scopeId: "org:sharechat",
+      scopeId: "org:example",
       context: {
         actor: { id: "user-kali", type: "internal" as const },
         conversation: { kind: "dm" as const, threadRef: "web:sess-web-123", audience: [] },
@@ -452,7 +452,7 @@ test("Spike 5: finnyTurnAuthority and createPlan support web chat surface", asyn
   const service = await factory.forTurn(turn);
   assert.ok(service, "Service must be instantiated for web parent turn");
 
-  const sop = { ...finnySopFixture(), scopeId: "org:sharechat", title: "Net Worth Schedule with Equity Bridge" };
+  const sop = { ...finnySopFixture(), scopeId: "org:example", title: "Net Worth Schedule with Equity Bridge" };
   const planResponse = await service.createPlan(sop, { cutoff: "2026-09-30", currency: "INR" });
   assert.match(planResponse.message, /is awaiting approval/);
   assert.equal(deliveries.length, 1);
