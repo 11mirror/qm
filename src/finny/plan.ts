@@ -368,6 +368,7 @@ export function assertFinnyMaterialClarificationMatchesSop(
       return (
         input.material &&
         input.from === "human" &&
+        bound !== undefined &&
         (String(bound) === recommended?.id || bound === recommended?.label)
       );
     },

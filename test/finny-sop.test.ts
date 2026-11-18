@@ -57,6 +57,26 @@ test("matches both material boolean values to canonical Slack option IDs", () =>
       clarification("false"),
     ),
   );
+  const optionalBooleanSop = {
+    ...booleanSop,
+    inputs: booleanSop.inputs.map((input) =>
+      input.id === "include_credits" ? { ...input, required: false } : input,
+    ),
+  } as const;
+  assert.throws(() =>
+    finnyPlan.assertFinnyMaterialClarificationMatchesSop(
+      optionalBooleanSop,
+      { cutoff: "2026-10-31", currency: "INR" },
+      {
+        question: "Include vendor credits?",
+        options: [
+          { id: "undefined", label: "Not provided" },
+          { id: "true", label: "Yes" },
+        ],
+        recommendedOptionId: "undefined",
+      },
+    ),
+  );
 });
 
 test("execution digest changes only with executable meaning or material values", () => {
