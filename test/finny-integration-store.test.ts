@@ -12,6 +12,52 @@ import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { finnySopJobFields } from "./support/finny-sop-fixture.ts";
 
+test("startup delivery recovery ignores finalized legacy jobs after SOP cutover", async () => {
+  const url = testDatabaseUrl();
+  const jobs = createPostgresFinnyStore(url);
+  const integration = createPostgresFinnyIntegrationStore(url);
+  await jobs.searchSopVersions("personal:U1", "missing");
+  await integration.pendingPlanIntents();
+  const { q } = createPgPool(url);
+  const now = Date.now();
+  const jobId = randomUUID();
+  await q(
+    `INSERT INTO finny_jobs(
+       id,scope_id,plan_presentation,plan_digest,policy_version,evaluator_ref,required_generations,
+       finding_policy,origin_thread_ref,final_receipt,finalized_at,created_at,updated_at
+     ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11,$11)`,
+    [
+      jobId,
+      "personal:U1",
+      { title: "Legacy", phases: [], certification: "Legacy", deliverable: "Legacy", destination: "Legacy", clarifications: [] },
+      "legacy-digest",
+      "legacy-policy",
+      TEST_FINNY_EVALUATOR,
+      {},
+      { id: "legacy", maxFindings: 1, maxCodeLength: 1, maxMessageLength: 1 },
+      "slack:C1:1.1",
+      {},
+      now,
+    ],
+  );
+  await q(
+    `INSERT INTO finny_integration_jobs(
+       job_id,scope_id,request_id,actor_id,origin_thread_ref,destination,parent_binding,created_at
+     ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [
+      jobId,
+      "personal:U1",
+      randomUUID(),
+      "U1",
+      "slack:C1:1.1",
+      { type: "slack", target: "C1" },
+      { schema: "finny-parent-binding.v1" },
+      now,
+    ],
+  );
+  assert.deepEqual(await integration.finalizedParents(), []);
+});
+
 test("durably preserves exact parent binding, destination, and artifact proposal idempotency", async () => {
   const url = testDatabaseUrl();
   const jobs = createPostgresFinnyStore(url);

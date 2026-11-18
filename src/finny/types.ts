@@ -337,7 +337,7 @@ export interface FinnySopVersion {
     contract: Record<string, unknown>;
     rerun?: { inputIds: readonly string[] };
   }>;
-  approval: { required: boolean; destination: string };
+  approval: { required: true; destination: string };
 }
 
 export interface FinnyProducerTask {

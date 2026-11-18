@@ -82,7 +82,7 @@ export const FINNY_SOP_SCHEMA = Type.Object(
         { additionalProperties: false },
       ),
     ),
-    approval: Type.Object({ required: Type.Boolean(), destination: text() }, { additionalProperties: false }),
+    approval: Type.Object({ required: Type.Literal(true), destination: text() }, { additionalProperties: false }),
   },
   { additionalProperties: false },
 );

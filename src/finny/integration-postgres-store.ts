@@ -356,7 +356,8 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
       const rows = await q(
         `SELECT i.* FROM finny_integration_jobs i
          JOIN finny_jobs j ON j.id=i.job_id AND j.scope_id=i.scope_id
-         WHERE j.final_receipt IS NOT NULL ORDER BY j.finalized_at, i.job_id`,
+         WHERE j.final_receipt IS NOT NULL AND j.sop_version_id IS NOT NULL
+         ORDER BY j.finalized_at, i.job_id`,
       );
       return rows.map(parent);
     },

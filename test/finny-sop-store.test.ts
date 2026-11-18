@@ -182,10 +182,17 @@ test("records every SOP revision while invalidating approval only for material a
   const materialJob = material.job as {
     approval?: unknown;
     sopBinding: { executionDigest: string; revision: number };
+    policy: { requiredGenerations: Record<string, number> };
   };
   assert.equal(materialJob.sopBinding.revision, 3);
   assert.notEqual(materialJob.sopBinding.executionDigest, originalBinding.executionDigest);
   assert.equal(materialJob.approval, undefined);
+  assert.deepEqual(
+    materialJob.policy.requiredGenerations,
+    Object.fromEntries(
+      Object.entries(input.policy.requiredGenerations).map(([checkId, generation]) => [checkId, generation + 1]),
+    ),
+  );
   assert.deepEqual(material.events[0]?.payload, {
     previousSopVersionId: "org%3Ainvented-media-company/ap-aging@3",
     newSopVersionId: "org%3Ainvented-media-company/ap-aging@3",
@@ -224,4 +231,66 @@ test("behavioral cutover refuses an unfinished legacy plan job", async () => {
   await db.q("DELETE FROM qm_schema_migrations WHERE id='finny/store/0013-sop-cutover'");
   const cutover = createPostgresFinnyStore(url);
   await assert.rejects(cutover.searchSopVersions("personal:U1", "missing"), /unfinished legacy Finny jobs/i);
+});
+
+test("behavioral cutover refuses a legacy plan intent awaiting job creation", async () => {
+  const url = testDatabaseUrl();
+  const db = createPgPool(url);
+  await db.q(`CREATE TABLE finny_plan_intents(
+    job_id TEXT PRIMARY KEY,
+    job_input JSONB NOT NULL,
+    parent_input JSONB NOT NULL,
+    created_at BIGINT NOT NULL
+  )`);
+  await db.q(
+    "INSERT INTO finny_plan_intents(job_id,job_input,parent_input,created_at) VALUES($1,$2,$3,$4)",
+    [randomUUID(), { plan: { title: "Legacy" } }, {}, Date.now()],
+  );
+  const cutover = createPostgresFinnyStore(url);
+  await assert.rejects(cutover.searchSopVersions("personal:U1", "missing"), /plan intents await job creation/i);
+});
+
+test("behavioral cutover refuses a finalized legacy receipt awaiting delivery", async () => {
+  const url = testDatabaseUrl();
+  const store = createPostgresFinnyStore(url);
+  await store.searchSopVersions("personal:U1", "missing");
+  const db = createPgPool(url);
+  const now = Date.now();
+  const jobId = randomUUID();
+  await db.q(
+    `INSERT INTO finny_jobs(
+       id,scope_id,plan_presentation,plan_digest,policy_version,evaluator_ref,required_generations,
+       finding_policy,origin_thread_ref,ledger_head,final_receipt,finalized_at,created_at,updated_at
+     ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,$12)`,
+    [
+      jobId,
+      "personal:U1",
+      { title: "Legacy", phases: [], certification: "Legacy", deliverable: "Legacy", destination: "Legacy", clarifications: [] },
+      "legacy-digest",
+      "legacy-policy",
+      TEST_FINNY_EVALUATOR,
+      {},
+      { id: "legacy", maxFindings: 1, maxCodeLength: 1, maxMessageLength: 1 },
+      "slack:C1:1.1",
+      7,
+      {},
+      now,
+    ],
+  );
+  await db.q(`CREATE TABLE deliveries(
+    id TEXT PRIMARY KEY,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    destination JSONB NOT NULL,
+    text TEXT NOT NULL,
+    created_at BIGINT NOT NULL,
+    delivered_at BIGINT
+  )`);
+  await db.q(
+    `INSERT INTO deliveries(id,idempotency_key,destination,text,created_at,delivered_at)
+     VALUES($1,$2,$3,$4,$5,NULL)`,
+    [randomUUID(), `finny-final:${jobId}:7`, { type: "slack", target: "C1" }, "Legacy final", now],
+  );
+  await db.q("DELETE FROM qm_schema_migrations WHERE id='finny/store/0013-sop-cutover'");
+  const cutover = createPostgresFinnyStore(url);
+  await assert.rejects(cutover.searchSopVersions("personal:U1", "missing"), /final receipts await delivery/i);
 });

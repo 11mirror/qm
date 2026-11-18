@@ -54,6 +54,26 @@ test("execution digest changes only with executable meaning or material values",
     api.canonicalFinnySopDefinitionDigest!(sop),
     api.canonicalFinnySopDefinitionDigest!(reorderedContract),
   );
+  const unicodeContract = {
+    ...sop,
+    outputs: sop.outputs.map((output) =>
+      output.id === "workbook" ? { ...output, contract: { "é": 1, "e\u0301": 2 } } : output,
+    ),
+  };
+  const reversedUnicodeContract = {
+    ...sop,
+    outputs: sop.outputs.map((output) =>
+      output.id === "workbook" ? { ...output, contract: { "e\u0301": 2, "é": 1 } } : output,
+    ),
+  };
+  assert.equal(
+    api.canonicalFinnySopDefinitionDigest!(unicodeContract),
+    api.canonicalFinnySopDefinitionDigest!(reversedUnicodeContract),
+  );
+  assert.equal(
+    api.canonicalFinnyExecutionDigest!(unicodeContract, values),
+    api.canonicalFinnyExecutionDigest!(reversedUnicodeContract, values),
+  );
   assert.notEqual(originalExecution, api.canonicalFinnyExecutionDigest!(sop, { ...values, cutoff: "2026-11-30" }));
   assert.throws(() => api.canonicalFinnyExecutionDigest!(sop, { cutoff: "2026-10-31" }), /currency|required/i);
   assert.throws(
@@ -108,6 +128,7 @@ test("rejects SOPs without finance evidence, controls, workbook, and certified s
     () => api.validateFinnySopVersion({ ...sop, outputs: [{ ...sop.outputs[0], contract: null }, sop.outputs[1]] }),
     /shape|contract/i,
   );
+  assert.throws(() => api.validateFinnySopVersion({ ...sop, approval: { ...sop.approval, required: false } }), /shape/i);
   assert.throws(
     () => api.validateFinnySopVersion({ ...sop, outputs: sop.outputs.filter((output) => output.kind !== "xlsx") }),
     /xlsx|workbook/i,

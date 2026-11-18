@@ -313,12 +313,45 @@ const SOP_AMENDMENT_SCHEMA = [
 
 const SOP_CUTOVER_SCHEMA = [
   `DO $qm$
+   DECLARE
+     blocked BOOLEAN;
    BEGIN
      IF EXISTS (
        SELECT 1 FROM finny_jobs
        WHERE sop_version_id IS NULL AND finalized_at IS NULL
      ) THEN
        RAISE EXCEPTION 'Finny SOP cutover refused: unfinished legacy Finny jobs exist';
+     END IF;
+
+     IF to_regclass('finny_plan_intents') IS NOT NULL THEN
+       EXECUTE 'SELECT EXISTS (
+         SELECT 1 FROM finny_plan_intents WHERE NOT (job_input ? ''sop'')
+       )' INTO blocked;
+       IF blocked THEN
+         RAISE EXCEPTION 'Finny SOP cutover refused: legacy Finny plan intents await job creation';
+       END IF;
+     END IF;
+
+     SELECT EXISTS (
+       SELECT 1 FROM finny_jobs
+       WHERE sop_version_id IS NULL AND final_receipt IS NOT NULL
+     ) INTO blocked;
+     IF blocked AND to_regclass('deliveries') IS NULL THEN
+       RAISE EXCEPTION 'Finny SOP cutover refused: legacy Finny final receipts await delivery';
+     END IF;
+     IF blocked THEN
+       EXECUTE 'SELECT EXISTS (
+         SELECT 1
+           FROM finny_jobs j
+           LEFT JOIN deliveries d
+             ON d.idempotency_key = ''finny-final:'' || j.id || '':'' || j.ledger_head::text
+          WHERE j.sop_version_id IS NULL
+            AND j.final_receipt IS NOT NULL
+            AND d.delivered_at IS NULL
+       )' INTO blocked;
+       IF blocked THEN
+         RAISE EXCEPTION 'Finny SOP cutover refused: legacy Finny final receipts await delivery';
+       END IF;
      END IF;
    END
    $qm$`,
@@ -1005,6 +1038,12 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         const previousExecutionDigest = job.execution_digest as string;
         const revision = Number(job.sop_revision) + 1;
         const material = newExecutionDigest !== previousExecutionDigest;
+        const currentPolicy: FinnyPolicySnapshot = {
+          policyVersion: job.policy_version as string,
+          evaluator: job.evaluator_ref as FinnyEvaluatorRef,
+          requiredGenerations: job.required_generations as Record<FinnyCheckId, number>,
+        };
+        const amendedPolicy = material ? reviseFinnyPolicy(currentPolicy, ["source_or_logic"]) : currentPolicy;
         const payload: FinnyJobEventPayloads["sop_amended"] = {
           previousSopVersionId,
           newSopVersionId: stored.versionId,
@@ -1042,7 +1081,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
              finalization_key=CASE WHEN $6 THEN NULL ELSE finalization_key END,
              final_receipt=CASE WHEN $6 THEN NULL ELSE final_receipt END,
              finalized_at=CASE WHEN $6 THEN NULL ELSE finalized_at END,
-             event_head=$7, updated_at=$8
+             required_generations=$7, event_head=$8, updated_at=$9
            WHERE id=$1`,
           [
             input.jobId,
@@ -1051,6 +1090,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
             newExecutionDigest,
             revision,
             material,
+            JSON.stringify(amendedPolicy.requiredGenerations),
             nextHead,
             input.createdAt,
           ],
