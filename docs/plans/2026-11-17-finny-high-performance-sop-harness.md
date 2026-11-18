@@ -706,7 +706,7 @@ interface FinnyJob {
 }
 ```
 
-`FinnyApproval.planDigest` becomes `executionDigest` and adds `sopRevision`. A new receipt payload uses `sopVersionId`, `sopRevision`, and `executionDigest` instead of `planDigest`; existing signed receipts remain the legacy union member and are never rewritten. The `plan_amended` event becomes:
+`FinnyApproval.planDigest` becomes `executionDigest`. Approval deliberately does not bind `sopRevision`: a non-material value amendment may advance revision provenance without changing the approved execution meaning. A new receipt payload uses `sopVersionId`, `sopRevision`, and `executionDigest` instead of `planDigest`; existing signed receipts remain the legacy union member and are never rewritten. The `plan_amended` event becomes:
 
 ```ts
 {
@@ -793,7 +793,6 @@ CREATE TRIGGER finny_sop_versions_immutable
 | `execution_digest`          | Added `TEXT CHECK (execution_digest IS NULL OR execution_digest <> '')`                                       |
 | `sop_revision`              | Added `BIGINT CHECK (sop_revision IS NULL OR sop_revision > 0)`                                               |
 | `approval_execution_digest` | Added `TEXT` for the current approval snapshot                                                                |
-| `approval_sop_revision`     | Added `BIGINT CHECK (approval_sop_revision IS NULL OR approval_sop_revision > 0)`                             |
 
 The exact additive job migration is:
 
@@ -805,7 +804,6 @@ ALTER TABLE finny_jobs ADD COLUMN bound_inputs JSONB;
 ALTER TABLE finny_jobs ADD COLUMN execution_digest TEXT;
 ALTER TABLE finny_jobs ADD COLUMN sop_revision BIGINT;
 ALTER TABLE finny_jobs ADD COLUMN approval_execution_digest TEXT;
-ALTER TABLE finny_jobs ADD COLUMN approval_sop_revision BIGINT;
 ALTER TABLE finny_jobs ADD CONSTRAINT finny_jobs_sop_scope_fk
   FOREIGN KEY(scope_id, sop_version_id)
   REFERENCES finny_sop_versions(scope_id, version_id);
@@ -822,9 +820,7 @@ ALTER TABLE finny_jobs ADD CONSTRAINT finny_jobs_binding_mode CHECK (
 );
 ALTER TABLE finny_jobs ADD CONSTRAINT finny_jobs_approval_binding_mode CHECK (
   NOT (approval_plan_digest IS NOT NULL AND approval_execution_digest IS NOT NULL) AND
-  ((approval_execution_digest IS NULL) = (approval_sop_revision IS NULL)) AND
-  (approval_execution_digest IS NULL OR approval_execution_digest <> '') AND
-  (approval_sop_revision IS NULL OR approval_sop_revision > 0)
+  (approval_execution_digest IS NULL OR approval_execution_digest <> '')
 );
 CREATE INDEX finny_jobs_sop_version
   ON finny_jobs(scope_id, sop_version_id)
@@ -833,22 +829,21 @@ CREATE INDEX finny_jobs_sop_version
 
 `finny_jobs_binding_mode` requires exactly one complete binding mode: either the retained legacy `plan_presentation` plus `plan_digest`, or `sop_version_id` plus object `bound_inputs`, non-empty `execution_digest`, and positive `sop_revision`. New writes may use only SOP mode. No runtime path falls back from a missing SOP binding to the legacy presentation. All existing job indexes and constraints remain unchanged.
 
-`finny_approval_requests` retains historical `plan_digest` as nullable and adds non-empty nullable `execution_digest` plus positive nullable `sop_revision`. Its exact additive migration is:
+`finny_approval_requests` retains historical `plan_digest` as nullable and adds non-empty nullable `execution_digest`. Its exact additive migration is:
 
 ```sql
 ALTER TABLE finny_approval_requests ALTER COLUMN plan_digest DROP NOT NULL;
 ALTER TABLE finny_approval_requests ADD COLUMN execution_digest TEXT;
-ALTER TABLE finny_approval_requests ADD COLUMN sop_revision BIGINT;
 ALTER TABLE finny_approval_requests ADD CONSTRAINT finny_approval_requests_binding_mode CHECK (
   (
-    plan_digest IS NOT NULL AND execution_digest IS NULL AND sop_revision IS NULL
+    plan_digest IS NOT NULL AND execution_digest IS NULL
   ) OR (
-    plan_digest IS NULL AND execution_digest <> '' AND sop_revision > 0
+    plan_digest IS NULL AND execution_digest <> ''
   )
 );
 ```
 
-Its existing primary key, foreign key, job index, and one-pending-request partial unique index remain unchanged. New requests use only execution mode. The current job approval snapshot is accepted only when request ID, actor, action, origin, execution digest, and SOP revision all match the current job binding.
+Its existing primary key, foreign key, job index, and one-pending-request partial unique index remain unchanged. New requests use only execution mode. The current job approval snapshot is accepted only when request ID, actor, action, origin, and execution digest match the current job binding. A revision with the same execution digest retains approval; a revision with a different execution digest cannot execute under the prior approval.
 
 No execution-digest uniqueness constraint is added. Two jobs may legitimately execute the same SOP and material inputs, and successive revisions may retain the same digest when only explicitly non-material bound values change. Idempotency remains owned by request IDs and existing idempotency keys, not by the semantic digest.
 
@@ -921,15 +916,13 @@ After:
     "execution_digest": "approved-execution-digest",
     "sop_revision": 1,
     "approval_plan_digest": null,
-    "approval_execution_digest": "approved-execution-digest",
-    "approval_sop_revision": 1
+    "approval_execution_digest": "approved-execution-digest"
   },
   "finny_approval_requests": {
     "request_id": "approval-ap-2",
     "job_id": "job-ap-2",
     "plan_digest": null,
-    "execution_digest": "approved-execution-digest",
-    "sop_revision": 1
+    "execution_digest": "approved-execution-digest"
   }
 }
 ```
