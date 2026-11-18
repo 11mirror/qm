@@ -11,7 +11,6 @@ import type { FinnyStore } from "./store.ts";
 import { initialFinnyPolicy } from "./policy.ts";
 import {
   assertFinnyMaterialClarificationMatchesSop,
-  canonicalFinnyExecutionDigest,
 } from "./plan.ts";
 import type { FinnyArtifactProposal } from "./integration-postgres-store.ts";
 import type {
@@ -327,35 +326,36 @@ export function createFinnyToolServiceFactory(deps: {
           sop: FinnySopVersion,
           values: Record<string, string | boolean>,
           materialClarification?: FinnyMaterialClarification,
+          operationId?: string,
         ): Promise<FinnyPlanCreation> {
           const job = await deps.jobs.getJob(turn.scopeId, jobId);
           if (!job) throw new Error("Finny job is unavailable");
           if (!job.sopBinding) throw new Error("Finny job has no SOP binding");
-          const newExecutionDigest = canonicalFinnyExecutionDigest(sop, values);
-          const material = newExecutionDigest !== job.sopBinding.executionDigest;
           if (materialClarification)
             assertFinnyMaterialClarificationMatchesSop(sop, values, materialClarification);
-          const requestId = material ? id() : undefined;
+          const amendmentId = operationId ?? id();
+          const requestId = `finny-amend-${createHash("sha256")
+            .update(`${turn.scopeId}\0${jobId}\0${amendmentId}`)
+            .digest("base64url")}`;
           const now = Date.now();
           const amendment = await deps.jobs.recordSopAmendment({
             scopeId: turn.scopeId,
             jobId,
             sop,
             values,
-            idempotencyKey: `finny-amend:${jobId}:${newExecutionDigest}`,
+            idempotencyKey: `finny-amend:${requestId}`,
             createdAt: now,
-            ...(requestId
-              ? {
-                  replacementApproval: {
-                    requestId,
-                    actorId: turn.actor.id,
-                    originThreadRef: turn.originThreadRef,
-                    destination: turn.destination,
-                    binding: turn.parentBinding,
-                  },
-                }
-              : {}),
+            replacementApproval: {
+              requestId,
+              actorId: turn.actor.id,
+              originThreadRef: turn.originThreadRef,
+              destination: turn.destination,
+              binding: turn.parentBinding,
+            },
           });
+          const event = amendment.events[0];
+          if (!event) throw new Error("Finny amendment did not record durable provenance");
+          const material = event.payload.previousExecutionDigest !== event.payload.newExecutionDigest;
           if (!material)
             return {
               message: `Finny plan ${jobId} amendment was recorded without changing its approved execution.`,
@@ -366,15 +366,15 @@ export function createFinnyToolServiceFactory(deps: {
           await deps.deliveries.enqueue({
             destination: {
               ...turn.destination,
-              finnyPlanRequestId: requestId!,
+              finnyPlanRequestId: requestId,
             },
             text: `[Amended Scope] ${sop.title}`,
-            idempotencyKey: `finny-plan-amendment:${requestId!}`,
+            idempotencyKey: `finny-plan-amendment:${requestId}`,
           });
           return {
             message: `Finny plan ${jobId} amendment is awaiting scope change approval.`,
             jobId,
-            requestId: requestId!,
+            requestId,
             awaiting: "approval",
           };
         },

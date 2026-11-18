@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { Check } from "typebox/value";
+import { Errors } from "typebox/value";
 import type {
   FinnyAuditEnvelope,
   FinnyJob,
@@ -24,37 +24,6 @@ function stringArray(value: unknown, label: string): string[] {
 function record(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Finny SOP ${label} is invalid`);
   return value as Record<string, unknown>;
-}
-
-function exact(value: unknown, keys: readonly string[], label: string): Record<string, unknown> {
-  const validated = record(value, label);
-  const unknown = Object.keys(validated).find((key) => !keys.includes(key));
-  if (unknown) throw new Error(`Finny SOP ${label} has unknown field ${unknown}`);
-  return validated;
-}
-
-function sopText(value: unknown, label: string): string {
-  if (typeof value !== "string" || !value.trim()) throw new Error(`Finny SOP ${label} is invalid`);
-  return value;
-}
-
-function sopBoolean(value: unknown, label: string): boolean {
-  if (typeof value !== "boolean") throw new Error(`Finny SOP ${label} is invalid`);
-  return value;
-}
-
-function sopArray(value: unknown, label: string): unknown[] {
-  if (!Array.isArray(value)) throw new Error(`Finny SOP ${label} is invalid`);
-  return value;
-}
-
-function sopStringArray(value: unknown, label: string): string[] {
-  return sopArray(value, label).map((item) => sopText(item, label));
-}
-
-function enumValue<T extends string>(value: unknown, values: readonly T[], label: string): T {
-  if (typeof value !== "string" || !values.includes(value as T)) throw new Error(`Finny SOP ${label} is invalid`);
-  return value as T;
 }
 
 function uniqueIds(items: readonly { id: string }[], label: string): void {
@@ -93,76 +62,51 @@ function canonicalDigest(value: unknown): string {
 }
 
 export function validateFinnySopVersion(value: unknown): FinnySopVersion {
-  const root = exact(
-    value,
-    ["schema", "id", "version", "scopeId", "title", "intent", "objective", "inputs", "sources", "steps", "controls", "outputs", "approval"],
-    "version",
-  );
-  if (root.schema !== "finny.sop.v1") throw new Error("Finny SOP schema is invalid");
-  if (!Number.isSafeInteger(root.version) || (root.version as number) < 1)
-    throw new Error("Finny SOP version is invalid");
-  const intent = exact(root.intent, ["domain", "description", "searchTerms"], "intent");
-  const inputs = sopArray(root.inputs, "inputs").map((item) => {
-    const input = exact(item, ["id", "label", "from", "type", "required", "material"], "input");
-    return Object.freeze({
-      id: sopText(input.id, "input ID"),
-      label: sopText(input.label, "input label"),
-      from: enumValue(input.from, ["human", "system"] as const, "input origin"),
-      type: enumValue(input.type, ["date", "text", "currency", "entity", "boolean"] as const, "input type"),
-      required: sopBoolean(input.required, "input required flag"),
-      material: sopBoolean(input.material, "input material flag"),
-    });
-  });
+  const [error] = Errors(FINNY_SOP_SCHEMA, value);
+  if (error) {
+    let detail = "";
+    if (error.keyword === "additionalProperties")
+      detail = `: unknown ${error.params.additionalProperties.join(", ")}`;
+    else if (error.instancePath) detail = ` at ${error.instancePath}`;
+    throw new Error(`Finny SOP shape is invalid${detail}`);
+  }
+  const root = value as FinnySopVersion;
+  const inputs = root.inputs.map((input) => Object.freeze({ ...input }));
   uniqueIds(inputs, "input");
   const inputIds = new Set(inputs.map((input) => input.id));
-  const sources = sopArray(root.sources, "sources").map((item) => {
-    const source = exact(item, ["id", "system", "object", "fields", "filter", "asOfInput"], "source");
-    const asOfInput = source.asOfInput === undefined ? undefined : sopText(source.asOfInput, "source as-of input");
-    if (asOfInput && !inputIds.has(asOfInput)) throw new Error(`Finny SOP source as-of input ${asOfInput} is unknown`);
+  const sources = root.sources.map((source) => {
+    if (source.asOfInput && !inputIds.has(source.asOfInput))
+      throw new Error(`Finny SOP source as-of input ${source.asOfInput} is unknown`);
     return Object.freeze({
-      id: sopText(source.id, "source ID"),
-      system: sopText(source.system, "source system"),
-      object: sopText(source.object, "source object"),
-      fields: frozenArray(sopStringArray(source.fields, "source fields")),
-      filter: sopText(source.filter, "source filter"),
-      ...(asOfInput ? { asOfInput } : {}),
+      ...source,
+      fields: frozenArray([...source.fields]),
     });
   });
-  if (!sources.length) throw new Error("Finny SOP must declare a source");
   uniqueIds(sources, "source");
   const readable = new Set([...inputIds, ...sources.map((source) => source.id)]);
-  const steps = sopArray(root.steps, "steps").map((item) => {
-    const step = exact(item, ["id", "action", "reads", "writes"], "step");
-    const reads = sopStringArray(step.reads, "step reads");
-    const unknown = reads.find((read) => !readable.has(read));
+  const steps = root.steps.map((step) => {
+    const unknown = step.reads.find((read) => !readable.has(read));
     if (unknown) throw new Error(`Finny SOP step read ${unknown} is unknown or out of order`);
-    const writes = sopText(step.writes, "step writes");
-    if (readable.has(writes)) throw new Error(`Finny SOP step write ${writes} is ambiguous`);
-    readable.add(writes);
+    if (readable.has(step.writes)) throw new Error(`Finny SOP step write ${step.writes} is ambiguous`);
+    readable.add(step.writes);
     return Object.freeze({
-      id: sopText(step.id, "step ID"),
-      action: sopText(step.action, "step action"),
-      reads: frozenArray(reads),
-      writes,
+      ...step,
+      reads: frozenArray([...step.reads]),
     });
   });
-  if (!steps.length) throw new Error("Finny SOP must declare an ordered step");
   uniqueIds(steps, "step");
-  const outputs = sopArray(root.outputs, "outputs").map((item) => {
-    const output = exact(item, ["id", "kind", "contract", "rerun"], "output");
+  const outputs = root.outputs.map((output) => {
     const rerun =
       output.rerun === undefined
         ? undefined
         : (() => {
-            const value = exact(output.rerun, ["inputIds"], "output rerun");
-            const inputIdsValue = sopStringArray(value.inputIds, "output rerun input IDs");
-            const unknown = inputIdsValue.find((id) => !inputIds.has(id));
+            const unknown = output.rerun.inputIds.find((id) => !inputIds.has(id));
             if (unknown) throw new Error(`Finny SOP output rerun input ${unknown} is unknown`);
-            return Object.freeze({ inputIds: frozenArray(inputIdsValue) });
+            return Object.freeze({ inputIds: frozenArray([...output.rerun.inputIds]) });
           })();
     return Object.freeze({
-      id: sopText(output.id, "output ID"),
-      kind: enumValue(output.kind, ["xlsx", "summary", "app"] as const, "output kind"),
+      id: output.id,
+      kind: output.kind,
       contract: jsonValue(output.contract, "output contract") as Record<string, unknown>,
       ...(rerun ? { rerun } : {}),
     });
@@ -172,54 +116,33 @@ export function validateFinnySopVersion(value: unknown): FinnySopVersion {
     throw new Error("Finny SOP must declare a certified summary");
   uniqueIds(outputs, "output");
   const evidence = new Set([...readable, ...outputs.map((output) => output.id)]);
-  const controls = sopArray(root.controls, "controls").map((item) => {
-    const control = exact(item, ["id", "assertion", "tolerance", "evidenceRefs", "judgment"], "control");
-    const evidenceRefs = sopStringArray(control.evidenceRefs, "control evidence references");
-    const unknown = evidenceRefs.find((reference) => !evidence.has(reference));
+  const controls = root.controls.map((control) => {
+    const unknown = control.evidenceRefs.find((reference) => !evidence.has(reference));
     if (unknown) throw new Error(`Finny SOP control evidence reference ${unknown} is unknown`);
-    const judgment =
-      control.judgment === undefined
-        ? undefined
-        : (() => {
-            const value = exact(control.judgment, ["question", "onlyWhen"], "control judgment");
-            return Object.freeze({
-              question: sopText(value.question, "control judgment question"),
-              onlyWhen: sopText(value.onlyWhen, "control judgment predicate"),
-            });
-          })();
     return Object.freeze({
-      id: sopText(control.id, "control ID"),
-      assertion: sopText(control.assertion, "control assertion"),
-      ...(control.tolerance === undefined ? {} : { tolerance: sopText(control.tolerance, "control tolerance") }),
-      evidenceRefs: frozenArray(evidenceRefs),
-      ...(judgment ? { judgment } : {}),
+      ...control,
+      evidenceRefs: frozenArray([...control.evidenceRefs]),
+      ...(control.judgment ? { judgment: Object.freeze({ ...control.judgment }) } : {}),
     });
   });
-  if (!controls.length) throw new Error("Finny SOP must declare a control");
   uniqueIds(controls, "control");
-  const approval = exact(root.approval, ["required", "destination"], "approval");
-  if (!Check(FINNY_SOP_SCHEMA, value)) throw new Error("Finny SOP shape is invalid");
   return Object.freeze({
     schema: "finny.sop.v1",
-    id: sopText(root.id, "ID"),
-    version: root.version as number,
-    scopeId: sopText(root.scopeId, "scope ID"),
-    title: sopText(root.title, "title"),
+    id: root.id,
+    version: root.version,
+    scopeId: root.scopeId,
+    title: root.title,
     intent: Object.freeze({
-      domain: enumValue(intent.domain, ["ap", "ar", "gl", "close"] as const, "intent domain"),
-      description: sopText(intent.description, "intent description"),
-      searchTerms: frozenArray(sopStringArray(intent.searchTerms, "intent search terms")),
+      ...root.intent,
+      searchTerms: frozenArray([...root.intent.searchTerms]),
     }),
-    objective: sopText(root.objective, "objective"),
+    objective: root.objective,
     inputs: frozenArray(inputs),
     sources: frozenArray(sources),
     steps: frozenArray(steps),
     controls: frozenArray(controls),
     outputs: frozenArray(outputs),
-    approval: Object.freeze({
-      required: sopBoolean(approval.required, "approval required flag"),
-      destination: sopText(approval.destination, "approval destination"),
-    }),
+    approval: Object.freeze({ ...root.approval }),
   });
 }
 

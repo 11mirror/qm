@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 
-const text = () => Type.String({ minLength: 1 });
+const text = () => Type.String({ minLength: 1, pattern: "\\S" });
 
 const input = Type.Object(
   {
@@ -81,7 +81,6 @@ export const FINNY_SOP_SCHEMA = Type.Object(
         },
         { additionalProperties: false },
       ),
-      { minItems: 2 },
     ),
     approval: Type.Object({ required: Type.Boolean(), destination: text() }, { additionalProperties: false }),
   },

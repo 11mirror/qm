@@ -51,6 +51,22 @@ test("durably preserves exact parent binding, destination, and artifact proposal
   assert.deepEqual(await integration.getParent(job.scopeId, job.id), parent);
   assert.ok(job.sop);
   assert.ok(job.sopBinding);
+  await jobs.recordSopAmendment({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    sop: job.sop,
+    values: { ...job.sopBinding.values, note: "presentation-only revision" },
+    idempotencyKey: randomUUID(),
+    createdAt: Date.now(),
+    replacementApproval: {
+      requestId: randomUUID(),
+      actorId: parent.actorId,
+      originThreadRef: parent.originThreadRef,
+      destination: parent.destination,
+      binding: parent.binding,
+    },
+  });
+  assert.deepEqual(await integration.getParent(job.scopeId, job.id), parent);
   const replacementRequestId = randomUUID();
   const amendment = await jobs.recordSopAmendment({
     scopeId: job.scopeId,

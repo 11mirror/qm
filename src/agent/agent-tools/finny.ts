@@ -21,6 +21,7 @@ export interface FinnyToolService {
     sop: FinnySopVersion,
     values: Record<string, string | boolean>,
     materialClarification?: FinnyMaterialClarification,
+    operationId?: string,
   ): Promise<FinnyPlanCreation>;
   status(jobId: string): Promise<string>;
   artifactReady(input: {
@@ -151,6 +152,7 @@ export function finnyTools(kit: ToolKit) {
         params.sop,
         params.values,
         params.materialClarification,
+        callId,
       );
       if (opts?.surfaceName === "web" && result.awaiting !== "none")
         return blockOnApproval(

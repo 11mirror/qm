@@ -75,6 +75,7 @@ function finnyTool() {
 test("finny plan actions accept only strict SOP versions and bound values", () => {
   const schema = finnyTool().parameters;
   assert.equal(Check(schema, { action: "create_plan", sop, values }), true);
+  assert.equal(Check(schema, { action: "create_plan", sop: { ...sop, title: "   " }, values }), false);
   assert.equal(Check(schema, { action: "amend_plan", jobId: "job-1", sop, values }), true);
   assert.equal(Check(schema, { action: "create_plan", plan }), false);
   assert.equal(Check(schema, { action: "create_plan", sop }), false);
@@ -349,9 +350,11 @@ test("web Finny approval retains the durable plan request identity", async () =>
 
 test("web Finny amendment presents its durable replacement approval", async () => {
   const pendingApprovals: NonNullable<import("../src/agent/agent-tools.ts").ToolContextRef["pendingApprovals"]> = [];
+  let operationId: string | undefined;
   const bound = {
     ...service,
-    async amendPlan() {
+    async amendPlan(...args: Parameters<FinnyToolService["amendPlan"]>) {
+      operationId = args[4];
       return {
         message: "Finny plan job-1 amendment is awaiting scope change approval.",
         jobId: "job-1",
@@ -370,6 +373,7 @@ test("web Finny amendment presents its durable replacement approval", async () =
 
   assert.equal(pendingApprovals[0]?.approvalKey, "finny-plan:amendment-request-1");
   assert.equal(pendingApprovals[0]?.command, sop.title);
+  assert.equal(operationId, "call-amendment");
 });
 
 test("web Finny non-material amendment returns without a replacement approval", async () => {

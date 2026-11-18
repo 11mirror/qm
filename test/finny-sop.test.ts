@@ -11,6 +11,7 @@ test("accepts one strict finance SOP and rejects workflow-only executable fields
   };
   assert.equal(typeof api.validateFinnySopVersion, "function");
   assert.deepEqual(api.validateFinnySopVersion!(sop), sop);
+  assert.throws(() => api.validateFinnySopVersion!({ ...sop, title: "   " }), /shape|title/i);
   assert.throws(
     () => api.validateFinnySopVersion!({ ...sop, nodes: [{ id: "retry", retryBudget: 3 }] }),
     /unknown|nodes/i,

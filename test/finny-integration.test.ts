@@ -36,6 +36,8 @@ function harness(
     policy: { policyVersion: "v1", requiredGenerations: {} },
     ...options.job,
   } as unknown as FinnyJob;
+  assert.ok(job.sopBinding);
+  const jobSopBinding = job.sopBinding;
   const factory = createFinnyToolServiceFactory({
     config: {
       findingPolicy: { id: "bounds.v1", maxFindings: 4, maxCodeLength: 20, maxMessageLength: 200 },
@@ -60,9 +62,21 @@ function harness(
       async getJob(scopeId: string, jobId: string) {
         return scopeId === "scope-1" && jobId === "job-1" ? job : null;
       },
-      async recordSopAmendment(input: unknown) {
+      async recordSopAmendment(input: any) {
         calls.push(["recordSopAmendment", input]);
-        return { job, events: [], deduped: false };
+        const newExecutionDigest = canonicalFinnyExecutionDigest(input.sop, input.values);
+        return {
+          job,
+          events: [
+            {
+              payload: {
+                previousExecutionDigest: jobSopBinding.executionDigest,
+                newExecutionDigest,
+              },
+            },
+          ],
+          deduped: false,
+        };
       },
     },
     runtime: {
@@ -279,16 +293,21 @@ test("material clarification must match the immutable plan recommendation", asyn
   assert.equal(calls.length, 0);
 });
 
-test("non-material amendments record provenance without replacing approval", async () => {
+test("non-material amendments use distinct stable operations without replacing approval", async () => {
   const { factory, calls } = harness();
   const service = await factory.forTurn(parent);
   assert.ok(service);
-  assert.deepEqual(await service.amendPlan("job-1", sop, { ...values, note: "display-only update" }), {
+  assert.deepEqual(await service.amendPlan("job-1", sop, { ...values, note: "display-only update" }, undefined, "call-1"), {
     message: "Finny plan job-1 amendment was recorded without changing its approved execution.",
     jobId: "job-1",
     awaiting: "none",
   });
-  assert.equal(calls.filter(([name]) => name === "recordSopAmendment").length, 1);
+  await service.amendPlan("job-1", sop, { ...values, note: "another display-only update" }, undefined, "call-2");
+  await service.amendPlan("job-1", sop, { ...values, note: "display-only update" }, undefined, "call-1");
+  const amendments = calls.filter(([name]) => name === "recordSopAmendment").map(([, input]) => input as any);
+  assert.equal(amendments.length, 3);
+  assert.notEqual(amendments[0]?.idempotencyKey, amendments[1]?.idempotencyKey);
+  assert.equal(amendments[0]?.idempotencyKey, amendments[2]?.idempotencyKey);
   assert.equal(calls.some(([name]) => name === "enqueue"), false);
 });
 
