@@ -9,10 +9,10 @@ import { Check } from "typebox/value";
 
 const service = {
   async createPlan() {
-    return "plan created";
+    return { message: "plan created", jobId: "job-1", requestId: "request-1", awaiting: "approval" as const };
   },
   async amendPlan() {
-    return "plan amended";
+    return { message: "plan amended", jobId: "job-1", requestId: "request-2", awaiting: "approval" as const };
   },
   async status() {
     return "awaiting approval";
@@ -183,11 +183,21 @@ test("finny forwards only narrow inputs and returns concise bound-service text",
   const bound: FinnyToolService = {
     async createPlan(input) {
       calls.push(["create_plan", input]);
-      return "created job-1";
+      return {
+        message: "created job-1",
+        jobId: "job-1",
+        requestId: "request-1",
+        awaiting: "approval",
+      };
     },
     async amendPlan(jobId, input) {
       calls.push(["amend_plan", { jobId, input }]);
-      return "amended job-1";
+      return {
+        message: "amended job-1",
+        jobId: "job-1",
+        requestId: "request-2",
+        awaiting: "approval",
+      };
     },
     async status(input) {
       calls.push(["status", input]);
@@ -290,6 +300,101 @@ test("finny forwards only narrow inputs and returns concise bound-service text",
     ["deterministic_audit", { idempotencyKey: "deterministic-1" }],
     ["finalize", { jobId: "job-1", idempotencyKey: "finalize-1" }],
   ]);
+});
+
+test("web Finny approval retains the durable plan request identity", async () => {
+  const pendingApprovals: NonNullable<import("../src/agent/agent-tools.ts").ToolContextRef["pendingApprovals"]> = [];
+  const bound = {
+    ...service,
+    async createPlan() {
+      return {
+        message: "Finny plan job-1 is awaiting approval.",
+        jobId: "job-1",
+        requestId: "plan-request-1",
+        awaiting: "approval" as const,
+      };
+    },
+  };
+  const tool = createAgentTools(
+    { current: { finny: bound } as unknown as ToolContext, pendingApprovals },
+    { surfaceName: "web" },
+  ).find((candidate) => candidate.name === "finny");
+  assert.ok(tool);
+
+  await execute(tool, "call-plan", { action: "create_plan", plan });
+
+  assert.equal(pendingApprovals[0]?.approvalKey, "finny-plan:plan-request-1");
+});
+
+test("web Finny amendment presents its durable replacement approval", async () => {
+  const pendingApprovals: NonNullable<import("../src/agent/agent-tools.ts").ToolContextRef["pendingApprovals"]> = [];
+  const bound = {
+    ...service,
+    async amendPlan() {
+      return {
+        message: "Finny plan job-1 amendment is awaiting scope change approval.",
+        jobId: "job-1",
+        requestId: "amendment-request-1",
+        awaiting: "approval" as const,
+      };
+    },
+  } as unknown as FinnyToolService;
+  const tool = createAgentTools(
+    { current: { finny: bound } as unknown as ToolContext, pendingApprovals },
+    { surfaceName: "web" },
+  ).find((candidate) => candidate.name === "finny");
+  assert.ok(tool);
+
+  await execute(tool, "call-amendment", { action: "amend_plan", jobId: "job-1", plan });
+
+  assert.equal(pendingApprovals[0]?.approvalKey, "finny-plan:amendment-request-1");
+  assert.equal(pendingApprovals[0]?.command, plan.title);
+});
+
+test("web Finny clarification presents the durable question before plan approval", async () => {
+  const pendingApprovals: NonNullable<import("../src/agent/agent-tools.ts").ToolContextRef["pendingApprovals"]> = [];
+  const clarification = {
+    question: "Which accounting basis should be used?",
+    options: [
+      { id: "contracts", label: "Signed contracts" },
+      { id: "invoices", label: "Issued invoices" },
+    ],
+    recommendedOptionId: "contracts",
+  };
+  const bound = {
+    ...service,
+    async createPlan() {
+      return {
+        message: "Finny plan job-1 is awaiting clarification.",
+        jobId: "job-1",
+        requestId: "clarification-request-1",
+        awaiting: "clarification" as const,
+      };
+    },
+  };
+  const tool = createAgentTools(
+    { current: { finny: bound } as unknown as ToolContext, pendingApprovals },
+    { surfaceName: "web" },
+  ).find((candidate) => candidate.name === "finny");
+  assert.ok(tool);
+
+  await execute(tool, "call-clarification", {
+    action: "create_plan",
+    plan: { ...plan, clarifications: [{ question: clarification.question, answer: "Signed contracts" }] },
+    materialClarification: clarification,
+  });
+
+  assert.deepEqual(
+    pendingApprovals.map(({ command, reason, approvalKey, summary }) => ({ command, reason, approvalKey, summary })),
+    [
+      {
+        command: clarification.question,
+        reason: "Finny Governance Clarification",
+        approvalKey: "finny-clarification:clarification-request-1",
+        summary: "Recommended: Signed contracts",
+      },
+    ],
+  );
 });
 
 test("tool context carries the injected bound Finny service", () => {

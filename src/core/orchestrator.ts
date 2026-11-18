@@ -12,6 +12,10 @@ import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.
 import { startDispatchTrace, tracePhase, type DispatchTrace } from "../../plugins/chassis/src/error-reporting.ts";
 import { externalTools } from "./orchestrator/external-tools.ts";
 import { isBackendCredential } from "../credentials/keychain.ts";
+import {
+  decideFinnyWebApproval,
+  type FinnyWebApprovalResolution,
+} from "../finny/web-approval.ts";
 import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
@@ -1199,7 +1203,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const isFinanceTurn = isFinanceCoordinator;
       const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders, appConnections);
       if (isFinanceTurn) {
-        systemPrompt += `\n\n## Mandatory FinnyLoop Governance Harness\nThis turn matches a financial workbook/reconciliation intent (${resolvedIntent.intentName ?? "financial"}). All financial calculations, ledger queries, and Excel workbook production MUST flow through the FinnyLoop governance lifecycle. Do NOT execute domain skills directly or attach unverified workbooks. You must first call finny_create_plan to present the plan for human approval via interactive approval cards (in this chat or via Slack).\n\n### Plan Presentation & SOP Requirements\nThe plan MUST represent an explicit, step-by-step Standard Operating Procedure (SOP) with accounting logic and data source fields:\n1. Specify the exact systems, tables, and fields used (e.g. NetSuite transaction, transactionline, previousaccountingperiod, Zoho Books, specific accounts, transaction types)\n2. State the accounting basis, cutoff date, and source scope explicitly\n3. Define filtering criteria, currency treatment, and account exclusions (e.g. FX netting, Account 606702, MSME tags)\n4. Break down the plan into discrete stages: Data Extraction -> Balance Calculation -> Workbook Synthesis -> Verification\n5. Specify output artifacts, sheet tabs, and reconciliation controls\n6. Clarification Gate: If ANY material parameters (accounting period, subsidiary, book currency, cutoff dates) are missing or ambiguous, present interactive question-answer clarification cards via materialClarification before submitting the plan for approval.\n7. Require human approval via interactive card before any write, execution, or delivery step`;
+        systemPrompt += `\n\n## Mandatory FinnyLoop Governance Harness\nThis turn matches a financial workbook/reconciliation intent (${resolvedIntent.intentName ?? "financial"}). All financial calculations, ledger queries, and Excel workbook production MUST flow through the FinnyLoop governance lifecycle. Do NOT execute domain skills directly or attach unverified workbooks. You must first call finny(action="create_plan", ...) to present the plan for human approval via interactive approval cards (in this chat or via Slack).\n\n### Plan Presentation & SOP Requirements\nThe plan MUST represent an explicit, step-by-step Standard Operating Procedure (SOP) with accounting logic and data source fields:\n1. Specify the exact systems, tables, and fields used (e.g. NetSuite transaction, transactionline, previousaccountingperiod, Zoho Books, specific accounts, transaction types)\n2. State the accounting basis, cutoff date, and source scope explicitly\n3. Define filtering criteria, currency treatment, and account exclusions (e.g. FX netting, Account 606702, MSME tags)\n4. Break down the plan into discrete stages: Data Extraction -> Balance Calculation -> Workbook Synthesis -> Verification\n5. Specify output artifacts, sheet tabs, and reconciliation controls\n6. Clarification Gate: If ANY material parameters (accounting period, subsidiary, book currency, cutoff dates) are missing or ambiguous, present interactive question-answer clarification cards via materialClarification before submitting the plan for approval.\n7. Require human approval via interactive card before any write, execution, or delivery step`;
       }
       turnContextBlocks["Skills"] = skillsIndex(nativeSkills);
       const transferId = turnFileId(input.runId, input.attempt);
@@ -2042,34 +2046,27 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               reason: "only the person who requested this command can approve or deny it",
             };
           }
-          if (deps.finnyApprovals && p.reason === "Finny Governance Plan Approval") {
-            const threadCandidates = [
-              conversation.threadRef,
-              `web:${conversation.threadRef}`,
-              conversation.threadRef.replace(/^web:web:/, "web:"),
-            ];
-            for (const threadRef of threadCandidates) {
-              const res = await deps.finnyApprovals
-                .decide({
-                  requestId: input.approval.requestId,
-                  decision: { kind: "plan", action: input.approval.approved ? "approve" : "reject" },
-                  actor: { externalId: actor.id, ...(actor.displayName ? { displayName: actor.displayName } : {}) },
-                  surface: input.surface,
-                  originThreadRef: threadRef,
-                })
-                .catch((e: unknown) => {
-                  deps.errors?.record({
-                    category: "finny",
-                    code: "web_approval_failed",
-                    message: errMessage(e),
-                    scopeLabel: scopeId,
-                    sessionId: session.id,
-                  });
-                  return undefined;
-                });
-              if (res && res.kind !== "gone") break;
-            }
-          }
+          let finnyResolution: FinnyWebApprovalResolution | null = null;
+          let projectedFinnyApproval: PendingApproval | undefined;
+          if (deps.finnyApprovals)
+            finnyResolution = await decideFinnyWebApproval({
+              bridge: deps.finnyApprovals,
+              reason: p.reason,
+              approvalKey: p.approvalKey,
+              approved: input.approval.approved,
+              ...(input.approval.optionId ? { optionId: input.approval.optionId } : {}),
+              actor: { externalId: actor.id, ...(actor.displayName ? { displayName: actor.displayName } : {}) },
+              surface: input.surface,
+            }).catch((e: unknown) => {
+              deps.errors?.record({
+                category: "finny",
+                code: "web_approval_failed",
+                message: errMessage(e),
+                scopeLabel: scopeId,
+                sessionId: session.id,
+              });
+              throw e;
+            });
           if (!input.approval.approved) {
             const messagePrefix = "security-screen-release:session_message_";
             if (p.approvalKey?.startsWith(messagePrefix))
@@ -2084,7 +2081,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }),
             );
             await mirrorRunActivity(decisionEntry);
-            if (p.kind !== "input" && !p.screenedOutput)
+            if (p.kind !== "input" && !p.screenedOutput && finnyResolution?.kind !== "clarification")
               await withManagedRosterVersion(() =>
                 deps.sessions.append(writer, {
                   kind: "UserMessage",
@@ -2093,6 +2090,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 }),
               );
             await pending.delete(input.approval.requestId);
+            if (finnyResolution?.kind === "clarification") {
+              audit({
+                action: "command_approval.deny",
+                resource: p.command,
+                status: "ok",
+                detail: JSON.stringify({ approvalOutcome: "clarification_other" }),
+              });
+              return { status: "ok", sessionId: session.id, reply: finnyResolution.reply };
+            }
             audit({
               action: "command_approval.deny",
               resource: p.command,
@@ -2174,6 +2180,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }),
             );
             await mirrorRunActivity(decisionEntry);
+            if (finnyResolution?.kind === "clarification" && finnyResolution.next) {
+              const next = finnyResolution.next;
+              projectedFinnyApproval = await issueApproval(
+                commandApprovalId(session.id, next.command, next.approvalKey),
+                {
+                  sessionId: session.id,
+                  command: next.command,
+                  reason: next.reason,
+                  summary: next.summary,
+                  summaryDetail: next.summaryDetail,
+                  approvalKey: next.approvalKey,
+                  kind: "approval",
+                  grantModes: next.grantModes,
+                },
+              );
+            }
             await pending.delete(input.approval.requestId);
             const useKey = p.approvalKey ?? p.command;
             if (p.screenedOutput && quarantineRelease) {
@@ -2207,14 +2229,34 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               resource: p.command,
               status: "ok",
             });
-            if (p.reason === "Finny Governance Plan Approval") {
+            if (finnyResolution?.kind === "plan") {
               const title = p.command || "Finny Governance Plan";
-              const reply = `Finny plan "${title}" approved. Background Producer and Auditor workers have been dispatched to build, audit, and certify the workbook deliverable.`;
+              const reply = `Finny plan "${title}" approved. The Producer has started building the workbook; the Auditor will start after a valid artifact is committed.`;
               return {
                 status: "ok",
                 sessionId: session.id,
                 reply,
               };
+            }
+            if (finnyResolution?.kind === "clarification") {
+              if (projectedFinnyApproval) {
+                return {
+                  status: "pending_approval",
+                  sessionId: session.id,
+                  reason: "Finny plan approval is ready.",
+                  pendingApprovals: [projectedFinnyApproval],
+                };
+              }
+              if (input.approval.approved && input.approval.optionId)
+                turnEvents.push(
+                  `The human selected a persisted Finny clarification option: ${finnyResolution.reply} Continue the original finance task now. Revise the existing Finny job with finny amend_plan and present its replacement plan for approval without asking the human to repeat this choice.`,
+                );
+              else
+                return {
+                  status: "ok",
+                  sessionId: session.id,
+                  reply: finnyResolution.reply,
+                };
             }
             turnEvents.push(
               p.kind === "input" || p.approvalKey?.startsWith("security-screen-release:")

@@ -291,7 +291,7 @@
         {
           "commandId": "finny-runtime-postgres",
           "file": "test/finny-runtime-coordinator.test.ts",
-          "name": "admits producer and Auditor sequentially and dispatches only the producer grant after approval"
+          "name": "approval starts one actionable Producer run without creating an Auditor"
         },
         {
           "commandId": "finny-runtime-postgres",
@@ -524,22 +524,22 @@
         {
           "commandId": "finny-runtime-postgres",
           "file": "test/finny-runtime-coordinator.test.ts",
-          "name": "replaying approved dispatch is idempotent"
+          "name": "replaying approval reuses the active Producer admission"
         },
         {
           "commandId": "finny-runtime-postgres",
           "file": "test/finny-runtime-coordinator.test.ts",
-          "name": "concurrent approved callbacks converge through dispatcher idempotency"
+          "name": "concurrent approved callbacks converge on one Producer admission"
         },
         {
           "commandId": "finny-runtime-postgres",
           "file": "test/finny-runtime-coordinator.test.ts",
-          "name": "a completed artifact action replays after the producer binding retires"
+          "name": "a completed artifact action replay does not create another Auditor"
         },
         {
           "commandId": "finny-runtime-postgres",
           "file": "test/finny-runtime-coordinator.test.ts",
-          "name": "artifact dispatch recovers from committed action authority without resolving the original proposal"
+          "name": "Auditor admission recovers from committed artifact authority without resolving the proposal again"
         },
         {
           "commandId": "finny-runtime-postgres",

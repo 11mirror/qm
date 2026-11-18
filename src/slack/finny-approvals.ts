@@ -41,7 +41,7 @@ export interface FinnyApprovalDecisionInput {
 }
 export type FinnyApprovalOutcome =
   | { kind: "decision"; card: FinnyDecisionCardInput }
-  | { kind: "result"; card: FinnyResultCardInput }
+  | { kind: "result"; card: FinnyResultCardInput; next?: Extract<FinnyPendingApproval, { kind: "plan" }> }
   | { kind: "gone" };
 
 export interface FinnyApprovalBridge {

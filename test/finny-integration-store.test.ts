@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { createPostgresFinnyIntegrationStore } from "../src/finny/integration-postgres-store.ts";
 import { createFinnyApprovalService } from "../src/finny/approval-service.ts";
-import { createFinnyToolServiceFactory } from "../src/finny/integration.ts";
 import { createPostgresFinnyStore } from "../src/finny/postgres-store.ts";
 import { createPostgresFinnyRuntimeStore } from "../src/finny/runtime-postgres-store.ts";
 import { initialFinnyPolicy } from "../src/finny/policy.ts";
@@ -159,6 +158,10 @@ test("startup recovery finds approved jobs whose producer dispatch is incomplete
     decidedAt: Date.now(),
   });
   await runtime.currentBinding(randomUUID());
+  const producerRunId = randomUUID();
+  const { q } = createPgPool(url);
+  await q(`CREATE TABLE runs(id TEXT PRIMARY KEY,status TEXT NOT NULL,last_stop TEXT,result TEXT)`);
+  await q("INSERT INTO runs(id,status,last_stop,result) VALUES($1,'running',NULL,NULL)", [producerRunId]);
   const parentSessionId = randomUUID();
   const producerSessionId = randomUUID();
   const auditorSessionId = randomUUID();
@@ -171,12 +174,34 @@ test("startup recovery finds approved jobs whose producer dispatch is incomplete
     producerExpiresAt: Date.now() + 60_000,
     auditorExpiresAt: Date.now() + 60_000,
     producerSessionId,
-    producerRunId: randomUUID(),
+    producerRunId,
     auditorSessionId,
     auditorRunId: randomUUID(),
     producerPrincipalId: "producer",
     auditorPrincipalId: "auditor",
   });
+  assert.deepEqual(await integration.approvedIncomplete(), []);
+  await q("UPDATE runs SET status='done',result=$2 WHERE id=$1", [
+    producerRunId,
+    JSON.stringify({ status: "pending_approval", pendingApprovals: [] }),
+  ]);
+  assert.deepEqual(await integration.approvedIncomplete(), []);
+  await q("UPDATE runs SET result=$2 WHERE id=$1", [
+    producerRunId,
+    JSON.stringify({ status: "refused", reason: "human decision required" }),
+  ]);
+  assert.deepEqual(await integration.approvedIncomplete(), []);
+  await q("UPDATE runs SET status='done',result=$2 WHERE id=$1", [
+    producerRunId,
+    JSON.stringify({ status: "ok", reply: "Finished without an artifact" }),
+  ]);
+  assert.deepEqual(await integration.approvedIncomplete(), [
+    {
+      ...(await integration.getParent(job.scopeId, job.id))!,
+      retryTerminalProducerRunId: producerRunId,
+    },
+  ]);
+  await q("UPDATE runs SET status='running',result=NULL WHERE id=$1", [producerRunId]);
   const originalProducer = await runtime.currentBinding(producerSessionId);
   assert.equal(
     await runtime.claimParentTurn({
@@ -186,31 +211,6 @@ test("startup recovery finds approved jobs whose producer dispatch is incomplete
       principalId: "producer",
     }),
     null,
-  );
-  assert.deepEqual(await runtime.currentBinding(producerSessionId), originalProducer);
-  const factory = createFinnyToolServiceFactory({ runtime } as any);
-  assert.equal(
-    await factory.forTurn({
-      actor: { id: "U1", type: "internal" },
-      scopeId: job.scopeId,
-      sessionId: producerSessionId,
-      runId: randomUUID(),
-      originThreadRef: job.originThreadRef,
-      destination: { type: "slack", target: "C1:100.1", threadTs: "100.1" },
-      parent: false,
-      parentBinding: {
-        schema: "finny-parent-binding.v1",
-        sessionId: producerSessionId,
-        runId: randomUUID(),
-        scopeId: job.scopeId,
-        context: {
-          actor: { id: "U1", type: "internal" },
-          conversation: { kind: "dm", threadRef: "dm:D1:100.1", audience: [{ id: "U1", type: "internal" }] },
-          surface: "slack",
-        },
-      },
-    }),
-    undefined,
   );
   assert.deepEqual(await runtime.currentBinding(producerSessionId), originalProducer);
   const currentRunId = randomUUID();
@@ -376,6 +376,17 @@ test("material clarification keeps approval fail closed and restart recovery rel
         title: "Clarification recorded",
         status: "passed",
         summary: "Signed contracts. The plan is ready for approval.",
+      },
+      next: {
+        kind: "plan",
+        requestId: parent.requestId,
+        card: {
+          title: "Material basis",
+          phases: [{ name: "Build", owner: "Producer", dependencies: [] }],
+          certification: "Audit",
+          deliverable: "Book",
+          destination: "Thread",
+        },
       },
     },
   );

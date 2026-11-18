@@ -534,6 +534,7 @@ export interface ApprovalDecision {
   requestId: string;
   approved: boolean;
   scope?: "once" | "session" | "always";
+  optionId?: string;
 }
 export type AssistantWork = AssistantMessage & {
   persisted?: boolean;
@@ -1153,7 +1154,11 @@ export async function resolveApproval(decision: ApprovalDecision): Promise<strin
   }
   const submit = await api<{ runId?: string }>(`/api/approvals/${encodeURIComponent(decision.requestId)}`, {
     method: "POST",
-    body: JSON.stringify({ approved: decision.approved, ...(decision.scope ? { scope: decision.scope } : {}) }),
+    body: JSON.stringify({
+      approved: decision.approved,
+      ...(decision.scope ? { scope: decision.scope } : {}),
+      ...(decision.optionId ? { optionId: decision.optionId } : {}),
+    }),
   }).catch((err: unknown) => {
     if (err instanceof ApiError && err.status === 404) return null;
     throw err;

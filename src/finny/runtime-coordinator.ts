@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { SessionOpenInput, SessionSyscalls } from "../sessions/session-syscalls.ts";
+import type { SessionSyscalls } from "../sessions/session-syscalls.ts";
 import type { FinnyStore } from "./store.ts";
 import type {
   FinnyAuditFinding,
@@ -40,6 +40,7 @@ interface RuntimeActorInput {
 
 interface ArtifactReadyRuntimeInput extends RuntimeActorInput {
   idempotencyKey: string;
+  retryTerminalAuditorRunId?: string;
 }
 
 interface AuditPassedRuntimeInput extends RuntimeActorInput {
@@ -65,6 +66,7 @@ interface ApprovedRuntimeInput {
   parentSessionId: string;
   parentRunId: string;
   idempotencyKey: string;
+  retryTerminalProducerRunId?: string;
 }
 
 function opened(result: Awaited<ReturnType<SessionSyscalls["open"]>>, role: string) {
@@ -152,7 +154,8 @@ export async function reconcileFinnyRuntimeRecoveries(deps: {
       scopeId: string;
       jobId: string;
       idempotencyKey: string;
-      forceNewAuditor?: boolean;
+      retryAuditorRunId?: string;
+      retryMissingAuditor?: boolean;
     }): Promise<void>;
   }>;
   recordError(error: unknown, recovery: FinnyRuntimeRecovery): Promise<void>;
@@ -234,7 +237,6 @@ export function createFinnyRuntimeCoordinator(deps: {
       const approval = job.approval;
       const producerTask = deps.workerPolicy.task(job, "producer");
       const producerCredentials = deps.workerPolicy.credentials(job, "producer");
-      const auditorCredentials = deps.workerPolicy.credentials(job, "auditor");
       const startupKey = `finny:${job.id}:${job.approval.requestId}`;
       await deps.runtime.bindParent({
         scopeId: input.scopeId,
@@ -243,56 +245,56 @@ export function createFinnyRuntimeCoordinator(deps: {
         runId: input.parentRunId,
         principalId: approval.actorId,
       });
-      const bindWorker = (role: "producer" | "auditor", identity: { sessionId: string; runId: string }) =>
-        deps.runtime.bindWorker({
+      const existingProducer = await deps.runtime.activeRoleBinding(input.scopeId, input.jobId, "producer");
+      if (existingProducer) {
+        if (input.retryTerminalProducerRunId === existingProducer.runId) {
+          await dispatch({
+            idempotencyKey: `${startupKey}:producer-retry:${input.retryTerminalProducerRunId}`,
+            scopeId: input.scopeId,
+            jobId: input.jobId,
+            sessionId: existingProducer.sessionId,
+            runId: existingProducer.runId,
+            kind: "producer_retry",
+            intent: producerTask,
+            message: producerTask,
+            role: "producer",
+            principalId: producerCredentials.principalId,
+            expiresAt: producerCredentials.expiresAt,
+          });
+        }
+        return;
+      }
+      const bindProducer = async (identity: { sessionId: string; runId: string }) => {
+        await deps.runtime.bindWorker({
           scopeId: input.scopeId,
           jobId: input.jobId,
           sessionId: identity.sessionId,
           runId: identity.runId,
-          role,
-          principalId: role === "producer" ? producerCredentials.principalId : auditorCredentials.principalId,
-          epoch: role === "producer" ? 0 : 1,
-          expiresAt: role === "producer" ? producerCredentials.expiresAt : auditorCredentials.expiresAt,
+          role: "producer",
+          principalId: producerCredentials.principalId,
+          epoch: 0,
+          expiresAt: producerCredentials.expiresAt,
         });
-      const openProducer: SessionOpenInput = {
-        requestId: `${startupKey}:producer`,
-        name: "Finny Producer",
-        task: "Await the role-bound Finny producer dispatch",
-        beforeEnqueue: (identity) => bindWorker("producer", identity),
+        await deps.grants.issueProducer({
+          scopeId: input.scopeId,
+          jobId: input.jobId,
+          principalId: producerCredentials.principalId,
+          runId: identity.runId,
+          expiresAt: producerCredentials.expiresAt,
+        });
       };
-      const openAuditor: SessionOpenInput = {
-        requestId: `${startupKey}:auditor`,
-        name: "Finny Auditor",
-        task: "Await the artifact-bound Finny Auditor dispatch",
-        beforeEnqueue: (identity) => bindWorker("auditor", identity),
-      };
-      // Session admission is guarded by one global lock. Open the two workers in
-      // deterministic order so they do not contend for that lock; once enqueued,
-      // their runs remain independent and can execute concurrently.
-      const producerResult = await deps.sessions.open(openProducer);
-      const auditorResult = await deps.sessions.open(openAuditor);
-      const producer = opened(producerResult, "producer");
-      const auditor = opened(auditorResult, "Auditor");
-      await Promise.all([bindWorker("producer", producer), bindWorker("auditor", auditor)]);
+      const producer = opened(
+        await deps.sessions.open({
+          requestId: `${startupKey}:producer`,
+          name: "Finny Producer",
+          task: producerTask,
+          beforeEnqueue: bindProducer,
+        }),
+        "producer",
+      );
       const currentProducer = await deps.runtime.currentRoleBinding(input.scopeId, input.jobId, "producer");
       if (!currentProducer || currentProducer.sessionId !== producer.sessionId)
         throw new Error("Finny Producer runtime binding is unavailable");
-      const producerDispatchKey = `${startupKey}:producer-grant:${currentProducer.runId}`;
-      if (!(await deps.runtime.isDispatched(producerDispatchKey))) {
-        await dispatch({
-          idempotencyKey: producerDispatchKey,
-          scopeId: input.scopeId,
-          jobId: input.jobId,
-          sessionId: currentProducer.sessionId,
-          runId: currentProducer.runId,
-          kind: "producer_grant",
-          intent: producerTask,
-          message: producerTask,
-          role: "producer",
-          principalId: producerCredentials.principalId,
-          expiresAt: producerCredentials.expiresAt,
-        });
-      }
     },
     async auditPassed(input: AuditPassedRuntimeInput): Promise<void> {
       const action = {
@@ -462,7 +464,8 @@ export function createFinnyRuntimeCoordinator(deps: {
       scopeId: string;
       jobId: string;
       idempotencyKey: string;
-      forceNewAuditor?: boolean;
+      retryAuditorRunId?: string;
+      retryMissingAuditor?: boolean;
     }): Promise<void> {
       const job = await deps.jobs.getJob(input.scopeId, input.jobId);
       if (
@@ -475,19 +478,14 @@ export function createFinnyRuntimeCoordinator(deps: {
         throw new Error("Finny reverification requires a current immutable artifact");
       }
       const dispatchPrefix = `${input.idempotencyKey}:auditor-reverify`;
-      let auditor = await deps.runtime.currentRoleBinding(input.scopeId, input.jobId, "auditor");
-      if (auditor && input.forceNewAuditor) {
-        await deps.runtime.retireBinding({
-          sessionId: auditor.sessionId,
-          runId: auditor.runId,
-          role: "auditor",
-        });
-        auditor = null;
-      }
+      let auditor = await deps.runtime.activeRoleBinding(input.scopeId, input.jobId, "auditor");
+      if (input.retryMissingAuditor && auditor) return;
+      if (input.retryAuditorRunId !== undefined && auditor?.runId !== input.retryAuditorRunId) return;
       if (!auditor) {
         const credentials = deps.workerPolicy.credentials(job, "auditor");
-        const bindAuditor = (identity: { sessionId: string; runId: string }) =>
-          deps.runtime.bindAuditor({
+        const task = deps.workerPolicy.task(job, "auditor");
+        const bindAuditor = async (identity: { sessionId: string; runId: string }) => {
+          await deps.runtime.bindAuditor({
             scopeId: input.scopeId,
             jobId: input.jobId,
             sessionId: identity.sessionId,
@@ -495,20 +493,32 @@ export function createFinnyRuntimeCoordinator(deps: {
             principalId: credentials.principalId,
             expiresAt: credentials.expiresAt,
           });
+          await deps.grants.issueAuditor({
+            scopeId: input.scopeId,
+            jobId: input.jobId,
+            principalId: credentials.principalId,
+            runId: identity.runId,
+            expiresAt: credentials.expiresAt,
+          });
+        };
         const openedAuditor = opened(
           await deps.sessions.open({
             requestId: `finny:${input.jobId}:auditor-reverify:${input.idempotencyKey}`,
             name: "Finny Auditor",
-            task: "Await the evaluator-bound Finny reverification dispatch",
-            beforeEnqueue: async (identity) => {
-              await bindAuditor(identity);
-            },
+            task,
+            beforeEnqueue: bindAuditor,
           }),
           "Auditor",
         );
-        auditor = await bindAuditor(openedAuditor);
+        auditor = await deps.runtime.currentRoleBinding(input.scopeId, input.jobId, "auditor");
+        if (!auditor || auditor.sessionId !== openedAuditor.sessionId || auditor.runId !== openedAuditor.runId) {
+          throw new Error("Finny Auditor runtime binding is unavailable");
+        }
+        return;
       }
-      const dispatchKey = `${dispatchPrefix}:${auditor.runId}`;
+      const dispatchKey = input.retryAuditorRunId
+        ? `${dispatchPrefix}:retry:${input.retryAuditorRunId}`
+        : `${dispatchPrefix}:${auditor.runId}`;
       if (await deps.runtime.isDispatched(dispatchKey)) return;
       const credentials = deps.workerPolicy.credentials(job, "auditor");
       const task = deps.workerPolicy.task(job, "auditor");
@@ -554,16 +564,36 @@ export function createFinnyRuntimeCoordinator(deps: {
         idempotencyKey: input.idempotencyKey,
       });
       if (!ready.deduped) deps.recoveryWake?.({ kind: "artifact_ready", ...input });
-      const auditorDispatchPrefix = `${input.idempotencyKey}:auditor-grant`;
+      const activeAuditor = await deps.runtime.activeRoleBinding(input.scopeId, input.jobId, "auditor");
+      if (input.retryTerminalAuditorRunId !== undefined) {
+        if (!activeAuditor || activeAuditor.runId !== input.retryTerminalAuditorRunId) return;
+        const credentials = deps.workerPolicy.credentials(ready.job, "auditor");
+        const task = deps.workerPolicy.task(ready.job, "auditor");
+        await dispatch({
+          idempotencyKey: `finny:${input.jobId}:auditor-retry:${input.retryTerminalAuditorRunId}`,
+          scopeId: input.scopeId,
+          jobId: input.jobId,
+          sessionId: activeAuditor.sessionId,
+          runId: activeAuditor.runId,
+          kind: "auditor_retry",
+          intent: task,
+          message: task,
+          role: "auditor",
+          principalId: credentials.principalId,
+          expiresAt: credentials.expiresAt,
+        });
+        return;
+      }
       let auditor = await deps.runtime.currentRoleBinding(input.scopeId, input.jobId, "auditor");
       if (!auditor) {
         const latestAuditor = await deps.runtime.latestRoleBinding(input.scopeId, input.jobId, "auditor");
-        if (!latestAuditor?.active && (await deps.runtime.hasDeliveredDispatch(auditorDispatchPrefix))) return;
+        if (ready.deduped && latestAuditor && !latestAuditor.active) return;
       }
       if (!auditor) {
         const auditorCredentials = deps.workerPolicy.credentials(ready.job, "auditor");
-        const bindAuditor = (identity: { sessionId: string; runId: string }) =>
-          deps.runtime.bindAuditor({
+        const auditorTask = deps.workerPolicy.task(ready.job, "auditor");
+        const bindAuditor = async (identity: { sessionId: string; runId: string }) => {
+          await deps.runtime.bindAuditor({
             scopeId: input.scopeId,
             jobId: input.jobId,
             sessionId: identity.sessionId,
@@ -571,37 +601,27 @@ export function createFinnyRuntimeCoordinator(deps: {
             principalId: auditorCredentials.principalId,
             expiresAt: auditorCredentials.expiresAt,
           });
-        const result = opened(
+          await deps.grants.issueAuditor({
+            scopeId: input.scopeId,
+            jobId: input.jobId,
+            principalId: auditorCredentials.principalId,
+            runId: identity.runId,
+            expiresAt: auditorCredentials.expiresAt,
+          });
+        };
+        const openedAuditor = opened(
           await deps.sessions.open({
             requestId: `finny:${input.jobId}:auditor:${ready.events[0]?.seq ?? ready.job.eventHead}`,
             name: "Finny Auditor",
-            task: "Await the artifact-bound Finny Auditor dispatch",
-            beforeEnqueue: async (identity) => {
-              await bindAuditor(identity);
-            },
+            task: auditorTask,
+            beforeEnqueue: bindAuditor,
           }),
           "Auditor",
         );
-        auditor = await bindAuditor(result);
-      }
-      const auditorDispatchKey = `${auditorDispatchPrefix}:${auditor.runId}`;
-      if (!(await deps.runtime.isDispatched(auditorDispatchKey))) {
-        const currentJob = ready.job;
-        const credentials = deps.workerPolicy.credentials(currentJob, "auditor");
-        const auditorTask = deps.workerPolicy.task(currentJob, "auditor");
-        await dispatch({
-          idempotencyKey: auditorDispatchKey,
-          scopeId: input.scopeId,
-          jobId: input.jobId,
-          sessionId: auditor.sessionId,
-          runId: auditor.runId,
-          kind: "auditor_grant",
-          intent: auditorTask,
-          message: auditorTask,
-          role: "auditor",
-          principalId: credentials.principalId,
-          expiresAt: credentials.expiresAt,
-        });
+        auditor = await deps.runtime.currentRoleBinding(input.scopeId, input.jobId, "auditor");
+        if (!auditor || auditor.sessionId !== openedAuditor.sessionId || auditor.runId !== openedAuditor.runId) {
+          throw new Error("Finny Auditor runtime binding is unavailable");
+        }
       }
     },
   };

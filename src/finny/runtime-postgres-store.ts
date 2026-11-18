@@ -24,6 +24,7 @@ export interface FinnyArtifactReadyRecovery {
   scopeId: string;
   jobId: string;
   idempotencyKey: string;
+  retryTerminalAuditorRunId?: string;
 }
 
 export interface FinnyAuditPassedRecovery {
@@ -58,7 +59,8 @@ export interface FinnyVerificationReopenedRecovery {
   scopeId: string;
   jobId: string;
   idempotencyKey: string;
-  forceNewAuditor?: boolean;
+  retryAuditorRunId?: string;
+  retryMissingAuditor?: boolean;
 }
 
 export type FinnyRuntimeRecovery =
@@ -172,12 +174,13 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
       await q(
         `INSERT INTO finny_runtime_bindings(session_id,run_id,scope_id,job_id,role,principal_id,epoch,created_at)
          VALUES($1,$2,$3,$4,'parent',$5,0,$6)
-         ON CONFLICT(session_id) DO UPDATE SET run_id=EXCLUDED.run_id
-         WHERE finny_runtime_bindings.scope_id=EXCLUDED.scope_id
-           AND finny_runtime_bindings.job_id=EXCLUDED.job_id
-           AND finny_runtime_bindings.role='parent'
-           AND finny_runtime_bindings.principal_id=EXCLUDED.principal_id`,
+         ON CONFLICT DO NOTHING`,
         [input.sessionId, input.runId, input.scopeId, input.jobId, input.principalId, Date.now()],
+      );
+      await q(
+        `UPDATE finny_runtime_bindings SET run_id=$2
+          WHERE session_id=$1 AND scope_id=$3 AND job_id=$4 AND role='parent' AND principal_id=$5`,
+        [input.sessionId, input.runId, input.scopeId, input.jobId, input.principalId],
       );
       const binding = await this.bindingForSession(input.sessionId);
       if (
@@ -597,8 +600,8 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
     },
     async pendingRecoveries(): Promise<FinnyRuntimeRecovery[]> {
       const hasRuns = (await q("SELECT to_regclass('runs') IS NOT NULL AS exists"))[0]?.exists === true;
-      const terminalAuditorRetry = hasRuns
-        ? `OR EXISTS (
+      const healthyAuditor = hasRuns
+        ? `EXISTS (
              SELECT 1 FROM finny_runtime_bindings AS auditor_binding
              JOIN runs AS auditor_run ON auditor_run.id=auditor_binding.run_id
               WHERE auditor_binding.job_id=actions.job_id
@@ -606,17 +609,51 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                 AND auditor_binding.role='auditor'
                 AND auditor_binding.active=TRUE
                 AND (
-                  auditor_run.status='failed'
-                  OR (auditor_run.status='done' AND (
-                    auditor_run.last_stop IS NOT NULL
-                    OR auditor_run.result LIKE '%"stopped":true%'
-                  ))
+                  (auditor_binding.expires_at>$1 AND auditor_run.status NOT IN ('done','failed'))
+                  OR (
+                    auditor_run.status='done'
+                    AND COALESCE(auditor_run.result::jsonb->>'status','') IN ('pending_approval','refused')
+                  )
                 )
            )`
-        : "";
+        : `EXISTS (
+             SELECT 1 FROM finny_runtime_bindings AS auditor_binding
+              WHERE auditor_binding.job_id=actions.job_id
+                AND auditor_binding.scope_id=actions.scope_id
+                AND auditor_binding.role='auditor'
+                AND auditor_binding.active=TRUE
+                AND auditor_binding.expires_at>$1
+           )`;
+      const terminalAuditorRunId = hasRuns
+        ? `SELECT auditor_binding.run_id FROM finny_runtime_bindings AS auditor_binding
+             LEFT JOIN runs AS auditor_run ON auditor_run.id=auditor_binding.run_id
+              WHERE auditor_binding.job_id=actions.job_id
+                AND auditor_binding.scope_id=actions.scope_id
+                AND auditor_binding.role='auditor'
+                AND auditor_binding.active=TRUE
+                AND (
+                  auditor_run.id IS NULL
+                  OR auditor_run.status='failed'
+                  OR (
+                    auditor_run.status='done'
+                    AND COALESCE(auditor_run.result::jsonb->>'status','') NOT IN ('pending_approval','refused')
+                  )
+                  OR (auditor_binding.expires_at<=$1 AND auditor_run.status NOT IN ('done','failed'))
+                )
+              ORDER BY auditor_binding.epoch DESC
+              LIMIT 1`
+        : `SELECT auditor_binding.run_id FROM finny_runtime_bindings AS auditor_binding
+              WHERE auditor_binding.job_id=actions.job_id
+                AND auditor_binding.scope_id=actions.scope_id
+                AND auditor_binding.role='auditor'
+                AND auditor_binding.active=TRUE
+                AND auditor_binding.expires_at<=$1
+              ORDER BY auditor_binding.epoch DESC
+              LIMIT 1`;
       const rows = await q(
         `SELECT actions.kind,actions.session_id,actions.run_id,actions.scope_id,actions.job_id,
-                actions.idempotency_key,CASE WHEN actions.kind='artifact_ready' THEN events.payload ELSE actions.authority_payload->'recovery' END AS payload
+                actions.idempotency_key,CASE WHEN actions.kind='artifact_ready' THEN events.payload ELSE actions.authority_payload->'recovery' END AS payload,
+                (${terminalAuditorRunId}) AS terminal_auditor_run_id
            FROM finny_runtime_actions AS actions
            JOIN finny_jobs AS jobs
              ON jobs.id=actions.job_id
@@ -652,20 +689,7 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                   )
                 )
               )
-              AND (
-                NOT EXISTS (
-                  SELECT 1 FROM finny_runtime_dispatches AS auditor_dispatch
-                   WHERE auditor_dispatch.job_id=actions.job_id
-                     AND auditor_dispatch.scope_id=actions.scope_id
-                     AND auditor_dispatch.kind='auditor_grant'
-                     AND auditor_dispatch.delivered_at IS NOT NULL
-                     AND (
-                       auditor_dispatch.idempotency_key=actions.idempotency_key || ':auditor-grant'
-                       OR auditor_dispatch.idempotency_key LIKE actions.idempotency_key || ':auditor-grant:%'
-                     )
-                )
-                ${terminalAuditorRetry}
-              )
+              AND (events.seq IS NULL OR NOT (${healthyAuditor}))
             ) OR (
               actions.kind<>'artifact_ready'
               AND dispatches.idempotency_key IS NULL
@@ -699,6 +723,7 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
               )
             )
           ORDER BY actions.created_at,actions.idempotency_key`,
+        [Date.now()],
       );
       const actionRecoveries: FinnyRuntimeRecovery[] = rows.map((row) => {
         const base = {
@@ -708,7 +733,14 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
           jobId: row.job_id as string,
           idempotencyKey: row.idempotency_key as string,
         };
-        if (row.kind === "artifact_ready") return { kind: "artifact_ready" as const, ...base };
+        if (row.kind === "artifact_ready")
+          return {
+            kind: "artifact_ready" as const,
+            ...base,
+            ...(typeof row.terminal_auditor_run_id === "string"
+              ? { retryTerminalAuditorRunId: row.terminal_auditor_run_id }
+              : {}),
+          };
         const payload = (row.payload ?? {}) as {
           artifactDigest: string;
           checkId: FinnyCheckId;
@@ -736,23 +768,6 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
           findings: payload.findings,
         };
       });
-      const terminalReverificationRetry = hasRuns
-        ? `OR EXISTS (
-             SELECT 1 FROM finny_runtime_bindings AS auditor_binding
-             JOIN runs AS auditor_run ON auditor_run.id=auditor_binding.run_id
-              WHERE auditor_binding.job_id=jobs.id
-                AND auditor_binding.scope_id=jobs.scope_id
-                AND auditor_binding.role='auditor'
-                AND auditor_binding.active=TRUE
-                AND (
-                  auditor_run.status='failed'
-                  OR (auditor_run.status='done' AND (
-                    auditor_run.last_stop IS NOT NULL
-                    OR auditor_run.result LIKE '%"stopped":true%'
-                  ))
-                )
-           )`
-        : "";
       const staleReverificationBinding = `
         OR NOT EXISTS (
           SELECT 1 FROM finny_runtime_bindings AS current_auditor
@@ -769,41 +784,56 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
              AND expired_auditor.active=TRUE
              AND expired_auditor.expires_at IS NOT NULL
              AND expired_auditor.expires_at <= ${Date.now()}
-        )
-        ${
-          hasRuns
-            ? `OR EXISTS (
-                 SELECT 1 FROM finny_runtime_bindings AS orphaned_auditor
-                 LEFT JOIN runs AS orphaned_run ON orphaned_run.id=orphaned_auditor.run_id
-                  WHERE orphaned_auditor.job_id=jobs.id
-                    AND orphaned_auditor.scope_id=jobs.scope_id
-                    AND orphaned_auditor.role='auditor'
-                    AND orphaned_auditor.active=TRUE
-                    AND orphaned_run.id IS NULL
-               )`
-            : ""
-        }`;
-      const forceNewReverificationSelect = hasRuns
-        ? `EXISTS (
-             SELECT 1 FROM finny_runtime_bindings AS stale_auditor
-             LEFT JOIN runs AS stale_run ON stale_run.id=stale_auditor.run_id
-              WHERE stale_auditor.job_id=jobs.id
-                AND stale_auditor.scope_id=jobs.scope_id
-                AND stale_auditor.role='auditor'
-                AND stale_auditor.active=TRUE
+        )`;
+      const reverificationRecoveryGate = hasRuns
+        ? `(NOT EXISTS (
+             SELECT 1 FROM finny_runtime_bindings AS current_auditor
+              WHERE current_auditor.job_id=jobs.id
+                AND current_auditor.scope_id=jobs.scope_id
+                AND current_auditor.role='auditor'
+                AND current_auditor.active=TRUE
+           )
+           OR EXISTS (
+             SELECT 1 FROM finny_runtime_bindings AS current_auditor
+             LEFT JOIN runs AS current_run ON current_run.id=current_auditor.run_id
+              WHERE current_auditor.job_id=jobs.id
+                AND current_auditor.scope_id=jobs.scope_id
+                AND current_auditor.role='auditor'
+                AND current_auditor.active=TRUE
                 AND (
-                  stale_run.id IS NULL
-                  OR stale_run.status='failed'
-                  OR (stale_run.status='done' AND (
-                    stale_run.last_stop IS NOT NULL
-                    OR stale_run.result LIKE '%"stopped":true%'
-                  ))
+                  (
+                    current_auditor.expires_at<=${Date.now()}
+                    AND current_run.status NOT IN ('done','failed')
+                  )
+                  OR current_run.id IS NULL
+                  OR current_run.status='failed'
+                  OR (
+                    current_run.status='done'
+                    AND COALESCE(current_run.result::jsonb->>'status','') NOT IN ('pending_approval','refused')
+                  )
                 )
-           )`
-        : "FALSE";
+           ))`
+        : `(NOT EXISTS (
+             SELECT 1 FROM finny_runtime_dispatches AS dispatch
+              WHERE dispatch.job_id=jobs.id
+                AND dispatch.scope_id=jobs.scope_id
+                AND dispatch.kind='auditor_reverification'
+                AND dispatch.delivered_at IS NOT NULL
+                AND dispatch.idempotency_key LIKE events.idempotency_key || ':auditor-reverify:%'
+           )
+           ${staleReverificationBinding})`;
       const reopened = await q(
         `SELECT jobs.scope_id,jobs.id AS job_id,events.idempotency_key,
-                ${forceNewReverificationSelect} AS force_new_auditor
+                (
+                  SELECT recovery_auditor.run_id
+                    FROM finny_runtime_bindings AS recovery_auditor
+                   WHERE recovery_auditor.job_id=jobs.id
+                     AND recovery_auditor.scope_id=jobs.scope_id
+                     AND recovery_auditor.role='auditor'
+                     AND recovery_auditor.active=TRUE
+                   ORDER BY recovery_auditor.epoch DESC
+                   LIMIT 1
+                ) AS recovery_auditor_run_id
            FROM finny_job_events AS events
            JOIN finny_jobs AS jobs ON jobs.id=events.job_id
           WHERE events.event_type='verification_reopened'
@@ -823,18 +853,7 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                     AND (audit.payload->>'generation')::int=required.generation::int
                )
             )
-            AND (
-              NOT EXISTS (
-                SELECT 1 FROM finny_runtime_dispatches AS dispatch
-                 WHERE dispatch.job_id=jobs.id
-                   AND dispatch.scope_id=jobs.scope_id
-                   AND dispatch.kind='auditor_reverification'
-                   AND dispatch.delivered_at IS NOT NULL
-                   AND dispatch.idempotency_key LIKE events.idempotency_key || ':auditor-reverify:%'
-              )
-              ${terminalReverificationRetry}
-              ${staleReverificationBinding}
-            )
+            AND ${reverificationRecoveryGate}
           ORDER BY events.seq`,
       );
       return [
@@ -844,7 +863,9 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
           scopeId: row.scope_id as string,
           jobId: row.job_id as string,
           idempotencyKey: row.idempotency_key as string,
-          ...((row.force_new_auditor as boolean) ? { forceNewAuditor: true } : {}),
+          ...(typeof row.recovery_auditor_run_id === "string"
+            ? { retryAuditorRunId: row.recovery_auditor_run_id }
+            : { retryMissingAuditor: true }),
         })),
       ];
     },
@@ -854,16 +875,6 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
         [idempotencyKey],
       );
       return rows[0]?.delivered === true;
-    },
-    async hasDeliveredDispatch(prefix: string): Promise<boolean> {
-      const rows = await q(
-        `SELECT 1 FROM finny_runtime_dispatches
-          WHERE delivered_at IS NOT NULL
-            AND (idempotency_key=$1 OR idempotency_key LIKE $1 || ':%')
-          LIMIT 1`,
-        [prefix],
-      );
-      return rows.length > 0;
     },
     async dispatchOnce(
       input: {

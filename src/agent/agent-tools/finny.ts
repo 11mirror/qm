@@ -10,12 +10,15 @@ import {
 import { text, type ToolKit } from "./kit.ts";
 
 export interface FinnyToolService {
-  createPlan(plan: FinnyPlanPresentation, materialClarification?: FinnyMaterialClarification): Promise<string>;
+  createPlan(
+    plan: FinnyPlanPresentation,
+    materialClarification?: FinnyMaterialClarification,
+  ): Promise<FinnyPlanCreation>;
   amendPlan(
     jobId: string,
     plan: FinnyPlanPresentation,
     materialClarification?: FinnyMaterialClarification,
-  ): Promise<string>;
+  ): Promise<FinnyPlanCreation>;
   status(jobId: string): Promise<string>;
   artifactReady(input: {
     artifactDigest: string;
@@ -37,6 +40,13 @@ export interface FinnyToolService {
     idempotencyKey: string;
   }): Promise<string>;
   finalize(input: { jobId: string; idempotencyKey: string }): Promise<string>;
+}
+
+export interface FinnyPlanCreation {
+  message: string;
+  jobId: string;
+  requestId: string;
+  awaiting: "approval" | "clarification";
 }
 
 const string = () => Type.String({ minLength: 1 });
@@ -98,30 +108,35 @@ export function finnyTools(kit: ToolKit) {
       await recordCall(callId, { tool: "finny", action: "create_plan", title: params.plan.title });
       const result = await ref.current!.finny!.createPlan(params.plan, params.materialClarification);
       if (opts?.surfaceName === "web") {
+        const clarification = result.awaiting === "clarification" ? params.materialClarification : undefined;
+        if (result.awaiting === "clarification" && !clarification)
+          throw new Error("Finny clarification response is missing its question");
+        const recommended = clarification?.options.find((option) => option.id === clarification.recommendedOptionId);
         const detail = JSON.stringify({
           plan: params.plan,
-          ...(params.materialClarification ? { materialClarification: params.materialClarification } : {}),
+          ...(clarification ? { materialClarification: clarification } : {}),
         });
         return blockOnApproval(
           callId,
           {
             name: "NeedsApproval",
-            message: result,
-            command: params.plan.title,
-            approvalReason: "Finny Governance Plan Approval",
+            message: result.message,
+            command: clarification?.question ?? params.plan.title,
+            approvalReason: clarification ? "Finny Governance Clarification" : "Finny Governance Plan Approval",
+            approvalKey: `${clarification ? "finny-clarification" : "finny-plan"}:${result.requestId}`,
             kind: "approval",
             grantModes: { session: false, always: false },
             summaryDetail: detail,
-            summary: params.plan.summary,
+            summary: recommended ? `Recommended: ${recommended.label}` : params.plan.summary,
           },
-          params.plan.summary,
+          recommended ? `Recommended: ${recommended.label}` : params.plan.summary,
           { tool: "finny", action: "create_plan", title: params.plan.title },
         );
       }
       return recordResult(
         callId,
         { tool: "finny", action: "create_plan", title: params.plan.title },
-        text(result),
+        text(result.message),
         false,
         undefined,
         true,
@@ -136,10 +151,40 @@ export function finnyTools(kit: ToolKit) {
       { jobId: string(), plan, materialClarification: Type.Optional(materialClarification) },
       { additionalProperties: false },
     ),
-    execute: (callId, params) =>
-      run(callId, "amend_plan", { jobId: params.jobId, title: params.plan.title }, () =>
-        ref.current!.finny!.amendPlan(params.jobId, params.plan, params.materialClarification),
-      ),
+    execute: async (callId, params) => {
+      await recordCall(callId, {
+        tool: "finny",
+        action: "amend_plan",
+        jobId: params.jobId,
+        title: params.plan.title,
+      });
+      const result = await ref.current!.finny!.amendPlan(params.jobId, params.plan, params.materialClarification);
+      if (opts?.surfaceName === "web")
+        return blockOnApproval(
+          callId,
+          {
+            name: "NeedsApproval",
+            message: result.message,
+            command: params.plan.title,
+            approvalReason: "Finny Governance Plan Approval",
+            approvalKey: `finny-plan:${result.requestId}`,
+            kind: "approval",
+            grantModes: { session: false, always: false },
+            summaryDetail: JSON.stringify({ plan: params.plan }),
+            summary: params.plan.summary,
+          },
+          params.plan.summary,
+          { tool: "finny", action: "amend_plan", jobId: params.jobId, title: params.plan.title },
+        );
+      return recordResult(
+        callId,
+        { tool: "finny", action: "amend_plan", jobId: params.jobId, title: params.plan.title },
+        text(result.message),
+        false,
+        undefined,
+        true,
+      );
+    },
   });
   const status = defineTool({
     name: "finny_status",

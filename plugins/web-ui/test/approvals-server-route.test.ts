@@ -159,6 +159,23 @@ test("approve replays the stored request verbatim with the decision and the name
   assert.equal(body.idempotencyKey, "web:alice:gesture-1");
 });
 
+test("a Finny clarification option is preserved on the replayed approval turn", async () => {
+  const before = calls.length;
+  const r = await fetch(`${base}/api/approvals/a-1`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ approved: true, optionId: "month-end" }),
+  });
+  assert.equal(r.status, 200);
+  const posts = turnPosts(before);
+  assert.equal(posts.length, 1);
+  assert.deepEqual(posts[0]!.body.approval, {
+    requestId: "a-1",
+    approved: true,
+    optionId: "month-end",
+  });
+});
+
 test("the original send's stored key never rides along, and unusable client keys are dropped", async () => {
   for (const key of [undefined, "a:b", "approval:a-1:true", "x".repeat(129), 42]) {
     const before = calls.length;

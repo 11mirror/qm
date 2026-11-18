@@ -190,7 +190,12 @@ test("parent create_plan persists server authority before idempotent native plan
   const { factory, calls } = harness();
   const service = await factory.forTurn(parent);
   assert.ok(service);
-  assert.equal(await service.createPlan(plan), "Finny plan id-1 is awaiting approval.");
+  assert.deepEqual(await service.createPlan(plan), {
+    message: "Finny plan id-1 is awaiting approval.",
+    jobId: "id-1",
+    requestId: "id-2",
+    awaiting: "approval",
+  });
   const created: any = calls.find(([name]) => name === "createJob")?.[1];
   assert.equal(created.scopeId, "scope-1");
   assert.equal(created.originThreadRef, parent.originThreadRef);
@@ -210,7 +215,7 @@ test("material clarification is persisted before delivery while the plan card st
     ...plan,
     clarifications: [{ question: "Which basis?", answer: "Signed contracts" }],
   };
-  assert.equal(
+  assert.deepEqual(
     await service.createPlan(clarifiedPlan, {
       question: "Which basis?",
       options: [
@@ -219,7 +224,12 @@ test("material clarification is persisted before delivery while the plan card st
       ],
       recommendedOptionId: "contracts",
     }),
-    "Finny plan id-1 is awaiting clarification.",
+    {
+      message: "Finny plan id-1 is awaiting clarification.",
+      jobId: "id-1",
+      requestId: "id-3",
+      awaiting: "clarification",
+    },
   );
   const intent: any = calls.find(([name]) => name === "createPlanIntent")?.[1];
   assert.equal(intent.clarification.requestId, "id-3");

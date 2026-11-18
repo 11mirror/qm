@@ -247,13 +247,86 @@ test("clarification selection is bound to the exact actor, origin, and persisted
     card: {
       title: "Clarification recorded",
       status: "blocked",
-      summary: "Revision is required before this plan can be approved. Submit a revised plan to continue.",
+      summary: "Issued invoices was selected. Revise the existing plan to use this choice.",
     },
   });
   assert.deepEqual((await store.getClarificationRequest(requestId))?.decision, {
     kind: "option",
     optionId: "invoices",
   });
+});
+
+test("replaying a committed recommended clarification recovers the pending plan approval", async () => {
+  const databaseUrl = testDatabaseUrl();
+  const store = createPostgresFinnyStore(databaseUrl);
+  const jobId = randomUUID();
+  const clarificationRequestId = randomUUID();
+  const approvalRequestId = randomUUID();
+  const scopeId = "personal:approver@example.com";
+  await store.createJob({
+    id: jobId,
+    scopeId,
+    plan,
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
+    findingPolicy,
+    originThreadRef: "web:approver@example.com:finny-replay",
+  });
+  await store.createApprovalRequest({
+    scopeId,
+    jobId,
+    requestId: approvalRequestId,
+    authorizedActorId: "approver@example.com",
+  });
+  await store.createClarificationRequest({
+    scopeId,
+    jobId,
+    requestId: clarificationRequestId,
+    authorizedActorId: "approver@example.com",
+    question: "Which accounting basis should be used?",
+    options: [
+      { id: "contracts", label: "Signed contracts" },
+      { id: "invoices", label: "Issued invoices" },
+    ],
+    recommendedOptionId: "contracts",
+    idempotencyKey: "clarification:web-replay",
+  });
+  const service = createFinnyApprovalService({
+    store,
+    identity: internalIdentity(),
+    onApproved: async () => undefined,
+  });
+  const input = {
+    requestId: clarificationRequestId,
+    decision: { kind: "clarification" as const, action: "select" as const, optionId: "contracts" },
+    actor: { externalId: "approver@example.com" },
+    originThreadRef: "web:approver@example.com:finny-replay",
+  };
+
+  const committed = await service.decide(input);
+  const newerJob = await store.createJob({
+    id: randomUUID(),
+    scopeId,
+    plan: { ...plan, title: "Unrelated newer plan" },
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
+    findingPolicy,
+    originThreadRef: "web:approver@example.com:finny-replay",
+  });
+  const newerApprovalRequestId = randomUUID();
+  await store.createApprovalRequest({
+    scopeId,
+    jobId: newerJob.id,
+    requestId: newerApprovalRequestId,
+    authorizedActorId: "approver@example.com",
+  });
+  await createPgPool(databaseUrl).q(
+    "UPDATE finny_approval_requests SET created_at=$2 WHERE request_id=$1",
+    [newerApprovalRequestId, Date.now() + 10_000],
+  );
+  const recovered = await service.decide(input);
+
+  assert.deepEqual(recovered, committed);
+  assert.equal(recovered.kind, "result");
+  assert.equal(recovered.kind === "result" ? recovered.next?.requestId : undefined, approvalRequestId);
 });
 
 test("clarification creation durably enqueues its opaque request to the exact destination idempotently", async () => {
@@ -366,7 +439,8 @@ test("clarification rejects unauthorized actors, copied cards, and unpersisted b
   );
   assert.equal((await store.getClarificationRequest(requestId))?.decision, undefined);
 
-  assert.deepEqual(await service.decide({ ...base, decision: { kind: "clarification", action: "other" } }), {
+  const otherResult = await service.decide({ ...base, decision: { kind: "clarification", action: "other" } });
+  assert.deepEqual(otherResult, {
     kind: "result",
     card: {
       title: "Clarification recorded",
@@ -375,9 +449,10 @@ test("clarification rejects unauthorized actors, copied cards, and unpersisted b
     },
   });
   assert.deepEqual((await store.getClarificationRequest(requestId))?.decision, { kind: "other" });
-  assert.deepEqual(await service.decide({ ...base, decision: { kind: "clarification", action: "other" } }), {
-    kind: "gone",
-  });
+  assert.deepEqual(
+    await service.decide({ ...base, decision: { kind: "clarification", action: "other" } }),
+    otherResult,
+  );
 });
 
 test("plan decisions reject external, wrong, and copied-card actors without mutating approval", async () => {
@@ -925,7 +1000,7 @@ test("prior nonrecommended decision permanently blocks a later recommendation", 
       card: {
         title: "Clarification recorded",
         status: "blocked",
-        summary: "Revision is required before this plan can be approved. Submit a revised plan to continue.",
+        summary: "Signed contracts was selected. Revise the existing plan to use this choice.",
       },
     },
   );
