@@ -3,6 +3,7 @@ import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { Destination } from "../types.ts";
 import type { FinnyParentBindingSnapshot } from "./integration.ts";
 import { assertFinnyMaterialClarificationMatchesSop } from "./plan.ts";
+import { terminalFinnyWorkerRunSql } from "./run-state.ts";
 import type { CreateFinnyClarificationRequestInput, CreateFinnyJobCommand } from "./store.ts";
 
 const SCHEMA = [
@@ -187,11 +188,7 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
           ],
         );
         if (clarification) {
-          assertFinnyMaterialClarificationMatchesSop(
-            job.sop_definition,
-            job.bound_inputs,
-            clarification,
-          );
+          assertFinnyMaterialClarificationMatchesSop(job.sop_definition, job.bound_inputs, clarification);
           const existingClarification = await db.query(
             "SELECT request_id FROM finny_clarification_requests WHERE job_id=$1",
             [input.jobId],
@@ -396,12 +393,7 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
              LEFT JOIN runs r ON r.id=b.run_id
               WHERE b.job_id=i.job_id AND b.scope_id=i.scope_id
                 AND b.role='producer' AND b.active=TRUE
-                AND (
-                  r.id IS NULL
-                  OR r.status='failed'
-                  OR (r.status='done' AND COALESCE(r.result::jsonb->>'status','') NOT IN ('pending_approval','refused'))
-                  OR (b.expires_at<=$1 AND r.status NOT IN ('done','failed'))
-                )
+                AND ${terminalFinnyWorkerRunSql("b", "r", "$1")}
               ORDER BY b.epoch DESC
               LIMIT 1`;
       const rows = await q(

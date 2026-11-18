@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { createPostgresAdvisoryLock } from "../persistence/advisory-lock.ts";
+import { terminalFinnyWorkerRunSql } from "./run-state.ts";
 import type { FinnyAuditFinding, FinnyCheckId, FinnyWorkerRole } from "./types.ts";
 
 export type FinnyRuntimeRole = "parent" | FinnyWorkerRole;
@@ -148,22 +149,6 @@ const CURRENT_ARTIFACT_NEEDS_AUDIT = `
           AND (audit.payload->>'generation')::int=required.generation::int
      )
   )`;
-
-function terminalWorkerRunSql(binding: string, run: string, now: string): string {
-  return `(
-    ${run}.id IS NULL
-    OR ${run}.status='failed'
-    OR (
-      ${run}.status='done'
-      AND COALESCE(${run}.result::jsonb->>'status','') NOT IN ('pending_approval','refused')
-    )
-    OR (
-      ${binding}.expires_at IS NOT NULL
-      AND ${binding}.expires_at<=${now}
-      AND ${run}.status NOT IN ('done','failed')
-    )
-  )`;
-}
 
 function rowToBinding(row: Record<string, unknown>): FinnyRuntimeBinding {
   return {
@@ -358,7 +343,7 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
              OR (
                b.run_id=$6
                AND COALESCE((
-                 SELECT ${terminalWorkerRunSql("b", "r", "$7")}
+                 SELECT ${terminalFinnyWorkerRunSql("b", "r", "$7")}
                    FROM runs AS r
                   WHERE r.id=b.run_id
                ), TRUE)
@@ -688,16 +673,8 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
             AND auditor_binding.active=TRUE
       LEFT JOIN runs AS auditor_run ON auditor_run.id=auditor_binding.run_id
       LEFT JOIN LATERAL (
-             SELECT
-               auditor_binding.run_id IS NOT NULL AND (
-                 (auditor_binding.expires_at>$1 AND auditor_run.status NOT IN ('done','failed'))
-                 OR (
-                   auditor_run.status='done'
-                   AND COALESCE(auditor_run.result::jsonb->>'status','') IN ('pending_approval','refused')
-                 )
-               ) AS healthy,
-               auditor_binding.run_id IS NOT NULL
-               AND ${terminalWorkerRunSql("auditor_binding", "auditor_run", "$1")} AS terminal
+             SELECT auditor_binding.run_id IS NOT NULL
+               AND ${terminalFinnyWorkerRunSql("auditor_binding", "auditor_run", "$1")} AS terminal
            ) AS auditor_state ON TRUE
       LEFT JOIN finny_runtime_bindings AS producer_binding
              ON actions.kind='audit_blocked'
@@ -708,7 +685,7 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
       LEFT JOIN runs AS producer_run ON producer_run.id=producer_binding.run_id
       LEFT JOIN LATERAL (
              SELECT producer_binding.run_id IS NOT NULL
-               AND ${terminalWorkerRunSql("producer_binding", "producer_run", "$1")} AS terminal
+               AND ${terminalFinnyWorkerRunSql("producer_binding", "producer_run", "$1")} AS terminal
            ) AS producer_state ON TRUE
       LEFT JOIN finny_runtime_dispatches AS dispatches
              ON dispatches.idempotency_key=actions.idempotency_key ||
@@ -726,7 +703,7 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
               AND (
                 events.seq IS NULL
                 OR auditor_state.terminal
-                OR NOT COALESCE(auditor_state.healthy,FALSE)
+                OR auditor_binding.run_id IS NULL
               )
             ) OR (
               (actions.kind='audit_passed' AND dispatches.delivered_at IS NULL AND events.seq IS NULL) OR
@@ -828,7 +805,7 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                 AND current_auditor.scope_id=jobs.scope_id
                 AND current_auditor.role='auditor'
                 AND current_auditor.active=TRUE
-                AND ${terminalWorkerRunSql("current_auditor", "current_run", "$1")}
+                AND ${terminalFinnyWorkerRunSql("current_auditor", "current_run", "$1")}
            ))`;
       const reopened = await q(
         `SELECT jobs.scope_id,jobs.id AS job_id,events.idempotency_key,
@@ -925,7 +902,7 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
           if (input.observedTerminalRunId !== undefined) {
             const observed = await db.query(
               `SELECT b.run_id,
-                      ${terminalWorkerRunSql("b", "r", "$3")} AS terminal
+                      ${terminalFinnyWorkerRunSql("b", "r", "$3")} AS terminal
                  FROM finny_runtime_bindings AS b
             LEFT JOIN runs AS r ON r.id=b.run_id
                 WHERE b.session_id=$1 AND b.run_id=$2 AND b.active=TRUE`,
