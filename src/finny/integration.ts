@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import type { FinnyPlanCreation, FinnyToolService } from "../agent/agent-tools/finny.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
@@ -7,7 +6,6 @@ import { parseScopeId, type Conversation, type Destination, type Principal } fro
 import type { FinnyIntegrationConfig } from "./integration-config.ts";
 import type { FinnyRuntimeStore } from "./runtime-postgres-store.ts";
 import type { FinnyStore } from "./store.ts";
-import { finnyAuditAttemptFromSpreadsheetResults } from "./audit-attempt.ts";
 import { FINNY_CERTIFIED_RESULT_SCHEMA, FINNY_XLSX_MIME, type FinnyCertifiedResult } from "./certified-result.ts";
 import { initialFinnyPolicy } from "./policy.ts";
 import { assertFinnyMaterialClarificationMatchesSop } from "./plan.ts";
@@ -25,8 +23,6 @@ import {
   SPREADSHEET_WORKER_CHECK_IDS,
   SPREADSHEET_WORKER_PRINCIPAL_ID,
   verifySpreadsheetWorkerEnvelope,
-  type SpreadsheetWorkerBinding,
-  type SpreadsheetWorkerResult,
 } from "./deterministic-spreadsheet-worker.ts";
 
 export interface FinnyParentBindingSnapshot {
@@ -122,47 +118,39 @@ function parentDestinationMatchesOrigin(destination: Destination, originThreadRe
   return false;
 }
 
-type FinnyAuditInput = Parameters<FinnyToolService["deterministicAudit"]>[0];
+type FinnyJudgmentInput = Parameters<FinnyToolService["completeJudgment"]>[0];
 
-function validateFinnyAuditInput(job: FinnyJob, input: FinnyAuditInput) {
-  if (!job.sop) throw new Error("Finny job has no approved SOP definition");
-  const suppliedById = new Map(input.controls.map((control) => [control.id, control]));
-  const sopControlIds = new Set(job.sop.controls.map((control) => control.id));
-  if (
-    suppliedById.size !== input.controls.length ||
-    suppliedById.size !== sopControlIds.size ||
-    [...sopControlIds].some((controlId) => !suppliedById.has(controlId))
-  ) {
-    throw new Error("Finny audit must report every approved SOP control exactly once");
-  }
-  const answersById = new Map((input.judgmentAnswers ?? []).map((answer) => [answer.controlId, answer]));
-  if (answersById.size !== (input.judgmentAnswers ?? []).length) {
-    throw new Error("Finny audit judgment answer is duplicated");
-  }
-  const judgmentControls = job.sop.controls.filter((control) => control.judgment);
-  const triggeredJudgmentIds = new Set(input.triggeredJudgmentControlIds ?? []);
-  if (
-    triggeredJudgmentIds.size !== (input.triggeredJudgmentControlIds ?? []).length ||
-    [...triggeredJudgmentIds].some((controlId) => !judgmentControls.some((control) => control.id === controlId))
-  ) {
-    throw new Error("Finny triggered judgment control is invalid");
-  }
-  const triggeredJudgments = judgmentControls.filter((control) => triggeredJudgmentIds.has(control.id));
-  const missingJudgments = triggeredJudgments.filter((control) => !answersById.has(control.id));
-  if (missingJudgments.length && answersById.size) {
-    throw new Error("Finny audit must answer every triggered judgment control together");
-  }
-  for (const control of triggeredJudgments) {
-    const answer = answersById.get(control.id);
-    const reported = suppliedById.get(control.id)!;
-    if (answer && answer.verdict !== reported.verdict) {
-      throw new Error(`Finny judgment answer disagrees with control ${control.id}`);
+function judgmentQuestionControlIds(questions: unknown[]): string[] {
+  return questions.map((question) => {
+    if (!question || typeof question !== "object" || !("controlId" in question)) {
+      throw new Error("Finny pending judgment question is invalid");
     }
+    const controlId = question.controlId;
+    if (typeof controlId !== "string" || !controlId) throw new Error("Finny pending judgment question is invalid");
+    return controlId;
+  });
+}
+
+function exactJudgmentAnswers(questions: unknown[], input: FinnyJudgmentInput) {
+  const questionIds = judgmentQuestionControlIds(questions);
+  const questionIdSet = new Set(questionIds);
+  const answerIds = input.judgmentAnswers.map((answer) => answer.controlId);
+  const answerIdSet = new Set(answerIds);
+  if (
+    questionIdSet.size !== questionIds.length ||
+    answerIdSet.size !== answerIds.length ||
+    answerIdSet.size !== questionIdSet.size ||
+    [...questionIdSet].some((controlId) => !answerIdSet.has(controlId))
+  ) {
+    throw new Error("Finny judgment must answer every pending judgment question exactly once");
   }
-  if ([...answersById].some(([controlId]) => !triggeredJudgmentIds.has(controlId))) {
-    throw new Error("Finny audit judgment answer is not for an approved judgment control");
-  }
-  return { triggeredJudgmentIds, missingJudgments };
+  return new Map(input.judgmentAnswers.map((answer) => [answer.controlId, answer]));
+}
+
+function auditAttemptResult(attempt: { controls: FinnyAuditControlResult[] }): string {
+  const blockedControlId = attempt.controls.find((control) => control.verdict === "block")?.id;
+  if (blockedControlId) return `Audit attempt recorded BLOCK for ${blockedControlId}.`;
+  return `Audit attempt recorded ${attempt.controls.length} PASS results.`;
 }
 
 export function finnyTurnAuthority(
@@ -218,7 +206,6 @@ export function createFinnyToolServiceFactory(deps: {
     | "getApprovalRequest"
     | "getJob"
     | "recordSopAmendment"
-    | "recordAuditAttempt"
     | "getAuditAttempt"
     | "getAuditAttemptByOperation"
     | "completeAuditJudgment"
@@ -228,16 +215,6 @@ export function createFinnyToolServiceFactory(deps: {
   integration: FinnyIntegrationStore;
   deliveries: Pick<DeliveryStore, "enqueue">;
   coordinator: FinnyCoordinatorPort;
-  files: Pick<FileArtifactStore, "open">;
-  deterministicSpreadsheetWorker: {
-    run(input: {
-      scopeId: string;
-      jobId: string;
-      artifactBytes: Uint8Array;
-      evidenceFileId: string;
-      binding: SpreadsheetWorkerBinding;
-    }): Promise<{ evidenceFileId: string; results: readonly SpreadsheetWorkerResult[] }>;
-  };
   certifyResult(input: {
     scopeId: string;
     result: FinnyCertifiedResult;
@@ -458,42 +435,17 @@ export function createFinnyToolServiceFactory(deps: {
           });
           return `Artifact ${input.artifactDigest} is queued for independent audit.`;
         },
-        async deterministicAudit(input): Promise<string> {
+        async completeJudgment(input): Promise<string> {
           const job = await jobForWorker("auditor");
-          if (!job.artifactDigest || !job.provisionalRevision) throw new Error("Finny job has no current artifact");
-          const artifact = await immutableScopedFileBytes(
-            deps.files,
-            job.scopeId,
-            job.provisionalRevision,
-            "current artifact",
-            deps.config.spreadsheetEngine.maxArtifactBytes,
-          );
-          if (artifact.digest !== job.artifactDigest) throw new Error("Finny current artifact digest is invalid");
-          if (artifact.mime !== "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") {
-            throw new Error("Finny current artifact MIME type is invalid");
-          }
-          if (!isDeepStrictEqual(job.policy.evaluator, deps.config.spreadsheetEngine.evaluator)) {
-            throw new Error("Finny job requires a different approved spreadsheet evaluator");
-          }
-          const { triggeredJudgmentIds, missingJudgments } = validateFinnyAuditInput(job, input);
-          const judgmentAddendum = {
-            issuerPrincipalId: current!.principalId,
-            issuerRunId: turn.runId,
-            answers: input.judgmentAnswers ?? [],
-          };
+          if (!job.artifactDigest) throw new Error("Finny job has no current artifact");
+          if (!job.currentAuditAttemptId) throw new Error("Finny job has no current audit attempt");
           const requestDigest = createHash("sha256")
-            .update(
-              JSON.stringify({
-                controls: input.controls,
-                triggeredJudgmentControlIds: input.triggeredJudgmentControlIds ?? [],
-                judgmentAnswers: input.judgmentAnswers ?? [],
-              }),
-            )
+            .update(JSON.stringify({ judgmentAnswers: input.judgmentAnswers }))
             .digest("hex");
           const operation = await deps.jobs.getAuditAttemptByOperation(current!.scopeId, job.id, input.idempotencyKey);
           if (operation) {
             if (operation.requestDigest !== requestDigest) {
-              throw new Error("Finny audit idempotency key was reused with different audit content");
+              throw new Error("Finny judgment idempotency key was reused with different judgment content");
             }
             const replayed = operation.attempt;
             await deps.coordinator.auditAttemptRecorded({
@@ -504,127 +456,46 @@ export function createFinnyToolServiceFactory(deps: {
               verdict: replayed.verdict,
               controls: replayed.controls,
             });
-            if (replayed.verdict === "pending_judgment") {
-              return `Audit attempt recorded pending ${replayed.judgmentQuestions.length} judgment answer${replayed.judgmentQuestions.length === 1 ? "" : "s"}.`;
-            }
-            const blockedControlId = replayed.controls.find((control) => control.verdict === "block")?.id;
-            if (blockedControlId) return `Deterministic spreadsheet audit recorded BLOCK for ${blockedControlId}.`;
-            return `Audit attempt recorded ${replayed.controls.length} PASS results.`;
+            return auditAttemptResult(replayed);
           }
-          const currentAttempt = job.currentAuditAttemptId
-            ? await deps.jobs.getAuditAttempt(current!.scopeId, job.id, job.currentAuditAttemptId)
-            : null;
-          if (currentAttempt?.verdict === "pending_judgment" && (input.judgmentAnswers?.length ?? 0) > 0) {
-            if (missingJudgments.length || triggeredJudgmentIds.size === 0) {
-              throw new Error("Finny current audit attempt requires every pending judgment answer");
-            }
-            const completed = await deps.jobs.completeAuditJudgment({
-              scopeId: current!.scopeId,
-              jobId: job.id,
-              attemptId: currentAttempt.id,
-              controls: input.controls.filter((control) => triggeredJudgmentIds.has(control.id)),
-              judgmentAddendum,
-              idempotencyKey: input.idempotencyKey,
-              requestDigest,
-              completedAt: Date.now(),
-            });
-            await deps.coordinator.auditAttemptRecorded({
-              scopeId: current!.scopeId,
-              jobId: job.id,
-              attemptId: completed.attempt.id,
-              artifactDigest: job.artifactDigest,
-              verdict: completed.attempt.verdict,
-              controls: completed.attempt.controls,
-            });
-            const blockedControlId = completed.attempt.controls.find((control) => control.verdict === "block")?.id;
-            if (blockedControlId) return `Deterministic spreadsheet audit recorded BLOCK for ${blockedControlId}.`;
-            return `Audit attempt recorded ${completed.attempt.controls.length} PASS results.`;
+          const currentAttempt = await deps.jobs.getAuditAttempt(current!.scopeId, job.id, job.currentAuditAttemptId);
+          if (!currentAttempt || currentAttempt.verdict !== "pending_judgment") {
+            throw new Error("Finny current audit attempt is not pending judgment");
           }
-          const binding = {
-            artifactDigest: job.artifactDigest,
-            policyVersion: job.policy.policyVersion,
-            evaluator: job.policy.evaluator,
-            checks: SPREADSHEET_WORKER_CHECK_IDS.map((checkId) => ({
-              checkId,
-              generation: job.policy.requiredGenerations[checkId],
-            })),
-          };
-          const evidenceFileId = createHash("sha256")
-            .update(
-              JSON.stringify([
-                "finny-deterministic-evidence",
-                job.scopeId,
-                job.id,
-                job.artifactDigest,
-                job.policy.policyVersion,
-                binding.evaluator,
-                binding.checks,
-                input.idempotencyKey,
-              ]),
-            )
-            .digest("hex");
-          const result = await deps.deterministicSpreadsheetWorker.run({
-            scopeId: job.scopeId,
-            jobId: job.id,
-            artifactBytes: artifact.bytes,
-            evidenceFileId,
-            binding,
+          const answersById = exactJudgmentAnswers(currentAttempt.judgmentQuestions, input);
+          const controls = [...answersById].map(([controlId, answer]) => {
+            const stored = currentAttempt.controls.find((control) => control.id === controlId);
+            if (!stored) throw new Error(`Finny pending judgment control ${controlId} is unavailable`);
+            return {
+              ...stored,
+              verdict: answer.verdict,
+              evidenceRefs: [...new Set([...stored.evidenceRefs, ...answer.evidenceRefs])],
+              repairActions: answer.verdict === "pass" ? [] : stored.repairActions,
+            };
           });
-          if (!job.sopBinding) throw new Error("Finny job has no SOP binding");
-          const deterministic = finnyAuditAttemptFromSpreadsheetResults(
-            result.results,
-            result.evidenceFileId,
-            job.policy.evaluator,
-          );
-          const controls = [...input.controls, ...deterministic.controls];
-          if (new Set(controls.map((control) => control.id)).size !== controls.length) {
-            throw new Error("Finny SOP control ID conflicts with a deterministic control ID");
-          }
-          const blockedControlId = controls.find((control) => control.verdict === "block")?.id;
-          let verdict: "pass" | "block" | "pending_judgment" = "pass";
-          if (missingJudgments.length) verdict = "pending_judgment";
-          else if (blockedControlId) verdict = "block";
-          const attemptId = createHash("sha256")
-            .update(`${job.id}\0${job.artifactDigest}\0${input.idempotencyKey}`)
-            .digest("hex");
-          const recorded = await deps.jobs.recordAuditAttempt({
-            id: attemptId,
+          const completed = await deps.jobs.completeAuditJudgment({
             scopeId: current!.scopeId,
             jobId: job.id,
-            sopVersionId: job.sopBinding.versionId,
-            executionDigest: job.sopBinding.executionDigest,
-            artifactFileId: job.provisionalRevision,
-            artifactSha256: job.artifactDigest,
-            artifactMime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            artifactSizeBytes: artifact.sizeBytes,
-            evaluator: job.policy.evaluator,
+            attemptId: currentAttempt.id,
             controls,
-            judgmentQuestions: missingJudgments.map((control) => ({
-              controlId: control.id,
-              question: control.judgment!.question,
-              onlyWhen: control.judgment!.onlyWhen,
-            })),
-            ...(missingJudgments.length ? {} : { judgmentAddendum }),
-            verdict,
-            issuerPrincipalId: current!.principalId,
-            issuerRunId: turn.runId,
+            judgmentAddendum: {
+              issuerPrincipalId: current!.principalId,
+              issuerRunId: turn.runId,
+              answers: input.judgmentAnswers,
+            },
             idempotencyKey: input.idempotencyKey,
             requestDigest,
-            ...(verdict === "pending_judgment" ? {} : { completedAt: Date.now() }),
+            completedAt: Date.now(),
           });
           await deps.coordinator.auditAttemptRecorded({
             scopeId: current!.scopeId,
             jobId: job.id,
-            attemptId: recorded.attempt.id,
+            attemptId: completed.attempt.id,
             artifactDigest: job.artifactDigest,
-            verdict: recorded.attempt.verdict,
-            controls: recorded.attempt.controls,
+            verdict: completed.attempt.verdict,
+            controls: completed.attempt.controls,
           });
-          if (verdict === "pending_judgment") {
-            return `Audit attempt recorded pending ${missingJudgments.length} judgment answer${missingJudgments.length === 1 ? "" : "s"}.`;
-          }
-          if (blockedControlId) return `Deterministic spreadsheet audit recorded BLOCK for ${blockedControlId}.`;
-          return `Audit attempt recorded ${controls.length} PASS results.`;
+          return auditAttemptResult(completed.attempt);
         },
         async finalize(input): Promise<string> {
           if (current?.role !== "parent" || current.jobId !== input.jobId)

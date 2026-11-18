@@ -1,7 +1,6 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
 import {
-  type FinnyAuditControlResult,
   type FinnyAuditJudgmentAnswer,
   type FinnyMaterialClarification,
   type FinnySopVersion,
@@ -30,12 +29,7 @@ export interface FinnyToolService {
     provisionalRevision: string;
     idempotencyKey: string;
   }): Promise<string>;
-  deterministicAudit(input: {
-    idempotencyKey: string;
-    controls: FinnyAuditControlResult[];
-    triggeredJudgmentControlIds?: string[];
-    judgmentAnswers?: FinnyAuditJudgmentAnswer[];
-  }): Promise<string>;
+  completeJudgment(input: { idempotencyKey: string; judgmentAnswers: FinnyAuditJudgmentAnswer[] }): Promise<string>;
   finalize(input: { jobId: string; summary: FinnyCertifiedResult["summary"]; idempotencyKey: string }): Promise<string>;
 }
 
@@ -64,20 +58,6 @@ const sop = FINNY_SOP_SCHEMA;
 const values = FINNY_SOP_VALUES_SCHEMA;
 const certifiedSummary = FINNY_CERTIFIED_SUMMARY_SCHEMA;
 const evidenceRefs = Type.Array(string());
-const auditControls = Type.Array(
-  Type.Object(
-    {
-      id: string(),
-      verdict: Type.Union([Type.Literal("pass"), Type.Literal("block")]),
-      evidenceRefs,
-      repairActions: Type.Array(
-        Type.Object({ message: string(), workbookRefs: evidenceRefs }, { additionalProperties: false }),
-      ),
-    },
-    { additionalProperties: false },
-  ),
-  { minItems: 1 },
-);
 const judgmentAnswers = Type.Array(
   Type.Object(
     {
@@ -230,22 +210,18 @@ export function finnyTools(kit: ToolKit) {
         }),
       ),
   });
-  const deterministicAudit = defineTool({
-    name: "finny_deterministic_audit",
-    label: "Finny deterministic audit",
-    description:
-      "Run Core-owned deterministic spreadsheet checks and atomically record every approved SOP control against the current bound artifact.",
+  const completeJudgment = defineTool({
+    name: "finny_judgment",
+    label: "Complete Finny judgment",
+    description: "Answer every pending judgment question for the current Core-owned audit attempt.",
     parameters: Type.Object(
       {
         idempotencyKey: string(),
-        controls: auditControls,
-        triggeredJudgmentControlIds: Type.Optional(Type.Array(string())),
-        judgmentAnswers: Type.Optional(judgmentAnswers),
+        judgmentAnswers,
       },
       { additionalProperties: false },
     ),
-    execute: (callId, params) =>
-      run(callId, "deterministic_audit", {}, () => ref.current!.finny!.deterministicAudit(params)),
+    execute: (callId, params) => run(callId, "judgment", {}, () => ref.current!.finny!.completeJudgment(params)),
   });
   const finalize = defineTool({
     name: "finny_finalize",
@@ -268,7 +244,7 @@ export function finnyTools(kit: ToolKit) {
     ...(authoring ? { create_plan: createPlan, amend_plan: amendPlan } : {}),
     status,
     ...(producing ? { artifact_ready: artifactReady } : {}),
-    ...(auditing ? { deterministic_audit: deterministicAudit } : {}),
+    ...(auditing ? { judgment: completeJudgment } : {}),
     ...(authoring ? { finalize } : {}),
   });
   const properties = Object.fromEntries(
@@ -277,13 +253,7 @@ export function finnyTools(kit: ToolKit) {
       jobId: string(),
       idempotencyKey: string(),
       ...(producing ? { artifactDigest: string(), provisionalRevision: string() } : {}),
-      ...(auditing
-        ? {
-            controls: auditControls,
-            triggeredJudgmentControlIds: Type.Array(string()),
-            judgmentAnswers,
-          }
-        : {}),
+      ...(auditing ? { judgmentAnswers } : {}),
       ...(authoring ? { summary: certifiedSummary } : {}),
     }).map(([key, schema]) => [key, Type.Optional(schema as TSchema)]),
   );
@@ -291,7 +261,7 @@ export function finnyTools(kit: ToolKit) {
     ...(authoring ? { create_plan: ["sop", "values"], amend_plan: ["jobId", "sop", "values"] } : {}),
     status: ["jobId"],
     ...(producing ? { artifact_ready: ["artifactDigest", "provisionalRevision", "idempotencyKey"] } : {}),
-    ...(auditing ? { deterministic_audit: ["idempotencyKey", "controls"] } : {}),
+    ...(auditing ? { judgment: ["idempotencyKey", "judgmentAnswers"] } : {}),
     ...(authoring ? { finalize: ["jobId", "summary", "idempotencyKey"] } : {}),
   } as const;
   const contentFields = Object.keys(properties);

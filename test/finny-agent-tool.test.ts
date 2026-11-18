@@ -27,8 +27,8 @@ const service = {
   async block() {
     return "check blocked";
   },
-  async deterministicAudit() {
-    return "deterministic audit recorded";
+  async completeJudgment() {
+    return "judgment recorded";
   },
   async finalize() {
     return "job finalized";
@@ -142,15 +142,7 @@ test("Finny tools expose only role-owned actions and parameter fields", () => {
     "provisionalRevision",
     "retrySafe",
   ]);
-  assert.deepEqual(fields(auditor), [
-    "action",
-    "controls",
-    "idempotencyKey",
-    "jobId",
-    "judgmentAnswers",
-    "retrySafe",
-    "triggeredJudgmentControlIds",
-  ]);
+  assert.deepEqual(fields(auditor), ["action", "idempotencyKey", "jobId", "judgmentAnswers", "retrySafe"]);
 
   assert.equal(
     Check(parent.parameters, {
@@ -161,12 +153,12 @@ test("Finny tools expose only role-owned actions and parameter fields", () => {
     }),
     false,
   );
-  assert.equal(Check(parent.parameters, { action: "deterministic_audit", idempotencyKey: "k", controls: [] }), false);
+  assert.equal(Check(parent.parameters, { action: "judgment", idempotencyKey: "k", judgmentAnswers: [] }), false);
   assert.equal(
     Check(producer.parameters, { action: "finalize", jobId: "j", summary: certifiedSummary, idempotencyKey: "k" }),
     false,
   );
-  assert.equal(Check(producer.parameters, { action: "deterministic_audit", idempotencyKey: "k", controls: [] }), false);
+  assert.equal(Check(producer.parameters, { action: "judgment", idempotencyKey: "k", judgmentAnswers: [] }), false);
   assert.equal(
     Check(auditor.parameters, {
       action: "artifact_ready",
@@ -180,6 +172,22 @@ test("Finny tools expose only role-owned actions and parameter fields", () => {
     Check(auditor.parameters, { action: "finalize", jobId: "j", summary: certifiedSummary, idempotencyKey: "k" }),
     false,
   );
+  const judgment = {
+    action: "judgment",
+    idempotencyKey: "judgment-1",
+    judgmentAnswers: [
+      {
+        controlId: "mapping-exception",
+        verdict: "pass",
+        evidenceRefs: ["xlsx:Exceptions!A2"],
+        rationale: "No material exception remains.",
+      },
+    ],
+  };
+  assert.equal(Check(auditor.parameters, judgment), true);
+  assert.equal(Check(auditor.parameters, { ...judgment, controls: [] }), false);
+  assert.equal(Check(auditor.parameters, { ...judgment, triggeredJudgmentControlIds: [] }), false);
+  assert.equal(Check(auditor.parameters, { ...judgment, artifactDigest: "forged" }), false);
   assert.ok(JSON.stringify(producer.parameters).length < JSON.stringify(parent.parameters).length);
   assert.ok(JSON.stringify(auditor.parameters).length < JSON.stringify(parent.parameters).length);
 });
@@ -273,7 +281,7 @@ test("finny schema rejects model-supplied authority and escalation fields", () =
     assert.equal(Check(schema, { ...base, [field]: field === "requiredChecks" ? [] : "forbidden" }), false, field);
   }
   assert.equal(Check(schema, { action: "create_plan", sop: { ...sop, nodes: [] }, values }), false);
-  assert.equal(Check(schema, { action: "deterministic_audit", idempotencyKey: "audit-1", verdict: "pass" }), false);
+  assert.equal(Check(schema, { action: "judgment", idempotencyKey: "audit-1", verdict: "pass" }), false);
   assert.equal(
     Check(schema, {
       action: "create_plan",
@@ -324,9 +332,9 @@ test("role-owned Finny actions forward narrow inputs and return concise bound-se
       calls.push(["artifact_ready", input]);
       return "artifact accepted";
     },
-    async deterministicAudit(input) {
-      calls.push(["deterministic_audit", input]);
-      return "deterministic audit accepted";
+    async completeJudgment(input) {
+      calls.push(["judgment", input]);
+      return "judgment accepted";
     },
     async finalize(input) {
       calls.push(["finalize", input]);
@@ -356,9 +364,16 @@ test("role-owned Finny actions forward narrow inputs and return concise bound-se
     [
       tool("auditor"),
       {
-        action: "deterministic_audit",
-        idempotencyKey: "deterministic-1",
-        controls: [{ id: "source-total", verdict: "pass", evidenceRefs: ["xlsx:Summary!B1"], repairActions: [] }],
+        action: "judgment",
+        idempotencyKey: "judgment-1",
+        judgmentAnswers: [
+          {
+            controlId: "mapping-exception",
+            verdict: "pass",
+            evidenceRefs: ["xlsx:Exceptions!A2"],
+            rationale: "No material exception remains.",
+          },
+        ],
         retrySafe: true,
       },
     ],
@@ -381,7 +396,7 @@ test("role-owned Finny actions forward narrow inputs and return concise bound-se
     "created job-1",
     "job-1 awaiting approval",
     "artifact accepted",
-    "deterministic audit accepted",
+    "judgment accepted",
     "job finalized",
   ]);
   assert.deepEqual(calls, [
@@ -392,11 +407,18 @@ test("role-owned Finny actions forward narrow inputs and return concise bound-se
       { artifactDigest: "sha256:artifact", provisionalRevision: "revision-1", idempotencyKey: "ready-1" },
     ],
     [
-      "deterministic_audit",
+      "judgment",
       {
-        action: "deterministic_audit",
-        idempotencyKey: "deterministic-1",
-        controls: [{ id: "source-total", verdict: "pass", evidenceRefs: ["xlsx:Summary!B1"], repairActions: [] }],
+        action: "judgment",
+        idempotencyKey: "judgment-1",
+        judgmentAnswers: [
+          {
+            controlId: "mapping-exception",
+            verdict: "pass",
+            evidenceRefs: ["xlsx:Exceptions!A2"],
+            rationale: "No material exception remains.",
+          },
+        ],
       },
     ],
     ["finalize", { jobId: "job-1", summary: certifiedSummary, idempotencyKey: "finalize-1" }],
