@@ -1,13 +1,17 @@
 import { createHash, randomUUID } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import type { PoolClient } from "pg";
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { assertFinnyAuditFindings, assertFinnyEscalationReason, assertFinnyFindingPolicy } from "./coordinator.ts";
 import {
-  assertFinnyMaterialClarificationMatchesPlan,
-  canonicalFinnyPlanDigest,
+  assertFinnyMaterialClarificationMatchesSop,
+  canonicalFinnySopDefinitionDigest,
+  canonicalFinnyExecutionDigest,
+  finnySopSearchText,
+  finnySopVersionId,
+  validateFinnySopVersion,
+  validateFinnySopValues,
   validateFinnyMaterialClarification,
-  validateFinnyPlanPresentation,
 } from "./plan.ts";
 import {
   FINNY_DETERMINISTIC_CHECK_IDS,
@@ -22,13 +26,14 @@ import type {
   ClaimFinnyWorkerRunInput,
   CreateFinnyApprovalRequestInput,
   CreateFinnyClarificationRequestInput,
-  CreateFinnyJobInput,
+  CreateFinnyJobCommand,
   FinalizeFinnyInput,
   FinnyApprovalRequest,
   FinnyReceiptSigner,
   FinnyStore,
+  FinnyStoredSopVersion,
   RecordFinnyApprovalInput,
-  RecordFinnyPlanAmendmentInput,
+  RecordFinnySopAmendmentInput,
   RecordFinnyClarificationDecisionInput,
   RecordFinnyArtifactReadyInput,
   RecordFinnyAuditBlockInput,
@@ -50,6 +55,7 @@ import type {
   FinnyFindingPolicy,
   FinnyPlanPresentation,
   FinnyPolicySnapshot,
+  FinnySopVersion,
 } from "./types.ts";
 
 const SCHEMA = [
@@ -230,6 +236,146 @@ const DETERMINISTIC_ATTESTATION_SCHEMA = [
      CHECK (deterministic_authority IS NULL OR jsonb_typeof(deterministic_authority) = 'object')`,
 ];
 
+const SOP_VERSION_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS finny_sop_versions(
+    version_id TEXT PRIMARY KEY CHECK (version_id <> ''),
+    scope_id TEXT NOT NULL CHECK (scope_id <> ''),
+    sop_id TEXT NOT NULL CHECK (sop_id <> ''),
+    version BIGINT NOT NULL CHECK (version > 0),
+    definition JSONB NOT NULL CHECK (jsonb_typeof(definition) = 'object'),
+    definition_digest TEXT NOT NULL CHECK (definition_digest <> ''),
+    search_text TEXT NOT NULL CHECK (search_text <> ''),
+    created_at BIGINT NOT NULL,
+    UNIQUE(scope_id, version_id),
+    UNIQUE(scope_id, sop_id, version)
+  )`,
+  `CREATE INDEX IF NOT EXISTS finny_sop_versions_scope_created
+    ON finny_sop_versions(scope_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS finny_sop_versions_search
+    ON finny_sop_versions USING GIN(to_tsvector('simple', search_text))`,
+  `CREATE OR REPLACE FUNCTION reject_finny_sop_version_mutation() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+      RAISE EXCEPTION 'Finny SOP versions are immutable';
+    END;
+    $$`,
+  `CREATE TRIGGER finny_sop_versions_immutable
+    BEFORE UPDATE OR DELETE ON finny_sop_versions
+    FOR EACH ROW EXECUTE FUNCTION reject_finny_sop_version_mutation()`,
+];
+
+const SOP_JOB_BINDING_SCHEMA = [
+  `ALTER TABLE finny_jobs ALTER COLUMN plan_presentation DROP NOT NULL`,
+  `ALTER TABLE finny_jobs ALTER COLUMN plan_digest DROP NOT NULL`,
+  `ALTER TABLE finny_jobs ADD COLUMN IF NOT EXISTS sop_version_id TEXT`,
+  `ALTER TABLE finny_jobs ADD COLUMN IF NOT EXISTS bound_inputs JSONB`,
+  `ALTER TABLE finny_jobs ADD COLUMN IF NOT EXISTS execution_digest TEXT`,
+  `ALTER TABLE finny_jobs ADD COLUMN IF NOT EXISTS sop_revision BIGINT`,
+  `ALTER TABLE finny_jobs ADD COLUMN IF NOT EXISTS approval_execution_digest TEXT`,
+  `ALTER TABLE finny_jobs ADD CONSTRAINT finny_jobs_sop_scope_fk
+    FOREIGN KEY(scope_id, sop_version_id)
+    REFERENCES finny_sop_versions(scope_id, version_id)`,
+  `ALTER TABLE finny_jobs ADD CONSTRAINT finny_jobs_binding_mode CHECK (
+    (
+      plan_presentation IS NOT NULL AND plan_digest IS NOT NULL AND
+      sop_version_id IS NULL AND bound_inputs IS NULL AND
+      execution_digest IS NULL AND sop_revision IS NULL
+    ) OR (
+      plan_presentation IS NULL AND plan_digest IS NULL AND
+      sop_version_id IS NOT NULL AND bound_inputs IS NOT NULL AND
+      jsonb_typeof(bound_inputs) = 'object' AND
+      execution_digest IS NOT NULL AND execution_digest <> '' AND
+      sop_revision IS NOT NULL AND sop_revision > 0
+    )
+  )`,
+  `ALTER TABLE finny_jobs ADD CONSTRAINT finny_jobs_approval_binding_mode CHECK (
+    NOT (approval_plan_digest IS NOT NULL AND approval_execution_digest IS NOT NULL) AND
+    (approval_execution_digest IS NULL OR approval_execution_digest <> '')
+  )`,
+  `CREATE INDEX IF NOT EXISTS finny_jobs_sop_version
+    ON finny_jobs(scope_id, sop_version_id) WHERE sop_version_id IS NOT NULL`,
+  `ALTER TABLE finny_approval_requests ALTER COLUMN plan_digest DROP NOT NULL`,
+  `ALTER TABLE finny_approval_requests ADD COLUMN IF NOT EXISTS execution_digest TEXT`,
+  `ALTER TABLE finny_approval_requests ADD CONSTRAINT finny_approval_requests_binding_mode CHECK (
+    (plan_digest IS NOT NULL AND execution_digest IS NULL) OR
+    (plan_digest IS NULL AND execution_digest IS NOT NULL AND execution_digest <> '')
+  )`,
+];
+
+const SOP_AMENDMENT_SCHEMA = [
+  `ALTER TABLE finny_job_events DROP CONSTRAINT IF EXISTS finny_job_events_event_type_check`,
+  `ALTER TABLE finny_job_events ADD CONSTRAINT finny_job_events_event_type_check CHECK (event_type IN (
+    'artifact_ready','audit_blocked','audit_passed','rework_requested','escalated',
+    'evaluator_revision_activated','evidence_invalidated','rework_cancelled','verification_reopened',
+    'plan_amended','sop_amended'
+  ))`,
+];
+
+const SOP_CUTOVER_SCHEMA = [
+  `DO $qm$
+   DECLARE
+     blocked BOOLEAN;
+   BEGIN
+     IF EXISTS (
+       SELECT 1 FROM finny_jobs
+       WHERE sop_version_id IS NULL AND finalized_at IS NULL
+     ) THEN
+       RAISE EXCEPTION 'Finny SOP cutover refused: unfinished legacy Finny jobs exist';
+     END IF;
+
+     IF to_regclass('finny_plan_intents') IS NOT NULL THEN
+       EXECUTE 'SELECT EXISTS (
+         SELECT 1 FROM finny_plan_intents WHERE NOT (job_input ? ''sop'')
+       )' INTO blocked;
+       IF blocked THEN
+         RAISE EXCEPTION 'Finny SOP cutover refused: legacy Finny plan intents await job creation';
+       END IF;
+     END IF;
+
+     SELECT EXISTS (
+       SELECT 1 FROM finny_jobs
+       WHERE sop_version_id IS NULL AND final_receipt IS NOT NULL
+     ) INTO blocked;
+     IF blocked AND to_regclass('deliveries') IS NULL THEN
+       RAISE EXCEPTION 'Finny SOP cutover refused: legacy Finny final receipts await delivery';
+     END IF;
+     IF blocked THEN
+       EXECUTE 'SELECT EXISTS (
+         SELECT 1
+           FROM finny_jobs j
+           LEFT JOIN deliveries d
+             ON d.idempotency_key = ''finny-final:'' || j.id || '':'' || j.ledger_head::text
+          WHERE j.sop_version_id IS NULL
+            AND j.final_receipt IS NOT NULL
+            AND d.delivered_at IS NULL
+       )' INTO blocked;
+       IF blocked THEN
+         RAISE EXCEPTION 'Finny SOP cutover refused: legacy Finny final receipts await delivery';
+       END IF;
+     END IF;
+
+     ALTER TABLE finny_jobs DROP CONSTRAINT IF EXISTS finny_jobs_sop_cutover_mode;
+     ALTER TABLE finny_jobs ADD CONSTRAINT finny_jobs_sop_cutover_mode
+       CHECK (sop_version_id IS NOT NULL OR finalized_at IS NOT NULL);
+     IF to_regclass('finny_plan_intents') IS NOT NULL THEN
+       EXECUTE 'ALTER TABLE finny_plan_intents
+         DROP CONSTRAINT IF EXISTS finny_plan_intents_sop_cutover_mode';
+       EXECUTE 'ALTER TABLE finny_plan_intents
+         ADD CONSTRAINT finny_plan_intents_sop_cutover_mode CHECK (job_input ? ''sop'')';
+     END IF;
+   END
+   $qm$`,
+];
+
+function rowToSopVersion(row: Record<string, unknown>): FinnyStoredSopVersion {
+  return {
+    versionId: row.version_id as string,
+    definitionDigest: row.definition_digest as string,
+    sop: validateFinnySopVersion(row.definition),
+    createdAt: Number(row.created_at),
+  };
+}
+
 function rowToClarification(row: Record<string, unknown>): FinnyClarificationRequest {
   return {
     requestId: row.request_id as string,
@@ -263,11 +409,9 @@ function rowToJob(row: Record<string, unknown>): FinnyJob {
     requiredGenerations: row.required_generations as Record<FinnyCheckId, number>,
   };
   const decidedAt = row.approval_decided_at;
-  return {
+  const common = {
     id: row.id as string,
     scopeId: row.scope_id as string,
-    plan: row.plan_presentation as FinnyPlanPresentation,
-    planDigest: row.plan_digest as string,
     ...(row.artifact_digest !== null ? { artifactDigest: row.artifact_digest as string } : {}),
     policy,
     ...(row.finding_policy !== null ? { findingPolicy: row.finding_policy as FinnyFindingPolicy } : {}),
@@ -279,7 +423,10 @@ function rowToJob(row: Record<string, unknown>): FinnyJob {
             requestId: row.approval_request_id as string,
             actorId: row.approval_actor_id as string,
             action: row.approval_action as NonNullable<FinnyJob["approval"]>["action"],
-            planDigest: row.approval_plan_digest as string,
+            ...(row.approval_plan_digest !== null ? { planDigest: row.approval_plan_digest as string } : {}),
+            ...(row.approval_execution_digest !== null
+              ? { executionDigest: row.approval_execution_digest as string }
+              : {}),
             originThreadRef: row.approval_origin_thread_ref as string,
             decidedAt: Number(decidedAt),
             ...(row.approval_consumed_at !== null ? { consumedAt: Number(row.approval_consumed_at) } : {}),
@@ -298,6 +445,27 @@ function rowToJob(row: Record<string, unknown>): FinnyJob {
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };
+  if (row.sop_version_id !== null && row.sop_version_id !== undefined) {
+    return {
+      ...common,
+      sop: validateFinnySopVersion(row.sop_definition),
+      sopBinding: {
+        versionId: row.sop_version_id as string,
+        values: row.bound_inputs as Record<string, string | boolean>,
+        executionDigest: row.execution_digest as string,
+        revision: Number(row.sop_revision),
+      },
+    } as FinnyJob;
+  }
+  return {
+    ...common,
+    plan: row.plan_presentation as FinnyPlanPresentation,
+    planDigest: row.plan_digest as string,
+  };
+}
+
+function updatedRowToJob(updated: Record<string, unknown>, locked: Record<string, unknown>): FinnyJob {
+  return rowToJob({ ...updated, sop_definition: locked.sop_definition });
 }
 
 function rowToApprovalRequest(row: Record<string, unknown>): FinnyApprovalRequest {
@@ -305,7 +473,8 @@ function rowToApprovalRequest(row: Record<string, unknown>): FinnyApprovalReques
     requestId: row.request_id as string,
     scopeId: row.scope_id as string,
     jobId: row.job_id as string,
-    planDigest: row.plan_digest as string,
+    ...(row.plan_digest !== null ? { planDigest: row.plan_digest as string } : {}),
+    ...(row.execution_digest !== null ? { executionDigest: row.execution_digest as string } : {}),
     originThreadRef: row.origin_thread_ref as string,
     authorizedActorId: row.authorized_actor_id as string,
     ...(row.ready_at !== null ? { readyAt: Number(row.ready_at) } : {}),
@@ -347,7 +516,7 @@ function rowToEvent(row: Record<string, unknown>): FinnyJobEvent {
 }
 
 function sameValue(left: unknown, right: unknown): boolean {
-  return isDeepStrictEqual(left, right);
+  return canonicalJson(left) === canonicalJson(right);
 }
 
 async function insertEvent<T extends FinnyJobEventType>(
@@ -470,10 +639,15 @@ async function insertAuditAttestation(
 }
 
 async function lockedJob(db: PoolClient, scopeId: string, jobId: string): Promise<Record<string, unknown>> {
-  const { rows } = await db.query("SELECT * FROM finny_jobs WHERE id = $1 AND scope_id = $2 FOR UPDATE", [
-    jobId,
-    scopeId,
-  ]);
+  const { rows } = await db.query(
+    `SELECT jobs.*, versions.definition AS sop_definition
+       FROM finny_jobs AS jobs
+       LEFT JOIN finny_sop_versions AS versions
+         ON versions.scope_id=jobs.scope_id AND versions.version_id=jobs.sop_version_id
+      WHERE jobs.id=$1 AND jobs.scope_id=$2
+      FOR UPDATE OF jobs`,
+    [jobId, scopeId],
+  );
   if (!rows[0]) throw new Error("Finny job was not found in this scope");
   return rows[0] as Record<string, unknown>;
 }
@@ -489,26 +663,100 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
     { id: "finny/store/0007-evaluator-authority", statements: EVALUATOR_AUTHORITY_SCHEMA },
     { id: "finny/store/0008-deterministic-attestation", statements: DETERMINISTIC_ATTESTATION_SCHEMA },
     { id: "finny/store/0009-plan-amendment-events", statements: PLAN_AMENDMENT_SCHEMA },
+    { id: "finny/store/0010-sop-versions", statements: SOP_VERSION_SCHEMA },
+    { id: "finny/store/0011-sop-job-bindings", statements: SOP_JOB_BINDING_SCHEMA },
+    { id: "finny/store/0012-sop-amendment-events", statements: SOP_AMENDMENT_SCHEMA },
+    { id: "finny/store/0013-sop-cutover", statements: SOP_CUTOVER_SCHEMA },
   ]);
+  const createSopVersion = async (sopValue: FinnySopVersion): Promise<FinnyStoredSopVersion> => {
+    const sop = validateFinnySopVersion(sopValue);
+    const versionId = finnySopVersionId(sop);
+    const definitionDigest = canonicalFinnySopDefinitionDigest(sop);
+    const createdAt = Date.now();
+    await q(
+      `INSERT INTO finny_sop_versions(
+         version_id, scope_id, sop_id, version, definition, definition_digest, search_text, created_at
+       ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT(version_id) DO NOTHING`,
+      [
+        versionId,
+        sop.scopeId,
+        sop.id,
+        sop.version,
+        JSON.stringify(sop),
+        definitionDigest,
+        finnySopSearchText(sop),
+        createdAt,
+      ],
+    );
+    const rows = await q("SELECT * FROM finny_sop_versions WHERE version_id=$1", [versionId]);
+    const stored = rows[0] ? rowToSopVersion(rows[0]) : undefined;
+    if (!stored || stored.definitionDigest !== definitionDigest || stored.sop.scopeId !== sop.scopeId)
+      throw new Error("Finny SOP version immutability conflict");
+    return stored;
+  };
+  const jobRows = (scopeId: string, jobId: string) =>
+    q(
+      `SELECT jobs.*, versions.definition AS sop_definition
+         FROM finny_jobs AS jobs
+         LEFT JOIN finny_sop_versions AS versions
+           ON versions.scope_id=jobs.scope_id AND versions.version_id=jobs.sop_version_id
+        WHERE jobs.id=$1 AND jobs.scope_id=$2`,
+      [jobId, scopeId],
+    );
   return {
-    async createJob(input: CreateFinnyJobInput) {
+    createSopVersion,
+    async getSopVersion(scopeId: string, versionId: string) {
+      const rows = await q("SELECT * FROM finny_sop_versions WHERE scope_id=$1 AND version_id=$2", [
+        scopeId,
+        versionId,
+      ]);
+      return rows[0] ? rowToSopVersion(rows[0]) : null;
+    },
+    async searchSopVersions(scopeId: string, query: string, page = {}) {
+      assertNonEmpty(scopeId, "SOP search scope");
+      assertNonEmpty(query, "SOP search query");
+      const offset = page.offset ?? 0;
+      const limit = page.limit ?? 20;
+      if (!Number.isInteger(offset) || offset < 0) throw new Error("Finny SOP search offset must be non-negative");
+      if (!Number.isInteger(limit) || limit < 1) throw new Error("Finny SOP search limit must be positive");
+      const ranked = await q(
+        `SELECT version_id FROM finny_sop_versions
+          WHERE scope_id=$1
+            AND to_tsvector('simple', search_text) @@ plainto_tsquery('simple', $2)
+          ORDER BY ts_rank(to_tsvector('simple', search_text), plainto_tsquery('simple', $2)) DESC,
+                   created_at DESC, version_id
+          OFFSET $3 LIMIT $4`,
+        [scopeId, query, offset, limit],
+      );
+      const ids = ranked.map((row) => row.version_id as string);
+      if (!ids.length) return [];
+      const rows = await q("SELECT * FROM finny_sop_versions WHERE scope_id=$1 AND version_id=ANY($2)", [scopeId, ids]);
+      const byId = new Map(rows.map((row) => [row.version_id as string, rowToSopVersion(row)]));
+      return ids.map((id) => byId.get(id)).filter((stored): stored is FinnyStoredSopVersion => stored !== undefined);
+    },
+    async createJob(input: CreateFinnyJobCommand) {
       assertFinnyPolicy(input.policy);
       assertFinnyApprovedEvaluatorRef(input.policy.evaluator);
       assertFinnyFindingPolicy(input.findingPolicy);
-      const plan = validateFinnyPlanPresentation(input.plan);
-      const planDigest = canonicalFinnyPlanDigest(plan);
+      const sop = validateFinnySopVersion(input.sop);
+      if (sop.scopeId !== input.scopeId) throw new Error("Finny SOP scope does not match the job");
+      const stored = await createSopVersion(sop);
+      const values = validateFinnySopValues(sop, input.values);
+      const executionDigest = canonicalFinnyExecutionDigest(sop, values);
       const now = Date.now();
-      const rows = await q(
+      await q(
         `INSERT INTO finny_jobs(
-          id, scope_id, plan_presentation, plan_digest, policy_version, evaluator_ref, required_generations,
-          finding_policy, origin_thread_ref, created_at, updated_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)
-        RETURNING *`,
+           id, scope_id, sop_version_id, bound_inputs, execution_digest, sop_revision,
+           policy_version, evaluator_ref, required_generations, finding_policy,
+           origin_thread_ref, created_at, updated_at
+         ) VALUES($1,$2,$3,$4,$5,1,$6,$7,$8,$9,$10,$11,$11)`,
         [
           input.id,
           input.scopeId,
-          JSON.stringify(plan),
-          planDigest,
+          stored.versionId,
+          JSON.stringify(values),
+          executionDigest,
           input.policy.policyVersion,
           JSON.stringify(input.policy.evaluator),
           JSON.stringify(input.policy.requiredGenerations),
@@ -517,18 +765,21 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
           now,
         ],
       );
-      if (!rows[0]) throw new Error("Finny job insert returned no row");
+      const rows = await jobRows(input.scopeId, input.id);
+      if (!rows[0]) throw new Error("Finny SOP job insert returned no row");
       return rowToJob(rows[0]);
     },
     async getJob(scopeId, jobId) {
-      const rows = await q("SELECT * FROM finny_jobs WHERE id = $1 AND scope_id = $2", [jobId, scopeId]);
+      const rows = await jobRows(scopeId, jobId);
       return rows[0] ? rowToJob(rows[0]) : null;
     },
     async getApprovalRequest(requestId) {
       const rows = await q(
-        `SELECT r.*, to_jsonb(j) AS job_row
+        `SELECT r.*, to_jsonb(j) || jsonb_build_object('sop_definition', versions.definition) AS job_row
            FROM finny_approval_requests r
            JOIN finny_jobs j ON j.id = r.job_id
+           LEFT JOIN finny_sop_versions AS versions
+             ON versions.scope_id=j.scope_id AND versions.version_id=j.sop_version_id
           WHERE r.request_id = $1`,
         [requestId],
       );
@@ -537,9 +788,11 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
     },
     async getPendingApprovalRequestForJob(scopeId, jobId) {
       const rows = await q(
-        `SELECT r.*, to_jsonb(j) AS job_row
+        `SELECT r.*, to_jsonb(j) || jsonb_build_object('sop_definition', versions.definition) AS job_row
            FROM finny_approval_requests r
            JOIN finny_jobs j ON j.id = r.job_id AND j.scope_id = r.scope_id
+           LEFT JOIN finny_sop_versions AS versions
+             ON versions.scope_id=j.scope_id AND versions.version_id=j.sop_version_id
           WHERE r.scope_id = $1 AND r.job_id = $2 AND r.decided_at IS NULL`,
         [scopeId, jobId],
       );
@@ -547,9 +800,11 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
     },
     async getPendingApprovalRequestByThread(originThreadRef) {
       const rows = await q(
-        `SELECT r.*, to_jsonb(j) AS job_row
+        `SELECT r.*, to_jsonb(j) || jsonb_build_object('sop_definition', versions.definition) AS job_row
            FROM finny_approval_requests r
            JOIN finny_jobs j ON j.id = r.job_id
+           LEFT JOIN finny_sop_versions AS versions
+             ON versions.scope_id=j.scope_id AND versions.version_id=j.sop_version_id
           WHERE r.origin_thread_ref = $1 AND r.decided_at IS NULL AND r.ready_at IS NOT NULL
           ORDER BY r.created_at DESC
           LIMIT 1`,
@@ -587,6 +842,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
       assertNonEmpty(input.authorizedActorId, "approval actor ID");
       await withPgTransaction(await pool(), async (db) => {
         const job = await lockedJob(db, input.scopeId, input.jobId);
+        if (job.sop_version_id === null) throw new Error("Finny active job has no SOP binding");
         if (job.approval_decided_at !== null) throw new Error("Finny approval was already decided");
         const pending = await db.query("SELECT 1 FROM finny_approval_requests WHERE job_id=$1 AND decided_at IS NULL", [
           input.jobId,
@@ -594,13 +850,14 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         if (pending.rows[0]) throw new Error("Finny approval request is already pending");
         await db.query(
           `INSERT INTO finny_approval_requests(
-             request_id, scope_id, job_id, plan_digest, origin_thread_ref, authorized_actor_id, ready_at, created_at
+             request_id, scope_id, job_id, execution_digest,
+             origin_thread_ref, authorized_actor_id, ready_at, created_at
            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$7)`,
           [
             input.requestId,
             input.scopeId,
             input.jobId,
-            job.plan_digest,
+            job.execution_digest,
             job.origin_thread_ref,
             input.authorizedActorId,
             Date.now(),
@@ -635,7 +892,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
             existing.jobId !== input.jobId ||
             existing.authorizedActorId !== input.authorizedActorId ||
             existing.question !== input.question ||
-            !isDeepStrictEqual(existing.options, input.options) ||
+            !sameValue(existing.options, input.options) ||
             existing.recommendedOptionId !== input.recommendedOptionId ||
             existing.originThreadRef !== job.origin_thread_ref
           )
@@ -645,7 +902,8 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         }
         const prior = await db.query("SELECT 1 FROM finny_clarification_requests WHERE job_id=$1", [input.jobId]);
         if (prior.rowCount) throw new Error("Finny job already has a material clarification");
-        assertFinnyMaterialClarificationMatchesPlan(job.plan_presentation as FinnyPlanPresentation, input);
+        if (job.sop_version_id === null) throw new Error("Finny active job has no SOP binding");
+        assertFinnyMaterialClarificationMatchesSop(job.sop_definition, job.bound_inputs, input);
         await lockApproval();
         const now = Date.now();
         const inserted = await db.query(
@@ -736,20 +994,23 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         if (binding.authorized_actor_id !== input.actorId) throw new Error("Finny approval actor is not authorized");
         if (binding.origin_thread_ref !== input.originThreadRef)
           throw new Error("Finny approval must be decided in its origin thread");
-        if (binding.plan_digest !== job.plan_digest || binding.origin_thread_ref !== job.origin_thread_ref) {
+        if (job.sop_version_id === null) throw new Error("Finny active job has no SOP binding");
+        const digestMatches = binding.execution_digest === job.execution_digest;
+        if (!digestMatches || binding.origin_thread_ref !== job.origin_thread_ref) {
           throw new Error("Finny approval request binding does not match the job");
         }
-        const updated = await db.query(
+        await db.query(
           `UPDATE finny_jobs SET
              approval_request_id=$2, approval_actor_id=$3, approval_action=$4,
-             approval_plan_digest=$5, approval_origin_thread_ref=$6, approval_decided_at=$7, updated_at=$7
+             approval_execution_digest=$5,
+             approval_origin_thread_ref=$6, approval_decided_at=$7, updated_at=$7
            WHERE id=$1 RETURNING *`,
           [
             input.jobId,
             input.requestId,
             input.actorId,
             input.action,
-            binding.plan_digest,
+            binding.execution_digest,
             binding.origin_thread_ref,
             input.decidedAt,
           ],
@@ -758,77 +1019,145 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
           input.requestId,
           input.decidedAt,
         ]);
-        return rowToJob(updated.rows[0]);
+        return rowToJob(await lockedJob(db, input.scopeId, input.jobId));
       });
     },
-    async recordPlanAmendment(input: RecordFinnyPlanAmendmentInput) {
+    async recordSopAmendment(input: RecordFinnySopAmendmentInput) {
+      const sop = validateFinnySopVersion(input.sop);
+      if (sop.scopeId !== input.scopeId) throw new Error("Finny SOP scope does not match the job");
+      const stored = await createSopVersion(sop);
+      const values = validateFinnySopValues(sop, input.values);
+      const newExecutionDigest = canonicalFinnyExecutionDigest(sop, values);
       return withPgTransaction(await pool(), async (db) => {
         const job = await lockedJob(db, input.scopeId, input.jobId);
-        if (job.finalized_at !== null) throw new Error("Finny job is already finalized");
+        if (job.sop_version_id === null) throw new Error("Finny job does not use SOP authority");
         const replay = await eventsForIdempotency(db, input.idempotencyKey);
         if (replay.length) {
           assertEventReplayJob(replay, input.jobId);
           const first = replay[0];
           if (
             !first ||
-            first.type !== "plan_amended" ||
-            first.payload.newPlanDigest !== canonicalFinnyPlanDigest(input.plan)
-          ) {
-            throw new Error("Finny plan amendment idempotency key was reused");
-          }
-          return { events: [first as FinnyJobEvent<"plan_amended">], job: rowToJob(job), deduped: true };
+            first.type !== "sop_amended" ||
+            first.payload.newSopVersionId !== stored.versionId ||
+            first.payload.newExecutionDigest !== newExecutionDigest ||
+            !sameValue(first.payload.newValues, values)
+          )
+            throw new Error("Finny SOP amendment idempotency key was reused");
+          return {
+            events: [first as FinnyJobEvent<"sop_amended">],
+            job: rowToJob(job),
+            deduped: true,
+          };
         }
-        const previousPlanDigest = job.plan_digest as string;
-        const newPlanDigest = canonicalFinnyPlanDigest(input.plan);
-        const nextHead = Number(job.event_head) + 1;
+        if (job.finalized_at !== null) throw new Error("Finny job is already finalized");
+        const previousSopVersionId = job.sop_version_id as string;
+        const previousValues = job.bound_inputs as Record<string, string | boolean>;
+        const previousExecutionDigest = job.execution_digest as string;
+        const revision = Number(job.sop_revision) + 1;
+        const material = newExecutionDigest !== previousExecutionDigest;
+        const currentPolicy: FinnyPolicySnapshot = {
+          policyVersion: job.policy_version as string,
+          evaluator: job.evaluator_ref as FinnyEvaluatorRef,
+          requiredGenerations: job.required_generations as Record<FinnyCheckId, number>,
+        };
+        const amendedPolicy = material ? reviseFinnyPolicy(currentPolicy, ["source_or_logic"]) : currentPolicy;
+        const payload: FinnyJobEventPayloads["sop_amended"] = {
+          previousSopVersionId,
+          newSopVersionId: stored.versionId,
+          previousValues,
+          newValues: values,
+          previousExecutionDigest,
+          newExecutionDigest,
+          revision,
+        };
         const event = await insertEvent(
           db,
           input.jobId,
-          "plan_amended",
-          { previousPlanDigest, newPlanDigest },
+          "sop_amended",
+          payload,
           input.idempotencyKey,
           0,
           input.createdAt,
         );
-        const updated = await db.query(
+        const nextHead = Number(job.event_head) + 1;
+        await db.query(
           `UPDATE finny_jobs SET
-             plan_presentation=$2, plan_digest=$3,
-             pending_rework_seq=NULL, unresolved_escalation_seq=NULL,
-             event_head=$4, updated_at=$5
-           WHERE id=$1 RETURNING *`,
-          [input.jobId, JSON.stringify(input.plan), newPlanDigest, nextHead, input.createdAt],
-        );
-        await db.query(
-          `UPDATE finny_approval_requests
-              SET decided_at=$3
-            WHERE scope_id=$1 AND job_id=$2 AND decided_at IS NULL`,
-          [input.scopeId, input.jobId, input.createdAt],
-        );
-        const parent = await db.query(
-          `UPDATE finny_integration_jobs
-              SET request_id=$3
-            WHERE scope_id=$1 AND job_id=$2 AND actor_id=$4
-            RETURNING actor_id`,
-          [input.scopeId, input.jobId, input.requestId, input.authorizedActorId],
-        );
-        if (parent.rowCount !== 1) throw new Error("Finny plan amendment has no matching approval parent");
-        await db.query(
-          `INSERT INTO finny_approval_requests(
-             request_id, scope_id, job_id, plan_digest, origin_thread_ref, authorized_actor_id, ready_at, created_at
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$7)
-           ON CONFLICT (request_id) DO UPDATE SET
-             plan_digest=EXCLUDED.plan_digest, ready_at=EXCLUDED.ready_at, decided_at=NULL`,
+             sop_version_id=$2, bound_inputs=$3, execution_digest=$4, sop_revision=$5,
+             artifact_digest=CASE WHEN $6 THEN NULL ELSE artifact_digest END,
+             provisional_revision=CASE WHEN $6 THEN NULL ELSE provisional_revision END,
+             approval_request_id=CASE WHEN $6 THEN NULL ELSE approval_request_id END,
+             approval_actor_id=CASE WHEN $6 THEN NULL ELSE approval_actor_id END,
+             approval_action=CASE WHEN $6 THEN NULL ELSE approval_action END,
+             approval_execution_digest=CASE WHEN $6 THEN NULL ELSE approval_execution_digest END,
+             approval_origin_thread_ref=CASE WHEN $6 THEN NULL ELSE approval_origin_thread_ref END,
+             approval_decided_at=CASE WHEN $6 THEN NULL ELSE approval_decided_at END,
+             approval_consumed_at=CASE WHEN $6 THEN NULL ELSE approval_consumed_at END,
+             pending_rework_seq=CASE WHEN $6 THEN NULL ELSE pending_rework_seq END,
+             unresolved_escalation_seq=CASE WHEN $6 THEN NULL ELSE unresolved_escalation_seq END,
+             finalization_key=CASE WHEN $6 THEN NULL ELSE finalization_key END,
+             final_receipt=CASE WHEN $6 THEN NULL ELSE final_receipt END,
+             finalized_at=CASE WHEN $6 THEN NULL ELSE finalized_at END,
+             required_generations=$7, event_head=$8, updated_at=$9
+           WHERE id=$1`,
           [
-            input.requestId,
-            input.scopeId,
             input.jobId,
-            newPlanDigest,
-            job.origin_thread_ref,
-            input.authorizedActorId,
+            stored.versionId,
+            JSON.stringify(values),
+            newExecutionDigest,
+            revision,
+            material,
+            JSON.stringify(amendedPolicy.requiredGenerations),
+            nextHead,
             input.createdAt,
           ],
         );
-        return { events: [event], job: rowToJob(updated.rows[0]), deduped: false };
+        if (material)
+          await db.query(
+            `UPDATE finny_approval_requests SET decided_at=$3
+              WHERE scope_id=$1 AND job_id=$2 AND decided_at IS NULL`,
+            [input.scopeId, input.jobId, input.createdAt],
+          );
+        if (material && input.replacementApproval) {
+          const replacement = input.replacementApproval;
+          if (replacement.originThreadRef !== job.origin_thread_ref)
+            throw new Error("Finny amendment approval origin does not match the job");
+          const updated = await db.query(
+            `UPDATE finny_integration_jobs SET
+               request_id=$3, destination=$4, parent_binding=$5
+              WHERE scope_id=$1 AND job_id=$2 AND actor_id=$6 AND origin_thread_ref=$7
+              RETURNING job_id`,
+            [
+              input.scopeId,
+              input.jobId,
+              replacement.requestId,
+              replacement.destination,
+              replacement.binding,
+              replacement.actorId,
+              replacement.originThreadRef,
+            ],
+          );
+          if (updated.rowCount !== 1) throw new Error("Finny amendment has no matching approval parent");
+          await db.query(
+            `INSERT INTO finny_approval_requests(
+               request_id,scope_id,job_id,execution_digest,
+               origin_thread_ref,authorized_actor_id,ready_at,created_at
+             ) VALUES($1,$2,$3,$4,$5,$6,$7,$7)`,
+            [
+              replacement.requestId,
+              input.scopeId,
+              input.jobId,
+              newExecutionDigest,
+              replacement.originThreadRef,
+              replacement.actorId,
+              input.createdAt,
+            ],
+          );
+        }
+        return {
+          events: [event as FinnyJobEvent<"sop_amended">],
+          job: rowToJob(await lockedJob(db, input.scopeId, input.jobId)),
+          deduped: false,
+        };
       });
     },
     async recordAttestation(input: RecordFinnyAttestationInput) {
@@ -964,7 +1293,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
             now,
           ],
         );
-        return { events: [event], job: rowToJob(updated.rows[0]), deduped: false };
+        return { events: [event], job: updatedRowToJob(updated.rows[0], row), deduped: false };
       });
     },
     async recordAuditPassed(input: RecordFinnyAuditPassedInput) {
@@ -1020,7 +1349,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
           "UPDATE finny_jobs SET ledger_head=$2, event_head=$3, updated_at=$4 WHERE id=$1 RETURNING *",
           [input.jobId, attestation.seq, event.seq, now],
         );
-        return { events: [event], job: rowToJob(updated.rows[0]), deduped: false };
+        return { events: [event], job: updatedRowToJob(updated.rows[0], row), deduped: false };
       });
     },
     async recordAuditBlock(input: RecordFinnyAuditBlockInput) {
@@ -1107,7 +1436,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
                pending_rework_seq=$4, updated_at=$5 WHERE id=$1 RETURNING *`,
             [input.jobId, JSON.stringify(revised.requiredGenerations), attestation.seq, requested.seq, now],
           );
-          return { events: [blocked, requested], job: rowToJob(updated.rows[0]), deduped: false };
+          return { events: [blocked, requested], job: updatedRowToJob(updated.rows[0], row), deduped: false };
         }
         assertFinnyEscalationReason(input.resolution.reason);
         const escalated = await insertEvent(
@@ -1124,13 +1453,15 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
            WHERE id=$1 RETURNING *`,
           [input.jobId, attestation.seq, escalated.seq, now],
         );
-        return { events: [blocked, escalated], job: rowToJob(updated.rows[0]), deduped: false };
+        return { events: [blocked, escalated], job: updatedRowToJob(updated.rows[0], row), deduped: false };
       });
     },
     async evaluatorCorrectionCandidates(approvedEvaluator: FinnyEvaluatorRef) {
       assertFinnyApprovedEvaluatorRef(approvedEvaluator);
       const rows = await q(
-        `SELECT jobs.* FROM finny_jobs AS jobs
+        `SELECT jobs.*, versions.definition AS sop_definition FROM finny_jobs AS jobs
+          LEFT JOIN finny_sop_versions AS versions
+            ON versions.scope_id=jobs.scope_id AND versions.version_id=jobs.sop_version_id
           WHERE jobs.finalized_at IS NULL
             AND jobs.artifact_digest IS NOT NULL
             AND jobs.provisional_revision IS NOT NULL
@@ -1288,7 +1619,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
              pending_rework_seq=NULL, event_head=$4, updated_at=$5 WHERE id=$1 RETURNING *`,
           [input.jobId, JSON.stringify(revised.evaluator), JSON.stringify(revised.requiredGenerations), eventHead, now],
         );
-        return { events, job: rowToJob(updated.rows[0]), deduped: false };
+        return { events, job: updatedRowToJob(updated.rows[0], row), deduped: false };
       });
     },
     async listEvents(scopeId, jobId, afterSequence = 0) {
@@ -1323,7 +1654,8 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
           row.approval_action !== "approve" ||
           row.approval_decided_at === null ||
           row.approval_consumed_at !== null ||
-          row.approval_plan_digest !== row.plan_digest ||
+          row.sop_version_id === null ||
+          row.approval_execution_digest !== row.execution_digest ||
           row.approval_origin_thread_ref !== row.origin_thread_ref
         ) {
           throw new Error("Finny job does not have an unconsumed bound approved decision");
@@ -1369,7 +1701,9 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
           aud: "finny.final.delivery",
           jobId: input.jobId,
           scopeId: input.scopeId,
-          planDigest: row.plan_digest as string,
+          sopVersionId: row.sop_version_id as string,
+          sopRevision: Number(row.sop_revision),
+          executionDigest: row.execution_digest as string,
           artifactDigest: row.artifact_digest as string,
           policyVersion: policy.policyVersion,
           evaluator: policy.evaluator,

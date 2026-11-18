@@ -2,8 +2,8 @@ import { isDeepStrictEqual } from "node:util";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { Destination } from "../types.ts";
 import type { FinnyParentBindingSnapshot } from "./integration.ts";
-import { assertFinnyMaterialClarificationMatchesPlan } from "./plan.ts";
-import type { CreateFinnyClarificationRequestInput, CreateFinnyJobInput } from "./store.ts";
+import { assertFinnyMaterialClarificationMatchesSop } from "./plan.ts";
+import type { CreateFinnyClarificationRequestInput, CreateFinnyJobCommand } from "./store.ts";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS finny_plan_intents(
@@ -40,6 +40,13 @@ const PLAN_CLARIFICATION_SCHEMA = [
     WHERE NOT (parent_input ? 'parent')`,
 ];
 
+const SOP_CUTOVER_SCHEMA = [
+  `ALTER TABLE finny_plan_intents
+     DROP CONSTRAINT IF EXISTS finny_plan_intents_sop_cutover_mode`,
+  `ALTER TABLE finny_plan_intents
+     ADD CONSTRAINT finny_plan_intents_sop_cutover_mode CHECK (job_input ? 'sop')`,
+];
+
 export interface FinnyIntegrationParentRecord {
   scopeId: string;
   jobId: string;
@@ -60,7 +67,7 @@ export interface FinnyPendingClarificationCard extends FinnyIntegrationParentRec
 }
 
 export interface FinnyPlanIntent {
-  job: CreateFinnyJobInput;
+  job: CreateFinnyJobCommand;
   parent: FinnyIntegrationParentRecord;
   clarification?: CreateFinnyClarificationRequestInput;
 }
@@ -102,6 +109,7 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
   const { q, pool } = createPgPool(connectionString, [
     { id: "finny/integration/0001", statements: SCHEMA },
     { id: "finny/integration/0002-plan-clarification", statements: PLAN_CLARIFICATION_SCHEMA },
+    { id: "finny/integration/0003-sop-cutover", statements: SOP_CUTOVER_SCHEMA },
   ]);
   return {
     async createPlanIntent(input: FinnyPlanIntent): Promise<void> {
@@ -131,7 +139,7 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
           clarification?: CreateFinnyClarificationRequestInput;
         };
         return {
-          job: row.job_input as unknown as CreateFinnyJobInput,
+          job: row.job_input as unknown as CreateFinnyJobCommand,
           parent: persisted.parent,
           ...(persisted.clarification ? { clarification: persisted.clarification } : {}),
         };
@@ -149,22 +157,29 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
       clarification?: CreateFinnyClarificationRequestInput,
     ): Promise<void> {
       await withPgTransaction(await pool(), async (db) => {
-        const jobResult = await db.query("SELECT * FROM finny_jobs WHERE id=$1 AND scope_id=$2 FOR UPDATE", [
-          input.jobId,
-          input.scopeId,
-        ]);
+        const jobResult = await db.query(
+          `SELECT jobs.*, versions.definition AS sop_definition
+             FROM finny_jobs AS jobs
+             LEFT JOIN finny_sop_versions AS versions
+               ON versions.scope_id=jobs.scope_id AND versions.version_id=jobs.sop_version_id
+            WHERE jobs.id=$1 AND jobs.scope_id=$2
+            FOR UPDATE OF jobs`,
+          [input.jobId, input.scopeId],
+        );
         const job = jobResult.rows[0] as Record<string, unknown> | undefined;
         if (!job || job.origin_thread_ref !== input.originThreadRef)
           throw new Error("Finny approval parent does not match the job");
+        if (job.sop_version_id === null) throw new Error("Finny active job has no SOP binding");
         await db.query(
           `INSERT INTO finny_approval_requests(
-             request_id,scope_id,job_id,plan_digest,origin_thread_ref,authorized_actor_id,ready_at,created_at
+             request_id,scope_id,job_id,execution_digest,
+             origin_thread_ref,authorized_actor_id,ready_at,created_at
            ) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(request_id) DO NOTHING`,
           [
             input.requestId,
             input.scopeId,
             input.jobId,
-            job.plan_digest,
+            job.execution_digest,
             input.originThreadRef,
             input.actorId,
             clarification ? null : Date.now(),
@@ -172,8 +187,9 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
           ],
         );
         if (clarification) {
-          assertFinnyMaterialClarificationMatchesPlan(
-            job.plan_presentation as CreateFinnyJobInput["plan"],
+          assertFinnyMaterialClarificationMatchesSop(
+            job.sop_definition,
+            job.bound_inputs,
             clarification,
           );
           const existingClarification = await db.query(
@@ -233,6 +249,7 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
           request.job_id !== input.jobId ||
           request.authorized_actor_id !== input.actorId ||
           request.origin_thread_ref !== input.originThreadRef ||
+          request.execution_digest !== job.execution_digest ||
           (clarification ? request.ready_at !== null : request.ready_at === null)
         )
           throw new Error("Finny approval parent idempotency conflict");
@@ -342,10 +359,29 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
       return ledgerHead === Number(job.ledger_head);
     },
     async finalizedParents(): Promise<FinnyIntegrationParentRecord[]> {
+      const hasDeliveries = (await q("SELECT to_regclass('deliveries') IS NOT NULL AS exists"))[0]?.exists === true;
+      const hasBindings =
+        (await q("SELECT to_regclass('finny_runtime_bindings') IS NOT NULL AS exists"))[0]?.exists === true;
       const rows = await q(
         `SELECT i.* FROM finny_integration_jobs i
          JOIN finny_jobs j ON j.id=i.job_id AND j.scope_id=i.scope_id
-         WHERE j.final_receipt IS NOT NULL ORDER BY j.finalized_at, i.job_id`,
+         WHERE j.final_receipt IS NOT NULL AND j.sop_version_id IS NOT NULL
+           AND (
+             ${hasDeliveries ? `(NOT EXISTS (
+               SELECT 1 FROM deliveries d
+                WHERE d.idempotency_key='finny-final:' || j.id || ':' || j.ledger_head::text
+             ) OR EXISTS (
+               SELECT 1 FROM deliveries d
+                WHERE d.idempotency_key='finny-final:' || j.id || ':' || j.ledger_head::text
+                  AND d.delivered_at IS NULL AND d.expired_at IS NOT NULL AND d.failed_reason IS NULL
+             ))` : "TRUE"}
+             OR ${hasBindings ? `EXISTS (
+               SELECT 1 FROM finny_runtime_bindings b
+                WHERE b.scope_id=j.scope_id AND b.job_id=j.id
+                  AND (b.role='parent' OR (b.active=TRUE AND b.role IN ('producer','auditor')))
+             )` : "FALSE"}
+           )
+         ORDER BY j.finalized_at, i.job_id`,
       );
       return rows.map(parent);
     },

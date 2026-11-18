@@ -1,15 +1,17 @@
 # Finny Phase 2 SOP Implementation Handover
 
-Status: Ready to begin after Phase 1 PR completion  
+Status: Implemented and verified on the production-shaped QM web surface; independent PR review and Slack acceptance remain
 Date: 2026-11-18  
 Authoritative design and evidence: [Finny High-Performance SOP Harness](./2026-11-17-finny-high-performance-sop-harness.md)  
 Phase 1 review: [11mirror/qm#34](https://github.com/11mirror/qm/pull/34)
 
 ## Outcome for the next session
 
-Implement and verify the smallest durable, finance-specific task SOP slice. The SOP must survive restarts and compaction, bind approval to the work that will execute, compile into concise Producer and audit instructions, and remain a task contract rather than a generic workflow language.
+The smallest durable, finance-specific task SOP slice is implemented and verified. The remaining handoff is independent review, Slack acceptance, and PR completion without expanding into the separately gated audit/result schemas or corpus.
 
 Phase 1 is complete at implementation commit `db90d6cf5`: Finny uses the real tool contract, opens the Producer only after approval, opens the Auditor only after an artifact, and recovers incomplete terminal work from durable job state. Do not redesign that topology.
+
+PR #34 merged through the required merge path as `7d40666e7`. Phase 2 continues on `codex/finny-sop-v1`. The user approved the complete schema review recorded in the [Phase 2 SOP and job schema gate](./2026-11-17-finny-high-performance-sop-harness.md#phase-2-sop-and-job-schema-gate), and the approved shape is implemented. Audit-attempt and certified-result shapes remain separate human gates.
 
 ## Start here
 

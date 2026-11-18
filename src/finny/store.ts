@@ -14,20 +14,31 @@ import type {
   FinnyEvaluatorRef,
   FinnyFinalReceipt,
   FinnyFinalReceiptPayload,
-  FinnyPlanPresentation,
   FinnyPolicySnapshot,
+  FinnySopVersion,
   FinnyVerdict,
   FinnyWorkerRole,
 } from "./types.ts";
+import type { Destination } from "../types.ts";
 
-export interface CreateFinnyJobInput {
+export interface FinnyStoredSopVersion {
+  versionId: string;
+  definitionDigest: string;
+  sop: FinnySopVersion;
+  createdAt: number;
+}
+
+export interface CreateFinnySopJobInput {
   id: string;
   scopeId: string;
-  plan: FinnyPlanPresentation;
+  sop: FinnySopVersion;
+  values: Record<string, string | boolean>;
   policy: FinnyPolicySnapshot;
   findingPolicy: FinnyFindingPolicy;
   originThreadRef: string;
 }
+
+export type CreateFinnyJobCommand = CreateFinnySopJobInput;
 
 export interface CreateFinnyApprovalRequestInput {
   scopeId: string;
@@ -40,7 +51,8 @@ export interface FinnyApprovalRequest {
   requestId: string;
   scopeId: string;
   jobId: string;
-  planDigest: string;
+  planDigest?: string;
+  executionDigest?: string;
   originThreadRef: string;
   authorizedActorId: string;
   readyAt?: number;
@@ -83,14 +95,20 @@ export interface RecordFinnyApprovalInput {
   decidedAt: number;
 }
 
-export interface RecordFinnyPlanAmendmentInput {
+export interface RecordFinnySopAmendmentInput {
   scopeId: string;
   jobId: string;
-  plan: FinnyPlanPresentation;
-  requestId: string;
-  authorizedActorId: string;
+  sop: FinnySopVersion;
+  values: Record<string, string | boolean>;
   idempotencyKey: string;
   createdAt: number;
+  replacementApproval?: {
+    requestId: string;
+    actorId: string;
+    originThreadRef: string;
+    destination: Destination;
+    binding: unknown;
+  };
 }
 
 export interface RecordFinnyAttestationInput {
@@ -175,10 +193,17 @@ export interface ClaimFinnyWorkerRunInput {
 }
 
 export interface FinnyStore {
-  createJob(input: CreateFinnyJobInput): Promise<FinnyJob>;
+  createSopVersion(sop: FinnySopVersion): Promise<FinnyStoredSopVersion>;
+  getSopVersion(scopeId: string, versionId: string): Promise<FinnyStoredSopVersion | null>;
+  searchSopVersions(
+    scopeId: string,
+    query: string,
+    page?: { offset?: number; limit?: number },
+  ): Promise<FinnyStoredSopVersion[]>;
+  createJob(input: CreateFinnyJobCommand): Promise<FinnyJob>;
   createApprovalRequest(input: CreateFinnyApprovalRequestInput): Promise<void>;
   createClarificationRequest(input: CreateFinnyClarificationRequestInput): Promise<FinnyClarificationRequest>;
-  recordPlanAmendment(input: RecordFinnyPlanAmendmentInput): Promise<FinnyEventResult<FinnyJobEvent<"plan_amended">>>;
+  recordSopAmendment(input: RecordFinnySopAmendmentInput): Promise<FinnyEventResult<FinnyJobEvent<"sop_amended">>>;
   getJob(scopeId: string, jobId: string): Promise<FinnyJob | null>;
   getApprovalRequest(requestId: string): Promise<FinnyApprovalRequest | null>;
   getPendingApprovalRequestForJob(scopeId: string, jobId: string): Promise<FinnyApprovalRequest | null>;

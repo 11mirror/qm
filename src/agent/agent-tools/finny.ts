@@ -5,19 +5,24 @@ import {
   type FinnyAuditFinding,
   type FinnyCheckId,
   type FinnyMaterialClarification,
-  type FinnyPlanPresentation,
+  type FinnySopVersion,
 } from "../../finny/types.ts";
+import { FINNY_SOP_SCHEMA, FINNY_SOP_VALUES_SCHEMA } from "../../finny/sop-schema.ts";
 import { text, type ToolKit } from "./kit.ts";
 
 export interface FinnyToolService {
+  readonly role?: "parent" | "producer" | "auditor";
   createPlan(
-    plan: FinnyPlanPresentation,
+    sop: FinnySopVersion,
+    values: Record<string, string | boolean>,
     materialClarification?: FinnyMaterialClarification,
   ): Promise<FinnyPlanCreation>;
   amendPlan(
     jobId: string,
-    plan: FinnyPlanPresentation,
+    sop: FinnySopVersion,
+    values: Record<string, string | boolean>,
     materialClarification?: FinnyMaterialClarification,
+    operationId?: string,
   ): Promise<FinnyPlanCreation>;
   status(jobId: string): Promise<string>;
   artifactReady(input: {
@@ -45,8 +50,8 @@ export interface FinnyToolService {
 export interface FinnyPlanCreation {
   message: string;
   jobId: string;
-  requestId: string;
-  awaiting: "approval" | "clarification";
+  requestId?: string;
+  awaiting: "approval" | "clarification" | "none";
 }
 
 const string = () => Type.String({ minLength: 1 });
@@ -65,27 +70,12 @@ const materialClarification = Type.Object(
   { additionalProperties: false },
 );
 
-const plan = Type.Object(
-  {
-    title: string(),
-    summary: Type.Optional(string()),
-    phases: Type.Array(
-      Type.Object(
-        { name: string(), owner: string(), dependencies: Type.Array(string()) },
-        { additionalProperties: false },
-      ),
-      { minItems: 1 },
-    ),
-    certification: string(),
-    deliverable: string(),
-    destination: string(),
-    clarifications: Type.Array(Type.Object({ question: string(), answer: string() }, { additionalProperties: false })),
-  },
-  { additionalProperties: false },
-);
+const sop = FINNY_SOP_SCHEMA;
+const values = FINNY_SOP_VALUES_SCHEMA;
 
 export function finnyTools(kit: ToolKit) {
   const { ref, opts, recordCall, recordResult, resourceTool, blockOnApproval } = kit;
+  const authoring = (ref.current?.finny?.role ?? "parent") === "parent";
   const run = async (
     callId: string,
     action: string,
@@ -101,19 +91,20 @@ export function finnyTools(kit: ToolKit) {
     label: "Create Finny plan",
     description: "Create a plan from presentation content. Core supplies its identity, policy, origin, and approval.",
     parameters: Type.Object(
-      { plan, materialClarification: Type.Optional(materialClarification) },
+      { sop, values, materialClarification: Type.Optional(materialClarification) },
       { additionalProperties: false },
     ),
     execute: async (callId, params) => {
-      await recordCall(callId, { tool: "finny", action: "create_plan", title: params.plan.title });
-      const result = await ref.current!.finny!.createPlan(params.plan, params.materialClarification);
+      await recordCall(callId, { tool: "finny", action: "create_plan", title: params.sop.title });
+      const result = await ref.current!.finny!.createPlan(params.sop, params.values, params.materialClarification);
       if (opts?.surfaceName === "web") {
         const clarification = result.awaiting === "clarification" ? params.materialClarification : undefined;
         if (result.awaiting === "clarification" && !clarification)
           throw new Error("Finny clarification response is missing its question");
         const recommended = clarification?.options.find((option) => option.id === clarification.recommendedOptionId);
         const detail = JSON.stringify({
-          plan: params.plan,
+          sop: params.sop,
+          values: params.values,
           ...(clarification ? { materialClarification: clarification } : {}),
         });
         return blockOnApproval(
@@ -121,21 +112,21 @@ export function finnyTools(kit: ToolKit) {
           {
             name: "NeedsApproval",
             message: result.message,
-            command: clarification?.question ?? params.plan.title,
+            command: clarification?.question ?? params.sop.title,
             approvalReason: clarification ? "Finny Governance Clarification" : "Finny Governance Plan Approval",
             approvalKey: `${clarification ? "finny-clarification" : "finny-plan"}:${result.requestId}`,
             kind: "approval",
             grantModes: { session: false, always: false },
             summaryDetail: detail,
-            summary: recommended ? `Recommended: ${recommended.label}` : params.plan.summary,
+            summary: recommended ? `Recommended: ${recommended.label}` : params.sop.intent.description,
           },
-          recommended ? `Recommended: ${recommended.label}` : params.plan.summary,
-          { tool: "finny", action: "create_plan", title: params.plan.title },
+          recommended ? `Recommended: ${recommended.label}` : params.sop.intent.description,
+          { tool: "finny", action: "create_plan", title: params.sop.title },
         );
       }
       return recordResult(
         callId,
-        { tool: "finny", action: "create_plan", title: params.plan.title },
+        { tool: "finny", action: "create_plan", title: params.sop.title },
         text(result.message),
         false,
         undefined,
@@ -146,9 +137,10 @@ export function finnyTools(kit: ToolKit) {
   const amendPlan = defineTool({
     name: "finny_amend_plan",
     label: "Amend Finny plan",
-    description: "Amend an in-flight Finny plan when scope shifts. Requires human scope change approval.",
+    description:
+      "Amend an in-flight Finny plan. Material execution changes require human approval; non-material value changes retain the existing approval.",
     parameters: Type.Object(
-      { jobId: string(), plan, materialClarification: Type.Optional(materialClarification) },
+      { jobId: string(), sop, values, materialClarification: Type.Optional(materialClarification) },
       { additionalProperties: false },
     ),
     execute: async (callId, params) => {
@@ -156,29 +148,35 @@ export function finnyTools(kit: ToolKit) {
         tool: "finny",
         action: "amend_plan",
         jobId: params.jobId,
-        title: params.plan.title,
+        title: params.sop.title,
       });
-      const result = await ref.current!.finny!.amendPlan(params.jobId, params.plan, params.materialClarification);
-      if (opts?.surfaceName === "web")
+      const result = await ref.current!.finny!.amendPlan(
+        params.jobId,
+        params.sop,
+        params.values,
+        params.materialClarification,
+        callId,
+      );
+      if (opts?.surfaceName === "web" && result.awaiting !== "none")
         return blockOnApproval(
           callId,
           {
             name: "NeedsApproval",
             message: result.message,
-            command: params.plan.title,
+            command: params.sop.title,
             approvalReason: "Finny Governance Plan Approval",
-            approvalKey: `finny-plan:${result.requestId}`,
+            approvalKey: `finny-plan:${result.requestId!}`,
             kind: "approval",
             grantModes: { session: false, always: false },
-            summaryDetail: JSON.stringify({ plan: params.plan }),
-            summary: params.plan.summary,
+            summaryDetail: JSON.stringify({ sop: params.sop, values: params.values }),
+            summary: params.sop.intent.description,
           },
-          params.plan.summary,
-          { tool: "finny", action: "amend_plan", jobId: params.jobId, title: params.plan.title },
+          params.sop.intent.description,
+          { tool: "finny", action: "amend_plan", jobId: params.jobId, title: params.sop.title },
         );
       return recordResult(
         callId,
-        { tool: "finny", action: "amend_plan", jobId: params.jobId, title: params.plan.title },
+        { tool: "finny", action: "amend_plan", jobId: params.jobId, title: params.sop.title },
         text(result.message),
         false,
         undefined,
@@ -197,7 +195,8 @@ export function finnyTools(kit: ToolKit) {
   const artifactReady = defineTool({
     name: "finny_artifact_ready",
     label: "Finny artifact ready",
-    description: "Record the digest and provisional revision of the actual produced artifact.",
+    description:
+      "Bind the actual workbook already published to durable Files. artifactDigest is the Files sha256 and provisionalRevision is the Files record ID returned by the completed upload; neither value is an SOP revision, local path, or locally invented identifier.",
     parameters: Type.Object(
       { artifactDigest: string(), provisionalRevision: string(), idempotencyKey: string() },
       { additionalProperties: false },
@@ -279,8 +278,7 @@ export function finnyTools(kit: ToolKit) {
       ),
   });
   const tool = resourceTool("finny", {
-    create_plan: createPlan,
-    amend_plan: amendPlan,
+    ...(authoring ? { create_plan: createPlan, amend_plan: amendPlan } : {}),
     status,
     artifact_ready: artifactReady,
     pass,
@@ -290,8 +288,7 @@ export function finnyTools(kit: ToolKit) {
   });
   const properties = Object.fromEntries(
     Object.entries({
-      plan,
-      materialClarification,
+      ...(authoring ? { sop, values, materialClarification } : {}),
       jobId: string(),
       artifactDigest: string(),
       provisionalRevision: string(),
@@ -302,9 +299,8 @@ export function finnyTools(kit: ToolKit) {
       findings: Type.Array(finding, { minItems: 1 }),
     }).map(([key, schema]) => [key, Type.Optional(schema as TSchema)]),
   );
-  const actionFields = {
-    create_plan: ["plan"],
-    amend_plan: ["jobId", "plan"],
+  const actionFields: Record<string, readonly string[]> = {
+    ...(authoring ? { create_plan: ["sop", "values"], amend_plan: ["jobId", "sop", "values"] } : {}),
     status: ["jobId"],
     artifact_ready: ["artifactDigest", "provisionalRevision", "idempotencyKey"],
     pass: ["checkId", "generation", "evidenceFileId", "idempotencyKey"],
@@ -331,7 +327,7 @@ export function finnyTools(kit: ToolKit) {
         anyOf: contentFields
           .filter(
             (field) =>
-              !required.includes(field as never) &&
+              !required.includes(field) &&
               !((action === "create_plan" || action === "amend_plan") && field === "materialClarification"),
           )
           .map((field) => ({ required: [field] })),

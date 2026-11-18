@@ -3,7 +3,9 @@ import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { createFinnyToolServiceFactory, finnySlackAuthority } from "../src/finny/integration.ts";
 import { channelThreadRef, dmThreadRef } from "../src/slack/message-gating.ts";
-import type { FinnyJob, FinnyPlanPresentation } from "../src/finny/types.ts";
+import { canonicalFinnyExecutionDigest, finnySopVersionId } from "../src/finny/plan.ts";
+import type { FinnyJob } from "../src/finny/types.ts";
+import { finnySopFixture } from "./support/finny-sop-fixture.ts";
 
 const evaluator = {
   id: "libreoffice-calc",
@@ -13,27 +15,36 @@ const evaluator = {
   configurationDigest: "b".repeat(64),
 } as const;
 
-const plan: FinnyPlanPresentation = {
-  title: "Close",
-  phases: [{ name: "Prepare", owner: "Producer", dependencies: [] }],
-  certification: "Independent audit",
-  deliverable: "Workbook",
-  destination: "Origin thread",
-  clarifications: [],
-};
+const sop = { ...finnySopFixture(), scopeId: "scope-1", title: "Close" };
+const values = { cutoff: "2026-10-31", currency: "INR", note: "first run" };
 
 function harness(
   binding: { role: "parent" | "producer" | "auditor" } | null = null,
-  options: { job?: Partial<FinnyJob>; artifactBytes?: Uint8Array; deterministicOutput?: unknown } = {},
+  options: {
+    job?: Partial<FinnyJob>;
+    artifactBytes?: Uint8Array;
+    deterministicOutput?: unknown;
+    amendmentPreviousExecutionDigest?: string;
+    amendmentDeduped?: boolean;
+    amendmentApprovalDecidedAt?: number;
+  } = {},
 ) {
   const calls: Array<[string, unknown]> = [];
   const job = {
     id: "job-1",
     scopeId: "scope-1",
-    plan,
+    sop,
+    sopBinding: {
+      versionId: finnySopVersionId(sop),
+      values,
+      executionDigest: canonicalFinnyExecutionDigest(sop, values),
+      revision: 1,
+    },
     policy: { policyVersion: "v1", requiredGenerations: {} },
     ...options.job,
-  } as FinnyJob;
+  } as unknown as FinnyJob;
+  assert.ok(job.sopBinding);
+  const jobSopBinding = job.sopBinding;
   const factory = createFinnyToolServiceFactory({
     config: {
       findingPolicy: { id: "bounds.v1", maxFindings: 4, maxCodeLength: 20, maxMessageLength: 200 },
@@ -57,6 +68,36 @@ function harness(
       },
       async getJob(scopeId: string, jobId: string) {
         return scopeId === "scope-1" && jobId === "job-1" ? job : null;
+      },
+      async getApprovalRequest(requestId: string) {
+        return {
+          requestId,
+          scopeId: job.scopeId,
+          jobId: job.id,
+          executionDigest: jobSopBinding.executionDigest,
+          originThreadRef: job.originThreadRef,
+          authorizedActorId: "actor-1",
+          ...(options.amendmentApprovalDecidedAt === undefined
+            ? {}
+            : { decidedAt: options.amendmentApprovalDecidedAt }),
+          job,
+        };
+      },
+      async recordSopAmendment(input: any) {
+        calls.push(["recordSopAmendment", input]);
+        const newExecutionDigest = canonicalFinnyExecutionDigest(input.sop, input.values);
+        return {
+          job,
+          events: [
+            {
+              payload: {
+                previousExecutionDigest: options.amendmentPreviousExecutionDigest ?? jobSopBinding.executionDigest,
+                newExecutionDigest,
+              },
+            },
+          ],
+          deduped: options.amendmentDeduped ?? false,
+        };
       },
     },
     runtime: {
@@ -190,7 +231,7 @@ test("parent create_plan persists server authority before idempotent native plan
   const { factory, calls } = harness();
   const service = await factory.forTurn(parent);
   assert.ok(service);
-  assert.deepEqual(await service.createPlan(plan), {
+  assert.deepEqual(await service.createPlan(sop, values), {
     message: "Finny plan id-1 is awaiting approval.",
     jobId: "id-1",
     requestId: "id-2",
@@ -211,12 +252,9 @@ test("material clarification is persisted before delivery while the plan card st
   const { factory, calls } = harness();
   const service = await factory.forTurn(parent);
   assert.ok(service);
-  const clarifiedPlan = {
-    ...plan,
-    clarifications: [{ question: "Which basis?", answer: "Signed contracts" }],
-  };
+  const clarifiedValues = { ...values, currency: "Signed contracts" };
   assert.deepEqual(
-    await service.createPlan(clarifiedPlan, {
+    await service.createPlan(sop, clarifiedValues, {
       question: "Which basis?",
       options: [
         { id: "contracts", label: "Signed contracts" },
@@ -248,7 +286,7 @@ test("material clarification must match the immutable plan recommendation", asyn
   const service = await factory.forTurn(parent);
   assert.ok(service);
   await assert.rejects(
-    service.createPlan(plan, {
+    service.createPlan(sop, values, {
       question: "Which basis?",
       options: [
         { id: "contracts", label: "Signed contracts" },
@@ -260,13 +298,8 @@ test("material clarification must match the immutable plan recommendation", asyn
   );
   await assert.rejects(
     service.createPlan(
-      {
-        ...plan,
-        clarifications: [
-          { question: "Which basis?", answer: "Signed contracts" },
-          { question: "Which basis?", answer: "Issued invoices" },
-        ],
-      },
+      sop,
+      { ...values, cutoff: "Signed contracts", currency: "Signed contracts" },
       {
         question: "Which basis?",
         options: [
@@ -279,6 +312,58 @@ test("material clarification must match the immutable plan recommendation", asyn
     /unambiguously match/i,
   );
   assert.equal(calls.length, 0);
+});
+
+test("non-material amendments use distinct stable operations without replacing approval", async () => {
+  const { factory, calls } = harness();
+  const service = await factory.forTurn(parent);
+  assert.ok(service);
+  assert.deepEqual(await service.amendPlan("job-1", sop, { ...values, note: "display-only update" }, undefined, "call-1"), {
+    message: "Finny plan job-1 amendment was recorded without changing its approved execution.",
+    jobId: "job-1",
+    awaiting: "none",
+  });
+  await service.amendPlan("job-1", sop, { ...values, note: "another display-only update" }, undefined, "call-2");
+  await service.amendPlan("job-1", sop, { ...values, note: "display-only update" }, undefined, "call-1");
+  const amendments = calls.filter(([name]) => name === "recordSopAmendment").map(([, input]) => input as any);
+  assert.equal(amendments.length, 3);
+  assert.notEqual(amendments[0]?.idempotencyKey, amendments[1]?.idempotencyKey);
+  assert.equal(amendments[0]?.idempotencyKey, amendments[2]?.idempotencyKey);
+  assert.equal(calls.some(([name]) => name === "enqueue"), false);
+});
+
+test("material amendment replay returns settled state after its replacement approval", async () => {
+  const revisedValues = { ...values, cutoff: "2026-11-30" };
+  const operationId = "approved-amendment";
+  const { factory, calls } = harness(null, {
+    job: {
+      sopBinding: {
+        versionId: finnySopVersionId(sop),
+        values: revisedValues,
+        executionDigest: canonicalFinnyExecutionDigest(sop, revisedValues),
+        revision: 2,
+      },
+      approval: {
+        requestId: "later-amendment-request",
+        actorId: "actor-1",
+        action: "approve",
+        executionDigest: canonicalFinnyExecutionDigest(sop, revisedValues),
+        originThreadRef: parent.originThreadRef,
+        decidedAt: Date.now(),
+      },
+    },
+    amendmentPreviousExecutionDigest: canonicalFinnyExecutionDigest(sop, values),
+    amendmentDeduped: true,
+    amendmentApprovalDecidedAt: Date.now(),
+  });
+  const service = await factory.forTurn(parent);
+  assert.ok(service);
+  assert.deepEqual(await service.amendPlan("job-1", sop, revisedValues, undefined, operationId), {
+    message: "Finny plan job-1 amendment was already recorded and is no longer awaiting approval.",
+    jobId: "job-1",
+    awaiting: "none",
+  });
+  assert.equal(calls.some(([name]) => name === "enqueue"), false);
 });
 
 test("worker service derives job authority from exact current session and run", async () => {
@@ -346,8 +431,14 @@ test("final delivery remains in the exact bound Slack thread with revision and s
   const job = {
     id: "job-1",
     originThreadRef: "slack:C1:100.1",
-    plan: { ...plan, title: "Pack", certification: "Certified" },
-  } as FinnyJob;
+    sop: { ...sop, title: "Pack" },
+    sopBinding: {
+      versionId: finnySopVersionId(sop),
+      values,
+      executionDigest: canonicalFinnyExecutionDigest(sop, values),
+      revision: 1,
+    },
+  } as unknown as FinnyJob;
   const delivery = finnyFinalDelivery(
     { originThreadRef: job.originThreadRef, destination: { type: "slack", target: "C1:100.1", threadTs: "100.1" } },
     job,
@@ -357,7 +448,7 @@ test("final delivery remains in the exact bound Slack thread with revision and s
   assert.deepEqual(delivery.destination, { type: "slack", target: "C1:100.1", threadTs: "100.1" });
   assert.match(delivery.text, /signed-receipt/);
   assert.match(delivery.text, /<https:\/\/qm\.example\/v1\/files\/r7\/content\|Open final artifact>/);
-  assert.match(delivery.text, /Certified/);
+  assert.match(delivery.text, /source control total/);
   assert.equal(delivery.idempotencyKey, "finny-final:job-1:9");
   assert.throws(
     () =>

@@ -10,21 +10,17 @@ import { createPostgresFinnyStore } from "../src/finny/postgres-store.ts";
 import { createFinnyWorkerGrants } from "../src/finny/worker-grants.ts";
 import type { SessionOpenInput } from "../src/sessions/session-syscalls.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { finnySopFixture } from "./support/finny-sop-fixture.ts";
 
 async function approvedJob() {
   const connectionString = testDatabaseUrl();
   const jobs = createPostgresFinnyStore(connectionString);
+  const scopeId = "personal:U1";
   const job = await jobs.createJob({
     id: randomUUID(),
-    scopeId: "personal:U1",
-    plan: {
-      title: "Finance pack",
-      phases: [{ name: "Produce", owner: "Producer", dependencies: [] }],
-      certification: "Independent audit",
-      deliverable: "Workbook",
-      destination: "Origin thread",
-      clarifications: [],
-    },
+    scopeId,
+    sop: { ...finnySopFixture(), scopeId },
+    values: { cutoff: "2026-10-31", currency: "INR" },
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy: { id: "runtime-test", maxFindings: 4, maxCodeLength: 40, maxMessageLength: 200 },
     originThreadRef: `slack:C1:${randomUUID()}`,
@@ -634,7 +630,9 @@ test("authenticated Pi reader returns the current active worker binding and job 
     eventSeq: 0,
     status: "producing",
     policyVersion: job.policy.policyVersion,
-    planDigest: job.planDigest,
+    sopVersionId: job.sopBinding?.versionId,
+    sopRevision: job.sopBinding?.revision,
+    executionDigest: job.sopBinding?.executionDigest,
     artifactDigest: null,
     requiredGenerations: job.policy.requiredGenerations,
   });

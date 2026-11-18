@@ -7,8 +7,150 @@ import { createFinnyApprovalService } from "../src/finny/approval-service.ts";
 import { createPostgresFinnyStore } from "../src/finny/postgres-store.ts";
 import { createPostgresFinnyRuntimeStore } from "../src/finny/runtime-postgres-store.ts";
 import { initialFinnyPolicy } from "../src/finny/policy.ts";
+import { finnySopPlanPresentation } from "../src/finny/plan.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { finnySopJobFields } from "./support/finny-sop-fixture.ts";
+
+test("integration schema permanently rejects legacy plan intents", async () => {
+  const url = testDatabaseUrl();
+  const jobs = createPostgresFinnyStore(url);
+  await jobs.searchSopVersions("personal:U1", "missing");
+  const integration = createPostgresFinnyIntegrationStore(url);
+  await integration.pendingPlanIntents();
+  const { q } = createPgPool(url);
+  await assert.rejects(
+    q(
+      "INSERT INTO finny_plan_intents(job_id,job_input,parent_input,created_at) VALUES($1,$2,$3,$4)",
+      [randomUUID(), { plan: { title: "Legacy" } }, {}, Date.now()],
+    ),
+    /finny_plan_intents_sop_cutover_mode/i,
+  );
+});
+
+test("startup delivery recovery ignores finalized legacy jobs after SOP cutover", async () => {
+  const url = testDatabaseUrl();
+  const jobs = createPostgresFinnyStore(url);
+  const integration = createPostgresFinnyIntegrationStore(url);
+  await jobs.searchSopVersions("personal:U1", "missing");
+  await integration.pendingPlanIntents();
+  const { q } = createPgPool(url);
+  const now = Date.now();
+  const jobId = randomUUID();
+  await q(
+    `INSERT INTO finny_jobs(
+       id,scope_id,plan_presentation,plan_digest,policy_version,evaluator_ref,required_generations,
+       finding_policy,origin_thread_ref,final_receipt,finalized_at,created_at,updated_at
+     ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11,$11)`,
+    [
+      jobId,
+      "personal:U1",
+      { title: "Legacy", phases: [], certification: "Legacy", deliverable: "Legacy", destination: "Legacy", clarifications: [] },
+      "legacy-digest",
+      "legacy-policy",
+      TEST_FINNY_EVALUATOR,
+      {},
+      { id: "legacy", maxFindings: 1, maxCodeLength: 1, maxMessageLength: 1 },
+      "slack:C1:1.1",
+      {},
+      now,
+    ],
+  );
+  await q(
+    `INSERT INTO finny_integration_jobs(
+       job_id,scope_id,request_id,actor_id,origin_thread_ref,destination,parent_binding,created_at
+     ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [
+      jobId,
+      "personal:U1",
+      randomUUID(),
+      "U1",
+      "slack:C1:1.1",
+      { type: "slack", target: "C1" },
+      { schema: "finny-parent-binding.v1" },
+      now,
+    ],
+  );
+  assert.deepEqual(await integration.finalizedParents(), []);
+});
+
+test("startup recovery revisits finalized SOP jobs only for delivery or binding cleanup", async () => {
+  const url = testDatabaseUrl();
+  const jobs = createPostgresFinnyStore(url);
+  const integration = createPostgresFinnyIntegrationStore(url);
+  const runtime = createPostgresFinnyRuntimeStore(url);
+  const deliveries = createPostgresDeliveryStore(url);
+  const job = await jobs.createJob({
+    id: randomUUID(),
+    scopeId: "personal:U1",
+    ...finnySopJobFields("personal:U1"),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
+    findingPolicy: { id: "v1", maxFindings: 2, maxCodeLength: 20, maxMessageLength: 100 },
+    originThreadRef: "slack:C1:100.1",
+  });
+  const parent = {
+    scopeId: job.scopeId,
+    jobId: job.id,
+    requestId: randomUUID(),
+    actorId: "U1",
+    originThreadRef: job.originThreadRef,
+    destination: { type: "slack" as const, target: "C1:100.1", threadTs: "100.1" },
+    binding: {
+      schema: "finny-parent-binding.v1" as const,
+      sessionId: randomUUID(),
+      runId: randomUUID(),
+      scopeId: job.scopeId,
+      context: {
+        actor: { id: "U1", type: "internal" as const },
+        conversation: {
+          kind: "dm" as const,
+          threadRef: job.originThreadRef,
+          audience: [{ id: "U1", type: "internal" as const }],
+        },
+        surface: "slack",
+      },
+    },
+  };
+  await integration.createApprovalBoundParent(parent);
+  const { q } = createPgPool(url);
+  await q("UPDATE finny_jobs SET final_receipt=$2,finalized_at=$3,ledger_head=7 WHERE id=$1", [
+    job.id,
+    { token: "signed", payload: {} },
+    Date.now(),
+  ]);
+  const delivery = await deliveries.enqueue({
+    destination: parent.destination,
+    text: "delivered",
+    idempotencyKey: `finny-final:${job.id}:7`,
+  });
+  await q("UPDATE deliveries SET expired_at=$2 WHERE id=$1", [delivery.id, Date.now()]);
+  assert.deepEqual(await integration.finalizedParents(), [parent]);
+  await q("UPDATE deliveries SET failed_reason='permanent' WHERE id=$1", [delivery.id]);
+  assert.deepEqual(await integration.finalizedParents(), []);
+  await q("UPDATE deliveries SET delivered_at=$2 WHERE idempotency_key=$1", [
+    `finny-final:${job.id}:7`,
+    Date.now(),
+  ]);
+  assert.deepEqual(await integration.finalizedParents(), []);
+  await runtime.bindParent({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    sessionId: parent.binding.sessionId,
+    runId: parent.binding.runId,
+    principalId: parent.actorId,
+  });
+  assert.deepEqual(await integration.finalizedParents(), [parent]);
+  await runtime.retireJob(job.scopeId, job.id);
+  assert.deepEqual(await integration.finalizedParents(), []);
+  await q(
+    `INSERT INTO finny_runtime_bindings(
+       session_id,run_id,scope_id,job_id,role,principal_id,epoch,created_at
+     ) VALUES($1,$2,$3,$4,'producer','finny-producer',1,$5)`,
+    [randomUUID(), randomUUID(), job.scopeId, job.id, Date.now()],
+  );
+  assert.deepEqual(await integration.finalizedParents(), [parent]);
+});
 
 test("durably preserves exact parent binding, destination, and artifact proposal idempotency", async () => {
   const url = testDatabaseUrl();
@@ -17,14 +159,7 @@ test("durably preserves exact parent binding, destination, and artifact proposal
   const job = await jobs.createJob({
     id: randomUUID(),
     scopeId: "personal:U1",
-    plan: {
-      title: "Pack",
-      phases: [{ name: "Build", owner: "Producer", dependencies: [] }],
-      certification: "Audit",
-      deliverable: "Book",
-      destination: "Thread",
-      clarifications: [],
-    },
+    ...finnySopJobFields("personal:U1"),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy: { id: "v1", maxFindings: 2, maxCodeLength: 20, maxMessageLength: 100 },
     originThreadRef: "slack:C1:100.1",
@@ -54,6 +189,46 @@ test("durably preserves exact parent binding, destination, and artifact proposal
   };
   await integration.createApprovalBoundParent(parent);
   assert.deepEqual(await integration.getParent(job.scopeId, job.id), parent);
+  assert.ok(job.sop);
+  assert.ok(job.sopBinding);
+  await jobs.recordSopAmendment({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    sop: job.sop,
+    values: { ...job.sopBinding.values, note: "presentation-only revision" },
+    idempotencyKey: randomUUID(),
+    createdAt: Date.now(),
+    replacementApproval: {
+      requestId: randomUUID(),
+      actorId: parent.actorId,
+      originThreadRef: parent.originThreadRef,
+      destination: parent.destination,
+      binding: parent.binding,
+    },
+  });
+  assert.deepEqual(await integration.getParent(job.scopeId, job.id), parent);
+  const replacementRequestId = randomUUID();
+  const amendment = await jobs.recordSopAmendment({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    sop: job.sop,
+    values: { ...job.sopBinding.values, cutoff: "2026-11-30" },
+    idempotencyKey: randomUUID(),
+    createdAt: Date.now(),
+    replacementApproval: {
+      requestId: replacementRequestId,
+      actorId: parent.actorId,
+      originThreadRef: parent.originThreadRef,
+      destination: parent.destination,
+      binding: parent.binding,
+    },
+  });
+  assert.equal(amendment.job.approval, undefined);
+  assert.deepEqual(await integration.getParent(job.scopeId, job.id), {
+    ...parent,
+    requestId: replacementRequestId,
+  });
+  assert.equal((await jobs.getPendingApprovalRequestForJob(job.scopeId, job.id))?.requestId, replacementRequestId);
   assert.deepEqual(
     (await integration.pendingApprovalCards()).map((record) => record.jobId),
     [job.id],
@@ -77,14 +252,7 @@ test("durably preserves exact parent binding, destination, and artifact proposal
   const intentJob = {
     id: randomUUID(),
     scopeId: "personal:U1",
-    plan: {
-      title: "Recover",
-      phases: [{ name: "Build", owner: "Producer", dependencies: [] }],
-      certification: "Audit",
-      deliverable: "Book",
-      destination: "Thread",
-      clarifications: [],
-    },
+    ...finnySopJobFields("personal:U1"),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy: { id: "v1", maxFindings: 2, maxCodeLength: 20, maxMessageLength: 100 },
     originThreadRef: "slack:C1:100.1",
@@ -111,14 +279,7 @@ test("startup recovery finds approved jobs whose producer dispatch is incomplete
   const job = await jobs.createJob({
     id: randomUUID(),
     scopeId: "personal:U1",
-    plan: {
-      title: "Pack",
-      phases: [{ name: "Build", owner: "Producer", dependencies: [] }],
-      certification: "Audit",
-      deliverable: "Book",
-      destination: "Thread",
-      clarifications: [],
-    },
+    ...finnySopJobFields("personal:U1"),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy: { id: "v1", maxFindings: 2, maxCodeLength: 20, maxMessageLength: 100 },
     originThreadRef: "slack:C1:100.1",
@@ -241,14 +402,7 @@ test("startup recovery finds approved jobs whose producer dispatch is incomplete
   const secondJob = await jobs.createJob({
     id: randomUUID(),
     scopeId: job.scopeId,
-    plan: {
-      title: "Second",
-      phases: [{ name: "Build", owner: "Producer", dependencies: [] }],
-      certification: "Audit",
-      deliverable: "Book",
-      destination: "Thread",
-      clarifications: [],
-    },
+    ...finnySopJobFields(job.scopeId),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy: { id: "v1", maxFindings: 2, maxCodeLength: 20, maxMessageLength: 100 },
     originThreadRef: job.originThreadRef,
@@ -274,14 +428,8 @@ test("material clarification keeps approval fail closed and restart recovery rel
   const jobInput = {
     id: randomUUID(),
     scopeId: "personal:U1",
-    plan: {
-      title: "Material basis",
-      phases: [{ name: "Build", owner: "Producer", dependencies: [] }],
-      certification: "Audit",
-      deliverable: "Book",
-      destination: "Thread",
-      clarifications: [{ question: "Which basis?", answer: "Signed contracts" }],
-    },
+    ...finnySopJobFields("personal:U1"),
+    values: { cutoff: "2026-10-31", currency: "Signed contracts" },
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy: { id: "v1", maxFindings: 2, maxCodeLength: 20, maxMessageLength: 100 },
     originThreadRef: "slack:C1:100.1",
@@ -363,6 +511,7 @@ test("material clarification keeps approval fail closed and restart recovery rel
     },
   });
   assert.equal(await approvals.pending(parent.requestId), null);
+  const presentation = finnySopPlanPresentation(jobInput.sop, jobInput.values);
   assert.deepEqual(
     await approvals.decide({
       requestId: clarification.requestId,
@@ -381,11 +530,12 @@ test("material clarification keeps approval fail closed and restart recovery rel
         kind: "plan",
         requestId: parent.requestId,
         card: {
-          title: "Material basis",
-          phases: [{ name: "Build", owner: "Producer", dependencies: [] }],
-          certification: "Audit",
-          deliverable: "Book",
-          destination: "Thread",
+          title: presentation.title,
+          summary: presentation.summary,
+          phases: presentation.phases,
+          certification: presentation.certification,
+          deliverable: presentation.deliverable,
+          destination: presentation.destination,
         },
       },
     },
@@ -407,14 +557,8 @@ test("nonrecommended and Other clarification decisions permanently withhold the 
     const job = await jobs.createJob({
       id: randomUUID(),
       scopeId: "personal:U1",
-      plan: {
-        title: "Material basis",
-        phases: [{ name: "Build", owner: "Producer", dependencies: [] }],
-        certification: "Audit",
-        deliverable: "Book",
-        destination: "Thread",
-        clarifications: [{ question: "Which basis?", answer: "Signed contracts" }],
-      },
+      ...finnySopJobFields("personal:U1"),
+      values: { cutoff: "2026-10-31", currency: "Signed contracts" },
       policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
       findingPolicy: { id: "v1", maxFindings: 2, maxCodeLength: 20, maxMessageLength: 100 },
       originThreadRef: "slack:C1:100.1",

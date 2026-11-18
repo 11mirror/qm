@@ -3,25 +3,19 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Agent } from "../src/agent/agent.ts";
 import type { SpreadsheetCalculationEngine } from "../src/finny/deterministic-spreadsheet-worker.ts";
-import type { FinnyPlanPresentation } from "../src/finny/types.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { scopeId } from "../src/types.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { finnySopFixture } from "./support/finny-sop-fixture.ts";
 
 const question = "Which cutoff date should the report use?";
-const plan: FinnyPlanPresentation = {
-  title: "AP aging",
-  phases: [{ name: "Prepare", owner: "Producer", dependencies: [] }],
-  certification: "Deterministic checks, then judgment where required",
-  deliverable: "Verified XLSX workbook",
-  destination: "Origin thread",
-  clarifications: [{ question, answer: "2026-11-17" }],
-};
+const sop = { ...finnySopFixture(), scopeId: scopeId("personal", "U1"), title: "AP aging" };
+const values = { cutoff: "2026-11-17", currency: "INR", note: "web run" };
 
 const agent: Agent = {
   async runTurn(turn) {
-    const created = await turn.tools.finny!.createPlan(plan, {
+    const created = await turn.tools.finny!.createPlan(sop, values, {
       question,
       options: [
         { id: "today", label: "2026-11-17" },
@@ -101,7 +95,7 @@ test("approving a web Finny clarification immediately presents the durable plan 
 
   assert.equal(result.status, "pending_approval", JSON.stringify(await built.errors.list()));
   assert.equal(result.pendingApprovals?.[0]?.reason, "Finny Governance Plan Approval");
-  assert.equal(result.pendingApprovals?.[0]?.command, plan.title);
+  assert.equal(result.pendingApprovals?.[0]?.command, sop.title);
 });
 
 test("a failed plan projection leaves the web clarification retryable", async () => {
@@ -164,8 +158,9 @@ test("a nonrecommended web Finny clarification choice resumes the coordinator wi
   const resumingAgent: Agent = {
     async runTurn(turn) {
       turns += 1;
+      const scopedSop = { ...sop, scopeId: scopeId("personal", "approver-42") };
       if (turns === 1) {
-        const created = await turn.tools.finny!.createPlan(plan, {
+        const created = await turn.tools.finny!.createPlan(scopedSop, values, {
           question,
           options: [
             { id: "today", label: "2026-11-17" },
@@ -190,17 +185,17 @@ test("a nonrecommended web Finny clarification choice resumes the coordinator wi
       }
       if (turns === 2) {
         assert.match(turn.environment ?? "", /2026-11-30/);
-        const revised = { ...plan, clarifications: [{ question, answer: "2026-11-30" }] };
-        const amended = await turn.tools.finny!.amendPlan(jobId, revised);
+        const revisedValues = { ...values, cutoff: "2026-11-30" };
+        const amended = await turn.tools.finny!.amendPlan(jobId, scopedSop, revisedValues);
         return {
           reply: "",
           pausedOnApproval: true,
           pendingApprovals: [
             {
-              command: revised.title,
+              command: scopedSop.title,
               reason: "Finny Governance Plan Approval",
               approvalKey: `finny-plan:${amended.requestId}`,
-              summary: revised.summary,
+              summary: scopedSop.intent.description,
               grantModes: { session: false, always: false },
             },
           ],
@@ -249,7 +244,7 @@ test("a nonrecommended web Finny clarification choice resumes the coordinator wi
 
   assert.equal(result.status, "pending_approval", JSON.stringify(await built.errors.list()));
   assert.equal(result.pendingApprovals?.[0]?.reason, "Finny Governance Plan Approval");
-  assert.equal(result.pendingApprovals?.[0]?.command, plan.title);
+  assert.equal(result.pendingApprovals?.[0]?.command, sop.title);
   assert.equal(turns, 2);
 
   const approved = await built.app.turn({

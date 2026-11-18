@@ -10,6 +10,7 @@ import { createPostgresFinnyIntegrationStore } from "./finny/integration-postgre
 import { createFinnyWorkerGrants } from "./finny/worker-grants.ts";
 import { createSignedFinnyFinalizer } from "./finny/finalizer.ts";
 import { createFinnyApprovalService } from "./finny/approval-service.ts";
+import { compileFinnyWorkerTask } from "./finny/plan.ts";
 import { createFinnyRuntimeCoordinator, reconcileFinnyRuntimeRecoveries } from "./finny/runtime-coordinator.ts";
 import {
   createFinnyEscalationDecision,
@@ -2202,20 +2203,7 @@ export function buildApp(
             };
           },
           task(job, role) {
-            return JSON.stringify({
-              schema: "finny-worker-task.v1",
-              role,
-              jobId: job.id,
-              scopeId: job.scopeId,
-              plan: job.plan,
-              policy: job.policy,
-              findingPolicy: job.findingPolicy,
-              artifactDigest: job.artifactDigest ?? null,
-              instruction:
-                role === "producer"
-                  ? `Produce or reuse the approved workbook in the persistent sandbox following the resolved domain skill (such as sharechat-ap-outstanding-workbook). All spreadsheet calculations, crossfoots, and verifications MUST be performed using pure-Python openpyxl with pre-computed cached values. DO NOT call LibreOffice/soffice or run destructive commands (such as rm -rf). IMPORTANT: When writing formulas (such as TOTAL rows), compute formula row-ranges dynamically from data start to last data row (e.g. SUM(L3:L{last_row})); never hardcode row boundaries that omit the final data line. Persist it by POSTing JSON {name,mimetype,dataBase64} to $AGENT_API_URL/v1/files/upload with x-agent-capability: $AGENT_API_TOKEN. Then call finny(action="artifact_ready", provisionalRevision="<immutable file.id>", artifactDigest="<file.sha256>", idempotencyKey="...").`
-                  : `Execute Finny Auditor checklist: invoke finny(action="deterministic_audit", idempotencyKey="...") once for the mandatory spreadsheet checks (formula.recalculate, summary.crossfoot, artifact.structure). For each remaining required check (${Object.keys(job.policy.requiredGenerations).join(", ")}), independently audit it and call finny(action="pass", checkId="...", generation=N, evidenceFileId="...", idempotencyKey="...") or finny(action="block", ...). Upload evidence files via files write or $AGENT_API_URL/v1/files/upload to obtain evidenceFileId. All actions (deterministic_audit, pass, block, status) use the callable 'finny' tool. Only server-dispatched auditor sessions carry the authoritative 'finny' tool; do not manually open ungranted subagents.`,
-            });
+            return JSON.stringify(compileFinnyWorkerTask(job, role));
           },
         },
         escalationDecision,

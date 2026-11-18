@@ -9,21 +9,17 @@ import { createPostgresFinnyStore } from "../src/finny/postgres-store.ts";
 import type { FinnyStore } from "../src/finny/store.ts";
 import type { FinnyApprovalAction, FinnyCheckId } from "../src/finny/types.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { finnySopFixture } from "./support/finny-sop-fixture.ts";
 
 const SECRET = "finny-finalizer-test-secret";
 
 async function createApprovedJob(store: FinnyStore, action: FinnyApprovalAction = "approve") {
+  const sop = { ...finnySopFixture(), scopeId: "personal:U1" };
   const input = {
     id: randomUUID(),
     scopeId: "personal:U1",
-    plan: {
-      title: "Finance pack",
-      phases: [{ name: "Prepare", owner: "MIS Expert", dependencies: [] }],
-      certification: "Independent checks",
-      deliverable: "Workbook",
-      destination: "Origin thread",
-      clarifications: [],
-    },
+    sop,
+    values: { cutoff: "2026-10-31", currency: "INR" },
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     originThreadRef: `slack:C1:${randomUUID()}`,
     findingPolicy: {
@@ -103,7 +99,10 @@ test("finalizer reads authoritative state and returns the same signed receipt fo
   const receipt = await finalizer.finalize({ scopeId: job.scopeId, jobId: job.id, idempotencyKey });
   assert.deepEqual(await verifySignedPayload(receipt.token, SECRET), receipt.payload);
   assert.equal(receipt.payload.jobId, job.id);
-  assert.equal(receipt.payload.planDigest, job.planDigest);
+  assert.ok("sopVersionId" in receipt.payload);
+  assert.equal(receipt.payload.sopVersionId, job.sopBinding?.versionId);
+  assert.equal(receipt.payload.sopRevision, job.sopBinding?.revision);
+  assert.equal(receipt.payload.executionDigest, job.sopBinding?.executionDigest);
   assert.equal(receipt.payload.artifactDigest, job.artifactDigest);
   assert.deepEqual(receipt.payload.evaluator, job.policy.evaluator);
   assert.equal(receipt.payload.provisionalRevision, job.provisionalRevision);

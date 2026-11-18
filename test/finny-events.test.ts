@@ -6,6 +6,7 @@ import { initialFinnyPolicy } from "../src/finny/policy.ts";
 import { FINNY_CHECK_IDS, type FinnyJobEvent } from "../src/finny/types.ts";
 import { createPostgresFinnyStore as createRawPostgresFinnyStore } from "../src/finny/postgres-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { finnySopJobFields } from "./support/finny-sop-fixture.ts";
 
 function createPostgresFinnyStore(connectionString: string) {
   const store = createRawPostgresFinnyStore(connectionString);
@@ -48,14 +49,7 @@ const auditAuthority = {
 const createInput = () => ({
   id: randomUUID(),
   scopeId: "personal:U1",
-  plan: {
-    title: "Finance pack",
-    phases: [{ name: "Prepare", owner: "MIS Expert", dependencies: [] }],
-    certification: "Independent checks",
-    deliverable: "Workbook",
-    destination: "Origin thread",
-    clarifications: [],
-  },
+  ...finnySopJobFields("personal:U1"),
   artifactDigest: "artifact-sha256-v1",
   policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
   originThreadRef: "slack:C1:100.1",
@@ -301,7 +295,7 @@ test("BLOCK rejects findings beyond the bounded event contract", async () => {
 test("an idempotency key cannot replay events from another job or scope", async () => {
   const store = createPostgresFinnyStore(testDatabaseUrl());
   const first = createInput();
-  const second = { ...createInput(), scopeId: "personal:U2" };
+  const second = { ...createInput(), scopeId: "personal:U2", ...finnySopJobFields("personal:U2") };
   await createApprovedPlan(store, first);
   await createApprovedPlan(store, second);
   const idempotencyKey = randomUUID();
