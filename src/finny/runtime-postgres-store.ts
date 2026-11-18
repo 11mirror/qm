@@ -311,14 +311,42 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
       runId: string;
       scopeId: string;
       expiresAt: number;
+      observedTerminalRunId?: string;
     }): Promise<FinnyRuntimeBinding | null> {
       if (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= Date.now())
         throw new Error("Finny worker run expiry must be in the future");
       const rows = await q(
-        `UPDATE finny_runtime_bindings SET run_id=$3, expires_at=$5
-         WHERE session_id=$1 AND run_id IN ($2,$3) AND scope_id=$4 AND role IN ('producer','auditor') AND active=TRUE
+        `UPDATE finny_runtime_bindings AS b SET run_id=$3, expires_at=$5
+         WHERE b.session_id=$1 AND b.run_id IN ($2,$3) AND b.scope_id=$4
+           AND b.role IN ('producer','auditor') AND b.active=TRUE
+           AND (
+             $6::text IS NULL
+             OR (
+               b.run_id=$6
+               AND COALESCE((
+                 SELECT (
+                   r.status='failed'
+                   OR (
+                     r.status='done'
+                     AND COALESCE(r.result::jsonb->>'status','') NOT IN ('pending_approval','refused')
+                   )
+                   OR (b.expires_at<=$7 AND r.status NOT IN ('done','failed'))
+                 )
+                   FROM runs AS r
+                  WHERE r.id=b.run_id
+               ), TRUE)
+             )
+           )
          RETURNING *`,
-        [input.sessionId, input.expectedRunId, input.runId, input.scopeId, input.expiresAt],
+        [
+          input.sessionId,
+          input.expectedRunId,
+          input.runId,
+          input.scopeId,
+          input.expiresAt,
+          input.observedTerminalRunId ?? null,
+          Date.now(),
+        ],
       );
       return rows[0] ? rowToBinding(rows[0]) : null;
     },
@@ -926,13 +954,7 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                 WHERE b.session_id=$1 AND b.run_id=$2 AND b.active=TRUE`,
               [input.sessionId, input.observedTerminalRunId, Date.now()],
             );
-            if (observed.rows[0]?.terminal !== true) {
-              await db.query(
-                "UPDATE finny_runtime_dispatches SET cancelled_at=$2 WHERE idempotency_key=$1 AND delivered_at IS NULL",
-                [input.idempotencyKey, Date.now()],
-              );
-              return;
-            }
+            if (observed.rows[0]?.terminal !== true) return;
           }
           if (input.kind === "producer_rework" && jobs.rows[0].pending_rework_seq === null) {
             await db.query(

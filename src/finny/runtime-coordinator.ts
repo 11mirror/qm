@@ -28,6 +28,7 @@ interface RuntimeDispatcher {
     role: FinnyWorkerRole;
     principalId: string;
     expiresAt: number;
+    observedTerminalRunId?: string;
   }): Promise<void>;
 }
 
@@ -226,6 +227,7 @@ export function createFinnyRuntimeCoordinator(deps: {
         role: input.role,
         principalId: input.principalId,
         expiresAt: input.expiresAt,
+        observedTerminalRunId: input.observedTerminalRunId,
       });
     });
   }

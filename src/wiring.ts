@@ -2153,6 +2153,7 @@ export function buildApp(
                   runId: next.runId,
                   scopeId,
                   expiresAt,
+                  observedTerminalRunId: input.observedTerminalRunId,
                 });
                 if (!advanced) throw new Error("Finny worker run binding is no longer current");
                 await (input.role === "producer" ? finnyGrants.issueProducer : finnyGrants.issueAuditor)({
