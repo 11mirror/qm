@@ -12,6 +12,22 @@ import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { finnySopJobFields } from "./support/finny-sop-fixture.ts";
 
+test("integration schema permanently rejects legacy plan intents", async () => {
+  const url = testDatabaseUrl();
+  const jobs = createPostgresFinnyStore(url);
+  await jobs.searchSopVersions("personal:U1", "missing");
+  const integration = createPostgresFinnyIntegrationStore(url);
+  await integration.pendingPlanIntents();
+  const { q } = createPgPool(url);
+  await assert.rejects(
+    q(
+      "INSERT INTO finny_plan_intents(job_id,job_input,parent_input,created_at) VALUES($1,$2,$3,$4)",
+      [randomUUID(), { plan: { title: "Legacy" } }, {}, Date.now()],
+    ),
+    /finny_plan_intents_sop_cutover_mode/i,
+  );
+});
+
 test("startup delivery recovery ignores finalized legacy jobs after SOP cutover", async () => {
   const url = testDatabaseUrl();
   const jobs = createPostgresFinnyStore(url);

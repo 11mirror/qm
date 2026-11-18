@@ -28,7 +28,7 @@ interface SopStore {
     values: Record<string, string | boolean>;
     idempotencyKey: string;
     createdAt: number;
-  }) => Promise<{ job: unknown; events: Array<{ payload: Record<string, unknown> }> }>;
+  }) => Promise<{ job: unknown; events: Array<{ idempotencyKey: string; payload: Record<string, unknown> }> }>;
 }
 
 function sopJobInput() {
@@ -179,6 +179,15 @@ test("records every SOP revision while invalidating approval only for material a
     idempotencyKey: randomUUID(),
     createdAt: Date.now() + 1,
   });
+  const materialReplay = await store.recordSopAmendment!({
+    scopeId: input.scopeId,
+    jobId: input.id,
+    sop: input.sop,
+    values: { ...input.values, cutoff: "2026-11-30", note: "second run" },
+    idempotencyKey: material.events[0]!.idempotencyKey,
+    createdAt: Date.now() + 2,
+  });
+  assert.equal((materialReplay as { deduped?: boolean }).deduped, true);
   const materialJob = material.job as {
     approval?: unknown;
     sopBinding: { executionDigest: string; revision: number };

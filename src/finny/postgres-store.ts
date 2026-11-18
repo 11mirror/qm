@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import type { PoolClient } from "pg";
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { assertFinnyAuditFindings, assertFinnyEscalationReason, assertFinnyFindingPolicy } from "./coordinator.ts";
 import {
@@ -516,7 +516,7 @@ function rowToEvent(row: Record<string, unknown>): FinnyJobEvent {
 }
 
 function sameValue(left: unknown, right: unknown): boolean {
-  return isDeepStrictEqual(left, right);
+  return canonicalJson(left) === canonicalJson(right);
 }
 
 async function insertEvent<T extends FinnyJobEventType>(
@@ -884,7 +884,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
             existing.jobId !== input.jobId ||
             existing.authorizedActorId !== input.authorizedActorId ||
             existing.question !== input.question ||
-            !isDeepStrictEqual(existing.options, input.options) ||
+            !sameValue(existing.options, input.options) ||
             existing.recommendedOptionId !== input.recommendedOptionId ||
             existing.originThreadRef !== job.origin_thread_ref
           )
@@ -1033,7 +1033,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
             first.type !== "sop_amended" ||
             first.payload.newSopVersionId !== stored.versionId ||
             first.payload.newExecutionDigest !== newExecutionDigest ||
-            !isDeepStrictEqual(first.payload.newValues, values)
+            !sameValue(first.payload.newValues, values)
           )
             throw new Error("Finny SOP amendment idempotency key was reused");
           return {

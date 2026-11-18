@@ -40,6 +40,13 @@ const PLAN_CLARIFICATION_SCHEMA = [
     WHERE NOT (parent_input ? 'parent')`,
 ];
 
+const SOP_CUTOVER_SCHEMA = [
+  `ALTER TABLE finny_plan_intents
+     DROP CONSTRAINT IF EXISTS finny_plan_intents_sop_cutover_mode`,
+  `ALTER TABLE finny_plan_intents
+     ADD CONSTRAINT finny_plan_intents_sop_cutover_mode CHECK (job_input ? 'sop')`,
+];
+
 export interface FinnyIntegrationParentRecord {
   scopeId: string;
   jobId: string;
@@ -102,6 +109,7 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
   const { q, pool } = createPgPool(connectionString, [
     { id: "finny/integration/0001", statements: SCHEMA },
     { id: "finny/integration/0002-plan-clarification", statements: PLAN_CLARIFICATION_SCHEMA },
+    { id: "finny/integration/0003-sop-cutover", statements: SOP_CUTOVER_SCHEMA },
   ]);
   return {
     async createPlanIntent(input: FinnyPlanIntent): Promise<void> {
