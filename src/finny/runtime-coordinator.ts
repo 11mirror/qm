@@ -574,6 +574,11 @@ export function createFinnyRuntimeCoordinator(deps: {
         provisionalRevision: artifact.provisionalRevision,
         idempotencyKey: input.idempotencyKey,
       });
+      if (
+        ready.job.artifactDigest !== artifact.artifactDigest ||
+        ready.job.provisionalRevision !== artifact.provisionalRevision
+      )
+        return;
       if (!ready.deduped) deps.recoveryWake?.({ kind: "artifact_ready", ...input });
       const activeAuditor = await deps.runtime.activeRoleBinding(input.scopeId, input.jobId, "auditor");
       if (input.retryTerminalAuditorRunId !== undefined) {

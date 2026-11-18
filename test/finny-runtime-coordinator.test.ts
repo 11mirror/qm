@@ -359,13 +359,6 @@ test("a BLOCK wakes the bound producer with policy-bounded findings", async () =
 
 test("the next artifact recovers a fresh independent Auditor after admission interruption", async () => {
   const { jobs, job, connectionString } = await approvedJob();
-  await jobs.recordArtifactReady({
-    scopeId: job.scopeId,
-    jobId: job.id,
-    artifactDigest: "artifact-v1",
-    provisionalRevision: "revision-1",
-    idempotencyKey: "artifact-1",
-  });
   const runtime = createPostgresFinnyRuntimeStore(connectionString);
   await runtime.bindInitial({
     scopeId: job.scopeId,
@@ -420,12 +413,19 @@ test("the next artifact recovers a fresh independent Auditor after admission int
     },
     ...coreRuntimeAuthority(),
   });
+  await coordinator.artifactReady({
+    sessionId: "producer-session",
+    runId: "producer-run",
+    scopeId: job.scopeId,
+    jobId: job.id,
+    idempotencyKey: "artifact-1",
+  });
   await coordinator.auditBlocked({
     sessionId: "auditor-session-1",
     runId: "auditor-run-1",
     scopeId: job.scopeId,
     jobId: job.id,
-    artifactDigest: "artifact-v1",
+    artifactDigest: "artifact-sha256",
     checkId: "lineage.binding",
     generation: 1,
     evidenceFileId: "evidence-sha256-block",
@@ -441,7 +441,9 @@ test("the next artifact recovers a fresh independent Auditor after admission int
     idempotencyKey: "artifact-2",
   };
   await assert.rejects(coordinator.artifactReady(nextArtifact), /replacement Auditor admission interrupted/);
-  await coordinator.artifactReady(nextArtifact);
+  const pending = await runtime.pendingRecoveries();
+  assert.deepEqual(pending, [{ kind: "artifact_ready", ...nextArtifact }]);
+  await coordinator.artifactReady(pending[0]!);
 
   assert.equal((await runtime.currentBinding("auditor-session-2"))?.runId, "auditor-run-2");
   assert.equal((await runtime.currentBinding("auditor-session-2"))?.epoch, 2);
