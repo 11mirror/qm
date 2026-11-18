@@ -27,7 +27,7 @@ This table is the quick handoff. Follow the links for design, implementation, an
 | Live Slack result     | Certified XLSX attached in the 11mirror `finny-staging` DM with one Producer and one post-artifact Auditor; total tokens fell 43.2% | [Slack baseline and candidate](#phase-01-live-measurement--slack)                                                                                                                                                         |
 | Verification          | Phase 1 focused suites, typecheck, ESLint/oxlint, FinnyLoop r5, and real Chrome web plus Slack QA pass                              | [Running implementation log](#running-implementation-log) and [r5 manifest](../../evals/finnyloop-r5/manifest.json)                                                                                                       |
 | Schema/config         | No database schema, persisted payload, or configuration change in Phase 0/1                                                         | [Phase 0/1 evidence](#phase-01-live-measurement--qm-web)                                                                                                                                                                  |
-| Phase 2               | Immutable SOP authority, exact execution-digest approval, material and non-material amendments, role-specific compilation, bounded search/recovery, and web/Slack acceptance are merged | [Phase 2](#phase-2--durable-sop-creation-and-execution), [schema gate](#phase-2-sop-and-job-schema-gate), [PR #35](https://github.com/11mirror/qm/pull/35), and [running log](#running-implementation-log) |
+| Phase 2               | Immutable SOP authority, exact execution-digest approval, material and non-material amendments, role-specific compilation, default-paged search, action-filtered recovery, and web/Slack acceptance are merged | [Phase 2](#phase-2--durable-sop-creation-and-execution), [schema gate](#phase-2-sop-and-job-schema-gate), [PR #35](https://github.com/11mirror/qm/pull/35), and [running log](#running-implementation-log) |
 | Current phase         | Phase 3 — Core-owned completion. Phase 1 already delivered durable successful-but-incomplete recovery; the remaining phase needs a path census, removal of run-result-text guessing, crash-boundary convergence, and poison-job isolation | [Phase 3](#phase-3--core-owned-completion) |
 | Next gates            | Complete Phase 3 without adding new authority; keep Phase 4 audit-attempt and Phase 5 certified-result schemas, the corpus/gold, controlled source population, and any SLA behind their own human gates | [Phase 3](#phase-3--core-owned-completion), [later phases](#phase-4--deterministic-audit-and-targeted-rework), and [human decisions](#required-human-decisions-for-later-gates) |
 | Next-session handover | Start Phase 3 with a durable completion-path census and the smallest test-driven gap closure | [Finny Phase 3 core-owned completion handover](./2026-11-18-finny-phase-3-handover.md) |
@@ -1225,14 +1225,15 @@ Already available from Phases 1–2:
 - terminal successful-but-incomplete Producer and Auditor work is redispatched from durable job state;
 - human-wait and refused outcomes are excluded from automatic redispatch;
 - recovery is fenced to the exact observed run and survives restart;
-- final-delivery recovery is bounded to actionable delivery and binding-cleanup state.
+- final-delivery recovery is filtered to actionable delivery and binding-cleanup state.
 
 Next work:
 
 1. Census every Producer and Auditor terminal outcome, finalization boundary, restart scan, and delivery handoff; identify any branch that still infers completion from model prose or generic run-result text.
 2. Add caller-visible failing tests only for confirmed gaps: successful runs without the required Finny transition, Core death at each commit/dispatch boundary, duplicate recovery scans, and poison-job isolation.
 3. Consolidate each confirmed gap into the existing job-state reconciliation path and delete superseded result-text or delivery-prefix guesses.
-4. Re-run the affected Finny suites, FinnyLoop r5, and production-shaped web/Slack recovery acceptance. Record timings and token usage as diagnostic evidence, not an SLA claim.
+4. Measure reconciliation with a representative recovery backlog so serial scans and unbounded actionable result sets are visible before claiming the phase is performant.
+5. Re-run the affected Finny suites, FinnyLoop r5, and production-shaped web/Slack recovery acceptance. Record timings and token usage as diagnostic evidence, not an SLA claim.
 
 Do not add `finny_audit_attempts`, `finny_results`, another queue, or a parallel workflow state machine in Phase 3. Those belong to later human gates.
 
