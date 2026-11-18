@@ -10,6 +10,7 @@ import { initialFinnyPolicy } from "../src/finny/policy.ts";
 import { finnySopPlanPresentation } from "../src/finny/plan.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { finnySopJobFields } from "./support/finny-sop-fixture.ts";
 
@@ -21,10 +22,12 @@ test("integration schema permanently rejects legacy plan intents", async () => {
   await integration.pendingPlanIntents();
   const { q } = createPgPool(url);
   await assert.rejects(
-    q(
-      "INSERT INTO finny_plan_intents(job_id,job_input,parent_input,created_at) VALUES($1,$2,$3,$4)",
-      [randomUUID(), { plan: { title: "Legacy" } }, {}, Date.now()],
-    ),
+    q("INSERT INTO finny_plan_intents(job_id,job_input,parent_input,created_at) VALUES($1,$2,$3,$4)", [
+      randomUUID(),
+      { plan: { title: "Legacy" } },
+      {},
+      Date.now(),
+    ]),
     /finny_plan_intents_sop_cutover_mode/i,
   );
 });
@@ -33,8 +36,11 @@ test("startup delivery recovery ignores finalized legacy jobs after SOP cutover"
   const url = testDatabaseUrl();
   const jobs = createPostgresFinnyStore(url);
   const integration = createPostgresFinnyIntegrationStore(url);
+  const runtime = createPostgresFinnyRuntimeStore(url);
   await jobs.searchSopVersions("personal:U1", "missing");
   await integration.pendingPlanIntents();
+  await runtime.currentBinding(randomUUID());
+  await createPostgresDeliveryStore(url).get(randomUUID());
   const { q } = createPgPool(url);
   const now = Date.now();
   const jobId = randomUUID();
@@ -46,7 +52,14 @@ test("startup delivery recovery ignores finalized legacy jobs after SOP cutover"
     [
       jobId,
       "personal:U1",
-      { title: "Legacy", phases: [], certification: "Legacy", deliverable: "Legacy", destination: "Legacy", clarifications: [] },
+      {
+        title: "Legacy",
+        phases: [],
+        certification: "Legacy",
+        deliverable: "Legacy",
+        destination: "Legacy",
+        clarifications: [],
+      },
       "legacy-digest",
       "legacy-policy",
       TEST_FINNY_EVALUATOR,
@@ -89,6 +102,7 @@ test("startup recovery revisits finalized SOP jobs only for delivery or binding 
     findingPolicy: { id: "v1", maxFindings: 2, maxCodeLength: 20, maxMessageLength: 100 },
     originThreadRef: "slack:C1:100.1",
   });
+  await runtime.currentBinding(randomUUID());
   const parent = {
     scopeId: job.scopeId,
     jobId: job.id,
@@ -128,10 +142,7 @@ test("startup recovery revisits finalized SOP jobs only for delivery or binding 
   assert.deepEqual(await integration.finalizedParents(), [parent]);
   await q("UPDATE deliveries SET failed_reason='permanent' WHERE id=$1", [delivery.id]);
   assert.deepEqual(await integration.finalizedParents(), []);
-  await q("UPDATE deliveries SET delivered_at=$2 WHERE idempotency_key=$1", [
-    `finny-final:${job.id}:7`,
-    Date.now(),
-  ]);
+  await q("UPDATE deliveries SET delivered_at=$2 WHERE idempotency_key=$1", [`finny-final:${job.id}:7`, Date.now()]);
   assert.deepEqual(await integration.finalizedParents(), []);
   await runtime.bindParent({
     scopeId: job.scopeId,
@@ -319,10 +330,14 @@ test("startup recovery finds approved jobs whose producer dispatch is incomplete
     decidedAt: Date.now(),
   });
   await runtime.currentBinding(randomUUID());
+  await createPostgresRunStore(url).runs.list({ limit: 1 });
   const producerRunId = randomUUID();
   const { q } = createPgPool(url);
-  await q(`CREATE TABLE runs(id TEXT PRIMARY KEY,status TEXT NOT NULL,last_stop TEXT,result TEXT)`);
-  await q("INSERT INTO runs(id,status,last_stop,result) VALUES($1,'running',NULL,NULL)", [producerRunId]);
+  await q(
+    `INSERT INTO runs(id,session_id,status,request,created_at)
+     VALUES($1,$2,'running','{}',$3)`,
+    [producerRunId, `session:${producerRunId}`, Date.now()],
+  );
   const parentSessionId = randomUUID();
   const producerSessionId = randomUUID();
   const auditorSessionId = randomUUID();

@@ -58,6 +58,7 @@ interface AuditBlockedRuntimeInput extends RuntimeActorInput {
   evidenceFileId: string;
   findings: FinnyAuditFinding[];
   idempotencyKey: string;
+  retryTerminalProducerRunId?: string;
 }
 
 interface ApprovedRuntimeInput {
@@ -440,10 +441,14 @@ export function createFinnyRuntimeCoordinator(deps: {
       }
       const producer = await deps.runtime.activeRoleBinding(input.scopeId, input.jobId, "producer");
       if (!producer) throw new Error("Finny runtime has no current producer binding");
+      if (input.retryTerminalProducerRunId !== undefined && producer.runId !== input.retryTerminalProducerRunId) return;
       const message = JSON.stringify({ task: "Rework the blocked artifact", findings });
       const producerCredentials = deps.workerPolicy.credentials(blocked.job, "producer");
       await dispatch({
-        idempotencyKey: `${input.idempotencyKey}:producer-rework`,
+        idempotencyKey:
+          input.retryTerminalProducerRunId === undefined
+            ? `${input.idempotencyKey}:producer-rework`
+            : `${input.idempotencyKey}:producer-rework:retry:${input.retryTerminalProducerRunId}`,
         scopeId: input.scopeId,
         jobId: input.jobId,
         sessionId: producer.sessionId,
