@@ -367,15 +367,18 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
          JOIN finny_jobs j ON j.id=i.job_id AND j.scope_id=i.scope_id
          WHERE j.final_receipt IS NOT NULL AND j.sop_version_id IS NOT NULL
            AND (
-             ${hasDeliveries ? `NOT EXISTS (
+             ${hasDeliveries ? `(NOT EXISTS (
                SELECT 1 FROM deliveries d
                 WHERE d.idempotency_key='finny-final:' || j.id || ':' || j.ledger_head::text
-                  AND d.delivered_at IS NOT NULL
-             )` : "TRUE"}
+             ) OR EXISTS (
+               SELECT 1 FROM deliveries d
+                WHERE d.idempotency_key='finny-final:' || j.id || ':' || j.ledger_head::text
+                  AND d.delivered_at IS NULL AND d.expired_at IS NOT NULL AND d.failed_reason IS NULL
+             ))` : "TRUE"}
              OR ${hasBindings ? `EXISTS (
                SELECT 1 FROM finny_runtime_bindings b
-                WHERE b.scope_id=j.scope_id AND b.job_id=j.id AND b.active=TRUE
-                  AND b.role IN ('producer','auditor')
+                WHERE b.scope_id=j.scope_id AND b.job_id=j.id
+                  AND (b.role='parent' OR (b.active=TRUE AND b.role IN ('producer','auditor')))
              )` : "FALSE"}
            )
          ORDER BY j.finalized_at, i.job_id`,

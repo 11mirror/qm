@@ -119,16 +119,29 @@ test("startup recovery revisits finalized SOP jobs only for delivery or binding 
     { token: "signed", payload: {} },
     Date.now(),
   ]);
-  await deliveries.enqueue({
+  const delivery = await deliveries.enqueue({
     destination: parent.destination,
     text: "delivered",
     idempotencyKey: `finny-final:${job.id}:7`,
   });
+  await q("UPDATE deliveries SET expired_at=$2 WHERE id=$1", [delivery.id, Date.now()]);
+  assert.deepEqual(await integration.finalizedParents(), [parent]);
+  await q("UPDATE deliveries SET failed_reason='permanent' WHERE id=$1", [delivery.id]);
+  assert.deepEqual(await integration.finalizedParents(), []);
   await q("UPDATE deliveries SET delivered_at=$2 WHERE idempotency_key=$1", [
     `finny-final:${job.id}:7`,
     Date.now(),
   ]);
-  await runtime.bindingForSession("missing");
+  assert.deepEqual(await integration.finalizedParents(), []);
+  await runtime.bindParent({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    sessionId: parent.binding.sessionId,
+    runId: parent.binding.runId,
+    principalId: parent.actorId,
+  });
+  assert.deepEqual(await integration.finalizedParents(), [parent]);
+  await runtime.retireJob(job.scopeId, job.id);
   assert.deepEqual(await integration.finalizedParents(), []);
   await q(
     `INSERT INTO finny_runtime_bindings(
