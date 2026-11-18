@@ -14,7 +14,6 @@ import type {
   FinnyEvaluatorRef,
   FinnyFinalReceipt,
   FinnyFinalReceiptPayload,
-  FinnyPlanPresentation,
   FinnyPolicySnapshot,
   FinnySopVersion,
   FinnyVerdict,
@@ -28,15 +27,6 @@ export interface FinnyStoredSopVersion {
   createdAt: number;
 }
 
-export interface CreateFinnyJobInput {
-  id: string;
-  scopeId: string;
-  plan: FinnyPlanPresentation;
-  policy: FinnyPolicySnapshot;
-  findingPolicy: FinnyFindingPolicy;
-  originThreadRef: string;
-}
-
 export interface CreateFinnySopJobInput {
   id: string;
   scopeId: string;
@@ -47,7 +37,7 @@ export interface CreateFinnySopJobInput {
   originThreadRef: string;
 }
 
-export type CreateFinnyJobCommand = CreateFinnyJobInput | CreateFinnySopJobInput;
+export type CreateFinnyJobCommand = CreateFinnySopJobInput;
 
 export interface CreateFinnyApprovalRequestInput {
   scopeId: string;
@@ -102,16 +92,6 @@ export interface RecordFinnyApprovalInput {
   action: FinnyApprovalAction;
   originThreadRef: string;
   decidedAt: number;
-}
-
-export interface RecordFinnyPlanAmendmentInput {
-  scopeId: string;
-  jobId: string;
-  plan: FinnyPlanPresentation;
-  requestId: string;
-  authorizedActorId: string;
-  idempotencyKey: string;
-  createdAt: number;
 }
 
 export interface RecordFinnySopAmendmentInput {
@@ -211,7 +191,6 @@ export interface FinnyStore {
   createJob(input: CreateFinnyJobCommand): Promise<FinnyJob>;
   createApprovalRequest(input: CreateFinnyApprovalRequestInput): Promise<void>;
   createClarificationRequest(input: CreateFinnyClarificationRequestInput): Promise<FinnyClarificationRequest>;
-  recordPlanAmendment(input: RecordFinnyPlanAmendmentInput): Promise<FinnyEventResult<FinnyJobEvent<"plan_amended">>>;
   recordSopAmendment(input: RecordFinnySopAmendmentInput): Promise<FinnyEventResult<FinnyJobEvent<"sop_amended">>>;
   getJob(scopeId: string, jobId: string): Promise<FinnyJob | null>;
   getApprovalRequest(requestId: string): Promise<FinnyApprovalRequest | null>;

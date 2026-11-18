@@ -2,27 +2,15 @@ import { TEST_FINNY_EVALUATOR } from "./support/finny-fixture.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
-import { canonicalFinnyPlanDigest } from "../src/finny/plan.ts";
 import { initialFinnyPolicy } from "../src/finny/policy.ts";
 import { createPostgresFinnyStore } from "../src/finny/postgres-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-
-const plan = () => ({
-  title: "Monthly finance pack",
-  phases: [
-    { name: "Prepare", owner: "MIS Expert", dependencies: [] },
-    { name: "Certify", owner: "Auditor", dependencies: ["Prepare"] },
-  ],
-  certification: "All required checks pass",
-  deliverable: "Certified workbook",
-  destination: "Origin thread",
-  clarifications: [{ question: "Entity?", answer: "Consolidated group" }],
-});
+import { finnySopJobFields } from "./support/finny-sop-fixture.ts";
 
 const createInput = () => ({
   id: randomUUID(),
   scopeId: "personal:U1",
-  plan: plan(),
+  ...finnySopJobFields("personal:U1"),
   policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
   findingPolicy: {
     id: "finny-r5-test",
@@ -52,12 +40,12 @@ async function approve(store: ReturnType<typeof createPostgresFinnyStore>, input
   });
 }
 
-test("creates a job from a validated presentation with no artifact", async () => {
+test("creates a job from a validated SOP binding with no artifact", async () => {
   const store = createPostgresFinnyStore(testDatabaseUrl());
   const input = createInput();
   const created = await store.createJob(input);
-  assert.equal(created.planDigest, canonicalFinnyPlanDigest(input.plan));
-  assert.deepEqual(created.plan, input.plan);
+  assert.deepEqual(created.sop, input.sop);
+  assert.deepEqual(created.sopBinding?.values, input.values);
   assert.equal(created.artifactDigest, undefined);
   assert.equal(created.provisionalRevision, undefined);
   assert.equal(created.approval, undefined);
@@ -84,7 +72,7 @@ test("approval decision derives exact bindings from an opaque pre-bound request"
     originThreadRef: input.originThreadRef,
     decidedAt: Date.now(),
   });
-  assert.equal(approved.approval?.planDigest, approved.planDigest);
+  assert.equal(approved.approval?.executionDigest, approved.sopBinding?.executionDigest);
   assert.equal(approved.approval?.originThreadRef, input.originThreadRef);
   await assert.rejects(
     store.recordApproval({

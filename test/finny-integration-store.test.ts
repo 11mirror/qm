@@ -7,8 +7,10 @@ import { createFinnyApprovalService } from "../src/finny/approval-service.ts";
 import { createPostgresFinnyStore } from "../src/finny/postgres-store.ts";
 import { createPostgresFinnyRuntimeStore } from "../src/finny/runtime-postgres-store.ts";
 import { initialFinnyPolicy } from "../src/finny/policy.ts";
+import { finnySopPlanPresentation } from "../src/finny/plan.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { finnySopJobFields } from "./support/finny-sop-fixture.ts";
 
 test("durably preserves exact parent binding, destination, and artifact proposal idempotency", async () => {
   const url = testDatabaseUrl();
@@ -17,14 +19,7 @@ test("durably preserves exact parent binding, destination, and artifact proposal
   const job = await jobs.createJob({
     id: randomUUID(),
     scopeId: "personal:U1",
-    plan: {
-      title: "Pack",
-      phases: [{ name: "Build", owner: "Producer", dependencies: [] }],
-      certification: "Audit",
-      deliverable: "Book",
-      destination: "Thread",
-      clarifications: [],
-    },
+    ...finnySopJobFields("personal:U1"),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy: { id: "v1", maxFindings: 2, maxCodeLength: 20, maxMessageLength: 100 },
     originThreadRef: "slack:C1:100.1",
@@ -77,14 +72,7 @@ test("durably preserves exact parent binding, destination, and artifact proposal
   const intentJob = {
     id: randomUUID(),
     scopeId: "personal:U1",
-    plan: {
-      title: "Recover",
-      phases: [{ name: "Build", owner: "Producer", dependencies: [] }],
-      certification: "Audit",
-      deliverable: "Book",
-      destination: "Thread",
-      clarifications: [],
-    },
+    ...finnySopJobFields("personal:U1"),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy: { id: "v1", maxFindings: 2, maxCodeLength: 20, maxMessageLength: 100 },
     originThreadRef: "slack:C1:100.1",
@@ -111,14 +99,7 @@ test("startup recovery finds approved jobs whose producer dispatch is incomplete
   const job = await jobs.createJob({
     id: randomUUID(),
     scopeId: "personal:U1",
-    plan: {
-      title: "Pack",
-      phases: [{ name: "Build", owner: "Producer", dependencies: [] }],
-      certification: "Audit",
-      deliverable: "Book",
-      destination: "Thread",
-      clarifications: [],
-    },
+    ...finnySopJobFields("personal:U1"),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy: { id: "v1", maxFindings: 2, maxCodeLength: 20, maxMessageLength: 100 },
     originThreadRef: "slack:C1:100.1",
@@ -241,14 +222,7 @@ test("startup recovery finds approved jobs whose producer dispatch is incomplete
   const secondJob = await jobs.createJob({
     id: randomUUID(),
     scopeId: job.scopeId,
-    plan: {
-      title: "Second",
-      phases: [{ name: "Build", owner: "Producer", dependencies: [] }],
-      certification: "Audit",
-      deliverable: "Book",
-      destination: "Thread",
-      clarifications: [],
-    },
+    ...finnySopJobFields(job.scopeId),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy: { id: "v1", maxFindings: 2, maxCodeLength: 20, maxMessageLength: 100 },
     originThreadRef: job.originThreadRef,
@@ -274,14 +248,8 @@ test("material clarification keeps approval fail closed and restart recovery rel
   const jobInput = {
     id: randomUUID(),
     scopeId: "personal:U1",
-    plan: {
-      title: "Material basis",
-      phases: [{ name: "Build", owner: "Producer", dependencies: [] }],
-      certification: "Audit",
-      deliverable: "Book",
-      destination: "Thread",
-      clarifications: [{ question: "Which basis?", answer: "Signed contracts" }],
-    },
+    ...finnySopJobFields("personal:U1"),
+    values: { cutoff: "2026-10-31", currency: "Signed contracts" },
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy: { id: "v1", maxFindings: 2, maxCodeLength: 20, maxMessageLength: 100 },
     originThreadRef: "slack:C1:100.1",
@@ -363,6 +331,7 @@ test("material clarification keeps approval fail closed and restart recovery rel
     },
   });
   assert.equal(await approvals.pending(parent.requestId), null);
+  const presentation = finnySopPlanPresentation(jobInput.sop, jobInput.values);
   assert.deepEqual(
     await approvals.decide({
       requestId: clarification.requestId,
@@ -381,11 +350,12 @@ test("material clarification keeps approval fail closed and restart recovery rel
         kind: "plan",
         requestId: parent.requestId,
         card: {
-          title: "Material basis",
-          phases: [{ name: "Build", owner: "Producer", dependencies: [] }],
-          certification: "Audit",
-          deliverable: "Book",
-          destination: "Thread",
+          title: presentation.title,
+          summary: presentation.summary,
+          phases: presentation.phases,
+          certification: presentation.certification,
+          deliverable: presentation.deliverable,
+          destination: presentation.destination,
         },
       },
     },
@@ -407,14 +377,8 @@ test("nonrecommended and Other clarification decisions permanently withhold the 
     const job = await jobs.createJob({
       id: randomUUID(),
       scopeId: "personal:U1",
-      plan: {
-        title: "Material basis",
-        phases: [{ name: "Build", owner: "Producer", dependencies: [] }],
-        certification: "Audit",
-        deliverable: "Book",
-        destination: "Thread",
-        clarifications: [{ question: "Which basis?", answer: "Signed contracts" }],
-      },
+      ...finnySopJobFields("personal:U1"),
+      values: { cutoff: "2026-10-31", currency: "Signed contracts" },
       policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
       findingPolicy: { id: "v1", maxFindings: 2, maxCodeLength: 20, maxMessageLength: 100 },
       originThreadRef: "slack:C1:100.1",

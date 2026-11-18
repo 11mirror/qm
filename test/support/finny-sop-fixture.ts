@@ -83,3 +83,10 @@ export function finnySopFixture() {
     approval: { required: true, destination: "origin-thread" },
   } as const;
 }
+
+export function finnySopJobFields(scopeId: string) {
+  return {
+    sop: { ...finnySopFixture(), scopeId },
+    values: { cutoff: "2026-10-31", currency: "INR" },
+  } as const;
+}

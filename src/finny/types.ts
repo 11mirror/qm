@@ -49,8 +49,8 @@ export interface FinnyApproval {
 export interface FinnyJob {
   id: string;
   scopeId: string;
-  plan: FinnyPlanPresentation;
-  planDigest: string;
+  plan?: FinnyPlanPresentation;
+  planDigest?: string;
   sop?: FinnySopVersion;
   sopBinding?: FinnyJobSopBinding;
   artifactDigest?: string;
@@ -99,11 +99,10 @@ export interface FinnyAttestation {
   createdAt: number;
 }
 
-export interface FinnyFinalReceiptPayload {
+interface FinnyFinalReceiptPayloadBase {
   aud: "finny.final.delivery";
   jobId: string;
   scopeId: string;
-  planDigest: string;
   artifactDigest: string;
   policyVersion: string;
   evaluator: FinnyEvaluatorRef;
@@ -115,6 +114,18 @@ export interface FinnyFinalReceiptPayload {
   provisionalRevision: string;
   issuedAt: number;
 }
+
+export interface FinnySopFinalReceiptPayload extends FinnyFinalReceiptPayloadBase {
+  sopVersionId: string;
+  sopRevision: number;
+  executionDigest: string;
+}
+
+export interface FinnyLegacyFinalReceiptPayload extends FinnyFinalReceiptPayloadBase {
+  planDigest: string;
+}
+
+export type FinnyFinalReceiptPayload = FinnySopFinalReceiptPayload | FinnyLegacyFinalReceiptPayload;
 
 export interface FinnyFinalReceipt {
   token: string;

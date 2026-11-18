@@ -42,13 +42,9 @@ export function createFinnyApprovalService(deps: {
     }
     if (request.readyAt === undefined || request.decidedAt !== undefined || request.job.approval !== undefined)
       return null;
-    const plan =
-      request.job.sop && request.job.sopBinding
-        ? finnySopPlanPresentation(request.job.sop, request.job.sopBinding.values)
-        : request.job.plan;
-    const bindingMatches = request.job.sopBinding
-      ? request.executionDigest === request.job.sopBinding.executionDigest
-      : request.planDigest === request.job.planDigest;
+    if (!request.job.sop || !request.job.sopBinding) throw new Error("Finny active job has no SOP binding");
+    const plan = finnySopPlanPresentation(request.job.sop, request.job.sopBinding.values);
+    const bindingMatches = request.executionDigest === request.job.sopBinding.executionDigest;
     if (!bindingMatches || request.originThreadRef !== request.job.originThreadRef)
       throw new Error("Finny approval request binding does not match the job");
     const { title, summary, phases, certification, deliverable, destination } = plan;
@@ -208,10 +204,8 @@ export function createFinnyApprovalService(deps: {
         () => deps.onApproved({ scopeId: request.scopeId, jobId: request.jobId, requestId: request.requestId }),
       );
       const outcome = PLAN_OUTCOMES[input.decision.action];
-      const title =
-        request.job.sop && request.job.sopBinding
-          ? finnySopPlanPresentation(request.job.sop, request.job.sopBinding.values).title
-          : request.job.plan.title;
+      if (!request.job.sop || !request.job.sopBinding) throw new Error("Finny active job has no SOP binding");
+      const title = finnySopPlanPresentation(request.job.sop, request.job.sopBinding.values).title;
       return { kind: "decision", card: { title, ...outcome } };
     },
   };

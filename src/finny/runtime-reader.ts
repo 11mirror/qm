@@ -11,7 +11,9 @@ export interface AuthoritativeFinnyRuntimeJob {
   eventSeq: number;
   status: string;
   policyVersion: string;
-  planDigest: string;
+  sopVersionId: string;
+  sopRevision: number;
+  executionDigest: string;
   artifactDigest: string | null;
   requiredGenerations: Record<string, number>;
 }
@@ -48,6 +50,7 @@ export function createFinnyCurrentJobReader(deps: {
       if (binding.role === "parent") return null;
       const job = await deps.jobs.getJob(binding.scopeId, binding.jobId);
       if (!job) return null;
+      if (!job.sopBinding) throw new Error("Finny active job has no SOP binding");
       return {
         schema: "finny-authoritative-job.v1",
         scopeId: binding.scopeId,
@@ -57,7 +60,9 @@ export function createFinnyCurrentJobReader(deps: {
         eventSeq: job.eventHead,
         status: status(job),
         policyVersion: job.policy.policyVersion,
-        planDigest: job.planDigest,
+        sopVersionId: job.sopBinding.versionId,
+        sopRevision: job.sopBinding.revision,
+        executionDigest: job.sopBinding.executionDigest,
         artifactDigest: job.artifactDigest ?? null,
         requiredGenerations: { ...job.policy.requiredGenerations },
       };

@@ -7,6 +7,7 @@ import { FINNY_CHECK_IDS, initialFinnyPolicy } from "../src/finny/policy.ts";
 import { createPostgresFinnyStore } from "../src/finny/postgres-store.ts";
 import { createFinnyWorkerGrants } from "../src/finny/worker-grants.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { finnySopJobFields } from "./support/finny-sop-fixture.ts";
 
 const SECRET = "finny-worker-grant-test-secret";
 
@@ -15,14 +16,7 @@ async function approvedJob() {
   const input = {
     id: randomUUID(),
     scopeId: "personal:U1",
-    plan: {
-      title: "Finance pack",
-      phases: [{ name: "Produce", owner: "MIS Expert", dependencies: [] }],
-      certification: "Independent checks",
-      deliverable: "Workbook",
-      destination: "Origin thread",
-      clarifications: [],
-    },
+    ...finnySopJobFields("personal:U1"),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     originThreadRef: `slack:C1:${randomUUID()}`,
     findingPolicy: { id: "finny-r5-test", maxFindings: 8, maxCodeLength: 80, maxMessageLength: 2_000 },

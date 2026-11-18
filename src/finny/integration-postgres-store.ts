@@ -161,6 +161,7 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
         const job = jobResult.rows[0] as Record<string, unknown> | undefined;
         if (!job || job.origin_thread_ref !== input.originThreadRef)
           throw new Error("Finny approval parent does not match the job");
+        if (job.sop_version_id === null) throw new Error("Finny active job has no SOP binding");
         await db.query(
           `INSERT INTO finny_approval_requests(
              request_id,scope_id,job_id,plan_digest,execution_digest,
@@ -170,7 +171,7 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
             input.requestId,
             input.scopeId,
             input.jobId,
-            job.plan_digest,
+            null,
             job.execution_digest,
             input.originThreadRef,
             input.actorId,
@@ -241,6 +242,8 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
           request.job_id !== input.jobId ||
           request.authorized_actor_id !== input.actorId ||
           request.origin_thread_ref !== input.originThreadRef ||
+          request.plan_digest !== null ||
+          request.execution_digest !== job.execution_digest ||
           (clarification ? request.ready_at !== null : request.ready_at === null)
         )
           throw new Error("Finny approval parent idempotency conflict");

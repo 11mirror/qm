@@ -107,7 +107,7 @@
         {
           "commandId": "finny-plan-postgres",
           "file": "test/finny-plan.test.ts",
-          "name": "validates and canonically digests a complete renderable plan"
+          "name": "validates a complete renderable SOP projection"
         },
         {
           "commandId": "finny-store-postgres",
@@ -508,7 +508,7 @@
         {
           "commandId": "finny-approval-postgres",
           "file": "test/finny-approval-service.test.ts",
-          "name": "pending loads the persisted plan presentation by opaque request ID"
+          "name": "pending projects the exact persisted SOP binding by opaque request ID"
         },
         {
           "commandId": "finny-slack-postgres",

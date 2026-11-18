@@ -9,10 +9,10 @@ import { initialFinnyPolicy } from "../src/finny/policy.ts";
 import { createPostgresFinnyStore } from "../src/finny/postgres-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { finnySopFixture } from "./support/finny-sop-fixture.ts";
+import { finnySopFixture, finnySopJobFields } from "./support/finny-sop-fixture.ts";
 
 const plan = {
-  title: "October close",
+  title: finnySopFixture().title,
   summary: "Prepare and independently certify the close pack.",
   phases: [
     { name: "Prepare", owner: "Producer", dependencies: [] },
@@ -23,6 +23,13 @@ const plan = {
   destination: "Origin thread",
   clarifications: [{ question: "Which accounting basis should be used?", answer: "Signed contracts" }],
 };
+
+function approvalSopJobFields(scopeId: string) {
+  return {
+    ...finnySopJobFields(scopeId),
+    values: { cutoff: "2026-10-31", currency: "Signed contracts" },
+  };
+}
 
 const findingPolicy = {
   id: "finny-r5-test",
@@ -89,7 +96,7 @@ test("approve requires the exact internal actor and origin then invokes coordina
   await store.createJob({
     id: jobId,
     scopeId,
-    plan,
+    ...approvalSopJobFields(scopeId),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
@@ -127,7 +134,7 @@ test("a decided approval returns gone without a duplicate coordinator callback",
   await store.createJob({
     id: jobId,
     scopeId,
-    plan,
+    ...approvalSopJobFields(scopeId),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
@@ -159,7 +166,7 @@ test("pending recovers a durable material clarification with persisted options",
   await store.createJob({
     id: jobId,
     scopeId,
-    plan,
+    ...approvalSopJobFields(scopeId),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
@@ -211,7 +218,7 @@ test("clarification selection is bound to the exact actor, origin, and persisted
   await store.createJob({
     id: jobId,
     scopeId,
-    plan,
+    ...approvalSopJobFields(scopeId),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
@@ -272,7 +279,7 @@ test("replaying a committed recommended clarification recovers the pending plan 
   await store.createJob({
     id: jobId,
     scopeId,
-    plan,
+    ...approvalSopJobFields(scopeId),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "web:approver@example.com:finny-replay",
@@ -312,7 +319,7 @@ test("replaying a committed recommended clarification recovers the pending plan 
   const newerJob = await store.createJob({
     id: randomUUID(),
     scopeId,
-    plan: { ...plan, title: "Unrelated newer plan" },
+    ...approvalSopJobFields(scopeId),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "web:approver@example.com:finny-replay",
@@ -345,7 +352,7 @@ test("clarification creation durably enqueues its opaque request to the exact de
   await store.createJob({
     id: jobId,
     scopeId,
-    plan,
+    ...approvalSopJobFields(scopeId),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
@@ -398,7 +405,7 @@ test("clarification rejects unauthorized actors, copied cards, and unpersisted b
   await store.createJob({
     id: jobId,
     scopeId,
-    plan,
+    ...approvalSopJobFields(scopeId),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
@@ -469,7 +476,7 @@ test("plan decisions reject external, wrong, and copied-card actors without muta
   await store.createJob({
     id: jobId,
     scopeId,
-    plan,
+    ...approvalSopJobFields(scopeId),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
@@ -510,7 +517,7 @@ test("clarification request idempotency keys cannot be reused for different mate
   await store.createJob({
     id: jobId,
     scopeId,
-    plan,
+    ...approvalSopJobFields(scopeId),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
@@ -550,7 +557,7 @@ test("concurrent approval clicks settle once and invoke coordination once", asyn
   await store.createJob({
     id: jobId,
     scopeId,
-    plan,
+    ...approvalSopJobFields(scopeId),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
@@ -587,7 +594,7 @@ test("approval store atomically rejects an origin context that does not match it
   await store.createJob({
     id: jobId,
     scopeId,
-    plan,
+    ...approvalSopJobFields(scopeId),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
@@ -618,7 +625,7 @@ test("clarification delivery rejects a destination outside the persisted origin 
   await store.createJob({
     id: jobId,
     scopeId,
-    plan,
+    ...approvalSopJobFields(scopeId),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
@@ -661,7 +668,7 @@ test("clarification persistence rejects option sets that Slack cannot render", a
   await store.createJob({
     id: jobId,
     scopeId,
-    plan,
+    ...approvalSopJobFields(scopeId),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
@@ -702,7 +709,7 @@ test("a job cannot expose multiple pending approval requests", async () => {
   await store.createJob({
     id: jobId,
     scopeId,
-    plan,
+    ...approvalSopJobFields(scopeId),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
@@ -735,10 +742,8 @@ test("generic clarification atomically withdraws ready approval until the persis
     const job = await store.createJob({
       id: randomUUID(),
       scopeId: "personal:approver@example.com",
-      plan: {
-        ...plan,
-        clarifications: [{ question: "Which accounting basis should be used?", answer: "Signed contracts" }],
-      },
+      ...approvalSopJobFields("personal:approver@example.com"),
+      values: { cutoff: "2026-10-31", currency: "Signed contracts" },
       policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
       findingPolicy,
       originThreadRef: "slack:C-finance:100.200",
@@ -818,7 +823,7 @@ test("approval readiness migration derives legacy readiness from every clarifica
     const job = await store.createJob({
       id: randomUUID(),
       scopeId: "personal:approver@example.com",
-      plan,
+      ...approvalSopJobFields("personal:approver@example.com"),
       policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
       findingPolicy,
       originThreadRef: `slack:C-finance:${randomUUID()}`,
@@ -888,7 +893,7 @@ test("concurrent material clarification creation leaves one pending request and 
   const job = await store.createJob({
     id: randomUUID(),
     scopeId: "personal:approver@example.com",
-    plan,
+    ...approvalSopJobFields("personal:approver@example.com"),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
@@ -931,7 +936,7 @@ test("prior nonrecommended decision permanently blocks a later recommendation", 
   const job = await store.createJob({
     id: randomUUID(),
     scopeId: "personal:approver@example.com",
-    plan,
+    ...approvalSopJobFields("personal:approver@example.com"),
     policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
@@ -1028,7 +1033,7 @@ test("committed decisions survive post-commit dispatch failures for durable reco
     await store.createJob({
       id: jobId,
       scopeId,
-      plan,
+      ...approvalSopJobFields("personal:approver@example.com"),
       policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
       findingPolicy,
       originThreadRef,

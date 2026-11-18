@@ -60,7 +60,8 @@ function harness(
       async getJob(scopeId: string, jobId: string) {
         return scopeId === "scope-1" && jobId === "job-1" ? job : null;
       },
-      async recordSopAmendment() {
+      async recordSopAmendment(input: unknown) {
+        calls.push(["recordSopAmendment", input]);
         return { job, events: [], deduped: false };
       },
     },
@@ -279,6 +280,14 @@ test("material clarification must match the immutable plan recommendation", asyn
     /unambiguously match/i,
   );
   assert.equal(calls.length, 0);
+});
+
+test("amendment rejects non-material changes before mutating durable authority", async () => {
+  const { factory, calls } = harness();
+  const service = await factory.forTurn(parent);
+  assert.ok(service);
+  await assert.rejects(service.amendPlan("job-1", sop, { ...values, note: "display-only update" }), /non-material/i);
+  assert.equal(calls.some(([name]) => name === "recordSopAmendment"), false);
 });
 
 test("worker service derives job authority from exact current session and run", async () => {

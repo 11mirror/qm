@@ -331,6 +331,10 @@ export function createFinnyToolServiceFactory(deps: {
         ): Promise<FinnyPlanCreation> {
           const job = await deps.jobs.getJob(turn.scopeId, jobId);
           if (!job) throw new Error("Finny job is unavailable");
+          if (!job.sopBinding) throw new Error("Finny job has no SOP binding");
+          const newExecutionDigest = canonicalFinnyExecutionDigest(sop, values);
+          if (newExecutionDigest === job.sopBinding.executionDigest)
+            throw new Error("Finny non-material amendments do not require approval");
           if (materialClarification)
             assertFinnyMaterialClarificationMatchesSop(sop, values, materialClarification);
           const requestId = id();
@@ -340,11 +344,10 @@ export function createFinnyToolServiceFactory(deps: {
             jobId,
             sop,
             values,
-            idempotencyKey: `finny-amend:${jobId}:${canonicalFinnyExecutionDigest(sop, values)}`,
+            idempotencyKey: `finny-amend:${jobId}:${newExecutionDigest}`,
             createdAt: now,
           });
-          if (amendment.job.approval)
-            throw new Error("Finny non-material amendment retained its existing approval");
+          if (amendment.job.approval) throw new Error("Finny material amendment retained its existing approval");
           await deps.integration.replaceApprovalBoundParent({
             scopeId: turn.scopeId,
             jobId,
@@ -695,10 +698,9 @@ export function finnyFinalDelivery(
     receipt.payload.provisionalRevision,
   )}/content`;
   const artifactLink = `<${artifactUrl}|Open final artifact>`;
-  const title = job.sop?.title ?? job.plan.title;
-  const certification = job.sop
-    ? job.sop.controls.map((control) => control.assertion).join("\n")
-    : job.plan.certification;
+  if (!job.sop || !job.sopBinding) throw new Error("Finny final delivery requires an SOP binding");
+  const title = job.sop.title;
+  const certification = job.sop.controls.map((control) => control.assertion).join("\n");
   const spec = {
     schema: "generative-ui.v1",
     fallbackText: [

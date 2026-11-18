@@ -6,6 +6,7 @@ import { createPostgresFinnyStore } from "../src/finny/postgres-store.ts";
 import { reconcileFinnyEvaluatorCorrections } from "../src/finny/evaluator-correction.ts";
 import type { FinnyEvaluatorRef, FinnyJob } from "../src/finny/types.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { finnySopJobFields } from "./support/finny-sop-fixture.ts";
 
 const EVALUATOR_V1: FinnyEvaluatorRef = {
   id: "spreadsheet-core",
@@ -27,14 +28,7 @@ async function createJob(options: { artifact?: boolean } = { artifact: true }) {
   const input = {
     id: randomUUID(),
     scopeId: "personal:U1",
-    plan: {
-      title: "Finance pack",
-      phases: [{ name: "Prepare", owner: "MIS Expert", dependencies: [] }],
-      certification: "Independent checks",
-      deliverable: "Workbook",
-      destination: "Origin thread",
-      clarifications: [],
-    },
+    ...finnySopJobFields("personal:U1"),
     policy: initialFinnyPolicy(EVALUATOR_V1),
     findingPolicy: { id: "test", maxFindings: 8, maxCodeLength: 80, maxMessageLength: 2_000 },
     originThreadRef: `slack:C1:${randomUUID()}`,

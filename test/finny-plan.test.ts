@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { canonicalFinnyPlanDigest, validateFinnyPlanPresentation } from "../src/finny/plan.ts";
+import { validateFinnyPlanPresentation } from "../src/finny/plan.ts";
 
 const plan = {
   title: "Monthly finance pack",
@@ -20,12 +20,9 @@ const plan = {
   ],
 };
 
-test("validates and canonically digests a complete renderable plan", () => {
+test("validates a complete renderable SOP projection", () => {
   const first = validateFinnyPlanPresentation(plan);
-  const second = validateFinnyPlanPresentation(structuredClone(plan));
   assert.deepEqual(first, plan);
-  assert.equal(canonicalFinnyPlanDigest(first), canonicalFinnyPlanDigest(second));
-  assert.match(canonicalFinnyPlanDigest(first), /^[A-Za-z0-9_-]{43}$/);
   assert(Object.isFrozen(first));
   assert(Object.isFrozen(first.phases));
   assert(Object.isFrozen(first.clarifications));

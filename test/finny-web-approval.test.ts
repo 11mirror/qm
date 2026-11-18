@@ -158,8 +158,9 @@ test("a nonrecommended web Finny clarification choice resumes the coordinator wi
   const resumingAgent: Agent = {
     async runTurn(turn) {
       turns += 1;
+      const scopedSop = { ...sop, scopeId: scopeId("personal", "approver-42") };
       if (turns === 1) {
-        const created = await turn.tools.finny!.createPlan(sop, values, {
+        const created = await turn.tools.finny!.createPlan(scopedSop, values, {
           question,
           options: [
             { id: "today", label: "2026-11-17" },
@@ -185,16 +186,16 @@ test("a nonrecommended web Finny clarification choice resumes the coordinator wi
       if (turns === 2) {
         assert.match(turn.environment ?? "", /2026-11-30/);
         const revisedValues = { ...values, cutoff: "2026-11-30" };
-        const amended = await turn.tools.finny!.amendPlan(jobId, sop, revisedValues);
+        const amended = await turn.tools.finny!.amendPlan(jobId, scopedSop, revisedValues);
         return {
           reply: "",
           pausedOnApproval: true,
           pendingApprovals: [
             {
-              command: sop.title,
+              command: scopedSop.title,
               reason: "Finny Governance Plan Approval",
               approvalKey: `finny-plan:${amended.requestId}`,
-              summary: sop.intent.description,
+              summary: scopedSop.intent.description,
               grantModes: { session: false, always: false },
             },
           ],

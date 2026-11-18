@@ -51,25 +51,17 @@ test("Spike 2: Preflight harness calls finny_create_plan and enters human approv
     },
     jobs: {
       async createJob(input: CreateFinnyJobCommand) {
-        if ("sop" in input)
-          return {
-            id: input.id,
-            scopeId: input.scopeId,
-            sop: input.sop,
-            sopBinding: {
-              versionId: finnySopVersionId(input.sop),
-              values: input.values,
-              executionDigest: canonicalFinnyExecutionDigest(input.sop, input.values),
-              revision: 1,
-            },
-            policy: initialFinnyPolicy(evaluator),
-          } as unknown as FinnyJob;
         return {
           id: input.id,
           scopeId: input.scopeId,
-          plan: input.plan,
+          sop: input.sop,
+          sopBinding: {
+            versionId: finnySopVersionId(input.sop),
+            values: input.values,
+            executionDigest: canonicalFinnyExecutionDigest(input.sop, input.values),
+            revision: 1,
+          },
           policy: initialFinnyPolicy(evaluator),
-          requiredGenerations: { "formula.recalculate": 1, "summary.crossfoot": 1 },
         } as unknown as FinnyJob;
       },
       async getJob() {
@@ -361,25 +353,17 @@ test("Spike 5: finnyTurnAuthority and createPlan support web chat surface", asyn
     },
     jobs: {
       async createJob(input: CreateFinnyJobCommand) {
-        if ("sop" in input)
-          return {
-            id: input.id,
-            scopeId: input.scopeId,
-            sop: input.sop,
-            sopBinding: {
-              versionId: finnySopVersionId(input.sop),
-              values: input.values,
-              executionDigest: canonicalFinnyExecutionDigest(input.sop, input.values),
-              revision: 1,
-            },
-            policy: initialFinnyPolicy(evaluator),
-          } as unknown as FinnyJob;
         return {
           id: input.id,
           scopeId: input.scopeId,
-          plan: input.plan,
+          sop: input.sop,
+          sopBinding: {
+            versionId: finnySopVersionId(input.sop),
+            values: input.values,
+            executionDigest: canonicalFinnyExecutionDigest(input.sop, input.values),
+            revision: 1,
+          },
           policy: initialFinnyPolicy(evaluator),
-          requiredGenerations: { "formula.recalculate": 1, "summary.crossfoot": 1 },
         } as unknown as FinnyJob;
       },
       async getJob() {
