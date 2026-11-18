@@ -2,7 +2,7 @@
 
 Status: Active design and implementation tracker
 Created: 2026-11-17
-Last updated: 2026-11-17
+Last updated: 2026-11-18
 Owner: Finny/QM working agents
 Implementation state: Phase 0 and Phase 1 implemented and verified on QM web and Slack; Phase 2 authorized and queued after the Phase 1 PR is complete
 Working branch: `codex/finny-phase-1-performance`
@@ -27,6 +27,7 @@ This table is the quick handoff. Follow the links for design, implementation, an
 | Verification | Phase 1 focused suites, typecheck, ESLint/oxlint, FinnyLoop r5, and real Chrome web plus Slack QA pass | [Running implementation log](#running-implementation-log) and [r5 manifest](../../evals/finnyloop-r5/manifest.json) |
 | Schema/config | No database schema, persisted payload, or configuration change in Phase 0/1 | [Phase 0/1 evidence](#phase-01-live-measurement--qm-web) |
 | Next gate | Complete PR review, then implement and verify the first durable task-level SOP slice; do not claim a latency win from one pair | [Phase 2](#phase-2--durable-sop-creation-and-execution) and [human decisions](#required-human-decisions-for-phase-2-gates) |
+| Next-session handover | Phase 2 execution order, guardrails, schema gate, verification, and definition of done | [Finny Phase 2 SOP implementation handover](./2026-11-18-finny-sop-phase-2-handover.md) |
 
 ## How to use this document
 
@@ -40,6 +41,7 @@ Every agent working on this initiative must:
 4. Distinguish proposed design, implemented code, locally verified behavior, and deployed behavior.
 5. Keep the current Finny topology. The separate `finny-staging` deployment proposal is outside this initiative.
 6. Prefer deleting protocol and redundant state over adding another workflow layer.
+7. For Phase 2 execution, follow the [SOP implementation handover](./2026-11-18-finny-sop-phase-2-handover.md) and keep this document updated as the running source of truth.
 
 The QM spec wins if this document disagrees with it.
 
@@ -1201,6 +1203,7 @@ Reason: Current QM has useful offline evidence conventions but no versioned fina
 | 2026-11-17 |  Phase 1 | Verified the complete alternate-choice flow on the exact-head production-shaped web instance in Chrome                                                                                                                         | Session `fa96216e-87a4-4ca9-b2ed-c54b1aa74263`: the user selected `2026-11-30`; QM resumed the same parent without another human message, presented a replacement plan explicitly bound to the alternate cutoff, accepted approval, and visibly started one Producer subagent.             | Complete                                                                          | Production QA     |
 | 2026-11-17 |  Phase 1 | Bound reverification recovery to the exact Auditor run observed by the durable scan                                                                                                                                             | RED: replaying one orphaned, terminal, or expired reverification recovery could target a replacement or stall on an expired binding. GREEN: active bindings retry in the same session with an observed-run guard; missing bindings admit once; stale replay is ignored; the obsolete delivery-prefix lookup is removed. | Complete; no database schema or configuration change                              | Integration owner |
 | 2026-11-17 |  Phase 2 | User authorized task-level SOP implementation and verification as the next milestone after the Phase 1 PR is complete                                                                                                                               | This document remains the working contract; first record the complete human-readable old/new schema and migration review, then implement one finance-specific SOP persistence and execution slice.                                                                                                            | Queued                                                                            | Integration owner |
+| 2026-11-18 |  Phase 2 | Added the durable next-session implementation handover                                                                                                                                                                                              | [Handover](./2026-11-18-finny-sop-phase-2-handover.md) links the authoritative design, exact schema gate, TDD sequence, live/eval measurements, guardrails, and definition of done.                                                                                                                             | Ready after Phase 1 PR completion                                                  | Integration owner |
 
 ## Required human decisions for Phase 2 gates
 
