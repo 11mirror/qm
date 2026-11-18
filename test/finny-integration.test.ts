@@ -20,7 +20,13 @@ const values = { cutoff: "2026-10-31", currency: "INR", note: "first run" };
 
 function harness(
   binding: { role: "parent" | "producer" | "auditor" } | null = null,
-  options: { job?: Partial<FinnyJob>; artifactBytes?: Uint8Array; deterministicOutput?: unknown } = {},
+  options: {
+    job?: Partial<FinnyJob>;
+    artifactBytes?: Uint8Array;
+    deterministicOutput?: unknown;
+    amendmentPreviousExecutionDigest?: string;
+    amendmentDeduped?: boolean;
+  } = {},
 ) {
   const calls: Array<[string, unknown]> = [];
   const job = {
@@ -70,12 +76,12 @@ function harness(
           events: [
             {
               payload: {
-                previousExecutionDigest: jobSopBinding.executionDigest,
+                previousExecutionDigest: options.amendmentPreviousExecutionDigest ?? jobSopBinding.executionDigest,
                 newExecutionDigest,
               },
             },
           ],
-          deduped: false,
+          deduped: options.amendmentDeduped ?? false,
         };
       },
     },
@@ -308,6 +314,42 @@ test("non-material amendments use distinct stable operations without replacing a
   assert.equal(amendments.length, 3);
   assert.notEqual(amendments[0]?.idempotencyKey, amendments[1]?.idempotencyKey);
   assert.equal(amendments[0]?.idempotencyKey, amendments[2]?.idempotencyKey);
+  assert.equal(calls.some(([name]) => name === "enqueue"), false);
+});
+
+test("material amendment replay returns settled state after its replacement approval", async () => {
+  const revisedValues = { ...values, cutoff: "2026-11-30" };
+  const operationId = "approved-amendment";
+  const requestId = `finny-amend-${createHash("sha256")
+    .update(`scope-1\0job-1\0${operationId}`)
+    .digest("base64url")}`;
+  const { factory, calls } = harness(null, {
+    job: {
+      sopBinding: {
+        versionId: finnySopVersionId(sop),
+        values: revisedValues,
+        executionDigest: canonicalFinnyExecutionDigest(sop, revisedValues),
+        revision: 2,
+      },
+      approval: {
+        requestId,
+        actorId: "actor-1",
+        action: "approve",
+        executionDigest: canonicalFinnyExecutionDigest(sop, revisedValues),
+        originThreadRef: parent.originThreadRef,
+        decidedAt: Date.now(),
+      },
+    },
+    amendmentPreviousExecutionDigest: canonicalFinnyExecutionDigest(sop, values),
+    amendmentDeduped: true,
+  });
+  const service = await factory.forTurn(parent);
+  assert.ok(service);
+  assert.deepEqual(await service.amendPlan("job-1", sop, revisedValues, undefined, operationId), {
+    message: "Finny plan job-1 amendment was already recorded and is no longer awaiting approval.",
+    jobId: "job-1",
+    awaiting: "none",
+  });
   assert.equal(calls.some(([name]) => name === "enqueue"), false);
 });
 

@@ -362,6 +362,16 @@ export function createFinnyToolServiceFactory(deps: {
               jobId,
               awaiting: "none",
             };
+          if (
+            amendment.deduped &&
+            (amendment.job.approval?.requestId === requestId ||
+              amendment.job.sopBinding?.executionDigest !== event.payload.newExecutionDigest)
+          )
+            return {
+              message: `Finny plan ${jobId} amendment was already recorded and is no longer awaiting approval.`,
+              jobId,
+              awaiting: "none",
+            };
           if (amendment.job.approval) throw new Error("Finny material amendment retained its existing approval");
           await deps.deliveries.enqueue({
             destination: {

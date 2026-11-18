@@ -981,7 +981,6 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
       return withPgTransaction(await pool(), async (db) => {
         const job = await lockedJob(db, input.scopeId, input.jobId);
         if (job.sop_version_id === null) throw new Error("Finny job does not use SOP authority");
-        if (job.finalized_at !== null) throw new Error("Finny job is already finalized");
         const replay = await eventsForIdempotency(db, input.idempotencyKey);
         if (replay.length) {
           assertEventReplayJob(replay, input.jobId);
@@ -1000,6 +999,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
             deduped: true,
           };
         }
+        if (job.finalized_at !== null) throw new Error("Finny job is already finalized");
         const previousSopVersionId = job.sop_version_id as string;
         const previousValues = job.bound_inputs as Record<string, string | boolean>;
         const previousExecutionDigest = job.execution_digest as string;
