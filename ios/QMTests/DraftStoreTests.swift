@@ -33,4 +33,14 @@ final class DraftStoreTests: XCTestCase {
     XCTAssertEqual(store.read().text, "next")
     XCTAssertTrue(DraftStore.conversations(account).isEmpty)
   }
+
+  func testAttachmentPruningRefusesAnUnreadableDraftDirectory() throws {
+    let account = "drafts-\(UUID().uuidString)"
+    defer { DraftStore.removeAccount(account) }
+    let directory = DraftStore(account: account, thread: "thread").file.deletingLastPathComponent()
+    try FileManager.default.createDirectory(
+      at: directory.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data("not a directory".utf8).write(to: directory)
+    XCTAssertThrowsError(try DraftStore.pruneAttachments(account))
+  }
 }

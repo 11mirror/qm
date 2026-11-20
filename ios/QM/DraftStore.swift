@@ -73,10 +73,14 @@ struct DraftStore {
     }
   }
 
-  private static func records(_ account: String) -> [URL] {
-    let files =
-      (try? FileManager.default.contentsOfDirectory(
-        at: directory(account), includingPropertiesForKeys: nil)) ?? []
+  private static func records(_ account: String) throws -> [URL] {
+    let files: [URL]
+    do {
+      files = try FileManager.default.contentsOfDirectory(
+        at: directory(account), includingPropertiesForKeys: nil)
+    } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+      return []
+    }
     return files.filter { $0.pathExtension == "json" }
   }
 
@@ -109,7 +113,7 @@ struct DraftStore {
   }
 
   static func conversations(_ account: String) -> [Conversation] {
-    let files = records(account)
+    let files = (try? records(account)) ?? []
     return files.compactMap { file in
       guard let record = try? load(file),
         !record.text.isEmpty || record.pending != nil || !(record.attachments ?? []).isEmpty,
@@ -125,7 +129,7 @@ struct DraftStore {
   }
 
   static func pruneAttachments(_ account: String) throws {
-    let files = records(account)
+    let files = try records(account)
     var referenced: Set<String> = []
     for file in files {
       let loaded: Record?

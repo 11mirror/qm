@@ -227,6 +227,20 @@ struct NativeBackgroundOutput: Decodable {
   let state: String
   let exitCode: Int?
 }
+struct NativeProcessTranscript {
+  var output = ""
+  var cursor = 0
+  var state = ""
+  var exitCode: Int?
+  mutating func apply(_ result: NativeBackgroundOutput) -> Bool {
+    let advanced = result.cursor > cursor
+    output += result.chunk
+    cursor = result.cursor
+    state = result.state
+    exitCode = result.exitCode
+    return state != "exited" || advanced
+  }
+}
 struct NativeBackgroundView: View {
   let client: APIClient
   let conversation: Conversation
@@ -297,16 +311,13 @@ struct NativeProcessOutput: View {
   let sessionID: String
   let processID: String
   let command: String
-  @State private var output = ""
-  @State private var cursor = 0
-  @State private var state = ""
-  @State private var exitCode: Int?
+  @State private var transcript = NativeProcessTranscript()
   @State private var error: String?
   @State private var busy = false
   @Environment(\.scenePhase) private var phase
   private var status: String {
-    switch state {
-    case "exited": "Exited\(exitCode.map { " (\($0))" } ?? "")"
+    switch transcript.state {
+    case "exited": "Exited\(transcript.exitCode.map { " (\($0))" } ?? "")"
     case "": ""
     default: "Running"
     }
@@ -316,7 +327,7 @@ struct NativeProcessOutput: View {
       VStack(alignment: .leading, spacing: 12) {
         Text(command).font(.headline.monospaced())
         Text(status).font(.caption).foregroundStyle(.secondary)
-        Text(output).font(.footnote.monospaced()).textSelection(.enabled).frame(
+        Text(transcript.output).font(.footnote.monospaced()).textSelection(.enabled).frame(
           maxWidth: .infinity, alignment: .leading)
         if let error { Text(error).foregroundStyle(.red) }
         Button {
@@ -324,7 +335,8 @@ struct NativeProcessOutput: View {
         } label: {
           NativeActionLabel(
             title: "Refresh output",
-            busyTitle: state.isEmpty ? "Loading output…" : "Refreshing output…", busy: busy)
+            busyTitle: transcript.state.isEmpty ? "Loading output…" : "Refreshing output…",
+            busy: busy)
         }.disabled(busy)
       }.padding()
     }
@@ -332,27 +344,29 @@ struct NativeProcessOutput: View {
     .task(id: phase) {
       guard phase == .active else { return }
       while !Task.isCancelled {
-        await load()
-        if state == "exited" { return }
+        let shouldContinue = await load()
+        if !shouldContinue { return }
+        if transcript.state == "exited" { continue }
         do { try await Task.sleep(for: .seconds(3)) } catch { return }
       }
     }
   }
-  private func load() async {
-    guard !busy else { return }
+  private func load() async -> Bool {
+    guard !busy else { return true }
     busy = true
     defer { busy = false }
     do {
       let result: NativeBackgroundOutput = try await client.fetch(
         "api/sessions/\(sessionID.apiComponent)/background/\(processID.apiComponent)/output",
-        query: [.init(name: "sinceCursor", value: String(cursor))])
+        query: [.init(name: "sinceCursor", value: String(transcript.cursor))])
       try Task.checkCancellation()
-      output = String((output + result.chunk).suffix(200_000))
-      cursor = result.cursor
-      state = result.state
-      exitCode = result.exitCode
+      let shouldContinue = transcript.apply(result)
       error = nil
-    } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+      return shouldContinue
+    } catch {
+      if !Task.isCancelled { self.error = error.localizedDescription }
+      return !Task.isCancelled
+    }
   }
 }
 

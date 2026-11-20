@@ -195,7 +195,8 @@ final class ChatTests: XCTestCase {
   }
 
   func testFinnyClarificationDecodesNativeChoices() throws {
-    let detail = #"{"materialClarification":{"question":"Which cutoff?","options":[{"id":"today","label":"Today"},{"id":"month-end","label":"Month end","description":"Use the close date"}],"recommendedOptionId":"today"}}"#
+    let detail =
+      #"{"materialClarification":{"question":"Which cutoff?","options":[{"id":"today","label":"Today"},{"id":"month-end","label":"Month end","description":"Use the close date"}],"recommendedOptionId":"today"}}"#
     let data = try JSONSerialization.data(withJSONObject: [
       "requestId": "approval", "command": "Which cutoff?",
       "reason": "Finny Governance Clarification", "summaryDetail": detail,
@@ -207,7 +208,8 @@ final class ChatTests: XCTestCase {
   }
 
   func testFinnyPlanDecodesNativeApprovalDetails() throws {
-    let detail = #"{"plan":{"title":"Close receivables","summary":"Prepare the governed report","phases":[{"name":"Produce","owner":"Finny Producer","dependencies":[]}],"certification":"Finny Auditor","deliverable":"Workbook","destination":"ShareChat finance","clarifications":[]}}"#
+    let detail =
+      #"{"plan":{"title":"Close receivables","summary":"Prepare the governed report","phases":[{"name":"Produce","owner":"Finny Producer","dependencies":[]}],"certification":"Finny Auditor","deliverable":"Workbook","destination":"Acme finance","clarifications":[]}}"#
     let data = try JSONSerialization.data(withJSONObject: [
       "requestId": "approval", "command": "Close receivables",
       "reason": "Finny Governance Plan Approval", "summaryDetail": detail,
@@ -217,7 +219,7 @@ final class ChatTests: XCTestCase {
     XCTAssertEqual(plan?.phases.first?.name, "Produce")
     XCTAssertEqual(plan?.certification, "Finny Auditor")
     XCTAssertEqual(plan?.deliverable, "Workbook")
-    XCTAssertEqual(plan?.destination, "ShareChat finance")
+    XCTAssertEqual(plan?.destination, "Acme finance")
   }
 
   func testServerDeniedMutationsAreBlockedAndPermittedMutationsReachTheServer() async throws {
