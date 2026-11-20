@@ -13,6 +13,7 @@ export interface MemoryDisclosure {
   nativeScopes: readonly ScopeId[];
   audience: readonly Principal[];
   open: boolean;
+  notebookOnly?: boolean;
   config?: Pick<ScopedConfigStore, "resolveSharingPostureDurable">;
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   currentScopeMembers?: CurrentScopeMembers;
@@ -146,22 +147,23 @@ export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure)
   return {
     ...memory,
     facts: visible,
-    async edit(scope, edits, author, context) {
+    async edit(scope, edits, by, context) {
       await editable(
         scope,
         edits.map((edit) => edit.id),
       );
-      await memory.edit!(scope, edits, author, context);
+      await memory.edit!(scope, edits, by, context);
     },
-    async delete(scope, ids, author) {
+    async delete(scope, ids, by, context) {
       await editable(scope, ids);
-      await memory.delete!(scope, ids, author);
+      await memory.delete!(scope, ids, by, context);
     },
     read: async (scope) => renderFacts(await visible(scope)),
     async recall(scope, context) {
       const shown = new Set((await visible(scope)).map((fact) => fact.id));
       return (await memory.recall(scope, context)).filter((row) => row.id !== undefined && shown.has(row.id));
     },
-    query: async (scope, query, limit = 20) => queryFacts(await visible(scope), query, limit),
+    query: async (scope, query, limit = 20, context) =>
+      queryFacts(await visible(scope), query, limit, context?.sessionId),
   };
 }

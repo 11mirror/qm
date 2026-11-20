@@ -1,4 +1,5 @@
 import { describe, it, before, after } from "node:test";
+import { testTenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
@@ -67,14 +68,31 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     assert.equal(built.identity.classify("U-leave").type, "guest");
     assert.equal(built.identity.classify("U-stay").type, "internal");
     assert.ok(
-      (await built.auditLog.events()).some((e) => e.action === "principal.deactivate" && e.principalId === "U-leave"),
+      (await built.auditLog.events(testTenant)).some(
+        (e) => e.action === "principal.deactivate" && e.principalId === "U-leave",
+      ),
     );
 
     await built.app.upsertDirectory([member("U-stay"), member("U-leave")]);
     assert.equal(built.identity.classify("U-leave").type, "internal");
     assert.ok(
-      (await built.auditLog.events()).some((e) => e.action === "principal.reactivate" && e.principalId === "U-leave"),
+      (await built.auditLog.events(testTenant)).some(
+        (e) => e.action === "principal.reactivate" && e.principalId === "U-leave",
+      ),
     );
+  });
+
+  it("a message to a person no chat surface knows lands in a web conversation of their own", async () => {
+    await built.app.upsertDirectory([member("U-stay")]);
+    const send = (recipient: string) =>
+      built.app.reachNow({ senderId: "U-stay", senderScope: scopeId("personal", "U-stay"), recipient, text: "hi" });
+    const offChat = await send("allowed@example.com");
+    assert.ok(offChat.ok, JSON.stringify(offChat));
+    assert.equal(offChat.delivery.destination.type, "web");
+    assert.equal(offChat.delivery.destination.target, "web:allowed@example.com:direct");
+    const onChat = await send("U-stay");
+    assert.ok(onChat.ok, JSON.stringify(onChat));
+    assert.equal(onChat.delivery.destination.type, "principal");
   });
 
   it("a Slack roster omission does not deactivate or hide a configured email-auth principal", async () => {
@@ -89,7 +107,7 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
       assert.equal(resolved.member.displayName, "allowed@example.com");
     }
     assert.ok(
-      !(await built.auditLog.events()).some(
+      !(await built.auditLog.events(testTenant)).some(
         (e) => e.action === "principal.deactivate" && e.principalId === "allowed@example.com",
       ),
     );
@@ -109,7 +127,9 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     assert.deepEqual(await on.json(), { ok: true, principalId: "U-manual", active: true });
     assert.equal(built.identity.classify("U-manual").type, "internal");
     assert.ok(
-      (await built.auditLog.events()).some((e) => e.action === "principal.reactivate" && e.principalId === "U-manual"),
+      (await built.auditLog.events(testTenant)).some(
+        (e) => e.action === "principal.reactivate" && e.principalId === "U-manual",
+      ),
     );
   });
 

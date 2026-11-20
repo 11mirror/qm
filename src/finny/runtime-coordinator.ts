@@ -11,6 +11,17 @@ import type {
 } from "./types.ts";
 import type { IssueFinnyWorkerInput } from "./worker-grants.ts";
 import type { FinnyRuntimeRecovery, FinnyRuntimeStore } from "./runtime-postgres-store.ts";
+import { bootTenant, tenancyBooted } from "../tenants/boot.ts";
+import { withTenant } from "../tenants/context.ts";
+
+export async function runSingleTenantFinnyRecovery(work: () => Promise<void>): Promise<void> {
+  const tenant = bootTenant();
+  if (!tenant) {
+    if (tenancyBooted()) throw new Error("Finny recovery requires a single-tenant deployment");
+    return;
+  }
+  await withTenant(tenant, work);
+}
 
 interface RuntimeGrants {
   issueProducer(input: IssueFinnyWorkerInput): Promise<FinnyWorkerGrant>;

@@ -2,10 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { freePort } from "../scripts/dev/lib/proc.ts";
 
 const repo = fileURLToPath(new URL("..", import.meta.url));
 const work = mkdtempSync(join(tmpdir(), "qm-web-release-"));
@@ -80,14 +80,6 @@ function publish(args: string[]): string {
   return id;
 }
 
-async function freePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address() as { port: number };
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  return port;
-}
-
 let core: ChildProcess | undefined;
 let log = "";
 
@@ -122,6 +114,7 @@ test("a running core serves each published web UI release without restarting", a
       PUBLIC_PORT: String(publicPort),
       PUBLIC_WEB_URL: `http://localhost:${publicPort}`,
       PORTAL_LOCAL_AUTH_BYPASS: "1",
+      PORTAL_SESSION_SECRET: "web-release-publish-test-session-secret-0123",
       PORTAL_DEV_PRINCIPAL: "dev@example.com",
       CONNECTOR_SECRET_KEY: "a".repeat(64),
       CORE_SIGNING_SECRET: "web-release-publish-test-signing-secret",

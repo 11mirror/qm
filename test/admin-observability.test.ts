@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -25,16 +26,43 @@ function start(overrides: Parameters<typeof testConfig>[0] = {}) {
     config: built.config,
     deliveries: built.deliveries,
     crons: built.crons,
+    users: built.users,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
+  return { base, built, close: () => new Promise<void>((r) => server.close(() => r()).closeAllConnections()) };
 }
 
 const ALICE = { "x-admin-actor": "admin-alice@default-org" };
 const get = (base: string, path: string, headers: Record<string, string> = ALICE) => fetch(base + path, { headers });
 const getJson = async (base: string, path: string, headers: Record<string, string> = ALICE): Promise<any> =>
   (await get(base, path, headers)).json();
+
+test("admin transcript fallback reports user-store failures", async (t) => {
+  const s = start();
+  t.after(s.close);
+  const diagnostics: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => void diagnostics.push(args.map(String).join(" ")));
+  assert.equal(
+    (
+      await s.built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "dm:U1:user-store-fallback" },
+        text: "hello",
+      })
+    ).status,
+    "ok",
+  );
+  const listed = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org");
+  t.mock.method(s.built.users, "get", async () => Promise.reject(new Error("user lookup unavailable")));
+  const response = await get(
+    s.base,
+    `/v1/admin/sessions/${encodeURIComponent(listed.sessions[0].id)}?scope=org:default-org`,
+  );
+  assert.equal(response.status, 200);
+  assert.match(diagnostics.join("\n"), /admin sessions: resolve user display name.*user lookup unavailable/);
+});
 
 test("an org admin sees conversations, transcripts, and files top-down", async () => {
   const s = start();
@@ -146,7 +174,7 @@ test("an org admin sees conversations, transcripts, and files top-down", async (
     assert.equal(svg.headers.get("content-type"), "application/octet-stream", "svg is never served inline");
     assert.match(svg.headers.get("content-disposition") ?? "", /^attachment/);
 
-    const actions = (await s.built.auditLog.events()).map((e) => e.action);
+    const actions = (await s.built.auditLog.events(testTenant)).map((e) => e.action);
     for (const a of ["sessions.read", "session.read", "files.read", "file.read", "file.download", "file.view"]) {
       assert.ok(actions.includes(a), `audited ${a}`);
     }
@@ -228,7 +256,7 @@ test("an org admin sees EXACTLY what we sent the model per turn (captured reques
       403,
     );
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "session.llm.read"),
+      (await s.built.auditLog.events(testTenant)).some((e) => e.action === "session.llm.read"),
       "audited session.llm.read",
     );
     assert.equal(
@@ -237,6 +265,33 @@ test("an org admin sees EXACTLY what we sent the model per turn (captured reques
       "scope required",
     );
     assert.equal((await get(s.base, "/v1/admin/sessions/does-not-exist/llm?scope=org:default-org")).status, 404);
+  } finally {
+    await s.close();
+  }
+});
+
+test("batched capture reads retain exact session and turn pairs", async () => {
+  const s = start();
+  try {
+    const sessions = await Promise.all(
+      ["a", "b"].map((id) => s.built.sessions.getOrCreateByThread(`web:batch:${id}`, "dm", "personal:batch")),
+    );
+    for (const session of sessions)
+      for (const turnSeq of [1, 2])
+        await s.built.sessions.recordLlmRequest(session.id, {
+          turnSeq,
+          step: 0,
+          model: "mock",
+          scopeLabel: session.scopeId,
+          promptEnvelope: { model: "mock", messages: [{ role: "user", content: `${session.id}:${turnSeq}` }] },
+        });
+    const wanted = sessions.map((session, i) => ({ sessionId: session.id, turnSeq: i + 1 }));
+    const actual = await s.built.sessions.listLlmRequestsForTurns([...wanted, wanted[0]!]);
+    assert.deepEqual(
+      actual.map(({ sessionId, turnSeq }) => ({ sessionId, turnSeq })),
+      wanted,
+    );
+    assert.deepEqual(await s.built.sessions.listLlmRequestsForTurns([]), []);
   } finally {
     await s.close();
   }
@@ -1007,7 +1062,7 @@ test("the Files view is the document store (write-tool artifacts), not the sandb
     assert.equal(doc.scopeId, scope);
     assert.ok(doc.openable);
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await new Promise<void>((r) => server.close(() => r()).closeAllConnections());
   }
 });
 
@@ -1083,7 +1138,7 @@ test("a saved document is read and downloaded by artifact id", async () => {
       "bytes are downloadable by id",
     );
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await new Promise<void>((r) => server.close(() => r()).closeAllConnections());
   }
 });
 
@@ -1119,7 +1174,7 @@ test("admin governance reports the sandbox's actual egress enforcement capabilit
       const base = `http://localhost:${(server.address() as AddressInfo).port}`;
       return (await getJson(base, "/v1/admin/scopes/org:default-org")).egressEnforcement;
     } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => server.close(() => resolve()).closeAllConnections());
     }
   };
   assert.deepEqual(await read("none", "none"), {
@@ -1225,7 +1280,7 @@ test("admin governance: base model round-trips per-scope, validates ids", async 
     assert.equal((await putModel("org:default-org", "", ALICE)).status, 200, "empty modelId clears the override");
     assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).baseModel, null);
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await new Promise<void>((r) => server.close(() => r()).closeAllConnections());
   }
 });
 
@@ -1275,7 +1330,67 @@ test("admin governance: browse step limit round-trips, validates, and is org-sco
     assert.equal((await putSteps("org:default-org", "", ALICE)).status, 200, "empty clears to the default");
     assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).browseMaxSteps, null);
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await new Promise<void>((r) => server.close(() => r()).closeAllConnections());
+  }
+});
+
+test("admin governance: compaction keep percent round-trips, validates, and is org-scoped", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-compactionkeep-")) }));
+  const server = createInsecureTestServer(built.app, {
+    admin: built.admin,
+    config: built.config,
+    auditLog: built.auditLog,
+  });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const put = (scope: string, percent: unknown, headers: Record<string, string>) =>
+    fetch(base + `/v1/admin/scopes/${encodeURIComponent(scope)}/compaction-keep-percent`, {
+      method: "PUT",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ percent }),
+    });
+  try {
+    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).compactionKeepPercent, null);
+    assert.equal((await put("org:default-org", 30, { "x-admin-actor": "nobody@default-org" })).status, 403);
+    assert.equal((await put("channel:C1", 30, ALICE)).status, 400);
+    for (const bad of [0, 70, 2.5, "abc"]) assert.equal((await put("org:default-org", bad, ALICE)).status, 400);
+    assert.equal((await put("org:default-org", "25", ALICE)).status, 200);
+    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).compactionKeepPercent, 25);
+    assert.equal((await built.config.getCompactionSettingsDurable()).keepPercent, 25);
+    assert.equal((await put("org:default-org", "", ALICE)).status, 200);
+    assert.equal((await built.config.getCompactionSettingsDurable()).keepPercent, null);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()).closeAllConnections());
+  }
+});
+
+test("admin governance: history budget round-trips, validates, and is org-scoped", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-historybudget-")) }));
+  const server = createInsecureTestServer(built.app, {
+    admin: built.admin,
+    config: built.config,
+    auditLog: built.auditLog,
+  });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const put = (scope: string, tokens: unknown, headers: Record<string, string>) =>
+    fetch(base + `/v1/admin/scopes/${encodeURIComponent(scope)}/history-budget-tokens`, {
+      method: "PUT",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ tokens }),
+    });
+  try {
+    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).historyBudgetTokens, null);
+    assert.equal((await put("org:default-org", 60_000, { "x-admin-actor": "nobody@default-org" })).status, 403);
+    assert.equal((await put("channel:C1", 60_000, ALICE)).status, 400);
+    for (const bad of [0, -5, 20_000.5, "abc"]) assert.equal((await put("org:default-org", bad, ALICE)).status, 400);
+    assert.equal((await put("org:default-org", "60000", ALICE)).status, 200);
+    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).historyBudgetTokens, 60_000);
+    assert.equal((await built.config.getCompactionSettingsDurable()).historyBudgetTokens, 60_000);
+    assert.equal((await put("org:default-org", "", ALICE)).status, 200);
+    assert.equal((await built.config.getCompactionSettingsDurable()).historyBudgetTokens, null);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()).closeAllConnections());
   }
 });
 
@@ -1310,7 +1425,7 @@ test("admin governance: spend limits round-trip per scope, validate, and clear",
     assert.equal((await put("channel:C1", { inherit: true })).status, 200);
     assert.equal(await built.config.getSpendLimitDurable("channel:C1"), null, "inherit clears it");
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await new Promise<void>((r) => server.close(() => r()).closeAllConnections());
   }
 });
 
@@ -1342,7 +1457,7 @@ test("the sessions listing digests cron fires from the fire table, even after th
     const row = listed.sessions.find((x: any) => x.id === session.id);
     assert.equal(row?.result, "42 signups today", "the digest is read from the cron_fires table by thread ref");
 
-    await s.built.app.deleteCron(cron.id);
+    await s.built.app.deleteCron(cron.id, { actorId: cron.owner });
     const relisted = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org&category=background");
     const survivor = relisted.sessions.find((x: any) => x.id === session.id);
     assert.equal(survivor?.result, "42 signups today", "fire digests outlive their cron");
@@ -1355,7 +1470,7 @@ test("admin errors paginate all retained records with scoped totals and bounded 
   const s = start();
   try {
     for (let i = 0; i < 260; i++) {
-      s.built.errors.record({
+      s.built.errors.record(testTenant, {
         category: "turn",
         code: String(i),
         message: "failure",
@@ -1364,7 +1479,12 @@ test("admin errors paginate all retained records with scoped totals and bounded 
       });
       await s.built.errors.flush();
     }
-    s.built.errors.record({ category: "turn", code: "other", message: "failure", scopeLabel: "personal:U2" });
+    s.built.errors.record(testTenant, {
+      category: "turn",
+      code: "other",
+      message: "failure",
+      scopeLabel: "personal:U2",
+    });
     const path = "/v1/admin/errors?scope=personal:U1&sessionId=test-session";
     const page = await getJson(s.base, path + "&limit=50&offset=200");
     assert.equal(page.total, 260);

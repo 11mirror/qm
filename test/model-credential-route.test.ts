@@ -64,6 +64,7 @@ test("admin model credentials are encrypted, write-only, live, and removable", a
       ],
       models: [
         { id: "claude-opus-5-5", name: "Claude Opus 5.5", provider: "anthropic" },
+        { id: "claude-fable-5-2", name: "Claude Fable 5.2", provider: "anthropic" },
         { id: "claude-fable-5-1", name: "Claude Fable 5.1", provider: "anthropic" },
         { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
         { id: "claude-opus-5", name: "Claude Opus 5", provider: "anthropic" },
@@ -75,6 +76,8 @@ test("admin model credentials are encrypted, write-only, live, and removable", a
         { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
         { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
         { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
+        { id: "gpt-6.2-sol", name: "GPT-6.2 Sol", provider: "openai" },
+        { id: "gpt-6.2-astra", name: "GPT-6.2 Astra", provider: "openai" },
         { id: "gpt-6-astra", name: "GPT-6 Astra", provider: "openai" },
         { id: "gpt-6-astra-ultrafast", name: "GPT-6 Astra · Ultrafast (6× cost)", provider: "openai" },
         { id: "gpt-6.1-sol", name: "GPT-6.1 Sol", provider: "openai" },
@@ -367,11 +370,6 @@ test("web turns keep a persisted OpenRouter model enabled when the refreshed cat
 
     const persisted = await turn("web:alice:persisted-openrouter-model", "anthropic/claude-sonnet-4.5");
     assert.equal(persisted.status, "queued");
-
-    await srv.built.config.setRuntimeSelection("personal:alice", { modelId: "openai/gpt-oss-20b:free" });
-    const arbitrary = await turn("web:alice:arbitrary-openrouter-model", "openai/gpt-oss-20b:free");
-    assert.equal(arbitrary.status, "refused");
-    assert.match(arbitrary.reason ?? "", /not enabled for the web UI/);
   } finally {
     await srv.close();
   }

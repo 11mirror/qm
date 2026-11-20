@@ -331,10 +331,10 @@ test("replaying a committed recommended clarification recovers the pending plan 
     requestId: newerApprovalRequestId,
     authorizedActorId: "approver@example.com",
   });
-  await createPgPool(databaseUrl).q(
-    "UPDATE finny_approval_requests SET created_at=$2 WHERE request_id=$1",
-    [newerApprovalRequestId, Date.now() + 10_000],
-  );
+  await createPgPool(databaseUrl).q("UPDATE finny_approval_requests SET created_at=$2 WHERE request_id=$1", [
+    newerApprovalRequestId,
+    Date.now() + 10_000,
+  ]);
   const recovered = await service.decide(input);
 
   assert.deepEqual(recovered, committed);

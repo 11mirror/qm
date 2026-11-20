@@ -1,6 +1,9 @@
 import "./support/auto-fake-sprites.ts";
 import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import assert from "node:assert/strict";
+import { once } from "node:events";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import test from "node:test";
 import {
   checkRuleSet,
@@ -14,6 +17,7 @@ import {
 import { createDecisionBackend } from "../src/decisions/providers.ts";
 import { withModelRequestContext } from "../src/model/request-context.ts";
 import { turnStartState } from "../src/decisions/hooks.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const PROVIDERS: DecisionProvider[] = [{ id: "gw", protocol: "chat-completions" }];
 const MODELS = new Set(["m-deep"]);
@@ -88,20 +92,34 @@ test("parseDecisionRule validates hooks, options, actions, onError, provider and
   );
 });
 
-test("checkRuleSet allows one active enforcing rule per most_confident hook", () => {
+test("checkRuleSet allows one active enforcing rule per action on a most_confident hook", () => {
   const second = { ...route(), id: "router-2" };
-  assert.match(String(checkRuleSet([route(), second])), /allows one enforcing rule/);
+  const persona = injection({
+    id: "persona",
+    hook: "turn_start",
+    onError: "keep",
+    options: {
+      keep: { description: "ordinary", action: "keep" },
+      ada: { description: "for Ada", action: "use_persona", persona: "p1" },
+    },
+  });
+  assert.equal(checkRuleSet([route(), persona]), undefined);
+  assert.match(
+    String(checkRuleSet([route(), second])),
+    /allows one enforcing rule per action, and another already uses use_runtime/,
+  );
   assert.equal(checkRuleSet([route(), { ...second, mode: "observe" }]), undefined);
   assert.equal(checkRuleSet([route(), { ...second, mode: "off" }]), undefined);
 });
 
 test("runHook: highest-probability option decides; observe rules never act; errors fall back to onError", async () => {
   const signal = new AbortController().signal;
-  const block = await runHook([injection()], "tool_response", "x", fixed({ yes: 0.9, no: 0.1 }), signal);
+  const block = await runHook(tenant, [injection()], "tool_response", "x", fixed({ yes: 0.9, no: 0.1 }), signal);
   assert.equal(block.decisive?.action, "block");
   assert.equal(block.decisive?.message, "prompt injection");
 
   const observed = await runHook(
+    tenant,
     [injection({ mode: "observe" })],
     "tool_response",
     "x",
@@ -111,10 +129,10 @@ test("runHook: highest-probability option decides; observe rules never act; erro
   assert.equal(observed.decisive, undefined);
   assert.equal(observed.results[0]?.option, "yes", "observed verdict is still reported");
 
-  const otherHook = await runHook([injection()], "user_input", "x", fixed({ yes: 1 }), signal);
+  const otherHook = await runHook(tenant, [injection()], "user_input", "x", fixed({ yes: 1 }), signal);
   assert.equal(otherHook.results.length, 0);
 
-  const failed = await runHook([injection()], "tool_response", "x", fixed(new Error("down")), signal);
+  const failed = await runHook(tenant, [injection()], "tool_response", "x", fixed(new Error("down")), signal);
   assert.equal(failed.decisive?.action, "allow");
   assert.equal(failed.results[0]?.error, "Error: down");
   const caused = new Error("fetch failed", { cause: new Error("getaddrinfo ENOTFOUND gateway") });
@@ -133,6 +151,7 @@ test("runHook: highest-probability option decides; observe rules never act; erro
       ),
   });
   const invalid = await runHook(
+    tenant,
     [injection({ model: { provider: "oa", model: "m" } })],
     "tool_response",
     "x",
@@ -140,10 +159,11 @@ test("runHook: highest-probability option decides; observe rules never act; erro
     signal,
   );
   assert.match(invalid.results[0]?.error ?? "", /invalid probability for yes: "high"/);
-  const withCause = await runHook([injection()], "tool_response", "x", fixed(caused), signal);
+  const withCause = await runHook(tenant, [injection()], "tool_response", "x", fixed(caused), signal);
   assert.match(withCause.results[0]?.error ?? "", /fetch failed <- Error: getaddrinfo ENOTFOUND gateway/);
   const calls: string[][] = [];
   const batched = await runHook(
+    tenant,
     [injection(), injection({ id: "secrets" }), injection({ id: "other", model: { provider: "oa", model: "m" } })],
     "tool_response",
     "x",
@@ -153,6 +173,7 @@ test("runHook: highest-probability option decides; observe rules never act; erro
   assert.deepEqual(calls, [["injection", "secrets"], ["other"]], "rules sharing a model share one request");
   assert.equal(batched.results.length, 3);
   const failClosed = await runHook(
+    tenant,
     [injection({ onError: "yes" })],
     "tool_response",
     "x",
@@ -165,6 +186,7 @@ test("runHook: highest-probability option decides; observe rules never act; erro
 const ask = (backend: ReturnType<typeof createDecisionBackend>, model: { provider: string; model: string }) =>
   backend
     .choose({
+      tenant,
       questions: { decision: { question: "q?", options: { yes: "a", no: "b" } } },
       state: "s",
       model,
@@ -309,6 +331,34 @@ test("a missing, disabled or mismatched credential is an error, so the rule fall
   await assert.rejects(ask(noGateway, { provider: "gw", model: "m" }), /no model gateway/);
 });
 
+test("a custom decision endpoint on a private network address is refused before connecting, and the model gateway is not", async (t) => {
+  for (const host of ["127.0.0.1", "169.254.169.254"]) {
+    const backend = createDecisionBackend({
+      providers: () => [{ id: "oa", protocol: "decisions", baseUrl: `http://${host}/v1`, credential: "dec" }],
+      credential: async () => ({ host, enabled: true, headers: { Authorization: "Bearer x" } }),
+    });
+    await assert.rejects(ask(backend, { provider: "oa", model: "m" }), {
+      message: `${host} is a private network address; a deployment operator can allow this exact origin with PRIVATE_NETWORK_ALLOWED_ORIGINS`,
+    });
+  }
+  const content = JSON.stringify({ answers: { decision: { type: "choice", probabilities: { yes: 1, no: 0 } } } });
+  const gateway = createServer((_req, res) => res.end(JSON.stringify({ choices: [{ message: { content } }] })));
+  gateway.listen(0, "127.0.0.1");
+  await once(gateway, "listening");
+  t.after(() => gateway.close());
+  const backend = createDecisionBackend({
+    providers: () => PROVIDERS,
+    gateway: {
+      url: `http://127.0.0.1:${(gateway.address() as AddressInfo).port}/`,
+      apiKey: "gk",
+      apiKeyHeader: "api-key",
+      actorKey: "test-actor-key",
+    },
+    credential: async () => null,
+  });
+  assert.deepEqual(await ask(backend, { provider: "gw", model: "m" }), { yes: 1, no: 0 });
+});
+
 test("each hook point only accepts its own actions; use_runtime carries a runtime", () => {
   const router = (options: Record<string, unknown>) =>
     parse({ ...injection(), id: "router", hook: "turn_start", onError: "keep", options });
@@ -324,6 +374,17 @@ test("each hook point only accepts its own actions; use_runtime carries a runtim
   assert.match(
     err(router({ keep: { description: "a", action: "keep" }, deep: { description: "b", action: "use_runtime" } })),
     /runtime is required/,
+  );
+  assert.match(
+    err(router({ keep: { description: "a", action: "keep" }, ada: { description: "b", action: "use_persona" } })),
+    /persona is required/,
+  );
+  assert.ok(
+    "rule" in
+      router({
+        keep: { description: "a", action: "keep" },
+        ada: { description: "b", action: "use_persona", persona: "p1" },
+      }),
   );
 });
 
@@ -347,10 +408,10 @@ test("most_confident hook points follow the likeliest enforced verdict and error
       return Object.fromEntries(Object.keys(questions).map((k) => [k, p]));
     },
   };
-  const both = await runHook([goal("a", "a"), goal("b", "b")], "goal_check", "{}", backend, signal);
+  const both = await runHook(tenant, [goal("a", "a"), goal("b", "b")], "goal_check", "{}", backend, signal);
   assert.equal(both.decisive?.ruleId, "b");
   assert.equal(both.decisive?.action, "step_back");
-  const failing = await runHook([goal("x", "down")], "goal_check", "{}", backend, signal);
+  const failing = await runHook(tenant, [goal("x", "down")], "goal_check", "{}", backend, signal);
   assert.equal(failing.decisive?.action, "continue", "a failed classifier falls back to its onError option");
 });
 
@@ -363,7 +424,7 @@ test("the decisions resource checks the model catalog and lets an admin's agent 
     rules: async () => saved,
     saveProvider: async () => {},
     removeProvider: async () => {},
-    saveRule: async (r: DecisionRule, by: { actorId: string }) =>
+    saveRule: async (_tenant: unknown, r: DecisionRule, by: { actorId: string }) =>
       void saved.push({ ...r, id: `${r.id}:${by.actorId}` }),
     removeRule: async () => {},
   };
@@ -377,7 +438,7 @@ test("the decisions resource checks the model catalog and lets an admin's agent 
   };
   const apply = (body: unknown, capability: unknown = null) =>
     ADMIN_RESOURCE_BY_ID.get("decisions")!.apply(
-      { body, capability, deps: { decisions } } as never,
+      { body, capability, tenant, deps: { decisions } } as never,
       { id: "admin@x.com" },
       "org:default-org",
     );
@@ -396,18 +457,22 @@ test("the decisions resource checks the model catalog and lets an admin's agent 
 test("decision hooks load active rules for the hook, decide, and audit every verdict", async () => {
   const { createDecisionHooks } = await import("../src/decisions/hooks.ts");
   const records: { action: string; resource?: string; status?: string }[] = [];
-  const audit = { record: (e: (typeof records)[number]) => void records.push(e) } as never;
+  const audit = { record: (_t: unknown, e: (typeof records)[number]) => void records.push(e) } as never;
   const asked: string[] = [];
   const store = {
-    rules: async (hook: string) => (
+    rules: async (_tenant: unknown, hook: string) => (
       asked.push(hook),
       [route(), { ...route(), id: "shadow", mode: "observe" as const }]
     ),
   } as never;
   const decide = createDecisionHooks(store, fixed({ keep: 0.2, deep: 0.8 }), audit);
-  const verdict = await decide("turn_start", "refactor the scheduler", { scopeLabel: "personal:a", sessionId: "s1" });
+  const verdict = await decide("turn_start", "refactor the scheduler", {
+    tenant,
+    scopeLabel: "personal:a",
+    sessionId: "s1",
+  });
   assert.deepEqual(asked, ["turn_start"]);
-  assert.deepEqual(verdict?.runtime, { modelId: "m-deep" });
+  assert.deepEqual(verdict[0]?.runtime, { modelId: "m-deep" });
   assert.deepEqual(
     records.map((r) => [r.action, r.resource, r.status]),
     [
@@ -415,19 +480,20 @@ test("decision hooks load active rules for the hook, decide, and audit every ver
       ["decision.classify", "shadow", "use_runtime"],
     ],
   );
-  assert.equal(
+  assert.deepEqual(
     await createDecisionHooks(undefined, fixed({}), audit)("turn_start", "x", {
+      tenant,
       scopeLabel: "s",
       sessionId: "s",
     }),
-    undefined,
+    [],
   );
 });
 
 test("observe-only rules do not hold up the turn and are still audited", async () => {
   const { createDecisionHooks } = await import("../src/decisions/hooks.ts");
   const records: { resource?: string; status?: string }[] = [];
-  const audit = { record: (e: (typeof records)[number]) => void records.push(e) } as never;
+  const audit = { record: (_t: unknown, e: (typeof records)[number]) => void records.push(e) } as never;
   const shadowModel = { provider: "anthropic", model: "shadow-model" };
   const store = {
     rules: async () => [route(), { ...route(), id: "shadow", mode: "observe" as const, model: shadowModel }],
@@ -440,8 +506,12 @@ test("observe-only rules do not hold up the turn and are still audited", async (
     },
   };
   const decide = createDecisionHooks(store, backend, audit);
-  const verdict = await decide("turn_start", "refactor the scheduler", { scopeLabel: "personal:a", sessionId: "s1" });
-  assert.equal(verdict?.ruleId, "router");
+  const verdict = await decide("turn_start", "refactor the scheduler", {
+    tenant,
+    scopeLabel: "personal:a",
+    sessionId: "s1",
+  });
+  assert.equal(verdict[0]?.ruleId, "router");
   assert.deepEqual(
     records.map((r) => r.resource),
     ["router"],
@@ -465,8 +535,10 @@ test("turn_start rules see the turn's context alongside the message", () => {
     runtimePinned: true,
     continueTurn: true,
     scopeLabel: "personal:someone@example.com",
+    conversation: "dm",
   });
   for (const line of [
+    "- conversation: dm",
     "- surface: web",
     "- purpose: interactive",
     "- scope: personal",
@@ -588,7 +660,7 @@ test("the reply check is armed only when a turn_end rule is active, enforces onl
       return Object.fromEntries(Object.keys(questions).map((k) => [k, p]));
     },
   });
-  const turn = { scopeLabel: "personal:a", sessionId: "s1" };
+  const turn = { tenant, scopeLabel: "personal:a", sessionId: "s1" };
   const factory = (rules: DecisionRule[], p: Record<string, number>) =>
     createReplyCheck(
       { rules: async () => rules },

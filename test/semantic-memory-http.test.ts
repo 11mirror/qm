@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import { test, type TestContext } from "node:test";
 import pg from "pg";
 import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
@@ -284,9 +285,9 @@ pgTest("HTTP Open DM combines room and current memory, then blocks reads after m
   const memory = prompt.split("## What you remember\n")[1]!.split("</environment>")[0]!;
   const packed = memory.slice(memory.indexOf("### ")).trim();
   assert.ok(packed.length <= 6000);
-  assert.ok(memory.indexOf("REMOTE_BEST") >= 0);
+  assert.ok(memory.indexOf("LOCAL_NEAR") >= 0);
+  assert.ok(memory.indexOf("LOCAL_NEAR") < memory.indexOf("REMOTE_BEST"));
   assert.ok(memory.indexOf("REMOTE_BEST") < memory.indexOf("REMOTE_NEAR"));
-  assert.ok(memory.indexOf("REMOTE_NEAR") < memory.indexOf("LOCAL_NEAR"));
   assert.doesNotMatch(prompt, /DENIED_NOTEBOOK/);
   assert.ok(inputs.flat().every((text) => !text.includes("DENIED_NOTEBOOK")));
   assert.equal(inputs.filter((batch) => batch.length === 1 && batch[0]!.includes("verify the change")).length, 1);
@@ -296,7 +297,7 @@ pgTest("HTTP Open DM combines room and current memory, then blocks reads after m
   assert.doesNotMatch(await turn("!memoryread channel:C1", "read-revoked"), /REMOTE_BEST/);
   assert.doesNotMatch(await turn("!sysprompt\nverify the change", "recall-revoked"), /REMOTE_BEST/);
   assert.ok(
-    (await built.auditLog.events()).some(
+    (await built.auditLog.events(testTenant)).some(
       (event) => event.action === "sharing.cross_context_read" && event.resource === "memory",
     ),
   );

@@ -92,10 +92,10 @@ test("renderGenerativeUI renders metric, callout, and provenance blocks", () => 
   const card = renderGenerativeUI(spec);
   assert.equal(card.blocks.length, 5);
   assert.equal(card.blocks[0]?.type, "header");
-  assert.equal(card.blocks[1]?.type, "section"); // metric
-  assert.equal(card.blocks[2]?.type, "section"); // callout
-  assert.equal(card.blocks[3]?.type, "header"); // Every Answer, Traceable header
-  assert.equal(card.blocks[4]?.type, "section"); // provenance item
+  assert.equal(card.blocks[1]?.type, "section");
+  assert.equal(card.blocks[2]?.type, "section");
+  assert.equal(card.blocks[3]?.type, "header");
+  assert.equal(card.blocks[4]?.type, "section");
 });
 
 test("finnyPlanCard clips Block Kit text without splitting a surrogate pair", () => {

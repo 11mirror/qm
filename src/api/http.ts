@@ -5,6 +5,17 @@ import { json as sendJson, sendBuffered } from "../../plugins/chassis/src/http.t
 
 export { sendJson };
 
+export function refuseImpersonated(res: ServerResponse): void {
+  sendJson(res, 403, { error: "forbidden", message: "Unavailable while impersonating." });
+}
+
+export const PERSON_REQUIRED =
+  "Only the person can take this step, from a turn they are in while it runs. A scheduled task, a bot, or a background job or script whose turn has ended can't take it. Ask them to do it themselves.";
+
+export function refuseWithoutPerson(res: ServerResponse): void {
+  sendJson(res, 403, { error: "human_consent_required", message: PERSON_REQUIRED });
+}
+
 export function sendProblem(res: ServerResponse, status: number, problem: Record<string, unknown>): void {
   sendBuffered(res, status, { "content-type": "application/problem+json" }, JSON.stringify({ status, ...problem }));
 }
@@ -73,17 +84,11 @@ export function contentTypeWithUtf8Charset(contentType: string): string {
   return textual ? `${contentType}; charset=utf-8` : contentType;
 }
 
-export function pipeToResponse(
-  res: ServerResponse,
-  stream: NodeJS.ReadableStream & { destroy?: () => void },
-  errorMessage: string,
-): void {
-  stream.on("error", () => {
-    if (!res.headersSent) sendJson(res, 500, { error: "stream_error", message: errorMessage });
-    else res.destroy();
-  });
-  res.on("close", () => stream.destroy?.());
-  stream.pipe(res);
+export const UNTRUSTED_CONTENT_SANDBOX_CSP =
+  "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
+
+export function frameAncestorsDirective(ancestors: readonly string[]): string {
+  return ["frame-ancestors 'self'", ...ancestors].join(" ");
 }
 
 export function sendRedirect(res: ServerResponse, location: string): void {

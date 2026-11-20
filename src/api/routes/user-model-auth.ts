@@ -1,4 +1,4 @@
-import type { ModelProvider } from "../../model/pi-models.ts";
+import type { ModelProvider } from "../../model/provider-endpoints.ts";
 import { completeClaudeLogin, startClaudeLogin } from "../../model/subscription-oauth.ts";
 import { createCodexDeviceLogin } from "../../model/codex-device-login.ts";
 import { errMessage } from "../../util/errors.ts";
@@ -21,14 +21,25 @@ function connectProvider(raw: unknown): ModelProvider | null {
   return null;
 }
 
+export async function modelAuthStatus(deps: ApiCtx["deps"], principal: string) {
+  const [required, connections, individualModelAuth, account] = await Promise.all([
+    deps.config?.getIndividualModelAuthDurable(),
+    deps.userModelCredentials?.connections(principal),
+    deps.config?.getIndividualModelAuthDurable(principal),
+    deps.config?.getModelAccountDurable(principal),
+  ]);
+  return {
+    individualModelAuth: individualModelAuth ?? false,
+    required: required ?? false,
+    account: account ?? "company",
+    connections: connections ?? [],
+  };
+}
+
 async function getStatus(ctx: ApiCtx): Promise<void> {
   const principal = caller(ctx);
   if (!principal) return sendJson(ctx.res, 401, { error: "unauthorized" });
-  const required = (await ctx.deps.config?.getIndividualModelAuthDurable()) ?? false;
-  const connections = (await ctx.deps.userModelCredentials?.connections(principal)) ?? [];
-  const individualModelAuth = (await ctx.deps.config?.getIndividualModelAuthDurable(principal)) ?? false;
-  const account = (await ctx.deps.config?.getModelAccountDurable(principal)) ?? "company";
-  return sendJson(ctx.res, 200, { individualModelAuth, required, account, connections });
+  return sendJson(ctx.res, 200, await modelAuthStatus(ctx.deps, principal));
 }
 
 async function setAccount(ctx: ApiCtx): Promise<void> {
@@ -54,7 +65,7 @@ async function setAccount(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 409, { error: "Connect this AI account first." });
   }
   await ctx.deps.config.setPersonalModelAuth(principal, account === "personal", provider);
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: principal,
     action: "user-model-auth.account",
     resource: account,
@@ -70,7 +81,7 @@ async function disconnect(ctx: ApiCtx): Promise<void> {
   const provider = connectProvider(bodyObj(ctx).provider);
   if (!provider) return sendJson(ctx.res, 400, { error: "bad_request", message: "provider must be claude or chatgpt" });
   await ctx.deps.userModelCredentials.delete(principal, provider);
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: principal,
     action: "user-model-auth.disconnect",
     resource: provider,
@@ -92,7 +103,7 @@ async function putApiKey(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 400, { error: "invalid_api_key", message: `${provider} rejected this API key` });
   }
   await ctx.deps.userModelCredentials.setApiKey(principal, provider, apiKey);
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: principal,
     action: "user-model-auth.api-key",
     resource: provider,
@@ -127,7 +138,7 @@ async function chatgptPoll(ctx: ApiCtx): Promise<void> {
       return sendJson(ctx.res, 404, { error: "oauth_poll_failed", message: "login expired or unknown — start again" });
     if (result === "pending") return sendJson(ctx.res, 200, { status: "pending" });
     await ctx.deps.userModelCredentials.setOAuth(principal, "openai", result);
-    audit(ctx.deps, {
+    audit(ctx, {
       principalId: principal,
       action: "user-model-auth.oauth",
       resource: "openai",
@@ -155,7 +166,7 @@ async function claudeComplete(ctx: ApiCtx): Promise<void> {
   try {
     const tokens = await completeClaudeLogin(code, verifier);
     await ctx.deps.userModelCredentials.setOAuth(principal, "anthropic", tokens);
-    audit(ctx.deps, {
+    audit(ctx, {
       principalId: principal,
       action: "user-model-auth.oauth",
       resource: "anthropic",
@@ -168,14 +179,33 @@ async function claudeComplete(ctx: ApiCtx): Promise<void> {
 }
 
 export const userModelAuthRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "GET", path: "/v1/user-model-auth/status", actor: "query.principalId", auth: "source", handle: getStatus },
+  {
+    method: "GET",
+    path: "/v1/user-model-auth/status",
+    browser: true,
+    actor: "query.principalId",
+    auth: "source",
+    handle: getStatus,
+  },
   ...withActor("body.principalId", [
-    { method: "POST", path: "/v1/user-model-auth/account", auth: "source", handle: setAccount },
-    { method: "POST", path: "/v1/user-model-auth/api-key", auth: "source", handle: putApiKey },
-    { method: "POST", path: "/v1/user-model-auth/disconnect", auth: "source", handle: disconnect },
-    { method: "POST", path: "/v1/user-model-auth/chatgpt/start", auth: "source", handle: chatgptStart },
-    { method: "POST", path: "/v1/user-model-auth/chatgpt/poll", auth: "source", handle: chatgptPoll },
-    { method: "POST", path: "/v1/user-model-auth/claude/start", auth: "source", handle: claudeStart },
-    { method: "POST", path: "/v1/user-model-auth/claude/complete", auth: "source", handle: claudeComplete },
+    { method: "POST", path: "/v1/user-model-auth/account", browser: "self", auth: "source", handle: setAccount },
+    { method: "POST", path: "/v1/user-model-auth/api-key", browser: "self", auth: "source", handle: putApiKey },
+    { method: "POST", path: "/v1/user-model-auth/disconnect", browser: "self", auth: "source", handle: disconnect },
+    {
+      method: "POST",
+      path: "/v1/user-model-auth/chatgpt/start",
+      browser: "self",
+      auth: "source",
+      handle: chatgptStart,
+    },
+    { method: "POST", path: "/v1/user-model-auth/chatgpt/poll", browser: "self", auth: "source", handle: chatgptPoll },
+    { method: "POST", path: "/v1/user-model-auth/claude/start", browser: "self", auth: "source", handle: claudeStart },
+    {
+      method: "POST",
+      path: "/v1/user-model-auth/claude/complete",
+      browser: "self",
+      auth: "source",
+      handle: claudeComplete,
+    },
   ]),
 ];

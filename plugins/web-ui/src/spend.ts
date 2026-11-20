@@ -8,7 +8,7 @@ import { api } from "./core-bridge";
 import { cronScheduleSummary } from "./cron-format";
 import type { CronView } from "./crons";
 import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
-import { friendlyPrincipal } from "./deploy-view";
+import { friendlyPrincipal } from "./app-view";
 import { appState } from "./shell-state";
 
 interface SpendTotals {
@@ -172,10 +172,7 @@ export async function mount(page: AdminPage): Promise<void> {
     Date.now(),
     MAX_DAYS,
   );
-  const header = pageHeader({
-    context: "What QM's model calls cost for you and the spaces you can see.",
-    tabs: spendWindowTabs(page, w),
-  });
+  const header = pageHeader({ tabs: spendWindowTabs(page, w) });
   render(
     html`${header}
       <p class="subline">Loading…</p>`,

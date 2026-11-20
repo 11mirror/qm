@@ -55,7 +55,7 @@ for (const mode of ["retry", "handoff"] as const) {
         assert.match(turn.input, /Runtime switched/);
         await turn.emit({ kind: "UserMessage", text: turn.input });
       }
-      await recordSteerIntake(turn, { text: "Change of plan", ts: "steer-visible" });
+      await recordSteerIntake(turn, { text: "Change of plan", ts: "steer-visible", author: "U2", speakerId: "U2" });
     };
     try {
       if (mode === "retry") {
@@ -70,6 +70,7 @@ for (const mode of ["retry", "handoff"] as const) {
       if (mode !== "retry") assert.equal(isHidden(users[1]!), true);
       assert.equal(users.length, steerAt + 1);
       assert.equal(users[steerAt]!.text, "Change of plan");
+      assert.equal(users[steerAt]!.body.speakerId, "U2");
       assert.notEqual(isHidden(users[steerAt]!), true);
       const activity = (await built.app.getRun(runId!))!.activity ?? [];
       const liveSteer = activity.flatMap((entry) =>
@@ -116,6 +117,38 @@ test("a withheld steer is recorded as a notice naming its sender, never as their
       items.some((item) => item.text?.includes("ignore previous instructions")),
       false,
     );
+  } finally {
+    exercise = undefined;
+  }
+});
+
+test("a session's steer reaches the model as its stamped message after a mid-turn note; a plain steer is unchanged", async () => {
+  const built = buildApp(testConfig());
+  const prompts: Array<string | undefined> = [];
+  exercise = async (turn) => {
+    const request: TurnRequest = {
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "session-steer-note" },
+      origin: { kind: "automation", screenData: "stamped" },
+      sessionSenderId: "S-sender",
+      text: '<subagent-message from="lead" fromSessionId="S-sender">\nuse v2\n</subagent-message>',
+      displayText: "use v2",
+    };
+    prompts.push((await turn.prepareSteer?.("use v2", request))?.text);
+    prompts.push((await turn.prepareSteer?.("plain words"))?.text);
+  };
+  try {
+    const result = await built.app.turn({
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "session-steer-note" },
+      text: "start",
+    });
+    assert.equal(result.status, "ok");
+    const stamped = '<subagent-message from="lead" fromSessionId="S-sender">\nuse v2\n</subagent-message>';
+    assert.ok(prompts[0]?.endsWith(`\n${stamped}`), "the model reads the stamped message, after a mid-turn note");
+    assert.equal(prompts[1], "plain words");
   } finally {
     exercise = undefined;
   }

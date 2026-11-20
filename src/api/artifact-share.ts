@@ -1,7 +1,8 @@
-import type { DeploymentInvitation } from "../deploy/email-access.ts";
+import type { DeployAccessErrorCode } from "../deploy/deploy-service.ts";
+import type { AppInvitation } from "../deploy/email-access.ts";
 import { validEmail } from "../identity/external-members.ts";
 import { orgId as configOrgId } from "../config.ts";
-import { isSharedScope, parseScopeId, scopeId, type Permission, type ScopeId } from "../types.ts";
+import { isSharedScope, parseScopeId, scopeId, type Permission, type ScopeId, type ScopeKind } from "../types.ts";
 import type { ResourceKind } from "../acl/resource-ref.ts";
 import type { RecipientResolution } from "../directory/directory-store.ts";
 
@@ -12,12 +13,34 @@ export function isMultiMemberSkillScope(scope: ScopeId): boolean {
   return isSharedScope(scope) || parseScopeId(scope).kind === "team";
 }
 
+const AUTHOR_PUBLISHED_SKILL_KINDS: Record<ScopeKind, boolean> = {
+  personal: true,
+  channel: true,
+  group: true,
+  persona: true,
+  org: false,
+  team: false,
+};
+
+export function authorPublishesSkill(scope: ScopeId): boolean {
+  const { kind } = parseScopeId(scope);
+  return kind !== null && AUTHOR_PUBLISHED_SKILL_KINDS[kind];
+}
+
 export function triggerBlocksSharedSkill(homeScope: ScopeId, liveActor: boolean): boolean {
   return isMultiMemberSkillScope(homeScope) && !liveActor;
 }
 
-export function livePersonCapability(c: { liveActor?: boolean; liveAuthor?: boolean } | undefined): boolean {
-  return c?.liveAuthor === true || c?.liveActor === true;
+export function livePersonCapability(
+  c: { liveActor?: boolean; liveAuthor?: boolean; botActor?: boolean } | undefined,
+): boolean {
+  return c?.botActor !== true && (c?.liveAuthor === true || c?.liveActor === true);
+}
+
+export function personAtKeyboard(
+  c: { liveActor?: boolean; liveAuthor?: boolean; botActor?: boolean; triggered?: boolean } | undefined,
+): boolean {
+  return livePersonCapability(c) && c?.triggered !== true;
 }
 
 export const ARTIFACT_TYPES = ["file", "skill", "deploy", "cron"] as const;
@@ -85,24 +108,51 @@ export interface ShareArtifactRequest {
   scope?: string;
   recipient?: string;
   email?: string;
-  permission?: Permission;
+  permission?: Permission | "none";
   move?: boolean;
   notify?: boolean;
 }
 
+export interface ShareAccess {
+  scope: ScopeId;
+  permission: Permission;
+  status?: "pending" | "on" | "edited";
+}
+
+export interface ShareOffers {
+  org: boolean;
+  manage: boolean;
+  email: boolean;
+  public: boolean;
+}
+
+export function shareOffers(type: ArtifactType, home: ArtifactHome): ShareOffers {
+  return {
+    org: type !== "skill",
+    manage: type !== "cron" || !home.ownerScopeId.startsWith("personal:"),
+    email: type === "deploy",
+    public: type === "deploy",
+  };
+}
+
+export type ShareAccessResult =
+  | { ok: true; type: ArtifactType; id: string; owner: ScopeId; offers: ShareOffers; access: ShareAccess[] }
+  | { ok: false; code: "not_found" | "forbidden"; message: string };
+
 export type ShareArtifactResult =
   | {
       ok: true;
-      verb: "share" | "move" | "promote";
+      verb: "share" | "unshare" | "move" | "promote";
       type: ArtifactType;
       id: string;
       target: { scope: ScopeId; label: string };
       permission: Permission;
-      invitation?: DeploymentInvitation;
+      invitation?: AppInvitation;
+      copy?: { id: string; enabled: boolean; existed: boolean; note?: string };
     }
   | {
       ok: false;
-      code: "bad_request" | "not_found" | "forbidden" | "recipient_not_found" | "ambiguous_recipient" | "share_failed";
+      code: "bad_request" | "recipient_not_found" | "ambiguous_recipient" | "share_failed" | DeployAccessErrorCode;
       message: string;
       candidates?: Array<{ id: string; label: string }>;
     };

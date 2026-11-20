@@ -7,9 +7,10 @@ import {
   type SharedMessage,
 } from "../../sessions/session-share.ts";
 import { MAX_ATTACHMENT_BYTES } from "../../core/attachments.ts";
-import { pipeToResponse, sendJson } from "../http.ts";
+import { sendJson } from "../http.ts";
+import { relayStream } from "../../../plugins/chassis/src/http.ts";
 import { audit, isObj } from "./shared.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 
 async function createShare(ctx: ApiCtx): Promise<void> {
   const { deps, app, res, body, params } = ctx;
@@ -21,7 +22,7 @@ async function createShare(ctx: ApiCtx): Promise<void> {
   if (typeof viewer !== "string" || !deps.identity?.isInternal(deps.identity.classify(viewer)))
     return sendJson(res, 403, { error: "forbidden" });
   if (!deps.sessionShares || !deps.sessionShareBytes) return sendJson(res, 503, { error: "sharing_unavailable" });
-  const source = await app.getSessionForViewer(params.id!, viewer);
+  const source = await app.getSessionForViewer(params.id!, { actorId: viewer });
   if (!source) return sendJson(res, 404, { error: "not_found" });
   const deliveries =
     (await deps.deliveries?.listBySourceSession(source.session.id, source.session.threadRef, { limit: 10_000 })) ?? [];
@@ -51,7 +52,7 @@ async function createShare(ctx: ApiCtx): Promise<void> {
   const pending: Array<{ sourceId: string; name: string; mimetype: string; data: Buffer }> = [];
   let totalBytes = 0;
   for (const id of ids) {
-    const file = await app.openFileForViewer(id, viewer);
+    const file = await app.openFileForViewer(tenantOf(ctx), id, viewer, false);
     if (!file)
       return sendJson(res, 409, {
         error: "attachment_unavailable",
@@ -92,7 +93,7 @@ async function createShare(ctx: ApiCtx): Promise<void> {
     files,
   };
   await deps.sessionShares.putIfAbsent(share.token, share);
-  audit(deps, {
+  audit(ctx, {
     principalId: viewer,
     action: "session.share",
     resource: share.sessionId,
@@ -102,26 +103,43 @@ async function createShare(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { share: { token: share.token, audience, createdAt: share.createdAt } });
 }
 
-async function readShare(ctx: ApiCtx): Promise<void> {
-  const { deps, app, res, params, url } = ctx;
-  res.setHeader("Cache-Control", "no-store");
+async function openShare(ctx: ApiCtx, external: boolean): Promise<SessionShare | 403 | 404> {
+  const { deps, app, params, url } = ctx;
   const share = await deps.sessionShares?.get(params.token!);
-  const external = ctx.pathname.startsWith("/v1/public-shares/");
-  if (!share || share.audience !== (external ? "external" : "internal"))
-    return sendJson(res, 404, { error: "not_found" });
+  if (!share || share.audience !== (external ? "external" : "internal")) return 404;
   await deps.identity?.refresh();
   if (!external) {
     const viewer = ctx.actor?.p ?? url.searchParams.get("viewer");
-    if (!viewer || !deps.identity?.isInternal(deps.identity.classify(viewer)))
-      return sendJson(res, 403, { error: "forbidden" });
+    if (!viewer || !deps.identity?.isInternal(deps.identity.classify(viewer))) return 403;
   }
-  if (!deps.identity?.isInternal(deps.identity.classify(share.createdBy)))
-    return sendJson(res, 404, { error: "not_found" });
-  if (!(await app.canViewSessionSnapshot(share.sessionId, share.createdBy)))
-    return sendJson(res, 404, { error: "not_found" });
+  if (!deps.identity?.isInternal(deps.identity.classify(share.createdBy))) return 404;
+  if (!(await app.canViewSessionSnapshot(share.sessionId, share.createdBy))) return 404;
+  return share;
+}
+
+const transcriptOf = (share: SessionShare) => ({
+  createdAt: share.createdAt,
+  audience: share.audience,
+  messages: share.messages,
+});
+
+async function sharePage(ctx: ApiCtx, external: boolean): Promise<void> {
+  const shell = ctx.deps.web?.shell;
+  if (!shell) return sendJson(ctx.res, 404, { error: "not_found" });
+  const share = await openShare(ctx, external);
+  if (typeof share === "number") return shell.sharePage(ctx.res, share, null);
+  return shell.sharePage(ctx.res, 200, transcriptOf(share));
+}
+
+async function readShare(ctx: ApiCtx): Promise<void> {
+  const { res, params, url } = ctx;
+  res.setHeader("Cache-Control", "no-store");
+  const share = await openShare(ctx, ctx.pathname.startsWith("/v1/public-shares/"));
+  if (share === 403) return sendJson(res, 403, { error: "forbidden" });
+  if (share === 404) return sendJson(res, 404, { error: "not_found" });
   if (params.fileId) {
     const file = share.files.find((file) => file.id === params.fileId);
-    const opened = file && (await deps.sessionShareBytes?.open(file.blobKey));
+    const opened = file && (await ctx.deps.sessionShareBytes?.open(file.blobKey));
     if (!file || !opened) return sendJson(res, 404, { error: "not_found" });
     const inline = url.searchParams.get("inline") === "1" && /^image\/(png|jpeg|gif|webp|avif)$/.test(file.mimetype);
     res.writeHead(200, {
@@ -132,19 +150,55 @@ async function readShare(ctx: ApiCtx): Promise<void> {
       "x-content-type-options": "nosniff",
       "referrer-policy": "no-referrer",
     });
-    pipeToResponse(res, opened.stream, "shared attachment read failed");
+    relayStream(opened.stream, res);
     return;
   }
-  return sendJson(res, 200, { createdAt: share.createdAt, audience: share.audience, messages: share.messages });
+  return sendJson(res, 200, transcriptOf(share));
 }
 
+const SHARE_TENANT = { by: "share", key: (params: Record<string, string>) => params.token } as const;
+const BROWSER_SHARE_TENANT = { ...SHARE_TENANT, signedTenantFirst: true } as const;
+
 export const sessionSharingRoutes: ReadonlyArray<Route> = [
-  { method: "POST", path: "/v1/sessions/:id/share", actor: "body.principalId", auth: "source", handle: createShare },
+  {
+    method: "POST",
+    path: "/v1/sessions/:id/share",
+    browser: true,
+    actor: "body.principalId",
+    auth: "source",
+    handle: createShare,
+  },
   ...(["shared-sessions", "public-shares"] as const).flatMap((prefix): Route[] => {
-    const actor = prefix === "shared-sessions" ? ("query.viewer" as const) : undefined;
+    const shared = prefix === "shared-sessions";
+    const actor = shared ? ("query.viewer" as const) : undefined;
+    const tenant = SHARE_TENANT;
     return [
-      { method: "GET", path: `/v1/${prefix}/:token`, actor, auth: "source", handle: readShare },
-      { method: "GET", path: `/v1/${prefix}/:token/files/:fileId`, actor, auth: "source", handle: readShare },
+      { method: "GET", path: `/v1/${prefix}/:token`, actor, auth: "source", tenant, handle: readShare },
+      {
+        method: "GET",
+        path: `/v1/${prefix}/:token/files/:fileId`,
+        ...(shared ? { browser: true as const } : {}),
+        actor,
+        auth: shared ? "source" : "public",
+        tenant: shared ? BROWSER_SHARE_TENANT : tenant,
+        handle: readShare,
+      },
     ];
   }),
+  {
+    method: "GET",
+    path: "/v1/web/shares/internal/:token",
+    browser: true,
+    actor: "person",
+    auth: "source",
+    tenant: BROWSER_SHARE_TENANT,
+    handle: (ctx) => sharePage(ctx, false),
+  },
+  {
+    method: "GET",
+    path: "/v1/web/shares/external/:token",
+    auth: "public",
+    tenant: SHARE_TENANT,
+    handle: (ctx) => sharePage(ctx, true),
+  },
 ];

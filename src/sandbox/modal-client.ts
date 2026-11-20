@@ -39,6 +39,7 @@ export class ModalNameConflictError extends Error {
 interface ModalCreateOpts {
   name?: string;
   tags?: Record<string, string>;
+  memoryGb?: number;
 }
 
 export interface ModalClient {
@@ -57,7 +58,6 @@ export interface SdkModalClientOptions {
   image?: string;
   environment?: string;
   cpus?: number;
-  memoryMb?: number;
   regions?: string[];
   sandboxTimeoutMs?: number;
   idleTimeoutMs?: number;
@@ -70,7 +70,7 @@ const MAX_LIFETIME_MS = 24 * 3600_000;
 const DEFAULT_IDLE_TIMEOUT_MS = 12 * 3600_000;
 const DEFAULT_MAX_COMMAND_MS = 3600_000;
 const DEFAULT_CPUS = 1;
-const DEFAULT_MEMORY_MB = 2048;
+export const DEFAULT_MEMORY_MB = 2048;
 export const MODAL_EXEC_GRACE_MS = 30_000;
 export const MODAL_MAX_EXEC_ARG_BYTES = 64 * 1024;
 const SNAPSHOT_CALL_TIMEOUT_MS = 600_000;
@@ -245,7 +245,8 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
           timeoutMs: sandboxTimeoutMs,
           idleTimeoutMs,
           cpu: opts.cpus ?? DEFAULT_CPUS,
-          memoryMiB: opts.memoryMb ?? DEFAULT_MEMORY_MB,
+          memoryMiB: createOpts.memoryGb ? createOpts.memoryGb * 1024 : DEFAULT_MEMORY_MB,
+          ...(createOpts.memoryGb ? { memoryLimitMiB: createOpts.memoryGb * 1024 } : {}),
           ...(opts.regions?.length ? { regions: opts.regions } : {}),
           ...network,
         });

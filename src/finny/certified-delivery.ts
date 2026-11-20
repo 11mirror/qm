@@ -1,5 +1,6 @@
 import type { Destination } from "../types.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
+import { withTenant } from "../tenants/context.ts";
 import { SLACK_CARD_LIMITS, SLACK_SECTION_TEXT_MAX } from "../slack/generative-ui.ts";
 import { toSlackMrkdwn } from "../slack/mrkdwn.ts";
 import type { FinnyStore } from "./store.ts";
@@ -169,9 +170,13 @@ export async function deliverPendingCertifiedResults(
   publicWebUrl: string,
   afterEnqueue: (result: FinnyCertifiedResultRecord) => Promise<unknown>,
 ): Promise<void> {
-  for (const result of await results.pendingCertifiedResultDeliveries(CERTIFIED_RESULT_DELIVERY_BATCH_SIZE)) {
-    const delivery = await deliveries.enqueue(certifiedResultDelivery(deliverableResult(result), publicWebUrl));
-    await afterEnqueue(result);
-    await results.markCertifiedResultDelivery(result.id, delivery.id);
+  for (const pending of await results.pendingCertifiedResultDeliveries(CERTIFIED_RESULT_DELIVERY_BATCH_SIZE)) {
+    await withTenant(pending.tenantId, async () => {
+      const delivery = await deliveries.enqueue(
+        certifiedResultDelivery(deliverableResult(pending.result), publicWebUrl),
+      );
+      await afterEnqueue(pending.result);
+      await results.markCertifiedResultDelivery(pending.result.id, delivery.id);
+    });
   }
 }

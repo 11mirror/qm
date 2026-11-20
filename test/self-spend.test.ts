@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -7,7 +8,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { installPrincipalLinks } from "../src/directory/person.ts";
 import { buildApp } from "./support/build-app.ts";
 import { scopeId } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
@@ -123,8 +123,9 @@ test("self spend: your personal scope plus the shared scopes you can see, nothin
       "your row matches the admin page's row for you",
     );
     assert.equal(
-      (await s.built.auditLog.events()).filter((e) => e.action === "spend.self.read" && e.principalId === "alice")
-        .length,
+      (await s.built.auditLog.events(testTenant)).filter(
+        (e) => e.action === "spend.self.read" && e.principalId === "alice",
+      ).length,
       1,
     );
   } finally {
@@ -147,7 +148,7 @@ test("self spend: your crons are split from the crons others made that you can s
     const bobsGroup = await s.cron("bob", "group:G1");
     t.after(async () => {
       for (const cron of [yours, yoursInChannel, shared, toYou, bobsOwn, bobsPrivate, bobsGroup])
-        await s.built.app.deleteCron(cron.id);
+        await s.built.app.deleteCron(cron.id, { actorId: cron.owner });
     });
     await s.built.app.upsertGroups([
       { groupId: "G1", principalId: "alice" },
@@ -188,17 +189,22 @@ test("self spend: your crons are split from the crons others made that you can s
   }
 });
 
-test("self spend: a linked sign-in's personal spend is yours", async (t) => {
+test("self spend: a linked sign-in's personal spend is yours", async () => {
   const s = await start();
-  installPrincipalLinks({ canonical: (id) => (id === "slack-alice" ? "alice" : undefined), aliases: () => [] });
-  t.after(() => installPrincipalLinks(null));
   try {
+    await s.built.admin.users.link({
+      principalId: "slack-alice",
+      canonicalId: "alice",
+      evidence: "qa",
+      linkedBy: "",
+      createdAt: Date.now(),
+    });
     await bill(s.built.sessions, "dm:alice:t1", "dm", scopeId("personal", "alice"), { costUsd: 2 });
     await bill(s.built.sessions, "dm:slack-alice:t1", "dm", scopeId("personal", "slack-alice"), { costUsd: 3 });
     const body = (await (await s.mine()).json()) as any;
     assert.deepEqual(
-      body.people.map((p: any) => [p.principalId, p.costUsd]),
-      [["alice", 5]],
+      body.people.map((p: any) => [p.principalId, p.costUsd, typeof p.userId]),
+      [["alice", 5, "string"]],
     );
   } finally {
     await s.close();

@@ -6,9 +6,14 @@ import { updateSlackMessage } from "./messaging.ts";
 import { escapeSlackText } from "./mrkdwn.ts";
 import { findPostedByKey, postWithVerify, slackReplyArgs } from "./delivery.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
-import { parseScopeId } from "../types.ts";
-
-const ACTIONS = ["keychain_allow_once", "keychain_allow_always", "keychain_deny"] as const;
+import { trimTrailingSlashes } from "../util/text.ts";
+import { slackButton } from "./approval-cards.ts";
+import {
+  KEYCHAIN_ACTION_IDS,
+  keychainButtons,
+  keychainCardWording,
+  keychainDecision,
+} from "../surfaces/approval-cards.ts";
 
 export function keychainApprovalMessage(
   view: KeychainApprovalView,
@@ -20,17 +25,8 @@ export function keychainApprovalMessage(
     originUrl && /^https?:\/\//.test(originUrl)
       ? `<${originUrl.replaceAll("|", "%7C").replaceAll(">", "%3E")}|${place}>`
       : place;
-  const pending = ask.status === "pending";
-  const { kind } = parseScopeId(ask.requesterScopeId);
-  let audience = "this group";
-  if (kind === "personal") audience = "your personal conversations";
-  if (kind === "channel") audience = "this channel";
-  const standing = `ongoing access across ${audience}`;
-  const duration = pending ? ` (${ask.requestedMode === "once" ? "one-time access" : standing})` : "";
+  const { pending, duration, status } = keychainCardWording(view);
   const summary = `Use your *${escapeSlackText(view.service.slice(0, 150))}* credential ${origin}${duration}.`;
-  let status = "This request expired.";
-  if (ask.status === "approved") status = `Approved — ${view.mode === "standing" ? standing : "one-time access"}.`;
-  if (ask.status === "declined") status = "Denied.";
   const text = pending
     ? `Approval needed: use your ${view.service} credential in ${view.conversation}${duration}.`
     : status;
@@ -56,22 +52,7 @@ export function keychainApprovalMessage(
     blocks.push({
       type: "actions",
       block_id: `keychain_ask:${ask.id}`,
-      elements: [
-        ...(ask.requestedMode === "once" ? [ACTIONS[0], ACTIONS[1]] : [ACTIONS[1], ACTIONS[0]]).map((id, i) => ({
-          type: "button",
-          text: { type: "plain_text", text: id === ACTIONS[0] ? "Allow once" : "Allow" },
-          action_id: id,
-          value: ask.id,
-          ...(i === 0 ? { style: "primary" } : {}),
-        })),
-        {
-          type: "button",
-          text: { type: "plain_text", text: "Deny" },
-          action_id: ACTIONS[2],
-          value: ask.id,
-          style: "danger",
-        },
-      ],
+      elements: keychainButtons(ask).map(slackButton),
     });
   }
   return { text, blocks };
@@ -89,7 +70,7 @@ export async function keychainApprovalOrigin(
     if (typeof result?.permalink === "string") return result.permalink;
   }
   if (!webUrl || !view.sessionId) return undefined;
-  const url = new URL(`${webUrl.replace(/\/+$/, "")}/s/${encodeURIComponent(view.sessionId)}`);
+  const url = new URL(`${trimTrailingSlashes(webUrl)}/s/${encodeURIComponent(view.sessionId)}`);
   if (view.seq !== undefined) url.searchParams.set("seq", String(view.seq));
   return url.toString();
 }
@@ -124,7 +105,7 @@ export function registerKeychainApprovalActions(
 ): void {
   app.action(/^keychain_/, async ({ ack, body, action, client }) => {
     await ack();
-    const parsed = parseBlockAction(action, ACTIONS);
+    const parsed = parseBlockAction(action, KEYCHAIN_ACTION_IDS);
     const { clickerId, channel, messageTs } = parseInteractionBody(body);
     if (!parsed || !clickerId) return;
     const tell = async (text: string) => {
@@ -146,12 +127,7 @@ export function registerKeychainApprovalActions(
     }
     try {
       const actor = await deps.directory.classifyActor(client, clickerId);
-      const decisions = {
-        keychain_allow_once: "once",
-        keychain_allow_always: "standing",
-        keychain_deny: "deny",
-      } as const;
-      const decision = decisions[parsed.actionId as keyof typeof decisions];
+      const decision = keychainDecision(parsed.actionId);
       const view = await deps.core.keychainApprovals.decide(parsed.value, actor, decision);
       const origin = await keychainApprovalOrigin(view, client, deps.webUiPublicUrl);
       const card = keychainApprovalMessage(view, origin);

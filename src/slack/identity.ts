@@ -1,3 +1,4 @@
+import { personLabel } from "../identity/person-names.ts";
 import { LRUCache } from "lru-cache";
 
 export interface ActorAssertion {
@@ -42,20 +43,21 @@ export function classifyUser(
   u: SlackUser | undefined,
   ownTeamId: string,
   identity: SlackIdentityMode = "slack-id",
+  invited?: (email: string) => boolean,
 ): ActorAssertion {
   const user = u ?? {};
+  const email = (user.profile?.email ?? "").trim().toLowerCase();
+  const invitedGuest = Boolean(identity === "email" && user.team_id === ownTeamId && email && invited?.(email));
   let isGuest = Boolean(
     !u ||
     user.deleted ||
-    user.is_restricted ||
-    user.is_ultra_restricted ||
+    ((user.is_restricted || user.is_ultra_restricted) && !invitedGuest) ||
     user.is_stranger ||
     (user.team_id && ownTeamId && user.team_id !== ownTeamId),
   );
   const displayName = user.profile?.display_name || user.real_name || user.name || user.id || "";
   let externalId = String(user.id ?? "");
   if (identity === "email" && !user.is_bot) {
-    const email = (user.profile?.email ?? "").trim().toLowerCase();
     if (email.includes("@")) externalId = email;
     else isGuest = true;
   }
@@ -112,7 +114,7 @@ export function groupDmDisplayName(members: readonly ActorAssertion[]): string |
   const seen = new Set<string>();
   for (const member of members) {
     if (member.isExternalGuest) continue;
-    const name = (member.displayName ?? member.externalId).trim();
+    const name = personLabel(member.externalId, { displayName: member.displayName });
     if (!name || seen.has(name)) continue;
     seen.add(name);
     names.push(name);

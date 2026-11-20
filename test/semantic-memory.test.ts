@@ -41,10 +41,14 @@ test("semantic recall selects an old match, respects budget, and leaves full gre
     "- (2026-10-01) browser preference",
   );
   assert.equal(await recall(memory, "personal:a", { query: "verify", maxChars: 0 }), "");
-  assert.deepEqual(await memory.query("personal:a", "release 119"), [
-    "#121 (2026-10-01) release 119: " + "x".repeat(70),
-  ]);
-  assert.deepEqual(await memory.query("personal:a", "BROWSER"), ["#1 (2026-10-01) browser preference"]);
+  assert.deepEqual(
+    (await memory.query("personal:a", "release 119")).map(({ text }) => text),
+    ["#121 (2026-10-01) release 119: " + "x".repeat(70)],
+  );
+  assert.deepEqual(
+    (await memory.query("personal:a", "BROWSER")).map(({ text }) => text),
+    ["#1 (2026-10-01) browser preference"],
+  );
 });
 
 test("empty/deleted notebooks and other scopes cannot return cached facts", async () => {
@@ -130,6 +134,8 @@ test("embedding client orders responses and normalizes vectors", async () => {
     [0, 1],
   ]);
   for (const v of [[], [0, 0], [NaN, 1], [Infinity, 1], ["1", 2]]) assert.throws(() => unitVector(v));
+  assert.equal(unitVector(Array(16_000).fill(1)).length, 16_000);
+  assert.throws(() => unitVector(Array(16_001).fill(1)), /16001 dimensions; pgvector stores at most 16000/);
 });
 
 test("malformed responses and provider errors do not expose provider payloads", async () => {

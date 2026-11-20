@@ -7,16 +7,12 @@ import { join } from "node:path";
 import pg from "pg";
 import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
 import { parseMemoryProviderConfig } from "../../src/memory/provider-config.ts";
-import { createConfiguredMemoryService } from "../../src/memory/provider-factory.ts";
+import { createRegistryMemoryService } from "../../src/memory/registry-memory.ts";
+import { emptyMemoryRegistry } from "../support/memory-registry.ts";
 import { scopeId, type ScopeId } from "../../src/types.ts";
 import { storedItem, type Item, type NewItem } from "../../src/sessions/items.ts";
 import { recallText } from "../support/recall-text.ts";
 
-/**
- * Extended live suite against the real Memorable extraction service. Deliberately not run in CI:
- * it needs a real workspace key and spends extraction allowance. Run with
- *   MEMORABLE_API_URL=… MEMORABLE_API_KEY=… MEMORABLE_E2E_DB_URL=… MEMORABLE_E2E_BIN="node …/cli.js"
- */
 const DB = process.env.MEMORABLE_E2E_DB_URL;
 const CLI = process.env.MEMORABLE_E2E_BIN;
 const API_URL = process.env.MEMORABLE_API_URL;
@@ -142,13 +138,13 @@ describe("memorable live extended e2e", { skip: skipReason() }, () => {
   const U2 = scopeId("personal", "U2");
   const U3 = scopeId("personal", "U3");
   let pool: pg.Pool;
-  let memory: ReturnType<typeof createConfiguredMemoryService>;
+  let memory: ReturnType<typeof createRegistryMemoryService>;
   let cli: (args: string[]) => string;
   const timings: Record<string, number> = {};
   const errors: string[] = [];
 
   const capture = (scope: ScopeId, sessionId: string) =>
-    memory.capture(scope, [], Date.now(), "U1", { mode: "automatic", sessionId, actorId: "U1" });
+    memory.capture(scope, [], Date.now(), { actorId: "U1", context: "conversation" }, { mode: "automatic", sessionId });
   const rows = async (scope?: ScopeId) =>
     (
       await pool.query(
@@ -185,7 +181,7 @@ describe("memorable live extended e2e", { skip: skipReason() }, () => {
       }).toString();
     cli(["enable", "--scope", U1]);
     cli(["enable", "--scope", U2]);
-    cli(["disable", "--scope", U3]); // read-only: recall allowed, capture refused
+    cli(["disable", "--scope", U3]);
 
     const config = parseMemoryProviderConfig(
       JSON.stringify({
@@ -197,9 +193,10 @@ describe("memorable live extended e2e", { skip: skipReason() }, () => {
       }),
       env,
     );
-    memory = createConfiguredMemoryService({
+    memory = createRegistryMemoryService({
+      registry: emptyMemoryRegistry,
       defaultMemory: createPostgresMemoryService(DB!),
-      config,
+      overlay: config,
       sessionItems: async (id) => SESSIONS[id] ?? [],
       onError: (error, providerId, operation) => errors.push(`${providerId}:${operation}:${String(error)}`),
     });
@@ -232,7 +229,7 @@ describe("memorable live extended e2e", { skip: skipReason() }, () => {
 
   it("recording the same session twice is idempotent", { timeout: 120_000 }, async () => {
     const before = (await rows(U1)).length;
-    assert.equal(await capture(U1, "s-orders"), 1); // relay reports ok; CLI skips the known workflow id
+    assert.equal(await capture(U1, "s-orders"), 1);
     assert.equal((await rows(U1)).length, before);
   });
 
@@ -308,11 +305,10 @@ describe("memorable live extended e2e", { skip: skipReason() }, () => {
     "a read-only scope refuses capture; the route fails open and the notebook is unaffected",
     { timeout: 120_000 },
     async () => {
-      // The provider surfaces the CLI's consent refusal; the route's default failOpen turns it into a logged no-op.
       assert.equal(await capture(U3, "s-tls"), 0);
       assert.match(errors.join("\n"), /procedures:capture:.*memorable_write_denied.*read-only/);
       assert.equal((await rows(U3)).length, 0);
-      assert.equal(recallText(await memory.recall(U3, { query: "rotate the ingress TLS cert" })), ""); // nothing stored for U3
+      assert.equal(recallText(await memory.recall(U3, { query: "rotate the ingress TLS cert" })), "");
     },
   );
 

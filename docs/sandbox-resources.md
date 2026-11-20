@@ -4,7 +4,7 @@ A sandbox is an independently recorded resource with an owning scope, provider, 
 
 Sandbox resources are always on. The `sandbox` tool provides lifecycle management; `execute` is the sole command launcher and `background` controls existing processes. `list` returns the available providers and supported actions. Unsupported provider operations fail explicitly. Files publication is separate from sandbox management.
 
-`execute` accepts `sandbox_id` for both foreground and background commands. Without a target, execution requires the scope's stored default. `set_default` accepts an ID or null; null clears the default. A new scope has no default. Retiring a sandbox requires clearing its default and stopping its jobs first. Retirement is available only for providers with direct scope deletion. It never provisions or restores a machine. Once retirement begins, execution stays blocked; interrupted or failed cleanup remains visible and can be retried. Retirement deletes its working state, so durable outputs should be published to Files or git beforehand.
+`execute` accepts `sandbox_id` for both foreground and background commands. Without a target, execution requires the scope's stored default. `set_default` accepts an ID or null; null clears the default. A bot's turn cannot change the default; [persistent subagent sessions](persistent-subagent-sessions.md) lists the turns that run as bot work. A person's own turn or an admin sets the default. A new scope has no default. Retiring a sandbox requires clearing its default and stopping its jobs first. Retirement is available only for providers with direct scope deletion. It never provisions or restores a machine. Once retirement begins, execution stays blocked; interrupted or failed cleanup remains visible and can be retried. Retirement deletes its working state, so durable outputs should be published to Files or git beforehand.
 
 In Isolated posture, agent inventory and operations stay in the current owning scope. In Open posture, authenticated human turns and owner-authorized scheduled turns can also target the acting person's personal sandboxes and Open shared sandboxes where they are a current member. Access is rechecked for each operation; changing conversations does not transfer ownership or grant other participants personal access. Cross-context execution uses the target's existing workspace without copying the calling conversation's credentials, files, or capability tokens onto it. Defaults remain local to their owning scope. Cross-context commands must satisfy both the calling conversation's and target sandbox's command policies. Network access is narrowed to satisfy both egress policies. Provider-native recovery status includes its own expiry; a sandbox record is not an indefinite backup guarantee.
 
@@ -17,6 +17,8 @@ In Isolated posture, agent inventory and operations stay in the current owning s
 | `set_default`       | `sandbox_id` or null, `purpose`; changes routing                  |
 | `status`, `restart` | optional `sandbox_id`, `purpose`                                  |
 | `retire`            | `sandbox_id`, `purpose`                                           |
+
+A turn that runs as a Slack bot's work can list, use, watch or retire a computer outside a swarm only when that bot created it and no person's turn has used it. The first time a person's turn uses a computer, or a person's swarm takes it as its forum, its record is marked for good, so the bot loses it from then on. A computer a person's turn creates, including a subagent's own computer and a background job's computer, is marked when it is made, even if its first open fails. The process reaper then stops the background jobs the bot already started there and marks them reaped, on its next sweep (`PROCESS_REAPER_INTERVAL_MS`, 30 seconds by default). A stop that fails, or that a restart interrupts, is retried on the sweep after. The same rule stops a bot's jobs on a swarm's computers once the bot loses the swarm. Computers from earlier releases carry no mark until a person's turn uses them again, except computers the admin API created, which are marked on upgrade, and the forums of people's swarms, which a migration marks once at startup, as [Swarms](swarms.md) describes. Some bot work runs as a shared system actor rather than as the bot: a proactive channel wake that a bot's message prompted runs as the organization's ambient actor, and a bot-marked cron that runs as its channel runs as that channel's actor. Such work uses none of that actor's computers outside a swarm and changes none of its crons, loops, webhooks, monitor watches, deployments or shared artifacts. A swarm's board and worker computers follow the swarm's own rule in [Swarms](swarms.md). [Persistent subagent sessions](persistent-subagent-sessions.md) lists the turns that run as bot work.
 
 Commands use `execute(command, sandbox_id?, credentials?, background?)`. Set
 `background:true` for a detached job and a process ID. The short `purpose` is saved
@@ -34,7 +36,9 @@ is the ordinary per-turn one: same image, the turn's environment and capability 
 Files and skills, but none of the shared workspace's files. Only that
 turn's commands run there. The result tells the model the command moved. Brokered org
 service handles (`AGENT_CREDENTIAL_TOKEN`) carry no raw secret and stay on the requested
-computer. Personal conversations stage credentials on their own computer.
+computer. Personal conversations stage credentials on their own computer. The owner's other
+runs, scheduled and unattended ones included, use that same computer, so any of the owner's
+runs can change the programs and staging files a live credential command uses.
 
 A background job in a shared conversation that names such a credential starts on its own
 job computer: a sandbox record marked job-only, created on the conversation's provider. It
@@ -50,8 +54,10 @@ job writes to its home outlives the computer. A provider that cannot retire comp
 jobs; the command must run in the foreground.
 
 The `background` tool controls existing jobs with `poll`, `send_input`, `stop`, `list`,
-`watch`, and `unwatch`. Process IDs retain their durable saved target even after the
-scope default changes. Watches retain their durable monitor registration and wake this
+`watch`, and `unwatch`. A job that a person's live turn started with a saved file login
+saves that login's changes as live when it exits, so it takes `send_input` and `stop` only
+from a person's live turn; a scheduled run, a bot's turn and other unattended runs are refused.
+Process IDs retain their durable saved target even after the scope default changes. Watches retain their durable monitor registration and wake this
 conversation with output or exit. Provider loss or expiry can still interrupt a process.
 
 Execution and process handlers retain existing command-policy, credential authorization,

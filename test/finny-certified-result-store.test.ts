@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
+import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import {
   finnyCertifiedResultSearchText,
@@ -53,7 +54,9 @@ interface CertifiedResultStore {
   ) => Promise<StoredCertifiedResult>;
   getCertifiedResult?: (scopeId: string, resultId: string) => Promise<StoredCertifiedResult | null>;
   getCertifiedResultById?: (resultId: string) => Promise<StoredCertifiedResult | null>;
-  pendingCertifiedResultDeliveries?: (limit: number) => Promise<StoredCertifiedResult[]>;
+  pendingCertifiedResultDeliveries?: (
+    limit: number,
+  ) => Promise<Array<{ result: StoredCertifiedResult; tenantId: string }>>;
   markCertifiedResultDelivery?: (resultId: string, deliveryId: string) => Promise<void>;
 }
 
@@ -465,10 +468,29 @@ test("stores delivery intent with the result before any generic delivery exists"
   const { q } = createPgPool(url);
   const rows = await q("SELECT destination,delivery_id FROM finny_results WHERE id=$1", [stored.id]);
   assert.deepEqual(rows, [{ destination, delivery_id: null }]);
-  assert.deepEqual(await authority.pendingCertifiedResultDeliveries!(50), [stored]);
+  assert.deepEqual(await authority.pendingCertifiedResultDeliveries!(50), [
+    { result: stored, tenantId: (await createPgPool(url).q("SELECT qm_bound_tenant() AS id"))[0]!.id },
+  ]);
   await authority.markCertifiedResultDelivery!(stored.id, "delivery-1");
   assert.deepEqual(await authority.pendingCertifiedResultDeliveries!(50), []);
   assert.equal((await authority.getCertifiedResult!(job.scopeId, stored.id))?.deliveryId, "delivery-1");
+});
+
+test("certified result delivery ownership follows the tenant delivery key", async () => {
+  const url = testDatabaseUrl();
+  const deliveries = createPostgresDeliveryStore(url);
+  await deliveries.pending("slack");
+  const store = createPostgresFinnyStore(url);
+  await store.searchSopVersions("personal:U1", "missing");
+  const { q } = createPgPool(url);
+  const constraints = await q(
+    `SELECT pg_get_constraintdef(oid) AS definition
+       FROM pg_constraint
+      WHERE conname='finny_results_delivery_fk'`,
+  );
+  assert.deepEqual(constraints, [
+    { definition: "FOREIGN KEY (delivery_tenant_id, delivery_id) REFERENCES deliveries(tenant_id, id)" },
+  ]);
 });
 
 test("certification idempotently converges and rejects scope substitution", async () => {

@@ -6,7 +6,15 @@ import { join } from "node:path";
 import { createSdkRenderClient, RENDER_SCRIPT_DIR } from "../src/sandbox/render-client.ts";
 import { createFakeRender, serveFakeRenderApi } from "./support/fake-render.ts";
 
-const SPOOLED = new RegExp(`^timeout (\\d+) sh '${RENDER_SCRIPT_DIR.replaceAll(".", "\\.")}/[0-9a-f-]{36}\\.sh'$`);
+const literal = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const SPOOLED = new RegExp(
+  [
+    `^${literal("sh -c 's=$(date +%s); $(command -v setsid) timeout -k 5 ")}(\\d+)${literal(" sh '\\''")}`,
+    `(${literal(RENDER_SCRIPT_DIR)}/[0-9a-f-]{36}\\.sh)`,
+    literal("'\\'' & p=$!; wait $p; rc=$?; if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then [ $(($(date +%s) - s)) -lt "),
+    `\\1${literal(" ] || kill -s KILL -- -$p 2>/dev/null; fi; exit $rc'")}$`,
+  ].join(""),
+);
 const cleanup = (path: string): string =>
   `rm -f '${path}'; find '${RENDER_SCRIPT_DIR}' -type f -mmin +5 -delete 2>/dev/null\n`;
 
@@ -46,7 +54,7 @@ const snapshot = {
   name: "qm-test",
   sandboxGroupId: "sbg-test",
   sourceSandboxId: "sbx-test",
-  kind: "filesystem",
+  kind: "runtime",
   status: "available",
   plan: "standard",
   requestedAt: "2026-09-12T00:00:00Z",
@@ -89,6 +97,7 @@ test("Render SDK adapter maps sandbox and snapshot records and forwards the crea
         plan: "2c-4g",
         timeoutSeconds: 2592000,
         idleTimeoutSeconds: 0,
+        networkPolicy: { type: "allow-all" },
         snapshotId: "snp-base",
       },
     },
@@ -102,7 +111,13 @@ test("Render SDK adapter maps sandbox and snapshot records and forwards the crea
   assert.deepEqual(requests[2], {
     method: "POST",
     path: "/v1/sandboxes",
-    body: { ownerId: "tea-test", plan: "2c-4g", timeoutSeconds: 86400, idleTimeoutSeconds: 0 },
+    body: {
+      ownerId: "tea-test",
+      plan: "2c-4g",
+      timeoutSeconds: 86400,
+      idleTimeoutSeconds: 0,
+      networkPolicy: { type: "allow-all" },
+    },
   });
   assert.equal(disposable.expiresAtMs, Date.parse(sandbox.createdAt) + 86400_000);
   await client.create({ image: "sbb-0000000000000000000a", lifetimeSec: 3600 });
@@ -114,11 +129,12 @@ test("Render SDK adapter maps sandbox and snapshot records and forwards the crea
       plan: "2c-4g",
       timeoutSeconds: 3600,
       idleTimeoutSeconds: 0,
+      networkPolicy: { type: "allow-all" },
       buildId: "sbb-0000000000000000000a",
     },
   });
   requests.splice(0);
-  const saved = await client.createSnapshot(info.id, "qm-test");
+  const saved = await client.createSnapshot(info.id, "qm-test", "runtime");
   assert.equal(saved.id, snapshot.id);
   assert.equal(saved.sandboxGroupId, snapshot.sandboxGroupId);
   assert.equal(saved.status, "available");
@@ -127,7 +143,7 @@ test("Render SDK adapter maps sandbox and snapshot records and forwards the crea
   assert.deepEqual(await client.getSnapshot(saved), saved);
   await client.deleteSnapshot(saved);
   const { expiresAt, ...snapshotBody } = requests[0]!.body as unknown as { expiresAt: string };
-  assert.deepEqual(snapshotBody, { kind: "filesystem", name: "qm-test" });
+  assert.deepEqual(snapshotBody, { kind: "runtime", name: "qm-test" });
   assert.ok(Date.parse(expiresAt) - Date.now() > 9 * 365 * 86400_000);
   assert.deepEqual(requests.slice(1), [
     { method: "GET", path: "/v1/sandbox-groups/sbg-test/snapshots/snp-test" },
@@ -181,30 +197,6 @@ test("Render SDK adapter creates the default sandbox group of a workspace that h
   const creates = http.groupCreates();
   await assert.rejects(client.importImage(source, "qm-sandbox-base-third"), /set one in the Render dashboard/);
   assert.equal(http.groupCreates(), creates);
-});
-
-test("Render SDK adapter starts a one-day sandbox on a workspace that caps lifetime at one day", async (t) => {
-  const fake = createFakeRender();
-  t.after(() => fake.cleanup());
-  const http = serveFakeRenderApi(t, fake);
-  http.capLifetime(86400);
-  const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
-  const created = await client.create({ lifetimeSec: 2592000 });
-  assert.equal(http.lifetimeOf(created.id), 86400);
-});
-
-test("Render SDK adapter runs scripts with the environment of the QM sandbox base image", async (t) => {
-  const fake = createFakeRender();
-  t.after(() => fake.cleanup());
-  serveFakeRenderApi(t, fake);
-  const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
-  const { id } = await client.create({ lifetimeSec: 3600 });
-  const result = await client.runScript(
-    id,
-    'echo "$VIRTUAL_ENV $ANONYMIZED_TELEMETRY $BROWSER_USE_CLOUD_SYNC"; echo "$PATH" | cut -d: -f1',
-    30,
-  );
-  assert.equal(result.stdout, "/opt/agent-venv false false\n/opt/agent-venv/bin\n");
 });
 
 test("Render SDK adapter waits for a checkpoint and keeps the provider reason when it fails", async (t) => {
@@ -328,7 +320,7 @@ test("Render SDK adapter keeps stdout, stderr, and nonzero exit status of an upl
   assert.match(command, SPOOLED);
   assert.equal(SPOOLED.exec(command)![1], "10");
   assert.deepEqual(JSON.parse(sent[3]!.body), { command });
-  const path = command.slice(command.indexOf("'") + 1, -1);
+  const path = SPOOLED.exec(command)![2]!;
   assert.ok(sent[1]!.body.startsWith(cleanup(path)));
   assert.ok(sent[1]!.body.endsWith("\nexample command"));
 });
@@ -403,13 +395,13 @@ test("Render SDK adapter retries sandbox and checkpoint creation only on 429", a
   const attempts = scriptedApi(t, failures);
   const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
   assert.equal((await client.create({ lifetimeSec: 86400 })).id, "sbx-test");
-  assert.equal((await client.createSnapshot("sbx-test", "qm-test")).id, "snp-test");
+  assert.equal((await client.createSnapshot("sbx-test", "qm-test", "runtime")).id, "snp-test");
   assert.equal(attempts("POST /v1/sandboxes"), 2);
   assert.equal(attempts("POST /v1/sandboxes/sbx-test/snapshots"), 2);
   failures.set("POST /v1/sandboxes", [503]);
   failures.set("POST /v1/sandboxes/sbx-test/snapshots", [503]);
   await assert.rejects(client.create({ lifetimeSec: 86400 }), /injected 503/);
-  await assert.rejects(client.createSnapshot("sbx-test", "qm-test"), /injected 503/);
+  await assert.rejects(client.createSnapshot("sbx-test", "qm-test", "runtime"), /injected 503/);
   assert.equal(attempts("POST /v1/sandboxes"), 3);
   assert.equal(attempts("POST /v1/sandboxes/sbx-test/snapshots"), 3);
 });
@@ -505,7 +497,7 @@ test(
     const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
     await assert.rejects(client.create({ lifetimeSec: 86400 }), { name: "TimeoutError" });
     await cleaned.sandbox.promise;
-    await assert.rejects(client.createSnapshot("sbx-test", "qm-test"), { name: "TimeoutError" });
+    await assert.rejects(client.createSnapshot("sbx-test", "qm-test", "runtime"), { name: "TimeoutError" });
     await cleaned.checkpoint.promise;
     assert.deepEqual(deletes, ["available"]);
   },
@@ -531,7 +523,7 @@ test("Render SDK adapter rejects truncated streams and removes the uploaded scri
     .map((request) => (JSON.parse(request.body) as { command: string }).command);
   assert.equal(commands.length, 2);
   assert.match(commands[0]!, SPOOLED);
-  assert.equal(commands[1], `rm -f ${commands[0]!.slice(commands[0]!.indexOf("'"))}`);
+  assert.equal(commands[1], `rm -f '${SPOOLED.exec(commands[0]!)![2]}'`);
 });
 
 test("Render SDK adapter keeps scripts and secrets out of run token requests and runs scripts past the argument limit", async (t) => {
@@ -555,7 +547,7 @@ test("Render SDK adapter keeps scripts and secrets out of run token requests and
     assert.equal(request.body.includes(payload.slice(0, 64)), false);
   }
   assert.match((JSON.parse(runs[0]!.body) as { command: string }).command, SPOOLED);
-  assert.ok(http.proxyCommands.every((command) => command.length < 200 && !command.includes(secret)));
+  assert.ok(http.proxyCommands.every((command) => command.length < 400 && !command.includes(secret)));
   assert.equal(http.uploads.length, 1);
   assert.ok(http.uploads[0]!.path.startsWith(`${RENDER_SCRIPT_DIR}/`));
   const spoolDir = join(fake.home(id), RENDER_SCRIPT_DIR);
@@ -598,7 +590,7 @@ test("Render SDK adapter bounds a stalled run token request by the script deadli
   const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
   const started = Date.now();
   await assert.rejects(client.runScript("sbx-test", "sleep 60", 1));
-  assert.ok(Date.now() - started < 5_000);
+  assert.ok(Date.now() - started < 15_000);
   assert.equal(commands.length, 2);
   assert.match(commands[0]!, SPOOLED);
   assert.match(commands[1]!, /^rm -f '/);

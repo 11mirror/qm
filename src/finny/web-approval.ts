@@ -62,10 +62,7 @@ export async function decideFinnyWebApproval(input: {
   const clarification = input.reason === FINNY_CLARIFICATION_REASON;
   const plan = input.reason === FINNY_PLAN_APPROVAL_REASON;
   if (!clarification && !plan) return null;
-  const requestId = requestIdFromApprovalKey(
-    input.approvalKey,
-    clarification ? "finny-clarification:" : "finny-plan:",
-  );
+  const requestId = requestIdFromApprovalKey(input.approvalKey, clarification ? "finny-clarification:" : "finny-plan:");
   let decision: FinnySlackDecision;
   if (clarification) {
     if (input.approved && !input.optionId) throw new Error("Finny clarification option is required");

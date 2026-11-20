@@ -33,14 +33,49 @@ const crons = [
   },
 ];
 
+const patches: unknown[] = [];
+let failShareLoad = false;
+
 const { vite, close } = await browserEnv({
   dom: { url: "http://localhost/crons" },
-  fetch: (input) => {
+  fetch: (input, init) => {
     const path = String(input);
+    if (init?.method === "PATCH") patches.push(JSON.parse(String(init.body)));
     if (path === "/api/contexts") return Promise.resolve(Response.json({ contexts: [] }));
     if (path === "/api/crons") return Promise.resolve(Response.json({ crons }));
+    if (path === "/api/shares/cron/c2" && failShareLoad) return Promise.reject(new Error("share store unavailable"));
     return Promise.resolve(Response.json({}));
   },
+});
+
+test("a cron share-load failure is reported with its operation context", async () => {
+  document.body.innerHTML = '<div id="app"></div><main></main>';
+  const main = document.querySelector("main")!;
+  const warnings: unknown[][] = [];
+  const previousWarn = console.warn;
+  console.warn = (...args: unknown[]) => warnings.push(args);
+  try {
+    const { appState } = await vite.ssrLoadModule("/src/shell.ts");
+    const { openCronById, renderCronsPage } = await vite.ssrLoadModule("/src/crons.ts");
+    appState.currentView = "crons";
+    appState.mainEl = main;
+    appState.me = { user: "tester", org: "test" };
+    failShareLoad = true;
+    openCronById("c2");
+    await renderCronsPage();
+    for (
+      let index = 0;
+      index < 20 && !warnings.some((args) => String(args[0]).includes("web:load_cron_shares"));
+      index++
+    )
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    const reported = warnings.find((args) => String(args[0]).includes("web:load_cron_shares"));
+    assert.ok(reported);
+    assert.match(reported.map(String).join(" "), /share store unavailable/);
+  } finally {
+    failShareLoad = false;
+    console.warn = previousWarn;
+  }
 });
 after(close);
 
@@ -57,4 +92,24 @@ test("an untitled cron is listed by its clipped task text, a titled one by its t
     [...main.querySelectorAll(".cron-title-line")].map((row) => row.textContent?.trim()),
     ["Please summarize the open PRs in qm: list each one with…", "Gmail digest", "(untitled cron)"],
   );
+});
+
+test("the schedule picker saves a weekday preset as a calendar schedule in the cron's timezone", async () => {
+  document.body.innerHTML = '<div id="app"></div><main></main>';
+  const main = document.querySelector("main")!;
+  const { appState } = await vite.ssrLoadModule("/src/shell.ts");
+  const { openCronById, renderCronsPage } = await vite.ssrLoadModule("/src/crons.ts");
+  appState.currentView = "crons";
+  appState.mainEl = main;
+  appState.me = { user: "tester", org: "test" };
+  openCronById("c1");
+  await renderCronsPage();
+  assert.equal(main.querySelector(".cron-when-main")?.textContent?.trim(), "Every day at 9:00 AM");
+  main.querySelector<HTMLButtonElement>(".cron-when .btn")!.click();
+  [...main.querySelectorAll<HTMLButtonElement>(".cron-segments button")]
+    .find((b) => b.textContent?.trim() === "Weekdays")!
+    .click();
+  main.querySelector<HTMLFormElement>(".cron-schedule-form")!.requestSubmit();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(patches.at(-1), { schedule: { cron: "0 9 * * 1-5", timezone: "America/Los_Angeles" } });
 });

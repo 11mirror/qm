@@ -11,10 +11,12 @@ import type { SessionStore } from "./session-store.ts";
 import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { swallowAs } from "../util/errors.ts";
+import { claimThenBind } from "../tenants/claim.ts";
 import { type Item, proseText } from "./items.ts";
 import {
   ANCESTOR_STOP,
   assertAudienceCompatible,
+  doesBotWork,
   isSidebarSession,
   isSubagentThreadRef,
   PARENT_INTERRUPT,
@@ -47,6 +49,7 @@ export function renderSubagentMail(input: {
   kind: SubagentMailKind;
   body: string;
   stopScope?: StopScope;
+  retired?: boolean;
 }): string {
   const why: Record<SubagentMailKind, string> = {
     final_answer: "finished a turn and sent back its result",
@@ -66,7 +69,7 @@ export function renderSubagentMail(input: {
     `<wake reason="subagent" name="${xmlAttrEscape(input.title)}" sessionId="${input.sessionId}" kind="${input.kind}" at="${new Date().toISOString()}">`,
     `  <why>Your subagent session "${xmlEscape(input.title)}" ${why[input.kind]}${xmlEscape(stopReason)}.</why>`,
     `  <content>${xmlEscape(input.body)}</content>`,
-    `  <instructions>If the person who asked for this work is waiting on it, relay what matters in your own words. Otherwise act on it internally without acknowledging it. Never repeat a result already reported or send a no-action-needed update. The subagent's full transcript is kept with it; use the subagents tool to read it or give it another task.</instructions>`,
+    `  <instructions>If the person who asked for this work is waiting on it, relay what matters in your own words. Otherwise act on it internally without acknowledging it. Never repeat a result already reported or send a no-action-needed update. The subagent's full transcript is kept with it; ${input.retired ? "it has retired, so read it with the subagents tool and open a fresh subagent for new work" : "use the subagents tool to read it or give it another task"}.</instructions>`,
     "</wake>",
   ].join("\n");
 }
@@ -74,21 +77,21 @@ export function renderSubagentMail(input: {
 export interface SubagentMailDeps {
   signals?: Pick<RunSignalStore, "pending">;
   deliveries?: Pick<DeliveryStore, "enqueue">;
-  delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
-  sessions: Pick<SessionStore, "get" | "getByThread" | "latestItemSeq" | "visibleItems" | "childrenOf">;
+  sessions: Pick<
+    SessionStore,
+    "get" | "getByThread" | "latestItemSeq" | "visibleItems" | "childrenOf" | "setSpawnMeta"
+  >;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> & Partial<Pick<RunStore, "get">>;
   maxAttempts: number;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
 }
 
-type ParentMailDeps = Pick<
-  SubagentMailDeps,
-  "mailbox" | "runs" | "maxAttempts" | "prepareRequest" | "delegationEnabled"
->;
+type ParentMailDeps = Pick<SubagentMailDeps, "mailbox" | "runs" | "maxAttempts" | "prepareRequest">;
 
 interface ParentSource {
   actor: Principal;
+  botActor?: boolean;
   conversation: Pick<OrchestratorInput["conversation"], "audience">;
   runId?: string;
   delegatingRunId?: string;
@@ -188,10 +191,10 @@ async function parentTurn(
             ? { destination: currentContext!.origin.destination }
             : {}),
         },
-        unattendedGrants: undefined,
       };
   const { openFingerprint: _openFingerprint, ...request }: OrchestratorInput & Pick<SpawnMeta, "openFingerprint"> = {
     ...meta,
+    ...(meta.botActor || doesBotWork(peer ? null : child, source) ? { botActor: true } : {}),
     sessionSenderId: child.id,
     conversation: {
       ...meta.conversation,
@@ -230,6 +233,7 @@ async function parentTurn(
     "conversationHeader",
     "cronScript",
     "infrequentCron",
+    "personaId",
   ] as const)
     delete request[key];
   if (!originalParent) request.addressed = false;
@@ -254,9 +258,7 @@ async function wakeParent(
   }
   if (existing && (existing.status === "done" || existing.status === "failed")) return "settled";
   if ((await deps.runs.inFlightForThread(parent.threadRef)).length) return "busy";
-  const surfaceTools =
-    meta.surfaceTools === true ||
-    requiresDelegation(prepared, (await deps.delegationEnabled?.(prepared.actor.id)) === true);
+  const surfaceTools = meta.surfaceTools === true || requiresDelegation(prepared);
   await deps.runs.enqueue({
     sessionId: parent.threadRef,
     dedupKey: wake.dedupKey,
@@ -286,6 +288,7 @@ async function mailParent(
     recipientId: parent.id,
     senderId: child.id,
     actor: turn.prepared.actor,
+    ...(turn.prepared.botActor ? { botActor: true } : {}),
     audience: turn.prepared.conversation.audience,
     createdAt: Date.now(),
   });
@@ -346,14 +349,16 @@ export async function wakeForUnreadMail(
 }
 
 export async function sweepUnreadMailWakes(deps: UnreadMailDeps): Promise<void> {
-  for (let page = await deps.mailbox.awaitingWake(); page.length;) {
-    for (const recipientId of new Set(page.map((message) => message.recipientId))) {
-      const parent = await deps.sessions.get(recipientId);
-      if (parent && !(await deps.runs.inFlightForThread(parent.threadRef)).length)
-        await wakeParentForMail(deps, parent).catch(swallowAs("sessions: recover unread mail wake", undefined));
+  await claimThenBind(deps.mailbox.claimWakeTenants, async () => {
+    for (let page = await deps.mailbox.awaitingWake(); page.length;) {
+      for (const recipientId of new Set(page.map((message) => message.recipientId))) {
+        const parent = await deps.sessions.get(recipientId);
+        if (parent && !(await deps.runs.inFlightForThread(parent.threadRef)).length)
+          await wakeParentForMail(deps, parent).catch(swallowAs("sessions: recover unread mail wake", undefined));
+      }
+      page = await deps.mailbox.awaitingWake(page.at(-1)?.id);
     }
-    page = await deps.mailbox.awaitingWake(page.at(-1)?.id);
-  }
+  });
 }
 
 async function wakeParentForMail(
@@ -377,6 +382,7 @@ async function wakeParentForMail(
             if (await runStopped(runs, deps.signals, message.senderRunId ?? message.delegatingRunId)) return "settled";
             const source = {
               actor: message.actor,
+              ...(message.botActor ? { botActor: true } : {}),
               conversation: { audience: message.audience },
               ...(message.delegatingRunId ? { delegatingRunId: message.delegatingRunId } : {}),
               ...(peer ? { peerDepth: message.peerDepth ?? 1 } : {}),
@@ -434,10 +440,17 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run, quie
   const resent = await deps.mailbox.unread(parent.id, resultId);
   const waiting = result?.stopped || failed || resent ? 0 : await pendingWork(deps, child);
   const { kind, body } = mailOf(run, failed, quotes ? turnText(views[0] ?? [], shared, run) : undefined, waiting);
+  const retired =
+    (kind === "final_answer" || kind === "no_reply") &&
+    !child.spawnMeta.persistent &&
+    !(await deps.signals?.pending(run.id))?.some(({ signal }) => signal.kind === "steer") &&
+    !(await deps.runs.inFlightForThread(child.threadRef)).length &&
+    !(await deps.mailbox.pending(child.id)).length;
   const text = renderSubagentMail({
     title,
     sessionId: child.id,
     kind,
+    retired,
     body:
       body.length > 16_000 ? `${body.slice(0, 16_000)}\n[truncated; read the child session for the full result]` : body,
     ...(result?.stopped && result.stopScope ? { stopScope: result.stopScope } : {}),
@@ -475,7 +488,9 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run, quie
     kind !== "in_progress" &&
     (!stopped ||
       (stopped === "self" && result?.stopped === true && ["tree", "session"].includes(result.stopScope ?? "tree")));
-  return (await mailParent(deps, child, parent, turn, mail, wakes ? wake : undefined)) === "settled";
+  const outcome = await mailParent(deps, child, parent, turn, mail, wakes ? wake : undefined);
+  if (retired) await deps.sessions.setSpawnMeta(child.id, { ...child.spawnMeta, retired: true });
+  return outcome === "settled";
 }
 
 export async function returnSubagentRun(
@@ -497,13 +512,15 @@ export async function settleTreeWakes(
     runs: Pick<RunStore, "pendingReturns" | "markReturned" | "deferReturn">;
   },
   root: Session,
+  botRunsOnly = false,
 ): Promise<void> {
   const tree = (await treeSessions(deps.sessions, root)).filter((session) => session.scopeId === root.scopeId);
   for (const message of await deps.mailbox.wakesFor(...tree.map((session) => session.id)))
-    await deps.mailbox.settle(message.recipientId, message.id);
+    if (!botRunsOnly || message.botActor) await deps.mailbox.settle(message.recipientId, message.id);
   const threadRefs = tree.map((session) => session.threadRef);
   for (const run of await deps.runs.pendingReturns(Number.MAX_SAFE_INTEGER, "", threadRefs))
-    await returnSubagentRun(deps, run, true).catch(swallowAs("sessions: settle tree return", undefined));
+    if (!botRunsOnly || run.request.botActor)
+      await returnSubagentRun(deps, run, true).catch(swallowAs("sessions: settle tree return", undefined));
 }
 
 function turnText(items: readonly Item[], shared: (seq: number) => boolean, run: Run): string | undefined {

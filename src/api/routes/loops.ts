@@ -1,6 +1,8 @@
+import { canAdministerLoop } from "../loop-administration.ts";
 import { LOOP_ICON_ERROR, validLoopIcon } from "../../loops/loop-store.ts";
 import { boundLoopCron } from "../../loops/authority.ts";
-import { unattendedGrantRefusal } from "../../cron/authority.ts";
+import { authoredNow, reauthored } from "../../cron/authority.ts";
+import { personAtKeyboard } from "../artifact-share.ts";
 import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { Loop, LoopState, LoopTriageConfig } from "../../loops/types.ts";
 import { scopeId, type ScopeId } from "../../types.ts";
@@ -18,7 +20,7 @@ import type { CronStore } from "../../cron/cron-store.ts";
 import { DEFAULT_CRON_TIMEZONE, userScheduleFromBody, validateUserSchedule } from "../../cron/schedule.ts";
 import type { ScopedConfigStore } from "../../resolution/config-store.ts";
 import { errMessage, reportFailure, swallow } from "../../util/errors.ts";
-import { sendJson } from "../http.ts";
+import { PERSON_REQUIRED, refuseImpersonated, sendJson } from "../http.ts";
 import { isObj, resolveCapabilityDestination } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 
@@ -41,38 +43,50 @@ interface ActingPrincipal {
   actorId: string;
   scopeId?: ScopeId;
   capability?: CapabilityClaims;
-  liveHuman: boolean;
+  liveHuman: () => Promise<boolean>;
+}
+
+export async function inboxPreviewEnabled(deps: ApiCtx["deps"], principalId: string): Promise<boolean> {
+  return (await deps.featureFlags?.enabled("inbox_loops", scopeId("personal", principalId))) === true;
+}
+
+export function forInboxLoopsPeople(routes: Route<ApiCtx>[]): Route<ApiCtx>[] {
+  return routes.map((route) => ({
+    ...route,
+    browser: route.browser ?? true,
+    handle: async (ctx) => {
+      if (ctx.actor && !(await inboxPreviewEnabled(ctx.deps, ctx.actor.p)))
+        return sendJson(ctx.res, 403, { error: "feature_disabled" });
+      return route.handle(ctx);
+    },
+  }));
 }
 
 export function actingPrincipal(ctx: ApiCtx): ActingPrincipal | null {
   if (ctx.capability) {
+    const atKeyboard = ctx.capability.liveActor === true && personAtKeyboard(ctx.capability);
     return {
       actorId: ctx.capability.actorId,
       scopeId: ctx.capability.scopeId as ScopeId,
       capability: ctx.capability,
-      liveHuman: ctx.actor?.p !== undefined || ctx.capability.liveActor === true,
+      liveHuman: async () => atKeyboard,
     };
   }
-  if (ctx.actor?.p) return { actorId: ctx.actor.p, liveHuman: true };
+  if (ctx.actor?.p) {
+    const live = !ctx.actor.imp;
+    return { actorId: ctx.actor.p, liveHuman: async () => live };
+  }
   const principalId = (ctx.url.searchParams.get("principalId") ?? "").trim();
-  if (principalId) return { actorId: principalId, liveHuman: false };
+  if (principalId) return { actorId: principalId, liveHuman: async () => false };
   sendJson(ctx.res, 403, { error: "forbidden", message: "loops need an agent capability or a principalId" });
   return null;
 }
 
-function requireLiveHuman(ctx: ApiCtx, acting: ActingPrincipal): boolean {
-  if (acting.liveHuman) return true;
-  sendJson(ctx.res, 403, { error: "human_required", message: "this action requires a live human actor" });
+export async function requireLiveHuman(ctx: ApiCtx, acting: ActingPrincipal): Promise<boolean> {
+  if (await acting.liveHuman()) return true;
+  if (ctx.actor?.imp) refuseImpersonated(ctx.res);
+  else sendJson(ctx.res, 403, { error: "human_required", message: PERSON_REQUIRED });
   return false;
-}
-
-export async function canAdministerLoop(ctx: ApiCtx, loop: Loop, acting: ActingPrincipal): Promise<boolean> {
-  const { app } = ctx;
-  if (await app.membershipControlsScope(loop.ownerScopeId)) {
-    return app.managesScope(acting.actorId, loop.ownerScopeId);
-  }
-  if (await app.samePerson(loop.owner, acting.actorId)) return true;
-  return app.managesScope(acting.actorId, loop.ownerScopeId);
 }
 
 export async function loadAdministrable(
@@ -90,7 +104,7 @@ export async function loadAdministrable(
     sendJson(ctx.res, 404, { error: "not_found", message: "no such loop" });
     return null;
   }
-  if (!(await canAdministerLoop(ctx, loop, acting))) {
+  if (!(await canAdministerLoop(ctx.app, loop, acting.capability ?? acting))) {
     sendJson(ctx.res, 403, { error: "forbidden", message: "you may not administer this loop" });
     return null;
   }
@@ -98,21 +112,13 @@ export async function loadAdministrable(
 }
 
 export async function requireLoopAuthority(ctx: ApiCtx, deps: LoopServiceDeps, loop: Loop): Promise<boolean> {
-  let cron;
   try {
-    cron = await boundLoopCron(loop, deps.crons);
+    await boundLoopCron(loop, deps.crons);
   } catch (e) {
     sendJson(ctx.res, 409, { error: "authority_mismatch", message: errMessage(e) });
     return false;
   }
-  if (!cron?.unattendedGrants?.length) return true;
-  const principal = ctx.capability ?? (ctx.actor?.p ? { actorId: ctx.actor.p, liveActor: true } : undefined);
-  const refusal = principal
-    ? await unattendedGrantRefusal(ctx.app, ctx.deps.admin, cron, principal)
-    : { message: "a privileged loop requires a live turn started by its owner" };
-  if (!refusal) return true;
-  sendJson(ctx.res, 403, { error: "forbidden", message: refusal.message });
-  return false;
+  return true;
 }
 
 const GATES = new Set(["auto", "hold"]);
@@ -216,7 +222,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
       error: "bad_request",
       message: 'shipActions must be [{action, gate: "auto"|"hold"}]',
     });
-  if (shipActions.some((policy) => policy.gate === "auto") && !requireLiveHuman(ctx, acting)) return;
+  if (shipActions.some((policy) => policy.gate === "auto") && !(await requireLiveHuman(ctx, acting))) return;
   const capsResult = capsFromBody(b.caps);
   if (capsResult.invalidField)
     return sendJson(ctx.res, 400, {
@@ -255,7 +261,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
     const resolved = resolveCapabilityDestination(ctx.capability, b.destinationKey);
     if (!resolved.ok || !resolved.destination)
       return sendJson(ctx.res, 400, { error: "bad_request", message: "destinationKey is not available" });
-    if (!requireLiveHuman(ctx, acting)) return;
+    if (!(await requireLiveHuman(ctx, acting))) return;
     destination = resolved.destination;
   }
   const ownerScopeId: ScopeId = scopeId("personal", acting.actorId);
@@ -263,6 +269,8 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
     owner: acting.actorId,
     createdBy: acting.actorId,
     ownerScopeId,
+    ...(ctx.capability?.botActor ? { botActor: true } : {}),
+    ...authoredNow(await acting.liveHuman()),
     name: b.name,
     ...(b.icon !== undefined ? { icon: b.icon as string | null } : {}),
     playbook: b.playbook,
@@ -291,6 +299,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
         owner: loop.owner,
         createdBy: loop.createdBy,
         ownerScopeId: loop.ownerScopeId,
+        ...(loop.botActor ? { botActor: true } : {}),
         schedule,
         title: `Loop: ${loop.name}`,
         action: `fire loop ${loop.id}`,
@@ -314,10 +323,8 @@ async function listLoops(ctx: ApiCtx): Promise<void> {
   const acting = actingPrincipal(ctx);
   if (!acting) return;
   const all = await deps.store.list();
-  const visible: Loop[] = [];
-  for (const loop of all) {
-    if (await canAdministerLoop(ctx, loop, acting)) visible.push(loop);
-  }
+  const permissions = await ctx.app.loopAdministration(acting.capability ?? acting, all);
+  const visible = all.filter((_loop, i) => permissions[i]);
   return sendJson(ctx.res, 200, { loops: visible });
 }
 
@@ -343,11 +350,6 @@ async function getLoop(ctx: ApiCtx): Promise<void> {
         ? {
             ...item,
             ...(item.sourcePayload ? { sourcePayload: agentSourcePayload(item.sourcePayload, item.source) } : {}),
-            ...(item.inboxPreview
-              ? {
-                  inboxPreview: agentSourcePayload(item.inboxPreview, item.source),
-                }
-              : {}),
           }
         : item,
     ),
@@ -389,7 +391,7 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
       });
     patch.state = b.state as LoopState;
     if (patch.state === "enabled" && (loop.state === "quarantined" || loop.state === "archived")) {
-      if (!requireLiveHuman(ctx, acting)) return;
+      if (!(await requireLiveHuman(ctx, acting))) return;
       if (loop.state === "quarantined") {
         patch.quarantineClearedBy = acting.actorId;
         patch.quarantineClearedAt = Date.now();
@@ -426,10 +428,12 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
   const existingGates = new Map(loop.shipActions.map((policy) => [policy.action, policy.gate]));
   if (
     shipActions.some((policy) => policy.gate === "auto" && existingGates.get(policy.action) !== "auto") &&
-    !requireLiveHuman(ctx, acting)
+    !(await requireLiveHuman(ctx, acting))
   )
     return;
   if (b.shipActions !== undefined) patch.shipActions = shipActions;
+  if (patch.playbookEdit || patch.successCondition || patch.successChecks || patch.shipActions)
+    Object.assign(patch, reauthored(await acting.liveHuman(), loop));
   const capsResult = capsFromBody(b.caps);
   if (capsResult.invalidField)
     return sendJson(ctx.res, 400, {
@@ -451,7 +455,7 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
         error: "forbidden",
         message: "loop triage is not enabled for this loop's owner",
       });
-    if (!requireLiveHuman(ctx, acting)) return;
+    if (!(await requireLiveHuman(ctx, acting))) return;
     patch.triage = triage;
   }
   if (b.destinationKey !== undefined) {
@@ -459,7 +463,7 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
       return sendJson(ctx.res, 400, { error: "bad_request", message: "destinationKey must be a string or null" });
     if (!ctx.capability)
       return sendJson(ctx.res, 400, { error: "bad_request", message: "destinationKey requires an agent capability" });
-    if (!requireLiveHuman(ctx, acting)) return;
+    if (!(await requireLiveHuman(ctx, acting))) return;
     if (b.destinationKey === null) {
       patch.destination = null;
     } else {
@@ -519,7 +523,7 @@ async function previewLoopTriage(ctx: ApiCtx): Promise<void> {
       error: "bad_request",
       message: `triage must be {prioritize?, consolidate?: {enabled: boolean, instructions?: string up to ${TRIAGE_INSTRUCTIONS_MAX} chars}}`,
     });
-  if (!requireLiveHuman(ctx, acting)) return;
+  if (!(await requireLiveHuman(ctx, acting))) return;
   try {
     const items = await deps.fire.previewTriage(loop, { ...loop.triage, ...triage });
     return sendJson(ctx.res, 200, { items });
@@ -535,7 +539,13 @@ async function fireLoopNow(ctx: ApiCtx): Promise<void> {
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   const fireKey = `loop:${loop.id}:manual:${Date.now()}`;
-  void deps.fire.fire(loop.id, fireKey).catch((e: unknown) => swallow(`manual fire of loop ${loop.id}`, e));
+  void deps.fire
+    .fire(loop.id, fireKey)
+    .then((result) => {
+      if (result.status === "failed")
+        console.error("%s", `[loops] manual fire of ${loop.id} failed: ${result.note ?? ""}`);
+    })
+    .catch((e: unknown) => swallow(`manual fire of loop ${loop.id}`, e));
   return sendJson(ctx.res, 200, { ok: true, fireKey });
 }
 
@@ -551,7 +561,7 @@ async function decideOutputLocked(ctx: ApiCtx): Promise<void> {
   if (!loaded) return;
   const { deps, loop, acting } = loaded;
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
-  if (!requireLiveHuman(ctx, acting)) return;
+  if (!(await requireLiveHuman(ctx, acting))) return;
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   const b = isObj(ctx.body) ? ctx.body : {};
   const outputId = ctx.params.outputId ?? "";
@@ -590,7 +600,7 @@ async function graduateShipAction(ctx: ApiCtx): Promise<void> {
   if (!loaded) return;
   const { deps, loop, acting } = loaded;
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
-  if (!requireLiveHuman(ctx, acting)) return;
+  if (!(await requireLiveHuman(ctx, acting))) return;
   const b = isObj(ctx.body) ? ctx.body : {};
   if (typeof b.shipAction !== "string" || !b.shipAction.trim())
     return sendJson(ctx.res, 400, { error: "bad_request", message: "shipAction required" });
@@ -623,7 +633,7 @@ async function setAutopilot(ctx: ApiCtx): Promise<void> {
   if (typeof b.enabled !== "boolean")
     return sendJson(ctx.res, 400, { error: "bad_request", message: "enabled must be a boolean" });
   if (b.enabled) {
-    if (!requireLiveHuman(ctx, acting)) return;
+    if (!(await requireLiveHuman(ctx, acting))) return;
     if (loop.state === "quarantined" || loop.state === "archived")
       return sendJson(ctx.res, 409, {
         error: "conflict",
@@ -674,7 +684,7 @@ async function revokeShipGrant(ctx: ApiCtx): Promise<void> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return;
   const { deps, loop, acting } = loaded;
-  if (!requireLiveHuman(ctx, acting)) return;
+  if (!(await requireLiveHuman(ctx, acting))) return;
   const grantId = ctx.params.grantId ?? "";
   const grant = await deps.grants.get(grantId);
   if (!grant || grant.loopId !== loop.id)
@@ -683,9 +693,9 @@ async function revokeShipGrant(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, { grant: revoked });
 }
 
-export const loopRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/loops/:id/triage/preview", auth: "source", handle: previewLoopTriage },
-  ...withActor("query.principalId", [
+export const loopRoutes: ReadonlyArray<Route<ApiCtx>> = withActor("query.principalId", [
+  ...forInboxLoopsPeople([
+    { method: "POST", path: "/v1/loops/:id/triage/preview", auth: "source", handle: previewLoopTriage },
     { method: "POST", path: "/v1/loops", auth: "either", handle: createLoop },
     { method: "GET", path: "/v1/loops", auth: "either", handle: listLoops },
     { method: "GET", path: "/v1/loops/:id", auth: "either", handle: getLoop },
@@ -695,6 +705,6 @@ export const loopRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "POST", path: "/v1/loops/:id/outputs/:outputId/decide", auth: "either", handle: decideOutput },
     { method: "POST", path: "/v1/loops/:id/grants", auth: "either", handle: graduateShipAction },
     { method: "POST", path: "/v1/loops/:id/autopilot", auth: "either", handle: setAutopilot },
-    { method: "DELETE", path: "/v1/loops/:id/grants/:grantId", auth: "either", handle: revokeShipGrant },
   ]),
-];
+  { method: "DELETE", path: "/v1/loops/:id/grants/:grantId", auth: "either", handle: revokeShipGrant },
+]);

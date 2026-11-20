@@ -1,5 +1,5 @@
 import type { RuntimeChoice } from "../agent/agent.ts";
-import type { Destination, ScopeId, TurnResult } from "../types.ts";
+import type { Destination, ScopeId, TurnResult, WornPersona } from "../types.ts";
 
 export interface TriggerBase {
   id: string;
@@ -7,6 +7,8 @@ export interface TriggerBase {
   owner: string;
   createdBy: string;
   ownerConsentedAt?: number;
+  botActor?: boolean;
+  taskAuthor?: "automation";
   destination?: Destination;
   enabled: boolean;
   createdAt: number;
@@ -56,15 +58,22 @@ export interface Cron extends TriggerBase {
   message?: string;
   loopId?: string;
   createdAt: number;
-  unattendedGrants?: string[];
   sessionRef?: string;
   script?: CronScript;
+  sharedFrom?: string;
+  forkedAt?: number;
 
   lastFireNote?: CronFireNote;
 }
 
+export interface CronOrigin {
+  personaId?: string;
+  persona?: WornPersona;
+  project?: { id: string; name: string };
+}
+
 interface WebhookVerification {
-  scheme: "hmac-sha256" | "github" | "slack" | "stripe" | "linear";
+  scheme: "hmac-sha256" | "github" | "slack" | "stripe" | "linear" | "token" | "standard-webhooks";
   secret?: string;
 }
 

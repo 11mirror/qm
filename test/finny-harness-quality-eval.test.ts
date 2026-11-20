@@ -27,13 +27,11 @@ test("Finny Harness UI & Quality Eval: fails when json-render is wrapped in comm
     },
   });
 
-  // Edge 1: Clean raw JSON (currently passes)
   const cleanSpec = parseGenerativeUISpec(jsonRenderPayload);
   assert.ok(cleanSpec, "Clean raw JSON should parse");
   const cleanCard = renderGenerativeUI(cleanSpec);
   assert.ok(cleanCard.blocks.length > 0, "Clean card should render blocks");
 
-  // Edge 2: Wrapped in markdown code fences ```json ... ``` (fails today)
   const fencedPayload = `\`\`\`json\n${jsonRenderPayload}\n\`\`\``;
   const fencedSpec = parseGenerativeUISpec(fencedPayload);
   assert.ok(
@@ -41,7 +39,6 @@ test("Finny Harness UI & Quality Eval: fails when json-render is wrapped in comm
     "FAILED TODAY: parseGenerativeUISpec returns null when model wraps JSON in markdown code fences",
   );
 
-  // Edge 3: Preceded by conversational commentary (fails today)
   const commentaryPayload = `Here is the verified weekly AR report:\n\n${jsonRenderPayload}\n\nAll reconciliations tie out.`;
   const commentarySpec = parseGenerativeUISpec(commentaryPayload);
   assert.ok(
@@ -49,7 +46,6 @@ test("Finny Harness UI & Quality Eval: fails when json-render is wrapped in comm
     "FAILED TODAY: parseGenerativeUISpec returns null when model surrounds JSON with conversational commentary",
   );
 
-  // Edge 4: Preceded by commentary AND wrapped in markdown fences (fails today)
   const mixedPayload = `Good news on the verification. Summary below:\n\`\`\`json\n${jsonRenderPayload}\n\`\`\``;
   const mixedSpec = parseGenerativeUISpec(mixedPayload);
   assert.ok(
@@ -59,7 +55,6 @@ test("Finny Harness UI & Quality Eval: fails when json-render is wrapped in comm
 });
 
 test("Finny Harness Workflow & Safety Eval: identifies sandbox command approval traps and worker instruction gaps", () => {
-  // Edge 5: Worker instructions must explicitly prohibit destructive rm -rf and external soffice CLI
   const sampleWorkerTask = {
     producerInstruction: `Produce or reuse the approved workbook in the persistent sandbox following the resolved domain skill (such as sharechat-ap-outstanding-workbook). All spreadsheet calculations, crossfoots, and verifications MUST be performed using pure-Python openpyxl with pre-computed cached values. DO NOT call LibreOffice/soffice or run destructive commands (such as rm -rf). Persist it by POSTing JSON {name,mimetype,dataBase64} to $AGENT_API_URL/v1/files/upload with x-agent-capability: $AGENT_API_TOKEN.`,
   };
@@ -81,8 +76,6 @@ test("Finny Harness Workflow & Safety Eval: identifies sandbox command approval 
 });
 
 test("Finny Harness Coordinator Chatter Suppression Eval: fails if uncertified interim figures are emitted during in-flight rework", () => {
-  // Simulated prompt check: Coordinator must be instructed to stay silent on intermediate subagent wake turns
-  // and forbid broadcasting raw uncertified tables/numbers until finalized.
   const coordinatorGuidance = `
 ### Coordinator Silence & Anti-Chatter Rules
 1. DO NOT broadcast intermediate debugging, audit rejections, or uncertified accounting figures into the Slack thread during in-flight rework or auditing.
@@ -135,9 +128,9 @@ test("Finny Harness UI Model Dialect Eval: parses label, columns, and text synon
   const card = renderGenerativeUI(spec);
   assert.equal(card.blocks.length, 4, "Must render exactly 4 Block Kit blocks");
   assert.equal(card.blocks[0]?.type, "header");
-  assert.equal(card.blocks[1]?.type, "section"); // fields block
-  assert.equal(card.blocks[2]?.type, "section"); // table block
-  assert.equal(card.blocks[3]?.type, "section"); // text/section block
+  assert.equal(card.blocks[1]?.type, "section");
+  assert.equal(card.blocks[2]?.type, "section");
+  assert.equal(card.blocks[3]?.type, "section");
 });
 
 test("Finny Harness UI Chat SDK Eval: converts official @json-render/chat component tree into Block Kit blocks", () => {
