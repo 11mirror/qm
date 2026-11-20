@@ -110,6 +110,29 @@ test("a lazy store applies its predecessor registered by another store", { skip 
   });
 });
 
+test("a dynamic migration applies its predecessor registered by another store", { skip }, async () => {
+  await withDatabase(async (url, admin) => {
+    const table = `dynamic_dependency_${Date.now()}`;
+    const predecessor = createPgPool(url, [
+      { id: `${table}/z-predecessor`, statements: [`CREATE TABLE ${table}(value INT)`] },
+    ]);
+    const dynamic = createPgPool(url);
+    try {
+      await dynamic.migrate({
+        id: `${table}/a-dependent`,
+        upgradeFrom: `${table}/z-predecessor`,
+        statements: [`CREATE TABLE ${table}_dependent(value INT)`],
+      });
+      assert.equal(
+        (await admin.query("SELECT to_regclass($1) AS table", [`${table}_dependent`])).rows[0].table,
+        `${table}_dependent`,
+      );
+    } finally {
+      await Promise.all([predecessor.close(), dynamic.close()]);
+    }
+  });
+});
+
 test("concurrent cold and repeat migration entrypoints exit and reject checksum drift", { skip }, async () => {
   await withDatabase(async (url, admin) => {
     const run = () =>
