@@ -104,16 +104,16 @@ struct DraftStore {
     }
   }
 
-  static func merging(_ sessions: [Conversation], account: String) -> [Conversation] {
+  static func merging(_ sessions: [Conversation], account: String) throws -> [Conversation] {
     let threads = Set(sessions.map(\.threadRef))
-    let local = conversations(account).filter { !threads.contains($0.threadRef) }
+    let local = try conversations(account).filter { !threads.contains($0.threadRef) }
     return (sessions + local).sorted {
       ($0.lastActivityAt ?? .infinity) > ($1.lastActivityAt ?? .infinity)
     }
   }
 
-  static func conversations(_ account: String) -> [Conversation] {
-    let files = (try? records(account)) ?? []
+  static func conversations(_ account: String) throws -> [Conversation] {
+    let files = try records(account)
     return files.compactMap { file in
       guard let record = try? load(file),
         !record.text.isEmpty || record.pending != nil || !(record.attachments ?? []).isEmpty,

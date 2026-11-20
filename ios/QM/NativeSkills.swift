@@ -479,6 +479,17 @@ struct NativeSkillCompletion {
     }
     return String(draft[..<slash]) + "/\(name) "
   }
+
+  static func matches(_ skills: [NativeSkill], query: String) -> [NativeSkill] {
+    skills.filter {
+      query.isEmpty || $0.name.localizedCaseInsensitiveContains(query)
+    }.sorted {
+      let first = $0.name.lowercased().hasPrefix(query.lowercased())
+      let second = $1.name.lowercased().hasPrefix(query.lowercased())
+      return first == second
+        ? $0.name.localizedStandardCompare($1.name) == .orderedAscending : first
+    }
+  }
 }
 
 struct NativeSkillSuggestions: View {
@@ -492,14 +503,7 @@ struct NativeSkillSuggestions: View {
   private var query: String? { NativeSkillCompletion.query(in: draft) }
   private var matches: [NativeSkill] {
     guard let query else { return [] }
-    return (skills ?? []).filter {
-      query.isEmpty || $0.name.localizedCaseInsensitiveContains(query)
-    }.sorted {
-      let first = $0.name.lowercased().hasPrefix(query.lowercased())
-      let second = $1.name.lowercased().hasPrefix(query.lowercased())
-      return first == second
-        ? $0.name.localizedStandardCompare($1.name) == .orderedAscending : first
-    }
+    return NativeSkillCompletion.matches(skills ?? [], query: query)
   }
 
   var body: some View {
@@ -518,7 +522,7 @@ struct NativeSkillSuggestions: View {
         } else if !matches.isEmpty {
           ScrollView {
             VStack(spacing: 0) {
-              ForEach(matches.prefix(8)) { skill in
+              ForEach(matches) { skill in
                 Button {
                   draft = NativeSkillCompletion.inserting(skill.name, into: draft)
                 } label: {

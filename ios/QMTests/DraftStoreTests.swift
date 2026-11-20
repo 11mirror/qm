@@ -31,7 +31,7 @@ final class DraftStoreTests: XCTestCase {
     XCTAssertEqual(aside.count, 1)
     XCTAssertEqual(try Data(contentsOf: aside[0]), damaged)
     XCTAssertEqual(store.read().text, "next")
-    XCTAssertTrue(DraftStore.conversations(account).isEmpty)
+    XCTAssertTrue(try DraftStore.conversations(account).isEmpty)
   }
 
   func testAttachmentPruningRefusesAnUnreadableDraftDirectory() throws {

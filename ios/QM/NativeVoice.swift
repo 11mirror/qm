@@ -533,7 +533,7 @@ final class NativeVoiceModel: NSObject {
           let item = NativeWorkItem.items(run.activity ?? []).last(where: { !$0.isThinking })
         {
           reported = Self.clock
-          bridge.progress(String(item.label(active: true).prefix(160)), run: runID)
+          bridge.progress(item.label(active: true), run: runID)
           flushEvents()
         }
       }

@@ -251,7 +251,7 @@ final class AttachmentSubmissionTests: XCTestCase {
     await chat.send()
     let first = try XCTUnwrap(chat.pending)
     XCTAssertEqual(first.attachments?.first?.blobId, sha)
-    XCTAssertFalse(DraftStore.conversations(account).isEmpty)
+    XCTAssertFalse(try DraftStore.conversations(account).isEmpty)
     let restored = ChatModel(
       conversation: conversation, client: client, user: "test", knownSession: false)
     await restored.send()

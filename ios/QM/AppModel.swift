@@ -200,7 +200,7 @@ final class AppModel {
       guard self.client === client, current == client.generation, loadRevision == revision else {
         return
       }
-      conversations = DraftStore.merging(firstPage(list), account: account)
+      conversations = try DraftStore.merging(firstPage(list), account: account)
       error = nil
       hasLoadedConversations = true
       if let result = try await fetchedContexts {
@@ -305,7 +305,7 @@ final class AppModel {
       let loaded = conversations.filter { $0.localOnly != true }
       let known = Set(loaded.map(\.id))
       let older = page.sessions.filter { !known.contains($0.id) }
-      conversations = DraftStore.merging(
+      conversations = try DraftStore.merging(
         loaded + older, account: client.baseURL.absoluteString + identity.user)
       nextCursor = page.nextCursor
       paged = true

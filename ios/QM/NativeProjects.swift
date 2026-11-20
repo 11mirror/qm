@@ -108,7 +108,7 @@ final class ProjectsModel {
           + (cursor.map { [.init(name: "before", value: $0)] } ?? []))
       let loaded = more ? (conversations[scopeId] ?? []).filter { $0.localOnly != true } : []
       let known = Set(loaded.map(\.id))
-      conversations[scopeId] = DraftStore.merging(
+      conversations[scopeId] = try DraftStore.merging(
         loaded + page.sessions.filter { !known.contains($0.id) },
         account: client.baseURL.absoluteString + user
       ).filter { $0.scopeId == scopeId }

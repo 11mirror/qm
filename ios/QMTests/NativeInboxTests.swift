@@ -578,7 +578,7 @@ final class NativeInboxTests: XCTestCase {
     XCTAssertEqual(reopened.to, "review@example.com")
     XCTAssertEqual(reopened.proposalAt, 123)
     XCTAssertTrue(reopened.dirty)
-    XCTAssertTrue(DraftStore.conversations(account).isEmpty)
+    XCTAssertTrue(try DraftStore.conversations(account).isEmpty)
     await reopened.discardDraft()
     XCTAssertEqual(reopened.text, "Server draft")
     XCTAssertNil(reopened.drafts.read().inbox)

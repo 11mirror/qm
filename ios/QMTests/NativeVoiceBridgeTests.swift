@@ -103,6 +103,16 @@ final class NativeVoiceBridgeTests: XCTestCase {
       [.steer(text: request("How's it going?"), delegation: "d2", remark: false)])
   }
 
+  func testProgressRetainsTheCompleteLatestStep() {
+    var bridge = NativeVoiceBridge()
+    bridge.observe(run: "run1")
+    let label = String(repeating: "context ", count: 30) + "Approval needed"
+    bridge.progress(label, run: "run1")
+    XCTAssertEqual(
+      bridge.takeOutgoing(canSend: true).last?["content"] as? String,
+      "QM is working. Latest step: \(label)")
+  }
+
   func testWordsNotHandedOffWhileWorkingBecomeARemark() {
     var bridge = NativeVoiceBridge()
     bridge.started(run: "run1", delegation: "d0")

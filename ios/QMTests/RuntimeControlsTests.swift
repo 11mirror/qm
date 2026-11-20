@@ -71,4 +71,12 @@ final class RuntimeControlsTests: XCTestCase {
       "/check Draft stays intact")
   }
 
+  func testSkillCompletionKeepsEveryMatchingSkillReachable() throws {
+    let json = (0..<12).map {
+      #"{"id":"skill-#($0)","name":"match-#($0)","description":"Skill #($0)","scope":"org"}"#
+    }.joined(separator: ",")
+    let skills = try JSONDecoder().decode([NativeSkill].self, from: Data("[\(json)]".utf8))
+    XCTAssertEqual(NativeSkillCompletion.matches(skills, query: "match").count, 12)
+  }
+
 }

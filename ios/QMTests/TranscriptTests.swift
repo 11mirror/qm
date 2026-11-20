@@ -288,7 +288,7 @@ final class TranscriptTests: XCTestCase {
     let pending = PendingSend(text: "Keep this task", idempotencyKey: "same-key")
     try DraftStore(account: account, thread: conversation.threadRef).write(
       .init(text: pending.text, pending: pending, conversation: conversation))
-    let recovered = DraftStore.conversations(account)
+    let recovered = try DraftStore.conversations(account)
     XCTAssertEqual(recovered.first?.threadRef, conversation.threadRef)
     XCTAssertEqual(recovered.first?.localOnly, true)
     XCTAssertEqual(
