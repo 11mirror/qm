@@ -274,3 +274,12 @@ test("hourly preset previews match scheduler behavior across the fall DST fold",
     ["2027-11-07T05:00:00.000Z", "2027-11-07T07:00:00.000Z", "2027-11-07T08:00:00.000Z"],
   );
 });
+
+test("hourly preset previews match scheduler behavior across the spring DST gap", () => {
+  const beforeGap = Date.UTC(2027, 2, 14, 6, 30);
+  const runs = presetNextRuns({ kind: "hourly", minute: 0 }, "America/New_York", 3, beforeGap);
+  assert.deepEqual(
+    runs.map((ms) => new Date(ms).toISOString()),
+    ["2027-03-14T07:00:00.000Z", "2027-03-14T08:00:00.000Z", "2027-03-14T09:00:00.000Z"],
+  );
+});

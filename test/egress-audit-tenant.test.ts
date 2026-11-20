@@ -97,6 +97,41 @@ test("egress-audit ingest rejects a well-formed tenant id the core does not have
     assert.deepEqual(result.saved, [{ host: "a.example", tenant: a }]);
   }));
 
+test("egress-audit ingest retries the whole batch when tenant lookup is temporarily unavailable", () =>
+  withoutTenant(async () => {
+    const failed = await ingest(
+      [
+        { host: "a.example", verdict: "ok", scopeLabel: "personal:U1", tenant: a },
+        { host: "b.example", verdict: "denied", scopeLabel: "personal:U1", tenant: b },
+      ],
+      undefined,
+      {
+        tenantLookup: {
+          exists: async (tenant: string) => {
+            if (tenant === b) throw new Error("lookup unavailable");
+            return true;
+          },
+        },
+      },
+    );
+    assert.equal(failed.status, 503);
+    assert.deepEqual(failed.body, {
+      error: "tenant_lookup_unavailable",
+      message: "tenant lookup is temporarily unavailable",
+    });
+    assert.deepEqual(failed.saved, []);
+
+    const retried = await ingest([
+      { host: "a.example", verdict: "ok", scopeLabel: "personal:U1", tenant: a },
+      { host: "b.example", verdict: "denied", scopeLabel: "personal:U1", tenant: b },
+    ]);
+    assert.equal(retried.status, 200);
+    assert.deepEqual(retried.saved, [
+      { host: "a.example", tenant: a },
+      { host: "b.example", tenant: b },
+    ]);
+  }));
+
 test("egress-audit ingest on a single-tenant core files tenantless records under the boot tenant only", () =>
   withoutTenant(async () => {
     await bindBootTenant(async () => b);

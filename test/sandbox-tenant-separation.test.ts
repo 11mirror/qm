@@ -22,6 +22,7 @@ const backend = (name: string): Sandbox =>
   ({
     profile: { backend: name },
     provision: async (scopeId: string) => ({ id: scopeId, rootDir: "/workspace" }),
+    destroyScope: async () => undefined,
     run: async () => {
       ran.push(name);
       return { stdout: "", stderr: "", exitCode: 0 };
@@ -100,6 +101,9 @@ test("shared tenants can only discover, create, and run isolated providers", asy
     await assert.rejects(resources.status("pat", "legacy-local"), /does not keep tenants apart/);
     await assert.rejects(resources.restart("pat", "legacy-local"), /does not keep tenants apart/);
     await assert.rejects(resources.retire("pat", "legacy-local"), /does not keep tenants apart/);
+    await records.update("legacy-local", (record) => ({ ...record, state: "retired", cleanupPending: true }));
+    const retired = (await resources.list("pat", "personal:pat")).sandboxes.find(({ id }) => id === "legacy-local");
+    assert.deepEqual(retired?.availableActions, []);
     await assert.rejects(resources.create("pat", "personal:pat", "local"), /does not keep tenants apart/);
     const record = await resources.create("pat", "personal:pat", "sprites");
     const handle = await tenantRouter.provision("personal:pat", { sandboxId: record.id });

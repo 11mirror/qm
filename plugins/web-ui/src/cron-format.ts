@@ -245,7 +245,14 @@ export function browserTimezone(): string | undefined {
 
 export function presetNextRuns(preset: SchedulePreset, timeZone: string, count = 3, now = Date.now()): number[] {
   if (!isIntlTimezone(timeZone)) return [];
-  return new Croner(presetCron(preset), { timezone: timeZone, paused: true, mode: "5-part" })
-    .nextRuns(count, new Date(now))
-    .map((run) => run.getTime());
+  const cron = new Croner(presetCron(preset), { timezone: timeZone, paused: true, mode: "5-part" });
+  const runs: number[] = [];
+  let cursor = new Date(now);
+  while (runs.length < count) {
+    const next = cron.nextRun(cursor);
+    if (!next) break;
+    runs.push(next.getTime());
+    cursor = next;
+  }
+  return runs;
 }

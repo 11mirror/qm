@@ -1,5 +1,5 @@
 import { sendJson } from "../http.ts";
-import { swallowAs } from "../../util/errors.ts";
+import { errMessage, swallowAs } from "../../util/errors.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import type { EgressAuditRecord } from "../../admin/egress-audit-sink.ts";
 import { bootTenant } from "../../tenants/boot.ts";
@@ -52,9 +52,6 @@ async function ingestEgressAudit(ctx: ApiCtx): Promise<void> {
   }
   const boot = bootTenant();
   const lookup = deps.sessions?.tenantLookup;
-  const exists = async (tenant: string): Promise<boolean> =>
-    tenant === boot ||
-    ((await lookup?.exists(tenant).catch(swallowAs(`egress audit: tenant ${tenant} lookup`, false))) ?? false);
   const byTenant = new Map<string, Array<Omit<EgressAuditRecord, "ts">>>();
   for (const raw of records) {
     const parsed = parseRecord(raw);
@@ -65,9 +62,25 @@ async function ingestEgressAudit(ctx: ApiCtx): Promise<void> {
     if (batch) batch.push(record);
     else byTenant.set(tenant, [record]);
   }
+  const knownTenants = new Set<string>();
+  try {
+    const resolved = await Promise.all(
+      [...byTenant.keys()].map(async (tenant) => ({
+        tenant,
+        exists: tenant === boot || ((await lookup?.exists(tenant)) ?? false),
+      })),
+    );
+    for (const tenant of resolved) if (tenant.exists) knownTenants.add(tenant.tenant);
+  } catch (error) {
+    console.error("[egress-audit] tenant lookup failed", errMessage(error));
+    return sendJson(res, 503, {
+      error: "tenant_lookup_unavailable",
+      message: "tenant lookup is temporarily unavailable",
+    });
+  }
   let accepted = 0;
   for (const [tenant, batch] of byTenant) {
-    if (!(await exists(tenant))) continue;
+    if (!knownTenants.has(tenant)) continue;
     const sink = deps.egressAudit;
     const ok = await inTenant(tenant, async (t) => {
       for (const record of batch) sink.record(t, record);

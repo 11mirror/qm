@@ -455,7 +455,12 @@ export function createSandboxResources(opts: {
           ? actionsFor(backend).filter((action) => action !== "create")
           : [];
         if (record.state === "retired")
-          availableActions = (record.cleanupPending || record.error) && backend?.destroyScope ? ["retire"] : [];
+          availableActions =
+            sandboxBackendAvailableToTenant(record.backend) &&
+            (record.cleanupPending || record.error) &&
+            backend?.destroyScope
+              ? ["retire"]
+              : [];
         sandboxes.push({ ...record, holders: undefined, availableActions });
       }
       return {
