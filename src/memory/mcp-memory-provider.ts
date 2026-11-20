@@ -13,7 +13,6 @@ import {
   requestKey,
 } from "./provider-outcome.ts";
 import type { McpMemoryOperationConfig } from "./provider-config.ts";
-import { RECALL_MESSAGE_CHARS } from "./semantic-recall.ts";
 import { flatText } from "../util/text.ts";
 
 const MAX_PROVENANCE_CHARS = 200;
@@ -100,7 +99,7 @@ export function createMcpMemoryProvider(opts: {
 
   const read = async (scopeId: string, query: string, context?: MemoryRecallContext): Promise<CallToolResult> => {
     const op = opts.read;
-    const question = context?.input?.trim().slice(0, RECALL_MESSAGE_CHARS) || query;
+    const question = context?.input?.trim() || query;
     const args: Record<string, unknown> = { [op.queryArg ?? "query"]: question };
     if (op.scopeArg) args[op.scopeArg] = scopeId;
     const maxChars = context?.maxChars;

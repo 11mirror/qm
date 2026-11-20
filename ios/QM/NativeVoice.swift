@@ -42,7 +42,6 @@ struct NativeVoiceTranscript {
   }
   private mutating func appendItem(_ content: NativeVoiceTimelineContent) {
     items.append(.init(content: content))
-    if items.count > 200 { items.removeFirst() }
   }
   mutating func append(_ event: [String: Any]) -> Bool {
     let type = event["type"] as? String
@@ -53,15 +52,13 @@ struct NativeVoiceTranscript {
     if let id = event["event_id"] as? String, !eventIDs.insert(id).inserted { return false }
     let role = type == "session.input_transcript.delta" ? "You" : "QM"
     if let last = items.last, case .speech(var fragment) = last.content,
-      fragment.role == role, start >= fragment.start, start - fragment.end <= 1500,
-      fragment.text.count + text.count <= 8000
+      fragment.role == role, start >= fragment.start, start - fragment.end <= 1500
     {
       fragment.text += text
       fragment.end = max(fragment.end, end)
       items[items.count - 1].content = .speech(fragment)
     } else {
-      appendItem(
-        .speech(.init(role: role, text: String(text.prefix(8000)), start: start, end: end)))
+      appendItem(.speech(.init(role: role, text: text, start: start, end: end)))
     }
     return true
   }

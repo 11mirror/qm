@@ -10,15 +10,20 @@
   "sandbox": {
     "app": "sharechat-sandboxes",
   },
-  "services": ["core", "slack", "egress-proxy"],
+  "services": ["core", "slack", "admin", "web-ui", "portal", "egress-proxy"],
   "env": {
+    "admin": {
+      "ADMIN_BASE_PATH": "/admin",
+    },
     "core": {
       "HARNESS": "pi",
       "SNAPSHOT_STORE": "s3",
       "TRANSFER_STORE": "s3",
       "S3_BUCKET": "sharechat-data",
       "S3_REGION": "auto",
-      "OIDC_ALLOWED_EMAIL_DOMAIN": "sharechat.com",
+    },
+    "portal": {
+      "OIDC_ALLOWED_EMAIL_DOMAIN": "*",
       "OIDC_AUTH_ENDPOINT": "https://accounts.google.com/o/oauth2/v2/auth",
       "OIDC_TOKEN_ENDPOINT": "https://oauth2.googleapis.com/token",
       "OIDC_USERINFO_ENDPOINT": "https://openidconnect.googleapis.com/v1/userinfo",

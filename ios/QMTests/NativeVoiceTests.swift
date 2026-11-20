@@ -64,7 +64,7 @@ final class NativeVoiceTests: XCTestCase {
     XCTAssertNil(model.error)
   }
 
-  func testCaptionsDeduplicateAndStayBounded() {
+  func testCaptionsDeduplicateAndRetainTheCompleteTranscript() {
     var transcript = NativeVoiceTranscript()
     for index in 0..<250 {
       let event: [String: Any] = [
@@ -74,8 +74,18 @@ final class NativeVoiceTests: XCTestCase {
       XCTAssertTrue(transcript.append(event))
       XCTAssertFalse(transcript.append(event))
     }
-    XCTAssertEqual(transcript.fragments.count, 200)
+    XCTAssertEqual(transcript.fragments.count, 250)
     XCTAssertEqual(transcript.fragments.first?.role, "You")
+  }
+  func testCaptionsRetainLongDeltas() {
+    var transcript = NativeVoiceTranscript()
+    let text = String(repeating: "voice context ", count: 700)
+    XCTAssertTrue(
+      transcript.append([
+        "type": "session.input_transcript.delta", "delta": text,
+        "start_ms": 0.0, "end_ms": 200.0,
+      ]))
+    XCTAssertEqual(transcript.fragments.map(\.text), [text])
   }
   func testTranscriptGroupsWordsAndKeepsOverlappingSpeakersIndependent() {
     var transcript = NativeVoiceTranscript()

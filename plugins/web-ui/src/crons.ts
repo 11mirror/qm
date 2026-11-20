@@ -25,6 +25,7 @@ import {
   timezoneLabel,
 } from "./cron-format";
 import { tip } from "./tooltip";
+import { reportHandledError } from "./browser-errors";
 
 export interface CronView {
   id: string;
@@ -756,7 +757,8 @@ async function loadCronShares(id: string): Promise<void> {
       `/api/shares/cron/${encodeURIComponent(id)}`,
     );
     cronShares.set(id, r.grantees ?? []);
-  } catch {
+  } catch (error) {
+    reportHandledError("web:load_cron_shares", error);
     cronShares.set(id, []);
   }
   if (activeCronId !== id || appState.currentView !== "crons") return;

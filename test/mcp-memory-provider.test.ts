@@ -64,6 +64,16 @@ test("MCP provider passes query, actor, and explicit writes through configured t
   ]);
 });
 
+test("MCP provider sends the complete current input to recall", async () => {
+  const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  const memory = createMcpMemoryProvider({
+    read: { client: client(calls), tool: "search_knowledge", timeoutMs: 100 },
+  });
+  const input = `${"context ".repeat(300)}What did we decide about launch?`;
+  await memory.recall("org:acme", { input });
+  assert.equal(calls[0]?.args.query, input);
+});
+
 test("MCP recall is locally bounded and times out", async () => {
   const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
   const bounded = createMcpMemoryProvider({

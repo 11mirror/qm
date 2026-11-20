@@ -34,6 +34,7 @@ const crons = [
 ];
 
 const patches: unknown[] = [];
+let failShareLoad = false;
 
 const { vite, close } = await browserEnv({
   dom: { url: "http://localhost/crons" },
@@ -42,8 +43,39 @@ const { vite, close } = await browserEnv({
     if (init?.method === "PATCH") patches.push(JSON.parse(String(init.body)));
     if (path === "/api/contexts") return Promise.resolve(Response.json({ contexts: [] }));
     if (path === "/api/crons") return Promise.resolve(Response.json({ crons }));
+    if (path === "/api/shares/cron/c2" && failShareLoad) return Promise.reject(new Error("share store unavailable"));
     return Promise.resolve(Response.json({}));
   },
+});
+
+test("a cron share-load failure is reported with its operation context", async () => {
+  document.body.innerHTML = '<div id="app"></div><main></main>';
+  const main = document.querySelector("main")!;
+  const warnings: unknown[][] = [];
+  const previousWarn = console.warn;
+  console.warn = (...args: unknown[]) => warnings.push(args);
+  try {
+    const { appState } = await vite.ssrLoadModule("/src/shell.ts");
+    const { openCronById, renderCronsPage } = await vite.ssrLoadModule("/src/crons.ts");
+    appState.currentView = "crons";
+    appState.mainEl = main;
+    appState.me = { user: "tester", org: "test" };
+    failShareLoad = true;
+    openCronById("c2");
+    await renderCronsPage();
+    for (
+      let index = 0;
+      index < 20 && !warnings.some((args) => String(args[0]).includes("web:load_cron_shares"));
+      index++
+    )
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    const reported = warnings.find((args) => String(args[0]).includes("web:load_cron_shares"));
+    assert.ok(reported);
+    assert.match(reported.map(String).join(" "), /share store unavailable/);
+  } finally {
+    failShareLoad = false;
+    console.warn = previousWarn;
+  }
 });
 after(close);
 

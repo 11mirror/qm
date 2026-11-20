@@ -5,7 +5,7 @@ import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-clien
 import { escapeHtml, json, readBody } from "../../chassis/src/http.ts";
 import { isAppHandleShape } from "../../chassis/src/dns-label.ts";
 import { isTenantId } from "../../chassis/src/tenant.ts";
-import { errMessage } from "../../chassis/src/errors.ts";
+import { errDetail } from "../../chassis/src/errors.ts";
 import { clearCookie, open, readCookie, seal, setCookie } from "./session.ts";
 
 export interface SignInTenant {
@@ -76,7 +76,7 @@ export async function coreEmailShared(
   try {
     return (await coreEmailTenants(coreApiUrl, signingSecret, email)).shared;
   } catch (error) {
-    console.error("[portal] sign-in workspace lookup failed: %s", errMessage(error));
+    console.error("[portal] sign-in workspace lookup failed: %s", errDetail(error));
     return false;
   }
 }
