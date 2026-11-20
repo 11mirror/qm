@@ -16,7 +16,7 @@ struct NativeConversationTools: View {
               model.transcriptEntries, inheritedBoundary: model.conversation.forkBoundarySeq,
               surface: model.conversation.surface)
           ) { point in
-            Text(String(point.title.prefix(70))).tag(point.id)
+            Text(point.title).tag(point.id)
           }
         }
         if model.earlierItems > 0 {

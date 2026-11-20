@@ -106,7 +106,7 @@ export function createTrustedEntry(
       const state = url.searchParams.get("state");
       const code = url.searchParams.get("code");
       if (url.searchParams.has("error"))
-        throw new Error(`Trusted provider returned ${url.searchParams.get("error")?.slice(0, 100) ?? ""}`);
+        throw new Error(`Trusted provider returned ${url.searchParams.get("error") ?? ""}`);
       if (!tmp) throw new Error("Trusted login cookie missing or expired");
       if (!state || !code || !safeEqual(state, tmp.state)) throw new Error("Invalid trusted login state");
       if (!(await claim(`trusted-entry:${tmp.state}`, tmp.exp * 1000))) throw new Error("Trusted login already used");

@@ -300,7 +300,7 @@ struct NativeInboxView: View {
             Text(item.title).font(.headline).lineLimit(2)
             if let from = item.sourcePayload.from { Text(from).font(.subheadline) }
             Text(
-              item.sourcePayload.snippet.map(item.sourcePayload.readable) ?? item.parkedReason
+              item.sourcePayload.snippet.map(item.readable) ?? item.parkedReason
                 ?? item.summary ?? ""
             ).font(
               .subheadline
