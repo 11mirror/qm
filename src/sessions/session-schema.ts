@@ -1,7 +1,7 @@
 import { PUBLISHED_SESSION_UPGRADE } from "./published-upgrade.ts";
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { authoredUserTurn } from "./items.ts";
-import { TENANCY, tenantRowSecurity, tenantTables } from "../tenants/migrations.ts";
+import { TENANCY, tenantTables } from "../tenants/migrations.ts";
 import { DROP_TENANT_PREBUILD_INDEXES } from "../tenants/prebuilt-indexes.ts";
 import { claimFunction } from "../tenants/claim.ts";
 
@@ -492,7 +492,6 @@ const SESSION_TABLES = tenantTables(
     ],
     after: [
       ...SPEND_TRIGGERS,
-      ...["items", "blobs"].flatMap(tenantRowSecurity),
       `DO $unstamped$
        BEGIN
          DELETE FROM tenants WHERE id = (SELECT id FROM qm_tenant) AND settings = '{}'::jsonb;

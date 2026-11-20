@@ -271,30 +271,26 @@ function tenantExpansion(
   ];
 }
 
-const TENANT_REFERENCE_ADD =
-  /^ALTER TABLE (\w+) ADD CONSTRAINT (\w+) FOREIGN KEY \(tenant_id\) REFERENCES tenants\(id\)$/;
-const COMPOSITE_REFERENCE_ADD = /^ALTER TABLE (\w+) ADD CONSTRAINT (\w+)\s+FOREIGN KEY \(tenant_id, /;
-
-function adoptedStatements(policy: readonly string[]): string[] {
-  const validations: string[] = [];
-  const rest = policy.flatMap((statement) => {
-    const tenantReference = TENANT_REFERENCE_ADD.exec(statement);
-    if (tenantReference) {
-      validations.push(`ALTER TABLE ${tenantReference[1]} VALIDATE CONSTRAINT ${tenantReference[2]}`);
-      return [];
-    }
-    const composite = COMPOSITE_REFERENCE_ADD.exec(statement);
-    if (composite) {
-      const [, table, name] = composite;
-      validations.push(`ALTER TABLE ${table} VALIDATE CONSTRAINT ${tenantReferenceName(name!)}`);
-      return [`ALTER TABLE ${table} RENAME CONSTRAINT ${tenantReferenceName(name!)} TO ${name}`];
-    }
-    if (/\bFOREIGN KEY\b/.test(statement) && /\bADD CONSTRAINT\b/.test(statement)) {
-      throw new Error(`tenancy: cannot adopt an unprepared foreign key: ${statement.slice(0, 120)}`);
-    }
-    return [statement];
-  });
-  return [...validations, ...rest];
+function adoptedStatements(
+  tables: readonly TenantTable[],
+  { references = [], tenanted = [], before = [], after = [] }: TenantTableOptions,
+): string[] {
+  const owners = [...tables.map(({ table }) => table), ...tenanted];
+  return [
+    ...before,
+    ...owners.map((table) => `ALTER TABLE ${table} VALIDATE CONSTRAINT ${tenantForeignKey(table)}`),
+    ...references.map(({ table, name }) => `ALTER TABLE ${table} VALIDATE CONSTRAINT ${tenantReferenceName(name)}`),
+    LOCK_TIMEOUT,
+    ...references.map(({ table, name }) => `ALTER TABLE ${table} DROP CONSTRAINT ${name}`),
+    ...tables.flatMap(swapKeys),
+    ...references.map(
+      ({ table, name }) => `ALTER TABLE ${table} RENAME CONSTRAINT ${tenantReferenceName(name)} TO ${name}`,
+    ),
+    ...[...tables.map(({ table }) => table), ...tenanted].flatMap((table) =>
+      tenantRowSecurity(table).filter((_, index) => index !== 1),
+    ),
+    ...after,
+  ];
 }
 
 function ledgerRow(migration: PgMigrationDefinition): string {
@@ -304,8 +300,7 @@ function ledgerRow(migration: PgMigrationDefinition): string {
 
 const QUOTE = "$tenant_statement$";
 
-function adoptPolicy(id: string, policy: PgMigrationDefinition, before: readonly string[]): PgMigrationDefinition {
-  const statements = [...before, ...adoptedStatements(policy.statements)];
+function adoptPolicy(id: string, policy: PgMigrationDefinition, statements: readonly string[]): PgMigrationDefinition {
   for (const statement of statements) {
     if (statement.includes(QUOTE)) throw new Error(`tenancy: statement in ${policy.id} uses the reserved quote`);
   }
@@ -341,7 +336,7 @@ export function tenantTables(
       ...references.map(({ table, name }) => `ALTER TABLE ${table} DROP CONSTRAINT ${name}`),
       ...tables.flatMap(swapKeys),
       ...references.map(tenantReference),
-      ...tables.flatMap(({ table }) => tenantRowSecurity(table)),
+      ...[...tables.map(({ table }) => table), ...tenanted].flatMap(tenantRowSecurity),
       ...after,
     ],
   };
@@ -351,7 +346,7 @@ export function tenantTables(
     ...TENANCY,
     column,
     ...(keys.length ? [{ id: `${id}/2-keys`, statements: keys }] : []),
-    adoptPolicy(`${id}/2-tenant-policy`, policy, before),
+    adoptPolicy(`${id}/2-tenant-policy`, policy, adoptedStatements(tables, { references, tenanted, before, after })),
     policy,
   ];
 }

@@ -62,7 +62,13 @@ test("a new person sees their company's seeded activities, only apps they connec
     link("What is this?").click();
     await new Promise((resolve) => setTimeout(resolve, 30));
     const about = document.querySelector("qm-welcome-about")!.textContent!.replace(/\s+/g, " ");
-    for (const shown of ["What is this?", "@qm make me a CRM", "A virtual employee in Slack", "Agent swarms"])
+    for (const shown of [
+      "What is this?",
+      "@qm make me a CRM",
+      "connected research sources",
+      "A virtual employee in Slack",
+      "Agent swarms",
+    ])
       assert.ok(about.includes(shown), shown);
     assert.equal(rows().length, 0);
     link("Back to welcome").click();

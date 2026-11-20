@@ -36,6 +36,7 @@ import { createTrustedEntry, trustedEntryConfig, trustedPrincipal } from "./trus
 import { coreAppHostTenant, createAppHandoff } from "./app-handoff.ts";
 import {
   coreEmailTenants,
+  coreEmailShared,
   coreWorkspace,
   createTenantChoice,
   verifiedEmail,
@@ -1621,9 +1622,7 @@ async function finishSignIn(
     ]);
     if (e instanceof AdmissionRefusedError && tenant === undefined) {
       const email = verifiedEmail(userinfo);
-      const shared = email
-        ? (await coreEmailTenants(CORE, CORE_SIGNING_SECRET, email).catch(() => null))?.shared
-        : false;
+      const shared = email ? await coreEmailShared(CORE, CORE_SIGNING_SECRET, email) : false;
       if (shared) return sendHtml(res, 403, noWorkspaceHtml(email));
     }
     return sendHtml(res, 400, signInErrorHtml(errMessage(e, "sign-in failed")));

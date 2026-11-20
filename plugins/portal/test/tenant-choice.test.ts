@@ -7,6 +7,7 @@ import { compactVerify, generateKeyPair, exportJWK, SignJWT } from "jose";
 import { deriveKey, open, seal, readCookie } from "../src/session.ts";
 import { verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
 import { trustedPrincipal } from "../src/trusted-entry.ts";
+import { coreEmailShared } from "../src/tenant-choice.ts";
 
 const secret = "tenant-choice-session-test-secret";
 const identitySecret = "tenant-choice-identity-secret-0123456789";
@@ -21,6 +22,7 @@ let tenants: unknown[] = [];
 let nonce = "";
 let audience = "portal-client";
 let shared = true;
+let emailTenantsStatus = 200;
 let email: string | null = "founder@company.test";
 let principalTenants: unknown[] = [];
 let canonicalStatus = 200;
@@ -90,7 +92,10 @@ const upstream = createServer((req, res) => {
       claimed.add(id);
       return void res.end(JSON.stringify({ claimed: fresh ? id : null }));
     }
-    if (path === "/v1/auth/broker/email-tenants") return void res.end(JSON.stringify({ tenants, shared }));
+    if (path === "/v1/auth/broker/email-tenants") {
+      res.statusCode = emailTenantsStatus;
+      return void res.end(JSON.stringify(emailTenantsStatus === 200 ? { tenants, shared } : { error: "unavailable" }));
+    }
     if (path === "/v1/auth/broker/host-tenant") {
       const host = new URL(req.url!, origin).searchParams.get("host");
       return void res.end(
@@ -159,6 +164,18 @@ const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 test.after(() => {
   server.close();
   upstream.close();
+});
+
+test("workspace lookup failures are reported before falling back", async (t) => {
+  const diagnostics: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => void diagnostics.push(args.map(String).join(" ")));
+  emailTenantsStatus = 503;
+  try {
+    assert.equal(await coreEmailShared(upstreamUrl, process.env.CORE_SIGNING_SECRET, "founder@company.test"), false);
+    assert.match(diagnostics.join("\n"), /sign-in workspace lookup failed.*503/);
+  } finally {
+    emailTenantsStatus = 200;
+  }
 });
 
 function cookieFrom(response: Response, name: string): string | undefined {
