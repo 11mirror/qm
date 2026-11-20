@@ -142,7 +142,11 @@ final class SameOriginRedirects: NSObject, URLSessionTaskDelegate, Sendable {
     let (responseData, response) = try await session.upload(
       for: request, fromFile: attachment.url, delegate: redirects)
     try check(response, generation: current, data: responseData)
-    return try JSONDecoder().decode(UploadedBlob.self, from: responseData)
+    let blob = try JSONDecoder().decode(UploadedBlob.self, from: responseData)
+    guard !blob.blobId.isEmpty, blob.sizeBytes == attachment.size else {
+      throw QMError.message("The server could not confirm this upload. Try attaching the file again.")
+    }
+    return blob
   }
 
   func download(_ path: String) async throws -> (url: URL, suggestedFilename: String?) {

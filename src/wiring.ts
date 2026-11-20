@@ -2602,7 +2602,7 @@ export function buildApp(
         );
       }
     };
-    recoverFinny = async () => {
+    const recoverFinnyInTenant = async () => {
       await finnyJobs.getJob("__finny_schema__", "__finny_schema__");
       if (config.publicWebUrl)
         await deliverPendingCertifiedResults(finnyJobs, deliveries, config.publicWebUrl, (result) =>
@@ -2643,6 +2643,14 @@ export function buildApp(
           if (!job) throw new Error("Finny approved recovery job is unavailable");
           if (job.unresolvedEscalationSequence !== undefined) await deliverEscalation(job);
         });
+    };
+    recoverFinny = async () => {
+      const tenant = bootTenant();
+      if (!tenant) {
+        if (tenancyBooted()) throw new Error("Finny recovery requires a single-tenant deployment");
+        return;
+      }
+      await withTenant(tenant, recoverFinnyInTenant);
     };
     finnyRecoverySweeper.start();
     requestRuntimeRecovery();

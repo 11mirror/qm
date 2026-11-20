@@ -14,6 +14,7 @@ import { assertRowsByTenant, describeTwoTenants } from "./support/two-tenants.ts
 import { settle } from "./support/settle.ts";
 import { boundTenant, withoutTenant, type Tenant } from "../src/tenants/context.ts";
 import { tenantLookup } from "../src/tenants/lookup.ts";
+import { onTenantLoad } from "../src/tenants/cache.ts";
 
 const SECRET = "egress-audit-tenant-capability-secret".repeat(2);
 const a = randomUUID();
@@ -130,6 +131,26 @@ test("egress-audit ingest retries the whole batch when tenant lookup is temporar
       { host: "a.example", tenant: a },
       { host: "b.example", tenant: b },
     ]);
+  }));
+
+test("egress-audit ingest does not hydrate unrelated tenant runtime before durable writes", () =>
+  withoutTenant(async () => {
+    const stop = onTenantLoad(async () => {
+      if (boundTenant() === b) throw new Error("unrelated tenant runtime unavailable");
+    });
+    try {
+      const result = await ingest([
+        { host: "a.example", verdict: "ok", scopeLabel: "personal:U1", tenant: a },
+        { host: "b.example", verdict: "denied", scopeLabel: "personal:U1", tenant: b },
+      ]);
+      assert.equal(result.status, 200);
+      assert.deepEqual(result.saved, [
+        { host: "a.example", tenant: a },
+        { host: "b.example", tenant: b },
+      ]);
+    } finally {
+      stop();
+    }
   }));
 
 test("egress-audit ingest on a single-tenant core files tenantless records under the boot tenant only", () =>

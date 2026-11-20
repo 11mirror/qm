@@ -168,7 +168,7 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
 
     async profileFor(scopeId: string, sandboxId?: string): Promise<AgentComputerProfile> {
       const resource = await resourceFor(scopeId, sandboxId);
-      return resource ? backendFor(resource.backend).profile : fallback.profile;
+      return backendFor(resource?.backend ?? (await resources.defaultBackend())).profile;
     },
 
     async provision(scope: ScopeId, provOpts?: ProvisionOptions): Promise<SandboxHandle> {

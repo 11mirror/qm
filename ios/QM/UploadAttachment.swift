@@ -401,6 +401,38 @@ struct CameraPicker: UIViewControllerRepresentable {
 }
 
 extension ChatModel {
+  func stageSavedAttachments(_ saved: [UploadAttachment], generation: UUID) async throws
+    -> [UploadAttachment]
+  {
+    var staged: [UploadAttachment] = []
+    for attachment in saved {
+      let age = Date().timeIntervalSince1970 - (attachment.uploadedAt ?? 0)
+      if attachment.uploadedAt != nil && age >= 0 && age < 5 * 60 * 60 {
+        staged.append(attachment)
+        continue
+      }
+      guard let sha = attachment.localSHA else {
+        throw QMError.message(
+          "This saved attachment needs to be attached again before it can be sent.")
+      }
+      let account = attachmentAccount
+      let prepared = try await Task.detached {
+        try AttachmentCache.read(account: account, sha: sha)
+      }.value
+      guard client.generation == generation else { throw CancellationError() }
+      let blob = try await client.upload(prepared)
+      guard client.generation == generation else { throw CancellationError() }
+      guard blob.sizeBytes == attachment.sizeBytes else {
+        throw QMError.message("Could not verify the attachment upload.")
+      }
+      staged.append(
+        UploadAttachment(
+          name: attachment.name, mimetype: attachment.mimetype, sizeBytes: blob.sizeBytes,
+          blobId: blob.blobId, localSHA: sha, uploadedAt: Date().timeIntervalSince1970))
+    }
+    return staged
+  }
+
   func addAttachments(_ sources: [AttachmentSource]) {
     guard !conversation.isSubagent, attachmentUploadTask == nil, !sending, !uploading,
       !sources.isEmpty
@@ -454,10 +486,6 @@ extension ChatModel {
         let blob = try await client.upload(prepared)
         try Task.checkCancellation()
         guard generation == client.generation else { break }
-        guard !blob.blobId.isEmpty, blob.sizeBytes == prepared.size else {
-          throw QMError.message(
-            "The server could not confirm this upload. Try attaching the file again.")
-        }
         if !attachments.contains(where: { $0.blobId == blob.blobId }) {
           attachments.append(
             UploadAttachment(

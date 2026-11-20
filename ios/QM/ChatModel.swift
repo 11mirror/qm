@@ -496,33 +496,8 @@ final class ChatModel {
         .init(
           text: draft, pending: saved, conversation: conversation, attachments: attachments,
           runtime: runtimeSelection))
-      var staged: [UploadAttachment] = []
-      for attachment in submission.attachments ?? [] {
-        let age = Date().timeIntervalSince1970 - (attachment.uploadedAt ?? 0)
-        if attachment.uploadedAt != nil && age >= 0 && age < 5 * 60 * 60 {
-          staged.append(attachment)
-          continue
-        }
-        guard let sha = attachment.localSHA else {
-          throw QMError.message(
-            "This saved attachment needs to be attached again before it can be sent.")
-        }
-        let account = attachmentAccount
-        let prepared = try await Task.detached {
-          try AttachmentCache.read(account: account, sha: sha)
-        }
-        .value
-        guard client.generation == accountGeneration else { throw CancellationError() }
-        let blob = try await client.upload(prepared)
-        guard client.generation == accountGeneration else { throw CancellationError() }
-        guard blob.sizeBytes == attachment.sizeBytes else {
-          throw QMError.message("Could not verify the attachment upload.")
-        }
-        staged.append(
-          UploadAttachment(
-            name: attachment.name, mimetype: attachment.mimetype, sizeBytes: blob.sizeBytes,
-            blobId: blob.blobId, localSHA: sha, uploadedAt: Date().timeIntervalSince1970))
-      }
+      let staged = try await stageSavedAttachments(
+        submission.attachments ?? [], generation: accountGeneration)
       guard client.generation == accountGeneration else { throw CancellationError() }
       submission.attachments = staged
       attachments = staged

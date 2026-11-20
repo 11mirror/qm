@@ -1,10 +1,9 @@
 import { sendJson } from "../http.ts";
-import { errMessage, swallowAs } from "../../util/errors.ts";
+import { errMessage } from "../../util/errors.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import type { EgressAuditRecord } from "../../admin/egress-audit-sink.ts";
 import { bootTenant } from "../../tenants/boot.ts";
-import { isTenantId } from "../../tenants/context.ts";
-import { inTenant } from "../../tenants/claim.ts";
+import { isTenantId, withTenant } from "../../tenants/context.ts";
 
 const MAX_BATCH = 500;
 const MAX_FIELD = 512;
@@ -82,11 +81,10 @@ async function ingestEgressAudit(ctx: ApiCtx): Promise<void> {
   for (const [tenant, batch] of byTenant) {
     if (!knownTenants.has(tenant)) continue;
     const sink = deps.egressAudit;
-    const ok = await inTenant(tenant, async (t) => {
+    withTenant(tenant, (t) => {
       for (const record of batch) sink.record(t, record);
-      return true;
-    }).catch(swallowAs(`egress audit: records for tenant ${tenant}`, false));
-    if (ok) accepted += batch.length;
+    });
+    accepted += batch.length;
   }
   return sendJson(res, 200, { accepted, rejected: records.length - accepted });
 }

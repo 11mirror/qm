@@ -10,7 +10,9 @@ import {
   type SandboxResources,
 } from "../src/sandbox/sandbox-resources.ts";
 import { bindBootTenant } from "../src/tenants/boot.ts";
+import { onTenantLoad } from "../src/tenants/cache.ts";
 import { withTenant } from "../src/tenants/context.ts";
+import { loadTenantSettings } from "../src/tenants/settings.ts";
 import type { LoadSample } from "../src/sandbox/load-probe.ts";
 import type { DurableMap } from "../src/persistence/durable-map.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
@@ -68,7 +70,7 @@ test("on a deployment shared by tenants, backends that cannot keep tenants apart
   assert.deepEqual(ran, ["sprites"]);
 });
 
-test("shared tenants can only discover, create, and run isolated providers", async () => {
+test("shared tenants can only discover, create, and run isolated providers", async (t) => {
   const backends = { e2b: backend("e2b"), sprites: backend("sprites"), local: backend("local") };
   const records = memoryMap<SandboxResource>();
   const resources = createSandboxResources({
@@ -81,6 +83,10 @@ test("shared tenants can only discover, create, and run isolated providers", asy
     canUseScope: async () => true,
   });
   const tenantRouter = createSandboxRouter({ backends, defaultBackend: "sprites", resources });
+  const stopLoad = onTenantLoad(() =>
+    loadTenantSettings({ q: async () => [{ settings: { sandboxBackend: "sprites" } }] } as never),
+  );
+  t.after(stopLoad);
   await withTenant(randomUUID(), async () => {
     await records.put("legacy-local", {
       id: "legacy-local",
@@ -97,6 +103,7 @@ test("shared tenants can only discover, create, and run isolated providers", asy
       (await resources.list("pat", "personal:pat")).providers.map(({ name }) => name),
       ["sprites"],
     );
+    assert.equal((await tenantRouter.profileFor!("personal:unassigned")).backend, "sprites");
     assert.deepEqual((await resources.list("pat", "personal:pat")).sandboxes[0]?.availableActions, []);
     await assert.rejects(resources.status("pat", "legacy-local"), /does not keep tenants apart/);
     await assert.rejects(resources.restart("pat", "legacy-local"), /does not keep tenants apart/);
