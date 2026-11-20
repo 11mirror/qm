@@ -108,7 +108,7 @@ function proposal(row: Record<string, unknown>): FinnyArtifactProposal {
 
 export function createPostgresFinnyIntegrationStore(connectionString: string) {
   const { q, pool } = createPgPool(connectionString, [
-    { id: "finny/integration/0001", statements: SCHEMA },
+    { id: "finny/integration/0001", upgradeFrom: "finny/store/0001", statements: SCHEMA },
     { id: "finny/integration/0002-plan-clarification", statements: PLAN_CLARIFICATION_SCHEMA },
     { id: "finny/integration/0003-sop-cutover", statements: SOP_CUTOVER_SCHEMA },
   ]);

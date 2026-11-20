@@ -47,6 +47,28 @@ test("slow lazy migrations queue with dynamic and bulk migrations before pool ac
   });
 });
 
+test("bulk startup migrations revisit a dependency registered before its predecessor", { skip }, async () => {
+  await withDatabase(async (url, admin) => {
+    const table = `startup_dependency_${Date.now()}`;
+    const dependent = createPgPool(url, [
+      {
+        id: `${table}/a-dependent`,
+        upgradeFrom: `${table}/z-predecessor`,
+        statements: [`INSERT INTO ${table}(value) VALUES (1)`],
+      },
+    ]);
+    const predecessor = createPgPool(url, [
+      { id: `${table}/z-predecessor`, statements: [`CREATE TABLE ${table}(value INT)`] },
+    ]);
+    try {
+      await migrateRegisteredPgSchemas(url);
+      assert.deepEqual((await admin.query(`SELECT value FROM ${table}`)).rows, [{ value: 1 }]);
+    } finally {
+      await Promise.all([dependent.close(), predecessor.close()]);
+    }
+  });
+});
+
 test("concurrent cold and repeat migration entrypoints exit and reject checksum drift", { skip }, async () => {
   await withDatabase(async (url, admin) => {
     const run = () =>
