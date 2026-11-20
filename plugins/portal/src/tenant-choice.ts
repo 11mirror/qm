@@ -169,7 +169,6 @@ function openChoice(token: string | null, key: Buffer, now: number): ChoiceClaim
 }
 
 const PICKER_BUTTONS_MAX = 6;
-const PICKER_RESULTS_MAX = 8;
 const RECENT_MAX = 8;
 const RECENT_COOKIE = "portal_recent_workspaces";
 
@@ -178,18 +177,15 @@ const PICKER_SCRIPT = `(() => {
   if (!input) return;
   const items = [...document.querySelectorAll("[data-workspace]")];
   const note = document.getElementById("workspace-note");
-  const cap = Number(input.dataset.cap);
   const filter = () => {
     const q = input.value.trim().toLowerCase();
-    let shown = 0, matched = 0;
+    let matched = 0;
     for (const item of items) {
       const hit = !q || item.dataset.workspace.includes(q);
       if (hit) matched++;
-      item.hidden = !(hit && shown < cap);
-      if (!item.hidden) shown++;
+      item.hidden = !hit;
     }
-    note.textContent = matched === 0 ? "No workspace matches that search."
-      : matched > shown ? "Showing " + shown + " of " + matched + ". Type to narrow the list." : "";
+    note.textContent = matched === 0 ? "No workspace matches that search." : "";
   };
   input.addEventListener("input", filter);
   input.form.addEventListener("submit", (event) => {
@@ -235,22 +231,18 @@ function workspacePicker(
   const query = (o.query ?? "").trim().toLowerCase();
   const matches = (t: SignInTenant): boolean =>
     !query || `${workspaceLabel(t)} ${t.handle ?? ""}`.toLowerCase().includes(query);
-  let shown = 0;
   let matched = 0;
   const items = ordered.map((t) => {
     const hit = matches(t);
     if (hit) matched++;
-    const show = hit && shown < PICKER_RESULTS_MAX;
-    if (show) shown++;
-    return button(t, !show);
+    return button(t, !hit);
   });
   let note = "";
   if (matched === 0) note = "No workspace matches that search.";
-  else if (matched > shown) note = `Showing ${shown} of ${matched}. Type to narrow the list.`;
   const search =
     `<form method="get" action="/auth/tenant" role="search">` +
     `<input id="workspace-search" class="search" name="q" type="search" value="${escapeHtml(o.query ?? "")}" ` +
-    `placeholder="Search workspaces" aria-label="Search workspaces" autocomplete="off" autofocus data-cap="${PICKER_RESULTS_MAX}">` +
+    `placeholder="Search workspaces" aria-label="Search workspaces" autocomplete="off" autofocus>` +
     `</form>`;
   return {
     actions: `${search}${items.join("")}<p id="workspace-note" class="picker-note" aria-live="polite">${escapeHtml(note)}</p>`,

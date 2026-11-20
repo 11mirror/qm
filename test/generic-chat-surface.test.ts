@@ -602,6 +602,10 @@ test("generic-chat config requires the url and secret together", () => {
   );
   const base = { GENERIC_CHAT_URL: "https://chat.example", GENERIC_CHAT_SECRET: "s" };
   assert.equal(loadConfig({ ...base, GENERIC_CHAT_MARK: "M2 2h20v20H2z" }).genericChat?.mark, "M2 2h20v20H2z");
+  assert.equal(
+    loadConfig({ ...base, GENERIC_CHAT_MARK: `M${"2 ".repeat(3_000)}Z` }).genericChat?.mark,
+    `M${"2 ".repeat(3_000)}Z`,
+  );
   assert.throws(() => loadConfig({ ...base, GENERIC_CHAT_MARK: '<svg onload="x()"/>' }), /SVG path data/);
 });
 

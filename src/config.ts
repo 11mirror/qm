@@ -244,11 +244,10 @@ export const CONFIG_DEFAULTS = {
   processReaperIntervalMs: 30_000,
 } as const;
 
-const SVG_PATH_MAX = 4000;
 const SVG_PATH_CHARS = new Set("MmLlHhVvCcSsQqTtAaZz0123456789.-+eE, \t\n");
 
 function isSvgPathData(value: string): boolean {
-  return value.length <= SVG_PATH_MAX && [...value].every((ch) => SVG_PATH_CHARS.has(ch));
+  return [...value].every((ch) => SVG_PATH_CHARS.has(ch));
 }
 
 function orgBrandingFromEnv(env: NodeJS.ProcessEnv): Config["brandingDefault"] {
@@ -517,8 +516,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (Boolean(env.GENERIC_CHAT_URL?.trim()) !== Boolean(env.GENERIC_CHAT_SECRET?.trim()))
     throw new Error("GENERIC_CHAT_URL and GENERIC_CHAT_SECRET must be set together");
   const genericChatMark = env.GENERIC_CHAT_MARK?.trim();
-  if (genericChatMark && !isSvgPathData(genericChatMark))
-    throw new Error(`GENERIC_CHAT_MARK must be SVG path data of at most ${SVG_PATH_MAX} characters`);
+  if (genericChatMark && !isSvgPathData(genericChatMark)) throw new Error("GENERIC_CHAT_MARK must be SVG path data");
   if (
     slackEventsPort !== undefined &&
     (!Number.isSafeInteger(slackEventsPort) || slackEventsPort <= 0 || slackEventsPort > 65_535)

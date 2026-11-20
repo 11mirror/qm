@@ -714,8 +714,8 @@ test("a staff account in hundreds of workspaces gets a searchable picker, a smal
   const html = await page.text();
   assert.match(html, /id="workspace-search"/);
   const visible = [...html.matchAll(/<form method="post" action="\/auth\/tenant" data-workspace/g)].length;
-  assert.equal(visible, 8);
-  assert.match(html, /Showing 8 of 250\. Type to narrow the list\./);
+  assert.equal(visible, 250);
+  assert.doesNotMatch(html, /Type to narrow the list/);
   assert.match(html, /<img src="\/auth\/assets\/becalmed-off-halfway-rock\.webp"/);
   assert.match(html, /<button class="btn ghost workspace" type="submit">/);
 
