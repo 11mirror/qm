@@ -112,3 +112,17 @@ test("a pre-tenancy home moves once to the sole tenant's canonical key", async (
     await bindBootTenant(async () => TEST_TENANT);
   }
 });
+
+test("canonical home wins and removes the pre-tenancy object before destruction", async () => {
+  const { s3, objects } = fakeBucket();
+  const canonical = `modal-home/${TEST_TENANT}/personal%3AU1.tar`;
+  const legacy = "modal-home/personal%3AU1.tar";
+  objects.set(canonical, Buffer.from("canonical home"));
+  objects.set(legacy, Buffer.from("stale home"));
+  const store = createS3SnapshotStore({ bucket: "b", prefix: "modal-home", s3 });
+  await bindBootTenant(async () => TEST_TENANT);
+  assert.equal(await withTenant(TEST_TENANT, () => read(store, SCOPE)), "canonical home");
+  assert.equal(objects.has(legacy), false);
+  objects.delete(canonical);
+  assert.equal(await withTenant(TEST_TENANT, () => read(store, SCOPE)), null);
+});

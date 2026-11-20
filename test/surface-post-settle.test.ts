@@ -99,7 +99,9 @@ test("mentions of strangers go out as written and come back flagged with the ts"
   assert.equal((r.notes?.[0] ?? "").match(/<@U999>/g)?.length, 1, "a stranger id is listed once, roster ids never");
 });
 
-test("mentions are left untouched when the roster can't be read", async () => {
+test("mentions are left untouched and the failure is reported when the roster can't be read", async (t) => {
+  const diagnostics: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => void diagnostics.push(args.map(String).join(" ")));
   const { tools, enqueued } = toolsWithDeliveries({
     directory: async () => {
       throw new Error("directory down");
@@ -109,4 +111,5 @@ test("mentions are left untouched when the roster can't be read", async () => {
   assert.equal(r.ok, true);
   assert.equal(enqueued[0]!.text, "ping <@U999>", "an unreadable roster neither rewrites nor flags the message");
   assert.equal(r.notes, undefined);
+  assert.match(diagnostics.join("\n"), /surface post: resolve mention roster.*directory down/);
 });

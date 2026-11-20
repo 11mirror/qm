@@ -30,6 +30,7 @@ import type {
   SurfaceSearchResult,
 } from "../tools/primitives.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
+import { reportFailure } from "../util/errors.ts";
 import {
   collectNamedOutbound,
   parseOutboundFiles,
@@ -237,7 +238,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
           if (m.slackId) ids.add(m.slackId);
         }
         return { ids, known: true };
-      } catch {
+      } catch (error) {
+        reportFailure("surface post: resolve mention roster", error);
         return { ids, known: false };
       }
     })();

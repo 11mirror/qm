@@ -159,19 +159,26 @@ export function createS3SnapshotStore(opts: S3SnapshotStoreOptions): HomeSnapsho
       throw e;
     }
   }
+  async function migrateSnapshot(
+    key: string,
+    migrationSource: string,
+  ): Promise<{ Body?: unknown; ContentLength?: number } | null> {
+    let got = await get(key);
+    if (!got) {
+      try {
+        await s3.send(new CopyObjectCommand({ Bucket, Key: key, CopySource: `${Bucket}/${migrationSource}` }));
+      } catch (e) {
+        if (!isNoSuchKey(e)) throw e;
+      }
+      got = await get(key);
+    }
+    await s3.send(new DeleteObjectCommand({ Bucket, Key: migrationSource }));
+    return got;
+  }
   return {
     async open(scope): Promise<StoredSnapshot | null> {
       const { key, migrationSource } = keysFor(scope);
-      let got = await get(key);
-      if (!got && migrationSource) {
-        try {
-          await s3.send(new CopyObjectCommand({ Bucket, Key: key, CopySource: `${Bucket}/${migrationSource}` }));
-        } catch (e) {
-          if (!isNoSuchKey(e)) throw e;
-        }
-        got = await get(key);
-        if (got) await s3.send(new DeleteObjectCommand({ Bucket, Key: migrationSource }));
-      }
+      const got = migrationSource ? await migrateSnapshot(key, migrationSource) : await get(key);
       if (!got?.Body) return null;
       return { size: got.ContentLength ?? -1, parts: bodyToReadable(got.Body) };
     },
