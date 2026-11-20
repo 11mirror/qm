@@ -1572,7 +1572,7 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
     const rawName = info.name ?? claims.name;
     signIn = {
       sub: infoSub,
-      name: typeof rawName === "string" ? rawName.trim().slice(0, 200) : "",
+      name: typeof rawName === "string" ? rawName.trim() : "",
       claims,
       userinfo: info,
     };

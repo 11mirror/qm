@@ -29,7 +29,9 @@ let canonicalStatus = 200;
 let admitted = true;
 let orgs: unknown = undefined;
 let selfServe = false;
+let signedInName = "Test Founder";
 const selfServed: Array<Record<string, unknown>> = [];
+const profileNames: string[] = [];
 const orgTenants: Record<string, string> = {};
 const principalLookups: string[] = [];
 const claimed = new Set<string>();
@@ -62,10 +64,17 @@ const upstream = createServer((req, res) => {
       return void res.end(
         JSON.stringify({
           sub: "idp-subject",
+          name: signedInName,
           ...(email ? { email, email_verified: true } : {}),
           ...(orgs !== undefined ? { orgs } : {}),
         }),
       );
+    if (path === "/v1/principals/profile") {
+      let raw = "";
+      for await (const chunk of req) raw += String(chunk);
+      profileNames.push((JSON.parse(raw) as { displayName: string }).displayName);
+      return void res.end(JSON.stringify({ ok: true }));
+    }
     if (path === "/v1/auth/broker/self-serve") {
       let raw = "";
       for await (const chunk of req) raw += String(chunk);
@@ -219,6 +228,20 @@ test("an email in one tenant signs in bound to it and every proxied request name
   surface.length = 0;
   await fetch(`${base}/`, { headers: { cookie: cookieFrom(response, "portal_session")! }, redirect: "manual" });
   assert.equal(surface.at(-1), alpha);
+});
+
+test("primary sign-in records the provider's complete name", async () => {
+  const complete = "Long provider name ".repeat(20).trim();
+  signedInName = complete;
+  tenants = [{ id: alpha, brandName: "Alpha" }];
+  profileNames.length = 0;
+  try {
+    const response = await callback();
+    assert.equal(response.status, 302);
+    assert.equal(profileNames.at(-1), complete);
+  } finally {
+    signedInName = "Test Founder";
+  }
 });
 
 test("an email in no tenant keeps today's untenanted sign-in", async () => {

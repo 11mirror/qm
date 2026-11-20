@@ -84,6 +84,7 @@ test("conversation details include the waiting message after prior context with 
           snippet: "tail",
           receivedAt: 2000,
           sourceContextPartial: true,
+          externalUrl: `https://example.com/${source}/conversation-2`,
         },
         sourceAt: 2000,
         updatedAt: 3000,
@@ -91,8 +92,12 @@ test("conversation details include the waiting message after prior context with 
       });
       render(contextTpl(cut), host);
       assert.equal(
-        host.querySelector(".inbox-source-notice")?.textContent?.trim(),
-        source === "slack" ? "Showing part of this conversation. Open in Slack for the full history." : undefined,
+        host.querySelector(".inbox-source-notice")?.textContent?.replace(/\s+/g, " ").trim(),
+        `Showing part of this conversation. Open in ${source === "slack" ? "Slack" : "Gmail"} for the full history.`,
+      );
+      assert.equal(
+        host.querySelector<HTMLAnchorElement>(".inbox-source-notice a")?.href,
+        `https://example.com/${source}/conversation-2`,
       );
     }
   } finally {

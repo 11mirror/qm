@@ -460,7 +460,7 @@ export function toInboxItem(entry: LedgerItem): InboxItem {
     ...(resolved === "dismissed" && entry.parkedReason ? { dismissedReason: entry.parkedReason } : {}),
     ...(resolved === "replied" && entry.actedAt !== undefined ? { repliedAt: entry.actedAt } : {}),
     ...(resolved === "replied" && entry.actionResult ? { externalReplyText: entry.actionResult } : {}),
-    ...(payload.sourceContextPartial === true && entry.source === "slack" ? { sourceContextPartial: true } : {}),
+    ...(payload.sourceContextPartial === true ? { sourceContextPartial: true } : {}),
   };
 }
 
@@ -1272,7 +1272,20 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
           </button>`
         : nothing
     }
-    ${item.sourceContextPartial ? html`<div class="inbox-source-notice">Showing part of this conversation. Open in Slack for the full history.</div>` : nothing}
+    ${
+      item.sourceContextPartial
+        ? html`<div class="inbox-source-notice">
+            Showing part of this conversation.
+            ${
+              item.externalUrl
+                ? html`<a href=${item.externalUrl} target="_blank" rel="noopener noreferrer"
+                    >Open in ${item.source === "gmail" ? "Gmail" : "Slack"} for the full history.</a
+                  >`
+                : `Open in ${item.source === "gmail" ? "Gmail" : "Slack"} for the full history.`
+            }
+          </div>`
+        : nothing
+    }
     ${rows.slice(hidden).map((m) => {
       const participant = item.source === "slack" ? item.participants?.find((p) => p.key === m.authorId) : undefined;
       const author = participant?.name ?? m.author;

@@ -342,6 +342,18 @@ test("trusted sign-in records the provider's name for the signed-in principal be
   assert.deepEqual(profiles, [{ body: { principalId: sub, displayName: "Test Founder" }, principal: sub }]);
 });
 
+test("trusted sign-in records the provider's complete name", async () => {
+  const complete = "Long trusted provider name ".repeat(20).trim();
+  signedInName = complete;
+  profiles.length = 0;
+  try {
+    await signInSession();
+    assert.equal(profiles[0]?.body.displayName, complete);
+  } finally {
+    signedInName = "Test Founder";
+  }
+});
+
 test("a session without a name shows the name core stored for the person, and an empty provider name is never recorded", async () => {
   signedInName = "";
   storedName = "Stored Founder";

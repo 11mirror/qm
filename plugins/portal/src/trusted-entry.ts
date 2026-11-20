@@ -121,7 +121,7 @@ export function createTrustedEntry(
       return {
         subject: claims.sub,
         sub: trustedPrincipal(cfg.issuer, claims.sub),
-        name: typeof info.name === "string" ? info.name.trim().slice(0, 200) : "",
+        name: typeof info.name === "string" ? info.name.trim() : "",
         email: verifiedEmail(info),
         orgs: trustedOrgs(info, claims),
         returnTo: tmp.returnTo,

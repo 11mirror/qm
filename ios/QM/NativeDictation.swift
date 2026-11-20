@@ -344,7 +344,14 @@ final class NativeDictationModel {
     operation?.cancel()
     operation = nil
     stopRecording()
-    if let file { try? FileManager.default.removeItem(at: file) }
+    if let file {
+      do {
+        try FileManager.default.removeItem(at: file)
+      } catch let error as CocoaError where error.code == .fileNoSuchFile {
+      } catch {
+        Log.background.failure("Deleting cancelled dictation recording", error)
+      }
+    }
     file = nil
     state = .idle
     level = 0
