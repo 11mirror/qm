@@ -1500,3 +1500,27 @@ test("a follow-up screens the item source but not the person's message, capped t
   });
   assert.equal(payload?.truncated, false);
 });
+
+test("a long partial Gmail follow-up preserves its retrievable source reference", async () => {
+  const s = service(() => "The complete thread is available.");
+  const loop = await makeLoop(s.loops, { sources: ["gmail"] });
+  await s.items.ingest([
+    {
+      loopId: loop.id,
+      dedupeKey: "long-gmail",
+      source: "gmail",
+      sourcePayload: {
+        snippet: "opening ".repeat(2_000),
+        sourceContextPartial: true,
+        gmail: { threadId: "gmail-thread-complete", accountType: "company" },
+      },
+    },
+  ]);
+  const [item] = await s.items.byLoop(loop.id);
+  await s.fire.followUp(loop, item!, "What does the final reply say?", loop.owner);
+  const turn = s.turns[0]!;
+  const screenData = automationOrigin(turn)?.screenData ?? "";
+  assert.match(screenData, /"sourceContextPartial":true/);
+  assert.match(screenData, /"threadId":"gmail-thread-complete"/);
+  assert.ok(turn.text!.includes(screenData));
+});

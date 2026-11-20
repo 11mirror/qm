@@ -149,6 +149,27 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     assert.deepEqual((await res.json()) as { matches: unknown[] }, { matches: [] });
   });
 
+  it("resolves exact names that differ after character eighty", async () => {
+    const shared = "Long exact recipient ".repeat(5);
+    const displayName = `${shared}B`;
+    await built.app.upsertDirectory([
+      { principalId: "long-b@acme.com", displayName, type: "internal", slackId: "U0LONGBBB" },
+    ]);
+    const res = await get(`/v1/directory/resolve?q=${encodeURIComponent(displayName)}`);
+    assert.equal(res.status, 200);
+    const { matches } = (await res.json()) as { matches: Array<{ principalId: string }> };
+    assert.deepEqual(
+      matches.map((match) => match.principalId),
+      ["long-b@acme.com"],
+    );
+    await built.app.upsertDirectory([
+      { principalId: "carol@acme.com", displayName: "Carol Example", type: "internal", slackId: "U0CAROL" },
+      { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U0ALICE" },
+      { principalId: "jordan@acme.com", displayName: "Jordan", type: "internal", slackId: "U0JORDAN" },
+      { principalId: "joan@acme.com", displayName: "Joan", type: "internal", slackId: "U0JOAN" },
+    ]);
+  });
+
   it("rejects a missing query with 400", async () => {
     const res = await get("/v1/directory/resolve");
     assert.equal(res.status, 400);

@@ -64,8 +64,7 @@ struct NativeThemePalette: Codable, Equatable {
     guard data.count <= 2 * 1024 * 1024 else {
       throw QMError.message("Choose a theme file smaller than 2 MB.")
     }
-    let name = String(
-      URL(fileURLWithPath: filename).deletingPathExtension().lastPathComponent.prefix(80))
+    let name = URL(fileURLWithPath: filename).deletingPathExtension().lastPathComponent
     if let plist = try? PropertyListSerialization.propertyList(from: data, format: nil)
       as? [String: Any]
     {
@@ -106,7 +105,7 @@ struct NativeThemePalette: Codable, Equatable {
           ?? (background.luminance < 0.5 ? "#d4d4d4" : "#333333"), over: background) ?? RGB.hex(
         background.luminance < 0.5 ? "#d4d4d4" : "#333333")!
     return .init(
-      name: String((object["name"] as? String ?? name).prefix(80)), background: background,
+      name: object["name"] as? String ?? name, background: background,
       foreground: foreground)
   }
 }

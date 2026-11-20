@@ -95,6 +95,16 @@ final class NativeThemeTests: XCTestCase {
     XCTAssertGreaterThan(palette.foreground.red, 0.5)
     XCTAssertLessThan(palette.foreground.red, 0.6)
   }
+  func testImportedThemeNamesRemainComplete() throws {
+    let name = String(repeating: "Theme name ", count: 12)
+    let palette = try NativeThemePalette.read(
+      Data("{name:'\(name)', colors:{'editor.background':'#123'}}".utf8),
+      filename: "fallback.json")
+    XCTAssertEqual(palette.name, name)
+    let fallback = try NativeThemePalette.read(
+      Data("{colors:{'editor.background':'#123'}}".utf8), filename: "\(name).json")
+    XCTAssertEqual(fallback.name, name)
+  }
   func testMalformedForegroundFallsBackInsteadOfCrashing() throws {
     let palette = try NativeThemePalette.read(
       Data(#"{"type":"dark","colors":{"editor.foreground":"invalid"}}"#.utf8), filename: "Dark.json"

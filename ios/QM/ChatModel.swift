@@ -296,6 +296,7 @@ final class ChatModel {
           text: draft, pending: pending, conversation: conversation, attachments: attachments,
           runtime: runtimeSelection))
     } catch {
+      Log.drafts.failure("Saving draft", error)
       self.error = "Could not save your draft on this device."
     }
   }
@@ -584,10 +585,12 @@ final class ChatModel {
       }
       var body: [String: Any] = [
         "approved": approved, "scope": scope,
-        "idempotencyKey": "ios-approval-\(approval.requestId)-\(approved)-\(scope)-\(optionId ?? "none")",
+        "idempotencyKey":
+          "ios-approval-\(approval.requestId)-\(approved)-\(scope)-\(optionId ?? "none")",
       ]
       if let optionId { body["optionId"] = optionId }
-      let response: Submission = try await client.fetch("api/approvals/\(approval.requestId)", body: body)
+      let response: Submission = try await client.fetch(
+        "api/approvals/\(approval.requestId)", body: body)
       guard response.runId != nil || response.isTerminalResult else {
         throw QMError.message(response.reason ?? "Could not confirm approval. Retry this decision.")
       }

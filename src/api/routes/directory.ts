@@ -188,7 +188,7 @@ async function directoryMeta(ctx: ApiCtx): Promise<void> {
 const SLACK_ID_RE = /^[UW][A-Z0-9]{8,}$/;
 async function resolveDirectory(ctx: ApiCtx): Promise<void> {
   const { res, app, url } = ctx;
-  const q = (url.searchParams.get("q") ?? "").trim().slice(0, 80);
+  const q = (url.searchParams.get("q") ?? "").trim();
   if (!q) return sendJson(res, 400, { error: "bad_request", message: "q (a name to resolve) required" });
   const r = await app.resolveRecipient(q);
   let found: DirectoryMember[] = [];

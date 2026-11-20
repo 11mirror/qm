@@ -328,7 +328,11 @@ final class NativeVoiceModel: NSObject {
     connecting = false
     connected = false
     stopping = false
-    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    do {
+      try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    } catch {
+      Log.background.failure("Deactivating voice audio", error)
+    }
   }
   private func send(_ event: [String: Any]) {
     guard channel?.readyState == .open,

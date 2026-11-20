@@ -365,7 +365,11 @@ final class NativeDictationModel {
     liveTask?.cancel()
     liveTask = nil
     if ownsAudioSession {
-      try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+      do {
+        try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+      } catch {
+        Log.background.failure("Deactivating dictation audio", error)
+      }
       ownsAudioSession = false
     }
   }
