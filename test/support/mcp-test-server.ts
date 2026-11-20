@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { addressGuardedFetch } from "../../src/util/network.ts";
+import { addressGuardedFetch, type AddressFetch } from "../../src/util/network.ts";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -19,6 +19,7 @@ interface McpRequest {
   rpc?: string;
   authorization?: string;
   actor?: string;
+  aliases?: string;
   approval?: string;
 }
 
@@ -146,6 +147,7 @@ export async function startMcpTestServer(
       path,
       ...(parsed?.method ? { rpc: parsed.method } : {}),
       ...(authorization ? { authorization } : {}),
+      aliases: req.headers["x-qm-actor-aliases"] as string | undefined,
       ...(typeof req.headers["x-qm-actor"] === "string" ? { actor: req.headers["x-qm-actor"] } : {}),
       ...(typeof req.headers["x-qm-approval"] === "string" ? { approval: req.headers["x-qm-approval"] } : {}),
     });
@@ -215,3 +217,20 @@ export async function startMcpTestServer(
 }
 
 export const loopbackFetch = addressGuardedFetch(() => false);
+
+export const routedTo =
+  (server: string): AddressFetch =>
+  (input, init) => {
+    const url = new URL(input);
+    const { protocol, host } = new URL(server);
+    Object.assign(url, { protocol, host });
+    return loopbackFetch(url, init);
+  };
+
+export async function closedPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>((r) => server.close(() => r()));
+  return port;
+}

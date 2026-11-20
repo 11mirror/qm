@@ -9,7 +9,7 @@ import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { notifyOwnerOfCronEdit } from "../../triggers/edit-notice.ts";
-import { canAdministerCron } from "../control-service.ts";
+import { canAdministerCron, cronTaskRewrite } from "../control-service.ts";
 import { CRON_PATCH_NOTHING_TO_CHANGE } from "../control-service.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 
@@ -25,7 +25,6 @@ function isCreateCron(b: unknown): b is CreateCronInput {
     isCronRuntime(b.runtime) &&
     userScheduleFromBody(b.schedule) !== null &&
     (typeof b.action === "string" || typeof (b as { message?: unknown }).message === "string") &&
-    (b as { unattendedGrants?: unknown }).unattendedGrants === undefined &&
     typeof b.ownerScopeId === "string" &&
     typeof b.owner === "string" &&
     typeof b.createdBy === "string" &&
@@ -48,8 +47,8 @@ type CapabilityCronBody = {
   participants?: unknown;
   scope?: unknown;
   unfurlLinks?: unknown;
-  unattendedGrants?: unknown;
   session?: unknown;
+  persona?: unknown;
 };
 
 function taskText(b: CapabilityCronBody): string | undefined {
@@ -72,8 +71,7 @@ async function gateSourceCron(ctx: ApiCtx, id: string): Promise<Cron | null> {
     return null;
   }
   const principalId = url.searchParams.get("principalId");
-  if (!principalId) return cron;
-  if (await canAdministerCron(app, cron, principalId)) return cron;
+  if (principalId && (await canAdministerCron(app, cron, { actorId: principalId }))) return cron;
   sendJson(res, 404, { error: "not_found" });
   return null;
 }
@@ -86,9 +84,9 @@ async function gateSourceCronRead(ctx: ApiCtx, id: string): Promise<Cron | null>
     return null;
   }
   const principalId = url.searchParams.get("principalId");
-  if (!principalId || (await canAdministerCron(app, cron, principalId))) return cron;
-  const { visible } = await app.listCronsForViewer(principalId);
-  if (visible.some((candidate) => candidate.id === id)) return cron;
+  if (principalId && (await canAdministerCron(app, cron, { actorId: principalId }))) return cron;
+  if (principalId && (await app.listCronsForViewer(principalId)).visible.some((candidate) => candidate.id === id))
+    return cron;
   sendJson(res, 404, { error: "not_found" });
   return null;
 }
@@ -102,7 +100,6 @@ function isCronPatch(b: unknown): b is {
   enabled?: boolean;
   archived?: boolean;
   unfurlLinks?: boolean;
-  unattendedGrants?: string[];
   session?: boolean;
 } {
   if (!isObj(b) || !isCronRuntime(b.runtime)) return false;
@@ -114,18 +111,12 @@ function isCronPatch(b: unknown): b is {
   const hasEnabled = b.enabled !== undefined;
   const hasArchived = b.archived !== undefined;
   const hasUnfurlLinks = b.unfurlLinks !== undefined;
-  const hasUnattendedGrants = b.unattendedGrants !== undefined;
   if (hasTitle && typeof b.title !== "string") return false;
   if (hasAction && typeof b.action !== "string") return false;
   if (hasTask && typeof b.task !== "string") return false;
   if (hasEnabled && typeof b.enabled !== "boolean") return false;
   if (hasArchived && typeof b.archived !== "boolean") return false;
   if (hasUnfurlLinks && typeof b.unfurlLinks !== "boolean") return false;
-  if (
-    hasUnattendedGrants &&
-    (!Array.isArray(b.unattendedGrants) || !b.unattendedGrants.every((grant) => typeof grant === "string"))
-  )
-    return false;
   if (hasSchedule && userScheduleFromBody(b.schedule) === null) return false;
   if (b.session !== undefined && typeof b.session !== "boolean") return false;
   return true;
@@ -141,7 +132,6 @@ function hasCronPatchFields(b: Record<string, unknown>): boolean {
     b.enabled !== undefined ||
     b.archived !== undefined ||
     b.unfurlLinks !== undefined ||
-    b.unattendedGrants !== undefined ||
     b.session !== undefined
   );
 }
@@ -170,15 +160,6 @@ async function createCron(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: CRON_SCRIPT_TOOL_ONLY });
   if (capability) {
     const b = body as CapabilityCronBody;
-    if (
-      b.unattendedGrants !== undefined &&
-      (!Array.isArray(b.unattendedGrants) || !b.unattendedGrants.every((grant) => typeof grant === "string"))
-    ) {
-      return sendJson(res, 400, {
-        error: "bad_request",
-        message: "unattendedGrants must be an array of recognized grant strings",
-      });
-    }
     const schedule = userScheduleFromBody(b.schedule, defaultTimezoneFor(capability));
     const task = taskText(b);
     const text = exactText(b);
@@ -205,8 +186,8 @@ async function createCron(ctx: ApiCtx): Promise<void> {
         ...(b.scope === "personal" ? { scope: "personal" as const } : {}),
         ...(typeof b.destinationKey === "string" ? { destinationKey: b.destinationKey } : {}),
         ...(typeof b.unfurlLinks === "boolean" ? { unfurlLinks: b.unfurlLinks } : {}),
-        ...(Array.isArray(b.unattendedGrants) ? { unattendedGrants: b.unattendedGrants } : {}),
         ...(typeof b.session === "boolean" ? { session: b.session } : {}),
+        ...(typeof b.persona === "string" ? { persona: b.persona } : {}),
       },
       capability,
     );
@@ -245,11 +226,11 @@ async function listCrons(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 200, { crons, visible });
   }
   const viewer = url.searchParams.get("viewer");
-  if (!viewer) return sendJson(res, 200, { crons: await app.listCrons() });
+  if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
   const { owned, visible } = await app.listCronsForViewer(viewer);
   const decorate = async (cron: Cron) => ({
     ...cron,
-    permission: (await canAdministerCron(app, cron, viewer)) ? "manage" : "read",
+    permission: (await canAdministerCron(app, cron, { actorId: viewer })) ? "manage" : "read",
   });
   return sendJson(res, 200, {
     crons: await Promise.all(owned.map(decorate)),
@@ -257,17 +238,21 @@ async function listCrons(ctx: ApiCtx): Promise<void> {
   });
 }
 
-async function disableCron(ctx: ApiCtx): Promise<void> {
-  const { res, app, capability } = ctx;
-  const id = ctx.params.id!;
-  if (capability) {
-    const r = await ctx.deps.control.setCronEnabled(id, false, capability);
-    if (!r.ok) return sendJson(res, CRON_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
+function toggleCron(enabled: boolean): (ctx: ApiCtx) => Promise<void> {
+  return async (ctx) => {
+    const { res, app, capability } = ctx;
+    const id = ctx.params.id!;
+    if (capability) {
+      const r = await ctx.deps.control.setCronEnabled(id, enabled, capability);
+      if (!r.ok) return sendJson(res, CRON_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
+      return sendJson(res, 200, { ok: true });
+    }
+    const cron = await gateSourceCron(ctx, id);
+    if (!cron) return;
+    if (enabled) return patchCronAsPerson(ctx, cron, { enabled: true, archived: false });
+    await app.setCronEnabled(id, false);
     return sendJson(res, 200, { ok: true });
-  }
-  if (!(await gateSourceCron(ctx, id))) return;
-  await app.setCronEnabled(id, false);
-  return sendJson(res, 200, { ok: true });
+  };
 }
 
 async function retargetCron(ctx: ApiCtx): Promise<void> {
@@ -331,7 +316,7 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
   }
   const cron = await gateSourceCron(ctx, id);
   if (!cron) return;
-  if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+  if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) {
     return sendJson(res, 400, { error: "bad_request", message: "limit must be a positive integer" });
   }
   const { runs, total } = await app.listCronFires(id, limit !== undefined ? { limit } : {});
@@ -339,7 +324,7 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
 }
 
 const CRON_PATCH_BAD_REQUEST =
-  "expected a cron patch: title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), unattendedGrants (string[]), and/or session (boolean)";
+  "expected a cron patch: title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), and/or session (boolean)";
 
 async function cronById(ctx: ApiCtx): Promise<void> {
   const { res, app, url, pathname, method, body, capability } = ctx;
@@ -376,7 +361,6 @@ async function cronById(ctx: ApiCtx): Promise<void> {
         ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
         ...(body.archived !== undefined ? { archived: body.archived } : {}),
         ...(body.unfurlLinks !== undefined ? { unfurlLinks: body.unfurlLinks } : {}),
-        ...(body.unattendedGrants !== undefined ? { unattendedGrants: body.unattendedGrants } : {}),
         ...(body.session !== undefined ? { session: body.session } : {}),
       },
       capability,
@@ -393,51 +377,63 @@ async function cronById(ctx: ApiCtx): Promise<void> {
   const cron = await gateSourceCron(ctx, id);
   if (!cron) return;
   if (method === "DELETE") {
-    await app.deleteCron(id);
-    const editor = url.searchParams.get("principalId");
-    if (editor) await notifyOwnerOfCronEdit(app, { cron, editorId: editor, changeSummary: ["deleted"] });
+    const editor = url.searchParams.get("principalId")!;
+    await app.deleteCron(id, { actorId: editor });
+    await notifyOwnerOfCronEdit(app, { cron, editorId: editor, changeSummary: ["deleted"] });
     return sendJson(res, 200, { ok: true });
   }
-  if ((cron.unattendedGrants?.length ?? 0) > 0) {
-    return sendJson(res, 403, {
-      error: "forbidden",
-      message: "a privileged cron may only be patched by its owner from a live turn",
-    });
-  }
-  if (!isCronPatch(body)) return sendJson(res, 400, { error: "bad_request", message: CRON_PATCH_BAD_REQUEST });
-  if (!hasCronPatchFields(body)) {
-    return sendJson(res, 400, { error: "bad_request", message: CRON_PATCH_NOTHING_TO_CHANGE });
-  }
+  return patchCronAsPerson(ctx, cron, body);
+}
+
+const PERSON_CRON_PATCH_FIELDS = new Set(["runtime", "title", "task", "schedule", "enabled", "archived"]);
+
+const PERSON_CRON_PATCH_BAD_REQUEST =
+  "expected a cron patch: title (string), task (non-empty string), schedule, enabled (boolean), archived (boolean), and/or runtime";
+
+function isPersonCronPatch(b: unknown): b is {
+  runtime?: Cron["runtime"];
+  title?: string;
+  task?: string;
+  schedule?: unknown;
+  enabled?: boolean;
+  archived?: boolean;
+} {
+  return (
+    isCronPatch(b) &&
+    hasCronPatchFields(b) &&
+    Object.keys(b).every((key) => PERSON_CRON_PATCH_FIELDS.has(key)) &&
+    (b.task === undefined || b.task.trim() !== "")
+  );
+}
+
+async function patchCronAsPerson(ctx: ApiCtx, cron: Cron, body: unknown): Promise<void> {
+  const { res, app, url } = ctx;
+  if (!isPersonCronPatch(body))
+    return sendJson(res, 400, { error: "bad_request", message: PERSON_CRON_PATCH_BAD_REQUEST });
   const schedule = body.schedule !== undefined ? userScheduleFromBody(body.schedule)! : undefined;
-  const task = body.action ?? body.task;
-  if (body.unfurlLinks !== undefined && !cron.destination) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "unfurlLinks can only be set on a cron with a delivery destination",
-    });
-  }
+  const editor = url.searchParams.get("principalId")!;
+  const rewrite = body.task !== undefined ? await cronTaskRewrite(app, cron, editor, true) : {};
   const patch: CronPatch = {
+    ...rewrite,
     ...(body.runtime !== undefined ? { runtime: body.runtime } : {}),
     ...(body.title !== undefined ? { title: body.title } : {}),
-    ...(task !== undefined ? { action: task } : {}),
+    ...(body.task !== undefined ? { action: body.task } : {}),
     ...(schedule !== undefined ? { schedule } : {}),
     ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
     ...(body.archived !== undefined ? { archived: body.archived } : {}),
-    ...(body.unfurlLinks !== undefined && cron.destination
-      ? { destination: { ...cron.destination, unfurlLinks: body.unfurlLinks } }
-      : {}),
   };
   try {
-    const updated = await app.updateCron(id, patch);
-    const editor = url.searchParams.get("principalId");
-    if (updated && editor)
+    const updated = await app.updateCron(cron.id, patch, { actorId: editor });
+    if (updated)
       await notifyOwnerOfCronEdit(app, {
-        cron: updated,
+        cron: { ...updated, owner: cron.owner },
         editorId: editor,
         changeSummary: [
           ...(body.runtime !== undefined ? ["runtime"] : []),
           ...(body.title !== undefined ? ["title"] : []),
-          ...(task !== undefined ? ["task"] : []),
+          ...(body.task !== undefined ? ["task"] : []),
+          ...(rewrite.owner ? ["owner"] : []),
+          ...(rewrite.script === null ? ["script"] : []),
           ...(schedule !== undefined ? ["schedule"] : []),
           ...(body.enabled !== undefined ? [`enabled=${body.enabled}`] : []),
           ...(body.archived !== undefined ? [`archived=${body.archived}`] : []),
@@ -452,18 +448,20 @@ async function cronById(ctx: ApiCtx): Promise<void> {
 
 export const cronRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/crons", actor: "body.createdBy", auth: "either", handle: createCron },
-  { method: "GET", path: "/v1/crons", actor: "query.viewer", auth: "either", handle: listCrons },
+  { method: "GET", path: "/v1/crons", browser: true, actor: "query.viewer", auth: "either", handle: listCrons },
   { method: "POST", path: "/v1/crons/:id/note", auth: "either", handle: noteCron },
   ...withActor("query.principalId", [
-    { method: "POST", path: "/v1/crons/:id/disable", auth: "either", handle: disableCron },
+    { method: "POST", path: "/v1/crons/:id/disable", browser: true, auth: "either", handle: toggleCron(false) },
+    { method: "POST", path: "/v1/crons/:id/enable", browser: true, auth: "either", handle: toggleCron(true) },
     { method: "POST", path: "/v1/crons/:id/destination", auth: "either", handle: retargetCron },
-    { method: "POST", path: "/v1/crons/:id/run", auth: "either", handle: runCronNow },
-    { method: "GET", path: "/v1/crons/:id/runs", auth: "either", handle: cronRuns },
+    { method: "POST", path: "/v1/crons/:id/run", browser: true, auth: "either", handle: runCronNow },
+    { method: "GET", path: "/v1/crons/:id/runs", browser: true, auth: "either", handle: cronRuns },
     {
       match: (m, p) =>
         p.startsWith("/v1/crons/") &&
         !p.slice("/v1/crons/".length).includes("/") &&
         (m === "GET" || m === "PATCH" || m === "DELETE"),
+      browser: true,
       auth: "either",
       handle: cronById,
     },

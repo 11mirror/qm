@@ -1,6 +1,8 @@
+import type { Tenant } from "../tenants/context.ts";
 import { isSessionTurn } from "../core/turn-origin.ts";
 import type {
   Conversation,
+  Delivery,
   DeliveryProvenance,
   Destination,
   OutgoingAttachment,
@@ -28,6 +30,7 @@ import type {
   SurfaceSearchResult,
 } from "../tools/primitives.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
+import { reportFailure } from "../util/errors.ts";
 import {
   collectNamedOutbound,
   parseOutboundFiles,
@@ -39,12 +42,65 @@ import { parseBotLedger, type BotPolicy, type ChannelPolicy } from "../surface-c
 import { isoFromTs } from "../util/message-tag.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { adminSessionUrl } from "../util/admin-links.ts";
-import { replaceThreadSegment, type TurnPostKeys } from "../core/orchestrator/turn-helpers.ts";
+import {
+  completedSurfaceEnqueues,
+  replaceThreadSegment,
+  stripAckPrefix,
+  turnPostKeys,
+  type TurnPostKeys,
+} from "../core/orchestrator/turn-helpers.ts";
+import { replyEditNote } from "../delivery/run-result-delivery.ts";
+import { editableIn, SLACK, turnCapabilities } from "./registry.ts";
+import { sleep } from "../util/async.ts";
+import { foldPrincipalId } from "../directory/person.ts";
+import { mentionedUserIds } from "../slack/mrkdwn.ts";
+import type { DeliveryStore } from "../delivery/delivery-store.ts";
+import type { Item } from "../sessions/items.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "../core/orchestrator/types.ts";
 
 const SURFACE_READ_MAX = 200;
 const SURFACE_SEARCH_DEFAULT = 10;
 const SURFACE_SEARCH_MAX = 40;
+
+const DELIVERY_SETTLE_WAIT_MS = 1_000;
+const DELIVERY_SETTLE_POLL_MS = 40;
+
+function deliversOwnMessageTs(destination: Destination): boolean {
+  return (
+    (destination.type === SLACK || destination.type === "group") &&
+    !destination.react &&
+    !destination.delete &&
+    !destination.keychainAskId &&
+    !destination.commandApprovalId &&
+    !destination.deploymentAccess
+  );
+}
+
+async function waitForDeliverySettle(deliveries: Pick<DeliveryStore, "get">, id: string): Promise<Delivery | null> {
+  const maxPolls = DELIVERY_SETTLE_WAIT_MS / DELIVERY_SETTLE_POLL_MS;
+  for (let polls = 0; ; polls++) {
+    let d: Delivery | null;
+    try {
+      d = await deliveries.get(id);
+    } catch (err) {
+      console.error("%s", "[surface] delivery settle check failed:", (err as Error).message);
+      return null;
+    }
+    if (d && (d.deliveredAt !== null || d.failedReason !== undefined)) return d;
+    if (polls >= maxPolls) return d;
+    await sleep(DELIVERY_SETTLE_POLL_MS, { unref: true });
+  }
+}
+
+function deliveryFailureMessage(reason: string, destination: Destination): string {
+  const ref = destination.edit?.messageTs;
+  if (
+    ref &&
+    (reason === "cant_update_message" || reason === "edit_target_not_found" || reason === "edit_window_closed")
+  )
+    return `ref ${ref} isn't one of my own messages (Slack refused: ${reason}) — I can only edit or delete messages I posted; use the ts my own post or edit returned`;
+  return `delivery failed (${reason})`;
+}
 
 export interface SpineState {
   surfaceOutboundCount: number;
@@ -53,6 +109,7 @@ export interface SpineState {
 }
 
 export interface SurfaceToolsContext {
+  tenant: Tenant;
   deps: OrchestratorDeps;
   input: OrchestratorInput;
   actor: Principal;
@@ -79,15 +136,71 @@ function postedFileMetas(attachments: readonly OutgoingAttachment[]): PostedFile
   }));
 }
 
+export function surfaceToolsActive(
+  ctx: Pick<SurfaceToolsContext, "input" | "strictReadOnly" | "defaultDestination">,
+): boolean {
+  return !ctx.strictReadOnly && !!ctx.input.surfaceTools && !!ctx.defaultDestination;
+}
+
+export async function enqueueDirectReply(ctx: {
+  deliveries: DeliveryStore;
+  destination: Destination;
+  text: string;
+  key: string;
+  postProvenance: (deliveryKey: string) => DeliveryProvenance;
+  retracted?: readonly string[];
+}): Promise<void> {
+  const editNote = replyEditNote(ctx.retracted);
+  await reachEnqueue({
+    deliveries: ctx.deliveries,
+    destination: editNote ? { ...ctx.destination, editNote } : ctx.destination,
+    text: ctx.text,
+    idempotencyKey: ctx.key,
+    provenance: ctx.postProvenance(ctx.key),
+  });
+}
+
+export async function replayRecordedSurfaceAnswer(ctx: {
+  deps: Pick<OrchestratorDeps, "deliveries">;
+  input: Pick<OrchestratorInput, "addressed" | "runId">;
+  session: Pick<Session, "id" | "threadRef">;
+  defaultDestination: Destination | undefined;
+  surfaceName: string;
+  turnItems: readonly Item[];
+  userSeq: number;
+  text: string;
+  postProvenance: (deliveryKey: string) => DeliveryProvenance;
+}): Promise<void> {
+  const { deps, input, defaultDestination } = ctx;
+  const posted = completedSurfaceEnqueues(ctx.turnItems, ctx.userSeq, ctx.surfaceName);
+  if (!input.addressed || posted > 0 || !defaultDestination || !input.runId) return;
+  const keys = turnPostKeys(input.runId);
+  const directKey = keys.key(defaultDestination, posted);
+  const fallbackKey = keys.key(defaultDestination, posted + 1);
+  if ((await deps.deliveries.existingKeys([directKey, fallbackKey])).size) return;
+  const ack = (await deps.deliveries.listBySourceSession(ctx.session.id, ctx.session.threadRef)).find(
+    (d) => d.idempotencyKey === keys.ackKey,
+  )?.text;
+  const text = stripAckPrefix(ctx.text, ack).trim();
+  if (!text) return;
+  await enqueueDirectReply({
+    deliveries: deps.deliveries,
+    destination: defaultDestination,
+    text,
+    key: directKey,
+    postProvenance: ctx.postProvenance,
+  });
+}
+
 export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps | undefined {
   const {
+    tenant,
     deps,
     input,
     actor,
     conversation,
     session,
     scopeId,
-    strictReadOnly,
     defaultDestination,
     blobTransfer,
     fileRegistration,
@@ -96,10 +209,10 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     postKeys,
     spine,
   } = ctx;
-  if (strictReadOnly || !(input.surfaceTools && defaultDestination && deps.deliveries)) return undefined;
-  const deliveries = deps.deliveries;
+  if (!surfaceToolsActive(ctx) || !defaultDestination) return undefined;
   const currentDestination = defaultDestination;
-  const textOnly = (d: Destination) => deps.surfaces.get(d.type)?.capabilities.textOnly === true;
+  const textOnly = (d: Destination) => turnCapabilities(deps.surfaces.get(d.type), input)?.textOnly === true;
+  const editable = (d: Destination) => editableIn(deps.surfaces, d.type, input);
   const homeSurface = deps.surfaces.get(currentDestination.type);
   const mirroredHome = homeSurface?.capabilities.mirrored ? homeSurface : undefined;
   const rateLimitRecipient =
@@ -110,6 +223,28 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       ? { rateLimitRecipient: { target: currentDestination.target, user: actor.id } }
       : {};
   let editRefConsumed = false;
+  let mentionRoster: { ids: Set<string>; known: boolean } | undefined;
+  const rosterForMentions = async (): Promise<{ ids: Set<string>; known: boolean }> => {
+    mentionRoster ??= await (async () => {
+      const ids = new Set<string>();
+      for (const p of [actor, ...conversation.audience]) {
+        const key = foldPrincipalId(p.id);
+        if (key) ids.add(key);
+      }
+      try {
+        for (const m of (await deps.directory.getMany([...ids])).values()) {
+          const key = foldPrincipalId(m.principalId);
+          if (key) ids.add(key);
+          if (m.slackId) ids.add(m.slackId);
+        }
+        return { ids, known: true };
+      } catch (error) {
+        reportFailure("surface post: resolve mention roster", error);
+        return { ids, known: false };
+      }
+    })();
+    return mentionRoster;
+  };
   const resolveDestination = async (
     target?: {
       channel?: string;
@@ -132,21 +267,19 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     ) {
       return { ok: true, destination: { ...currentDestination, target: conversation.channelRef } };
     }
-    if (!deps.directory)
-      return { ok: false, message: "I can't reach a named channel or teammate from here — no directory is available." };
     const r: ReachResolution = await resolveReachTarget(
       {
-        resolveRecipient: (q) => deps.directory!.resolve(q),
-        resolveChannel: (q) => deps.directory!.resolveChannel(q),
-        channelMember: (c, p) => deps.directory!.channelMember(c, p),
-        resolveGroup: (parts) => deps.directory!.resolveGroupByParticipants(parts),
-        groupMember: (g, p) => deps.directory!.groupMember(g, p),
-        directoryMember: (p) => deps.directory!.get(p),
+        resolveRecipient: (q) => deps.directory.resolve(q),
+        resolveChannel: (q) => deps.directory.resolveChannel(q),
+        channelMember: (c, p) => deps.directory.channelMember(c, p),
+        resolveGroup: (parts) => deps.directory.resolveGroupByParticipants(parts, SLACK),
+        groupMember: (g, p) => deps.directory.groupMember(g, p),
+        directoryMember: (p) => deps.directory.get(p),
         ...(deps.surfaceContext
           ? {
               openGroup: (parts: readonly string[]) =>
-                openGroupViaSurface((query) => deps.surfaceContext!.pull("slack", query), parts),
-              registerGroup: (g: string, parts: readonly string[]) => deps.directory!.upsertGroup(g, parts),
+                openGroupViaSurface((query) => deps.surfaceContext!.pull(SLACK, query), parts),
+              registerGroup: (g: string, parts: readonly string[]) => deps.directory.upsertGroup(g, parts, SLACK),
             }
           : {}),
       },
@@ -159,7 +292,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       { mayOpenGroup: opts?.mayOpenGroup === true },
     );
     if (!r.ok) return { ok: false, message: r.message };
-    return { ok: true, destination: r.destination };
+    const persona = currentDestination.persona;
+    return { ok: true, destination: persona ? { ...r.destination, persona } : r.destination };
   };
   const enqueue = async (
     destination: Destination,
@@ -170,7 +304,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     try {
       const idempotencyKey = postKeys.key(destination, seq);
       const delivery = await reachEnqueue({
-        deliveries,
+        deliveries: deps.deliveries,
         destination,
         text: postText,
         ...(attachments?.length ? { attachments } : {}),
@@ -178,7 +312,17 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         provenance: postProvenance(idempotencyKey),
       });
       spine.surfaceOutboundCount += 1;
-      if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
+      if (input.runId) deps.turnStream.markSurfacePosted(input.runId);
+      if (deliversOwnMessageTs(destination)) {
+        const settled = await waitForDeliverySettle(deps.deliveries, delivery.id);
+        if (settled?.failedReason)
+          return {
+            ok: false,
+            message: deliveryFailureMessage(settled.failedReason, destination),
+            deliveryId: delivery.id,
+          };
+        if (settled?.messageTs) return { ok: true, deliveryId: delivery.id, ts: settled.messageTs };
+      }
       return { ok: true, deliveryId: delivery.id };
     } catch (e) {
       return { ok: false, message: errMessage(e) };
@@ -249,6 +393,12 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         return { ok: false, message: "This conversation takes text messages only; nothing was sent." };
       const f = await resolveFiles(files, sandboxId);
       if (!f.ok) return { ok: false, message: f.message };
+      let unknownMentions: string[] | undefined;
+      if (postText.includes("<@") && deliversOwnMessageTs(destination)) {
+        const roster = await rosterForMentions();
+        if (roster.known)
+          unknownMentions = [...new Set(mentionedUserIds(postText).filter((id) => !roster.ids.has(id)))];
+      }
       const footer = buildDebugFooter();
       const run = input.runId ? await deps.runs?.get(input.runId) : null;
       const editRef =
@@ -260,7 +410,16 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(footer ? { debugFooter: footer } : {}),
       };
       const sent = await enqueue(projectedDestination, postText, seq, f.attachments);
-      return sent.ok && f.attachments?.length ? { ...sent, attachments: postedFileMetas(f.attachments) } : sent;
+      const withAttachments =
+        sent.ok && f.attachments?.length ? { ...sent, attachments: postedFileMetas(f.attachments) } : sent;
+      if (!unknownMentions?.length) return withAttachments;
+      const raw = unknownMentions.map((id) => `<@${id}>`).join(", ");
+      return {
+        ...withAttachments,
+        notes: [
+          `mention id(s) ${raw} aren't recognized members of this conversation — the message went out as written, so an unverified id may ping an unintended person; edit the message${sent.ok && sent.ts ? ` (ts ${sent.ts})` : ""} to fix it`,
+        ],
+      };
     },
     reach: async (postText, target, files, sandboxId) => {
       const seq = postKeys.take();
@@ -305,7 +464,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(input.participants !== undefined ? { participants: input.participants } : {}),
       });
       if (!d.ok) return { ok: false, message: d.message };
-      if (d.destination.type !== "slack" && d.destination.type !== "group")
+      if (!editable(d.destination))
         return { ok: false, message: "I can only edit a Slack message in a channel, group DM, or this conversation." };
       return enqueue(withEdit(d.destination, input.ref), input.text, seq);
     },
@@ -391,6 +550,12 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
             snippet: String(m.text).slice(0, 200),
           }));
       if (opts?.source === "slack") {
+        if (input.botActor)
+          return {
+            ok: false,
+            message:
+              "live search runs as a person's own Slack login, so a Slack bot's turn cannot use it; search the mirror",
+          };
         if (!deps.surfaceContext?.searchLive)
           return { ok: false, message: "live search isn't available from this turn" };
         if (!dest.target) return { ok: false, message: "this conversation has nothing to search" };
@@ -486,6 +651,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       if (!deps.channelPolicy) return { ok: false, message: "standing orders aren't available on this turn" };
       if (conversation.kind === "dm" || !conversation.channelRef)
         return { ok: false, message: "standing orders are per-channel — you can only set one from inside a channel." };
+      if (input.botActor) return { ok: false, message: "a Slack bot's turn cannot change this channel's guidance" };
       let parsedBots: Record<string, BotPolicy> | undefined;
       if (bots !== undefined) {
         const parsed = parseBotLedger(bots);
@@ -504,7 +670,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       } catch (error) {
         return { ok: false, message: errMessage(error) };
       }
-      deps.auditLog.record({
+      deps.auditLog.record(tenant, {
         at: Date.now(),
         principalId: actor.id,
         action: "surface.policy.set",

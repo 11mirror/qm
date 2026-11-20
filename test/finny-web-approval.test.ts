@@ -7,7 +7,9 @@ import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { scopeId } from "../src/types.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { finnySopFixture } from "./support/finny-sop-fixture.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const question = "Which cutoff date should the report use?";
 const sop = { ...finnySopFixture(), scopeId: scopeId("personal", "U1"), title: "AP aging" };
@@ -57,6 +59,7 @@ const engine: SpreadsheetCalculationEngine = {
 test("approving a web Finny clarification immediately presents the durable plan approval", async () => {
   const built = buildApp(
     testConfig({
+      databaseUrl: testDatabaseUrl(),
       finny: {
         signingSecret: "finny-test-secret",
         findingPolicy: { id: "test", maxFindings: 4, maxCodeLength: 40, maxMessageLength: 200 },
@@ -90,16 +93,22 @@ test("approving a web Finny clarification immediately presents the durable plan 
 
   const result = await built.app.turn({
     ...request,
-    approval: { requestId: clarificationApproval!.requestId, approved: true, scope: "once", optionId: "today" } as never,
+    approval: {
+      requestId: clarificationApproval!.requestId,
+      approved: true,
+      scope: "once",
+      optionId: "today",
+    } as never,
   });
 
-  assert.equal(result.status, "pending_approval", JSON.stringify(await built.errors.list()));
+  assert.equal(result.status, "pending_approval", JSON.stringify(await built.errors.list(testTenant)));
   assert.equal(result.pendingApprovals?.[0]?.reason, "Finny Governance Plan Approval");
   assert.equal(result.pendingApprovals?.[0]?.command, sop.title);
 });
 
 test("a failed plan projection leaves the web clarification retryable", async () => {
   const config = testConfig({
+    databaseUrl: testDatabaseUrl(),
     finny: {
       signingSecret: "finny-test-secret",
       findingPolicy: { id: "test", maxFindings: 4, maxCodeLength: 40, maxMessageLength: 200 },
@@ -148,7 +157,7 @@ test("a failed plan projection leaves the web clarification retryable", async ()
   await db.q("DROP FUNCTION fail_finny_plan_projection() ");
   await db.q("DROP SEQUENCE fail_finny_plan_projection_seq");
 
-  assert.equal(recovered.status, "pending_approval", JSON.stringify(await built.errors.list()));
+  assert.equal(recovered.status, "pending_approval", JSON.stringify(await built.errors.list(testTenant)));
   assert.equal(recovered.pendingApprovals?.[0]?.reason, "Finny Governance Plan Approval");
 });
 
@@ -205,25 +214,25 @@ test("a nonrecommended web Finny clarification choice resumes the coordinator wi
     },
   };
   const config = testConfig({
-      finny: {
-        signingSecret: "finny-test-secret",
-        findingPolicy: { id: "test", maxFindings: 4, maxCodeLength: 40, maxMessageLength: 200 },
-        maxReworks: 2,
-        workerGrantTtlMs: 60_000,
-        spreadsheetEngine: {
-          url: "https://spreadsheet-engine.example/evaluate",
-          name: engine.name,
-          version: engine.version,
-          timeoutMs: 30_000,
-          maxResponseBytes: 1_048_576,
-          maxArtifactBytes: 52_428_800,
-          evaluator: engine.evaluator,
-        },
-        maxEvidenceBytes: 4_194_304,
-      } as never,
-    });
+    databaseUrl: testDatabaseUrl(),
+    finny: {
+      signingSecret: "finny-test-secret",
+      findingPolicy: { id: "test", maxFindings: 4, maxCodeLength: 40, maxMessageLength: 200 },
+      maxReworks: 2,
+      workerGrantTtlMs: 60_000,
+      spreadsheetEngine: {
+        url: "https://spreadsheet-engine.example/evaluate",
+        name: engine.name,
+        version: engine.version,
+        timeoutMs: 30_000,
+        maxResponseBytes: 1_048_576,
+        maxArtifactBytes: 52_428_800,
+        evaluator: engine.evaluator,
+      },
+      maxEvidenceBytes: 4_194_304,
+    } as never,
+  });
   const built = buildApp(config, { agent: resumingAgent, spreadsheetCalculationEngine: engine });
-  await built.featureFlags.setEnabled("persistent_subagents", scopeId("personal", "approver-42"), true, "test");
   const request = {
     surface: "web",
     actor: { externalId: "approver-42" },
@@ -242,7 +251,7 @@ test("a nonrecommended web Finny clarification choice resumes the coordinator wi
     } as never,
   });
 
-  assert.equal(result.status, "pending_approval", JSON.stringify(await built.errors.list()));
+  assert.equal(result.status, "pending_approval", JSON.stringify(await built.errors.list(testTenant)));
   assert.equal(result.pendingApprovals?.[0]?.reason, "Finny Governance Plan Approval");
   assert.equal(result.pendingApprovals?.[0]?.command, sop.title);
   assert.equal(turns, 2);
@@ -252,18 +261,18 @@ test("a nonrecommended web Finny clarification choice resumes the coordinator wi
     approval: { requestId: result.pendingApprovals![0]!.requestId, approved: true, scope: "once" } as never,
   });
   const db = createPgPool(config.databaseUrl!);
-  const bindings = await db.q(
-    "SELECT session_id FROM finny_runtime_bindings WHERE job_id=$1 AND role='producer'",
-    [jobId],
-  );
+  const bindings = await db.q("SELECT session_id FROM finny_runtime_bindings WHERE job_id=$1 AND role='producer'", [
+    jobId,
+  ]);
 
-  assert.equal(approved.status, "ok", JSON.stringify(await built.errors.list()));
-  assert.equal(bindings.length, 1, JSON.stringify(await built.errors.list()));
+  assert.equal(approved.status, "ok", JSON.stringify(await built.errors.list(testTenant)));
+  assert.equal(bindings.length, 1, JSON.stringify(await built.errors.list(testTenant)));
 });
 
 test("Other resolves a web Finny clarification without treating it as a denied command", async () => {
   const built = buildApp(
     testConfig({
+      databaseUrl: testDatabaseUrl(),
       finny: {
         signingSecret: "finny-test-secret",
         findingPolicy: { id: "test", maxFindings: 4, maxCodeLength: 40, maxMessageLength: 200 },

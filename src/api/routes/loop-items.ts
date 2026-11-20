@@ -4,21 +4,29 @@ import type { Loop, LoopItem, LoopSourcePayload } from "../../loops/types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
 import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { errMessage } from "../../util/errors.ts";
+import { publicFetch } from "../../util/network.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
-import { requireLoopAuthority, loadAdministrable, loopDeps, actingPrincipal, type LoopServiceDeps } from "./loops.ts";
-import { scopeId, parseScopeId } from "../../types.ts";
-import { isResolved, isLedgerState, ledgerItemView, ledgerState, sortLedgerItems } from "../../loops/ledger-view.ts";
+import {
+  requireLoopAuthority,
+  loadAdministrable,
+  loopDeps,
+  actingPrincipal,
+  forInboxLoopsPeople,
+  inboxPreviewEnabled,
+  type LoopServiceDeps,
+} from "./loops.ts";
+import { parseScopeId } from "../../types.ts";
+import { isLedgerState, ledgerItemView, ledgerState, sortLedgerItems } from "../../loops/ledger-view.ts";
 import { loopItemId, type IngestEntryInput } from "../../loops/item-ledger.ts";
 import { LOOP_ITEM_PRIORITIES, removeFromGroup, settleGroup } from "../../loops/triage.ts";
 import { addressList } from "../../loops/sources/adapter.ts";
 import { adapterForItem, sourceAdapter } from "../../loops/sources/index.ts";
 import {
   ensureDefaultInboxLoops,
-  renderSourceInboxTask,
-  INBOX_LEDGER_MAX_ITEMS,
-  INBOX_LEDGER_RETENTION_MS,
+  inboxSyncCronAction,
+  inboxSource,
   INBOX_SYNC_DEFAULT_EVERY_MS,
 } from "../../loops/inbox-loop.ts";
 import { THINKING_LEVELS } from "../../model/pi-models.ts";
@@ -103,10 +111,6 @@ async function listItems(ctx: ApiCtx): Promise<void> {
   if (wanted !== null && !isLedgerState(wanted)) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "unknown state filter" });
   }
-  if (loop.surface?.startsWith("inbox:") && loop.owner === loaded.acting.actorId) {
-    const openMail = (await deps.items.byLoop(loop.id)).filter((item) => !isResolved(item) && item.source === "gmail");
-    await ctx.deps.inboxSourceRefresh?.(loop.owner, openMail);
-  }
   const all = sortLedgerItems(await deps.items.byLoop(loop.id), loop);
   const items = wanted === null ? all : all.filter((item) => ledgerState(item) === wanted);
   const counts: Record<string, number> = {};
@@ -135,30 +139,24 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
   const sessionId = ctx.capability.threadRef
     ? ((await ctx.deps.sessions?.getByThread(ctx.capability.threadRef))?.id ?? undefined)
     : undefined;
-  const classifyInboxEmail =
-    loop.surface === "inbox:gmail" &&
-    loop.ownerScopeId === scopeId("personal", loop.owner) &&
-    (await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", loop.owner))) === true;
   const entries: IngestEntryInput[] = [];
   for (const [at, raw] of body.items.entries()) {
     const parsed = parseIngestEntry(loop, raw);
     if ("error" in parsed) {
       return sendJson(ctx.res, 400, { error: "bad_request", message: `items[${at}]: ${parsed.error}` });
     }
-    if (classifyInboxEmail && parsed.source === "gmail" && isObj(raw)) {
-      for (const key of ["automated", "probablyResolved"])
-        if (typeof raw[key] === "boolean") parsed.sourcePayload[key] = raw[key];
-    }
     entries.push(sessionId && parsed.proposal ? { ...parsed, proposal: { ...parsed.proposal, sessionId } } : parsed);
   }
-  const outcome = await deps.items.ingest(entries);
-  await deps.items.prune(loop.id, { maxItems: INBOX_LEDGER_MAX_ITEMS, retentionMs: INBOX_LEDGER_RETENTION_MS });
-  sendJson(ctx.res, 200, outcome);
+  sendJson(ctx.res, 200, await deps.items.ingest(entries));
 }
 
-async function loadItem(
-  ctx: ApiCtx,
-): Promise<{ deps: LoopServiceDeps; loop: Loop; item: LoopItem; actorId: string } | null> {
+async function loadItem(ctx: ApiCtx): Promise<{
+  deps: LoopServiceDeps;
+  loop: Loop;
+  item: LoopItem;
+  actorId: string;
+  liveHuman: () => Promise<boolean>;
+} | null> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return null;
   if (!readableItems(ctx, loaded.loop)) return null;
@@ -167,7 +165,13 @@ async function loadItem(
     sendJson(ctx.res, 404, { error: "not_found", message: "no such ledger item" });
     return null;
   }
-  return { deps: loaded.deps, loop: loaded.loop, item, actorId: loaded.acting.actorId };
+  return {
+    deps: loaded.deps,
+    loop: loaded.loop,
+    item,
+    actorId: loaded.acting.actorId,
+    liveHuman: loaded.acting.liveHuman,
+  };
 }
 
 const IMAGE_MAX_BYTES = 8_000_000;
@@ -210,13 +214,15 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
   }
   let upstream: Response;
   try {
-    upstream = await fetch(url, { headers: authHeader, redirect: "follow" });
+    upstream = await (ctx.deps.itemImageFetch ?? publicFetch)(url, { headers: authHeader, redirect: "follow" });
   } catch (e) {
-    return sendJson(ctx.res, 502, { error: "upstream", message: errMessage(e) });
+    console.warn(`[loops] item image fetch failed: ${errMessage(e)}`);
+    return sendJson(ctx.res, 502, { error: "upstream" });
   }
   const type = upstream.headers.get("content-type") ?? "";
   if (!upstream.ok || !upstream.body || !type.startsWith("image/")) {
-    return sendJson(ctx.res, 502, { error: "upstream", message: `upstream returned ${upstream.status} ${type}` });
+    console.warn(`[loops] item image upstream returned ${upstream.status} ${type}`);
+    return sendJson(ctx.res, 502, { error: "upstream" });
   }
   const bytes = Buffer.from(await upstream.arrayBuffer());
   if (bytes.length > IMAGE_MAX_BYTES) return sendJson(ctx.res, 502, { error: "upstream", message: "image too large" });
@@ -224,6 +230,8 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
     "content-type": type,
     "content-length": String(bytes.length),
     "cache-control": "private, max-age=3600",
+    "content-security-policy": "sandbox",
+    "x-content-type-options": "nosniff",
   });
   ctx.res.end(bytes);
 }
@@ -231,16 +239,18 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
 async function getItem(ctx: ApiCtx): Promise<void> {
   const loaded = await loadItem(ctx);
   if (!loaded) return;
-  if (
-    ctx.url.searchParams.get("refreshSource") === "1" &&
-    loaded.loop.surface?.startsWith("inbox:") &&
-    loaded.loop.owner === loaded.actorId
-  )
-    await ctx.deps.inboxSourceRefresh?.(loaded.loop.owner, [loaded.item]);
-  sendJson(ctx.res, 200, {
-    item: ledgerItemView((await loaded.deps.items.get(loaded.item.id)) ?? loaded.item, loaded.loop, !!ctx.capability),
-    outputs: (await loaded.deps.outputs.byItem(loaded.item.id)).filter((output) => output.loopId === loaded.loop.id),
-  });
+  sendJson(
+    ctx.res,
+    200,
+    await itemDetail(ctx, loaded.deps, loaded.loop, (await loaded.deps.items.get(loaded.item.id)) ?? loaded.item),
+  );
+}
+
+async function itemDetail(ctx: ApiCtx, deps: LoopServiceDeps, loop: Loop, item: LoopItem) {
+  return {
+    item: ledgerItemView(item, loop, !!ctx.capability),
+    outputs: (await deps.outputs.byItem(item.id)).filter((output) => output.loopId === loop.id),
+  };
 }
 
 function sameProposalData(item: LoopItem, data: LoopSourcePayload): boolean {
@@ -277,8 +287,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     const data = proposalFrom(item, args.proposal ?? args);
     if (!data) return sendJson(ctx.res, 400, { error: "bad_request", message: "proposal is not valid for this item" });
     if (expectedAt !== undefined && item.proposal && item.proposal.at !== expectedAt) return draftChanged();
-    if (sameProposalData(item, data))
-      return sendJson(ctx.res, 200, { item: ledgerItemView(item, loop, !!ctx.capability) });
+    if (sameProposalData(item, data)) return sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, item));
     const next = await deps.items.setProposal(
       item.id,
       { data, by: proposalAuthor },
@@ -286,14 +295,14 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     );
     if (!next && expectedAt !== undefined) return draftChanged();
     if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is already actioned" });
-    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
+    return sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, next));
   }
 
   if (kind === "dismiss") {
     const next = await deps.items.recordAction(item.id, { kind, outcome: "dismissed" });
     if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is already actioned" });
     if (args.group === true && !ctx.capability) await settleGroup(deps.items, next);
-    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
+    return sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, next));
   }
 
   if (kind === "prioritize" || kind === "ungroup") {
@@ -307,20 +316,20 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
         ? await deps.items.setTriage(item.id, { priority }, "human")
         : await removeFromGroup(deps.items, item);
     if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is already actioned" });
-    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
+    return sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, next));
   }
 
   if (kind === "reply") {
     if (!ctx.actor?.p || item.sourcePayload?.sentChat !== true) return sendJson(ctx.res, 403, { error: "forbidden" });
     const next = await deps.items.reopen(item.id, { sentReply: true });
     if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "a reply is already being drafted" });
-    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
+    return sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, next));
   }
 
   if (kind === "reopen") {
     const next = await deps.items.reopen(item.id);
     if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is not dismissed" });
-    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
+    return sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, next));
   }
 
   if (kind === "send" && item.status !== "ready") {
@@ -348,6 +357,11 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
 
   const adapter = adapterForItem(item);
   if (adapter?.actions.includes(kind)) {
+    if (ctx.capability?.botActor)
+      return sendJson(ctx.res, 403, {
+        error: "forbidden",
+        message: `a Slack bot's turn cannot ${kind} as the loop's owner`,
+      });
     const tokens = ctx.deps.loopSourceTokens;
     if (!tokens) return sendJson(ctx.res, 404, { error: "not_found", message: "connectors are not wired" });
     const decisionToken = await deps.items.acquireDecision(item.id);
@@ -372,10 +386,9 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
         return sendJson(ctx.res, statusByReason[result.reason], { error: result.reason, message: result.message });
       }
       if (result.payloadPatch) item = (await deps.items.annotate(item.id, result.payloadPatch)) ?? item;
-      if (result.resolves === false)
-        return sendJson(ctx.res, 200, { item: ledgerItemView(item, loop, !!ctx.capability) });
+      if (result.resolves === false) return sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, item));
       const next = await deps.items.recordAction(item.id, { kind, outcome: "actioned", result: result.result });
-      return sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item, loop, !!ctx.capability) });
+      return sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, next ?? item));
     } finally {
       await deps.items.releaseDecision(item.id, decisionToken);
     }
@@ -383,7 +396,14 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
 
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
-  const turn = await deps.fire.itemAction(loop, item, kind, args, loaded.actorId);
+  const turn = await deps.fire.itemAction(
+    loop,
+    item,
+    kind,
+    args,
+    loaded.actorId,
+    (await loaded.liveHuman()) ? undefined : { unattended: true },
+  );
   if (!turn.ok) {
     return sendJson(ctx.res, 502, { error: "action_failed", message: turn.userNote ?? "the agent turn did not run" });
   }
@@ -393,7 +413,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     outcome: "actioned",
     ...(turn.reply ? { result: turn.reply } : {}),
   });
-  sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item, loop, !!ctx.capability) });
+  sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, next ?? item));
 }
 
 const followUpOptionsSchema = z.object({
@@ -441,14 +461,11 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
   }
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   try {
-    const next = await deps.fire.followUp(
-      loop,
-      item,
-      message || "Please review the attached files.",
-      loaded.actorId,
-      options,
-    );
-    sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item, loop, !!ctx.capability) });
+    const next = await deps.fire.followUp(loop, item, message || "Please review the attached files.", loaded.actorId, {
+      ...options,
+      ...((await loaded.liveHuman()) ? {} : { unattended: true as const }),
+    });
+    sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, next ?? item));
   } catch (e) {
     sendJson(ctx.res, 502, { error: "followup_failed", message: errMessage(e) });
   }
@@ -485,8 +502,6 @@ async function getInboxLoop(ctx: ApiCtx): Promise<void> {
 export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
   const owner = ctx.actor?.p;
   if (!owner) return sendJson(ctx.res, 403, { error: "forbidden" });
-  if (!(await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", owner))))
-    return sendJson(ctx.res, 403, { error: "feature_disabled" });
   const deps = loopDeps(ctx);
   if (!deps) return sendJson(ctx.res, 404, { error: "not_found" });
   const body = isObj(ctx.body) ? ctx.body : {};
@@ -513,6 +528,7 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
       rfcMessageId: text("rfcMessageId", 400),
     },
     sentChat: true,
+    ...(body.sourceContextPartial === true ? { sourceContextPartial: true } : {}),
   } as LoopSourcePayload;
   const defaults = await ensureDefaultInboxLoops(deps.store, owner);
   const loop = defaults.find((entry) => entry.sources?.includes("gmail"))!;
@@ -544,7 +560,7 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
   if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
   const acting = actingPrincipal(ctx);
   if (!acting) return;
-  if (!(await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", acting.actorId))))
+  if (!(await inboxPreviewEnabled(ctx.deps, acting.actorId)))
     return sendJson(ctx.res, 403, { error: "feature_disabled" });
   const body = isObj(ctx.body) ? ctx.body : {};
   const everyMs =
@@ -562,8 +578,7 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
     for (const loop of targets) {
       const sync = async () => {
         const current = (await deps.store.get(loop.id)) ?? loop;
-        const source = current.sources![0]!;
-        const task = renderSourceInboxTask(loop.id, source);
+        const task = inboxSyncCronAction(inboxSource(current) ?? "gmail");
         let cron = current.cronId ? await ctx.app.getCron(current.cronId) : null;
         if (!cron && enable) {
           cron = await ctx.app.createCron({
@@ -580,10 +595,7 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
         }
         if (cron) {
           if (enable && cron.action !== task)
-            await ctx.app.updateCron(cron.id, {
-              action: task,
-              title: `${loop.name} sync`,
-            });
+            await ctx.app.updateCron(cron.id, { action: task, title: `${loop.name} sync` }, acting);
           await ctx.app.setCronEnabled(cron.id, enable);
           if (enable && current.state === "paused") await deps.store.setState(loop.id, "enabled");
         }
@@ -611,25 +623,34 @@ function serializeItemAction(handler: (ctx: ApiCtx) => Promise<void>): (ctx: Api
 }
 
 export const loopItemRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/loops/inbox/sent-chat", auth: "source", handle: ensureSentChat },
-  { method: "GET", path: "/v1/loops/:id/items/:itemId/image", auth: "source", handle: serveItemImage },
+  ...forInboxLoopsPeople([
+    { method: "POST", path: "/v1/loops/inbox/sent-chat", actor: "person", auth: "source", handle: ensureSentChat },
+  ]),
   ...withActor("query.principalId", [
     { method: "GET", path: "/v1/loops/inbox", auth: "either", handle: getInboxLoop },
-    { method: "POST", path: "/v1/loops/inbox/sync-cron", auth: "source", handle: ensureInboxSyncCron },
-    { method: "GET", path: "/v1/loops/:id/items", auth: "either", handle: listItems },
     { method: "POST", path: "/v1/loops/:id/items", auth: "either", handle: ingestItems },
-    { method: "GET", path: "/v1/loops/:id/items/:itemId", auth: "either", handle: getItem },
-    {
-      method: "POST",
-      path: "/v1/loops/:id/items/:itemId/action",
-      auth: "either",
-      handle: serializeItemAction(actOnItem),
-    },
-    {
-      method: "POST",
-      path: "/v1/loops/:id/items/:itemId/followup",
-      auth: "either",
-      handle: serializeItemAction(followUpOnItem),
-    },
   ]),
+  ...withActor(
+    "query.principalId",
+    forInboxLoopsPeople([
+      { method: "GET", path: "/v1/loops/:id/items/:itemId/image", auth: "source", handle: serveItemImage },
+      { method: "POST", path: "/v1/loops/inbox/sync-cron", auth: "source", handle: ensureInboxSyncCron },
+      { method: "GET", path: "/v1/loops/:id/items", auth: "either", handle: listItems },
+      { method: "GET", path: "/v1/loops/:id/items/:itemId", auth: "either", handle: getItem },
+      {
+        method: "POST",
+        path: "/v1/loops/:id/items/:itemId/action",
+        browser: "self",
+        auth: "either",
+        handle: serializeItemAction(actOnItem),
+      },
+      {
+        method: "POST",
+        path: "/v1/loops/:id/items/:itemId/followup",
+        browser: "self",
+        auth: "either",
+        handle: serializeItemAction(followUpOnItem),
+      },
+    ]),
+  ),
 ];

@@ -116,6 +116,7 @@ async function loadSentChat(draw: () => void, current = detailGeneration): Promi
         cc: detail.cc,
         rfcMessageId: detail.rfcMessageId,
         text: text.slice(0, 50000),
+        sourceContextPartial: text.length > 50000,
       }),
     });
     if (current === detailGeneration) {

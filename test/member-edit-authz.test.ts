@@ -11,13 +11,15 @@ import { createSkillStore } from "../src/skills/skill-store.ts";
 import { type PersistedSoul, type ScopedConfigStore } from "../src/resolution/config-store.ts";
 import { type DurableMap } from "../src/persistence/durable-map.ts";
 import { type AdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import type { Deployment } from "../src/deploy/deploy-store.ts";
+import type { PublishedApp } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testAdvisoryLock, testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { encodeRef, skillRef } from "../src/acl/resource-ref.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const ORG = "default-org";
 const OWNER = "owner";
@@ -64,8 +66,8 @@ function makeDeps(overrides: { config?: ScopedConfigStore; advisoryLock?: Adviso
     participantScopes: async () => [] as { scopeId: string }[],
   };
   const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
-  const deployRows: Deployment[] = [];
-  const deploy = { listDeployments: async () => deployRows };
+  const deployRows: PublishedApp[] = [];
+  const deploy = { listApps: async () => deployRows };
   return {
     files,
     crons,
@@ -396,4 +398,49 @@ test("crons: owner and a private-channel member manage; a public-channel member 
     false,
     "a teammate cannot manage my personal cron",
   );
+});
+
+test("skills: an archive landing mid-edit is not overwritten by the edit", async () => {
+  const deps = makeDeps();
+  const planted = await deps.skills.create({
+    scopeId: privScope,
+    manifest: { name: "raced", description: "d", requiredCapabilities: [], body: "# b" },
+    createdBy: OWNER,
+  });
+  await deps.skills.review(planted.id, "system:test", []);
+  await deps.skills.publish(planted.id);
+  const get = deps.skills.get.bind(deps.skills);
+  let first = true;
+  deps.skills.get = async (id) => {
+    const seen = await get(id);
+    if (first) {
+      first = false;
+      await deps.skills.archive(id);
+    }
+    return seen;
+  };
+  const app = createApp(deps as unknown as AppDeps);
+  assert.equal(await app.updateOwnedSkill(planted.id, PRIV_MEMBER, { description: "late" }, { liveActor: true }), null);
+  const after = await get(planted.id);
+  assert.equal(after!.status, "archived");
+  assert.equal(after!.manifest.description, "d");
+});
+
+test("skills: a person granted write on someone's skill may edit it", async () => {
+  const deps = makeDeps();
+  const planted = await deps.skills.create({
+    scopeId: scopeId("personal", OWNER),
+    manifest: { name: "mine", description: "d", requiredCapabilities: [], body: "# b" },
+    createdBy: OWNER,
+  });
+  const app = createApp(deps as unknown as AppDeps);
+  await deps.acl.grant(testTenant, {
+    ownerScopeId: planted.scopeId,
+    ref: encodeRef(skillRef(planted.id)),
+    granteeScopeId: scopeId("personal", OUTSIDER),
+    grantedBy: OWNER,
+    permission: "write",
+  });
+  const edited = await app.updateOwnedSkill(planted.id, OUTSIDER, { description: "d2" }, { liveActor: true });
+  assert.equal(typeof edited === "object" && edited?.manifest.description, "d2");
 });

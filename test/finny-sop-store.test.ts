@@ -196,7 +196,10 @@ test("Core audit cutover refuses unfinished jobs with unmapped SOP controls", as
   );
   await db.q("DELETE FROM qm_schema_migrations WHERE id='finny/store/0019-core-audit-cutover'");
   const cutover = createPostgresFinnyStore(url);
-  await assert.rejects(cutover.searchSopVersions(sop.scopeId, "missing"), /unfinished jobs have unmapped SOP controls/i);
+  await assert.rejects(
+    cutover.searchSopVersions(sop.scopeId, "missing"),
+    /unfinished jobs have unmapped SOP controls/i,
+  );
 });
 
 test("Core audit cutover preserves finalized jobs with historical SOP controls", async () => {

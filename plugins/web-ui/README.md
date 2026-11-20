@@ -3,24 +3,19 @@
 An end-user web surface with a custom chat shell, connected to the
 platform core. It still uses Pi's `Agent` state machine and selected Pi web utilities
 for markdown, attachment loading, and model metadata, but the visible conversation UI is
-owned by this plugin. Two parts:
-
-- **A zero-dep `node:http` server** (`server/index.ts`) — runs inside core, which starts it on a loopback
-  port behind the portal (`src/web/front-door.ts`). It holds the signed-in principal
-  in an `HttpOnly` cookie, injects it as the turn's actor, and proxies a small set of
-  `/api/*` routes to the core (chat turns, unified history, and **webhook management** —
-  see below). It never imports the core and never sends a model/API key to the browser.
-- **A Vite-bundled front-end** (`src/`) — a custom Lit shell + transcript + composer. The built bundle
-  (`dist-web/`) is not read from disk at runtime: core publishes it as a content-hashed release to its
-  object store and the server serves the live release from there, so `qm ui publish` can replace it
-  without a restart (see [docs/combined-services.md](../../docs/combined-services.md)).
-  Pi's `Agent` LLM-call boundary (`streamFn`) is swapped for a bridge to the core.
-  It `POST`s the turn (`POST /v1/turns?async=1`), then watches the in-flight reply over
-  **SSE** (`GET /api/runs/:id/events`, relayed from the core's `partial`) so tokens are
-  pushed as they arrive instead of discovered on the next poll tick. It falls back to
-  polling `GET /api/runs/:id` where SSE can't be established (old/proxy-hostile
-  environments). The real agent loop (model + the three primitives + memory + audit) runs
-  server-side in the core's sandbox; the browser is a thin chat client.
+owned by this plugin. It is a **Vite-bundled front-end** (`src/`): a custom Lit shell + transcript +
+composer. The built bundle (`dist-web/`) is not read from disk at runtime: core publishes it as a
+content-hashed release to its object store and core's web shell (`src/web/shell.ts`) serves the live
+release, so `qm ui publish` can replace it without a restart (see
+[docs/combined-services.md](../../docs/combined-services.md)). Its `/api/*` calls are aliases of core's
+browser-enabled `/v1` routes; core binds them to the signed-in person.
+Pi's `Agent` LLM-call boundary (`streamFn`) is swapped for a bridge to the core.
+It `POST`s the turn (`POST /v1/turns?async=1`), then watches the in-flight reply over
+**SSE** (`GET /api/runs/:id/events`, relayed from the core's `partial`) so tokens are
+pushed as they arrive instead of discovered on the next poll tick. It falls back to
+polling `GET /api/runs/:id` where SSE can't be established (old/proxy-hostile
+environments). The real agent loop (model + the three primitives + memory + audit) runs
+server-side in the core's sandbox; the browser is a thin chat client.
 
 **Behind the portal.** When fronted by `plugins/portal` (the public SSO front door), this SPA
 is served at the portal root — the default `WEB_UI_BASE=/` build is the one the portal fronts
@@ -31,10 +26,8 @@ Core binds run reads and signals to the portal-verified actor;
 no run bearer is exposed to browser code or placed in a URL. The active-run resume index
 (`/api/runs/active`) is per-process best-effort with a durable core fallback for personal threads.
 
-Core runs this server in-process and serves the built bundle as a published release; see
-[docs/combined-services.md](../../docs/combined-services.md). Build the bundle with
-`npm install && npm run build`. For development, `scripts/dev-instance.sh up --watch` runs core
-with Vite hot reload for this front-end.
+Build the bundle with `npm install && npm run build`; see
+[docs/combined-services.md](../../docs/combined-services.md) for publishing it.
 
 ## Suggested activities
 
@@ -76,11 +69,29 @@ characters), `title` (up to 65 characters), `prompt` (up to 1,200 characters), a
 accepts up to 12 entries and 20,000 characters. Invalid configuration fails startup
 without printing its contents. Restart the web service after changing it.
 
+An organization can instead have its own starters, set with the org-scoped
+`activity-seeds` admin resource (`PUT /v1/admin/scopes/<org scope>/activity-seeds` with
+`{ "seeds": { "activities": [...], "apps": {...} } }`, or `{ "seeds": null }` to clear).
+Seeds reach only people the `company_welcome` feature flag covers (that person's
+personal scope or the whole organization); for them the organization's `activities`
+take the place of `WEB_UI_SUGGESTED_ACTIVITIES`, as the fallback and as the seeds the
+generator starts from. Each entry needs an `id` (up to 64 characters, the longest id a
+dismissal accepts), a `title`, a `prompt` and an `icon`; an organization activity may
+carry a `source` shown beside its title. The `apps` lists add activities once the
+signed-in person has connected that app themselves (a Composio toolkit id, or `slack`
+for their own linked Slack account); an app's activity may name the organization
+activity it `replaces`. Ids are unique across the whole document, and any other field
+is refused. A rejected write names the path and the rule it broke.
+
 The authenticated `/me` response supplies the configured fallback and whether generation is enabled.
 Fixed starters are organization-wide; keep them free of personal activity or credentials.
 
 When enabled, opening a new personal chat enrolls the user in an ordinary personal
-cron named **Refresh my suggested activities**. Its first run starts immediately;
+cron named **Refresh my suggested activities**, once they have sent QM a message under
+any of their linked ids, in any conversation. Being added to a channel or receiving a
+delivery does not count. Before that they see the fallback starters and nothing is
+generated. The cron receives
+each seed's id and title, not its prompt. Its first run starts immediately;
 subsequent runs happen around 2am in the browser's timezone, with the minute
 staggered by user. The cron runner uses the normal owner-scoped session, runtime
 selection, memory, history, tools, and authorized data access. It has no delivery
@@ -228,7 +239,7 @@ the CSS media queries, the composer, and the split canvas.
   since a relay with nowhere to deliver is a no-op), on an `everyMs` interval and/or a one-time
   `firstFireAt` (which may not be in the past). The server enforces a 1-minute interval floor; the
   scheduler itself runs in the core.
-- **Files / Connectors / Deploys** (sidebar views — management lives here in one place):
+- **Files / Connectors / Apps** (sidebar views — management lives here in one place):
   - **Files** — the doc store (spec §19 `artifacts(kind=file)`; §3 "files & sharing =
     Google Docs"): one `GET /api/files` call (→ core `GET /v1/files?viewer=`) lists files you
     **created/uploaded** (owned) + files **shared with you**, recency-sorted, with Open/Download
@@ -240,13 +251,13 @@ the CSS media queries, the composer, and the split canvas.
     per-member grants are sequencing-gated (off until enabled), so those stay owner-only until then.
   - **Connectors** — per-provider OAuth status with Connect / Reconnect / Disconnect. The server
     proxies `GET /api/connectors` → core `/v1/connectors/oauth/status`, `POST /api/connectors/:p/start`
-    → core `/v1/connectors/oauth/:p/start` (redirect URI = this surface's
-    `/connectors/oauth/:p/callback`), and `POST /api/connectors/revoke` → core
+    → core `/v1/connectors/oauth/:p/start` (redirect URI = the portal's
+    `/v1/connectors/oauth/:p/callback`, passed straight to core), and `POST /api/connectors/revoke` → core
     `/v1/connectors/oauth/revoke`. The callback exchanges the code server-side (tokens never reach
     the browser) and bounces back into the SPA via a base-relative redirect.
-  - **Deploys** — `GET /api/deployments` → core `/v1/deployments`, grouped into manageable,
+  - **Apps** — `GET /api/apps` → core `/v1/apps`, grouped into manageable,
     shared, and archived views. Detail and restore routes expose authorized metadata and bring an
-    archived version back online; running apps open through the surface's signed deployment proxy.
+    archived version back online; running apps open through the portal's `/d/<app>/` proxy to core.
 
 ## Notes
 
@@ -272,6 +283,8 @@ Gmail, Google Calendar, Google Drive, and Google Sheets artwork comes from
 
 ## Cohort welcome and app picker
 
+A company with activity seeds gets a welcome built from them in a new user's empty chat: a greeting, the company's starters under "Where to start" (all of them, with any from apps the person has connected first), and the app picker under "Connect your accounts". Selecting a starter fills the composer without sending. `/onboard` opens that welcome in a new chat for anyone, including people who already have conversations.
+
 Set `WEB_UI_WELCOME_COHORT=F26` on the web surface to show the cohort welcome in a new user's empty chat. It replaces the automatic first agent turn for that deployment; ordinary chat starts when the user sends a message. The greeting uses the signed-in display name. The welcome remains above the messages in the earliest personal web conversation, including when reopened. It is selected from persisted session creation times. The champagne and soft flutter sequence replays on refresh only before the first message and respects reduced motion.
 
 The picker reads Composio's live catalog in usage order, omits apps that need no authorization, and searches the complete paginated catalog. Known services use local logos; remaining catalog logos use Composio's logo host. Selecting an app submits to the authenticated web surface and opens the provider's authorization link directly. Consent remains on the provider page. Slack is excluded from this picker. A dedicated Connect Slack card in onboarding and Settings authorizes the signed-in person’s Slack tools through Composio and links their verified Slack workspace identity to their existing web account. Installing the company bot remains a separate administrator action.
@@ -294,31 +307,25 @@ In web chat, an assistant reply can include `::connect-apps{}` as a standalone p
 
 ## Optional product analytics
 
-Set `POSTHOG_API_KEY` to a PostHog project ingestion token to enable browser
-analytics. `POSTHOG_HOST` defaults to `https://us.i.posthog.com` and must be an
-HTTPS origin. The authenticated `/me` response supplies this public configuration;
-the portal serves the same web application, so it needs no separate SDK.
+QM ships no analytics vendor. A deployment plugs its own in by setting
+`WEB_UI_ANALYTICS` on the web UI to a JSON object:
 
-Events are explicit pageviews by navigation view, accepted `message_sent` events,
-and `session_started` for the first user message in a chat. Company grouping uses
-`CORE_ORG_ID`; user identities combine company and authenticated principal. Browser
-analytics is disabled during impersonation. Autocapture, replay, exception capture,
-performance capture and feature flags are disabled. Event properties exclude chat
-content, URLs, query strings, titles and referrers. Delivery is best effort.
+- `module` (required): a same-origin path or HTTPS URL of an ES module the
+  deployment serves. It must export `createAnalytics({ org, user, options })`,
+  returning (or resolving to) an object with optional `page(view)`,
+  `track(event, { insertId })` and `stop()` methods.
+- `connect` (optional): HTTPS origins the module needs to reach; they are added to
+  `connect-src`. A cross-origin `module` URL's origin is added to `script-src`.
+- `options` (optional): any JSON, passed to `createAnalytics` unchanged.
 
-Set the same variables on core to capture `app_published` after a successful new
-application or version deployment. Publications use the application's creator and
-company, matching browser identity. No key means no analytics requests.
-
-Core also captures `response_completed` and `response_failed` when a human turn
-reaches its final run state, including when a separate worker executes it.
-`completion_boundary=run` means processing finished, not confirmed delivery to the
-user. Successful silent or reaction-only results count as completed processing.
-`result_status` distinguishes those results; `surface` identifies web or Slack.
-Automation, automatic openers, impersonated turns, stopped turns, refusals, queued
-results and pending approvals do not emit outcomes. Retries emit only at the final
-run state. Stable insert IDs support deduplication. These best-effort events are
-not a complete reliability ledger and contain no response text or raw errors.
+The authenticated `/me` response supplies this configuration. The web UI loads the
+module after sign-in and never during impersonation, stops the previous instance on
+sign-out or identity change, and isolates module errors. It reports navigation views
+through `page`, and accepted `message_sent` events and `session_started` for the
+first user message in a chat through `track`, with stable insert IDs for
+deduplication. It passes no chat content, URLs, titles or referrers; anything else a
+module collects, such as session replay, and how it masks it, is the deployment's
+choice.
 
 ## Optional browser error reporting
 

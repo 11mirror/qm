@@ -7,6 +7,7 @@ import { scopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { Check } from "typebox/value";
 import { finnySopFixture } from "./support/finny-sop-fixture.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const service = {
   async createPlan() {
@@ -556,6 +557,7 @@ test("web Finny clarification presents the durable question before plan approval
 test("tool context carries the injected bound Finny service", () => {
   const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
   const toolContext = createToolContext({
+    tenant: testTenant,
     finny: service,
     sandbox: {} as Sandbox,
     provision: async () => handle,

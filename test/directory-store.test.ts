@@ -152,17 +152,20 @@ describe("group-DM (mpim) membership (addressed by participant set, §10)", () =
 
   it("resolves a participant SET (order- and duplicate-insensitive) to its group id", async () => {
     const d = await dir();
-    const r = await d.resolveGroupByParticipants(["U-sam", "U-alice", "U-carol", "U-alice"]);
+    const r = await d.resolveGroupByParticipants(["U-sam", "U-alice", "U-carol", "U-alice"], "slack");
     assert.equal(r.kind, "one");
     if (r.kind === "one") assert.equal(r.groupId, "G-1");
   });
 
   it("requires an exact set — a subset or superset is a different conversation", async () => {
     const d = await dir();
-    assert.equal((await d.resolveGroupByParticipants(["U-alice", "U-carol"])).kind === "one", true);
-    assert.equal((await d.resolveGroupByParticipants(["U-alice", "U-carol", "U-sam", "U-extra"])).kind, "none");
-    assert.equal((await d.resolveGroupByParticipants(["U-alice"])).kind, "none");
-    assert.equal((await d.resolveGroupByParticipants([])).kind, "none");
+    assert.equal((await d.resolveGroupByParticipants(["U-alice", "U-carol"], "slack")).kind === "one", true);
+    assert.equal(
+      (await d.resolveGroupByParticipants(["U-alice", "U-carol", "U-sam", "U-extra"], "slack")).kind,
+      "none",
+    );
+    assert.equal((await d.resolveGroupByParticipants(["U-alice"], "slack")).kind, "none");
+    assert.equal((await d.resolveGroupByParticipants([], "slack")).kind, "none");
   });
 
   it("groupMember reflects pushed membership (the parity gate)", async () => {
@@ -187,12 +190,36 @@ describe("group-DM (mpim) membership (addressed by participant set, §10)", () =
     assert.equal(await d.groupMembership("G-1", "U-alice"), false);
   });
 
+  it("a single registered group neither marks the org synced nor fences out the next full sync", async () => {
+    const d = createPostgresDirectoryStore(testDatabaseUrl());
+    await d.upsertGroup("G-1", ["U-alice"], "slack");
+    assert.equal(await d.groupMembership("G-1", "U-alice"), true);
+    assert.equal(await d.groupMembership("G-2", "U-alice"), undefined);
+    assert.equal(await d.replaceGroups([{ groupId: "G-2", principalId: "U-alice" }], Date.now() - 60_000), true);
+    assert.equal(await d.groupMembership("G-2", "U-alice"), true);
+  });
+
+  it("a full sync keeps a group another surface registered", async () => {
+    const d = createPostgresDirectoryStore(testDatabaseUrl());
+    await d.upsertGroup("partner-chat:1:group:9", ["ada@example.com"], "partner-chat");
+    await d.replaceGroups([{ groupId: "G-2", principalId: "U-alice" }]);
+    assert.equal(await d.groupMember("partner-chat:1:group:9", "ada@example.com"), true);
+  });
+
+  it("matches a participant set only among groups the asking surface owns", async () => {
+    const d = createPostgresDirectoryStore(testDatabaseUrl());
+    await d.upsertGroup("partner-chat:1:group:9", ["ada@example.com", "bo@example.com"], "partner-chat");
+    assert.deepEqual(await d.resolveGroupByParticipants(["bo@example.com", "ada@example.com"], "slack"), {
+      kind: "none",
+    });
+  });
+
   it("replaceGroups is a full per-org swap", async () => {
     const d = await dir();
     await d.replaceGroups([{ groupId: "G-3", principalId: "U-alice" }]);
     assert.equal(await d.groupMember("G-1", "U-alice"), false);
-    assert.equal((await d.resolveGroupByParticipants(["U-alice", "U-carol", "U-sam"])).kind, "none");
-    assert.equal((await d.resolveGroupByParticipants(["U-alice"])).kind, "one");
+    assert.equal((await d.resolveGroupByParticipants(["U-alice", "U-carol", "U-sam"], "slack")).kind, "none");
+    assert.equal((await d.resolveGroupByParticipants(["U-alice"], "slack")).kind, "one");
   });
 
   it("a swap stamped older than the stored snapshot is refused, so a stale instance cannot clobber a fresh sync", async () => {
@@ -335,15 +362,20 @@ describe("private-channel membership (authorizes private-channel sends, §10)", 
     assert.equal(await d.channelMembership("C-one", "U-keep"), true);
   });
 
-  it("uses one Slack Connect roster without making a private room an ordinary send target", async () => {
+  it("treats a private Slack Connect room like any private room for its own members", async () => {
     const d = createPostgresDirectoryStore(testDatabaseUrl());
     await d.replaceChannels(
       [{ channelId: "C-connect", name: "connect", isPrivate: true, isExternal: true }],
       [{ channelId: "C-connect", principalId: "U-member" }],
     );
     assert.equal(await d.channelMembership("C-connect", "U-member"), true);
-    assert.equal(await d.channelMember("C-connect", "U-member"), false);
-    assert.deepEqual(await d.listChannelsFor("U-member"), []);
+    assert.equal(await d.channelMember("C-connect", "U-member"), true);
+    assert.equal(await d.channelMember("C-connect", "U-other"), false);
+    assert.deepEqual(
+      (await d.listChannelsFor("U-member")).map((c) => c.channelId),
+      ["C-connect"],
+    );
+    assert.equal(await d.conversationMembers("channel", "C-connect"), undefined);
   });
 
   it("partially replaces only the channel rosters known by the source", async () => {
@@ -382,17 +414,6 @@ describe("private-channel membership (authorizes private-channel sends, §10)", 
     );
     assert.equal(await d.channelMembership("C-one", "U-leaving"), false);
     assert.equal(await d.channelMembership("C-one", "U-keep"), true);
-  });
-
-  it("uses one Slack Connect roster without making a private room an ordinary send target", async () => {
-    const d = createPostgresDirectoryStore(testDatabaseUrl());
-    await d.replaceChannels(
-      [{ channelId: "C-connect", name: "connect", isPrivate: true, isExternal: true }],
-      [{ channelId: "C-connect", principalId: "U-member" }],
-    );
-    assert.equal(await d.channelMembership("C-connect", "U-member"), true);
-    assert.equal(await d.channelMember("C-connect", "U-member"), false);
-    assert.deepEqual(await d.listChannelsFor("U-member"), []);
   });
 });
 

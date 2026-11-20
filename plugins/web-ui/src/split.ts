@@ -6,15 +6,11 @@ import { ref } from "lit/directives/ref.js";
 import {
   Archive,
   ArrowUpLeft,
-  Binoculars,
-  Bot,
-  Target,
   Box,
   Brain,
   Clock3,
   ChevronDown,
   Columns2,
-  Cog,
   Files,
   KeyRound,
   Link,
@@ -58,6 +54,7 @@ import { SplitDropPreview } from "./split-drop-preview";
 import { paneKindByKey, paneKindEntry } from "./pane-kinds";
 import { focusComposerOnPaneClick, focusPaneComposer, preservingFocus } from "./pane-focus";
 import { tip } from "./tooltip";
+import { personaName, sessionPersonaChip } from "./personas";
 import { workingWave } from "./ui";
 import { icon } from "./icons";
 import { contextsState, scopeTitle } from "./contexts";
@@ -82,6 +79,7 @@ import {
   sessionTitle,
   archiveSessionById,
   syncWorkingPulse,
+  backgroundIcons,
 } from "./sessions";
 import { conversationBackground, rowIndicators, type RowIndicators } from "./session-list";
 import { scopeToolCount, setScopedSession, type SessionTool } from "./session-scope";
@@ -524,7 +522,6 @@ export function sessionInCanvas(sessionId: string): boolean {
   return splitState.active && paneShowing(sessionId) !== null;
 }
 
-/** Close any pane (and, outside the canvas, the main view) showing this session. */
 export function closeSessionSurfaces(sessionId: string): boolean {
   if (!sessionId) return false;
   if (splitState.active && dockApi) {
@@ -726,7 +723,6 @@ function refreshPaneDrag(): void {
   syncAllZones();
 }
 
-// really add one (not already on the canvas, below the pane ceiling).
 function stripJoinable(drag = paneDrag): boolean {
   return Boolean(drag && !drag.existing() && (dockApi?.panels.length ?? 0) < MAX_PANES);
 }
@@ -832,7 +828,7 @@ function computeHeaderSignature(): string {
       const parent = session?.parentSessionId
         ? sessionsState.list.find((row) => row.id === session.parentSessionId)
         : undefined;
-      return `${p.id}|${session?.id ?? ""}|${paneCrumb(p) ?? ""}|${paneTitle(p)}|${paneIsWorking(p)}|${paneAwaitsInput(p)}|${paneBackground(p)?.label ?? ""}|${paneKindBadge(p)}|${session?.parentSessionId ?? ""}|${parent?.title ?? ""}`;
+      return `${p.id}|${session?.id ?? ""}|${paneCrumb(p) ?? ""}|${paneTitle(p)}|${paneIsWorking(p)}|${paneAwaitsInput(p)}|${paneBackground(p)?.label ?? ""}|${paneKindBadge(p)}|${session?.parentSessionId ?? ""}|${parent?.title ?? ""}|${session?.personaId ? personaName(session.personaId) : ""}`;
     })
     .join("~");
 }
@@ -919,7 +915,7 @@ function openPaneTool(panel: IDockviewPanel, tool: SessionTool): void {
     crumb: paneCrumb(panel),
   });
   if (scope && (tool === "crons" || tool === "files" || tool === "apps")) contextsState.selected = scope;
-  switchView(tool === "apps" ? "deploys" : tool);
+  switchView(tool);
 }
 
 function paneIsWorking(panel: IDockviewPanel): boolean {
@@ -1246,15 +1242,6 @@ class PaneTab implements ITabRenderer {
         ${working ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}
         ${awaiting ? html`<span class="awaiting-dot" aria-label="Waiting for your reply"></span>` : nothing}
         ${
-          background
-            ? html`<span class="bg-chip" aria-label=${background.label} ${tip(background.label)}
-                >${background.jobs > 0 ? icon(Cog, 11) : nothing}${
-                  background.watches > 0 ? icon(Binoculars, 11) : nothing
-                }${background.crons > 0 ? icon(Clock3, 11) : nothing}${background.subagents > 0 ? icon(Bot, 11) : nothing}${background.goal ? icon(Target, 11) : nothing}</span
-              >`
-            : nothing
-        }
-        ${
           crumb
             ? html`<span class="split-pane-crumb">${crumb}</span><span class="split-pane-crumb-sep">/</span>`
             : nothing
@@ -1279,6 +1266,14 @@ class PaneTab implements ITabRenderer {
             : nothing
         }
         <span class="split-pane-title-text" dir="auto">${title}</span>
+        ${sessionPersonaChip(paneSession(panel))}
+        ${
+          background
+            ? html`<span class="bg-chip" aria-label=${background.label} ${tip(background.label)}
+                >${backgroundIcons(background)}</span
+              >`
+            : nothing
+        }
         ${
           this.inStrip
             ? html`<span class="split-tab-actions">
@@ -1326,10 +1321,6 @@ class PaneTab implements ITabRenderer {
   }
 }
 
-// The strip highlight needs a target behind it: with full-width single tabs dockview's
-// header space is zero-width and a tab only accepts its outer reorder edges, so an
-// external session drag has nothing real to land on. Dockview owns this element's
-// lifecycle, so the zone is mounted and torn down with its group.
 class StripDrop implements IHeaderActionsRenderer {
   readonly element: HTMLElement;
   private group: IDockviewGroupPanel | null = null;

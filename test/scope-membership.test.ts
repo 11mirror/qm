@@ -4,6 +4,7 @@ import {
   createCanManageScope,
   createCanReadScope,
   createCanWriteScope,
+  createCurrentScopeMembers,
   createIsCurrentSharedScopeMember,
   createManagesArtifactHome,
   createMembershipControlsScope,
@@ -50,7 +51,7 @@ const directory = {
 const deps = {
   directory,
   identity: { classify: (id: string) => ({ type: id.startsWith("ext") ? "external" : "internal" }) },
-  teams: { isMember: async (id: string, team: string) => id === "alice@x.com" && team === "eng" },
+  teams: { isMember: async (_tenant: unknown, id: string, team: string) => id === "alice@x.com" && team === "eng" },
   sessions: {
     participantScopes: async (id: string) =>
       id === "bob@x.com" ? [{ scopeId: scopeId("channel", "unknown") }, { scopeId: scopeId("group", "gunknown") }] : [],
@@ -176,3 +177,21 @@ const EXPECTED = [
   "group:project-1 system:channel:priv -----",
   "group:project-1 (none) -----",
 ];
+
+test("a private shared channel admits its members but never stands in for the full audience", async () => {
+  const shared = {
+    ...directory,
+    channelPrivacy: async () => true,
+    rosterCoversAudience: async (channelId: string) => channelId !== "priv",
+    list: async () => [{ principalId: "alice@x.com" }],
+  };
+  const canWrite = createCanWriteScope({ ...deps, directory: shared });
+  assert.equal(await canWrite("alice@x.com", scopeId("channel", "priv")), true);
+  assert.equal(await canWrite("bob@x.com", scopeId("channel", "priv")), false);
+  const members = createCurrentScopeMembers({ ...deps, directory: shared });
+  assert.deepEqual(await members(scopeId("channel", "priv")), []);
+  assert.deepEqual(
+    (await members(scopeId("channel", "pub")))?.map((m) => m.id),
+    ["alice@x.com"],
+  );
+});

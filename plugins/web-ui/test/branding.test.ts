@@ -1,52 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { releaseFiles } from "./release-fixture.ts";
-import { createServer, type IncomingMessage } from "node:http";
-import type { AddressInfo } from "node:net";
 import { JSDOM } from "jsdom";
-
-const core = createServer((req: IncomingMessage, res) => {
-  if ((req.url ?? "").startsWith("/v1/surface-config")) {
-    res.writeHead(200, { "content-type": "application/json" });
-    return void res.end(JSON.stringify({ branding: { accent: "#f0652f", mark: "Y", selfLabel: "QM" } }));
-  }
-  res.writeHead(200, { "content-type": "application/json" });
-  res.end("{}");
-});
-await new Promise<void>((r) => core.listen(0, r));
-
-process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
-process.env.CORE_SIGNING_SECRET = "web-ui-branding-test";
-process.env.WEB_UI_PRINCIPALS = "alice";
-
-const { handler, serveReleasesFrom } = await import("../server/index.ts");
-serveReleasesFrom(
-  releaseFiles({
-    "index.html":
-      '<!doctype html><html><head><meta name="brand-self-label" content="Agent" /></head><body></body></html>',
-  }),
-);
-const surface = createServer((req, res) => void handler(req, res));
-await new Promise<void>((r) => surface.listen(0, r));
-const base = `http://localhost:${(surface.address() as AddressInfo).port}`;
-
-test.after(() => {
-  surface.close();
-  core.close();
-});
-
-test("cold start: the FIRST shell render already carries accent, mark, and self-label", async () => {
-  const r = await fetch(`${base}/`, { headers: { cookie: "webuiuser=alice" } });
-  assert.equal(r.status, 200);
-  const html = await r.text();
-  assert.match(html, /--brand-accent:#f0652f/, "accent injected on the first render");
-  assert.match(html, /--brand-mark:"Y"/, "mark injected on the first render");
-  assert.match(
-    html,
-    /<meta name="brand-self-label" content="QM"\s*\/?>/,
-    "self-label meta injected regardless of template formatting",
-  );
-});
 
 test("injectBranding rewrites the tab title with the escaped label when a suffix is given", async () => {
   const { injectBranding } = await import("../../chassis/src/branding.ts");
@@ -107,4 +61,14 @@ test("the installable-app metadata follows the brand: manifest link, touch icon,
   const branded = injectBranding(shell, { selfLabel: 'Ship "Q"' });
   assert.match(branded, /<meta name="apple-mobile-web-app-title" content="Ship &quot;Q&quot;" \/>/);
   assert.match(injectBranding(shell, {}), /<meta name="apple-mobile-web-app-title" content="QM" \/>/);
+});
+
+test("injectBranding flags the page only when an org configured a mark, so the UI has no default mark", async () => {
+  const { injectBranding } = await import("../../chassis/src/branding.ts");
+  const shell = '<!doctype html><html lang="en"><head></head><body></body></html>';
+  assert.doesNotMatch(injectBranding(shell, {}), /data-brand-mark/);
+  assert.doesNotMatch(injectBranding(shell, { accent: "#ff6600", selfLabel: "Acme" }), /data-brand-mark/);
+  assert.match(injectBranding(shell, { mark: "A" }), /<html data-brand-mark lang="en">/);
+  assert.match(injectBranding(shell, { markUrl: "https://cdn.example.com/icon.png" }), /<html data-brand-mark /);
+  assert.doesNotMatch(injectBranding(shell, { markUrl: "http://cdn.example.com/icon.png" }), /data-brand-mark/);
 });

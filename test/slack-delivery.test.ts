@@ -60,6 +60,33 @@ test("botIdentityArgs/slackReplyArgs stay a no-op without an env override", () =
   });
 });
 
+test("a post from a persona turn goes out under the persona's name and icon", () => {
+  const ada = { id: "p1", name: "Ada" };
+  assert.deepEqual(botIdentityArgs({ ...ada, icon: { kind: "emoji", value: "🎨" } }), {
+    username: "Ada",
+    icon_emoji: ":art:",
+  });
+  assert.deepEqual(botIdentityArgs({ ...ada, icon: { kind: "emoji", value: "❤️" } }), {
+    username: "Ada",
+    icon_emoji: ":heart:",
+  });
+  assert.deepEqual(botIdentityArgs({ ...ada, icon: { kind: "custom", name: "ada-face" } }), {
+    username: "Ada",
+    icon_emoji: ":ada-face:",
+  });
+  assert.deepEqual(botIdentityArgs({ ...ada, icon: { kind: "image", url: "https://example.com/ada.png" } }), {
+    username: "Ada",
+    icon_url: "https://example.com/ada.png",
+  });
+  assert.deepEqual(botIdentityArgs(ada), { username: "Ada" }, "no icon keeps the app's own");
+  assert.deepEqual(slackReplyArgs("C1", "hi", "1.2", { persona: ada }), {
+    channel: "C1",
+    text: "hi",
+    thread_ts: "1.2",
+    username: "Ada",
+  });
+});
+
 test("slackReplyArgs can suppress Slack link and media unfurls per message", () => {
   assert.deepEqual(slackReplyArgs("C1", "see https://x.com/a/status/1", undefined, { unfurlLinks: false }), {
     channel: "C1",
@@ -189,6 +216,34 @@ test("deliverWithRetry: transient post failures recover before the cap", async (
   assert.equal(h.posts.length, 1);
   assert.equal(h.acks.length, 1);
   assert.ok(!h.tracker.givenUp("d1"));
+});
+
+test("deliverWithRetry: an ack that gives up is retried as an ack after the bench, never re-posted", async () => {
+  const tracker = createDeliveryTracker({ maxAttempts: 2, giveUpRetryMs: 20 });
+  let posts = 0;
+  let ackFails = 2;
+  const acks: unknown[] = [];
+  const cycle = () =>
+    deliverWithRetry({
+      tracker,
+      id: "d1",
+      post: async () => {
+        posts++;
+        return "body";
+      },
+      ack: async (body) => {
+        if (ackFails-- > 0) throw new Error("core 503");
+        acks.push(body);
+      },
+      onError: () => {},
+    });
+  await cycle();
+  await cycle();
+  assert.ok(tracker.givenUp("d1"));
+  await new Promise((r) => setTimeout(r, 30));
+  await cycle();
+  assert.equal(posts, 1);
+  assert.deepEqual(acks, ["body"]);
 });
 
 test("createDeliveryTracker: a posted-but-unacked entry evicted by the cap is given up on, never re-posted", () => {
@@ -456,27 +511,14 @@ test("postWithVerify: platform error rethrows without retry", async () => {
   assert.equal(h.historyCalled, false);
 });
 
-test("postWithVerify: rate limit waits, verifies (the claim may have lapsed), then re-posts", async () => {
-  const h = verifyHarness({
-    postResults: [
-      { err: { code: "slack_webapi_rate_limited_error", retryAfter: 0 } },
-      { ok: { ts: "2.2", channel: "C1" } },
-    ],
-  });
-  const res = await postWithVerify(h.client, { channel: "C1", text: "hi" } as any, KEY);
-  assert.equal(res.ts, "2.2");
-  assert.equal(h.postCalls, 2);
-  assert.equal(h.historyCalled, true, "the 429 wait may outlive our delivery claim — check for a sibling's post");
-});
-
-test("postWithVerify: rate limit wait finds a sibling relay's post and reuses it", async () => {
-  const h = verifyHarness({
-    postResults: [{ err: { code: "slack_webapi_rate_limited_error", retryAfter: 0 } }],
-    historyMessages: [foundMsg],
-  });
-  const res = await postWithVerify(h.client, { channel: "C1", text: "hi" } as any, KEY);
-  assert.deepEqual(res, { ts: "9.9", channel: "C1", reused: true });
-  assert.equal(h.postCalls, 1, "never re-posts over a sibling's landed message");
+test("postWithVerify: a rate limit rethrows so the caller can defer the row", async () => {
+  const err = { code: "slack_webapi_rate_limited_error", retryAfter: 3 };
+  const h = verifyHarness({ postResults: [{ err }] });
+  await assert.rejects(
+    () => postWithVerify(h.client, { channel: "C1", text: "hi" } as any, KEY),
+    (e: any) => e === err,
+  );
+  assert.equal(h.postCalls, 1);
 });
 
 test("postWithVerify: ambiguous error + message found on verify returns existing ts, no re-post", async () => {

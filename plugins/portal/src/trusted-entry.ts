@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { verifiedEmail, type ExternalOrg, type Workspace } from "./tenant-choice.ts";
 import { buildAuthorizeUrl, exchangeCode, fetchUserinfo, pkcePair, verifyIdToken, type OidcConfig } from "./oidc.ts";
 import { deriveKey, openTmp, randomToken, safeEqual, seal, type TmpClaims } from "./session.ts";
 
@@ -39,6 +40,31 @@ export function trustedEntryConfig(env: NodeJS.ProcessEnv, publicUrl: string): O
   };
 }
 
+function orgText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function trustedOrgs(...sources: Record<string, unknown>[]): ExternalOrg[] {
+  const raw = (sources.map((source) => source.orgs).find(Array.isArray) as unknown[] | undefined) ?? [];
+  const orgs = new Map<string, ExternalOrg>();
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const { id, name, partnerChatAccount } = entry as Record<string, unknown>;
+    const org = { id: orgText(id), name: orgText(name), partnerChatAccount: orgText(partnerChatAccount) };
+    if (!org.id || !org.name || orgs.has(org.id)) continue;
+    orgs.set(org.id, {
+      id: org.id,
+      name: org.name,
+      ...(org.partnerChatAccount ? { partnerChatAccount: org.partnerChatAccount } : {}),
+    });
+  }
+  if (orgs.size < raw.length)
+    console.warn(
+      `[portal] trusted orgs claim: kept ${orgs.size} of ${raw.length} entries (need a unique id and a name)`,
+    );
+  return [...orgs.values()];
+}
+
 export function trustedPrincipal(issuer: string, sub: string): string {
   if (!sub || sub.length > 255) throw new Error("Invalid trusted subject");
   return `oidc:${createHash("sha256").update(issuer).digest("hex")}:${Buffer.from(sub).toString("base64url")}`;
@@ -53,7 +79,7 @@ export function createTrustedEntry(
   const key = deriveKey(sessionSecret, "trusted-entry-tmp");
   const ttl = 600;
   return {
-    start(returnTo: string) {
+    start(returnTo: string, workspace?: { handle: string } & Workspace) {
       const { verifier, challenge } = pkcePair();
       const now = Math.floor(Date.now() / 1000);
       const tmp: TmpClaims = {
@@ -62,32 +88,44 @@ export function createTrustedEntry(
         nonce: randomToken(),
         pkceVerifier: verifier,
         returnTo,
+        ...(workspace ? { workspace: workspace.handle } : {}),
         iat: now,
         exp: now + ttl,
       };
       return {
         cookie: seal(tmp, key),
-        location: buildAuthorizeUrl(cfg, { state: tmp.state, nonce: tmp.nonce, challenge }),
+        location: buildAuthorizeUrl(
+          { ...cfg, ...workspace?.trustedClient },
+          { state: tmp.state, nonce: tmp.nonce, challenge },
+        ),
         ttl,
       };
     },
-    async finish(cookie: string | null, url: URL) {
+    async finish(cookie: string | null, url: URL, workspaceFor?: (handle: string) => Promise<Workspace | null>) {
       const tmp = openTmp(cookie, key, Date.now());
       const state = url.searchParams.get("state");
       const code = url.searchParams.get("code");
-      if (url.searchParams.has("error") || !tmp || !state || !code || !safeEqual(state, tmp.state))
-        throw new Error("Invalid trusted login state");
+      if (url.searchParams.has("error"))
+        throw new Error(`Trusted provider returned ${url.searchParams.get("error") ?? ""}`);
+      if (!tmp) throw new Error("Trusted login cookie missing or expired");
+      if (!state || !code || !safeEqual(state, tmp.state)) throw new Error("Invalid trusted login state");
       if (!(await claim(`trusted-entry:${tmp.state}`, tmp.exp * 1000))) throw new Error("Trusted login already used");
-      const { accessToken, idToken } = await exchangeCode(cfg, { code, codeVerifier: tmp.pkceVerifier }, fetchImpl);
-      const claims = await verifyIdToken(cfg, idToken, tmp.nonce, fetchImpl);
-      const info = await fetchUserinfo(cfg, accessToken, fetchImpl);
+      const workspace = tmp.workspace === undefined ? undefined : await workspaceFor?.(tmp.workspace);
+      if (tmp.workspace !== undefined && !workspace) throw new Error("Unknown workspace");
+      const client = { ...cfg, ...workspace?.trustedClient };
+      const { accessToken, idToken } = await exchangeCode(client, { code, codeVerifier: tmp.pkceVerifier }, fetchImpl);
+      const claims = await verifyIdToken(client, idToken, tmp.nonce, fetchImpl);
+      const info = await fetchUserinfo(client, accessToken, fetchImpl);
       if (typeof claims.sub !== "string" || claims.sub !== info.sub)
         throw new Error("Trusted identity subject mismatch");
       return {
         subject: claims.sub,
         sub: trustedPrincipal(cfg.issuer, claims.sub),
-        name: typeof info.name === "string" ? info.name.trim().slice(0, 200) : "",
+        name: typeof info.name === "string" ? info.name.trim() : "",
+        email: verifiedEmail(info),
+        orgs: trustedOrgs(info, claims),
         returnTo: tmp.returnTo,
+        tenant: workspace?.tenant,
       };
     },
   };

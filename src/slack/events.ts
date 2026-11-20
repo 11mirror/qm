@@ -24,7 +24,7 @@ import type { DenyResponder } from "./allow-from.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { Mirror } from "./mirror.ts";
 import type { TurnHandler } from "./turn-handler.ts";
-import { shouldMirrorMessage, isOwnStatusCard } from "./message-gating.ts";
+import { shouldMirrorMessage, isOwnSlackMessage, isOwnStatusCard, isBotAuthored } from "./message-gating.ts";
 
 interface EventArgs {
   event: unknown;
@@ -143,7 +143,7 @@ export function registerSlackEvents(
           channel: e.channel,
           userId: identity.userId,
           kind: "channel",
-          isBot: Boolean(e.bot_id || identity.actor?.isBot),
+          isBot: isBotAuthored(e) || Boolean(identity.actor?.isBot),
         });
         return;
       }
@@ -168,7 +168,7 @@ export function registerSlackEvents(
           files: content.files,
           threadTs: e.thread_ts,
           ts: e.ts,
-          ...(e.bot_id || e.subtype === "bot_message" ? { botAuthored: true } : {}),
+          ...(isBotAuthored(e) ? { botAuthored: true } : {}),
           message: e,
           ackGate: context.ackGate,
         },
@@ -204,7 +204,7 @@ export function registerSlackEvents(
         await forceDirectorySync(client);
       }
       const ackGate = context.ackGate;
-      if (m.channel && m.ts && !m.hidden && !m.subtype && !(m.bot_id || m.subtype === "bot_message")) {
+      if (m.channel && m.ts && !m.hidden && !m.subtype && !isBotAuthored(m)) {
         const text = slackMessageContent(m).text;
         deps.inboxMessage?.(client, {
           channel: m.channel,
@@ -219,12 +219,10 @@ export function registerSlackEvents(
         await pushSurfaceEvents([{ container: m.channel, ts: m.message.ts, deleted: true }]);
         return;
       }
-      const ownMessage = (event: { user?: string; bot_id?: string }): boolean =>
-        Boolean((ids.botUserId && event.user === ids.botUserId) || (ids.ownBotId && event.bot_id === ids.ownBotId));
       if (
         !(await actorAllowed(
           client,
-          ownMessage(m.message ?? m.previous_message ?? m)
+          isOwnSlackMessage(m.message ?? m.previous_message ?? m, ids.botUserId, ids.ownBotId)
             ? ids.botUserId
             : (m.user ?? m.message?.user ?? m.previous_message?.user),
         ))
@@ -235,7 +233,7 @@ export function registerSlackEvents(
             userId: m.user,
             kind: "dm",
             threadTs: m.thread_ts,
-            isBot: Boolean(m.bot_id || m.subtype === "bot_message"),
+            isBot: isBotAuthored(m),
           });
         }
         return;
@@ -255,9 +253,7 @@ export function registerSlackEvents(
       if (m.subtype === "message_deleted" && m.deleted_ts) {
         const type = m.channel_type;
         const prev = m.previous_message;
-        const selfDelete = Boolean(
-          prev && ((ids.botUserId && prev.user === ids.botUserId) || (ids.ownBotId && prev.bot_id === ids.ownBotId)),
-        );
+        const selfDelete = Boolean(prev && isOwnSlackMessage(prev, ids.botUserId, ids.ownBotId));
         if (m.channel && (type === "channel" || type === "group" || type === "mpim" || type === "im"))
           await pushSurfaceEvents([
             {
@@ -271,7 +267,7 @@ export function registerSlackEvents(
         return;
       }
       if (!shouldMirrorMessage(m)) return;
-      if (ownMessage(m) || !shouldProcessMessage(m, ids.botUserId, ids.ownBotId)) {
+      if (!shouldProcessMessage(m, ids.botUserId, ids.ownBotId)) {
         await mirrorMessageEvent(m, client, {
           handled: true,
           ...(m.channel_type === "im" ? { kind: "dm" } : {}),
@@ -302,7 +298,7 @@ export function registerSlackEvents(
             files: content.files,
             threadTs: m.thread_ts,
             ts: m.ts,
-            ...(m.bot_id || m.subtype === "bot_message" ? { botAuthored: true } : {}),
+            ...(isBotAuthored(m) ? { botAuthored: true } : {}),
             message: m,
             ackGate,
           },
@@ -351,7 +347,7 @@ export function registerSlackEvents(
             threadTs: m.thread_ts,
             ts: m.ts,
             unprompted: true,
-            ...(m.bot_id || m.subtype === "bot_message" ? { botAuthored: true } : {}),
+            ...(isBotAuthored(m) ? { botAuthored: true } : {}),
             message: m,
             ackGate,
           },

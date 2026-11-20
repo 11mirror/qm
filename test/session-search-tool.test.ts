@@ -36,10 +36,12 @@ test("session search reuses indexed search with participant intersection and bou
   });
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   let members: Principal[] | undefined;
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const factory = createSessionSyscalls({
     sessions,
     runs,
-    signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    signals,
+    steerRun: async (run, signal) => ({ sent: await signals.send(run.id, signal) }),
     mailbox: createSessionMailbox(testMap<SessionMessage>()),
     maxAttempts: 1,
     advisoryLock: testAdvisoryLock(),
@@ -50,7 +52,7 @@ test("session search reuses indexed search with participant intersection and bou
     conversations: {
       list: async () => [],
       start: async () => ({ error: "unused" }),
-      search: ({ query, principals, limit }) => app.searchConversations(query, principals, limit),
+      search: (input) => app.searchConversations(input),
     },
   });
   const tools = factory.forTurn({

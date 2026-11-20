@@ -2,6 +2,7 @@ import {
   connectorHandle,
   credentialHandle,
   KeychainError,
+  keychainService,
   renderAskNotice,
   type CredentialFieldInput,
   type CredentialFile,
@@ -13,11 +14,18 @@ import { approvalCardDestination } from "../../credentials/keychain-approval.ts"
 import { sendJson } from "../http.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import type { ApiCtx, Route } from "./route.ts";
-import type { CapabilityClaims } from "../../auth/capability-token.ts";
-import { audit, resolveCapabilityDestination } from "./shared.ts";
+import { botWorkInPersonsName, type CapabilityClaims } from "../../auth/capability-token.ts";
+import {
+  audit,
+  BOT_WORK_PERSON_CREDENTIAL,
+  livePersonTurn,
+  personalCapability,
+  resolveCapabilityDestination,
+} from "./shared.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { cronIdOf } from "../../sessions/session-store.ts";
 import { connectorHostLabel } from "../../connectors/oauth.ts";
+import type { SecretDropResult } from "../../credentials/secret-drop.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
 
 async function resolveScopeNames(
@@ -67,9 +75,13 @@ async function resolveScopeNames(
 }
 
 const keychainRoute =
-  (handle: (ctx: ApiCtx, kc: NonNullable<ApiCtx["deps"]["keychain"]>, capability: CapabilityClaims) => Promise<void>) =>
+  (
+    handle: (ctx: ApiCtx, kc: NonNullable<ApiCtx["deps"]["keychain"]>, capability: CapabilityClaims) => Promise<void>,
+    signedInPerson = false,
+  ) =>
   async (ctx: ApiCtx): Promise<void> => {
-    const { res, deps, capability } = ctx;
+    const { res, deps } = ctx;
+    const capability = signedInPerson ? personalCapability(ctx) : ctx.capability;
     if (!deps.keychain)
       return sendJson(res, 503, {
         error: "keychain_unavailable",
@@ -88,7 +100,22 @@ const keychainRoute =
     }
   };
 
-const saveCredential = keychainRoute(async ({ res, deps, body }, kc, { actorId, scopeId }) => {
+function loginTicketRefusal(
+  ticket: SecretDropResult,
+  ownerId: string,
+  service: string,
+  threadRef: string | undefined,
+): string | null {
+  if (!ticket.ok) return ticket.reason;
+  if (ticket.rec.kind !== "login") return "not a login ticket";
+  if (!samePerson(ticket.rec.ownerId, ownerId)) return "another person's ticket";
+  if (ticket.rec.service !== service) return `a ticket for ${ticket.rec.service}`;
+  if (ticket.rec.threadRef !== threadRef) return "a ticket from another conversation";
+  return null;
+}
+
+const saveCredential = keychainRoute(async (ctx, kc, { actorId, scopeId, threadRef }) => {
+  const { res, deps, tenant, body } = ctx;
   const b = body as {
     service?: unknown;
     secret?: unknown;
@@ -100,6 +127,7 @@ const saveCredential = keychainRoute(async ({ res, deps, body }, kc, { actorId, 
     accountLabel?: unknown;
     origin?: unknown;
     expiresAt?: unknown;
+    loginTicket?: unknown;
   };
   const expiresAt = normalizeInboundExpiresAt(b.expiresAt);
   if (!expiresAt.ok) return sendJson(res, 400, { error: "bad_request", message: expiresAt.message });
@@ -148,7 +176,7 @@ const saveCredential = keychainRoute(async ({ res, deps, body }, kc, { actorId, 
       message: "service plus secret, files[], or fields[] required",
     });
   }
-  const meta = await kc.save({
+  const input = {
     ownerId: actorId,
     service: b.service,
     ...(typeof b.secret === "string" ? { secret: b.secret } : {}),
@@ -160,14 +188,77 @@ const saveCredential = keychainRoute(async ({ res, deps, body }, kc, { actorId, 
     ...(typeof b.accountLabel === "string" ? { accountLabel: b.accountLabel } : {}),
     origin: typeof b.origin === "string" ? b.origin : `agent-session:${scopeId}`,
     ...(expiresAt.value !== undefined ? { expiresAt: expiresAt.value } : {}),
+  };
+  const service = keychainService(b.service);
+  const ticketId = typeof b.loginTicket === "string" ? b.loginTicket : undefined;
+  const store = async () => {
+    const ticket = ticketId && deps.secretDrops ? await deps.secretDrops.peek(ticketId) : null;
+    const refusal = ticket && loginTicketRefusal(ticket, actorId, service, threadRef);
+    if (refusal) console.warn(`[keychain] loginTicket not used for ${service}: ${refusal}`);
+    const signedIn = ticket !== null && refusal === null;
+    let meta = await kc.create(input);
+    if (!meta) {
+      if (!signedIn && !livePersonTurn(ctx)) return;
+      meta = await kc.save(input);
+    }
+    if (signedIn) {
+      const spent = await deps.secretDrops!.redeem(ticketId!);
+      if (!spent.ok)
+        console.warn(`[keychain] loginTicket for ${service} was not spent after the save: ${spent.reason}`);
+    }
+    audit(
+      { deps, tenant },
+      {
+        principalId: actorId,
+        action: "keychain.save",
+        resource: `${meta.service}:${meta.id}`,
+        scopeLabel: scopeId,
+      },
+    );
+    return sendJson(res, 200, { credential: meta });
+  };
+  return ticketId ? kc.withLoginTicket(ticketId, store) : store();
+});
+
+const startLogin = keychainRoute(async (ctx, _kc, { actorId, scopeId, threadRef }) => {
+  const { res, deps, tenant, body } = ctx;
+  const { service } = body as { service?: unknown };
+  if (typeof service !== "string" || !service.trim())
+    return sendJson(res, 400, { error: "bad_request", message: "service required" });
+  if (!deps.secretDrops) return sendJson(res, 404, { error: "not_found" });
+  if (!livePersonTurn(ctx)) return;
+  const { dropId } = await deps.secretDrops.mint({
+    kind: "login",
+    ownerId: actorId,
+    service: keychainService(service),
+    purpose: "login",
+    requestedBy: actorId,
+    ...(threadRef ? { threadRef } : {}),
+    requiresToken: true,
   });
-  audit(deps, {
-    principalId: actorId,
-    action: "keychain.save",
-    resource: `${meta.service}:${meta.id}`,
-    scopeLabel: scopeId,
-  });
-  return sendJson(res, 200, { credential: meta });
+  audit(
+    { deps, tenant },
+    { principalId: actorId, action: "keychain.login.start", resource: keychainService(service), scopeLabel: scopeId },
+  );
+  return sendJson(res, 200, { loginTicket: dropId });
+});
+
+const claimWriter = keychainRoute(async ({ res, body, params }, kc, { actorId }) => {
+  const b = body as { holder?: unknown; until?: unknown };
+  const until = normalizeInboundExpiresAt(b.until, "until");
+  if (typeof b.holder !== "string" || !b.holder.trim() || !until.ok || until.value === undefined)
+    return sendJson(res, 400, { error: "bad_request", message: "expected { holder, until }" });
+  const claimed = await kc.claimWriter(actorId, params.id!, { holder: b.holder.trim(), until: until.value });
+  if (claimed === null) return sendJson(res, 404, { error: "not_found" });
+  return claimed ? sendJson(res, 200, { ok: true }) : sendJson(res, 409, { error: "writer_held" });
+});
+
+const releaseWriter = keychainRoute(async ({ res, url, params }, kc, { actorId }) => {
+  const holder = url.searchParams.get("holder")?.trim();
+  if (!holder) return sendJson(res, 400, { error: "bad_request", message: "holder required" });
+  const released = await kc.releaseWriter(actorId, params.id!, holder);
+  if (released === null) return sendJson(res, 404, { error: "not_found" });
+  return released ? sendJson(res, 200, { ok: true }) : sendJson(res, 409, { error: "writer_held" });
 });
 
 const listCredentials = keychainRoute(async ({ res }, kc, { actorId }) => {
@@ -184,14 +275,16 @@ const keychainOverview = keychainRoute(async ({ res, app, deps }, kc, { actorId 
     ...asks.map((ask) => ask.requesterScopeId),
   ]);
   return sendJson(res, 200, { credentials, connectorCredentials, grants, asks, scopeNames });
-});
+}, true);
 
-const deleteCredential = keychainRoute(async ({ res, deps, params }, kc, { actorId, scopeId }) => {
+const deleteCredential = keychainRoute(async (ctx, kc, { actorId, scopeId }) => {
+  const { res, params } = ctx;
+  if (!livePersonTurn(ctx)) return;
   const id = params.id!;
   const ok = await kc.remove(actorId, id);
-  if (ok) audit(deps, { principalId: actorId, action: "keychain.delete", resource: id, scopeLabel: scopeId });
+  if (ok) audit(ctx, { principalId: actorId, action: "keychain.delete", resource: id, scopeLabel: scopeId });
   return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "not_found" });
-});
+}, true);
 
 const listGrants = keychainRoute(async ({ res }, kc, { actorId, scopeId }) => {
   const mine = await kc.listGrants({ ownerId: actorId });
@@ -200,12 +293,14 @@ const listGrants = keychainRoute(async ({ res }, kc, { actorId, scopeId }) => {
   return sendJson(res, 200, { grants: [...byId.values()] });
 });
 
-const revokeGrant = keychainRoute(async ({ res, deps, params }, kc, { actorId, scopeId }) => {
+const revokeGrant = keychainRoute(async (ctx, kc, { actorId, scopeId }) => {
+  const { res, params } = ctx;
+  if (!livePersonTurn(ctx)) return;
   const id = params.id!;
   const ok = await kc.revokeGrant(actorId, id);
-  if (ok) audit(deps, { principalId: actorId, action: "keychain.revoke", resource: id, scopeLabel: scopeId });
+  if (ok) audit(ctx, { principalId: actorId, action: "keychain.revoke", resource: id, scopeLabel: scopeId });
   return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "not_found" });
-});
+}, true);
 
 type KeychainStore = NonNullable<ApiCtx["deps"]["keychain"]>;
 
@@ -300,6 +395,8 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
   if (scope.kind !== "channel" && scope.kind !== "personal" && scope.kind !== "group") {
     return sendJson(res, 403, { error: "forbidden", message: "asks require a personal or shared conversation" });
   }
+  if (await botWorkInPersonsName(ctx.deps.admin?.users, capability))
+    return sendJson(res, 403, { error: "forbidden", message: BOT_WORK_PERSON_CREDENTIAL });
   let credentialId = typeof b.credential === "string" ? b.credential : undefined;
   if (credentialId === undefined) {
     const target = await resolveAskTarget(ctx, kc, capability.scopeId, b.owner as string, b.service as string);
@@ -328,10 +425,11 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
     (dest.ok && dest.destination) || (cron?.ownerScopeId === capability.scopeId ? cron.destination : undefined);
   const originRun = capability.runId ? await deps.runs?.get(capability.runId) : null;
   const requesterSeq = originRun && originRun.sessionId === capability.threadRef ? originRun?.turnUserSeq : null;
-  const requesterMessageTs =
-    originRun && originRun.sessionId === capability.threadRef && originRun.request.origin.kind === "human"
-      ? originRun.request.origin.messageTs
-      : undefined;
+  const runRequest = originRun && originRun.sessionId === capability.threadRef ? originRun.request : undefined;
+  const humanOrigin = runRequest?.origin.kind === "human" ? runRequest.origin : undefined;
+  const requesterMessageTs = humanOrigin?.messageTs;
+  const ownerSurfaceUser =
+    humanOrigin && samePerson(runRequest?.actor.id, cred.ownerId) ? runRequest?.surfaceOrigin?.author : undefined;
   const { ask, existing } = await kc.createAsk({
     ...(capability.triggered ? { triggered: true } : {}),
     credentialId: cred.id,
@@ -339,10 +437,12 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
     requesterScopeId: capability.scopeId,
     ...(requesterSeq != null ? { requesterSeq } : {}),
     ...(requesterMessageTs ? { requesterMessageTs } : {}),
+    ...(ownerSurfaceUser ? { ownerSurfaceUser } : {}),
     ...(requesterDestination ? { requesterDestination } : {}),
     ...(capability.threadRef ? { requesterThreadRef: capability.threadRef } : {}),
     purpose: b.purpose,
     ...(b.requestedMode !== undefined ? { requestedMode: b.requestedMode as GrantMode } : {}),
+    ...(capability.botActor ? { botActor: true } : {}),
     ...(expiresAt.value !== undefined ? { expiresAt: expiresAt.value } : {}),
   });
   const notice = renderAskNotice({
@@ -361,7 +461,7 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
       idempotencyKey: `ask:${ask.id}:notice`,
     });
   if (!existing) {
-    audit(deps, {
+    audit(ctx, {
       principalId: actorId,
       action: "keychain.ask",
       resource: `${ask.id} (${cred.service}:${cred.id}→${cred.ownerId})`,
@@ -384,6 +484,8 @@ async function handleApproval(ctx: ApiCtx): Promise<void> {
   const b = (body ?? {}) as { principalId?: unknown; decision?: unknown };
   if (!deps.keychainApprovals || typeof b.principalId !== "string" || !b.principalId)
     return sendJson(res, 404, { error: "not_found" });
+  if (ctx.actor?.imp)
+    return sendJson(res, 403, { error: "forbidden", message: "Sign in as yourself to decide on credential use." });
   try {
     if (b.decision !== "once" && b.decision !== "standing" && b.decision !== "deny")
       return sendJson(res, 400, {
@@ -400,12 +502,55 @@ async function handleApproval(ctx: ApiCtx): Promise<void> {
 
 export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/keychain/credentials", actor: "system", auth: "either", handle: saveCredential },
+  { method: "POST", path: "/v1/keychain/login-tickets", actor: "system", auth: "either", handle: startLogin },
+  {
+    method: "POST",
+    path: "/v1/keychain/credentials/:id/writer",
+    actor: "system",
+    auth: "either",
+    handle: claimWriter,
+  },
+  {
+    method: "DELETE",
+    path: "/v1/keychain/credentials/:id/writer",
+    actor: "system",
+    auth: "either",
+    handle: releaseWriter,
+  },
   { method: "GET", path: "/v1/keychain/credentials", auth: "either", handle: listCredentials },
-  { method: "GET", path: "/v1/keychain/overview", auth: "either", handle: keychainOverview },
-  { method: "DELETE", path: "/v1/keychain/credentials/:id", actor: "system", auth: "either", handle: deleteCredential },
+  {
+    method: "GET",
+    path: "/v1/keychain/overview",
+    browser: true,
+    actor: "person",
+    auth: "either",
+    handle: keychainOverview,
+  },
+  {
+    method: "DELETE",
+    path: "/v1/keychain/credentials/:id",
+    browser: "self",
+    actor: "person",
+    auth: "either",
+    handle: deleteCredential,
+  },
   { method: "GET", path: "/v1/keychain/grants", auth: "either", handle: listGrants },
-  { method: "POST", path: "/v1/keychain/grants/:id/revoke", actor: "system", auth: "either", handle: revokeGrant },
+  {
+    method: "POST",
+    path: "/v1/keychain/grants/:id/revoke",
+    browser: "self",
+    actor: "person",
+    auth: "either",
+    handle: revokeGrant,
+  },
   { method: "POST", path: "/v1/keychain/asks", actor: "system", auth: "either", handle: createAsk },
   { method: "GET", path: "/v1/keychain/asks", auth: "either", handle: listAsks },
-  { method: "POST", path: "/v1/keychain/approvals/:id", auth: "source", handle: handleApproval },
+  {
+    method: "POST",
+    path: "/v1/keychain/approvals/:id",
+    browser: true,
+    actor: "body.principalId",
+    auth: "source",
+    handle: handleApproval,
+  },
 ];

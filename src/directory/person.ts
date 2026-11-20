@@ -1,4 +1,5 @@
 import { swallowAs } from "../util/errors.ts";
+import { isSystemActor, parseScopeId } from "../types.ts";
 
 export interface PrincipalLinkResolver {
   canonical(key: string): string | undefined;
@@ -26,11 +27,49 @@ export class UnattestableActor extends Error {
   readonly code = "invalid_actor";
 }
 
+export class OutsideAudience extends Error {
+  readonly code = "private_only";
+  constructor(callee: string) {
+    super(`${callee} acts as the person, so it answers only to them in their own private conversation with QM`);
+  }
+}
+
 export const UNATTESTABLE_ACTOR_FIX =
   "Link this member to a principal id of 1 to 256 visible ASCII characters with POST /v1/admin/principal-links (docs/principal-links.md).";
 
 export function attestableActor(id: unknown): string | undefined {
   return typeof id === "string" && /^[\x21-\x7e]{1,256}$/.test(id) ? id : undefined;
+}
+
+export function attestableAudience(actorId: string | undefined, scope: string | undefined): boolean {
+  const { kind, ref } = parseScopeId(scope ?? "");
+  return kind === "personal" && !isSystemActor(actorId) && samePerson(actorId, ref);
+}
+
+export function ownPrivateConversation(
+  actorId: string | undefined,
+  scope: string | undefined,
+  audienceScope: string | undefined,
+): boolean {
+  return attestableAudience(actorId, scope) && attestableAudience(actorId, audienceScope);
+}
+
+export type AttestAudience = "personal" | "any";
+
+export interface AttestingTurn {
+  actAsActor?: boolean;
+  botActor?: boolean;
+}
+
+export function attestsInAudience(
+  audience: AttestAudience | undefined,
+  actorId: string | undefined,
+  scope: string | undefined,
+  turn: AttestingTurn,
+): boolean {
+  if (turn.botActor === true) return false;
+  if (attestableAudience(actorId, scope)) return true;
+  return audience === "any" && turn.actAsActor === true && !!actorId && !isSystemActor(actorId);
 }
 
 export function attestedPerson(id: string | undefined, callee: string): string {
@@ -45,6 +84,17 @@ export function personIds(id: string): string[] {
   if (!key) return [];
   const canonical = links?.canonical(key) ?? id.trim();
   return [canonical, ...(links?.aliases(foldPrincipalId(canonical)) ?? [])];
+}
+
+export const ACTOR_HEADERS: readonly string[] = ["x-qm-actor", "x-qm-actor-aliases"];
+
+export function attestedActorHeaders(actor: string): Record<string, string> {
+  const aliases = [...new Set(personIds(actor))].filter((id) => id !== actor && attestableActor(id));
+  return { "x-qm-actor": actor, "x-qm-actor-aliases": JSON.stringify(aliases) };
+}
+
+export function ownsWebThread(threadRef: string, id: string): boolean {
+  return personIds(id).some((owner) => threadRef.startsWith(`web:${owner}:`));
 }
 
 export function rosterIds(id: string): string[] {

@@ -3,8 +3,7 @@ import { run } from "./proc.ts";
 import { ensureDockerDaemon } from "./postgres.ts";
 import { sleep } from "./util.ts";
 
-const MINIO_IMAGE =
-  "cgr.dev/chainguard/minio@sha256:4d397a26fe49d7f9ed39b8b566534848936f7efa50ab6328ac97b2a44eeabf4c";
+const MINIO_IMAGE = "cgr.dev/chainguard/minio@sha256:4d397a26fe49d7f9ed39b8b566534848936f7efa50ab6328ac97b2a44eeabf4c";
 
 function docker(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   return run("docker", args, { timeoutMs: 120_000 });

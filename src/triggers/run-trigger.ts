@@ -6,12 +6,12 @@ import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import { turnModelOptions } from "../agent/runtime-choice.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
+import { releasesQuarantinedContent } from "../core/orchestrator/approvals.ts";
 import { TransientTurnFailure } from "../core/turn-error.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember, DirectoryStore, RecipientResolution } from "../directory/directory-store.ts";
 import { samePerson } from "../directory/person.ts";
-import { grantsHomedWithOwner } from "../cron/authority.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { isProjectGroupRef } from "../projects/project-store.ts";
 import { reportFailureAs, swallowAs } from "../util/errors.ts";
@@ -36,7 +36,10 @@ export interface TriggerDeps {
   resolveRecipient?: (query: string) => Promise<RecipientResolution>;
 }
 
-export interface TriggerSpec extends Pick<TurnRequest, "model" | "fastMode" | "attachments" | "infrequentCron"> {
+export interface TriggerSpec extends Pick<
+  TurnRequest,
+  "model" | "fastMode" | "attachments" | "infrequentCron" | "memoryNotebookOnly" | "botActor"
+> {
   runtime?: import("../agent/agent.ts").RuntimeChoice | null;
   title?: string;
   owner: string;
@@ -48,7 +51,8 @@ export interface TriggerSpec extends Pick<TurnRequest, "model" | "fastMode" | "a
   destination?: Destination;
   message?: string;
   threadRef?: string;
-  unattendedGrants?: string[];
+  personaId?: string;
+  ownerFire?: boolean;
   cronScript?: CronScript;
   shadow?: boolean;
   thinkingLevel?: string;
@@ -69,6 +73,7 @@ export interface TriggerOutcome {
   userNote?: string;
   reply?: string;
   sessionId?: string;
+  heldForApproval?: true;
 }
 
 function isTriggerFailure(outcome: TriggerOutcome): boolean {
@@ -240,8 +245,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ? (destinationIsHome && homeAccess.ok) || (await destinationVisible(deps, actorId, spec.destination))
     : true;
   const notVisibleNote = "destination is no longer visible to the cron owner — delivery skipped";
-  const liveDelivery =
-    spec.surface === "monitor" && spec.destination?.type !== "webhook" && Boolean(spec.destination) && deliverable;
+  const liveDelivery = spec.surface === "monitor" && Boolean(spec.destination) && deliverable;
 
   let status: TurnResult["status"] | undefined;
   let errorCode: string | undefined;
@@ -249,7 +253,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   let userNote: string | undefined;
   let reply: string | undefined;
   let sessionId: string | undefined;
-  let runDelivers = false;
+  let heldForApproval = false;
   let scriptVerdict: string | undefined;
   const sendErrorNotice = async (reason: string): Promise<void> => {
     if (!spec.errorNotice || !spec.destination || !deliverable) return;
@@ -294,12 +298,14 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       text: typeof spec.input === "string" ? spec.input : spec.input(roster),
       origin: {
         kind: "automation",
+        ...(spec.ownerFire && !runsAsScope ? { ownerFire: true as const } : {}),
         ...(spec.securityScreenData !== undefined ? { screenData: spec.securityScreenData } : {}),
         ...(spec.destination ? { destination: spec.destination } : {}),
         ...(scheduled && !runsAsScope && conversation.kind !== "dm" ? { useOwnerKeychain: true } : {}),
       },
-      ...(spec.unattendedGrants && grantsHomedWithOwner(spec) ? { unattendedGrants: spec.unattendedGrants } : {}),
       ...(spec.cronScript ? { cronScript: spec.cronScript } : {}),
+      ...(spec.personaId ? { personaId: spec.personaId } : {}),
+      ...(spec.botActor ? { botActor: true } : {}),
       ...(spec.infrequentCron ? { infrequentCron: true } : {}),
       ...(spec.runtime ? { model: spec.runtime.modelId } : {}),
       ...turnModelOptions({
@@ -312,10 +318,8 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       ...(spec.model ? { model: spec.model } : {}),
       ...(spec.attachments?.length ? { attachments: spec.attachments } : {}),
       ...(spec.readOnly ? { readOnly: true } : {}),
+      ...(spec.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
       ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
-      ...(spec.destination?.type === "webhook" && deliverable && !spec.shadow
-        ? { deliveryTarget: spec.destination.target }
-        : {}),
       ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
       idempotencyKey: spec.fireKey,
     });
@@ -327,17 +331,16 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     errorCode = res.errorCode;
     reply = res.reply;
     sessionId = res.sessionId;
-    runDelivers = spec.destination?.type === "webhook" && deliverable && !spec.shadow && Boolean(res.runId);
+    heldForApproval = res.pendingApprovals?.some((approval) => !releasesQuarantinedContent(approval)) === true;
     scriptVerdict = res.scriptVerdict;
     if (res.status === "silent") return;
     if (res.status === "pending_approval") {
-      if (runDelivers) return;
-      note = "hit a require_approval command — failed closed (no human at fire/event time)";
+      const reasons = (res.pendingApprovals ?? []).map((approval) => approval.reason).join("; ");
+      note = `needed an approval with no person there to give it, so it failed closed${reasons ? `: ${reasons}` : ""}`;
       console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
       return;
     }
     if (res.status === "ok" && (res.reply || res.attachments?.length)) {
-      if (runDelivers) return;
       if (!spec.destination) return;
       if (liveDelivery) return;
       if (!deliverable) {
@@ -347,7 +350,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       }
       await reachEnqueue({
         deliveries: deps.deliveries,
-        destination: spec.destination,
+        destination: res.persona ? { ...spec.destination, persona: res.persona } : spec.destination,
         text: res.reply ?? "",
         ...(res.attachments?.length ? { attachments: res.attachments } : {}),
         idempotencyKey: spec.fireKey,
@@ -373,9 +376,10 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ...(userNote ? { userNote } : {}),
     ...(reply !== undefined ? { reply } : {}),
     ...(sessionId ? { sessionId } : {}),
+    ...(heldForApproval ? { heldForApproval: true as const } : {}),
   };
 
-  if (isTriggerFailure(outcome) && !runDelivers) await sendErrorNotice(userNote ?? note ?? status!);
+  if (isTriggerFailure(outcome)) await sendErrorNotice(userNote ?? note ?? status!);
 
   return outcome;
 }

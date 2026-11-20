@@ -116,6 +116,7 @@ test("sent view pages Gmail messages and opens the matching Google account", asy
     );
     assert.equal(chatRequest.accountType, "company");
     assert.equal(chatRequest.messageId, "newer");
+    assert.equal(chatRequest.sourceContextPartial, false);
     render(sentEmailPageTpl(draw, html`<div class="inbox-chat">Assistant</div>`), host);
     assert.equal(host.querySelector(".inbox-context-text")!.textContent, "Full sent body");
     assert.ok(host.querySelector(".pane-head.inbox-item-head"));

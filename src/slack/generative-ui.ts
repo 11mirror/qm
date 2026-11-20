@@ -324,7 +324,6 @@ export function parseGenerativeUISpec(content: string): GenerativeUISpec | null 
     const candidate = extractJsonCandidate(content);
     if (!candidate) return null;
     const parsed = JSON.parse(candidate) as Record<string, unknown>;
-    // Support official json-render / Chat SDK schema ({ root: "card", elements: { ... } })
     if (
       typeof parsed.root === "string" &&
       parsed.elements &&

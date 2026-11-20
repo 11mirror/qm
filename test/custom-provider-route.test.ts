@@ -1,6 +1,8 @@
 import "./support/auto-fake-sprites.ts";
 
 import assert from "node:assert/strict";
+import { once } from "node:events";
+import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,7 +20,7 @@ const USER = { "content-type": "application/json", "x-admin-actor": "bob@default
 
 afterEach(() => setCustomProviders([]));
 
-function start(modelCredentialFetch: typeof fetch = async () => new Response(null, { status: 200 })): {
+function start(modelCredentialFetch?: typeof fetch): {
   base: string;
   built: BuiltApp;
   close: () => Promise<void>;
@@ -59,7 +61,6 @@ test("custom provider lifecycle: register, list, resolve, delete — admin only,
     return new Response(null, { status: 200 });
   });
   try {
-    // Register (validates against the endpoint's /models).
     const put = await fetch(`${srv.base}/v1/admin/custom-providers/acme-gateway`, {
       method: "PUT",
       headers: ADMIN,
@@ -71,21 +72,17 @@ test("custom provider lifecycle: register, list, resolve, delete — admin only,
     assert.equal(putBody.status.hasKey, true);
     assert.equal(JSON.stringify(putBody).includes("sk-acme-secret"), false);
 
-    // The runtime registry serves the model immediately.
     assert.equal(String(resolveModel("custom/acme-gateway/acme-large")?.provider), "acme-gateway");
 
-    // List never leaks the key.
     const list = await fetch(`${srv.base}/v1/admin/custom-providers`, { headers: ADMIN });
     assert.equal(list.status, 200);
     const listBody = await list.text();
     assert.equal(listBody.includes("sk-acme-secret"), false);
     assert.ok(listBody.includes("acme-gateway"));
 
-    // Non-admin gets refused.
     const denied = await fetch(`${srv.base}/v1/admin/custom-providers`, { headers: USER });
     assert.notEqual(denied.status, 200);
 
-    // Delete disables and clears the registry.
     const del = await fetch(`${srv.base}/v1/admin/custom-providers/acme-gateway`, {
       method: "DELETE",
       headers: ADMIN,
@@ -95,6 +92,35 @@ test("custom provider lifecycle: register, list, resolve, delete — admin only,
   } finally {
     await srv.close();
   }
+});
+
+test("key validation refuses an endpoint on a private network address without sending it the key", async (t) => {
+  let hits = 0;
+  const endpoint = createServer((_req, res) => {
+    hits++;
+    res.end("{}");
+  });
+  endpoint.listen(0, "127.0.0.1");
+  await once(endpoint, "listening");
+  t.after(() => endpoint.close());
+  const srv = start();
+  t.after(srv.close);
+  for (const [baseUrl, host] of [
+    [`http://127.0.0.1:${(endpoint.address() as AddressInfo).port}/v1`, "127.0.0.1"],
+    ["http://169.254.169.254/latest", "169.254.169.254"],
+  ]) {
+    const put = await fetch(`${srv.base}/v1/admin/custom-providers/acme-gateway`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ ...BODY, baseUrl }),
+    });
+    assert.equal(put.status, 400, baseUrl);
+    assert.deepEqual(await put.json(), {
+      error: "bad_request",
+      message: `${host} is a private network address; a deployment operator can allow this exact origin with PRIVATE_NETWORK_ALLOWED_ORIGINS`,
+    });
+  }
+  assert.equal(hits, 0);
 });
 
 test("a rejected key blocks registration unless validate:false", async () => {
@@ -119,6 +145,39 @@ test("a rejected key blocks registration unless validate:false", async () => {
   }
 });
 
+test("a key check that cannot reach the endpoint reports why instead of a rejected key", async () => {
+  const srv = start(async () => {
+    throw new TypeError("fetch failed", { cause: new Error("getaddrinfo ENOTFOUND llm.acme.internal") });
+  });
+  try {
+    const put = await fetch(`${srv.base}/v1/admin/custom-providers/acme-gateway`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify(BODY),
+    });
+    assert.equal(put.status, 400);
+    const body = (await put.json()) as { error: string; message: string };
+    assert.equal(body.error, "bad_request");
+    assert.match(body.message, /^fetch failed <- .*getaddrinfo ENOTFOUND llm\.acme\.internal/);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a key that is not a valid header value is refused without echoing it", async (t) => {
+  const srv = start();
+  t.after(srv.close);
+  const put = await fetch(`${srv.base}/v1/admin/custom-providers/acme-gateway`, {
+    method: "PUT",
+    headers: ADMIN,
+    body: JSON.stringify({ ...BODY, apiKey: "sk-acme-secret\nX" }),
+  });
+  assert.equal(put.status, 400);
+  const text = await put.text();
+  assert.equal(text.includes("sk-acme-secret"), false);
+  assert.equal((JSON.parse(text) as { error: string }).error, "bad_request");
+});
+
 test("bad specs are refused with a reason", async () => {
   const srv = start();
   try {
@@ -135,7 +194,6 @@ test("bad specs are refused with a reason", async () => {
       assert.equal(res.status, 400);
       assert.match(((await res.json()) as { message: string }).message, reason);
     }
-    // Reserved slug via the path.
     const reserved = await fetch(`${srv.base}/v1/admin/custom-providers/openai`, {
       method: "PUT",
       headers: ADMIN,

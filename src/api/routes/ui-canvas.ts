@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { isTerminal } from "../../runs/run-store.ts";
 import { waitForClientResult } from "../../runs/run-signal-store.ts";
 import type { UiSignal } from "../../runs/session-state-bus.ts";
 import {
@@ -13,6 +12,7 @@ import {
 } from "../../surfaces/ui-canvas.ts";
 import { uiStateId, UI_STATE_MAX_BYTES } from "../../surfaces/ui-state.ts";
 import { scopeId } from "../../types.ts";
+import { personAtKeyboard } from "../artifact-share.ts";
 import { sendJson } from "../http.ts";
 import { conversationRef } from "./pins.ts";
 import { samePerson } from "../../directory/person.ts";
@@ -36,7 +36,7 @@ async function liveWebTurn(ctx: ApiCtx): Promise<UiTurn | null> {
   const threadRef = await conversationRef(ctx);
   if (!threadRef) return null;
   const cap = ctx.capability!;
-  if (!deps.uiState || !deps.runs || !deps.sessions) {
+  if (!deps.uiState || !deps.sessions) {
     sendJson(res, 404, { error: "not_available", message: "this deployment has no UI state store" });
     return null;
   }
@@ -47,16 +47,11 @@ async function liveWebTurn(ctx: ApiCtx): Promise<UiTurn | null> {
     });
     return null;
   }
-  if (cap.surface !== "web" || !cap.liveActor || cap.triggered || cap.botActor) {
+  if (cap.surface !== "web" || !cap.liveActor || !personAtKeyboard(cap)) {
     sendJson(res, 403, {
       error: "not_live_web_turn",
       message: "Only available during a turn the person started from the web UI.",
     });
-    return null;
-  }
-  const run = cap.runId ? await deps.runs.get(cap.runId) : null;
-  if (!run || isTerminal(run.status)) {
-    sendJson(res, 409, { error: "turn_ended", message: "The turn that issued this token has ended." });
     return null;
   }
   const session = await deps.sessions.getByThread(threadRef);
@@ -68,7 +63,7 @@ async function liveWebTurn(ctx: ApiCtx): Promise<UiTurn | null> {
     actorId: cap.actorId,
     sessionId: session.id,
     threadRef,
-    runId: run.id,
+    runId: cap.runId!,
     personal: cap.scopeId === scopeId("personal", cap.actorId),
   };
 }
@@ -146,7 +141,7 @@ async function applyCanvas(
   }
   if (patch && !canvas)
     return sendJson(ctx.res, 404, { error: "no_canvas", message: "there is no canvas yet; pass html, css or js" });
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: turn.actorId,
     action: patch ? "ui.canvas.write" : "ui.canvas.dismiss",
     resource: target === ALWAYS_ON_CANVAS ? "ui:always-on" : `session:${turn.sessionId}`,
@@ -202,7 +197,7 @@ async function observe(ctx: ApiCtx): Promise<void> {
   } finally {
     await deps.uiState!.delete(pendingId).catch((error: unknown) => swallow("ui observe pending cleanup", error));
   }
-  audit(deps, {
+  audit(ctx, {
     principalId: turn.actorId,
     action: "ui.observe",
     resource: `session:${turn.sessionId}`,
@@ -246,14 +241,42 @@ async function isCanvasTarget(ctx: ApiCtx, target: string): Promise<boolean> {
   return target === ALWAYS_ON_CANVAS || Boolean(await ctx.deps.sessions?.get(target));
 }
 
-async function userCanvasContent(ctx: ApiCtx): Promise<void> {
+async function userCanvasOf(ctx: ApiCtx): Promise<UiCanvas | null> {
   const { res, deps, url, params } = ctx;
   const principalId = url.searchParams.get("principalId") ?? "";
-  if (!principalId || !(await isCanvasTarget(ctx, params.sessionId!)))
-    return sendJson(res, 400, { error: "bad_request", message: "principalId and a session id required" });
-  if (!deps.uiState || !(await canvasEnabled(ctx, principalId))) return sendJson(res, 404, { error: "not_found" });
-  const canvas = await readUiCanvas(deps.uiState, principalId, params.sessionId!);
-  return canvas ? sendJson(res, 200, { canvas }) : sendJson(res, 404, { error: "not_found" });
+  if (!principalId || !(await isCanvasTarget(ctx, params.sessionId!))) {
+    sendJson(res, 400, { error: "bad_request", message: "principalId and a session id required" });
+    return null;
+  }
+  const canvas =
+    deps.uiState && (await canvasEnabled(ctx, principalId))
+      ? await readUiCanvas(deps.uiState, principalId, params.sessionId!)
+      : null;
+  if (!canvas) sendJson(res, 404, { error: "not_found" });
+  return canvas;
+}
+
+async function userCanvasContent(ctx: ApiCtx): Promise<void> {
+  const canvas = await userCanvasOf(ctx);
+  if (canvas) sendJson(ctx.res, 200, { canvas });
+}
+
+async function userCanvasScript(ctx: ApiCtx): Promise<void> {
+  const { req, res, url, params } = ctx;
+  const site = req.headers["sec-fetch-site"];
+  if (site !== undefined && site !== "same-origin")
+    return sendJson(res, 403, { error: "forbidden", message: "cross-origin request refused" });
+  const canvas = await userCanvasOf(ctx);
+  if (!canvas) return;
+  if (String(canvas.rev) !== url.searchParams.get("rev")) return sendJson(res, 409, { error: "stale_revision" });
+  res.writeHead(200, {
+    "content-type": "application/javascript; charset=utf-8",
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
+  });
+  res.end(
+    `((canvas) => {\n${canvas.js}\n})(window.qmUiCanvasTake?.(${JSON.stringify(params.sessionId!)}, ${Number(canvas.rev)}));\n`,
+  );
 }
 
 async function userCanvas(ctx: ApiCtx): Promise<void> {
@@ -283,10 +306,34 @@ export const uiCanvasRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "POST",
     path: "/v1/ui/observe/:callId/result",
+    browser: "self",
+    actor: "body.principalId",
     auth: "source",
     maxBodyBytes: 2_000_000,
     handle: observeResult,
   },
-  { method: "GET", path: "/v1/ui/canvases/:sessionId", auth: "source", handle: userCanvasContent },
-  { method: "POST", path: "/v1/ui/canvases/:sessionId", auth: "source", handle: userCanvas },
+  {
+    method: "GET",
+    path: "/v1/ui/canvases/:sessionId",
+    browser: "self",
+    actor: "query.principalId",
+    auth: "source",
+    handle: userCanvasContent,
+  },
+  {
+    method: "GET",
+    path: "/v1/ui/canvases/:sessionId/script.js",
+    browser: "self",
+    actor: "query.principalId",
+    auth: "source",
+    handle: userCanvasScript,
+  },
+  {
+    method: "POST",
+    path: "/v1/ui/canvases/:sessionId",
+    browser: "self",
+    actor: "body.principalId",
+    auth: "source",
+    handle: userCanvas,
+  },
 ];

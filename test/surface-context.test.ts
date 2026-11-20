@@ -14,6 +14,7 @@ import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { liveRunBinding, liveRunStore } from "./support/live-run.ts";
 
 const SECRET = "surface-context-test-secret".repeat(3);
 
@@ -29,6 +30,7 @@ describe("surface-context pulls", async () => {
         scopeId: scopeId("channel", "C9"),
         destination: { type: "slack", target: "C9:1700.0001", audienceScopeId: scopeId("channel", "C9") },
         exp: Date.now() + CAPABILITY_TTL_MS,
+        ...liveRunBinding("U1"),
         ...overrides,
       },
       SECRET,
@@ -78,6 +80,7 @@ describe("surface-context pulls", async () => {
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
+      runs: liveRunStore(),
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -297,7 +300,7 @@ describe("surface-context pulls", async () => {
       },
     );
     const query = await fulfillNext(() => ({
-      file: { blobId: "blob-42", name: "wave.png", sizeBytes: 3, mimetype: "image/png", author: "Alice" },
+      attachments: [{ blobId: "blob-42", name: "wave.png", sizeBytes: 3, mimetype: "image/png", author: "Alice" }],
     }));
     assert.equal(query.channelId, "C-ENG");
     assert.deepEqual(query.file, { ts: "1699.5", name: "wave.png" });
@@ -322,7 +325,7 @@ describe("surface-context pulls", async () => {
       { ts: "1700.2", threadTs: "1700.0001" },
       { "x-agent-capability": await cap() },
     );
-    const query = await fulfillNext(() => ({ file: { blobId: "b2", name: "notes.txt", sizeBytes: 9 } }));
+    const query = await fulfillNext(() => ({ attachments: [{ blobId: "b2", name: "notes.txt", sizeBytes: 9 }] }));
     assert.equal(query.conversationTarget, "C9:1700.0001");
     assert.deepEqual(query.file, { ts: "1700.2", threadTs: "1700.0001" });
     assert.equal((await asking).status, 200);
@@ -343,7 +346,7 @@ describe("surface-context pulls", async () => {
       { channel: "warroom", ts: "1.0" },
       { "x-agent-capability": await cap({ actorId: "U-member" }) },
     );
-    const query = await fulfillNext(() => ({ file: { blobId: "b3", name: "secret.pdf", sizeBytes: 1 } }));
+    const query = await fulfillNext(() => ({ attachments: [{ blobId: "b3", name: "secret.pdf", sizeBytes: 1 }] }));
     assert.equal(query.channelId, "C-SECRET");
     assert.equal((await asking).status, 200);
   });

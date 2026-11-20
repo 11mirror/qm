@@ -4,7 +4,6 @@ import type { CapabilityClaims } from "../auth/capability-token.ts";
 const stripCandidate = (c: CandidateDestination): Destination => ({
   type: c.type,
   target: c.target,
-  ...(c.webhook ? { webhook: c.webhook } : {}),
   ...(c.audienceScopeId ? { audienceScopeId: c.audienceScopeId } : {}),
 });
 
@@ -17,5 +16,8 @@ export function resolveCapabilityDestination(
     return chosen ? { ok: true, destination: stripCandidate(chosen) } : { ok: false };
   }
   const def = cap.destinations?.find((d) => d.key === cap.defaultDestinationKey);
-  return { ok: true, destination: def ? stripCandidate(def) : cap.destination };
+  if (def) return { ok: true, destination: stripCandidate(def) };
+  if (!cap.destination) return { ok: true, destination: undefined };
+  const { persona: _worn, project: _from, ...stored } = cap.destination;
+  return { ok: true, destination: stored };
 }

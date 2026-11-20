@@ -9,7 +9,6 @@ import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
 import { text, type ToolKit } from "./kit.ts";
 import { listOrder, pageOf, previewText } from "./listing.ts";
 
-const SENDER_WEBHOOK_SCHEMES = WEBHOOK_SCHEMES.filter((scheme) => scheme !== "hmac-sha256");
 const WEBHOOK_ACTION_PREVIEW_CHARS = 2000;
 
 export function controlPlaneTools(kit: ToolKit) {
@@ -20,7 +19,7 @@ export function controlPlaneTools(kit: ToolKit) {
     description:
       "Inbound webhooks: a turn runs whenever an external system POSTs to the URL. Confirm with the user before creating one.\n" +
       "create: `task` (what to do per event; the payload is appended), `verification`, optional `filters` and `destinationKey` (same delivery menu as crons). " +
-      `For ${SENDER_WEBHOOK_SCHEMES.join("/")} the user supplies the signing secret from the sender's settings; for hmac-sha256 generate a strong random one. ` +
+      "For hmac-sha256 and token (senders that cannot sign) generate a strong random secret; for every other scheme the user supplies the sender's signing secret. " +
       "The result shows the public `url` and `secret` once; relay both verbatim to the user, who must configure the sender before it fires.\n" +
       "list: 25 per page, secrets elided. update: replace one's task (same URL and secret). disable: pause one.",
     parameters: Type.Object({
@@ -36,7 +35,7 @@ export function controlPlaneTools(kit: ToolKit) {
         Type.Object(
           {
             scheme: Type.Union(WEBHOOK_SCHEMES.map((scheme) => Type.Literal(scheme))),
-            secret: Type.String({ description: "The signing secret." }),
+            secret: Type.String({ description: "The signing secret or token." }),
           },
           { description: "create: request authentication." },
         ),
@@ -83,11 +82,15 @@ export function controlPlaneTools(kit: ToolKit) {
             return recordResult(callId, { tool: "webhook", error: r.code }, text(`[error] ${r.message}`), true);
 
           const secretLine = `\nSecret (shown once — store it): ${r.secret}`;
+          const tokenUse =
+            r.webhook.verification.scheme === "token"
+              ? "\nThe sender sends the secret as `Authorization: Bearer <secret>`, or adds `?token=<secret>` to the URL if it cannot set headers."
+              : "";
           return recordResult(
             callId,
             { tool: "webhook", id: r.webhook.id, url: r.url, secretShown: !!r.secret },
             text(
-              `Registered webhook ${r.webhook.id}.\nInbound URL (give to the sender verbatim): ${r.url}${secretLine}\nIt won't fire until the sender is pointed at this URL.`,
+              `Registered webhook ${r.webhook.id}.\nInbound URL (give to the sender verbatim): ${r.url}${secretLine}${tokenUse}\nIt won't fire until the sender is pointed at this URL.`,
             ),
           );
         }
@@ -330,8 +333,12 @@ export function controlPlaneTools(kit: ToolKit) {
   function sharingTool(type: "file" | "skill" | "deploy" | "cron"): ToolDefinition {
     const tool = { file: "files", skill: "skills", deploy: "apps", cron: "cron" }[type];
     let description = "Grant access to an artifact you own; grantees cannot reshare.";
+    if (type === "cron")
+      description =
+        "Share a cron you own. If it posts to your own DM, a teammate (a name or personal:<id>) gets their own linked copy that runs as them, posts to their DM and keeps its persona and project: an admin's share starts it; anyone else's waits paused until they turn it on (accept) or delete it (decline). Your later edits reach every copy its owner hasn't edited. A cron that posts to a channel or group stays one cron, so sharing it, like permission=write or any other scope, gets access to this cron itself instead.";
     if (type === "file")
-      description = "Share a Files record by ID (upload a sandbox path with POST /v1/files/uploads first).";
+      description =
+        "Share a Files record by ID (upload a sandbox path with the helper from GET /v1/files/upload-client first).";
     if (type === "deploy")
       description =
         "Change access to an app you own: `public`, or toScope/email for signed-in access (external emails view-only).";
@@ -371,8 +378,8 @@ export function controlPlaneTools(kit: ToolKit) {
             }
           : {}),
         permission: Type.Optional(
-          Type.Union([Type.Literal("read"), Type.Literal("write")], {
-            description: "read (default) or write (manage).",
+          Type.Union([Type.Literal("read"), Type.Literal("write"), Type.Literal("none")], {
+            description: "read (default), write (manage), or none (remove their access).",
           }),
         ),
       }),
@@ -382,7 +389,7 @@ export function controlPlaneTools(kit: ToolKit) {
           toScope?: string;
           email?: string;
           public?: boolean;
-          permission?: "read" | "write";
+          permission?: "read" | "write" | "none";
           notify?: boolean;
         };
         const tc = ref.current;
@@ -397,7 +404,7 @@ export function controlPlaneTools(kit: ToolKit) {
               text("[error] set public, email, or toScope, not more than one"),
               true,
             );
-          const d = await tc.setDeploymentPublic(id, params.public);
+          const d = await tc.setAppPublic(id, params.public);
           return recordResult(
             callId,
             { tool, action: "share", type, id: d.id, public: d.public },
@@ -438,11 +445,16 @@ export function controlPlaneTools(kit: ToolKit) {
         else if (r.invitation)
           invitationNote = ` Access granted, but invitation email was not sent: ${r.invitation.emailProblem ?? "delivery unavailable"}`;
         if (r.invitation?.appUrl) invitationNote += ` App link: ${r.invitation.appUrl}`;
+        if (r.copy?.existed) invitationNote = ` They already have linked copy ${r.copy.id}.`;
+        else if (r.copy)
+          invitationNote = ` Their linked copy ${r.copy.id} ${r.copy.enabled ? "is on and runs as them" : "waits, paused, until they accept it"}; they were told in their DM.${r.copy.note ? ` ${r.copy.note}` : ""}`;
         return recordResult(
           callId,
           { tool, action: "share", verb: r.verb, type: r.type, id: r.id, target: r.target.scope },
           text(
-            `Shared ${r.type} ${r.id} → ${r.target.label}${r.verb === "share" ? ` (${r.permission})` : ""}.${invitationNote}`,
+            r.verb === "unshare"
+              ? `Removed ${r.target.label}'s access to ${r.type} ${r.id}.`
+              : `Shared ${r.type} ${r.id} → ${r.target.label}${r.verb === "share" ? ` (${r.permission})` : ""}.${invitationNote}`,
           ),
         );
       },
@@ -493,7 +505,7 @@ export function controlPlaneTools(kit: ToolKit) {
 
   if (ref.current === null || ref.current.admin?.operationsAvailable)
     admin.description =
-      "Admin API; authority is rechecked on every call and audited. Private content needs a live admin in a DM or Open conversation; unattended reads need explicit grants. Admin-role changes, impersonation, identity links and teammate invitations are portal-only. Confirm every mutation, report exactly what changed, and disclose only what this conversation needs. Never put secrets in arguments.\n\n" +
+      "Admin API; authority is rechecked on every call and audited. Private content needs the admin in a DM or Open conversation; a cron, webhook or loop fire carries its owner's authority. Admin-role changes, impersonation, identity links and teammate invitations are portal-only. Confirm every mutation, report exactly what changed, and disclose only what this conversation needs. Never put secrets in arguments.\n\n" +
       admin.description;
 
   return { webhook, guidance, sharingTool, admin };

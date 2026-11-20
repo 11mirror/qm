@@ -457,6 +457,60 @@ const CERTIFIED_RESULT_SCHEMA = [
    $qm$`,
 ];
 
+const CERTIFIED_RESULT_DELIVERY_COMPAT_SCHEMA = [
+  `DO $qm$
+   BEGIN
+     IF to_regclass('deliveries') IS NOT NULL AND NOT EXISTS (
+       SELECT 1
+         FROM pg_index i
+         JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=ANY(i.indkey)
+        WHERE i.indrelid=to_regclass('deliveries')
+          AND i.indisunique
+          AND i.indnkeyatts=1
+          AND a.attname='id'
+     ) THEN
+       CREATE UNIQUE INDEX deliveries_finny_legacy_id_unique ON deliveries(id);
+     END IF;
+   END
+   $qm$`,
+];
+
+const CERTIFIED_RESULT_TENANT_DELIVERY_SCHEMA = [
+  `ALTER TABLE finny_results ADD COLUMN IF NOT EXISTS delivery_tenant_id UUID`,
+  `DO $qm$
+   BEGIN
+     IF to_regclass('deliveries') IS NOT NULL THEN
+       UPDATE finny_results results
+          SET delivery_tenant_id=deliveries.tenant_id
+         FROM deliveries
+        WHERE results.delivery_id=deliveries.id
+          AND results.delivery_tenant_id IS NULL;
+     END IF;
+     UPDATE finny_results
+        SET delivery_tenant_id=qm_boot_tenant()
+      WHERE delivery_tenant_id IS NULL;
+     IF EXISTS (SELECT 1 FROM finny_results WHERE delivery_tenant_id IS NULL) THEN
+       RAISE EXCEPTION 'Finny result tenancy cutover refused: delivery ownership is ambiguous';
+     END IF;
+   END
+   $qm$`,
+  `ALTER TABLE finny_results ALTER COLUMN delivery_tenant_id SET DEFAULT qm_bound_tenant()`,
+  `ALTER TABLE finny_results ALTER COLUMN delivery_tenant_id SET NOT NULL`,
+  `DO $qm$
+   BEGIN
+     IF to_regclass('deliveries') IS NOT NULL THEN
+       ALTER TABLE finny_results DROP CONSTRAINT IF EXISTS finny_results_delivery_fk;
+       ALTER TABLE finny_results DROP CONSTRAINT IF EXISTS finny_results_delivery_id_key;
+       ALTER TABLE finny_results ADD CONSTRAINT finny_results_delivery_key
+         UNIQUE(delivery_tenant_id, delivery_id);
+       ALTER TABLE finny_results ADD CONSTRAINT finny_results_delivery_fk
+         FOREIGN KEY(delivery_tenant_id, delivery_id) REFERENCES deliveries(tenant_id, id);
+       DROP INDEX IF EXISTS deliveries_finny_legacy_id_unique;
+     END IF;
+   END
+   $qm$`,
+];
+
 const AUDIT_RESULT_CUTOVER_SCHEMA = [
   `DO $qm$
    BEGIN
@@ -873,11 +927,13 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
     { id: "finny/store/0012-sop-amendment-events", statements: SOP_AMENDMENT_SCHEMA },
     { id: "finny/store/0013-sop-cutover", statements: SOP_CUTOVER_SCHEMA },
     { id: "finny/store/0014-audit-attempts", statements: AUDIT_ATTEMPT_SCHEMA },
+    { id: "finny/store/0014a-certified-delivery-compat", statements: CERTIFIED_RESULT_DELIVERY_COMPAT_SCHEMA },
     { id: "finny/store/0015-certified-results", statements: CERTIFIED_RESULT_SCHEMA },
     { id: "finny/store/0016-audit-result-cutover", statements: AUDIT_RESULT_CUTOVER_SCHEMA },
     { id: "finny/store/0017-audit-result-recovery-cutover", statements: AUDIT_RESULT_RECOVERY_CUTOVER_SCHEMA },
     { id: "finny/store/0018-audit-attempt-evaluator-identity", statements: AUDIT_ATTEMPT_EVALUATOR_IDENTITY_SCHEMA },
     { id: "finny/store/0019-core-audit-cutover", statements: CORE_AUDIT_CUTOVER_SCHEMA },
+    { id: "finny/store/0020-tenant-delivery", statements: CERTIFIED_RESULT_TENANT_DELIVERY_SCHEMA },
   ]);
   const createSopVersion = async (sopValue: FinnySopVersion): Promise<FinnyStoredSopVersion> => {
     const sop = validateFinnySopVersion(sopValue);
@@ -2022,7 +2078,10 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
       const rows = await q("SELECT * FROM finny_results WHERE delivery_id IS NULL ORDER BY created_at,id LIMIT $1", [
         limit,
       ]);
-      return rows.map(rowToCertifiedResult);
+      return rows.map((row) => ({
+        result: rowToCertifiedResult(row),
+        tenantId: row.delivery_tenant_id as string,
+      }));
     },
     async markCertifiedResultDelivery(resultId, deliveryId) {
       assertNonEmpty(resultId, "certified result ID");

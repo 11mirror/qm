@@ -8,6 +8,8 @@ import {
 } from "../src/finny/certified-delivery.ts";
 import type { FinnyCertifiedResultRecord } from "../src/finny/certified-result.ts";
 import { parseGenerativeUISpec, renderGenerativeUI } from "../src/slack/generative-ui.ts";
+import { boundTenant } from "../src/tenants/context.ts";
+import { TEST_TENANT } from "./support/test-tenant-id.ts";
 
 const result = {
   id: "result-1",
@@ -181,11 +183,18 @@ test("uses the identical certified figures for web and Slack destinations", () =
 
 test("recovers result-owned delivery intent without duplicating the visible result", async () => {
   const deliveries = createDeliveryStore();
+  const tenantIds: Array<string | undefined> = [];
+  const scopedDeliveries = {
+    enqueue: async (input: Parameters<typeof deliveries.enqueue>[0]) => {
+      tenantIds.push(boundTenant());
+      return deliveries.enqueue(input);
+    },
+  };
   let deliveryId: string | undefined;
   const lifecycle: string[] = [];
   const results = {
     async pendingCertifiedResultDeliveries() {
-      return deliveryId ? [] : [result];
+      return deliveryId ? [] : [{ result, tenantId: TEST_TENANT }];
     },
     async markCertifiedResultDelivery(resultId: string, id: string) {
       assert.equal(resultId, result.id);
@@ -198,12 +207,13 @@ test("recovers result-owned delivery intent without duplicating the visible resu
     lifecycle.push("retired");
     retired.push(entry.jobId);
   };
-  await deliverPendingCertifiedResults(results, deliveries, "https://qm.example.test", afterEnqueue);
-  await deliverPendingCertifiedResults(results, deliveries, "https://qm.example.test", afterEnqueue);
+  await deliverPendingCertifiedResults(results, scopedDeliveries, "https://qm.example.test", afterEnqueue);
+  await deliverPendingCertifiedResults(results, scopedDeliveries, "https://qm.example.test", afterEnqueue);
   assert.ok(deliveryId);
   assert.equal((await deliveries.pending("slack")).length, 1);
   assert.deepEqual(retired, [result.jobId]);
   assert.deepEqual(lifecycle, ["retired", "marked"]);
+  assert.deepEqual(tenantIds, [TEST_TENANT]);
 });
 
 test("drains certified result backlogs in bounded batches", async () => {
@@ -218,7 +228,7 @@ test("drains certified result backlogs in bounded batches", async () => {
   const results = {
     async pendingCertifiedResultDeliveries(limit: number) {
       requestedLimits.push(limit);
-      return pending.slice(0, limit);
+      return pending.slice(0, limit).map((entry) => ({ result: entry, tenantId: TEST_TENANT }));
     },
     async markCertifiedResultDelivery(resultId: string) {
       const index = pending.findIndex((entry) => entry.id === resultId);

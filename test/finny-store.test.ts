@@ -209,14 +209,16 @@ test("records one complete immutable audit attempt for the current artifact", as
     first.events.map((event) => event.type),
     ["audit_attempt_recorded", "rework_requested"],
   );
-  assert.deepEqual(first.events[0]?.payload, {
+  const firstEvent = first.events[0];
+  assert.ok(firstEvent);
+  assert.deepEqual(firstEvent.payload, {
     attemptId: submission.id,
     artifactDigest: submission.artifactSha256,
     verdict: "block",
     failedControlIds: ["summary.crossfoot"],
-    requestDigest: (first.events[0]?.payload as { requestDigest: string }).requestDigest,
+    requestDigest: (firstEvent.payload as { requestDigest: string }).requestDigest,
   });
-  assert.match((first.events[0]?.payload as { requestDigest: string }).requestDigest, /^[a-f0-9]{64}$/);
+  assert.match((firstEvent.payload as { requestDigest: string }).requestDigest, /^[a-f0-9]{64}$/);
 });
 
 test("completes one pending judgment attempt as BLOCK and requests rework", async () => {

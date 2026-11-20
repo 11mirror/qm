@@ -21,12 +21,16 @@ import type {
   TurnOrigin,
 } from "../types.ts";
 import { childIsolation } from "./child-isolation.ts";
+import { sessionVisibleTo } from "./session-rows.ts";
 import { openRuntime, parentRuntime } from "./subagent-runtime.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
-import type { RunSignalStore } from "../runs/run-signal-store.ts";
+import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
+import type { RunSignal, RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
+import type { SwarmService } from "../swarms/swarm-service.ts";
+import type { Tenant } from "../tenants/context.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { isPeerMessage, wakeOwnParent, wakePeer } from "./subagent-mail.ts";
 import {
@@ -48,26 +52,31 @@ export function isSubagentThreadRef(threadRef: string): boolean {
 }
 
 export function requiresDelegation(
-  request: Pick<OrchestratorInput, "surface" | "surfaceTools" | "conversation" | "swarm">,
-  enabled: boolean,
+  request: Pick<OrchestratorInput, "surface" | "surfaceTools" | "conversation" | "swarm" | "surfaceOrigin">,
 ): boolean {
   return (
-    enabled &&
+    request.surfaceOrigin?.audience !== "external" &&
     !request.swarm &&
     !isSubagentThreadRef(request.conversation.threadRef) &&
     (request.surface === "slack" || request.surfaceTools === true)
   );
 }
 
-export async function delegatedAuthorizationOrigin(
+export function isOwnerFire(request: Pick<OrchestratorInput, "origin" | "botActor">): boolean {
+  return request.origin.kind === "automation" && request.origin.ownerFire === true && !request.botActor;
+}
+
+export async function delegatedAuthorization(
   request: OrchestratorInput,
-  deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "getByThread" | "getForParticipant"> },
-): Promise<OrchestratorInput["origin"] | undefined> {
+  deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get" | "getByThread"> },
+): Promise<{ origin: OrchestratorInput["origin"]; attended: boolean } | undefined> {
   const seen = new Set<string>();
+  const startedAt = request.runStartedAt ?? Date.now();
+  let attended = true;
   let current = request;
   for (let depth = 0; depth < 32; depth++) {
     if (
-      current.origin.kind === "automation" ||
+      (current.origin.kind === "automation" && !isOwnerFire(current)) ||
       current.readOnly ||
       current.privateSessionMessage ||
       current.swarm ||
@@ -78,7 +87,7 @@ export async function delegatedAuthorizationOrigin(
       return;
     seen.add(current.delegatingRunId);
     const source = await deps.runs.get(current.delegatingRunId);
-    const sender = await deps.sessions.getForParticipant(current.sessionSenderId, request.actor.id);
+    const sender = await deps.sessions.get(current.sessionSenderId);
     const child = await deps.sessions.getByThread(current.conversation.threadRef);
     if (!source || !sender || !child) return;
     const delegated =
@@ -95,6 +104,7 @@ export async function delegatedAuthorizationOrigin(
       !isSubagentThreadRef(child.threadRef) &&
       source.sessionId === sender.threadRef;
     if (!delegated && !continued && !started) return;
+    attended &&= source.finishedAt === null || source.finishedAt > startedAt;
     const parent = source.request;
     const audience = new Set([parent.actor.id, ...parent.conversation.audience.map((person) => person.id)]);
     if (
@@ -118,9 +128,10 @@ export async function delegatedAuthorizationOrigin(
       !isSessionTurn(parent) &&
       internal &&
       (parent.origin.kind === "human" ||
+        isOwnerFire(parent) ||
         (parent.origin.kind === "ambient" && parent.origin.live === true && parent.conversation.kind !== "dm"))
     )
-      return parent.origin;
+      return { origin: parent.origin, attended };
     current = parent;
   }
 }
@@ -141,6 +152,32 @@ export function ownsSessionContext(
 export const isSidebarSession = (session: Session): boolean =>
   !session.parentSessionId && !isSubagentThreadRef(session.threadRef) && !session.threadRef.startsWith("swarm:");
 
+export function doesBotWork(session: Pick<Session, "spawnMeta"> | null, request: { botActor?: boolean }): boolean {
+  return request.botActor === true || session?.spawnMeta?.botActor === true;
+}
+
+export async function forkOfBotWork(
+  tenant: Tenant,
+  session: Pick<Session, "id" | "forkedFrom"> | null,
+  deps: { sessions: Pick<SessionStore, "forkOrigin">; swarms?: Pick<SwarmService, "botStartedWorker"> },
+): Promise<boolean> {
+  if (!session?.forkedFrom) return false;
+  const origin = await deps.sessions.forkOrigin(tenant, session.id);
+  if (!origin || origin.forkedFrom) return true;
+  if (isSubagentThreadRef(origin.threadRef)) return origin.spawnMeta?.botActor === true;
+  if (!origin.threadRef.startsWith("swarm:")) return false;
+  return !deps.swarms || (await deps.swarms.botStartedWorker(origin));
+}
+
+export async function hiddenFromBotWork(
+  tenant: Tenant,
+  viewer: { botActor?: boolean },
+  session: Pick<Session, "id" | "forkedFrom" | "botWork">,
+  deps: Parameters<typeof forkOfBotWork>[2],
+): Promise<boolean> {
+  return !sessionVisibleTo(viewer, session) && !(await forkOfBotWork(tenant, session, deps));
+}
+
 export function storedContext(session: Session): SpawnMeta | undefined {
   return (
     session.spawnMeta && {
@@ -158,8 +195,8 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
   return {
     origin,
     ...(input.surfaceTools ? { surfaceTools: true } : {}),
+    ...(input.liveReplies ? { liveReplies: true } : {}),
     ...(input.deliveryCandidates ? { deliveryCandidates: input.deliveryCandidates } : {}),
-    ...(input.unattendedGrants ? { unattendedGrants: [...input.unattendedGrants] } : {}),
     ...(input.surfaceOrigin?.audience === "external" ? { surfaceOrigin: input.surfaceOrigin } : {}),
     ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
     ...(input.sessionParticipantIds ? { sessionParticipantIds: input.sessionParticipantIds } : {}),
@@ -167,9 +204,10 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
     conversation: input.conversation,
     actor: input.actor,
     ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
-    ...(input.deliveryWebhook ? { deliveryWebhook: input.deliveryWebhook } : {}),
     ...(input.timezone ? { timezone: input.timezone } : {}),
     ...(input.readOnly ? { readOnly: true } : {}),
+    ...(input.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
+    ...(input.botActor ? { botActor: true } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
@@ -185,6 +223,8 @@ const SESSION_MESSAGE_DEPTH_CAP = 8;
 const READ_DEFAULT_LIMIT = 30;
 const SESSION_LIST_LIMIT = 50;
 const WEB_ONLY = "sessions are a web UI feature and aren't available here.";
+const HIDDEN_PARENT =
+  "your parent conversation is hidden from bot work, so you can't read it; you can still write to it.";
 const READ_DEFAULT_MAX_CHARS = 4_000;
 const READ_MAX_CHARS_CEILING = 20_000;
 const LAST_SAID_SCAN = 40;
@@ -199,6 +239,7 @@ export interface SessionOpenInput {
   fastMode?: boolean;
   isolation?: ChildIsolationMode;
   beforeEnqueue?: (binding: { sessionId: string; runId: string }) => Promise<{ text?: string } | void>;
+  persistent?: boolean;
 }
 
 type SessionOpenResult =
@@ -220,7 +261,7 @@ type SessionWriteResult =
       ok: true;
       sessionId: string;
       title: string;
-      delivered: "queued_turn" | "interrupted" | "queued_message";
+      delivered: "queued_turn" | "steered" | "interrupted" | "queued_message";
       busy?: boolean;
       notWoken?: string;
     }
@@ -283,7 +324,6 @@ export interface SessionSyscallBinding {
     | "surface"
     | "surfaceTools"
     | "deliveryCandidates"
-    | "unattendedGrants"
     | "privateSessionMessage"
     | "sessionMessageDepth"
     | "swarm"
@@ -292,9 +332,10 @@ export interface SessionSyscallBinding {
     | "conversation"
     | "actor"
     | "deliveryTarget"
-    | "deliveryWebhook"
     | "timezone"
     | "readOnly"
+    | "memoryNotebookOnly"
+    | "botActor"
     | "scopeVersion"
     | "sessionParticipantIds"
     | "surfaceOrigin"
@@ -325,7 +366,6 @@ export interface SessionSyscallsFactory {
 export interface SessionSyscallDeps {
   mailbox: SessionMailbox;
   enabled?: (actorId: string) => Promise<boolean>;
-  delegationEnabled?: (actorId: string) => Promise<boolean>;
   sessions: Pick<
     SessionStore,
     | "get"
@@ -345,16 +385,21 @@ export interface SessionSyscallDeps {
     SubagentActivityDeps["sessions"];
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw"> &
     SubagentActivityDeps["runs"];
-  signals: Pick<RunSignalStore, "send" | "pending">;
+  signals: Pick<RunSignalStore, "send" | "pending" | "runForDedupeKey">;
+  steerRun(
+    run: Run,
+    signal: RunSignal,
+  ): Promise<{ sent: boolean; terminal?: boolean; drained?: boolean; replayRunId?: string }>;
   maxAttempts: number;
   advisoryLock: AdvisoryLock;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
-  authorize?: (session: Session, actorId: string) => Promise<boolean>;
+  authorize?: (target: Session, request: SessionSyscallBinding["request"]) => Promise<boolean>;
+  reaches?: (target: Session, request: SessionSyscallBinding["request"], from: Session) => Promise<boolean>;
   validateRuntime?: (input: SessionOpenInput, scopeId: ScopeId) => Promise<void>;
   defaultModel?: (scopeId: ScopeId) => Promise<string>;
   conversations?: {
     search?: CoreSearch["search"];
-    list(actorId: string): Promise<Session[]>;
+    list(viewer: { actorId: string; botActor?: boolean }): Promise<Session[]>;
     start(
       actorId: string,
       input: {
@@ -422,18 +467,19 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     ...(meta.scopeVersion ? { scopeVersion: meta.scopeVersion } : {}),
     ...(meta.sessionParticipantIds ? { sessionParticipantIds: meta.sessionParticipantIds } : {}),
     surface: meta.surface,
+    ...(meta.liveReplies ? { liveReplies: true } : {}),
     ...(meta.surfaceOrigin ? { surfaceOrigin: meta.surfaceOrigin } : {}),
     ...(meta.deliveryTarget ? { deliveryTarget: meta.deliveryTarget } : {}),
-    ...(meta.deliveryWebhook ? { deliveryWebhook: meta.deliveryWebhook } : {}),
     ...(meta.deliveryCandidates ? { deliveryCandidates: meta.deliveryCandidates } : {}),
     actor: meta.actor,
     conversation: { ...meta.conversation, threadRef: child.threadRef },
     origin: sessionTurnOrigin(meta.origin, text),
-    ...(meta.unattendedGrants ? { unattendedGrants: [...meta.unattendedGrants] } : {}),
     text,
     displayText,
     envelopeWrapped: true,
     ...(meta.readOnly ? { readOnly: true } : {}),
+    ...(meta.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
+    ...(meta.botActor ? { botActor: true } : {}),
     ...(meta.model ? { model: meta.model } : {}),
     ...(meta.thinkingLevel ? { thinkingLevel: meta.thinkingLevel } : {}),
     ...(meta.fastMode !== undefined ? { fastMode: meta.fastMode } : {}),
@@ -449,6 +495,9 @@ export function assertAudienceCompatible(
   if ([target.actor.id, ...target.conversation.audience.map((person) => person.id)].some((id) => !allowed.has(id)))
     throw new Error("the target audience includes people outside the sender's authorized audience");
 }
+
+export const AMBIENT_REACH_REFUSAL =
+  "that helper belongs to another unprompted wake; only the wake that opened it can reach it.";
 
 async function sessionAncestors(sessions: Pick<SessionStore, "get">, session: Session): Promise<Session[]> {
   const ancestors: Session[] = [];
@@ -522,7 +571,7 @@ export const ANCESTOR_STOP = "because the parent session was stopped";
 export const USER_STOP = "by user";
 export const USER_STOP_ALL = "by user (subagents too)";
 
-type StopRequest = { reason?: string | undefined; scope?: StopScope };
+type StopRequest = { reason?: string | undefined; scope?: StopScope; botRunsOnly?: boolean };
 
 export const sparesDescendants = (scope: StopScope | undefined): boolean => scope === "run" || scope === "session";
 
@@ -565,7 +614,7 @@ export async function stopSessionRuns(
 ): Promise<{ id: string; withdrawn: boolean }[]> {
   const stopped: { id: string; withdrawn: boolean }[] = [];
   for (const run of await deps.runs.inFlightForThread(session.threadRef)) {
-    if (interrupt && !interruptible(run)) continue;
+    if ((interrupt && !interruptible(run)) || (stop.botRunsOnly && !run.request.botActor)) continue;
     const sender = interrupt && unstarted(run) ? run.request.sessionSenderId : undefined;
     const foreign = interrupt && sender && sender !== interrupt.by ? { mailbox: interrupt.mailbox, sender } : undefined;
     if (foreign)
@@ -574,6 +623,7 @@ export async function stopSessionRuns(
         recipientId: session.id,
         senderId: foreign.sender,
         actor: run.request.actor,
+        ...(run.request.botActor ? { botActor: true } : {}),
         audience: run.request.conversation.audience,
         text: run.request.text,
         createdAt: run.createdAt,
@@ -608,6 +658,32 @@ async function acceptedFollowup(
   return { ok: true, sessionId: target.id, title, delivered: "queued_turn", busy: others.length > 0 };
 }
 
+async function steerRunningTurn(
+  deps: Pick<SessionSyscallDeps, "signals" | "steerRun">,
+  inFlight: Run[],
+  request: OrchestratorInput,
+  message: { text: string; dedupKey: string | undefined },
+): Promise<"steered" | "replayed" | "refused" | undefined> {
+  if (message.dedupKey && (await deps.signals.runForDedupeKey(message.dedupKey))) return "steered";
+  const live = inFlight.find((run) => run.status === "running");
+  if (
+    !live ||
+    (request.readOnly && !live.request.readOnly) ||
+    (request.memoryNotebookOnly && !live.request.memoryNotebookOnly) ||
+    Boolean(request.botActor) !== Boolean(live.request.botActor)
+  )
+    return undefined;
+  const steered = await deps.steerRun(live, {
+    kind: "steer",
+    text: message.text,
+    ts: `${Date.now()}.${randomUUID().slice(0, 8)}`,
+    request: { ...replayableRequest(request), spawned: true },
+    ...(message.dedupKey ? { dedupeKey: message.dedupKey } : {}),
+  });
+  if (!steered.terminal) return "steered";
+  return steered.drained && !steered.replayRunId ? "refused" : "replayed";
+}
+
 export async function stopSessionTree(
   deps: {
     sessions: Pick<SessionStore, "childrenOf">;
@@ -616,10 +692,12 @@ export async function stopSessionTree(
   },
   root: Session,
   reason?: string,
+  botRunsOnly?: boolean,
 ): Promise<boolean> {
   let stopped = false;
   for (const session of await treeSessions(deps.sessions, root)) {
-    const stop: StopRequest = session.id === root.id ? { reason } : { reason: ANCESTOR_STOP, scope: "ancestor" };
+    const stop: StopRequest =
+      session.id === root.id ? { reason, botRunsOnly } : { reason: ANCESTOR_STOP, scope: "ancestor", botRunsOnly };
     if (session.scopeId === root.scopeId && (await stopSessionRuns(deps, session, stop)).length) stopped = true;
   }
   return stopped;
@@ -645,19 +723,30 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
     forTurn(binding) {
       const callerTitle = binding.session.title?.trim() || "Untitled";
 
-      async function resolveTarget(ref: string): Promise<Session | null> {
+      async function resolveTarget(ref: string, writing = false): Promise<Session | string> {
+        const missing = `no session matches "${ref}" — use a sessionId from open, read, or list.`;
         const trimmed = ref.trim();
-        if (!trimmed) return null;
+        if (!trimmed) return missing;
+        const visible = (session: Session | null) =>
+          session && sessionVisibleTo(binding.request, session) ? session : null;
         const current = await deps.sessions.get(binding.session.id);
+        const found = (session: Session | null) => {
+          if (!session || visible(session)) return session ?? missing;
+          if (session.id !== current?.parentSessionId) return missing;
+          return writing ? session : HIDDEN_PARENT;
+        };
         if (trimmed.toLowerCase() === "parent")
-          return current?.parentSessionId ? deps.sessions.get(current.parentSessionId) : null;
+          return found(current?.parentSessionId ? await deps.sessions.get(current.parentSessionId) : null);
         const byId = await deps.sessions.get(trimmed);
-        if (byId) return byId;
+        if (byId) return found(byId);
         const byThread = await deps.sessions.getByThread(trimmed);
-        if (byThread) return byThread;
+        if (byThread) return found(byThread);
         const children = await deps.sessions.childrenOf(binding.session.id);
         const siblings = current?.parentSessionId ? await deps.sessions.childrenOf(current.parentSessionId) : [];
-        return [...children, ...siblings].find((c) => c.title?.trim().toLowerCase() === trimmed.toLowerCase()) ?? null;
+        const named = [...children, ...siblings].filter(
+          (c) => c.title?.trim().toLowerCase() === trimmed.toLowerCase() && visible(c),
+        );
+        return named.find((c) => !c.spawnMeta?.retired) ?? named[0] ?? missing;
       }
 
       function sidebarRefusal(): string | null {
@@ -666,15 +755,17 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         return null;
       }
 
+      const visibleTitle = (target: Session) =>
+        (sessionVisibleTo(binding.request, target) && target.title?.trim()) || target.id;
+
       function peerRefusal(target: Session): string | null {
         const refusal = sidebarRefusal();
         if (refusal) return refusal;
         if (!isSidebarSession(target))
-          return `"${target.title?.trim() || target.id}" is a subagent, not a session — use the subagents tool for it.`;
+          return `"${visibleTitle(target)}" is a subagent, not a session — use the subagents tool for it.`;
         return null;
       }
 
-      const visibleTitle = (target: Session) => target.title?.trim() || target.id;
       async function visibleHistory(target: Session): Promise<Item[]> {
         const audience = binding.request.conversation.audience.length
           ? binding.request.conversation.audience
@@ -691,12 +782,15 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         if (deps.enabled && !(await deps.enabled(binding.request.actor.id)))
           throw new Error("persistent subagents are not enabled for this user");
         const current = await deps.sessions.get(binding.session.id);
-        if (
-          !current ||
-          current.scopeId !== binding.scopeId ||
-          (deps.authorize && !(await deps.authorize(current, binding.request.actor.id)))
-        )
-          throw new Error("the sender no longer has access to this session");
+        if (!current) throw new Error("this session no longer exists; nothing was started or sent.");
+        if (current.scopeId !== binding.scopeId)
+          throw new Error(
+            `this session moved from ${binding.scopeId} to ${current.scopeId}; nothing was started or sent.`,
+          );
+        if (deps.authorize && !(await deps.authorize(current, binding.request)))
+          throw new Error(
+            `${binding.request.actor.id} can't currently be confirmed as a member of ${binding.scopeId}, so helpers can't run here; nothing was started or sent.`,
+          );
         const request: OrchestratorInput = {
           ...binding.request,
           origin: binding.request.origin ?? { kind: "automation" },
@@ -717,7 +811,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             for (const message of messages) {
               const sender = await deps.sessions.getForParticipant(message.senderId, caller.actor.id);
               if (!sender || sender.scopeId !== binding.scopeId) continue;
-              if (deps.authorize && !(await deps.authorize(sender, caller.actor.id))) continue;
+              if (deps.authorize && !(await deps.authorize(sender, caller))) continue;
               try {
                 assertAudienceCompatible(
                   { actor: message.actor, conversation: { ...caller.conversation, audience: message.audience } },
@@ -752,6 +846,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           await deps.mailbox?.acknowledge(binding.session.id, ids);
         },
         async open(input) {
+          if (binding.session.sideChat && !binding.session.sideChat.expanded)
+            return { ok: false, message: "Side chats cannot launch subagents. Open this chat as a session first." };
           return lock
             .withLock("session-tree-admission", async (): Promise<SessionOpenResult> => {
               if (binding.request.swarm || binding.session.threadRef.startsWith("swarm:"))
@@ -814,7 +910,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   ...binding.request,
                   surface: binding.request.surface ?? binding.session.surface ?? "web",
                   origin: caller.origin,
-                  unattendedGrants: caller.unattendedGrants,
                   readOnly,
                   model: runtime.model,
                   thinkingLevel: runtime.thinkingLevel,
@@ -825,6 +920,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 openFingerprint: fingerprint,
                 ...(binding.request.surfaceOrigin ? { surfaceOrigin: binding.request.surfaceOrigin } : {}),
                 ...(isolation ? { isolation } : {}),
+                ...(input.persistent ? { persistent: true } : {}),
               };
               if (!existing?.spawnMeta) {
                 await deps.sessions.setParentSession(child.id, binding.session.id);
@@ -870,12 +966,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 throw new Error("swarm workers coordinate through the swarm API");
               const caller = await currentCaller();
               assertAudienceCompatible(binding.request, caller);
-              const target = await resolveTarget(input.target);
-              if (!target)
-                return {
-                  ok: false,
-                  message: `no session matches "${input.target}" — use a sessionId from open, read, or list.`,
-                };
+              const target = await resolveTarget(input.target, !input.interrupt);
+              if (typeof target === "string") return { ok: false, message: target };
               const refusal = input.peer ? peerRefusal(target) : null;
               if (refusal) return { ok: false, message: refusal };
               if (target.threadRef.startsWith("swarm:"))
@@ -889,8 +981,16 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 };
               if (!(await deps.sessions.getForParticipant(target.id, binding.request.actor.id)))
                 return { ok: false, message: "you are not a participant in that session." };
-              if (deps.authorize && !(await deps.authorize(target, caller.actor.id)))
+              if (target.spawnMeta?.retired && target.parentSessionId === binding.session.id)
+                return {
+                  ok: false,
+                  message:
+                    "that subagent finished and retired; open a fresh one with `open` (its result is already in your transcript).",
+                };
+              if (deps.authorize && !(await deps.authorize(target, caller)))
                 return { ok: false, message: "you no longer have access to the target session" };
+              if (deps.reaches && !(await deps.reaches(target, caller, binding.session)))
+                return { ok: false, message: AMBIENT_REACH_REFUSAL };
               const meta = storedContext(target);
               if (!meta) return { ok: false, message: "the target has no verified runtime context yet" };
               const privateChild = isSubagentThreadRef(target.threadRef);
@@ -912,8 +1012,9 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   surface: meta.surface ?? target.surface ?? "web",
                   actor: caller.actor,
                   origin: caller.origin,
-                  unattendedGrants: caller.unattendedGrants,
                   readOnly: privateMessage || caller.readOnly || meta.readOnly || target.spawnMeta?.readOnly,
+                  memoryNotebookOnly: caller.memoryNotebookOnly || meta.memoryNotebookOnly,
+                  botActor: caller.botActor,
                 },
                 "",
                 "",
@@ -926,6 +1027,16 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   return { ok: false, message: "ordinary sessions accept private messages, not interrupts" };
                 if (caller.readOnly && !target.spawnMeta?.readOnly)
                   return { ok: false, message: "a read-only session cannot interrupt a writable task" };
+                if (caller.memoryNotebookOnly && !meta.memoryNotebookOnly)
+                  return {
+                    ok: false,
+                    message: "a notebook-only turn cannot interrupt a session that isn't notebook-only",
+                  };
+                if (
+                  caller.botActor &&
+                  (await deps.runs.inFlightForThread(target.threadRef)).some((run) => !run.request.botActor)
+                )
+                  return { ok: false, message: "a Slack bot's turn cannot interrupt a person's task" };
               }
               const text = input.text?.trim();
               if (!text) {
@@ -960,6 +1071,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   recipientId: target.id,
                   senderId: binding.session.id,
                   actor: caller.actor,
+                  ...(caller.botActor ? { botActor: true } : {}),
                   audience: caller.conversation.audience,
                   createdAt: Date.now(),
                 });
@@ -969,6 +1081,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (!input.wake && !input.interrupt) return leaveMail();
               if (binding.request.privateSessionMessage)
                 return leaveMail("a private turn cannot start work in another session");
+              if (caller.memoryNotebookOnly && !meta.memoryNotebookOnly)
+                return leaveMail("a notebook-only turn cannot start work in a session that isn't notebook-only");
               if (isPeerMessage(binding.session, target)) {
                 if (caller.readOnly) return leaveMail("a read-only turn cannot start work in another conversation");
                 if (messageDepth > SESSION_MESSAGE_DEPTH_CAP)
@@ -1002,6 +1116,26 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const dedupKey = input.requestId ? `subagent-followup:${messageId}` : undefined;
               const accepted = await acceptedFollowup(deps.runs, dedupKey, target, stamped, title);
               if (accepted) return accepted;
+              request.origin = sessionTurnOrigin(request.origin, stamped);
+              request.sessionSenderId = binding.session.id;
+              request.delegatingRunId = binding.request.runId;
+              const steered =
+                input.interrupt || privateMessage
+                  ? undefined
+                  : await steerRunningTurn(
+                      deps,
+                      inFlight,
+                      { ...request, text: stamped, displayText: text },
+                      {
+                        text,
+                        dedupKey,
+                      },
+                    );
+              if (steered === "steered")
+                return { ok: true, sessionId: target.id, title, delivered: "steered", busy: true };
+              if (steered === "replayed") return { ok: true, sessionId: target.id, title, delivered: "queued_turn" };
+              if (steered === "refused")
+                return { ok: false, message: `subagent "${title}" finished its turn and did not accept this message.` };
               const queuedRunId = deterministicRunId(["session-followup-run", dedupKey ?? messageId]);
               const preparedEnqueue = await input.beforeEnqueue?.({ sessionId: target.id, runId: queuedRunId });
               const stopped = input.interrupt
@@ -1015,9 +1149,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                     },
                   )
                 : [];
-              request.origin = sessionTurnOrigin(request.origin, stamped);
-              request.sessionSenderId = binding.session.id;
-              request.delegatingRunId = binding.request.runId;
               const queuedText = preparedEnqueue?.text?.trim() || stamped;
               await deps.runs
                 .enqueue({
@@ -1073,11 +1204,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             return { ok: true, mode: "children", children: summaries };
           }
           const target = await resolveTarget(input.target);
-          if (!target)
-            return {
-              ok: false,
-              message: `no session matches "${input.target}" — use a sessionId from open, read, or list.`,
-            };
+          if (typeof target === "string") return { ok: false, message: target };
           const refusal = input.peer ? peerRefusal(target) : null;
           if (refusal) return { ok: false, message: refusal };
           if (target.scopeId !== binding.scopeId)
@@ -1086,6 +1213,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           const maxChars = Math.min(Math.max(200, input.maxChars ?? READ_DEFAULT_MAX_CHARS), READ_MAX_CHARS_CEILING);
           if (!(await deps.sessions.getForParticipant(target.id, binding.request.actor.id)))
             return { ok: false, message: "you are not a participant in that session." };
+          if (deps.reaches && !(await deps.reaches(target, binding.request, binding.session)))
+            return { ok: false, message: AMBIENT_REACH_REFUSAL };
           const items = await visibleHistory(target);
           const lines: string[] = [];
           for (const item of items.slice(-limit)) {
@@ -1126,6 +1255,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             query: input.query,
             principals: [caller.actor, ...(members ?? caller.conversation.audience)],
             ...(input.limit !== undefined ? { limit: input.limit } : {}),
+            botActor: caller.botActor,
           });
         },
         async list() {
@@ -1137,7 +1267,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           const audience = binding.request.conversation.audience.length
             ? binding.request.conversation.audience
             : [binding.request.actor];
-          const candidates = (await conversations.list(binding.request.actor.id)).filter(
+          const viewer = { actorId: binding.request.actor.id, botActor: binding.request.botActor };
+          const candidates = (await conversations.list(viewer)).filter(
             (s) => s.scopeId === binding.scopeId && isSidebarSession(s) && !s.archived,
           );
           const visible: Session[] = [];
@@ -1176,6 +1307,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               message: `${verb} needs a person attending this turn — not a cron, trigger, subagent, or other automation.`,
             };
           if (binding.request.readOnly) return { ok: false, message: "a read-only turn cannot create sessions." };
+          if (binding.request.botActor)
+            return { ok: false, message: "a turn doing a Slack bot's work cannot create sessions." };
           const text = input.text?.trim();
           if (!input.fork && !text)
             return { ok: false, message: "new requires `text`: the new session's first message." };

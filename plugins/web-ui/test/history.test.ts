@@ -241,8 +241,8 @@ test("a stale show load never lands on the next fork; reset revives the control"
   });
   const firstToggle = controller.toggle();
   assert.equal(pending.length, 1);
-  controller.reset(); // switched to another fork mid-load
-  const secondToggle = controller.toggle(); // new fork's control is live immediately
+  controller.reset();
+  const secondToggle = controller.toggle();
   assert.equal(pending.length, 2, "reset frees the in-flight guard");
   pending[0]!([item("UserMessage", { createdAt: 1, seq: 0, text: "fork A history" }) as Item]);
   await firstToggle;
@@ -277,7 +277,6 @@ test("a failed show load surfaces an error instead of dying silently", async () 
   assert.ok(redraws >= 1);
   assert.equal(state.inheritedExpanded, false, "a failed load never expands");
   assert.equal(state.inheritedLoaded, false);
-  // the control recovers: a later successful load works
   const ok = createForkOriginController<Item>({
     state,
     load: async () => [item("UserMessage", { createdAt: 1, seq: 0, text: "old" }) as Item],
@@ -308,7 +307,6 @@ test("a successful show clears a prior error; an in-flight load survives non-res
   });
   const toggling = controller.toggle();
   assert.equal(error, "", "starting a new attempt clears the stale error");
-  // a same-session remount does NOT reset the controller, so the load lands
   resolveLoad!([item("UserMessage", { createdAt: 1, seq: 0, text: "old" }) as Item]);
   await toggling;
   assert.equal(state.inheritedLoaded, true);
@@ -1257,7 +1255,7 @@ test("a no-op finish_silently (non-poll, no silent:true) does NOT suppress promo
   const items: Item[] = [
     item("UserMessage", { createdAt: 100, seq: 1, text: "do it" }),
     item("ToolCall", { createdAt: 110, seq: 2, tool: "finish_silently" }),
-    item("ToolResult", { createdAt: 120, seq: 3, tool: "finish_silently", body: { noop: "not_a_poll_fire" } }),
+    item("ToolResult", { createdAt: 120, seq: 3, tool: "finish_silently", body: { noop: "reply_required" } }),
     item("AgentMessage", { createdAt: 130, seq: 4, variant: "narration", text: "Actually, here's the result." }),
     item("ToolCall", { createdAt: 140, seq: 5, tool: "execute", body: { command: "ls" } }),
     item("ToolResult", { createdAt: 150, seq: 6, tool: "execute", body: { code: 0 } }),
@@ -1487,7 +1485,7 @@ test("a surface post's sent files render as delivered files on the reply bubble"
   );
 });
 
-for (const text of ["Partial answer", "", "(stopped)"]) {
+for (const text of ["Partial answer", ""]) {
   test(`stopped history retains its state without promoting commentary: ${text || "empty"}`, () => {
     const items: Item[] = [
       item("UserMessage", { seq: 1, createdAt: 1, text: "check" }),
@@ -1652,7 +1650,7 @@ test("live consumed steers join canonical history once and survive stopped/error
     item("ToolCall", { seq: 2, createdAt: 2, tool: "execute", callId: "a" }),
     item("SteeringMessage", { seq: 3, createdAt: 3, text: "Change direction" }),
     item("ToolResult", { seq: 4, createdAt: 4, tool: "execute", callId: "a" }),
-    item("AgentMessage", { seq: 5, createdAt: 5, text: "(stopped)", body: { stopped: true } }),
+    item("Stop", { seq: 5, createdAt: 5, body: { reason: "by user" } }),
   ];
   const work = (itemsToMessages(items).at(-1) as AssistantWork).work!;
   for (const reason of ["aborted", "error"] as const) {

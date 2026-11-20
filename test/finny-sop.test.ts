@@ -109,9 +109,7 @@ test("matches both material boolean values to canonical Slack option IDs", () =>
   );
   const optionalBooleanSop = {
     ...booleanSop,
-    inputs: booleanSop.inputs.map((input) =>
-      input.id === "include_credits" ? { ...input, required: false } : input,
-    ),
+    inputs: booleanSop.inputs.map((input) => (input.id === "include_credits" ? { ...input, required: false } : input)),
   } as const;
   assert.throws(() =>
     finnyPlan.assertFinnyMaterialClarificationMatchesSop(
@@ -161,20 +159,17 @@ test("execution digest changes only with executable meaning or material values",
   assert.match(originalExecution, /^[A-Za-z0-9_-]{43}$/);
   assert.notEqual(api.canonicalFinnySopDefinitionDigest!(sop), api.canonicalFinnySopDefinitionDigest!(renamed));
   assert.equal(originalExecution, api.canonicalFinnyExecutionDigest!(renamed, { ...values, note: "second run" }));
-  assert.equal(
-    api.canonicalFinnySopDefinitionDigest!(sop),
-    api.canonicalFinnySopDefinitionDigest!(reorderedContract),
-  );
+  assert.equal(api.canonicalFinnySopDefinitionDigest!(sop), api.canonicalFinnySopDefinitionDigest!(reorderedContract));
   const unicodeContract = {
     ...sop,
     outputs: sop.outputs.map((output) =>
-      output.id === "workbook" ? { ...output, contract: { "é": 1, "e\u0301": 2 } } : output,
+      output.id === "workbook" ? { ...output, contract: { é: 1, "e\u0301": 2 } } : output,
     ),
   };
   const reversedUnicodeContract = {
     ...sop,
     outputs: sop.outputs.map((output) =>
-      output.id === "workbook" ? { ...output, contract: { "e\u0301": 2, "é": 1 } } : output,
+      output.id === "workbook" ? { ...output, contract: { "e\u0301": 2, é: 1 } } : output,
     ),
   };
   assert.equal(
@@ -187,10 +182,7 @@ test("execution digest changes only with executable meaning or material values",
   );
   assert.notEqual(originalExecution, api.canonicalFinnyExecutionDigest!(sop, { ...values, cutoff: "2026-11-30" }));
   assert.throws(() => api.canonicalFinnyExecutionDigest!(sop, { cutoff: "2026-10-31" }), /currency|required/i);
-  assert.throws(
-    () => api.canonicalFinnyExecutionDigest!(sop, { ...values, undeclared: "no" }),
-    /undeclared|unknown/i,
-  );
+  assert.throws(() => api.canonicalFinnyExecutionDigest!(sop, { ...values, undeclared: "no" }), /undeclared|unknown/i);
 });
 
 test("bound SOP values preserve declared object prototype keys", () => {
@@ -276,7 +268,10 @@ test("rejects SOPs without finance evidence, controls, workbook, and certified s
     () => api.validateFinnySopVersion({ ...sop, outputs: [{ ...sop.outputs[0], contract: null }, sop.outputs[1]] }),
     /shape|contract/i,
   );
-  assert.throws(() => api.validateFinnySopVersion({ ...sop, approval: { ...sop.approval, required: false } }), /shape/i);
+  assert.throws(
+    () => api.validateFinnySopVersion({ ...sop, approval: { ...sop.approval, required: false } }),
+    /shape/i,
+  );
   assert.throws(
     () => api.validateFinnySopVersion({ ...sop, outputs: sop.outputs.filter((output) => output.kind !== "xlsx") }),
     /xlsx|workbook/i,
@@ -297,10 +292,7 @@ test("rejects SOPs without finance evidence, controls, workbook, and certified s
 
 test("compiles role-specific worker tasks without prompt-level workflow authority", () => {
   const api = finnyPlan as unknown as {
-    compileFinnyWorkerTask?: (
-      job: Record<string, unknown>,
-      role: "producer" | "auditor",
-    ) => Record<string, unknown>;
+    compileFinnyWorkerTask?: (job: Record<string, unknown>, role: "producer" | "auditor") => Record<string, unknown>;
   };
   assert.equal(typeof api.compileFinnyWorkerTask, "function");
   const values = { cutoff: "2026-10-31", currency: "INR" };

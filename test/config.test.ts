@@ -10,6 +10,7 @@ import {
   CONFIG_DEFAULTS,
 } from "../src/config.ts";
 import { boolEnv, numEnv } from "../src/util/env.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 import { enabledSandboxBackends } from "../src/sandbox/sandbox-settings.ts";
 
 const RENDER_IMAGE = `ghcr.io/yc-software/qm/sandbox-base:${"c".repeat(40)}@sha256:${"d".repeat(64)}`;
@@ -172,14 +173,17 @@ test("EGRESS_PROXY_URL forces every proxy-capable provider through the proxy unl
     proxied.smolmachinesSandbox,
     proxied.porterSandbox,
     proxied.agent37Sandbox,
+    proxied.renderSandbox,
+    proxied.managedAgentsSandbox,
   ])
     assert.equal(provider.egressProxyUrl, "https://egress.test");
   const exempted = loadConfig({
     EGRESS_PROXY_URL: "https://egress.test",
-    EGRESS_PROXY_EXEMPT_BACKENDS: "e2b, smolmachines",
+    EGRESS_PROXY_EXEMPT_BACKENDS: "e2b, smolmachines, do-managed-agents",
   });
   assert.equal(exempted.e2bSandbox.egressProxyUrl, undefined);
   assert.equal(exempted.smolmachinesSandbox.egressProxyUrl, undefined);
+  assert.equal(exempted.managedAgentsSandbox.egressProxyUrl, undefined);
   assert.equal(exempted.modalSandbox.egressProxyUrl, "https://egress.test");
   assert.equal(loadConfig({}).e2bSandbox.egressProxyUrl, undefined);
 });
@@ -199,8 +203,8 @@ test("a retired per-provider egress proxy setting stops boot only when EGRESS_PR
     /No longer read: SMOLMACHINES_EGRESS_PROXY_URL\./,
   );
   assert.throws(
-    () => loadConfig({ DO_AGENTS_EGRESS_PROXY_URL: "https://egress.test", EGRESS_PROXY_URL: "https://egress.test" }),
-    /No longer read: DO_AGENTS_EGRESS_PROXY_URL\. DigitalOcean Managed Agents can't be forced/,
+    () => loadConfig({ DO_AGENTS_EGRESS_PROXY_URL: "https://egress.test" }),
+    /No longer read: DO_AGENTS_EGRESS_PROXY_URL\..*Set EGRESS_PROXY_URL/,
   );
   const warnings: string[] = [];
   const original = console.warn;
@@ -573,6 +577,16 @@ test("MODEL_PROVIDER declares the vendor that bills the base model", () => {
   assert.equal(loadConfig({}).modelProvider, undefined);
   assert.equal(loadConfig({ MODEL_PROVIDER: " openrouter ", OPENROUTER_API_KEY: "k" }).modelProvider, "openrouter");
   assert.throws(() => loadConfig({ MODEL_PROVIDER: "bedrock" }), /MODEL_PROVIDER.*not recognized/);
+});
+
+test("MODEL_PROVIDER loads at boot before any tenant is bound", () => {
+  for (const [provider, key] of [
+    ["anthropic", "ANTHROPIC_API_KEY"],
+    ["openai", "OPENAI_API_KEY"],
+    ["openrouter", "OPENROUTER_API_KEY"],
+  ] as const) {
+    assert.equal(withoutTenant(() => loadConfig({ MODEL_PROVIDER: provider, [key]: "k" })).modelProvider, provider);
+  }
 });
 
 test("baseModelProviders constrains the base model only when a provider is declared", () => {
@@ -1003,5 +1017,37 @@ test("The Render sandbox backend needs a tagged, digest-pinned RENDER_SANDBOX_IM
   assert.ok(!enabledSandboxBackends(loadConfig(secondary)).includes("render"));
   assert.ok(
     enabledSandboxBackends(loadConfig({ ...secondary, RENDER_SANDBOX_IMAGE: RENDER_IMAGE })).includes("render"),
+  );
+});
+
+test("PRIVATE_NETWORK_ALLOWED_ORIGINS is parsed at startup and a bad entry stops core without echoing it", () => {
+  assert.equal(loadConfig({}).privateNetworkAllowedOrigins.size, 0);
+  assert.deepEqual(
+    [
+      ...loadConfig({ PRIVATE_NETWORK_ALLOWED_ORIGINS: "http://gbrain:8787,https://brain.example-tailnet.ts.net" })
+        .privateNetworkAllowedOrigins,
+    ],
+    ["http://gbrain:8787", "https://brain.example-tailnet.ts.net"],
+  );
+  assert.throws(
+    () => loadConfig({ PRIVATE_NETWORK_ALLOWED_ORIGINS: "http://gbrain:8787,http://admin:PASSWORD@localhost:8787" }),
+    (e: unknown) => {
+      assert.match(String(e), /PRIVATE_NETWORK_ALLOWED_ORIGINS entry 2 \(http:\/\/localhost:8787\)/);
+      assert.doesNotMatch(String(e), /PASSWORD|admin/);
+      return true;
+    },
+  );
+});
+
+test("a workspace provisioner needs a strong signing secret and no deployment model credentials", () => {
+  const signed = {
+    WORKSPACE_PROVISIONER_URL: "http://provisioner.test/provision",
+    CORE_SIGNING_SECRET: "s".repeat(48),
+  };
+  assert.equal(loadConfig(signed).workspaceProvisionerUrl, "http://provisioner.test/provision");
+  assert.throws(() => loadConfig({ ...signed, CORE_SIGNING_SECRET: "" }), /requires CORE_SIGNING_SECRET/);
+  assert.throws(
+    () => loadConfig({ ...signed, OPENAI_API_KEY: "sk-x", CODEX_AUTH_CREDENTIAL: "c" }),
+    /cannot be combined with deployment model credentials: OPENAI_API_KEY, CODEX_AUTH_CREDENTIAL/,
   );
 });

@@ -1,17 +1,19 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import pg from "pg";
+import { boundUrl, seedTestTenant } from "../test/support/test-tenant.ts";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     jobs: { type: "string", default: process.env.PG_TEST_JOBS ?? String(Math.min(4, availableParallelism())) },
     timeout: { type: "string", default: "600" },
+    record: { type: "boolean" },
   },
 });
 
@@ -22,10 +24,15 @@ if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
   throw new Error(`--timeout must be a positive number of seconds, got ${values.timeout}`);
 }
 if (positionals.length === 0) throw new Error("Pass the Postgres test files to run");
-const files = positionals.toSorted((a, b) => statSync(b).size - statSync(a).size);
+const TIMINGS = new URL("root-test-timings.json", import.meta.url);
+const timings = JSON.parse(readFileSync(TIMINGS, "utf8"));
+const files = positionals.toSorted(
+  (a, b) => (timings[b] ?? 0) - (timings[a] ?? 0) || statSync(b).size - statSync(a).size,
+);
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) throw new Error("Set DATABASE_URL to a Postgres server the tests may create databases on");
+const BOOT_TENANT_ENTRY = "test/support/boot-tenant-entry.ts";
 const runId = `qmt_${process.pid}_${randomBytes(4).toString("hex")}`;
 const children = new Set();
 const admin = new pg.Pool({ connectionString: baseUrl, max: jobs });
@@ -74,9 +81,9 @@ function runFile(file, env) {
       children.delete(child);
       resolve({ file, ok, ms: Date.now() - started, output });
     };
-    const child = spawn(process.execPath, ["--experimental-test-module-mocks", "--test", file], {
+    const child = spawn(process.execPath, ["--experimental-test-module-mocks", "--test", BOOT_TENANT_ENTRY], {
       detached: true,
-      env: { ...process.env, ...env },
+      env: { ...process.env, ...env, QM_BOOT_TENANT_TEST_FILE: file },
     });
     children.add(child);
     child.stdout?.on("data", (chunk) => (output += chunk));
@@ -98,8 +105,9 @@ async function runIsolated(file, index) {
   const name = `${runId}_${index}`;
   try {
     await admin.query(`CREATE DATABASE ${name}`);
+    await seedTestTenant(databaseUrl(name));
     if (stopping) return { file, ok: false, ms: 0, output: "" };
-    return await runFile(file, { DATABASE_URL: databaseUrl(name), QM_TEST_TEMPLATE_DATABASE: templateName });
+    return await runFile(file, { DATABASE_URL: boundUrl(databaseUrl(name)), QM_TEST_TEMPLATE_DATABASE: templateName });
   } finally {
     await dropDatabase(name);
   }
@@ -123,6 +131,7 @@ function migrateTemplate() {
 
 const started = Date.now();
 await admin.query(`CREATE DATABASE ${templateName}`);
+await seedTestTenant(databaseUrl(templateName));
 await migrateTemplate().catch(async (error) => {
   try {
     await dropDatabase(templateName);
@@ -134,6 +143,8 @@ await migrateTemplate().catch(async (error) => {
   }
   throw error;
 });
+await admin.query(`ALTER DATABASE ${templateName} WITH ALLOW_CONNECTIONS false`);
+await admin.query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", [templateName]);
 const results = [];
 let next = 0;
 const work = Promise.all(
@@ -178,4 +189,12 @@ process.stdout.write(
   `\n# ${results.length - failed.length}/${results.length} files passed with ${jobs} jobs in ${((Date.now() - started) / 1000).toFixed(1)}s (${(summedMs / 1000).toFixed(1)}s summed)\n`,
 );
 for (const result of failed) process.stdout.write(`# FAIL ${result.file}\n`);
+if (values.record) {
+  for (const { file, ok, ms } of results) if (ok) timings[file] = Math.max(1, Math.round(ms / 1000));
+  const kept = Object.entries(timings).filter(([file]) => existsSync(file));
+  writeFileSync(
+    TIMINGS,
+    `${JSON.stringify(Object.fromEntries(kept.sort(([a], [b]) => a.localeCompare(b))), null, 2)}\n`,
+  );
+}
 process.exitCode = failed.length > 0 ? 1 : 0;

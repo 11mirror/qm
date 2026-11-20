@@ -150,10 +150,7 @@ export function assertFinnyCoreAuditableSop(value: unknown): asserts value is Fi
   }
 }
 
-export function validateFinnySopValues(
-  sopValue: unknown,
-  value: unknown,
-): Record<string, string | boolean> {
+export function validateFinnySopValues(sopValue: unknown, value: unknown): Record<string, string | boolean> {
   const sop = validateFinnySopVersion(sopValue);
   const values = record(value, "bound input values");
   const inputs = new Map(sop.inputs.map((input) => [input.id, input]));
@@ -196,10 +193,7 @@ export function finnySopSearchText(value: unknown): string {
   ].join(" ");
 }
 
-export function canonicalFinnyExecutionDigest(
-  sopValue: unknown,
-  inputValues: unknown,
-): string {
+export function canonicalFinnyExecutionDigest(sopValue: unknown, inputValues: unknown): string {
   const sop = validateFinnySopVersion(sopValue);
   const values = validateFinnySopValues(sop, inputValues);
   return canonicalDigest({
@@ -374,17 +368,15 @@ export function assertFinnyMaterialClarificationMatchesSop(
   const values = validateFinnySopValues(sop, inputValues);
   const validated = validateFinnyMaterialClarification(clarification);
   const recommended = validated.options.find((option) => option.id === validated.recommendedOptionId);
-  const matches = sop.inputs.filter(
-    (input) => {
-      const bound = values[input.id];
-      return (
-        input.material &&
-        input.from === "human" &&
-        bound !== undefined &&
-        (String(bound) === recommended?.id || bound === recommended?.label)
-      );
-    },
-  );
+  const matches = sop.inputs.filter((input) => {
+    const bound = values[input.id];
+    return (
+      input.material &&
+      input.from === "human" &&
+      bound !== undefined &&
+      (String(bound) === recommended?.id || bound === recommended?.label)
+    );
+  });
   if (matches.length !== 1)
     throw new Error("Finny clarification does not unambiguously match one material SOP input value");
 }

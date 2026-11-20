@@ -1,4 +1,6 @@
 import { test, after, beforeEach } from "node:test";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -242,8 +244,9 @@ test("with a home backup store, restart backs up the home and replaces the sessi
   assert.equal((await sandbox.run(again, "cat ~/kept.txt")).stdout.trim(), "after");
 });
 
-test("a failed home snapshot retries on the next teardown", async () => {
+test("a failed home snapshot is reported once and waits out the interval before it retries", async () => {
   const uploads: number[] = [];
+  const failures: string[] = [];
   const snapshots: HomeSnapshotStore = {
     open: async () => null,
     put: async () => undefined,
@@ -252,13 +255,14 @@ test("a failed home snapshot retries on the next teardown", async () => {
       throw new Error("snapshot upload failed");
     },
   };
-  sandbox = make({ snapshots });
+  sandbox = make({ snapshots, onError: (e: { code: string }) => failures.push(e.code) });
   const h = await sandbox.provision(scope);
   await sandbox.teardown(h);
   const again = await sandbox.provision(scope);
   await sandbox.teardown(again);
   assert.equal(fake.checkpointCalls().length, 0);
-  assert.equal(uploads.length, 2);
+  assert.equal(uploads.length, 1);
+  assert.deepEqual(failures, ["teardown_snapshot_failed"]);
 });
 
 test("teardown pauses the session and the next provision resumes it", async () => {
@@ -273,6 +277,22 @@ test("teardown pauses the session and the next provision resumes it", async () =
   const r = await sandbox.run(again, "cat kept.txt");
   assert.match(r.stdout, /hi/);
   assert.equal(fake.createdCount(scopeName()), 1);
+});
+
+test("resuming a session whose pause failed clears the stale pause error", async () => {
+  const store = testMap<StoredManagedAgentsSandbox>();
+  const create = async (options: Parameters<typeof fake.client.create>[0]) => ({
+    ...(await fake.client.create(options)),
+    pause: async () => Promise.reject(new Error("provider pause unavailable")),
+  });
+  const first = make({ client: { ...fake.client, create }, store });
+  for (const next of [first, make({ client: { ...fake.client, create }, store })]) {
+    await assert.rejects(first.teardown(await first.provision(scope)), /pause unavailable/);
+    await next.computerStatus?.(scope);
+    await next.provision(scope);
+    const stored = await store.get(scope);
+    assert.deepEqual([stored?.preservationState, stored?.preservationError], ["running", undefined]);
+  }
 });
 
 test("keepWarm teardown leaves the session running for background work", async () => {
@@ -398,8 +418,40 @@ test("the QM template's tools are advertised as installed, not missing", () => {
   }
 });
 
-test("egress enforcement is never claimed", () => {
+test("without an egress proxy the session keeps its own network and no forwarder starts", async () => {
   assert.equal(sandbox.profile.egressEnforcement, "none");
+  const h = await sandbox.provision(scope, { egressToken: "tok", env: { HTTPS_PROXY: "http://stale.test" } });
+  assert.equal(h.env, undefined);
+  assert.ok(fake.execScripts().every((script) => !script.includes("forward.mjs")));
+});
+
+test("with an egress proxy, commands reach it through the forwarder and the session's own proxy", async (t) => {
+  const proxy = spawn(
+    process.execPath,
+    [
+      "-e",
+      `const s = require("node:http").createServer((req, res) => res.end(req.method + " " + req.url + " " + req.headers["proxy-authorization"]));
+       s.on("connect", (req, client) => { const [host, port] = req.url.split(":"); const up = require("node:net").connect(port, host, () => { client.write("HTTP/1.1 200 OK\\r\\n\\r\\n"); up.pipe(client); client.pipe(up); }); });
+       s.listen(0, "127.0.0.1", () => console.log(s.address().port));`,
+    ],
+    { stdio: ["ignore", "pipe", "inherit"] },
+  );
+  t.after(() => proxy.kill());
+  const proxyUrl = `http://127.0.0.1:${String((await once(proxy.stdout!, "data"))[0]).trim()}`;
+  sandbox = make({ egressProxyUrl: proxyUrl });
+  assert.equal(sandbox.profile.egressEnforcement, "domain");
+  const h = await sandbox.provision(scope, { egressToken: "tok" });
+  assert.equal(h.env?.HTTPS_PROXY, "http://x:tok@127.0.0.1:3129");
+  const unrestricted = await sandbox.run(h, "true");
+  assert.match(unrestricted.stderr, /created before the egress proxy was required/);
+  process.env.HTTPS_PROXY = proxyUrl;
+  t.after(async () => {
+    await sandbox.run(h, "kill $(cat /workspace/.qm-egress/pid)");
+    delete process.env.HTTPS_PROXY;
+  });
+  const r = await sandbox.run(h, "curl -sS -m 10 http://destination.test/path");
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(r.stdout, `GET http://destination.test/path Basic ${Buffer.from("x:tok").toString("base64")}`);
 });
 
 test("session status wire values map onto backend states", () => {
@@ -412,7 +464,7 @@ test("session status wire values map onto backend states", () => {
 
 const awsCredential = (value: string) => ({
   files: [{ path: ".aws/credentials", contentBase64: Buffer.from(value).toString("base64") }],
-  save: async (): Promise<void> => {},
+  save: async () => ({ overruled: [], withheld: [] }),
 });
 
 test("the guest refuses a transfer outside the workspace, the way the platform does", async () => {
