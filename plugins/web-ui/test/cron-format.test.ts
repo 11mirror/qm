@@ -265,3 +265,12 @@ test("weekday preset previews skip the weekend and keep wall-clock time across D
     ["2026-11-02T17:00:00.000Z", "2026-11-03T17:00:00.000Z", "2026-11-04T17:00:00.000Z"],
   );
 });
+
+test("hourly preset previews match scheduler behavior across the fall DST fold", () => {
+  const beforeFold = Date.UTC(2027, 10, 7, 4, 30);
+  const runs = presetNextRuns({ kind: "hourly", minute: 0 }, "America/New_York", 3, beforeFold);
+  assert.deepEqual(
+    runs.map((ms) => new Date(ms).toISOString()),
+    ["2027-11-07T05:00:00.000Z", "2027-11-07T07:00:00.000Z", "2027-11-07T08:00:00.000Z"],
+  );
+});

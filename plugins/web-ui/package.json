@@ -27,6 +27,7 @@
     "@sentry/browser": "10.75.0",
     "@tanstack/ai-client": "0.31.1",
     "date-fns": "^4.4.0",
+    "croner": "^10.0.1",
     "dockview-core": "^7.0.4",
     "dompurify": "^3.4.17",
     "emoji-datasource": "^16.0.0",

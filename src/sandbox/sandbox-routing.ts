@@ -66,11 +66,15 @@ export interface RoutingSandboxOptions {
 
 const TENANT_SEPARATED: ReadonlySet<SandboxBackendName> = new Set(["sprites", "modal", "superserve"]);
 
-function requireTenantSeparation(name: SandboxBackendName): void {
-  if (TENANT_SEPARATED.has(name) || !tenancyBooted()) return;
+export function sandboxBackendAvailableToTenant(name: SandboxBackendName): boolean {
+  if (TENANT_SEPARATED.has(name) || !tenancyBooted()) return true;
   const tenant = boundTenant();
   const boot = bootTenant();
-  if (boot !== undefined && (tenant === undefined || tenant === boot)) return;
+  return boot !== undefined && (tenant === undefined || tenant === boot);
+}
+
+function requireTenantSeparation(name: SandboxBackendName): void {
+  if (sandboxBackendAvailableToTenant(name)) return;
   throw new Error(`sandbox backend ${name} does not keep tenants apart; only a single-tenant deployment can use it`);
 }
 

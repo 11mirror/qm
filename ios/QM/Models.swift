@@ -208,6 +208,7 @@ struct Approval: Decodable, Identifiable {
   let reason: String?
   let purpose: String?
   let summary: String?
+  let summaryDetail: String?
   let blocksInput: Bool?
   let grantModes: GrantModes?
 
@@ -221,6 +222,28 @@ struct Approval: Decodable, Identifiable {
     requestId.hasPrefix("keychain:") ? String(requestId.dropFirst("keychain:".count)) : nil
   }
   var isCredential: Bool { credentialAskID != nil }
+  var finnyClarification: FinnyClarification? {
+    guard reason == "Finny Governance Clarification", let summaryDetail,
+      let data = summaryDetail.data(using: .utf8)
+    else { return nil }
+    return try? JSONDecoder().decode(FinnyPlanDetail.self, from: data).materialClarification
+  }
+
+  struct FinnyPlanDetail: Decodable {
+    let materialClarification: FinnyClarification?
+  }
+
+  struct FinnyClarification: Decodable {
+    let question: String
+    let options: [FinnyClarificationOption]
+    let recommendedOptionId: String
+  }
+
+  struct FinnyClarificationOption: Decodable, Identifiable {
+    let id: String
+    let label: String
+    let description: String?
+  }
 }
 
 struct ApprovalList: Decodable { let approvals: [Approval] }

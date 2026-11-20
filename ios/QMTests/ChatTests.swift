@@ -194,6 +194,18 @@ final class ChatTests: XCTestCase {
           .utf8))
   }
 
+  func testFinnyClarificationDecodesNativeChoices() throws {
+    let detail = #"{"materialClarification":{"question":"Which cutoff?","options":[{"id":"today","label":"Today"},{"id":"month-end","label":"Month end","description":"Use the close date"}],"recommendedOptionId":"today"}}"#
+    let data = try JSONSerialization.data(withJSONObject: [
+      "requestId": "approval", "command": "Which cutoff?",
+      "reason": "Finny Governance Clarification", "summaryDetail": detail,
+    ])
+    let clarification = try JSONDecoder().decode(Approval.self, from: data).finnyClarification
+    XCTAssertEqual(clarification?.question, "Which cutoff?")
+    XCTAssertEqual(clarification?.options.map(\.id), ["today", "month-end"])
+    XCTAssertEqual(clarification?.recommendedOptionId, "today")
+  }
+
   func testServerDeniedMutationsAreBlockedAndPermittedMutationsReachTheServer() async throws {
     let file = FileManager.default.temporaryDirectory
       .appendingPathComponent("\(UUID().uuidString).txt")

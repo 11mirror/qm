@@ -424,23 +424,43 @@ struct ChatView: View {
       }
       Text(approval.command).font(.system(.footnote, design: .monospaced)).textSelection(
         .enabled)
-      HStack {
-        Button(role: .destructive) {
-          Task { await decide(approval, approved: false) }
-        } label: {
-          NativeActionLabel(
-            title: "Deny", busyTitle: "Denying…",
-            busy: approvalSubmission?.id == approval.id && approvalSubmission?.approved == false)
+      if let clarification = approval.finnyClarification {
+        Text(clarification.question).font(.subheadline.weight(.semibold))
+        ForEach(clarification.options) { option in
+          Button {
+            Task { await decide(approval, approved: true, optionId: option.id) }
+          } label: {
+            VStack(alignment: .leading, spacing: 3) {
+              Text(
+                option.id == clarification.recommendedOptionId
+                  ? "\(option.label) · Recommended" : option.label)
+              if let description = option.description {
+                Text(description).font(.caption).foregroundStyle(.secondary)
+              }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+          }.buttonStyle(.bordered)
         }
-        Spacer()
-        Button {
-          approvalToConfirm = approval
-        } label: {
-          NativeActionLabel(
-            title: "Approve once", busyTitle: "Approving…",
-            busy: approvalSubmission?.id == approval.id && approvalSubmission?.approved == true)
-        }.buttonStyle(.borderedProminent)
-      }.disabled(model.sending)
+        Button("Other", role: .destructive) { Task { await decide(approval, approved: false) } }
+          .disabled(model.sending)
+      } else {
+        HStack {
+          Button(role: .destructive) {
+            Task { await decide(approval, approved: false) }
+          } label: {
+            NativeActionLabel(
+              title: "Deny", busyTitle: "Denying…",
+              busy: approvalSubmission?.id == approval.id && approvalSubmission?.approved == false)
+          }
+          Spacer()
+          Button {
+            approvalToConfirm = approval
+          } label: {
+            NativeActionLabel(
+              title: "Approve once", busyTitle: "Approving…",
+              busy: approvalSubmission?.id == approval.id && approvalSubmission?.approved == true)
+          }.buttonStyle(.borderedProminent)
+        }.disabled(model.sending)
+      }
     }.padding().background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
   }
 
@@ -453,11 +473,13 @@ struct ChatView: View {
     await model.stop()
   }
 
-  private func decide(_ approval: Approval, approved: Bool, scope: String = "once") async {
+  private func decide(
+    _ approval: Approval, approved: Bool, scope: String = "once", optionId: String? = nil
+  ) async {
     guard !model.sending else { return }
     approvalSubmission = (approval.id, approved)
     defer { approvalSubmission = nil }
-    await model.decide(approval, approved: approved, scope: scope)
+    await model.decide(approval, approved: approved, scope: scope, optionId: optionId)
   }
 
   private func fork(from messageID: String) async {

@@ -1,5 +1,6 @@
 import { addDays, isSameDay } from "date-fns";
 import { TZDate } from "@date-fns/tz";
+import { Cron as Croner } from "croner";
 import { relTime } from "./ui.ts";
 
 export interface CronTimingView {
@@ -244,36 +245,7 @@ export function browserTimezone(): string | undefined {
 
 export function presetNextRuns(preset: SchedulePreset, timeZone: string, count = 3, now = Date.now()): number[] {
   if (!isIntlTimezone(timeZone)) return [];
-  const runs: number[] = [];
-  const today = new TZDate(now, timeZone);
-  if (preset.kind === "hourly") {
-    let at = new TZDate(
-      today.getFullYear(),
-      today.getMonth(),
-      today.getDate(),
-      today.getHours(),
-      preset.minute,
-      timeZone,
-    );
-    while (runs.length < count) {
-      if (at.getTime() > now) runs.push(at.getTime());
-      at = new TZDate(at.getTime() + 3_600_000, timeZone);
-    }
-    return runs;
-  }
-  for (let offset = 0; runs.length < count && offset < 21; offset++) {
-    const at = new TZDate(
-      today.getFullYear(),
-      today.getMonth(),
-      today.getDate() + offset,
-      preset.hour,
-      preset.minute,
-      timeZone,
-    );
-    const day = at.getDay();
-    if (preset.kind === "weekdays" && (day === 0 || day === 6)) continue;
-    if (preset.kind === "weekly" && day !== preset.day) continue;
-    if (at.getTime() > now) runs.push(at.getTime());
-  }
-  return runs;
+  return new Croner(presetCron(preset), { timezone: timeZone, paused: true, mode: "5-part" })
+    .nextRuns(count, new Date(now))
+    .map((run) => run.getTime());
 }

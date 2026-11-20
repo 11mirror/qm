@@ -19,7 +19,7 @@ import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import type { IsCurrentSharedScopeMember } from "../resolution/scope-membership.ts";
 import { intersectEgressPolicies } from "../resolution/egress-policy.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
-import { NoDefaultSandboxError, type SandboxBackendName } from "./sandbox-routing.ts";
+import { NoDefaultSandboxError, sandboxBackendAvailableToTenant, type SandboxBackendName } from "./sandbox-routing.ts";
 import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus, EgressEnforcement } from "./sandbox.ts";
 import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
 import { claimThenBind } from "../tenants/claim.ts";
@@ -315,7 +315,7 @@ export function createSandboxResources(opts: {
   };
   const profiles = (): SandboxProviderProfile[] =>
     (Object.entries(opts.backends) as Array<[SandboxBackendName, Sandbox]>)
-      .filter(([, backend]) => !!backend)
+      .filter(([name, backend]) => !!backend && sandboxBackendAvailableToTenant(name))
       .map(([name, backend]) => ({
         name,
         ...(backend.profile.spec ? { spec: backend.profile.spec } : {}),
@@ -459,6 +459,10 @@ export function createSandboxResources(opts: {
       await authorize(actorId, scopeId);
       if (!Object.hasOwn(opts.backends, backend) || !opts.backends[backend as SandboxBackendName])
         throw new Error(`sandbox backend unavailable: ${backend}`);
+      if (!sandboxBackendAvailableToTenant(backend as SandboxBackendName))
+        throw new Error(
+          `sandbox backend ${backend} does not keep tenants apart; only a single-tenant deployment can use it`,
+        );
       checkMemory(opts.backends[backend as SandboxBackendName]!, memoryGb);
       if (jobOnly && !opts.backends[backend as SandboxBackendName]?.destroyScope)
         throw new Error(

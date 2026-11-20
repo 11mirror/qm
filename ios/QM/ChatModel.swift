@@ -587,7 +587,9 @@ final class ChatModel {
     if let acceptedSubmission { await reconcileSubmission(acceptedSubmission) }
   }
 
-  func decide(_ approval: Approval, approved: Bool, scope: String = "once") async {
+  func decide(_ approval: Approval, approved: Bool, scope: String = "once", optionId: String? = nil)
+    async
+  {
     guard !conversation.isSubagent, !sending,
       scope == "once" || (scope == "session" && approval.grantModes?.session == true)
         || (scope == "always" && approval.grantModes?.always == true)
@@ -605,12 +607,12 @@ final class ChatModel {
         error = nil
         return
       }
-      let response: Submission = try await client.fetch(
-        "api/approvals/\(approval.requestId)",
-        body: [
-          "approved": approved, "scope": scope,
-          "idempotencyKey": "ios-approval-\(approval.requestId)-\(approved)-\(scope)",
-        ])
+      var body: [String: Any] = [
+        "approved": approved, "scope": scope,
+        "idempotencyKey": "ios-approval-\(approval.requestId)-\(approved)-\(scope)-\(optionId ?? "none")",
+      ]
+      if let optionId { body["optionId"] = optionId }
+      let response: Submission = try await client.fetch("api/approvals/\(approval.requestId)", body: body)
       guard response.runId != nil || response.isTerminalResult else {
         throw QMError.message(response.reason ?? "Could not confirm approval. Retry this decision.")
       }

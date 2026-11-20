@@ -57,20 +57,16 @@ import {
   Maximize2,
   MessageSquare,
   Paperclip,
-  Pause,
-  Play,
   Pencil,
   Pin,
   Radar,
   RefreshCw,
   RotateCcw,
-  Target,
   Rocket,
   ScrollText,
   SquareTerminal as Terminal,
   TriangleAlert,
   Wrench,
-  X,
   type IconNode,
 } from "lucide";
 import {
@@ -219,13 +215,7 @@ import {
   watchActivityLabel,
 } from "./session-list";
 import { liveTurnThreadRef } from "./working-dot";
-import {
-  GOAL_RESUME_PROMPT,
-  goalElapsedLabel,
-  goalObjectiveLabel,
-  goalWorkedLabel,
-  type GoalStripState,
-} from "./goal-strip";
+import { createGoalStrip, goalElapsedLabel, goalObjectiveLabel, type GoalStripState } from "./goal-strip";
 import { ackKey, subagentRows, subagentSummary, visibleSubagents, type SubagentRow } from "./subagent-activity";
 import { createSwarmStrip } from "./swarm-strip.ts";
 import { newChatDraftKey, saveDraft, storedDraft } from "./drafts";
@@ -319,8 +309,6 @@ export function createChatSurface(
   const transcriptFetcher = dependencies.fetchTranscript ?? fetchTranscript;
   const sessionOpener = dependencies.openSession ?? openSession;
 
-  const goalCancels = new Set<string>();
-  const goalResumes = new Set<string>();
   const chatState = {
     agent: null as Agent | null,
     host: null as HTMLElement | null,
@@ -1802,7 +1790,7 @@ export function createChatSurface(
         status: liveWorkStatus(agent),
         busy: agent.state.isStreaming,
         showPrompts: !messages.length,
-        toolbar: html`${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${subagentStrip()}
+        toolbar: html`${goalBar.view()} ${ctx.composer.queuedStrip(agent)} ${subagentStrip()}
         ${swarmUi.strip(chatState.sessionId)} ${backgroundActivityStrip()}`,
         composer: ctx.composer.composerForm(agent),
         onPrompt: (prompt) => ctx.composer.fillSuggestedPrompt(prompt, agent),
@@ -1860,7 +1848,7 @@ export function createChatSurface(
               </div>
             </section>
             <div class="chat-bottom-dock">
-              ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${subagentStrip()}
+              ${goalBar.view()} ${ctx.composer.queuedStrip(agent)} ${subagentStrip()}
               ${swarmUi.strip(chatState.sessionId)} ${backgroundActivityStrip()}
               ${showWelcome && welcome.hideComposer ? nothing : ctx.composer.composerForm(agent)}
               ${ctx.pane ? nothing : suggestions} ${scrollBottomButton()}
@@ -2547,6 +2535,42 @@ export function createChatSurface(
     return chatState.liveWork?.goal ?? chatState.goal;
   }
 
+  const goalBar = createGoalStrip({
+    current: () => {
+      const agent = chatState.agent;
+      const goal = currentGoal();
+      const sessionId = chatState.sessionId;
+      return agent && goal && sessionId
+        ? {
+            sessionId,
+            goal,
+            streaming: agent.state.isStreaming,
+            workedMs: goalWorked(visibleMessages(agent), goal),
+          }
+        : null;
+    },
+    readyToSend: () => ctx.composer.readyToSend(),
+    cancel: cancelSessionGoal,
+    resume: resumeSessionGoal,
+    markCancelled: (createdAt) => {
+      for (const holder of [chatState, chatState.liveWork])
+        if (holder?.goal?.createdAt === createdAt) holder.goal = { ...holder.goal, status: "cancelled" };
+    },
+    applyResumed: (goal) => {
+      chatState.goal = goal;
+    },
+    refresh: async () => {
+      if (chatState.agent) await refreshTranscriptFromItems(chatState.agent);
+    },
+    sendResumePrompt: async (prompt) => {
+      if (chatState.agent) await ctx.composer.sendText(prompt, chatState.agent);
+    },
+    draw: () => drawActiveChat(),
+    reportError: (message) => {
+      ctx.composer.state.error = message;
+    },
+  });
+
   function clearLiveWork(): void {
     if (chatState.liveWork?.goal) chatState.goal = chatState.liveWork.goal;
     chatState.liveWork = null;
@@ -3014,93 +3038,6 @@ export function createChatSurface(
               </button>`
         }
         ${expanded ? html`<div class="subagent-list ${single ? "single" : "bg-panel"}">${rows.map((row) => subagentRowTpl(rootId, row))}</div>` : nothing}
-      </section>
-    `;
-  }
-
-  async function cancelGoal(agent: Agent, goal: GoalStripState): Promise<void> {
-    const sessionId = chatState.sessionId;
-    const key = `${sessionId}:${goal.createdAt}`;
-    if (!sessionId || goalCancels.has(key)) return;
-    goalCancels.add(key);
-    drawActiveChat(agent);
-    try {
-      await cancelSessionGoal(sessionId);
-      if (sessionId === chatState.sessionId) markGoalCancelled(goal.createdAt);
-      if (agent === chatState.agent) await refreshTranscriptFromItems(agent);
-    } catch (err) {
-      ctx.composer.state.error = errMessage(err, "Could not cancel the goal.");
-    } finally {
-      goalCancels.delete(key);
-      if (agent === chatState.agent) drawActiveChat(agent);
-    }
-  }
-
-  function markGoalCancelled(createdAt: number): void {
-    for (const holder of [chatState, chatState.liveWork])
-      if (holder?.goal?.createdAt === createdAt) holder.goal = { ...holder.goal, status: "cancelled" };
-  }
-
-  async function resumeGoalFromBar(agent: Agent, goal: GoalStripState): Promise<void> {
-    const sessionId = chatState.sessionId;
-    const key = `${sessionId}:${goal.createdAt}`;
-    if (!sessionId || agent.state.isStreaming || goalResumes.has(key) || goalCancels.has(key)) return;
-    goalResumes.add(key);
-    drawActiveChat(agent);
-    try {
-      const out = await resumeSessionGoal(sessionId);
-      if (agent !== chatState.agent || sessionId !== chatState.sessionId) return;
-      chatState.goal = out.goal;
-      await ctx.composer.sendText(GOAL_RESUME_PROMPT, agent);
-    } catch (err) {
-      ctx.composer.state.error = errMessage(err, "Could not resume the goal.");
-    } finally {
-      goalResumes.delete(key);
-      if (agent === chatState.agent) drawActiveChat(agent);
-    }
-  }
-
-  function goalStrip(agent: Agent): TemplateResult | typeof nothing {
-    const messages = visibleMessages(agent);
-    const goal = currentGoal();
-    if (!goal) return nothing;
-    const key = `${chatState.sessionId}:${goal.createdAt}`;
-    const cancelling = goalCancels.has(key);
-    const workedMs = goalWorked(messages, goal);
-    const paused = goal.status === "paused";
-    if (goal.status !== "active" && !paused) return nothing;
-    let title = "Goal";
-    if (paused) title = "Goal paused";
-    else if (agent.state.isStreaming) title = "Pursuing goal";
-    return html`
-      <section class="goal-strip ${paused ? "paused" : ""}" aria-live="polite" title=${goal.objective}>
-        ${
-          agent.state.isStreaming
-            ? html`<span class="goal-strip-icon">${icon(paused ? Pause : Target, 13)}</span>`
-            : html`<button
-                type="button"
-                class="chip-x goal-strip-resume"
-                aria-label="Resume goal"
-                ${tip("Resume goal")}
-                ?disabled=${goalResumes.has(key) || cancelling || !ctx.composer.readyToSend()}
-                @click=${() => void resumeGoalFromBar(agent, goal)}
-              >
-                ${icon(Play, 13)}
-              </button>`
-        }
-        <span class="goal-strip-title">${title}</span>
-        <span class="goal-strip-objective" dir="auto">${goalObjectiveLabel(goal.objective)}</span>
-        <span class="goal-strip-meta">${goalWorkedLabel(workedMs, goal.floor)}</span>
-        <button
-          type="button"
-          class="chip-x"
-          aria-label="Cancel goal"
-          ${tip("Cancel goal")}
-          ?disabled=${cancelling || goalResumes.has(key)}
-          @click=${() => void cancelGoal(agent, goal)}
-        >
-          ${icon(X, 13)}
-        </button>
       </section>
     `;
   }
