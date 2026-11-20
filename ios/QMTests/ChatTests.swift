@@ -206,6 +206,20 @@ final class ChatTests: XCTestCase {
     XCTAssertEqual(clarification?.recommendedOptionId, "today")
   }
 
+  func testFinnyPlanDecodesNativeApprovalDetails() throws {
+    let detail = #"{"plan":{"title":"Close receivables","summary":"Prepare the governed report","phases":[{"name":"Produce","owner":"Finny Producer","dependencies":[]}],"certification":"Finny Auditor","deliverable":"Workbook","destination":"ShareChat finance","clarifications":[]}}"#
+    let data = try JSONSerialization.data(withJSONObject: [
+      "requestId": "approval", "command": "Close receivables",
+      "reason": "Finny Governance Plan Approval", "summaryDetail": detail,
+    ])
+    let plan = try JSONDecoder().decode(Approval.self, from: data).finnyPlan
+    XCTAssertEqual(plan?.title, "Close receivables")
+    XCTAssertEqual(plan?.phases.first?.name, "Produce")
+    XCTAssertEqual(plan?.certification, "Finny Auditor")
+    XCTAssertEqual(plan?.deliverable, "Workbook")
+    XCTAssertEqual(plan?.destination, "ShareChat finance")
+  }
+
   func testServerDeniedMutationsAreBlockedAndPermittedMutationsReachTheServer() async throws {
     let file = FileManager.default.temporaryDirectory
       .appendingPathComponent("\(UUID().uuidString).txt")

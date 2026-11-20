@@ -228,9 +228,31 @@ struct Approval: Decodable, Identifiable {
     else { return nil }
     return try? JSONDecoder().decode(FinnyPlanDetail.self, from: data).materialClarification
   }
+  var finnyPlan: FinnyPlan? {
+    guard reason == "Finny Governance Plan Approval", let summaryDetail,
+      let data = summaryDetail.data(using: .utf8)
+    else { return nil }
+    return try? JSONDecoder().decode(FinnyPlanDetail.self, from: data).plan
+  }
 
   struct FinnyPlanDetail: Decodable {
+    let plan: FinnyPlan?
     let materialClarification: FinnyClarification?
+  }
+
+  struct FinnyPlan: Decodable {
+    let title: String
+    let summary: String?
+    let phases: [FinnyPlanPhase]
+    let certification: String
+    let deliverable: String
+    let destination: String
+  }
+
+  struct FinnyPlanPhase: Decodable {
+    let name: String
+    let owner: String
+    let dependencies: [String]
   }
 
   struct FinnyClarification: Decodable {

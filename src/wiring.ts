@@ -13,7 +13,11 @@ import { mintSignedPayload } from "./auth/signed-token.ts";
 import { deliverPendingCertifiedResults } from "./finny/certified-delivery.ts";
 import { createFinnyApprovalService } from "./finny/approval-service.ts";
 import { compileFinnyWorkerTask } from "./finny/plan.ts";
-import { createFinnyRuntimeCoordinator, reconcileFinnyRuntimeRecoveries } from "./finny/runtime-coordinator.ts";
+import {
+  createFinnyRuntimeCoordinator,
+  reconcileFinnyRuntimeRecoveries,
+  runSingleTenantFinnyRecovery,
+} from "./finny/runtime-coordinator.ts";
 import { createFinnyToolServiceFactory, resolveFinnyFileArtifactProposal } from "./finny/integration.ts";
 import { reconstructFinnyParentSyscalls } from "./finny/integration-runtime.ts";
 import { createFinnyCurrentJobReader } from "./finny/runtime-reader.ts";
@@ -2439,20 +2443,18 @@ export function buildApp(
       recoveryRunning = (async () => {
         while (recoveryRequested) {
           recoveryRequested = false;
-          await reconcileRuntime()
-            .then(() => recoverFinny?.())
-            .catch(async (error) => {
-              recordErrorInBinding(
-                errors,
-                {
-                  category: "finny",
-                  code: "recovery_scan",
-                  message: errMessage(error),
-                  scopeLabel: `org:${config.orgId}`,
-                },
-                error,
-              );
-            });
+          await recoverFinny?.().catch(async (error) => {
+            recordErrorInBinding(
+              errors,
+              {
+                category: "finny",
+                code: "recovery_scan",
+                message: errMessage(error),
+                scopeLabel: `org:${config.orgId}`,
+              },
+              error,
+            );
+          });
         }
       })().finally(() => {
         recoveryRunning = undefined;
@@ -2645,12 +2647,10 @@ export function buildApp(
         });
     };
     recoverFinny = async () => {
-      const tenant = bootTenant();
-      if (!tenant) {
-        if (tenancyBooted()) throw new Error("Finny recovery requires a single-tenant deployment");
-        return;
-      }
-      await withTenant(tenant, recoverFinnyInTenant);
+      await runSingleTenantFinnyRecovery(async () => {
+        await reconcileRuntime();
+        await recoverFinnyInTenant();
+      });
     };
     finnyRecoverySweeper.start();
     requestRuntimeRecovery();

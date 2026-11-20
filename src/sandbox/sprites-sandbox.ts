@@ -18,7 +18,8 @@ import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
-import { tenantSpritesShape } from "./tenant-sandbox-shape.ts";
+import { TenantKeyedMap, tenantSpritesShape } from "./tenant-sandbox-shape.ts";
+import { boundTenant } from "../tenants/context.ts";
 import { withConnectorSdk, type ConnectorSdkBundle } from "./connector-sdk.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import {
@@ -131,7 +132,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   const deploymentToken = opts.token;
   const prefix = opts.namePrefix ?? "qm";
   const clients = new Map<string, SpritesClient>();
-  const clientByName = new Map<string, SpritesClient>();
+  const clientByName = new TenantKeyedMap<SpritesClient>();
   const clientFor = (token: string): SpritesClient => {
     let found = clients.get(token);
     if (!found) clients.set(token, (found = new SpritesClient(token, opts.baseUrl ? { baseURL: opts.baseUrl } : {})));
@@ -152,7 +153,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   const initializationStore = opts.initializationStore;
   const advisoryLock = opts.advisoryLock;
   const withLifecycle = <T>(name: string, fn: () => Promise<T>): Promise<T> =>
-    advisoryLock.withLock(`sprites-lifecycle:${name}`, fn);
+    advisoryLock.withLock(`sprites-lifecycle:${boundTenant() ?? ""}:${name}`, fn);
   const requireInitialized = async (name: string): Promise<void> => {
     if ((await initializationStore.get(name))?.pending)
       throw new Error(`sprites ${name}: initialization is incomplete; refusing to capture or restore a checkpoint`);
@@ -160,10 +161,10 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const checkpointIntervalMs = opts.checkpointIntervalMs ?? CHECKPOINT_INTERVAL_MS;
 
-  const ensured = new Set<string>();
-  const sizeByName = new Map<string, number>();
-  const appliedSize = new Map<string, number>();
-  const egressPolicyByName = new Map<string, string>();
+  const ensured = new TenantKeyedMap<boolean>();
+  const sizeByName = new TenantKeyedMap<number>();
+  const appliedSize = new TenantKeyedMap<number>();
+  const egressPolicyByName = new TenantKeyedMap<string>();
 
   const reportError = (category: string, code: string, message: string, scopeLabel?: string): void => {
     try {
@@ -443,7 +444,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
         const exists = await spriteExists(name);
         if (exists && !pending) {
           await applyResources(name);
-          ensured.add(name);
+          ensured.set(name, true);
           return { coldStart: false };
         }
         await initializationStore.put(name, { pending: true });
@@ -455,7 +456,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
           await applyResources(name);
           const hydrated = homeSnapshots && scope ? await homeSnapshots.hydrateHome(scope, name) : false;
           await initializationStore.delete(name);
-          ensured.add(name);
+          ensured.set(name, true);
           return { coldStart: !hydrated };
         } catch (e) {
           forget(name);
@@ -472,7 +473,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
       if (await spriteExists(name)) await deleteSprite(name);
       await attempt(`create ${name}`, () => client(name).createSprite(name, { waitForCapacity: true }));
       await applyResources(name);
-      ensured.add(name);
+      ensured.set(name, true);
     },
     deleteInstance: deleteSprite,
     forgetInstance: forget,

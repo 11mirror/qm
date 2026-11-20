@@ -422,6 +422,25 @@ struct ChatView: View {
       if let summary = approval.summary ?? approval.purpose ?? approval.reason {
         Text(summary)
       }
+      if let plan = approval.finnyPlan {
+        Text(plan.title).font(.subheadline.weight(.semibold))
+        if let summary = plan.summary {
+          Text(summary).font(.subheadline)
+        }
+        if !plan.phases.isEmpty {
+          Text("Phases").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+          ForEach(Array(plan.phases.enumerated()), id: \.offset) { index, phase in
+            VStack(alignment: .leading, spacing: 2) {
+              Text("\(index + 1). \(phase.name)")
+              Text(phase.owner).font(.caption).foregroundStyle(.secondary)
+            }
+          }
+        }
+        LabeledContent("Certification", value: plan.certification)
+        LabeledContent("Deliverable", value: plan.deliverable)
+        LabeledContent("Destination", value: plan.destination)
+          .textSelection(.enabled)
+      }
       Text(approval.command).font(.system(.footnote, design: .monospaced)).textSelection(
         .enabled)
       if let clarification = approval.finnyClarification {

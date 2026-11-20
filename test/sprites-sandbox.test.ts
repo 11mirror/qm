@@ -19,6 +19,13 @@ import { installFakeSprites, FAKE_SPRITES_TOKEN, type FakeSprites } from "./supp
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { APIError, SpriteCommand } from "@fly/sprites";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { onTenantLoad } from "../src/tenants/cache.ts";
+import { boundTenant, withTenant } from "../src/tenants/context.ts";
+import { loadTenantSettings } from "../src/tenants/settings.ts";
+import { randomUUID } from "node:crypto";
+import type { DurableMap } from "../src/persistence/durable-map.ts";
+import type { StoredSprite } from "../src/sandbox/sprites-sandbox.ts";
+import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 let fake: FakeSprites;
 let sandbox: Sandbox;
@@ -55,6 +62,44 @@ test("provision runs commands with env and cwd", async () => {
   assert.equal(r.code, 0);
   assert.match(r.stdout, /\/home\/sprite\/workspace|workspace/);
   assert.match(r.stdout, /VAR=v1/);
+});
+
+test("tenants with the same sprite name keep separate provider credentials", async (t) => {
+  const first = randomUUID();
+  const second = randomUUID();
+  const stopLoad = onTenantLoad(() =>
+    loadTenantSettings({
+      q: async () => [
+        {
+          settings: {
+            spritesToken: boundTenant() === first ? "tenant-a-token" : "tenant-b-token",
+            spritesNamePrefix: "shared",
+          },
+        },
+      ],
+    } as never),
+  );
+  t.after(stopLoad);
+  const initialized = new Map<string, StoredSprite>();
+  const shared = make({
+    initializationStore: {
+      get: async (key: string) => initialized.get(key) ?? null,
+      put: async (key: string, value: StoredSprite) => void initialized.set(key, value),
+      delete: async (key: string) => void initialized.delete(key),
+      update: async (key: string, apply: (value: StoredSprite) => StoredSprite) => {
+        const value = initialized.get(key);
+        if (!value) return null;
+        const next = apply(value);
+        initialized.set(key, next);
+        return next;
+      },
+    } as DurableMap<StoredSprite>,
+    advisoryLock: { withLock: async (_key: string, work: () => Promise<unknown>) => work() } as AdvisoryLock,
+  });
+  await withTenant(first, () => shared.provision(scope));
+  await withTenant(second, () => shared.computerStatus!(scope));
+  await withTenant(first, () => shared.computerStatus!(scope));
+  assert.equal(fake.calls.filter(({ token }) => token).at(-1)?.token, "tenant-a-token");
 });
 
 test("streams and exit codes are exact", async () => {

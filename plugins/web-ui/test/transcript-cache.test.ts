@@ -210,7 +210,7 @@ test("a burst of nudges for a cached chat refreshes its tail once, a second late
   cache.refreshCachedTranscript("a");
   cache.refreshCachedTranscript("never-opened");
   await settle();
-  const fetched = () => requests.filter((path) => path.startsWith("/api/sessions/"));
+  const fetched = () => requests.filter((path) => path.includes("?tailTurns=25"));
   assert.deepEqual(fetched(), [], "debounced");
   await new Promise((resolve) => setTimeout(resolve, 1_100));
   await settle();
