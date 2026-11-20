@@ -44,7 +44,7 @@ test("a pending refresh displays its cached result and then publishes the comple
   const first = [{ id: "first", title: "Review my current work", prompt: "Review my work.", icon: "📚" }];
   const second = [{ id: "second", title: "Plan my next steps", prompt: "Plan my next steps.", icon: "🧭" }];
   globalThis.fetch = async () =>
-    Response.json(++calls === 1 ? { activities: first, pending: true } : { activities: second, pending: false });
+    Response.json(++calls < 20 ? { activities: first, pending: true } : { activities: second, pending: false });
   const vite = await testViteServer();
   try {
     const { loadGeneratedActivities } = await vite.ssrLoadModule("/src/generated-activities.ts");
@@ -54,9 +54,14 @@ test("a pending refresh displays its cached result and then publishes the comple
     const pending = loadGeneratedActivities(me, () => seen.push(structuredClone(me.suggestedActivities)));
     await new Promise(setImmediate);
     assert.deepEqual(seen, [first]);
-    t.mock.timers.tick(10_000);
+    for (let index = 1; index < 20; index++) {
+      t.mock.timers.tick(10_000);
+      await new Promise(setImmediate);
+    }
     await pending;
-    assert.deepEqual(seen, [first, second]);
+    assert.equal(calls, 20);
+    assert.deepEqual(seen[0], first);
+    assert.deepEqual(seen.at(-1), second);
     assert.deepEqual(me.suggestedActivities, second);
   } finally {
     t.mock.timers.reset();

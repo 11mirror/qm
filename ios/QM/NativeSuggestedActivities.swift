@@ -19,7 +19,7 @@ final class NativeSuggestedActivitiesModel {
   func generate(for identity: Identity) async {
     guard identity.suggestedActivitiesGeneration == true else { return }
     let generation = client.generation
-    for _ in 0..<19 {
+    while !Task.isCancelled, client.generation == generation {
       do {
         let response: SuggestedActivitiesResponse = try await client.fetch(
           "api/suggested-activities", body: ["timezone": TimeZone.current.identifier])

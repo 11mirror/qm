@@ -44,15 +44,11 @@ struct NativeInboxItem: Decodable, Identifiable {
     let from: String?
     let fromDetail: String?
     let snippet: String?
-    let source: String?
     let externalUrl: String?
     let context: [Context]?
     let sentChat: Bool?
     let images: [String]?
 
-    func readable(_ text: String) -> String {
-      source == "slack" ? SlackText.plain(text) : text
-    }
   }
   struct Triage: Decodable {
     let priority: String?
@@ -74,7 +70,8 @@ struct NativeInboxItem: Decodable, Identifiable {
   let updatedAt: Double
   let triage: Triage?
   var title: String { sourcePayload.title ?? summary ?? "Review item" }
-  var kind: String { source ?? sourcePayload.source ?? "generic" }
+  var kind: String { source ?? "generic" }
+  func readable(_ text: String) -> String { kind == "slack" ? SlackText.plain(text) : text }
   var canReply: Bool { ["gmail", "slack"].contains(kind) }
   var handled: Bool { state == "actioned" || state == "dismissed" }
   var priority: String { triage?.priority ?? "normal" }
@@ -750,7 +747,7 @@ struct NativeInboxItemView: View {
         index, message in
         VStack(alignment: .leading, spacing: 6) {
           Text(message.author).font(.caption.bold())
-          Text(model.item.sourcePayload.readable(message.text)).textSelection(.enabled)
+          Text(model.item.readable(message.text)).textSelection(.enabled)
           ForEach(Array((message.images ?? []).indices), id: \.self) { image in
             NativeInboxImage(client: model.client, path: model.path, context: index, index: image)
           }
@@ -762,7 +759,7 @@ struct NativeInboxItemView: View {
       if let snippet = model.item.sourcePayload.snippet,
         model.item.sourcePayload.context?.isEmpty != false
       {
-        Text(model.item.sourcePayload.readable(snippet)).textSelection(.enabled)
+        Text(model.item.readable(snippet)).textSelection(.enabled)
       }
     }
   }

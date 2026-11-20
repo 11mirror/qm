@@ -689,9 +689,15 @@ export function createChatSurface(
     drawActiveChat(agent, { forceScroll: true });
     const me = appState.me;
     if (!sessionId && me && (scopeId === null || scopeId === `personal:${me.user}`)) {
-      void loadGeneratedActivities(me, () => {
-        if (appState.me === me && chatState.agent === agent && !chatState.sessionId) drawActiveChat(agent);
-      });
+      const active = () => appState.me === me && chatState.agent === agent && !chatState.sessionId;
+      void loadGeneratedActivities(
+        me,
+        () => {
+          if (active()) drawActiveChat(agent);
+        },
+        false,
+        active,
+      );
     }
     ctx.composer.focusComposerEnd();
     ctx.ensureDeliveryStream();
@@ -1765,14 +1771,17 @@ export function createChatSurface(
       (chatState.scopeId === null || chatState.scopeId === `personal:${appState.me?.user}`) &&
       !agent.state.isStreaming;
     const me = appState.me;
+    const suggestionsActive = () => appState.me === me && chatState.agent === agent && !chatState.sessionId;
     const redrawSuggestions = () => {
-      if (appState.me === me && !chatState.sessionId) drawActiveChat();
+      if (suggestionsActive()) drawActiveChat();
     };
     const suggestions = showSuggestions
       ? suggestedActivities(me?.suggestedActivities, {
           onSelect: (activity) => ctx.composer.fillSuggestedPrompt(activity.prompt, agent),
           ...(me?.suggestedActivitiesGeneration
-            ? { onDismiss: (activity) => dismissGeneratedActivity(me, activity, redrawSuggestions) }
+            ? {
+                onDismiss: (activity) => dismissGeneratedActivity(me, activity, redrawSuggestions, suggestionsActive),
+              }
             : {}),
           redraw: redrawSuggestions,
           collapsed: Boolean(

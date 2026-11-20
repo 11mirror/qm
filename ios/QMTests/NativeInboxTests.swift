@@ -38,11 +38,23 @@ final class NativeInboxTests: XCTestCase {
   }
   func testSlackItemsShowNamesInsteadOfWireTokensAndMailIsLeftAsWritten() throws {
     let text = #"<@U1|ada> shared <https://docs.example/plan|the plan>"#
-    let payloads = try ["slack", "gmail"].map { source in
-      try JSONDecoder().decode(
-        NativeInboxItem.Payload.self, from: Data(#"{"source":"\#(source)"}"#.utf8))
-    }
-    XCTAssertEqual(payloads.map { $0.readable(text) }, ["@ada shared the plan", text])
+    let slack = try JSONDecoder().decode(
+      NativeInboxItem.self,
+      from: Data(
+        #"{"id":"slack","loopId":"l1","state":"processed","source":"slack","sourcePayload":{"source":"gmail"},"thread":[],"updatedAt":1}"#
+          .utf8))
+    let gmail = try JSONDecoder().decode(
+      NativeInboxItem.self,
+      from: Data(
+        #"{"id":"gmail","loopId":"l1","state":"processed","source":"gmail","sourcePayload":{"source":"slack"},"thread":[],"updatedAt":1}"#
+          .utf8))
+    let generic = try JSONDecoder().decode(
+      NativeInboxItem.self,
+      from: Data(
+        #"{"id":"generic","loopId":"l1","state":"processed","sourcePayload":{"source":"gmail"},"thread":[],"updatedAt":1}"#
+          .utf8))
+    XCTAssertEqual([slack.readable(text), gmail.readable(text)], ["@ada shared the plan", text])
+    XCTAssertFalse(generic.canReply)
   }
 
   func testPriorityChangeIsSentAndShownOnTheInboxRow() async throws {
